@@ -21,8 +21,8 @@ coverage is complete over the 2026-09-02 set**, not the live one (P0f is the per
 FAKECHAIN skip, census R9), 2 failed closed (CEN-L8; CEN-I12, split anchor
 source). **The set has since grown:** C2-R1b promoted nine rows into bucket 2 on
 2026-09-03, so the live bucket-1/2 count is **111** and those nine are
-UNREVIEWED until P0f reviews them. **Both S-graded findings are fixed and re-verified** — the S0 by
-PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (CEN-D2/D1 promoted); **CEN-L11/L12 promoted at PR #609's merged fix** (2026-09-04); every other row is UNREVIEWED. Bucket-4 rows record
+UNREVIEWED until P0f reviews them. **The review's two S-graded findings are fixed and re-verified** — the S0 by
+PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (CEN-D2/D1 promoted) — **and a third is open:** CEN-B5's header-check timing, S1, found 2026-09-04 (§7 #17), fix-or-accept Rick's; **CEN-L11/L12 promoted at PR #609's merged fix** (2026-09-04); every other row is UNREVIEWED. Bucket-4 rows record
 questions, never answers; the §10
 queue is the design-round program that answers them.
 **Pinned sha:** `ab3cc98e6eb73db2b309730ccc9853ba4ea95e7d` (`dev` tip,
@@ -310,7 +310,7 @@ split.
 | CEN-B2 | Block `minor_version` is effectively unconstrained: `do_check` requires `vote ≥ current`, but the vote normalization (`minor 0` reads as 1) and `current == 1` make the predicate unfailable — any `minor_version` is accepted | src/cryptonote_basic/hardfork.cpp:41–50, 109–113 | C | 4 | none | — | RC-9 ⇒ merged with correction: RC stated the predicate ("vote must be ≥ current fork version") and CEN stated the effect ("unconstrained"); both verified at the pin — the predicate exists and cannot fail at the shipped table. A vote signal with nothing to vote for |
 | CEN-B3 | The hard-fork **voting machinery** runs on every connect (rolling window 10080, threshold accounting, per-height version persisted) but is inert: one table entry, threshold 0, nothing to advance to. `HardFork::add`'s reject verdict is **discarded** at the DB call site; `add` records the table version (not the block's vote) at each height; the voting window is rebuilt from `split_height` after a reorg; the on-hf-advance pool re-validation arm can never fire post-genesis; `mainnet_hard_fork_version_1_till = 0` and the `HF_VERSION_*` constants (all = 1) feed only dead dispatch | src/cryptonote_basic/hardfork.cpp:134–161; discard src/blockchain_db/blockchain_db.cpp:641; reorg rebuild blockchain.cpp:1494; pool re-validate :6480–6490; constants cryptonote_config.h:280–289 | C | 4 | none | — | RC-142, RC-163, RC-164, RC-165, RC-166, RC-168 ⇒ merged. Rule-60 deletion candidate (RC's position: bucket 3 via rule 60's delete-the-dead-branch command); kept at 4 because deleting the *machinery* — as opposed to individual dead branches — is entangled with the V4-activation question the R4 round must answer by design (rules 75/21). §6 finding |
 | CEN-B4 | The block's `attestation_root` must equal the root recomputed from the (possibly empty) credit-wire witness, and every pass record's P-countersignature must verify against the bond's committed hybrid pubkey; nonce binds coinbase `vout[0]` key and the validated `prev_id` (all-zero prev hash refused by the FFI) | 5738 (main) / 2253 (alt) → `verify_block_attestation` 5565–5662; verdict Rust `shekyl_archival_verify_attestation` | C | 1 | spec | [`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md) §3–§4; RF-D3 | RC-12, RC-13 ⇒ merged. Enforcement status: the mechanism is the full recompute + countersignature verify; pre-population the only valid header value is the empty-set root (`ARCHIVAL_CREDIT_WIRE.md` :214–223), so the ratified-in-full admission recompute is *exercised* only on its empty-root slice until the cutover. The doc's §3 enforcement-status paragraph is stale (names the deleted `check_attestation_root`); spec content stands |
-| CEN-B5 | After connect, the header's `curve_tree_root` must equal the root the DB computed by growing the tree with this block's outputs; mismatch pops the block and rejects | 6422–6437 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) :264, :281; [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) | RC-14 ⇒ merged. Skipped on FAKECHAIN; alt path defers to promotion (CEN-K5) |
+| CEN-B5 | After connect, the header's `curve_tree_root` must equal the root the DB computed by growing the tree with this block's outputs; mismatch pops the block and rejects | 6422–6437 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) :264, :281; [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) | RC-14 ⇒ merged. Skipped on FAKECHAIN; alt path defers to promotion (CEN-K5). **Second divergence found 2026-09-04 (§7 #17), graded S1:** the check compares the header against the root read *after* the add (`:6413`), but the template fills the header from the root *before* it (`:2006`) — the operands differ at every block where a leaf drains (observed on real LMDB: `archival_substrate_lmdb.cpp` `cen_b5_post_add_root_is_not_the_state_the_header_was_filled_from`), so on every non-FAKECHAIN nettype block index 60 is rejected and the chain halts; masked by the FAKECHAIN skip on the only chain type ever run past 59. Fix-or-accept is Rick's. The rule's own wording is also loose — the tree grows with the leaves that *mature* at the block, never with the block's outputs, which are deferred |
 | CEN-B6 | Block identity and the PoW hashing blob are `serialize(header) ‖ merkle(miner_tx_hash ‖ tx_hashes) ‖ varint(tx_hashes.size()+1)` — there is no separate merkle-root header field; tampering with `tx_hashes` retargets both identity and PoW | cryptonote_format_utils.cpp:1397–1403 (`get_block_hashing_blob`), 1515–1525 (`get_tx_tree_hash`) | C | 4 | none | — | [m] RC-7 ⇒ minted. CEN scoped identity definitions out (§1.6 of the archived doc); carried here because the PoW check consumes this construction directly. RC decision-log #5: a rewrite that adds an explicit `merkle_root` field is a wire change, not a missing check |
 | CEN-B7 | A `major_version` above `get_ideal_version()` logs a one-time warning and does **not** reject (the version-equality reject is CEN-B1; this arm is the old-daemon UX branch) | 5713–5723 | C | 4 | none | — | [m] RC-17 ⇒ minted. Not a reject; recorded because it is an acceptance-path branch a rewrite must consciously keep or drop |
 
@@ -439,7 +439,7 @@ Enforced at pool admission (`tx_pool.cpp:304` → `Blockchain::check_tx_inputs`)
 | CEN-I9 | `pseudoOuts` count == input count (regular spend; archival shapes use their spend-subset counts, CEN-H21/H22) | 3645–3654 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | RC-88 ⇒ merged |
 | CEN-I10 | `referenceBlock` must be an existing main-chain block | 4191–4198 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 1a | RC-89 ⇒ merged |
 | CEN-I11 | `referenceBlock` age window: ≥ `FCMP_REFERENCE_BLOCK_MIN_AGE` (5) and ≤ `FCMP_REFERENCE_BLOCK_MAX_AGE` (100) blocks old | 4200–4220 | C | 1 | spec | `config/consensus_constants.json`; [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 1 (MIN_AGE=5 reorg-margin rationale); value pin = Decision 14 (`docs/CHANGELOG.md` :26404–26407; `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` :69) | RC-90, RC-91 ⇒ merged. **No docs/design pin for the values** — the CHANGELOG Decision-14 entry is the ruling record (enforcement-status caveat carried from §8) |
-| CEN-I12 | The membership anchor is the curve-tree root **as it stands after `referenceBlock` connects** — a state property with two consensus-bound witnesses: the header's `curve_tree_root` (the block's attestation, checked against the computed root at connect, CEN-B5) and the node's own per-height root record (written at that connect). The verifier reads its own computed record, never the header — all three `check_tx_inputs` arms do (`:3810`, `:3959`, `:4217` at `d9d27c752`) | 4224–4226 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2 — **reconciled 2026-09-04**: split from its first commit — the pseudocode named the record, the prose narrated the header read the code performed until `292c00aff7` (2026-04-13) | Ruled 2026-09-04 (§7 #16): state, not claim. The in-code FAKECHAIN comment states a consequence, not the rationale — the two witnesses differ only where CEN-B5 is skipped (R9), so the choice is observable only in tests. CSR register re-review owed at the merged sha |
+| CEN-I12 | The membership anchor is the curve-tree state **at chain height `ref_height`** — after `referenceBlock`'s parent connects, before `referenceBlock`'s own drain — a state property with two witnesses: the header's `curve_tree_root` (filled from that state at template time, `blockchain.cpp:2006`) and the node's per-height root record (key `ref_height`, post-add keying from the parent's connect, `blockchain_db.cpp:636`); the wallet's `drained_through = ref_height − 1` and the CT-2 KAT at 61 name the same state. The verifier reads its own computed record, never the header — all three `check_tx_inputs` arms do (`:3810`, `:3959`, `:4217` at `d9d27c752`) | 4224–4226 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2 — **reconciled 2026-09-04**: split from its first commit — the pseudocode named the record, the prose narrated the header read the code performed until `292c00aff7` (2026-04-13) | Ruled 2026-09-04 (§7 #16): state, not claim. The in-code FAKECHAIN comment states a consequence, not the rationale — the two witnesses differ only where CEN-B5 is skipped (R9), so the choice is observable only in tests. CSR register re-review owed at the merged sha |
 | CEN-I13 | `curve_trees_tree_depth` ∈ [1, current tree depth]; layers passed to verify are depth+1 | 4236–4244, 4291–4292 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2c; [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) | RC-92 ⇒ merged. **Found, not ruled (§7 #16):** step 2b/2c's pseudocode says equality with the depth *at `referenceBlock`*; the code range-checks against the *current* depth, and the FFI binds the claimed depth to the proof (`proof.rs`: `proof.tree_depth != tree_depth` rejects; the root is deserialized at that layer count). Same internally-split shape as CEN-I12; the spec column still needs its own reconciliation |
 | CEN-I14 | The FCMP++ proof must be non-empty | 4246–4252 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | RC-93 ⇒ merged |
 | CEN-I15 | FCMP++ membership+spend-auth proof verifies in Rust (`shekyl_fcmp_verify`) over: proof bytes, all key images, all pseudoOuts, per-input PQC leaf hashes (`shekyl_fcmp_pqc_leaf_hash` of each hybrid pubkey — the in-circuit 4th leaf scalar; per-input hash failure rejects), tree root, layers = depth+1, and the tx prefix hash | 4254–4314 (leaf hashes 4265–4274) | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 4; [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md); PQC leaf KATs | RC-94, RC-95 ⇒ merged. **Inverse spot-check row.** Skippable on block connect only via the pool cache (CEN-M8) — load-bearing for D++ `hop` |
@@ -778,12 +778,18 @@ input, not fixes.
     banner, twenty-nine to date (`git rev-list --count 292c00aff7..d9d27c752 --
     docs/FCMP_PLUS_PLUS.md`) — reconciled the two, so the prose narrated
     dead code for five months. **Ruling:** the
-    anchor is the curve-tree root *as it stands after `referenceBlock`
-    connects* — a state property, of which the header field and the
-    per-height record are two witnesses bound to each other by CEN-B5; the
-    verifier reads its own computed record (the fact it checked the header
-    against), the prover reads the header under the same binding
-    (`CURVE_TREE_CLIENT.md` §3.3). The rejected alternative — the header as
+    anchor is the curve-tree state *at chain height `ref_height`* — after
+    `referenceBlock`'s parent connects, before `referenceBlock`'s own drain
+    — a state property, of which the header field and the per-height record
+    are two witnesses; the verifier reads its own computed record, the
+    prover reads the header (`CURVE_TREE_CLIENT.md` §3.3). **Boundary
+    corrected on review (Copilot, this PR):** the first draft said "after
+    `referenceBlock` connects", one block late; every keying agrees on the
+    parent-connected state — header filled from the current root at
+    template time (`blockchain.cpp:2006`), record under key `ref_height`
+    written by the parent's connect (`blockchain_db.cpp:636`, post-add
+    keying), the wallet's `drained_through = ref_height − 1`
+    (`client.rs:908`), and the CT-2 KAT at height 61. The rejected alternative — the header as
     the normative source — would make the verifier anchor on a claim it has
     itself verified against the fact, and would need every block's header
     checked on every nettype, which B5's FAKECHAIN skip denies today. The
@@ -807,6 +813,40 @@ input, not fixes.
     this reconciliation; that re-review must walk all three read sites and
     rest on the state definition plus B5, not on slice 7's placeholder
     rationale.
+17. **CEN-B5 has a second, live divergence — the header check compares the
+    wrong state; graded S1, ruling owed** (2026-09-04; found on PR #618's
+    review while correcting entry 16's boundary). The post-connect check
+    reads `get_curve_tree_root()` *after* `add_block` (`blockchain.cpp:6413`)
+    and compares it to the header, but `create_block_template` fills the
+    header from `get_curve_tree_root()` *before* the block is added
+    (`:2006`) — the state at chain height N, which every other keying names
+    (entry 16). The two operands are equal only when nothing drains at block
+    N. **Observed, not inferred:** `archival_substrate_lmdb.cpp` `cen_b5_post_add_root_is_not_the_state_the_header_was_filled_from` connects a leaf-creating block on
+    real LMDB through the production `add_block`, advances to the drain
+    block, and shows the pre-add root equals the record under key N while
+    the post-add root does not (leaf count 0 → 1). **Consequence:** on every
+    nettype except FAKECHAIN the check rejects block index 60 — the genesis
+    coinbase's stored maturity is `0 + 1 + 60 = 61`, draining when block 60
+    connects — and every block after it; the chain halts at height 60.
+    Never observed because every Blockchain-level test is FAKECHAIN (the
+    check is skipped, `:6411`), `--regtest` is FAKECHAIN, and every real
+    network is at height 1 — the rule-71 skip R9 owns masked an S1.
+    **Grade S1** (`DAEMON_REDB_STORE.md` §7.2: consensus correctness,
+    non-reorg; blocks DRS-0; fix-or-accept is Rick's). **Direction
+    recommended, not ruled:** the header commits to the state the block was
+    built on (chain height N), as the template, the per-height record, the
+    wallet client (`drained_through = H − 1`) and the CT-2 KAT already
+    assume; so the check should compare the header against the root
+    *before* the add — the record under key N, available before the write
+    transaction opens, which is where the register's existing REWRITE-NOTE
+    on this row already puts the check. The alternative — make the template
+    predict the post-drain root so the header commits to the post-state
+    `FCMP_PLUS_PLUS.md` §5 currently describes — would invalidate the CT-2
+    KAT and the wallet's contract. §5's sentence describes neither the
+    template nor the client and is flagged open, not rewritten, pending the
+    ruling. Nothing in C++ changes here; FOLLOWUPS carries the item with
+    the fix sketch and the red-first test it needs (a non-FAKECHAIN
+    core_test, i.e. the R9 work of a generator that produces real roots).
 
 ---
 
