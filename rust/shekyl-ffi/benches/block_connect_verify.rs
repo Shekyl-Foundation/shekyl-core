@@ -132,7 +132,26 @@
 //! **The count-argmax therefore HOLDS unconditionally**, and under
 //! production batching the Bp+ term nearly vanishes from the argmax bill
 //! (0.53 ms against adm's 22.8): FCMP++ admission verification dominates,
-//! now grounded rather than conditional. Composed per-byte at the argmax
+//! now grounded rather than conditional. **Reachability, read from the
+//! call graph rather than name-matched (a review asked; the answer is
+//! load-bearing):** the shipped verifier IS on the acceptance path, through
+//! a wrapper a name-grep misses — `tx_pool::add_tx` (`tx_pool.cpp:236`) and
+//! the pool-supplement connect overload → `ver_non_input_consensus` → Rule
+//! 7 `ver_mixed_ct_semantics` (`tx_verification_utils.cpp:188` → `:212`,
+//! canonical-layout check then batch) → `verCtSemanticsSimple(rvv)`
+//! (`ct_semantics.cpp:186`, which also runs the Rust CT-balance per tx and
+//! accumulates every tx's proofs) → `verBulletproofPlus(bpp_proofs)`
+//! (`:236`) → `bulletproof_plus_VERIFY` (`:134`/`:141`). The batch spans
+//! the tx set handed to one `ver_non_input_consensus` call — a cold
+//! block's unknown txs arrive as one pool supplement, so connect pays the
+//! BATCHED figure while single-tx relay admission pays the single-proof
+//! one. No double-count with the `adm` term: `shekyl_fcmp_verify` proves
+//! membership/spend-auth (`shekyl-fcmp/src/proof.rs:989`), not ranges —
+//! the wire carries `bulletproofs` and `fcmp_proof` as separate prunable
+//! fields. (One small term this bench does not time separately:
+//! `shekyl_verify_ct_balance`, a per-tx commitment sum check of a handful
+//! of EC ops inside the same walk — µs-class against a ms-class bill.)
+//! Composed per-byte at the argmax
 //! with shipped-batched Bp+ (composition arithmetic, not a direct fill
 //! run): ≈ 1.81 µs/B vs the proxy-single 1.95 — same order, same
 //! conclusion, surge-ceiling ≈ 54 s instead of 57. The shipped verifier's
