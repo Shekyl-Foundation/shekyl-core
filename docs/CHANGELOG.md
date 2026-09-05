@@ -444,8 +444,10 @@
   all name. The operands differ at every block where a leaf drains, observed
   on real LMDB by a new keying pin in `archival_substrate_lmdb.cpp`; the
   genesis coinbase drains when block 60 connects, so mainnet/testnet/stagenet
-  would reject block 60 and halt. Masked by the FAKECHAIN skip (rule 71, R9)
-  on the only chain type ever run past 59. Fix-or-accept is Rick's (DRS
+  would reject block 60 and halt (derived; no non-FAKECHAIN fixture exists to
+  observe it). The rule-71 skip R9 owns is the cause, not the context:
+  nettype gating the check left every test and every `--regtest` run blind
+  to it. Fix-or-accept is Rick's (DRS
   §7.2); FOLLOWUPS carries the sketch. The "no S-graded divergence remains"
   claim is withdrawn at every surface it reached; DRS-0 is gated again.
 
