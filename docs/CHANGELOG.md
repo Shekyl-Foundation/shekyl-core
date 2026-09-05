@@ -4,6 +4,28 @@
 
 ### Fixed
 
+- **Consensus: the block header's `curve_tree_root` is now checked at
+  admission against the tip root, before the block is added (CEN-B5, S1).**
+  `handle_block_to_main_chain` compared the header against the tree root read
+  *after* `add_block` — the post-drain state — while `create_block_template`
+  fills the header from the root *before* it, the state at the block's own
+  height that the per-height record, the wallet client and the CT-2 KAT all
+  name. The two agree only when nothing matures at the block, so every
+  non-FAKECHAIN chain would have rejected block 60 (the genesis coinbase
+  matures there) and halted; the FAKECHAIN skip around the check hid it from
+  every Blockchain-level test and every `--regtest` run. The compare now runs
+  with the other header checks, after proof-of-work and before the miner-tx
+  prevalidation, and a mismatch rejects the block outright — the post-add
+  compare with its connect-then-pop arm is deleted. Observed red → green by
+  the first non-FAKECHAIN Blockchain fixture in the tree
+  (`curve_tree_header_root_check.cpp`: TESTNET, fixed difficulty 1, real
+  LMDB, block 60 rejected before and connected after). The FAKECHAIN skip
+  itself survives, captioned with its real reason (the core_tests generator
+  replays placeholder-root headers into real LMDB; census R9 owns retiring
+  it). `FCMP_PLUS_PLUS.md` §5 now states the state the header commits to.
+  Register: CEN-B5 stays DIVERGENT for the skip; its S1 is fixed, promotion
+  of that half owed at the merged sha.
+
 - **Consensus hardening: the curve-tree leaf collector aborts instead of
   silently dropping an output (CEN-L11/L12).** Three arms in the DB-side leaf
   collector discarded an output on a `continue` or an unchecked construct
@@ -503,6 +525,7 @@
   to it. Fix-or-accept is Rick's (DRS
   §7.2); FOLLOWUPS carries the sketch. The "no S-graded divergence remains"
   claim is withdrawn at every surface it reached; DRS-0 is gated again.
+  *(Fixed 2026-09-05 — see the CEN-B5 entry under Fixed above.)*
 
 - **Consensus: the block-timestamp rule is ratified and single-sentence
   (C2-R3, `docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md`, ratified

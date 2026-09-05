@@ -311,7 +311,7 @@ split.
 | CEN-B2 | Block `minor_version` is effectively unconstrained: `do_check` requires `vote ≥ current`, but the vote normalization (`minor 0` reads as 1) and `current == 1` make the predicate unfailable — any `minor_version` is accepted | src/cryptonote_basic/hardfork.cpp:41–50, 109–113 | C | 4 | none | — | RC-9 ⇒ merged with correction: RC stated the predicate ("vote must be ≥ current fork version") and CEN stated the effect ("unconstrained"); both verified at the pin — the predicate exists and cannot fail at the shipped table. A vote signal with nothing to vote for |
 | CEN-B3 | The hard-fork **voting machinery** runs on every connect (rolling window 10080, threshold accounting, per-height version persisted) but is inert: one table entry, threshold 0, nothing to advance to. `HardFork::add`'s reject verdict is **discarded** at the DB call site; `add` records the table version (not the block's vote) at each height; the voting window is rebuilt from `split_height` after a reorg; the on-hf-advance pool re-validation arm can never fire post-genesis; `mainnet_hard_fork_version_1_till = 0` and the `HF_VERSION_*` constants (all = 1) feed only dead dispatch | src/cryptonote_basic/hardfork.cpp:134–161; discard src/blockchain_db/blockchain_db.cpp:641; reorg rebuild blockchain.cpp:1494; pool re-validate :6480–6490; constants cryptonote_config.h:280–289 | C | 4 | none | — | RC-142, RC-163, RC-164, RC-165, RC-166, RC-168 ⇒ merged. Rule-60 deletion candidate (RC's position: bucket 3 via rule 60's delete-the-dead-branch command); kept at 4 because deleting the *machinery* — as opposed to individual dead branches — is entangled with the V4-activation question the R4 round must answer by design (rules 75/21). §6 finding |
 | CEN-B4 | The block's `attestation_root` must equal the root recomputed from the (possibly empty) credit-wire witness, and every pass record's P-countersignature must verify against the bond's committed hybrid pubkey; nonce binds coinbase `vout[0]` key and the validated `prev_id` (all-zero prev hash refused by the FFI) | 5738 (main) / 2253 (alt) → `verify_block_attestation` 5565–5662; verdict Rust `shekyl_archival_verify_attestation` | C | 1 | spec | [`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md) §3–§4; RF-D3 | RC-12, RC-13 ⇒ merged. Enforcement status: the mechanism is the full recompute + countersignature verify; pre-population the only valid header value is the empty-set root (`ARCHIVAL_CREDIT_WIRE.md` :214–223), so the ratified-in-full admission recompute is *exercised* only on its empty-root slice until the cutover. The doc's §3 enforcement-status paragraph is stale (names the deleted `check_attestation_root`); spec content stands |
-| CEN-B5 | After connect, the header's `curve_tree_root` must equal the root the DB computed by growing the tree with this block's outputs; mismatch pops the block and rejects | 6422–6437 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) :264, :281; [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) | RC-14 ⇒ merged. Skipped on FAKECHAIN; alt path defers to promotion (CEN-K5). **Second divergence found 2026-09-04 (§7 #17), graded S1:** the check compares the header against the root read *after* the add (`:6413`), but the template fills the header from the root *before* it (`:2006`) — the operands differ at every block where a leaf drains (observed on real LMDB: `archival_substrate_lmdb.cpp` `cen_b5_post_add_root_is_not_the_state_the_header_was_filled_from`), so on every non-FAKECHAIN nettype block index 60 is rejected and the chain halts; masked by the FAKECHAIN skip on the only chain type ever run past 59. Fix-or-accept is Rick's. The rule's own wording is also loose — the tree grows with the leaves that *mature* at the block, never with the block's outputs, which are deferred |
+| CEN-B5 | At admission, before the block is added, the header's `curve_tree_root` must equal the tip root — the tree state at the block's own height, grown with every leaf that matured through its parent; mismatch rejects the block without connecting it *(wording corrected 2026-09-05 with the fix, §7 #18: the row previously said "after connect … grown with this block's outputs; mismatch pops", which was the defect, not the rule)* | 5890–5902 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) :264, :281; [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) | RC-14 ⇒ merged. Skipped on FAKECHAIN; alt path defers to promotion (CEN-K5). **Second divergence found 2026-09-04 (§7 #17), graded S1:** the check compares the header against the root read *after* the add (`:6413`), but the template fills the header from the root *before* it (`:2006`) — the operands differ at every block where a leaf drains (observed on real LMDB: `archival_substrate_lmdb.cpp` `cen_b5_post_add_root_is_not_the_state_the_header_was_filled_from`), so on every non-FAKECHAIN nettype block index 60 is rejected and the chain halts; masked by the FAKECHAIN skip on the only chain type ever run past 59. Fix-or-accept is Rick's. The rule's own wording is also loose — the tree grows with the leaves that *mature* at the block, never with the block's outputs, which are deferred |
 | CEN-B6 | Block identity and the PoW hashing blob are `serialize(header) ‖ merkle(miner_tx_hash ‖ tx_hashes) ‖ varint(tx_hashes.size()+1)` — there is no separate merkle-root header field; tampering with `tx_hashes` retargets both identity and PoW | cryptonote_format_utils.cpp:1397–1403 (`get_block_hashing_blob`), 1515–1525 (`get_tx_tree_hash`) | C | 4 | none | — | [m] RC-7 ⇒ minted. CEN scoped identity definitions out (§1.6 of the archived doc); carried here because the PoW check consumes this construction directly. RC decision-log #5: a rewrite that adds an explicit `merkle_root` field is a wire change, not a missing check |
 | CEN-B7 | A `major_version` above `get_ideal_version()` logs a one-time warning and does **not** reject (the version-equality reject is CEN-B1; this arm is the old-daemon UX branch) | 5713–5723 | C | 4 | none | — | [m] RC-17 ⇒ minted. Not a reject; recorded because it is an acceptance-path branch a rewrite must consciously keep or drop |
 
@@ -830,7 +830,7 @@ input, not fixes.
     nettype except FAKECHAIN the check rejects block index 60 — the genesis
     coinbase's stored maturity is `0 + 1 + 60 = 61`, draining when block 60
     connects — and every block after it; the chain halts at height 60.
-    Never observed because every Blockchain-level test is FAKECHAIN (the
+    Not observed until the fix's own regression (entry 18) because every Blockchain-level test was FAKECHAIN (the
     check is skipped, `:6411`), `--regtest` sets `FAKECHAIN`
     (`cryptonote_core.cpp:423–426`), and every real network is at height 1.
     **That is rule 71's strongest evidence to date:** `m_nettype !=
@@ -855,6 +855,57 @@ input, not fixes.
     ruling. Nothing in C++ changes here; FOLLOWUPS carries the item with
     the fix sketch and the red-first test it needs (a non-FAKECHAIN
     core_test, i.e. the R9 work of a generator that produces real roots).
+
+18. **CEN-B5's S1 is fixed — the check runs at admission, before the add,
+    against the tip root; connect-then-pop is gone** (2026-09-05, PR #TBD-B5;
+    Rick authorized the scoped edit as the fix-or-accept ruling of entry 17).
+    The compare moved into `handle_block_to_main_chain`'s header-check
+    sequence, after proof-of-work and before the miner-tx prevalidation
+    (`blockchain.cpp:5873–5902`): the prev_id check above it guarantees the
+    tip is the block's parent, so `get_curve_tree_root()` read there *is* the
+    state at chain height N that the template filled from and the per-height
+    record stores under key N (entry 16). A mismatch sets
+    `m_verifivation_failed` and returns before any write; the post-add
+    compare and its `pop_block_from_blockchain` / `return_txs_to_pool` arm
+    are deleted (net −17 lines in that block, 32 added with the caption). The
+    `new_height > 0` skip went with it: genesis's header is a source constant
+    and the empty-tree root is `selene_hash_init`, so checking it is a gain.
+    **Observed red → green** by the first non-FAKECHAIN Blockchain fixture in
+    the tree, `curve_tree_header_root_check.cpp` (TESTNET, `fixed_difficulty
+    = 1`, real LMDB, real `add_new_block` through the RandomX light-cache
+    verifier): before the edit blocks 1–59 connected and block 60 was rejected
+    with `curve_tree_root mismatch`; after it block 60 connects, the leaf
+    count goes 0 → positive, the header of block 60 equals the record under
+    key 60, and block 61 connects. **Alt/reorg walk (Rick's condition):**
+    every path that adds a block to the main chain is one function —
+    `handle_block_to_main_chain` has three callers, connect (`:6644`, via
+    the `:3103` wrapper), promotion in `switch_to_alternative_blockchain`
+    (`:1326`) and restore in `rollback_blockchain_switching` (`:1251`) — so
+    the admission check covers promotion and restore identically: each
+    re-added block is checked against the post-pop tip, which the prev_id
+    check pins as its parent. `handle_alternative_block` still carries no
+    root check of its own; alt blocks defer to promotion (CEN-K5, unchanged).
+    **What did not change, and why entry 17 misjudged it:** the
+    `m_nettype != FAKECHAIN` skip around the (moved) check survives. Entry 17
+    expected the fix to retire it by making the core_tests generator
+    self-consistent; that reading was wrong — core_tests replay every
+    generated block into a real LMDB-backed `core` (`chaingen.h`,
+    `c.init(vm, test_options_)`), and ten of those chains rewind through the
+    60-block maturity window across five files, so the generator's
+    `selene_hash_init` placeholder headers would be rejected at every drain
+    once the check runs. Retiring the skip therefore needs the generator to
+    compute real roots: a replica of the KAT-verified Rust
+    `CurveTreeClient` exposed over FFI (ingest per block, `root_at(height)`,
+    fork replay from `m_blocks_info`) — bounded, but generator work, and it
+    stays R9's, now with its actual blocker named. The keying pin in
+    `archival_substrate_lmdb.cpp` is renamed
+    `cen_b5_header_root_is_the_tip_root_before_add_block_not_after` and
+    holds the two reads apart so the keying cannot drift back silently.
+    §5 of the spec is rewritten to the state the header commits to (the
+    "after processing all transactions" sentence is retired, records-was);
+    register row stays DIVERGENT for the surviving skip, S1 marked fixed,
+    promotion of the S1 half owed at the merged sha per the M8/D2/L11
+    precedent.
 
 ---
 
@@ -1056,7 +1107,7 @@ the bucket-3/4 rows at C1 close (counts sum to 70).
 | **R8 — Storage-layer enforcement placement** | CEN-L1–L6, L13, L14 (8) | "Validation completed by a side effect of the write path" (KI uniqueness as an LMDB exception, verbatim-hash storage, verify-side-only uniqueness) becomes the rewrite's implicit spec — the rewrite must place each rule deliberately or inherit the accident |
 | **R6 — Inherited crypto verifiers on the acceptance path** | CEN-H11, H19, D1b (3) | The KI-domain check (submit-path-examined only, coupled to the open FCMP y-normalization question), the inherited C++ BP+ verifier (inventory disposition still *pending*), and the KAT-sealed PoW comparison ship as cryptographic consensus surfaces whose right-for-Shekyl was never ruled — a seal is not a ratification |
 | **R7 — Mempool admission semantics** | CEN-M1, M2, M6, M7, M11 (5) | Pool idempotency, NIC caching, and relay-side spend pre-checks freeze as the de-facto admission contract; U-4's open question rides here — whether the pool makes any relay-timing decision independent of the Dandelion++ layer (a privacy-leak channel no relay round examined, because the rounds examined the relay layer and not the pool) |
-| **R9 — Test levers in production consensus paths** | CEN-D7 (1) + the §6.8 carve-out finding (I2/B5/D3-env notes) | Regtest seams compiled into consensus functions fossilize; the rewrite needs a designed test seam, not inherited `FAKECHAIN` branches. **On an S1's critical path since 2026-09-04 (§7 #17):** the CEN-B5 fix's regression cannot run on FAKECHAIN, so a generator that produces real header roots is that fix's prerequisite, not a tidy-up |
+| **R9 — Test levers in production consensus paths** | CEN-D7 (1) + the §6.8 carve-out finding (I2/B5/D3-env notes) | Regtest seams compiled into consensus functions fossilize; the rewrite needs a designed test seam, not inherited `FAKECHAIN` branches. **On an S1's critical path 2026-09-04 → 2026-09-05 (§7 #17, #18):** the CEN-B5 fix's regression could not run on FAKECHAIN, and landed as the first non-FAKECHAIN Blockchain fixture instead; what remains R9's is the skip itself, whose retirement needs the core_tests generator to compute real roots (it replays into real LMDB with placeholder headers — the blocker §7 #18 names) |
 
 The 87 bucket-1 and 14 bucket-2 rows are **closed by this census** (Survey
 A O-4): the rewrite consumes their specs and ratification records directly;

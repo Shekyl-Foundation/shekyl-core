@@ -262,17 +262,24 @@ The `prunable_hash` covers `fcmp_pp_proof`, `curve_trees_tree_depth`,
 ## 5. Block Header Commitment
 
 Each block header contains a `curve_tree_root` field (`crypto::hash`,
-32 bytes) that commits to the state of the curve tree after processing
-all transactions in the block.
+32 bytes) that commits to the state of the curve tree **at the block's own
+height** — after its parent connected and before the block's own drain: the
+state the block was built on, which the template reads at fill time, the
+node's per-height record stores under the block's height, the wallet client
+names as `drained_through = N − 1`, and the CT-2 KAT pins at height 61. The
+connect check compares the field against that state **at admission, before
+the block is added**; a mismatch rejects the block outright, never
+connect-then-pop.
 
-> **Open — S1, ruling owed (2026-09-04; census §7 #17).** The sentence above
-> describes neither the template, which fills the field from the root
-> *before* the block is added (`blockchain.cpp:2006` — the state at chain
-> height N, which the wallet client's `drained_through = N − 1` and the CT-2
-> KAT also name), nor the connect check, which compares the field against
-> the root *after* the add (`:6413`). The two agree only when nothing drains
-> at the block. Which state the field commits to is Rick's ruling; until
-> then this section is not a ratified specification of that boundary.
+> **Ruled 2026-09-05 (fix authorized by Rick; census §7 #18).** This section
+> previously said "after processing all transactions in the block", a state
+> neither the template nor the client ever named, and the connect check
+> compared the field against the root read *after* the add — so the two
+> witnesses disagreed at every block where a leaf matures and every real
+> nettype would have halted at height 60 (the S1 of §7 #17). The check now
+> runs before the add against the tip root; the FAKECHAIN skip around it
+> survives only until the core_tests generator produces real roots (census
+> R9).
 
 ### Serialization
 
@@ -474,19 +481,22 @@ block's header `curve_tree_root` was filled from it at template time
 ref_height − 1` (`shekyl-curve-tree/src/client.rs:908`), and the CT-2 KAT
 pins it at height 61. Two witnesses of it therefore exist — the header
 field (the block's *attestation*) and the node's own per-height record —
-and CEN-B5 is the consensus check meant to bind them (§5) — **but today
-that binding holds on no nettype:** the check is skipped on FAKECHAIN and,
-everywhere else, compares the header against the root *after* the block's
-own drain (census §7 #17, S1, ruling owed), so the two witnesses currently
-agree only because the template fills the header honestly. One more reason
+and CEN-B5 is the consensus check that binds them (§5): at admission,
+before the block's own drain, the header must equal the tip root. Until
+2026-09-05 that binding held on no nettype — skipped on FAKECHAIN and,
+everywhere else, comparing the header against the root *after* the drain
+(census §7 #17, S1, fixed in §7 #18) — so the two witnesses agreed only
+because the template filled the header honestly. Today it holds on every
+nettype except FAKECHAIN, where the skip survives until the core_tests
+generator produces real roots (census R9). One more reason
 the verifier reads its **own computed record**, never the header; a rewrite
 does the same in whatever form its store keeps that record. The prover holds no
 store and reads the header ([`CURVE_TREE_CLIENT.md`](design/CURVE_TREE_CLIENT.md) §3.3); today its only
 protection is its own leaf recompute against that header (`verify_root`
-refuses to build against a root it cannot reproduce), and B5 adds the
-consensus-side binding only once the S1 below is closed. The two reads name one
-value on every network where B5 runs; the only thing that makes the choice
-observable is B5's FAKECHAIN skip (census R9), and only in tests.
+refuses to build against a root it cannot reproduce), and B5 is the
+consensus-side binding of that header on every real nettype. The two reads
+name one value on every network where B5 runs; the only thing that makes the
+choice observable is B5's FAKECHAIN skip (census R9), and only in tests.
 
 *Reconciled 2026-09-04:* this paragraph previously narrated a header read
 the code stopped performing on 2026-04-13; the archaeology and the ruling

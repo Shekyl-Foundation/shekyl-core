@@ -69,7 +69,14 @@ and fine. It is nettype selecting a code path instead of a parameter.
    divergence that announces nothing — the silent skip
    (`CEN-B5`'s FAKECHAIN root-check skip is the counter-example this
    rule exists to retire; census batch R9 owns that family and
-   inherits this rule rather than re-deriving it).
+   inherits this rule rather than re-deriving it). This rule was
+   written from an argument; it now has an exhibit: that same skip
+   hid an S1 — the root check compared the wrong state and would have
+   halted every real network at height 60 — because every
+   Blockchain-level test and every `--regtest` run took the FAKECHAIN
+   arm without the check (census §7 #17, fixed §7 #18). A skipped
+   check is not a check the tests exercise on another nettype; it is a
+   check nothing exercises.
 3. **Enforcement is two-sided.** The negative side: the
    `check_network_uniformity.sh` gate flags any *new* public-nettype
    equality **or inequality** branch in the fenced directories against
