@@ -55,9 +55,13 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::recon::{collect_block_leaves, extract_leaf_hashes, per_output_h_pqc, TxOutputs};
+use crate::recon::{
+    assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, per_output_h_pqc,
+    root_from_scalars, TxOutputs,
+};
 use crate::store::{LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError};
 use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
+use shekyl_fcmp::tree::selene_hash_init;
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
 /// **before** `h_pqc` resolution. The client resolves `h_pqc` from the
@@ -995,6 +999,47 @@ impl CurveTreeClient {
         let root = self.store.root_at_count(n).map_err(ClientError::from)?;
         let depth = shekyl_fcmp::tree::layer_count_for_leaves(n);
         Ok((root, depth))
+    }
+
+    /// The root a block built on the current tip commits to
+    /// (`FCMP_PLUS_PLUS.md` §5): the tree state at chain height `tip + 1`,
+    /// after the tip's own drain — what the daemon's `get_curve_tree_root()`
+    /// reports once the tip has connected, and what [`Self::root_at`]`(tip + 1)`
+    /// returns once that next block is ingested. For a fresh client (no
+    /// blocks) it is the empty-tree sentinel, i.e. the genesis header.
+    ///
+    /// [`Self::root_at`] refuses heights beyond the ingested tip because a
+    /// *verifier* must never anchor on a state it has not replayed. A
+    /// *producer* of the next header needs exactly that state, so this is
+    /// the one read that looks one block past the tip; `n` is the count
+    /// drained through the tip.
+    ///
+    /// The store is verifier-shaped: ingesting block `h` drains the bucket
+    /// that matures at `h − 1`, so it holds the state through `tip − 1` and
+    /// serves `root_at(tip)` from cache. The one-block-ahead read this method
+    /// makes needs the bucket maturing at `tip` as well, which enters the
+    /// store only when block `tip + 1` is ingested. Only when that bucket is
+    /// empty does the store path answer; on any chain with coinbases a bucket
+    /// matures at every height past the first window, so past height 60 the
+    /// common case rebuilds the root from the in-memory entries in canonical
+    /// drain order with the same layer builder (`recon::root_from_scalars`,
+    /// the oracle the store KATs are pinned to) — linear in the drained
+    /// leaves per call. A producer-side read (test generator, template
+    /// construction on a store-less node), not the verify hot path.
+    pub fn next_block_root(&self) -> Result<[u8; 32], ClientError> {
+        self.ensure_live()?;
+        let Some(tip) = self.ingested_tip_height else {
+            return Ok(selene_hash_init());
+        };
+        let n = self.drained_leaf_count_at(tip);
+        let stored = self.store.leaf_count().map_err(ClientError::from)?;
+        if n <= stored {
+            return self.store.root_at_count(n).map_err(ClientError::from);
+        }
+        Ok(root_from_scalars(&assemble_leaf_stream(
+            &self.entries,
+            tip.0,
+        )))
     }
 
     /// Integrity gate (§3.3): the reconstructed root at `reference.height`

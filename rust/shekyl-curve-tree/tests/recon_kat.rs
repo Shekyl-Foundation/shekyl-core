@@ -332,6 +332,43 @@ fn client_reconstructs_consensus_root_at_every_height() {
     }
 }
 
+/// Producer-side twin of the test above: `next_block_root` — the read the
+/// C++ test generator fills headers from through `shekyl-ffi`'s replica
+/// surface — equals the consensus header root of the block about to be
+/// built, at every height, *before* that block is ingested. Height 0 is the
+/// empty-tree sentinel (the genesis header). This pins the one-past-tip
+/// read to the same fixture that pins `root_at`, so the two can never name
+/// different states.
+#[test]
+fn next_block_root_is_the_header_of_the_block_about_to_be_built() {
+    let f = fixture();
+    for c in f["chains"].as_array().expect("chains") {
+        let name = c["name"].as_str().unwrap();
+        let blocks = decode_client_chain(c);
+        let mut client = CurveTreeClient::new();
+        let mut mismatches = Vec::new();
+        for blk in &blocks {
+            let produced = client.next_block_root().unwrap();
+            if produced != blk.root {
+                mismatches.push(blk.height);
+            }
+            ingest_client_block(&mut client, blk);
+            // Once ingested, the verifier-side read names the same state.
+            assert_eq!(
+                client.root_at(BlockHeight(blk.height)).unwrap(),
+                produced,
+                "chain {name}: root_at({}) disagrees with the header it was built from",
+                blk.height
+            );
+        }
+        assert!(
+            mismatches.is_empty(),
+            "chain {name}: next_block_root != header root at heights {:?}",
+            &mismatches[..mismatches.len().min(10)],
+        );
+    }
+}
+
 /// The production client path and the bare-`recon` path agree height-for-
 /// height: promoting the KAT to the `CurveTreeClient` API changed the
 /// orchestration surface, not the reconstructed values.

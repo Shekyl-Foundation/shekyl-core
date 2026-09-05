@@ -46,7 +46,7 @@ the other stamped figures are unre-measured and keep the Round-2 pin.
 > complete over the bucket-1/2 set: the set itself grows (bucket promotions
 > enter UNREVIEWED), so absence keeps meaning unreviewed, never conformant. Three states: CHECKED-CONFORMANT (oracle),
 > DIVERGENT, UNREVIEWED (**the default**); the last two are regression-only, and
-> **DRS-P0f row coverage is complete** (2026-09-02): 102/102 bucket-1/2 rows disposed — **100 CHECKED-CONFORMANT**, 1 DIVERGENT (CEN-B5's rule-71 FAKECHAIN skip — census R9 owns it), 1 failed closed (CEN-L8; CEN-I12 was promoted 2026-09-05 once its anchor source was reconciled) — over the **102** bucket-1/2 rows that existed then. The set is now **121** (C2-R1b promoted nine rows 2026-09-03; C2-R1c ten more 2026-09-04, nine promotions plus the K1 split); those nineteen are UNREVIEWED pending P0f review. **Both S-graded findings are FIXED and re-verified:** the S0 by PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (CEN-D2/D1 promoted, 2026-09-03); **CEN-L11/L12 promoted at PR #609's merged fix (2026-09-04).** P0f is the per-row conformance review (*not* P0d, which is Digest v0); bucket-3/4 rows remain UNREVIEWED pending their design rounds. **An S-graded divergence is open again (2026-09-04):** CEN-B5's post-connect header check compares the root *after* the add while the header is filled from the root *before* it — every non-FAKECHAIN chain halts at height 60 (census §7 #17) — **S1**, masked by the FAKECHAIN skip; fix-or-accept is Rick's and it gates DRS-0 per §7.2. This invalidates the unhedged
+> **DRS-P0f row coverage is complete** (2026-09-02): 102/102 bucket-1/2 rows disposed — **100 CHECKED-CONFORMANT**, 1 DIVERGENT (CEN-B5's rule-71 FAKECHAIN skip — retired on PR #623 with its S1; promotion owed at the merged sha), 1 failed closed (CEN-L8; CEN-I12 was promoted 2026-09-05 once its anchor source was reconciled) — over the **102** bucket-1/2 rows that existed then. The set is now **121** (C2-R1b promoted nine rows 2026-09-03; C2-R1c ten more 2026-09-04, nine promotions plus the K1 split); those nineteen are UNREVIEWED pending P0f review. **Both S-graded findings are FIXED and re-verified:** the S0 by PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (CEN-D2/D1 promoted, 2026-09-03); **CEN-L11/L12 promoted at PR #609's merged fix (2026-09-04).** P0f is the per-row conformance review (*not* P0d, which is Digest v0); bucket-3/4 rows remain UNREVIEWED pending their design rounds. **A third S-grade was found 2026-09-04 and is **fixed on PR #623 (2026-09-05, census §7 #18)** — the check now runs at admission before the add, on every nettype; re-verification at the merged sha owed, and only that re-review still gates DRS-0:** CEN-B5's header check compared the root *after* the add while the header is filled from the root *before* it — every non-FAKECHAIN chain would have halted at height 60 (census §7 #17) — **S1**, masked by the FAKECHAIN skip, which the same PR retired. This invalidates the unhedged
 > "trusted LMDB digest" phrasing in **A2 / D11 / E2**.
 > **heed is retired** (no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve, so format compatibility is worth zero — DEL-007). **DRS-D4 is substantially discharged** (wallet ~90%).
 > **Ruled 2026-09-01 and applied in this document — CSR-3:** the oracle
@@ -57,9 +57,10 @@ the other stamped figures are unre-measured and keep the Round-2 pin.
 > CEN-L11) is **complete over the 102 bucket-1/2 rows P0f reviewed, not the
 > current 121** — 100 / 1 / 1, via **DRS-P0f** — so outside the 100 the digest is
 > a *regression* instrument. **The review's two S-grades are fixed and re-verified** — the S0
-> by PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (D2/D1 promoted) — but a
-> third S-grade is open (CEN-B5's header-check timing, S1, 2026-09-04, census §7
-> #17) and gates DRS-0. **Also applied — CSR-4:** DRS-C is
+> by PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (D2/D1 promoted) — and a
+> third (CEN-B5's header-check timing, S1, 2026-09-04, census §7 #17) is fixed on
+> PR #623 (2026-09-05, §7 #18) with re-verification at the merged sha owed;
+> it gates DRS-0 until then. **Also applied — CSR-4:** DRS-C is
 > **analysis-only**; §3.5's PR shape amended. **CSR-1** and **CSR-2** are ruled
 > and recorded in the reconciliation; **CSR-5** is ruled in direction only,
 > with no queue slot fixed.
@@ -98,7 +99,7 @@ the other stamped figures are unre-measured and keep the Round-2 pin.
 | `db_lmdb.{h,cpp}` | **Authoritative** table inventory until re-census |
 | Early **logical state digest** (E-1) | **To be built** in DRS-P0/DRS-C against LMDB — not first in DRS-E2 |
 
-**DRS-0 is blocked** until **DRS-P0** lands **and the register's open S-grade is closed or accepted.** The S0 (CEN-M8, PR #602) and the first S1 (CEN-D2/D1, PR #604) are fixed, merged and re-verified; a **second S1 was found 2026-09-04** — CEN-B5's post-connect header check compares the root *after* the add while `create_block_template` fills the header from the root *before* it, so every non-FAKECHAIN chain halts at height 60 (census §7 #17; observed on real LMDB; masked by the rule-71 skip R9 owns). Fix-or-accept is Rick's. CEN-L11/L12 were promoted at PR #609's merged fix (2026-09-04).
+**DRS-0 is blocked** until **DRS-P0** lands **and the register's third S-grade is re-verified at its merged sha.** The S0 (CEN-M8, PR #602) and the first S1 (CEN-D2/D1, PR #604) are fixed, merged and re-verified; a **second S1 was found 2026-09-04 and fixed 2026-09-05 (PR #623)** — CEN-B5's header check compared the root *after* the add while `create_block_template` fills the header from the root *before* it, so every non-FAKECHAIN chain would have halted at height 60 (census §7 #17); the check now runs at admission before the add, red → green observed on a TESTNET Blockchain fixture (§7 #18). CEN-L11/L12 were promoted at PR #609's merged fix (2026-09-04).
 
 ### P0a reconciliation registry (2026-09-05, `dev` `9742ec4f6`)
 
