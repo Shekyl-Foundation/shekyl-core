@@ -62,6 +62,29 @@
 
 ### Added
 
+- **DRS-P0a — LMDB table reconciliation: the pin→HEAD delta is measured,
+  registered, and gate-pinned.** The DRS design doc's Round-2 substrate
+  figures (46 tables, seven undocumented, two phantoms) had aged into
+  today's 49; P0a closes the delta by **set difference, not history
+  search** — births = 3 (both attestation-witness tables and
+  `archival_settlement`, each with owning commit and the schema
+  version-ladder as independent witness), **deaths = ∅ measured**, not
+  assumed by the total adding up. A 49-row reconciliation registry in
+  [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) records per-table
+  disposition (39 documented-at-pin + 7 since-documented + 3 born-since),
+  the pin-era doc closure (41 claimed = 39 real + 2 phantoms), and the
+  provenance trap that bit twice: a pickaxe on a bare name measures the
+  identifier *family* (`archival_settlement_epoch_at_height`, pre-pin),
+  the quoted literal measures the *table* (post-pin). The schema doc's
+  duplicate `properties`-titled heading — present since before the pin
+  and invisible to the property-row gate's set() dedup — is merged into
+  the one `properties` section, and `check_lmdb_schema_coverage.py`
+  gains the legs that would have seen all of it: section headings as a
+  duplicate-free bijection with `SHEKYL_LMDB_TABLES`, and the registry's
+  rows and stated count pinned to the same macro. Every new failure path
+  observed red before landing. DEL-005 closed; stale DRS figure sites
+  corrected with records-was pins kept.
+
 - **Shard-visual ruling A: parameter admissibility closed, with a
   pre-registered criterion and typed enforcement.** The spec's
   parameter design-review checkpoint had inverted — the gate existed,

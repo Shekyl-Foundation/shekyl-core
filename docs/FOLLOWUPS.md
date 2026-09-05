@@ -107,7 +107,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Daemon chain store (`DRS-*`) — gap-close pass landed in design.** SoT: [`docs/design/DAEMON_REDB_STORE.md`](./design/DAEMON_REDB_STORE.md)
   - Target: pre-genesis
 
-- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI; **P0b**
+- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI — **DELIVERED 2026-09-05** (49-row reconciliation registry + heading/registry gate legs; see the P0a registry in [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)); **P0b**
   - Target: pre-genesis
 
 - **DRS-BENCH — resource/privacy/IBD/pop suite (not throughput).** File
