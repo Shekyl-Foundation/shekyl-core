@@ -33,7 +33,7 @@ use shekyl_rpc_types::{
     BlockHeaderSlot, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
     GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
     GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
-    HardForkInfoRequest, HardForkInfoResponse,
+    HardForkInfoRequest, HardForkInfoResponse, CORE_RPC_ERROR_CODE_CORE_BUSY,
 };
 
 /// Why a native method could not answer. Maps onto the transport's existing
@@ -766,7 +766,8 @@ pub fn block_headers_range_request(
 pub fn hard_fork_info_request(params: &serde_json::Value) -> Result<HardForkInfoRequest, RpcFault> {
     object_params(
         params,
-        "Wrong parameters, expected an object with optional version (0-255)",
+        "Wrong parameters, expected an object with optional version (1-255); \
+         omit it to ask about the fork this node would vote in next",
     )
 }
 
@@ -795,6 +796,27 @@ pub fn get_last_block_header(
 ) -> Result<GetLastBlockHeaderResponse, RpcFault> {
     let pow = pow_hash_or_refuse(fill_pow_hash, restricted)?;
     let tip = facts.chain_tip()?;
+    // **The readiness check the C++ had, and only here.** `CHECK_CORE_READY()`
+    // guarded `on_get_last_block_header` alone among this slice's five —
+    // deliberately, and the reason survives the port: this is the one method
+    // that answers "the tip", which on an unsynchronised node is the top of a
+    // partial chain presented as the top of the chain. The other four take an
+    // explicit height or hash, where the caller already named what it wanted
+    // and a partial chain simply does not have it.
+    //
+    // The C++ answered `status = BUSY` with a **default-constructed header**,
+    // which `shekyl-rpc-client`'s `get_hardfork_version` read straight
+    // through as major version 0. Refusing is the ruling already applied to
+    // `fill_pow_hash`: a method that declines to answer must not report
+    // success (`5b0c32f51`).
+    if !tip.synchronized {
+        return Err(RpcFault::Refused(RpcRefusal {
+            code: CORE_RPC_ERROR_CODE_CORE_BUSY,
+            message: "Core is busy: this node is not synchronized, so it has \
+                      no chain tip to report."
+                .to_owned(),
+        }));
+    }
     // `chain_height` is the count; the tip's own height is one below it. A
     // chain with no blocks cannot occur (genesis is block 0), and saturating
     // rather than asserting keeps the arithmetic total.
@@ -917,7 +939,7 @@ pub fn hard_fork_info(
     facts: &dyn ChainFacts,
     request: &HardForkInfoRequest,
 ) -> Result<HardForkInfoResponse, RpcFault> {
-    let info = facts.hard_fork_info(request.version)?;
+    let info = facts.hard_fork_info(request.version.map(core::num::NonZeroU8::get))?;
     Ok(HardForkInfoResponse {
         status: RpcStatus::ok(),
         queried_version: info.queried_version,
@@ -1983,7 +2005,7 @@ pub(crate) mod tests {
             hard_fork_info_request(&json!({"version": 7}))
                 .unwrap()
                 .version,
-            Some(7)
+            core::num::NonZeroU8::new(7)
         );
         assert_eq!(
             fee_estimate_request(&json!({"grace_blocks": 5}))
@@ -2262,7 +2284,9 @@ pub(crate) mod tests {
     /// rather than answering with an empty field and status OK.
     #[test]
     fn a_restricted_caller_asking_for_the_pow_hash_is_refused_not_blanked() {
-        let f = facts(false, 0);
+        // Synchronized, because `get_last_block_header` refuses an
+        // unsynchronised node outright — see the test below.
+        let f = facts(true, 0);
         for restricted in [true, false] {
             let out = get_last_block_header(&f, true, restricted);
             if restricted {
@@ -2276,6 +2300,55 @@ pub(crate) mod tests {
         }
         // And not asking for it is fine on either listener.
         assert!(get_last_block_header(&f, false, true).is_ok());
+    }
+
+    /// An unsynchronised node refuses to report a tip, rather than reporting
+    /// the top of a partial chain.
+    ///
+    /// The C++ `CHECK_CORE_READY()` guarded **this method alone** among the
+    /// slice's five, and the reason survives: this is the one that answers
+    /// "the tip", which on a syncing node is the top of what has arrived so
+    /// far presented as the top of the chain. The other four take an explicit
+    /// height or hash, where the caller named what it wanted.
+    ///
+    /// The C++ answered `status = BUSY` with a **default-constructed**
+    /// header, and that was a live trap rather than a tidy convention:
+    /// `shekyl-rpc-client`'s `get_hardfork_version` reads
+    /// `block_header.major_version` without checking the status, so an
+    /// unsynchronised daemon told it the fork version was 0. A refusal cannot
+    /// be read as an answer.
+    #[test]
+    fn an_unsynchronized_node_refuses_to_report_a_tip() {
+        let unsynced = facts(false, 900_000);
+        let out = get_last_block_header(&unsynced, false, false);
+        assert!(
+            matches!(&out, Err(RpcFault::Refused(r)) if r.code == CORE_RPC_ERROR_CODE_CORE_BUSY),
+            "{out:?}"
+        );
+        // No header was read: the refusal precedes the projection, so a
+        // syncing node does not pay for a question it will not answer.
+        assert_eq!(unsynced.header_reads.load(Ordering::Relaxed), 0);
+
+        // The other four have no readiness check, because the C++ gave them
+        // none — asserted, so that "port what is there" stays a fact about
+        // this diff rather than a claim about it.
+        let range = GetBlockHeadersRangeRequest {
+            start_height: 0,
+            end_height: 0,
+            fill_pow_hash: false,
+        };
+        assert!(get_block_headers_range(&unsynced, &range, false).is_ok());
+        assert!(hard_fork_info(&unsynced, &HardForkInfoRequest { version: None }).is_ok());
+        assert!(get_fee_estimate(&unsynced, &GetFeeEstimateRequest { grace_blocks: 0 }).is_ok());
+        assert!(get_block_header_by_hash(
+            &unsynced,
+            &GetBlockHeaderByHashRequest {
+                hashes: vec![],
+                fill_pow_hash: false,
+            },
+            false
+        )
+        .is_ok());
     }
 
     /// One miss does not discard the rest, and each slot names the hash it
@@ -2402,7 +2475,13 @@ pub(crate) mod tests {
             "the two versions are separate fields, not one under two names"
         );
 
-        let out = hard_fork_info(&f, &HardForkInfoRequest { version: Some(4) }).expect("info");
+        let out = hard_fork_info(
+            &f,
+            &HardForkInfoRequest {
+                version: core::num::NonZeroU8::new(4),
+            },
+        )
+        .expect("info");
         assert_eq!(
             *f.asked_fork_version.lock().expect("not poisoned"),
             Some(Some(4))

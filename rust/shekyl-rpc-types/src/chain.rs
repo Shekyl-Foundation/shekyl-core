@@ -133,6 +133,21 @@ pub const CORE_RPC_ERROR_CODE_RESTRICTED: i64 = -19;
 /// height it cannot produce the block for.
 pub const CORE_RPC_ERROR_CODE_INTERNAL_ERROR: i64 = -5;
 
+/// JSON-RPC error code for a node that is not synchronised
+/// (`CORE_RPC_ERROR_CODE_CORE_BUSY`, `core_rpc_server_error_codes.h:41`).
+///
+/// **A refusal, where the C++ answered with a status and a zeroed payload.**
+/// `CHECK_CORE_READY()` set `status = BUSY` and returned success, leaving the
+/// reply's `block_header` default-constructed — so a client that read the
+/// header without checking the status got a block at height 0 with a zero
+/// hash. That is not hypothetical: `shekyl-rpc-client`'s
+/// `get_hardfork_version` reads `block_header.major_version` straight
+/// through, and against an unsynchronised C++ daemon it silently returned
+/// version 0. Refusing is the ruling this slice already applied twice
+/// (`pow_hash_or_refuse`, and `5b0c32f51`'s "loud, never the degrade arm"):
+/// a method that declines to answer must not report success.
+pub const CORE_RPC_ERROR_CODE_CORE_BUSY: i64 = -9;
+
 /// The REST error envelope a natively-served endpoint answers with when it
 /// cannot produce its reply (HTTP 500): `status` is never `OK`, and `error`
 /// names what failed (diagnostic text — RK-D8 scope — not contract). The

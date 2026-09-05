@@ -659,7 +659,10 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             let Some(version) = args.get(1).and_then(|a| a.parse::<u8>().ok()) else {
                 return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN;
             };
-            hard_fork_info(&source, (version > 0).then_some(version))
+            // `NonZeroU8::new` *is* the "0 means the next fork" rule, so the
+            // console no longer spells it out: the sentinel cannot survive
+            // into the request type.
+            hard_fork_info(&source, core::num::NonZeroU8::new(version))
         }
         _ => return SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN,
     };
@@ -1768,6 +1771,23 @@ fn alt_chain_info(
             "Block hash {tip} is not the tip of any known alternate chain"
         ));
     };
+    // **The declared length must match the hashes supplied.** The C++ check
+    // this replaced was `bhres.block_headers.size() != chain.length + 1`
+    // against a request of `block_hashes` plus the parent — which is
+    // `block_hashes.len() == length` said indirectly. The per-hash
+    // correspondence below is stronger on *which* hash answered and
+    // **weaker here**, because a reply declaring `length = 10` while
+    // supplying two hashes has every slot correspond: the console would then
+    // print a depth and a hash-rate share computed from ten blocks over two
+    // headers' timespan. Checked before the fetch, so a malformed reply costs
+    // no header reads.
+    if chain.block_hashes.len() as u64 != chain.length {
+        return Err(format!(
+            "the daemon declared a {}-block alt chain but listed {} of its blocks",
+            chain.length,
+            chain.block_hashes.len()
+        ));
+    }
     let start_height = start_of(chain);
     let mut out: Vec<String> = target_warning.into_iter().collect();
     out.extend([
@@ -1903,7 +1923,7 @@ fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
 /// Fetch `hard_fork_info` — native here, over `/json_rpc` remotely.
 fn fetch_hard_fork_info(
     src: &Source,
-    version: Option<u8>,
+    version: Option<core::num::NonZeroU8>,
 ) -> Result<shekyl_rpc_types::HardForkInfoResponse, String> {
     let request = shekyl_rpc_types::HardForkInfoRequest { version };
     let reply = match src {
@@ -2036,7 +2056,7 @@ fn fork_extra_info(earliest_height: u64, net_height: u64, block_time: u64) -> St
 /// *which fork these numbers are about* is exactly what
 /// `queried_version` was split out to be, and a label that can drift from
 /// its numbers is worth not carrying forward.
-fn hard_fork_info(src: &Source, version: Option<u8>) -> Result<String, String> {
+fn hard_fork_info(src: &Source, version: Option<core::num::NonZeroU8>) -> Result<String, String> {
     let info = fetch_hard_fork_info(src, version)?;
     Ok([
         format!(
@@ -3755,6 +3775,47 @@ mod tests {
         assert!(
             out.contains("Approximated 66.666667% of network hash rate"),
             "{out}"
+        );
+    }
+
+    /// A chain declaring more blocks than it lists is refused.
+    ///
+    /// **The half of the C++ check the correspondence check did not
+    /// replace.** `block_headers.size() != chain.length + 1` was
+    /// `block_hashes.len() == length` said indirectly; per-hash
+    /// correspondence is stronger about *which* hash answered and blind to
+    /// this, because every slot of a short list corresponds perfectly. The
+    /// console would have printed a depth and a hash-rate share derived from
+    /// a length no header supports — a wrong number with every input
+    /// agreeing. Found in review; the claim that the new check was "strictly
+    /// stronger" was wrong on this axis.
+    #[test]
+    fn a_chain_declaring_more_blocks_than_it_lists_is_refused() {
+        let tip = hash_n(9).to_string();
+        let (address, log) = route_server_recording(vec![
+            ("/get_info", info_reply(100)),
+            (
+                "json_rpc:get_alternate_chains",
+                // length 10, two hashes.
+                alt_chains_reply(&serde_json::json!([one_alt_chain(9, 90, 10, &[8, 9], 7)])),
+            ),
+            (
+                "json_rpc:get_block_header_by_hash",
+                slots_reply(vec![slot(8, 1000), slot(9, 1240), slot(7, 880)]),
+            ),
+        ]);
+        let (code, out) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
+        assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+        assert!(out.contains("declared a 10-block alt chain"), "{out}");
+        assert!(out.contains("listed 2"), "{out}");
+        // Refused before the headers are fetched: a malformed reply must not
+        // cost a round trip per block it claims.
+        let asked = log.lock().unwrap();
+        assert!(
+            asked
+                .iter()
+                .all(|(_, body)| !body.contains("get_block_header_by_hash")),
+            "the header batch must not be issued: {asked:?}"
         );
     }
 

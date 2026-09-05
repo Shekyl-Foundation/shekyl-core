@@ -354,18 +354,17 @@ pub trait Rpc: Sync + Clone {
     /// This is specifically the major version within the most recent block header.
     fn get_hardfork_version(&self) -> impl Send + Future<Output = Result<u8, RpcError>> {
         async move {
-            #[derive(Debug, Deserialize)]
-            struct HeaderResponse {
-                major_version: u8,
-            }
-
-            #[derive(Debug, Deserialize)]
-            struct LastHeaderResponse {
-                block_header: HeaderResponse,
-            }
-
+            // The shared wire type, for the reason `get_fee_rate` gives: a
+            // locally-declared reply struct is invisible to the daemon's
+            // oracle vectors and parity tests, which is how a removed field
+            // reached a runtime parse failure once already. This one read a
+            // two-field subset, so it would not have *broken* — it would have
+            // kept working while quietly disagreeing about what a header is.
             Ok(self
-                .json_rpc_call::<LastHeaderResponse>("get_last_block_header", None)
+                .json_rpc_call::<shekyl_rpc_types::GetLastBlockHeaderResponse>(
+                    "get_last_block_header",
+                    None,
+                )
                 .await?
                 .block_header
                 .major_version)

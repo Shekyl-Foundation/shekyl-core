@@ -444,6 +444,12 @@
   for block 0 as the C++ did — a client that omits its heights is told it
   omitted them — and bounds both endpoints against the chain tip before
   reading anything, which the C++ also did and the first port did not.
+  `get_last_block_header` **refuses with `CORE_BUSY` (-9) on an
+  unsynchronized node**, where the C++ answered `status: BUSY` with a
+  zero-filled header — a shape that let a client reading the header without
+  checking the status report a fork version of 0. `hard_fork_info` no longer
+  accepts `version: 0`: it was the C++'s spelling of "absent", and omitting
+  the field is now the only way to ask about the next fork.
 
 - **The daemon console reads the DAA block target from the build, not from
   the daemon it is talking to.** `T` is genesis-frozen and single-sourced

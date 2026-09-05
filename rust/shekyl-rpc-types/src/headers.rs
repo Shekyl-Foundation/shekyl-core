@@ -132,15 +132,25 @@ pub struct GetBlockHeadersRangeResponse {
 
 /// Request of `hard_fork_info`.
 ///
-/// **`version` is an `Option`, because 0 was a sentinel.** The C++ read
-/// `req.version > 0 ? req.version : get_next_hard_fork_version()`, so zero
-/// meant "the next fork" — a value hiding in the same field as the versions
-/// it is not. Absent means the next fork; present means that version.
+/// **`version` is an `Option<NonZeroU8>`, because 0 was a sentinel.** The C++
+/// read `req.version > 0 ? req.version : get_next_hard_fork_version()`, so
+/// zero meant "the next fork" — a value hiding in the same field as the
+/// versions it is not. Absent means the next fork; present means that
+/// version.
+///
+/// **The zero is unrepresentable rather than documented away.** An `Option<u8>`
+/// would still deserialize `{"version": 0}` as `Some(0)`, which then means
+/// exactly what `None` means — so the type would claim a distinction the wire
+/// does not have, and a reader would be entitled to believe every present
+/// value is queried literally. `NonZeroU8` makes the sentinel fail to parse,
+/// and the refusal names the shape (`version` is 1-255). This is the same
+/// split the *reply* got: one field that meant two things became two fields
+/// that each mean one.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HardForkInfoRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<u8>,
+    pub version: Option<core::num::NonZeroU8>,
 }
 
 /// Result of `hard_fork_info`.
@@ -315,6 +325,14 @@ mod tests {
 
     /// The sentinel is gone: absent means "the next fork", and there is no
     /// value of `version` that means anything other than a version.
+    ///
+    /// **The name claimed this before the body checked it.** With
+    /// `Option<u8>`, `{"version":0}` deserialized to `Some(0)` and the
+    /// handler's `unwrap_or(0)` handed the sentinel straight back to the
+    /// resolver — so zero and absent meant the same thing while the type said
+    /// they did not, and this test passed without ever asking. Found in
+    /// review. `NonZeroU8` makes the sentinel fail to parse, and the last
+    /// assertion is the one that now earns the name.
     #[test]
     fn the_hard_fork_request_has_no_sentinel() {
         let absent: HardForkInfoRequest =
@@ -328,7 +346,23 @@ mod tests {
 
         let asked: HardForkInfoRequest =
             serde_json::from_str(r#"{"version":3}"#).expect("an explicit version is valid");
-        assert_eq!(asked.version, Some(3));
+        assert_eq!(asked.version, core::num::NonZeroU8::new(3));
+
+        // The sentinel itself.
+        assert!(
+            serde_json::from_str::<HardForkInfoRequest>(r#"{"version":0}"#).is_err(),
+            "0 is not a fork version — it was the C++'s spelling of \"absent\", \
+             and a field that means two things is what this type exists to \
+             stop"
+        );
+        // And the range still runs to 255, so the refusal is about zero and
+        // not about a narrower type.
+        assert_eq!(
+            serde_json::from_str::<HardForkInfoRequest>(r#"{"version":255}"#)
+                .expect("255 is a version")
+                .version,
+            core::num::NonZeroU8::new(255)
+        );
     }
 
     /// The deleted singular `hash` is refused rather than ignored, so a
