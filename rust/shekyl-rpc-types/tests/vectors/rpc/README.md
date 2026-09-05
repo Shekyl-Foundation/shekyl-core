@@ -12,8 +12,11 @@ are mirrored by `skip_serializing_if`).
 
 The files are epee's bytes exactly — including its CRLF line endings —
 and this directory is `-text` in `.gitattributes` so no checkout rewrites
-them (the same rule `docs/test_vectors/` uses). Whitespace is not part of
-the contract (RK-D4); the bytes are kept faithful because a vector that is
+them (the same rule `docs/test_vectors/` uses). `-text` stops **git**. A
+tool can still rewrite the bytes, and the parsed-equality suite will not
+notice (serde accepts both endings). `v1_oracle_vectors_keep_epees_crlf`
+is the check the attribute cannot be. Whitespace is not part of the
+contract (RK-D4); the bytes are kept faithful because a vector that is
 "the oracle's output, modulo edits" is a weaker pin than one that is the
 oracle's output.
 

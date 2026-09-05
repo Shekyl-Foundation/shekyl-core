@@ -75,6 +75,74 @@ fn parsed(json: &str) -> Value {
     serde_json::from_str(json).expect("vector / output is JSON")
 }
 
+/// `_v1.json` files that are not epee `store_t_to_json` bytes with CRLF.
+///
+/// `get_block_hash_v1` is a JSON string with no line ending — epee's one-line
+/// form. The three `get_version_*` files were derived after
+/// `CORE_RPC_VERSION` moved to Rust (README); they are LF and cannot be
+/// recaptured as epee output.
+const V1_WITHOUT_EPEE_CRLF: &[&str] = &[
+    "get_block_hash_v1.json",
+    "get_version_all_defaults_v1.json",
+    "get_version_synced_v1.json",
+    "get_version_syncing_v1.json",
+];
+
+/// `.gitattributes` marks this directory `-text` so **git** will not rewrite
+/// EOL. A tool still can, and the parsed-equality suite will not notice:
+/// serde accepts both endings, the C++ structs these came from are deleted,
+/// and the file cannot be recaptured. This bites against replacing `\r\n`
+/// with `\n` in any epee `_v1` capture. It does NOT cover that the JSON is
+/// still the captured document — that is each method's parsed-equality test.
+#[test]
+fn v1_oracle_vectors_keep_epees_crlf() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors/rpc");
+    let mut crlf_files = 0;
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&dir).expect("vectors/rpc exists") {
+        let path = entry.expect("entry").path();
+        let name = path
+            .file_name()
+            .expect("file name")
+            .to_str()
+            .expect("utf-8 name");
+        if !name.ends_with("_v1.json") {
+            continue;
+        }
+        seen += 1;
+        let bytes = std::fs::read(&path).expect("readable vector");
+        let has_crlf = bytes.windows(2).any(|w| w == b"\r\n");
+        let bare_lf = bytes.first() == Some(&b'\n')
+            || bytes.windows(2).any(|w| w[1] == b'\n' && w[0] != b'\r');
+        if V1_WITHOUT_EPEE_CRLF.contains(&name) {
+            assert!(
+                !has_crlf,
+                "{name} is on the named exception list and must not grow CRLF \
+                 by accident; if it is a new epee capture, take it off the list"
+            );
+            continue;
+        }
+        assert!(
+            has_crlf && !bare_lf,
+            "{name} is an epee capture and must keep CRLF with no bare LF. \
+             `.gitattributes` stops git rewriting this directory; a tool did. \
+             The structs these came from are deleted — this file cannot be \
+             recaptured."
+        );
+        crlf_files += 1;
+    }
+    assert!(
+        seen > 0 && crlf_files > 0,
+        "walked no v1 captures; the directory or the glob is wrong"
+    );
+    assert_eq!(
+        V1_WITHOUT_EPEE_CRLF.len(),
+        4,
+        "adding an exception is how an epee capture loses its CRLF pin; \
+         the list is closed unless CORE_RPC_VERSION-style derivation happens again"
+    );
+}
+
 /// Parity for `get_version`, whose `version` field is the one value a vector
 /// cannot track.
 ///
