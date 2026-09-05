@@ -117,9 +117,10 @@
 #                                                   the released collateral
 #                                                   to principal, one capped
 #                                                   pass per call; the
-#                                                   reply's `remainder` is
-#                                                   the completion fact —
-#                                                   see CollectUnstakedResult)
+#                                                   reply carries the
+#                                                   two-part completion
+#                                                   fact — see
+#                                                   CollectUnstakedResult)
 #
 #     RESERVED→SHIPPED RECONCILIATION (read before assuming drift): the
 #     reservation said "`unstake` is the composed unbond() = post + a

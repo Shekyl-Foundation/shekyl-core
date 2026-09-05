@@ -421,7 +421,7 @@ reversion clause).
    key on credit paths**. *(The block-level fast-path re-pin of this step — census CEN-G8 — was
    retired 2026-09-02 with the per-block-checkpoint mechanism, C2-R1a: per-tx verify is now
    unconditional at block connect, so this step's per-tx enforcement is the sole and always-on
-   site; [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) §3.1.)*:
+   site; [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) §3.1.)*:
    - `bond_debit > 0` (`Unbond`, `HoldingsUpdate` drop) → verify against the record's committed
      `bond_spend_pk`. The account identity key `P_pubkey` (`= hybrid_sign_pk`) **must not**
      authorize a debit (identity-only invariant).

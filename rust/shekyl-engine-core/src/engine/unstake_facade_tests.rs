@@ -82,7 +82,10 @@ fn evidence(
     ExitEvidence {
         pscan: pscan_state,
         pending,
-        id_by_slot: slots.iter().map(|&(s, id)| (s, persona(id))).collect(),
+        id_by_slot: slots
+            .iter()
+            .map(|&(s, id)| (PSlot::from_raw(s), persona(id)))
+            .collect(),
     }
 }
 
@@ -266,7 +269,7 @@ fn collect_resolves_lowest_exited_slot_with_rows_and_completes_on_empty() {
 }
 
 /// This bites against the seam's two pending refusals collapsing onto
-/// one façade arm (review-1, Bugbot: `BondPostPending` mapped to
+/// one façade arm (`BondPostPending` mapped to
 /// `ExitInProgress` sent a just-bonded wallet to `collect_unstaked`,
 /// which answers `NoExit` — the GC-bridge window makes the seam arm
 /// reachable past resolution). The two remedies point at different
@@ -368,8 +371,8 @@ fn lowest_slot_is_independent_of_cache_insertion_order() {
     );
 }
 
-/// The dust rendering names the full fee-plus-payable-amount condition
-/// (review-2 / Copilot): `fee + 1` is dust and larger than the fee, so
+/// The dust rendering names the full fee-plus-payable-amount condition:
+/// `fee + 1` is dust and larger than the fee, so
 /// "smaller than the fee" is a lie. Bitten red by restoring that phrase.
 #[test]
 fn dust_remainder_names_the_split_floor_not_just_the_fee() {
@@ -384,7 +387,7 @@ fn dust_remainder_names_the_split_floor_not_just_the_fee() {
     );
 }
 
-// --- The NotStaker / NothingStaked discrimination (review-4) --------------
+// --- The NotStaker / NothingStaked discrimination -------------------------
 //
 // `unstake`/`collect_unstaked` reject a wallet with no stake engine as
 // `NotStaker` (-29513) BEFORE reading exit evidence, matching the seam's own
@@ -471,10 +474,9 @@ async fn a_staker_with_nothing_bonded_is_not_collapsed_to_not_staker() {
     );
 }
 
-// --- Resolution-ladder stranding: the candidate set, not the order (r5) ----
+// --- Resolution-ladder stranding: the candidate set, not the order --------
 //
-// The ladder still targets the lowest slot; review-5 narrowed which slots are
-// eligible. Unstake excludes a persona whose exit is already sealed (so a
+// The ladder still targets the lowest slot; eligibility is what narrowed. Unstake excludes a persona whose exit is already sealed (so a
 // multi-bonded wallet advances instead of re-targeting the in-flight one, and
 // a held seal on the lowest slot cannot strand the rest); collect skips a slot
 // the caller has proven permanently unsweepable (so a stuck dust slot cannot
@@ -583,7 +585,7 @@ fn a_slot_still_maturing_is_not_permanent_dust() {
     );
 }
 
-/// The completion fact is TWO-part (review-6): `remainder` is per-slot, and
+/// The completion fact is TWO-part: `remainder` is per-slot, and
 /// the lane-wide half is `other_exited_pools_remain` — with two exited
 /// personas, sweeping the first to remainder 0 must NOT read as lane-wide
 /// completion while the second still holds funds (including a dust-skipped

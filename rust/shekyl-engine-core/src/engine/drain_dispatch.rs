@@ -151,7 +151,7 @@ pub(crate) enum DrainRequestError {
     /// dispatch-tip clock read. It is **before** the seal, so nothing was
     /// assembled or propagated and the caller may retry at will. Kept distinct
     /// from [`State`] so wallet-RPC can name a reachable daemon outage as
-    /// retryable rather than an opaque internal fault (review-5).
+    /// retryable rather than an opaque internal fault.
     #[error("daemon unreachable ({context}): {detail}")]
     DaemonUnreachable {
         /// Which daemon query failed.
