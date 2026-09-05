@@ -305,7 +305,11 @@ private:
   std::unordered_map<crypto::hash, block_txs> m_block_txs;
   std::shared_ptr<curve_tree_replica> m_replica;
   const std::vector<test_event_entry> * m_events;
-  cryptonote::network_type m_nettype;
+  // The harness's network. Defaulted, not left indeterminate: fill_nonce
+  // reads it whenever a block's difficulty exceeds 1 and the events pointer
+  // is set (MAKE_GENESIS_BLOCK sets it), and every generator that never
+  // called set_network_type used to hand an uninitialized enum there.
+  cryptonote::network_type m_nettype = cryptonote::FAKECHAIN;
 
   friend class boost::serialization::access;
 
