@@ -55,17 +55,6 @@ namespace nodetool
     return epee::string_tools::pad_string(s.str(), 16, '0', true);
   }
   
-  struct network_address_old
-  {
-    uint32_t ip;
-    uint32_t port;
-
-    BEGIN_KV_SERIALIZE_MAP()
-      KV_SERIALIZE(ip)
-      KV_SERIALIZE(port)
-    END_KV_SERIALIZE_MAP()
-  };
-
   template<typename AddressType>
   struct peerlist_entry_base
   {
@@ -111,26 +100,6 @@ namespace nodetool
   };
   typedef anchor_peerlist_entry_base<epee::net_utils::network_address> anchor_peerlist_entry;
 
-  template<typename AddressType>
-  struct connection_entry_base
-  {
-    AddressType adr;
-    peerid_type id;
-    bool is_income;
-
-    BEGIN_KV_SERIALIZE_MAP()
-      KV_SERIALIZE(adr)
-      KV_SERIALIZE(id)
-      KV_SERIALIZE(is_income)
-    END_KV_SERIALIZE_MAP()
-
-    BEGIN_SERIALIZE()
-      FIELD(adr)
-      FIELD(id)
-      FIELD(is_income)
-    END_SERIALIZE()
-  };
-  typedef connection_entry_base<epee::net_utils::network_address> connection_entry;
   inline 
   std::string print_peerlist_to_string(const std::vector<peerlist_entry>& pl)
   {
