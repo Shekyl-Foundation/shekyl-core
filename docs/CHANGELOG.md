@@ -495,8 +495,8 @@
   comment is a consequence, not the rationale. Step 1's rationale also drops
   the retired claim-era staked-maturity arm (CEN-L12). Found-not-ruled: step
   2b/2c's depth pseudocode is split the same way (routed to CEN-I13). The
-  register's CEN-I12 row stays failed-closed pending re-review at the merged
-  sha. *(Done: promoted 2026-09-05, see the entry above.)*
+  register's CEN-I12 row stayed failed-closed until re-reviewed at the merged
+  sha — promoted 2026-09-05, see the entry above.
 
 - **CEN-B5 has a second, live divergence — the post-connect header-root
   check compares the wrong state (S1; found, graded and routed — not fixed

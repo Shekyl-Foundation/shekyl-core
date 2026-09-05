@@ -811,8 +811,8 @@ input, not fixes.
     **Also corrected in the same doc:** step 1's design rationale still
     listed the retired claim-era "staked" maturity arm (CEN-L12's row
     already records it as never existing in code). The CSR register's
-    CEN-I12 row stays failed-closed until re-reviewed at a sha containing
-    this reconciliation (done 2026-09-05 at `667817d47`, PR #622); that re-review must walk all three read sites and
+    CEN-I12 row stayed failed-closed until re-reviewed at a sha containing
+    this reconciliation — done 2026-09-05 at `667817d47`, PR #622; that re-review must walk all three read sites and
     rest on the state definition plus B5, not on slice 7's placeholder
     rationale.
 17. **CEN-B5 has a second, live divergence — the header check compares the
