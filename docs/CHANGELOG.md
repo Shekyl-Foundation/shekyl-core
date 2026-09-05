@@ -200,8 +200,9 @@
   ran: **99 CHECKED-CONFORMANT, 1 DIVERGENT, 2 failed closed** (the divergent
   row is CEN-B5's rule-71 FAKECHAIN skip, which census R9 owns). CEN-L11 with
   CEN-L12 coupled were fixed by PR #609 and promoted at its merged sha. The
-  bucket-1/2 set has since grown to **111** — C2-R1b promoted nine rows on
-  2026-09-03 — and those nine are UNREVIEWED until reviewed. **Both S-graded findings ran the
+  bucket-1/2 set has since grown to **121** — C2-R1b promoted nine rows on
+  2026-09-03 and C2-R1c ten more on 2026-09-04 — and those nineteen are
+  UNREVIEWED until reviewed. **Both S-graded findings ran the
   full arc — found, ruled FIX, fixed, merged, re-reviewed:** the S0 (CEN-M8,
   with CEN-G4/J26) by PR #602 and the S1 (CEN-D2 with CEN-D1) by PR #604, so
   no S-graded divergence remained — until 2026-09-04, when CEN-B5's
