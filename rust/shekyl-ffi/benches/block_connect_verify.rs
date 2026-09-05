@@ -38,7 +38,32 @@
 //! GAP-7's hardware half therefore stays OPEN whatever this reports; the
 //! point of this file is that a Pi arriving tomorrow has something to run.
 //!
-//! # What is measured, mapped to the sites that pay it
+//! # What is measured, mapped to the sites that pay it — and what is NOT
+//!
+//! **Scope, stated precisely (review finding): this instrument measures the
+//! enumerated dominant CRYPTO terms through their FFI entry points. It is
+//! not an end-to-end production-path harness.** Unmeasured acceptance-path
+//! residue, named: the C++ semantic/output checks, signed-payload
+//! reconstruction and tx hashing, per-tx existence and reference-block/tree
+//! LMDB lookups (`tx_verification_utils.cpp:60-188`,
+//! `blockchain.cpp:4179-4347`) — µs-class CPU work plus storage-dependent
+//! lookups. **Direction of the omission: every omitted term ENLARGES the
+//! real bill, so the composed `verify_floor` is a lower bound on cost and
+//! the derived `surge_max` is an UPPER bound** — consistent with the
+//! one-directional rule that further measurement only tightens. The ruling
+//! consuming these numbers takes its margin below `surge_max`, never at it.
+//!
+//! **Authorization-scheme fence (review finding): the sweep models
+//! scheme-1 (single hybrid sig per input). Scheme-2 M-of-N multisig
+//! (`tx_pqc_verify.cpp:187-218`, M ≤ 5) is consensus-valid and costs up to
+//! M hybrid verifications per input — but it CANNOT flip the argmax, by
+//! floor-measured arithmetic:** the pqc term is 934 µs/verify against an
+//! adm term of 129 ms, so even M = 5 adds ≈ 3.7 ms/input to the numerator
+//! while the multisig containers add ~20-30 kB/input to the DENOMINATOR —
+//! per-byte density falls well below the minimal-spend argmax (bigger wire
+//! beats bigger verify at these magnitudes). Recorded as an arithmetic
+//! fence with its operands; a scheme-2 fixture is the belt if a future
+//! round wants the measurement.
 //!
 //! Per transaction, at shape `(n_in, n_out)`:
 //!
@@ -181,6 +206,14 @@
 //! floor device measures remains GAP-7's open half.
 //!
 //! # FLOOR RESULTS — skl-pi, Raspberry Pi 4 Model B Rev 1.4 (verify_floor)
+//!
+//! **Capture provenance note (review finding): the first rust-phase
+//! capture was taken under the FA-6 §8.2 flags, TERMINATED at the RandomX
+//! SIGILL (its last lines are the crash; pipefail skipped thermal_end),
+//! and the flagless RandomX figure initially existed only outside the
+//! archive. The phase re-runs FLAGLESS end-to-end — the shipping regime —
+//! and the re-run capture supersedes the flagged one as the verify_floor
+//! source; the flagged capture stays archived as the SIGILL record.**
 //!
 //! Captures: `docs/benchmarks/gap7_block_verify_pi4_{pins,rust,cpp}_2026….txt`
 //! (device row, toolchain, flags, thermal trace, and the SD/8 GB as-found

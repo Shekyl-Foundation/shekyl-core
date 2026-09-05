@@ -30,10 +30,7 @@ use shekyl_curve_primitives::Commitment;
 use shekyl_wire::transaction::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix,
 };
-use shekyl_wire::tx_extra::{
-    HYBRID_KEM_CT_BYTES, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, TX_EXTRA_TAG_PQC_LEAF_HASHES,
-};
-use shekyl_wire::varint::write_varint;
+use shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES;
 
 use shekyl_ffi::{shekyl_buffer_free, shekyl_pqc_keypair_generate, shekyl_pqc_sign};
 
@@ -194,43 +191,35 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
         })
         .collect();
 
-    // tx_extra per GTWF §9.6a: per-output 0x06 (varint len ‖ x25519[32] ‖
-    // ML-KEM-768 ct[1088]) and one 0x07 carrying 32·n_out leaf-hash bytes
-    // (deliberately NOT self-describing — parsed by output count).
-    let mut extra = Vec::with_capacity(n_out * (HYBRID_KEM_CT_BYTES + 3) + 32 * n_out + 2);
-    for i in 0..n_out {
-        extra.push(TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT);
-        // varint(1120): 1120 = 0xE0 ‖ 0x08 in LEB128.
-        extra.push(0xE0);
-        extra.push(0x08);
-        extra.extend(std::iter::repeat_n(
-            u8::try_from(i).expect("n_out <= 16"),
-            HYBRID_KEM_CT_BYTES,
-        ));
-    }
-    // 0x07 is per NEW OUTPUT (h_pqc = Blake2b(pqc_pk) of each created
-    // output) — NOT the admission fixture's `pqc_hashes_flat`, which is
-    // per-INPUT (the spent outputs' leaf scalars feeding the membership
-    // proof). Conflating the two mis-prices the wire by (n_in − n_out)·32
-    // bytes; the first run of the pins caught exactly that. The bytes here
-    // are synthetic filler: no measured call verifies them (the leaf-hash
-    // FFI term is measured on its own fixture), so only their LENGTH prices
-    // the wire, and the length is the per-output contract.
-    // Encoding: tag · V(len) · blob, matching BOTH shipped codecs —
-    // shekyl-wire's `read_blob`/`write_blob` (tx_extra.rs:224/:358) and the
-    // C++ `FIELD(blob)` on `std::string` (varint length + bytes,
-    // src/serialization/string.h:55-61). GTWF §9.6a's "not self-describing"
-    // sentence contradicts both implementations and is the routed doc
-    // defect — the first cut of this fixture followed the doc and omitted
-    // the varint (1-2 bytes, ~0.015% of tx weight: below the floor
-    // captures' resolution, so those numbers stand). The pins now assert
-    // the interior via `parse_extra`, so this class cannot recur silently.
-    extra.push(TX_EXTRA_TAG_PQC_LEAF_HASHES);
-    write_varint((n_out * 32) as u64, &mut extra).expect("vec write is infallible");
-    for i in 0..n_out {
-        let nib = 0xB0u8 | (u8::try_from(i).expect("n_out <= 16") & 0x0F);
-        extra.extend(std::iter::repeat_n(nib, 32));
-    }
+    // tx_extra through the CODEC-OWNED serializer (`shekyl_wire::tx_extra::
+    // serialize`) — one length-prefixed 0x06 blob carrying ALL outputs' KEM
+    // ciphertexts concatenated, one length-prefixed 0x07 blob carrying all
+    // leaf hashes, exactly as both shipped codecs encode them (the Rust
+    // read_blob/write_blob pair and the C++ single-`std::string blob`
+    // structs, tx_extra.h:210-228 + src/serialization/string.h:55-61).
+    // Two earlier hand-rolled forms diverged — first omitting the 0x07
+    // varint (following GTWF §9.6a's defective "not self-describing"
+    // sentence), then emitting per-output 0x06 FIELDS where production
+    // packs one blob (§9.6a's "per output" reading — same routed doc
+    // defect, second sentence). Hand-rolling a codec the crate owns is the
+    // duplicate-the-format trap; the serializer is the single source now,
+    // and the pins assert the interior through `parse_extra`.
+    let kem_concat: Vec<u8> = (0..n_out)
+        .flat_map(|i| {
+            std::iter::repeat_n(u8::try_from(i).expect("n_out <= 16"), HYBRID_KEM_CT_BYTES)
+        })
+        .collect();
+    let leaf_concat: Vec<u8> = (0..n_out)
+        .flat_map(|i| {
+            let nib = 0xB0u8 | (u8::try_from(i).expect("n_out <= 16") & 0x0F);
+            std::iter::repeat_n(nib, 32)
+        })
+        .collect();
+    let extra = shekyl_wire::tx_extra::serialize(&[
+        shekyl_wire::tx_extra::TxExtraField::PqcKemCiphertext(kem_concat),
+        shekyl_wire::tx_extra::TxExtraField::PqcLeafHashes(leaf_concat),
+    ])
+    .expect("tx_extra serialize");
 
     // Bp+ bytes: oxide `write` and wire `BpPlus` share the exact layout
     // (pinned by tx-builder's `bulletproof_oxide_layout_parses_as_wire_bpplus`).

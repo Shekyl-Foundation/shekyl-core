@@ -29,8 +29,15 @@
 #   ./scripts/bench/gap7_pi4_gate.sh rust   # terms sweep + multi-point budget fill + pow
 #   ./scripts/bench/gap7_pi4_gate.sh cpp    # shipped-BP+ microbench (needs unit_tests built)
 #
-# Per FA-6 §8.2, pin the CPU before capture:
-#   export RUSTFLAGS='-C target-cpu=cortex-a72'
+# RUSTFLAGS: leave UNSET — the shipping configuration is generic aarch64
+# (no repo target-cpu; BuildRust.cmake passes linker args only), and the
+# FA-6 §8.2 convention's '-C target-cpu=cortex-a72' must NOT be used here:
+# LLVM's cortex-a72 definition includes +aes, the BCM2711 ships without the
+# ARMv8 crypto extensions, and the flags SIGILL RandomX mid-capture (the
+# first floor capture terminated exactly there; with pipefail the script
+# died before thermal_end). Measured on-floor: flagless is also ~3% FASTER
+# on the FCMP term. Benchmark flags and floor numbers never share a
+# convention.
 
 set -euo pipefail
 
@@ -73,7 +80,7 @@ thermal_sampler() {
   echo "# device_row: Raspberry Pi 4 Model B, 4 GB, active cooling, USB3 SSD (PERFORMANCE_BASELINE.md §8.2)"
   echo "# git_rev=$(git -C "${REPO_ROOT}" rev-parse HEAD)"
   echo "# rustc=$(rustc -V 2>/dev/null || echo NA)"
-  echo "# RUSTFLAGS=${RUSTFLAGS:-<unset>} (pin -C target-cpu=cortex-a72 per FA-6 §8.2)"
+  echo "# RUSTFLAGS=${RUSTFLAGS:-<unset>} (unset = the shipping generic-aarch64 regime; cortex-a72 flags SIGILL RandomX on BCM2711)"
   echo "# randomx_mode=light/cache BY CONSTRUCTION — not a configuration that can drift between runs: shekyl-pow-randomx is a cache+VM substrate with no dataset arm (rust/shekyl-pow-randomx/src/lib.rs:46-72)"
   echo "# storage_deviation: run from SD (mmcblk0p2); §8.2 row's USB3 SSD present but unmounted — not mounted deliberately; measured path is CPU-bound and in-memory, so the deviation does not enter verify_floor"
   echo "# ram_as_found: 8 GB (Rev 1.4 board) vs the June row's 4 GB — rule 76 names the MODEL and Model B matches; RandomX is light/cache (~256 MB) and the FCMP terms are CPU-bound, so 8 vs 4 GB cannot bind HERE — a future floor measurement that IS memory-sensitive must not inherit this row's device as 'the floor'"

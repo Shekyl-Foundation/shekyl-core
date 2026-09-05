@@ -41,6 +41,34 @@ const TX_WEIGHT_LIMIT: usize = 149_400;
 /// The permanent floor operating point: 2 × the 300 000 penalty-free zone.
 const BUDGET_AT_ZONE: usize = 600_000;
 
+/// Exact expected weights per shape — every component length is
+/// deterministic (canonical fixed-length hybrid keys/sigs, shape-fixed
+/// proof lengths, codec-owned extra), so the pin is equality, not a
+/// tautology: `n_txs = budget / weight` makes the budget inequalities true
+/// for ANY positive weight, which means only an exact-weight pin can catch
+/// an under- or over-weighted fixture (review finding). A legitimate
+/// weight change (wire format, proof size, auth encoding) must update this
+/// table consciously — that is the point.
+const EXPECTED_WEIGHTS: [(usize, usize, usize); 6] = [
+    (1, 2, 13_005),
+    (8, 2, 59_229),
+    (1, 16, 33_948),
+    (8, 16, 80_172),
+    (4, 4, 37_332),
+    (2, 8, 29_845),
+];
+
+#[test]
+fn fixture_weights_are_exactly_expected() {
+    for (n_in, n_out, expected) in EXPECTED_WEIGHTS {
+        let fx = build_connect_tx(&mut OsRng, n_in, n_out, 2, ChunkLayout::Spread);
+        assert_eq!(
+            fx.weight, expected,
+            "shape ({n_in},{n_out}): weight moved — if deliberate, update              EXPECTED_WEIGHTS and note the wire change; if not, the fixture              or a codec drifted"
+        );
+    }
+}
+
 #[test]
 fn candidate_shapes_saturate_their_caps() {
     for (n_in, n_out) in [(8usize, 2usize), (1usize, 16usize), (8, 16)] {
@@ -64,11 +92,18 @@ fn candidate_shapes_saturate_their_caps() {
             .prefix
             .parse_extra()
             .expect("tx_extra interior must parse");
-        let kem_fields = fields
+        let kem_blobs: Vec<usize> = fields
             .iter()
-            .filter(|f| matches!(f, shekyl_wire::tx_extra::TxExtraField::PqcKemCiphertext(_)))
-            .count();
-        assert_eq!(kem_fields, n_out, "one 0x06 KEM field per output");
+            .filter_map(|f| match f {
+                shekyl_wire::tx_extra::TxExtraField::PqcKemCiphertext(b) => Some(b.len()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            kem_blobs,
+            vec![shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES * n_out],
+            "exactly ONE 0x06 field carrying all outputs' KEM cts concatenated"
+        );
         let leaf_blobs: Vec<usize> = fields
             .iter()
             .filter_map(|f| match f {
@@ -79,7 +114,7 @@ fn candidate_shapes_saturate_their_caps() {
         assert_eq!(
             leaf_blobs,
             vec![32 * n_out],
-            "exactly one 0x07 field carrying 32·n_out leaf-hash bytes"
+            "exactly ONE 0x07 field carrying 32·n_out leaf-hash bytes"
         );
 
         // Per-tx caps hold — the fixture is admissible under what R2 ratifies.
