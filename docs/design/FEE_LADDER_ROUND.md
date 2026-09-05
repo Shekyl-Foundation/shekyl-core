@@ -383,6 +383,25 @@ Also this cycle: `origin/dev` (#612) merged in; one
 `IMPLEMENTATION_INDEX.md` conflict resolved hunk-wise (dev's updated
 C2-R row + this branch's FL row).
 
+**Cycle six (Copilot, two findings):**
+
+- **Index row missing its as-of date** (rule-94 row format) — valid,
+  fixed: the FL status cell leads with `OPEN (as of 2026-09-05)`.
+- **Census rows still say "R2 DEFERRED … pending FL-R12′"** — the
+  index's cleared-gate method note does bind the PR that lands the
+  gate's clearing, and the finding's citation is real. **Disposition:
+  routed, not edited here, on the record.** The class is eight census
+  rows plus the §10 conjunct sentence (Copilot flagged two); all of
+  them are the subject of the census lane's in-flight R2-marker lift,
+  which deliberately sequences AFTER this PR's merge so its citations
+  verify against a merged sha (the citation-verified-after-merge
+  rule). Editing eight rows of a ratification-only surface from this
+  lane would double-land that lift and collide with its draft; the
+  stale-blocked window is bounded by an ACTIVE resumed round that
+  owns the edit, not by "nobody re-checks a closed gate." The
+  clearing itself is recorded in this landing (§0.1, §8, this file);
+  the census lane was notified that Copilot flagged the rows.
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
