@@ -35,7 +35,7 @@ Do **not** implement from `docs/completed/`. Those are closed plans, preflights,
 | Ledger | one file each | not a queue | FOLLOWUPS (short), CHANGELOG (user-facing), decision log |
 | Map | `IMPLEMENTATION_INDEX.md` | identifier + owning doc + one-line status | Map only |
 
-Lifecycle rule: [`.cursor/rules/95-documentation-lifecycle.mdc`](../.cursor/rules/95-documentation-lifecycle.mdc). Completing a plan includes archive-or-contract in the same change. Structural gates live in [`.github/workflows/doc-links.yml`](../.github/workflows/doc-links.yml).
+Lifecycle rule: [`.cursor/rules/95-documentation-lifecycle.mdc`](../.cursor/rules/95-documentation-lifecycle.mdc). Completing a plan includes archive-or-contract in the same change. Structural gates live in [`.github/workflows/docs-gates.yml`](../.github/workflows/docs-gates.yml) (named `doc-links.yml` until P0b, 2026-09-05 — it had outgrown link checking).
 
 ## Work-item targets
 

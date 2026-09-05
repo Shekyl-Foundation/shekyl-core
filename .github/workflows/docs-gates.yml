@@ -24,7 +24,7 @@
 # Structure mirrors grep-gates.yml: single job, single runner,
 # fast-running, superseded-run cancellation.
 
-name: ci/doc-links
+name: ci/docs-gates
 
 on:
   pull_request:
@@ -54,10 +54,10 @@ on:
       # db_lmdb.cpp entry below. Pruning or narrowing these paths in a
       # link-checker restructure silently unwires that gate.
       - "src/blockchain_db/lmdb/db_lmdb.cpp"
-      - ".github/workflows/doc-links.yml"
+      - ".github/workflows/docs-gates.yml"
 
 concurrency:
-  group: doc-links-${{ github.ref }}
+  group: docs-gates-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

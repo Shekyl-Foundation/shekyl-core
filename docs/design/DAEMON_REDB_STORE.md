@@ -18,8 +18,9 @@ columns are ordered by that hierarchy, not by engineering elegance.
 **Verification stamp:** Round-2 numbers vs `dev` **`3247fe3b6`**; surface map
 from `blockchain.cpp` `m_db->` vocabulary (97 methods). **The five table-inventory
 rows (handles, opens, claimed total, undocumented, phantoms) re-measured
-at `9742ec4f6` by P0a (2026-09-05)** — the remaining substrate rows
-(`m_db->` counts, atomicity audit, hardfork pop) were not — the pin→HEAD delta
+at `9742ec4f6` by P0a (2026-09-05); the atomicity-audit row re-measured at
+`2dba46537` by P0b (2026-09-05)** — the remaining substrate rows
+(`m_db->` counts, hardfork pop) were not — the pin→HEAD delta
 is closed in the [P0a reconciliation registry](#p0a-reconciliation-registry-2026-09-05-dev-9742ec4f6);
 the other stamped figures are unre-measured and keep the Round-2 pin.
 
@@ -86,7 +87,7 @@ the other stamped figures are unre-measured and keep the Round-2 pin.
 | Tables in code, **0 hits** in schema doc | **none** (P0a, 2026-09-05). At the Round-2 pin these **seven** had zero hits: `block_burn`, `archival_budget`, `archival_budget_accrual`, `archival_bond_unbond_log`, `archival_bond_rebond_log`, `archival_bond_holdings_update_log`, **`archival_emission_claim_log`** — all documented since (`2572e6f5b`, 2026-08-25 — the commit that landed all seven sections and the coverage gate; the gate's header dates its census 2026-08-26, the same moment in UTC, and counts **nine** = these seven + the two witness tables born 2026-08-04) |
 | Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion, and the gate's ghost leg refuses their return |
 | `m_db->` sites / distinct methods | **253** in `blockchain.cpp`; **97** distinct methods (same 97 across all files — no extra methods outside that vocabulary) |
-| Atomicity audit | 183 lines, April 2026; **0** archival hits vs **702** in `db_lmdb.cpp` |
+| Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all live tables (matrix gate-pinned), both prune shapes, `reset()`, `migrate()`; was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
 | Hardfork pop | `HardFork::on_block_popped` **reads** `get_hard_fork_version(height)` for heights **above** new tip (`hardfork.cpp:286–302`); interface has **set/get only**, no delete (`blockchain_db.h:1938,1947`) |
 
 ### Oracles of record — status
@@ -94,7 +95,7 @@ the other stamped figures are unre-measured and keep the Round-2 pin.
 | Document | Status |
 | --- | --- |
 | [`docs/LMDB_SCHEMA.md`](../LMDB_SCHEMA.md) | **RECONCILED** (P0a, 2026-09-05) — gate-pinned duplicate-free bijection with `SHEKYL_LMDB_TABLES` (property rows, headings, total, DB-version header); a DRS-0 input |
-| [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) | **STALE** — PASS over superseded write set (P0b's subject) |
+| [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) | **RECONCILED** (P0b, 2026-09-05) — rewritten in place at `2dba46537` over every write path; §10 matrix gate-pinned to `SHEKYL_LMDB_TABLES`; A-2/A-4/A-6 transcriptions + RAW set carried; the April verdicts preserved as records-was |
 | `db_lmdb.{h,cpp}` | **Authoritative** table inventory until re-census |
 | Early **logical state digest** (E-1) | **To be built** in DRS-P0/DRS-C against LMDB — not first in DRS-E2 |
 
@@ -213,7 +214,7 @@ This registry is CI-pinned: `scripts/ci/check_lmdb_schema_coverage.py`
 asserts these rows are a duplicate-free bijection with
 `SHEKYL_LMDB_TABLES` and that the stated row count matches, in the same
 run that pins `LMDB_SCHEMA.md`'s property rows, section headings, stated
-total, and DB-version header. `doc-links.yml` already triggers on
+total, and DB-version header. `docs-gates.yml` (né `doc-links.yml`; renamed by P0b) already triggers on
 `docs/**` and on `db_lmdb.cpp`, so both a registry edit and a
 source-only table change start the gate.
 
@@ -262,7 +263,7 @@ agnostic first** (Tier A). redb-only genesis is Tier B. Meeting Tier A under
 
 | # | Shekyl is better when … | Mission | Lands by |
 | --- | --- | --- | --- |
-| **A1** | Archival **pop-reversal journals** have an atomicity/pop-symmetry audit (and S0/S1 findings fixed or decision-logged) | Security | DRS-P0 |
+| **A1** | Archival **pop-reversal journals** have an atomicity/pop-symmetry audit (and S0/S1 findings fixed or decision-logged) — **met 2026-09-05 (P0b):** audit §§2-3 verdicts + §7/§8 transcriptions; both S-grades were closed by PR #602/#604 | Security | DRS-P0 |
 | **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record AND carrying an affirmative conformance record** (CSR-3 / CSR-3a; *not on the register* is **not** sufficient — absence means unreviewed, and unreviewed is regression-only). A bucket is not a conformance claim: CEN-L11 was bucket-1 ratified with an implementation that silently omitted an accepted output (fixed 2026-09-04), so a digest match there would have recorded reproduction of the defect — the reason the rule is written this way. Over a **DIVERGENT** or **UNREVIEWED** row — or any bucket-3/4 row — the digest is regression evidence and must be reported as that (a **CHECKED-CONFORMANT** register row is the one case where a match *is* correctness evidence) | Security | DRS-P0 → C |
 | **A3** | Known durable-state **warts** are call-graph-traced; default **RECORD-AND-SPECIFY** (countermand 2026-09-01; FIX-IN-CPP only where the defect blocks the C++ from serving as an interim oracle for a *ratified, conformance-checked* row) (e.g. hardfork pop / `hf_versions`) closed or explicitly REPLICATE | Security | DRS-P0 / C |
 | **A4** | Consensus store **durability is explicit** (strict fsync policy) and crash-tested — not library default by omission | Security | DRS-D9 (+ E\* or LMDB config path) |
@@ -723,7 +724,7 @@ flowchart TD
 | PR | ID | Deliverable | Blocks |
 | --- | --- | --- | --- |
 | **P0a** | Inventory + CI | Accurate `LMDB_SCHEMA.md` (46 tables, **seven** adds, drop phantoms — *the plan's Round-2-pin figures, kept as written; the live count is 49, see the P0a registry*); **DRS-CI** bidirectional gates. *(Delivered 2026-09-05 — the plan's figures had aged by delivery: the adds/drops landed with the coverage-gate commit `2572e6f5b` (2026-08-25), so P0a shipped the remaining truth: the 49-row reconciliation registry with birth/death provenance, the heading-layer and registry gate legs, and the duplicate-`properties` merge — see the P0a registry in the front matter)* | Mental model |
-| **P0b** | Atomicity + journals + RAW + **transcriptions** | Rewrite audit for all tables + journals; **RAW edges**; CI every `MDB_dbi` in audit. **Transcribe (not invent):** (A-2) **height-base per journal** (hook height vs block-index *N*); (A-4) **revert partial-order table** (journal × fields × predecessors × reason) from `pop_block` comments; (A-6) note in-code `m_write_txn` assertions + error-type inconsistency. **CI housekeeping (from #624 review, Rick):** the schema-coverage gate rides a workflow named `doc-links` — rename the workflow for what it gates (or move the gate to a schema-named workflow); the coupling is recorded at the trigger site, this closes it | Apply/pop design; E2 pop_block |
+| **P0b** | Atomicity + journals + RAW + **transcriptions** | Rewrite audit for all tables + journals; **RAW edges**; CI every `MDB_dbi` in audit. **Transcribe (not invent):** (A-2) **height-base per journal** (hook height vs block-index *N*); (A-4) **revert partial-order table** (journal × fields × predecessors × reason) from `pop_block` comments; (A-6) note in-code `m_write_txn` assertions + error-type inconsistency. **CI housekeeping (from #624 review, Rick):** the schema-coverage gate rides a workflow named `doc-links` — rename the workflow for what it gates; the coupling is recorded at the trigger site, this closes it. *(Delivered 2026-09-05 — audit rewritten in place over every write path with the §10 gate-pinned matrix; A-2/A-4/A-6 transcribed from the pop-funnel comments and the guard census; RAW set enumerated with the dead §6.6 seed retired; workflow renamed `docs-gates.yml`; findings W-1…W-5 recorded, none S-graded, no C++ touched. The RAW **edge** enumeration beyond the audit's R-1…R-5 — full read-set tracing per write path — remains with P0d's digest work, where the reads become the digest's inputs)* | Apply/pop design; E2 pop_block |
 | **P0c** | Wart register — **RECORD-AND-SPECIFY** (inverted 2026-09-01; was “cheap FIX-IN-CPP”) | Call-graph warts. Concrete rows: (A-1) pure-virtual archival apply/revert hooks + explicit `BaseTestDB` stubs; (A-3) journal `TreePosition` in drain; (A-5) dense-seq → range scan; `hf_versions` FIX or REPLICATE. **Ship on a short-lived branch off `dev`, not on `dev` directly.** | Silent-failure classes removed pre-redb |
 | **P0d** | Digest v0 | Core chain + spent keys + curve root **minimum**; **must expand archival journals before S-ARCH / DRS-E archival port** (A-1 composes with blind min oracle — see §7.1.1) | C oracle; logical-state definition |
 | **P0e** | Digest totality | Full table inventory / named exclusions | E2 |
@@ -856,7 +857,9 @@ name-derived `m_<name>`, verified 1:1 by P0a):
    (**catches phantoms** — the half that produced `staker_*`), plus the
    stated total, the DB-version header, and the P0a reconciliation
    registry's row bijection
-3. Every `MDB_dbi` appears in `LMDB_WRITE_ATOMICITY_AUDIT.md` — **P0b**
+3. Every `MDB_dbi` appears in `LMDB_WRITE_ATOMICITY_AUDIT.md` — **live**
+   (P0b, 2026-09-05: the audit-matrix leg of `check_lmdb_schema_coverage.py`,
+   stated at the table-name layer the macro owns)
 4. After digest exists: every `MDB_dbi` in digest set **or** named exclusion
    row
 

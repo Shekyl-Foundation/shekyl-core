@@ -62,6 +62,32 @@
 
 ### Added
 
+- **DRS-P0b — the atomicity audit covers the store that exists.** The
+  April 2026 `LMDB_WRITE_ATOMICITY_AUDIT.md` was a PASS doing work it was
+  never entitled to do: 22 of the 49 live tables post-dated it, while its
+  covered subjects included the dead claim-era staking paths and two dead
+  tables. Rewritten in place at `dev 2dba46537` over every write path —
+  connect, pop, txpool (re-censused: 14 `LockedTXN` constructions / 13
+  commits, the read-snapshot `get_transaction_info` recorded as the
+  deliberate baseline; the April D++ fix verified alive and intact), alt
+  blocks, **three** prune shapes (archival retention inside the epoch-close
+  hook with receipt-before-destruction; `prune_tx_data`'s own-txn
+  RAII swap; `prune_worker`'s deliberately chunked resumable txns),
+  `reset()` (enumeration wipe — its stale FOLLOWUPS row closed), and
+  `migrate()` (zero writes by design). The §10 coverage matrix is
+  gate-pinned to `SHEKYL_LMDB_TABLES` (DRS §9.1 leg 3 now live; eight new
+  failure paths observed red). The in-code-only conventions are
+  transcribed for the Rust store: A-2 height bases with the F-B5b
+  convert-don't-unify rationale verbatim, A-4's load-bearing revert
+  partial order, A-6's guard census (22× `std::runtime_error` vs 2×
+  `DB_ERROR_TXN_START` for one precondition). Findings W-1…W-5 recorded —
+  none S-graded, no C++ touched — including `txs` (zero write or read
+  sites; inherited-dead candidate) and `hf_starting_heights` (deleted at
+  every writable `open()`, structurally absent at runtime). The dead
+  `staker_pool_balance` properties row left the schema doc, and the
+  workflow carrying the schema gates is renamed `docs-gates.yml` for what
+  it does (Rick's #624 boundary: P0b's item, no other lane's).
+
 - **DRS-P0a — LMDB table reconciliation: the pin→HEAD delta is measured,
   registered, and gate-pinned.** The DRS design doc's Round-2 substrate
   figures (46 tables, seven undocumented, two phantoms) had aged into
