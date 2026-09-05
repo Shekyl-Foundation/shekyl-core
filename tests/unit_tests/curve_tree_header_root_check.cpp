@@ -106,12 +106,11 @@ struct TestnetChain
     boost::filesystem::remove_all(tmpdir, ec);
   }
 
-  // One block through the production template and connect paths. The
-  // template fills the header root from the current tree root; at difficulty
-  // 1 the first nonce satisfies check_hash, so no search is needed.
-  bool mine_next(block_verification_context& bvc)
+  // The production template: fills the header root from the current tree
+  // root. At difficulty 1 the first nonce satisfies check_hash, so no search.
+  bool make_template(block& b)
   {
-    block b{};
+    b = block{};
     difficulty_type diff = 0;
     uint64_t height = 0, reward = 0, seed_height = 0;
     crypto::hash seed_hash = crypto::null_hash;
@@ -119,11 +118,23 @@ struct TestnetChain
           reward, blobdata(), seed_height, seed_hash))
       return false;
     b.nonce = 0;
+    return true;
+  }
+
+  // The production connect path. It writes inside a caller-held LMDB write
+  // transaction, as core::handle_incoming_block and Blockchain::init's
+  // genesis add both do.
+  bool submit(const block& b, block_verification_context& bvc)
+  {
     bvc = block_verification_context{};
-    // The connect path writes inside a caller-held LMDB write transaction, as
-    // core::handle_incoming_block and Blockchain::init's genesis add both do.
     db_wtxn_guard wtxn(&bc.get_db());
     return bc.add_new_block(b, bvc);
+  }
+
+  bool mine_next(block_verification_context& bvc)
+  {
+    block b;
+    return make_template(b) && submit(b, bvc);
   }
 };
 
@@ -171,4 +182,40 @@ TEST(curve_tree_header_root_check, testnet_chain_connects_through_the_first_matu
   // The chain keeps going past the boundary.
   ASSERT_TRUE(chain.mine_next(bvc)) << "block after the boundary rejected";
   ASSERT_EQ(chain.bc.get_current_blockchain_height(), first_maturing_block + 2);
+}
+
+// The falsifier for the check itself: delete the compare and this goes red.
+// A template whose header root is corrupted must be rejected at admission,
+// before anything is written, and the chain must be untouched -- same height,
+// same tip, same tree root, nothing popped -- after which the next honest
+// block connects. Height 3, not 60: the check runs on every block; the
+// maturity boundary the acceptance test above pins is the case of the same
+// compare that the old post-add read got wrong.
+TEST(curve_tree_header_root_check, testnet_chain_rejects_a_header_with_the_wrong_root_before_writing)
+{
+  TestnetChain chain;
+  const BlockchainDB& db = chain.bc.get_db();
+  block_verification_context bvc{};
+  for (uint64_t h = 1; h < 3; ++h)
+    ASSERT_TRUE(chain.mine_next(bvc)) << "block " << h << " rejected";
+
+  const uint64_t height_before = chain.bc.get_current_blockchain_height();
+  const crypto::hash tip_before = chain.bc.get_tail_id();
+  const std::array<uint8_t, 32> root_before = db.get_curve_tree_root();
+
+  block bad;
+  ASSERT_TRUE(chain.make_template(bad));
+  bad.curve_tree_root.data[0] ^= 0x01;
+  EXPECT_FALSE(chain.submit(bad, bvc)) << "a header committing to the wrong tree state connected";
+  EXPECT_TRUE(bvc.m_verifivation_failed);
+  EXPECT_FALSE(bvc.m_added_to_main_chain);
+  EXPECT_EQ(chain.bc.get_current_blockchain_height(), height_before) << "rejection changed the height";
+  EXPECT_EQ(chain.bc.get_tail_id(), tip_before) << "rejection moved the tip";
+  EXPECT_EQ(db.get_curve_tree_root(), root_before) << "rejection touched the tree";
+
+  // Nothing was consumed or popped by the rejection: the honest template
+  // built on the same tip connects.
+  ASSERT_TRUE(chain.mine_next(bvc)) << "the honest block after a rejected one was refused";
+  ASSERT_FALSE(bvc.m_verifivation_failed);
+  EXPECT_EQ(chain.bc.get_current_blockchain_height(), height_before + 1);
 }
