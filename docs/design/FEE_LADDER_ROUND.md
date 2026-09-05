@@ -419,6 +419,33 @@ still decides every output; (4) the "documentation only" scope claim
 is Bugbot's auto-summary, regenerated per commit — the authored body
 already declared the Rust surface and now enumerates it in full.
 
+**Cycle eight (one finding + the maintainer's rerun mandate):**
+
+- **Rerun verification first:** the cycle-seven changes (typed
+  `SnapRule`, const window guard, `ilog2` seed) were confirmed
+  output-neutral — the re-run JSON and summary are **bit-identical** to
+  the run §4.4/§4.5's round-11 numbers came from.
+- **Frozen trace state (Copilot; VALID — §1.8 says confirm, not
+  assume):** dwell and feedback froze `ag`/σ/reward across their
+  traces. Fixed by EVOLVING chain state per block (`ag` advances by the
+  shipped paid emission; the C-surface point evaluations at line 1073
+  are definitionally per-state and unchanged). The drift-honest re-run
+  changed the record, in three parts, all regenerated from the run:
+  (1) secular reward-decay value steps (~1 per 10–20 k blocks) are
+  normal and shared by every mode; the adopted ceiling + hysteresis
+  pass every FL-C4a gate (min median 446, min in-ramp 274); (2) **the
+  registered nearest rule fails FL-C4a outright at age 12** (median
+  2–3 blocks — per-block flicker at the √2 midpoint under drift), a
+  second independent ground for the adopted ceiling; (3) a transition
+  counter separates secular crossings (154 cells, pass) from
+  oscillation — and **14 hysteresis cells still oscillate** at the
+  boundary-parked high-elasticity corner (`D = 50`, ε ≥ 2): one `C_q`
+  step, 7–24 transitions, worst inter-flip dwell ≈ 125 blocks. Per
+  §1.7's own chain the residual is **surfaced as FL-R18 (UNSIGNED,
+  decision required)** with four candidate dispositions, none adopted.
+  The §7 hysteresis requirement is now recorded as necessary and NOT
+  sufficient alone.
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
@@ -662,15 +689,19 @@ directly. Dispositions:
    rename) and follows the design PR's merge.**
 2. ~~FL-R17~~ — **SIGNED (a) three tiers at review round 7**, standard
    as default (§5.5); single-rate rejected with named reopeners.
-3. **FL-R13 / FL-D5** — fee-floor basis calibration round: its FL-R12′
+3. **FL-R18 — residual boundary-parked oscillation under demand
+   feedback (minted round 12): UNSIGNED, decision required.** Four
+   candidate dispositions on the row; the §4.5 transition
+   classification is the instrument.
+4. **FL-R13 / FL-D5** — fee-floor basis calibration round: its FL-R12′
    gate is SATISFIED (signed round 8, amendment adopted), so the round is
    simply open — non-blocking (the perpetual-tail ruling retired the
    genesis-blocking escalation), scheduled on its own merits.
-4. **PRs** — the design PR is **this PR (#614)**; the implementation
+5. **PRs** — the design PR is **this PR (#614)**; the implementation
    follows as the round-9 split: `feat/fee-ladder-impl-1` (atomic
    bundle, built and gated) then `-impl-2` (mechanical rename), each
    opened after this document merges.
-5. Census-R2: **both resume conjuncts are SATISFIED** — FL-R12′ signed
+6. Census-R2: **both resume conjuncts are SATISFIED** — FL-R12′ signed
    (round 8) and the red test extant (graduated green on impl-1). R2 can
    resume per its own criterion; the routing to the consensus lane
    (C2-R0 phase 2, which edits `CONSENSUS_RULE_CENSUS.md` §10) carries

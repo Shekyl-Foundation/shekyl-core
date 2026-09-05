@@ -43,10 +43,10 @@ use std::collections::{BTreeSet, VecDeque};
 use serde::Serialize;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
-    base_block_reward, block_reward_with_penalty, calc_burn_pct, calc_effective_emission_share,
-    calc_release_multiplier, cap_reward_to_remaining_supply, emission_speed_factor,
-    projected_already_generated, tail_subsidy_per_block, EconomicParams, BLOCKS_PER_YEAR,
-    STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    apply_release_multiplier, base_block_reward, block_reward_with_penalty, calc_burn_pct,
+    calc_effective_emission_share, calc_release_multiplier, cap_reward_to_remaining_supply,
+    emission_speed_factor, projected_already_generated, tail_subsidy_per_block, EconomicParams,
+    BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
@@ -639,6 +639,26 @@ const DWELL_SCENARIOS: &[(&str, f64, f64, u64)] = &[
     ("ramp-v50-to-v200", 50.0, 200.0, FULL_REWARD_ZONE_V5),
 ];
 
+/// Advance the traced chain state by one block: the SHIPPED paid emission
+/// at the trace's windowed volume (multiplier on the floored base, then
+/// the remaining-supply cap — the composition the measured tree pays; the
+/// FL-R12′ implementation changes the payer in its own PR, with
+/// first-order-identical drift). §1.8 requires the quasi-static claim to
+/// be CONFIRMED, not assumed (PR #614 review): the traces now evolve
+/// `already_generated` and height per block, so any rung or `C_q`
+/// crossing that supply/σ drift can cause is measured rather than frozen
+/// out.
+fn advance_traced_state(ag: u64, v_avg: u64, params: &EconomicParams) -> u64 {
+    let base = base_block_reward(ag, params).expect("base along trace");
+    let m_r = calc_release_multiplier(
+        v_avg,
+        params.tx_volume_baseline,
+        params.release_min,
+        params.release_max,
+    );
+    ag + cap_reward_to_remaining_supply(apply_release_multiplier(base, m_r), ag, params)
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn dwell_scenario(
     scenario: &'static str,
@@ -649,11 +669,15 @@ fn dwell_scenario(
     mode: LadderMode,
     params: &EconomicParams,
 ) -> DwellResult {
-    // σ, supply ratio, and the median are quasi-static on the measured
-    // horizon (≈28 days): σ moves < 0.1 pp and the ratio ≈1% — orders below
-    // the volume axis this scenario exercises. Held fixed per §1.8.
-    let raw = articmine_ladder_raw(st.base_reward, median, median);
-
+    // σ, supply ratio, and reward drift are EVOLVED along the trace, not
+    // held (the register demands confirmation, not assumption): `ag` and
+    // height advance per block via [`advance_traced_state`], and rungs +
+    // `C` are recomputed from the moving state. The arithmetic bound that
+    // says drift is quasi-static on this horizon — dR/R ≈ 2⁻²¹/block, one
+    // 2-significant-digit rounding step per ≈21 000 blocks; σ < 0.15 pp
+    // per trace — is now a measured property of the reported dwell, and a
+    // reward-decay crossing shows up as the ≤ 1-per-trace value change it
+    // is instead of being frozen out.
     let blocks: u64 = 20_000;
     let ramp_len = VOLUME_WINDOW as u64;
     let mut rng = Rng(0x5EED_F1FE_ED1E_5EED);
@@ -665,7 +689,7 @@ fn dwell_scenario(
         window.push_back(n);
     }
 
-    let current_fees = rounded(raw);
+    let mut ag = st.ag;
     let mut hyst = HysteresisCq { prev: 0 };
     // Per rung: (value, run_length, run_start_block) plus accumulators.
     let mut runs: [Vec<(u64, u64)>; 4] = [vec![], vec![], vec![], vec![]]; // (start, len)
@@ -686,21 +710,24 @@ fn dwell_scenario(
         sum -= window.pop_front().expect("window warm");
         let v_avg = sum / VOLUME_WINDOW as u64;
 
+        let height = st.height + t;
+        let base = base_block_reward(ag, params).expect("base along trace");
+        let raw = articmine_ladder_raw(base, median, median);
         let fees = match mode {
-            LadderMode::Current => current_fees,
-            LadderMode::CorrectedRaw => corrected_ladder(
-                raw,
-                correction_factor(v_avg, st.ag, st.height, params).c_scaled,
-            ),
+            LadderMode::Current => rounded(raw),
+            LadderMode::CorrectedRaw => {
+                corrected_ladder(raw, correction_factor(v_avg, ag, height, params).c_scaled)
+            }
             LadderMode::Quantized(rule) => {
-                let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
+                let c = correction_factor(v_avg, ag, height, params).c_scaled;
                 corrected_ladder(raw, quantize_c_pow2(c, rule))
             }
             LadderMode::QuantizedHysteresis => {
-                let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
+                let c = correction_factor(v_avg, ag, height, params).c_scaled;
                 corrected_ladder(raw, hyst.step(c))
             }
         };
+        ag = advance_traced_state(ag, v_avg, params);
         for i in 0..4 {
             values[i].insert(fees[i]);
             if fees[i] == current[i] {
@@ -773,6 +800,13 @@ pub struct FeedbackResult {
     /// 1 = converged to a fixed point; > 1 = residual cycle amplitude in
     /// quantization/rounding steps.
     pub distinct_fees_tail: u64,
+    /// Value CHANGES over the same tail window — the discriminator the
+    /// evolved traces need (PR #614 review): with state drift a
+    /// distinct_tail of 2 is EITHER one secular boundary crossing
+    /// (transitions = 1: the system tracking real state change, a pass)
+    /// or an oscillation (transitions ≥ 2: the limit cycle FL-C7
+    /// excludes).
+    pub tail_transitions: u64,
     pub v_avg_tail_min: u64,
     pub v_avg_tail_max: u64,
     pub fee_tail_min: u64,
@@ -798,9 +832,10 @@ fn feedback_scenario(
     mode: LadderMode,
     params: &EconomicParams,
 ) -> FeedbackResult {
-    let raw = articmine_ladder_raw(st.base_reward, median, median);
-    let fee_at = |v_avg: u64, hyst: &mut HysteresisCq| -> u64 {
-        let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
+    let fee_at = |v_avg: u64, ag: u64, height: u64, hyst: &mut HysteresisCq| -> u64 {
+        let base = base_block_reward(ag, params).expect("base along trace");
+        let raw = articmine_ladder_raw(base, median, median);
+        let c = correction_factor(v_avg, ag, height, params).c_scaled;
         let c = match mode {
             LadderMode::Quantized(rule) => quantize_c_pow2(c, rule),
             LadderMode::QuantizedHysteresis => hyst.step(c),
@@ -808,9 +843,16 @@ fn feedback_scenario(
         };
         corrected_ladder(raw, c)[1].max(1)
     };
-    // The reference fee is history-free (a fresh estimate at the fixed
-    // point); the loop's fee below carries the band's memory.
-    let f_ref = fee_at(demand_scale, &mut HysteresisCq { prev: 0 });
+    // The reference fee is history-free and anchored at the trace's START
+    // state — it defines the demand curve, so it must not move with the
+    // loop; the loop's fee below evolves with the traced state (§1.8:
+    // confirmed, not assumed) and carries the band's memory.
+    let f_ref = fee_at(
+        demand_scale,
+        st.ag,
+        st.height,
+        &mut HysteresisCq { prev: 0 },
+    );
 
     let eps = eps_milli as f64 / 1000.0;
     let blocks: u64 = 30_000;
@@ -827,10 +869,14 @@ fn feedback_scenario(
     let mut v_min = u64::MAX;
     let mut v_max = 0u64;
     let mut tail_fees = BTreeSet::new();
+    let mut tail_transitions = 0u64;
+    let mut last_tail_fee: Option<u64> = None;
     let mut hyst = HysteresisCq { prev: 0 };
+    let mut ag = st.ag;
     for t in 0..blocks {
         let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
-        let fee = fee_at(v_avg, &mut hyst);
+        let fee = fee_at(v_avg, ag, st.height + t, &mut hyst);
+        ag = advance_traced_state(ag, v_avg, params);
         let demand = (demand_scale as f64) * (fee as f64 / f_ref as f64).powf(-eps);
         let demand = demand.clamp(0.0, 10_000.0);
         sum += demand;
@@ -842,6 +888,12 @@ fn feedback_scenario(
             v_min = v_min.min(v_avg);
             v_max = v_max.max(v_avg);
             tail_fees.insert(fee);
+            if let Some(prev_fee) = last_tail_fee {
+                if fee != prev_fee {
+                    tail_transitions += 1;
+                }
+            }
+            last_tail_fee = Some(fee);
         }
     }
     FeedbackResult {
@@ -852,6 +904,7 @@ fn feedback_scenario(
         start_volume,
         mode: mode.name(),
         distinct_fees_tail: tail_fees.len() as u64,
+        tail_transitions,
         v_avg_tail_min: v_min,
         v_avg_tail_max: v_max,
         fee_tail_min: fee_min,
@@ -1255,21 +1308,25 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
         .iter()
         .filter(|d| d.mode.contains("quantized"))
         .count();
-    let quantized_changed: Vec<_> = r
+    // Under the evolved traces a value change is NORMAL (the ~1-per-
+    // 10-20k-block reward-decay crossing), so the exception filter is the
+    // GATE, not any change: a quantized run whose median dwell dips below
+    // the 240-block FL-C4a bar.
+    let quantized_gate_violations: Vec<_> = r
         .dwell
         .iter()
-        .filter(|d| d.mode.contains("quantized") && d.value_changes.iter().any(|&c| c > 0))
+        .filter(|d| d.mode.contains("quantized") && d.median_dwell.iter().any(|&m| m < 240))
         .collect();
     let _ = writeln!(
         out,
-        "fee-ladder: dwell grid = {} runs ({} quantized; {} quantized runs posted any value change)",
+        "fee-ladder: dwell grid = {} runs ({} quantized; {} quantized runs below the 240-block gate)",
         r.dwell.len(),
         quantized_runs,
-        quantized_changed.len()
+        quantized_gate_violations.len()
     );
     for d in &r.dwell {
         let interesting = if d.mode.contains("quantized") {
-            d.value_changes.iter().any(|&c| c > 0)
+            d.median_dwell.iter().any(|&m| m < 240)
         } else {
             d.mode == "corrected-raw" && d.scenario.starts_with("stationary-v50")
         };
@@ -1287,25 +1344,34 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             );
         }
     }
-    // Feedback over the swept grid: the FL-C7 gate is distinct_fees_tail
-    // == 1 (fixed point) or a cycle within one rounding step; aggregate,
-    // then print every non-converged cell in full.
+    // Feedback over the swept grid. With evolved traces, distinct_tail
+    // > 1 with ONE transition is a secular boundary crossing (the system
+    // tracking real drift — a pass); the FL-C7 exception is OSCILLATION:
+    // >= 2 tail transitions at more than one rounding step of amplitude.
     let fb_total = r.feedback.len();
+    let secular = r
+        .feedback
+        .iter()
+        .filter(|fb| fb.distinct_fees_tail > 1 && fb.tail_transitions <= 1)
+        .count();
     let fb_multi: Vec<_> = r
         .feedback
         .iter()
-        .filter(|fb| fb.distinct_fees_tail > 1)
+        .filter(|fb| {
+            fb.tail_transitions >= 2 && fb.fee_tail_max >= fb.fee_tail_min.saturating_mul(19) / 10
+        })
         .collect();
     let _ = writeln!(
         out,
-        "fee-ladder: feedback grid = {} cells; {} with distinct_tail > 1 (listed below)",
+        "fee-ladder: feedback grid = {} cells; {} secular single crossings; {} OSCILLATING at >= 1.9x (listed below)",
         fb_total,
+        secular,
         fb_multi.len()
     );
     for fb in fb_multi {
         let _ = writeln!(
             out,
-            "fee-ladder: feedback age={} M={} [{}] eps={} D={} start={} distinct_tail={} v_tail=[{},{}] fee_tail=[{},{}]",
+            "fee-ladder: feedback age={} M={} [{}] eps={} D={} start={} distinct_tail={} transitions={} v_tail=[{},{}] fee_tail=[{},{}]",
             fb.age_years,
             fb.median,
             fb.mode,
@@ -1313,6 +1379,7 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             fb.demand_scale,
             fb.start_volume,
             fb.distinct_fees_tail,
+            fb.tail_transitions,
             fb.v_avg_tail_min,
             fb.v_avg_tail_max,
             fb.fee_tail_min,
