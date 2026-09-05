@@ -62,6 +62,30 @@
 
 ### Added
 
+- **Shard-visual ruling A: parameter admissibility closed, with a
+  pre-registered criterion and typed enforcement.** The spec's
+  parameter design-review checkpoint had inverted — the gate existed,
+  never ran, and the borderline set it was meant to gate shipped in the
+  GUI preview, because the feature set was designed against a fake
+  chain that publishes what the real chain hides (cleartext amounts,
+  cleartext tiers). The pre-registered criterion (a feature is
+  admissible iff it is a deterministic function of data any shard
+  holder reads from held block bytes) admits `activity_density`,
+  `output_richness`, count-based `coinbase_ratio`, and `time_density`;
+  rejects the value moments (CT) and `tier_skew_high` (confidential
+  staking / the F-ARCHIVAL tier oracle); and rule-21-rejects the
+  stake-event features with a named reopening criterion.
+  `ShardAggregate` and `Features` now carry only the admitted set;
+  renderer inputs that consumed rejected features draw from their own
+  SHAKE256 namespaces at fresh indices. Companion rulings: the
+  rendering-spec version is chain data pinned at shard creation height
+  (never wallet data), and overridden renders are non-canonical by
+  type (`CandidateRecipe.canonical`). The no-tradeability
+  enforcement-point inventory is verified and codified; the
+  `shard.v1.render.*` / `candidate.v1.*` namespace families are
+  registered in the implementation index. Aesthetics closure and the
+  determinism bar are ruling B (FOLLOWUPS).
+
 - **C2-R1c — alt admission + acceptance topology: ruled, and the sync
   orphan arm stops punishing peers for our own state.** Seven rulings
   signed ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md)
