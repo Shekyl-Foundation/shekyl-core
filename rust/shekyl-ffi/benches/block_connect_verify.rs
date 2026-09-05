@@ -57,7 +57,10 @@
 //!   production prover — the SHIPPED verifier is the inherited C++
 //!   `bulletproofs_plus.cc` (CEN-H19) and is invisible to a Rust bench. The
 //!   proxy answers the SHAPE question (does output-density compete with
-//!   input-density); its absolute cost does not discharge CEN-H19.
+//!   input-density); its absolute cost does not discharge CEN-H19. The
+//!   escalation microbench of the shipped verifier lives at
+//!   `tests/unit_tests/gap7_bp_bench.cpp` — R6 / CEN-H19 consumers take
+//!   their measured number from there rather than re-measuring.
 //!   **Escalation rule: if the proxy lands within ~10× of the top term, a
 //!   C++ microbench of the shipped verifier is owed before any dominance
 //!   conclusion** — an inherited C++ verifier can plausibly be several
@@ -112,7 +115,8 @@
 //! adversarial worst case is maximum tx count, bounded only by the minimal
 //! spend's own wire weight (≈ 13 kB, mostly proof + hybrid-auth bytes).
 //! Budget fill at the measured argmax (1-in/2-out): 1.165 s @ 600 kB
-//! (n = 46), 2.306 s @ 1.2 MB, 4.566 s @ 2.4 MB, 9.146 s @ 4.8 MB —
+//! (n = 46), 2.306 s @ 1.2 MB, 4.566 s @ 2.4 MB, 9.146 s @ 4.8 MB (every
+//! 30 MB figure below is extrapolation 6.25× beyond this measured span) —
 //! **marginal 1.90 µs/weight-byte** vs aggregate 1.95 (the §4
 //! marginal-vs-aggregate gap, here 2.5 %, measured not assumed).
 //!
@@ -128,17 +132,21 @@
 //! 178 µs per verification, ≈ 38× under the fcmp per-input marginal. Parse
 //! is noise (µs against ms). Neither can move the constants.
 //!
-//! **Outcome statement (steering's two-way):** at the permanent floor
-//! operating point (600 kB) the dev box pays ≈ 1.5 s per worst-case cold
-//! block (crypto 1.17 s + RandomX 0.32 s) ≈ 1.2 % of T = 120 s —
-//! comfortable HERE, unmeasured on the floor. At the ×50 surge ceiling
-//! (30 MB), extrapolating the measured marginal (span: data to 4.8 MB;
-//! 30 MB is 6.25× beyond it): ≈ 57 s ≈ **48 % of T on the i9-11950H
-//! itself**. This is the hardware case made with a number: any floor
-//! device materially slower than this machine cannot verify a
-//! surge-ceiling cold block inside a block interval, which is exactly the
-//! condition census C2-R2 Q3 attached to the ×50 ratification (its named
-//! re-derivation target is the surge factor, not the zone).
+//! **Outcome statement (steering's two-way), stated as HEADROOM on the
+//! measured machine — never as a floor prediction (rule 76 §3/§4 forbid
+//! assumed cross-machine ratios):** at the permanent floor operating point
+//! (600 kB) the worst-case cold block costs ≈ 1.5 s on this machine —
+//! crypto 1.17 s + RandomX 0.32 s (the PoW term is ~21 % of the zone-point
+//! bill; a reader summing only the fill term mis-adds) — ≈ 1.2 % of
+//! T = 120 s. At the ×50 surge ceiling (30 MB — **an extrapolation 6.25×
+//! beyond the measured 4.8 MB span**): ≈ 57 s, i.e. **the worst-case cold
+//! block consumes ≈ 48 % of a block interval on the fastest machine
+//! available to the project, leaving under 2× headroom before the interval
+//! is exhausted — on a machine that is by definition faster than the
+//! stated floor.** That composition speaks directly to the condition
+//! census C2-R2 Q3 attached to the ×50 ratification (its named
+//! re-derivation target is the surge factor, not the zone); what the
+//! floor device measures remains GAP-7's open half.
 //!
 //! # Fences
 //!
