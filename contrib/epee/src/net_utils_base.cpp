@@ -93,14 +93,26 @@ namespace epee { namespace net_utils
 		//!
 		//! Anonymity zones hand every inbound connection the same per-zone
 		//! default address (`net_node.inl` `set_default_remote`, one call per
-		//! zone), and that default is the family's `unknown()` sentinel. The
-		//! sentinel encodes *"there is nothing to know"* — a Tor client reaches
-		//! us over a rendezvous circuit and need not own an onion address at
-		//! all — so it is honest, and it is not the defect.
+		//! zone), and that default is the family's `unknown()` sentinel.
 		//!
-		//! The defect is reading absence-of-information as *equality*: two
-		//! addresses that both name nothing are not "the same host", and
-		//! treating them so collapses an entire zone into one host.
+		//! **The sentinel should not exist**, and it is not a design decision
+		//! worth reconstructing. Every peer has an endpoint — `.onion`,
+		//! `.b32.i2p`, or IP and port — because a peer must be reachable to
+		//! serve. The inherited handshake simply never asks for one:
+		//! `basic_node_data` announces a port and no address, which works on
+		//! clearnet only because the socket supplies the rest. On an overlay
+		//! there is nothing to combine the port with, and a zone-wide sentinel
+		//! was filled in instead of the missing field.
+		//!
+		//! The fix is for the handshake to carry the endpoint. This guard is a
+		//! stopgap until it does: while the sentinel exists, comparing two
+		//! addresses that both name nothing must not report "same host", or one
+		//! sweep takes the whole zone.
+		//!
+		//! DELETE THIS, the predicate, and every word of this comment when the
+		//! handshake carries the endpoint. There will be no `unknown()` to
+		//! compare, so the guard becomes dead code and the explanation becomes
+		//! another inherited comment describing machinery that is gone.
 		//!
 		//! Implemented over `is_blockable()` because that predicate is already
 		//! exactly this test everywhere it is used —
