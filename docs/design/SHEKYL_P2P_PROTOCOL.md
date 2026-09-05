@@ -3192,9 +3192,9 @@ rather than inheriting whatever the default happens to be.
 >
 > **The announce path, checked rather than assumed (same review round).** The
 > parse arm of `handle_notify_new_fluffy_block`
-> (`cryptonote_protocol_handler.inl:554-566`) is genuine *form* —
+> (`cryptonote_protocol_handler.inl:546-557`) is genuine *form* —
 > input-describing, universal — and its drop stands. The size arm
-> (`check_incoming_block_size`, `:545-549`) is **state-describing**: it
+> (`check_incoming_block_size`, `:536-540`) is **state-describing**: it
 > compares the blob against **our** current weight limit + 100
 > (`src/cryptonote_core/cryptonote_core.cpp:1408-1420`), and the limit a few
 > heights ahead can legally exceed ours (how fast is the consensus lane's
@@ -3203,6 +3203,31 @@ rather than inheriting whatever the default happens to be.
 > smaller than the weight the limit bounds — but the test is on the wrong
 > axis for a drop under this rule, so the same implementation action carries
 > it: decline to process, do not sever.
+>
+> **The block-sync path, checked in the review of #620 — a third site, and the
+> most clearly disqualified of the three.** The
+> `prepare_handle_incoming_blocks` failure arm
+> (`cryptonote_protocol_handler.inl`, in `try_add_next_blocks`) severs the
+> span's origin. That call returns `false` for **six of our-own-state
+> reasons**: `m_cancel` — our own shutdown or cancellation — at
+> `src/cryptonote_core/blockchain.cpp:7025`, `:7035`, `:7076`, `:7188`, and a
+> thread-pool `!waiter.wait()` at `:7021` and `:7172`. None describes the
+> input; **our shutdown disconnects and charges an innocent peer.** It fails
+> the first conjunct outright, without needing the universality test.
+>
+> **What #620 could do under a boolean, and what it deliberately did not.**
+> The host-fail score is removed from that site's id-drop: a charge is an
+> accusation, and none is supportable here. The **disconnect stays**, because
+> a boolean return cannot separate our cancellation from malformed input, and
+> removing the sever on the strength of the cancellation cases alone would
+> leave a genuinely malformed span with no consequence — and, since the
+> host-wide sweep above it is a no-op only on anonymity zones, would make the
+> severing behaviour differ by zone, which is the divergence
+> [`71-network-uniformity`](../../.cursor/rules/71-network-uniformity.mdc)
+> requires be named and ratified rather than acquired. **That forced choice is
+> the argument for the type:** with one bit, both answers are wrong, and only
+> the tri-state above makes the site decidable. The implementation action
+> carries this site with the other two.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |

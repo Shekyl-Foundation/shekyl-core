@@ -1765,7 +1765,10 @@ namespace
   {
     std::vector<cryptonote::cryptonote_connection_context> conns;
     std::vector<boost::uuids::uuid> dropped;
-    std::vector<epee::net_utils::network_address> host_fails;
+    //! Address AND score: the score is what distinguishes a caller that
+    //! charges the peer from one that merely disconnects it, and several
+    //! call sites differ only in that argument.
+    std::vector<std::pair<epee::net_utils::network_address, unsigned>> host_fails;
 
     void add(const boost::uuids::uuid &id, const epee::net_utils::network_address &addr)
     {
@@ -1805,7 +1808,7 @@ namespace
       dropped.push_back(context.m_connection_id);
       return true;
     }
-    virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int) override
+    virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score) override
     {
       // Fidelity: production's `node_server::add_host_fail` opens with
       // `if(!address.is_blockable()) return false;` (`net_node.inl:412`), so an
@@ -1815,7 +1818,7 @@ namespace
       // rather than the code.
       if (!address.is_blockable())
         return false;
-      host_fails.push_back(address);
+      host_fails.emplace_back(address, score);
       return true;
     }
   };
@@ -1861,8 +1864,8 @@ TEST(anon_zone_address_keying, host_sweep_does_not_sever_a_zone)
   // rather than a number: scoring happened, and it never names an address that
   // names no host.
   EXPECT_FALSE(endpoint.host_fails.empty());
-  for (const auto &a : endpoint.host_fails)
-    EXPECT_TRUE(a.is_blockable());
+  for (const auto &f : endpoint.host_fails)
+    EXPECT_TRUE(f.first.is_blockable());
 }
 
 // The `prepare_handle_incoming_blocks` failure arm. The host sweep above is
@@ -1973,4 +1976,42 @@ TEST(block_sync_span_lifecycle, an_incorrect_height_span_leaves_the_queue_with_i
   EXPECT_EQ(0u, queue.get_num_filled_spans())
     << "the rejected span must leave the queue, or get_next_span serves it "
        "again forever against a peer that is already gone";
+}
+
+// `prepare_handle_incoming_blocks` returns false for six of OUR-state reasons
+// (`blockchain.cpp` `m_cancel` at :7025, :7035, :7076, :7188; `!waiter.wait()`
+// at :7021, :7172), so a failure there is not attributable to the sender and
+// PWD-B7 forbids charging one for it. The origin is still disconnected -- a
+// bool cannot separate our cancellation from malformed input -- but the id
+// drop must add no score of its own. Run on a CLEARNET origin, because the
+// endpoint refuses to score a non-host address at all and could not tell the
+// two apart on an anonymity zone.
+TEST(block_sync_span_lifecycle, prepare_failure_disconnects_the_origin_without_charging_it)
+{
+  test_core pr_core;
+  pr_core.prepare_handle_incoming_blocks_result = false;
+  pr_core.blocks_we_have.push_back(crypto::null_hash);
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  const boost::uuids::uuid origin = fixed_uuid(5);
+  endpoint.add(origin, ip);
+
+  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
+  queue.add_blocks(1, {one_block()}, origin, ip, 1.0f, 1);
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
+
+  // The host sweep runs on a blockable address and charges: 5 for the host,
+  // then 1 for the connection it severs. Everything charged on this path is
+  // the sweep's -- the id drop that follows contributes nothing.
+  unsigned total = 0;
+  for (const auto &f : endpoint.host_fails)
+    total += f.second;
+  EXPECT_EQ(6u, total)
+    << "the id drop must not add a host-fail score: a prepare failure is not "
+       "attributable to the sender (PWD-B7)";
+  EXPECT_FALSE(endpoint.dropped.empty()) << "but the origin is still disconnected";
 }

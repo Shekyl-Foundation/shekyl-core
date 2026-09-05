@@ -1486,8 +1486,18 @@ namespace cryptonote
             // as the two sites below already do. `flush_all_spans` is true
             // because this span is filled: until now only the sweep's own
             // `flush_spans(id, true)` erased it, and that is gone here.
+            //
+            // No host-fail score, matching the parse-failure sibling below:
+            // `prepare_handle_incoming_blocks` returns false for six OUR-STATE
+            // reasons (`blockchain.cpp` `m_cancel` at :7025, :7035, :7076,
+            // :7188; `!waiter.wait()` at :7021, :7172), so a failure here is
+            // not attributable to the sender and PWD-B7 forbids charging one.
+            // The drop itself stays: a bool cannot separate our cancellation
+            // from malformed input, and removing it would relax severing on
+            // one zone only. The typed verdict that fixes it properly is
+            // owned by the P2P-3 drop-rule item in FOLLOWUPS.
             if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
-              drop_connection(context, true, true);
+              drop_connection(context, false, true);
               return 1;
             }))
               LOG_ERROR_CCONTEXT("span connection id not found");
