@@ -343,6 +343,46 @@ Copilot's third pass: 9 open threads + 23 suppressed comments
     is honest now: zero steps at ages ≤ 4, 2–3 steps at ages 12/30
     within the gate.
 
+## Review round 12 (PR #614 bot cycles four and five, 2026-09-04 late)
+
+**Cycle four — the gui-drift red, diagnosed as cross-PR skew, no #614
+defect.** The failing check builds wallet@`dev` against
+`refs/pull/614/merge`. The wallet's `dev` (`shekyl-gui-wallet`
+`04b9c78`) already follows core PR **#617** (shard-visual ruling A,
+OPEN), which moves `dominant_regime` off `ShardAggregate` onto
+`PreviewFixture` — so the wallet reads `f.dominant_regime`, a field
+that exists only in #617's tree. Every core PR fails this check
+identically until #617 merges (the GUI repo's own dev CI went red on
+the same push, same minute), and #614's wallet-consumed crates
+compiled clean in the failing run. Nothing in this PR can or should
+fix it (patching shard-visual here would double-land #617); the
+resolution is sequencing — merge #617, then re-run the check. While
+this red stands, a genuine drift introduced by any core PR is
+invisible — the standing stale-cross-repo-red hazard, inverted: an
+EARLY companion turns every producer PR red.
+
+**Cycle five (Copilot, two findings, both valid, both taken):**
+
+- **`HysteresisCq` had no direct test while being load-bearing** — the
+  no-test-means-write-the-test rule applied to this round's own
+  round-11 addition. `hysteresis_band_boundaries_are_exact` now pins
+  initialization, retention at BOTH band edges (strictly-outside
+  escape: the edge itself holds), the transitions one unit outside
+  each margin, held-step history preservation, and the same-step
+  short-circuit. Falsifiers observed per axis: margin drift
+  (`MARGIN_MILLI` 30 → 0) and inequality drift (`>` → `>=`) each fire
+  the upper-edge retention assert; restored green.
+- **§5.1's criteria-disposition table was stale against rounds 8/11**:
+  FL-C4a still said "passes all scenarios" unqualified, FL-C7 said
+  "pass, no smoothing needed beyond `C_q`" (contradicting §4.5's
+  18-cell failure of the un-hysteretic map), FL-C8 still deferred
+  exhaustion governance to an FL-D1 that round 8 closed. All three
+  rows now carry the current verdicts with their round provenance.
+
+Also this cycle: `origin/dev` (#612) merged in; one
+`IMPLEMENTATION_INDEX.md` conflict resolved hunk-wise (dev's updated
+C2-R row + this branch's FL row).
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule

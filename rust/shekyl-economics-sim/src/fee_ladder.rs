@@ -1430,4 +1430,42 @@ mod tests {
         assert_eq!(raw[0], 13);
         assert_eq!(corrected_ladder(raw, 16 * SCALE)[0], 210);
     }
+
+    /// [`HysteresisCq`] is LOAD-BEARING (§4.5: the un-hysteretic map fails
+    /// FL-C7 at 18 reachable boundary cells; the 800-cell convergence
+    /// result rests on this band), so its boundaries are pinned directly —
+    /// a threshold or inequality drift must fail HERE, not silently
+    /// invalidate the §4.5 measurement (PR #614 review). Semantics mirror
+    /// impl-1's `fee_correction_quantized`: 3% margin, band around the
+    /// PREVIOUS step, escape is strictly-outside (`>` / `<`), `prev = 0`
+    /// means no history.
+    #[test]
+    fn hysteresis_band_boundaries_are_exact() {
+        // Initialization: no history ⇒ the plain ceiling snap, stored.
+        let mut h = HysteresisCq { prev: 0 };
+        assert_eq!(h.step(1_300_000), 2 * SCALE);
+        assert_eq!(h.prev, 2 * SCALE, "first snap must become the history");
+
+        // Retention at the upper band EDGE: prev = 2^0, raw C exactly
+        // prev·1.03 — strictly-outside escape means the edge itself holds.
+        let mut h = HysteresisCq { prev: SCALE };
+        assert_eq!(h.step(1_030_000), SCALE);
+        assert_eq!(h.prev, SCALE, "a held step must not rewrite history");
+        // Transition immediately outside the upper margin: steps up.
+        let mut h = HysteresisCq { prev: SCALE };
+        assert_eq!(h.step(1_030_001), 2 * SCALE);
+
+        // Retention at the lower band EDGE: prev = 2^1, lower bound is
+        // (prev/2)·0.97 = 970 000; the edge holds.
+        let mut h = HysteresisCq { prev: 2 * SCALE };
+        assert_eq!(h.step(970_000), 2 * SCALE);
+        // Immediately below: steps down to the fresh snap.
+        let mut h = HysteresisCq { prev: 2 * SCALE };
+        assert_eq!(h.step(969_999), SCALE);
+
+        // Same-step short-circuit: a raw C whose ceiling snap equals the
+        // held step returns it without consulting the band.
+        let mut h = HysteresisCq { prev: 2 * SCALE };
+        assert_eq!(h.step(1_500_000), 2 * SCALE);
+    }
 }

@@ -896,13 +896,13 @@ Readings, as corrected at round 6:
 | FL-C1 continuous | **rejected** — never triggered: discrete ladders satisfy the registered set; the exception clause stays unfired | §4.3 |
 | FL-C2 coverage | met by floor + `2R/M` top; **surge arm fails C2(b)** → fixed in §5.2 | §4.3 |
 | FL-C3 spacing ≤ 10× | **conflict with C4b** — registered outcome, resolved on the record in §5.3 | §4.3 |
-| FL-C4a dwell | raw `C` fails; **pow2-quantized `C_q` passes all scenarios** → adopted | §4.4 |
+| FL-C4a dwell | raw `C` fails; **pow2-quantized `C_q` behind the §7 hysteresis passes the 240-block gate in every scenario at every registered age** → adopted (round 11: old-age ramps legitimately step 2–3×, min in-ramp dwell 274 ≥ 240) | §4.4 |
 | FL-C4b usage floor | `Fm` at **0% measured production usage** (FL-V3) → **delete** (emergency-lane branch examined and rejected: an emergency lane nobody was using marks the first user who ever touches it) | §5.3 |
 | FL-C4c count | **3** | §5.3 |
 | FL-C5 static vs state | **state-computed** (19× ≫ r) | §4.1 |
 | FL-C6 relay floor | **clamp** (option i), floor re-derivation deferred to CEN-M3's round | §5.4 |
-| FL-C7 feedback | pass, no smoothing needed beyond `C_q` | §4.5 |
-| FL-C8 degenerates | pinned; exhaustion-era governance deferred FL-D1 | §4.6 |
+| FL-C7 feedback | **pass on the CONSTRUCTED map only** (round 11): the un-hysteretic `C_q` map 2-cycles at 18 reachable boundary cells at full-step amplitude — the §1.7 remedy applied; the §7 hysteresis (load-bearing) converges all 800 cells | §4.5 |
+| FL-C8 degenerates | pinned (incl. the tail-reward penalty via the KAT-pinned entry point, round 11); exhaustion-era governance was deferred as FL-D1 and **CLOSED AS ANSWERED at round 8** (perpetual tail; penalty after the floor) | §4.6, §9 |
 | FL-C9 anchored candidate-set reduction (post-registration, round 5; re-labeled round 6) | measured: minority-rung reduction ×10–×20 once per anchored tx; single state-computed rate ×1.0 — **rung-count ruling REOPENED as FL-R17** | §4.7, W7-revised |
 
 ### §5.2 The proposed ladder
