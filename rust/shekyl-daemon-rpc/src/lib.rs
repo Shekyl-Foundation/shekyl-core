@@ -28,10 +28,10 @@
 
 //! Rust daemon RPC server — Axum replacement for epee's HTTP server.
 //!
-//! All RPC handler logic remains in C++ (`core_rpc_server::on_*`).
-//! This crate provides the HTTP transport layer: route registration,
-//! JSON/binary/JSON-RPC dispatch, body size limits, CORS, and
-//! restricted-mode enforcement.
+//! Native methods live in [`methods`] over [`chain_facts`]. C++ still serves
+//! the methods this crate has not taken (`core_rpc_server::on_*`); this crate
+//! owns HTTP, dispatch, restricted-mode, and every method the KV cutover has
+//! moved.
 
 // This crate's `tracing::*` events reach the C++-installed subscriber
 // because the daemon links exactly one Rust image

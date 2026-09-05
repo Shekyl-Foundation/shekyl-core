@@ -307,6 +307,30 @@ impl FfiChainFacts {
     }
 }
 
+/// How a lookup names the block for the two FFI exports that share a selector.
+fn lookup_selector(at: BlockLookup) -> (Option<[u8; 32]>, u64) {
+    match at {
+        BlockLookup::Hash(h) => (Some(h), 0),
+        BlockLookup::Height(h) => (None, h.to_raw()),
+    }
+}
+
+/// The fee POD becomes typed facts only when C++ wrote every tier it claimed.
+///
+/// `fee_count` is the runtime half of the four-ness `FeeTiers` enforces on
+/// the wire: the estimator resizes to four, the C++ shim refuses any other
+/// length, and this check is what makes a POD that arrived `OK` with a
+/// shorter write a fault rather than a base fee padded with zeros.
+fn fee_estimate_from_pod(pod: ffi::FeeEstimateFactsFfi) -> Result<FeeEstimate, FactsFault> {
+    if pod.fee_count != 4 {
+        return Err(FactsFault::Inconsistent);
+    }
+    Ok(FeeEstimate {
+        fees: pod.fees,
+        quantization_mask: pod.quantization_mask,
+    })
+}
+
 /// One place where a header POD becomes typed facts.
 ///
 /// Two exports fill this same POD — `shekyl_rpc_block_header_at` and
@@ -417,10 +441,7 @@ impl ChainFacts for FfiChainFacts {
             .core
             .fee_estimate(grace_blocks)
             .map_err(FactsFault::from_code)?;
-        Ok(FeeEstimate {
-            fees: pod.fees,
-            quantization_mask: pod.quantization_mask,
-        })
+        fee_estimate_from_pod(pod)
     }
 
     fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault> {
@@ -439,10 +460,7 @@ impl ChainFacts for FfiChainFacts {
         at: BlockLookup,
         fill_pow_hash: bool,
     ) -> Result<BlockHeaderAt, FactsFault> {
-        let (hash, height) = match at {
-            BlockLookup::Hash(h) => (Some(h), 0),
-            BlockLookup::Height(h) => (None, h.to_raw()),
-        };
+        let (hash, height) = lookup_selector(at);
         let pod = self
             .core
             .block_header_at(hash.as_ref(), height, fill_pow_hash)
@@ -461,10 +479,7 @@ impl ChainFacts for FfiChainFacts {
     }
 
     fn block_at(&self, at: BlockLookup, fill_pow_hash: bool) -> Result<BlockAt, FactsFault> {
-        let (hash, height) = match at {
-            BlockLookup::Hash(h) => (Some(h), 0),
-            BlockLookup::Height(h) => (None, h.to_raw()),
-        };
+        let (hash, height) = lookup_selector(at);
         let (pod, blob, json, tx_hashes) = self
             .core
             .block_at(hash.as_ref(), height, fill_pow_hash)
@@ -502,6 +517,7 @@ impl ChainFacts for FfiChainFacts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ffi;
 
     #[test]
     fn fault_codes_map_one_to_one_and_unknown_is_never_guessed() {
@@ -522,5 +538,28 @@ mod tests {
             FactsFault::Inconsistent
         );
         assert_eq!(FactsFault::from_code(-77), FactsFault::Unknown(-77));
+    }
+
+    #[test]
+    fn a_fee_pod_that_did_not_write_four_tiers_is_inconsistent() {
+        let four = ffi::FeeEstimateFactsFfi {
+            fees: [1, 2, 3, 4],
+            quantization_mask: 8,
+            fee_count: 4,
+            reserved: [0; 7],
+        };
+        let ok = fee_estimate_from_pod(four).expect("four tiers is the contract");
+        assert_eq!(ok.fees, [1, 2, 3, 4]);
+        assert_eq!(ok.quantization_mask, 8);
+
+        for count in [0, 3, 5] {
+            let mut short = four;
+            short.fee_count = count;
+            assert_eq!(
+                fee_estimate_from_pod(short),
+                Err(FactsFault::Inconsistent),
+                "fee_count {count} must not be read as a shorter answer"
+            );
+        }
     }
 }

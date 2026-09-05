@@ -466,6 +466,9 @@ pub struct BlockHeaderFactsFfi {
     pub minor_version: u8,
     pub orphan_status: u8,
     pub pow_hash_filled: u8,
+    /// `0` means no such block: by height, `height >= chain_height`; by hash,
+    /// a hash this chain does not hold. An in-range height the store cannot
+    /// produce is `ERR_INCONSISTENT`, never `found == 0`.
     pub found: u8,
     pub reserved: [u8; 7],
 }

@@ -99,11 +99,13 @@ typedef struct shekyl_rpc_block_header_facts {
     uint8_t  minor_version;
     uint8_t  orphan_status;
     uint8_t  pow_hash_filled;
-    // 0 means no such block. Reached by height that is `height >=
-    // chain_height`, or an in-range height the store cannot produce; reached
-    // by hash it is a hash this chain does not hold. Both are legitimate
-    // query outcomes and the caller knows which it asked for — the same
-    // classification `shekyl_rpc_block_at` states.
+    // 0 means no such block, and only then: by height, `height >=
+    // chain_height`; by hash, a hash this chain does not hold. Both are
+    // legitimate query outcomes and the caller knows which it asked for.
+    // An in-range height the store cannot produce is
+    // SHEKYL_RPC_FACTS_ERR_INCONSISTENT, never found == 0 — the same
+    // classification `shekyl_rpc_block_hash_at` states, and the one
+    // `shekyl_rpc_block_at` states for a broken coinbase.
     uint8_t  found;
     uint8_t  reserved[7];
 } shekyl_rpc_block_header_facts;

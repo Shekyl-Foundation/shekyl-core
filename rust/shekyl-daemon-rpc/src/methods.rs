@@ -184,6 +184,36 @@ pub fn block_request(params: &serde_json::Value) -> Result<GetBlockRequest, RpcF
     object_params(params, WRONG_BLOCK_PARAMS)
 }
 
+/// Read a JSON-RPC `params` value as this method's request object when the
+/// request has **no meaningful empty form**.
+///
+/// Absent params, a non-object, and an unusable object are all refused.
+/// The C++ value-initialised `get_block_headers_range`'s two heights to zero
+/// and answered for block 0, for both an absent `params` and an empty object.
+/// The first Rust port reproduced neither faithfully: null took `T::default()`
+/// while `{}` failed to deserialize, so the two spellings of "I gave you
+/// nothing" stopped meaning the same thing. **They mean the same thing here,
+/// and both are refused**: a range is the one request in this family where
+/// the empty form names nothing, and answering it with genesis tells a client
+/// that forgot its arguments about block 0 instead of telling it that it
+/// forgot. `GetBlockHeadersRangeRequest` is not `Default`, which is what
+/// stops this being re-routed through [`object_params`] later.
+///
+/// # Errors
+///
+/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] for absent
+/// params, a non-object, or an object this method cannot read.
+fn required_object_params<T: serde::de::DeserializeOwned>(
+    params: &serde_json::Value,
+    expected: &str,
+) -> Result<T, RpcFault> {
+    match params {
+        serde_json::Value::Object(_) => serde_json::from_value(params.clone())
+            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(expected))),
+        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(expected))),
+    }
+}
+
 /// Read a JSON-RPC `params` value as this method's request object.
 ///
 /// One shape per method: absent params are the request's own defaults, an
@@ -202,36 +232,6 @@ pub fn block_request(params: &serde_json::Value) -> Result<GetBlockRequest, RpcF
 ///
 /// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
 /// `params` is present but is not an object this method accepts.
-/// [`object_params`] for a method whose request has **no meaningful empty
-/// form**, so absent params are refused rather than defaulted.
-///
-/// The C++ value-initialised `get_block_headers_range`'s two heights to zero
-/// and answered for block 0, and it did so for both an absent `params` and an
-/// empty object — the bridge only skipped the deserialize, it never chose a
-/// different request. The first Rust port reproduced neither faithfully: null
-/// took `T::default()` while `{}` failed to deserialize, so the two spellings
-/// of "I gave you nothing" stopped meaning the same thing. **They mean the
-/// same thing here, and both are refused**: a range is the one request in
-/// this family where the empty form names nothing, and answering it with
-/// genesis tells a client that forgot its arguments about block 0 instead of
-/// telling it that it forgot. `GetBlockHeadersRangeRequest` is not `Default`,
-/// which is what stops this being re-routed through [`object_params`] later.
-///
-/// # Errors
-///
-/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] for absent
-/// params, a non-object, or an object this method cannot read.
-fn required_object_params<T: serde::de::DeserializeOwned>(
-    params: &serde_json::Value,
-    expected: &str,
-) -> Result<T, RpcFault> {
-    match params {
-        serde_json::Value::Object(_) => serde_json::from_value(params.clone())
-            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(expected))),
-        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(expected))),
-    }
-}
-
 fn object_params<T: serde::de::DeserializeOwned + Default>(
     params: &serde_json::Value,
     expected: &str,
@@ -710,10 +710,9 @@ fn pow_hash_or_refuse(requested: bool, restricted: bool) -> Result<bool, RpcFaul
 /// Each names **its own** fields, because a caller that sent the wrong shape
 /// needs to know what this method wanted, not what the last one did.
 /// `get_last_block_header` and `hard_fork_info` accept absent params — the
-/// tip and the active fork are what they answer with no arguments — and so
-/// does `get_block_headers_range`, whose C++ default-initialized both heights
-/// to zero and answered for block 0 (RK-D8: the shape is preserved, however
-/// odd, because changing it is a separate decision from moving it).
+/// tip and the next fork are what they answer with no arguments.
+/// `get_block_headers_range` does **not**: a range has no empty form, so
+/// absent params and `{}` are refused rather than answered as genesis.
 ///
 /// # Errors
 ///
