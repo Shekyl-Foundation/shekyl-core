@@ -1470,7 +1470,7 @@ namespace cryptonote
           {
             LOG_ERROR_CCONTEXT("Failure in prepare_handle_incoming_blocks");
             drop_connections(span_origin);
-            // Sibling parity: the three other `drop_connections(span_origin)`
+            // Sibling parity: the two other `drop_connections(span_origin)`
             // sites each also drop the originating connection by id. This one
             // relied solely on the host-wide sweep, which is correct only where
             // the address names a host -- so on anonymity zones, where the
