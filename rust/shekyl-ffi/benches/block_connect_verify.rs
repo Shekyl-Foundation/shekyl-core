@@ -180,6 +180,49 @@
 //! re-derivation target is the surge factor, not the zone); what the
 //! floor device measures remains GAP-7's open half.
 //!
+//! # FLOOR RESULTS — skl-pi, Raspberry Pi 4 Model B Rev 1.4 (verify_floor)
+//!
+//! Captures: `docs/benchmarks/gap7_block_verify_pi4_{pins,rust,cpp}_2026….txt`
+//! (device row, toolchain, flags, thermal trace, and the SD/8 GB as-found
+//! deviations recorded in each header). Pins ran FIRST and green (3/3 —
+//! validating the instrument as well as the fixtures: the run also exposed
+//! a broken thermal reader whose vcgencmd branch presence-tested the BINARY
+//! when the capability is the DEVICE NODE). Thermal regime: CLEAN — stock
+//! 1.8 GHz in 230/231 samples, peak 70.6 °C, no throttling; the fill is
+//! exactly linear (marginal ≡ aggregate).
+//!
+//! Per-term at the argmax (1-in/2-out), floor vs i9 ratio bracketed:
+//! adm 128.97 ms [5.65×; per-input marginal 40.2 ms = 5.98× — rule 76 §4's
+//! own cited figure, reproduced]; pqc 934 µs [5.25×]; RandomX (flagless)
+//! 1.222 s/block [3.86×]; shipped Bp+ single 13.59 ms @ 2-out / 71.8 ms @
+//! 16-out — **2.56× FASTER than the Rust proxy on the A72, the inverse of
+//! the i9's 1.56×-slower ratio**; batched 46× = 1.745 ms/proof
+//! (amortization 7.79× vs i9's 8.3× — algorithmic-first, confirmed).
+//! **Four-plus per-term floor ratios spanning 3.86× to ≈12×, one of them
+//! INVERTED: no single assumed scaling factor could have been right
+//! anywhere (rule 76 §3, measured).** Dev-box RELATIVE shape costs are not
+//! floor relative costs — the sub-argmax ordering flipped.
+//!
+//! **Regime note:** the sweep was measured with the FA-6 §8.2 flags; a
+//! one-point comparison against the shipping configuration (generic
+//! aarch64 — no repo `target-cpu`, verified) showed flagless 3.2% FASTER
+//! on adm, identical on Bp+ — the sweep is ≤3.2 % conservative for what
+//! ships. The flags also SIGILL RandomX on this board (BCM2711 has no
+//! ARMv8 crypto extensions; LLVM's cortex-a72 def includes +aes), so the
+//! §8.2 convention is unsafe here, unrepresentative, and not even faster —
+//! routed as its own item.
+//!
+//! **verify_floor, composed at the argmax (shipped-batched Bp+):**
+//! 131.7 ms/tx ⇒ 10.12 µs per weight-byte ⇒ zone-point worst cold block
+//! **7.30 s ≈ 6.1 % of T** (RandomX is 17 % of that bill). Against the
+//! signed f·T = 40 s: **surge_max ≈ 6.4** (flagged-conservative;
+//! shipping-regime estimate ≈ 6.6) — INTERPOLATED (6.4 ⇒ ≈ 3.8 MB limit,
+//! inside the measured 0.6–4.8 MB span). The pre-registered bracket was
+//! [≈3.6, ≈6.2]; the realized value sits just above its anchor edge
+//! because the bracket capped the C++/proxy ratio at ≥ 1 — the inverted
+//! ratio was the one direction not priced. The ×50 surge factor therefore
+//! re-derives to ×6 territory at today's verification costs.
+//!
 //! # Fences
 //!
 //! Archival families (serve-credit / bond-post / emission) are OUT of this
