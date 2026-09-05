@@ -60,7 +60,10 @@ fn candidate_shapes_saturate_their_caps() {
         // defective GTWF §9.6a sentence) and every pin stayed green. This
         // opt-in `parse_extra` round-trip is what makes interior encoding
         // failures visible.
-        let fields = parsed.prefix.parse_extra().expect("tx_extra interior must parse");
+        let fields = parsed
+            .prefix
+            .parse_extra()
+            .expect("tx_extra interior must parse");
         let kem_fields = fields
             .iter()
             .filter(|f| matches!(f, shekyl_wire::tx_extra::TxExtraField::PqcKemCiphertext(_)))
