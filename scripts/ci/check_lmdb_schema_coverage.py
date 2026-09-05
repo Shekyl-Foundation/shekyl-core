@@ -51,6 +51,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "src" / "blockchain_db" / "lmdb" / "db_lmdb.cpp"
 DOC = ROOT / "docs" / "LMDB_SCHEMA.md"
 DRS = ROOT / "docs" / "design" / "DAEMON_REDB_STORE.md"
+AUDIT = ROOT / "docs" / "LMDB_WRITE_ATOMICITY_AUDIT.md"
 
 # Subject assertion floor: the list held 49 names when this gate was written.
 # A parse yielding fewer than this is a broken parse (or a mass table
@@ -171,7 +172,7 @@ def main() -> None:
     # Subject failures here still flush any errors already accumulated by
     # the earlier legs — a missing registry must not mask a heading defect
     # (the workflow runs these legs under one process, so masking would be
-    # exactly the one-defect-hides-another failure doc-links.yml avoids
+    # exactly the one-defect-hides-another failure docs-gates.yml avoids
     # between scripts).
     def _fail(msg: str) -> None:
         sys.exit("FAIL: " + msg + ("" if not errors else
@@ -225,13 +226,62 @@ def main() -> None:
                       f"{reg_count.group(1)} rows; SHEKYL_LMDB_TABLES has "
                       f"{len(tables)} tables")
 
+    # Audit leg (P0b, 2026-09-05). The atomicity audit's §10 coverage matrix
+    # claims one row per live table — the DRS §9.1 leg-3 pin ("every MDB_dbi
+    # in the audit"), stated at the table-name layer the macro owns. Same
+    # subject-assertion and non-masking discipline as the registry leg.
+    try:
+        audit = AUDIT.read_text(encoding="utf-8")
+    except OSError as e:
+        _fail(f"cannot read docs/LMDB_WRITE_ATOMICITY_AUDIT.md ({e}) — the "
+              "coverage matrix this gate pins is unreadable")
+    mat_m = re.search(
+        r"^## 10\. Coverage matrix\b.*?(?=^## |\Z)", audit,
+        re.MULTILINE | re.DOTALL)
+    if not mat_m:
+        _fail("'## 10. Coverage matrix' section not found in "
+              "docs/LMDB_WRITE_ATOMICITY_AUDIT.md — the audit no longer "
+              "carries the per-table matrix this gate pins")
+    mat_rows = re.findall(r"^\| `([a-z0-9_]+)` \|", mat_m.group(0),
+                          re.MULTILINE)
+    if len(mat_rows) < MIN_TABLES or "blocks" not in mat_rows:
+        _fail(f"parsed only {len(mat_rows)} table rows from the audit "
+              f"coverage matrix (floor {MIN_TABLES}, sentinel 'blocks') — "
+              "the matrix parse is not reading real rows")
+    mat_dupes = sorted({t for t in mat_rows if mat_rows.count(t) > 1})
+    if mat_dupes:
+        errors.append("duplicate rows in the audit coverage matrix "
+                      "(LMDB_WRITE_ATOMICITY_AUDIT.md §10):\n  "
+                      + "\n  ".join(mat_dupes))
+    mat_missing = [t for t in tables if t not in set(mat_rows)]
+    if mat_missing:
+        errors.append(
+            "these tables exist in SHEKYL_LMDB_TABLES but have no row in the "
+            "audit coverage matrix (LMDB_WRITE_ATOMICITY_AUDIT.md §10):\n  "
+            + "\n  ".join(mat_missing))
+    mat_ghosts = sorted(set(mat_rows) - set(tables))
+    if mat_ghosts:
+        errors.append(
+            "these audit coverage matrix rows name tables absent from "
+            "SHEKYL_LMDB_TABLES (deleted table, surviving row?):\n  "
+            + "\n  ".join(mat_ghosts))
+    mat_count = re.search(r"\*\*(\d+) rows\*\*", mat_m.group(0))
+    if not mat_count:
+        errors.append("the audit coverage matrix's '**N rows**' count line "
+                      "is missing — the row-count claim this gate checks no "
+                      "longer exists")
+    elif int(mat_count.group(1)) != len(tables):
+        errors.append(f"the audit coverage matrix claims "
+                      f"{mat_count.group(1)} rows; SHEKYL_LMDB_TABLES has "
+                      f"{len(tables)} tables")
+
     if errors:
         sys.exit("FAIL: the LMDB schema surface is out of step with the live "
                  "table list:\n" + "\n".join(errors))
 
     print(f"OK: all {len(tables)} LMDB tables documented (property rows and "
-          "headings), reconciliation registry matches, stated totals and "
-          "DB-version header match the code")
+          "headings), reconciliation registry and atomicity-audit matrix "
+          "match, stated totals and DB-version header match the code")
 
 
 if __name__ == "__main__":
