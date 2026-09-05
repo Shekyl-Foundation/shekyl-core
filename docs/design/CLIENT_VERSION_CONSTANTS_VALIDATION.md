@@ -1,11 +1,13 @@
 # VC — Client-side version and constants validation
 
-**Status:** OPEN — design round 1. Dispositions `VC-D1`…`VC-D11` are
-**proposed**, not ruled; nothing in §4 is built. **No wire change is
-authorised while this banner reads round 1** (steering direction,
-2026-09-05: the design category is exempt from the alpha.8 parallel-building
-slowdown; a `get_version` field is not). Every `file:line` below was read at
-`dev` = `2dba46537` (PR #619, RK-5b merge).
+**Status:** OPEN — design round 1. Dispositions `VC-D1`…`VC-D12` are
+**proposed**, not ruled. **`VC-1` is built in the PR that lands this
+document** (steering ruling, 2026-09-05: no wire change, no C++, so it clears
+the alpha.8 slowdown); `VC-2`…`VC-4` are not started. **No wire change is
+authorised while this banner reads round 1** (the design category is exempt
+from the slowdown; a `get_version` field is not). Every `file:line` below was
+read at `dev` = `2dba46537` (PR #619, RK-5b merge); the anchor for `VC-1`'s
+landing is `e54e5b983`.
 **Identifier family:** `VC-` (version and constants validation), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 in the commit that
 lands this document (rule 94). `VC-D*` are dispositions of this round;
@@ -90,16 +92,27 @@ What landed is half of that. `OpenError::NetworkMismatch`
 (`rust/shekyl-engine-core/src/engine/error/lifecycle.rs:52`) is raised from
 `lifecycle/support.rs:53` by translating `WalletFileError::NetworkMismatch` —
 the **wallet file's** declared network against the caller's `expected`
-parameter. The daemon is never asked. And the docstring at
-`engine/daemon.rs:169` says the opposite of what the code does:
+parameter. The daemon is never asked — the variant's own shape,
+`{ wallet, expected }`, has no field for a daemon-reported value, so the type
+could not implement the lock even if a call site wanted to. And two
+docstrings say the opposite of what the code does. `engine/daemon.rs:169`:
 
 > Daemon network verification is performed by `Engine::open_*` against the
 > on-disk wallet file's network declaration.
 
-That sentence is a *prose claim asserted rather than tested* — the second of
-the three defect shapes RK-5b's six review rounds catalogued — and it has
-been standing since Phase 1. The regtest end-to-end suite
-(`engine/regtest_e2e.rs`) opens `Network::Mainnet` wallets against a
+— literally true about what it does, while its subject says "daemon network
+verification"; a reader takes the subject. And `engine/error/mod.rs:41`,
+under "variant names locked in by the plan":
+
+> `OpenError::NetworkMismatch` — wallet file says network N, daemon client
+> says network M.
+
+Both are *prose claims asserted rather than tested* — the second of the
+three defect shapes RK-5b's six review rounds catalogued — and both have been
+standing since Phase 1. `VC-4` corrects both in the same PR as the check;
+prose that is load-bearing-false does not get a follow-up.
+
+The regtest end-to-end suite (`engine/regtest_e2e.rs`) opens `Network::Mainnet` wallets against a
 `shekyld --regtest` daemon that reports `"fakechain"`, and passes, which is
 the proof: the check does not exist, so nothing has ever had to accommodate
 it (§3.6.4 is where that accommodation is designed).
@@ -128,6 +141,17 @@ a client's build and the daemon it dials:
 
 Three axes, three different failures, three different messages an operator
 needs. That is why §2 does not collapse them into one "handshake".
+
+**And the wrong-chain daemon is undefended twice over, today.** The lock-5
+attack — a wallet pointed at a daemon on a different chain — has no network
+check (§0.2) *and* no genesis check: no Rust pin of a genesis block hash
+exists and no client compares block 0's hash to anything (found 2026-09-05
+while grounding `VC-D12`; §2's genesis row). Three stated commitments were
+chased on this day and all three lacked an enforcing site — the plan's
+"verified via `get_info`", this document's own first draft's "committed to
+by the genesis block hash", and, in another lane, `GENESIS_TX_WIRE_FORMAT`'s
+"consensus parses `32·n_outputs`". The identity tuple is the enforcing site
+for the first two.
 
 ---
 
@@ -166,15 +190,48 @@ optionality without a concrete need is debt).
 ## 2. The identity tuple
 
 A client establishes, once per connection, that the daemon it dialed is the
-daemon it was built for, on three independent axes:
+daemon it was built for, on independent axes (three at the round's opening,
+four after `VC-D12`):
 
 | Axis | Client's value | Daemon's value | Mismatch means |
 | --- | --- | --- | --- |
 | **Wire** | compiled `CORE_RPC_VERSION` | `get_version.version` | the two binaries do not share an RPC contract; every reply is suspect |
 | **Rules** | compiled `CONSENSUS_CONSTANTS_DIGEST` (§3.3) | `get_version.consensus_constants_digest` (new, `VC-D5`) | the two binaries were built from different consensus constants; this is a different chain |
 | **Network** | the wallet's `Network` / the console's caller | `get_version.nettype` (new, `VC-D5`) | same rules, different instance of them |
+| **Genesis** (`VC-D12`, added 2026-09-05) | a per-network pinned genesis block hash, new in Rust | `on_get_block_hash([0])` — served natively since RK-2, **no wire change** | the daemon's chain does not start where this build's does: a different chain, whatever else agrees |
 
-The three are orthogonal and are kept that way in the refusal: the operator
+The genesis axis was added when `VC-D12`'s first draft excluded the
+`genesis_recipients.*.json` files from the digest on the ground that "the
+genesis block hash already commits to them" — and the steering lane checked
+whether anything compares that hash. Nothing does: no Rust pin of a genesis
+hash exists and no client reads block 0's hash. The daemon pins
+`GENESIS_TX` / `GENESIS_NONCE` per network in `src/cryptonote_config.h:368`
+(and `:500`, `:511`); the client side has never held the answer. So the
+axis joins the tuple (`VC-4` builds it over the existing method) rather than
+serving as an excuse. Genesis does not replace network: `FAKECHAIN` takes
+mainnet's configuration (`cryptonote_config.h:562`), so a regtest daemon
+shares mainnet's genesis and only `nettype` tells them apart; and `nettype`
+is the value an operator can read in a refusal. Genesis is the strong check;
+network is the discriminator and the message.
+
+Two things follow from `FAKECHAIN` taking mainnet's configuration, stated so
+a later reader does not file either as a defect. First, it is rule 71
+([`71-network-uniformity`](../../.cursor/rules/71-network-uniformity.mdc))
+working exactly as written: the network selects *data* — `FAKECHAIN` selects
+mainnet's constants, `GENESIS_TX` and `GENESIS_NONCE` included — and no
+control flow diverges on the consensus surface. Second, and this is why the
+tuple has several axes rather than one strong one: **the genesis axis has a
+structural blind spot exactly where regtest lives, and only the network axis
+sees there.** The axes do not merely add confidence to one another; they
+cover different failure sets. Wire skew is invisible to every axis but the
+first; a rebuilt constants file is invisible to every axis but the second; a
+regtest daemon behind a mainnet URL is invisible to the genesis axis and
+caught by the third; a daemon on a different chain with the same constants
+and network is caught only by the fourth. That coverage difference is the
+justification for the tuple's shape — not "defence in depth", which is what
+one writes when the difference cannot be named.
+
+The axes are orthogonal and are kept that way in the refusal: the operator
 reads *which* axis failed and what each side's value was. "Wrong daemon" is
 not an error message; "this daemon runs testnet, this wallet is mainnet" is.
 
@@ -396,11 +453,13 @@ statistics from a chain it has just proved is not this build's chain prints
 confidently wrong numbers, which is the failure §0.3 was written to avoid.
 There is no operator task that needs it that `version` does not serve.
 
-#### 3.6.3 Wallet engine — refuse to open, on all three axes
+#### 3.6.3 Wallet engine — refuse to open, on every axis
 
 `Engine::open_*` (`engine/lifecycle/open.rs`) performs the handshake against
 the supplied daemon client **before any wallet operation** — lock 5's
-wording, finally honoured — and refuses with a new typed
+wording, finally honoured — on all four axes of §2 (the genesis axis via
+`on_get_block_hash([0])`, a second call against an existing method), and
+refuses with a new typed
 `OpenError::DaemonIdentityMismatch { axis, ours, theirs }`. `shekyl-cli` and
 `shekyl-wallet-rpc` surface it in operator language per
 [`82-failure-mode-ux`](../../.cursor/rules/82-failure-mode-ux.mdc):
@@ -533,6 +592,85 @@ that looks like a check is the class rule 47 exists for. **`VC-3` deletes
 it** and its tests, and re-points the doc comment that names this round.
 Rule 15: pre-genesis, delete rather than keep two instruments for one fact.
 
+### 3.12 `VC-D12` — the digest's file set: `consensus_constants.json` alone, or all of `config/`?
+
+Raised by the steering lane on 2026-09-05 while correcting a relay: the
+fee-ladder implementation bundle touches `config/economics_params.json`, not
+`consensus_constants.json`, so it would **not** trip `VC-1`'s sentinel — and
+that is the gap. `economics_params.json` is at least as consensus-affecting
+as the file `VC-1` digests: `money_supply`, the emission speed and final
+subsidy, the burn rates, the staker shares, `coin` (the atomic-unit
+denominator), `shekyl_tx_volume_window` (the fee ladder's window). What
+guards it today is `rust/shekyl-economics/src/digest.rs`: a Blake2b-256 over
+the typed `EconomicParams`, used as the C4 fixture-lineage guard and as one
+leg of `snapshot_calibration_digest`. That is a **different instrument with a
+different job** — it detects drift between a committed fixture and the
+params, it does not fail the build against a pinned value, and its module
+doc deliberately keeps it `EconomicParams`-only so fixture lineage does not
+move when an unrelated constant changes. Its narrowness is correct for its
+job; the consequence is that **seven** of `economics_params.json`'s eighteen
+non-comment keys (`coin`, `display_decimal_point`, `shekyl_fixed_point_scale`,
+`shekyl_tx_volume_window`, `shekyl_staker_emission_share`,
+`shekyl_staker_emission_decay`, `shekyl_blocks_per_year`) have no build-time
+guard of any kind. The honest answer to "what guards `economics_params.json`
+against a client/daemon mismatch" is currently *nothing*.
+
+**Proposed: the rules digest covers both integer authorities under `config/`
+— `consensus_constants.json` and `economics_params.json` — as one digest,
+one wire field.** The canonical form (§3.3) gains a per-file section: after
+the header line, for each file in a fixed order, one line naming the file
+(`= config/consensus_constants.json`) followed by its sorted `key value`
+lines. Both files are already integer-only (18 of 18 in
+`economics_params.json`), so rules 2–5 apply unchanged; the header bumps to
+`…-canonical-v2` because the form changed. Two digests (one per file) were
+considered and rejected: two wire fields for one question — "same rules?" —
+and a second thing a client can forget to compare. Rule 19 says bundle by
+validation surface, and the surface is "the constants this binary was built
+from".
+
+**A key rename moves the digest, and should.** The fee-ladder bundle's
+`FL-R15` renames `money_supply` → `emission_curve_asymptote` with the value
+unchanged. Under the canonical form the digest moves, because the key is
+part of the binding: a constant is a *name* bound to a value, every
+generator reads it by name, and a build where the name moved is a build
+whose generators were rewritten. The re-pin question ("does a different
+value of what moved make a different chain?") is answered for a rename by
+asking it of the value the new name binds — the fee-ladder lane's own answer
+for the asymptote is yes. The design does not add a value-only view to
+excuse renames; a rename that is not worth a re-pin is a rename that should
+not be made to this file.
+
+**`genesis_recipients.{mainnet,stagenet,testnet}.json` are excluded from
+the digest, and the genesis block hash becomes the tuple's fourth axis
+(§2), in `VC-4`'s scope.** The files are per-network (which would break the
+digest-is-orthogonal-to-network property §2 relies on) and non-integer
+(strings and lists), so they do not fit the form; and what they determine —
+the genesis block — is better checked directly, by comparing the daemon's
+`on_get_block_hash([0])` (native since RK-2; no wire change) to a
+per-network pinned genesis hash. **This document's first draft excluded them
+on the claim that the genesis hash "already commits to them" and left the
+comparison as a reopening criterion; the steering lane checked and the
+criterion was already true — nothing pins a genesis hash in Rust and nothing
+compares one.** An exclusion cannot rest on a check nobody performs, so the
+check moves into scope: `VC-4` adds the Rust pins (per network, rule 71:
+`nettype` selects the constant, never the control flow; derived from the
+daemon's `GENESIS_TX`/`GENESIS_NONCE` and KAT-checked against a live daemon's
+block 0 the way the txid KATs are) and the comparison, and refuses on
+mismatch with the same shape as the other axes. Regtest: `FAKECHAIN` uses
+mainnet's configuration, so a regtest daemon reports mainnet's genesis hash
+and the axis passes for a `Mainnet` wallet under `FakechainPolicy::Accept`
+exactly as the network axis does. **Reopen** the digest question for these
+files only if the genesis-hash axis is ruled out.
+
+**Cost if ruled yes:** `VC-1`'s canonicaliser reads two files instead of
+one, the KAT gains a two-file case, the sentinel's pinned value changes
+once, the JSON `_comment` sentence moves to (or is duplicated in)
+`economics_params.json`, and `shekyl-economics`'s digest keeps its job
+untouched — two digests with different jobs is right; a gap between them
+was not. **Not built ahead of the ruling** (rule 21: the one-file form is not
+wrong, it is narrower than the surface, and widening it is Rick's call
+because it decides what a "consensus constant" is for this project).
+
 ---
 
 ## 4. Implementation slices — named, not started
@@ -546,14 +684,15 @@ doc gates, plus what each row names.
 
 | Slice | Contents | Wire change? | Additional gate |
 | --- | --- | --- | --- |
-| **`VC-1`** | `shekyl-rpc-types/build.rs` + `CONSENSUS_CONSTANTS_DIGEST` (§3.3, §3.4); canonical-form KAT; live-file sentinel; `DaemonNetwork` type with string round-trip test and unknown-string refusal test; the membership-rule sentence in the JSON's `_comment` (§3.7). | **No.** Nothing on the wire moves; the constant exists and is tested. | KAT observed failing first on a deliberately mis-sorted canonical form (a new test's red is observed before it is trusted). |
+| **`VC-1`** — **BUILT** in this document's PR (`dev` e54e5b983) | `shekyl-rpc-types/build.rs` + `CONSENSUS_CONSTANTS_DIGEST` and `CONSENSUS_CONSTANTS_CANONICAL` (§3.3, §3.4), with the canonicaliser in `build_support/consensus_canonical.rs` included by both the build script and the tests — one definition; canonical-form KAT whose expected digest was computed by an independent Python implementation of §3.3; live-file sentinel (`const _: () = assert!`); `DaemonNetwork` type with string round-trip and unknown-string refusal tests; the membership-rule sentence in the JSON's `_comment` (§3.7). | **No.** Nothing on the wire moves; the constant exists and is tested; nothing reads it yet, and `consensus_digest.rs`'s module doc says so. | Red observed before trusting green, two ways: with the sentinel disabled, a descending key sort fails `kat_pins_the_canonical_form_and_its_digest` and `the_live_canonical_form_has_the_shape_the_design_pins` while `the_build_used_these_rules_on_the_live_file` stays green (build script and tests share the mutated rules — the Python-derived KAT is what catches a drift both sides share); with the sentinel enabled, the same mutation fails **compilation** on the pinned digest, which is the sentinel doing its job first. |
 | **`VC-2`** | `GetVersionResponse` + 2 fields; `CORE_RPC_VERSION` → next minor, **read from `dev` at write time**; `get_version_synced_v5.json` and siblings for the other two `v1` states; chain-delta test extended per §3.5; chain-facts POD `nettype` byte + C export + ABI offset pin; `methods.rs` fills both fields. **Pre-flight pass first (rule 26).** | **Yes.** Needs Rick's ruling on alpha.8 timing (§6). | `rpc_parity` whole chain green; the four-spelling version pin updated; C++ `ninja -C build` + unit suite (the POD changed). |
 | **`VC-3`** | Console remote arm handshake (§3.6.2); `version` exemption; delete `daa_target_seconds` and its tests (§3.11); operator-facing message tests for all three axes and both "older side" directions. | No (consumes `VC-2`). | A test per axis that observes the refusal on a fabricated mismatched reply, and one that observes `version` rendering both sides. |
-| **`VC-4`** | Engine open-time handshake (§3.6.3); `OpenError::DaemonIdentityMismatch`; `FakechainPolicy` (§3.6.4) threaded through `open_*`, set by `regtest_e2e.rs` and the operator flag; **fix the `daemon.rs:169` docstring** to say what the code now does; `shekyl-cli` / `shekyl-wallet-rpc` messages per rule 82. | No (consumes `VC-2`). | Regtest e2e green with the policy passed; a lifecycle test per axis observing `open_full` refuse; a test that `FakechainPolicy::Refuse` (the default) refuses a `fakechain` daemon. |
+| **`VC-4`** | Engine open-time handshake (§3.6.3) on all four axes, including the per-network genesis-hash pins and the `on_get_block_hash([0])` comparison (`VC-D12`); `OpenError::DaemonIdentityMismatch`; `FakechainPolicy` (§3.6.4) threaded through `open_*`, set by `regtest_e2e.rs` and the operator flag; **fix the `daemon.rs:169` docstring** to say what the code now does; `shekyl-cli` / `shekyl-wallet-rpc` messages per rule 82. | No (consumes `VC-2`). | Regtest e2e green with the policy passed; a lifecycle test per axis observing `open_full` refuse; a test that `FakechainPolicy::Refuse` (the default) refuses a `fakechain` daemon. |
 
-`VC-1` could land under the current throttle — it is code with no wire
-change — and is the natural first PR after this document; whether it does
-is §6's fourth question. `VC-3` and `VC-4` land in **one PR** with `VC-2` or
+`VC-1` landed with this document: the steering lane ruled (2026-09-05) that
+code with no wire change and no C++ clears the throttle, and the enabler
+ships with its own oracle (the KAT and the sentinel) rather than waiting for
+a consumer that cannot exist until `VC-2` is authorised. `VC-3` and `VC-4` land in **one PR** with `VC-2` or
 immediately after it on the same branch: producers and callers in one PR is
 the standing rule, and a `get_version` field with no consumer would be the
 very finding this round opened with, recreated.
@@ -578,6 +717,9 @@ very finding this round opened with, recreated.
 | Python generator emits the digest | `VC-D9` | a C++ consumer, after asking whether it should be Rust |
 | Intra-binary C++/Rust digest compare | `VC-D10` | the two halves built from different trees |
 | Keep the `T` warning beside the digest | `VC-D11` | never — unreachable once `VC-3` lands |
+| Two digests, one per config file | `VC-D12` | never as such — one question, one field |
+| Value-only view that ignores key renames | `VC-D12` | never — a key is part of the binding |
+| `genesis_recipients.*.json` in the digest | `VC-D12` | no client-side genesis-hash comparison exists when `VC-4` lands |
 
 ---
 
@@ -588,16 +730,25 @@ very finding this round opened with, recreated.
    alternative is the two-method handshake in §5.
 2. **Alpha.8 timing of `VC-2`**: the wire change is the one thing in this
    document the steering direction holds. Land in alpha.8, or first thing
-   after.
+   after. **What a yes buys:** `VC-3` and `VC-4` land with `VC-2`, and `VC-4`
+   now carries **four** axes, not three — the fourth adds per-network
+   genesis-hash pins in Rust and no wire change (`VC-D12`, §2). Fold or
+   split; but it should not be a surprise in the PR.
 3. **The fakechain shape** (`VC-D6`, §3.6.4): a typed `FakechainPolicy`
    parameter with a default of `Refuse`, set by the regtest harness and an
    explicit operator flag — versus reusing an existing regtest lever, if one
    is ruled equivalent.
-4. **Whether `VC-1` lands now**: no wire change, one new constant with its
-   pins, one new type. It is the enabler; it is also code during a
-   slowdown.
+4. ~~Whether `VC-1` lands now~~ — **ruled by the steering lane 2026-09-05:
+   yes** (no wire change, no C++). Built in this PR.
+5. **The digest's file set** (`VC-D12`): `consensus_constants.json` alone
+   (as built) or both integer authorities under `config/`, with
+   `economics_params.json`'s seven unguarded keys as the argument for
+   widening. If yes, `VC-1` widens before this PR merges (canonical form
+   `v2`, one re-pin); if no, the doc must name what guards
+   `economics_params.json` — today, nothing.
 
-Until these are ruled the banner stays at round 1 and §4 stays a table.
+Until 1–3 and 5 are ruled the banner stays at round 1 and `VC-2`…`VC-4`
+stay a table.
 
 ---
 
@@ -610,3 +761,7 @@ Until these are ruled the banner stays at round 1 and §4 stays a table.
 | 2026-09-05 | **"Local console fatal at startup" rejected: it cannot fail.** `Source::Live` renders from the same binary that would answer; comparing a constant to itself is a check that exists to be seen. The remote arm is the only console consumer (§3.6.1). |
 | 2026-09-05 | **Refuse reads, not only submits.** Dispatch text allowed that refusing to read "may be merely annoying". Two grounds against: a rules mismatch means the read is of a different chain; a wire mismatch is where the open `#[serde(default)]` silent-zero lives. Both are wrong-data failures, not inconvenience (§3.6.3). |
 | 2026-09-05 | **Scope held to design by steering direction** (alpha.8 slowdown; design docs exempt, wire changes not). Slices named in §4; `VC-1` identified as landable without a wire change; nothing started. Reported to the steering lane as a package before implementation, per its request. |
+| 2026-09-05 | **`VC-1` built in this PR under the steering lane's ruling; the canonicaliser has one definition and two readers.** `shekyl-rpc-types/build.rs` and the crate's tests `#[path]`-include the same `build_support/consensus_canonical.rs`, so the generator cannot drift from its oracle. Which raised the question the mutation test answered: if both share the rules, what catches a rules drift? The KAT's expected digest was computed by an independent Python implementation of §3.3 (`json` + `hashlib`), so a mutated Rust canonicaliser disagrees with a number it did not produce — observed: a descending sort fails the KAT and the shape test while the build-vs-test agreement test stays green. And above that, the live-file sentinel turns the same mutation into a compile error before any test runs. Two independent oracles for one function, which is what "the check's subject cannot silently empty" costs to actually claim. |
+| 2026-09-05 | **The digest's file set is a ruling, not an assumption (`VC-D12`).** The steering lane, correcting its own relay that the fee-ladder bundle would trip the new sentinel (it touches `economics_params.json`, a different file), exposed that nothing pins that file: `shekyl-economics`'s Blake2b digest is a fixture-lineage instrument covering 11 of its 18 keys and deliberately so. Proposed: one digest over both integer authorities, per-file sections, canonical form `v2`; a key rename moves it on purpose; `genesis_recipients.*` excluded because the genesis hash already commits to them (reopen if no client compares that either). Not built ahead of Rick's ruling — deciding what a "consensus constant" is for this project is his, and the one-file form is narrower than the surface rather than wrong. §6 gains ruling 5. |
+| 2026-09-05 | **The genesis-recipients exclusion rested on a check nobody performs; the genesis hash becomes the fourth axis.** `VC-D12`'s first draft excluded `genesis_recipients.*.json` from the digest because "the genesis block hash already commits to them", with "reopen if no client compares it by `VC-4`" as the criterion. The steering lane checked: the criterion is a present fact — no Rust genesis-hash pin, no client comparison, only the daemon's own `GENESIS_TX`/`GENESIS_NONCE` in `cryptonote_config.h`. Verified here rather than relayed. Third stated-commitment-without-enforcing-site found today, and this one was this document's own. Disposition restated: the files stay out of the digest (per-network, non-integer), and the comparison joins `VC-4` as the fourth axis over the existing native `on_get_block_hash` — no wire change. `FAKECHAIN` shares mainnet's genesis, so `nettype` remains the regtest discriminator and the operator-readable value. **The convergence is the point:** the lock-5 wrong-chain case is undefended on network *and* genesis simultaneously; the tuple is the enforcing site for both. |
+| 2026-09-05 | **A second false docstring, found by the steering lane's independent check of §0.2.** `engine/error/mod.rs:41` lists `OpenError::NetworkMismatch` as "wallet file says network N, daemon client says network M" under "variant names locked in by the plan" — and the variant's fields are `{ wallet, expected }`, with no daemon-reported value anywhere in the comparison. Recorded with `daemon.rs:169` in §0.2; `VC-4` fixes both in the same PR as the check. The lock finding now leads the package to Rick: not a new capability for alpha.8, but a defence the plan committed to and the wallet has shipped without. |

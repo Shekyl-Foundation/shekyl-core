@@ -20,8 +20,19 @@ serde = { workspace = true }
 # production surface stays serde alone (RK-D10) predates it and is superseded.
 shekyl-portable-storage = { path = "../shekyl-portable-storage" }
 
+[build-dependencies]
+# VC-1 (CLIENT_VERSION_CONSTANTS_VALIDATION.md §3.4): `build.rs` canonicalises
+# config/consensus_constants.json and emits CONSENSUS_CONSTANTS_DIGEST — once,
+# here, for every RPC party that depends on this crate. Build-time only; the
+# production surface gains one `&str` and no runtime dependency.
+serde_json = "1"
+sha2 = "0.10"
+
 [dev-dependencies]
 serde_json = { workspace = true }
+# The tests include the same canonicaliser `build.rs` does, to pin its rules
+# against a synthetic KAT and the live file.
+sha2 = "0.10"
 # Only to render a byte diff when a `.bin` parity test fails.
 hex = "0.4"
 # The frozen-hex txid KAT (tests/txid_kat.rs) computes the engine-side txid
