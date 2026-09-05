@@ -1171,6 +1171,49 @@ arm cannot show:
 Subtracting A is what keeps ordinary p2p chatter out of the carrier figure
 without having to model it.
 
+**Count only payloads of exactly `WINDOW_BYTES`, and EXCLUDE everything else
+(2026-09-05).** The earlier draft of this section said to count levin payload
+on the node→proxy sockets and said nothing about filtering. That silence was
+the defect, and it is arm C's problem specifically.
+
+Arm C is a LOADED run, so fluff releases share its wire with carrier
+emissions. PWD-B12 caps what a flush releases, so fluff volume is a moving
+quantity — and arm C's job is signature 3, measured as C against B. A change
+in fluff volume between the two arms would present as a carrier-rate
+difference and **masquerade as the CV-4 breach the arm exists to detect**: a
+false positive on the one signature this section calls worth running even if
+the totals look right. An oracle that cannot distinguish the defect it names
+from an unrelated change in its own environment is not an oracle.
+
+The cure is to EXCLUDE fluff rather than subtract it. Subtracting inherits
+every assumption the confound had; excluding removes the dependency, so arm C
+stops depending on PWD-B12 at all rather than waiting for it to settle.
+
+**Why the filter is exact rather than a heuristic — do not relax it.** A
+carrier emission is always precisely `WINDOW_BYTES`, by construction and not
+by tendency:
+
+- `shekyl_relay_zone_noise_enqueue` takes ONE transaction blob, not a vector.
+  §2.9b is structural at the crossing: a batch is *unsayable* there, so N
+  transactions become N enqueues, each padded to a whole number of windows.
+- CV-4 makes the cadence independent of queue depth, so the emission RATE
+  does not move with load either.
+
+A reader who sees only "count exact-window-size payloads" will take it for a
+convenience and widen it to a range the first time a number looks off. It is
+not a convenience; it is the property that makes the arm separable.
+
+**And the emitter is batch-blind structurally, which is why the carrier arms
+survive PWD-I1 at all.** `NoiseQueues` is held BESIDE `Driver` in
+`RelayZoneHandle` and never inside it, and `Driver` owns `Zone` — so
+PWD-B12's subject, `rust/shekyl-relay/src/zone/mod.rs`, cannot reach the
+carrier's buffers. Batch composition changes what `Zone` releases; it cannot
+change what the carrier emits.
+
+**Arm A is still re-taken after PWD-B12 settles.** The flush cap changes p2p
+chatter, and A is the baseline B is measured against. Excluding fluff fixes
+arm C; it does not make A's baseline stop moving.
+
 **Count levin PAYLOAD, not IP bytes.** The table above lists three discrepancy
 sources — jitter (either way), unbound slots (under), discards (neither) — and
 **none of them can produce an over-reading**. So an over-reading looks
@@ -1187,6 +1230,29 @@ shows in a minute — the length is for defect 1.
 **Confirm all four slots are bound for the whole window**, or the run
 under-reads by construction (CV-2, the second row of the table above) and the
 under-reading is not a finding.
+
+**PRECONDITION ON THE RESULT, not on the run: the rule that governs boundness
+has not been written (2026-09-05).** PWD-I1 routes a same-host outbound cap to
+PWD-B9. PWD-B9 **does not exist** — routed, never drafted. Counted on dev
+2026-09-05: 24 references across four documents, **17 of them inside
+`SHEKYL_P2P_PROTOCOL.md` itself**, and no section heading anywhere in the
+repository. The deliverable cites a section it does not contain, seventeen
+times. So outbound connection lifecycle on encrypted zones is not
+stable-pending-implementation; the rule that decides it is ABSENT.
+
+The consequence is specific and it is not fixed by measuring more carefully. A
+reading taken today can satisfy every instruction in this section — four slots
+bound, two hours, exact-window filtering — and still not mean what §3.1c's
+sign-off assumes, because nobody can yet say whether the boundness observed is
+the boundness the settled protocol will produce. **Internally valid, and not
+about the thing the sign-off is about.**
+
+So the result carries this as a stated condition: a number taken before PWD-B9
+exists is provisional in the same way the budget it tests is provisional, and
+it does not discharge §3.1c on its own. Recorded here rather than tracked
+elsewhere because **an absent rule is invisible to every check that reads this
+document** — no gate, no test and no review can see a section that was never
+written, so naming it in the method is the only place it can be seen at all.
 
 **Histogram the intervals, do not only divide bytes by time.** Defect 2's
 signature is sharper in the distribution than in the mean: jitter applied gives
