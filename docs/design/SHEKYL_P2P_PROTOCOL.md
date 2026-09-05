@@ -3121,7 +3121,7 @@ severing its neighbours.
 unparseable and structurally invalid transactions **never set the flag**, so
 they fall through
 `if (!m_core.handle_incoming_tx(...) && !tvc.m_no_drop_offense) { drop_connection(...) }`
-(`src/cryptonote_protocol/cryptonote_protocol_handler.inl:928-932`). Nothing
+(`src/cryptonote_protocol/cryptonote_protocol_handler.inl:909-913`). Nothing
 special-cases them; they drop because the carve-out does not reach them.
 **PWD-B7 states that as a rule** — form failures are context-free, universal,
 and the sender chose to send those bytes — so a future condition is decidable
@@ -3137,7 +3137,7 @@ rather than inheriting whatever the default happens to be.
 > `add_tx`'s catch-alls (`:344`, `:506-509` — "internal error: error adding
 > transaction to txpool"). Both fall through the same
 > `!tvc.m_no_drop_offense` gate
-> (`src/cryptonote_protocol/cryptonote_protocol_handler.inl:928-932`) and
+> (`src/cryptonote_protocol/cryptonote_protocol_handler.inl:909-913`) and
 > disconnect the sender — **our own storage throwing severs an innocent
 > peer**, the exact outcome the rule forbids. The ruling stands; the
 > mechanism does not satisfy it.
@@ -3226,7 +3226,7 @@ describes the common case, not the contract.*
 
 **RULED: `m_bad_peer_checker` is deleted.** `once_a_time_seconds<43>` has
 **exactly one occurrence tree-wide — its declaration**, at
-`src/cryptonote_protocol/cryptonote_protocol_handler.h:186` — and `on_idle`
+`src/cryptonote_protocol/cryptonote_protocol_handler.h:189` **at this round's pin** (PWC-E4a cites `:186` from its own; #612 moved it, and the census records stale pointers rather than correcting them silently) — and `on_idle`
 does not call it (PWC-E4a). A cadence constant no code reads is not a cadence; it reads
 as one to anyone auditing the file, which is the whole cost.
 
@@ -3263,11 +3263,20 @@ dead surface.
 | --- | --- | --- |
 | PWC-E7 (double-spend is a no-drop offense) | **Ruled** — no drop, and now for a stated reason: it describes our own state | PWD-B7 |
 | PWC-E8 (the three other no-drop classes) | **Ruled** — fee is our-own-state; `tx_extra` and `unlock_time` are non-universal policy | PWD-B7 |
-| PWC-E5 (idle kick 240 s; score floor `DROP_PEERS_ON_SCORE = -2`) | **Ruled** — retained; both are *our* liveness judgement of a connection, not an offense classification, so PWD-B7's rule does not reach them | PWD-B7 |
+| PWC-E5 (idle kick 240 s; score floor `DROP_PEERS_ON_SCORE = -2`) | **Deferred — named blocker: both of its inputs are owed by rows this round did not close.** The **score floor** cannot be derived until it is known what increments the score: PWD-B7 decides *which rejections are attributable*, but the tri-state verdict that makes that operational is owed to P2P-3, and PWD-B1's bucket decides what a peer may do before scoring is reached at all — its four parameters are owed too. The **idle kick** is a liveness judgement whose 240 s has never been derived (`pinned-not-re-derived` in the census) and belongs with the cadence work. Target pre-genesis | PWD-B1, PWD-B7's P2P-3 action |
 | PWC-E9 (`drop_connections(address)` severs every connection sharing a host, +5 host-fail) | **Deferred — and the original named blocker was wrong; the corrected one is stronger** (2026-09-04 review finding, verified at source). `is_same_host` does **not** need an IP: `network_address::is_same_host` dispatches to the concrete type (`contrib/epee/src/net_utils_base.cpp:90-98`) and Tor/I2P compare hostname strings (`src/net/tor_address.cpp:181-184`, `src/net/i2p_address.cpp:165-167`). The real blockers: **(a)** every inbound anonymity-zone peer is recorded as the zone's `unknown()` sentinel (`src/p2p/net_node.cpp:336`, `:340`) — an inbound anon peer's identity is unlearnable *by design* — so host-keying compares `unknown == unknown` and `drop_connections` would sever **every inbound anon peer at once**; **(b)** even a learnable onion identity is free to mint, so a per-host key prices nothing an adversary pays. Host-keyed severing therefore cannot be ported to anonymity zones for identity-policy reasons, not comparator reasons — it is the same *identity* problem as the anonymity-zone inbound cap (whose absence is `has_too_many_connections`' explicit non-public early return, `src/p2p/net_node.inl:3091-3092`, not a comparator gap), so both re-derive together, count- or work-based | PWD-I4 sub-round |
 | PWC-E4a (the never-driven 43 s timer) | **Ruled** — deleted | PWD-B8 |
 
-**Sum check: 4 ruled + 0 absorbed + 1 deferred = 5 rows.** ✅
+**Sum check: 3 ruled + 0 absorbed + 2 deferred = 5 rows.** ✅
+
+*PWC-E5 moved deferred-from-ruled in review, recorded here rather than in its
+own cell — a history note inside a verdict cell makes the cell parse as two
+verdicts at once, which is how the sum-check sweep first read it. The earlier
+version marked it ruled while the same cell said PWD-B7's rule does not reach
+it: a disposition contradicting its own justification, with no option table and
+no falsifier, which §0 requires of a ruling. The row count and the running
+total are unchanged — a deferred row is still dispositioned — but the claim
+about what this sub-round ruled is not.*
 
 **Running total against the round's gate — authoritative:** **31 of 46**
 bucket-4 rows dispositioned — cluster I's 10 + cluster T's 8 + B sub-round 1's
