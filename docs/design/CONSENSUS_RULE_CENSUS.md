@@ -857,7 +857,7 @@ input, not fixes.
     core_test, i.e. the R9 work of a generator that produces real roots).
 
 18. **CEN-B5's S1 is fixed — the check runs at admission, before the add,
-    against the tip root; connect-then-pop is gone** (2026-09-05, PR #TBD-B5;
+    against the tip root; connect-then-pop is gone** (2026-09-05, PR #623;
     Rick authorized the scoped edit as the fix-or-accept ruling of entry 17).
     The compare moved into `handle_block_to_main_chain`'s header-check
     sequence, after proof-of-work and before the miner-tx prevalidation
