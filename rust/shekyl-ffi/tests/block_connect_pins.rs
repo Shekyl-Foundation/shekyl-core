@@ -53,6 +53,32 @@ fn candidate_shapes_saturate_their_caps() {
         assert_eq!(parsed.prefix.outputs.len(), n_out, "parsed output arity");
         assert_eq!((fx.n_in, fx.n_out), (n_in, n_out), "fixture shape record");
 
+        // The extra's INTERIOR must parse too. `Transaction::from_bytes`
+        // treats `prefix.extra` as an opaque byte run (§9.4: V(extra_len) ·
+        // bytes), so the arity asserts above cannot see a mis-encoded field —
+        // the first cut of the 0x07 block omitted its length varint (per a
+        // defective GTWF §9.6a sentence) and every pin stayed green. This
+        // opt-in `parse_extra` round-trip is what makes interior encoding
+        // failures visible.
+        let fields = parsed.prefix.parse_extra().expect("tx_extra interior must parse");
+        let kem_fields = fields
+            .iter()
+            .filter(|f| matches!(f, shekyl_wire::tx_extra::TxExtraField::PqcKemCiphertext(_)))
+            .count();
+        assert_eq!(kem_fields, n_out, "one 0x06 KEM field per output");
+        let leaf_blobs: Vec<usize> = fields
+            .iter()
+            .filter_map(|f| match f {
+                shekyl_wire::tx_extra::TxExtraField::PqcLeafHashes(b) => Some(b.len()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            leaf_blobs,
+            vec![32 * n_out],
+            "exactly one 0x07 field carrying 32·n_out leaf-hash bytes"
+        );
+
         // Per-tx caps hold — the fixture is admissible under what R2 ratifies.
         assert!(
             fx.wire_bytes.len() <= MAX_TX_SIZE,

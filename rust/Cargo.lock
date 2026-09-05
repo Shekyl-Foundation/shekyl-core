@@ -4226,6 +4226,7 @@ dependencies = [
  "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-primitives",
+ "shekyl-curve-tree",
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-encoding",

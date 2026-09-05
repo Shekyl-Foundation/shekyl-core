@@ -102,7 +102,9 @@ case "${PHASE}" in
       echo "  cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON && cmake --build build -j2 --target unit_tests" | tee -a "${OUT_FILE}"
       exit 3
     fi
-    "${BIN}" --gtest_filter='gap7_bp_bench.*' 2>&1 | tee -a "${OUT_FILE}"
+    # The timing instrument is DISABLED_ in default ctest runs (correctness
+    # coverage lives in bulletproofs_plus.cpp); this gate opts in.
+    "${BIN}" --gtest_filter='gap7_bp_bench.*' --gtest_also_run_disabled_tests 2>&1 | tee -a "${OUT_FILE}"
     ;;
 esac
 

@@ -59,7 +59,16 @@ namespace
   }
 } // namespace
 
-TEST(gap7_bp_bench, shipped_verifier_cost)
+// DISABLED_: this is a timing INSTRUMENT, not correctness coverage — the
+// correctness of the shipped verifier (valid 2..9-output incl. the padded
+// 16-slot circuit, aggregated, and the invalid_8/invalid_31/invalid_torsion
+// negative limbs) already lives in bulletproofs_plus.cpp, so running K=21
+// timing loops in every CI ctest pass would be pure noise and runtime. The
+// ASSERT_TRUEs below are positive limbs FOR THE TIMING (the loop must not
+// time a rejection path), not the coverage. The Pi gate script opts in via
+// --gtest_also_run_disabled_tests (scripts/bench/gap7_pi4_gate.sh, cpp
+// phase).
+TEST(gap7_bp_bench, DISABLED_shipped_verifier_cost)
 {
   static const int K = 21;
 

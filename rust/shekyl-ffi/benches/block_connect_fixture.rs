@@ -33,6 +33,7 @@ use shekyl_wire::transaction::{
 use shekyl_wire::tx_extra::{
     HYBRID_KEM_CT_BYTES, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, TX_EXTRA_TAG_PQC_LEAF_HASHES,
 };
+use shekyl_wire::varint::write_varint;
 
 use shekyl_ffi::{shekyl_buffer_free, shekyl_pqc_keypair_generate, shekyl_pqc_sign};
 
@@ -215,7 +216,17 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
     // are synthetic filler: no measured call verifies them (the leaf-hash
     // FFI term is measured on its own fixture), so only their LENGTH prices
     // the wire, and the length is the per-output contract.
+    // Encoding: tag · V(len) · blob, matching BOTH shipped codecs —
+    // shekyl-wire's `read_blob`/`write_blob` (tx_extra.rs:224/:358) and the
+    // C++ `FIELD(blob)` on `std::string` (varint length + bytes,
+    // src/serialization/string.h:55-61). GTWF §9.6a's "not self-describing"
+    // sentence contradicts both implementations and is the routed doc
+    // defect — the first cut of this fixture followed the doc and omitted
+    // the varint (1-2 bytes, ~0.015% of tx weight: below the floor
+    // captures' resolution, so those numbers stand). The pins now assert
+    // the interior via `parse_extra`, so this class cannot recur silently.
     extra.push(TX_EXTRA_TAG_PQC_LEAF_HASHES);
+    write_varint((n_out * 32) as u64, &mut extra).expect("vec write is infallible");
     for i in 0..n_out {
         let nib = 0xB0u8 | (u8::try_from(i).expect("n_out <= 16") & 0x0F);
         extra.extend(std::iter::repeat_n(nib, 32));

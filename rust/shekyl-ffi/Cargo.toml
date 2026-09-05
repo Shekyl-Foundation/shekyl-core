@@ -56,6 +56,13 @@ shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-units = { path = "../shekyl-units" }
 shekyl-proofs = { path = "../shekyl-proofs" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+# Curve-tree client, exposed as a *replica* (`curve_tree_replica_ffi.rs`) so
+# the C++ test generator can fill block headers with real curve-tree roots
+# instead of a placeholder -- the retirement of CEN-B5's FAKECHAIN skip
+# (census R9). Brings `redb` into the daemon image ahead of the daemon redb
+# store (DRS), which needs it anyway; ruled by Rick 2026-09-05 over a
+# C++-LMDB generator oracle that the store rewrite would have deleted.
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # Single-Rust-image contract: every binary links exactly one Rust archive,
 # and that archive must carry the `shekyl_log_*` exports plus the one
 # `tracing-core` GLOBAL_DISPATCH that this crate graph's `tracing::*`
