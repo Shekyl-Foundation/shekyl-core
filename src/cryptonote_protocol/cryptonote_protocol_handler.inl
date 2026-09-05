@@ -1470,13 +1470,19 @@ namespace cryptonote
           {
             LOG_ERROR_CCONTEXT("Failure in prepare_handle_incoming_blocks");
             drop_connections(span_origin);
-            // Sibling parity: the two other `drop_connections(span_origin)`
-            // sites each also drop the originating connection by id. This one
-            // relied solely on the host-wide sweep, which is correct only where
-            // the address names a host -- so on anonymity zones, where the
-            // sweep is now (correctly) a no-op, the offending peer would
-            // otherwise not be dropped at all.
-            drop_connection(span_connection_id);
+            // The sweep is a no-op where the address names no host, so this
+            // site drops the origin by id and clears its spans itself, exactly
+            // as the two sites below already do. `flush_all_spans` is true
+            // because this span is filled: until now only the sweep's own
+            // `flush_spans(id, true)` erased it, and that is gone here.
+            if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
+              drop_connection(context, true, true);
+              return 1;
+            }))
+              LOG_ERROR_CCONTEXT("span connection id not found");
+
+            // in case the peer had dropped beforehand, remove the span anyway so other threads can wake up and get it
+            m_block_queue.remove_spans(span_connection_id, start_height);
             return 1;
           }
           if (!pblocks.empty() && pblocks.size() != blocks.size())
@@ -2856,19 +2862,16 @@ skip:
   template<class t_core>
   void t_cryptonote_protocol_handler<t_core>::drop_connections(const epee::net_utils::network_address address)
   {
-    // Host-wide severing needs an address that names a host. On anonymity
-    // zones every inbound connection carries the same per-zone `unknown()`
+    // Host-wide severing needs an address that names a host. Every inbound
+    // connection on an anonymity zone carries the same per-zone `unknown()`
     // default (`net_node.inl` `set_default_remote`, one call per zone), so
-    // "every connection sharing this host" is *every inbound peer in the
-    // zone* -- one bad span from any peer would isolate the node. On a
-    // Tor-only posture that is near-total isolation triggered by one peer.
+    // "every connection sharing this host" is every inbound peer in the zone
+    // -- on a Tor-only posture, near-total isolation triggered by one peer.
     //
-    // `is_same_host` now refuses to equate an address that names no host, so
-    // the loop below would already select nothing; returning early states the
-    // intent where the sweep is issued rather than leaving it to be inferred
-    // from a comparator two layers down, and skips the misleading warning and
-    // the scan. The callers drop the *originating* connection by id
-    // separately, which is the per-peer action that remains correct here.
+    // `is_same_host` already refuses to equate such an address, so the loop
+    // below would select nothing; returning early states the intent where the
+    // sweep is issued and skips a misleading warning and a pointless scan.
+    // Callers drop the originating connection by id, which stays correct.
     if (!address.is_blockable())
     {
       MINFO("not dropping connections by host for " << address.str()
