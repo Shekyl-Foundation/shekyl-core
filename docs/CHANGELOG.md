@@ -62,7 +62,6 @@
 
 ### Added
 
-<<<<<<< HEAD
 - **DRS-P0a — LMDB table reconciliation: the pin→HEAD delta is measured,
   registered, and gate-pinned.** The DRS design doc's Round-2 substrate
   figures (46 tables, seven undocumented, two phantoms) had aged into
@@ -85,7 +84,7 @@
   rows and stated count pinned to the same macro. Every new failure path
   observed red before landing. DEL-005 closed; stale DRS figure sites
   corrected with records-was pins kept.
-=======
+
 - **Shard-visual ruling A: parameter admissibility closed, with a
   pre-registered criterion and typed enforcement.** The spec's
   parameter design-review checkpoint had inverted — the gate existed,
@@ -109,7 +108,6 @@
   `shard.v1.render.*` / `candidate.v1.*` namespace families are
   registered in the implementation index. Aesthetics closure and the
   determinism bar are ruling B (FOLLOWUPS).
->>>>>>> origin/dev
 
 - **C2-R1c — alt admission + acceptance topology: ruled, and the sync
   orphan arm stops punishing peers for our own state.** Seven rulings
