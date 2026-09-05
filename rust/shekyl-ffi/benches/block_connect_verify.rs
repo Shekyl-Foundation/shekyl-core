@@ -82,6 +82,64 @@
 //! point). A linearity failure across the points is a finding, not an
 //! obstacle, and the multi-point design exists so the instrument can see one.
 //!
+//! # Results — dev box, first run (SHAPE data; re-read the rule-76 section)
+//!
+//! **Machine: Intel i9-11950H (8C/16T, 5.0 GHz boost), Linux 6.12, `cargo
+//! bench` profile, 2026-09-04.** Every number below is a dev-box SHAPE
+//! observation; none is a floor value (rule 76 §1/§4 above).
+//!
+//! Per-term, per-tx (median):
+//!
+//! | shape (in/out) | weight | adm (fcmp+masks) | pqc ×1 | bp_proxy | parse |
+//! |---|---|---|---|---|---|
+//! | 1/2  | 13 007 | 22.8 ms | 178 µs | 2.82 ms | 0.68 µs |
+//! | 8/2  | 59 231 | 69.8 ms | 179 µs | 2.85 ms | 2.77 µs |
+//! | 1/16 | 33 990 | 23.3 ms | 179 µs | 16.4 ms | 1.87 µs |
+//! | 8/16 | 80 214 | 69.9 ms | 178 µs | 16.5 ms | 3.91 µs |
+//! | 4/4  | 37 339 | 39.4 ms | 178 µs | 4.86 ms | 1.79 µs |
+//! | 2/8  | 29 864 | 26.6 ms | 179 µs | 8.77 ms | 1.57 µs |
+//!
+//! RandomX, once per block: **317 ms** (prepared cache; light-verify path).
+//!
+//! **Finding 1 — the dominant term is FCMP++ admission verification, and its
+//! FIXED cost is what shapes the worst case:** adm ≈ 16.1 ms per proof +
+//! ≈ 6.72 ms per input (from the 1→8 input span), output-insensitive.
+//!
+//! **Finding 2 — the argmax REVERSED the presumed candidates.** Cost per
+//! weight-byte: 1-in/2-out ≈ 1.95 µs/B > 8-in/2-out 1.25 > 4/4 1.21 > 2/8
+//! 1.20 > 1/16 1.17 > 8/16 1.09. The per-proof fixed cost means a block of
+//! MANY MINIMAL transactions outprices every density extreme — the
+//! adversarial worst case is maximum tx count, bounded only by the minimal
+//! spend's own wire weight (≈ 13 kB, mostly proof + hybrid-auth bytes).
+//! Budget fill at the measured argmax (1-in/2-out): 1.165 s @ 600 kB
+//! (n = 46), 2.306 s @ 1.2 MB, 4.566 s @ 2.4 MB, 9.146 s @ 4.8 MB —
+//! **marginal 1.90 µs/weight-byte** vs aggregate 1.95 (the §4
+//! marginal-vs-aggregate gap, here 2.5 %, measured not assumed).
+//!
+//! **Finding 3 — the Bp+ escalation rule FIRES.** The proxy at 16 outputs
+//! (16.4 ms) is within 4.3× of the top term, well inside the ~10× trigger:
+//! a C++ microbench of the shipped `bulletproofs_plus.cc` is owed before
+//! any dominance conclusion — and before trusting Finding 2's ordering,
+//! since a shipped verifier ~5× slower than the proxy would put
+//! 1-in/16-out at ≈ 3.1 µs/B and flip the argmax to output-heavy packing.
+//! The count-argmax is therefore CONDITIONAL on CEN-H19's verifier cost.
+//!
+//! **Finding 4 — the hybrid-signature term is NOT load-bearing today:**
+//! 178 µs per verification, ≈ 38× under the fcmp per-input marginal. Parse
+//! is noise (µs against ms). Neither can move the constants.
+//!
+//! **Outcome statement (steering's two-way):** at the permanent floor
+//! operating point (600 kB) the dev box pays ≈ 1.5 s per worst-case cold
+//! block (crypto 1.17 s + RandomX 0.32 s) ≈ 1.2 % of T = 120 s —
+//! comfortable HERE, unmeasured on the floor. At the ×50 surge ceiling
+//! (30 MB), extrapolating the measured marginal (span: data to 4.8 MB;
+//! 30 MB is 6.25× beyond it): ≈ 57 s ≈ **48 % of T on the i9-11950H
+//! itself**. This is the hardware case made with a number: any floor
+//! device materially slower than this machine cannot verify a
+//! surge-ceiling cold block inside a block interval, which is exactly the
+//! condition census C2-R2 Q3 attached to the ×50 ratification (its named
+//! re-derivation target is the surge factor, not the zone).
+//!
 //! # Fences
 //!
 //! Archival families (serve-credit / bond-post / emission) are OUT of this
@@ -173,8 +231,16 @@ fn bench_budget_fill(c: &mut Criterion) {
     let mut group = c.benchmark_group("block_connect_budget_fill");
     group.sample_size(10);
 
-    // The two density extremes; the sweep decides which is the argmax.
-    for (n_in, n_out, shape_tag) in [(8usize, 2usize, "in8_out2"), (1usize, 16usize, "in1_out16")] {
+    // The two density extremes, PLUS the measured argmax: the first sweep
+    // found the smallest tx (1-in/2-out) carries the highest cost per
+    // weight-byte — the per-proof fixed cost dominates, so a block of many
+    // minimal txs outprices both presumed extremes. The candidates stay so
+    // the fill re-verifies the ordering, not just the winner.
+    for (n_in, n_out, shape_tag) in [
+        (1usize, 2usize, "in1_out2"),
+        (8usize, 2usize, "in8_out2"),
+        (1usize, 16usize, "in1_out16"),
+    ] {
         let fx = build_connect_tx(&mut OsRng, n_in, n_out, TREE_DEPTH, ChunkLayout::Spread);
         assert_eq!(admission_verify(&fx.adm), ADMISSION_OK);
         assert_eq!(pqc_verify_code(&fx.pqc), 0);
