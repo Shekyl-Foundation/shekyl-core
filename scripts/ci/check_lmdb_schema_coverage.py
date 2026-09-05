@@ -26,6 +26,22 @@
 # A section is recognized by the doc containing the exact backtick-quoted
 # LMDB name (`"blocks"`) — the "LMDB name" property-row convention every
 # existing section uses. The total is the `Total: **N sub-databases**` line.
+#
+# The heading leg (P0a, 2026-09-05) repairs an imprecision in that
+# recognition rule: the property-row comparison deduplicates through set(),
+# so a SECOND section heading claiming the same table is invisible to it —
+# and the doc carried a duplicate `properties` heading from before the DRS
+# Round-2 pin (42 headings over 41 property rows at `3247fe3b6`) without
+# this gate ever seeing it. A reader navigates by headings, so the
+# completeness claim the forward leg was already making is really a claim
+# about headings; this leg states it at that layer: section headings must
+# be a duplicate-free bijection with the table list.
+#
+# The registry leg (P0a, 2026-09-05) pins the DRS reconciliation registry
+# (docs/design/DAEMON_REDB_STORE.md) to the same source: its per-table rows
+# must be a bijection with SHEKYL_LMDB_TABLES, and its stated row count must
+# match — the schema doc's own "Total: 41" drifted silently for exactly the
+# want of such a pin.
 
 import pathlib
 import re
@@ -34,6 +50,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "src" / "blockchain_db" / "lmdb" / "db_lmdb.cpp"
 DOC = ROOT / "docs" / "LMDB_SCHEMA.md"
+DRS = ROOT / "docs" / "design" / "DAEMON_REDB_STORE.md"
 
 # Subject assertion floor: the list held 49 names when this gate was written.
 # A parse yielding fewer than this is a broken parse (or a mass table
@@ -93,6 +110,37 @@ def main() -> None:
             "in SHEKYL_LMDB_TABLES (deleted table, surviving section?):\n  "
             + "\n  ".join(ghosts))
 
+    # Heading leg. Same claim as the two directions above, stated at the
+    # layer a reader actually navigates: `### `name`` section headings must
+    # be a duplicate-free bijection with the table list. The property-row
+    # legs dedupe through set(), so only this leg can see two sections
+    # claiming the same table (live instance: the pre-pin duplicate
+    # `properties` heading).
+    headings = re.findall(r"^### `([a-z0-9_]+)`", doc, re.MULTILINE)
+    if len(headings) < MIN_TABLES or "blocks" not in headings:
+        sys.exit(f"FAIL: parsed only {len(headings)} '### `name`' section "
+                 f"headings from docs/LMDB_SCHEMA.md (floor {MIN_TABLES}, "
+                 "sentinel 'blocks') — the heading parse is not reading the "
+                 "real doc")
+    dup_headings = sorted({h for h in headings if headings.count(h) > 1})
+    if dup_headings:
+        errors.append(
+            "these tables have MORE THAN ONE '### `name`' section heading in "
+            "docs/LMDB_SCHEMA.md (two sections claiming one table — invisible "
+            "to the property-row legs):\n  " + "\n  ".join(dup_headings))
+    unheaded = [t for t in tables if t not in set(headings)]
+    if unheaded:
+        errors.append(
+            "these tables have an 'LMDB name' property row but no '### "
+            "`name`' section heading in docs/LMDB_SCHEMA.md (or neither):\n  "
+            + "\n  ".join(unheaded))
+    stranded = sorted(set(headings) - set(tables))
+    if stranded:
+        errors.append(
+            "these '### `name`' section headings in docs/LMDB_SCHEMA.md name "
+            "tables absent from SHEKYL_LMDB_TABLES (deleted table, surviving "
+            "heading?):\n  " + "\n  ".join(stranded))
+
     m = re.search(r"Total: \*\*(\d+) sub-databases\*\*", doc)
     if not m:
         errors.append("the doc's 'Total: **N sub-databases**' line is missing "
@@ -115,11 +163,66 @@ def main() -> None:
         errors.append(f"the doc header says DB version {doc_v.group(1)}; "
                       f"db_lmdb.cpp defines VERSION {code_v.group(1)}")
 
+    # Registry leg. The P0a reconciliation registry in the DRS design doc
+    # claims one row per live table; that claim gets the same pin the schema
+    # doc has, or it drifts the same way the schema doc's "Total: 41" did.
+    # Subject assertion first (rule 47): the registry section itself must
+    # exist and parse to a plausible row set before its content is compared.
+    # Subject failures here still flush any errors already accumulated by
+    # the earlier legs — a missing registry must not mask a heading defect
+    # (the workflow runs these legs under one process, so masking would be
+    # exactly the one-defect-hides-another failure doc-links.yml avoids
+    # between scripts).
+    def _fail(msg: str) -> None:
+        sys.exit("FAIL: " + msg + ("" if not errors else
+                 "\n(also, from the earlier legs:)\n" + "\n".join(errors)))
+
+    drs = DRS.read_text(encoding="utf-8")
+    reg_m = re.search(
+        r"^### P0a reconciliation registry\b.*?(?=^#{2,3} |\Z)", drs,
+        re.MULTILINE | re.DOTALL)
+    if not reg_m:
+        _fail("'### P0a reconciliation registry' section not found in "
+              "docs/design/DAEMON_REDB_STORE.md — the registry this gate "
+              "pins is missing (renamed heading? deleted section?)")
+    reg_rows = re.findall(r"^\| `([a-z0-9_]+)` \|", reg_m.group(0),
+                          re.MULTILINE)
+    if len(reg_rows) < MIN_TABLES or "blocks" not in reg_rows:
+        _fail(f"parsed only {len(reg_rows)} table rows from the P0a "
+              f"reconciliation registry (floor {MIN_TABLES}, sentinel "
+              "'blocks') — the registry parse is not reading real rows")
+    reg_dupes = sorted({t for t in reg_rows if reg_rows.count(t) > 1})
+    if reg_dupes:
+        errors.append("duplicate rows in the P0a reconciliation registry "
+                      "(DAEMON_REDB_STORE.md):\n  " + "\n  ".join(reg_dupes))
+    reg_missing = [t for t in tables if t not in set(reg_rows)]
+    if reg_missing:
+        errors.append(
+            "these tables exist in SHEKYL_LMDB_TABLES but have no row in the "
+            "P0a reconciliation registry (DAEMON_REDB_STORE.md):\n  "
+            + "\n  ".join(reg_missing))
+    reg_ghosts = sorted(set(reg_rows) - set(tables))
+    if reg_ghosts:
+        errors.append(
+            "these P0a reconciliation registry rows name tables absent from "
+            "SHEKYL_LMDB_TABLES (deleted table, surviving row?):\n  "
+            + "\n  ".join(reg_ghosts))
+    reg_count = re.search(r"\*\*(\d+) rows\*\*", reg_m.group(0))
+    if not reg_count:
+        errors.append("the P0a reconciliation registry's '**N rows**' count "
+                      "line is missing — the row-count claim this gate "
+                      "checks no longer exists")
+    elif int(reg_count.group(1)) != len(tables):
+        errors.append(f"the P0a reconciliation registry claims "
+                      f"{reg_count.group(1)} rows; SHEKYL_LMDB_TABLES has "
+                      f"{len(tables)} tables")
+
     if errors:
-        sys.exit("FAIL: docs/LMDB_SCHEMA.md is out of step with the live "
+        sys.exit("FAIL: the LMDB schema surface is out of step with the live "
                  "table list:\n" + "\n".join(errors))
 
-    print(f"OK: all {len(tables)} LMDB tables documented; stated total and "
+    print(f"OK: all {len(tables)} LMDB tables documented (property rows and "
+          "headings), reconciliation registry matches, stated totals and "
           "DB-version header match the code")
 
 
