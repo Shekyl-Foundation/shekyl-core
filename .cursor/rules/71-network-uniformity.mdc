@@ -67,9 +67,18 @@ and fine. It is nettype selecting a code path instead of a parameter.
    loudly that its blocks validate only among nodes running the same
    override; `blockchain.cpp:644–653`). What is forbidden is
    divergence that announces nothing — the silent skip
-   (`CEN-B5`'s FAKECHAIN root-check skip is the counter-example this
-   rule exists to retire; census batch R9 owns that family and
-   inherits this rule rather than re-deriving it).
+   (`CEN-B5`'s FAKECHAIN root-check skip was the counter-example this
+   rule was written to retire — retired 2026-09-05, PR #623, once the
+   test generator computed real roots; census batch R9 owns the rest
+   of that family and inherits this rule rather than re-deriving it).
+   This rule was
+   written from an argument; it now has an exhibit: that same skip
+   hid an S1 — the root check compared the wrong state and would have
+   halted every real network at height 60 — because every
+   Blockchain-level test and every `--regtest` run took the FAKECHAIN
+   arm without the check (census §7 #17, fixed §7 #18). A skipped
+   check is not a check the tests exercise on another nettype; it is a
+   check nothing exercises.
 3. **Enforcement is two-sided.** The negative side: the
    `check_network_uniformity.sh` gate flags any *new* public-nettype
    equality **or inequality** branch in the fenced directories against
