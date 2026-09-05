@@ -39,7 +39,10 @@
 //! over a generated chain. Fine for the hundreds of blocks a core test
 //! builds; a generator run over thousands of blocks should be measured.
 //!
-//! Not a daemon surface: nothing in `src/` outside the test tree calls it.
+//! Not a daemon surface: nothing in `src/` outside the test tree calls it —
+//! but it ships in the production archive like every `shekyl-ffi` export
+//! (one `-p shekyl-ffi` build), the same class as the `test-utils` PQC
+//! helpers. FOLLOWUPS F-7 owns the structural gate for that class.
 
 use shekyl_curve_tree::client::{BlockLeaves, CurveTreeClient, RawOutput, TxLeafInputs};
 use shekyl_curve_tree::types::{BlockHeight, TargetKind};
