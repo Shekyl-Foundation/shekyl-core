@@ -473,6 +473,16 @@
 
 ### Changed
 
+- **Register: CEN-I12 re-reviewed at the merged reconciliation and promoted
+  CHECKED-CONFORMANT — 100 / 1 / 1 over P0f's 102-row snapshot.** At
+  `667817d47` all three FCMP++ verifier arms read the node's own per-height
+  record under the reference block's height, never the header, and that
+  record is the ruled state (the tree at chain height `ref_height`). The
+  verdict rests on the state definition, not the placeholder rationale slice
+  7 used. CEN-L8 is the one row still failed closed; CEN-B5 the one DIVERGENT.
+  The per-height root record is recorded as a spec-level requirement on any
+  store the rewrite uses. Register-only; no code.
+
 - **Daemon RPC: `get_block_header_by_hash`, `hard_fork_info` and
   `get_fee_estimate` change shape; `CORE_RPC_VERSION` is now 3.27 (RK-5b).**
   Those three plus `get_last_block_header` and `get_block_headers_range` (and
@@ -536,8 +546,8 @@
   comment is a consequence, not the rationale. Step 1's rationale also drops
   the retired claim-era staked-maturity arm (CEN-L12). Found-not-ruled: step
   2b/2c's depth pseudocode is split the same way (routed to CEN-I13). The
-  register's CEN-I12 row stays failed-closed pending re-review at the merged
-  sha.
+  register's CEN-I12 row stayed failed-closed until re-reviewed at the merged
+  sha — promoted 2026-09-05, see the entry above.
 
 - **CEN-B5 has a second, live divergence — the post-connect header-root
   check compares the wrong state (S1; found, graded and routed — not fixed
