@@ -245,16 +245,22 @@
 //! §8.2 convention is unsafe here, unrepresentative, and not even faster —
 //! routed as its own item.
 //!
-//! **verify_floor, composed at the argmax (shipped-batched Bp+):**
-//! 131.7 ms/tx ⇒ 10.12 µs per weight-byte ⇒ zone-point worst cold block
-//! **7.30 s ≈ 6.1 % of T** (RandomX is 17 % of that bill). Against the
-//! signed f·T = 40 s: **surge_max ≈ 6.4** (flagged-conservative;
-//! shipping-regime estimate ≈ 6.6) — INTERPOLATED (6.4 ⇒ ≈ 3.8 MB limit,
-//! inside the measured 0.6–4.8 MB span). The pre-registered bracket was
-//! [≈3.6, ≈6.2]; the realized value sits just above its anchor edge
-//! because the bracket capped the C++/proxy ratio at ≥ 1 — the inverted
-//! ratio was the one direction not priced. The ×50 surge factor therefore
-//! re-derives to ×6 territory at today's verification costs.
+//! **verify_floor, composed at the argmax — FINAL, from the flagless
+//! shipping-regime capture (`gap7_block_verify_pi4_rust_20260905T181144Z`,
+//! canonical codec encoding, end-to-end incl. RandomX 1.2845 s, clock at
+//! stock in 229/231 samples, fill marginal ≡ aggregate 12.44 µs/B):**
+//! 128.77 ms/tx ⇒ 9.90 µs per weight-byte ⇒ zone-point worst cold block
+//! **7.23 s ≈ 6.0 % of T** (RandomX is 18 % of that bill). Against the
+//! signed f·T = 40 s: **surge_max ≈ 6.5, an UPPER bound** (the omitted
+//! acceptance-path residue only lowers it; the consuming ruling margins
+//! below) — INTERPOLATED (6.5 ⇒ ≈ 3.9 MB implied limit, inside the
+//! measured 0.6–4.8 MB span). The earlier flagged-capture composition
+//! (surge_max ≈ 6.4) is superseded; its capture stays archived as the
+//! SIGILL record. Pre-registered bracket [≈3.6, ≈6.2]: realized just
+//! above the anchor edge because the bracket capped the C++/proxy ratio
+//! at ≥ 1 — the inverted ratio was the one direction not priced. The ×50
+//! surge factor therefore re-derives to ×6 territory at today's
+//! verification costs.
 //!
 //! # Fences
 //!
