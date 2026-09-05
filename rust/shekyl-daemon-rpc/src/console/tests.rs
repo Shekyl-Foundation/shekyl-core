@@ -1255,6 +1255,59 @@ fn a_version_tally_lists_only_the_versions_present() {
     assert_eq!(version_tally(&counts), "1 v1, 3 v2");
 }
 
+/// A range reply that does not fill the window it was asked for is refused,
+/// not summarised.
+///
+/// **The `alt_chain_info` finding, one command over.** That one declared a
+/// length its hashes did not support; this one requests a range the headers
+/// need not fill. Round 2 fixed the instance it was reported against and not
+/// the rule, which is why this arrived as a separate finding — correspondence
+/// is a property of every reply read against a request, not of the command it
+/// was first noticed in.
+///
+/// Both shapes are covered: too few headers, and the right count for the
+/// wrong heights. The second is the one an output-only assertion cannot see,
+/// because a plausible summary is exactly what it produces.
+#[test]
+fn a_range_reply_that_misses_the_window_is_refused() {
+    let short = typed_reply(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "0",
+        "result": shekyl_rpc_types::GetBlockHeadersRangeResponse {
+            status: RpcStatus::ok(),
+            headers: vec![header_at(7)],
+        },
+    }));
+    let address = route_server(vec![
+        ("/get_info", info_reply(10)),
+        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 320, 4000])),
+        ("json_rpc:get_block_headers_range", short),
+    ]);
+    let (code, out) = run(&["print_blockchain_dynamic_stats", "3"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("answered 1 headers for the 3 blocks"), "{out}");
+
+    // Right count, wrong heights — the case that would otherwise print a
+    // correct-looking "Last 3" summary of blocks nobody asked about.
+    let wrong = typed_reply(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "0",
+        "result": shekyl_rpc_types::GetBlockHeadersRangeResponse {
+            status: RpcStatus::ok(),
+            headers: vec![header_at(100), header_at(101), header_at(102)],
+        },
+    }));
+    let address = route_server(vec![
+        ("/get_info", info_reply(10)),
+        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 320, 4000])),
+        ("json_rpc:get_block_headers_range", wrong),
+    ]);
+    let (code, out) = run(&["print_blockchain_dynamic_stats", "3"], Some(&address));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("starting at height 100"), "{out}");
+    assert!(!out.contains("Last 3:"), "{out}");
+}
+
 /// `print_blockchain_dynamic_stats` over its four legs, minus the one
 /// this slice deleted.
 ///

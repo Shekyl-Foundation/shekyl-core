@@ -184,11 +184,38 @@ pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Resu
     // The window is the last `nblocks` below the tip; `height` is a count, so
     // the tip's own height is one below it.
     let window = nblocks.min(info.height);
-    let headers = fetch_block_headers_range(
-        src,
-        info.height.saturating_sub(window),
-        info.height.saturating_sub(1),
-    )?;
+    let start = info.height.saturating_sub(window);
+    let end = info.height.saturating_sub(1);
+    let headers = fetch_block_headers_range(src, start, end)?;
+    // **The window is checked against what arrived, not assumed from what was
+    // asked.** Every figure below is labelled `Last {window}`, so a reply with
+    // the wrong count — or the right count for different heights — produces a
+    // confidently mislabelled summary rather than a visible error. The native
+    // handler guarantees exact correspondence; the *remote* arm is talking to
+    // a daemon that need not.
+    //
+    // This is the `alt_chain_info` finding one command over. That one declared
+    // a length the hashes did not support; this one requests a range the
+    // headers need not fill. Same defect, and round 2 fixed only the instance
+    // it was reported against — the correspondence rule is a property of every
+    // reply read against a request, not of the command it was first noticed in.
+    let expected: Vec<u64> = (start..=end).collect();
+    if headers.len() != expected.len()
+        || headers
+            .iter()
+            .zip(&expected)
+            .any(|(h, want)| h.height != *want)
+    {
+        return Err(format!(
+            "the daemon answered {} headers for the {} blocks of [{start}, {end}]{}",
+            headers.len(),
+            expected.len(),
+            headers.first().map_or(String::new(), |h| format!(
+                ", starting at height {}",
+                h.height
+            ))
+        ));
+    }
     let Ok(sample) = u64::try_from(headers.len()) else {
         return Err("the daemon returned more headers than can be counted".to_owned());
     };

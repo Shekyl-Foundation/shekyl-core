@@ -783,11 +783,38 @@ pub fn fee_estimate_request(params: &serde_json::Value) -> Result<GetFeeEstimate
     )
 }
 
+/// How many times [`get_last_block_header`] will re-read a tip that moved.
+///
+/// Small on purpose. Each attempt costs one chain-lock acquisition, and a
+/// second attempt only happens if a block arrived inside the first — which at
+/// any real block interval is rare and never twice running. A larger bound
+/// would not buy correctness, only a longer wait before the honest answer.
+const TIP_READ_ATTEMPTS: usize = 4;
+
 /// `get_last_block_header` (alias `getlastblockheader`).
 ///
-/// The tip's header. Read by height against the tip the same facts call
-/// reports, so the header and the height it is `depth`-relative to come from
-/// one chain state.
+/// The tip's header, or a refusal — never a header that is no longer the tip.
+///
+/// **Selecting the tip and projecting it are two lock acquisitions, and the
+/// chain can move between them.** `chain_tip` names a height; `block_header_at`
+/// then reads that height under its *own* lock and derives `depth` from the
+/// chain height it sees there (`rpc_facts_ffi.cpp`: `depth = chain_height -
+/// height - 1`). A block arriving in the gap yields the former tip with
+/// `depth == 1`, returned as the last block header with status OK.
+///
+/// The C++ had exactly this race — `get_blockchain_top` then
+/// `get_block_by_hash`, with `fill_block_header_response` computing depth
+/// from a third read — so this is inherited rather than introduced, and rule
+/// 16 says an inherited flow that contradicts the method's own contract is
+/// migrated, not carried. A method called "last block header" must not
+/// answer with a block that is not last.
+///
+/// Resolved by reading until the projection agrees with its own bound:
+/// `at.chain_height` is authoritative for the read that produced the header,
+/// so `header.height + 1 == at.chain_height` is the tip test, checked against
+/// the same snapshot rather than an earlier one. It converges on the first
+/// retry at any plausible block rate; a chain that outruns
+/// [`TIP_READ_ATTEMPTS`] is answering `CORE_BUSY`, which is true of it.
 pub fn get_last_block_header(
     facts: &dyn ChainFacts,
     fill_pow_hash: bool,
@@ -819,17 +846,34 @@ pub fn get_last_block_header(
     // `chain_height` is the count; the tip's own height is one below it. A
     // chain with no blocks cannot occur (genesis is block 0), and saturating
     // rather than asserting keeps the arithmetic total.
-    let top = tip.chain_height.to_raw().saturating_sub(1);
-    let at = facts.block_header_at(BlockLookup::Height(BlockHeight::from_raw(top)), pow)?;
-    let Some(header) = at.header else {
-        // The tip is the one height a chain always has, so its absence is the
-        // store contradicting itself rather than a caller asking for nothing.
-        return Err(RpcFault::Facts(FactsFault::Inconsistent));
-    };
-    Ok(GetLastBlockHeaderResponse {
-        status: RpcStatus::ok(),
-        block_header: block_header(&header),
-    })
+    let mut top = tip.chain_height.to_raw().saturating_sub(1);
+    for _ in 0..TIP_READ_ATTEMPTS {
+        let at = facts.block_header_at(BlockLookup::Height(BlockHeight::from_raw(top)), pow)?;
+        let Some(header) = at.header else {
+            // The height came from a chain height, so it was below the tip
+            // when it was chosen. Absent now means either the store cannot
+            // produce a block it claims to hold, or the chain shortened under
+            // us; both are read as "try the current top", and the loop bound
+            // stops that becoming unbounded.
+            top = at.chain_height.to_raw().saturating_sub(1);
+            continue;
+        };
+        // The tip test, against the snapshot that produced this header rather
+        // than the earlier one that chose its height.
+        if header.height.to_raw().saturating_add(1) == at.chain_height.to_raw() {
+            return Ok(GetLastBlockHeaderResponse {
+                status: RpcStatus::ok(),
+                block_header: block_header(&header),
+            });
+        }
+        top = at.chain_height.to_raw().saturating_sub(1);
+    }
+    Err(RpcFault::Refused(RpcRefusal {
+        code: CORE_RPC_ERROR_CODE_CORE_BUSY,
+        message: "Core is busy: the chain advanced on every attempt to read \
+                  its tip."
+            .to_owned(),
+    }))
 }
 
 /// `get_block_header_by_hash` (alias `getblockheaderbyhash`).
@@ -1343,6 +1387,18 @@ pub(crate) mod tests {
         /// assertion on the error code alone cannot tell an O(1) refusal
         /// from one that walked the chain first and refused at the end.
         pub header_reads: AtomicU64,
+        /// How many more header reads see the chain grow by one block first.
+        ///
+        /// **The input a fixed-height double cannot express.** `get_last_block_header`
+        /// picks a height from one lock acquisition and projects it under
+        /// another, so its defect only exists while the chain moves *between*
+        /// them — a double whose height is constant makes that state
+        /// unrepresentable and the retry unreachable. Counts down, so a test
+        /// can say "move once, then settle" and assert convergence rather
+        /// than just refusal.
+        pub tip_growth_remaining: AtomicU64,
+        /// Blocks the fake chain has grown so far, added to `hash_chain_height`.
+        pub tip_grown: AtomicU64,
     }
 
     impl ChainFacts for FakeFacts {
@@ -1401,7 +1457,10 @@ pub(crate) mod tests {
             if let Some(fault) = self.block_fault {
                 return Err(fault);
             }
-            let chain_height = BlockHeight::from_raw(self.hash_chain_height);
+            let chain_height = BlockHeight::from_raw(
+                self.hash_chain_height
+                    .saturating_add(self.tip_grown.load(Ordering::Relaxed)),
+            );
             // The fake applies the same bound the shim does, so a handler that
             // forgets to check one cannot pass by luck.
             let present = match at {
@@ -1443,11 +1502,21 @@ pub(crate) mod tests {
             fill_pow_hash: bool,
         ) -> Result<BlockHeaderAt, FactsFault> {
             self.header_reads.fetch_add(1, Ordering::Relaxed);
+            // The chain grows *before* this read resolves its bound, which is
+            // the ordering the race has: the caller chose a height from an
+            // older snapshot, and this read sees a newer one.
+            if self.tip_growth_remaining.load(Ordering::Relaxed) > 0 {
+                self.tip_growth_remaining.fetch_sub(1, Ordering::Relaxed);
+                self.tip_grown.fetch_add(1, Ordering::Relaxed);
+            }
             self.asked_pow.store(fill_pow_hash, Ordering::Relaxed);
             if let Some(fault) = self.hash_fault {
                 return Err(fault);
             }
-            let chain_height = BlockHeight::from_raw(self.hash_chain_height);
+            let chain_height = BlockHeight::from_raw(
+                self.hash_chain_height
+                    .saturating_add(self.tip_grown.load(Ordering::Relaxed)),
+            );
             // Same two-arm shape as `block_at`, because it answers the same
             // question. **This is a fake chain's own shape, not a copy of the
             // shim's rule** — the fake chain has a height and nothing above it,
@@ -1473,7 +1542,7 @@ pub(crate) mod tests {
                 }
                 BlockLookup::Height(height) => {
                     self.asked_height.store(height.to_raw(), Ordering::Relaxed);
-                    if height.to_raw() >= self.hash_chain_height {
+                    if height.to_raw() >= chain_height.to_raw() {
                         return Ok(BlockHeaderAt {
                             header: None,
                             chain_height,
@@ -1484,6 +1553,18 @@ pub(crate) mod tests {
             };
             let mut h = self.header.clone();
             h.height = height;
+            // **Depth is derived, not canned.** "How far below the tip" is
+            // what depth *means* — a property of a chain, not a rule the shim
+            // chose — so a fake chain that reports one inconsistent with its
+            // own height is simply wrong, and a test about the tip could not
+            // observe it. (This is not the mirroring a double must avoid: the
+            // fake is not restating a C++ policy, it is being a chain.) One
+            // test used to compensate by hand, setting `hash_chain_height` to
+            // `1_234_567 + 42 + 1` so the canned depth would line up.
+            h.depth = chain_height
+                .to_raw()
+                .saturating_sub(height.to_raw())
+                .saturating_sub(1);
             h.pow_hash = fill_pow_hash.then(|| tagged_bytes(23));
             // Only the alt case overrides it. `sample_header()` carries the
             // value the RK-3 oracle vector was captured with, and clobbering
@@ -1524,6 +1605,8 @@ pub(crate) mod tests {
             hash_fault: None,
             asked_height: AtomicU64::new(u64::MAX),
             header_reads: AtomicU64::new(0),
+            tip_growth_remaining: AtomicU64::new(0),
+            tip_grown: AtomicU64::new(0),
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
@@ -1800,6 +1883,8 @@ pub(crate) mod tests {
             hash_fault: Some(FactsFault::NotReady),
             asked_height: AtomicU64::new(u64::MAX),
             header_reads: AtomicU64::new(0),
+            tip_growth_remaining: AtomicU64::new(0),
+            tip_grown: AtomicU64::new(0),
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
@@ -2306,6 +2391,56 @@ pub(crate) mod tests {
         }
         // And not asking for it is fine on either listener.
         assert!(get_last_block_header(&f, false, true).is_ok());
+    }
+
+    /// A block arriving between choosing the tip and projecting it does not
+    /// produce a header labelled "last" with `depth == 1`.
+    ///
+    /// **The defect is inherited, not introduced.** The C++ read
+    /// `get_blockchain_top`, then `get_block_by_hash`, then computed depth
+    /// from a third read of the chain height — the same three-snapshot shape.
+    /// Rule 16: an inherited flow that contradicts the method's own contract
+    /// is migrated rather than carried, and "last block header" answering
+    /// with a block that is not last is exactly that.
+    ///
+    /// The fake grows its chain once, on the first header read, which is the
+    /// state a constant-height double makes unrepresentable.
+    #[test]
+    fn a_block_arriving_mid_read_does_not_yield_a_stale_tip() {
+        let f = facts(true, 0);
+        let base = f.tip.as_ref().expect("a tip").chain_height.to_raw();
+        f.tip_growth_remaining.store(1, Ordering::Relaxed);
+
+        let out = get_last_block_header(&f, false, false).expect("the tip, after one retry");
+        // The header returned is the *new* tip, not the height chosen from
+        // the pre-growth snapshot.
+        assert_eq!(out.block_header.height, base);
+        assert_eq!(
+            out.block_header.depth, 0,
+            "a header reported as the last block must be the last block"
+        );
+        // Two reads: the first saw the chain move, the second agreed with its
+        // own bound. Asserted so a fix that merely widened a bound, without
+        // re-reading, is distinguishable from one that converged.
+        assert_eq!(f.header_reads.load(Ordering::Relaxed), 2);
+    }
+
+    /// A chain that moves on every attempt is answered, not looped over.
+    #[test]
+    fn a_chain_that_never_settles_is_refused_rather_than_spun_on() {
+        let f = facts(true, 0);
+        f.tip_growth_remaining.store(u64::MAX, Ordering::Relaxed);
+        let out = get_last_block_header(&f, false, false);
+        assert!(
+            matches!(&out, Err(RpcFault::Refused(r)) if r.code == CORE_RPC_ERROR_CODE_CORE_BUSY),
+            "{out:?}"
+        );
+        // Bounded: the refusal costs a fixed number of reads, so a node under
+        // sustained block arrival cannot be made to spin here.
+        assert_eq!(
+            f.header_reads.load(Ordering::Relaxed),
+            TIP_READ_ATTEMPTS as u64
+        );
     }
 
     /// An unsynchronised node refuses to report a tip, rather than reporting
