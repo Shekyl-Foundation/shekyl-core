@@ -52,8 +52,8 @@ were true of their tree):
 | Block connect / block pop core | Covered then; **re-audited below** — the paths have since grown the archival journal hooks, the witness store, and the epoch-close/prune machinery |
 | Staking-Specific Write Paths (accrual, claim pool restore, `txin_stake_claim`) | **Dead** — deleted with the claim-era wire; `txin_stake_claim` and `staker_pool_balance` have zero occurrences in `src/` |
 | `get_relayable_transactions` missing-commit fix (Dandelion++ timestamps) | **Alive, fix intact** — the function stands at `tx_pool.cpp:1130` and `lock.commit()` at `:1224` precedes the `m_next_check` update; stem *selection* moved to Rust (`shekyl-relay-privacy`), the txpool bookkeeping and its transaction discipline stayed C++ |
-| `pop_block_from_blockchain` staker-accrual `db_wtxn_guard` fix | **Dead subject** — the guarded write path went with the claim era |
-| `hf_versions` not cleaned on pop | **Alive, unchanged** — carried as the P0c wart row (`hf_versions` FIX-or-REPLICATE), not re-litigated here |
+| `pop_block_from_blockchain` staker-accrual `db_wtxn_guard` fix | **The claim-era write died; the guard survives, load-bearing for a successor** — `db_wtxn_guard` at `blockchain.cpp:896` now wraps the post-pop **burn-total reversal** (`get_block_burn` → `set_total_burned`), preserving exactly the defensive shape the April fix added; see §3 and W-6 |
+| `hf_versions` not cleaned on pop | **Alive, unchanged — re-verified by the write-site census**: the table's only writers are `set_hard_fork_version` and `drop_hard_fork_info`; no pop-side remove exists among the 135 enumerated sites. Carried as the P0c wart row (`hf_versions` FIX-or-REPLICATE) |
 | FCMP++ curve tree (grow/trim/pending) | Covered then; re-audited below — the family has since gained `curve_tree_roots`, both output↔leaf maps, `block_pending_additions`, and the segment-freeze hook |
 | `LockedTXN` nesting + silent-commit-failure notes | Still accurate; restated in §4 with a re-enumerated site census |
 
@@ -120,8 +120,21 @@ dropped rather than parked (a hash-keyed parked row would be unreachable to
 the height-keyed prune and leak; reorg survival is explicit via the
 read-before-pop handoff to `handle_alternative_block`).
 
-**Verdict: PASS** — and the pop-side invariant comment (`:841`) states the
-same consensus-split consequence as connect's.
+One write lives **outside** the funnel: the core-level post-pop
+**burn-total reversal** (`Blockchain::pop_block_from_blockchain`,
+`blockchain.cpp:896`) reads `block_burn` for the popped height and lowers
+the `total_burned` properties scalar, under `db_wtxn_guard` — the guard
+the April fix introduced for the (now dead) staker-accrual reversal,
+inherited by this successor write. Under a batch the guard is a no-op and
+the reversal joins the pop's transaction; **standalone, it is a second
+transaction after the pop's commit** — the same latent two-txn window the
+April audit graded low for the accrual (production callers hold a batch),
+carried forward as **W-6**: the Rust store's pop is one transaction,
+derived-total reversals included.
+
+**Verdict: PASS** (production callers batched; the standalone two-txn
+window is W-6, latent) — and the pop-side invariant comment (`:841`)
+states the same consensus-split consequence as connect's.
 
 ## 4. Transaction pool (`tx_pool.cpp`)
 
@@ -280,6 +293,7 @@ tripped it.
 | W-1 | Guard exception split: 22× `std::runtime_error` vs 2× `DB_ERROR_TXN_START` for the identical `!m_write_txn` precondition | wart (no unsound state; inconsistent failure surface) | RECORD-AND-SPECIFY: the Rust store has **one** typed precondition error; no C++ harmonization |
 | W-2 | `LockedTXN::commit` swallows `batch_stop` exceptions — silent commit failure (April note, still true) | wart | RECORD-AND-SPECIFY: Rust store commit is `Result`, callers must consume it |
 | W-3 | 129 unguarded `*m_write_txn` dereferences (null deref if a caller path ever arrives guardless — none found at the pin) | wart (latent) | RECORD-AND-SPECIFY: the Rust store's write handle is possession-typed; the precondition becomes unrepresentable |
+| W-6 | Post-pop burn-total reversal (`blockchain.cpp:896`) is outside the pop funnel: one logical pop = two transactions for any standalone (batchless) caller — the April staker-guard finding's shape, inherited by the successor write | wart (latent; production callers hold a batch) | RECORD-AND-SPECIFY: the Rust store's pop is one transaction, derived-total reversals included |
 | — | `hf_versions` not cleaned on pop | carried | P0c wart row (owned there since April; not re-opened here) |
 | — | Dead schema-doc row: `properties` key `staker_pool_balance` + both accessors, zero occurrences in `src/` | doc defect | fixed in this PR (`LMDB_SCHEMA.md` row and the Staking-section pointer) |
 
@@ -293,7 +307,16 @@ count is the macro's length by construction). "Path §" points at the
 section above whose verdict covers the table's writers.
 
 **49 rows** (the stated figure is gate-checked against the macro's
-length, like the P0a registry's):
+length, like the P0a registry's). **A stated property of this matrix, not
+a footnote on one row:** it covers the 49 **declared** tables — the
+X-macro is a register of declarations, not a census of what exists at
+runtime — and W-5 proves the two populations differ: `hf_starting_heights`
+is dropped (`del=1`) at every writable `open()`, so the running store
+holds one table fewer than the register says. The coverage gate
+**structurally cannot observe this class**, because both sides of every
+comparison it makes derive from the same macro. Recorded here for census
+R4 (which owns the hardfork machinery) to rule on; building a runtime
+census is out of this pass's scope by design:
 
 | Table | Writers at the pin | Path § |
 | --- | --- | --- |
@@ -334,7 +357,7 @@ length, like the P0a registry's):
 | `output_txs` | `add_output` / `remove_output` | §2/§3 |
 | `pending_tree_drain` | `add_pending_tree_drain_entry`; `remove_pending_tree_drain_entries` | §2/§3 |
 | `pending_tree_leaves` | `add/remove_pending_tree_leaf`; `drain_pending_tree_leaves` | §2/§3 |
-| `properties` | `open()` version seed; `set_total_bonded_atomic` / `set_total_burned`; prune receipts (`note_archival_prune_watermark_epoch`, frozen-shard count, `pruning_seed`, `tx_prune_next_block`); `set_settlement_epoch_blocks_pin` (own txn) | §2/§5a/§5b/§5c |
+| `properties` | `open()` version seed; `set_total_bonded_atomic` / `set_total_burned` (incl. the post-pop burn reversal, `blockchain.cpp:896` — §3/W-6); prune receipts (`note_archival_prune_watermark_epoch`, frozen-shard count, `pruning_seed`, `tx_prune_next_block`); `set_settlement_epoch_blocks_pin` (own txn) | §2/§5a/§5b/§5c |
 | `spent_keys` | `add_spent_key` / `remove_spent_key` | §2/§3 |
 | `tx_indices` | `add_transaction_data` / `remove_transaction_data` | §2/§3 |
 | `tx_outputs` | `add_tx_amount_output_indices` / `remove_transaction_data` | §2/§3 |
