@@ -77,7 +77,9 @@ thermal_sampler() {
   echo "# git_rev=$(git -C "${REPO_ROOT}" rev-parse HEAD)"
   echo "# rustc=$(rustc -V 2>/dev/null || echo NA)"
   echo "# RUSTFLAGS=${RUSTFLAGS:-<unset>} (pin -C target-cpu=cortex-a72 per FA-6 §8.2)"
-  echo "# randomx_mode=light/cache by construction (shekyl-pow-randomx lib.rs:46-72; no dataset arm exists)"
+  echo "# randomx_mode=light/cache BY CONSTRUCTION — not a configuration that can drift between runs: shekyl-pow-randomx is a cache+VM substrate with no dataset arm (rust/shekyl-pow-randomx/src/lib.rs:46-72)"
+  echo "# storage_deviation: run from SD (mmcblk0p2); §8.2 row's USB3 SSD present but unmounted — not mounted deliberately; measured path is CPU-bound and in-memory, so the deviation does not enter verify_floor"
+  echo "# ram_as_found: 8 GB (Rev 1.4 board) vs the June row's 4 GB — rule 76 names the MODEL and Model B matches; RandomX is light/cache (~256 MB) and the FCMP terms are CPU-bound, so 8 vs 4 GB cannot bind HERE — a future floor measurement that IS memory-sensitive must not inherit this row's device as 'the floor'"
   echo "# thermal_start: $(read_temp)"
 } | tee "${OUT_FILE}"
 
