@@ -5888,12 +5888,11 @@ leave:
   // leaves -- the first one at height CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE on
   // every real nettype; tests/unit_tests/curve_tree_header_root_check.cpp.)
   //
-  // The FAKECHAIN skip survives for one reason only: the core_tests generator
-  // (tests/core_tests/chaingen.cpp) fills headers with the empty-tree root
-  // while its blocks replay into a real LMDB-backed core, so any generated
-  // chain crossing the maturity window would be rejected here. That is a
-  // generator defect (census R9), not a nettype property; rule 71 exhibit.
-  if (m_nettype != FAKECHAIN)
+  // Runs on every nettype, FAKECHAIN included (rule 71). The test generator
+  // computes real roots through the Rust curve-tree client
+  // (shekyl_curve_tree_replica_*), so a generated header that disagrees with
+  // this store is a real disagreement between the two implementations, and
+  // this is where it is caught.
   {
     const auto tip_root = m_db->get_curve_tree_root();
     crypto::hash expected_root;

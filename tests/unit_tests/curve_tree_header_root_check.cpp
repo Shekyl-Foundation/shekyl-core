@@ -33,11 +33,14 @@
 // Why this runs on TESTNET and not FAKECHAIN: the defect it guards was hidden
 // by a nettype-gated skip of the very check under test (rule 71). Every other
 // Blockchain-level test and every `--regtest` daemon run as FAKECHAIN, where
-// the check never executed, so this fixture is the first to exercise it. With
-// the nettype branches gone from the consensus path a TESTNET chain
-// exercising the check is evidence about MAINNET's check -- that is rule 71's
-// payoff, and it is why this test must not be moved onto MAINNET nor
-// dismissed as testnet-only.
+// the check never executed, so this fixture was the first to exercise it. The
+// skip is gone (the same PR retired it; the test generator now computes real
+// roots), so FAKECHAIN fixtures exercise the check too -- this one stays the
+// non-FAKECHAIN witness that a real-nettype chain, template to connect,
+// crosses the first maturity boundary. With the nettype branches gone from the
+// consensus path a TESTNET chain exercising the check is evidence about
+// MAINNET's check -- that is rule 71's payoff, and it is why this test must
+// not be moved onto MAINNET nor dismissed as testnet-only.
 //
 // Why fixed difficulty 1 is not a weakening: difficulty 1 is the locus where
 // CEN-D2's fail-open sentinel was found and fixed (PR #604), whose own

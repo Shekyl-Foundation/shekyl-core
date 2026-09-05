@@ -1168,6 +1168,68 @@ uint32_t shekyl_curve_tree_scalars_per_leaf();    // 4
 uint32_t shekyl_curve_tree_selene_chunk_width();  // 38 (LAYER_ONE_LEN)
 uint32_t shekyl_curve_tree_helios_chunk_width();  // 18 (LAYER_TWO_LEN)
 
+// ---------------------------------------------------------------------------
+// Curve-tree replica (rust/shekyl-ffi/src/curve_tree_replica_ffi.rs)
+//
+// An ephemeral Rust CurveTreeClient the C++ test generator
+// (tests/core_tests/chaingen.cpp) drives to compute the curve_tree_root every
+// generated block header must carry, now that the admission-time header-root
+// check (CEN-B5) runs on every nettype. The client's parity with the daemon's
+// store is KAT-pinned (shekyl-curve-tree/tests/recon_kat.rs); every generated
+// block that connects is a live parity check between the two.
+//
+// Contract: heights strictly consecutive from 0; transactions in block order,
+// coinbase first; `next_block_root` is the state at chain height tip + 1 (what
+// a block built on the tip commits to; the empty-tree sentinel for a fresh
+// replica). `rollback_to_fork(h)` keeps heights 0..=h. Every failure returns
+// false and logs; nothing is substituted. Test-generator surface only.
+// ---------------------------------------------------------------------------
+
+typedef struct ShekylCurveTreeReplica ShekylCurveTreeReplica;
+
+/// One output's leaf-relevant facts (vout[i] + ct_signatures.outPk[i].mask).
+/// Layout mirrors the Rust `#[repr(C)]` definition field-for-field.
+typedef struct ShekylCurveTreeReplicaOutput {
+    uint8_t output_key[32];
+    uint8_t commitment[32];
+    uint8_t has_commitment;  // 0 when i >= outPk.size() (leaf-ineligible)
+    uint8_t target_kind;     // 0 txout_to_tagged_key, 1 txout_to_key, 2 other
+} ShekylCurveTreeReplicaOutput;
+
+/// One transaction's leaf inputs in vout order.
+typedef struct ShekylCurveTreeReplicaTx {
+    uint8_t is_miner;
+    uint8_t has_leaf_hash_blob;      // tx_extra 0x07 tag present
+    const uint8_t* leaf_hash_blob;   // raw 0x07 payload, leaf_hash_blob_len bytes
+    size_t leaf_hash_blob_len;
+    const ShekylCurveTreeReplicaOutput* outputs;
+    size_t n_outputs;
+} ShekylCurveTreeReplicaTx;
+
+/// Create an empty replica; null if the ephemeral store cannot be opened.
+ShekylCurveTreeReplica* shekyl_curve_tree_replica_new(void);
+/// Destroy a replica (null tolerated).
+void shekyl_curve_tree_replica_free(ShekylCurveTreeReplica* replica);
+/// Ingest one block at `height` (tip + 1, or 0 for a fresh replica).
+bool shekyl_curve_tree_replica_ingest_block(
+    ShekylCurveTreeReplica* replica,
+    uint64_t height,
+    const ShekylCurveTreeReplicaTx* txs,
+    size_t n_txs);
+/// Keep heights 0..=fork_height. On the client's poisoned failure mode the
+/// handle is unusable and must be freed.
+bool shekyl_curve_tree_replica_rollback_to_fork(
+    ShekylCurveTreeReplica* replica,
+    uint64_t fork_height);
+/// Ingested tip height; false when nothing is ingested (out untouched).
+bool shekyl_curve_tree_replica_tip_height(
+    const ShekylCurveTreeReplica* replica,
+    uint64_t* out_height);
+/// The curve_tree_root a block built on the current tip must carry (32 bytes).
+bool shekyl_curve_tree_replica_next_block_root(
+    const ShekylCurveTreeReplica* replica,
+    uint8_t* out_root);
+
 /// Compose every curve-tree layer ABOVE the leaf layer, narrow from the leaf-chunk
 /// layer — the correct producer-side grow that telescopes to the reference root
 /// (fixes the depth-3 layer-2 incremental-deepening divergence: an in-place deepen

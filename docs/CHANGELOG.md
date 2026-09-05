@@ -20,11 +20,19 @@
   the first non-FAKECHAIN Blockchain fixture in the tree
   (`curve_tree_header_root_check.cpp`: TESTNET, fixed difficulty 1, real
   LMDB, block 60 rejected before and connected after). The FAKECHAIN skip
-  itself survives, captioned with its real reason (the core_tests generator
-  replays placeholder-root headers into real LMDB; census R9 owns retiring
-  it). `FCMP_PLUS_PLUS.md` §5 now states the state the header commits to.
-  Register: CEN-B5 stays DIVERGENT for the skip; its S1 is fixed, promotion
-  of that half owed at the merged sha.
+  around the check is deleted: the core_tests generator now computes real
+  roots by replaying its own recorded chain through the Rust curve-tree
+  client, exposed to C++ as `shekyl_curve_tree_replica_*` in `shekyl-ffi`
+  (the client's parity with the daemon's store was KAT-pinned; every
+  generated block that connects is now a live cross-implementation check at
+  every height), and the fake-DB test doubles report the empty-tree sentinel
+  instead of zeros. `CurveTreeClient::next_block_root` — the one-past-tip
+  read a header producer needs — is added and pinned to the recon fixture.
+  `shekyl-ffi` gains the `shekyl-curve-tree` dependency, which brings `redb`
+  into the daemon image ahead of the daemon redb store that needs it anyway.
+  `FCMP_PLUS_PLUS.md` §5 now states the state the header commits to.
+  Register: CEN-B5 stays DIVERGENT until re-reviewed at the merged sha;
+  both its divergences are fixed.
 
 - **Consensus hardening: the curve-tree leaf collector aborts instead of
   silently dropping an output (CEN-L11/L12).** Three arms in the DB-side leaf

@@ -277,9 +277,9 @@ connect-then-pop.
 > compared the field against the root read *after* the add — so the two
 > witnesses disagreed at every block where a leaf matures and every real
 > nettype would have halted at height 60 (the S1 of §7 #17). The check now
-> runs before the add against the tip root; the FAKECHAIN skip around it
-> survives only until the core_tests generator produces real roots (census
-> R9).
+> runs before the add against the tip root, on every nettype — the
+> FAKECHAIN skip around it was retired in the same PR once the test
+> generator computed real roots through the Rust curve-tree client.
 
 ### Serialization
 
@@ -487,16 +487,15 @@ before the block's own drain, the header must equal the tip root. Until
 everywhere else, comparing the header against the root *after* the drain
 (census §7 #17, S1, fixed in §7 #18) — so the two witnesses agreed only
 because the template filled the header honestly. Today it holds on every
-nettype except FAKECHAIN, where the skip survives until the core_tests
-generator produces real roots (census R9). One more reason
+nettype. One more reason
 the verifier reads its **own computed record**, never the header; a rewrite
 does the same in whatever form its store keeps that record. The prover holds no
 store and reads the header ([`CURVE_TREE_CLIENT.md`](design/CURVE_TREE_CLIENT.md) §3.3); today its only
 protection is its own leaf recompute against that header (`verify_root`
 refuses to build against a root it cannot reproduce), and B5 is the
 consensus-side binding of that header on every real nettype. The two reads
-name one value on every network where B5 runs; the only thing that makes the
-choice observable is B5's FAKECHAIN skip (census R9), and only in tests.
+name one value on every network, and B5 binds them on every one, so nothing
+makes the choice observable.
 
 *Reconciled 2026-09-04:* this paragraph previously narrated a header read
 the code stopped performing on 2026-04-13; the archaeology and the ruling
