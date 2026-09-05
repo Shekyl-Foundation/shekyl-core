@@ -1310,23 +1310,37 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
         .count();
     // Under the evolved traces a value change is NORMAL (the ~1-per-
     // 10-20k-block reward-decay crossing), so the exception filter is the
-    // GATE, not any change: a quantized run whose median dwell dips below
-    // the 240-block FL-C4a bar.
-    let quantized_gate_violations: Vec<_> = r
+    // registered gate, not any change.
+    // Per-scenario-kind REGISTERED gates (§1.4a; PR #614 review — a
+    // single median-vs-240 filter tested the wrong statistic for ramps):
+    // stationary gates median dwell ≥ 240; the ramp gates its min
+    // in-ramp run ≥ 60 (the whole-trace median is tail-dominated there
+    // and is not the ramp's registered bar).
+    let fails_registered_gate = |d: &DwellResult| -> bool {
+        let is_ramp = d.min_dwell_started_in_ramp.iter().any(Option::is_some);
+        if is_ramp {
+            d.min_dwell_started_in_ramp
+                .iter()
+                .any(|r| matches!(r, Some(l) if *l < 60))
+        } else {
+            d.median_dwell.iter().any(|&m| m < 240)
+        }
+    };
+    let quantized_gate_violations = r
         .dwell
         .iter()
-        .filter(|d| d.mode.contains("quantized") && d.median_dwell.iter().any(|&m| m < 240))
-        .collect();
+        .filter(|d| d.mode.contains("quantized") && fails_registered_gate(d))
+        .count();
     let _ = writeln!(
         out,
-        "fee-ladder: dwell grid = {} runs ({} quantized; {} quantized runs below the 240-block gate)",
+        "fee-ladder: dwell grid = {} runs ({} quantized; {} quantized runs FAIL their registered gate)",
         r.dwell.len(),
         quantized_runs,
-        quantized_gate_violations.len()
+        quantized_gate_violations
     );
     for d in &r.dwell {
         let interesting = if d.mode.contains("quantized") {
-            d.median_dwell.iter().any(|&m| m < 240)
+            fails_registered_gate(d)
         } else {
             d.mode == "corrected-raw" && d.scenario.starts_with("stationary-v50")
         };
@@ -1354,16 +1368,21 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
         .iter()
         .filter(|fb| fb.distinct_fees_tail > 1 && fb.tail_transitions <= 1)
         .count();
+    // The FL-C7 amplitude bar is the REGISTERED one — more than one
+    // fee-rounding step (PR #614 review: a 1.9× ratio tested `C_q`
+    // flips, not the bar; a smaller multi-step cycle must fail too).
+    // "One rounding step" is exact: the next distinct
+    // `round_money_up_2` value above the tail minimum.
+    let beyond_one_rounding_step =
+        |fb: &&FeedbackResult| fb.fee_tail_max > round_money_up_2(fb.fee_tail_min + 1);
     let fb_multi: Vec<_> = r
         .feedback
         .iter()
-        .filter(|fb| {
-            fb.tail_transitions >= 2 && fb.fee_tail_max >= fb.fee_tail_min.saturating_mul(19) / 10
-        })
+        .filter(|fb| fb.tail_transitions >= 2 && beyond_one_rounding_step(fb))
         .collect();
     let _ = writeln!(
         out,
-        "fee-ladder: feedback grid = {} cells; {} secular single crossings; {} OSCILLATING at >= 1.9x (listed below)",
+        "fee-ladder: feedback grid = {} cells; {} secular single crossings; {} OSCILLATING beyond one rounding step (listed below)",
         fb_total,
         secular,
         fb_multi.len()

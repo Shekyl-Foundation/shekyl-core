@@ -768,13 +768,17 @@ mode pass the ≥ 240-block gate in every scenario at every age** (minimum
 median dwell 464 / 446 blocks, minimum in-ramp run 274 at the age-30
 ramp; worst-case cohorts ~1.4–5.5 × 10⁴ txs/value there, two orders
 above raw-`C`'s 150–300 though below the quiet-state ~10⁶). **The
-registered round-to-nearest rule FAILS the gate outright at age 12**
-(median dwell 2–3 blocks, stationary `v ≥ 200` and the ramp): drift
-parks raw `C` at the √2 midpoint and the nearest snap flips
-per-block — a failure the frozen-state traces could not see, and a
-second, independent ground for the already-adopted ceiling (the first
-was FL-C2(b) marginal-pricing under-funding; the §1.4a register itself
-is not rewritten — this paragraph is the disclosure). FL-C4a verdict:
+registered round-to-nearest rule FAILS its stationary gate outright at
+age 12** (median dwell 2–3 blocks at `v ≥ 200`): drift parks raw `C`
+at the √2 midpoint and the nearest snap flips per-block — a failure
+the frozen-state traces could not see, and a second, independent
+ground for the already-adopted ceiling (the first was FL-C2(b)
+marginal-pricing under-funding; the §1.4a register itself is not
+rewritten — this paragraph is the disclosure). The same state's ramp
+scenario passes the ramp's own registered bar (min in-ramp run 1 457 ≥
+60; the round-12 gate correction measures each scenario kind against
+ITS registered statistic) while flickering identically in its
+stationary tail — the stationary rows carry the verdict. FL-C4a verdict:
 `C` enters the formula only as `C_q` (ceiling, behind the §7
 hysteresis). Residual, re-measured on the evolved traces: boundary-
 parked states still 2-cycle on the un-hysteretic map, and at the
@@ -831,8 +835,10 @@ tracking real state change; ≥ 2 = oscillation):
   gate). Mechanism: the band absorbs boundary NOISE (it damps 1 177 →
   24 transitions) but not gain-≥2 demand feedback — a fee step moves
   volume ~4–8×, which moves `C` ~20%, far outside any 3% band.
-- Raw-`C` additionally drifts within one rounding step in most cells —
-  within C7's letter, and raw is already rejected by FL-C4a.
+- Raw-`C` oscillates BEYOND one rounding step in 28 cells under the
+  registered bar (round 12 correction: the earlier 1.9× screen tested
+  `C_q` flips, not the bar) — raw fails C7's letter as well as C4a.
+  Under-one-step drift fills most of its remaining cells.
 
 FL-C7: **pass on the CONSTRUCTED map for every state except the
 boundary-parked high-elasticity corner, which is SURFACED as FL-R18
@@ -1146,7 +1152,7 @@ ride each row.
 | FL-R16b | **`ActivityMetric::new` cap guard (`activity.rs:124`): non-blocking API cleanup.** False under the accepted direction, but fixture-test-only today — remove with the rename sweep, not on the build's critical path | **record** | minted at review round 4 |
 | FL-R16c | **Burn-ratio semantics past the asymptote:** `calc_burn_pct`'s `supply_ratio` (`burn.rs:76-78`) is unsaturated — exceeds 1.0 after exhaustion, drifting the burn toward `burn_cap` (≈ 0.0037%/yr issuance scale, negligible but unnamed). Disposition: saturate at `SCALE`, one line. And the sweep must not walk past the pre-existing definitional bug: `circulating_supply = already_generated_coins` (`blockchain.cpp:1787`, `:2074`) is **gross emission ignoring burn** | **record — binds the implementing PR** | minted at review round 4 |
 | FL-R17 | **Rung count — SIGNED (a): THREE TIERS. Maintainer, in-channel, review round 7** ("sign it as three tier"). Rationale as signed: (i) **no privacy argument applies to the default case** — the default bucket is the majority set and its users bear no meaningful reduction (defaulted model: the standard bucket at ×1.25, §4.7); (ii) **the non-default case does not significantly degrade privacy** — a smaller set is still, arguably, much *larger* than Monero RingCT's ring-16, the de facto standard. (iii) The ruling's interpretive frame, in the maintainer's words: the privacy cost of a tier is *a bounded per-transaction candidate-set reduction for anchored attacks, with no linkage primitive to amplify it under FCMP++ — the kind of cost a proportionality judgment handles, not the kind the priority order was written for*. This frame *reconciles* rather than contradicts the stake-quorum rejection (the hierarchy's canonical privacy-wins ruling): there the cost was **structural and unbounded** — a per-persona uptime log growing without ceiling — so the lexicographic ordering applied; here it is **bounded, once per anchored transaction**, so proportionality applies. Same hierarchy, two instruments, selected by whether the cost is bounded — read together, the two rulings are one position. The round's supporting arithmetic for (ii): a priority transaction's anchored candidate set is `W/20` for an anchor window of `W` transactions, above ring-16 for any anchor looser than `W = 320` txs — at baseline volume, any anchor wider than ≈ 6.4 blocks (~13 minutes); tighter time-windows come with higher volume, which scales the set back up. Tier contracts and the default are §5.5. **Candidate (b) REJECTED; rule-21 reopeners as set by the maintainer at round 7, superseding the round's drafted three:** (r1) **FL-C4b's already-registered mechanism** — any rung whose measured mainnet usage share falls below 5% over a window is deleted or explicitly ruled an emergency lane; it needs no new row, and it is what retires priority if "many people use it" proves wrong; (r2) **any transaction-format or spend-proof change that introduces an on-chain way to relate two transactions** — the no-linkage-primitive premise is what makes the cost bounded, so its loss reopens the fee-tier disposition itself. *Method note (steering, round 7): r2 is anchored to the premise the argument rests on, not to a magnitude the argument produced — a threshold reopener invites argument about whether the number was crossed; a premise reopener either holds or does not, checkable by reading the format. Tie reopeners to assumptions, not magnitudes.* The median-dynamics gate lapses for this decision; W8 re-homed to FL-D7 | **SIGNED (a) — three tiers** | signed in-channel at review round 7 |
-| FL-R18 | **Residual boundary-parked oscillation under demand feedback — SURFACED per §1.7's chain (round 12), decision required.** On drift-honest traces the §7 hysteresis band (3%, necessary and load-bearing) does not close 14 interior cells: baseline-parked boundary states (`D = 50`) with demand elasticity ≥ 2 (≥ 1 at age 30, `M = 3·Zm`) oscillate at one `C_q` step, 7–24 transitions per 3 000-block tail, worst inter-flip dwell ≈ 125 blocks — under the FL-C4a 240-block gate. Mechanism: the band absorbs boundary noise, not gain-≥2 feedback (a fee step moves volume 4–8×, `C` ~20%). Candidate dispositions for ratification, NONE adopted here: (a) accept as bounded (one step amplitude; requires an elasticity-≥2 population parked at baseline volume, and the anonymity cost is only at those states); (b) widen/asymmetrize the band (costs responsiveness everywhere to serve a corner); (c) rate-limit served `C_q` changes (a minimum-dwell floor on the served value — turns the FL-C4a gate into a mechanism); (d) revisit FL-D6's smoothing pool as *smoothing* (its declined-as-floor status untouched) | **decision required — UNSIGNED** | minted at review round 12, on the drift-honest re-measurement; instrument: the §4.5 transition classification |
+| FL-R18 | **Residual boundary-parked oscillation under demand feedback — SURFACED per §1.7's chain (round 12), decision required.** On drift-honest traces the §7 hysteresis band (3%, necessary and load-bearing) does not close 14 interior cells: baseline-parked boundary states (`D = 50`) with demand elasticity ≥ 2 (≥ 1 at age 30, `M = 3·Zm`) oscillate at one `C_q` step, 7–24 transitions per 3 000-block tail, worst inter-flip dwell ≈ 125 blocks — under the FL-C4a 240-block gate. Mechanism: the band absorbs boundary noise, not gain-≥2 feedback (a fee step moves volume 4–8×, `C` ~20%). Candidate dispositions for ratification, NONE adopted here: (a) accept as bounded (one step amplitude; requires an elasticity-≥2 population parked at baseline volume, and the anonymity cost is only at those states); (b) widen/asymmetrize the band (costs responsiveness everywhere to serve a corner); (c) rate-limit served `C_q` changes (a minimum-dwell floor on the served value — turns the FL-C4a gate into a mechanism); (d) revisit FL-D6's smoothing pool as *smoothing* (its declined-as-floor status untouched) **What this row binds: the implementing (bundle) PR consumes its disposition** — (b)/(c) change the built `fee_correction_quantized` mechanism, (a)/(d) leave it; this design record carries the measurement either way | **decision required — UNSIGNED** | minted at review round 12, on the drift-honest re-measurement; instrument: the §4.5 transition classification under the registered one-rounding-step bar |
 
 Signatures are recorded per-row with their provenance (in-channel, review
 rounds 4–8); this line remains for any wholesale countersign the

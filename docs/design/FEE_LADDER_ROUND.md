@@ -446,6 +446,33 @@ already declared the Rust surface and now enumerates it in full.
   The §7 hysteresis requirement is now recorded as necessary and NOT
   sufficient alone.
 
+**Cycle nine (three findings + the maintainer's rerun mandate):**
+
+- **Rerun first:** the tree reproduces the recorded artifact —
+  bit-identical JSON and summary against the run §4.4/§4.5's round-12
+  numbers came from.
+- **Both summary predicates were WRONG-BAR instruments (Copilot,
+  valid — the cannot-fail-on-its-axis class, in this round's own
+  tooling):** the dwell filter tested median ≥ 240 for every scenario
+  where §1.4a registers median ≥ 240 for stationary but **min in-ramp
+  ≥ 60 for the ramp**; the oscillation screen tested a 1.9× ratio
+  (a `C_q`-flip detector) where the registered bar is **more than one
+  fee-rounding step**. Both now test the registered bars. Re-derived
+  counts under the honest predicates: dwell violations 2 → 1 (the
+  age-12 nearest RAMP row passes its actual 60-block bar; the
+  stationary failure carries the verdict), oscillation 34 → 62 — the
+  28 new cells are ALL raw-`C`, which therefore fails C7's letter as
+  well as C4a. **Plain ceiling stays at 20 and hysteresis at exactly
+  14: FL-R18's figures are unchanged under the registered bar.**
+- **FL-R18 vs "fully ruled" (Copilot, valid as stated):** the
+  completeness claims outran the round-12 minting. The PR body, the
+  index cell, and the FL-R18 row now say it plainly: §8 is fully
+  disposed with ONE UNSIGNED row, which binds the implementing
+  (bundle) PR — dispositions (b)/(c) change the built mechanism,
+  (a)/(d) leave it — not this record. Obtaining the signature is the
+  maintainer's; holding the bundle on it is the sequencing this
+  states.
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
