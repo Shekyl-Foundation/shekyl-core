@@ -120,6 +120,13 @@ dropped rather than parked (a hash-keyed parked row would be unreachable to
 the height-keyed prune and leak; reorg survival is explicit via the
 read-before-pop handoff to `handle_alternative_block`).
 
+A note the two misclassifications of this pass earned (D++ and the row
+below): a two-valued provenance column — dead or alive — cannot express a
+subject that was **replaced in place**. The guard here outlived its
+original write and wraps a successor; the D++ fix outlived its lane and
+kept its C++ tenancy. Both times the category set, not the provenance,
+was what was wrong.
+
 One write lives **outside** the funnel: the core-level post-pop
 **burn-total reversal** (`Blockchain::pop_block_from_blockchain`,
 `blockchain.cpp:896`) reads `block_burn` for the popped height and lowers
@@ -293,7 +300,7 @@ tripped it.
 | W-1 | Guard exception split: 22× `std::runtime_error` vs 2× `DB_ERROR_TXN_START` for the identical `!m_write_txn` precondition | wart (no unsound state; inconsistent failure surface) | RECORD-AND-SPECIFY: the Rust store has **one** typed precondition error; no C++ harmonization |
 | W-2 | `LockedTXN::commit` swallows `batch_stop` exceptions — silent commit failure (April note, still true) | wart | RECORD-AND-SPECIFY: Rust store commit is `Result`, callers must consume it |
 | W-3 | 129 unguarded `*m_write_txn` dereferences (null deref if a caller path ever arrives guardless — none found at the pin) | wart (latent) | RECORD-AND-SPECIFY: the Rust store's write handle is possession-typed; the precondition becomes unrepresentable |
-| W-6 | Post-pop burn-total reversal (`blockchain.cpp:896`) is outside the pop funnel: one logical pop = two transactions for any standalone (batchless) caller — the April staker-guard finding's shape, inherited by the successor write | wart (latent; production callers hold a batch) | RECORD-AND-SPECIFY: the Rust store's pop is one transaction, derived-total reversals included |
+| W-6 | Post-pop burn-total reversal (`blockchain.cpp:896`) is outside the pop funnel: one logical pop = two transactions for any standalone (batchless) caller — the April staker-guard finding's shape, inherited by the successor write. The file documents the invariant it breaks: the comment at `:905` says the accrual-row removal "shares the pop's wtxn" while the burn reversal three lines above it does not | wart (**latent bookkeeping — graded on a consumer trace, not assumption**: a crash between the two txns leaves `total_burned` inflated on that node, but the scalar's only non-reversal consumer is the RPC readout `core_rpc_server.cpp:274`; no emission, supply, or validation arithmetic derives from it, and `shekyl-economics-sim/src/record.rs:143` states circulating supply is captured from design §608–612, *not* `already_generated − total_burned`. **Grade expires with its ground**: any future consensus consumer of the scalar — a circulating-supply operand in the fee ladder or emission — re-grades this to consensus-relevant at that consumer's design round) | RECORD-AND-SPECIFY: the Rust store's pop is one transaction, derived-total reversals included |
 | — | `hf_versions` not cleaned on pop | carried | P0c wart row (owned there since April; not re-opened here) |
 | — | Dead schema-doc row: `properties` key `staker_pool_balance` + both accessors, zero occurrences in `src/` | doc defect | fixed in this PR (`LMDB_SCHEMA.md` row and the Staking-section pointer) |
 
