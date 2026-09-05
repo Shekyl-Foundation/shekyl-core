@@ -24,7 +24,12 @@ mod params;
 mod render;
 
 pub use aggregate::{hex_bytes, ShardAggregate};
-pub use candidate::{recipe_from_params, render_candidate, CandidateRecipe};
+pub use candidate::{recipe_from_params, CandidateRecipe};
+// `render_candidate` (the raw `RgbImage` renderer) is deliberately NOT
+// re-exported: a bare image can be encoded without its provenance chunks,
+// bypassing the every-export-is-marked enforcement (review #617). All
+// public rendering goes through the PNG entry points below.
+use candidate::render_candidate;
 pub use features::{features_from_aggregate, Features};
 pub use params::{parameters_from_aggregate, parameters_with_hash_override, RenderParameters};
 

@@ -1531,7 +1531,9 @@ the dot-version, not the existence of the mechanism.
   archival routing client surface), V3.1 sibling-resolution entry for
   `assemble_tree_path_for_output` (FCMP++ historical-reference cutover
   via Stage 5 `ArchivalEngine`), V3.x Stage 5 `ArchivalEngine` native
-  build, V3.x no-tradeability invariant codification
+  build (the no-tradeability enforcement-point inventory closed
+  2026-09-04 — codified in `docs/V3_SHARD_VISUALIZATION.md`, *Not
+  tradeable*)
 - `docs/DESIGN_CONCEPTS.md` — V3 economic structure
   (`staker_pool_share`, `staker_emission_share`, lock tiers,
   Component 3 governance)

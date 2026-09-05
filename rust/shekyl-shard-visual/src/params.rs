@@ -19,12 +19,21 @@ pub struct RenderParameters {
     pub(crate) algorithm: &'static str,
     pub(crate) label: String,
     pub(crate) structural_overrides: Vec<(String, String)>,
-    /// `true` only when every input came from the shard's own aggregate.
-    /// A hash override or synthetic feature vector makes the render a
-    /// viewer-chosen artifact, not chain state; the flag flows into
-    /// [`crate::CandidateRecipe`] and the PNG's provenance chunks so
-    /// exports stay visibly non-canonical (ruling A,
-    /// `docs/V3_SHARD_VISUALIZATION.md`).
+    /// `true` only when every input came, unmodified, from the
+    /// [`ShardAggregate`] this bundle was built from. A hash override or
+    /// synthetic feature vector makes the render a viewer-chosen
+    /// artifact; the flag flows into [`crate::CandidateRecipe`] and the
+    /// PNG's provenance chunks so exports stay visibly non-canonical
+    /// (ruling A, `docs/V3_SHARD_VISUALIZATION.md`).
+    ///
+    /// SCOPE: this attests the *render pipeline's* provenance — no
+    /// override, no synthetic path, no post-construction tampering. It
+    /// does not and cannot attest that the aggregate itself is truthful
+    /// chain data; that binding is owned by the layer that produces
+    /// aggregates (`shekyl-shard-source`'s hash-authoritative handle
+    /// guard today, `ArchivalEngine` at Stage 5). A reader treating
+    /// `canonical` as "verified against the chain" is reading the value
+    /// wider than its scope.
     pub(crate) canonical: bool,
 }
 

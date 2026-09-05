@@ -334,6 +334,20 @@ render entry point (`render_candidate_png_from_params`) derives pixels,
 chunks, and recipe from the same parameter bundle, so they cannot
 disagree.
 
+**Scope of the claim (one value, one meaning).** `canonical` attests
+the *render pipeline's* provenance: the pixels were derived from the
+aggregate handed to the constructor, unmodified, with no override and
+no synthetic input. It does not attest that the aggregate is truthful
+chain data — the renderer is a pure function and cannot know; that
+binding belongs to the layer that produces aggregates
+(`shekyl-shard-source` rejects a stale handle whose hash disagrees
+with the resolved aggregate today; `ArchivalEngine` supplies verified
+shards at Stage 5). Asking the render layer to verify its input
+against the chain would put a chain-integrity check at a
+pure-function boundary that has no chain access — the same
+wrong-layer shape as demanding wire properties of a seal-admission
+check.
+
 Empirical exploration in `shekyl-dev/visualization/` (2026-05) converged on a
 **two-stage difference compositor** rather than the single-algorithm 3-bit
 bucket assignment described below. This pipeline is the **leading design** for
