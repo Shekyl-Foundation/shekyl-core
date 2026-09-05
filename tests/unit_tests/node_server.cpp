@@ -128,8 +128,9 @@ struct cryptonote_protocol_handler_test_seam
 
   template<class T>
   static void drop_connections(cryptonote::t_cryptonote_protocol_handler<T> &h,
-                               const epee::net_utils::network_address &addr)
-  { h.drop_connections(addr); }
+                               const epee::net_utils::network_address &addr,
+                               bool attributable)
+  { h.drop_connections(addr, attributable); }
 
   template<class T>
   static int try_add_next_blocks(cryptonote::t_cryptonote_protocol_handler<T> &h,
@@ -1840,7 +1841,7 @@ TEST(anon_zone_address_keying, host_sweep_does_not_sever_a_zone)
   // Negative limb: the sweep must sever NOTHING when handed an address that
   // names no host. Before the fix both anon connections were severed, because
   // `unknown()` compared equal to `unknown()`.
-  cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, unknown_tor);
+  cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, unknown_tor, /*attributable=*/true);
   EXPECT_TRUE(endpoint.dropped.empty());
   // Scoring: the mock models production's `is_blockable` bail, so this limb is
   // guaranteed by the double rather than by the fix -- it documents the
@@ -1856,7 +1857,7 @@ TEST(anon_zone_address_keying, host_sweep_does_not_sever_a_zone)
   const boost::uuids::uuid clear1 = fixed_uuid(3);
   endpoint.add(clear1, ip_other_port);
 
-  cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, ip);
+  cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, ip, /*attributable=*/true);
   ASSERT_EQ(1u, endpoint.dropped.size());
   EXPECT_EQ(clear1, endpoint.dropped.front());   // the same host, different port
   // The sweep scores the host, and `drop_connection(context, true, ...)` scores
@@ -2004,14 +2005,51 @@ TEST(block_sync_span_lifecycle, prepare_failure_disconnects_the_origin_without_c
 
   ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
 
-  // The host sweep runs on a blockable address and charges: 5 for the host,
-  // then 1 for the connection it severs. Everything charged on this path is
-  // the sweep's -- the id drop that follows contributes nothing.
+  // NOTHING on this path charges. The id drop passes no score, and the sweep
+  // is now told the failure is unattributable, so its 5-for-the-host and
+  // 1-per-severed-connection are both suppressed. This assertion used to read
+  // 6 -- the sweep's contribution -- when only the id drop had been corrected;
+  // it is stronger now, because it fails if EITHER starts charging again.
   unsigned total = 0;
   for (const auto &f : endpoint.host_fails)
     total += f.second;
-  EXPECT_EQ(6u, total)
-    << "the id drop must not add a host-fail score: a prepare failure is not "
-       "attributable to the sender (PWD-B7)";
+  EXPECT_EQ(0u, total)
+    << "a prepare failure describes our own state, so no part of this path may "
+       "charge the sender (PWD-B7)";
   EXPECT_FALSE(endpoint.dropped.empty()) << "but the origin is still disconnected";
+}
+
+// PWD-B7: a score is an accusation, so a sweep prompted by a failure that
+// describes OUR OWN state must sever without charging. The severing is
+// unchanged either way -- only the accusation is conditional -- so both limbs
+// assert the same connection is dropped and differ only in what is charged.
+TEST(drop_semantics, an_unattributable_sweep_severs_without_charging)
+{
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  const auto same_host = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18081}};
+
+  unsigned charged[2] = {0, 0};
+  boost::uuids::uuid severed[2] = {};
+  for (int i = 0; i < 2; ++i)
+  {
+    const bool attributable = (i == 1);
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+    recording_endpoint endpoint;
+    cprotocol.set_p2p_endpoint(&endpoint);
+    endpoint.add(fixed_uuid(7), same_host);
+
+    cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, ip, attributable);
+
+    ASSERT_EQ(1u, endpoint.dropped.size()) << "the sweep severs either way";
+    severed[i] = endpoint.dropped.front();
+    for (const auto &f : endpoint.host_fails)
+      charged[i] += f.second;
+  }
+
+  EXPECT_EQ(severed[0], severed[1]) << "attributability must not change WHO is severed";
+  EXPECT_EQ(0u, charged[0])
+    << "a failure describing our own state supports no accusation (PWD-B7)";
+  EXPECT_EQ(6u, charged[1])
+    << "an attributable failure still charges the host 5 and the severed peer 1";
 }

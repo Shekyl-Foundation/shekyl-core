@@ -184,7 +184,11 @@ namespace cryptonote
     void drop_connection(cryptonote_connection_context &context, bool add_fail, bool flush_all_spans);
     void drop_connection_with_score(cryptonote_connection_context &context, unsigned int score, bool flush_all_spans);
     void drop_connection(const boost::uuids::uuid&);
-    void drop_connections(const epee::net_utils::network_address address);
+    // `attributable` states whether the failure that prompted the sweep
+    // describes the SENDER'S INPUT or OUR OWN STATE (PWD-B7). It has no
+    // default: a caller that has not decided has not met the rule, and the
+    // next caller added here must answer it rather than inherit an answer.
+    void drop_connections(const epee::net_utils::network_address address, bool attributable);
     bool kick_idle_peers();
     bool check_standby_peers();
     bool update_sync_search();
