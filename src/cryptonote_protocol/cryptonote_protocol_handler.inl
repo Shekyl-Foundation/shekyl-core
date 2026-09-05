@@ -1409,6 +1409,17 @@ namespace cryptonote
             {
               MERROR(context << "Found incorrect height for " << new_block.prev_id << " provided by " << span_connection_id);
               drop_connection(span_connection_id);
+              // The span must go with the peer. Dropping by id flushes only
+              // that connection's EMPTY spans, and nothing else erases a
+              // filled one -- `on_connection_close` and `flush_stale_spans`
+              // are both empty-only, deliberately, since downloaded blocks
+              // from a departed peer stay useful. This span is not useful:
+              // it is the one whose height was rejected, and if it is the
+              // lowest in the queue `get_next_span` serves it again on every
+              // call, re-runs this check against a peer that is already gone,
+              // and nothing behind it is ever added. Every other failure arm
+              // in this loop removes its span; this one did not.
+              m_block_queue.remove_spans(span_connection_id, start_height);
               return 1;
             }
 

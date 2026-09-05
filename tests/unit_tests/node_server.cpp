@@ -1734,17 +1734,29 @@ namespace
   //! One serialized block whose parent is `crypto::null_hash`, so a `test_core`
   //! holding that hash reports the parent as known and `try_add_next_blocks`
   //! reaches `prepare_handle_incoming_blocks`.
-  cryptonote::block_complete_entry one_block()
+  cryptonote::block_complete_entry one_block(const crypto::hash &parent = crypto::null_hash)
   {
     cryptonote::block b{};
     b.major_version = 1;
     b.minor_version = 1;
-    b.prev_id = crypto::null_hash;
+    b.prev_id = parent;
     b.miner_tx.version = 1;
     b.miner_tx.unlock_time = 0;
     cryptonote::block_complete_entry bce{};
     bce.block = cryptonote::t_serializable_object_to_blob(b);
     return bce;
+  }
+
+  //! The hash of a block that is never added to anything -- only used as a
+  //! parent identity the queue can be told about.
+  crypto::hash a_parent_hash()
+  {
+    cryptonote::block b{};
+    b.major_version = 1;
+    b.minor_version = 1;
+    b.nonce = 0xabcdef;
+    b.miner_tx.version = 1;
+    return cryptonote::get_block_hash(b);
   }
 
   //! Records what the protocol handler asks the p2p layer to do.
@@ -1920,4 +1932,45 @@ TEST(anon_zone_address_keying, prepare_failure_clears_the_span_of_a_departed_pee
   EXPECT_TRUE(endpoint.dropped.empty()) << "there is no such connection to drop";
   EXPECT_EQ(0u, queue.get_num_filled_spans())
     << "removed anyway, so other threads can wake up and get past it";
+}
+
+// A span whose start height contradicts the height the queue holds for its
+// parent is rejected and its peer dropped -- but dropping by id flushes only
+// EMPTY spans, and neither `on_connection_close` nor `flush_stale_spans`
+// erases a filled one. Nothing removed this span, so if it sat lowest in the
+// queue `get_next_span` re-served it on every call and sync could not pass it.
+// Inherited; every sibling failure arm in the same loop already removes its
+// span. Same validation surface as the anonymity-zone arm above.
+TEST(block_sync_span_lifecycle, an_incorrect_height_span_leaves_the_queue_with_its_peer)
+{
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto unknown_tor = epee::net_utils::network_address{net::tor_address::unknown()};
+  const boost::uuids::uuid liar = fixed_uuid(4);
+  endpoint.add(liar, unknown_tor);
+
+  // Reserve a span at height 50 whose one requested hash is the parent, then
+  // fill it. The queue now believes that parent sits AT 50, while the span
+  // delivered for it also starts at 50 -- so the block's parent would have to
+  // be its own sibling. That is the contradiction the check rejects.
+  const crypto::hash parent = a_parent_hash();
+  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
+  const auto reserved = queue.reserve_span(50, 50, 1, liar, unknown_tor,
+    /*sync_pruned_blocks=*/true, /*local_pruning_seed=*/0, /*pruning_seed=*/0,
+    /*blockchain_height=*/51, {{parent, 0}}, boost::date_time::min_date_time);
+  ASSERT_EQ(50u, reserved.first);
+  queue.add_blocks(50, {one_block(parent)}, liar, unknown_tor, 1.0f, 1);
+  ASSERT_EQ(1u, queue.get_num_filled_spans());
+  ASSERT_EQ(50u, queue.have_height(parent));
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
+
+  ASSERT_EQ(1u, endpoint.dropped.size());
+  EXPECT_EQ(liar, endpoint.dropped.front());
+  EXPECT_EQ(0u, queue.get_num_filled_spans())
+    << "the rejected span must leave the queue, or get_next_span serves it "
+       "again forever against a peer that is already gone";
 }
