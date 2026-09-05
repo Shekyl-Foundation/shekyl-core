@@ -1206,6 +1206,22 @@ typedef struct ShekylCurveTreeReplicaTx {
     size_t n_outputs;
 } ShekylCurveTreeReplicaTx;
 
+// Layout pins (rule 40): a drift here is silent -- wrong roots, a block
+// rejected sixty heights later, no pointer back. The Rust module carries the
+// same assertions.
+static_assert(offsetof(ShekylCurveTreeReplicaOutput, output_key) == 0, "replica output layout");
+static_assert(offsetof(ShekylCurveTreeReplicaOutput, commitment) == 32, "replica output layout");
+static_assert(offsetof(ShekylCurveTreeReplicaOutput, has_commitment) == 64, "replica output layout");
+static_assert(offsetof(ShekylCurveTreeReplicaOutput, target_kind) == 65, "replica output layout");
+static_assert(sizeof(ShekylCurveTreeReplicaOutput) == 66, "replica output layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, is_miner) == 0, "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, has_leaf_hash_blob) == 1, "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, leaf_hash_blob) == sizeof(void*), "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, leaf_hash_blob_len) == 2 * sizeof(void*), "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, outputs) == 3 * sizeof(void*), "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, n_outputs) == 4 * sizeof(void*), "replica tx layout");
+static_assert(sizeof(ShekylCurveTreeReplicaTx) == 5 * sizeof(void*), "replica tx layout");
+
 /// Create an empty replica; null if the ephemeral store cannot be opened.
 ShekylCurveTreeReplica* shekyl_curve_tree_replica_new(void);
 /// Destroy a replica (null tolerated).

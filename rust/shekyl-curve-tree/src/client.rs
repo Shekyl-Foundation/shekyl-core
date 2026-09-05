@@ -1011,17 +1011,21 @@ impl CurveTreeClient {
     /// [`Self::root_at`] refuses heights beyond the ingested tip because a
     /// *verifier* must never anchor on a state it has not replayed. A
     /// *producer* of the next header needs exactly that state, so this is
-    /// the one read that looks one block past the tip. Same
-    /// `root_at_count(n)` hot path; `n` is the count drained through the tip.
+    /// the one read that looks one block past the tip; `n` is the count
+    /// drained through the tip.
     ///
     /// The store is verifier-shaped: ingesting block `h` drains the bucket
     /// that matures at `h − 1`, so it holds the state through `tip − 1` and
     /// serves `root_at(tip)` from cache. The one-block-ahead read this method
     /// makes needs the bucket maturing at `tip` as well, which enters the
-    /// store only when block `tip + 1` is ingested. When that bucket is empty
-    /// the store path answers; when it is not, the root is rebuilt from the
-    /// in-memory entries in canonical drain order with the same layer builder
-    /// (`recon::root_from_scalars`, the oracle the store KATs are pinned to).
+    /// store only when block `tip + 1` is ingested. Only when that bucket is
+    /// empty does the store path answer; on any chain with coinbases a bucket
+    /// matures at every height past the first window, so past height 60 the
+    /// common case rebuilds the root from the in-memory entries in canonical
+    /// drain order with the same layer builder (`recon::root_from_scalars`,
+    /// the oracle the store KATs are pinned to) — linear in the drained
+    /// leaves per call. A producer-side read (test generator, template
+    /// construction on a store-less node), not the verify hot path.
     pub fn next_block_root(&self) -> Result<[u8; 32], ClientError> {
         self.ensure_live()?;
         let Some(tip) = self.ingested_tip_height else {

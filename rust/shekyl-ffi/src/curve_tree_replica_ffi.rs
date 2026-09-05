@@ -32,6 +32,13 @@
 //! silently substituted, because a substituted root would surface as a
 //! rejected block ten or sixty blocks later with no pointer back here.
 //!
+//! Cost: `next_block_root` is a producer-side read, not a hot path. On any
+//! chain with coinbases a bucket matures at every height past the first
+//! window, so past height 60 it rebuilds the tree from the client's in-memory
+//! entries on every call -- linear in the drained leaves per header, quadratic
+//! over a generated chain. Fine for the hundreds of blocks a core test
+//! builds; a generator run over thousands of blocks should be measured.
+//!
 //! Not a daemon surface: nothing in `src/` outside the test tree calls it.
 
 use shekyl_curve_tree::client::{BlockLeaves, CurveTreeClient, RawOutput, TxLeafInputs};
@@ -70,6 +77,24 @@ pub struct ShekylCurveTreeReplicaTx {
     pub outputs: *const ShekylCurveTreeReplicaOutput,
     pub n_outputs: usize,
 }
+
+// Layout pins, mirrored by the static_asserts in `src/shekyl/shekyl_ffi.h`
+// (rule 40): a drift here is silent -- wrong roots, a block rejected sixty
+// heights later, no pointer back.
+const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaOutput, output_key) == 0);
+const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaOutput, commitment) == 32);
+const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaOutput, has_commitment) == 64);
+const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaOutput, target_kind) == 65);
+const _: () = assert!(std::mem::size_of::<ShekylCurveTreeReplicaOutput>() == 66);
+const PTR: usize = std::mem::size_of::<usize>();
+const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, is_miner) == 0);
+const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, has_leaf_hash_blob) == 1);
+const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, leaf_hash_blob) == PTR);
+const _: () =
+    assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, leaf_hash_blob_len) == 2 * PTR);
+const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, outputs) == 3 * PTR);
+const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, n_outputs) == 4 * PTR);
+const _: () = assert!(std::mem::size_of::<ShekylCurveTreeReplicaTx>() == 5 * PTR);
 
 /// Opaque replica handle.
 pub struct ShekylCurveTreeReplica {
