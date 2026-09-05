@@ -65,6 +65,12 @@ const REF_TX_WEIGHT: u64 = 3_000;
 /// a pre-genesis window recalibration cannot leave this instrument silently
 /// measuring a window the chain no longer uses.
 const VOLUME_WINDOW: usize = TX_VOLUME_WINDOW as usize;
+// The cast above truncates silently on a 16/32-bit `usize`; fail the BUILD
+// there instead of measuring a silently shrunken window (PR #614 review).
+const _: () = assert!(
+    TX_VOLUME_WINDOW <= usize::MAX as u64,
+    "TX_VOLUME_WINDOW does not fit this target's usize"
+);
 
 /// The NG-genesis height production feeds to `calc_effective_emission_share`:
 /// `get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG)` resolves to
@@ -234,7 +240,7 @@ fn relay_floor(base_reward: u64, median: u64) -> u64 {
 // ---------------------------------------------------------------------------
 
 /// Which pow2 snap rule to apply to `C`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SnapRule {
     /// `2^round(log2 C)` — the §1.4a *registered* remedy, kept measurable
     /// so the register-vs-adopted deviation stays auditable from the
@@ -243,6 +249,18 @@ pub enum SnapRule {
     /// `2^ceil(log2 C)` — the §5.2 *adopted* refinement: never under-funds
     /// marginal pricing, overprices ≤ 2×.
     Ceiling,
+}
+
+impl SnapRule {
+    /// Report label. The rule travels as this enum end to end (PR #614
+    /// review: a stringly selector let a typo silently pick the wrong
+    /// rule); the string exists only at the render edge.
+    fn label(self) -> &'static str {
+        match self {
+            SnapRule::Nearest => "nearest",
+            SnapRule::Ceiling => "ceil",
+        }
+    }
 }
 
 /// `2^k ≤ c/s`, exactly, in integers.
@@ -267,8 +285,12 @@ fn quantize_c_pow2(c_scaled: u64, rule: SnapRule) -> u64 {
     let c = u128::from(c_scaled);
     let s = u128::from(SCALE);
 
-    // kf = floor(log2(c/s)).
-    let mut kf: i32 = -40;
+    // kf = floor(log2(c/s)). Seeded from integer bit lengths —
+    // ilog2(c) − ilog2(s) is within one of the true floor — then settled
+    // by the same exact-integer comparison the KATs pin, so the O(1) seed
+    // cannot change any output, only the iteration count (PR #614 review:
+    // the previous scan from −40 walked ~40 comparisons per call).
+    let mut kf: i32 = c.ilog2() as i32 - s.ilog2() as i32 - 2;
     while pow2_le(c, s, kf + 1) {
         kf += 1;
     }
@@ -546,7 +568,7 @@ enum LadderMode {
     /// `C` applied raw.
     CorrectedRaw,
     /// `C` snapped to a power of two first.
-    Quantized(&'static str),
+    Quantized(SnapRule),
     /// The ceiling snap behind the §7 hysteresis construction — the map
     /// the daemon actually serves once the implementing branch lands.
     QuantizedHysteresis,
@@ -592,7 +614,9 @@ impl LadderMode {
         match self {
             LadderMode::Current => "current".to_owned(),
             LadderMode::CorrectedRaw => "corrected-raw".to_owned(),
-            LadderMode::Quantized(rule) => format!("corrected-quantized-pow2-{rule}"),
+            LadderMode::Quantized(rule) => {
+                format!("corrected-quantized-pow2-{}", rule.label())
+            }
             LadderMode::QuantizedHysteresis => {
                 "corrected-quantized-pow2-ceil-hysteresis".to_owned()
             }
@@ -668,12 +692,7 @@ fn dwell_scenario(
                 raw,
                 correction_factor(v_avg, st.ag, st.height, params).c_scaled,
             ),
-            LadderMode::Quantized(rule_name) => {
-                let rule = if rule_name == "nearest" {
-                    SnapRule::Nearest
-                } else {
-                    SnapRule::Ceiling
-                };
+            LadderMode::Quantized(rule) => {
                 let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
                 corrected_ladder(raw, quantize_c_pow2(c, rule))
             }
@@ -783,14 +802,7 @@ fn feedback_scenario(
     let fee_at = |v_avg: u64, hyst: &mut HysteresisCq| -> u64 {
         let c = correction_factor(v_avg, st.ag, st.height, params).c_scaled;
         let c = match mode {
-            LadderMode::Quantized(rule_name) => {
-                let rule = if rule_name == "nearest" {
-                    SnapRule::Nearest
-                } else {
-                    SnapRule::Ceiling
-                };
-                quantize_c_pow2(c, rule)
-            }
+            LadderMode::Quantized(rule) => quantize_c_pow2(c, rule),
             LadderMode::QuantizedHysteresis => hyst.step(c),
             _ => c,
         };
@@ -1134,8 +1146,8 @@ pub fn report() -> FeeLadderReport {
         for mode in [
             LadderMode::Current,
             LadderMode::CorrectedRaw,
-            LadderMode::Quantized("nearest"),
-            LadderMode::Quantized("ceil"),
+            LadderMode::Quantized(SnapRule::Nearest),
+            LadderMode::Quantized(SnapRule::Ceiling),
             LadderMode::QuantizedHysteresis,
         ] {
             for &(label, m0, m1, median) in DWELL_SCENARIOS {
@@ -1151,7 +1163,7 @@ pub fn report() -> FeeLadderReport {
         for &median in &[zone, 3 * zone, 10 * zone, 50 * zone] {
             for mode in [
                 LadderMode::CorrectedRaw,
-                LadderMode::Quantized("ceil"),
+                LadderMode::Quantized(SnapRule::Ceiling),
                 LadderMode::QuantizedHysteresis,
             ] {
                 for eps in [0u64, 500, 1000, 2000, 3000] {

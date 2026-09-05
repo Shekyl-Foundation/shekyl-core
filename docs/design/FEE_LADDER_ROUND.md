@@ -402,6 +402,23 @@ C2-R row + this branch's FL row).
   clearing itself is recorded in this landing (§0.1, §8, this file);
   the census lane was notified that Copilot flagged the rows.
 
+**Cycle seven (four inline findings; Copilot's full pass timed out, no
+suppressed comments):** dev merged again (#616, **#617** — whose merge
+also clears the gui-drift red diagnosed in cycle four; one index
+conflict, both sides' added rows kept). Dispositions: (1) stringly
+`Quantized("nearest")` selector — taken, `SnapRule` now travels as the
+enum end to end, label only at the render edge; (2)
+`TX_VOLUME_WINDOW as usize` truncation on small targets — taken as a
+const build-guard (fallible conversion is not const; the build now
+fails loudly where the cast would truncate); (3) the linear
+`quantize_c_pow2` exponent scan — taken as an `ilog2` SEED, not a
+rewrite: measured runtime was not dominated (the full sweep runs in
+about a minute), but the seed removes ~40 comparisons per call while
+the same exact-integer `pow2_le` settle — the property the KATs pin —
+still decides every output; (4) the "documentation only" scope claim
+is Bugbot's auto-summary, regenerated per commit — the authored body
+already declared the Rust surface and now enumerates it in full.
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
