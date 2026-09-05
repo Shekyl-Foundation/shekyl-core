@@ -120,13 +120,24 @@
 //! **marginal 1.90 µs/weight-byte** vs aggregate 1.95 (the §4
 //! marginal-vs-aggregate gap, here 2.5 %, measured not assumed).
 //!
-//! **Finding 3 — the Bp+ escalation rule FIRES.** The proxy at 16 outputs
-//! (16.4 ms) is within 4.3× of the top term, well inside the ~10× trigger:
-//! a C++ microbench of the shipped `bulletproofs_plus.cc` is owed before
-//! any dominance conclusion — and before trusting Finding 2's ordering,
-//! since a shipped verifier ~5× slower than the proxy would put
-//! 1-in/16-out at ≈ 3.1 µs/B and flip the argmax to output-heavy packing.
-//! The count-argmax is therefore CONDITIONAL on CEN-H19's verifier cost.
+//! **Finding 3 — the Bp+ escalation rule FIRED and the microbench RESOLVED
+//! it.** The proxy at 16 outputs (16.4 ms) was within 4.3× of the top term
+//! (inside the ~10× trigger), so the shipped `bulletproofs_plus.cc` was
+//! measured directly (`tests/unit_tests/gap7_bp_bench.cpp`, same machine):
+//! single-proof VERIFY 4.40 ms @ 2-out, 23.6 ms @ 16-out — the shipped
+//! verifier is only **1.44–1.56× the proxy**, far from the ~5× that would
+//! have flipped the argmax to output-heavy packing. Batched (the acceptance
+//! path batches across the block's txs, CEN-H19): 46 × 2-out proofs verify
+//! in 24.5 ms total = **0.53 ms/proof amortized** (8.3× amortization).
+//! **The count-argmax therefore HOLDS unconditionally**, and under
+//! production batching the Bp+ term nearly vanishes from the argmax bill
+//! (0.53 ms against adm's 22.8): FCMP++ admission verification dominates,
+//! now grounded rather than conditional. Composed per-byte at the argmax
+//! with shipped-batched Bp+ (composition arithmetic, not a direct fill
+//! run): ≈ 1.81 µs/B vs the proxy-single 1.95 — same order, same
+//! conclusion, surge-ceiling ≈ 54 s instead of 57. The shipped verifier's
+//! absolute cost is CEN-H19 / R6's number and lives in the C++ bench's
+//! output.
 //!
 //! **Finding 4 — the hybrid-signature term is NOT load-bearing today:**
 //! 178 µs per verification, ≈ 38× under the fcmp per-input marginal. Parse
