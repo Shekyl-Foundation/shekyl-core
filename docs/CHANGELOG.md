@@ -62,6 +62,58 @@
 
 ### Added
 
+- **Shard-visual ruling A: parameter admissibility closed, with a
+  pre-registered criterion and typed enforcement.** The spec's
+  parameter design-review checkpoint had inverted — the gate existed,
+  never ran, and the borderline set it was meant to gate shipped in the
+  GUI preview, because the feature set was designed against a fake
+  chain that publishes what the real chain hides (cleartext amounts,
+  cleartext tiers). The pre-registered criterion (a feature is
+  admissible iff it is a deterministic function of data any shard
+  holder reads from held block bytes) admits `activity_density`,
+  `output_richness`, count-based `coinbase_ratio`, and `time_density`;
+  rejects the value moments (CT) and `tier_skew_high` (confidential
+  staking / the F-ARCHIVAL tier oracle); and rule-21-rejects the
+  stake-event features with a named reopening criterion.
+  `ShardAggregate` and `Features` now carry only the admitted set;
+  renderer inputs that consumed rejected features draw from their own
+  SHAKE256 namespaces at fresh indices. Companion rulings: the
+  rendering-spec version is chain data pinned at shard creation height
+  (never wallet data), and overridden renders are non-canonical by
+  type (`CandidateRecipe.canonical`). The no-tradeability
+  enforcement-point inventory is verified and codified; the
+  `shard.v1.render.*` / `candidate.v1.*` namespace families are
+  registered in the implementation index. Aesthetics closure and the
+  determinism bar are ruling B (FOLLOWUPS).
+
+- **C2-R1c — alt admission + acceptance topology: ruled, and the sync
+  orphan arm stops punishing peers for our own state.** Seven rulings
+  signed ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md)
+  §5.5): the two-tier admission contract ratified as defense economics
+  under the intervals-not-averages constraint; CEN-K1 split into its two
+  conflated conditions; K9's `relay_method::block` tolerance fixed to
+  three named producers (the third found by the ruling's own falsifier,
+  executed pre-signature); K10 ratified as-composed with M8's hash gate,
+  dependency armed; storage floors ratified with bounds routed to GAP-4
+  by name; topology ratified with belts named. **The Q3b defect fix:**
+  the sync-loop orphan arm severed and scored every connection from a
+  span's origin on a flag that means "our store lost the parent" — local
+  pops, the checkpoint-rollback discard (reachable mid-span through the
+  600 s reload), and the Q1a flip-flop discard all reach it honestly.
+  The arm now cleans up and re-walks the chain directly via the new
+  shared `request_chain_history` helper (which also retired a three-copy
+  drift set); the queue-bookkeeping-mismatch drop keeps its teeth.
+  Enforced twice: consensus-invariants **[7/7]** (whole-arm extraction,
+  full punitive token set, both failure paths observed firing) and the
+  new behavioral rig `sync_orphan_arm.cpp` (scripted-core seam, three
+  vectors: the orphan arm's no-punishment-and-healing vector and the
+  cleanup-failure-recovery vector each observed red-first on their
+  pre-fix forms, while the bookkeeping-mismatch vector stays green on
+  both trees BY DESIGN — it guards against over-correction; five
+  review rounds hardened the fix through two Bugbot HIGHs and two
+  Bugbot MEDIUMs). Census: nine rows → bucket 2, counts 86/35/5/46 = 172;
+  the R1 batch is complete and the round doc is closed to completed/.
+
 - **The staking exit is REACHABLE: `unstake` + `collect_unstaked` (PR-C —
   the composed verb, wallet-RPC + CLI).** The reachability gate held since
   PR-P4 (and narrowed, never lifted, by the engine walk, the submit fact
@@ -128,7 +180,7 @@
 
 - **C2-R1b implementation — the fork-choice/depth contract and the
   operator-checkpoint surfaces**
-  ([`CONSENSUS_C2_R1_REORG.md`](design/CONSENSUS_C2_R1_REORG.md) §4b
+  ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md) §4b
   ratified 2026-09-03, §4c execution record). The prune now writes a
   **monotonic watermark** (its durable receipt, same txn as the
   deletions; exempt from every revert), and `BlockchainDB::pop_block` —
@@ -358,7 +410,7 @@
 
 - **The per-block-checkpoint fast-sync mechanism (consensus)** — C2-R1a,
   ratified 2026-09-02
-  ([`CONSENSUS_C2_R1_REORG.md`](design/CONSENSUS_C2_R1_REORG.md) §3).
+  ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md) §3).
   Deleted whole: the compiled-in hash-of-hashes table and its loader
   (mainnet's pin was a stale inherited constant no Shekyl blob could match;
   testnet/stagenet blobs loaded with no verification), the four

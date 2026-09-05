@@ -132,7 +132,9 @@ namespace cryptonote
     bool needs_new_sync_connections(epee::net_utils::zone zone) const;
     bool is_busy_syncing();
 
+#ifndef IN_UNIT_TESTS
   private:
+#endif
     //----------------- commands handlers ----------------------------------------------
     int handle_notify_new_block(int command, NOTIFY_NEW_BLOCK::request& arg, cryptonote_connection_context& context);
     int handle_notify_new_transactions(int command, NOTIFY_NEW_TRANSACTIONS::request& arg, cryptonote_connection_context& context);
@@ -163,6 +165,7 @@ namespace cryptonote
     bool check_standby_peers();
     bool update_sync_search();
     int try_add_next_blocks(cryptonote_connection_context &context);
+    void request_chain_history(cryptonote_connection_context &context);
     void notify_new_stripe(cryptonote_connection_context &context, uint32_t stripe);
     size_t skip_unneeded_hashes(cryptonote_connection_context& context, bool check_block_queue) const;
     bool request_txpool_complement(cryptonote_connection_context &context);

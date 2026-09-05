@@ -948,7 +948,7 @@ Parallel: gate-6 §2.3/§2.5 join-Market defanging; gate-2 slash trigger.
   by every node, contradicting (e)'s end-to-end contract. *(That arm was
   retired with its whole mechanism by C2-R1a, 2026-09-02: per-tx verify is now
   unconditional at block connect, so the committed-key pin above is the sole
-  and always-on site — [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md)
+  and always-on site — [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md)
   §3.1.)* Debit-side bond posts also feed the per-`P`
   block-unique pass (`Unbond+Unbond` pairs were unreachable before). The gate-4
   lifecycle KAT stops embedding a copy of gate-2's integration section (the copy
