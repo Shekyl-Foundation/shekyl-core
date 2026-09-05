@@ -3163,6 +3163,71 @@ TEST(archival_substrate_lmdb, cen_l11_accepts_a_well_formed_output)
   EXPECT_EQ(height_before + 1, db.height());
 }
 
+// CEN-B5 timing discriminant (CSR round on PR #618). The miner's template
+// fills a block's header root from the CURRENT root at template time
+// (blockchain.cpp:2006) -- the state at chain height N, before block N's own
+// drain -- while the post-connect check compares that header against the root
+// read AFTER add_block (blockchain.cpp:6413). Those two reads can only agree
+// when nothing drains at block N. This test observes both operands at the
+// first block where a leaf drains, on a real LMDB, through the real add_block
+// path, without a Blockchain object (every Blockchain-level test is FAKECHAIN,
+// where the check is skipped -- so this is the only place the operands are
+// ever compared).
+TEST(archival_substrate_lmdb, cen_b5_post_add_root_is_not_the_state_the_header_was_filled_from)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+  append_minimal_blocks(db, 3);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // The block at `creating_block` carries one well-formed output. Its stored
+  // maturity is (creating_block + 1) + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE, and
+  // the drain runs with current_height = prev_height + 1, so the leaf enters
+  // the tree when the block at index `maturity - 1` connects
+  // (CT2_DRAIN_ORDER.md §4, "the +1 terms cancel").
+  const uint64_t creating_block = connect_block_with_txs(db, {make_single_output_tx()});
+  ASSERT_EQ(creating_block, 3u);
+  const uint64_t maturity = (creating_block + 1) + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+  const uint64_t draining_block = maturity - 1;
+
+  // Advance the tip to chain height `draining_block`: every block below it
+  // connected, the draining block itself next. Fail fast rather than
+  // underflow the unsigned delta if the spendable age ever shrinks below the
+  // scaffolding height.
+  ASSERT_GE(draining_block, db.height());
+  append_minimal_blocks(db, draining_block - db.height());
+  fixture.db.batch_stop();
+  ASSERT_EQ(db.height(), draining_block);
+  ASSERT_EQ(db.get_curve_tree_leaf_count(), 0u);
+
+  // Operand A: what the template for the draining block reads -- the current
+  // root at chain height `draining_block`. It is also the per-height record
+  // under that key, written when the previous block connected (post-add
+  // keying, blockchain_db.cpp:636).
+  const std::array<uint8_t, 32> header_source = db.get_curve_tree_root();
+  EXPECT_EQ(header_source, db.get_curve_tree_root_at_height(draining_block));
+
+  // Connect the draining block: the drain fires and the tree grows by one leaf.
+  fixture.db.batch_start();
+  append_minimal_blocks(db, 1);
+  fixture.db.batch_stop();
+  ASSERT_EQ(db.height(), draining_block + 1);
+  ASSERT_EQ(db.get_curve_tree_leaf_count(), 1u);
+
+  // Operand B: what the post-connect check compares the header against -- the
+  // root after the add. It is the record under key `draining_block + 1`, not
+  // `draining_block`.
+  const std::array<uint8_t, 32> b5_operand = db.get_curve_tree_root();
+  EXPECT_NE(b5_operand, header_source);
+  EXPECT_EQ(b5_operand, db.get_curve_tree_root_at_height(draining_block + 1));
+  // The record the header was filled from is unchanged by the add.
+  EXPECT_EQ(header_source, db.get_curve_tree_root_at_height(draining_block));
+}
+
 TEST(archival_substrate_lmdb, emission_connect_pop_roundtrip_through_real_block_path)
 {
   const EmissionVinFixture fx = load_emission_vin_fixture();

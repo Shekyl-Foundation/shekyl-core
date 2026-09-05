@@ -10,15 +10,24 @@ assert **parsed** equality (RK-D4: key order and whitespace are epee's, not
 the contract's; `KV_SERIALIZE_OPT` omissions are part of the contract and
 are mirrored by `skip_serializing_if`).
 
-The files are epee's bytes exactly — including its CRLF line endings —
-and this directory is `-text` in `.gitattributes` so no checkout rewrites
-them (the same rule `docs/test_vectors/` uses). `-text` stops **git**. A
-tool can still rewrite the bytes, and the parsed-equality suite will not
-notice (serde accepts both endings). `v1_oracle_vectors_keep_epees_crlf`
-is the check the attribute cannot be. Whitespace is not part of the
-contract (RK-D4); the bytes are kept faithful because a vector that is
-"the oracle's output, modulo edits" is a weaker pin than one that is the
-oracle's output.
+**The JSON files are LF; the `.bin` files are byte-exact.** That split is the
+whole rule, and it follows from what each is for. `RK-D4` says whitespace is
+not part of the wire contract and the parity suite compares *parsed* values,
+so for JSON nothing reads these bytes as bytes — the line endings were epee's
+CRLF only because that is what the capture happened to emit. For `.bin`, the
+bytes **are** the contract, and their harnesses compare them byte for byte.
+
+This directory is `-text` in `.gitattributes` so git never rewrites EOL, which
+`.bin` requires. That also means git will not normalise a CRLF a Windows
+editor introduces, so `json_vectors_are_lf` keeps the JSON from drifting back.
+
+Ruled 2026-09-05. The earlier rule kept the JSON at epee's exact bytes for
+provenance — "the oracle's output, modulo edits" being a weaker pin than the
+oracle's output. True, but a weaker pin only costs something if something
+leans on the strength, and nothing did: the values are what every test reads,
+and `RK-W` redesigns this wire on purpose. A tool normalising the captures was
+caught in review and reverted; on inspection the property it violated had no
+consumer, so it was retired deliberately rather than defended by habit.
 
 The emitter is deleted with the structs it captures, so each slice writes its
 own and takes it away again; these files are the oracle's memory. **RK-5b was
@@ -56,7 +65,8 @@ RK-5b added the third:
   (`v2_is_v1_minus_exactly_the_two_retired_members`,
   `fee_v2_is_v1_minus_exactly_the_redundant_scalar`)
 - **substitution** — `_v1` with one value replaced
-  (`get_version_v2_is_v1_with_only_the_version_bumped`)
+  (`the_get_version_chain_differs_by_exactly_the_version_at_every_link`,
+  which walks every link of that chain rather than its newest pair)
 - **transform, plus a named extension** — for a change of *shape*, where no
   subtraction from `_v1` produces `_v2`. `by_hash_v2_is_v1_reshaped_into_slots`
   writes the reshaping as code; the cases `_v1` structurally cannot express —
@@ -75,8 +85,10 @@ faithful C++ capture; the constant it reports is not re-capturable, because
 longer defines it. So the bump that RK-4c's wire change earned (3.24 → 3.25)
 cannot be recorded by re-running the emitter, and hand-editing `_v1` would
 destroy the one property that makes it an oracle. The `_v2` is instead held
-honest by `get_version_v2_is_v1_with_only_the_version_bumped`, which
-substitutes the live constant into `_v1` and requires the result to equal
-`_v2` exactly — so the file may differ from the C++ capture by that constant
-and by nothing else, and it cannot silently go stale against the constant
-either.
+honest by `the_get_version_chain_differs_by_exactly_the_version_at_every_link`,
+which substitutes the live constant across every consecutive pair and requires
+each result to equal its successor exactly — so a file may differ from its
+predecessor by that constant and by nothing else, no link may be skipped, and
+the newest may not go stale against the constant. It replaced a per-pair test
+that was renamed at each bump, which is how a chain with a missing vector
+passed.

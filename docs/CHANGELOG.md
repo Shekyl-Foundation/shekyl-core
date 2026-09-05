@@ -224,11 +224,13 @@
   ran: **99 CHECKED-CONFORMANT, 1 DIVERGENT, 2 failed closed** (the divergent
   row is CEN-B5's rule-71 FAKECHAIN skip, which census R9 owns). CEN-L11 with
   CEN-L12 coupled were fixed by PR #609 and promoted at its merged sha. The
-  bucket-1/2 set has since grown to **111** — C2-R1b promoted nine rows on
-  2026-09-03 — and those nine are UNREVIEWED until reviewed. **Both S-graded findings ran the
+  bucket-1/2 set has since grown to **121** — C2-R1b promoted nine rows on
+  2026-09-03 and C2-R1c ten more on 2026-09-04 — and those nineteen are
+  UNREVIEWED until reviewed. **Both S-graded findings ran the
   full arc — found, ruled FIX, fixed, merged, re-reviewed:** the S0 (CEN-M8,
   with CEN-G4/J26) by PR #602 and the S1 (CEN-D2 with CEN-D1) by PR #604, so
-  no S-graded divergence remains and the register no longer gates DRS-0. Each
+  no S-graded divergence remained — until 2026-09-04, when CEN-B5's
+  header-check timing (S1, see the Changed entry) reopened the DRS-0 gate. Each
   row carries
   sha-pinned, arm-walked evidence and 15 routed REWRITE-NOTEs for the rebuild. The S0:
   **CEN-M8** — block connect's FCMP++ proof-skip *was* **presence-gated** where
@@ -471,21 +473,27 @@
 
 ### Changed
 
-- **Daemon RPC: three header methods change shape; `CORE_RPC_VERSION` is now
-  3.27 (RK-5b).** `get_last_block_header`, `get_block_header_by_hash`,
-  `get_block_headers_range`, `hard_fork_info` and `get_fee_estimate` (and the
-  `getlastblockheader` / `getblockheaderbyhash` / `getblockheadersrange`
-  aliases) are served natively from Rust. **Operator impact — three replies a
-  client parses differently.** `get_block_header_by_hash` answers **per
+- **Daemon RPC: `get_block_header_by_hash`, `hard_fork_info` and
+  `get_fee_estimate` change shape; `CORE_RPC_VERSION` is now 3.27 (RK-5b).**
+  Those three plus `get_last_block_header` and `get_block_headers_range` (and
+  the `getlastblockheader` / `getblockheaderbyhash` / `getblockheadersrange`
+  aliases) are served natively from Rust. **The last two keep their response
+  shapes** — a client parses them exactly as before, and only their refusals
+  changed. **Operator impact — three replies a client parses differently.** `get_block_header_by_hash` answers **per
   element**: `block_headers` is now an array of `{hash, block_header?}` slots
   rather than a bare header array, so a client learns *which* hash was
   unknown instead of receiving zero headers and an error string, and one
   unknown hash no longer discards the other nine hundred; the request's
   singular `hash` field is gone (it had no in-tree caller, and its only
   effect beside `hashes` was to slip one lookup past the restricted cap of
-  1000). `hard_fork_info` reports `queried_version` **and**
-  `active_version` in place of a single `version` that silently meant
-  whichever the request implied. `get_fee_estimate` drops the `fee` scalar,
+  1000). `hard_fork_info` splits the reply's single
+  `version` in two, and the mapping is exact: **`active_version` is that
+  field renamed** — the deleted handler always filled it from
+  `get_current_hard_fork_version()`, whatever the request asked about — and
+  **`queried_version` is new**, naming the version the `window` / `votes` /
+  `threshold` fields beside it actually describe. A client reading `version`
+  today wants `active_version`; nothing it could read before told it what the
+  voting counts were counting. `get_fee_estimate` drops the `fee` scalar,
   which the C++ handler set to `fees[0]` and which therefore carried nothing
   the tier array did not. Also corrected while porting: the restricted
   header-range cap bounded `end - start` rather than the count, so a
@@ -515,6 +523,37 @@
   from this build's. A daemon reporting a different `T` is running different
   consensus rules, so this most likely means a mismatched binary or a
   different chain.
+
+- **FCMP++ spec: the membership anchor is a state property, not a header
+  read (CEN-I12 reconciled).** `FCMP_PLUS_PLUS.md` §7 step 2's prose said the
+  verifier reads the reference block's header `curve_tree_root`; that was the
+  pre-2026-04-13 code, replaced by the per-height root record (`292c00aff7`)
+  without the prose following. Ruled: the anchor is the curve-tree state at
+  chain height `ref_height` — after the reference block's parent connects,
+  before its own drain (boundary corrected on review) — with the header
+  field and the per-height record as its two witnesses; the verifier reads
+  its own record, the prover reads the header. The in-code FAKECHAIN
+  comment is a consequence, not the rationale. Step 1's rationale also drops
+  the retired claim-era staked-maturity arm (CEN-L12). Found-not-ruled: step
+  2b/2c's depth pseudocode is split the same way (routed to CEN-I13). The
+  register's CEN-I12 row stays failed-closed pending re-review at the merged
+  sha.
+
+- **CEN-B5 has a second, live divergence — the post-connect header-root
+  check compares the wrong state (S1; found, graded and routed — not fixed
+  here).** `handle_block_to_main_chain` compares the header `curve_tree_root`
+  against the root read *after* `add_block`, but `create_block_template`
+  fills the header from the root *before* the add — the state at chain
+  height N that the per-height record, the wallet client and the CT-2 KAT
+  all name. The operands differ at every block where a leaf drains, observed
+  on real LMDB by a new keying pin in `archival_substrate_lmdb.cpp`; the
+  genesis coinbase drains when block 60 connects, so mainnet/testnet/stagenet
+  would reject block 60 and halt (derived; no non-FAKECHAIN fixture exists to
+  observe it). The rule-71 skip R9 owns is the cause, not the context:
+  nettype gating the check left every test and every `--regtest` run blind
+  to it. Fix-or-accept is Rick's (DRS
+  §7.2); FOLLOWUPS carries the sketch. The "no S-graded divergence remains"
+  claim is withdrawn at every surface it reached; DRS-0 is gated again.
 
 - **Consensus: the block-timestamp rule is ratified and single-sentence
   (C2-R3, `docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md`, ratified

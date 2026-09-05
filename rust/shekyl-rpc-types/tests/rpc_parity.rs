@@ -75,29 +75,31 @@ fn parsed(json: &str) -> Value {
     serde_json::from_str(json).expect("vector / output is JSON")
 }
 
-/// `_v1.json` files that are not epee `store_t_to_json` bytes with CRLF.
+/// Every JSON vector is LF, and stays LF.
 ///
-/// `get_block_hash_v1` is a JSON string with no line ending — epee's one-line
-/// form. The three `get_version_*` files were derived after
-/// `CORE_RPC_VERSION` moved to Rust (README); they are LF and cannot be
-/// recaptured as epee output.
-const V1_WITHOUT_EPEE_CRLF: &[&str] = &[
-    "get_block_hash_v1.json",
-    "get_version_all_defaults_v1.json",
-    "get_version_synced_v1.json",
-    "get_version_syncing_v1.json",
-];
-
-/// `.gitattributes` marks this directory `-text` so **git** will not rewrite
-/// EOL. A tool still can, and the parsed-equality suite will not notice:
-/// serde accepts both endings, the C++ structs these came from are deleted,
-/// and the file cannot be recaptured. This bites against replacing `\r\n`
-/// with `\n` in any epee `_v1` capture. It does NOT cover that the JSON is
-/// still the captured document — that is each method's parsed-equality test.
+/// **The CRLF fidelity requirement was retired deliberately, not lost.** The
+/// `_v1` files are epee's output and cannot be recaptured once a slice
+/// deletes the C++ that produced them, so their bytes were kept exact as a
+/// matter of provenance. But `RK-D4` states that whitespace is not part of
+/// the wire contract, the parity suite compares *parsed* values, and `RK-W`
+/// will redesign this wire on purpose — so nothing read those bytes as bytes,
+/// and the property had no consumer. A tool normalising them was caught in
+/// review, restored, and guarded; the guard was then defending a distinction
+/// the project had no use for. Ruled 2026-09-05: normalise, and say so.
+///
+/// What is worth guarding is the opposite direction. `.gitattributes` marks
+/// this directory `-text`, which stops **git** rewriting EOL — necessary for
+/// the `.bin` vectors, where bytes *are* the contract — and which therefore
+/// also means git will not normalise a CRLF that a Windows editor introduces.
+/// This keeps the directory from drifting back, and it needs no exception
+/// list: all JSON here is LF, with no "except these four".
+///
+/// `.bin` vectors are untouched by this: they have no line endings, their
+/// bytes are the contract, and their own harnesses compare them byte for
+/// byte.
 #[test]
-fn v1_oracle_vectors_keep_epees_crlf() {
+fn json_vectors_are_lf() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors/rpc");
-    let mut crlf_files = 0;
     let mut seen = 0;
     for entry in std::fs::read_dir(&dir).expect("vectors/rpc exists") {
         let path = entry.expect("entry").path();
@@ -105,41 +107,26 @@ fn v1_oracle_vectors_keep_epees_crlf() {
             .file_name()
             .expect("file name")
             .to_str()
-            .expect("utf-8 name");
-        if !name.ends_with("_v1.json") {
+            .expect("utf-8 name")
+            .to_owned();
+        if !name.ends_with(".json") {
             continue;
         }
         seen += 1;
         let bytes = std::fs::read(&path).expect("readable vector");
-        let has_crlf = bytes.windows(2).any(|w| w == b"\r\n");
-        let bare_lf = bytes.first() == Some(&b'\n')
-            || bytes.windows(2).any(|w| w[1] == b'\n' && w[0] != b'\r');
-        if V1_WITHOUT_EPEE_CRLF.contains(&name) {
-            assert!(
-                !has_crlf,
-                "{name} is on the named exception list and must not grow CRLF \
-                 by accident; if it is a new epee capture, take it off the list"
-            );
-            continue;
-        }
         assert!(
-            has_crlf && !bare_lf,
-            "{name} is an epee capture and must keep CRLF with no bare LF. \
-             `.gitattributes` stops git rewriting this directory; a tool did. \
-             The structs these came from are deleted — this file cannot be \
-             recaptured."
+            !bytes.windows(2).any(|w| w == b"\r\n"),
+            "{name} carries CRLF. `.gitattributes` marks this directory \
+             `-text` for the sake of the `.bin` vectors, so git will not \
+             normalise this for you — the JSON vectors are LF by ruling \
+             (2026-09-05), and an editor reintroduced it"
         );
-        crlf_files += 1;
     }
+    // A gate must assert its own subject exists (rule 47): a moved directory
+    // or a broken glob would otherwise pass by walking nothing.
     assert!(
-        seen > 0 && crlf_files > 0,
-        "walked no v1 captures; the directory or the glob is wrong"
-    );
-    assert_eq!(
-        V1_WITHOUT_EPEE_CRLF.len(),
-        4,
-        "adding an exception is how an epee capture loses its CRLF pin; \
-         the list is closed unless CORE_RPC_VERSION-style derivation happens again"
+        seen > 30,
+        "walked only {seen} JSON vectors; the glob is wrong"
     );
 }
 
@@ -1244,30 +1231,61 @@ fn by_hash_v2_is_v1_reshaped_into_slots() {
     );
 }
 
-/// The extension `_v1` **cannot** express: a slot with no header. The C++
-/// returned an error and discarded the batch, so there is no `_v1` counterpart
-/// to derive this from — which is exactly why it is named here rather than
-/// left implicit in a shape comparison.
+/// The missing-slot vector is **derived** from the regular `_v2`, not
+/// authored beside it.
+///
+/// **This test stated that invariant and did not hold its own vector to it.**
+/// It checked the slot count, which slot was empty, and that the document
+/// deserialized — so an edit to `status`, to either present header, to any
+/// echoed hash, or to the missing slot's own hash all stayed green. A vector
+/// nothing derives is a vector standing as its own authority, which is the
+/// one thing the `_v2` discipline exists to prevent.
+///
+/// **The transform is insertion, not subtraction**, and writing it out is
+/// what made that clear: the vector is the regular `_v2` *plus* a slot for
+/// one more hash the chain does not hold. That extra hash is the one datum
+/// no transform can produce from `_v2`, so it is named here — the same
+/// "transform plus a named extension" shape the README records for
+/// `by_hash_v2_is_v1_reshaped_into_slots`. Everything else must be untouched,
+/// and the comparison is exact rather than field-by-field, so a field added
+/// to `BlockHeaderSlot` later is covered without anyone remembering to.
 #[test]
 fn a_missing_slot_is_the_case_v1_could_not_express() {
-    let with_miss = parsed(include_str!(
+    /// The hash the chain does not hold. Not derivable from `_v2` — it is
+    /// the input that makes this case exist — so it is stated once, here.
+    const ABSENT: &str = "c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1";
+
+    let mut derived = parsed(include_str!("vectors/rpc/get_block_header_by_hash_v2.json"));
+    let slots = derived["block_headers"]
+        .as_array_mut()
+        .expect("v2 carries slots");
+    assert_eq!(
+        slots.len(),
+        2,
+        "the transform inserts into a two-slot reply"
+    );
+    slots.insert(1, serde_json::json!({ "hash": ABSENT }));
+
+    let authored = parsed(include_str!(
         "vectors/rpc/get_block_header_by_hash_missing_v2.json"
     ));
-    let slots = with_miss["block_headers"].as_array().expect("array");
-    assert_eq!(slots.len(), 3);
-    assert!(
-        slots[1].get("block_header").is_none(),
-        "the middle slot missed"
+    assert_eq!(
+        derived, authored,
+        "the missing-slot vector must be `_v2` with exactly one absent-hash \
+         slot inserted — anything else in it is unaccounted for"
     );
-    assert!(slots[1].get("hash").is_some(), "and still names its hash");
-    assert!(
-        slots[0].get("block_header").is_some() && slots[2].get("block_header").is_some(),
-        "a miss costs only its own slot — the property the all-or-nothing C++ \
-         could not have a vector for"
-    );
+
+    // And the property the vector exists to record: a miss costs only its own
+    // slot, which the all-or-nothing C++ could not have produced a vector for
+    // at all.
     let round_trip: GetBlockHeaderByHashResponse =
-        serde_json::from_value(with_miss).expect("the missing-slot shape parses");
+        serde_json::from_value(authored).expect("the missing-slot shape parses");
     assert_eq!(round_trip.block_headers.len(), 3);
+    assert!(round_trip.block_headers[1].block_header.is_none());
+    assert!(
+        round_trip.block_headers[0].block_header.is_some()
+            && round_trip.block_headers[2].block_header.is_some()
+    );
 }
 
 /// **Rename plus one addition.** `version` becomes `active_version`, and
