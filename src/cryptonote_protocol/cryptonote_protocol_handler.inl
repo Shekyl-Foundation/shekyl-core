@@ -1467,6 +1467,13 @@ namespace cryptonote
           {
             LOG_ERROR_CCONTEXT("Failure in prepare_handle_incoming_blocks");
             drop_connections(span_origin);
+            // Sibling parity: the three other `drop_connections(span_origin)`
+            // sites each also drop the originating connection by id. This one
+            // relied solely on the host-wide sweep, which is correct only where
+            // the address names a host -- so on anonymity zones, where the
+            // sweep is now (correctly) a no-op, the offending peer would
+            // otherwise not be dropped at all.
+            drop_connection(span_connection_id);
             return 1;
           }
           if (!pblocks.empty() && pblocks.size() != blocks.size())
@@ -2820,6 +2827,26 @@ skip:
   template<class t_core>
   void t_cryptonote_protocol_handler<t_core>::drop_connections(const epee::net_utils::network_address address)
   {
+    // Host-wide severing needs an address that names a host. On anonymity
+    // zones every inbound connection carries the same per-zone `unknown()`
+    // default (`net_node.inl` `set_default_remote`, one call per zone), so
+    // "every connection sharing this host" is *every inbound peer in the
+    // zone* -- one bad span from any peer would isolate the node. On a
+    // Tor-only posture that is near-total isolation triggered by one peer.
+    //
+    // `is_same_host` now refuses to equate an address that names no host, so
+    // the loop below would already select nothing; returning early states the
+    // intent where the sweep is issued rather than leaving it to be inferred
+    // from a comparator two layers down, and skips the misleading warning and
+    // the scan. The callers drop the *originating* connection by id
+    // separately, which is the per-peer action that remains correct here.
+    if (!address.is_blockable())
+    {
+      MINFO("not dropping connections by host for " << address.str()
+        << ": this address names no host, so it identifies every peer in its zone, not one");
+      return;
+    }
+
     MWARNING("dropping connections to " << address.str());
 
     m_p2p->add_host_fail(address, 5);
