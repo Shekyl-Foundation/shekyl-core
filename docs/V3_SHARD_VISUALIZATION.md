@@ -21,8 +21,7 @@ The crate (`shekyl-shard-visual`) is referenced by:
 `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 — Engine architecture*
 (domain-primitive library crate, "stays as-is" in the rename scope);
 `docs/V3_STAKER_ARCHIVAL.md` (companion archival design that produces
-the shards); `docs/FOLLOWUPS.md` V3.x no-tradeability invariant
-codification.
+the shards).
 
 **Author / decision context:** Emerged in Phase 1 wallet-rewrite
 session (2026-04-26) while exploring gamification of the shard
@@ -113,26 +112,40 @@ designed.
 
 **The discipline: visualizations exist because they make archival
 legible, and for no other reason.** Anything that turns them into a
-separate economic asset breaks the model. The no-tradeability
-invariant is tracked in `docs/FOLLOWUPS.md` (V3.x — *No-tradeability
-invariant codification*) as a placeholder for the enforcement-point
-inventory that lands when archival/visualization implementation
-begins.
+separate economic asset breaks the model. The enforcement-point
+inventory below codifies the invariant (verified against landed code
+2026-09-04; the FOLLOWUPS placeholder that scheduled it is removed
+per rule 95 — resolved items are removed).
 
-Concrete enforcement:
+Concrete enforcement — **inventory verified against landed code
+2026-09-04** (the FOLLOWUPS placeholder's trigger, "when implementation
+begins", fired with the crate's first landing; this closes it):
 
 - `shekyl-shard-visual` library API surface has no functions that
   mint, register, sign, or otherwise endorse an instance of a
   visualization. Pure
-  `(shard_content) -> deterministic_image` only.
+  `(shard_content) -> deterministic_image` only. *(Verified: no
+  mint/transfer/register/owner symbol in `shekyl-shard-visual` or
+  `shekyl-shard-source`.)*
 - Wallet/daemon RPC surface has no methods that "own," "transfer,"
-  "claim," or "register" visualizations.
-- Wallet UI has no "trade" button on shard visuals.
+  "claim," or "register" visualizations. *(Verified: the RPC surfaces
+  have no visualization methods at all; their only shard references
+  are archival-assignment errors.)*
+- Wallet UI has no "trade" button on shard visuals. *(Cross-repo
+  claim, verified in the companion `shekyl-gui-wallet` repository —
+  `src/components/staking/ShardIdentityPreview.tsx` has no
+  trade/sell/transfer affordance; reproducible there, not from this
+  tree.)*
 - No wire format for transferring shard visual ownership.
-- No on-chain registry of who "owns" a visual.
-- Anyone running an archival client can render any shard's visual at
-  any time (no scarcity of *rendering*; scarcity is in *active
-  archival*).
+  *(Verified: `ShardSummary` / `ShardRenderHandle` carry no owner.)*
+- No on-chain registry of who "owns" a visual. *(None exists.)*
+- Anyone holding a shard can render its visual at any time (no
+  scarcity of *rendering*; scarcity is in *active archival*; complete
+  shards are visible only to their holders, per ruling A's criterion).
+
+A future PR that adds any such surface re-opens this inventory by
+construction; the verification is a statement about the tree at the
+date above, not a permanent property.
 
 If a community proposal in V3.x or beyond suggests adding tradeability,
 it gets evaluated against the simulation work that validated the
@@ -173,25 +186,24 @@ from the shard's content. Critically, **parameters are derived from
 properties that are already public** — never from anything that wallet
 privacy depends on.
 
-Candidate derived properties (all public, all computable by anyone
-holding the shard):
+Candidate derived properties, with their ruling-A dispositions
+(*Parameter admissibility* below; the original draft called all of
+these "public", which the sweep found untrue of the real chain):
 
-- Shard hash (256 bits, uniformly distributed)
-- Block count in shard
-- Transaction count (aggregate)
-- Time range (first block timestamp to last block timestamp)
-- Output count (number of new outputs created in the shard's block range)
-- Stake event count (stakes created, stakes claimed)
-- Distribution moments of output values (mean, variance — aggregate
-  statistics only, not individual values)
+- Shard hash (256 bits, uniformly distributed) — **admitted**
+- Block count in shard — **admitted**
+- Transaction count (aggregate) — **admitted**
+- Time range (first block timestamp to last block timestamp) — **admitted**
+- Output count (new outputs in the shard's block range) — **admitted**
 - Coinbase ratio (proportion of outputs from miner emission vs. user
-  transactions)
+  transactions; count-based) — **admitted, derived from counts**
+- Stake event count (stakes created, stakes claimed) — **rejected for
+  now** (rule 21; no ratified holder-readable surface yet)
+- Distribution moments of output values — **rejected** (CT hides user
+  output amounts; not computable from held bytes)
 
-These are aggregate, public, and chain-derived. None of them leak
-individual transaction information or undermine FCMP++'s privacy
-properties. Worth verifying explicitly during V3.x implementation that
-the chosen parameter set doesn't accidentally encode anything sensitive
-— this is a design-review checkpoint.
+The design-review checkpoint this list anticipated has run: it is
+ruling A's sweep, below.
 
 The shard hash provides the bulk of the "uniqueness" entropy. The
 content-derived properties make the visual *say something true* about
@@ -199,7 +211,142 @@ the shard rather than being a pure hash visualization. A shard from a
 high-activity chain period looks visibly different from a quiet-period
 shard; experienced stakers learn to read this.
 
-## Candidate compositor (candidate.v1) — leading V3.x design
+## Parameter admissibility (ruling A)
+
+### The admissibility criterion (pre-registered 2026-09-04)
+
+This criterion is registered **before** the feature-by-feature sweep, so
+that every feature is judged against the same standard rather than one
+derived while walking the list. It is the design-review checkpoint from
+*Privacy considerations* below, stated as a testable rule:
+
+> **A feature is admissible iff it is a deterministic function of data
+> any holder of the shard can read from the shard's serialized blocks —
+> no key, no wallet state, no holder-specific privilege — so that a
+> rendering publishes nothing about the shard that holding the shard
+> does not.**
+
+Two clarifications that do work:
+
+- **"Holder" is the population, not the network.** Complete shards are
+  visible only to those who hold them (or otherwise have them on their
+  machine); the criterion is *holder-computability from held block
+  bytes*, not queryability over the network. This matches the original
+  framing ("computable by anyone holding the shard") and is what makes
+  the rendering an integrity check between holders.
+- **Aggregation is a design preference, not the privacy criterion.**
+  Features should be shard-wide aggregates for legibility and
+  continuity, but aggregation is neither necessary nor sufficient for
+  admissibility — an aggregate over data the chain hides (e.g. a mean
+  of confidential amounts) fails the criterion however aggregated.
+
+### The closed-world artifact property
+
+The criterion above is the feature-level application of a closed-world
+rule over the whole rendering:
+
+> **A rendering is a deterministic function of
+> (shard content, spec version) — and of nothing else.**
+
+The *and of nothing else* is load-bearing: any future input to the
+rendering — a new feature, a wallet setting, a locale, a device
+property — is a violation **by default** and must pass this section's
+criterion (and re-ratify this section) to be admitted. The burden runs
+toward exclusion; nothing is grandfathered by being convenient.
+
+### The sweep (2026-09-04) — verdicts on the shipped feature set
+
+**Root cause, first, because it explains how the checkpoint inverted
+without anyone noticing:** the feature set was designed against the
+`shekyl-dev/visualization/` fake chain, which *publishes things the
+real chain hides* — cleartext output amounts, cleartext stake tiers.
+Every feature looked public in the explorer because the explorer's
+chain made it public. This is a corpus-fidelity defect, not reviewer
+negligence, and the criterion above is stated against *held real block
+bytes* precisely so the fake chain can never again stand in for the
+real one in an admissibility argument.
+
+Verdicts on the nine features `features_from_aggregate` computed, plus
+the two aggregate fields that were not features:
+
+| Feature / field | Verdict | Ground |
+|---|---|---|
+| `activity_density` (tx per block) | **ADMIT** | tx and block counts are in held block bytes |
+| `output_richness` (user outputs per tx) | **ADMIT** | output counts are in held block bytes; coinbase txs are structurally distinguishable |
+| `coinbase_ratio` | **ADMIT, as a derived feature** | count-based (`coinbase_output_count / output_count`); computed in `features.rs` from the two counts — the redundant wire field on `ShardAggregate` is deleted (one value, one meaning) |
+| `time_density` | **ADMIT** | block timestamps are in held block bytes (currently unconsumed by candidate.v1; whether it drives aesthetics is ruling B's call) |
+| `value_magnitude`, `value_dispersion` | **REJECT** | user output amounts are Pedersen commitments (CT; `docs/FCMP_PLUS_PLUS.md`). Even a holder of every byte of the shard cannot compute value moments without recipient keys — the criterion fails at computability, before any leak analysis is needed |
+| `tier_skew_high` (from `tier_distribution`) | **REJECT** | stake tier is confidential-staking material: the F-ARCHIVAL resolution adopted tier-neutral shard pricing *specifically to kill the portfolio tier oracle* (`docs/V3_STAKER_ARCHIVAL.md`), and post-F0 the tier is not in block bytes. Rendering it would re-expose what that redesign deliberately removed |
+| `stake_intensity`, `claim_create_ratio` | **REJECT-NOW, reopening criterion named** (rule 21) | no ratified consensus surface makes per-shard stake-create or claim event counts a holder-readable quantity today (principal-stake lifecycle is mid-design-round; the reward-emission leg is unbuilt). Re-admit — by re-ratifying this section — when the respective surface lands and its per-shard event count is readable from held shard bytes |
+| `dominant_regime` | **not chain data** | fake-chain corpus classifier; moved off `ShardAggregate` onto the fixture type (`PreviewFixture`), where corpus annotation belongs |
+
+Enforcement is in the same change as this text: `ShardAggregate` now
+carries only `shard_id`, `shard_hash`, and the admitted counts and
+timestamps; `Features` carries only the four admitted scalars. Renderer
+inputs that consumed rejected features now draw from the renderer's own
+SHAKE256 structural namespace at previously-unused indices (hash-derived,
+so they publish nothing and per-shard visual diversity is preserved);
+the resulting aesthetics are ruling B's to close.
+
+### Spec version is chain data (algorithm-versioning ruling)
+
+The "Algorithm versioning" open question below is ruled on its privacy
+half: **the rendering-spec version is chain data — an activation height
+— never wallet data.** A shard renders under the spec version active at
+its creation height, immutably (path (a)).
+
+The discriminator is this document's own property 1 (the visual
+integrity check): under re-render-with-latest (path (b)), a stale
+wallet and an upgraded wallet mismatch on the *same* shard throughout
+every upgrade window — the integrity signal false-alarms exactly when
+the network is paying attention to versions. Under (a), an old wallet
+shows an explicit "newer spec" placeholder for a post-upgrade shard and
+never a wrong picture. Path (b) would also make every shared image a
+fingerprint of the sharer's wallet version, violating the closed-world
+property (a rendering would be a function of wallet state). Cost of
+(a): conforming implementations carry superseded renderers; spec
+versions are expected to be rare enough that this is bounded.
+
+Enforcement of the height pin lands with the Stage 5 cutover, when
+shards acquire creation heights — the named blocker (rule 22): no
+height exists for a fixture aggregate, and only one spec version
+exists today. What lands now is the operand: every `CandidateRecipe`
+carries `spec_version` (`"candidate.v1"`), so exports are
+self-describing and the future comparison has its field.
+
+### Overridden renders are visibly non-canonical (hash-override ruling)
+
+The preview tweak path (`hash_override`, structural overrides,
+synthetic feature vectors) produces **viewer-chosen artifacts, not
+chain state**. That category is acceptable *because it is stated*: an
+override render indistinguishable from a canonical one would poison
+the same integrity check the feature exists to serve. Enforcement is
+typed, not conventional, and unforgeable from outside the crate
+(review #617): `RenderParameters`' fields are crate-private, its
+constructors decide `canonical`, and the only public mutation
+(`push_structural_override`) can weaken the claim but never restore
+it. `CandidateRecipe.canonical` derives from
+`RenderParameters::is_canonical`, so every exported recipe carries the
+marker — and the PNG bytes themselves carry it too: every render stamps
+`tEXt` provenance chunks (`shekyl.spec_version`, `shekyl.canonical`),
+so a saved file stays self-describing with no recipe attached. The one
+render entry point (`render_candidate_png_from_params`) derives pixels,
+chunks, and recipe from the same parameter bundle, so they cannot
+disagree.
+
+**Scope of the claim (one value, one meaning).** `canonical` attests
+the *render pipeline's* provenance: the pixels were derived from the
+aggregate handed to the constructor, unmodified, with no override and
+no synthetic input. It does not attest that the aggregate is truthful
+chain data — the renderer is a pure function and cannot know; that
+binding belongs to the layer that produces aggregates
+(`shekyl-shard-source` rejects a stale handle whose hash disagrees
+with the resolved aggregate today; `ArchivalEngine` supplies verified
+shards at Stage 5). Asking the render layer to verify its input
+against the chain would put a chain-integrity check at a
+pure-function boundary that has no chain access — the same
+wrong-layer shape as demanding wire properties of a seal-admission
+check.
 
 Empirical exploration in `shekyl-dev/visualization/` (2026-05) converged on a
 **two-stage difference compositor** rather than the single-algorithm 3-bit
@@ -229,10 +376,15 @@ palette-spread jitter) from its own namespaced stream:
 
 | Renderer         | Namespace                        | Indices used        |
 |------------------|----------------------------------|---------------------|
-| `aperiodic_tile` | `shard.v1.render.aperiodic_tile` | `unit(0)`, `unit(1)`|
-| `phyllotaxis`    | `shard.v1.render.phyllotaxis`    | `unit(0..2)`        |
-| `truchet`        | `shard.v1.render.truchet`        | `unit(0)` + per-cell `Sha256`|
-| `crystalline`    | `shard.v1.render.crystalline`    | `unit(0..2)`, `uint32(3..4)`|
+| `aperiodic_tile` | `shard.v1.render.aperiodic_tile` | `unit(0..3)`        |
+| `phyllotaxis`    | `shard.v1.render.phyllotaxis`    | `unit(0..4)`        |
+| `truchet`        | `shard.v1.render.truchet`        | `unit(0..1)` + per-cell `Sha256`|
+| `crystalline`    | `shard.v1.render.crystalline`    | `unit(0..2)`, `uint32(3..4)`, `unit(5)`|
+
+Indices `2..3` (aperiodic), `3..4` (phyllotaxis), `1` (truchet) and `5`
+(crystalline) were added by ruling A: structural draws that replace the
+rejected features those renderers previously consumed, at
+previously-unused offsets so the pre-existing draws are unchanged.
 
 Rationale: the legacy layout carved the 256-bit hash into eight little-endian
 `uint32` words and let every renderer index the *same* pool, so renderers that
@@ -503,23 +655,21 @@ that means and the design-review checkpoint.
 - Wallet identifiers (addresses, view keys, etc.)
 - Anything wallet privacy depends on
 
-**Borderline cases requiring review:**
+**Borderline cases — CLOSED by ruling A** (*Parameter admissibility*
+above). The two cases this section held open resolved the opposite way
+from its "probably fine" leanings, and for a reason the leanings could
+not see: both assumed the underlying quantities were "computable from
+any node anyway", which is true of the fake-chain corpus and false of
+the real chain. Distribution moments of output values are **rejected**
+(CT hides user output amounts — the moments are not computable from
+held bytes at all); stake event ratios are **rejected for now** under
+rule 21 (no ratified holder-readable stake-event surface exists yet;
+the reopening criterion is named in the ruling).
 
-- Distribution moments of output values: aggregate statistics, but
-  could in principle leak macro-information about chain activity
-  patterns. Probably fine for V3.x ship since this information is
-  computable from any node anyway, but worth verifying.
-- Stake event ratios: same shape — aggregate, but encodes
-  macro-economic information. Probably fine.
-
-**Design-review checkpoint:** before V3.x ships, the chosen parameter
-derivation function gets reviewed for "does any of this leak
-information that the chain protects elsewhere?" If yes, that
-parameter is dropped. If no, it ships.
-
-The default should be conservative: start with shard hash + block
-count + time range only, add other parameters only if they pass
-review. This is safer than starting rich and trimming.
+**Design-review checkpoint — RUN (2026-09-04):** the checkpoint this
+paragraph scheduled is ruling A's sweep. Its criterion is
+pre-registered there; any change to the parameter set re-opens that
+section, not this paragraph.
 
 **Distinct concern — the *sharing behavior*, not the parameters.** The
 analysis above establishes that the rendered visual leaks nothing the
@@ -651,8 +801,12 @@ Renderings are deterministic, so they're cacheable. A staker's wallet
 holding 100 shards renders each once on first display, caches the
 result, and re-renders only if the shard content changes (reorg).
 
-Cache invalidation: keyed on (shard_id, shard_content_hash). When the
-content hash changes, the cached render is invalidated.
+Cache invalidation: keyed on (shard_id, shard_content_hash, and the
+crate's exported `RENDER_REVISION`). The content hash changes on a
+reorg; the revision changes when the pixel derivation itself changes
+pre-freeze (review #617: a cache keyed without it can serve a stale
+PNG alongside a recipe the current code would not produce). Once a
+spec version freezes, a revision bump within it is a defect.
 
 This makes the rendering performance budget less critical for
 steady-state use — the user pays the cost once. But initial wallet-load
@@ -699,11 +853,12 @@ RPC methods.
 
 The dependencies and timing:
 
-- **V3.0 ships without visualization machinery.** V3.0 wallets that
-  encounter shards (if any) render shards as plain hash strings or
-  "Shard #4712" text labels. There is no `shekyl-shard-visual` crate
-  surface in V3.0; the crate either doesn't exist yet or exists in
-  unpublished/unintegrated form awaiting V3.x activation.
+- **V3.0 ships without production visualization.** The
+  `shekyl-shard-visual` crate exists and is integrated today, but only
+  behind the pre-archival GUI preview (fixture aggregates on the
+  Staking tab, per the preview exception above); no production shard
+  surface renders visuals until `ArchivalEngine` (Stage 5) provides
+  real shards.
 - **V3.x ships `ArchivalEngine` (Stage 5) and `shekyl-shard-visual`
   together.** They are companion features: archival produces the
   shards; visualization makes them legible. Both gate on the
@@ -718,9 +873,8 @@ V3.0's design surface forecloses nothing here. The
 domain-primitive crate name (`shekyl-shard-visual`) is pre-committed
 in the rename entry's "stays as-is" list; the crate has no V3.0
 dependency and is purely additive when V3.x activates it. The
-no-tradeability invariant has a placeholder FOLLOWUPS item (V3.x)
-that codifies the enforcement-point inventory when implementation
-begins.
+no-tradeability enforcement-point inventory is codified above (*Not
+tradeable*, "Concrete enforcement", verified 2026-09-04).
 
 ---
 
@@ -787,7 +941,8 @@ The mechanism is:
    transferable, exist only as renderings of chain state. This is a
    hard architectural constraint that prevents introducing economic
    dimensions the V3 simulations didn't validate. Codification of the
-   enforcement-point inventory tracked in `docs/FOLLOWUPS.md` (V3.x).
+   enforcement-point inventory codified in *Not tradeable* (verified
+   2026-09-04).
 6. **No NFT framing** in public communication — this is data art, not
    a separate asset class.
 7. **Library crate, not actor.** `shekyl-shard-visual` is a domain-
@@ -810,8 +965,8 @@ resonant — the "real work" stakers perform becomes visible, both in
 the metaphorical sense (the network values it) and the literal sense
 (stakers see their portfolios). V3.0 ships the architectural surface
 that makes V3.x activation purely additive (rename entry pre-commits
-the `shekyl-shard-visual` crate name; FOLLOWUPS V3.x tracks the
-no-tradeability invariant codification).
+the `shekyl-shard-visual` crate name; the no-tradeability
+enforcement-point inventory is codified in *Not tradeable*).
 
 ---
 
@@ -824,9 +979,9 @@ no-tradeability invariant codification).
   `shekyl-shard-visual` as library crate, not actor); *2026-04-27 —
   `Wallet<S>` renamed to `Engine<S>`* ("stays as-is" pre-commit of
   the crate name)
-- `docs/FOLLOWUPS.md` — V3.x *No-tradeability invariant codification*
-  (placeholder for the enforcement-point inventory); V3.x *Stage 5
-  ArchivalEngine native build* (companion archival ship)
+- `docs/FOLLOWUPS.md` — V3.x *Stage 5 ArchivalEngine native build*
+  (companion archival ship); the no-tradeability enforcement-point
+  inventory closed 2026-09-04 (codified in *Not tradeable* above)
 - `docs/DESIGN_CONCEPTS.md` — V3 economic structure (the model this
   must not undermine)
 - Future: `docs/PUBLIC_NARRATIVE_FAQ.md` — should grow a "shard
