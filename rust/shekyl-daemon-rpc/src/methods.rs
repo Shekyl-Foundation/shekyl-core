@@ -881,9 +881,11 @@ pub fn get_block_headers_range(
     // apply, `start_height = 0, end_height = u64::MAX` walks the whole chain
     // — a lock acquisition and a block read per height — before refusing.
     //
-    // The tip is read once. It can only grow underneath us, which makes a
-    // range that passes this check still valid; a range that fails it was
-    // already past the tip when it was asked for.
+    // The tip is read once, and it can move **either way** underneath us: a
+    // reorg onto a shorter-but-heavier chain, or an operator `pop_blocks`,
+    // lowers it. So this bound is a fast refusal for the common case, not a
+    // guarantee for the loop below — which is why the loop still has to say
+    // what a vanished height means.
     let chain_height = facts.chain_tip()?.chain_height.to_raw();
     if request.start_height > request.end_height
         || request.start_height >= chain_height
@@ -915,13 +917,18 @@ pub fn get_block_headers_range(
     for height in request.start_height..=request.end_height {
         let at = facts.block_header_at(BlockLookup::Height(BlockHeight::from_raw(height)), pow)?;
         let Some(header) = at.header else {
-            // Below the tip and absent. With the bound above, this is no
-            // longer a caller error — it is the store contradicting itself,
-            // which is what the C++ said too (`INTERNAL_ERROR`, not
-            // `TOO_BIG_HEIGHT`). The first port collapsed both cases into the
-            // caller-error code, which told a caller to fix a request that
-            // was correct.
-            return Err(RpcFault::Facts(FactsFault::Inconsistent));
+            // **A missing header here can only mean the chain shortened.**
+            // On the height path the shim returns `found == 0` for exactly
+            // one condition — `height >= chain_height` as read *inside* that
+            // call — and reports a store that cannot produce a block it
+            // claims to hold as an error, which `?` has already propagated
+            // above. So this arm is not a store contradiction and must not be
+            // reported as one: it is the tip moving down between the bound
+            // and this iteration (a reorg onto a shorter heavier chain, or a
+            // `pop_blocks`), and the caller's range was valid when it was
+            // checked. `TOO_BIG_HEIGHT` with the height that has gone is what
+            // a caller can act on; a generic internal error is not.
+            return Err(too_big_height(height, at.chain_height.to_raw()));
         };
         headers.push(block_header(&header));
     }
@@ -2452,6 +2459,46 @@ pub(crate) mod tests {
         let before = reads();
         assert!(get_block_headers_range(&f, &range(tip - 1, tip - 1), false).is_ok());
         assert_eq!(reads(), before + 1, "exactly one header for one height");
+    }
+
+    /// A height that vanishes between the bound and the loop is a caller
+    /// error, not a store fault.
+    ///
+    /// **The pre-loop bound is a fast refusal, not a guarantee.** The tip can
+    /// move down underneath it — a reorg onto a shorter heavier chain, or an
+    /// operator `pop_blocks` — so the loop still has to say what a missing
+    /// header means. On the height path the shim returns `found == 0` for
+    /// exactly one condition (`height >= chain_height`, read inside that
+    /// call) and reports a store that cannot produce a block it claims to
+    /// hold as an *error*, which `?` propagates before this arm is reached.
+    /// So this arm can only be the chain shortening, and reporting it as
+    /// `Inconsistent` would hand the caller a generic internal error for a
+    /// benign race whose remedy is to re-ask.
+    ///
+    /// The fake reproduces exactly that: the tip it reports on `chain_tip`
+    /// is above the height its header arm will still answer for.
+    #[test]
+    fn a_height_that_vanishes_under_the_bound_is_a_caller_error() {
+        let mut f = facts(true, 0);
+        // The bound sees 1_234_567; the header arm holds only 1_000 blocks.
+        f.hash_chain_height = 1_000;
+        let out = get_block_headers_range(
+            &f,
+            &GetBlockHeadersRangeRequest {
+                start_height: 999,
+                end_height: 1_000,
+                fill_pow_hash: false,
+            },
+            false,
+        );
+        let Err(RpcFault::Refused(refusal)) = out else {
+            panic!("a vanished height is a refusal, not a fault: {out:?}");
+        };
+        assert_eq!(refusal.code, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT);
+        // Names the height that has gone and the tip as it now stands, so
+        // the caller can re-ask rather than guess.
+        assert!(refusal.message.contains("1000"), "{}", refusal.message);
+        assert!(refusal.message.contains("999"), "{}", refusal.message);
     }
 
     /// The request's absent version reaches the facts layer as `None` — the
