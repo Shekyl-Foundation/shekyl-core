@@ -177,7 +177,15 @@ def main() -> None:
         sys.exit("FAIL: " + msg + ("" if not errors else
                  "\n(also, from the earlier legs:)\n" + "\n".join(errors)))
 
-    drs = DRS.read_text(encoding="utf-8")
+    # This is the one read that runs after errors have accumulated, so an
+    # unreadable file must take the flushing _fail path — a raw traceback
+    # here would mask any heading-leg findings (the SOURCE/DOC reads above
+    # run before anything can accumulate, so their tracebacks mask nothing).
+    try:
+        drs = DRS.read_text(encoding="utf-8")
+    except OSError as e:
+        _fail(f"cannot read docs/design/DAEMON_REDB_STORE.md ({e}) — the "
+              "registry this gate pins is unreadable")
     reg_m = re.search(
         r"^### P0a reconciliation registry\b.*?(?=^#{2,3} |\Z)", drs,
         re.MULTILINE | re.DOTALL)
