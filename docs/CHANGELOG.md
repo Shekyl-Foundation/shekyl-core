@@ -110,7 +110,7 @@
   transcribed for the Rust store: A-2 height bases with the F-B5b
   convert-don't-unify rationale verbatim, A-4's load-bearing revert
   partial order, A-6's guard census (22× `std::runtime_error` vs 2×
-  `DB_ERROR_TXN_START` for one precondition). Findings W-1…W-5 recorded —
+  `DB_ERROR_TXN_START` for one precondition). Findings W-1…W-7 recorded —
   none S-graded, no C++ touched — including `txs` (zero write or read
   sites; inherited-dead candidate) and `hf_starting_heights` (deleted at
   every writable `open()`, structurally absent at runtime). The dead
