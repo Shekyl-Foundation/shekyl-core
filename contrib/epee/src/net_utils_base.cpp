@@ -103,8 +103,11 @@ namespace epee { namespace net_utils
 		//! this is the one line to change.
 		//!
 		//! DELETE this, the guard in `is_same_host`, and both comments once an
-		//! inbound anonymity-zone connection carries a dial-verified endpoint:
-		//! there is then no `unknown()` to compare and this is dead code.
+		//! inbound anonymity-zone connection carries an endpoint that is BOUND to
+		//! the session, not merely reachable -- a dial proves the announced onion
+		//! answers, never that this peer controls it, and adopting an unbound
+		//! announcement would let one peer be scored as another. There is then no
+		//! `unknown()` to compare and this is dead code.
 		bool identifies_a_host(const network_address& addr)
 		{
 			return addr.is_blockable();

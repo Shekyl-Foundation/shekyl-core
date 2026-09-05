@@ -413,7 +413,7 @@ and two of them read it as the same boolean:
 
 - `cryptonote_protocol_handler.inl:1790` — `if (!peer_id || context.m_is_income)`,
   excluding pre-handshake peers from **sync-search**.
-- `:2659-2660` — `if (peer_id && …)`, excluding them from **fluffy-block relay**,
+- `:2701-2702` — `if (peer_id && …)`, excluding them from **fluffy-block relay**,
   with the tree's own comment: *"peer_id also filters out connections before
   handshake"*.
 
@@ -469,7 +469,7 @@ it:**
 | Site | Kind | Disposition |
 | --- | --- | --- |
 | `cryptonote_protocol_handler.inl:1790` | **Boolean** — excludes pre-handshake peers from sync-search | Migrate to `handshake_complete` |
-| `:2657-2660` | **Boolean** — same, for fluffy-block relay (*"peer_id also filters out connections before handshake"*) | Migrate to `handshake_complete` |
+| `:2701-2702` | **Boolean** — same, for fluffy-block relay (*"peer_id also filters out connections before handshake"*) | Migrate to `handshake_complete` |
 | `:347` | **Display** — `print_connections`' peer column | Drop the column or show `connection_id` |
 | `rpc_facts_ffi.h:315` / `.cpp:1050-1056` | **Display** — `get_connections` over RPC | Same: `connection_id` is already in the struct |
 
@@ -755,12 +755,38 @@ the white peerlist. The gossiped fact is therefore "I personally reached this en
 not "this peer said so". That mechanism is what a rewrite keeps.
 
 **The gap is specific to anonymity zones**, where nothing is observed at all — so the
-endpoint itself must be announced. Unlike a clearnet port it is directly checkable:
-dialling the `.onion` *is* the verification, which is PWD-B10's ruling that the outbound
-dial is the verification, applied to a zone that does not use it. Note
-`zone.m_can_pingback` is set true only for the public zone (`net_node.inl:444`) and
-cleared when a SOCKS proxy is configured (`:818`), so **an anonymity zone verifies
-nothing today** — which is why it is the sentinel's zone and clearnet is not.
+endpoint itself must be announced. Note `zone.m_can_pingback` is set true only for the
+public zone (`net_node.inl:444`) and cleared when a SOCKS proxy is configured (`:818`),
+so **an anonymity zone verifies nothing today** — which is why it is the sentinel's zone
+and clearnet is not. The mechanism could not run there anyway: `try_ping` builds its
+target from the **observed** `context.m_remote_address` plus the claimed port and
+hard-refuses anything that is not IPv4/IPv6 (*"Only IPv4 or IPv6 addresses are supported
+here"*), so there is no address to dial on an overlay even if the gate were open.
+
+**A dial is NOT sufficient there, and an earlier draft of this correction said it was.**
+That draft read *"dialling the `.onion` is the verification"*. It is not, and the
+difference is the whole security content of this row:
+
+- **On clearnet the binding comes from the socket.** The address is *observed*, so TCP
+  already ties it to this peer; the ping only resolves the one field observation cannot
+  supply, and a false port claim can mis-attribute at worst to another port on the same
+  host.
+- **On an overlay there is no observed half.** A successful dial to an announced
+  `.onion` proves that *service* is reachable — **not that the peer on this inbound
+  session controls it.** An attacker can announce a victim's live onion, pass the
+  reachability check, and have its own misbehaviour scored and gossiped against the
+  victim. Reachability without a binding converts the sentinel's problem into a
+  **framing primitive**, which is strictly worse than an anonymous inbound remote.
+
+**So the queued work carries a binding requirement, not just a field.** The announced
+endpoint may be adopted only once the inbound session and the dialled endpoint are
+proven to be the same party — a challenge the dialled service must answer with a secret
+that only this session carried. **PWD-I1 already routes a zone-scoped handshake nonce to
+PWD-T1**; that token is the natural carrier and T1 must be drafted knowing this consumer
+exists. **Until such a binding exists, the inbound anonymity-zone remote stays
+anonymous** and the `identifies_a_host` guard stays with it — the guard's deletion
+trigger is a *verified* endpoint, and an unbound announcement does not meet it.
+Found in review of #620.
 
 **Consequence for the sentinel.** `unknown()` stands in for a field that overlays need
 and clearnet does not. Until it carries one, `contrib/epee/src/net_utils_base.cpp`'s
@@ -2927,7 +2953,7 @@ and calling it resource exhaustion protection.*
 
 **Scoping the bucket to the four invoke routes would have left the entire
 cryptonote command family unmetered** — all nine `HANDLE_NOTIFY_T2` entries
-(`src/cryptonote_protocol/cryptonote_protocol_handler.h:89-98`), which carry
+(`src/cryptonote_protocol/cryptonote_protocol_handler.h:94-102`), which carry
 the blocks and the transaction batches, i.e. **the large payloads and the
 flood vector PWD-B12 exists to bound.** *A second earlier version made that
 mistake, and it is the same one twice: naming the surface I had been reading
