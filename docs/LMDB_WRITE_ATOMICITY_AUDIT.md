@@ -1,183 +1,364 @@
 # LMDB Write Atomicity Audit
 
-**Date:** April 2026
-**Scope:** Every `BlockchainLMDB` write path reachable from block connect, block pop, tx pool mutations, alt blocks, and staking accrual/pool management.
-**Goal:** Confirm that each logical mutation is fully contained in a single LMDB transaction with no partial-commit risk.
+**Date:** 2026-09-05 (DRS-P0b; supersedes the April 2026 audit in place)
+**Pin:** `dev` `2dba46537` — every claim below was verified against this tree
+**Scope:** every `BlockchainLMDB` write path at the pin: block connect, block
+pop, the transaction pool, alt blocks, the two retention prunes, `reset()`,
+and `migrate()`. One coverage row per `SHEKYL_LMDB_TABLES` entry — the count
+is derived from the macro wherever it is used, never restated as a literal
+(the schema-coverage gate pins the matrix to the macro in both directions).
+**Goal:** confirm each logical mutation is fully contained in a single LMDB
+transaction with no partial-commit risk — and record, for the redb store's
+specification, every convention this layer keeps only in code (DRS-P0b
+transcriptions A-2 / A-4 / A-6, and the §6.6 read-after-write edge set).
 
-## Background
+Findings are **recorded, never fixed here** (P0c RECORD-AND-SPECIFY,
+countermand 2026-09-01): a defect in this layer becomes a wart row for the
+Rust store unless it is S-graded, which stops the lane and goes to Rick.
+This pass found **no S-graded defect**; the findings register is §9.
 
-All LMDB writes go through one of three transaction mechanisms:
+---
+
+## 0. Provenance — what happened to the April 2026 audit
+
+The previous audit in this file (born `a17ccd0c81`, 2026-04-07; 183 lines)
+was graded **STALE** in `DAEMON_REDB_STORE.md`'s oracles table: *PASS over a
+superseded write set*. P0b's grounding measured how superseded, by set
+difference against the April tree (era-calibrated: at that pin, table names
+were `const char* const LMDB_*` constants in `db_lmdb.cpp`, not the X-macro
+— and its 51 raw `lmdb_db_open` hits close only as 1 definition + 34
+symbol-keyed production opens over **29 tables** + 5 migration re-opens + 16
+*quoted-literal* opens of Monero-lineage legacy names in since-deleted
+`migrate_*` code; production opens were symbol-keyed while migration opens
+were quoted, so a single extraction over the raw hits silently mixes live
+tables with dead migration code):
+
+- **April 29 → Round-2 pin 46**: +19 tables (14 `archival_*`, `block_burn`,
+  `block_pending_additions`, `curve_tree_roots`, `leaf_to_output`,
+  `output_to_leaf`), −2 (`staker_accrual`, `staker_claims`, deleted with the
+  claim-era wire). **Round-2 → this pin: +3** (both attestation-witness
+  tables, `archival_settlement`), −0. Both direction of each delta measured.
+- **22 of the 49 live tables post-date the April audit** and had zero
+  atomicity coverage until this rewrite. The April PASS was doing work it
+  was never entitled to do: a verdict over a store that is now half tables
+  it never saw, while several of its covered subjects are dead. A seal is
+  not coverage.
+
+Per-subject disposition of the April sections (records-was; the old verdicts
+were true of their tree):
+
+| April subject | Disposition at this pin |
+| --- | --- |
+| Block connect / block pop core | Covered then; **re-audited below** — the paths have since grown the archival journal hooks, the witness store, and the epoch-close/prune machinery |
+| Staking-Specific Write Paths (accrual, claim pool restore, `txin_stake_claim`) | **Dead** — deleted with the claim-era wire; `txin_stake_claim` and `staker_pool_balance` have zero occurrences in `src/` |
+| `get_relayable_transactions` missing-commit fix (Dandelion++ timestamps) | **Alive, fix intact** — the function stands at `tx_pool.cpp:1130` and `lock.commit()` at `:1224` precedes the `m_next_check` update; stem *selection* moved to Rust (`shekyl-relay-privacy`), the txpool bookkeeping and its transaction discipline stayed C++ |
+| `pop_block_from_blockchain` staker-accrual `db_wtxn_guard` fix | **Dead subject** — the guarded write path went with the claim era |
+| `hf_versions` not cleaned on pop | **Alive, unchanged** — carried as the P0c wart row (`hf_versions` FIX-or-REPLICATE), not re-litigated here |
+| FCMP++ curve tree (grow/trim/pending) | Covered then; re-audited below — the family has since gained `curve_tree_roots`, both output↔leaf maps, `block_pending_additions`, and the segment-freeze hook |
+| `LockedTXN` nesting + silent-commit-failure notes | Still accurate; restated in §4 with a re-enumerated site census |
+
+---
+
+## 1. Transaction mechanisms at the pin
+
+The April frame still holds, with two additions (the last two rows):
 
 | Mechanism | Scope | When |
-|---|---|---|
-| **Batch** (`m_write_batch_txn` via `batch_start`/`batch_stop`) | Groups multiple blocks into one LMDB txn | Normal block ingestion from P2P and sync |
+| --- | --- | --- |
+| **Batch** (`m_write_batch_txn` via `batch_start`/`batch_stop`) | Groups multiple blocks into one LMDB txn | Block ingestion from P2P and sync |
 | **Block write guard** (`block_wtxn_start`/`block_wtxn_stop`) | Single write txn, or no-op when batch active | Genesis init, standalone pop, tests |
-| **`TXN_BLOCK_PREFIX` macro** | Joins active batch/write txn, or opens its own | Auxiliary writes (`set_hard_fork_version`, properties) |
+| **`TXN_BLOCK_PREFIX`** (defined `db_lmdb.cpp:2049`) | Joins active batch/write txn, or opens its own | Sole remaining user: `set_hard_fork_version` (`:4697`) |
+| **`db_wtxn_guard`** | No-op under an active batch, else own txn | Defensive wrapping of standalone write callers |
+| **`LockedTXN`** (txpool) | Batch join with commit/abort; §4 | Txpool mutations — and one deliberate read-snapshot user, §4 |
+| **`prune_tx_data`'s txn swap** (`:10144`) | Begins its **own** write txn and RAII-swaps it into `m_write_txn` (`write_txn_restorer`), restoring the saved pointer on exit | The standalone tx-data prune only — a mechanism the April audit predates |
 
-When a batch is active, `block_wtxn_start`/`stop` become no-ops (they only assert thread ownership). All `mdb_put`/`mdb_cursor_put` calls in the same batch share one LMDB transaction until `batch_stop` commits.
+When a batch is active, everything below that says "the block's transaction"
+means the batch transaction: all writes for all blocks in the batch commit
+or abort together at `batch_stop`.
 
-## Block Connect (`add_block`)
+## 2. Block connect (`BlockchainDB::add_block`, `blockchain_db.cpp:435`)
 
-### Transaction coverage
+Ordering at the pin (the funnel every connected block traverses):
 
-All writes for a block connect are issued under one LMDB transaction:
+1. `add_transaction` for the miner tx and each block tx — tx data, indices,
+   outputs, spent keys, **and the per-vin archival journal writes** (bond
+   record mutations with their unbond/rebond/holdings-update pre-image
+   journals, emission-claim journal, serve-credit bits) ride tx-connect.
+2. The FCMP++ curve-tree block: `block_pending_additions` journal, the
+   drain (auto-journaled per entry for `pop_block`), `grow_curve_tree`,
+   then the segment-freeze connect hook at `prev_height + 1`. The in-code
+   invariant (`:491`): *pending, drain, output↔leaf maps,
+   `block_pending_additions`, and `curve_tree_*` tables MUST be mutated
+   within the same `m_write_txn` as the block add — any partial commit here
+   is a consensus split.*
+3. Attestation witness store, keyed `archival_attestation_witness_key(prev_height)`.
+4. `BlockchainLMDB::add_block` — block blob, `block_info`, `block_heights`.
+5. The budget-accrual row at `prev_height` (F-B1a: written inside this
+   funnel, before the hooks, not by `blockchain.cpp` after the fact).
+6. `process_archival_slash_at_height(prev_height + 1)`.
+7. `process_archival_epoch_close_at_height(prev_height + 1)` — which, at an
+   epoch boundary, also runs the archival retention prune (§5a) in the same
+   transaction.
 
-| Write set | LMDB functions | Same txn? |
-|---|---|---|
-| Block header, block_info, block_heights | `mdb_cursor_put` via `m_wcursors` | Yes |
-| Tx indices, txs_pruned, txs_pqc_auths, txs_prunable, etc. | `mdb_cursor_put` via `m_wcursors` | Yes |
-| Output amounts, output_txs, tx_outputs | `mdb_cursor_put` via `m_wcursors` | Yes |
-| Spent keys | `mdb_cursor_put` via `m_wcursors` | Yes |
-| Hard fork version (`set_hard_fork_version`) | `mdb_put` via `TXN_BLOCK_PREFIX` | Yes (joins batch) |
-| Pending tree leaves + drain journal | `mdb_put`/`mdb_del` on `*m_write_txn` | Yes |
-| Curve tree leaves, layers, meta, checkpoints | `mdb_put` on `*m_write_txn` | Yes |
-| Staker accrual record | `mdb_put` on `*m_write_txn` | Yes |
-| Staker pool balance, total burned (properties) | `mdb_put` on `*m_write_txn` | Yes |
+Every step writes through `*m_write_txn` / `m_wcursors` under the block's
+transaction; `set_hard_fork_version` joins it via `TXN_BLOCK_PREFIX`. No
+`mdb_txn_commit` occurs mid-block; exceptions leave the transaction
+uncommitted and `cleanup_handle_incoming_blocks` aborts the batch.
 
-### Ordering within `BlockchainDB::add_block`
+**Verdict: PASS** — one transaction per block (or per batch), including all
+archival journal writes and the boundary-epoch prune.
 
-1. `add_transaction` for miner tx and each block tx (spent keys, tx data, outputs, indices)
-2. FCMP++ pending/drain/grow + checkpoints (if `>= HF_VERSION_FCMP_PLUS_PLUS_PQC`)
-3. `BlockchainLMDB::add_block` (block blobs, block_info, block_heights)
-4. `HardFork::add` → `set_hard_fork_version`
-5. Staking accrual, pool balance, burn updates (in `handle_block_to_main_chain`, post-`add_block`)
+## 3. Block pop (`BlockchainDB::pop_block`, `blockchain_db.cpp:695`)
 
-### Early return analysis
+One funnel, one write transaction (`block_wtxn` unless a batch is active),
+entered only above the prune-watermark floor (C2-R1b-Q1c: the floor comes
+from the prune's own persisted receipt, never the tip). The revert sequence
+mirrors connect in reverse; its height conventions and ordering constraints
+are the A-2/A-4 transcriptions (§7, §8). All removals — journal-driven
+curve-tree trim included — ride the same transaction; the witness row is
+dropped rather than parked (a hash-keyed parked row would be unreachable to
+the height-keyed prune and leak; reorg survival is explicit via the
+read-before-pop handoff to `handle_alternative_block`).
 
-No `mdb_txn_commit` is called mid-block. Exceptions (`DB_ERROR`, `KEY_IMAGE_EXISTS`) leave the LMDB transaction uncommitted. The caller's `cleanup_handle_incoming_blocks` sets `m_batch_success = false` and aborts on failure. **No partial-commit risk.**
+**Verdict: PASS** — and the pop-side invariant comment (`:841`) states the
+same consensus-split consequence as connect's.
 
-### Verdict: PASS
+## 4. Transaction pool (`tx_pool.cpp`)
+
+Re-enumerated at the pin: **14 `LockedTXN` constructions, 13
+`lock.commit()` sites.** The sole non-committing construction is
+`get_transaction_info` (`:913`) — a `const`, read-only path where the
+`LockedTXN` provides a consistent snapshot and the destructor's abort
+discards no writes. **That imbalance is the deliberate baseline**: any
+future construction without a commit on some path is exactly the April
+defect class (`get_relayable_transactions`, fixed then, fix verified intact
+at `:1224`), so re-run this census — constructions vs commits, then walk
+the odd ones out — whenever the file changes shape.
+
+April's still-true notes, restated: `LockedTXN` nests by no-op'ing under an
+active batch (writes piggyback on the outer transaction), and
+`LockedTXN::commit` swallows `batch_stop` exceptions — commit failures are
+silent to callers. The latter is **wart row W-2** (§9) for the Rust store:
+a store API where commit cannot fail silently.
+
+**Verdict: PASS**, one baseline recorded, one wart carried.
+
+## 5. Alt blocks and the detached witness table
+
+`add_alt_block` / `remove_alt_block` operate on `*m_write_txn` cursors and
+require the caller's transaction (callers: `handle_alternative_block` under
+the incoming-blocks batch; `switch_to_alternative_blockchain`'s removal
+loop, same batch; `drop_alt_blocks` via `reset()`'s own transaction). The
+`archival_alt_attestation_witness` table is written beside the alt block
+that owns it and its rows cannot outlive that block (one table, one owner —
+the alt-block lifecycle, not the height prune, bounds it).
+
+**Verdict: PASS.**
+
+## 5a. Retention prunes — two paths, two shapes
+
+**Archival retention prune** (`prune_archival_epochs_before`, `:7704`):
+runs *inside* the epoch-close connect hook, under the block's transaction.
+The watermark receipt is written **before** the deletions, same
+transaction: commit lands floor and destruction together, abort lands
+neither; no pop path reverts the receipt, so the floor never retreats
+(the pop funnel's entry gate reads it). Seven families pruned; the
+`archival_budget` walk early-breaks on the BE-ordered key where the others
+scan-and-delete — an idiom difference, not a semantic one.
+
+**Tx-data prune** (`prune_tx_data`, `:10144`): a standalone write path with
+its **own** transaction, RAII-swapped into `m_write_txn` for the duration
+(§1's last mechanism). v11 retention semantics: the depth pass keeps
+`txs_prunable_hash` and `txs_pqc_auths` — the pruned-txid operands — when
+it drops the prunable body.
+
+**Verdict: PASS** on both; the receipt-before-destruction edge is R-2 in
+the RAW set (§6).
+
+## 5b. `reset()` and `migrate()`
+
+`reset()` (`:1911`): wipes by **enumerating** the environment's named
+tables (main-DB keys are table names) and dropping every one not in the
+keep predicate — `is_chain_reset_keep_table` (`:404`) keeps exactly
+`txpool_meta` and `txpool_blob` (mempool lifecycle is `tx_memory_pool`'s;
+reset has never touched it) — then re-seeds only the version row, in one
+transaction. The 2026-08-07 finding recorded in FOLLOWUPS (*"drops an
+INCOMPLETE table set — 29 of 48 tables not dropped"*) described the
+hand-written drop list this enumeration **replaced the same day**
+(`190fd73a65`); the row was never closed and is closed by this PR. A
+hand-written drop list cannot go stale again — there isn't one.
+
+`migrate()` (`:10295`): **zero writes** — pre-genesis posture, refuse
+loudly and direct to resync; the Monero-era `migrate_0_1..5_6` ladder
+(whose quoted-literal opens dominated the April file's raw hit count) is
+deleted.
+
+**Verdict: PASS** (`reset()`); `migrate()` is a non-write path by design.
+
+## 6. Read-after-write dependency set (RAW edges, DRS §6.6)
+
+The §6.6 seeds re-verified, one dead, and the live set enumerated:
+
+| # | Edge | Where | Why it must hold |
+| --- | --- | --- | --- |
+| R-1 | `drain_pending_tree_leaves` → `grow_curve_tree` | connect step 2 | grow consumes the drained leaf set produced earlier in the same txn; splitting them plants leaves twice or never |
+| R-2 | watermark receipt → the seven `delete_*` walks | `prune_archival_epochs_before` | the pop floor must never postdate the destruction it defends against |
+| R-3 | budget-accrual rows (earlier blocks) → epoch-close range-sum | `process_archival_epoch_close_at_height` | cross-**block** reads: the close of epoch E sums accrual rows written by E's whole span; the retention window dominates the reorg window and the pop floor (R-2) defends the remainder |
+| R-4 | slash-journal restore → holdings-update restore | pop funnel | shared fields (`bonded_total`, `held_shard_ids`, `shard_add_epochs`); §8's partial order |
+| R-5 | witness read → pop → alt-store handoff | reorg (`switch_to_alternative_blockchain`) | the reorg reads the witness *before* popping and stores it beside the alt block; pop itself deletes the row |
+| — | ~~multi-claim pool balance~~ | — | **dead seed** — the §6.6 text predates the claim-era deletion; `txin_stake_claim` has zero occurrences at the pin |
+
+Journals were expected to add more; R-2/R-3/R-4 are those additions.
+
+## 7. Transcription A-2 — height base per journal (transcribed, not invented)
+
+Connect fires the slash and epoch-close hooks at `prev_height + 1` — the
+chain height *after* the block. The tx-connect journals key on the block's
+*index* `N = prev_height`. Pop therefore reverts at **two bases** (with
+`removed_block_height` = the pre-remove chain height):
+
+| Journal / hook | Base on pop | Writer's base on connect |
+| --- | --- | --- |
+| `archival_slash_log` / `archival_slash_applied` revert | `removed_block_height` | hook at `prev_height + 1` |
+| `archival_epoch_close_log` revert (+ boundary prune floor) | `removed_block_height` | hook at `prev_height + 1` |
+| `archival_emission_claim_log` revert | `removed_block_height − 1` | tx-connect at block index `N` |
+| `archival_bond_unbond_log` revert | `removed_block_height − 1` | tx-connect at `N` |
+| `archival_bond_holdings_update_log` revert | `removed_block_height − 1` | tx-connect at `N` |
+| `archival_bond_rebond_log` revert | `removed_block_height − 1` | tx-connect at `N` |
+| `archival_budget_accrual` remove | `removed_block_height − 1` | funnel step 5 at `prev_height` |
+| attestation witness remove | `removed_block_height` | store at key `prev_height` (`archival_attestation_witness_key` adds the +1) |
+| segment-freeze revert | height-free (row count) | hook at `prev_height + 1` |
+
+**Why two bases — the in-code rationale, verbatim** (F-B5b,
+`blockchain_db.cpp:735`-ff): *"the slash/close hooks key on the chain
+height AFTER the block (connect fires them at prev_height + 1), which
+equals removed_block_height here. The claim journal keys on the block's
+INDEX N = removed_block_height − 1, because the connect arm must journal at
+the same operand verify's claim-age bound used (pin (b): both read height()
+before the block row exists). **Convert, don't unify — moving the journal
+to N + 1 would shift the connect-side settled-epoch operand off verify's at
+every epoch boundary.**"* A reader who sees only "two bases" will file it
+as a defect and normalize them; the sentence above is why that
+normalization is the defect. The Rust store keeps both conventions or
+re-derives verify's operand with them — it does not unify.
+
+## 8. Transcription A-4 — pop revert partial order
+
+From the load-bearing-order comments in the pop funnel (`:726`–`:790`),
+as journal × fields × must-run-after × reason:
+
+| Revert | Fields restored | Must run AFTER | Reason (from the comments) |
+| --- | --- | --- | --- |
+| slashes (`N` base) | `bonded_total`, `held_shard_ids`, `shard_add_epochs`, `bad_intervals` appends | — (first) | within a block, txs connect before the slash hook; pop mirrors in reverse |
+| epoch close (`N` base) | epoch/budget close state | slashes | connect order mirror |
+| emission claims (`N−1`) | claimed set, `first_paying_emission_height` | slashes + close | claims connect at tx-connect, before the hooks; **fields disjoint** from the slash revert's, so this one *could* compose either way — the order is the mirror, kept |
+| unbonds (`N−1`) | `bonded_total`, holdings, interval log | slashes | defensive belt; a violation surfaces as `MISSING_CLEAN_CLOSE`, loud |
+| holdings updates (`N−1`) | `bonded_total`, `held_shard_ids`, `shard_add_epochs` | slashes | **ORDER IS LOAD-BEARING**: the slash journal restores the very same fields; reverting in the wrong order makes the exactly-one-FLOOR delta check see `FLOOR ± slashed_amount` and abort the pop with `NotSingleShardDelta` |
+| rebonds (`N−1`) | holdings/balance, closed interval | slashes | both journals touch `bad_intervals`; the slash revert strips its appended intervals before the rebond revert re-opens the journaled closed one |
+| segment freezes (count) | frozen-segment counter | epoch-close revert | `:875`: counted against post-close state |
+
+Inserting a new journal that touches `bonded_total`/`held_shard_ids`/
+`bad_intervals` **between** any of these breaks the delta checks by
+construction — the table above is the constraint surface the Rust store's
+pop must reproduce or re-derive.
+
+## 9. Transcription A-6, and the findings register
+
+**A-6 — `m_write_txn` assertion census** (all sites in `db_lmdb.cpp`):
+129 dereferences ride a caller-provided transaction with no local guard;
+24 sites guard with `if (!m_write_txn) throw …`; 15 are lifecycle
+assignments (batch/guard machinery and the §1 prune swap). The 24 guards
+split into **two exception families**: 2 throw `DB_ERROR_TXN_START`
+(inherited paths) and 22 throw bare `std::runtime_error("FATAL: …")`
+(the archival/curve-tree generation). A `std::runtime_error` sails past
+every `catch (DB_ERROR&)` recovery surface, so the same precondition
+violation has two different crash behaviors depending on which table
+tripped it.
+
+| # | Finding | Grade | Disposition |
+| --- | --- | --- | --- |
+| W-1 | Guard exception split: 22× `std::runtime_error` vs 2× `DB_ERROR_TXN_START` for the identical `!m_write_txn` precondition | wart (no unsound state; inconsistent failure surface) | RECORD-AND-SPECIFY: the Rust store has **one** typed precondition error; no C++ harmonization |
+| W-2 | `LockedTXN::commit` swallows `batch_stop` exceptions — silent commit failure (April note, still true) | wart | RECORD-AND-SPECIFY: Rust store commit is `Result`, callers must consume it |
+| W-3 | 129 unguarded `*m_write_txn` dereferences (null deref if a caller path ever arrives guardless — none found at the pin) | wart (latent) | RECORD-AND-SPECIFY: the Rust store's write handle is possession-typed; the precondition becomes unrepresentable |
+| — | `hf_versions` not cleaned on pop | carried | P0c wart row (owned there since April; not re-opened here) |
+| — | Dead schema-doc row: `properties` key `staker_pool_balance` + both accessors, zero occurrences in `src/` | doc defect | fixed in this PR (`LMDB_SCHEMA.md` row and the Staking-section pointer) |
+
+No finding is S-graded; nothing here blocks DRS-0, and nothing here adds
+C++.
+
+## 10. Coverage matrix — every table, its writers, its audited path
+
+One row per `SHEKYL_LMDB_TABLES` entry (gate-pinned bijection; the row
+count is the macro's length by construction). "Path §" points at the
+section above whose verdict covers the table's writers.
+
+**49 rows** (the stated figure is gate-checked against the macro's
+length, like the P0a registry's):
+
+| Table | Writers at the pin | Path § |
+| --- | --- | --- |
+| `alt_blocks` | `add_alt_block` / `remove_alt_block`; `drop_alt_blocks` (emptied) | §5 |
+| `archival_alt_attestation_witness` | `store/remove_archival_alt_attestation_witness`; `drop_alt_blocks` | §5 |
+| `archival_attestation_witness` | `store/remove_…_at_height`; `delete_…_before_height` (prune) | §2/§3/§5a |
+| `archival_bond` | `put_archival_bond_value` / `remove_archival_bond_record` | §2/§3 |
+| `archival_bond_holdings_update_log` | journal helpers | §2/§3/§7/§8 |
+| `archival_bond_rebond_log` | journal helpers | §2/§3/§7/§8 |
+| `archival_bond_unbond_log` | journal helpers (`archival_journal_put/delete`, param dbi) | §2/§3/§7/§8 |
+| `archival_budget` | epoch close put; `delete_…_for/before_epoch` | §2/§5a |
+| `archival_budget_accrual` | `add/remove_archival_budget_accrual`; `delete_…_before_height` | §2/§3/§5a |
+| `archival_emission_claim_log` | journal helpers | §2/§3/§7/§8 |
+| `archival_epoch_close_log` | `process/revert_archival_epoch_close_at_height` | §2/§3 |
+| `archival_r_market` | epoch close put; `delete_…_for/before_epoch` | §2/§5a |
+| `archival_serve_credit` | `set/remove_archival_serve_credit_bit`; `delete_…_before_epoch` (prune) | §2/§3/§5a |
+| `archival_settlement` | `set_archival_settlement` (production caller = census question CEN-L8); `delete_…_for/before_epoch` | §5a/§9 |
+| `archival_shard_segment` | `put_archival_shard_segment`; `revert_archival_segment_freezes`; corruption-test put | §2/§3 |
+| `archival_sigma_work` | epoch close put; `delete_…_for/before_epoch` | §2/§5a |
+| `archival_slash_applied` | `set/remove_archival_slash_applied` | §2/§3 |
+| `archival_slash_log` | `append_archival_slash_log`; `revert_archival_slashes_at_height` | §2/§3 |
+| `block_burn` | `add_block_burn` / `remove_block_burn` | §2/§3 |
+| `block_heights` | `add_block` / `remove_block` | §2/§3 |
+| `block_info` | `add_block` / `remove_block`; `correct_block_cumulative_difficulties` (own `block_wtxn`) | §2/§3/§5c |
+| `block_pending_additions` | `add_block_pending_addition`; `remove_block_pending_additions` | §2/§3 |
+| `blocks` | `add_block` / `remove_block` (`m_wcursors`) | §2/§3 |
+| `curve_tree_checkpoints` | `save_curve_tree_checkpoint`; `prune_curve_tree_intermediate_layers` | §2/§3 |
+| `curve_tree_layers` | `grow/trim_curve_tree`; `prune_curve_tree_intermediate_layers`; corruption-test del | §2/§3 |
+| `curve_tree_leaves` | `grow_curve_tree` / `trim_curve_tree` | §2/§3 |
+| `curve_tree_meta` | `grow/trim_curve_tree` | §2/§3 |
+| `curve_tree_roots` | `store/remove_curve_tree_root_at_height` | §2/§3 |
+| `hf_starting_heights` | **deleted at every non-read-only `open()`** (`mdb_drop` del=1, `:1778`); `drop_hard_fork_info`; finding W-5 | §9 |
+| `hf_versions` | `set_hard_fork_version` (`TXN_BLOCK_PREFIX`); `drop_hard_fork_info`; not cleaned on pop (P0c wart) | §2 |
+| `leaf_to_output` | `add/remove_output_leaf_mapping` | §2/§3 |
+| `output_amounts` | `add_output` / `remove_output` | §2/§3 |
+| `output_metadata` | `store_output_metadata` | §2 |
+| `output_to_leaf` | `add/remove_output_leaf_mapping` | §2/§3 |
+| `output_txs` | `add_output` / `remove_output` | §2/§3 |
+| `pending_tree_drain` | `add_pending_tree_drain_entry`; `remove_pending_tree_drain_entries` | §2/§3 |
+| `pending_tree_leaves` | `add/remove_pending_tree_leaf`; `drain_pending_tree_leaves` | §2/§3 |
+| `properties` | `open()` version seed; `set_total_bonded_atomic` / `set_total_burned`; prune receipts (`note_archival_prune_watermark_epoch`, frozen-shard count, `pruning_seed`, `tx_prune_next_block`); `set_settlement_epoch_blocks_pin` (own txn) | §2/§5a/§5b/§5c |
+| `spent_keys` | `add_spent_key` / `remove_spent_key` | §2/§3 |
+| `tx_indices` | `add_transaction_data` / `remove_transaction_data` | §2/§3 |
+| `tx_outputs` | `add_tx_amount_output_indices` / `remove_transaction_data` | §2/§3 |
+| `txpool_blob` | `add/remove_txpool_tx` (`LockedTXN`); reset-kept | §4/§5b |
+| `txpool_meta` | `add/update/remove_txpool_tx` (`LockedTXN`); reset-kept | §4/§5b |
+| `txs` | **none** — opened (`:1662`), never written or read through its handle; finding W-4 | §9 |
+| `txs_pqc_auths` | `add_transaction_data` / `remove_transaction_data` (v11: kept by the depth prune) | §2/§3/§5a |
+| `txs_prunable` | `add/remove_transaction_data`; `prune_worker`, `prune_tx_data` (own txns) | §2/§3/§5a |
+| `txs_prunable_hash` | `add/remove_transaction_data` (v11: kept by the depth prune) | §2/§3/§5a |
+| `txs_prunable_tip` | `add/remove_transaction_data`; `prune_worker` | §2/§3/§5a |
+| `txs_pruned` | `add_transaction_data` / `remove_transaction_data` | §2/§3 |
+
+Enumeration ground: 135 write call sites across 81 functions (79
+`BlockchainLMDB::` methods + the two anonymous-namespace journal template
+helpers, which take the `MDB_dbi` as a parameter — the three
+non-member-handle write sites are those two plus `reset()`'s per-name local
+dbi). `txs` is the one macro table with no write site (W-4), and
+`hf_starting_heights` is deleted at every writable `open()` (W-5) — both in
+§9's register.
 
 ---
 
-## Block Pop (`pop_block` / `pop_block_from_blockchain`)
-
-### LMDB-level pop (`BlockchainLMDB::pop_block`)
-
-Wraps `BlockchainDB::pop_block` in `block_wtxn_start`/`block_wtxn_stop` with a catch-all `block_wtxn_abort`. Within this scope:
-
-| Write set | Same txn? |
-|---|---|
-| Block removal (blocks, block_info, block_heights) | Yes |
-| Tx removal (tx_indices, txs_pruned, txs_prunable, etc.) | Yes |
-| Output removal (output_amounts, output_txs) | Yes |
-| Spent key removal | Yes |
-| Claim pool balance restore (`set_staker_pool_balance` for `txin_stake_claim` inputs) | Yes |
-| Curve tree trim + pending tree restore | Yes |
-
-### Core-level pop (`Blockchain::pop_block_from_blockchain`)
-
-After `m_db->pop_block` returns, the core reverses staker accrual records, pool balance, and burn totals. These writes must run under an active write transaction.
-
-**Finding (fixed):** The staker accrual reversal (lines 690-708 in `blockchain.cpp`) previously ran without its own write transaction guard. All production callers (`pop_blocks`, `switch_to_alternative_blockchain`, `rollback_blockchain_switching`) have a batch active, so this was **not an active bug**, but was a latent risk if any future caller invoked `pop_block_from_blockchain` without a batch.
-
-**Fix applied:** Wrapped the staker accrual reversal block in `db_wtxn_guard`, which is a no-op when a batch is already active but starts/commits its own write txn otherwise.
-
-### `pop_blocks` (multi-block rewind)
-
-Wraps all pops in `batch_start`/`batch_stop`. All `pop_block_from_blockchain` calls, txpool `add_tx` re-insertions, and staker accrual reversals share one LMDB transaction.
-
-### Known issue: hf_versions not cleaned on pop
-
-The code comment at line 653-655 notes that popping a block does not remove the corresponding `hf_versions` LMDB entry. `HardFork::on_block_popped` only adjusts in-memory state. This is a **logical inconsistency** (the LMDB table has one extra entry relative to the chain tip), not a data corruption risk — `hf_versions` is overwritten on re-add.
-
-### Verdict: PASS (with fix applied for defensive guard)
-
----
-
-## Transaction Pool
-
-### Properly atomic paths
-
-| Function | Mechanism | Verdict |
-|---|---|---|
-| `add_tx` | `LockedTXN` → `lock.commit()` | PASS |
-| `take_tx` | `LockedTXN` → `lock.commit()` | PASS |
-| `set_relayed` | `LockedTXN` → `lock.commit()` (line 934) | PASS |
-| `remove_stuck_transactions` | `LockedTXN` → `lock.commit()` | PASS |
-| `fill_block_template` | `LockedTXN` → `lock.commit()` | PASS |
-| `validate` | `LockedTXN` → `lock.commit()` | PASS |
-
-### Bug found and fixed: `get_relayable_transactions`
-
-**Before fix:** The function created a `LockedTXN` at line 821 and called `m_blockchain.update_txpool_tx()` for Dandelion++ stem/forward timestamp updates, but returned **without calling `lock.commit()`**. The destructor called `abort()`, silently rolling back all timestamp updates on every invocation.
-
-**Impact:** Dandelion++ stem/forward transaction relay timestamps were never persisted. Transactions in these states could be re-relayed prematurely or with stale timing data. This affected privacy (Dandelion++ timing resistance) but not consensus or fund safety.
-
-**Fix applied:** Added `lock.commit()` before `m_next_check` assignment.
-
-### `LockedTXN` nesting behavior
-
-When a batch is already active (e.g., during block processing), `LockedTXN::batch_start()` returns `false`, and the inner `commit()`/`abort()` are no-ops. All writes piggyback on the outer batch. This is correct behavior but worth noting for future developers.
-
-### `LockedTXN::commit` exception handling
-
-`commit()` catches and logs exceptions from `batch_stop` but does not propagate them. Callers cannot distinguish a successful commit from a failed one without additional checks. This is a **design trade-off** (avoids double-throw in destructors) but means commit failures are silent.
-
-### Verdict: PASS (with fix applied)
-
----
-
-## Alt Blocks
-
-### `add_alt_block` / `remove_alt_block`
-
-Both use `CURSOR(alt_blocks)` which operates on `*m_write_txn`. They do not start their own transactions — they require an active write txn from the caller.
-
-### Call paths
-
-| Caller | Batch active? | Safe? |
-|---|---|---|
-| `handle_alternative_block` (via `add_new_block`) | Yes (from `prepare_handle_incoming_blocks`) | Yes |
-| `switch_to_alternative_blockchain` (remove loop) | Yes (same batch context) | Yes |
-| `drop_alt_blocks` (via `reset`) | Uses `db_wtxn_guard` | Yes |
-
-### Verdict: PASS
-
----
-
-## Staking-Specific Write Paths
-
-### Block connect (accrual + pool + burn)
-
-Covered under "Block Connect" above. All writes are in the same batch transaction.
-
-### Block pop (accrual reversal)
-
-Covered under "Block Pop" above. Now protected by `db_wtxn_guard`.
-
-### Claim processing (`add_transaction` / `remove_transaction`)
-
-Claim pool balance decrements (`set_staker_pool_balance`) in `add_transaction_data` and increments in `remove_transaction` both use `*m_write_txn` and are in the same transaction as the block they belong to.
-
-**Note:** Multiple claim transactions in the same block each individually validate against the pool balance, then decrement sequentially. A warning log was previously added to flag cases where a claim amount exceeds the pool balance (indicating potential inter-tx over-claim). The sequential validation within one LMDB transaction ensures consistency.
-
-### Verdict: PASS
-
----
-
-## FCMP++ Curve Tree
-
-### grow_curve_tree / trim_curve_tree
-
-Both use `*m_write_txn` directly for leaves, layers, and meta updates. Checkpoint saves and intermediate layer prunes are in the same transaction.
-
-### Pending tree lifecycle
-
-`add_pending_tree_leaf`, `drain_pending_tree_leaves`, and drain journal entries all use `*m_write_txn`. The drain-then-grow sequence in `BlockchainDB::add_block` is atomic within the block's transaction.
-
-### Verdict: PASS
-
----
-
-## Summary of Fixes
-
-| Issue | Severity | Status |
-|---|---|---|
-| `get_relayable_transactions` missing `lock.commit()` | Medium (privacy/Dandelion++) | **Fixed** |
-| `pop_block_from_blockchain` staker accrual writes without defensive write txn guard | Low (latent risk, all current callers safe) | **Fixed** |
-| `hf_versions` LMDB entry not removed on pop | Low (cosmetic, overwritten on re-add) | Known, not fixed (pre-existing) |
-
-## Overall Assessment
-
-The LMDB write layer is well-designed. The batch mechanism (`m_write_batch_txn`) provides strong atomicity guarantees for block processing, and `TXN_BLOCK_PREFIX` correctly joins existing transactions. The two issues found were a missing commit in a txpool helper and a missing defensive guard for a post-pop write path — neither caused data corruption in production paths. All FCMP++ curve tree operations and staking writes are properly scoped within their parent transactions.
+*The April 2026 text this file replaces is preserved in git history at
+`a17ccd0c81` (`git show a17ccd0c81:docs/LMDB_WRITE_ATOMICITY_AUDIT.md`);
+its verdicts are records-was — true of a 29-table store with claim-era
+staking and a live Monero migration ladder, none of which exist at this
+pin.*
