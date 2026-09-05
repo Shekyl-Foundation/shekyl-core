@@ -298,25 +298,78 @@ TEST(ban, limit)
   ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
 }
 
+namespace
+{
+  // A private --data-dir for a test that runs node_server::init. The
+  // option's default is the operator's real data directory
+  // (tools::get_default_data_dir()), whose p2pstate.bin init_config would
+  // read and whose peerlist a test must neither depend on nor rewrite.
+  boost::filesystem::path create_node_dir()
+  {
+    boost::system::error_code ec;
+    auto path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("daemon-%%%%%%%%%%%%%%%%", ec);
+    if (ec)
+      return boost::filesystem::path{};
+    auto success = boost::filesystem::create_directory(path, ec);
+    if (!ec && success)
+      return path;
+    return boost::filesystem::path{};
+  }
+
+  // Options for a node_server whose init must not open a listener. --offline
+  // returns from init before the p2p bind (net_node.inl: "from here onwards,
+  // it's online stuff"), after the command line, the ban list and the
+  // peerlist have been processed — everything the ban tests exercise. Without
+  // it, init bound the network default P2P_DEFAULT_PORT, so the suite went
+  // red whenever a daemon was running on the same box, for a reason none of
+  // these tests tests. A test that fails for a non-subject reason trains its
+  // own dismissal: RK-5b hit that failure on every full run and two lanes
+  // triaged it as environmental on the same day.
+  //
+  // TEST(node_server, bind_same_p2p_port) deliberately does not use this: a
+  // listener is its subject.
+  boost::program_options::variables_map offline_node_vm(const boost::filesystem::path& node_dir, std::vector<std::string> extra_args)
+  {
+    std::vector<std::string> args{"--data-dir", node_dir.string(), "--offline"};
+    args.insert(args.end(), extra_args.begin(), extra_args.end());
+
+    boost::program_options::options_description options_description{};
+    cryptonote::core::init_options(options_description);
+    Server::init_options(options_description);
+
+    boost::program_options::variables_map vm;
+    boost::program_options::store(
+      boost::program_options::command_line_parser(args).options(options_description).run(), vm);
+    return vm;
+  }
+}
+
 TEST(ban, subnet)
 {
-  GTEST_SKIP() << "Intermittent allocator failure in constrained environments; tracked for dedicated fix.";
+  // Formerly GTEST_SKIP'd as "intermittent allocator failure in constrained
+  // environments; tracked for dedicated fix" — nothing in the tree tracked
+  // it, and the stated cause was wrong on all three counts. The body called
+  // boost::program_options::parse_command_line(0, nullptr, opts); boost's
+  // parser builds std::vector<std::string>(argv+1, argv+argc), a reversed
+  // range when argc == 0, and libstdc++ throws std::length_error
+  // deterministically (older libstdc++ attempted the negative length and
+  // raised bad_alloc — the "allocator failure"). So the test threw before
+  // init ran. Had it parsed, it would have read the operator's real
+  // p2pstate.bin (no --data-dir), bound P2P_DEFAULT_PORT (no --offline), and
+  // never asserted init's result. All of that is gone; the assertion is
+  // present.
   time_t seconds;
   test_core pr_core;
   cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
   Server server(cprotocol);
-  {
-    boost::program_options::options_description opts{};
-    Server::init_options(opts);
-    cryptonote::core::init_options(opts);
 
-    char** args = nullptr;
-    boost::program_options::variables_map vm;
-    boost::program_options::store(
-      boost::program_options::parse_command_line(0, args, opts), vm
-    );
-    server.init(vm);
-  }
+  const auto node_dir = create_node_dir();
+  ASSERT_TRUE(!node_dir.empty());
+  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
+      boost::filesystem::remove_all(node_dir);
+    });
+
+  ASSERT_TRUE(server.init(offline_node_vm(node_dir, {})));
   cprotocol.set_p2p_endpoint(&server);
 
   ASSERT_TRUE(server.block_subnet(MAKE_IPV4_SUBNET(1,2,3,4,24), 10));
@@ -366,39 +419,16 @@ TEST(ban, file_banlist)
   Server server(cprotocol);
   cprotocol.set_p2p_endpoint(&server);
 
-  auto create_node_dir = [](){
-    boost::system::error_code ec;
-    auto path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("daemon-%%%%%%%%%%%%%%%%", ec);
-    if (ec)
-      return boost::filesystem::path{};
-    auto success = boost::filesystem::create_directory(path, ec);
-    if (!ec && success)
-      return path;
-    return boost::filesystem::path{};
-  };
   const auto node_dir = create_node_dir();
   ASSERT_TRUE(!node_dir.empty());
   auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
       boost::filesystem::remove_all(node_dir);
     });
 
-  boost::program_options::variables_map vm;
-  boost::program_options::store(
-    boost::program_options::command_line_parser({
-      "--data-dir",
-      node_dir.string(),
-      "--ban-list",
-      (unit_test::data_dir / "node" / "banlist_1.txt").string()
-    }).options([]{
-      boost::program_options::options_description options_description{};
-      cryptonote::core::init_options(options_description);
-      Server::init_options(options_description);
-      return options_description;
-    }()).run(),
-    vm
-  );
-
-  ASSERT_TRUE(server.init(vm));
+  ASSERT_TRUE(server.init(offline_node_vm(node_dir, {
+    "--ban-list",
+    (unit_test::data_dir / "node" / "banlist_1.txt").string()
+  })));
 
   // Test cases (look in the banlist_1.txt file)
 
