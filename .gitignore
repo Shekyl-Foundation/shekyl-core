@@ -200,4 +200,4 @@ build-randomx-v2-diff/
 build-parity-rel/
 
 # Claude settings
-.claude/
+.claude/build-aarch64/
