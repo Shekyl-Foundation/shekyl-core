@@ -481,8 +481,10 @@ own drain (census §7 #17, S1, ruling owed), so the two witnesses currently
 agree only because the template fills the header honestly. One more reason
 the verifier reads its **own computed record**, never the header; a rewrite
 does the same in whatever form its store keeps that record. The prover holds no
-store, reads the header ([`CURVE_TREE_CLIENT.md`](design/CURVE_TREE_CLIENT.md) §3.3), and is covered by
-the same B5 binding plus its own leaf recompute. The two reads name one
+store and reads the header ([`CURVE_TREE_CLIENT.md`](design/CURVE_TREE_CLIENT.md) §3.3); today its only
+protection is its own leaf recompute against that header (`verify_root`
+refuses to build against a root it cannot reproduce), and B5 adds the
+consensus-side binding only once the S1 below is closed. The two reads name one
 value on every network where B5 runs; the only thing that makes the choice
 observable is B5's FAKECHAIN skip (census R9), and only in tests.
 
