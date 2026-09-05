@@ -757,18 +757,28 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             .expect("every get_version vector carries a version")
     };
 
-    let mut previous = 0u64;
+    let mut previous_after: Option<&str> = None;
     for (i, (before_raw, after_raw)) in links.iter().enumerate() {
         let (lo, hi) = (version_of(before_raw), version_of(after_raw));
         assert!(
             hi > lo,
             "link {i}: the version must increase across a bump ({lo} -> {hi})"
         );
-        assert!(
-            lo > previous || i == 0,
-            "link {i}: the chain must be contiguous — {lo} does not follow {previous}"
-        );
-        previous = lo;
+        // **Contiguity is document identity, not an ordering.** The first
+        // draft asserted `lo > previous_version`, which only says the
+        // sequence increases — a chain with a vector left out of `links`
+        // passes that happily, and a vector left out is exactly what this
+        // test exists to catch. Each link's *before* must be the previous
+        // link's *after*: the same document, not merely a larger number.
+        if let Some(previous) = previous_after {
+            assert_eq!(
+                parsed(previous),
+                parsed(before_raw),
+                "link {i}: its `before` is not the previous link's `after` — \
+                 a vector is missing from the chain"
+            );
+        }
+        previous_after = Some(after_raw);
 
         // The pair differs by the version and by nothing else.
         let mut before = parsed(before_raw);
@@ -1071,7 +1081,7 @@ fn sync_info_empty_matches_the_oracle() {
 // ── RK-5b: the header remainder, and four deliberate divergences ────────────
 //
 // **A green parity run here does NOT mean "Rust matches C++".** Three of these
-// methods change shape at 3.26, so their `_v1` captures are the *before* half
+// methods change shape at 3.27, so their `_v1` captures are the *before* half
 // of a pair and the `_v2` files are what the daemon emits now. Each `_v2` is
 // held honest by a delta test below that **re-derives it from `_v1`**, so a
 // hand-edited `_v2` fails rather than passing as its own authority.

@@ -102,7 +102,16 @@ pub struct GetBlockHeaderByHashResponse {
 }
 
 /// Request of `get_block_headers_range` (alias `getblockheadersrange`).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// **Deliberately not `Default`.** Every other request in this module has a
+/// meaningful empty form — `get_last_block_header` means the tip,
+/// `hard_fork_info` means the active fork — and a generic params parser can
+/// hand them `T::default()` for absent params. A *range* has no such form:
+/// the C++ value-initialised both heights to zero and answered for block 0,
+/// so a client that forgot to set them was told about genesis instead of
+/// being told it forgot. Removing the derive makes
+/// `methods::object_params::<GetBlockHeadersRangeRequest>` fail to compile,
+/// so the absent-params path cannot be restored by accident.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GetBlockHeadersRangeRequest {
     pub start_height: u64,
@@ -331,7 +340,7 @@ mod tests {
                 r#"{"hash":"0b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4"}"#
             )
             .is_err(),
-            "`hash` was deleted in 3.26; silently ignoring it would answer a \
+            "`hash` was deleted in 3.27; silently ignoring it would answer a \
              different question than the caller asked"
         );
     }

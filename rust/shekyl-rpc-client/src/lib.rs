@@ -207,6 +207,24 @@ impl FeePriority {
     }
 }
 
+/// Which fee tier a caller's priority buys.
+///
+/// The mapping the local index arithmetic encoded, named: priority `0` and
+/// `1` both take the lowest tier (the old code reached that by
+/// `saturating_sub(1)` on a `u32`), `2` and `3` step up, and anything `>= 4`
+/// — including a `Custom` priority of a million — takes the highest. Every
+/// `u32` maps to a tier, so the out-of-range `InvalidPriority` this function
+/// used to be able to return is not merely unused: it is unreachable, which
+/// is why the bounds check went with the index.
+fn fee_tier_for(priority: FeePriority) -> shekyl_rpc_types::FeeTier {
+    match priority.fee_priority() {
+        0 | 1 => shekyl_rpc_types::FeeTier::Low,
+        2 => shekyl_rpc_types::FeeTier::Normal,
+        3 => shekyl_rpc_types::FeeTier::Medium,
+        _ => shekyl_rpc_types::FeeTier::High,
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct JsonRpcResponse<T> {
     result: T,
@@ -429,60 +447,35 @@ pub trait Rpc: Sync + Clone {
         priority: FeePriority,
     ) -> impl Send + Future<Output = Result<FeeRate, RpcError>> {
         async move {
-            #[derive(Debug, Deserialize)]
-            struct FeeResponse {
-                status: String,
-                fees: Option<Vec<u64>>,
-                fee: u64,
-                quantization_mask: u64,
-            }
-
-            let res: FeeResponse = self
+            // **The shared wire type, not a local mirror.** This function
+            // used to declare its own `FeeResponse` with a required scalar
+            // `fee`, and RK-5b's removal of that field from the wire broke it
+            // at runtime while everything compiled — the crate already
+            // depends on `shekyl-rpc-types` precisely so "wallet and daemon
+            // cannot skew", and a hand-rolled duplicate is how the skew got
+            // in. Reading the shared type makes the next wire change a
+            // compile error here.
+            let res: shekyl_rpc_types::GetFeeEstimateResponse = self
                 .json_rpc_call(
                     "get_fee_estimate",
                     Some(json!({ "grace_blocks": GRACE_BLOCKS_FOR_FEE_ESTIMATE })),
                 )
                 .await?;
 
-            if res.status != "OK" {
+            if !res.status.is_ok() {
                 Err(RpcError::InvalidFee)?;
             }
 
-            if let Some(fees) = res.fees {
-                // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c/
-                // src/wallet/wallet2.cpp#L7615-L7620
-                let priority_idx = usize::try_from(if priority.fee_priority() >= 4 {
-                    3
-                } else {
-                    priority.fee_priority().saturating_sub(1)
-                })
-                .map_err(|_| RpcError::InvalidPriority)?;
-
-                if priority_idx >= fees.len() {
-                    Err(RpcError::InvalidPriority)
-                } else {
-                    FeeRate::new(fees[priority_idx], res.quantization_mask)
-                }
-            } else {
-                // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c/
-                //   src/wallet/wallet2.cpp#L7569-L7584
-                // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c/
-                //   src/wallet/wallet2.cpp#L7660-L7661
-                let priority_idx = usize::try_from(if priority.fee_priority() == 0 {
-                    1
-                } else {
-                    priority.fee_priority() - 1
-                })
-                .map_err(|_| RpcError::InvalidPriority)?;
-                let multipliers = [1, 5, 25, 1000];
-                if priority_idx >= multipliers.len() {
-                    // though not an RPC error, it seems sensible to treat as such
-                    Err(RpcError::InvalidPriority)?;
-                }
-                let fee_multiplier = multipliers[priority_idx];
-
-                FeeRate::new(res.fee * fee_multiplier, res.quantization_mask)
-            }
+            // The pre-2021-scaling fallback is gone with the field it read.
+            // It multiplied the scalar by one of `[1, 5, 25, 1000]` when the
+            // daemon sent no `fees` array — a Monero wallet2 path for a
+            // daemon Shekyl has never had, since the estimator resizes to
+            // exactly four tiers on every network and `FeeTiers` is a fixed
+            // `[u64; 4]`, so "no tiers" is now unrepresentable rather than
+            // merely unreachable (rule 60). It also carried the only
+            // unchecked multiply in this function, on a daemon-supplied
+            // number.
+            FeeRate::new(res.fees.get(fee_tier_for(priority)), res.quantization_mask)
         }
     }
 
@@ -587,5 +580,35 @@ pub trait Rpc: Sync + Clone {
             }
             Ok(reply.o_indexes)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fee_tier_for, FeePriority};
+    use shekyl_rpc_types::FeeTier;
+
+    /// Every priority maps to the tier the deleted index arithmetic gave it.
+    ///
+    /// The old code computed `if p >= 4 { 3 } else { p.saturating_sub(1) }`
+    /// and indexed a `Vec`. Naming the tiers removes the index, and this is
+    /// what says the rename changed no answer: `0` and `1` share the lowest
+    /// tier because `saturating_sub` floored them together, and every value
+    /// at or above `4` — a `Custom` priority has no upper bound — takes the
+    /// highest, which is why the out-of-range refusal went with the index
+    /// rather than being kept as defence.
+    #[test]
+    fn every_priority_maps_to_the_tier_the_index_arithmetic_gave_it() {
+        let custom = |priority| FeePriority::Custom { priority };
+        assert_eq!(fee_tier_for(custom(0)), FeeTier::Low);
+        assert_eq!(fee_tier_for(FeePriority::Unimportant), FeeTier::Low);
+        assert_eq!(fee_tier_for(custom(1)), FeeTier::Low);
+        assert_eq!(fee_tier_for(FeePriority::Normal), FeeTier::Normal);
+        assert_eq!(fee_tier_for(custom(2)), FeeTier::Normal);
+        assert_eq!(fee_tier_for(FeePriority::Elevated), FeeTier::Medium);
+        assert_eq!(fee_tier_for(custom(3)), FeeTier::Medium);
+        assert_eq!(fee_tier_for(FeePriority::Priority), FeeTier::High);
+        assert_eq!(fee_tier_for(custom(4)), FeeTier::High);
+        assert_eq!(fee_tier_for(custom(u32::MAX)), FeeTier::High);
     }
 }

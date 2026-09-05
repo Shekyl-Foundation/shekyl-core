@@ -202,6 +202,36 @@ pub fn block_request(params: &serde_json::Value) -> Result<GetBlockRequest, RpcF
 ///
 /// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] when
 /// `params` is present but is not an object this method accepts.
+/// [`object_params`] for a method whose request has **no meaningful empty
+/// form**, so absent params are refused rather than defaulted.
+///
+/// The C++ value-initialised `get_block_headers_range`'s two heights to zero
+/// and answered for block 0, and it did so for both an absent `params` and an
+/// empty object — the bridge only skipped the deserialize, it never chose a
+/// different request. The first Rust port reproduced neither faithfully: null
+/// took `T::default()` while `{}` failed to deserialize, so the two spellings
+/// of "I gave you nothing" stopped meaning the same thing. **They mean the
+/// same thing here, and both are refused**: a range is the one request in
+/// this family where the empty form names nothing, and answering it with
+/// genesis tells a client that forgot its arguments about block 0 instead of
+/// telling it that it forgot. `GetBlockHeadersRangeRequest` is not `Default`,
+/// which is what stops this being re-routed through [`object_params`] later.
+///
+/// # Errors
+///
+/// [`RpcFault::Refused`] with [`CORE_RPC_ERROR_CODE_WRONG_PARAM`] for absent
+/// params, a non-object, or an object this method cannot read.
+fn required_object_params<T: serde::de::DeserializeOwned>(
+    params: &serde_json::Value,
+    expected: &str,
+) -> Result<T, RpcFault> {
+    match params {
+        serde_json::Value::Object(_) => serde_json::from_value(params.clone())
+            .map_err(|_| RpcFault::Refused(RpcRefusal::wrong_param(expected))),
+        _ => Err(RpcFault::Refused(RpcRefusal::wrong_param(expected))),
+    }
+}
+
 fn object_params<T: serde::de::DeserializeOwned + Default>(
     params: &serde_json::Value,
     expected: &str,
@@ -721,7 +751,7 @@ pub fn block_header_by_hash_request(
 pub fn block_headers_range_request(
     params: &serde_json::Value,
 ) -> Result<GetBlockHeadersRangeRequest, RpcFault> {
-    object_params(
+    required_object_params(
         params,
         "Wrong parameters, expected an object with start_height and end_height \
          (non-negative integers) and optional fill_pow_hash (boolean)",
@@ -820,7 +850,23 @@ pub fn get_block_headers_range(
     restricted: bool,
 ) -> Result<GetBlockHeadersRangeResponse, RpcFault> {
     let pow = pow_hash_or_refuse(request.fill_pow_hash, restricted)?;
-    if request.start_height > request.end_height {
+    // **Both endpoints are bounded against the tip before any per-height
+    // work.** The C++ refused `start > end` *and* either endpoint at or past
+    // the chain height in one O(1) test; the first port kept only the
+    // ordering check and let the tip overrun surface inside the loop, one
+    // height at a time. That is a behaviour change and a denial-of-service
+    // vector: on the unrestricted listener, where the span cap does not
+    // apply, `start_height = 0, end_height = u64::MAX` walks the whole chain
+    // — a lock acquisition and a block read per height — before refusing.
+    //
+    // The tip is read once. It can only grow underneath us, which makes a
+    // range that passes this check still valid; a range that fails it was
+    // already past the tip when it was asked for.
+    let chain_height = facts.chain_tip()?.chain_height.to_raw();
+    if request.start_height > request.end_height
+        || request.start_height >= chain_height
+        || request.end_height >= chain_height
+    {
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
             message: "Invalid start/end heights.".to_owned(),
@@ -847,17 +893,13 @@ pub fn get_block_headers_range(
     for height in request.start_height..=request.end_height {
         let at = facts.block_header_at(BlockLookup::Height(BlockHeight::from_raw(height)), pow)?;
         let Some(header) = at.header else {
-            // In range and absent: the C++ answered "can't get block by
-            // height", and the facts layer already classifies it as the
-            // store contradicting itself.
-            return Err(RpcFault::Refused(RpcRefusal {
-                code: CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
-                message: format!(
-                    "Invalid start/end heights: no block at height {height} \
-                     against chain height {}",
-                    at.chain_height.to_raw()
-                ),
-            }));
+            // Below the tip and absent. With the bound above, this is no
+            // longer a caller error — it is the store contradicting itself,
+            // which is what the C++ said too (`INTERNAL_ERROR`, not
+            // `TOO_BIG_HEIGHT`). The first port collapsed both cases into the
+            // caller-error code, which told a caller to fix a request that
+            // was correct.
+            return Err(RpcFault::Facts(FactsFault::Inconsistent));
         };
         headers.push(block_header(&header));
     }
@@ -1265,6 +1307,14 @@ pub(crate) mod tests {
         pub asked_hash: std::sync::Mutex<Option<[u8; 32]>>,
         /// When set, `block_at` faults instead of answering.
         pub block_fault: Option<FactsFault>,
+        /// How many times `block_header_at` was called.
+        ///
+        /// A *count*, not a last-value, because the property
+        /// `get_block_headers_range` owes is about work not done: a range
+        /// past the tip must be refused before any per-height read. An
+        /// assertion on the error code alone cannot tell an O(1) refusal
+        /// from one that walked the chain first and refused at the end.
+        pub header_reads: AtomicU64,
     }
 
     impl ChainFacts for FakeFacts {
@@ -1364,6 +1414,7 @@ pub(crate) mod tests {
             at: BlockLookup,
             fill_pow_hash: bool,
         ) -> Result<BlockHeaderAt, FactsFault> {
+            self.header_reads.fetch_add(1, Ordering::Relaxed);
             self.asked_pow.store(fill_pow_hash, Ordering::Relaxed);
             if let Some(fault) = self.hash_fault {
                 return Err(fault);
@@ -1444,6 +1495,7 @@ pub(crate) mod tests {
             hash_chain_height: 1_234_567,
             hash_fault: None,
             asked_height: AtomicU64::new(u64::MAX),
+            header_reads: AtomicU64::new(0),
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
@@ -1719,6 +1771,7 @@ pub(crate) mod tests {
             hash_chain_height: 0,
             hash_fault: Some(FactsFault::NotReady),
             asked_height: AtomicU64::new(u64::MAX),
+            header_reads: AtomicU64::new(0),
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
@@ -1908,6 +1961,18 @@ pub(crate) mod tests {
         let range = block_headers_range_request(&json!({"start_height": 3, "end_height": 9}))
             .expect("an object with both heights");
         assert_eq!((range.start_height, range.end_height), (3, 9));
+        // **A range has no empty form, and both spellings of "nothing" say so
+        // the same way.** The C++ answered for block 0 whether params were
+        // absent or `{}`; the first port defaulted the first and refused the
+        // second, so the two stopped meaning the same thing. Both are now
+        // refused — a client that forgot its heights is told it forgot,
+        // rather than told about genesis.
+        for empty in [json!(null), json!({}), json!({"fill_pow_hash": true})] {
+            assert!(
+                block_headers_range_request(&empty).is_err(),
+                "{empty} names no range and must be refused"
+            );
+        }
 
         assert_eq!(
             hard_fork_info_request(&json!(null)).unwrap().version,
@@ -2264,6 +2329,56 @@ pub(crate) mod tests {
             get_block_headers_range(&f, &range(5, 4), false),
             Err(RpcFault::Refused(_))
         ));
+    }
+
+    /// A range past the tip is refused **without reading a single header**.
+    ///
+    /// The C++ bounded both endpoints against the chain height in one O(1)
+    /// test before its loop; the first port of this method kept only the
+    /// ordering check and discovered the overrun inside the loop, one height
+    /// at a time. On the unrestricted listener — where the span cap does not
+    /// apply — `start_height = 0, end_height = u64::MAX` therefore walked the
+    /// whole chain, a lock acquisition and a block read per height, before
+    /// refusing. Found by review, not by a test, because **an assertion on
+    /// the error code cannot tell an O(1) refusal from one that did all the
+    /// work first**: both return the same refusal. The count is the only
+    /// observable that separates them, which is why the fake now carries one.
+    #[test]
+    fn a_range_past_the_tip_is_refused_before_any_header_is_read() {
+        let f = facts(false, 0);
+        let reads = || f.header_reads.load(Ordering::Relaxed);
+        let range = |start: u64, end: u64| GetBlockHeadersRangeRequest {
+            start_height: start,
+            end_height: end,
+            fill_pow_hash: false,
+        };
+
+        let before = reads();
+        assert!(matches!(
+            get_block_headers_range(&f, &range(0, u64::MAX), false),
+            Err(RpcFault::Refused(refusal)) if refusal.code == CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT
+        ));
+        assert_eq!(
+            reads(),
+            before,
+            "an unbounded range must cost no header reads"
+        );
+
+        // The tip itself is past the end: `chain_height` is a count, so the
+        // highest readable height is one below it.
+        let tip = f.tip.as_ref().expect("a tip").chain_height.to_raw();
+        let before = reads();
+        assert!(matches!(
+            get_block_headers_range(&f, &range(tip, tip), false),
+            Err(RpcFault::Refused(_))
+        ));
+        assert_eq!(reads(), before, "the tip's own height is not readable");
+
+        // And the last valid height still answers, so the bound is not
+        // off by one in the other direction.
+        let before = reads();
+        assert!(get_block_headers_range(&f, &range(tip - 1, tip - 1), false).is_ok());
+        assert_eq!(reads(), before + 1, "exactly one header for one height");
     }
 
     /// The request's absent version reaches the facts layer as `None` — the

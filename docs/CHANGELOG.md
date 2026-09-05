@@ -439,7 +439,11 @@
   header-range cap bounded `end - start` rather than the count, so a
   restricted caller could obtain 1001 headers against a cap of 1000; and a
   restricted caller asking for `fill_pow_hash` is now refused rather than
-  handed an empty field with status OK.
+  handed an empty field with status OK. `get_block_headers_range` refuses a
+  request that names no range (absent `params` or `{}`) instead of answering
+  for block 0 as the C++ did — a client that omits its heights is told it
+  omitted them — and bounds both endpoints against the chain tip before
+  reading anything, which the C++ also did and the first port did not.
 
 - **The daemon console reads the DAA block target from the build, not from
   the daemon it is talking to.** `T` is genesis-frozen and single-sourced

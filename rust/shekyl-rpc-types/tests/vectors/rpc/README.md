@@ -40,7 +40,7 @@ and ships with it, so the vectors exist to prove a *deliberate* shape change
 is the only change, not to freeze the shape. RK-5b is the worked example: it
 changes `get_block_header_by_hash` on purpose (a deleted request field, a
 per-element found discriminator, a refusal where there was a silent blank) and
-carries `CORE_RPC_VERSION` 3.26 for it. A later slice reading only the
+carries `CORE_RPC_VERSION` 3.27 for it. A later slice reading only the
 paragraph above could inherit the constraint backwards and treat an
 un-recapturable method as frozen; it is not. **A `_v2` is derived, never authored.** Each pair carries a delta test that
 re-derives `_v2` from `_v1`, so a hand-edited `_v2` fails rather than standing
