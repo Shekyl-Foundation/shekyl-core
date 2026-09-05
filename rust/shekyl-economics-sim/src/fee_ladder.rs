@@ -536,6 +536,12 @@ impl Rng {
 #[derive(Serialize)]
 pub struct DwellResult {
     pub scenario: &'static str,
+    /// Ramp vs stationary, from the SCENARIO DEFINITION (`mean_end !=
+    /// mean_start`) — never inferred from observed data: a ramp whose
+    /// value held through the window (the documented vacuous pass) has
+    /// every `min_dwell_started_in_ramp` slot `None`, and inferring kind
+    /// from that scored it against the stationary bar (PR #614 review).
+    pub is_ramp: bool,
     /// Chain age of the swept state (§1.8 grid; PR #614 review — dwell was
     /// previously pinned to the single age-4 state, and age/supply shift
     /// `C` relative to every pow2 boundary).
@@ -767,6 +773,7 @@ fn dwell_scenario(
     }
     DwellResult {
         scenario,
+        is_ramp,
         age_years: st.height / BLOCKS_PER_YEAR,
         mode: mode.name(),
         blocks_measured: blocks,
@@ -877,8 +884,15 @@ fn feedback_scenario(
         let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
         let fee = fee_at(v_avg, ag, st.height + t, &mut hyst);
         ag = advance_traced_state(ag, v_avg, params);
+        // The registered §1.7 model has NO saturation (PR #614 review: a
+        // hidden 10 000 clamp is a capacity bound the register never
+        // derived). Unclamped: the rails bound the SYSTEM — `M_r`
+        // saturates at 1.3 and `C_q` with it — so an extreme
+        // high-elasticity excursion produces a large volume, a railed
+        // correction, and a finite fee, not a divergence; the u64 cast
+        // below saturates rather than wraps.
         let demand = (demand_scale as f64) * (fee as f64 / f_ref as f64).powf(-eps);
-        let demand = demand.clamp(0.0, 10_000.0);
+        let demand = demand.max(0.0);
         sum += demand;
         window.push_back(demand);
         sum -= window.pop_front().expect("window warm");
@@ -1317,8 +1331,7 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     // in-ramp run ≥ 60 (the whole-trace median is tail-dominated there
     // and is not the ramp's registered bar).
     let fails_registered_gate = |d: &DwellResult| -> bool {
-        let is_ramp = d.min_dwell_started_in_ramp.iter().any(Option::is_some);
-        if is_ramp {
+        if d.is_ramp {
             d.min_dwell_started_in_ramp
                 .iter()
                 .any(|r| matches!(r, Some(l) if *l < 60))

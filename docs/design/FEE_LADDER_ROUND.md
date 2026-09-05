@@ -473,6 +473,26 @@ already declared the Rust surface and now enumerates it in full.
   maintainer's; holding the bundle on it is the sequencing this
   states.
 
+**Cycle ten (three findings + the maintainer's rerun mandate):**
+
+- **Rerun first:** bit-identical against the recorded artifact.
+- **Ramp identity (Bugbot + Copilot, the same defect, valid):** the
+  gate filter inferred ramp-vs-stationary from observed data (`Some`
+  in-ramp runs), so a ramp whose value held through the window — the
+  documented vacuous pass — was scored against the stationary
+  median-240 bar. Kind now travels FROM THE SCENARIO DEFINITION
+  (`is_ramp` on the result, from `mean_end != mean_start`). Measured
+  effect: 9 vacuous ramps were being misclassified; none carried a
+  verdict change (no median < 240 among them), and the single
+  registered-gate violation is unchanged (age-12 nearest,
+  stationary `v=200`).
+- **Unregistered demand clamp (Copilot, valid):** the §1.7 model has
+  no saturation; the instrument carried a hidden `10 000` ceiling on
+  per-block demand. Removed (the rails bound the SYSTEM — `M_r`/`C_q`
+  saturate — so nothing diverges). Measured effect: **every one of the
+  2 400 feedback cells is bit-identical without it** — the clamp never
+  bound, and that is now a measured fact instead of an assumption.
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
