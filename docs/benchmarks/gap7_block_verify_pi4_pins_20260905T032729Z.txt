@@ -1,0 +1,358 @@
+# GAP-7 floor capture — worst-case cold-block connect verification
+# phase=pins
+# captured_utc=20260905T032729Z
+# host=skl-pi  uname=Linux skl-pi 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
+# device_row: Raspberry Pi 4 Model B, 4 GB, active cooling, USB3 SSD (PERFORMANCE_BASELINE.md §8.2)
+# git_rev=aa63f4ce996d3b8f12547db51ca60a8fb69cd84a
+# rustc=rustc 1.97.1 (8bab26f4f 2026-07-14)
+# RUSTFLAGS=-C target-cpu=cortex-a72 (pin -C target-cpu=cortex-a72 per FA-6 §8.2)
+# randomx_mode=light/cache BY CONSTRUCTION — not a configuration that can drift between runs: shekyl-pow-randomx is a cache+VM substrate with no dataset arm (rust/shekyl-pow-randomx/src/lib.rs:46-72)
+# storage_deviation: run from SD (mmcblk0p2); §8.2 row's USB3 SSD present but unmounted — not mounted deliberately; measured path is CPU-bound and in-memory, so the deviation does not enter verify_floor
+# ram_as_found: 8 GB (Rev 1.4 board) vs the June row's 4 GB — rule 76 names the MODEL and Model B matches; RandomX is light/cache (~256 MB) and the FCMP terms are CPU-bound, so 8 vs 4 GB cannot bind HERE — a future floor measurement that IS memory-sensitive must not inherit this row's device as 'the floor'
+# thermal_start: Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:27:30 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded zstd-safe v7.2.4
+  Downloaded pkg-config v0.3.33
+  Downloaded zstd v0.13.3
+  Downloaded zstd-sys v2.0.16+zstd.1.5.7
+  Downloaded fips205 v0.4.1
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling libc v0.2.184
+   Compiling version_check v0.9.5
+   Compiling cfg-if v1.0.4
+   Compiling generic-array v0.14.9
+   Compiling typenum v1.20.0
+   Compiling radium v0.7.0
+   Compiling subtle v2.6.1
+   Compiling rustversion v1.0.22
+# thermal 03:27:45 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling syn v2.0.117
+   Compiling getrandom v0.2.17
+   Compiling rand_core v0.6.4
+   Compiling semver v1.0.28
+   Compiling crypto-common v0.1.6
+   Compiling rustc_version v0.4.1
+   Compiling block-buffer v0.10.4
+   Compiling digest v0.10.7
+   Compiling zmij v1.0.21
+   Compiling tap v1.0.1
+   Compiling wyz v0.5.1
+   Compiling funty v2.0.0
+   Compiling serde_core v1.0.228
+   Compiling serde_json v1.0.149
+# thermal 03:28:00 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling bitvec v1.0.1
+   Compiling cpufeatures v0.2.17
+   Compiling serde v1.0.228
+# thermal 03:28:15 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling ff v0.13.1
+   Compiling group v0.13.0
+   Compiling foldhash v0.2.0
+   Compiling hashbrown v0.16.1
+   Compiling zeroize_derive v1.4.3
+   Compiling serde_derive v1.0.228
+   Compiling zeroize v1.8.2
+   Compiling spin v0.10.0
+   Compiling std-shims v0.1.5
+   Compiling curve25519-dalek v4.1.3
+   Compiling flexible-transcript v0.3.4
+   Compiling blake2 v0.10.6
+   Compiling thiserror v2.0.18
+# thermal 03:28:31 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling ciphersuite v0.4.2
+   Compiling thiserror-impl v2.0.18
+   Compiling keccak v0.1.6
+   Compiling sha2 v0.10.9
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.0
+# thermal 03:28:46 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling sha3 v0.10.9
+   Compiling multiexp v0.4.2
+   Compiling crypto-bigint v0.5.5
+   Compiling zerocopy v0.8.48
+   Compiling generalized-bulletproofs v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/generalized-bulletproofs)
+warning: variant `InconsistentWitness` is never constructed
+  --> shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs:97:5
+   |
+89 | pub(crate) enum IpProveError {
+   |                 ------------ variant in this enum
+...
+97 |     InconsistentWitness,
+   |     ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `IpProveError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `generalized-bulletproofs` (lib) generated 1 warning (1 duplicate)
+   Compiling zerocopy-derive v0.8.48
+warning: `generalized-bulletproofs` (lib) generated 1 warning
+   Compiling dalek-ff-group v0.5.0
+# thermal 03:29:01 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling ec-divisors v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/divisors)
+   Compiling generalized-bulletproofs-circuit-abstraction v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/fcmps/circuit-abstraction)
+   Compiling generic-array v1.3.5
+   Compiling jobserver v0.1.34
+# thermal 03:29:16 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling generalized-bulletproofs-ec-gadgets v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/fcmps/ec-gadgets)
+   Compiling cc v1.2.59
+   Compiling once_cell v1.21.4
+   Compiling full-chain-membership-proofs v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/fcmps)
+   Compiling helioselene v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-oxide/crypto/helioselene)
+warning: use of deprecated method `blake2::digest::generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> shekyl-oxide/crypto/helioselene/src/ciphersuite.rs:35:38
+   |
+35 |         uniform.copy_from_slice(hash.as_slice());
+   |                                      ^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `blake2::digest::generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> shekyl-oxide/crypto/helioselene/src/ciphersuite.rs:74:38
+   |
+74 |         uniform.copy_from_slice(hash.as_slice());
+   |                                      ^^^^^^^^
+
+   Compiling shekyl-curve-io v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-curve-io)
+   Compiling crossbeam-utils v0.8.21
+   Compiling shekyl-curve-generators v0.4.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-curve-generators)
+# thermal 03:29:31 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+warning: `helioselene` (lib) generated 2 warnings
+   Compiling inout v0.1.4
+   Compiling cipher v0.4.4
+   Compiling tracing-core v0.1.36
+   Compiling universal-hash v0.5.1
+   Compiling opaque-debug v0.3.1
+   Compiling base64ct v1.8.3
+   Compiling arrayvec v0.7.6
+   Compiling tinyvec_macros v0.1.1
+   Compiling hex-conservative v0.2.2
+   Compiling tinyvec v1.11.0
+# thermal 03:29:46 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling password-hash v0.5.0
+   Compiling poly1305 v0.8.0
+   Compiling chacha20 v0.9.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling shekyl-crypto-hash v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-crypto-hash)
+   Compiling tracing-attributes v0.1.31
+   Compiling aead v0.5.2
+   Compiling regex-syntax v0.8.10
+warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
+   Compiling pkg-config v0.3.33
+# thermal 03:30:01 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling bech32 v0.11.1
+   Compiling base64 v0.22.1
+   Compiling pin-project-lite v0.2.17
+   Compiling signature v2.2.0
+   Compiling ed25519 v2.2.3
+   Compiling tracing v0.1.44
+   Compiling shekyl-encoding v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-encoding)
+   Compiling zstd-sys v2.0.16+zstd.1.5.7
+   Compiling regex-automata v0.4.14
+   Compiling chacha20poly1305 v0.10.1
+   Compiling rand_chacha v0.3.1
+   Compiling argon2 v0.5.3
+   Compiling unicode-normalization v0.1.25
+   Compiling bitcoin_hashes v0.14.1
+# thermal 03:30:16 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling shekyl-curve-primitives v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-curve-primitives)
+   Compiling shekyl-units v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-units)
+   Compiling postcard-derive v0.2.2
+   Compiling hmac v0.12.1
+   Compiling powerfmt v0.2.0
+   Compiling num-conv v0.2.1
+   Compiling time-core v0.1.8
+   Compiling time-macros v0.2.27
+   Compiling deranged v0.5.8
+# thermal 03:30:31 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling hkdf v0.12.4
+   Compiling postcard-schema v0.2.5
+   Compiling bip39 v2.2.2
+   Compiling rand v0.8.6
+# thermal 03:30:46 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling shekyl-address v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-address)
+   Compiling ed25519-dalek v2.2.0
+   Compiling shekyl-fcmp-proofs v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-fcmp-proofs)
+   Compiling fips205 v0.4.1
+   Compiling fips203 v0.4.3
+# thermal 03:31:02 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling fips204 v0.4.6
+# thermal 03:31:17 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling hex v0.4.3
+   Compiling x25519-dalek v2.0.1
+   Compiling hybrid-array v0.4.12
+# thermal 03:31:32 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling crossbeam-epoch v0.9.20
+   Compiling time v0.3.47
+   Compiling shekyl-crypto-pq v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-crypto-pq)
+# thermal 03:31:47 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:32:02 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:32:17 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling zstd-safe v7.2.4
+   Compiling autocfg v1.5.0
+   Compiling log v0.4.29
+   Compiling lazy_static v1.5.0
+   Compiling sharded-slab v0.1.7
+   Compiling tracing-log v0.2.0
+   Compiling num-traits v0.2.19
+# thermal 03:32:32 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling inout v0.2.2
+   Compiling crypto-common v0.2.2
+# thermal 03:32:47 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling matchers v0.2.0
+   Compiling shekyl-bulletproofs v0.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-bulletproofs)
+   Compiling ring v0.17.14
+   Compiling derive_more-impl v2.1.1
+   Compiling heapless v0.7.17
+   Compiling thread_local v1.1.9
+   Compiling nu-ansi-term v0.50.3
+   Compiling rayon-core v1.13.0
+# thermal 03:33:02 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling byteorder v1.5.0
+   Compiling smallvec v1.15.1
+   Compiling either v1.15.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling hash32 v0.2.1
+# thermal 03:33:18 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:33:33 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:33:48 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling cipher v0.5.2
+   Compiling crossbeam-deque v0.8.6
+   Compiling shekyl-ct-balance v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-ct-balance)
+   Compiling crossbeam-channel v0.5.15
+   Compiling half v2.7.1
+# thermal 03:34:03 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling shekyl-archival-retention v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-archival-retention)
+   Compiling shekyl-difficulty v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-difficulty)
+   Compiling shekyl-economics v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-economics)
+   Compiling gungraun-macros v0.9.1
+   Compiling cpufeatures v0.3.0
+   Compiling proc-macro-error-attr3 v3.0.2
+   Compiling cpubits v0.1.1
+   Compiling clap_lex v1.1.0
+   Compiling getrandom v0.4.2
+   Compiling ciborium-io v0.2.2
+   Compiling anstyle v1.0.14
+   Compiling stable_deref_trait v1.2.1
+   Compiling untrusted v0.9.0
+   Compiling rustix v1.1.4
+   Compiling plotters-backend v0.3.7
+   Compiling symlink v0.1.0
+   Compiling tracing-appender v0.2.5
+   Compiling plotters-svg v0.3.7
+   Compiling clap_builder v4.6.0
+# thermal 03:34:18 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:34:33 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:34:48 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling ciborium-ll v0.2.2
+   Compiling proc-macro-error3 v3.0.2
+   Compiling aes v0.9.1
+   Compiling zstd v0.13.3
+# thermal 03:35:03 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling itertools v0.10.5
+   Compiling derive_more v2.1.1
+   Compiling yasna v0.5.2
+   Compiling pem v3.0.6
+   Compiling shekyl-wire v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-wire)
+# thermal 03:35:18 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling shekyl-portable-storage v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-portable-storage)
+   Compiling cobs v0.3.0
+   Compiling shekyl-types v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-types)
+   Compiling either-or-both v0.3.1
+   Compiling rustls-pki-types v1.14.0
+   Compiling same-file v1.0.6
+   Compiling cast v0.3.0
+   Compiling gungraun v0.19.3
+   Compiling unty-next v0.1.1
+   Compiling bitflags v2.11.0
+# thermal 03:35:33 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling linux-raw-sys v0.12.1
+   Compiling shekyl-relay-privacy v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-relay-privacy)
+   Compiling shekyl-relay v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-relay)
+# thermal 03:35:49 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling bincode-next v2.1.0
+   Compiling rcgen v0.14.7
+# thermal 03:36:04 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling criterion-plot v0.5.0
+# thermal 03:36:19 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling walkdir v2.5.0
+   Compiling gungraun-runner v0.19.3
+# thermal 03:36:34 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling postcard v1.1.3
+   Compiling shekyl-levin v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-levin)
+# thermal 03:36:49 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling rayon v1.11.0
+# thermal 03:37:04 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling plotters v0.3.7
+# thermal 03:37:19 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling shekyl-pow-randomx v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-pow-randomx)
+# thermal 03:37:34 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling ciborium v0.2.2
+   Compiling shekyl-logging v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-logging)
+# thermal 03:37:50 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling clap v4.6.0
+   Compiling shekyl-proofs v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-proofs)
+   Compiling regex v1.12.3
+# thermal 03:38:05 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:38:20 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling shekyl-chacha v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-chacha)
+   Compiling tinytemplate v1.2.1
+# thermal 03:38:35 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling shekyl-consensus v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-consensus)
+   Compiling is-terminal v0.4.17
+   Compiling anes v0.1.6
+   Compiling fastrand v2.4.1
+# thermal 03:38:50 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling oorandom v11.1.5
+   Compiling criterion v0.5.1
+   Compiling tempfile v3.27.0
+# thermal 03:39:05 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:39:20 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:39:35 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:39:51 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:40:06 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:40:21 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:40:36 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:40:51 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:41:06 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:41:21 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:41:36 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:41:51 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:42:06 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:42:21 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:42:36 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:42:51 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:43:06 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:43:21 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:43:36 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:43:51 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:44:06 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling shekyl-fcmp v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-fcmp)
+   Compiling shekyl-tx-builder v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-tx-builder)
+# thermal 03:44:21 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:44:37 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:44:52 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+   Compiling shekyl-ffi v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-ffi)
+# thermal 03:45:07 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:45:22 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:45:37 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:45:52 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+    Finished `release` profile [optimized] target(s) in 18m 28s
+     Running tests/block_connect_pins.rs (target/release/deps/block_connect_pins-32df888fbc39213b)
+
+running 3 tests
+test pqc_fixture_fidelity_positive_and_negative ... ok
+test bp_proxy_fidelity_positive_and_negative ... ok
+# thermal 03:46:07 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# thermal 03:46:22 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+test candidate_shapes_saturate_their_caps ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 35.65s
+
+# thermal_end: Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0 Can't open device file: /dev/vcioTry creating a device file with: sudo mknod /dev/vcio c 100 0
+# done_utc=20260905T034635Z
