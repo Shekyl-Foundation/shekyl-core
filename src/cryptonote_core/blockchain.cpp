@@ -4218,8 +4218,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         // that state, never the block header: the header is the block's
         // attestation of the same value, bound to the record by the CEN-B5
         // admission check, and a verifier that trusted it would be trusting the
-        // block it is validating. (That FAKECHAIN headers carry placeholder
-        // roots is a consequence of this choice, not its reason.)
+        // block it is validating.
         std::array<uint8_t, 32> tree_root = m_db->get_curve_tree_root_at_height(ref_height);
 
         MDEBUG("FCMP++ verify: ref_height=" << ref_height
@@ -5885,8 +5884,9 @@ leave:
   // here, at admission, before add_block runs the drain: a mismatch is a
   // rejected block, never a connected-then-popped one. (Comparing after
   // add_block read the post-drain root and rejected every block that matures
-  // leaves -- the first one at height CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE on
-  // every real nettype; tests/unit_tests/curve_tree_header_root_check.cpp.)
+  // leaves -- the first one at height CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW,
+  // where the genesis coinbase matures, on every real nettype;
+  // tests/unit_tests/curve_tree_header_root_check.cpp.)
   //
   // Runs on every nettype, FAKECHAIN included (rule 71). The test generator
   // computes real roots through the Rust curve-tree client

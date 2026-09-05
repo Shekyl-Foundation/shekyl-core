@@ -54,7 +54,9 @@
 
 #include "gtest/gtest.h"
 
+#include <array>
 #include <boost/filesystem.hpp>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
