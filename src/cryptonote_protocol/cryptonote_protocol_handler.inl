@@ -2886,7 +2886,8 @@ skip:
     if (!address.is_blockable())
     {
       MINFO("not dropping connections by host for " << address.str()
-        << ": this address names no host, so it identifies every peer in its zone, not one");
+        << ": this address names no host, so it cannot single out a peer -- every "
+           "inbound connection in its zone carries the same value");
       return;
     }
 
