@@ -330,6 +330,26 @@ jobs:
         # bare-Rust environment passes; the differential harness asserts
         # under its own substrate-correct environment.
         run: cargo test --locked --workspace --exclude shekyl-randomx-differential
+      - name: "shard-visual-x86-smoke"
+        working-directory: rust
+        # Option (c) of `docs/V3_SHARD_VISUALIZATION.md` "Where the bound is
+        # enforced" (Performance targets, amended 2026-09-06). This catches
+        # GROSS render regressions early on the machine CI already has; it
+        # CANNOT bound the Pi 4 floor (GAP-7: x86:A72 per-term ratios
+        # 3.86x-12x with one axis changing sign, so no scaling factor
+        # exists). The floor itself is re-run by trigger, option (a).
+        #
+        # Deliberately named a smoke check, not a budget or performance
+        # gate, so the step name cannot overclaim; and the binary prints the
+        # same disclaimer on PASS as on FAIL, because a green line reads as
+        # "performance is fine" to every human and every dashboard while a
+        # design-doc paragraph three files away does not travel with the
+        # checkmark.
+        #
+        # --release is mandatory (the binary refuses debug: a debug-profile
+        # latency measurement is meaningless). Thresholds are x86-derived
+        # and live beside the floor ones in the example source.
+        run: cargo run --locked --release -p shekyl-shard-visual --example budget_matrix -- x86-smoke
       - name: "shekyl-levin: zstd-feature-off unavailability lane (--no-default-features)"
         working-directory: rust
         # `shekyl-levin`'s `zstd` feature is default-on (production always

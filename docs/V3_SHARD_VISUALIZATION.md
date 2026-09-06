@@ -459,9 +459,10 @@ document's stated consequence (drop or restrict what misses; the
 single-algorithm fallback remains the documented escape). The
 thresholds were the targets already printed below, which predate the
 measurement. **Result: all 36 (fixture, size) cells came in over
-budget** — see *Measurements of record* directly below. The budget,
-the candidate, and the floor device are all unmoved by this section:
-which of the three gives is an open ruling, not a measurement's call.
+budget** — see *Measurements of record* directly below. Which of the
+three gives was not a measurement's call; it was ruled separately on
+2026-09-06 (**the budget gives**), and the amendment that follows from
+it is recorded in *Performance targets*.
 
 ### Measurements of record (2026-09-06)
 
@@ -532,9 +533,15 @@ stated minimum device at any tier**, and the magnitudes rule out
 tuning as the answer — 6.2× at 1024px is not a constant factor away
 from fitting. The documented escape (drop or restrict what misses;
 single-algorithm fallback) cannot be applied selectively when every
-cell misses. **A ruling is owed**, and it chooses among three things
-this document deliberately does not rank: the budget, the candidate,
-or the floor device. This section records the miss and waits.
+cell misses. The measurement itself ranked none of the three things
+that could give — the budget, the candidate, or the floor device.
+
+**RULED 2026-09-06 (Rick): the budget gives.** *"The scores on the Pi
+for shard rendering are acceptable."* The implementation and the floor
+device both stand; the original figures were the wrong numbers. The
+replacements, their derivation, and the change in what they assert are
+recorded as a dated amendment in *Performance targets* below. This
+paragraph stays as the record of the falsification that forced it.
 
 ## Candidate compositor (candidate.v1) — leading V3.x design
 
@@ -771,15 +778,124 @@ is plenty for a network with thousands of shards.
 
 ### Performance targets
 
-- **Mobile wallet thumbnail (128x128):** sub-50ms render
-- **Desktop wallet portfolio view (256x256):** sub-100ms render
-- **Detail view (512x512):** sub-300ms render
-- **Print-quality / share image (1024x1024):** sub-2s render
+**AMENDED 2026-09-06 — recorded amendment, per the amendment
+discipline in *Rendering determinism and empirical closure*.**
+Authority: Rick's ruling, *"the scores on the Pi for shard rendering
+are acceptable"* — of budget, candidate, and floor device, the
+**budget gives**. Evidence: the 36-cell floor matrix,
+[`docs/benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt`](benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt),
+which falsified every cell of the original figures. The originals are
+struck through below, **refuted, not superseded**.
 
-If a candidate algorithm can't hit these on the target devices, it
-gets dropped from the palette or restricted to higher-end rendering
-tiers. Mobile users seeing portfolio views at 128x128 must not have
-a slow experience.
+#### Why the originals failed: they named no statistic
+
+The lead finding is not that the numbers were too aggressive. It is
+that "sub-50ms at 128px" names **no statistic and no device state**.
+Median, p95, and worst-case differ by more than the numbers do, so
+the targets were **never falsifiable** — and an unfalsifiable
+threshold generates no failures, so nothing ever forced a look. That
+is why they survived years unexamined. A threshold without a
+statistic is not a threshold.
+
+Every replacement below is stated as **median on the floor device,
+warm, otherwise idle** — the exact quantity
+`rust/shekyl-shard-visual/examples/budget_matrix.rs` emits (median of
+5 timed runs after one untimed warm-up, single-threaded, full
+render-plus-PNG-encode, architecture recorded).
+
+#### These are regression bounds, not fitness bounds
+
+The struck-through figures asserted **fitness**: candidate.v1 must fit
+the floor device. The replacements do a **different job**, and saying
+so is load-bearing. At ~2× the measured corpus-worst, nothing the
+current implementation does can breach them — presented in the old
+voice they would be *a check that cannot fail*.
+
+> These thresholds no longer assert that the design fits a UX target.
+> They assert that it has **not regressed from the measured floor
+> baseline**. The UX question is answered by the async and caching
+> consequences below instead.
+
+#### Amended targets
+
+| tier | original | corpus-worst floor median | **amended** |
+|------|----------|---------------------------|-------------|
+| Mobile thumbnail (128×128) | ~~sub-50 ms~~ | 164 ms (`active`) | **350 ms** |
+| Portfolio view (256×256) | ~~sub-100 ms~~ | 385 ms (`coinbase_heavy`) | **800 ms** |
+| Detail view (512×512) | ~~sub-300 ms~~ | 1781 ms (`coinbase_heavy`) | **4 s** |
+| Share / print (1024×1024) | ~~sub-2 s~~ | 12440 ms (`coinbase_heavy`) | **25 s** |
+
+**Margin: 2× over the corpus-worst floor median.** Under a regression
+reading the margin is a **false-positive budget** — too tight and the
+check reddens on thermal noise until people learn to ignore it, and
+*a threshold people learn to ignore is worse than no threshold
+because it looks like coverage*; too loose and a real regression
+slips. Three one-sided sources of variation justify it, each able to
+make a real render slower and never faster:
+
+1. **The corpus cannot contain the worst case.** Nine fixtures, one
+   per regime of a *fake* chain, chosen for aesthetic diversity, not
+   render cost. Measured content-dependence is **4.6× at one size**
+   (`coinbase_heavy` 12.4 s vs `confidential_stake` 2.7 s at
+   1024px), so real-chain shards plausibly exceed the measured max.
+2. **Measurement conditions were favourable; a wallet's are not.**
+   Device idle at load 0.00, one render at a time, every timed cell
+   preceded by an untimed warm-up. A wallet renders while scanning
+   and syncing.
+3. **Thermal, quantified.** The run ended at 59.4 °C after minutes,
+   not hours, at stock 1800 MHz. A passively cooled Pi 4 under
+   sustained load throttles toward 1.0–1.5 GHz — **up to ~1.8×
+   slower on clock alone**, which nearly consumes 2× by itself and
+   leaves sources 1 and 2 unfunded.
+
+**Reopening criteria (rule 21) — the two things that would justify
+tightening:** a matrix over a **real** shard corpus (moves source 1
+from unquantified to measured), or a **sustained-load thermal run**
+(turns source 3 from a bound into a number). Absent one of those, the
+margin does not move.
+
+#### Consequences these numbers oblige (rules 80, 82)
+
+- **128px / 256px stay interactive only because the render is
+  cached** by the GUI's `cache_digest` (which includes
+  `RENDER_REVISION`): the cost is once per shard per revision, not
+  once per view. **That cache is load-bearing, not an
+  optimization** — the note lives at the cache site as well as here,
+  because a design doc does not defend a line of code from a cleanup
+  PR.
+- **512px / 1024px must be asynchronous with visible progress.** A
+  25 s synchronous export on the floor device is **a hang, not a slow
+  operation**. Blocking the UI at these sizes is a defect regardless
+  of the budget.
+
+#### Where the bound is enforced
+
+A regression bound is only real if something re-runs it. Named
+plainly, because "regression bound" otherwise implies automation that
+does not exist:
+
+- **(a) Named trigger, manual — the standing mechanism.** Any change
+  to a renderer, the compositor, or the entropy draws obliges a
+  floor re-run before merge. Carried as a `docs/FOLLOWUPS.md` row
+  with the trigger conditions written out. It relies on discipline —
+  but so does every reopener in this program, and the alternative is
+  pretending otherwise.
+- **(b) Scheduled floor campaign — held in reserve**, as the
+  escalation if (a) is observed failing, not the opening move.
+- **(c) x86 smoke check in CI — taken, and muzzled.** CI runs the
+  same matrix on x86 against separate, x86-derived thresholds. It
+  catches gross regressions early and **cannot bound the floor** (see
+  the sign-flipping ratios above), so the disclaimer rides in the
+  gate's own **pass** line, not only on failure and not only in this
+  document: a green line in CI reads as "performance is fine" to
+  every human and every dashboard, and a paragraph three files away
+  does not travel with the checkmark. The gate is named
+  `shard-visual-x86-smoke` — not a budget or performance gate — so
+  the name cannot overclaim either.
+
+If a candidate algorithm can't hit the amended targets on the floor
+device, it gets dropped from the palette or restricted to higher-end
+rendering tiers.
 
 ### Reproducibility
 

@@ -1003,10 +1003,19 @@ Default. Lands before genesis if it should exist at launch.
 - **Stage 5 — `ArchivalEngine` native actor build (simulation-
   - Target: pre-genesis
 
-- **[Shard-visual ruling B — budget ruling owed](V3_SHARD_VISUALIZATION.md) (measurement half EXECUTED 2026-09-06).**
-  Goldens/KATs/avalanche/parity landed, green (aarch64 raster bit-identical to x86 goldens; not a reopen). Budget
-  matrix: **36/36 cells over on the floor** (1.3×–6.2×) — ruling owed: budget / candidate / floor device.
+- **[Shard-visual floor re-run trigger](V3_SHARD_VISUALIZATION.md) — STANDING, never "done".** The amended
+  performance targets are regression bounds enforced by a named trigger (option (a) of *Where the bound is
+  enforced*), because nothing else re-runs them.
   - Target: pre-genesis
+  - **Trigger conditions — any of these obliges a floor re-run BEFORE merge:** a change to any renderer
+    (`rust/shekyl-shard-visual/src/render/*.rs`), to the compositor (`src/candidate.rs`), or to the entropy
+    draws (`src/entropy.rs` — namespace strings or draw indices).
+  - **How:** cross-compile `--example budget_matrix` for `aarch64-unknown-linux-gnu` (skl-pi has no Rust
+    toolchain), run the `floor` profile on skl-pi — ping the board first, no sudo — and commit the capture
+    under `docs/benchmarks/`.
+  - **Verdict discipline:** over-budget cells are a REGRESSION to record against the 2026-09-06 baseline, never
+    a threshold to retune. CI's `shard-visual-x86-smoke` does NOT discharge this trigger: it cannot bound the
+    floor in either direction.
 
 - **Transport selection for the staker-archival path (gate 6 /
   - Target: pre-genesis

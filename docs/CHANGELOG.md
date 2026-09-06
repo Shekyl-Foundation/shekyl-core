@@ -92,6 +92,26 @@
 
 ### Added
 
+- **Shard-visual performance targets AMENDED (2026-09-06), and the
+  amendment changes what they assert.** Rick ruled the floor scores
+  acceptable, so of budget / candidate / floor device the **budget
+  gives**. New targets, stated as *median on the floor device, warm,
+  otherwise idle* — the quantity `examples/budget_matrix.rs` actually
+  emits: 128px 350 ms, 256px 800 ms, 512px 4 s, 1024px 25 s (2× the
+  corpus-worst floor median; the originals are struck through in
+  place, refuted not superseded). Two things recorded with them:
+  (1) the originals named **no statistic and no device state**, so
+  they were never falsifiable — an unfalsifiable threshold generates
+  no failures, which is why they survived unexamined; (2) the
+  replacements are **regression bounds, not fitness bounds** — at 2×
+  the measured worst nothing the implementation does can breach them,
+  and presenting them in the old voice would ship a check that cannot
+  fail. Enforced by named trigger (any renderer / compositor /
+  entropy-draw change obliges a floor re-run; `docs/FOLLOWUPS.md`)
+  plus a new CI gate `shard-visual-x86-smoke`, whose **pass** line
+  carries its own disclaimer because a green checkmark otherwise
+  reads as "performance is fine" and cannot bound the Pi 4 floor.
+
 - **Shard-visual ruling B (measurement half): goldens, KATs, avalanche,
   floor budget matrix — executed 2026-09-06.** Designated-reference
   goldens committed once (Rust crate at `655d31cb2`, x86_64, rustc
