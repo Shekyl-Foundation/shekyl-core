@@ -20,6 +20,17 @@
   Tor or I2P, where `m_can_pingback` is false by construction. NAT'd ports are
   handled naturally by the revised p2p rather than by an operator flag.
 
+- **PWD-B8: a p2p timer that was never driven, and two lineage-dead wire
+  structs.** `m_bad_peer_checker` (`once_a_time_seconds<43>`) had exactly one
+  occurrence tree-wide — its own declaration — and `on_idle` never called it;
+  its orphaned `m_bad_peer_check_lock` goes with it. `connection_entry_base`
+  and its `connection_entry` typedef had **zero** references anywhere, and
+  `network_address_old` only two, both in the debug size printer. Nothing
+  observable changes, because none of it was reachable; the value is that a
+  cadence constant no code reads no longer reads as a cadence to anyone
+  auditing the file.
+
+
 ### Fixed
 
 - **Consensus: the block header's `curve_tree_root` is now checked at

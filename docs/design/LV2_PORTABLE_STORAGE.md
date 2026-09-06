@@ -247,8 +247,6 @@ surface; it is not optional.
 | Type | Why it is out |
 | --- | --- |
 | `connection_info` | RPC `get_connections` JSON, not a Levin body |
-| `network_address_old` | Debug `object_sizes` only; no production caller |
-| `connection_entry` | Not a Levin command body |
 | `network_config` | Node config (`m_net_config`); not in handshake |
 | `anchor_peerlist_entry` | Disk peerlist via Boost serialization, not KV-on-Levin |
 | `ipv4_network_subnet` | Ban-list / matching, not a command body |

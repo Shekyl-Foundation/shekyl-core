@@ -34,6 +34,7 @@ set(unit_tests_sources
   block_reward.cpp
   economics_c2a_prime.cpp
   bulletproofs_plus.cpp
+  gap7_bp_bench.cpp
   canonical_amounts.cpp
   chacha.cpp
   checkpoints.cpp
