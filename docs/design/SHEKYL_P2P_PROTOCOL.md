@@ -793,7 +793,26 @@ and clearnet does not. Until it carries one, `contrib/epee/src/net_utils_base.cp
 `identifies_a_host` guard and the `drop_connections` early return exist only to stop a
 zone-wide address from being read as a host key; both are marked for deletion at the
 line. Not scheduled here — admission policy (no endpoint ⇒ not a peer) is a separate
-ruling, and it has a `--hide-my-port` consequence.
+ruling.
+
+**The `--hide-my-port` consequence this row used to defer is settled, and it does not
+travel with that ruling** (Rick, 2026-09-05; landed with the PR that deleted the flag).
+The flag is gone **as an option and as a capability**: whether this node advertises a
+port is now derived — announced only where a peer could reach us on it, meaning the zone
+supports the back-ping that verifies the claim *and* we accept inbound connections at
+all. **No dedicated advertisement flag remains**, so an admission ruling has no toggle
+to interact with; it inherits a derived value rather than a configured one. Operator
+influence is not gone and should not be described as gone -- `--in-peers` feeds
+`max_in_connection_count`, so an operator still controls the outcome, but by changing the
+node's reachability rather than by asserting an answer that contradicts it.
+
+Two consequences P2P-3 should carry rather than re-derive. An operator who wants not to
+be advertised refuses inbound (`--in-peers 0`) and the derivation follows; one who wants
+no p2p participation does not run a daemon — the posture the flag nominally served has
+no separate mechanism and needs none. `m_external_port` survives as the single
+operator-supplied value in the announcement, kept because a manual static NAT forward is
+not observable by the node and the claim is verified downstream by the peer's back-ping
+before anything is gossiped.
 
 ### PWD-I2 — peerlist *acceptance* is restricted; disclosure is retained unchanged, and the Shi et al. amplifiers are closed
 
@@ -3230,30 +3249,53 @@ rather than inheriting whatever the default happens to be.
 > axis for a drop under this rule, so the same implementation action carries
 > it: decline to process, do not sever.
 >
-> **The block-sync path, checked in the review of #620 — a third site, and the
-> most clearly disqualified of the three.** The
-> `prepare_handle_incoming_blocks` failure arm
-> (`cryptonote_protocol_handler.inl`, in `try_add_next_blocks`) severs the
-> span's origin. That call returns `false` for **six of our-own-state
-> reasons**: `m_cancel` — our own shutdown or cancellation — at
-> `src/cryptonote_core/blockchain.cpp:7025`, `:7035`, `:7076`, `:7188`, and a
-> thread-pool `!waiter.wait()` at `:7021` and `:7172`. None describes the
-> input; **our shutdown disconnects and charges an innocent peer.** It fails
-> the first conjunct outright, without needing the universality test.
+> **The block-sync path — a third site, and the one that proves the type is
+> necessary rather than merely tidier (reviews of #620 and #628).** The
+> `prepare_handle_incoming_blocks` failure arm severs and charges the span's
+> origin. That call has **ten** syntactic `return false` sites but **fifteen
+> distinct conditions**, because `SCAN_TABLE_QUIT`'s single return serves six
+> of them. Classified by condition, not by return, they fall in **three**
+> classes:
 >
-> **What #620 could do under a boolean, and what it deliberately did not.**
-> The host-fail score is removed from that site's id-drop: a charge is an
-> accusation, and none is supportable here. The **disconnect stays**, because
-> a boolean return cannot separate our cancellation from malformed input, and
-> removing the sever on the strength of the cancellation cases alone would
-> leave a genuinely malformed span with no consequence — and, since the
-> host-wide sweep above it is a no-op only on anonymity zones, would make the
-> severing behaviour differ by zone, which is the divergence
-> [`71-network-uniformity`](../../.cursor/rules/71-network-uniformity.mdc)
-> requires be named and ratified rather than acquired. **That forced choice is
-> the argument for the type:** with one bit, both answers are wrong, and only
-> the tri-state above makes the site decidable. The implementation action
-> carries this site with the other two.
+> | Condition | Count | Describes | Attributable? |
+> | --- | --- | --- | --- |
+> | `m_cancel` — our own shutdown or cancellation | 4 | our state | no |
+> | thread-pool `!waiter.wait()` | 2 | our state | no |
+> | unparseable block blob | 2 | the input | **yes** |
+> | unparseable tx, duplicate tx, duplicate key image (via `SCAN_TABLE_QUIT`) | 3 | the input | **yes** |
+> | empty span | 1 | the input | **yes** |
+> | `tx_index is out of sync` ×2, `Tx not found on scan table` (via `SCAN_TABLE_QUIT`) | 3 | **an internal invariant of ours** | no — and this is the class PWD-B7 most clearly forbids charging for |
+>
+> **The third class was missed twice, and that is itself the lesson.** The
+> first enumeration grepped for the reasons it expected and found six; the
+> second counted syntactic returns and reported a two-way split. Both times the
+> instrument shaped the result — `SCAN_TABLE_QUIT` hides six conditions behind
+> one `return false`, so any census that counts returns undercounts conditions
+> and any census that greps its hypothesis finds only the hypothesis.
+>
+> **The first reading of this site was wrong, and recording the error is the
+> point of this paragraph.** #620 removed the id-drop's score here, and #628
+> proposed removing the sweep's too, both on the premise that a prepare failure
+> always describes our own state. It does not. **The boolean cannot say which
+> of the fifteen fired**, so the caller cannot classify the failure at all — and
+> declining to charge would let a peer feed malformed spans indefinitely,
+> reconnecting each time with no score accumulating.
+>
+> **#628 therefore withdrew its own change rather than restoring anything.**
+> The sweep charges as it always did -- that is the charge, and it is what
+> makes the failure cost the sender. The id-drop below it keeps `add_fail`
+> false, as `#620` left it and as the parse-failure sibling does, so the origin
+> is not billed twice for one failure; an earlier revision of #628 restored
+> that point and was reverted, because the redundant charge pinned a number
+> rather than the invariant. On an anonymity zone the question is moot:
+> `add_host_fail` refuses an address that names no host whoever calls it.
+>
+> **This is the concrete argument for the tri-state.** Under one bit both
+> answers are wrong: charge, and our own shutdown punishes an honest peer;
+> decline, and a hostile peer is never priced. Neither the sever nor the score
+> is separable without a classified verdict, which is why the implementation
+> action carries this site with the other two and why it belongs in Rust rather
+> than in a wider C++ signature.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |

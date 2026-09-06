@@ -175,7 +175,6 @@ or a reverse proxy. Wallet-RPC retains login/SSL flags for its own listener.
 | `--add-peer <host:port>` | Manually add a peer |
 | `--add-priority-node <host:port>` | Peer that is always maintained |
 | `--ban-list <path>` | File of banned IP addresses |
-| `--hide-my-port` | Do not advertise your port to peers |
 
 **Background operation**
 

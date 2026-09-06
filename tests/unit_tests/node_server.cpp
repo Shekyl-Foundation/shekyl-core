@@ -1978,15 +1978,20 @@ TEST(block_sync_span_lifecycle, an_incorrect_height_span_leaves_the_queue_with_i
        "again forever against a peer that is already gone";
 }
 
+// A prepare failure IS charged, and this test exists to keep it that way.
+//
 // `prepare_handle_incoming_blocks` returns false for six of OUR-state reasons
-// (`blockchain.cpp` `m_cancel` at :7025, :7035, :7076, :7188; `!waiter.wait()`
-// at :7021, :7172), so a failure there is not attributable to the sender and
-// PWD-B7 forbids charging one for it. The origin is still disconnected -- a
-// bool cannot separate our cancellation from malformed input -- but the id
-// drop must add no score of its own. Run on a CLEARNET origin, because the
-// endpoint refuses to score a non-host address at all and could not tell the
-// two apart on an anonymity zone.
-TEST(block_sync_span_lifecycle, prepare_failure_disconnects_the_origin_without_charging_it)
+// (`m_cancel`, thread-pool `!waiter.wait()`) and for about as many
+// SENDER-attributable ones -- unparseable block blob, unparseable transaction,
+// duplicate transaction, duplicate key image, empty span. The boolean cannot
+// say which fired, so declining to charge would let a peer feed malformed
+// spans forever and reconnect with no score accumulating. An earlier revision
+// of this test asserted the opposite, on the premise that the failure was
+// always ours; that premise was wrong (review of #628).
+//
+// Run on a CLEARNET origin, because the endpoint refuses to score a non-host
+// address at all and could not observe the difference on an anonymity zone.
+TEST(block_sync_span_lifecycle, prepare_failure_charges_the_origin_it_disconnects)
 {
   test_core pr_core;
   pr_core.prepare_handle_incoming_blocks_result = false;
@@ -2004,14 +2009,81 @@ TEST(block_sync_span_lifecycle, prepare_failure_disconnects_the_origin_without_c
 
   ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
 
-  // The host sweep runs on a blockable address and charges: 5 for the host,
-  // then 1 for the connection it severs. Everything charged on this path is
-  // the sweep's -- the id drop that follows contributes nothing.
+  // Two properties, and the exact number pins both at once.
+  //
+  //   6 = the sweep's 5 for the host + 1 for the connection it severs.
+  //
+  // Lower than 6 means the path stopped charging -- the bypass: a peer that
+  // reaches this failure with malformed input could then repeat it forever,
+  // reconnecting each time with nothing accumulating.
+  //
+  // Higher than 6 means the origin was billed twice for one failure, because
+  // the id-drop below the sweep also passed `add_fail`. The parse-failure
+  // sibling passes false for exactly that reason, and an earlier revision of
+  // this PR asserted 7 while claiming it was testing "not zero" -- the extra
+  // point was redundant and the rationale did not match the assertion.
   unsigned total = 0;
   for (const auto &f : endpoint.host_fails)
     total += f.second;
   EXPECT_EQ(6u, total)
-    << "the id drop must not add a host-fail score: a prepare failure is not "
-       "attributable to the sender (PWD-B7)";
+    << "the sweep must charge (an unchargeable failure is one a peer can "
+       "repeat forever) and nothing may charge a second time for it";
   EXPECT_FALSE(endpoint.dropped.empty()) << "but the origin is still disconnected";
+}
+
+// The endpoint advertisement is DERIVED: no dedicated flag decides it, so the
+// only witness is the announced value itself. Operator influence remains and is
+// exercised below -- `--in-peers 0` suppresses the announcement BY DERIVATION,
+// which is the supported control and the second limb of this test.
+//
+// The middle limb is the defect this replaced. `check_incoming_connections`
+// has always treated "no inbound accepted" as "not advertising"; the
+// announcement site asked only whether `--hide-my-port` was set, so a node run
+// with `--in-peers 0` refused every inbound connection and still announced a
+// port to attract them. Nothing in the tree observed that, which is why the
+// two sites could diverge silently.
+TEST(node_server, announced_port_is_derived_from_listener_and_zone)
+{
+  struct test_data_t
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+    test_data_t(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+  };
+
+  const auto announced = [](const std::string &port, const std::string &in_peers) {
+    test_data_t data;
+    boost::program_options::options_description desc_options("Command line options");
+    cryptonote::core::init_options(desc_options);
+    Server::init_options(desc_options);
+    const char* argv[2] = {nullptr, nullptr};
+    boost::program_options::variables_map vm;
+    boost::program_options::store(
+      boost::program_options::parse_command_line(1, argv, desc_options), vm);
+    vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+      boost::program_options::variable_value(std::string("127.0.0.2"), false);
+    vm.find(nodetool::arg_p2p_bind_port.name)->second =
+      boost::program_options::variable_value(port, false);
+    if (!in_peers.empty())
+      vm.find(nodetool::arg_in_peers.name)->second =
+        boost::program_options::variable_value(int64_t(std::stoll(in_peers)), false);
+    boost::program_options::notify(vm);
+    if (!data.server->init(vm))
+      return uint32_t(0xffffffff);   // distinguishable from a real 0
+    return data.server->get_announced_port(epee::net_utils::zone::public_);
+  };
+
+  // Accepting inbound on a pingback-capable zone: announce the listening port.
+  EXPECT_EQ(48086u, announced("48086", ""))
+    << "a reachable node must advertise, and nothing but the facts decides it";
+
+  // The corrected divergence: no inbound accepted, so nothing to advertise.
+  EXPECT_EQ(0u, announced("48087", "0"))
+    << "a node that refuses every inbound connection must not announce a port "
+       "for peers to attract themselves to";
 }

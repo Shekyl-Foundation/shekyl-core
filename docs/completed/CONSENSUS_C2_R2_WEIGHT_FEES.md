@@ -15,11 +15,13 @@ embedded trace, and the load-bearing Q2↔Q3 coupling are all in §3 Q2.
 it was allocated to the `margin` deliverable and DISSOLVED into §6 when
 that was reclassified as a derivation (a consequence of Q2/Q3), not a
 ruling. Recorded rather than renumbered so every cross-reference stays
-valid.** On close this document moves to `docs/completed/` as the round's
-ruling record (rule 95).
+valid.** Archived to `docs/completed/` in the landing PR as the round's
+finished ruling record (rule 95 closed-plan class; the round is
+ratification-only, so it owns no open work — residue rows live in
+`FOLLOWUPS.md` and the census §10 queue).
 
 Third design round of the C2 program
-([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §10 batch R2, 8
+([`CONSENSUS_RULE_CENSUS.md`](../design/CONSENSUS_RULE_CENSUS.md) §10 batch R2, 8
 rows). The round is **ratification-only** (steering constraint, program-wide):
 no in-round crossings to Rust, no C++ mechanism changes — docs and gates only.
 Where a ruling implies mechanism, it is **recorded and specified for the Rust
@@ -28,7 +30,7 @@ store port**, which consumes these rows; it is not built ahead of it.
 **Pinned sha:** `ab4693d0e8` (`dev` tip at dispatch). Every `file:line` in
 this document was located at this pin.
 
-**Fee-ladder citations:** [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md)
+**Fee-ladder citations:** [`FEE_LADDER_DERIVATION.md`](../design/FEE_LADDER_DERIVATION.md)
 is ON DEV (PR #614 merged 2026-09-05, `d82fcf31c`) — the plain-text pins the
 draft carried (`ccfb85c72`) are converted to links in this PR, per the
 sequencing rule the draft recorded: lifting the eight `R2 DEFERRED` census
@@ -61,12 +63,12 @@ detectability rationale for sequencing this PR after #614 is history — the
 sequencing it argued for happened.
 
 **Identifier family:** `C2-R2-Q1…Q11` (registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) this PR, rule 94).
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) this PR, rule 94).
 
 **Authority chain:** census §10 R2 + rows CEN-G6, G6b, F14b, H1, H3, M3, M4,
 M10; census §12 GAP-6/GAP-7/GAP-8; FEE_LADDER_DERIVATION.md (FL-R12′, FL-R13,
 FL-D4, FL-D5 — pinned `ccfb85c72`); `DAEMON_SUBMIT_VERDICT.md` §8 rows N3, P2,
-P3; [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) (round-shape
+P3; [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) (round-shape
 precedent); rules 00 / 06 / 16 / 19 / 20 / 21 / 22 / 42 / 50 / 60 / 71 / 76 /
 90 / 94 / 95.
 
@@ -504,7 +506,8 @@ no migration, no rule-42 trigger; the strongest outcome a
 `pinned-not-re-derived` row can reach. Three boundary conditions on
 `P(x) = 1 − x²`, each independently motivated:
 
-1. **`P(0) = 1`** — a block at the median pays nothing: the zone/median is
+1. **`P(0) = 1`** — a block at the median forfeits nothing (it receives
+   the full paid reward): the zone/median is
    the *guaranteed* capacity (Q1), so the penalty must vanish there or the
    guarantee is false.
 2. **`P′(0) = 0`** (smooth entry) — the median is a *noisy order
@@ -845,19 +848,20 @@ parent chain extends `k` blocks past it.
    absolute ceiling (`EM ≤ S·LTEM`; S = 50 in today's code, but Q3's
    amendment REFUTED ×50 and **the signed re-derivation is S = 4 (d24
    denomination)** — carry the symbol, never the literal,
-   so no legal announce ever exceeds `2·50·LTEM` regardless of lag). The
+   so no legal announce ever exceeds `2·S·LTEM` regardless of lag). The
    receiver computes both `EM` (its `m_current_block_cumul_weight_limit/2`)
-   and `LTEM` live, so the cap needs no protocol constant beyond the ×50
+   and `LTEM` live, so the cap needs no protocol constant beyond `S`
    and the lag bound `k` the P2P row states. At typical announce-lag
    `k ≤ 2`: **×4**, already dominating the observed adversarial ladder
    (2.5 at k = 2); at the crossover `k ≥ 6`-ish the clamp term takes over.
 4. **Genesis-era note:** at chain height `H < 100` the windows are
    `H`-sized and the hysteresis reasoning shifts, but bound (1) and the
-   clamp term are window-size-independent, so `min(2^k, 50·LTEM/EM)`
+   clamp term are window-size-independent, so `min(2^k, S·LTEM/EM)`
    holds from block 1 (with `EM` floored at the zone, limit ≥ 600 000
    while real blocks are tiny — the additive `entry_max` terms dominate).
-5. **Ceiling (reference):** `L ≤ 100·LTEM` (30 MB at launch LTEM); LTEM
-   itself moves ≤ ×1.7 per 50 000 blocks (Q2).
+5. **Ceiling (reference):** `L ≤ 2·S·LTEM` — at the signed S = 4 this is
+   `8·LTEM` (2.4 MB at launch LTEM; the code's unfixed S = 50 would give
+   `100·LTEM` = 30 MB, the refuted figure); LTEM itself moves ≤ ×1.7 per 50 000 blocks (Q2).
 
 **Handoff:** `margin(k) = min(2^k, S·LTEM/EM)` with S = the ratified
 surge factor (signed S = 4), computed live; the P2P row states its
@@ -869,10 +873,24 @@ LTEM's growth over the lag is bounded by its own ratified rate,
 is ≤ 1.00003 for k ≤ 2 (invisible); in the worst ramp-in case (h = 100,
 k = 2) it is ≤ 1.7^(1/25) ≈ 1.022. The error direction is the familiar
 liveness one (a too-small cap rejects a legal announce, never admits an
-oversized one), and the ≤ 2.2 % worst-case shortfall on a ≈ 600 kB-scale
-limit (≈ 13 kB) is dwarfed by `entry_max`'s additive witness term
-(866 568 B) — absorbed by construction. Recorded so the substitution is a
-stated approximation with a bound, not an unnoticed unsoundness.
+oversized one). **The shortfall is NOT absorbed by `entry_max`'s additive
+witness term** — 866 568 B budgets the announce's own independently-capped
+witness, and a legal announce can consume all of it while its body sits at
+the true (grown-LTEM) limit, so that term has no slack to lend; an earlier
+revision claimed absorption and double-counted the budget (review
+finding, 2026-09-06). What actually holds: within the stated announce-lag
+assumption `k ≤ 2` the cap under-admits by up to the ≈ 13 kB shortfall on
+a ≈ 600 kB-scale term — a bounded liveness cost, accepted. Beyond the
+assumed lag (the latched `is_synchronized()` enforces no numeric `k`) the
+shortfall grows with LTEM's ratified rate and is unbounded in `k` — but
+the consequence stays liveness-shaped: a far-behind receiver drops a tip
+announce it could not use anyway and recovers by the block-sync path
+(2002/2004, byte-budgeted separately), which is that node's designed path
+regardless. If the announce path is ever required to serve far-behind
+receivers, the fix is a bounded-lag check at the announce gate — already
+routed with the PWD-B7 announce-arm item in `docs/FOLLOWUPS.md` — not a
+bigger cap. Recorded so the substitution is a stated approximation with
+its true consequence, not an unnoticed unsoundness.
 **The clamp arm is load-bearing, not a safety belt** (P2P-2 lane's
 grounding, verified at this pin): the announce path ignores announces
 unless `state_normal` and `is_synchronized()`
@@ -880,8 +898,9 @@ unless `state_normal` and `is_synchronized()`
 **latched boolean** (`!no_sync() && m_synchronized`,
 `cryptonote_protocol_handler.h:111`), not a within-`k`-of-tip check — a
 synced-then-partitioned node processes announces while arbitrarily far
-behind, so no code enforces a numeric `k` and `50·LTEM/EM` is what holds
-when the lag assumption fails. **Error direction, for the reviewer when
+behind, so no code enforces a numeric `k` and `S·LTEM/EM` is what holds
+when the lag assumption fails (S = 50 in the shipped C++ today; signed
+S = 4). **Error direction, for the reviewer when
 the falsifier fires:** a bound that is too tight here **rejects a legal
 announce** (the receiver's EM is the crash valley while the announced
 block is legally larger) — a *liveness* failure, not a safety one; an
@@ -893,7 +912,8 @@ live **here** (single owner); the P2P doc cites this section.
 section):** simulate the §2 formulas (ST median over 100, clamps, floor,
 limit = 2·EM) under (i) adversarial bimodal windows for the single-step
 bound and (ii) crash-preloaded windows for the ladder; any trace exceeding
-`min(2^k, 50·LTEM/EM)` at any `k` falsifies the bound. Draft-time run:
+`min(2^k, S·LTEM/EM)` at any `k` falsifies the bound. Draft-time run (at
+the code's S = 50, the constants the §2 formulas carry):
 single-step max 1.961 ≤ 2 ✓; ladder ≤ 2^k at every k and saturates at the
 clamp ✓. `swing.rs` is *not* this instrument (it carries the constants and
 throughput helpers, no trace generator) — the simulation must accompany
@@ -903,10 +923,22 @@ the signature record.
 
 ## 7. GAP rows — the named blocker and the fence
 
-### GAP-7 — the verification-cost leg (named blocker, rule 22)
+### GAP-7 — the verification-cost leg (named blocker, rule 22) — DISCHARGED
 
-**The gap:** nothing binds weight to verification time on the rule-76 floor
-(Pi 4). This round's Q1/Q3 ratifications are **conditional** on it.
+**DISCHARGED IN-ROUND (2026-09-06, both halves):** the instrument this
+section demanded was built and run on the Pi 4 floor itself (PR #625:
+`shekyl-ffi/benches/block_connect_verify.rs` + the C++ BP+ microbench,
+canonical flagless captures archived under `docs/benchmarks/`). Zone leg:
+the zone-point worst cold block measures **7.23 s ≈ 6.0 % of T** —
+Q1 signs unconditionally. Transient leg: the `2·50·LTEM` unit named
+below **failed** (≈ 316 % of T), firing the condition exactly as written —
+the ×50 surge factor is REFUTED (§3 Q3) and the signed re-derivation is
+**S = 4 (d24)**, making the transient unit `2·4·LTEM` = 2.4 MB at launch.
+The text below stands as the blocker's record as named, pre-measurement.
+
+**The gap (as named):** nothing binds weight to verification time on the
+rule-76 floor (Pi 4). This round's Q1/Q3 ratifications were
+**conditional** on it.
 
 **Why it cannot be discharged at this pin:** rule 76 §4 — *"Values AND
 INCREMENTS for the floor device are measured ON it, never scaled to it"* — a
@@ -931,8 +963,8 @@ verified — the bench's own doc comment), and **no full-block traversal
 bench exists** — that instrument is part of what the discharge must
 define, not only run. Discharge = the two numbers recorded beside the
 constants with the machine named
-(rule 76 §1). Until then: Q1/Q3 sign as `ratified` **with the GAP-7
-condition recorded in the census rows' notes column** (no new evidence
+(rule 76 §1). Until the measurement, Q1/Q3 were to sign as `ratified` **with the
+GAP-7 condition recorded in the census rows' notes column** (no new evidence
 class — census §2 owns the taxonomy) — the condition is *in the ruling
 text and the row*, loud, with this section as its record.
 **What the condition means operationally:** if measurement shows the 30 MB
@@ -1025,7 +1057,7 @@ Ratification-only means these are **specifications the port consumes**:
   own named simulation — a crash-preloaded window climbs the median
   between stale high samples with no 51-block wait (observed ×6.5 at
   k = 4). Replaced with the proved-and-simulated
-  `min(2^k, 50·LTEM/EM)`; the wrong bound and the instrument that killed
+  `min(2^k, S·LTEM/EM)` (simulated at the code's S = 50); the wrong bound and the instrument that killed
   it are both recorded in §6 point 2.
 - Advisor/steering review corrections folded: conjunct (b) re-grounded as
   branch-only (header); FL-R16a retirement rephrased to in-flight, not

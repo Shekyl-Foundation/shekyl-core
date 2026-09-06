@@ -223,11 +223,16 @@ in `tx_extra.h`). The payload is a single `blob` of **N × 32** bytes:
 order**.
 
 The curve tree insertion code (`collect_outputs` in `blockchain_db.cpp`)
-extracts these hashes and commits them as the 4th leaf scalar. If the tag
-is absent (pre-existing outputs before this feature), a 32-byte zero
-placeholder is used. This field is emitted by both `construct_miner_tx`
-(coinbase) and `create_claim_transaction` (claim), and by the regular
-wallet transfer path.
+extracts these hashes and commits them as the 4th leaf scalar. The field is
+**consensus-mandatory** (CEN-I19, ruled 2026-09-05): admission rejects any
+transaction with outputs that does not carry exactly one `0x07` of exactly
+`N × 32` bytes (and exactly one `0x06` of `N × 1120`), and the collector
+aborts rather than substituting a placeholder — on a v3-from-genesis chain
+there are no pre-feature outputs. (Until 2026-09-06 an absent or short field
+was zero-filled into the leaf: a leaf bound to nothing, unspendable, and a
+leaf set a faithful port would not have stored.) This field is emitted by
+both `construct_miner_tx` (coinbase) and `create_claim_transaction`
+(claim), and by the regular wallet transfer path.
 
 ### Coinbase KEM self-encapsulation
 
