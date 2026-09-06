@@ -1480,29 +1480,28 @@ namespace cryptonote
           if (!m_core.prepare_handle_incoming_blocks(blocks, pblocks))
           {
             LOG_ERROR_CCONTEXT("Failure in prepare_handle_incoming_blocks");
-            // Not attributable, so nothing here charges the peer:
-            // `prepare_handle_incoming_blocks` returns false on our own
-            // cancellation (`m_cancel`) and on a thread-pool wait failure
-            // (`!waiter.wait()`) -- neither describes the sender's input. A
-            // score is an accusation and none is supportable, which PWD-B7
-            // forbids, so the sweep is told not to charge and the id-drop
-            // below does not either. (Grep those two names in
-            // `Blockchain::prepare_handle_incoming_blocks` for the sites; line
-            // numbers are deliberately absent because they rot, and PWD-B7's
-            // row carries the enumeration.)
+            // Charged, deliberately -- see PWD-B7. It is tempting to treat a
+            // prepare failure as our own fault, because six of this call's
+            // `return false` sites are (`m_cancel`, and a thread-pool
+            // `!waiter.wait()`). But it returns false for about as many
+            // SENDER-attributable reasons: an unparseable block blob, an
+            // unparseable transaction, a duplicate transaction, a duplicate
+            // key image, an empty span.
             //
-            // The severing itself stays: a bool cannot separate our
-            // cancellation from malformed input, and removing it would relax
-            // severing on one zone only. The typed verdict that fixes that
-            // properly is owned by the P2P-3 drop-rule item in FOLLOWUPS.
-            drop_connections(span_origin, false);
+            // The boolean cannot say which fired, so a caller cannot honestly
+            // classify this failure at all -- and declining to charge would
+            // let a peer feed malformed spans forever, reconnecting each time
+            // with no score accumulating. That is the concrete argument for
+            // the typed tri-state verdict, which is owned by the P2P-3
+            // drop-rule item in FOLLOWUPS and belongs in Rust.
+            drop_connections(span_origin);
             // The sweep is a no-op where the address names no host, so this
             // site drops the origin by id and clears its spans itself, exactly
             // as the two sites below already do. `flush_all_spans` is true
             // because this span is filled: until now only the sweep's own
             // `flush_spans(id, true)` erased it, and that is gone here.
             if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
-              drop_connection(context, false, true);
+              drop_connection(context, true, true);
               return 1;
             }))
               LOG_ERROR_CCONTEXT("span connection id not found");
@@ -1535,7 +1534,7 @@ namespace cryptonote
             block_connect_supplement connect;
             if (!make_full_block_connect_supplement_from_block_entry(block_entry, connect))
             {
-                drop_connections(span_origin, true);
+                drop_connections(span_origin);
                 if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
                   LOG_ERROR_CCONTEXT("transaction parsing failed for 1 or more txs in NOTIFY_RESPONSE_GET_OBJECTS,"
                     "dropping connections");
@@ -1569,7 +1568,7 @@ namespace cryptonote
 
             if(bvc.m_verifivation_failed)
             {
-              drop_connections(span_origin, true);
+              drop_connections(span_origin);
               if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
                 LOG_PRINT_CCONTEXT_L1("Block verification failed, dropping connection");
                 drop_connection_with_score(context, bvc.m_bad_pow ? P2P_IP_FAILS_BEFORE_BLOCK : 1, true);
@@ -2886,7 +2885,7 @@ skip:
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
-  void t_cryptonote_protocol_handler<t_core>::drop_connections(const epee::net_utils::network_address address, bool attributable)
+  void t_cryptonote_protocol_handler<t_core>::drop_connections(const epee::net_utils::network_address address)
   {
     // Host-wide severing needs an address that names a host. Every inbound
     // connection on an anonymity zone carries the same per-zone `unknown()`
@@ -2908,13 +2907,7 @@ skip:
 
     MWARNING("dropping connections to " << address.str());
 
-    // The severing is unconditional; only the ACCUSATION is conditional.
-    // Charging a host for a failure that describes our own state punishes an
-    // honest peer -- the adversary a drop rule creates rather than answers
-    // (PWD-B7). Both charges are governed together, because the host score and
-    // the per-connection score are the same accusation at two granularities.
-    if (attributable)
-      m_p2p->add_host_fail(address, 5);
+    m_p2p->add_host_fail(address, 5);
 
     std::vector<boost::uuids::uuid> drop;
     m_p2p->for_each_connection([&](const connection_context& cntxt, nodetool::peerid_type peer_id, uint32_t support_flags) {
@@ -2927,7 +2920,7 @@ skip:
       m_block_queue.flush_spans(id, true);
       m_p2p->for_connection(id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
         // This _could be_ outside of strand, so careful on actions
-        drop_connection(context, attributable, false);
+        drop_connection(context, true, false);
         return true;
       });
     }

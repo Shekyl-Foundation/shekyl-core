@@ -3230,30 +3230,35 @@ rather than inheriting whatever the default happens to be.
 > axis for a drop under this rule, so the same implementation action carries
 > it: decline to process, do not sever.
 >
-> **The block-sync path, checked in the review of #620 — a third site, and the
-> most clearly disqualified of the three.** The
-> `prepare_handle_incoming_blocks` failure arm
-> (`cryptonote_protocol_handler.inl`, in `try_add_next_blocks`) severs the
-> span's origin. That call returns `false` for **six of our-own-state
-> reasons**: `m_cancel` — our own shutdown or cancellation — at
-> `src/cryptonote_core/blockchain.cpp:7025`, `:7035`, `:7076`, `:7188`, and a
-> thread-pool `!waiter.wait()` at `:7021` and `:7172`. None describes the
-> input; **our shutdown disconnects and charges an innocent peer.** It fails
-> the first conjunct outright, without needing the universality test.
+> **The block-sync path — a third site, and the one that proves the type is
+> necessary rather than merely tidier (reviews of #620 and #628).** The
+> `prepare_handle_incoming_blocks` failure arm severs and charges the span's
+> origin. That call returns `false` from **ten** sites, and they split almost
+> evenly:
 >
-> **What #620 could do under a boolean, and what it deliberately did not.**
-> The host-fail score is removed from that site's id-drop: a charge is an
-> accusation, and none is supportable here. The **disconnect stays**, because
-> a boolean return cannot separate our cancellation from malformed input, and
-> removing the sever on the strength of the cancellation cases alone would
-> leave a genuinely malformed span with no consequence — and, since the
-> host-wide sweep above it is a no-op only on anonymity zones, would make the
-> severing behaviour differ by zone, which is the divergence
-> [`71-network-uniformity`](../../.cursor/rules/71-network-uniformity.mdc)
-> requires be named and ratified rather than acquired. **That forced choice is
-> the argument for the type:** with one bit, both answers are wrong, and only
-> the tri-state above makes the site decidable. The implementation action
-> carries this site with the other two.
+> | Reason | Describes | Attributable? |
+> | --- | --- | --- |
+> | `m_cancel` ×4 — our own shutdown or cancellation | our state | no |
+> | thread-pool `!waiter.wait()` ×2 | our state | no |
+> | unparseable block blob ×2 | the input | **yes** |
+> | unparseable tx / duplicate tx / duplicate key image (`SCAN_TABLE_QUIT`) | the input | **yes** |
+> | empty span | the input | **yes** |
+>
+> **The first reading of this site was wrong, and recording the error is the
+> point of this paragraph.** #620 removed the id-drop's score here, and #628
+> proposed removing the sweep's too, both on the premise that a prepare failure
+> always describes our own state. It does not. **The boolean cannot say which
+> of the ten fired**, so the caller cannot classify the failure at all — and
+> declining to charge would let a peer feed malformed spans indefinitely,
+> reconnecting each time with no score accumulating. #628 therefore **restores
+> both charges**, reverting #620's half of the mistake.
+>
+> **This is the concrete argument for the tri-state.** Under one bit both
+> answers are wrong: charge, and our own shutdown punishes an honest peer;
+> decline, and a hostile peer is never priced. Neither the sever nor the score
+> is separable without a classified verdict, which is why the implementation
+> action carries this site with the other two and why it belongs in Rust rather
+> than in a wider C++ signature.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
