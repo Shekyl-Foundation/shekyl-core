@@ -38,7 +38,9 @@ tables with dead migration code):
   `output_to_leaf`), −2 (`staker_accrual`, `staker_claims`, deleted with the
   claim-era wire). **Round-2 → this pin: +3** (both attestation-witness
   tables, `archival_settlement`), −0. Both directions of each delta measured.
-- **22 of the 49 live tables post-date the April audit** and had zero
+- **22 of the 49 declared tables post-date the April audit** (declared,
+  not live: DRS-W5 and §10 record that a writable `open()` deletes
+  `hf_starting_heights`, so the running store holds 48) and had zero
   atomicity coverage until this rewrite. The April PASS was doing work it
   was never entitled to do: a verdict over a store that is now half tables
   it never saw, while several of its covered subjects are dead. A seal is
@@ -391,20 +393,49 @@ commits until `block_wtxn_stop()`, so an exception anywhere in the loop
 leaves the whole correction unapplied rather than half-applied. Two
 observations belong on the record:
 
-- **the exception paths are asymmetric.** The size-mismatch guard aborts
-  explicitly (`block_wtxn_abort()`) before throwing; the loop's own throws
-  (`BLOCK_DNE` on a missing row, `DB_ERROR` on the put) do not, so they
-  leave the write transaction open until the owning `mdb_txn_safe` unwinds
-  it. No partial commit either way — but the two failure modes leave the
-  writer in different states (**DRS-W8**);
+- **the exception paths are asymmetric, and the second one poisons the
+  store.** The size-mismatch guard aborts explicitly
+  (`block_wtxn_abort()`) before throwing; the loop's own throws
+  (`BLOCK_DNE` on a missing row, `DB_ERROR` on the put) do not — and
+  there is no stack owner to clean up after them. `block_wtxn_start()`
+  **heap-allocates** the transaction into the member pointer
+  (`m_write_txn = new mdb_txn_safe()`, `:4311`); only
+  `block_wtxn_stop()` and `block_wtxn_abort()` delete it and clear the
+  member (`:4344`, `:4361`). A throw between them bypasses both, so the
+  `mdb_txn_safe` is never destroyed, the LMDB write transaction stays
+  **live**, and `m_write_txn` stays non-null — which makes the *next*
+  `block_wtxn_start()` throw `DB_ERROR_TXN_START` (*"Attempted to start
+  new write txn when write txn already exists"*, `:4307`). So the
+  failure is not "a transaction left open until unwind"; it is a
+  poisoned writer that fails every subsequent block write until the
+  process restarts (**DRS-W8**). Still no partial commit — nothing
+  commits — but the two failure modes leave the store in materially
+  different states;
 - **it has no production caller.** The symbol resolves only to the
   interface declaration, the `testdb` stub, and this definition — the same
   unwired shape the census recorded for `set_archival_settlement`
   (CEN-L8). An unwired writer's atomicity is a claim about code nobody
   runs, which is worth knowing before the Rust store reproduces it.
 
-**Verdict: PASS** (atomic by construction), with DRS-W8 recorded and the
-unwired status flagged for the census.
+**`drop_hard_fork_info`** (`:4675`): deletes **both** hard-fork tables —
+`mdb_drop(…, del=1)` on `hf_starting_heights` and `hf_versions` — under
+one `TXN_PREFIX(0)`, which joins an active batch if one exists and
+otherwise opens and commits its own transaction. Both drops share that
+transaction, so the pair cannot half-apply. Like the pop path in §3, it
+is reached by a shipped tool rather than by the node: `blockchain_import
+--drop-hard-fork` calls it directly and then deinitialises
+(`blockchain_import.cpp:788`–`:793`). Worth stating for the port:
+`del=1` **deletes the databases**, not just their contents, and
+`hf_versions` is re-created by the next `open()` while
+`hf_starting_heights` is dropped again on that same open (DRS-W5) — so
+after this tool runs, the two tables the operator asked to drop end up
+in different states, one restored and one not. That is a property of
+`open()`'s unconditional drop, not of this path, and it is DRS-W5's
+consequence rather than a new finding. **Verdict: PASS.**
+
+**Verdict for §5c: PASS** (each path atomic in itself), with DRS-W8
+recorded, its unwired status flagged for the census, and the
+tool-reachability of `drop_hard_fork_info` noted beside §3's.
 
 ## 6. Read-after-write dependency set (RAW edges, DRS §6.6)
 
@@ -477,8 +508,8 @@ pop must reproduce or re-derive.
 ## 9. Transcription A-6, and the findings register
 
 **A-6 — `m_write_txn` assertion census** (all sites in `db_lmdb.cpp`):
-129 dereferences ride a caller-provided transaction with no local guard;
-24 sites guard with `if (!m_write_txn) throw …`; 15 are lifecycle
+129 sites **dereference** `*m_write_txn`; 24 sites guard with
+`if (!m_write_txn) throw …`; 15 are lifecycle
 assignments (batch/guard machinery and the §1 prune swap). The 24 guards
 split into **two exception families**: 2 throw `DB_ERROR_TXN_START`
 (inherited paths) and 22 throw bare `std::runtime_error("FATAL: …")`
@@ -487,16 +518,29 @@ every `catch (DB_ERROR&)` recovery surface, so the same precondition
 violation has two different crash behaviors depending on which table
 tripped it.
 
+**What this census is, and is not.** The three numbers are a *lexical*
+count over `db_lmdb.cpp`; they are not a safety classification. An
+unknown subset of the 129 dereferences is **dominated by a caller's
+guard** — `process_archival_slash_at_height` is the worked example: it
+checks `!m_write_txn` at `:5930` and its comment names the helpers it is
+guarding for (*"every mutating helper below … dereferences
+`*m_write_txn`. Fail"* fast here). Counting those helpers' dereferences
+as unguarded would double-count exactly the paths the guard exists to
+protect. **The dominance analysis is not done here** — it needs the call
+graph, which is P0c's instrument, not this pass's — so the figure is
+reported as what it is: the total dereference census, and an upper bound
+on the unguarded set.
+
 | # | Finding | Grade | Disposition |
 | --- | --- | --- | --- |
 | DRS-W1 | Guard exception split: 22× `std::runtime_error` vs 2× `DB_ERROR_TXN_START` for the identical `!m_write_txn` precondition | wart (no unsound state; inconsistent failure surface) | RECORD-AND-SPECIFY: the Rust store has **one** typed precondition error; no C++ harmonization |
 | DRS-W2 | `LockedTXN::commit` swallows `batch_stop` exceptions — silent commit failure (April note, still true) | wart | RECORD-AND-SPECIFY: Rust store commit is `Result`, callers must consume it |
-| DRS-W3 | 129 unguarded `*m_write_txn` dereferences (null deref if a caller path ever arrives guardless — none found at the pin) | wart (latent) | RECORD-AND-SPECIFY: the Rust store's write handle is possession-typed; the precondition becomes unrepresentable |
+| DRS-W3 | 129 dereferences of `*m_write_txn` in `db_lmdb.cpp` with no guard **at the dereference site**; an unknown subset is dominated by a caller's guard (worked example: `process_archival_slash_at_height`, `:5930`), so 129 is the total census and an **upper bound** on the unguarded set, not a count of latent null dereferences | wart (latent; **bound, not measured** — the dominance analysis needs the call graph and is P0c's) | RECORD-AND-SPECIFY: the Rust store's write handle is possession-typed, which makes the precondition unrepresentable and the whole census moot — that is why the exact figure is not worth computing in C++ |
 | DRS-W4 | `txs` has **zero write and zero read sites** — the handle's only occurrence in `db_lmdb.cpp` is its `open()` (`:1662`); every live tx write goes to the pruned/prunable split. Verified wide across `src/` and `tests/` (the tests' `m_txs` is a test-local vector, not the handle) | wart (inherited-dead surface; no unsound state) | RECORD-AND-SPECIFY: the Rust store does not port the table. Deleting it here is a C++ **and** schema-version change, owned by the census/DRS lane, not by a docs pass |
 | DRS-W5 | `hf_starting_heights` is `mdb_drop(…, del=1)`-deleted at every writable `open()` (`:1778`) and never re-created, so the **declared** table set (49) and the **runtime** set (48) differ permanently — and the coverage gate cannot see the class, since both sides of its comparisons derive from the same macro (§10) | wart (structural divergence between register and runtime; no unsound state) | RECORD-AND-SPECIFY, and routed to census **R4**, which owns the hardfork machinery. A runtime census is out of this pass's scope by design |
 | DRS-W6 | The post-pop burn pair (`total_burned` reversal + `block_burn` row removal, `blockchain.cpp:896`–`:905`) sits at the **core layer, outside `BlockchainDB::pop_block`**. Two consequences: a batchless core-path caller pops in two transactions; and a caller popping through the DB funnel skips both writes entirely — **live today** via `blockchain_import --pop-blocks`, which calls `get_db().pop_block(...)` directly and documents why (§3). A database added through the verifying path and popped by that tool keeps burns the chain no longer contains | wart (**latent bookkeeping, live reachability** — graded on the complete five-site consumer census: RPC readout, connect add, pop reversal, and the two slash guards, both of which an *inflated* value satisfies with headroom; no emission, supply, or validation arithmetic consumes it — `shekyl-economics-sim/src/record.rs:143` refuses the `already_generated − total_burned` derivation on the record, and the conservation helper is KAT-only with synthetic operands. **Grade expires with its ground**: any consensus consumer of the scalar re-grades this at that consumer's design round) | RECORD-AND-SPECIFY: **derived-total reversal belongs in the pop funnel** in the Rust store, so popping through the store cannot mean something different from popping through the node |
 | DRS-W7 | Three sites, three semantics for the same scalar's impossible value: the pop reversal **clamps** to floor (`blockchain.cpp:902`), the slash revert **throws** `FATAL` on underflow (`db_lmdb.cpp:6362`), the slash add **throws** `FATAL` on overflow (`:6050`) — the paths disagree about what an impossible `total_burned` means, so the node's behavior under a divergence depends on which path meets it first: silent floor vs halt | wart (**reachable — regraded**: this row read "unreachable at the pin" until the §2 re-audit found DRS-W9, which commits a burn row without its aggregate and so produces exactly the too-LOW scalar the `:6362` FATAL underflow tests. The disagreement is therefore live, not a standing trap: the same impossible value halts one site and is silently clamped at another) | RECORD-AND-SPECIFY: the Rust store has **one** ruled semantic for an impossible derived total — and the ruling itself belongs to the economics lane, not the store |
-| DRS-W8 | `correct_block_cumulative_difficulties` (`:3034`) aborts explicitly on its size-mismatch guard but not on its loop throws, so the same function leaves the write transaction in two different states depending on which failure fires — and it has **no production caller** (§5c) | wart (atomicity holds either way; unwired) | RECORD-AND-SPECIFY: one unwinding path in the Rust store. The unwired status is a census datum, the `set_archival_settlement`/CEN-L8 shape |
+| DRS-W8 | `correct_block_cumulative_difficulties` (`:3034`) aborts explicitly on its size-mismatch guard but not on its loop throws — and there is no stack owner to unwind them: `block_wtxn_start` heap-allocates into `m_write_txn` (`:4311`) and only stop/abort delete and clear it (`:4344`, `:4361`). A loop throw therefore leaves the LMDB write transaction **live** and the member non-null, so the next `block_wtxn_start()` throws `DB_ERROR_TXN_START` and every subsequent block write fails until the process restarts. It also has **no production caller** (§5c) | wart (no partial commit — nothing commits — but a **poisoned writer**, not merely an open transaction; unwired today) | RECORD-AND-SPECIFY: one unwinding path in the Rust store, and a write handle whose lifetime is owned by the scope that opened it rather than by a raw member pointer |
 | DRS-W9 | The connect-side burn pair (`add_block_burn` + `total_burned` increment, `blockchain.cpp:6453`–`:6466`) runs **after** the try whose catches set `m_batch_success = false`. A throw between the two unwinds to `add_new_block`'s outer catch, which sets only `bvc`, so `cleanup_handle_incoming_blocks` still calls `batch_stop()`: the block, its txs and the `block_burn` row commit **without** the aggregate — a partial commit of one logical unit, and the production entry for a too-LOW `total_burned` that DRS-W7 lacked | wart (**the most severe of this set, and still not S-graded**: no consensus arithmetic reads the scalar and no fund-safety consequence follows, and the window needs an LMDB-level write failure — but it can leave a node whose next slash revert trips the `:6362` FATAL underflow, a local halt, and it falsified a PASS this audit had published) | RECORD-AND-SPECIFY, converging with DRS-W6: the burn bookkeeping is core-layer on **both** connect and pop, so neither side inherits the funnel's failure semantics. In the Rust store both belong **inside** the funnel |
 | DRS-W10 | `open()`'s older-DB exit **commits before it refuses**: `txn.commit()` runs, then `migrate()` throws (`:1819`-ff), so the table creations and the `hf_starting_heights` drop persist on a store the binary just declined to open (§5b) | wart (no partial transaction and no unsound state — the refusal's remedy is delete-and-resync, so nothing survives to be inconsistent; recorded because the shape does not survive a store that *can* migrate) | RECORD-AND-SPECIFY: in the Rust store, an open that fails leaves the store as it found it — structural changes commit only on the path that succeeds |
 | — | `hf_versions` not cleaned on pop | carried | P0c wart row (owned there since April; not re-opened here) |
@@ -567,8 +611,8 @@ row of the table that follows:
 | `curve_tree_leaves` | `grow_curve_tree` / `trim_curve_tree` | §2/§3 |
 | `curve_tree_meta` | `grow/trim_curve_tree` | §2/§3 |
 | `curve_tree_roots` | `store/remove_curve_tree_root_at_height` | §2/§3 |
-| `hf_starting_heights` | **deleted at every non-read-only `open()`** (`mdb_drop` del=1, `:1778`); `drop_hard_fork_info`; finding DRS-W5 | §9 |
-| `hf_versions` | `set_hard_fork_version` (`TXN_BLOCK_PREFIX`); `drop_hard_fork_info`; not cleaned on pop (P0c wart) | §2 |
+| `hf_starting_heights` | **deleted at every non-read-only `open()`** (`mdb_drop` del=1, `:1778`); `drop_hard_fork_info`; finding DRS-W5 | §5b/§5c |
+| `hf_versions` | `set_hard_fork_version` (`TXN_BLOCK_PREFIX`); `drop_hard_fork_info`; not cleaned on pop (P0c wart) | §2/§5c |
 | `leaf_to_output` | `add/remove_output_leaf_mapping` | §2/§3 |
 | `output_amounts` | `add_output` / `remove_output` | §2/§3 |
 | `output_metadata` | `store_output_metadata` — sole caller is inside `prune_tx_data` (`db_lmdb.cpp:10229`), so this table is written by the **depth prune**, not by connect | §5a |

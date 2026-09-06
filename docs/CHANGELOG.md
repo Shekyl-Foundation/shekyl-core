@@ -144,7 +144,7 @@
 
 - **DRS-P0b — the atomicity audit covers the store that exists.** The
   April 2026 `LMDB_WRITE_ATOMICITY_AUDIT.md` was a PASS doing work it was
-  never entitled to do: 22 of the 49 live tables post-dated it, while its
+  never entitled to do: 22 of the 49 declared tables post-dated it (49 declared, 48 at runtime — DRS-W5), while its
   covered subjects included the dead claim-era staking paths and two dead
   tables. Rewritten in place at `dev 2dba46537` over every write path —
   connect, pop, txpool (re-censused: 14 `LockedTXN` constructions / 13

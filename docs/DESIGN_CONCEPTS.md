@@ -569,8 +569,9 @@ If this design is adopted:
 4. **RPC and API compatibility**
    - Ensure all amount fields remain atomic-unit based.
    - Add explicit metadata for display precision in docs and client SDKs.
-   - Expose new fields: `release_multiplier`, `burn_pct`, `stake_ratio`, `staker_pool_balance`, `staker_emission_share_effective`, `staker_yield_annualized`.
-     - **Implemented:** `stake_ratio` and `staker_pool_balance` are wired to live chain state in `/get_info`. The dedicated `/get_staking_info` RPC returns all staking metrics.
+   - Expose new fields: `release_multiplier`, `burn_pct`, `stake_ratio`, `staker_emission_share_effective`, `staker_yield_annualized`.
+     - **Implemented:** `stake_ratio` is wired to live chain state in `/get_info`. The dedicated `/get_staking_info` RPC returns all staking metrics.
+     - `staker_pool_balance` was dropped with the claim-era wire: the `properties` key and both accessors have **zero occurrences** in `src/` (verified 2026-09-06 by DRS-P0b, which removed the matching row from [`LMDB_SCHEMA.md`](LMDB_SCHEMA.md)). Any future pool-balance field is a new design, not a re-exposure.
    - Document the reboot-only PQ transaction format separately in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
 
 5. **Test coverage**
