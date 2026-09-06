@@ -71,10 +71,16 @@ inline void append_pqc_leaf_field(cryptonote::transaction& tx, size_t bytes)
   tx.extra.insert(tx.extra.end(), b.begin(), b.end());
 }
 
-/// The conforming shape for `tx.vout.size()` outputs: one field of each.
+/// The conforming shape for `tx.vout.size()` outputs: one field of each — and
+/// NEITHER field when there are no outputs. A zero-output transaction that
+/// carries an empty 0x06 and an empty 0x07 is not "conforming with zero
+/// bytes"; CEN-I19 forbids the fields entirely there, so a helper that
+/// appended them would quietly manufacture a fixture the rule rejects.
 inline void append_pqc_fields(cryptonote::transaction& tx)
 {
   const size_t n = tx.vout.size();
+  if (n == 0)
+    return;
   append_pqc_kem_field(tx, cryptonote::HYBRID_KEM_CT_BYTES * n);
   append_pqc_leaf_field(tx, cryptonote::PQC_LEAF_HASH_BYTES * n);
 }

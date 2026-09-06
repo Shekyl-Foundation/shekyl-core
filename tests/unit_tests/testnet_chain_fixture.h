@@ -13,6 +13,7 @@
 #pragma once
 
 #include <boost/filesystem.hpp>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -44,10 +45,18 @@ struct TestnetChain
     boost::filesystem::create_directories(tmpdir);
     try
     {
-      BlockchainLMDB* db = new BlockchainLMDB();
-      db->open(tmpdir.string());
+      // Owned here only until the handoff: if `open` throws, this frees the
+      // handle, which a raw `new` would have leaked. Ownership passes at the
+      // `init` CALL, not at its return -- init assigns `m_db` before any of
+      // its later failure returns, and deletes the DB itself on its
+      // unopened-DB arm -- so the pointer is released first and every path
+      // after it is Blockchain's to clean up. Releasing later would double
+      // free: a late `init` failure leaves `m_db` set, and `deinit` deletes it.
+      std::unique_ptr<BlockchainLMDB> owned(new BlockchainLMDB());
+      owned->open(tmpdir.string());
+      BlockchainLMDB* db = owned.release();
       // TESTNET, offline, NO test_options (they would force FAKECHAIN), fixed
-      // difficulty 1. Blockchain takes ownership of the DB.
+      // difficulty 1.
       if (!bc.init(db, TESTNET, true, nullptr, 1))
         throw std::runtime_error("Blockchain::init failed on TESTNET over LMDB");
       miner.generate(crypto::secret_key{}, false, false, TESTNET);
@@ -55,14 +64,16 @@ struct TestnetChain
     catch (...)
     {
       // ~TestnetChain never runs for an object whose constructor threw, so the
-      // temp directory would outlive the test run — one per failure, under the
-      // system temp dir, invisible until something fills. Remove it here and
-      // re-throw the original failure. The DB handle is deliberately not
-      // deleted on this path: Blockchain::init may already have taken it, and
-      // bc's destructor runs (it is a constructed member) into deinit, which
-      // calls m_db->close() — so freeing the handle here would be a
-      // use-after-free at that close, to reclaim one object in a test that is
-      // failing anyway.
+      // temp directory would outlive the test run -- one per failure, under the
+      // system temp dir, invisible until something fills.
+      //
+      // Close the store BEFORE unlinking its directory: LMDB may still hold the
+      // files open, and a platform that refuses to remove open files would fail
+      // the removal silently (`remove_all` here takes an error_code) and leave
+      // the tree behind anyway. `deinit` closes, deletes and NULLs `m_db`, so it
+      // is idempotent -- the destruction of `bc` as a constructed member runs it
+      // again harmlessly.
+      bc.deinit();
       boost::system::error_code ec;
       boost::filesystem::remove_all(tmpdir, ec);
       throw;

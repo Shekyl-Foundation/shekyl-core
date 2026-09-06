@@ -131,6 +131,26 @@ TEST(tx_extra_pqc_field_shape, control_serve_credit_with_no_outputs_and_no_field
   EXPECT_TRUE(semantic_accepts(tx));
 }
 
+// The zero-output arm, at the layer that reaches it. The Rust validator cannot
+// exercise this: every zero-output shape it accepts is a serve-credit fee-only
+// transaction, whose own arm refuses a mutated fixture first. Here the shape
+// rule runs earlier, so it is the rule that speaks.
+TEST(tx_extra_pqc_field_shape, rejects_a_pqc_field_on_a_transaction_with_no_outputs)
+{
+  transaction tx = load_serve_credit_fixture();
+  ASSERT_TRUE(tx.vout.empty());
+  append_leaf(tx, LEAF);
+  EXPECT_FALSE(semantic_accepts(tx)) << "a zero-output tx carrying 0x07 was accepted";
+}
+
+TEST(tx_extra_pqc_field_shape, rejects_a_kem_field_on_a_transaction_with_no_outputs)
+{
+  transaction tx = load_serve_credit_fixture();
+  ASSERT_TRUE(tx.vout.empty());
+  append_kem(tx, KEM);
+  EXPECT_FALSE(semantic_accepts(tx)) << "a zero-output tx carrying 0x06 was accepted";
+}
+
 TEST(tx_extra_pqc_field_shape, rejects_duplicate_leaf_hash_field)
 {
   transaction tx = conforming_spend();
