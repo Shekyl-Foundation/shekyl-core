@@ -2009,16 +2009,25 @@ TEST(block_sync_span_lifecycle, prepare_failure_charges_the_origin_it_disconnect
 
   ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
 
-  // The sweep charges 5 for the host and 1 for the connection it severs, and
-  // the id drop that follows charges 1 more. The number is not the point --
-  // the point is that it is NOT ZERO, because a peer that can produce this
-  // failure with malformed input must accumulate a score for it.
+  // Two properties, and the exact number pins both at once.
+  //
+  //   6 = the sweep's 5 for the host + 1 for the connection it severs.
+  //
+  // Lower than 6 means the path stopped charging -- the bypass: a peer that
+  // reaches this failure with malformed input could then repeat it forever,
+  // reconnecting each time with nothing accumulating.
+  //
+  // Higher than 6 means the origin was billed twice for one failure, because
+  // the id-drop below the sweep also passed `add_fail`. The parse-failure
+  // sibling passes false for exactly that reason, and an earlier revision of
+  // this PR asserted 7 while claiming it was testing "not zero" -- the extra
+  // point was redundant and the rationale did not match the assertion.
   unsigned total = 0;
   for (const auto &f : endpoint.host_fails)
     total += f.second;
-  EXPECT_EQ(7u, total)
-    << "a prepare failure is not classifiable as ours, so it must still cost "
-       "the sender: an unchargeable failure is one a peer can repeat forever";
+  EXPECT_EQ(6u, total)
+    << "the sweep must charge (an unchargeable failure is one a peer can "
+       "repeat forever) and nothing may charge a second time for it";
   EXPECT_FALSE(endpoint.dropped.empty()) << "but the origin is still disconnected";
 }
 

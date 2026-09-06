@@ -3233,22 +3233,32 @@ rather than inheriting whatever the default happens to be.
 > **The block-sync path — a third site, and the one that proves the type is
 > necessary rather than merely tidier (reviews of #620 and #628).** The
 > `prepare_handle_incoming_blocks` failure arm severs and charges the span's
-> origin. That call returns `false` from **ten** sites, and they split almost
-> evenly:
+> origin. That call has **ten** syntactic `return false` sites but **fifteen
+> distinct conditions**, because `SCAN_TABLE_QUIT`'s single return serves six
+> of them. Classified by condition, not by return, they fall in **three**
+> classes:
 >
-> | Reason | Describes | Attributable? |
-> | --- | --- | --- |
-> | `m_cancel` ×4 — our own shutdown or cancellation | our state | no |
-> | thread-pool `!waiter.wait()` ×2 | our state | no |
-> | unparseable block blob ×2 | the input | **yes** |
-> | unparseable tx / duplicate tx / duplicate key image (`SCAN_TABLE_QUIT`) | the input | **yes** |
-> | empty span | the input | **yes** |
+> | Condition | Count | Describes | Attributable? |
+> | --- | --- | --- | --- |
+> | `m_cancel` — our own shutdown or cancellation | 4 | our state | no |
+> | thread-pool `!waiter.wait()` | 2 | our state | no |
+> | unparseable block blob | 2 | the input | **yes** |
+> | unparseable tx, duplicate tx, duplicate key image (via `SCAN_TABLE_QUIT`) | 3 | the input | **yes** |
+> | empty span | 1 | the input | **yes** |
+> | `tx_index is out of sync` ×2, `Tx not found on scan table` (via `SCAN_TABLE_QUIT`) | 3 | **an internal invariant of ours** | no — and this is the class PWD-B7 most clearly forbids charging for |
+>
+> **The third class was missed twice, and that is itself the lesson.** The
+> first enumeration grepped for the reasons it expected and found six; the
+> second counted syntactic returns and reported a two-way split. Both times the
+> instrument shaped the result — `SCAN_TABLE_QUIT` hides six conditions behind
+> one `return false`, so any census that counts returns undercounts conditions
+> and any census that greps its hypothesis finds only the hypothesis.
 >
 > **The first reading of this site was wrong, and recording the error is the
 > point of this paragraph.** #620 removed the id-drop's score here, and #628
 > proposed removing the sweep's too, both on the premise that a prepare failure
 > always describes our own state. It does not. **The boolean cannot say which
-> of the ten fired**, so the caller cannot classify the failure at all — and
+> of the fifteen fired**, so the caller cannot classify the failure at all — and
 > declining to charge would let a peer feed malformed spans indefinitely,
 > reconnecting each time with no score accumulating. #628 therefore **restores
 > both charges**, reverting #620's half of the mistake.
