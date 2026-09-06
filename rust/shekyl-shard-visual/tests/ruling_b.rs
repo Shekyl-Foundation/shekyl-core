@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 use shekyl_shard_visual::{
     fixtures, parameters_from_aggregate, recipe_from_params, render_candidate_png_from_params,
+    RENDER_REVISION,
 };
 
 /// Pre-registered raster threshold θ (spec: RGB-RMS on decoded pixels,
@@ -137,9 +138,48 @@ fn full_recipe_kat_matches_committed_artifact() {
     let reference_run = golden
         .get("_reference_run")
         .expect("recipes.json must carry its _reference_run provenance record");
-    for field in ["implementation", "target_arch", "golden_size"] {
+
+    // THE REVISION PIN, enforced rather than documented. Goldens are only
+    // meaningful under the pixel derivation that produced them. Without this
+    // equality, "a changed golden byte under an unchanged RENDER_REVISION is a
+    // mistake" is a convention a reviewer has to apply by hand; with it,
+    // regenerating goldens without bumping the constant fails here.
+    assert_eq!(
+        reference_run
+            .get("render_revision")
+            .and_then(serde_json::Value::as_u64),
+        Some(u64::from(RENDER_REVISION)),
+        "goldens were generated under a different RENDER_REVISION than this \
+         crate exports ({RENDER_REVISION}) — regenerate them, or bump the \
+         constant if the pixel derivation changed"
+    );
+    assert_eq!(
+        reference_run
+            .get("golden_size")
+            .and_then(serde_json::Value::as_u64),
+        Some(u64::from(GOLDEN_SIZE)),
+        "the artifact's golden_size must match the size these tests compare at"
+    );
+
+    // The fields that let a reader identify the run. `unknown` is what the
+    // generator writes when a capture fails, so it is rejected here — a
+    // provenance record that cannot name its toolchain or tree is not
+    // provenance, and accepting the placeholder would let the record decay
+    // silently.
+    for field in [
+        "implementation",
+        "profile",
+        "rustc_version",
+        "target_arch",
+        "target_os",
+        "source_tree_commit",
+    ] {
+        let value = reference_run
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
         assert!(
-            reference_run.get(field).is_some(),
+            !value.is_empty() && value != "unknown",
             "_reference_run must name `{field}` — a provenance record missing \
              it cannot identify the run that produced these goldens"
         );

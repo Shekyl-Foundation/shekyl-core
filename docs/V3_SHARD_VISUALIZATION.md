@@ -469,7 +469,9 @@ it is recorded in *Performance targets*.
 Executed under the pre-registered thresholds above, none of which were
 touched. Reference run producing the committed goldens
 (`rust/shekyl-shard-visual/tests/goldens/`): the Rust crate at
-`655d31cb2`, release profile, rustc 1.95.0, x86_64-unknown-linux-gnu
+`655d31cb2`, release profile, rustc 1.94.0 (the version
+`rust/rust-toolchain.toml` pins; the machine's default 1.95.0 does not
+apply inside `rust/`), x86_64-unknown-linux-gnu
 (i9-11950H). Floor device: `skl-pi`, Raspberry Pi 4 Model B Rev 1.4,
 aarch64, binaries cross-compiled from the same commit. Thermal
 regime: 50.6 °C at start, 59.4 °C at end, governor verified reaching

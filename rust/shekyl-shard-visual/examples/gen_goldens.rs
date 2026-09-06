@@ -22,9 +22,25 @@ use std::path::PathBuf;
 
 use shekyl_shard_visual::{
     fixtures, parameters_from_aggregate, recipe_from_params, render_candidate_png_from_params,
+    RENDER_REVISION,
 };
 
 const GOLDEN_SIZE: u32 = 128;
+
+/// Best-effort capture of a tool's output for the provenance record. A field
+/// that could silently become `"unknown"` would weaken the record, so the
+/// consuming KAT rejects that value rather than accepting it — better a loud
+/// failure at generation time than an artifact that cannot identify its run.
+fn capture(program: &str, args: &[&str]) -> String {
+    std::process::Command::new(program)
+        .args(args)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
 
 fn main() {
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/goldens");
@@ -35,10 +51,25 @@ fn main() {
         "_reference_run".into(),
         serde_json::json!({
             "implementation": "shekyl-shard-visual (Rust reference)",
+            // The revision pin. Goldens are only meaningful under the pixel
+            // derivation that produced them, so the artifact records it and
+            // the KAT asserts equality with the crate's exported constant: a
+            // regenerated golden under an unchanged RENDER_REVISION is then a
+            // caught error rather than a documented convention.
+            "render_revision": RENDER_REVISION,
+            "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+            "rustc_version": capture("rustc", &["--version"]),
             "target_arch": std::env::consts::ARCH,
             "target_os": std::env::consts::OS,
+            "target_pointer_width": usize::BITS,
+            // Tree the generator read, not the commit that lands the result —
+            // that one cannot exist yet. `dirty` says whether the tree carried
+            // uncommitted changes, without which the sha does not identify
+            // what was actually rendered.
+            "source_tree_commit": capture("git", &["rev-parse", "HEAD"]),
+            "source_tree_dirty": !capture("git", &["status", "--porcelain"]).is_empty()
+                && capture("git", &["status", "--porcelain"]) != "unknown",
             "golden_size": GOLDEN_SIZE,
-            "note": "producing commit is named in the commit that lands these artifacts",
         }),
     );
 

@@ -2,9 +2,14 @@
   "_reference_run": {
     "golden_size": 128,
     "implementation": "shekyl-shard-visual (Rust reference)",
-    "note": "producing commit is named in the commit that lands these artifacts",
+    "profile": "release",
+    "render_revision": 2,
+    "rustc_version": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+    "source_tree_commit": "8df4cf5c3c9241a2150538553a6ac4461abe8e76",
+    "source_tree_dirty": true,
     "target_arch": "x86_64",
-    "target_os": "linux"
+    "target_os": "linux",
+    "target_pointer_width": 64
   },
   "active": {
     "bg_crystalline": "crystalline",

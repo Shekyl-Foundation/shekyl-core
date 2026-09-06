@@ -3,7 +3,11 @@
 # captured_utc=20260906T090000Z
 # host=skl-pi  device_row: Raspberry Pi 4 Model B Rev 1.4, aarch64, 4 cores, 8 GB
 # git_rev=655d31cb2 (rust/shekyl-shard-visual; binaries cross-compiled on x86_64, not built on device)
-# rustc=rustc 1.95.0 (59807616e 2026-04-14)  target=aarch64-unknown-linux-gnu  profile=release
+# rustc=rustc 1.94.0 (4a4ef493e 2026-03-02)  target=aarch64-unknown-linux-gnu  profile=release
+# rustc_correction: this header first recorded 1.95.0, read from a shell whose cwd was OUTSIDE
+#   rust/ where rust-toolchain.toml's 1.94.0 pin does not apply. Every cargo invocation that built
+#   these binaries ran inside rust/ and therefore used 1.94.0. Corrected in place because the
+#   original value never described this capture; the error is recorded here rather than erased.
 # linker=aarch64-linux-gnu-gcc  RUSTFLAGS=<unset>
 # method=median of 5 timed runs after 1 untimed warm-up, per (fixture, size) cell; single-threaded;
 #        wall clock (std::time::Instant) around the full consumer call render_candidate_png_from_params
