@@ -1011,6 +1011,15 @@ Ratification-only means these are **specifications the port consumes**:
   holds nothing still), and ":379 cannot move any rung" is rung
   structure; no movement-shaped consumer found anywhere. Zero hits
   needing correction beyond the already-amended sentence.
+- **The 171→172 reconciliation, and its own sweep lesson:** the +1 was
+  found and NAMED (C2-R1c's CEN-K1 → K1a/K1b split; the census §3
+  denominator table was already correct — the INDEX was the stale side) —
+  and a THIRD instance of the figure then survived the first fix in the
+  same file (the CSR row's prose aside "cuts by rule (171 rows)", caught
+  by a reviewer sweeping on the VALUE). The pairing is the record: the
+  reconciliation succeeded and the sweep still missed one, because the
+  survivor mentioned the number in passing rather than stating it —
+  sweep on the value, not on the phrase expected to surround it.
 - **Draft-time falsifier run corrected §6:** the first committed margin
   bound (`2^{⌈k/51⌉}`, from the 51-sample hysteresis) was falsified by its
   own named simulation — a crash-preloaded window climbs the median
