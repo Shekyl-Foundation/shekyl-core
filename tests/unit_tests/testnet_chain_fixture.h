@@ -42,13 +42,31 @@ struct TestnetChain
   {
     tmpdir = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path();
     boost::filesystem::create_directories(tmpdir);
-    BlockchainLMDB* db = new BlockchainLMDB();
-    db->open(tmpdir.string());
-    // TESTNET, offline, NO test_options (they would force FAKECHAIN), fixed
-    // difficulty 1. Blockchain takes ownership of the DB.
-    if (!bc.init(db, TESTNET, true, nullptr, 1))
-      throw std::runtime_error("Blockchain::init failed on TESTNET over LMDB");
-    miner.generate(crypto::secret_key{}, false, false, TESTNET);
+    try
+    {
+      BlockchainLMDB* db = new BlockchainLMDB();
+      db->open(tmpdir.string());
+      // TESTNET, offline, NO test_options (they would force FAKECHAIN), fixed
+      // difficulty 1. Blockchain takes ownership of the DB.
+      if (!bc.init(db, TESTNET, true, nullptr, 1))
+        throw std::runtime_error("Blockchain::init failed on TESTNET over LMDB");
+      miner.generate(crypto::secret_key{}, false, false, TESTNET);
+    }
+    catch (...)
+    {
+      // ~TestnetChain never runs for an object whose constructor threw, so the
+      // temp directory would outlive the test run — one per failure, under the
+      // system temp dir, invisible until something fills. Remove it here and
+      // re-throw the original failure. The DB handle is deliberately not
+      // deleted on this path: Blockchain::init may already have taken it, and
+      // bc's destructor runs (it is a constructed member) into deinit, which
+      // calls m_db->close() — so freeing the handle here would be a
+      // use-after-free at that close, to reclaim one object in a test that is
+      // failing anyway.
+      boost::system::error_code ec;
+      boost::filesystem::remove_all(tmpdir, ec);
+      throw;
+    }
   }
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
