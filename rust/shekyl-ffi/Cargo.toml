@@ -114,6 +114,12 @@ shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs" }
 # either a gate that flaps with runner hardware or a number that cannot be
 # gated.
 criterion = { version = "0.5", features = ["html_reports"] }
+# GAP-7 cold-block bench fixtures: the wire pricing owner, the Bp+ prover/
+# proxy-verifier pair, and its commitment type.
+shekyl-wire = { path = "../shekyl-wire" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
 gungraun = "0.19"
 
 [lints]
@@ -125,4 +131,8 @@ harness = false
 
 [[bench]]
 name = "relay_admission_verify_iai"
+harness = false
+
+[[bench]]
+name = "block_connect_verify"
 harness = false
