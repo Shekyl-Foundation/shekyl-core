@@ -1003,9 +1003,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Stage 5 — `ArchivalEngine` native actor build (simulation-
   - Target: pre-genesis
 
-- **[Shard-visual ruling B — measurement half](V3_SHARD_VISUALIZATION.md) (ratified 2026-09-05; spec § landed).**
-  Remaining: designated-reference goldens, full-recipe per-fixture KATs, two-limb avalanche test, skl-pi budget
-  matrix. Held by name: build-slowdown directive (P2P focus) + skl-pi occupancy; device slot via coordination.
+- **[Shard-visual ruling B — budget ruling owed](V3_SHARD_VISUALIZATION.md) (measurement half EXECUTED 2026-09-06).**
+  Goldens/KATs/avalanche/parity landed, green (aarch64 raster bit-identical to x86 goldens; not a reopen). Budget
+  matrix: **36/36 cells over on the floor** (1.3×–6.2×) — ruling owed: budget / candidate / floor device.
   - Target: pre-genesis
 
 - **Transport selection for the staker-archival path (gate 6 /

@@ -447,7 +447,7 @@ limb alone would pass against a broken renderer that ignores its
 input entirely, since any hash function avalanches whether or not the
 pixels listen to it.
 
-### Floor-device budget (measurement held, precondition met)
+### Floor-device budget (measured 2026-09-06: falsified at every tier)
 
 The *Performance targets* below are provisioned at the floor device
 (`rule 76`: Pi 4), measured **on the floor only**. An x86 measurement
@@ -457,8 +457,68 @@ scaling factor exists. Falsifier: any (fixture, size) cell over budget
 on the floor falsifies candidate.v1's fitness at that tier, with this
 document's stated consequence (drop or restrict what misses; the
 single-algorithm fallback remains the documented escape). The
-measurement runs when the device slot is granted; its thresholds are
-the targets already printed below, which predate any measurement.
+thresholds were the targets already printed below, which predate the
+measurement. **Result: all 36 (fixture, size) cells came in over
+budget** — see *Measurements of record* directly below. The budget,
+the candidate, and the floor device are all unmoved by this section:
+which of the three gives is an open ruling, not a measurement's call.
+
+### Measurements of record (2026-09-06)
+
+Executed under the pre-registered thresholds above, none of which were
+touched. Reference run producing the committed goldens
+(`rust/shekyl-shard-visual/tests/goldens/`): the Rust crate at
+`655d31cb2`, release profile, rustc 1.95.0, x86_64-unknown-linux-gnu
+(i9-11950H). Floor device: `skl-pi`, Raspberry Pi 4 Model B Rev 1.4,
+aarch64, binaries cross-compiled from the same commit. Thermal
+regime: 50.6 °C at start, 59.4 °C at end, governor verified reaching
+stock 1800 MHz under load mid-render. The firmware throttle flag is
+unreadable without root, so the temperature bracket plus the
+sustained-frequency check stand in for it: they establish that the
+conditions for throttling were absent, which is the claim these
+numbers support (not the stronger "no throttling occurred").
+
+**Raster parity (θ = 2.0): RMS = 0.000000 on all nine fixtures.** The
+aarch64 raster is bit-identical to the x86-committed goldens — the
+anticipated boundary-rounding jitter did not appear at all on this
+architecture pair. Recorded as measured. **This does not reopen the
+bit-equivalence retraction**: the reopening criterion is a
+deterministic rasterizer *pinned across both implementations*, and
+one architecture pair happening to agree is an observation, not a
+pin — two architectures agreeing today says nothing about a third
+architecture, a WASM target, or a toolchain bump on either side. The
+perceptual bar stays the ruled bar; a measurement that *looks like*
+it satisfies a criterion is precisely where a criterion quietly
+dissolves, so the zero is recorded and the criterion is restated.
+
+**Avalanche (floor ≥ 20): sweep minimum RMS = 34.165** (drain_burst,
+byte 15 bit 3), identical on x86 and aarch64, over 9 fixtures × 3 bit
+positions on the pixel axis. Sensitivity holds with ~1.7× margin.
+
+**Budget matrix: 36/36 cells over budget.** Median of 5 timed runs
+after 1 warm-up, single-threaded, full render-plus-PNG-encode path
+(`examples/budget_matrix.rs`), release profile. Per-size medians
+across the nine fixtures, against the targets:
+
+| size   | budget  | floor medians (min–max) | over by   |
+|--------|---------|-------------------------|-----------|
+| 128px  | 50 ms   | 69–164 ms               | 1.4×–3.3× |
+| 256px  | 100 ms  | 155–385 ms              | 1.6×–3.9× |
+| 512px  | 300 ms  | 535–1781 ms             | 1.8×–5.9× |
+| 1024px | 2000 ms | 2685–12440 ms           | 1.3×–6.2× |
+
+Worst fixture: `coinbase_heavy` (12.4 s at 1024px). Best:
+`confidential_stake`, still over in every cell. For orientation only
+(non-probative for the floor, per this section): the x86 reference
+machine also missed 512px and 1024px on 5 of 9 fixtures. **This is a
+falsification, not a gap: candidate.v1 as specified does not fit the
+stated minimum device at any tier**, and the magnitudes rule out
+tuning as the answer — 6.2× at 1024px is not a constant factor away
+from fitting. The documented escape (drop or restrict what misses;
+single-algorithm fallback) cannot be applied selectively when every
+cell misses. **A ruling is owed**, and it chooses among three things
+this document deliberately does not rank: the budget, the candidate,
+or the floor device. This section records the miss and waits.
 
 ## Candidate compositor (candidate.v1) — leading V3.x design
 
