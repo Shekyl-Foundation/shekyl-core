@@ -234,8 +234,6 @@ namespace cryptonote
     double get_avg_block_size();
     boost::circular_buffer<size_t> m_avg_buffer = boost::circular_buffer<size_t>(10);
 
-    boost::mutex m_bad_peer_check_lock;
-
     template<class t_parameter>
       bool post_notify(typename t_parameter::request& arg, cryptonote_connection_context& context)
       {
