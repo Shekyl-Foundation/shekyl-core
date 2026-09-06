@@ -33,6 +33,14 @@ const AVALANCHE_FLOOR: f64 = 20.0;
 /// the goldens' filenames.
 const GOLDEN_SIZE: u32 = 128;
 
+/// Size the avalanche sweep renders at. Derived from [`GOLDEN_SIZE`] rather
+/// than repeated as a literal, and deliberately the same size: the spec
+/// records parity and avalanche under one scope statement ("at 128px"), so
+/// if the measurement size ever moves, both must move together or that
+/// statement silently stops describing the tests. The avalanche sweep does
+/// not read the goldens, hence its own name.
+const AVALANCHE_SIZE: u32 = GOLDEN_SIZE;
+
 fn goldens_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/goldens")
 }
@@ -41,13 +49,26 @@ fn goldens_dir() -> PathBuf {
 /// pixels, never PNG file bytes** (spec: bytes go through the encoder's
 /// compression, filtering, and the ruling-A provenance chunks — a byte
 /// comparison would measure the compressor, not the picture).
-fn decode_rgb8(png_bytes: &[u8]) -> (u32, u32, Vec<u8>) {
+///
+/// `what` names the image being decoded (`"golden genesis"`, `"rendered
+/// genesis"`) so a format failure says which side of the comparison was
+/// malformed. Both sides pass through here, so a message naming only one of
+/// them would misdirect the reader of a failure.
+fn decode_rgb8(what: &str, png_bytes: &[u8]) -> (u32, u32, Vec<u8>) {
     let decoder = png::Decoder::new(Cursor::new(png_bytes));
     let mut reader = decoder.read_info().expect("png header");
     let mut buf = vec![0u8; reader.output_buffer_size().expect("png buffer size")];
     let info = reader.next_frame(&mut buf).expect("png frame");
-    assert_eq!(info.color_type, png::ColorType::Rgb, "goldens are RGB8");
-    assert_eq!(info.bit_depth, png::BitDepth::Eight, "goldens are RGB8");
+    assert_eq!(
+        info.color_type,
+        png::ColorType::Rgb,
+        "{what}: expected RGB8 color type"
+    );
+    assert_eq!(
+        info.bit_depth,
+        png::BitDepth::Eight,
+        "{what}: expected 8-bit depth"
+    );
     buf.truncate(info.buffer_size());
     (info.width, info.height, buf)
 }
@@ -90,13 +111,20 @@ fn full_recipe_kat_matches_committed_artifact() {
     // Id-set equality in both directions: a fixture added without a golden
     // recipe, or a golden orphaned by a removed fixture, is a failure — a
     // one-directional check lets the artifact and the corpus drift apart.
-    let golden_ids: Vec<&str> = golden
+    let mut golden_ids: Vec<&str> = golden
         .keys()
         .filter(|k| *k != "_reference_run")
         .map(String::as_str)
         .collect();
     let mut fixture_ids: Vec<&str> = fixtures.iter().map(|f| f.id.as_str()).collect();
-    fixture_ids.sort_unstable(); // golden keys iterate sorted (BTreeMap)
+    // BOTH sides sorted. serde_json's Map iterates sorted only while it is
+    // backed by a BTreeMap; the `preserve_order` feature swaps in an IndexMap
+    // that iterates in file order, and Cargo feature unification means any
+    // crate in the workspace could enable it without touching this test.
+    // Sorting here removes that hidden dependency — the assertion is about
+    // set equality, never iteration order.
+    golden_ids.sort_unstable();
+    fixture_ids.sort_unstable();
     assert_eq!(
         golden_ids, fixture_ids,
         "committed recipe set must cover exactly the fixture corpus"
@@ -128,12 +156,12 @@ fn raster_parity_within_theta_of_goldens() {
     for fixture in fixtures::all() {
         let golden_path = goldens_dir().join(format!("{}_{}.png", fixture.id, GOLDEN_SIZE));
         let golden_bytes = std::fs::read(&golden_path).expect("committed golden png");
-        let (gw, gh, golden_px) = decode_rgb8(&golden_bytes);
+        let (gw, gh, golden_px) = decode_rgb8(&format!("golden {}", fixture.id), &golden_bytes);
         assert_eq!((gw, gh), (GOLDEN_SIZE, GOLDEN_SIZE), "golden dimensions");
 
         let params = parameters_from_aggregate(&fixture.aggregate);
         let rendered = render_candidate_png_from_params(&params, GOLDEN_SIZE).expect("render");
-        let (rw, rh, rendered_px) = decode_rgb8(&rendered);
+        let (rw, rh, rendered_px) = decode_rgb8(&format!("rendered {}", fixture.id), &rendered);
         assert_eq!((rw, rh), (gw, gh), "rendered dimensions match golden");
 
         let rms = rgb_rms(&golden_px, &rendered_px);
@@ -171,18 +199,25 @@ fn avalanche_bit_flip_moves_pixels_by_floor() {
     let mut min_rms = f64::INFINITY;
     let mut min_case = String::new();
     for fixture in fixtures::all() {
-        let base_png =
-            render_candidate_png_from_params(&parameters_from_aggregate(&fixture.aggregate), 128)
-                .expect("render base");
-        let (_, _, base_px) = decode_rgb8(&base_png);
+        let base_png = render_candidate_png_from_params(
+            &parameters_from_aggregate(&fixture.aggregate),
+            AVALANCHE_SIZE,
+        )
+        .expect("render base");
+        let (_, _, base_px) = decode_rgb8(&format!("avalanche base {}", fixture.id), &base_png);
 
         for (byte, bit) in FLIPS {
             let mut flipped = fixture.aggregate.clone();
             flipped.shard_hash[byte] ^= 1 << bit;
-            let flipped_png =
-                render_candidate_png_from_params(&parameters_from_aggregate(&flipped), 128)
-                    .expect("render flipped");
-            let (_, _, flipped_px) = decode_rgb8(&flipped_png);
+            let flipped_png = render_candidate_png_from_params(
+                &parameters_from_aggregate(&flipped),
+                AVALANCHE_SIZE,
+            )
+            .expect("render flipped");
+            let (_, _, flipped_px) = decode_rgb8(
+                &format!("avalanche flipped {} byte {byte} bit {bit}", fixture.id),
+                &flipped_png,
+            );
 
             let rms = rgb_rms(&base_px, &flipped_px);
             if rms < min_rms {
