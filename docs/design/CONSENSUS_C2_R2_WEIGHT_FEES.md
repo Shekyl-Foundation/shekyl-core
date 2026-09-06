@@ -89,9 +89,11 @@ precedent); rules 00 / 06 / 16 / 19 / 20 / 21 / 22 / 42 / 50 / 60 / 71 / 76 /
   **not ruled here** — §7 records the fence as a decision with reasons, not a
   default.
 - **A consensus fee floor does not exist today** (CEN-M3: "no consensus fee
-  floor"). Introducing one would **mint a new consensus rule**, which exceeds
-  ratification-only and is the maintainer's ruling to make. §5 Q9 poses and
-  analyses the census §6 question and **stops at a recommendation**.
+  floor"). Introducing one would have minted a new consensus rule — beyond
+  ratification-only, so §5 Q9 was DRAFTED as a recommendation. **The
+  maintainer then made the ruling himself: NO consensus fee floor, ratified
+  with both reopeners (§5 Q9 carries his words).** The fence did its job:
+  the round proposed; the owner ruled.
 
 ---
 
@@ -296,8 +298,8 @@ bond economics must (and per the D3/R2 linear-work record, does) price as
 work rather than assume away; (ii) the P2P lane's `entry_max` (§6), which
 needs exactly this rate.
 
-**Ruling (Q2) — SIGNED, RATIONALE UNDER CORRECTION (its own mandated
-instrument refuted half of it; countersignature pending):** the clamp pair
+**Ruling (Q2) — SIGNED; rationale CORRECTED AND COUNTERSIGNED
+2026-09-06 (the block below records the correction's history):** the clamp pair
 and window were ratified with the reason "a doubling time of ~2
 half-windows (≈ 20 weeks sustained)". **Running the signature-mandated
 saturating trace against the exact `blockchain.cpp:6540–6566` machinery
@@ -383,8 +385,14 @@ floor device can *verify* one inside useful time is exactly the unmeasured
 leg.
 
 **Ruling (Q3), AS SIGNED WITH AMENDMENT (Rick, 2026-09-06):** the
-**100-block ST window and the 51-block hysteresis are RATIFIED** (the
-order-statistic definition was checked independently at signature). The
+**100-block ST window and the 51-block doubling envelope are RATIFIED**
+(*amended post-signature, review finding:* the check at signature read
+`median()` as a pure order statistic; at even sizes it AVERAGES the middle
+pair, so the median moves continuously in half-steps — the ratified
+stability property is the ×2-per-51 ENVELOPE and the 51-to-CROSS level
+property, both of which hold under the averaging definition and were
+proved/measured with it; the falsifier block below carries the strike and
+the full correction). The
 second half is **NOT ratified**: ~~ratify ×50 as the transient ceiling
 conditional on GAP-7~~ — **the ×50 surge factor is REFUTED, not
 superseded: GAP-7's floor measurement fired against it** (the surge-
@@ -420,12 +428,23 @@ early-chain weight growth — the long-term governor is structurally weak
 while its window fills (Q2's corrected rationale) — so any future
 loosening of surge_max reopens Q2, not just this row.**
 
-**Falsifier (defect):** the hysteresis claim ("51 full blocks minimum to
-move EM") is falsified by exhibiting a 100-value multiset where fewer than
-51 elements ≥ X yields median ≥ X — impossible for the order-statistic
-median (`epee::misc_utils::median` of 100 averages the 50th/51st order
-statistics; both ≥ X requires ≥ 51 elements ≥ X). Recorded as checked by
-inspection of `median()`'s definition at the pin.
+**Falsifier (defect) — FIRED IN REVIEW, correction recorded against the
+signed row (flagged, not smoothed):** ~~"51 full blocks minimum to move
+EM"~~ is FALSE for the shipped implementation and is struck.
+`epee::misc_utils::median` at even sizes returns `get_mid(v[n-1], v[n])`
+— it AVERAGES the middle pair (`contrib/epee/include/misc_language.h:66`)
+— so with 50 values at 0 and 50 at X the median is X/2, not 0: **EM moves
+CONTINUOUSLY in half-steps; nothing waits for a 51st sample.** What the
+ratification's stability property actually is, and it SURVIVES: (i)
+*level-crossing* — median ≥ X, where X caps the window's values, requires
+`v[49] ≥ X`, i.e. ≥ 51 samples at X; and (ii) *the envelope* —
+`EM_t ≤ 2·EM_{t−51}` — which was PROVED in §6 using the averaging
+definition (the half-step is absorbed, not ignored) and MEASURED by an
+instrument faithful to it (`statistics.median` averages at even sizes
+too): doubling points landed at exactly t = 51/102/153/204/255. So the
+×2-per-51 doubling cadence Q3 relies on stands; the "median doesn't move
+until 51" characterization was never true of this implementation and the
+signed sentence citing "the order-statistic definition" is amended below.
 
 ### Q4 — the ArticMine quadratic penalty curve (CEN-F14b)
 
@@ -651,9 +670,11 @@ closer than ×1.07 falsifies claim (2).
 
 ### Q9 — the census §6 question: is a consensus fee floor wanted?
 
-**Boundary (restated from the fence):** a "yes" mints a new consensus rule;
-that exceeds this round's ratification-only mandate and is the maintainer's
-ruling. This section analyses and **recommends only**.
+**Boundary (restated from the fence):** a "yes" would have minted a new
+consensus rule — beyond this round's ratification-only mandate — so this
+section was drafted as analysis and recommendation. **The maintainer's
+ruling followed and is recorded below: the question is RULED, not merely
+recommended.**
 
 **The ground:** today the fee floor exists only at relay admission
 (`kept_by_block` exempt) — a miner may include zero-fee transactions of its
@@ -669,7 +690,11 @@ avoided); (iii) the threat it addresses (miner self-dealing spam) already
 pays the penalty curve past `m` and the storage bond economics below it —
 the attack is priced twice without a floor.
 
-**Recommendation:** **no consensus fee floor.** The relay floor plus the
+**RULED (Rick, 2026-09-06) — his words: "Q9 — the maintainer's ruling,
+and it's mine to give: no consensus fee floor. The analysis is right on
+all three costs… Ratified with both reopeners as written."** The
+recommendation that carried the analysis to him, as drafted: **no
+consensus fee floor.** The relay floor plus the
 penalty curve plus archival bonds price the spam surfaces a floor would
 target, without making tx validity climate-dependent or complicating the
 archival vin taxonomy. **Proposed reopening criteria (rule 21):** (a) a
@@ -677,7 +702,9 @@ measured mainnet episode of miner-included spam at sustained volume the
 penalty curve demonstrably failed to price, or (b) any consensus change that
 removes the `kept_by_block` relay exemption's justification (the archival
 zero-fee families leaving the protocol). Put to the maintainer as a
-recommendation with these reopeners; not ruled here.
+recommendation with these reopeners — and so put, it was RULED as above:
+the ruling is the maintainer's act on this analysis, not the round's
+overreach.
 
 ### Q10 — the tx_extra relay cap 24 576 (CEN-M4)
 
@@ -813,8 +840,20 @@ parent chain extends `k` blocks past it.
 5. **Ceiling (reference):** `L ≤ 100·LTEM` (30 MB at launch LTEM); LTEM
    itself moves ≤ ×1.7 per 50 000 blocks (Q2).
 
-**Handoff:** `margin(k) = min(2^k, 50·LTEM/EM)`, computed live; the P2P
-row states its assumed announce-lag `k` (for `k = 2`: multiplier 4).
+**Handoff:** `margin(k) = min(2^k, S·LTEM/EM)` with S = the ratified
+surge factor (signed S = 4), computed live; the P2P row states its
+assumed announce-lag `k` (for `k = 2`: multiplier 4).
+**Staleness of the receiver-local LTEM, quantified (review finding — the
+clamp arm substitutes LTEM_h where the bound at h+k is S·LTEM_{h+k}):**
+LTEM's growth over the lag is bounded by its own ratified rate,
+`LTEM_{h+k}/LTEM_h ≤ 1.7^(k / ⌈min(h,100 000)/2⌉)` — at full window this
+is ≤ 1.00003 for k ≤ 2 (invisible); in the worst ramp-in case (h = 100,
+k = 2) it is ≤ 1.7^(1/25) ≈ 1.022. The error direction is the familiar
+liveness one (a too-small cap rejects a legal announce, never admits an
+oversized one), and the ≤ 2.2 % worst-case shortfall on a ≈ 600 kB-scale
+limit (≈ 13 kB) is dwarfed by `entry_max`'s additive witness term
+(866 568 B) — absorbed by construction. Recorded so the substitution is a
+stated approximation with a bound, not an unnoticed unsoundness.
 **The clamp arm is load-bearing, not a safety belt** (P2P-2 lane's
 grounding, verified at this pin): the announce path ignores announces
 unless `state_normal` and `is_synchronized()`
