@@ -93,9 +93,14 @@
 ### Added
 
 - **Shard-visual performance targets AMENDED (2026-09-06), and the
-  amendment changes what they assert.** Rick ruled the floor scores
-  acceptable, so of budget / candidate / floor device the **budget
-  gives**. New targets, stated as *median on the floor device, warm,
+  amendment changes what they assert.** *Authority note: the ruling and
+  the countersignature of these specific thresholds reached this work
+  RELAYED through a coordinating session, not stated directly. Direct
+  confirmation is requested on the PR; until it is given, treat the
+  numbers as landed-but-unconfirmed rather than as a signed decision —
+  a relayed ruling is not a signature.* The ruling as relayed: the floor
+  scores are acceptable, so of budget / candidate / floor device the
+  **budget gives**. New targets, stated as *median on the floor device, warm,
   otherwise idle* — the quantity `examples/budget_matrix.rs` actually
   emits: 128px 350 ms, 256px 800 ms, 512px 4 s, 1024px 25 s (2× the
   corpus-worst floor median; the originals are struck through in

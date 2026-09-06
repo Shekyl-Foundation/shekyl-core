@@ -784,7 +784,11 @@ is plenty for a network with thousands of shards.
 discipline in *Rendering determinism and empirical closure*.**
 Authority: Rick's ruling, *"the scores on the Pi for shard rendering
 are acceptable"* — of budget, candidate, and floor device, the
-**budget gives**. Evidence: the 36-cell floor matrix,
+**budget gives**. **Relayed, not direct:** the ruling and the
+countersignature of these particular thresholds arrived through a
+coordinating session. Direct confirmation is requested on the landing
+PR; a relayed ruling is not a signature, and this note stands until
+the named authority confirms. Evidence: the 36-cell floor matrix,
 [`docs/benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt`](benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt),
 which falsified every cell of the original figures. The originals are
 struck through below, **refuted, not superseded**.
