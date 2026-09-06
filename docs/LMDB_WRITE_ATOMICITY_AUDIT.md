@@ -127,21 +127,46 @@ original write and wraps a successor; the D++ fix outlived its lane and
 kept its C++ tenancy. Both times the category set, not the provenance,
 was what was wrong.
 
-One write lives **outside** the funnel: the core-level post-pop
-**burn-total reversal** (`Blockchain::pop_block_from_blockchain`,
-`blockchain.cpp:896`) reads `block_burn` for the popped height and lowers
-the `total_burned` properties scalar, under `db_wtxn_guard` — the guard
-the April fix introduced for the (now dead) staker-accrual reversal,
-inherited by this successor write. Under a batch the guard is a no-op and
-the reversal joins the pop's transaction; **standalone, it is a second
-transaction after the pop's commit** — the same latent two-txn window the
-April audit graded low for the accrual (production callers hold a batch),
-carried forward as **DRS-W6**: the Rust store's pop is one transaction,
-derived-total reversals included.
+Two burn writes live **outside** the funnel, at the core layer: the post-pop
+**burn-total reversal** and the `block_burn` row removal
+(`Blockchain::pop_block_from_blockchain`, `blockchain.cpp:896`–`:905`),
+which read `block_burn` for the popped height, lower the `total_burned`
+properties scalar, and drop the row — under `db_wtxn_guard`, the guard the
+April fix introduced for the (now dead) staker-accrual reversal and which
+this successor write inherited. That placement has **two** consequences,
+and the second is the sharper one:
 
-**Verdict: PASS** (production callers batched; the standalone two-txn
-window is DRS-W6, latent) — and the pop-side invariant comment (`:841`)
-states the same consensus-split consequence as connect's.
+- **A batchless core-path caller pops in two transactions.** Under a batch
+  the guard is a no-op and the reversal joins the pop's transaction;
+  standalone it is a second transaction after the pop's commit.
+- **A caller that pops through the DB funnel skips both writes entirely**,
+  because neither lives in `BlockchainDB::pop_block`. This is not
+  hypothetical: `blockchain_import --pop-blocks` calls
+  `get_db().pop_block(...)` directly, and says why in its own comment —
+  *"pop_block_from_blockchain() is private, so call directly through db"*
+  (`blockchain_import.cpp:92`–`:119`, driven from `:779`–`:785`). Since the
+  connect-side increment is also core-layer
+  (`handle_block_to_main_chain`, `:6455`), a database whose blocks were
+  added through the verifying path and popped through that tool keeps a
+  `total_burned` that counts burns the chain no longer contains, plus a
+  `block_burn` row for a height that no longer exists. Deterministically,
+  on a normal run of a shipped utility — no crash required.
+
+Both are **DRS-W6**. The grade is unchanged and still rests on the
+five-site consumer census (§9): the scalar is read by an RPC readout and by
+two slash guards that abort on arithmetic violation, and an *inflated*
+value satisfies both guards with headroom, so nothing halts and no
+consensus arithmetic consumes it. What changes is reachability — this is a
+live path, not a crash window — and the stale `block_burn` row is
+self-healing only if that height is re-added, since connect overwrites it.
+
+**Verdict: PASS for the funnel itself** — `BlockchainDB::pop_block` is one
+transaction and the pop-side invariant comment (`:841`) states the same
+consensus-split consequence as connect's. The burn pair's placement outside
+it is DRS-W6, and the specification it implies for the Rust store is plain:
+**derived-total reversal belongs in the pop funnel**, so that popping
+through the store cannot silently mean something different from popping
+through the node.
 
 ## 4. Transaction pool (`tx_pool.cpp`)
 
@@ -168,7 +193,21 @@ a store API where commit cannot fail silently.
 `add_alt_block` / `remove_alt_block` operate on `*m_write_txn` cursors and
 require the caller's transaction (callers: `handle_alternative_block` under
 the incoming-blocks batch; `switch_to_alternative_blockchain`'s removal
-loop, same batch; `drop_alt_blocks` via `reset()`'s own transaction). The
+loop, same batch).
+
+`drop_alt_blocks` (`:4821`) is a **separate self-transactional path**, not
+a rider on anyone else's: it opens `TXN_PREFIX(0)`, which joins an active
+batch when there is one and otherwise begins and commits its own
+transaction, and empties both `alt_blocks` and
+`archival_alt_attestation_witness` (`mdb_drop(…, del=0)`). It is not part
+of `reset()`'s transaction — `Blockchain::reset_and_set_genesis_block`
+calls `m_db->reset()` first, which commits, and *then*
+`m_db->drop_alt_blocks()` (`blockchain.cpp:923`–`:924`) — and it has a
+second live caller at core init, dropping alt blocks on startup unless
+`keep_alt_blocks` is set and the DB is writable
+(`cryptonote_core.cpp:655`). Each call is atomic in itself; the two
+tables are emptied in one transaction, so the witness table cannot
+survive the alt blocks it belongs to. The
 `archival_alt_attestation_witness` table is written beside the alt block
 that owns it and its rows cannot outlive that block (one table, one owner —
 the alt-block lifecycle, not the height prune, bounds it).
@@ -186,11 +225,22 @@ neither; no pop path reverts the receipt, so the floor never retreats
 `archival_budget` walk early-breaks on the BE-ordered key where the others
 scan-and-delete — an idiom difference, not a semantic one.
 
-**Tx-data prune** (`prune_tx_data`, `:10144`): a standalone write path with
-its **own** transaction, RAII-swapped into `m_write_txn` for the duration
-(§1's last mechanism). v11 retention semantics: the depth pass keeps
-`txs_prunable_hash` and `txs_pqc_auths` — the pruned-txid operands — when
-it drops the prunable body.
+**Tx-data prune** (`prune_tx_data`, `:10144`): **also checkpointed**, and
+its checkpoints are the better-designed of the two. Its `while` loop takes
+at most 256 heights per pass, each under a fresh transaction that is
+RAII-swapped into `m_write_txn` for that pass (§1's last mechanism), and
+each pass commits its deletions **together with its own resumption
+anchor** — `write_tx_prune_next_block_height(wtxn, h)` rides the same
+transaction as the work it describes (`:10179`–`:10200`, `:10283`–`:10288`).
+So the crash window here leaves earlier batches committed, exactly as the
+stripe prune does, but the persisted next-height means the resumed run
+neither repeats nor skips: the anchor cannot disagree with the data,
+because they commit or abort together. (An anchor written in a *separate*
+transaction from its work is the shape this one avoids — compare the
+receipt-before-destruction ordering in the archival prune above, which
+achieves the same property the other way round.) v11 retention semantics:
+the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths` — the
+pruned-txid operands — when it drops the prunable body.
 
 **Stripe prune** (`prune_worker`, `:2320`): the one write path in this
 store that is **deliberately multi-transaction**. It opens its own
@@ -218,9 +268,12 @@ Contrast with connect and pop (§2/§3), where a partial commit is a
 consensus split: there the multi-transaction shape is forbidden, here it is
 the design.
 
-**Verdict: PASS** on all three — two atomic, one deliberately checkpointed
-with a resumable, consensus-neutral failure window. The
-receipt-before-destruction edge is R-2 in the RAW set (§6).
+**Verdict: PASS** on all three — **one atomic, two deliberately
+checkpointed**, each checkpointed one with a resumable, consensus-neutral
+failure window and a persisted anchor that commits with its own work. Only
+the archival retention prune is a single transaction, and only because it
+rides the block's. The receipt-before-destruction edge is R-2 in the RAW
+set (§6); the depth prune's anchor-with-batch is R-6.
 
 ## 5b. `reset()` and `migrate()`
 
@@ -288,6 +341,7 @@ The §6.6 seeds re-verified, one dead, and the live set enumerated:
 | R-3 | budget-accrual rows (earlier blocks) → epoch-close range-sum | `process_archival_epoch_close_at_height` | cross-**block** reads: the close of epoch E sums accrual rows written by E's whole span; the retention window dominates the reorg window and the pop floor (R-2) defends the remainder |
 | R-4 | slash-journal restore → holdings-update restore | pop funnel | shared fields (`bonded_total`, `held_shard_ids`, `shard_add_epochs`); §8's partial order |
 | R-5 | witness read → pop → alt-store handoff | reorg (`switch_to_alternative_blockchain`) | the reorg reads the witness *before* popping and stores it beside the alt block; pop itself deletes the row |
+| R-6 | depth-prune batch deletions → `tx_prune_next_block` anchor | `prune_tx_data` | the resumption anchor commits in the same transaction as the batch it describes, so a crash cannot leave the anchor disagreeing with the data (§5a) |
 | — | ~~multi-claim pool balance~~ | — | **dead seed** — the §6.6 text predates the claim-era deletion; `txin_stake_claim` has zero occurrences at the pin |
 
 Journals were expected to add more; R-2/R-3/R-4 are those additions.
@@ -364,7 +418,7 @@ tripped it.
 | DRS-W3 | 129 unguarded `*m_write_txn` dereferences (null deref if a caller path ever arrives guardless — none found at the pin) | wart (latent) | RECORD-AND-SPECIFY: the Rust store's write handle is possession-typed; the precondition becomes unrepresentable |
 | DRS-W4 | `txs` has **zero write and zero read sites** — the handle's only occurrence in `db_lmdb.cpp` is its `open()` (`:1662`); every live tx write goes to the pruned/prunable split. Verified wide across `src/` and `tests/` (the tests' `m_txs` is a test-local vector, not the handle) | wart (inherited-dead surface; no unsound state) | RECORD-AND-SPECIFY: the Rust store does not port the table. Deleting it here is a C++ **and** schema-version change, owned by the census/DRS lane, not by a docs pass |
 | DRS-W5 | `hf_starting_heights` is `mdb_drop(…, del=1)`-deleted at every writable `open()` (`:1778`) and never re-created, so the **declared** table set (49) and the **runtime** set (48) differ permanently — and the coverage gate cannot see the class, since both sides of its comparisons derive from the same macro (§10) | wart (structural divergence between register and runtime; no unsound state) | RECORD-AND-SPECIFY, and routed to census **R4**, which owns the hardfork machinery. A runtime census is out of this pass's scope by design |
-| DRS-W6 | Post-pop burn-total reversal (`blockchain.cpp:896`) is outside the pop funnel: one logical pop = two transactions for any standalone (batchless) caller — the April staker-guard finding's shape, inherited by the successor write. The file documents the invariant it breaks: the comment closing the same block (`blockchain.cpp:906`–`:910`) says the accrual-row removal's two sides "are DB-layer and share the pop's wtxn" — while the burn reversal lines above it, inside the same guard block, does not share it | wart (**latent bookkeeping — graded on the COMPLETE consumer census, five sites** (a first three-site census had excluded `db_lmdb.cpp` by filter and missed the two slash sites — steering's catch): RPC readout `core_rpc_server.cpp:274`; connect add `blockchain.cpp:6455` (inside the block's batch txn); pop reversal `:901`; slash add `db_lmdb.cpp:6048` and slash revert `:6360`, both **inside** the funnel txns with FATAL guards. The crash window inflates the scalar (too-HIGH), which satisfies every guard with headroom and cannot fire the `:902` clamp (which needs too-LOW); a too-low scalar has **no production entry** at the pin — the connect add shares the block's txn, genesis rides one `db_wtxn_guard`, and clamp-before-divergence is circular. No consensus arithmetic consumes the scalar: `shekyl-economics-sim/src/record.rs:143` refuses the `already_generated − total_burned` derivation on the record, and `shekyl-archival-retention`'s conservation check is a no-LMDB snapshot helper whose only callers are its own KATs with synthetic operands. **Grade expires with its ground**: any future consensus consumer of the scalar, or any new unbatched caller of `handle_block_to_main_chain`, re-grades this at that change's design round) | RECORD-AND-SPECIFY: the Rust store's pop is one transaction, derived-total reversals included |
+| DRS-W6 | The post-pop burn pair (`total_burned` reversal + `block_burn` row removal, `blockchain.cpp:896`–`:905`) sits at the **core layer, outside `BlockchainDB::pop_block`**. Two consequences: a batchless core-path caller pops in two transactions; and a caller popping through the DB funnel skips both writes entirely — **live today** via `blockchain_import --pop-blocks`, which calls `get_db().pop_block(...)` directly and documents why (§3). A database added through the verifying path and popped by that tool keeps burns the chain no longer contains | wart (**latent bookkeeping, live reachability** — graded on the complete five-site consumer census: RPC readout, connect add, pop reversal, and the two slash guards, both of which an *inflated* value satisfies with headroom; no emission, supply, or validation arithmetic consumes it — `shekyl-economics-sim/src/record.rs:143` refuses the `already_generated − total_burned` derivation on the record, and the conservation helper is KAT-only with synthetic operands. **Grade expires with its ground**: any consensus consumer of the scalar re-grades this at that consumer's design round) | RECORD-AND-SPECIFY: **derived-total reversal belongs in the pop funnel** in the Rust store, so popping through the store cannot mean something different from popping through the node |
 | DRS-W7 | Three sites, three semantics for the same scalar's impossible value: the pop reversal **clamps** to floor (`blockchain.cpp:902`), the slash revert **throws** `FATAL` on underflow (`db_lmdb.cpp:6362`), the slash add **throws** `FATAL` on overflow (`:6050`) — the paths disagree about what an impossible `total_burned` means, so the node's behavior under a (today unreachable) divergence depends on which path meets it first: silent floor vs halt | wart (unreachable at the pin — see DRS-W6's reachability argument — but the disagreement is a standing trap for whichever future change arms it) | RECORD-AND-SPECIFY: the Rust store has **one** ruled semantic for an impossible derived total — and the ruling itself belongs to the economics lane, not the store |
 | DRS-W8 | `correct_block_cumulative_difficulties` (`:3034`) aborts explicitly on its size-mismatch guard but not on its loop throws, so the same function leaves the write transaction in two different states depending on which failure fires — and it has **no production caller** (§5c) | wart (atomicity holds either way; unwired) | RECORD-AND-SPECIFY: one unwinding path in the Rust store. The unwired status is a census datum, the `set_archival_settlement`/CEN-L8 shape |
 | — | `hf_versions` not cleaned on pop | carried | P0c wart row (owned there since April; not re-opened here) |

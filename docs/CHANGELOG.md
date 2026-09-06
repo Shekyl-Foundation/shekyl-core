@@ -112,9 +112,11 @@
   connect, pop, txpool (re-censused: 14 `LockedTXN` constructions / 13
   commits, the read-snapshot `get_transaction_info` recorded as the
   deliberate baseline; the April D++ fix verified alive and intact), alt
-  blocks, **three** prune shapes (archival retention inside the epoch-close
-  hook with receipt-before-destruction; `prune_tx_data`'s own-txn
-  RAII swap; `prune_worker`'s deliberately chunked resumable txns),
+  blocks, **three** prune shapes — one atomic and two deliberately
+  checkpointed (archival retention rides the block's transaction with its
+  receipt written before the destruction it authorises; `prune_tx_data`
+  commits per ≤256-height batch **with its resumption anchor in the same
+  transaction**; `prune_worker` commits and reopens every 4096 deletions) —
   `reset()` (enumeration wipe — its stale FOLLOWUPS row closed), and
   `migrate()` (zero writes by design). The §10 coverage matrix is
   gate-pinned to `SHEKYL_LMDB_TABLES` (DRS §9.1 leg 3 now live; eight new
@@ -125,7 +127,9 @@
   `DB_ERROR_TXN_START` for one precondition). Findings DRS-W1…DRS-W8 recorded —
   none S-graded, no C++ touched — including `txs` (zero write or read
   sites; inherited-dead candidate) and `hf_starting_heights` (deleted at
-  every writable `open()`, structurally absent at runtime). The dead
+  every writable `open()`, structurally absent at runtime), and the post-pop
+  burn pair living outside the pop funnel — which `blockchain_import
+  --pop-blocks` reaches today by popping straight through the DB. The dead
   `staker_pool_balance` properties row left the schema doc, and the
   workflow carrying the schema gates is renamed `docs-gates.yml` for what
   it does (Rick's #624 boundary: P0b's item, no other lane's).
