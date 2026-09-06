@@ -3,7 +3,7 @@
 **Date:** 2026-09-05 (DRS-P0b; supersedes the April 2026 audit in place)
 **Pin:** `dev` `2dba46537` — every claim below was verified against this tree
 **Scope:** every `BlockchainLMDB` write path at the pin: block connect, block
-pop, the transaction pool, alt blocks, the two retention prunes, `reset()`,
+pop, the transaction pool, alt blocks, the three prunes, `reset()`,
 and `migrate()`. One coverage row per `SHEKYL_LMDB_TABLES` entry — the count
 is derived from the macro wherever it is used, never restated as a literal
 (the schema-coverage gate pins the matrix to the macro in both directions).
@@ -37,7 +37,7 @@ tables with dead migration code):
   `block_pending_additions`, `curve_tree_roots`, `leaf_to_output`,
   `output_to_leaf`), −2 (`staker_accrual`, `staker_claims`, deleted with the
   claim-era wire). **Round-2 → this pin: +3** (both attestation-witness
-  tables, `archival_settlement`), −0. Both direction of each delta measured.
+  tables, `archival_settlement`), −0. Both directions of each delta measured.
 - **22 of the 49 live tables post-date the April audit** and had zero
   atomicity coverage until this rewrite. The April PASS was doing work it
   was never entitled to do: a verdict over a store that is now half tables
@@ -475,6 +475,20 @@ comparison it makes derive from the same macro. Recorded here for census
 R4 (which owns the hardfork machinery) to rule on; building a runtime
 census is out of this pass's scope by design:
 
+**Two writers are cross-cutting, and are stated here once rather than
+repeated down the column** — a universal fact copied into 47 rows is 47
+copies that can drift, and the per-row "Writers" column earns its keep by
+naming what *distinguishes* one table from another. They apply to every
+row of the table that follows:
+
+- **`reset()` (§5b) writes every table it enumerates**, which is every
+  named table in the environment except the keep set (`txpool_meta`,
+  `txpool_blob`) — `mdb_drop(…, del=0)` per name, one transaction. So §5b
+  is part of every row's writer set except those two, whose rows say
+  *reset-kept*.
+- **`open()` (§5b) drops `hf_starting_heights`** on every writable open
+  (DRS-W5), and seeds the `properties` version row on an empty database.
+
 | Table | Writers at the pin | Path § |
 | --- | --- | --- |
 | `alt_blocks` | `add_alt_block` / `remove_alt_block`; `drop_alt_blocks` (emptied) | §5 |
@@ -509,7 +523,7 @@ census is out of this pass's scope by design:
 | `hf_versions` | `set_hard_fork_version` (`TXN_BLOCK_PREFIX`); `drop_hard_fork_info`; not cleaned on pop (P0c wart) | §2 |
 | `leaf_to_output` | `add/remove_output_leaf_mapping` | §2/§3 |
 | `output_amounts` | `add_output` / `remove_output` | §2/§3 |
-| `output_metadata` | `store_output_metadata` | §2 |
+| `output_metadata` | `store_output_metadata` — sole caller is inside `prune_tx_data` (`db_lmdb.cpp:10229`), so this table is written by the **depth prune**, not by connect | §5a |
 | `output_to_leaf` | `add/remove_output_leaf_mapping` | §2/§3 |
 | `output_txs` | `add_output` / `remove_output` | §2/§3 |
 | `pending_tree_drain` | `add_pending_tree_drain_entry`; `remove_pending_tree_drain_entries` | §2/§3 |
@@ -526,19 +540,6 @@ census is out of this pass's scope by design:
 | `txs_prunable_hash` | `add/remove_transaction_data` (v11: kept by the depth prune) | §2/§3/§5a |
 | `txs_prunable_tip` | `add/remove_transaction_data`; `prune_worker` | §2/§3/§5a |
 | `txs_pruned` | `add_transaction_data` / `remove_transaction_data` | §2/§3 |
-
-**Two writers are cross-cutting and are therefore stated once here rather
-than repeated down the column** — a universal fact copied into 47 rows is
-47 copies that can drift, and the per-row "Writers" column is for the
-writers that distinguish one table from another:
-
-- **`reset()` (§5b) writes every table it enumerates**, which is every
-  named table in the environment except the keep set (`txpool_meta`,
-  `txpool_blob`) — `mdb_drop(…, del=0)` per name, one transaction. So §5b
-  applies to every row below except those two, whose rows say
-  *reset-kept*.
-- **`open()` (§5b) drops `hf_starting_heights`** on every writable open
-  (DRS-W5), and seeds the `properties` version row on an empty database.
 
 Enumeration ground: 135 write call sites across 81 functions (79
 `BlockchainLMDB::` methods + the two anonymous-namespace journal template
