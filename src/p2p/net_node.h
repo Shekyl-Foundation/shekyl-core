@@ -444,6 +444,7 @@ namespace nodetool
 
     //! \return The `peer_id` announced on `zone`, or 0 if this node has no such zone.
     peerid_type get_announced_peer_id(epee::net_utils::zone zone) const;
+    uint32_t get_announced_port(epee::net_utils::zone zone) const;
 
     void change_max_out_public_peers(size_t count);
     uint32_t get_max_out_public_peers() const;

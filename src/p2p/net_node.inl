@@ -2994,6 +2994,21 @@ namespace nodetool
   }
 
   template<class t_payload_net_handler>
+  uint32_t node_server<t_payload_net_handler>::get_announced_port(const epee::net_utils::zone zone) const
+  {
+    /* The port `get_local_node_data` would put on the wire for this zone.
+       Named so the derived advertisement has something a test can observe:
+       the decision has no operator input any more, so there is no flag to
+       assert on and the announced value is the only witness. */
+    const auto found = m_network_zones.find(zone);
+    if (found == m_network_zones.end())
+      return 0;
+    basic_node_data node_data{};
+    const_cast<node_server*>(this)->get_local_node_data(node_data, found->second);
+    return node_data.my_port;
+  }
+
+  template<class t_payload_net_handler>
   uint32_t node_server<t_payload_net_handler>::get_max_out_public_peers() const
   {
     const auto public_zone = m_network_zones.find(epee::net_utils::zone::public_);

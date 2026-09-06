@@ -2015,3 +2015,58 @@ TEST(block_sync_span_lifecycle, prepare_failure_disconnects_the_origin_without_c
        "attributable to the sender (PWD-B7)";
   EXPECT_FALSE(endpoint.dropped.empty()) << "but the origin is still disconnected";
 }
+
+// The endpoint advertisement is DERIVED, with no operator input, so the only
+// witness is the announced value itself -- there is no flag left to assert on.
+//
+// The middle limb is the defect this replaced. `check_incoming_connections`
+// has always treated "no inbound accepted" as "not advertising"; the
+// announcement site asked only whether `--hide-my-port` was set, so a node run
+// with `--in-peers 0` refused every inbound connection and still announced a
+// port to attract them. Nothing in the tree observed that, which is why the
+// two sites could diverge silently.
+TEST(node_server, announced_port_is_derived_from_listener_and_zone)
+{
+  struct test_data_t
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+    test_data_t(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+  };
+
+  const auto announced = [](const std::string &port, const std::string &in_peers) {
+    test_data_t data;
+    boost::program_options::options_description desc_options("Command line options");
+    cryptonote::core::init_options(desc_options);
+    Server::init_options(desc_options);
+    const char* argv[2] = {nullptr, nullptr};
+    boost::program_options::variables_map vm;
+    boost::program_options::store(
+      boost::program_options::parse_command_line(1, argv, desc_options), vm);
+    vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+      boost::program_options::variable_value(std::string("127.0.0.2"), false);
+    vm.find(nodetool::arg_p2p_bind_port.name)->second =
+      boost::program_options::variable_value(port, false);
+    if (!in_peers.empty())
+      vm.find(nodetool::arg_in_peers.name)->second =
+        boost::program_options::variable_value(int64_t(std::stoll(in_peers)), false);
+    boost::program_options::notify(vm);
+    if (!data.server->init(vm))
+      return uint32_t(0xffffffff);   // distinguishable from a real 0
+    return data.server->get_announced_port(epee::net_utils::zone::public_);
+  };
+
+  // Accepting inbound on a pingback-capable zone: announce the listening port.
+  EXPECT_EQ(48086u, announced("48086", ""))
+    << "a reachable node must advertise, and nothing but the facts decides it";
+
+  // The corrected divergence: no inbound accepted, so nothing to advertise.
+  EXPECT_EQ(0u, announced("48087", "0"))
+    << "a node that refuses every inbound connection must not announce a port "
+       "for peers to attract themselves to";
+}
