@@ -46,13 +46,19 @@ review round 4, never updated after the round-8 signature; found here via
 `git log -S`, routed to the fee lane, and **fixed on #614 at `2e29f67d1`**,
 verified at that sha: §0.1 now records was-open-until-round-8-signed and
 "census-R2 is unblocked per its own criterion.")
-(b) The exhaustion-boundary test `terminal_reward_legs_agree` — **also
-branch-only**: it lives in `emission.rs` on the fee-ladder branch
-(FETCH_HEAD `ccfb85c72` :318), not on dev (grepped at the pin: zero hits;
-the census §10 text describing it is describing a branch artifact). Green
-through the new owner per the §8 BUILT record. Both conjuncts therefore
-share the same detectability profile — evidence on an unmerged branch —
-which is the sequencing rationale above applied twice, not once.
+(b) The exhaustion-boundary test `terminal_reward_legs_agree` **is ON DEV
+at `rust/shekyl-economics/src/emission.rs:331`** (landed with #614's
+fee-ladder rounds; minted in `b05ddbaf61`), deliberately `#[ignore]`d with
+its reason string naming the gate — *"FL-R12′ signed (round 8) but not yet
+implemented"* — and red by design until the implementation branch
+(`feat/fee-ladder-impl-1`) lands and un-ignores it. **Conjunct (b) is
+therefore discharged ON DEV: the red oracle exists in-tree.** *Records-was:
+at this round's draft pin the test grepped to zero on dev — that was true
+when written (it corrected a premature "discharged" relay), and it expired
+when #614 merged; the correction went stale exactly as a claim can, and
+this sentence replaces it as the asserts-is statement.* The branch-only
+detectability rationale for sequencing this PR after #614 is history — the
+sequencing it argued for happened.
 
 **Identifier family:** `C2-R2-Q1…Q11` (registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) this PR, rule 94).
