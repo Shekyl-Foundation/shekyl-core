@@ -5,8 +5,8 @@
     "profile": "release",
     "render_revision": 2,
     "rustc_version": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-    "source_tree_commit": "8df4cf5c3c9241a2150538553a6ac4461abe8e76",
-    "source_tree_dirty": true,
+    "source_tree_commit": "d232ff3d9a74a14f05672d3bc0e7eb98861f3575",
+    "source_tree_dirty": false,
     "target_arch": "x86_64",
     "target_os": "linux",
     "target_pointer_width": 64
