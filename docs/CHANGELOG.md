@@ -118,6 +118,22 @@
   workflow carrying the schema gates is renamed `docs-gates.yml` for what
   it does (Rick's #624 boundary: P0b's item, no other lane's).
 
+- **Shard-visual ruling B (spec half): the layered determinism bar,
+  pre-registered thresholds, and the sensitivity correction.** Ratified
+  2026-09-05. Hash-derived structure is bit-exact forever (pinned by
+  the twin Rust/Python recipe KATs); the painted raster is held to a
+  pre-registered perceptual metric (RGB-RMS ≤ θ = 2.0, decoded pixels
+  never PNG bytes), fixed before any cross-platform measurement
+  exists. The spec's bit-equivalence prose is retracted in place with
+  its reopening criterion (a deterministic rasterizer pinned across
+  both implementations). The reorg-continuity claim is corrected, not
+  softened: it was wrong as written and in direct opposition to the
+  integrity check's purpose — the ruled property is sensitivity, with
+  a two-limb avalanche falsifier (floor ≥ 20) whose second limb is
+  what makes it a test. The floor-device budget matrix, goldens, and
+  tests are the held measurement half (FOLLOWUPS). Also restores the
+  candidate-compositor § heading eaten by an earlier edit anchor.
+
 - **DRS-P0a — LMDB table reconciliation: the pin→HEAD delta is measured,
   registered, and gate-pinned.** The DRS design doc's Round-2 substrate
   figures (46 tables, seven undocumented, two phantoms) had aged into

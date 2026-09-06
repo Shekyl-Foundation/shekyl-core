@@ -1,0 +1,623 @@
+# GAP-7 floor capture — worst-case cold-block connect verification
+# phase=rust
+# captured_utc=20260905T181144Z
+# host=skl-pi  uname=Linux skl-pi 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
+# device_row: Raspberry Pi 4 Model B, 4 GB, active cooling, USB3 SSD (PERFORMANCE_BASELINE.md §8.2)
+# git_rev=8af70a60a6d444daa858d94d8b34e71b7e54eb49
+# rustc=rustc 1.94.0 (4a4ef493e 2026-03-02)
+# RUSTFLAGS=<unset> (unset = the shipping generic-aarch64 regime; cortex-a72 flags SIGILL RandomX on BCM2711)
+# randomx_mode=light/cache BY CONSTRUCTION — not a configuration that can drift between runs: shekyl-pow-randomx is a cache+VM substrate with no dataset arm (rust/shekyl-pow-randomx/src/lib.rs:46-72)
+# storage_deviation: run from SD (mmcblk0p2); §8.2 row's USB3 SSD present but unmounted — not mounted deliberately; measured path is CPU-bound and in-memory, so the deviation does not enter verify_floor
+# ram_as_found: 8 GB (Rev 1.4 board) vs the June row's 4 GB — rule 76 names the MODEL and Model B matches; RandomX is light/cache (~256 MB) and the FCMP terms are CPU-bound, so 8 vs 4 GB cannot bind HERE — a future floor measurement that IS memory-sensitive must not inherit this row's device as 'the floor'
+# thermal_start: temp_mC=66218 clock_kHz=1300000
+# thermal 18:11:44 temp_mC=66218 clock_kHz=1800000
+warning: variant `InconsistentWitness` is never constructed
+  --> shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs:97:5
+   |
+89 | pub(crate) enum IpProveError {
+   |                 ------------ variant in this enum
+...
+97 |     InconsistentWitness,
+   |     ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `IpProveError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `generalized-bulletproofs` (lib) generated 1 warning
+warning: `generalized-bulletproofs` (lib) generated 1 warning (1 duplicate)
+warning: use of deprecated method `blake2::digest::generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> shekyl-oxide/crypto/helioselene/src/ciphersuite.rs:35:38
+   |
+35 |         uniform.copy_from_slice(hash.as_slice());
+   |                                      ^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `blake2::digest::generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> shekyl-oxide/crypto/helioselene/src/ciphersuite.rs:74:38
+   |
+74 |         uniform.copy_from_slice(hash.as_slice());
+   |                                      ^^^^^^^^
+
+warning: `helioselene` (lib) generated 2 warnings
+warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
+   Compiling shekyl-ffi v3.1.0 (/home/torvaldsl/gap7-bench/shekyl-core/rust/shekyl-ffi)
+# thermal 18:11:59 temp_mC=68653 clock_kHz=1800000
+# thermal 18:12:14 temp_mC=70114 clock_kHz=1800000
+# thermal 18:12:30 temp_mC=68166 clock_kHz=1800000
+    Finished `bench` profile [optimized] target(s) in 48.57s
+     Running benches/block_connect_verify.rs (target/release/deps/block_connect_verify-6598bb4e757cf659)
+Gnuplot not found, using plotters backend
+# thermal 18:12:45 temp_mC=66705 clock_kHz=1800000
+Benchmarking block_connect_terms/adm/in1_out2_w13005
+Benchmarking block_connect_terms/adm/in1_out2_w13005: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 6.9s or enable flat sampling.
+Benchmarking block_connect_terms/adm/in1_out2_w13005: Collecting 10 samples in estimated 6.9160 s (55 iterations)
+# thermal 18:13:00 temp_mC=66218 clock_kHz=1800000
+Benchmarking block_connect_terms/adm/in1_out2_w13005: Analyzing
+block_connect_terms/adm/in1_out2_w13005
+                        time:   [125.87 ms 126.05 ms 126.16 ms]
+                        thrpt:  [100.67 KiB/s 100.75 KiB/s 100.90 KiB/s]
+Benchmarking block_connect_terms/pqc_per_input/in1_out2_w13005
+Benchmarking block_connect_terms/pqc_per_input/in1_out2_w13005: Warming up for 3.0000 s
+Benchmarking block_connect_terms/pqc_per_input/in1_out2_w13005: Collecting 10 samples in estimated 5.0184 s (5170 iterations)
+Benchmarking block_connect_terms/pqc_per_input/in1_out2_w13005: Analyzing
+block_connect_terms/pqc_per_input/in1_out2_w13005
+                        time:   [968.52 µs 971.86 µs 977.68 µs]
+                        thrpt:  [12.686 MiB/s 12.762 MiB/s 12.806 MiB/s]
+# thermal 18:13:15 temp_mC=67679 clock_kHz=1800000
+Benchmarking block_connect_terms/bp_proxy/in1_out2_w13005
+Benchmarking block_connect_terms/bp_proxy/in1_out2_w13005: Warming up for 3.0000 s
+Benchmarking block_connect_terms/bp_proxy/in1_out2_w13005: Collecting 10 samples in estimated 5.7803 s (165 iterations)
+Benchmarking block_connect_terms/bp_proxy/in1_out2_w13005: Analyzing
+block_connect_terms/bp_proxy/in1_out2_w13005
+                        time:   [34.991 ms 35.017 ms 35.046 ms]
+                        thrpt:  [362.38 KiB/s 362.69 KiB/s 362.96 KiB/s]
+# thermal 18:13:30 temp_mC=69140 clock_kHz=1800000
+Benchmarking block_connect_terms/parse/in1_out2_w13005
+Benchmarking block_connect_terms/parse/in1_out2_w13005: Warming up for 3.0000 s
+Benchmarking block_connect_terms/parse/in1_out2_w13005: Collecting 10 samples in estimated 5.0000 s (1.0M iterations)
+Benchmarking block_connect_terms/parse/in1_out2_w13005: Analyzing
+block_connect_terms/parse/in1_out2_w13005
+                        time:   [4.8679 µs 4.8688 µs 4.8699 µs]
+                        thrpt:  [2.4871 GiB/s 2.4877 GiB/s 2.4881 GiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+# thermal 18:13:45 temp_mC=70601 clock_kHz=1800000
+Benchmarking block_connect_terms/adm/in8_out2_w59229
+Benchmarking block_connect_terms/adm/in8_out2_w59229: Warming up for 3.0000 s
+# thermal 18:14:00 temp_mC=67192 clock_kHz=1800000
+Benchmarking block_connect_terms/adm/in8_out2_w59229: Collecting 10 samples in estimated 8.0458 s (20 iterations)
+Benchmarking block_connect_terms/adm/in8_out2_w59229: Analyzing
+block_connect_terms/adm/in8_out2_w59229
+                        time:   [402.02 ms 402.11 ms 402.20 ms]
+                        thrpt:  [143.81 KiB/s 143.84 KiB/s 143.88 KiB/s]
+# thermal 18:14:15 temp_mC=70114 clock_kHz=1800000
+Benchmarking block_connect_terms/pqc_per_input/in8_out2_w59229
+Benchmarking block_connect_terms/pqc_per_input/in8_out2_w59229: Warming up for 3.0000 s
+Benchmarking block_connect_terms/pqc_per_input/in8_out2_w59229: Collecting 10 samples in estimated 5.0108 s (5170 iterations)
+Benchmarking block_connect_terms/pqc_per_input/in8_out2_w59229: Analyzing
+block_connect_terms/pqc_per_input/in8_out2_w59229
+                        time:   [972.13 µs 972.28 µs 972.40 µs]
+                        thrpt:  [58.088 MiB/s 58.095 MiB/s 58.104 MiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking block_connect_terms/bp_proxy/in8_out2_w59229
+Benchmarking block_connect_terms/bp_proxy/in8_out2_w59229: Warming up for 3.0000 s
+# thermal 18:14:30 temp_mC=68653 clock_kHz=1800000
+Benchmarking block_connect_terms/bp_proxy/in8_out2_w59229: Collecting 10 samples in estimated 5.7474 s (165 iterations)
+Benchmarking block_connect_terms/bp_proxy/in8_out2_w59229: Analyzing
+block_connect_terms/bp_proxy/in8_out2_w59229
+                        time:   [34.812 ms 34.827 ms 34.867 ms]
+                        thrpt:  [1.6200 MiB/s 1.6219 MiB/s 1.6226 MiB/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+Benchmarking block_connect_terms/parse/in8_out2_w59229
+Benchmarking block_connect_terms/parse/in8_out2_w59229: Warming up for 3.0000 s
+# thermal 18:14:45 temp_mC=68653 clock_kHz=1800000
+Benchmarking block_connect_terms/parse/in8_out2_w59229: Collecting 10 samples in estimated 5.0009 s (251k iterations)
+Benchmarking block_connect_terms/parse/in8_out2_w59229: Analyzing
+block_connect_terms/parse/in8_out2_w59229
+                        time:   [19.893 µs 19.901 µs 19.910 µs]
+                        thrpt:  [2.7706 GiB/s 2.7718 GiB/s 2.7728 GiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+# thermal 18:15:00 temp_mC=68166 clock_kHz=1800000
+Benchmarking block_connect_terms/adm/in1_out16_w33948
+Benchmarking block_connect_terms/adm/in1_out16_w33948: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 7.2s or enable flat sampling.
+Benchmarking block_connect_terms/adm/in1_out16_w33948: Collecting 10 samples in estimated 7.1595 s (55 iterations)
+Benchmarking block_connect_terms/adm/in1_out16_w33948: Analyzing
+block_connect_terms/adm/in1_out16_w33948
+                        time:   [130.19 ms 130.26 ms 130.37 ms]
+                        thrpt:  [254.30 KiB/s 254.51 KiB/s 254.64 KiB/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+Benchmarking block_connect_terms/pqc_per_input/in1_out16_w33948
+Benchmarking block_connect_terms/pqc_per_input/in1_out16_w33948: Warming up for 3.0000 s
+# thermal 18:15:15 temp_mC=70114 clock_kHz=1800000
+Benchmarking block_connect_terms/pqc_per_input/in1_out16_w33948: Collecting 10 samples in estimated 5.0493 s (5225 iterations)
+Benchmarking block_connect_terms/pqc_per_input/in1_out16_w33948: Analyzing
+block_connect_terms/pqc_per_input/in1_out16_w33948
+                        time:   [967.72 µs 967.83 µs 968.05 µs]
+                        thrpt:  [33.444 MiB/s 33.451 MiB/s 33.455 MiB/s]
+Benchmarking block_connect_terms/bp_proxy/in1_out16_w33948
+Benchmarking block_connect_terms/bp_proxy/in1_out16_w33948: Warming up for 3.0000 s
+# thermal 18:15:30 temp_mC=67192 clock_kHz=1800000
+Benchmarking block_connect_terms/bp_proxy/in1_out16_w33948: Collecting 10 samples in estimated 5.8049 s (30 iterations)
+Benchmarking block_connect_terms/bp_proxy/in1_out16_w33948: Analyzing
+block_connect_terms/bp_proxy/in1_out16_w33948
+                        time:   [193.38 ms 193.42 ms 193.49 ms]
+                        thrpt:  [171.34 KiB/s 171.40 KiB/s 171.44 KiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking block_connect_terms/parse/in1_out16_w33948
+Benchmarking block_connect_terms/parse/in1_out16_w33948: Warming up for 3.0000 s
+# thermal 18:15:45 temp_mC=68653 clock_kHz=1800000
+Benchmarking block_connect_terms/parse/in1_out16_w33948: Collecting 10 samples in estimated 5.0005 s (471k iterations)
+Benchmarking block_connect_terms/parse/in1_out16_w33948: Analyzing
+block_connect_terms/parse/in1_out16_w33948
+                        time:   [10.732 µs 10.738 µs 10.741 µs]
+                        thrpt:  [2.9434 GiB/s 2.9443 GiB/s 2.9460 GiB/s]
+# thermal 18:16:00 temp_mC=66705 clock_kHz=1800000
+Benchmarking block_connect_terms/adm/in8_out16_w80172
+Benchmarking block_connect_terms/adm/in8_out16_w80172: Warming up for 3.0000 s
+# thermal 18:16:15 temp_mC=66218 clock_kHz=1800000
+Benchmarking block_connect_terms/adm/in8_out16_w80172: Collecting 10 samples in estimated 8.1647 s (20 iterations)
+Benchmarking block_connect_terms/adm/in8_out16_w80172: Analyzing
+block_connect_terms/adm/in8_out16_w80172
+                        time:   [407.79 ms 407.91 ms 408.05 ms]
+                        thrpt:  [191.87 KiB/s 191.94 KiB/s 191.99 KiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking block_connect_terms/pqc_per_input/in8_out16_w80172
+Benchmarking block_connect_terms/pqc_per_input/in8_out16_w80172: Warming up for 3.0000 s
+# thermal 18:16:30 temp_mC=66705 clock_kHz=1800000
+Benchmarking block_connect_terms/pqc_per_input/in8_out16_w80172: Collecting 10 samples in estimated 5.0010 s (5170 iterations)
+Benchmarking block_connect_terms/pqc_per_input/in8_out16_w80172: Analyzing
+block_connect_terms/pqc_per_input/in8_out16_w80172
+                        time:   [968.21 µs 968.32 µs 968.50 µs]
+                        thrpt:  [78.945 MiB/s 78.960 MiB/s 78.968 MiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking block_connect_terms/bp_proxy/in8_out16_w80172
+Benchmarking block_connect_terms/bp_proxy/in8_out16_w80172: Warming up for 3.0000 s
+# thermal 18:16:45 temp_mC=66705 clock_kHz=1800000
+Benchmarking block_connect_terms/bp_proxy/in8_out16_w80172: Collecting 10 samples in estimated 5.8044 s (30 iterations)
+Benchmarking block_connect_terms/bp_proxy/in8_out16_w80172: Analyzing
+block_connect_terms/bp_proxy/in8_out16_w80172
+                        time:   [193.33 ms 193.35 ms 193.38 ms]
+                        thrpt:  [404.87 KiB/s 404.93 KiB/s 404.98 KiB/s]
+Benchmarking block_connect_terms/parse/in8_out16_w80172
+Benchmarking block_connect_terms/parse/in8_out16_w80172: Warming up for 3.0000 s
+Benchmarking block_connect_terms/parse/in8_out16_w80172: Collecting 10 samples in estimated 5.0007 s (198k iterations)
+# thermal 18:17:00 temp_mC=66705 clock_kHz=1800000
+Benchmarking block_connect_terms/parse/in8_out16_w80172: Analyzing
+block_connect_terms/parse/in8_out16_w80172
+                        time:   [25.376 µs 25.431 µs 25.506 µs]
+                        thrpt:  [2.9274 GiB/s 2.9360 GiB/s 2.9423 GiB/s]
+Benchmarking block_connect_terms/adm/in4_out4_w37332
+Benchmarking block_connect_terms/adm/in4_out4_w37332: Warming up for 3.0000 s
+# thermal 18:17:15 temp_mC=66705 clock_kHz=1800000
+Benchmarking block_connect_terms/adm/in4_out4_w37332: Collecting 10 samples in estimated 6.8680 s (30 iterations)
+Benchmarking block_connect_terms/adm/in4_out4_w37332: Analyzing
+block_connect_terms/adm/in4_out4_w37332
+                        time:   [228.72 ms 228.78 ms 228.83 ms]
+                        thrpt:  [159.32 KiB/s 159.36 KiB/s 159.40 KiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+Benchmarking block_connect_terms/pqc_per_input/in4_out4_w37332
+Benchmarking block_connect_terms/pqc_per_input/in4_out4_w37332: Warming up for 3.0000 s
+Benchmarking block_connect_terms/pqc_per_input/in4_out4_w37332: Collecting 10 samples in estimated 5.0040 s (5170 iterations)
+# thermal 18:17:30 temp_mC=67192 clock_kHz=1800000
+Benchmarking block_connect_terms/pqc_per_input/in4_out4_w37332: Analyzing
+block_connect_terms/pqc_per_input/in4_out4_w37332
+                        time:   [970.52 µs 970.94 µs 971.88 µs]
+                        thrpt:  [36.633 MiB/s 36.668 MiB/s 36.684 MiB/s]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking block_connect_terms/bp_proxy/in4_out4_w37332
+Benchmarking block_connect_terms/bp_proxy/in4_out4_w37332: Warming up for 3.0000 s
+Benchmarking block_connect_terms/bp_proxy/in4_out4_w37332: Collecting 10 samples in estimated 6.5673 s (110 iterations)
+# thermal 18:17:46 temp_mC=65731 clock_kHz=1800000
+Benchmarking block_connect_terms/bp_proxy/in4_out4_w37332: Analyzing
+block_connect_terms/bp_proxy/in4_out4_w37332
+                        time:   [59.724 ms 59.755 ms 59.779 ms]
+                        thrpt:  [609.86 KiB/s 610.11 KiB/s 610.42 KiB/s]
+Benchmarking block_connect_terms/parse/in4_out4_w37332
+Benchmarking block_connect_terms/parse/in4_out4_w37332: Warming up for 3.0000 s
+Benchmarking block_connect_terms/parse/in4_out4_w37332: Collecting 10 samples in estimated 5.0006 s (427k iterations)
+# thermal 18:18:01 temp_mC=66705 clock_kHz=1800000
+Benchmarking block_connect_terms/parse/in4_out4_w37332: Analyzing
+block_connect_terms/parse/in4_out4_w37332
+                        time:   [11.826 µs 11.836 µs 11.848 µs]
+                        thrpt:  [2.9346 GiB/s 2.9375 GiB/s 2.9399 GiB/s]
+Benchmarking block_connect_terms/adm/in2_out8_w29845
+Benchmarking block_connect_terms/adm/in2_out8_w29845: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 8.4s or enable flat sampling.
+Benchmarking block_connect_terms/adm/in2_out8_w29845: Collecting 10 samples in estimated 8.4048 s (55 iterations)
+# thermal 18:18:16 temp_mC=65244 clock_kHz=1800000
+Benchmarking block_connect_terms/adm/in2_out8_w29845: Analyzing
+block_connect_terms/adm/in2_out8_w29845
+                        time:   [152.71 ms 152.76 ms 152.84 ms]
+                        thrpt:  [190.69 KiB/s 190.79 KiB/s 190.85 KiB/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+Benchmarking block_connect_terms/pqc_per_input/in2_out8_w29845
+Benchmarking block_connect_terms/pqc_per_input/in2_out8_w29845: Warming up for 3.0000 s
+Benchmarking block_connect_terms/pqc_per_input/in2_out8_w29845: Collecting 10 samples in estimated 5.0138 s (5170 iterations)
+# thermal 18:18:31 temp_mC=66705 clock_kHz=1800000
+Benchmarking block_connect_terms/pqc_per_input/in2_out8_w29845: Analyzing
+block_connect_terms/pqc_per_input/in2_out8_w29845
+                        time:   [973.00 µs 974.05 µs 976.66 µs]
+                        thrpt:  [29.143 MiB/s 29.221 MiB/s 29.252 MiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking block_connect_terms/bp_proxy/in2_out8_w29845
+Benchmarking block_connect_terms/bp_proxy/in2_out8_w29845: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.9s or enable flat sampling.
+Benchmarking block_connect_terms/bp_proxy/in2_out8_w29845: Collecting 10 samples in estimated 5.8784 s (55 iterations)
+# thermal 18:18:46 temp_mC=67192 clock_kHz=1800000
+Benchmarking block_connect_terms/bp_proxy/in2_out8_w29845: Analyzing
+block_connect_terms/bp_proxy/in2_out8_w29845
+                        time:   [106.72 ms 106.79 ms 106.87 ms]
+                        thrpt:  [272.73 KiB/s 272.93 KiB/s 273.10 KiB/s]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking block_connect_terms/parse/in2_out8_w29845
+Benchmarking block_connect_terms/parse/in2_out8_w29845: Warming up for 3.0000 s
+Benchmarking block_connect_terms/parse/in2_out8_w29845: Collecting 10 samples in estimated 5.0002 s (503k iterations)
+# thermal 18:19:01 temp_mC=67679 clock_kHz=1800000
+Benchmarking block_connect_terms/parse/in2_out8_w29845: Analyzing
+block_connect_terms/parse/in2_out8_w29845
+                        time:   [9.9673 µs 9.9852 µs 9.9978 µs]
+                        thrpt:  [2.7801 GiB/s 2.7837 GiB/s 2.7887 GiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
+Benchmarking block_connect_budget_fill/in1_out2/budget600000_n46
+Benchmarking block_connect_budget_fill/in1_out2/budget600000_n46: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 74.5s.
+Benchmarking block_connect_budget_fill/in1_out2/budget600000_n46: Collecting 10 samples in estimated 74.498 s (10 iterations)
+# thermal 18:19:16 temp_mC=66218 clock_kHz=1800000
+# thermal 18:19:31 temp_mC=65244 clock_kHz=1800000
+# thermal 18:19:46 temp_mC=65731 clock_kHz=1800000
+# thermal 18:20:01 temp_mC=65244 clock_kHz=1800000
+# thermal 18:20:16 temp_mC=63783 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in1_out2/budget600000_n46: Analyzing
+block_connect_budget_fill/in1_out2/budget600000_n46
+                        time:   [7.4396 s 7.4410 s 7.4425 s]
+                        thrpt:  [78.497 KiB/s 78.512 KiB/s 78.527 KiB/s]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+# thermal 18:20:31 temp_mC=67679 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in1_out2/budget1200000_n92
+Benchmarking block_connect_budget_fill/in1_out2/budget1200000_n92: Warming up for 3.0000 s
+# thermal 18:20:46 temp_mC=65244 clock_kHz=1800000
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 149.0s.
+Benchmarking block_connect_budget_fill/in1_out2/budget1200000_n92: Collecting 10 samples in estimated 148.99 s (10 iterations)
+# thermal 18:21:01 temp_mC=63296 clock_kHz=1800000
+# thermal 18:21:16 temp_mC=65244 clock_kHz=1800000
+# thermal 18:21:31 temp_mC=63296 clock_kHz=1800000
+# thermal 18:21:46 temp_mC=64270 clock_kHz=1800000
+# thermal 18:22:01 temp_mC=64270 clock_kHz=1800000
+# thermal 18:22:16 temp_mC=64270 clock_kHz=1800000
+# thermal 18:22:31 temp_mC=62809 clock_kHz=1800000
+# thermal 18:22:46 temp_mC=64270 clock_kHz=1800000
+# thermal 18:23:01 temp_mC=62809 clock_kHz=1800000
+# thermal 18:23:16 temp_mC=62809 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in1_out2/budget1200000_n92: Analyzing
+block_connect_budget_fill/in1_out2/budget1200000_n92
+                        time:   [14.885 s 14.888 s 14.891 s]
+                        thrpt:  [78.466 KiB/s 78.483 KiB/s 78.497 KiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking block_connect_budget_fill/in1_out2/budget2400000_n184
+Benchmarking block_connect_budget_fill/in1_out2/budget2400000_n184: Warming up for 3.0000 s
+# thermal 18:23:31 temp_mC=63296 clock_kHz=1800000
+# thermal 18:23:46 temp_mC=64757 clock_kHz=1800000
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 298.1s.
+Benchmarking block_connect_budget_fill/in1_out2/budget2400000_n184: Collecting 10 samples in estimated 298.10 s (10 iterations)
+# thermal 18:24:01 temp_mC=62809 clock_kHz=1800000
+# thermal 18:24:17 temp_mC=63296 clock_kHz=1800000
+# thermal 18:24:32 temp_mC=63296 clock_kHz=1800000
+# thermal 18:24:47 temp_mC=63783 clock_kHz=1800000
+# thermal 18:25:02 temp_mC=62809 clock_kHz=1800000
+# thermal 18:25:17 temp_mC=62809 clock_kHz=1800000
+# thermal 18:25:32 temp_mC=62322 clock_kHz=1800000
+# thermal 18:25:47 temp_mC=62809 clock_kHz=1800000
+# thermal 18:26:02 temp_mC=61835 clock_kHz=1800000
+# thermal 18:26:17 temp_mC=63783 clock_kHz=1800000
+# thermal 18:26:32 temp_mC=62809 clock_kHz=1800000
+# thermal 18:26:47 temp_mC=63783 clock_kHz=1800000
+# thermal 18:27:02 temp_mC=62322 clock_kHz=1800000
+# thermal 18:27:17 temp_mC=63296 clock_kHz=1800000
+# thermal 18:27:32 temp_mC=62322 clock_kHz=1800000
+# thermal 18:27:47 temp_mC=63783 clock_kHz=1800000
+# thermal 18:28:02 temp_mC=62322 clock_kHz=1800000
+# thermal 18:28:17 temp_mC=62322 clock_kHz=1800000
+# thermal 18:28:32 temp_mC=61835 clock_kHz=1800000
+# thermal 18:28:47 temp_mC=62809 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in1_out2/budget2400000_n184: Analyzing
+block_connect_budget_fill/in1_out2/budget2400000_n184
+                        time:   [29.771 s 29.773 s 29.776 s]
+                        thrpt:  [78.481 KiB/s 78.488 KiB/s 78.493 KiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking block_connect_budget_fill/in1_out2/budget4800000_n369
+Benchmarking block_connect_budget_fill/in1_out2/budget4800000_n369: Warming up for 3.0000 s
+# thermal 18:29:02 temp_mC=63296 clock_kHz=1800000
+# thermal 18:29:17 temp_mC=63296 clock_kHz=1800000
+# thermal 18:29:32 temp_mC=63783 clock_kHz=1800000
+# thermal 18:29:47 temp_mC=62809 clock_kHz=1800000
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 598.1s.
+Benchmarking block_connect_budget_fill/in1_out2/budget4800000_n369: Collecting 10 samples in estimated 598.09 s (10 iterations)
+# thermal 18:30:02 temp_mC=63296 clock_kHz=1800000
+# thermal 18:30:17 temp_mC=62322 clock_kHz=1800000
+# thermal 18:30:32 temp_mC=63296 clock_kHz=1800000
+# thermal 18:30:48 temp_mC=62809 clock_kHz=1800000
+# thermal 18:31:03 temp_mC=64270 clock_kHz=1800000
+# thermal 18:31:18 temp_mC=61835 clock_kHz=1800000
+# thermal 18:31:33 temp_mC=62322 clock_kHz=1800000
+# thermal 18:31:48 temp_mC=63783 clock_kHz=1800000
+# thermal 18:32:03 temp_mC=61835 clock_kHz=1800000
+# thermal 18:32:18 temp_mC=61835 clock_kHz=1800000
+# thermal 18:32:33 temp_mC=61835 clock_kHz=1800000
+# thermal 18:32:48 temp_mC=61348 clock_kHz=1800000
+# thermal 18:33:03 temp_mC=61348 clock_kHz=1800000
+# thermal 18:33:18 temp_mC=61348 clock_kHz=1800000
+# thermal 18:33:33 temp_mC=61835 clock_kHz=1800000
+# thermal 18:33:48 temp_mC=62809 clock_kHz=1800000
+# thermal 18:34:03 temp_mC=63296 clock_kHz=1800000
+# thermal 18:34:18 temp_mC=63296 clock_kHz=1800000
+# thermal 18:34:33 temp_mC=61835 clock_kHz=1800000
+# thermal 18:34:48 temp_mC=61348 clock_kHz=1800000
+# thermal 18:35:03 temp_mC=62322 clock_kHz=1800000
+# thermal 18:35:18 temp_mC=61835 clock_kHz=1800000
+# thermal 18:35:33 temp_mC=61835 clock_kHz=1800000
+# thermal 18:35:48 temp_mC=61835 clock_kHz=1800000
+# thermal 18:36:03 temp_mC=61835 clock_kHz=1800000
+# thermal 18:36:18 temp_mC=61348 clock_kHz=1800000
+# thermal 18:36:33 temp_mC=61348 clock_kHz=1800000
+# thermal 18:36:48 temp_mC=62322 clock_kHz=1800000
+# thermal 18:37:03 temp_mC=60861 clock_kHz=1800000
+# thermal 18:37:18 temp_mC=61348 clock_kHz=1800000
+# thermal 18:37:34 temp_mC=61835 clock_kHz=1800000
+# thermal 18:37:49 temp_mC=61835 clock_kHz=1800000
+# thermal 18:38:04 temp_mC=61348 clock_kHz=1800000
+# thermal 18:38:19 temp_mC=61835 clock_kHz=1800000
+# thermal 18:38:34 temp_mC=62322 clock_kHz=1800000
+# thermal 18:38:49 temp_mC=61348 clock_kHz=1800000
+# thermal 18:39:04 temp_mC=62809 clock_kHz=1800000
+# thermal 18:39:19 temp_mC=62322 clock_kHz=1800000
+# thermal 18:39:34 temp_mC=62322 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in1_out2/budget4800000_n369: Analyzing
+block_connect_budget_fill/in1_out2/budget4800000_n369
+                        time:   [59.720 s 59.729 s 59.741 s]
+                        thrpt:  [78.445 KiB/s 78.460 KiB/s 78.472 KiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+# thermal 18:39:49 temp_mC=64757 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in8_out2/budget600000_n10
+Benchmarking block_connect_budget_fill/in8_out2/budget600000_n10: Warming up for 3.0000 s
+# thermal 18:40:04 temp_mC=63783 clock_kHz=1800000
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 44.6s.
+Benchmarking block_connect_budget_fill/in8_out2/budget600000_n10: Collecting 10 samples in estimated 44.623 s (10 iterations)
+# thermal 18:40:19 temp_mC=63296 clock_kHz=1800000
+# thermal 18:40:34 temp_mC=62322 clock_kHz=1800000
+# thermal 18:40:49 temp_mC=62322 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in8_out2/budget600000_n10: Analyzing
+block_connect_budget_fill/in8_out2/budget600000_n10
+                        time:   [4.4507 s 4.4519 s 4.4533 s]
+                        thrpt:  [129.88 KiB/s 129.92 KiB/s 129.96 KiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking block_connect_budget_fill/in8_out2/budget1200000_n20
+Benchmarking block_connect_budget_fill/in8_out2/budget1200000_n20: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 89.2s.
+Benchmarking block_connect_budget_fill/in8_out2/budget1200000_n20: Collecting 10 samples in estimated 89.174 s (10 iterations)
+# thermal 18:41:04 temp_mC=62322 clock_kHz=1800000
+# thermal 18:41:19 temp_mC=61835 clock_kHz=1800000
+# thermal 18:41:34 temp_mC=62809 clock_kHz=1800000
+# thermal 18:41:49 temp_mC=61835 clock_kHz=1800000
+# thermal 18:42:04 temp_mC=61348 clock_kHz=1800000
+# thermal 18:42:19 temp_mC=61348 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in8_out2/budget1200000_n20: Analyzing
+block_connect_budget_fill/in8_out2/budget1200000_n20
+                        time:   [8.9033 s 8.9049 s 8.9064 s]
+                        thrpt:  [129.89 KiB/s 129.91 KiB/s 129.93 KiB/s]
+# thermal 18:42:34 temp_mC=66705 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in8_out2/budget2400000_n40
+Benchmarking block_connect_budget_fill/in8_out2/budget2400000_n40: Warming up for 3.0000 s
+# thermal 18:42:49 temp_mC=63296 clock_kHz=1800000
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 178.2s.
+Benchmarking block_connect_budget_fill/in8_out2/budget2400000_n40: Collecting 10 samples in estimated 178.24 s (10 iterations)
+# thermal 18:43:04 temp_mC=61835 clock_kHz=1800000
+# thermal 18:43:19 temp_mC=62322 clock_kHz=1800000
+# thermal 18:43:35 temp_mC=61835 clock_kHz=1800000
+# thermal 18:43:50 temp_mC=61835 clock_kHz=1800000
+# thermal 18:44:05 temp_mC=62809 clock_kHz=1800000
+# thermal 18:44:20 temp_mC=61835 clock_kHz=1800000
+# thermal 18:44:35 temp_mC=62809 clock_kHz=1800000
+# thermal 18:44:50 temp_mC=61348 clock_kHz=1800000
+# thermal 18:45:05 temp_mC=61835 clock_kHz=1800000
+# thermal 18:45:20 temp_mC=61835 clock_kHz=1800000
+# thermal 18:45:35 temp_mC=61835 clock_kHz=1800000
+# thermal 18:45:50 temp_mC=61835 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in8_out2/budget2400000_n40: Analyzing
+block_connect_budget_fill/in8_out2/budget2400000_n40
+                        time:   [17.808 s 17.811 s 17.813 s]
+                        thrpt:  [129.88 KiB/s 129.90 KiB/s 129.92 KiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking block_connect_budget_fill/in8_out2/budget4800000_n81
+Benchmarking block_connect_budget_fill/in8_out2/budget4800000_n81: Warming up for 3.0000 s
+# thermal 18:46:05 temp_mC=62809 clock_kHz=1800000
+# thermal 18:46:20 temp_mC=62809 clock_kHz=1800000
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 361.0s.
+Benchmarking block_connect_budget_fill/in8_out2/budget4800000_n81: Collecting 10 samples in estimated 361.01 s (10 iterations)
+# thermal 18:46:35 temp_mC=62809 clock_kHz=1800000
+# thermal 18:46:50 temp_mC=63296 clock_kHz=1800000
+# thermal 18:47:05 temp_mC=60374 clock_kHz=1800000
+# thermal 18:47:20 temp_mC=62809 clock_kHz=1800000
+# thermal 18:47:35 temp_mC=62809 clock_kHz=1800000
+# thermal 18:47:50 temp_mC=61835 clock_kHz=1800000
+# thermal 18:48:05 temp_mC=61348 clock_kHz=1800000
+# thermal 18:48:20 temp_mC=62809 clock_kHz=1800000
+# thermal 18:48:35 temp_mC=61348 clock_kHz=1800000
+# thermal 18:48:50 temp_mC=61835 clock_kHz=1800000
+# thermal 18:49:05 temp_mC=61348 clock_kHz=1800000
+# thermal 18:49:20 temp_mC=61348 clock_kHz=1800000
+# thermal 18:49:35 temp_mC=61835 clock_kHz=1800000
+# thermal 18:49:50 temp_mC=61348 clock_kHz=1800000
+# thermal 18:50:06 temp_mC=61835 clock_kHz=1800000
+# thermal 18:50:21 temp_mC=60861 clock_kHz=1800000
+# thermal 18:50:36 temp_mC=61348 clock_kHz=1800000
+# thermal 18:50:51 temp_mC=63296 clock_kHz=1800000
+# thermal 18:51:06 temp_mC=61835 clock_kHz=1800000
+# thermal 18:51:21 temp_mC=62322 clock_kHz=1800000
+# thermal 18:51:36 temp_mC=61835 clock_kHz=1800000
+# thermal 18:51:51 temp_mC=61835 clock_kHz=1800000
+# thermal 18:52:06 temp_mC=60374 clock_kHz=1800000
+# thermal 18:52:21 temp_mC=60861 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in8_out2/budget4800000_n81: Analyzing
+block_connect_budget_fill/in8_out2/budget4800000_n81
+                        time:   [36.065 s 36.070 s 36.076 s]
+                        thrpt:  [129.87 KiB/s 129.89 KiB/s 129.91 KiB/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+# thermal 18:52:36 temp_mC=63296 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in1_out16/budget600000_n17
+Benchmarking block_connect_budget_fill/in1_out16/budget600000_n17: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 55.6s.
+Benchmarking block_connect_budget_fill/in1_out16/budget600000_n17: Collecting 10 samples in estimated 55.592 s (10 iterations)
+# thermal 18:52:51 temp_mC=61835 clock_kHz=1800000
+# thermal 18:53:06 temp_mC=62322 clock_kHz=1800000
+# thermal 18:53:21 temp_mC=61348 clock_kHz=1800000
+# thermal 18:53:36 temp_mC=62322 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in1_out16/budget600000_n17: Analyzing
+block_connect_budget_fill/in1_out16/budget600000_n17
+                        time:   [5.5489 s 5.5503 s 5.5518 s]
+                        thrpt:  [101.51 KiB/s 101.54 KiB/s 101.57 KiB/s]
+Benchmarking block_connect_budget_fill/in1_out16/budget1200000_n35
+Benchmarking block_connect_budget_fill/in1_out16/budget1200000_n35: Warming up for 3.0000 s
+# thermal 18:53:51 temp_mC=62322 clock_kHz=1800000
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 114.3s.
+Benchmarking block_connect_budget_fill/in1_out16/budget1200000_n35: Collecting 10 samples in estimated 114.34 s (10 iterations)
+# thermal 18:54:06 temp_mC=61835 clock_kHz=1800000
+# thermal 18:54:21 temp_mC=61348 clock_kHz=1800000
+# thermal 18:54:36 temp_mC=61348 clock_kHz=1800000
+# thermal 18:54:51 temp_mC=60861 clock_kHz=1800000
+# thermal 18:55:06 temp_mC=61348 clock_kHz=1800000
+# thermal 18:55:21 temp_mC=61348 clock_kHz=1800000
+# thermal 18:55:36 temp_mC=61348 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in1_out16/budget1200000_n35: Analyzing
+block_connect_budget_fill/in1_out16/budget1200000_n35
+                        time:   [11.423 s 11.425 s 11.426 s]
+                        thrpt:  [101.55 KiB/s 101.57 KiB/s 101.58 KiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking block_connect_budget_fill/in1_out16/budget2400000_n70
+Benchmarking block_connect_budget_fill/in1_out16/budget2400000_n70: Warming up for 3.0000 s
+# thermal 18:55:51 temp_mC=65731 clock_kHz=1800000
+# thermal 18:56:06 temp_mC=61835 clock_kHz=1800000
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 228.6s.
+Benchmarking block_connect_budget_fill/in1_out16/budget2400000_n70: Collecting 10 samples in estimated 228.64 s (10 iterations)
+# thermal 18:56:21 temp_mC=63296 clock_kHz=1800000
+# thermal 18:56:37 temp_mC=61348 clock_kHz=1800000
+# thermal 18:56:52 temp_mC=61835 clock_kHz=1800000
+# thermal 18:57:07 temp_mC=60861 clock_kHz=1800000
+# thermal 18:57:22 temp_mC=60861 clock_kHz=1800000
+# thermal 18:57:37 temp_mC=60374 clock_kHz=1800000
+# thermal 18:57:52 temp_mC=61835 clock_kHz=1800000
+# thermal 18:58:07 temp_mC=61835 clock_kHz=1800000
+# thermal 18:58:22 temp_mC=61835 clock_kHz=1800000
+# thermal 18:58:37 temp_mC=61348 clock_kHz=1800000
+# thermal 18:58:52 temp_mC=60861 clock_kHz=1800000
+# thermal 18:59:07 temp_mC=60374 clock_kHz=1800000
+# thermal 18:59:22 temp_mC=61348 clock_kHz=1800000
+# thermal 18:59:37 temp_mC=60861 clock_kHz=1800000
+# thermal 18:59:52 temp_mC=61835 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in1_out16/budget2400000_n70: Analyzing
+block_connect_budget_fill/in1_out16/budget2400000_n70
+                        time:   [22.852 s 22.855 s 22.857 s]
+                        thrpt:  [101.53 KiB/s 101.54 KiB/s 101.55 KiB/s]
+Benchmarking block_connect_budget_fill/in1_out16/budget4800000_n141
+Benchmarking block_connect_budget_fill/in1_out16/budget4800000_n141: Warming up for 3.0000 s
+# thermal 19:00:07 temp_mC=64270 clock_kHz=1800000
+# thermal 19:00:22 temp_mC=60374 clock_kHz=1800000
+# thermal 19:00:37 temp_mC=61348 clock_kHz=1800000
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 460.4s.
+Benchmarking block_connect_budget_fill/in1_out16/budget4800000_n141: Collecting 10 samples in estimated 460.44 s (10 iterations)
+# thermal 19:00:52 temp_mC=60861 clock_kHz=1800000
+# thermal 19:01:07 temp_mC=60861 clock_kHz=1800000
+# thermal 19:01:22 temp_mC=61348 clock_kHz=1800000
+# thermal 19:01:37 temp_mC=59887 clock_kHz=1800000
+# thermal 19:01:52 temp_mC=61835 clock_kHz=1800000
+# thermal 19:02:07 temp_mC=60374 clock_kHz=1800000
+# thermal 19:02:22 temp_mC=60374 clock_kHz=1800000
+# thermal 19:02:37 temp_mC=60861 clock_kHz=1800000
+# thermal 19:02:52 temp_mC=60861 clock_kHz=1800000
+# thermal 19:03:08 temp_mC=60374 clock_kHz=1800000
+# thermal 19:03:23 temp_mC=61835 clock_kHz=1800000
+# thermal 19:03:38 temp_mC=61348 clock_kHz=1800000
+# thermal 19:03:53 temp_mC=61348 clock_kHz=1800000
+# thermal 19:04:08 temp_mC=62322 clock_kHz=1800000
+# thermal 19:04:23 temp_mC=60861 clock_kHz=1800000
+# thermal 19:04:38 temp_mC=61348 clock_kHz=1800000
+# thermal 19:04:53 temp_mC=60861 clock_kHz=1800000
+# thermal 19:05:08 temp_mC=61348 clock_kHz=1800000
+# thermal 19:05:23 temp_mC=61835 clock_kHz=1800000
+# thermal 19:05:38 temp_mC=61835 clock_kHz=1800000
+# thermal 19:05:53 temp_mC=61835 clock_kHz=1800000
+# thermal 19:06:08 temp_mC=61348 clock_kHz=1800000
+# thermal 19:06:23 temp_mC=61348 clock_kHz=1800000
+# thermal 19:06:38 temp_mC=61348 clock_kHz=1800000
+# thermal 19:06:53 temp_mC=61348 clock_kHz=1800000
+# thermal 19:07:08 temp_mC=60861 clock_kHz=1800000
+# thermal 19:07:23 temp_mC=61348 clock_kHz=1800000
+# thermal 19:07:38 temp_mC=60374 clock_kHz=1800000
+# thermal 19:07:53 temp_mC=61348 clock_kHz=1800000
+# thermal 19:08:08 temp_mC=60861 clock_kHz=1800000
+# thermal 19:08:23 temp_mC=62322 clock_kHz=1800000
+Benchmarking block_connect_budget_fill/in1_out16/budget4800000_n141: Analyzing
+block_connect_budget_fill/in1_out16/budget4800000_n141
+                        time:   [46.034 s 46.039 s 46.047 s]
+                        thrpt:  [101.51 KiB/s 101.53 KiB/s 101.55 KiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+
+Benchmarking block_connect_pow/randomx_once_per_block
+Benchmarking block_connect_pow/randomx_once_per_block: Warming up for 3.0000 s
+# thermal 19:08:38 temp_mC=62809 clock_kHz=1800000
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.8s.
+Benchmarking block_connect_pow/randomx_once_per_block: Collecting 10 samples in estimated 12.849 s (10 iterations)
+# thermal 19:08:53 temp_mC=61348 clock_kHz=1800000
+Benchmarking block_connect_pow/randomx_once_per_block: Analyzing
+block_connect_pow/randomx_once_per_block
+                        time:   [1.2842 s 1.2845 s 1.2849 s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+
+# thermal_end: temp_mC=65731 clock_kHz=1600000
+# done_utc=20260905T190858Z
