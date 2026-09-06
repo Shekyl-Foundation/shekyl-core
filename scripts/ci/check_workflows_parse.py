@@ -170,7 +170,7 @@ StrictLoader.add_constructor(
 
 # Exactly what GitHub executes (`.yml`/`.yaml` directly under
 # .github/workflows/) plus the parked forms of the same. Suffixes, not a
-# substring: a committed editor artifact (`doc-links.yml.bak`, `...yml~`) is
+# substring: a committed editor artifact (`docs-gates.yml.bak`, `...yml~`) is
 # a hygiene problem, not a workflow, and failing it here would report
 # "not a valid workflow" about a file nobody meant to be one.
 WORKFLOW_SUFFIXES = (".yml", ".yaml", ".yml.disabled", ".yaml.disabled")
