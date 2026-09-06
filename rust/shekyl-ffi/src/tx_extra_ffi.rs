@@ -14,8 +14,14 @@
 //! an adapter. Called from `core::check_tx_semantic` (relay and block) and
 //! `Blockchain::prevalidate_miner_transaction` (coinbase).
 //!
-//! Return codes are the error enum flattened; `0` is conformant. The daemon
-//! turns the code back into the same sentence the Rust error displays.
+//! The call returns the error enum flattened to a code (`0` is conformant) and
+//! writes the error's own sentence into a caller-owned buffer. The daemon logs
+//! that sentence verbatim rather than formatting a second one from the code:
+//! two formatters producing "the same message" is a synchronisation promise
+//! nobody can keep, and the rule's words belong to the crate that owns the
+//! rule. The code is what the daemon branches on; the string is what it prints.
+
+use std::os::raw::c_char;
 
 use shekyl_wire::tx_extra::{check_pqc_field_shape, PqcFieldShapeError};
 
@@ -40,6 +46,11 @@ pub const SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE: i32 = 8;
 /// The `0x07` field is not `32 · n_outputs` bytes.
 pub const SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH: i32 = 9;
 
+/// Buffer size the caller must provide for the message, NUL included. The
+/// longest sentence this type produces is well under half of it; a message
+/// that would not fit is truncated on a character boundary, never unterminated.
+pub const SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP: usize = 256;
+
 fn code(err: PqcFieldShapeError) -> i32 {
     use PqcFieldShapeError as E;
     const KEM: u8 = shekyl_wire::tx_extra::TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT;
@@ -48,7 +59,7 @@ fn code(err: PqcFieldShapeError) -> i32 {
             SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_PRESENT_WITHOUT_OUTPUTS
         }
         E::PresentWithoutOutputs { .. } => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_PRESENT_WITHOUT_OUTPUTS,
-        E::Missing { tag } if tag == KEM => SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_MISSING,
+        E::Missing { tag, .. } if tag == KEM => SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_MISSING,
         E::Missing { .. } => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_MISSING,
         E::Duplicate { tag, .. } if tag == KEM => SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_DUPLICATE,
         E::Duplicate { .. } => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE,
@@ -61,8 +72,16 @@ fn code(err: PqcFieldShapeError) -> i32 {
 /// `leaf_count` byte lengths, one per `0x06` / `0x07` field the caller's
 /// parser found, in order (a null pointer is accepted only with count 0).
 ///
+/// On a non-conformant shape the error's sentence is written to `out_msg` as a
+/// NUL-terminated string (at most `out_msg_cap` bytes including the NUL,
+/// truncated on a character boundary if it would not fit); on
+/// [`SHEKYL_TX_EXTRA_PQC_SHAPE_OK`] the buffer is set to the empty string.
+/// `out_msg` may be null with `out_msg_cap` 0 for a caller that wants only the
+/// code.
+///
 /// # Safety
-/// The arrays are valid for their counts for the duration of the call.
+/// The arrays are valid for their counts, and `out_msg` is writable for
+/// `out_msg_cap` bytes, for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_tx_extra_pqc_field_shape(
     n_outputs: usize,
@@ -70,7 +89,11 @@ pub unsafe extern "C" fn shekyl_tx_extra_pqc_field_shape(
     kem_count: usize,
     leaf_lens: *const usize,
     leaf_count: usize,
+    out_msg: *mut c_char,
+    out_msg_cap: usize,
 ) -> i32 {
+    // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
+    unsafe { write_msg(out_msg, out_msg_cap, "") };
     // SAFETY: caller contract on both arrays.
     let (kem, leaf) = unsafe {
         let Some(kem) = usize_slice(kem_lens, kem_count) else {
@@ -83,7 +106,30 @@ pub unsafe extern "C" fn shekyl_tx_extra_pqc_field_shape(
     };
     match check_pqc_field_shape(n_outputs, kem, leaf) {
         Ok(()) => SHEKYL_TX_EXTRA_PQC_SHAPE_OK,
-        Err(err) => code(err),
+        Err(err) => {
+            // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
+            unsafe { write_msg(out_msg, out_msg_cap, &err.to_string()) };
+            code(err)
+        }
+    }
+}
+
+/// Write `msg` NUL-terminated into a caller-owned buffer, truncating on a
+/// character boundary. A null buffer or a zero capacity writes nothing.
+unsafe fn write_msg(out: *mut c_char, cap: usize, msg: &str) {
+    if out.is_null() || cap == 0 {
+        return;
+    }
+    let mut n = msg.len().min(cap - 1);
+    while n > 0 && !msg.is_char_boundary(n) {
+        n -= 1;
+    }
+    // SAFETY: `out` is writable for `cap` bytes per the caller's contract and
+    // `n < cap`, so the bytes and the terminator both land inside it. The
+    // regions cannot overlap: `msg` is Rust-owned.
+    unsafe {
+        std::ptr::copy_nonoverlapping(msg.as_ptr().cast::<c_char>(), out, n);
+        *out.add(n) = 0;
     }
 }
 
@@ -107,40 +153,100 @@ unsafe fn usize_slice<'a>(ptr: *const usize, count: usize) -> Option<&'a [usize]
 mod tests {
     use super::*;
 
+    fn call(n: usize, kem: &[usize], leaf: &[usize], msg: &mut [c_char]) -> i32 {
+        unsafe {
+            shekyl_tx_extra_pqc_field_shape(
+                n,
+                if kem.is_empty() { std::ptr::null() } else { kem.as_ptr() },
+                kem.len(),
+                if leaf.is_empty() { std::ptr::null() } else { leaf.as_ptr() },
+                leaf.len(),
+                msg.as_mut_ptr(),
+                msg.len(),
+            )
+        }
+    }
+
+    fn text(msg: &[c_char]) -> String {
+        let bytes: Vec<u8> = msg
+            .iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as u8)
+            .collect();
+        String::from_utf8(bytes).expect("the message is UTF-8")
+    }
+
     #[test]
     fn codes_follow_the_rule() {
-        let k = [1120usize];
-        let l = [32usize];
-        let l2 = [32usize, 32];
-        unsafe {
-            assert_eq!(
-                shekyl_tx_extra_pqc_field_shape(1, k.as_ptr(), 1, l.as_ptr(), 1),
-                0
-            );
-            assert_eq!(
-                shekyl_tx_extra_pqc_field_shape(0, std::ptr::null(), 0, std::ptr::null(), 0),
-                0
-            );
-            assert_eq!(
-                shekyl_tx_extra_pqc_field_shape(1, k.as_ptr(), 1, l2.as_ptr(), 2),
-                SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE
-            );
-            assert_eq!(
-                shekyl_tx_extra_pqc_field_shape(1, std::ptr::null(), 0, l.as_ptr(), 1),
-                SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_MISSING
-            );
-            assert_eq!(
-                shekyl_tx_extra_pqc_field_shape(2, k.as_ptr(), 1, l.as_ptr(), 1),
-                SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_LENGTH
-            );
-            assert_eq!(
-                shekyl_tx_extra_pqc_field_shape(0, k.as_ptr(), 1, std::ptr::null(), 0),
-                SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_PRESENT_WITHOUT_OUTPUTS
-            );
-            assert_eq!(
-                shekyl_tx_extra_pqc_field_shape(1, std::ptr::null(), 1, l.as_ptr(), 1),
-                SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR
-            );
-        }
+        const K: usize = 1120;
+        const L: usize = 32;
+        let mut msg = [0 as c_char; SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP];
+
+        assert_eq!(call(1, &[K], &[L], &mut msg), SHEKYL_TX_EXTRA_PQC_SHAPE_OK);
+        assert_eq!(text(&msg), "", "a conformant shape leaves no message");
+        assert_eq!(call(0, &[], &[], &mut msg), SHEKYL_TX_EXTRA_PQC_SHAPE_OK);
+
+        assert_eq!(
+            call(1, &[K], &[L, L], &mut msg),
+            SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE
+        );
+        assert_eq!(
+            text(&msg),
+            "tx_extra 0x07 appears 2 times; exactly one is admitted"
+        );
+
+        assert_eq!(
+            call(1, &[], &[L], &mut msg),
+            SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_MISSING
+        );
+        assert_eq!(
+            text(&msg),
+            "tx_extra 0x06 missing on a transaction with outputs; 1120 bytes required"
+        );
+
+        assert_eq!(
+            call(2, &[K], &[L], &mut msg),
+            SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_LENGTH
+        );
+        assert_eq!(
+            text(&msg),
+            "tx_extra 0x06 is 1120 bytes; 2240 required for this output count"
+        );
+
+        assert_eq!(
+            call(0, &[K], &[], &mut msg),
+            SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_PRESENT_WITHOUT_OUTPUTS
+        );
+
+        // A null array with a non-zero count is refused, not dereferenced.
+        assert_eq!(
+            unsafe {
+                shekyl_tx_extra_pqc_field_shape(
+                    1,
+                    std::ptr::null(),
+                    1,
+                    [L].as_ptr(),
+                    1,
+                    msg.as_mut_ptr(),
+                    msg.len(),
+                )
+            },
+            SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR
+        );
+
+        // A buffer too small truncates and still terminates; a null buffer is
+        // tolerated for a caller that wants only the code.
+        let mut small = [0 as c_char; 8];
+        assert_eq!(
+            call(1, &[K], &[L, L], &mut small),
+            SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE
+        );
+        assert_eq!(text(&small), "tx_extr");
+        assert_eq!(
+            unsafe {
+                shekyl_tx_extra_pqc_field_shape(1, [K].as_ptr(), 1, std::ptr::null(), 0, std::ptr::null_mut(), 0)
+            },
+            SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_MISSING
+        );
     }
 }

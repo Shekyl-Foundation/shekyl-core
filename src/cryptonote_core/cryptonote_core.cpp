@@ -815,7 +815,7 @@ namespace cryptonote
       std::string why;
       if (!check_tx_extra_pqc_field_shape(tx, why))
       {
-        MERROR_VER("tx " << why << ", rejected for tx id= " << get_transaction_hash(tx));
+        MERROR_VER(why << ", rejected for tx id= " << get_transaction_hash(tx));
         tvc.m_verifivation_failed = true;
         tvc.m_invalid_output = true;
         return false;

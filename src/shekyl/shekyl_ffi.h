@@ -1266,14 +1266,23 @@ bool shekyl_curve_tree_replica_next_block_root(
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_MISSING                 7
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE               8
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH                  9
-/// Returns SHEKYL_TX_EXTRA_PQC_SHAPE_OK or one of the codes above. A null
-/// array pointer is accepted only with a zero count.
+/// Buffer size for out_msg, NUL included.
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP                      256
+/// Returns SHEKYL_TX_EXTRA_PQC_SHAPE_OK or one of the codes above, and writes
+/// the rule's own sentence for that code into out_msg as a NUL-terminated
+/// string (empty on OK; truncated on a character boundary if it would not
+/// fit). The daemon LOGS THAT STRING rather than formatting a second one from
+/// the code: the rule's words belong to the crate that owns the rule, and two
+/// formatters agreeing is a promise nobody can keep. A null array pointer is
+/// accepted only with a zero count; out_msg may be null with out_msg_cap 0.
 int32_t shekyl_tx_extra_pqc_field_shape(
     size_t n_outputs,
     const size_t* kem_lens,
     size_t kem_count,
     const size_t* leaf_lens,
-    size_t leaf_count);
+    size_t leaf_count,
+    char* out_msg,
+    size_t out_msg_cap);
 
 /// Compose every curve-tree layer ABOVE the leaf layer, narrow from the leaf-chunk
 /// layer — the correct producer-side grow that telescopes to the reference root

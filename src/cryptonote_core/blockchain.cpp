@@ -1580,7 +1580,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   {
     std::string why;
     CHECK_AND_ASSERT_MES(check_tx_extra_pqc_field_shape(b.miner_tx, why), false,
-      "miner transaction " << why << " in block " << get_block_hash(b));
+      "miner transaction: " << why << " (block " << get_block_hash(b) << ")");
   }
 
   // §2.3 output-point rule for coinbase output keys: pool txs get this via

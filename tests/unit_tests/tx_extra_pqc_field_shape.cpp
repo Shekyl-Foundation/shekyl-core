@@ -95,14 +95,22 @@ transaction load_serve_credit_fixture()
   rapidjson::IStreamWrapper wrapper(ifs);
   rapidjson::Document doc;
   doc.ParseStream(wrapper);
-  if (doc.HasParseError() || !doc.HasMember("tx_hex"))
-    throw std::runtime_error("invalid tx parity fixture");
+  // Each accessor is guarded before it is used: rapidjson asserts (or worse,
+  // in a release build) when a member is read off a non-object or a string is
+  // read off a non-string. A malformed fixture must fail this test loudly and
+  // by name -- the must-accept control silently degrading into "no fixture,
+  // nothing checked" is the failure mode that matters here.
+  const std::string where = SERVE_CREDIT_TX_PARITY_FIXTURE_PATH;
+  if (doc.HasParseError() || !doc.IsObject())
+    throw std::runtime_error("tx parity fixture is not a JSON object: " + where);
+  if (!doc.HasMember("tx_hex") || !doc["tx_hex"].IsString())
+    throw std::runtime_error("tx parity fixture has no string tx_hex: " + where);
   std::string blob;
   if (!epee::string_tools::parse_hexstr_to_binbuff(doc["tx_hex"].GetString(), blob))
-    throw std::runtime_error("fixture tx_hex is not hex");
+    throw std::runtime_error("tx parity fixture tx_hex is not hex: " + where);
   transaction tx;
   if (!parse_and_validate_tx_from_blob(blob, tx))
-    throw std::runtime_error("fixture tx does not parse");
+    throw std::runtime_error("tx parity fixture tx does not parse: " + where);
   return tx;
 }
 

@@ -407,14 +407,19 @@ pub fn pqc_leaf_hashes_per_output(blob: &[u8]) -> io::Result<Vec<[u8; 32]>> {
 }
 
 /// Why a `0x06` / `0x07` field is refused at admission (§9.6a as ruled
-/// 2026-09-05; CEN-I19). Every variant names the tag and the numbers, so the
-/// daemon's log line and a port's error carry the same fact.
+/// 2026-09-05; CEN-I19). Every variant names its tag, and every variant whose
+/// defect is a count or a length names those numbers — a rejected transaction
+/// says what was expected, not merely that something was wrong. The daemon
+/// logs this type's `Display` verbatim across the FFI
+/// (`shekyl_tx_extra_pqc_field_shape`), so its log line and a port's error are
+/// the same sentence by construction rather than by two formatters agreeing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PqcFieldShapeError {
     /// A tagged field is present on a transaction with no outputs.
     PresentWithoutOutputs { tag: u8 },
-    /// The transaction has outputs but no field carrying this tag.
-    Missing { tag: u8 },
+    /// The transaction has outputs but no field carrying this tag;
+    /// `expected` is the length the single field would have had.
+    Missing { tag: u8, expected: usize },
     /// More than one field carries this tag: the bytes admit two readings
     /// (first-match, last-match, reject) and a port may pick a different one.
     Duplicate { tag: u8, count: usize },
@@ -435,9 +440,9 @@ impl std::fmt::Display for PqcFieldShapeError {
                     "tx_extra {tag:#04x} present on a transaction with no outputs"
                 )
             }
-            Self::Missing { tag } => write!(
+            Self::Missing { tag, expected } => write!(
                 f,
-                "tx_extra {tag:#04x} missing on a transaction with outputs"
+                "tx_extra {tag:#04x} missing on a transaction with outputs; {expected} bytes required"
             ),
             Self::Duplicate { tag, count } => {
                 write!(
@@ -504,26 +509,18 @@ fn check_one(
             Err(PqcFieldShapeError::PresentWithoutOutputs { tag })
         };
     }
+    // `n_outputs` is a vout count the caller already parsed, so this product
+    // cannot overflow in practice; saturating keeps the arithmetic total
+    // without inventing a variant for a state no transaction can reach.
+    let expected = stride.saturating_mul(n_outputs);
     match lens {
-        [] => Err(PqcFieldShapeError::Missing { tag }),
-        [got] => {
-            let expected = stride
-                .checked_mul(n_outputs)
-                .ok_or(PqcFieldShapeError::Length {
-                    tag,
-                    got: *got,
-                    expected: usize::MAX,
-                })?;
-            if *got == expected {
-                Ok(())
-            } else {
-                Err(PqcFieldShapeError::Length {
-                    tag,
-                    got: *got,
-                    expected,
-                })
-            }
-        }
+        [] => Err(PqcFieldShapeError::Missing { tag, expected }),
+        [got] if *got == expected => Ok(()),
+        [got] => Err(PqcFieldShapeError::Length {
+            tag,
+            got: *got,
+            expected,
+        }),
         many => Err(PqcFieldShapeError::Duplicate {
             tag,
             count: many.len(),
@@ -619,11 +616,31 @@ mod pqc_field_shape {
         );
         assert_eq!(
             check_pqc_field_shape(1, &[], &[]),
-            Err(E::Missing { tag: 0x06 })
+            Err(E::Missing {
+                tag: 0x06,
+                expected: K
+            })
         );
         assert_eq!(
-            check_pqc_field_shape(1, &[K], &[]),
-            Err(E::Missing { tag: 0x07 })
+            check_pqc_field_shape(2, &[2 * K], &[]),
+            Err(E::Missing {
+                tag: 0x07,
+                expected: 2 * L
+            })
+        );
+        // The sentences themselves: the daemon logs these verbatim, so a
+        // message that stopped naming its numbers would fail here.
+        assert_eq!(
+            check_pqc_field_shape(2, &[2 * K], &[])
+                .unwrap_err()
+                .to_string(),
+            "tx_extra 0x07 missing on a transaction with outputs; 64 bytes required"
+        );
+        assert_eq!(
+            check_pqc_field_shape(1, &[K], &[2 * L])
+                .unwrap_err()
+                .to_string(),
+            "tx_extra 0x07 is 64 bytes; 32 required for this output count"
         );
         assert_eq!(
             check_pqc_field_shape(0, &[], &[L]),
