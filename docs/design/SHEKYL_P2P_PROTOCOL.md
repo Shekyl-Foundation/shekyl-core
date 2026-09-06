@@ -3260,8 +3260,16 @@ rather than inheriting whatever the default happens to be.
 > always describes our own state. It does not. **The boolean cannot say which
 > of the fifteen fired**, so the caller cannot classify the failure at all — and
 > declining to charge would let a peer feed malformed spans indefinitely,
-> reconnecting each time with no score accumulating. #628 therefore **restores
-> both charges**, reverting #620's half of the mistake.
+> reconnecting each time with no score accumulating.
+>
+> **#628 therefore withdrew its own change rather than restoring anything.**
+> The sweep charges as it always did -- that is the charge, and it is what
+> makes the failure cost the sender. The id-drop below it keeps `add_fail`
+> false, as `#620` left it and as the parse-failure sibling does, so the origin
+> is not billed twice for one failure; an earlier revision of #628 restored
+> that point and was reverted, because the redundant charge pinned a number
+> rather than the invariant. On an anonymity zone the question is moot:
+> `add_host_fail` refuses an address that names no host whoever calls it.
 >
 > **This is the concrete argument for the tri-state.** Under one bit both
 > answers are wrong: charge, and our own shutdown punishes an honest peer;
