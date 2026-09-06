@@ -2150,7 +2150,7 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::get_local_node_data(basic_node_data& node_data, const network_zone& zone)
+  bool node_server<t_payload_net_handler>::get_local_node_data(basic_node_data& node_data, const network_zone& zone) const
   {
     node_data.peer_id = zone.m_config.m_peer_id;
     // Announce a port only where a peer could actually reach us on it. Both
@@ -2161,7 +2161,7 @@ namespace nodetool
     // `check_incoming_connections` has always asked the second question; this
     // site asked only whether a flag was set, so a node run with `--in-peers 0`
     // announced a port that refuses every connection it attracts.
-    if(zone.m_can_pingback && zone.m_config.m_net_config.max_in_connection_count > 0)
+    if (zone.m_can_pingback && zone.m_config.m_net_config.max_in_connection_count > 0)
       node_data.my_port = m_external_port ? m_external_port : m_listening_port;
     else
       node_data.my_port = 0;
@@ -3004,7 +3004,7 @@ namespace nodetool
     if (found == m_network_zones.end())
       return 0;
     basic_node_data node_data{};
-    const_cast<node_server*>(this)->get_local_node_data(node_data, found->second);
+    get_local_node_data(node_data, found->second);
     return node_data.my_port;
   }
 
