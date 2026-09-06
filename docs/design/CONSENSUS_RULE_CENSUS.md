@@ -177,9 +177,14 @@ every changed row.
 | Bucket 4 (inherited, not ratified — classes recorded) | 46 |
 
 Sum check: `87 + 35 + 5 + 46 = 173 = 164 + 9` (recounted 2026-09-06 with the census's own commands below; the line had read `86 + 25 + 5 + 55 = 171` since the C1 era while the table above it had already moved — records-was). Merged set = 161 CEN rows
-+ 8 minted (`CEN-A7, B6, B7, F20, F21, H23, H24, L15`) + 2 split
-(`CEN-D1b, F14b`). Bucket-4 class split: 4 `examined-disposition`
-+ 2 `KAT-port` + 3 `pinned-not-re-derived` + 46 `none` = 55 (the C1-era
++ 9 minted (`CEN-A7, B6, B7, F20, F21, H23, H24, L15`, and `CEN-I19`
+2026-09-06 with its implementation) + 3 split (`CEN-D1b, F14b`, and
+`CEN-K1 → K1a/K1b` on 2026-09-04 — that split was never carried into this
+decomposition, so the line summed to 171 while the table above it said 172). Bucket-4 class split (recounted 2026-09-06 over the bucket-4 rows only):
+4 `examined-disposition` + 2 `KAT-port` + 3 `pinned-not-re-derived`
++ 37 `none` = 46, the bucket-4 total. The line had read `… + 46 none = 55`,
+which counted the bucket's own size as its `none` class and summed to a
+figure no column produced (the C1-era
 split additionally held 1 `ratified-premise-refuted` + 56 `none`;
 C2-R3 ruled CEN-C2 and CEN-C3 into bucket 2, class `ratified` — §7.15;
 C2-R1a ruled CEN-E3/E4 removed-and-executed and retired the bucket-1
@@ -208,12 +213,12 @@ grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$7); print $7}' | sort | uniq -c  
 | F miner tx / emission | 22 | 13 | 3 | 0 | 6 | 0 |
 | G block body (connect) | 14 | 7 | 0 | 1 | 6 | 0 |
 | H tx non-input consensus | 24 | 9 | 5 | 1 | 9 | 0 |
-| I FCMP++ inputs / PQC | 18 | 14 | 4 | 0 | 0 | 0 |
+| I FCMP++ inputs / PQC | 19 | 15 | 4 | 0 | 0 | 0 |
 | J archival tx families | 26 | 26 | 0 | 0 | 0 | 0 |
 | K reorg / alt chains | 12 | 1 | 11 | 0 | 0 | 0 |
 | L storage layer | 15 | 6 | 0 | 1 | 8 | 0 |
 | M mempool admission | 11 | 2 | 1 | 0 | 8 | 9 |
-| **Total** | **172** | **86** | **35** | **5** | **46** | **9** |
+| **Total** | **173** | **87** | **35** | **5** | **46** | **9** |
 
 ### 3.2 Inverse spot-check (union of both walks' tables; all six MUST be present)
 
@@ -247,7 +252,6 @@ verdict crates it crossed into.
 | --- | --- | --- | --- |
 | `shekyl_fcmp_verify` | CEN-I15, J21, J26 | **No** (boundary read; proof math not walked). The §7.13 y-normalization question is open | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7; [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) |
 | `shekyl_pqc_verify` | CEN-I18 | **No** (boundary read; pinned KATs) | [`POST_QUANTUM_CRYPTOGRAPHY.md`](../POST_QUANTUM_CRYPTOGRAPHY.md); [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) |
-| CEN-I19 | `tx_extra` PQC field shape: with `n = vout.size()`, a transaction carries **exactly one** `0x06` KEM-ciphertext field of `1120·n` bytes and **exactly one** `0x07` leaf-hash field of `32·n` bytes when `n > 0`, and **neither** when `n == 0`; `tx_extra` must parse. Enforced at relay and block (`core::check_tx_semantic`, no `kept_by_block` exemption) and on the coinbase (`prevalidate_miner_transaction`); the DB collector aborts on the same shape | `cryptonote_format_utils.cpp:977` (rule adapter → `shekyl_tx_extra_pqc_field_shape`); `cryptonote_core.cpp:816`; `blockchain.cpp:1582`; `blockchain_db.cpp:522` (abort-unreachable) | C | 1 | spec | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §9.6a (both sentences corrected 2026-09-05); [`CT2_DRAIN_ORDER.md`](CT2_DRAIN_ORDER.md) §3.1 | **Born 2026-09-06 with its implementation (PR #630; §7 #19).** Ruled by Rick 2026-09-05: exactly one field per tx (first-match "is a choice among valid parses … the wire admits a transaction whose meaning depends on which implementation reads it"), and the `0x06` length is consensus, not policy (symmetry with `0x07`; a relay-only reject "leaves a miner free to include a malformed `0x06` … the funds are gone at connect"). Before: no admission-side check existed and `blockchain_db.cpp` zero-filled a missing/short `0x07` into the leaf (anchors as found: `:519-521`, `:533-535`). The rule lives in `shekyl-wire` (`check_pqc_field_shape`, one home for daemon and port); the daemon passes its own parser's field lengths. Zero-output txs (serve-credit) carry neither field — the must-accept control |
 | `shekyl-economics` (reward, split, burn, release) | CEN-F13–F17, F20 | **Yes** (CEN read `emission.rs`, `release.rs`; 81-vector cross-language KAT) | `config/economics_params.json`; [`ECONOMY_EXPLAINED.md`](../ECONOMY_EXPLAINED.md) |
 | `shekyl-difficulty` (LWMA-1, `check_hash`, timestamp rule) | CEN-D1b, D4, C1, C2, C3 | **Yes** (`lwma1.rs` is a step-annotated transcription of the spec; `check_hash_vectors.rs`; `timestamp.rs` `check_timestamp_rule` is **production-live** through `shekyl_difficulty_check_timestamp_rule` since the C2-R3 crossing — the C++ validator's `check_block_timestamp` is a marshaling shim; vectors `MTP_BOUNDARY_V1.json` pin it natively and end-to-end) | [`DAA_LWMA1.md`](../completed/DAA_LWMA1.md) §5.3; [`CONSENSUS_C2_R3_TIMESTAMPS.md`](../completed/CONSENSUS_C2_R3_TIMESTAMPS.md) §4.3/§7 |
 | `shekyl-pow-randomx` (hash, seed epoch) | CEN-D2, D3 | **Yes** (`seed_epoch.rs` read) | [`RANDOMX_V2_RUST.md`](RANDOMX_V2_RUST.md) :393, :790–823; [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md) |
@@ -448,6 +452,7 @@ Enforced at pool admission (`tx_pool.cpp:304` → `Blockchain::check_tx_inputs`)
 | CEN-I16 | Per-input hybrid PQC auth structure: `auth_version == 1`; `flags == 0`; `scheme_id` ∈ {1 solo, 2 multisig} (cross-input scheme agreement NOT required — MSW-6 withdrawn); solo key blob exactly `PQC_HYBRID_SINGLE_KEY_LEN` (1996); multisig blob ∈ [3, `PQC_MAX_PUBLIC_KEY_BLOB` 16384] with the exact parse Rust-side | tx_pqc_verify.cpp:161–221; MSW-6 comment blockchain.cpp:4325–4347 | C | 1 | spec | [`POST_QUANTUM_CRYPTOGRAPHY.md`](../POST_QUANTUM_CRYPTOGRAPHY.md); [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) §16.3 (MSW-6), MSW-1 | RC-101, RC-102, RC-103, RC-104 ⇒ merged. Inverse spot-check row |
 | CEN-I17 | The PQC-signed payload binds, per input: full tx prefix ‖ CtSig base ‖ keccak256(prunable) ‖ that input's PQC header ‖ keccak256 of **every** input's hybrid pubkey — neither the FCMP++ proof nor any input's key can be swapped without invalidating signatures. Cross-input key hashes use Keccak, **not** `shekyl_fcmp_pqc_leaf_hash` (Blake2b-512 domain `shekyl-pqc-leaf`) | tx_pqc_verify.cpp:62–158 (prunable bind :92–95; cross-input bind :133–143) | C | 1 | spec | [`FCMP_SPEND_SIGNING_PREIMAGE.md`](FCMP_SPEND_SIGNING_PREIMAGE.md) :27–36 (exact formula) | RC-105, RC-107 ⇒ merged |
 | CEN-I18 | The hybrid signature (Ed25519 **and** ML-DSA, or M-of-N multisig) over keccak256(payload) must verify in Rust (`shekyl_pqc_verify` returns 0 per input); serve-credit-only txs exempt (signature lives on the vin, CEN-J10) | tx_pqc_verify.cpp:223–243; gate blockchain.cpp:4348–4356 | C | 1 | spec | [`POST_QUANTUM_CRYPTOGRAPHY.md`](../POST_QUANTUM_CRYPTOGRAPHY.md); [`PQC_MULTISIG.md`](../PQC_MULTISIG.md) | RC-106, RC-108, RC-100 (gate half) ⇒ merged. **Inverse spot-check row** |
+| CEN-I19 | `tx_extra` PQC field shape: with `n = vout.size()`, a transaction carries **exactly one** `0x06` KEM-ciphertext field of `1120·n` bytes and **exactly one** `0x07` leaf-hash field of `32·n` bytes when `n > 0`, and **neither** when `n == 0`; `tx_extra` must parse. Enforced at relay and block (`core::check_tx_semantic`, no `kept_by_block` exemption) and on the coinbase (`prevalidate_miner_transaction`); the DB collector aborts on the same shape | `cryptonote_format_utils.cpp:977` (rule adapter → `shekyl_tx_extra_pqc_field_shape`); `cryptonote_core.cpp:816`; `blockchain.cpp:1582`; `blockchain_db.cpp:522` (abort-unreachable) | C | 1 | spec | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §9.6a (both sentences corrected 2026-09-05); [`CT2_DRAIN_ORDER.md`](CT2_DRAIN_ORDER.md) §3.1 | **Born 2026-09-06 with its implementation (PR #630; §7 #19).** Ruled by Rick 2026-09-05: exactly one field per tx (first-match "is a choice among valid parses … the wire admits a transaction whose meaning depends on which implementation reads it"), and the `0x06` length is consensus, not policy (symmetry with `0x07`; a relay-only reject "leaves a miner free to include a malformed `0x06` … the funds are gone at connect"). Before: no admission-side check existed and `blockchain_db.cpp` zero-filled a missing/short `0x07` into the leaf (anchors as found: `:519-521`, `:533-535`). The rule lives in `shekyl-wire` (`check_pqc_field_shape`, one home for daemon and port); the daemon passes its own parser's field lengths. Zero-output txs (serve-credit) carry neither field — the must-accept control |
 
 ### 4.J Archival transaction families (all verdicts Rust-side; C++ marshals)
 
@@ -980,6 +985,36 @@ input, not fixes.
     template whose coinbase carried two `0x07` fields connected; the DB
     collector zero-filled a one-output-short `0x07`. Controls accepted before
     and after: the conforming spend fixture and the serve-credit transaction.
+    **Round 3 (PR #630) closed the rule's two remaining gaps and revealed a
+    third thing.** (a) `check_pqc_field_shape_of` had NO non-test caller, so
+    the port's own validators — `validate_context_free_pruned`, on the daemon
+    RPC submit and engine block-fetch paths — still accepted missing,
+    duplicate and wrong-length fields while this entry claimed one rule
+    governed both: a correct mechanism with no consumer, not a missing one.
+    It is now called there, applied whenever `extra` parses (this parser
+    rejects `0x03`/`0x0B`/`0xDE`, which the C++ one accepts, so rejecting on a
+    parse failure would refuse transactions the daemon accepts — a divergence
+    in the reject direction; those three tags have no live producer but
+    merge-mining's template path, FOLLOWUPS/rule 60, and deleting them makes
+    this unconditional). (b) The DB backstop re-derived parts of the rule
+    instead of applying it and disagreed three ways — a zero-output early
+    return that accepted forbidden fields, first-match on `0x07` that accepted
+    duplicates, and no `0x06` check at all; it now calls the same shared
+    check. (c) **Twenty-one wire fixtures encoded transactions that could
+    never exist:** outputs with an empty `tx_extra`, a shape no builder has
+    ever produced, since every producer emits both fields per output. The rule
+    did not invalidate those fixtures; it revealed that the corpus had been
+    asserting parser behaviour over transactions the network cannot carry. The
+    real-data controls held throughout — a pinned REAL daemon coinbase
+    validates unchanged, and the serve-credit vector (zero outputs, empty
+    `extra`) is accepted as the must-accept case — so only the synthetic
+    fixtures were wrong. The pinned cross-language hash vector
+    (`pruned_tx_hash_parity_v1.json`) was regenerated deliberately for the same
+    reason: a parity pin that fixes agreement on a transaction consensus
+    rejects pins agreement about nothing that can happen. C++ recomputes both
+    hashes over the regenerated bytes rather than trusting the recorded ones,
+    so the pin's property is unchanged.
+
     Register: born UNREVIEWED with its implementation; review at the merged
     sha owed. Live bucket-1/2 set 122.
 

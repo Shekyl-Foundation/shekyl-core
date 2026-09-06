@@ -508,34 +508,40 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
       this_block_output_count += tx_pair.first.vout.size();
     uint64_t next_output_seq = get_num_outputs(0) - this_block_output_count;
 
-    // CEN-I19: admission guarantees every transaction with outputs carries
-    // exactly one 0x07 field of PQC_LEAF_HASH_BYTES * vout.size() bytes
-    // (check_tx_extra_pqc_field_shape, at core::check_tx_semantic and
-    // prevalidate_miner_transaction). This used to return {} on a parse
-    // failure, an absent field or a length that was not a multiple of 32, and
-    // collect_outputs then zero-filled h_pqc for every output past the end of
-    // the blob -- the fail-open that stored leaves whose PQ binding was to
-    // nothing, invisibly. Every arm below is unreachable for an admitted
-    // transaction and aborts rather than falls back, so the shape cannot
-    // return silently (CEN-L11 pattern). A transaction with no outputs carries
-    // no field and contributes no leaf.
+    // CEN-I19: the store applies the SAME shape rule admission applies -- one
+    // rule, one implementation (`check_tx_extra_pqc_field_shape`, over
+    // shekyl-wire's `check_pqc_field_shape`), so any path reaching add_block
+    // without admission fails closed instead of storing a leaf the rule
+    // forbids. Re-deriving parts of the rule here is what went wrong before:
+    // this backstop returned early on a zero-output transaction (accepting
+    // 0x06/0x07 fields the rule forbids there), took the FIRST 0x07 (accepting
+    // duplicates, which the rule rejects because the bytes would otherwise
+    // admit two readings), and never examined 0x06 at all -- three ways to
+    // disagree with the rule it exists to back up.
+    //
+    // Before CEN-I19 this returned {} on a parse failure, an absent field or a
+    // length that was not a multiple of 32, and collect_outputs then zero-filled
+    // h_pqc for every output past the end of the blob: the fail-open that stored
+    // leaves whose post-quantum binding was to nothing, invisibly. Everything
+    // below is unreachable for an admitted transaction and aborts rather than
+    // falling back (CEN-L11 pattern).
     auto extract_leaf_hashes = [](const transaction& tx) -> std::vector<uint8_t> {
+      std::string why;
+      if (!check_tx_extra_pqc_field_shape(tx, why))
+        throw DB_ERROR(("curve-tree leaf: " + why + " at DB add for tx "
+          + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+          + " (validated at admission?)").c_str());
+      // Rule-conformant and leafless: no outputs, therefore no fields, no leaf.
       if (tx.vout.empty())
         return {};
       std::vector<tx_extra_field> fields;
       if (!parse_tx_extra(tx.extra, fields))
-        throw DB_ERROR(("curve-tree leaf: tx_extra does not parse at DB add for tx "
-          + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
-          + " (validated at admission?)").c_str());
+        throw DB_ERROR("curve-tree leaf: tx_extra parses for the shape check but not here (bug)");
       tx_extra_pqc_leaf_hashes lh;
       if (!find_tx_extra_field_by_type(fields, lh))
-        throw DB_ERROR(("curve-tree leaf: no 0x07 leaf-hash field at DB add for tx "
-          + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
-          + " with " + std::to_string(tx.vout.size()) + " output(s) (validated at admission?)").c_str());
-      if (lh.blob.size() != PQC_LEAF_HASH_BYTES * tx.vout.size())
-        throw DB_ERROR(("curve-tree leaf: 0x07 leaf-hash field is " + std::to_string(lh.blob.size())
-          + " bytes, " + std::to_string(PQC_LEAF_HASH_BYTES * tx.vout.size()) + " required, at DB add for tx "
-          + epee::string_tools::pod_to_hex(get_transaction_hash(tx)) + " (validated at admission?)").c_str());
+        throw DB_ERROR("curve-tree leaf: the shape check accepted a tx whose 0x07 field is absent (bug)");
+      // Exactly one field of exactly 32 * vout.size() bytes, per the rule just
+      // applied -- so the first match IS the only match.
       return std::vector<uint8_t>(lh.blob.begin(), lh.blob.end());
     };
 

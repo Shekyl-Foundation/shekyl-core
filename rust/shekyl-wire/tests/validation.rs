@@ -8,6 +8,9 @@
 //! unlock_time block-height form, and `nbp == 1`. Chain-context rules (§13) are
 //! the consensus layer's and are not exercised here.
 
+mod common;
+use common::conforming_pqc_extra;
+
 use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{
     Block, BondPost, BondPostKind, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable,
@@ -94,7 +97,7 @@ fn spend(inputs: Vec<Input>, outputs: Vec<Output>, unlock_time: u64, nbp: usize)
             unlock_time,
             inputs,
             outputs,
-            extra: vec![],
+            extra: conforming_pqc_extra(n_out),
         },
         ct: Ct::Fcmp {
             fee: 0,
