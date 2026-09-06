@@ -662,6 +662,18 @@ and the axis passes for a `Mainnet` wallet under `FakechainPolicy::Accept`
 exactly as the network axis does. **Reopen** the digest question for these
 files only if the genesis-hash axis is ruled out.
 
+**The named first consumer.** The C2-R2 weight/fee round does not touch
+`consensus_constants.json` today, but its §8 names migrating the weight and
+fee constants *into* it as a store-port obligation — they are hand-maintained
+in `src/cryptonote_config.h` with a `shekyl-wire` mirror. The port PR that
+executes §8 is the first change that will meet the sentinel, and that lane's
+own read of the re-pin question is **yes for every one of them**: the
+penalty-free zone, the clamps and the surge factor are consensus; the
+relay-policy trio is admission-visible. That is the mechanism doing what it
+is for — a key addition forced through the question rather than past it —
+and it is recorded here so the first red is met as the design, not as a
+surprise.
+
 **Cost if ruled yes:** `VC-1`'s canonicaliser reads two files instead of
 one, the KAT gains a two-file case, the sentinel's pinned value changes
 once, the JSON `_comment` sentence moves to (or is duplicated in)
