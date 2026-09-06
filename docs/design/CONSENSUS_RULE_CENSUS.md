@@ -257,6 +257,7 @@ verdict crates it crossed into.
 | `shekyl-pow-randomx` (hash, seed epoch) | CEN-D2, D3 | **Yes** (`seed_epoch.rs` read) | [`RANDOMX_V2_RUST.md`](RANDOMX_V2_RUST.md) :393, :790–823; [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md) |
 | `shekyl-archival-retention` (bond, serve-credit, admission, emission, settlement) | CEN-J*, L7–L10 | **Partially** (CEN read bond_post, serve_credit_decisions, admission, failure_window, emission verify; RC did not cross) | gate-2 / [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) / E3 / [`ARCHIVAL_RESPONSE_FORMAT.md`](ARCHIVAL_RESPONSE_FORMAT.md) / [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) |
 | `shekyl-ct-balance` | CEN-H17, H18 | **Yes** (single-sourced with the builder) | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §2.3 |
+| `shekyl_tx_extra_pqc_field_shape` (over `shekyl-wire`'s `check_pqc_field_shape`) | CEN-I19 | **Yes** (the rule is `check_one` over the two field-length lists; every arm has a KAT, and the daemon logs the error type's own `Display` across the boundary rather than re-formatting it). The daemon parses `tx_extra` with its OWN parser and passes only field lengths — the Rust parser rejects three tags C++ accepts (`0x03`/`0x0B`/`0xDE`), so it is not the admission parser until those are deleted (rule 60, FOLLOWUPS) | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §9.6a |
 
 The rewrite consumes this table as its oracle-scope map: where the interior
 is not enumerated, the named spec — not the C++ or the FFI behavior — is
