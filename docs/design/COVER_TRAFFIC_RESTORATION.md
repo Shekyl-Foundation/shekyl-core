@@ -1240,19 +1240,46 @@ repository. The deliverable cites a section it does not contain, seventeen
 times. So outbound connection lifecycle on encrypted zones is not
 stable-pending-implementation; the rule that decides it is ABSENT.
 
-The consequence is specific and it is not fixed by measuring more carefully. A
-reading taken today can satisfy every instruction in this section — four slots
-bound, two hours, exact-window filtering — and still not mean what §3.1c's
-sign-off assumes, because nobody can yet say whether the boundness observed is
-the boundness the settled protocol will produce. **Internally valid, and not
-about the thing the sign-off is about.**
+**The result is TIME-SCOPED, not indeterminate — and the difference decides
+what a reader does with it.** A reading taken today observes the boundness
+rules that exist today, which are real and readable: `is_peer_used`
+(`net_node.inl:1207`) refuses a second outbound connection to an address it
+already holds. That number is **valid about today**. It is not a number of
+unknown meaning, and it should not be discarded — it should be **re-run once
+PWD-I1 and PWD-B9 land**, because those change the rule it was taken under.
+Calling it indeterminate invites throwing it away; calling it time-scoped
+invites repeating it, which is the correct instruction.
 
-So the result carries this as a stated condition: a number taken before PWD-B9
-exists is provisional in the same way the budget it tests is provisional, and
-it does not discharge §3.1c on its own. Recorded here rather than tracked
-elsewhere because **an absent rule is invisible to every check that reads this
-document** — no gate, no test and no review can see a section that was never
-written, so naming it in the method is the only place it can be seen at all.
+**And on the zones this measurement runs on, PWD-B9 cannot secure the
+precondition at all.** `CEILING_ZONES` counts `is_encrypted()`, so the carrier
+exists on `tor` and `i2p` and nowhere else. A same-host cap is a real bound
+only where a distinct host costs something: on `public_` a distinct host means
+a distinct IP, so a cap of `k` is a genuine limit with a computable
+stem-capture consequence. On `tor` a "host" is an onion address — a keypair,
+free to mint — so the same cap recovers duplicate avoidance and bounds nothing
+an adversary cares about.
+
+That asymmetry has to be stated here rather than assumed away, because the
+transport's name invites the opposite reading. Tor supplies transport
+encryption and IP concealment. It supplies **no sybil resistance** — that is
+what makes onion addresses free — and **no source ambiguity**, which is the
+stem's job, not the transport's. Encryption changes what an observer sees on
+the wire; it changes nothing about what a peer costs to create. (The inherited
+comment crediting Tor with sybil protection is already retired from the tree;
+the reasoning is retired at `levin_notify.cpp:732`. The habit of calling these
+"anonymity zones" is what would re-import it.)
+
+So the condition on the result is narrower and firmer than "wait for PWD-B9":
+on `tor` and `i2p`, no value of B9 makes the observed boundness adversarially
+meaningful, so a §3.1c reading is a measurement of the HONEST posture. That is
+the right thing to measure for a bandwidth budget — cover cost is paid against
+honest peers — but the number must not be cited as evidence about an
+adversarial one.
+
+Recorded here rather than tracked elsewhere because **an absent rule is
+invisible to every check that reads this document** — no gate, no test and no
+review can see a section that was never written, so naming it in the method is
+the only place it can be seen at all.
 
 **Histogram the intervals, do not only divide bytes by time.** Defect 2's
 signature is sharper in the distribution than in the mean: jitter applied gives
