@@ -1,0 +1,16 @@
+# Blob dumps permitted inside log macros -- see scripts/ci/check_log_blob_dumps.py
+#
+# Format, tab-separated:   path <TAB> whitespace-normalized argument <TAB> reason
+#
+# The reason states the BOUND, not an opinion. "Reviewed" and "intentional"
+# are not bounds; "fixed 32 bytes" is. If you cannot name the bound, the
+# argument is not bounded and the site needs describe_peer_blob() instead.
+#
+# Keyed on the argument text, never on a line number, so the row survives
+# edits above it and dies when the argument itself changes -- which is right,
+# because the bound is a property of the argument.
+
+src/cryptonote_core/blockchain.cpp	std::string(reinterpret_cast<const char*>(tree_root.data()), 32)	Fixed 32 bytes: tree_root is std::array<uint8_t, 32> and the length is the literal 32. FCMP++ verify diagnostics, MDEBUG (off by default).
+src/cryptonote_core/blockchain.cpp	std::string(reinterpret_cast<const char*>(key_images_flat.data() + dbg_i * 32), 32)	Fixed 32 bytes: one key image out of a 32-byte-strided flat buffer, length is the literal 32. MDEBUG.
+src/cryptonote_core/blockchain.cpp	std::string(reinterpret_cast<const char*>(pseudo_outs_flat.data() + dbg_i * 32), 32)	Fixed 32 bytes: one pseudo-out out of a 32-byte-strided flat buffer, length is the literal 32. MDEBUG.
+src/cryptonote_core/blockchain.cpp	std::string(reinterpret_cast<const char*>(pqc_hashes_flat.data() + dbg_i * 32), 32)	Fixed 32 bytes: one PQC leaf hash out of a 32-byte-strided flat buffer, length is the literal 32. MDEBUG.
