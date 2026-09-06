@@ -9,8 +9,14 @@ blast radius across both programs' binding decisions.
 **re-verified at `bf317111f`** (PR #592, C2-R3) and again at **`4b9807c5e`**
 (PR #596, C2-R1) — the census has been re-bucketed twice under this document.
 C1 close recorded 87 / 14 / 2 / 68; C2-R3 promoted CEN-C2/C3 to bucket 2
-(87 / 16 / 2 / 66); C2-R1 then moved three more rows to bucket 3, so the live
-split is **86 / 25 / 5 / 55** (total still 171) — C2-R1b promoted nine bucket-4 rows into bucket 2 on 2026-09-03, which is why the register's 102-row denominator is now a dated snapshot rather than the live set. The **18-row store-enforced set and its 7 / 1 / 10
+(87 / 16 / 2 / 66); C2-R1 then moved three more rows to bucket 3, giving
+**86 / 25 / 5 / 55** over 171 rows **as of `4b9807c5e`** — a dated split, not a
+running one. It has moved twice since (C2-R1b's nine promotions and C2-R1c's
+ten on 2026-09-03/04, then CEN-I19 minted 2026-09-06), which is also why the
+register's 102-row denominator is a dated snapshot rather than the live set.
+**Every current figure is re-derived from the census's own row column, never
+carried forward from this paragraph** — the commands are in
+[`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §3. The **18-row store-enforced set and its 7 / 1 / 10
 bucket split are unchanged** (re-derived mechanically at the later sha); every
 aggregate below is stated in whichever denominator it belongs to.
 
@@ -71,7 +77,7 @@ ruling cites evidence rather than sentiment:
 | **§6 finding 2** | The **unlock_time triple-divergence**: one field that is consensus-legal (CEN-H16), relay-illegal (CEN-M5), and semantically inert (CEN-L12), with no single owner. |
 | **§6 finding 5** | The **reorg acceptance design has no examined-decision record anywhere** — steering searched the decision log, `docs/design`, and `docs/completed`. |
 | **§6 finding 8** | FAKECHAIN/regtest levers are **compiled into consensus paths** (CEN-I2, CEN-B5, CEN-D7, CEN-D3). |
-| **§6 finding 11** | **70 of 171 rows carried open questions at C1 close** (**69** live after C2-R3 and C2-R1: 5 bucket-3 + 64 bucket-4); most of the inherited consensus surface has no specification other than its own source. |
+| **§6 finding 11** | **70 of 171 rows carried open questions at C1 close** (**69** as of C2-R1's close: 5 bucket-3 + 64 bucket-4 — a dated count, not a running one; the bucket-4 figure has moved since and is re-derived from the census's own row column, never from this line); most of the inherited consensus surface has no specification other than its own source. |
 
 The counterweight the census also records (Survey A O-4) stands and is not
 disturbed: the bucket-1/2 surfaces — DAA, economics KATs, FCMP++/PQC, archival
@@ -382,7 +388,7 @@ cannot produce a conformance verdict.
 
 **The register lists REVIEWED rows only, in either outcome.** Absence from it is
 not an entry and not a claim — it *is* the UNREVIEWED state, which keeps the
-table finite (it never has to enumerate 171 rows) while keeping the default
+table finite (it never has to enumerate the whole row set) while keeping the default
 closed.
 
 **Every entry pins the sha it was reviewed at.** A conformance claim is a claim
