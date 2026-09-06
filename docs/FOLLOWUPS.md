@@ -14,6 +14,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **Delete or justify `tx_extra` 0x0A (`PQC_SPEND_AUTH_PUBKEYS`) — it has no producer.** Found at the C2-R2 signing round (Rick, verified at source): declared (`src/cryptonote_basic/tx_extra.h:48`, `rust/shekyl-wire/src/tx_extra.rs:50`), parsed (`tx_extra.rs:233`), picked (`src/cryptonote_basic/cryptonote_format_utils.cpp:540`) — and nothing anywhere constructs the field; the only write arm is the codec's generic `write_blob` branch. A parse surface with no producer is rule-15 debt and a fuzzing surface for free. Rule 15: delete at the port, or record the future producer that justifies it. — [`CONSENSUS_C2_R2_WEIGHT_FEES.md`](design/CONSENSUS_C2_R2_WEIGHT_FEES.md) Q10
+  - Target: pre-genesis
+
 - **The block-weight penalty-free-zone arbitration was punted and never landed.** `GENESIS_TX_WIRE_FORMAT.md` :806–811 flagged the `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE` V1/V2/V5 lineage (300 000 consumed as given) as "the arbitration belongs to the economics doc"; no doc ever received it, and the long-term 1.7× clamps ride along unexamined (owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-G6b; C2 batch R2). **Arbitration received:** [`CONSENSUS_C2_R2_WEIGHT_FEES.md`](design/CONSENSUS_C2_R2_WEIGHT_FEES.md) Q1 (zone, conditional on the GAP-7 floor measurement) and Q2 (the 1.7× clamps) — **proposed, pending maintainer signature**; this row closes when they sign.
   - Target: pre-genesis
 

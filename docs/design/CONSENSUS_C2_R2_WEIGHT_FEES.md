@@ -1,9 +1,21 @@
 # C2-R2 — Block-weight / reward-zone / fee constants design round
 
-**Status:** **DRAFT — structure adopted by steering; rulings PROPOSED, nothing
-ruled.** Every "Proposed ruling" below is a proposal to the maintainer; no
-census row changes class until he signs. On close this document moves to
-`docs/completed/` as the round's ruling record (rule 95).
+**Status:** **SIGNED (Rick, 2026-09-06), with amendments recorded per
+ruling:** Q1/Q2/Q4/Q6/Q7/Q8/Q9/Q10/Q11 ratified (Q1 with the GAP-7
+condition discharged in the passing direction — floor figure in the census
+notes; Q10 with corrected headroom and the 0x0A rule-15 row); **Q3
+amended — the window/hysteresis half ratified, the ×50 surge factor
+REFUTED-NOT-SUPERSEDED by GAP-7's floor measurement** (§3 Q3 carries the
+strike-through, the named refuter, and the re-derived bound's numbers for
+signature); **Q2's rationale is under correction** — its own mandated
+instrument (the saturating trace, §3 Q2) refuted the early-chain half of
+the signed rate claim; the corrected text awaits countersignature.
+**Numbering note (family C2-R2-Q1…Q11): Q5 does not exist as a heading —
+it was allocated to the `margin` deliverable and DISSOLVED into §6 when
+that was reclassified as a derivation (a consequence of Q2/Q3), not a
+ruling. Recorded rather than renumbered so every cross-reference stays
+valid.** On close this document moves to `docs/completed/` as the round's
+ruling record (rule 95).
 
 Third design round of the C2 program
 ([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §10 batch R2, 8
@@ -15,14 +27,14 @@ store port**, which consumes these rows; it is not built ahead of it.
 **Pinned sha:** `ab4693d0e8` (`dev` tip at dispatch). Every `file:line` in
 this document was located at this pin.
 
-**Fee-ladder citations:** `FEE_LADDER_DERIVATION.md` lives on
-`design/fee-ladder-derivation` (PR #614, open), **not on dev**, so it is cited
-as plain text pinned to commit `ccfb85c72`. **This round's PR sequences
-AFTER #614's merge** (steering-adopted): lifting the eight `R2 DEFERRED`
-census
+**Fee-ladder citations:** [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md)
+is ON DEV (PR #614 merged 2026-09-05, `d82fcf31c`) — the plain-text pins the
+draft carried (`ccfb85c72`) are converted to links in this PR, per the
+sequencing rule the draft recorded: lifting the eight `R2 DEFERRED` census
 markers is a state change on dev asserting the reopen condition is met, and
-the evidence for that condition must be on dev before the assertion is. The
-plain-text citations convert to links in this same PR at that point.
+the evidence now IS on dev. During the window between #614's merge and this
+PR, dev deliberately carried the inconsistency (FL-R12′ signed there, census
+still deferred) — the recorded cost of refusing a premature clear.
 
 **Reopen conjuncts, verified at the artifacts (not relayed):**
 (a) FL-R12′ **SIGNED** — FEE_LADDER_DERIVATION.md §8 (commit `6689b0cff`,
@@ -236,9 +248,14 @@ toward a different number, but the ratification is **incomplete until the
 GAP-7 floor measurement (§7) is on record**, and the ruling text must carry
 that condition rather than silently dropping the leg (dropping it would
 re-create the exact `pinned-not-re-derived` state this round exists to end).
-Class on signature: `ratified`, **with the GAP-7 condition recorded in the
-census row's notes column** — no new evidence class is minted (census §2
-owns the taxonomy; a condition is a note on a class, not a class).
+Class on signature: `ratified` — **the GAP-7 condition DISCHARGED in the
+passing direction, and the census note carries the FLOOR figure, not the
+fastest-machine figure** (Rick's condition): the zone-point worst-case
+cold block measures **7.23 s ≈ 6.0 % of T = 120 s on the Pi 4 floor
+itself** (canonical flagless capture, PR #625's archived record) — the
+permanent penalty-free operating point is comfortable on the stated
+minimum spec. No new evidence class was minted (census §2 owns the
+taxonomy; the discharge is a note on `ratified`).
 **Fossil-flag discharge, in full:** the flag (`GENESIS_TX_WIRE_FORMAT.md`
 :805–811) is not only the value — it is the **V1/V2/V5 variant lineage**
 (20 000 / 60 000 / 300 000, version-gated getters referencing Monero forks
@@ -272,15 +289,25 @@ bond economics must (and per the D3/R2 linear-work record, does) price as
 work rather than assume away; (ii) the P2P lane's `entry_max` (§6), which
 needs exactly this rate.
 
-**Proposed ruling (Q2):** ratify the **×1.7 / ×10⁄17 clamps and the
-100 000-block window** as Shekyl's long-term growth governor, with the reason
-recorded as: a doubling time of ~2 half-windows (≈ 20 weeks sustained) is
-slow enough for node operators at the provisioning floor to react (storage is
-the binding floor resource, and it is provisioned in month-granularity), fast
-enough that organic demand is never rationed for more than one era, and the
-symmetric clamp pair keeps deflation attacks as slow as inflation. Same GAP-7
-condition as Q1 attaches to the *ceiling* the clamps govern toward, not to
-the rate itself.
+**Ruling (Q2) — SIGNED, RATIONALE UNDER CORRECTION (its own mandated
+instrument refuted half of it; countersignature pending):** the clamp pair
+and window were ratified with the reason "a doubling time of ~2
+half-windows (≈ 20 weeks sustained)". **Running the signature-mandated
+saturating trace against the exact `blockchain.cpp:6540–6566` machinery
+falsified that reason for the EARLY CHAIN: the window is
+`min(height, 100 000)`, so below height 100 000 the median lags by half
+the CHAIN, not half of 100 000 — under saturation LTEM compounds to
+≈ 1 944× the zone by block 20 000 and ≈ 6 657× by 100 000.** At full
+window the claim is exact (a monotone window's median is its midpoint
+element: LTEM_n = 1.7·LTEM_{n−50 000}). **Corrected rationale proposed
+for countersignature:** ratify the clamp pair and window with the honest
+two-regime statement — asymptotic ×1.7 per 50 000 blocks once the window
+is full; a RAMP-IN regime for the first 100 000 blocks (≈ 4.6 months)
+where the long-term governor is structurally weak and **the binding
+early-chain protection is Q3's re-derived verification-time bound**,
+which caps EM directly and does not lean on LTEM's slowness. The
+symmetric-clamp deflation argument stands unrefuted. Countersignature
+line: ________________
 
 **Falsifier:** the rate claim is checkable by construction — a simulated
 weight trace saturating every block must show LTEM ≤ LTEM₀·1.7^⌈n/50 000⌉.
@@ -309,14 +336,36 @@ value in the round: the economics can absorb a 30 MB transient; whether the
 floor device can *verify* one inside useful time is exactly the unmeasured
 leg.
 
-**Proposed ruling (Q3):** ratify the **100-block ST window** (demand
-signal on the hours scale; 51-block hysteresis is what makes the fast
-governor expensive to game — §6); ratify **×50** as the transient ceiling
-**conditional on GAP-7** (same condition as Q1, but binding here at
-`2·50·LTEM`, the actual worst-case parse+verify unit, not at the zone).
-If the §7 measurement shows the floor device cannot verify the transient
-ceiling inside a block interval, the surge factor is the value to re-derive
-(lower), not the zone — the condition names its re-derivation target.
+**Ruling (Q3), AS SIGNED WITH AMENDMENT (Rick, 2026-09-06):** the
+**100-block ST window and the 51-block hysteresis are RATIFIED** (the
+order-statistic definition was checked independently at signature). The
+second half is **NOT ratified**: ~~ratify ×50 as the transient ceiling
+conditional on GAP-7~~ — **the ×50 surge factor is REFUTED, not
+superseded: GAP-7's floor measurement fired against it** (the surge-
+ceiling cold block ≈ 316 % of T on the Pi 4 — the named refuter is the
+GAP-7 record, PR #625's archived captures). The condition's own text
+named the re-derivation target correctly: the surge factor, not the zone.
+
+**The re-derived bound, numbers on this diff for signature** (all from
+the canonical flagless floor capture and the signed f = 1/3):
+
+> `surge × (max_tx_count × verify_floor) ≤ f·T`, with
+> **verify_floor = 128.77 ms per argmax tx = 9.90 µs/weight-byte**;
+> zone-point worst cold block **7.23 s ≈ 6.0 % of T** on the floor.
+> **surge_max ≈ 6.5 at depth 2** (an UPPER bound — omitted acceptance-
+> path residue only lowers it); batch bracket **[≈6.0, ≈6.5]** (free,
+> conservative); **DEPTH TIERS: ≈6.5 @ d2 / ≈5.7 @ d7 / ≈4.0 @ the
+> consensus-max d24** (composed from the relay bench's floor-measured
+> per-layer slope). Never quote 6.5 without its depth.
+
+**The depth tier is the actual decision and is put to the maintainer
+explicitly rather than picked here.** Steering's recommendation, recorded
+as steering's: a consensus constant must hold at d24, because depth grows
+with the chain with no code change — a constant signed at the d2 figure
+silently becomes wrong over chain life while nothing fires. The
+alternative is a depth-indexed bound (the constant tracks the tree's
+ratified capacity tier). Signature line for the surge value and its
+depth: ________________
 
 **Falsifier (defect):** the hysteresis claim ("51 full blocks minimum to
 move EM") is falsified by exhibiting a 100-value multiset where fewer than
@@ -589,10 +638,18 @@ credit-wire lane's, per the fence). Headroom, computed rather than
 asserted (`GENESIS_TX_WIRE_FORMAT.md` §9.6a, §10): the largest
 protocol-legitimate extra at the pin is a 16-output tx's PQC fields —
 16 × ≈ 1 120 B (0x06 KEM ciphertexts) + 16 × 32 B (0x07 leaf hashes)
-≈ **18 432 B**, leaving ≈ **6 100 B (~25 %)** for payment metadata and
-future fields. Adequate, **not** generous: any new per-output extra field
-of ≥ ~380 B exhausts it at 16 outputs, which is exactly why the
-canonical-form arbitration (credit-wire) matters.
+≈ **18 432 B**, plus the 0x05 ownership entries the first computation
+omitted (34 B each, ≈ **544 B** at 16 outputs — signing-round
+correction), leaving ≈ **5 600 B (~23 %)** for payment metadata and
+future fields — the figure the falsifier is checked against. Adequate,
+**not** generous: any new per-output extra field of ≥ ~350 B exhausts it
+at 16 outputs, which is exactly why the canonical-form arbitration
+(credit-wire) matters. **Rule-15 row found at signature: 0x0A
+(`PQC_SPEND_AUTH_PUBKEYS`) has NO PRODUCER** — declared (`tx_extra.h:48`,
+`tx_extra.rs:50`), parsed (`tx_extra.rs:233`), picked
+(`cryptonote_format_utils.cpp:540`), but nothing anywhere constructs it;
+the only write arm is the codec's generic branch. Delete or justify at
+the port (FOLLOWUPS row).
 
 **Proposed ruling (Q10):** ratify **24 576** as a relay-policy bound with the
 job stated; the canonical-form question stays deferred to credit-wire
@@ -684,8 +741,11 @@ parent chain extends `k` blocks past it.
    demand crash. This is recorded prominently because the wrong bound
    survived one commit and reads plausibly.
 3. **The sound bound, both operands receiver-local:**
-   **`margin(k) = min(2^k, 50·LTEM/EM)`** — the proved single-step bound
-   iterated, cut by the surge clamp's absolute ceiling (`EM ≤ 50·LTEM`,
+   **`margin(k) = min(2^k, S·LTEM/EM)`, S = the ratified surge factor** —
+   the proved single-step bound iterated, cut by the surge clamp's
+   absolute ceiling (`EM ≤ S·LTEM`; S = 50 in today's code, but Q3's
+   amendment REFUTED ×50 and the re-derivation lands near ×6 — carry the
+   symbol, never the literal,
    so no legal announce ever exceeds `2·50·LTEM` regardless of lag). The
    receiver computes both `EM` (its `m_current_block_cumul_weight_limit/2`)
    and `LTEM` live, so the cap needs no protocol constant beyond the ×50
