@@ -161,6 +161,22 @@ fn full_recipe_kat_matches_committed_artifact() {
         "the artifact's golden_size must match the size these tests compare at"
     );
 
+    // A dirty tree does not identify what was rendered: the sha names the
+    // commit, and the uncommitted changes on top of it are unrecoverable, so
+    // "generated at X with unknown edits" is not a designated reference run.
+    // The generator records the flag for exactly this reason — reading it is
+    // what makes recording it worth anything.
+    assert_eq!(
+        reference_run
+            .get("source_tree_dirty")
+            .and_then(serde_json::Value::as_bool),
+        Some(false),
+        "goldens were generated from a DIRTY tree — the recorded commit cannot \
+         identify what was rendered. Commit the tree, regenerate, then commit \
+         the artifact (the flag describes the tree the generator READ, so the \
+         write it performs afterwards does not invalidate it)"
+    );
+
     // The fields that let a reader identify the run. `unknown` is what the
     // generator writes when a capture fails, so it is rejected here — a
     // provenance record that cannot name its toolchain or tree is not
