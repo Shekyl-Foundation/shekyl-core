@@ -785,11 +785,12 @@ is plenty for a network with thousands of shards.
 discipline in *Rendering determinism and empirical closure*.**
 Authority: Rick's ruling, *"the scores on the Pi for shard rendering
 are acceptable"* — of budget, candidate, and floor device, the
-**budget gives**. **Relayed, not direct:** the ruling and the
-countersignature of these particular thresholds arrived through a
-coordinating session. Direct confirmation is requested on the landing
-PR; a relayed ruling is not a signature, and this note stands until
-the named authority confirms. Evidence: the 36-cell floor matrix,
+**budget gives**. **Confirmed:** the ruling arrived relayed through a
+coordinating session and was then confirmed by Rick directly to
+steering on 2026-09-06 ("Shard visual B is ratified"). Recorded that
+way because a relayed ruling is not a signature — the confirmation is
+in-channel, not an artifact in this tree, and the record should say
+which it is. Evidence: the 36-cell floor matrix,
 [`docs/benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt`](benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt),
 which falsified every cell of the original figures. The originals are
 struck through below, **refuted, not superseded**.
