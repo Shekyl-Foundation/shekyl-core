@@ -493,6 +493,64 @@ already declared the Rust surface and now enumerates it in full.
   2 400 feedback cells is bit-identical without it** — the clamp never
   bound, and that is now a measured fact instead of an assumption.
 
+## Review round 13 (FL-R18 ruled, 2026-09-06)
+
+**FL-R18 RULED (c) — rate-limit served `C_q` — with two conditions.**
+*Provenance: ruled in-channel and relayed through the umbrella lane;
+**in-tree countersignature owed**, per review round 4's standing
+correction for this table.* The rejections carry more than the verdict:
+**(b)** rejected because a quantizer inside a gain-≥2 feedback loop
+limit-cycles *structurally* — a deadband only suppresses that once it
+exceeds the loop's excursion, which is why its price is "responsiveness
+everywhere"; its cheapness was the trap. **(a)** rejected on a question
+the framing never asked — is `D = 50` a corner or an ATTRACTOR?
+**Verified at source before recording:** `shekyl_tx_volume_baseline` =
+50 and `calc_release_multiplier` computes `ratio = v/baseline`, so
+`D = 50` is exactly where `M_r = 1.0` — the neutral point the release
+curve is calibrated around, which a quiet mature chain occupies by
+construction. **(d)** rejected as the wrong layer (FL-D6 smooths miner
+revenue variance; this oscillation is in the served quote).
+
+**`N` measured, not guessed (§4.5a), and the measurement found
+something the ruling was made without.** Sweeping `N ∈ {60, 120, 240,
+480, 720}`: the flip RATE falls as intended (24 → 5 transitions) while
+the oscillating-cell COUNT rises (14 → 101), because a dwell floor is
+a DELAY in a feedback loop and delay destabilises — the volume
+excursion widens monotonically (49–53 → 24–53 at one probe cell). The
+residual cycle's period is 125–429 blocks, so `N = 60` cannot bind at
+all. **Ratified `N` = 240** — the FL-C4a gate itself, so the property
+the gate checked becomes the property the mechanism enforces — at
+which the probe cell's inter-flip dwell moves from ≈ 125 blocks (under
+the gate) to ≈ 375 (over it) and every open-loop dwell scenario still
+passes (min median 342, min in-ramp 274).
+
+**Stated plainly rather than smoothed: (c) does not close FL-C7.** The
+residual cells still cycle at one `C_q` step, exceeding C7's
+"≤ one rounding step", and at `N = 240` more cells show the slow cycle
+(56) than showed the fast one (14). The trade (c) actually makes is
+*fast anonymity-harmful oscillation → slow anonymity-safe oscillation,
+at the cost of breadth and volume excursion* — good on the ruling's own
+reasoning (dwell is the anonymity property and it is now structural),
+but not the "14 cells close with margin" the instruction anticipated.
+**Flagged for the countersignature; if it changes the answer the row
+reopens.**
+
+Conditions recorded where they bind: **1** — FL-C4a's subject is
+replaced by a post-registration note at §1.4 (floor applied at every
+change, **restart-inclusive**, `N` equals the ratified figure), because
+a gate that survives as a tautology displays green forever; **2** — the
+estimate-side clamp is recorded at §5.2 as **licensing the hold**
+rather than belting the tail-floor edge, so it cannot later be
+simplified out from under (c); its red test (rising floor inside a held
+window, served stale-low, assert `served ≥ floor`) is owed by the
+implementing PR.
+
+**Sizing correction on the record:** the (b)/(c) cost estimates put to
+the maintainer were measured against the **held bundle**
+`feat/fee-ladder-impl-1` (`rust/shekyl-economics/src/fee.rs`, the FFI
+decl, the C++ marshal seam), **not against `dev`** — that file is not
+on `dev`, and the ruling was made with that disclosed.
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
@@ -736,10 +794,13 @@ directly. Dispositions:
    rename) and follows the design PR's merge.**
 2. ~~FL-R17~~ — **SIGNED (a) three tiers at review round 7**, standard
    as default (§5.5); single-rate rejected with named reopeners.
-3. **FL-R18 — residual boundary-parked oscillation under demand
-   feedback (minted round 12): UNSIGNED, decision required.** Four
-   candidate dispositions on the row; the §4.5 transition
-   classification is the instrument.
+3. ~~FL-R18~~ — **RULED (c) at round 13** (relayed; in-tree
+   countersignature owed), `N = 240` measured at §4.5a. Two conditions
+   ride the implementing PR: FL-C4a's replacement subject
+   (restart-inclusive floor application) and the acceptance-invariant
+   red test. **Open for the countersignature:** §4.5a's finding that
+   (c) trades cycle frequency for cycle breadth and does not close
+   FL-C7.
 4. **FL-R13 / FL-D5** — fee-floor basis calibration round: its FL-R12′
    gate is SATISFIED (signed round 8, amendment adopted), so the round is
    simply open — non-blocking (the perpetual-tail ruling retired the
