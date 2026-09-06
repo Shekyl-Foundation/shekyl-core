@@ -293,9 +293,11 @@
 //
 // Output maturity is enforced by universal deferred tree insertion: outputs
 // only enter the curve tree after their type-specific maturity period
-// (coinbase: MINED_MONEY_UNLOCK_WINDOW, regular: DEFAULT_TX_SPENDABLE_AGE,
-// staked: max(effective_lock_until, DEFAULT_TX_SPENDABLE_AGE)).  MIN_AGE is a reorg
-// safety margin ensuring the referenced tree state is stable.
+// (coinbase: MINED_MONEY_UNLOCK_WINDOW; every other output:
+// DEFAULT_TX_SPENDABLE_AGE -- the claim-era "staked" arm was retired with
+// the confidential-staking cutover and never existed in code, CEN-L12).
+// MIN_AGE is a reorg safety margin ensuring the referenced tree state is
+// stable.
 //
 // `FCMP_REFERENCE_BLOCK_{MIN,MAX}_AGE` come from the JSON authority at
 // `config/consensus_constants.json` (generated into

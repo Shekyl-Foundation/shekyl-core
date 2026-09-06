@@ -329,10 +329,15 @@ impl CoreRpc {
         }
     }
 
-    /// The block-header projection at `height` (`shekyl_rpc_block_header_at`);
-    /// `Err(code)` on a non-OK return.
+    /// The block-header projection, by hash or by height
+    /// (`shekyl_rpc_block_header_at`); `Err(code)` on a non-OK return.
+    ///
+    /// `block_hash` selects the lookup, exactly as [`Self::block_at`]'s does.
+    /// A hash reaches alt blocks, so `orphan_status` is a real value on that
+    /// path and a constant on the other.
     pub fn block_header_at(
         &self,
+        block_hash: Option<&[u8; 32]>,
         height: u64,
         fill_pow_hash: bool,
     ) -> Result<ffi::BlockHeaderFactsFfi, i32> {
@@ -340,10 +345,12 @@ impl CoreRpc {
             return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
         }
         let mut pod = ffi::BlockHeaderFactsFfi::zeroed();
-        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        // SAFETY: live handle; `pod` is a valid out pointer; `block_hash`, when
+        // given, points at 32 readable bytes that outlive the call.
         let rc = unsafe {
             ffi::shekyl_rpc_block_header_at(
                 self.handle,
+                block_hash.map_or(std::ptr::null(), |h| h.as_ptr()),
                 height,
                 u8::from(fill_pow_hash),
                 &raw mut pod,
@@ -543,6 +550,54 @@ impl CoreRpc {
     pub fn span_pruning_seed(start_block_height: u64) -> u32 {
         // SAFETY: a pure function of its argument; no handle, no allocation.
         unsafe { ffi::shekyl_rpc_span_pruning_seed(start_block_height) }
+    }
+
+    /// Hard-fork voting info (`shekyl_rpc_hard_fork_info`). `requested_version`
+    /// of 0 means "the next fork"; the export resolves it and reports which.
+    pub fn hard_fork_info(&self, requested_version: u8) -> Result<ffi::HardForkFactsFfi, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::HardForkFactsFfi {
+            earliest_height: 0,
+            window: 0,
+            votes: 0,
+            threshold: 0,
+            state: 0,
+            queried_version: 0,
+            active_version: 0,
+            voting: 0,
+            enabled: 0,
+            reserved: [0; 4],
+        };
+        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        let rc =
+            unsafe { ffi::shekyl_rpc_hard_fork_info(self.handle, requested_version, &raw mut pod) };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok(pod)
+        } else {
+            Err(rc)
+        }
+    }
+
+    /// The dynamic base-fee estimate (`shekyl_rpc_fee_estimate`).
+    pub fn fee_estimate(&self, grace_blocks: u64) -> Result<ffi::FeeEstimateFactsFfi, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::FeeEstimateFactsFfi {
+            fees: [0; 4],
+            quantization_mask: 0,
+            fee_count: 0,
+            reserved: [0; 7],
+        };
+        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        let rc = unsafe { ffi::shekyl_rpc_fee_estimate(self.handle, grace_blocks, &raw mut pod) };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok(pod)
+        } else {
+            Err(rc)
+        }
     }
 
     /// The hard-fork schedule (`shekyl_rpc_hardforks`), copied out of the

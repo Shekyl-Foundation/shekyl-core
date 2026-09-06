@@ -135,6 +135,8 @@ jobs:
             ./scripts/ci/check_levin_constant_parity.sh
           run_one "C++ clamp-ban (address-freeze)" \
             bash scripts/lint_cpp_clamp_ban.sh
+          run_one "Carrier dev-flag stays hidden and default-off" \
+            scripts/ci/check_carrier_flag_hidden.sh
           run_one "§94: transit provenance marker outlives its constant" \
             scripts/ci/check_transit_marker.sh
 

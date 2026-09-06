@@ -28,10 +28,10 @@
 
 //! Rust daemon RPC server — Axum replacement for epee's HTTP server.
 //!
-//! All RPC handler logic remains in C++ (`core_rpc_server::on_*`).
-//! This crate provides the HTTP transport layer: route registration,
-//! JSON/binary/JSON-RPC dispatch, body size limits, CORS, and
-//! restricted-mode enforcement.
+//! Native methods live in [`methods`] over [`chain_facts`]. C++ still serves
+//! the methods this crate has not taken (`core_rpc_server::on_*`); this crate
+//! owns HTTP, dispatch, restricted-mode, and every method the KV cutover has
+//! moved.
 
 // This crate's `tracing::*` events reach the C++-installed subscriber
 // because the daemon links exactly one Rust image
@@ -42,6 +42,46 @@
 
 pub mod bind;
 pub mod chain_facts;
+
+/// The consensus constants this crate reads, generated from the JSON
+/// authority (`config/consensus_constants.json`) by `build.rs` — the same
+/// source that emits the C++ `shekyl/consensus_constants_generated.h`
+/// through `cmake/generate_consensus_constants.py`.
+///
+/// **At the crate root rather than under `submit`,** because the submit
+/// engine is no longer the only reader: the daemon console renders block
+/// statistics against `DAA_TARGET_SECONDS`, and a constant with a single
+/// authority should not be reached through the module that happened to need
+/// it first.
+///
+/// Nothing here comes off the wire. `/get_info` does report `target`, and a
+/// console that read it would give one genesis-frozen constant two sources —
+/// one of them a remote daemon that could report anything. Comparing the two
+/// is a real check and belongs to the client-side version-and-constants
+/// validation round; taking the remote value as the answer is not.
+pub mod consensus {
+    include!(concat!(env!("OUT_DIR"), "/consensus_constants.rs"));
+
+    // Decision-14 sentinels, mirroring the static_asserts in
+    // src/cryptonote_config.h: a JSON bump must be a reviewed consensus
+    // change, not a silent parameter drift.
+    const _: () = assert!(
+        FCMP_REFERENCE_BLOCK_MIN_AGE == 5,
+        "FCMP_REFERENCE_BLOCK_MIN_AGE diverged from Decision 14 baseline (5); \
+         review consensus implications before updating the sentinel"
+    );
+    const _: () = assert!(
+        FCMP_REFERENCE_BLOCK_MAX_AGE == 100,
+        "FCMP_REFERENCE_BLOCK_MAX_AGE diverged from baseline (100); \
+         review consensus implications before updating the sentinel"
+    );
+    const _: () = assert!(
+        DAA_TARGET_SECONDS == 120,
+        "DAA_TARGET_SECONDS diverged from the LWMA-1 ratified T (120); \
+         review consensus implications before updating the sentinel"
+    );
+}
+
 pub mod conn_limit;
 pub mod console;
 pub mod core;

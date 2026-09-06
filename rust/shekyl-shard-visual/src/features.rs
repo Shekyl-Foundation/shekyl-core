@@ -3,21 +3,20 @@ use serde::{Deserialize, Serialize};
 
 const EXPECTED_TX_PER_BLOCK: f64 = 50.0;
 const EXPECTED_OUTPUTS_PER_TX: f64 = 4.0;
-const EXPECTED_STAKES_PER_BLOCK: f64 = 0.5;
-const EXPECTED_VALUE_LOG_VARIANCE: f64 = 30.0;
-const EXPECTED_VALUE_LOG_MEAN: f64 = 25.0;
 
 /// Normalized semantic scalars in `[0, 1]`.
+///
+/// Only features admitted by the ruling-A criterion appear here
+/// (`docs/V3_SHARD_VISUALIZATION.md`, *Parameter admissibility*): each is
+/// a deterministic function of counts and timestamps a shard holder reads
+/// from the held block bytes. Rejected features (value moments, tier
+/// skew, stake-event ratios) are recorded with their grounds in that
+/// section; re-admitting one requires re-ratifying it there first.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Features {
     pub activity_density: f64,
     pub output_richness: f64,
     pub coinbase_ratio: f64,
-    pub value_dispersion: f64,
-    pub value_magnitude: f64,
-    pub stake_intensity: f64,
-    pub tier_skew_high: f64,
-    pub claim_create_ratio: f64,
     pub time_density: f64,
 }
 
@@ -35,20 +34,12 @@ pub fn features_from_aggregate(agg: &ShardAggregate) -> Features {
     } else {
         0.0
     };
-    let coinbase_ratio = saturate(agg.coinbase_ratio);
-    let value_dispersion = saturate(agg.value_log_variance / EXPECTED_VALUE_LOG_VARIANCE);
-    let value_magnitude =
-        saturate((agg.value_log_mean - 12.0).max(0.0) / (EXPECTED_VALUE_LOG_MEAN - 12.0).max(1.0));
-    let stake_intensity =
-        saturate(agg.stake_events_created as f64 / (blocks as f64 * EXPECTED_STAKES_PER_BLOCK));
-    let total_tier: u64 = agg.tier_distribution.iter().sum();
-    let tier_skew_high = if total_tier > 0 {
-        agg.tier_distribution[2] as f64 / total_tier as f64
-    } else {
-        0.0
-    };
-    let claim_create_ratio = if agg.stake_events_created > 0 {
-        saturate(agg.stake_events_claimed as f64 / agg.stake_events_created as f64)
+    // A zero-output shard cannot occur on the real chain (every block has a
+    // coinbase output), so this is degenerate synthetic input; like the
+    // other features, it saturates to zero rather than reading as
+    // maximally coinbase-heavy (review #617).
+    let coinbase_ratio = if agg.output_count > 0 {
+        saturate(agg.coinbase_output_count as f64 / agg.output_count as f64)
     } else {
         0.0
     };
@@ -59,11 +50,6 @@ pub fn features_from_aggregate(agg: &ShardAggregate) -> Features {
         activity_density,
         output_richness,
         coinbase_ratio,
-        value_dispersion,
-        value_magnitude,
-        stake_intensity,
-        tier_skew_high,
-        claim_create_ratio,
         time_density,
     }
 }

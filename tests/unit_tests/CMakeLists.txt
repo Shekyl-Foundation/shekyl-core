@@ -34,6 +34,7 @@ set(unit_tests_sources
   block_reward.cpp
   economics_c2a_prime.cpp
   bulletproofs_plus.cpp
+  gap7_bp_bench.cpp
   canonical_amounts.cpp
   chacha.cpp
   checkpoints.cpp
@@ -116,10 +117,12 @@ set(unit_tests_sources
   checkpoint_uniformity.cpp
   fork_choice_vectors.cpp
   reorg_watermark.cpp
+  sync_orphan_arm.cpp
   archival_settlement_table.cpp
   archival_substrate_lmdb.cpp
   archival_claim_source_rpc.cpp
   ct_balance_differential.cpp
+  curve_tree_header_root_check.cpp
   deferred_insertion.cpp
   economics_b5_fee_coinbase.cpp
   pruned_tx_hash_parity.cpp

@@ -328,7 +328,7 @@ TEST(rpc_facts_shims, in_range_height_the_store_cannot_produce_is_inconsistent)
 }
 
 // The header projection carries what the block and the store say, at the
-// height asked for — the fields the wire's `block_header_response` renders.
+// height asked for — the fields `shekyl_rpc_types::BlockHeader` renders.
 TEST(rpc_facts_shims, header_projection_reads_the_block_at_that_height)
 {
   BlockchainAndPool bap;
@@ -337,7 +337,7 @@ TEST(rpc_facts_shims, header_projection_reads_the_block_at_that_height)
   const uint64_t height = 4;
   shekyl_rpc_block_header_facts f{};
   ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
-    daemon_rpc_facts::block_header_at(bap.bc, height, /*fill_pow_hash=*/false, &f));
+    daemon_rpc_facts::block_header_at(bap.bc, nullptr, height, /*fill_pow_hash=*/false, &f));
 
   const cryptonote::block expected = block_at(height);
   EXPECT_EQ(1, f.found);
@@ -399,7 +399,7 @@ TEST(rpc_facts_shims, header_pow_hash_is_computed_from_the_seed_at_its_seed_heig
   const uint64_t height = 4;
   shekyl_rpc_block_header_facts f{};
   ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
-    daemon_rpc_facts::block_header_at(bap.bc, height, /*fill_pow_hash=*/true, &f));
+    daemon_rpc_facts::block_header_at(bap.bc, nullptr, height, /*fill_pow_hash=*/true, &f));
 
   ASSERT_EQ(1, f.found);
   EXPECT_EQ(1, f.pow_hash_filled);
@@ -431,7 +431,7 @@ TEST(rpc_facts_shims, header_past_the_tip_is_absent_and_names_the_chain_height)
   for (const uint64_t h : {CHAIN_HEIGHT, CHAIN_HEIGHT + 500})
   {
     shekyl_rpc_block_header_facts f{};
-    ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::block_header_at(bap.bc, h, false, &f))
+    ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::block_header_at(bap.bc, nullptr, h, false, &f))
       << "height " << h;
     EXPECT_EQ(0, f.found) << "height " << h;
     EXPECT_EQ(CHAIN_HEIGHT, f.chain_height) << "height " << h;
@@ -447,11 +447,11 @@ TEST(rpc_facts_shims, header_for_an_unproducible_in_range_block_is_inconsistent)
 
   shekyl_rpc_block_header_facts f{};
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT,
-    daemon_rpc_facts::block_header_at(bap.bc, 3, false, &f));
+    daemon_rpc_facts::block_header_at(bap.bc, nullptr, 3, false, &f));
   EXPECT_EQ(0, f.found);
 
   shekyl_rpc_block_header_facts ok{};
-  EXPECT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::block_header_at(bap.bc, 2, false, &ok));
+  EXPECT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::block_header_at(bap.bc, nullptr, 2, false, &ok));
   EXPECT_EQ(1, ok.found);
 }
 
@@ -508,6 +508,143 @@ TEST(rpc_facts_shims, chain_tip_passes_the_p2p_scalars_through_uncollapsed)
   EXPECT_EQ(1, truthy.synchronized);
 }
 
+// ── RK-5b: the header projection reached by hash ────────────────────────────
+//
+// `block_header_at` gained `block_at`'s selector so `get_block_header_by_hash`
+// need not read headers through an export that allocates payloads first. These
+// pin the three things the hash path can do that the height path cannot.
+
+// The same block, reached both ways, is the same header — which is what makes
+// the selector a selector rather than a second projection.
+TEST(rpc_facts_shims, a_header_reached_by_hash_matches_the_one_reached_by_height)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  const crypto::hash id = hash_at(3);
+  shekyl_rpc_block_header_facts by_hash{};
+  shekyl_rpc_block_header_facts by_height{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::block_header_at(bap.bc, &id, 0, false, &by_hash));
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::block_header_at(bap.bc, nullptr, 3, false, &by_height));
+
+  ASSERT_EQ(1, by_hash.found);
+  ASSERT_EQ(1, by_height.found);
+  EXPECT_EQ(0, std::memcmp(&by_hash, &by_height, sizeof(by_hash)))
+    << "the selector must not change the projection";
+}
+
+// A hash this chain does not hold is **data**, not a fault. The C++ handler
+// answered INTERNAL_ERROR here, which turned a reorg between
+// `get_alternate_chains` and the header request into a reported daemon fault.
+TEST(rpc_facts_shims, a_header_for_an_unknown_hash_is_absent_not_a_fault)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  const crypto::hash absent = hash_at(200);
+  shekyl_rpc_block_header_facts f{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::block_header_at(bap.bc, &absent, 0, false, &f));
+  EXPECT_EQ(0, f.found);
+  EXPECT_EQ(CHAIN_HEIGHT, f.chain_height)
+    << "the bound is reported even on a miss, as it is for a height miss";
+}
+
+// Only the hash path can reach a block off the main chain, so `orphan_status`
+// stops being the constant the height path made it.
+TEST(rpc_facts_shims, a_header_reached_by_hash_reports_a_real_orphan_status)
+{
+  BlockchainAndPool bap;
+  FactsTestDB* db = new FactsTestDB(CHAIN_HEIGHT);
+  cryptonote::block alt = block_at(2);
+  alt.nonce = 999999;
+  db->set_alt_block(alt);
+  const crypto::hash alt_id = db->alt_hash();
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+  shekyl_rpc_block_header_facts f{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::block_header_at(bap.bc, &alt_id, 0, false, &f));
+  ASSERT_EQ(1, f.found);
+  EXPECT_EQ(1, f.orphan_status);
+  EXPECT_EQ(2u, f.height) << "the height is the coinbase's, not the lookup's";
+
+  // And the height path still cannot produce one, which is the other half of
+  // the claim the comment now makes.
+  shekyl_rpc_block_header_facts by_height{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK,
+    daemon_rpc_facts::block_header_at(bap.bc, nullptr, 2, false, &by_height));
+  EXPECT_EQ(0, by_height.orphan_status);
+}
+
+// **The guard the height path never needed.** An alt block whose coinbase
+// claims a height past the tip would make `depth = chain_height - height - 1`
+// wrap to near 2^64. Reached by height the bound makes that impossible;
+// reached by hash it is one RPC argument away, so it is refused by name.
+TEST(rpc_facts_shims, a_hash_whose_coinbase_claims_a_height_past_the_tip_is_refused)
+{
+  BlockchainAndPool bap;
+  FactsTestDB* db = new FactsTestDB(CHAIN_HEIGHT);
+  cryptonote::block ahead = block_at(CHAIN_HEIGHT + 5);
+  db->set_alt_block(ahead);
+  const crypto::hash id = db->alt_hash();
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+
+  shekyl_rpc_block_header_facts f{};
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INTERNAL,
+    daemon_rpc_facts::block_header_at(bap.bc, &id, 0, false, &f));
+  EXPECT_EQ(0, f.found) << "a refusal reports nothing, not a wrapped depth";
+}
+
+// ── RK-5b: hard-fork voting info, and the fee estimate ──────────────────────
+
+// **The resolution the C++ did in a local and then reported a different
+// version beside.** `queried_version` is what the voting fields describe;
+// asking with 0 means "the next fork" and the answer says which that was.
+TEST(rpc_facts_shims, hard_fork_info_reports_which_version_it_answered_about)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  shekyl_rpc_hard_fork_facts zero{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::hard_fork_info(bap.bc, 0, &zero));
+  EXPECT_NE(0, zero.queried_version)
+    << "0 is a sentinel meaning 'the next fork', and must be resolved before "
+       "it is reported";
+
+  // An explicit version is echoed, so a caller can tell what it got an answer
+  // about without re-deriving the daemon's default.
+  shekyl_rpc_hard_fork_facts explicit_v{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::hard_fork_info(bap.bc, 1, &explicit_v));
+  EXPECT_EQ(1, explicit_v.queried_version);
+
+  // And the chain's own version is a separate field. They coincide at this
+  // fixture's single-entry table — which is exactly why the C++ collision was
+  // invisible — so what is pinned here is that they are two fields, not that
+  // they differ.
+  EXPECT_EQ(explicit_v.active_version, zero.active_version)
+    << "the active version does not depend on what was asked";
+}
+
+// The estimator asserts on `grace_blocks` and throws. The export refuses
+// first, so an out-of-range request is a named refusal rather than an
+// exception the caller reads as an internal fault.
+TEST(rpc_facts_shims, a_fee_estimate_beyond_the_reward_window_is_refused)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  const uint64_t ceiling = shekyl_rpc_fee_grace_blocks_max();
+  ASSERT_GT(ceiling, 0u) << "the exported ceiling must be the real constant";
+
+  shekyl_rpc_fee_estimate_facts f{};
+  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT,
+    daemon_rpc_facts::fee_estimate(bap.bc, ceiling + 1, &f));
+  EXPECT_EQ(0u, f.fee_count) << "a refusal reports no tiers";
+}
+
 TEST(rpc_facts_shims, null_out_pointer_refuses)
 {
   BlockchainAndPool bap;
@@ -515,7 +652,7 @@ TEST(rpc_facts_shims, null_out_pointer_refuses)
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::chain_tip(bap.bc, 0, 0, nullptr));
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL, daemon_rpc_facts::block_hash_at(bap.bc, 0, nullptr));
   EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_NULL,
-    daemon_rpc_facts::block_header_at(bap.bc, 0, false, nullptr));
+    daemon_rpc_facts::block_header_at(bap.bc, nullptr, 0, false, nullptr));
 }
 
 // ── RK-3b: whole blocks ─────────────────────────────────────────────────────

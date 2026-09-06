@@ -118,15 +118,17 @@ integration tests must explicitly construct FCMP++ transactions and
 verify them against mainnet rules in a separate test layer (e.g.,
 KAT-driven validation of the proof bytes).
 
-**`curve_tree_root` header field is not checked on `FAKECHAIN`.**
-`src/cryptonote_core/blockchain.cpp:4810–4824` wraps the
-header-vs-DB curve-tree-root comparison in
-`if (new_height > 0 && m_nettype != FAKECHAIN)`. Regtest blocks can
-carry placeholder roots; per the comment at 3656–3657, FCMP++
-verification still uses `m_db->get_curve_tree_root_at_height`, so
-proof verification itself remains rigorous, but block-header coherence
-of the curve-tree root is a separate property regtest does not
-exercise.
+**`curve_tree_root` header field is checked on every nettype, `FAKECHAIN`
+included** (since PR #623, 2026-09-05; CEN-B5). `handle_block_to_main_chain`
+compares the header against the tip root at admission, before the block is
+written, with no nettype wrapper — the earlier `m_nettype != FAKECHAIN`
+skip hid an S1 (the check read the post-add root and would have rejected
+block 60 on every real network) and was retired together with the fix.
+Regtest blocks therefore cannot carry placeholder roots: the daemon's own
+template fills the real root, and the core_tests generator computes it
+through the Rust curve-tree client (`shekyl_curve_tree_replica_*`). FCMP++
+verification reads `m_db->get_curve_tree_root_at_height` as before, so
+header coherence and proof anchoring are now both exercised on regtest.
 
 **FCMP++ reference-block age rules still run.**
 `src/cryptonote_core/blockchain.cpp:3801–3855` is **not** wrapped in a
