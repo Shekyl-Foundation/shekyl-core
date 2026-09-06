@@ -411,9 +411,9 @@ stopped at the p2p layer.** `for_each_connection` (`net_node.inl:155-160`)
 forwards `cntx.peer_id` as a **parameter** into every cryptonote-layer callback,
 and two of them read it as the same boolean:
 
-- `cryptonote_protocol_handler.inl:1725` — `if (!peer_id || context.m_is_income)`,
+- `cryptonote_protocol_handler.inl:1790` — `if (!peer_id || context.m_is_income)`,
   excluding pre-handshake peers from **sync-search**.
-- `:2659-2660` — `if (peer_id && …)`, excluding them from **fluffy-block relay**,
+- `:2701-2702` — `if (peer_id && …)`, excluding them from **fluffy-block relay**,
   with the tree's own comment: *"peer_id also filters out connections before
   handshake"*.
 
@@ -468,8 +468,8 @@ it:**
 
 | Site | Kind | Disposition |
 | --- | --- | --- |
-| `cryptonote_protocol_handler.inl:1723` | **Boolean** — excludes pre-handshake peers from sync-search | Migrate to `handshake_complete` |
-| `:2657-2660` | **Boolean** — same, for fluffy-block relay (*"peer_id also filters out connections before handshake"*) | Migrate to `handshake_complete` |
+| `cryptonote_protocol_handler.inl:1790` | **Boolean** — excludes pre-handshake peers from sync-search | Migrate to `handshake_complete` |
+| `:2701-2702` | **Boolean** — same, for fluffy-block relay (*"peer_id also filters out connections before handshake"*) | Migrate to `handshake_complete` |
 | `:347` | **Display** — `print_connections`' peer column | Drop the column or show `connection_id` |
 | `rpc_facts_ffi.h:315` / `.cpp:1050-1056` | **Display** — `get_connections` over RPC | Same: `connection_id` is already in the struct |
 
@@ -731,6 +731,69 @@ diversity — distinct hosts per node's outbound set — falling below the diver
 achieved with `peer_id`-based dedup**, which the Q12-D6a rig can measure on both
 configurations. The second is the one that would indict the same-host cap
 specifically, and it is the replacement carrying the most new risk.
+
+#### Correction (2026-09-05) — the address/port split is deliberate, and the gap is overlay-only
+
+**A premise stated in review, and in an earlier draft of `fix/anon-zone-address-keying`,
+was wrong: `basic_node_data`'s "port and no address" is not a missing field.** It was
+called one, and the conclusion drawn — that peers should announce a full `IP:port`
+endpoint — would have been a regression. Recorded here because the wrong version
+travelled through comments, a queue row and a PR body before it was caught.
+
+**On clearnet the split is correct and must stay.** The peerlist entry's address comes
+from the connection; the port is the only self-reported field **because it is the only
+one observation cannot supply**. An outbound dial's source port is an ephemeral NAT
+mapping bound to that one 5-tuple: the peer observes it, but an unsolicited inbound
+connection to the same `(IP, port)` from anyone else is dropped. Announcing `IP:port`
+would replace an observed fact with a claim — strictly worse, and it is exactly the
+dead-peerlist-entry problem the announcement exists to avoid.
+
+**The claim is never trusted; it is a hint that triggers a reachability test.**
+`net_node.inl:2747-2756` gates on `arg.node_data.my_port && zone.m_can_pingback` and
+calls `try_ping`, whose callback runs *"only(!) if success pinged"* before appending to
+the white peerlist. The gossiped fact is therefore "I personally reached this endpoint",
+not "this peer said so". That mechanism is what a rewrite keeps.
+
+**The gap is specific to anonymity zones**, where nothing is observed at all — so the
+endpoint itself must be announced. Note `zone.m_can_pingback` is set true only for the
+public zone (`net_node.inl:444`) and cleared when a SOCKS proxy is configured (`:818`),
+so **an anonymity zone verifies nothing today** — which is why it is the sentinel's zone
+and clearnet is not. The mechanism could not run there anyway: `try_ping` builds its
+target from the **observed** `context.m_remote_address` plus the claimed port and
+hard-refuses anything that is not IPv4/IPv6 (*"Only IPv4 or IPv6 addresses are supported
+here"*), so there is no address to dial on an overlay even if the gate were open.
+
+**A dial is NOT sufficient there, and an earlier draft of this correction said it was.**
+That draft read *"dialling the `.onion` is the verification"*. It is not, and the
+difference is the whole security content of this row:
+
+- **On clearnet the binding comes from the socket.** The address is *observed*, so TCP
+  already ties it to this peer; the ping only resolves the one field observation cannot
+  supply, and a false port claim can mis-attribute at worst to another port on the same
+  host.
+- **On an overlay there is no observed half.** A successful dial to an announced
+  `.onion` proves that *service* is reachable — **not that the peer on this inbound
+  session controls it.** An attacker can announce a victim's live onion, pass the
+  reachability check, and have its own misbehaviour scored and gossiped against the
+  victim. Reachability without a binding converts the sentinel's problem into a
+  **framing primitive**, which is strictly worse than an anonymous inbound remote.
+
+**So the queued work carries a binding requirement, not just a field.** The announced
+endpoint may be adopted only once the inbound session and the dialled endpoint are
+proven to be the same party — a challenge the dialled service must answer with a secret
+that only this session carried. **PWD-I1 already routes a zone-scoped handshake nonce to
+PWD-T1**; that token is the natural carrier and T1 must be drafted knowing this consumer
+exists. **Until such a binding exists, the inbound anonymity-zone remote stays
+anonymous** and the `identifies_a_host` guard stays with it — the guard's deletion
+trigger is a *verified* endpoint, and an unbound announcement does not meet it.
+Found in review of #620.
+
+**Consequence for the sentinel.** `unknown()` stands in for a field that overlays need
+and clearnet does not. Until it carries one, `contrib/epee/src/net_utils_base.cpp`'s
+`identifies_a_host` guard and the `drop_connections` early return exist only to stop a
+zone-wide address from being read as a host key; both are marked for deletion at the
+line. Not scheduled here — admission policy (no endpoint ⇒ not a peer) is a separate
+ruling, and it has a `--hide-my-port` consequence.
 
 ### PWD-I2 — peerlist *acceptance* is restricted; disclosure is retained unchanged, and the Shi et al. amplifiers are closed
 
@@ -2890,7 +2953,7 @@ and calling it resource exhaustion protection.*
 
 **Scoping the bucket to the four invoke routes would have left the entire
 cryptonote command family unmetered** — all nine `HANDLE_NOTIFY_T2` entries
-(`src/cryptonote_protocol/cryptonote_protocol_handler.h:89-98`), which carry
+(`src/cryptonote_protocol/cryptonote_protocol_handler.h:94-102`), which carry
 the blocks and the transaction batches, i.e. **the large payloads and the
 flood vector PWD-B12 exists to bound.** *A second earlier version made that
 mistake, and it is the same one twice: naming the surface I had been reading
@@ -3155,9 +3218,9 @@ rather than inheriting whatever the default happens to be.
 >
 > **The announce path, checked rather than assumed (same review round).** The
 > parse arm of `handle_notify_new_fluffy_block`
-> (`cryptonote_protocol_handler.inl:554-566`) is genuine *form* —
+> (`cryptonote_protocol_handler.inl:545-556`) is genuine *form* —
 > input-describing, universal — and its drop stands. The size arm
-> (`check_incoming_block_size`, `:545-549`) is **state-describing**: it
+> (`check_incoming_block_size`, `:536-540`) is **state-describing**: it
 > compares the blob against **our** current weight limit + 100
 > (`src/cryptonote_core/cryptonote_core.cpp:1408-1420`), and the limit a few
 > heights ahead can legally exceed ours (how fast is the consensus lane's
@@ -3166,6 +3229,31 @@ rather than inheriting whatever the default happens to be.
 > smaller than the weight the limit bounds — but the test is on the wrong
 > axis for a drop under this rule, so the same implementation action carries
 > it: decline to process, do not sever.
+>
+> **The block-sync path, checked in the review of #620 — a third site, and the
+> most clearly disqualified of the three.** The
+> `prepare_handle_incoming_blocks` failure arm
+> (`cryptonote_protocol_handler.inl`, in `try_add_next_blocks`) severs the
+> span's origin. That call returns `false` for **six of our-own-state
+> reasons**: `m_cancel` — our own shutdown or cancellation — at
+> `src/cryptonote_core/blockchain.cpp:7025`, `:7035`, `:7076`, `:7188`, and a
+> thread-pool `!waiter.wait()` at `:7021` and `:7172`. None describes the
+> input; **our shutdown disconnects and charges an innocent peer.** It fails
+> the first conjunct outright, without needing the universality test.
+>
+> **What #620 could do under a boolean, and what it deliberately did not.**
+> The host-fail score is removed from that site's id-drop: a charge is an
+> accusation, and none is supportable here. The **disconnect stays**, because
+> a boolean return cannot separate our cancellation from malformed input, and
+> removing the sever on the strength of the cancellation cases alone would
+> leave a genuinely malformed span with no consequence — and, since the
+> host-wide sweep above it is a no-op only on anonymity zones, would make the
+> severing behaviour differ by zone, which is the divergence
+> [`71-network-uniformity`](../../.cursor/rules/71-network-uniformity.mdc)
+> requires be named and ratified rather than acquired. **That forced choice is
+> the argument for the type:** with one bit, both answers are wrong, and only
+> the tri-state above makes the site decidable. The implementation action
+> carries this site with the other two.
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
@@ -3264,7 +3352,7 @@ dead surface.
 | PWC-E7 (double-spend is a no-drop offense) | **Ruled** — no drop, and now for a stated reason: it describes our own state | PWD-B7 |
 | PWC-E8 (the three other no-drop classes) | **Ruled** — fee is our-own-state; `tx_extra` and `unlock_time` are non-universal policy | PWD-B7 |
 | PWC-E5 (idle kick 240 s; score floor `DROP_PEERS_ON_SCORE = -2`) | **Deferred — named blocker: both of its inputs are owed by rows this round did not close.** The **score floor** cannot be derived until it is known what increments the score: PWD-B7 decides *which rejections are attributable*, but the tri-state verdict that makes that operational is owed to P2P-3, and PWD-B1's bucket decides what a peer may do before scoring is reached at all — its four parameters are owed too. The **idle kick** is a liveness judgement whose 240 s has never been derived (`pinned-not-re-derived` in the census) and belongs with the cadence work. Target pre-genesis | PWD-B1, PWD-B7's P2P-3 action |
-| PWC-E9 (`drop_connections(address)` severs every connection sharing a host, +5 host-fail) | **Deferred — and the original named blocker was wrong; the corrected one is stronger** (2026-09-04 review finding, verified at source). `is_same_host` does **not** need an IP: `network_address::is_same_host` dispatches to the concrete type (`contrib/epee/src/net_utils_base.cpp:90-98`) and Tor/I2P compare hostname strings (`src/net/tor_address.cpp:181-184`, `src/net/i2p_address.cpp:165-167`). The real blockers: **(a)** every inbound anonymity-zone peer is recorded as the zone's `unknown()` sentinel (`src/p2p/net_node.cpp:336`, `:340`) — an inbound anon peer's identity is unlearnable *by design* — so host-keying compares `unknown == unknown` and `drop_connections` would sever **every inbound anon peer at once**; **(b)** even a learnable onion identity is free to mint, so a per-host key prices nothing an adversary pays. Host-keyed severing therefore cannot be ported to anonymity zones for identity-policy reasons, not comparator reasons — it is the same *identity* problem as the anonymity-zone inbound cap (whose absence is `has_too_many_connections`' explicit non-public early return, `src/p2p/net_node.inl:3091-3092`, not a comparator gap), so both re-derive together, count- or work-based | PWD-I4 sub-round |
+| PWC-E9 (`drop_connections(address)` severs every connection sharing a host, +5 host-fail) | **Deferred — and the original named blocker was wrong; the corrected one is stronger** (2026-09-04 review finding, verified at source). `is_same_host` does **not** need an IP: `network_address::is_same_host` dispatches to the concrete type (`contrib/epee/src/net_utils_base.cpp:134-135`) and Tor/I2P compare hostname strings (`src/net/tor_address.cpp:181-184`, `src/net/i2p_address.cpp:165-167`). The real blockers were: **(a)** every inbound anonymity-zone peer is recorded as the zone's `unknown()` sentinel (`src/p2p/net_node.cpp:336`, `:340`) — an inbound anon peer's identity is unlearnable *by design* — so host-keying compared `unknown == unknown` and `drop_connections` would sever **every inbound anon peer at once**; **(b)** even a learnable onion identity is free to mint, so a per-host key prices nothing an adversary pays. **(a) is closed** by `fix/anon-zone-address-keying`: `is_same_host` no longer equates two addresses that name no host, and `drop_connections` returns early on one, so the sweep selects nothing rather than everything. **(b) is untouched and still defers this row** — the sweep is now safe on an anonymity zone, not useful there. Host-keyed severing therefore cannot be ported to anonymity zones for identity-policy reasons, not comparator reasons — it is the same *identity* problem as the anonymity-zone inbound cap (whose absence is `has_too_many_connections`' explicit non-public early return, `src/p2p/net_node.inl:3091-3092`, not a comparator gap), so both re-derive together, count- or work-based | PWD-I4 sub-round |
 | PWC-E4a (the never-driven 43 s timer) | **Ruled** — deleted | PWD-B8 |
 
 **Sum check: 3 ruled + 0 absorbed + 2 deferred = 5 rows.** ✅

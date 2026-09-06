@@ -242,6 +242,52 @@ namespace
     };
 }
 
+TEST(tor_address, unknown_is_not_a_host)
+{
+    // An `unknown()` address encodes "there is nothing to know" — it is the
+    // per-zone default handed to every inbound anonymity connection
+    // (net_node.inl:677, one call per zone). It must never report *sameness*:
+    // two connections whose remote is unknown are not the same host, they are
+    // two peers whose host is unknown. Reading absence-of-information as
+    // equality collapses an entire zone into one host, which is what made
+    // `drop_connections` sever every inbound anon peer at once.
+    //
+    // This is the same invariant `block_host` (net_node.inl:254),
+    // `add_host_fail` (:412) and the RPC ban path (core_rpc_server.cpp:186)
+    // already enforce via `is_blockable()`; `is_same_host` was the one
+    // unguarded consumer.
+    const epee::net_utils::network_address unknown1{net::tor_address::unknown()};
+    const epee::net_utils::network_address unknown2{net::tor_address::unknown()};
+    const epee::net_utils::network_address known{MONERO_UNWRAP(net::tor_address::make(v3_onion, 8080))};
+
+    EXPECT_FALSE(unknown1.is_same_host(unknown2));
+    EXPECT_FALSE(unknown2.is_same_host(unknown1));
+    EXPECT_FALSE(unknown1.is_same_host(known));
+    EXPECT_FALSE(known.is_same_host(unknown1));
+
+    // THE PRODUCTION SHAPE, and the limb that catches a guard placed after the
+    // pointer short-circuit. `network_address::self` is a `shared_ptr`, so a
+    // COPY shares the pointee -- and every inbound connection in an anonymity
+    // zone takes its remote from the zone's single `default_remote`, so in
+    // production these comparisons are between aliases of one object, not two
+    // separately constructed ones. A test that only builds two separate
+    // `unknown()` values passes while production still collapses.
+    const epee::net_utils::network_address alias = unknown1;
+    EXPECT_FALSE(unknown1.is_same_host(alias));
+    EXPECT_FALSE(alias.is_same_host(unknown1));
+
+    // Positive limb: the guard must not become "always false". A real onion
+    // host is still the same host as itself, so an over-correction fails here.
+    const epee::net_utils::network_address known_same{MONERO_UNWRAP(net::tor_address::make(v3_onion, 9090))};
+    EXPECT_TRUE(known.is_same_host(known_same));
+    EXPECT_TRUE(known.is_same_host(known));
+
+    // And two *different* real onions still compare unequal, so the guard has
+    // not been mistaken for "every known address is the same host".
+    const epee::net_utils::network_address other{MONERO_UNWRAP(net::tor_address::make(v2_onion, 8080))};
+    EXPECT_FALSE(known.is_same_host(other));
+}
+
 TEST(tor_address, epee_serializev_v2)
 {
     epee::byte_slice buffer{};
@@ -658,6 +704,43 @@ TEST(i2p_address, valid)
     EXPECT_FALSE(address2.is_same_host(address3));
     EXPECT_TRUE(address3.less(address2));
     EXPECT_FALSE(address2.less(address3));
+}
+
+TEST(i2p_address, unknown_is_not_a_host)
+{
+    // Same invariant as tor_address.unknown_is_not_a_host — stated per address
+    // family because each owns its own sentinel string, and a guard that only
+    // covered tor would leave I2P collapsing exactly as tor used to.
+    const epee::net_utils::network_address unknown1{net::i2p_address::unknown()};
+    const epee::net_utils::network_address unknown2{net::i2p_address::unknown()};
+    const epee::net_utils::network_address known{MONERO_UNWRAP(net::i2p_address::make(b32_i2p))};
+
+    EXPECT_FALSE(unknown1.is_same_host(unknown2));
+    EXPECT_FALSE(unknown2.is_same_host(unknown1));
+    EXPECT_FALSE(unknown1.is_same_host(known));
+    EXPECT_FALSE(known.is_same_host(unknown1));
+
+    // THE PRODUCTION SHAPE, and the limb that catches a guard placed after the
+    // pointer short-circuit. `network_address::self` is a `shared_ptr`, so a
+    // COPY shares the pointee -- and every inbound connection in an anonymity
+    // zone takes its remote from the zone's single `default_remote`, so in
+    // production these comparisons are between aliases of one object, not two
+    // separately constructed ones. A test that only builds two separate
+    // `unknown()` values passes while production still collapses.
+    const epee::net_utils::network_address alias = unknown1;
+    EXPECT_FALSE(unknown1.is_same_host(alias));
+    EXPECT_FALSE(alias.is_same_host(unknown1));
+
+    // Positive limb: a real I2P host is still the same host as itself, so an
+    // over-correction to "always false" fails here.
+    const epee::net_utils::network_address known_same{MONERO_UNWRAP(net::i2p_address::make(b32_i2p))};
+    EXPECT_TRUE(known.is_same_host(known_same));
+    EXPECT_TRUE(known.is_same_host(known));
+
+    // And two *different* real hosts still compare unequal, so the guard has
+    // not been mistaken for "every known address is the same host".
+    const epee::net_utils::network_address other{MONERO_UNWRAP(net::i2p_address::make(b32_i2p_2))};
+    EXPECT_FALSE(known.is_same_host(other));
 }
 
 TEST(i2p_address, generic_network_address)
