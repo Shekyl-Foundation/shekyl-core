@@ -651,14 +651,14 @@ impl HysteresisCq {
 /// FL-C4a dwell property structural: a served value that has changed
 /// cannot change again for `n` blocks.
 ///
-/// `held` counts blocks since the last CHANGE. The implementing branch
+/// `blocks_since_change` counts blocks since the last CHANGE. The implementing branch
 /// carries `(value, since_height)` instead — equivalent, and the reason
 /// FL-R18 condition 1 names restart survival: this counter is state that
 /// a restart can lose.
 struct RateLimitedCq {
     band: HysteresisCq,
     served: u64,
-    held: u64,
+    blocks_since_change: u64,
     n: u64,
 }
 
@@ -667,7 +667,7 @@ impl RateLimitedCq {
         Self {
             band: HysteresisCq { prev: 0 },
             served: 0,
-            held: 0,
+            blocks_since_change: 0,
             n,
         }
     }
@@ -676,13 +676,13 @@ impl RateLimitedCq {
         let want = self.band.step(c_raw);
         if self.served == 0 {
             self.served = want;
-            self.held = 0;
+            self.blocks_since_change = 0;
             return self.served;
         }
-        self.held += 1;
-        if want != self.served && self.held >= self.n {
+        self.blocks_since_change += 1;
+        if want != self.served && self.blocks_since_change >= self.n {
             self.served = want;
-            self.held = 0;
+            self.blocks_since_change = 0;
         }
         self.served
     }
@@ -938,12 +938,22 @@ fn feedback_scenario(
     mode: LadderMode,
     params: &EconomicParams,
 ) -> FeedbackResult {
-    let fee_at = |v_avg: u64,
-                  ag: u64,
-                  height: u64,
-                  hyst: &mut HysteresisCq,
-                  rl: &mut RateLimitedCq|
-     -> u64 {
+    // ONE per-block evaluation, returning everything the trace needs from
+    // it: the standard rung that drives the demand loop, and the SERVED
+    // economy rung (clamped up to the relay floor, §5.2) with the floor
+    // it was clamped against. The rejection race previously recomputed
+    // the economy rung from RAW `C`, which is not what any stateful mode
+    // serves — and it could not simply re-apply the band, because
+    // `HysteresisCq::step` and `RateLimitedCq::step` ADVANCE state and a
+    // second call per block would double-step them. Returning the served
+    // values from the single stepping site fixes both (PR #634 review,
+    // Bugbot + Copilot, same defect).
+    let step_at = |v_avg: u64,
+                   ag: u64,
+                   height: u64,
+                   hyst: &mut HysteresisCq,
+                   rl: &mut RateLimitedCq|
+     -> (u64, u64, u64) {
         let base = base_block_reward(ag, params).expect("base along trace");
         let raw = articmine_ladder_raw(base, median, median);
         let c = correction_factor(v_avg, ag, height, params).c_scaled;
@@ -953,19 +963,22 @@ fn feedback_scenario(
             LadderMode::RateLimited(_) => rl.step(c),
             _ => c,
         };
-        corrected_ladder(raw, c)[1].max(1)
+        let ladder = corrected_ladder(raw, c);
+        let floor_now = relay_floor(base, median);
+        (ladder[1].max(1), ladder[0].max(floor_now), floor_now)
     };
     // The reference fee is history-free and anchored at the trace's START
     // state — it defines the demand curve, so it must not move with the
     // loop; the loop's fee below evolves with the traced state (§1.8:
     // confirmed, not assumed) and carries the band's memory.
-    let f_ref = fee_at(
+    let f_ref = step_at(
         demand_scale,
         st.ag,
         st.height,
         &mut HysteresisCq { prev: 0 },
         &mut RateLimitedCq::new(1),
-    );
+    )
+    .0;
 
     let eps = eps_milli as f64 / 1000.0;
     let blocks: u64 = 30_000;
@@ -994,24 +1007,12 @@ fn feedback_scenario(
     let mut ag = st.ag;
     for t in 0..blocks {
         let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
-        let fee = fee_at(v_avg, ag, st.height + t, &mut hyst, &mut rl);
-        // FL-R18 rejection race: the SERVED economy rung is the ladder's
-        // floor rung clamped up to the relay floor at QUOTE time (§5.2's
-        // acceptance identity); the refusal test compares it against the
-        // floor at ADMISSION time.
-        {
-            let base = base_block_reward(ag, params).expect("base along trace");
-            let raw_l = articmine_ladder_raw(base, median, median);
-            let c_now = correction_factor(v_avg, ag, st.height + t, params).c_scaled;
-            let c_served = match mode {
-                LadderMode::Quantized(rule) => quantize_c_pow2(c_now, rule),
-                _ => c_now,
-            };
-            let floor_now = relay_floor(base, median);
-            let economy = corrected_ladder(raw_l, c_served)[0].max(floor_now);
-            served_economy.push(economy);
-            floors.push(floor_now);
-        }
+        // FL-R18 rejection race: the served economy rung and its
+        // quote-time floor come from the SAME stepping call as the fee,
+        // so the margin is measured on the map the mode actually serves.
+        let (fee, economy, floor_now) = step_at(v_avg, ag, st.height + t, &mut hyst, &mut rl);
+        served_economy.push(economy);
+        floors.push(floor_now);
         ag = advance_traced_state(ag, v_avg, params);
         // The registered §1.7 model has NO saturation (PR #614 review: a
         // hidden 10 000 clamp is a capacity bound the register never
@@ -1091,6 +1092,11 @@ pub struct NSweepPoint {
     pub n: u64,
     pub oscillating_cells: u64,
     pub worst_tail_transitions: u64,
+    /// Cells whose served economy rung sits within 2% of the relay floor
+    /// (§4.5b's thin-margin measure) under this `N` — so the claim that a
+    /// dwell floor worsens the rejection race is MEASURED rather than
+    /// asserted (PR #634 review).
+    pub thin_margin_cells: u64,
 }
 
 #[derive(Serialize)]
@@ -1438,6 +1444,7 @@ pub fn report() -> FeeLadderReport {
     for n in [60u64, 120, 240, 480, 720] {
         let mut oscillating = 0u64;
         let mut worst_transitions = 0u64;
+        let mut thin_margin_cells = 0u64;
         for &(_age, st) in &states {
             let d_boundary = boundary_demand(st, &params);
             for &median in &[zone, 3 * zone, 10 * zone, 50 * zone] {
@@ -1459,6 +1466,9 @@ pub fn report() -> FeeLadderReport {
                                 oscillating += 1;
                                 worst_transitions = worst_transitions.max(fb.tail_transitions);
                             }
+                            if fb.race_margin_min_milli < 1020 {
+                                thin_margin_cells += 1;
+                            }
                         }
                     }
                 }
@@ -1468,6 +1478,7 @@ pub fn report() -> FeeLadderReport {
             n,
             oscillating_cells: oscillating,
             worst_tail_transitions: worst_transitions,
+            thin_margin_cells,
         });
     }
 
@@ -1642,8 +1653,8 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     for p in &r.n_sweep {
         let _ = writeln!(
             out,
-            "fee-ladder: FL-R18 n={} oscillating_cells={} worst_transitions={}",
-            p.n, p.oscillating_cells, p.worst_tail_transitions
+            "fee-ladder: FL-R18 n={} oscillating_cells={} worst_transitions={} thin_margin_cells={}",
+            p.n, p.oscillating_cells, p.worst_tail_transitions, p.thin_margin_cells
         );
     }
     let _ = writeln!(

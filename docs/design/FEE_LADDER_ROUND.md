@@ -582,12 +582,15 @@ construction. Reporting the zero as the answer would have been a
 collapsed observable.
 
 **What actually governs the race is the MARGIN over the floor**, which
-IS measurable here: median 1.29×, but **154 of 800 served-map cells sit
+IS measurable here: median 2.10×, but **49 of 800 served-map cells sit
 at the clamp with under 2% headroom**, where a **1% median contraction
-inside the quote window refuses the transaction**. Thin states cluster
-at `D = 50` and at the widest medians. This also corrects §5.4's "the
-clamp is never live on the reachable grid" — measured on the
-drift-honest interior it is live, often.
+inside the quote window refuses the transaction**. The thin states are
+concentrated in the widest-median, oldest-age regime where rung and
+floor both collapse toward 1 atomic/byte. This also corrects §5.4's
+"the clamp is never live on the reachable grid" — measured on the
+drift-honest interior it is live there. *(Figures corrected at round
+16; the round-14 pass reported 1.29× / 154 cells from a defective
+instrument — see below.)*
 
 **That measurement decides FL-R18: the race is
 DISPOSITION-INDEPENDENT.** It is a property of clamping at quote time,
@@ -667,6 +670,59 @@ asserted.
 
 FL-R19 is untouched by both corrections and stands as minted, still
 unsigned. Nothing ships; no rework reaches the bundle.
+
+## Review round 16 (PR #634 bots): the race instrument measured a map nothing serves
+
+**Bugbot and Copilot independently found the same High defect, and it
+was real.** The rejection-race block rebuilt its own `c_served` as
+`match mode { Quantized(rule) => quantize(...), _ => c_now }` — so for
+the **hysteresis** and **rate-limited** modes it used **raw `C`**, while
+`fee_at` on the same block had already applied the band. The margin
+figures for the served map were therefore computed on a map nothing
+serves. It could not be fixed by simply re-applying the band either:
+`HysteresisCq::step` and `RateLimitedCq::step` ADVANCE state, and a
+second call per block would double-step them — which is presumably why
+the shortcut was taken, and why substituting raw `C` was the worse of
+the two errors.
+
+**Fixed at the source of the inconsistency** (Copilot's suggested
+shape, and the right one): the per-block evaluation is now a single
+`step_at` returning the standard rung, the **served** economy rung, and
+the floor it was clamped against, from the one stepping site. Nothing
+can diverge because nothing recomputes.
+
+**The corrected numbers move, and one published claim was wrong:**
+
+| | round 14 (defective) | round 16 (corrected) |
+| --- | --- | --- |
+| served-map median margin | 1.29× | **2.10×** |
+| served-map thin cells | 154 / 800 | **49 / 800** |
+| thin-cell clustering | "`D = 50`, 114 of 154" | **48 of 49 at the widest median, 41 at the oldest age** |
+
+So **"the §7 band already worsens the race (51 → 154)" was an artifact
+of the defect** — the band is in fact neutral (51 → 49). That claim is
+retracted. And the companion claim that a dwell floor "would worsen it
+further" was unmeasured assertion; it is now **measured** by extending
+the `N` sweep: 49 → 52 → 60 → 64 at `N` = 240 / 480 / 720. True, but
+modest.
+
+**FL-R18's disposition does not change, and is better supported.** The
+race is disposition-independent — every quantized served map lands
+within 49–64 thin cells of 800, and the exposure tracks the degenerate
+large-median regime they all share rather than the mode. FL-R19 stands
+as minted with corrected figures.
+
+Also taken: `RateLimitedCq::held` renamed `blocks_since_change`
+(Copilot), which also reads straight across to the implementing
+branch's `(value, since_height)`.
+
+**The lesson, since this round has now hit it twice:** an instrument
+that recomputes a quantity the pipeline already produced will
+eventually recompute it differently. The dwell/feedback traces had the
+same shape of bug at round 12 (frozen state) and this one at round 14
+(re-derived `C`); both were caught by someone else reading the code,
+not by the measurement looking wrong — because a wrong-but-plausible
+number looks exactly like a right one.
 
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
@@ -916,10 +972,10 @@ directly. Dispositions:
    divergence), (c) withdrawn, **no rework in the bundle**. Relayed;
    in-tree countersignature owed.
 4. **FL-R19 — the rejection race's thin margin (minted round 14):
-   UNSIGNED, decision required.** 154 of 800 served-map cells sit at
-   the clamp with < 2% headroom; a 1% median contraction inside the
-   quote window refuses the transaction. Four candidate dispositions on
-   the row.
+   UNSIGNED, decision required.** 49 of 800 served-map cells sit at the
+   clamp with < 2% headroom (corrected at round 16); a 1% median
+   contraction inside the quote window refuses the transaction. Four
+   candidate dispositions on the row.
 5. **FL-R13 / FL-D5** — fee-floor basis calibration round: its FL-R12′
    gate is SATISFIED (signed round 8, amendment adopted), so the round is
    simply open — non-blocking (the perpetual-tail ruling retired the
