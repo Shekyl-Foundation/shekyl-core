@@ -3163,17 +3163,19 @@ TEST(archival_substrate_lmdb, cen_l11_accepts_a_well_formed_output)
   EXPECT_EQ(height_before + 1, db.height());
 }
 
-// CEN-B5 timing discriminant (CSR round on PR #618). The miner's template
-// fills a block's header root from the CURRENT root at template time
-// (blockchain.cpp:2006) -- the state at chain height N, before block N's own
-// drain -- while the post-connect check compares that header against the root
-// read AFTER add_block (blockchain.cpp:6413). Those two reads can only agree
-// when nothing drains at block N. This test observes both operands at the
-// first block where a leaf drains, on a real LMDB, through the real add_block
-// path, without a Blockchain object (every Blockchain-level test is FAKECHAIN,
-// where the check is skipped -- so this is the only place the operands are
-// ever compared).
-TEST(archival_substrate_lmdb, cen_b5_post_add_root_is_not_the_state_the_header_was_filled_from)
+// CEN-B5 keying pin. The header of block N commits to the tree state at chain
+// height N: the current root when N's template is filled (blockchain.cpp,
+// create_block_template), which is also the per-height record under key N,
+// written when block N-1 connected (blockchain_db.cpp, add_block keys the
+// record under prev_height + 1). Connecting block N runs N's drain, after
+// which the current root is the record under key N + 1 -- a different value
+// whenever a leaf matures at N. The consensus check therefore compares the
+// header against the tip root BEFORE add_block (blockchain.cpp,
+// handle_block_to_main_chain); comparing after it rejected every maturing
+// block (the CEN-B5 S1, fixed on this branch). This pin holds the two reads
+// apart on a real LMDB through the real add_block path so the keying cannot
+// drift back silently.
+TEST(archival_substrate_lmdb, cen_b5_header_root_is_the_tip_root_before_add_block_not_after)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
@@ -3204,10 +3206,10 @@ TEST(archival_substrate_lmdb, cen_b5_post_add_root_is_not_the_state_the_header_w
   ASSERT_EQ(db.height(), draining_block);
   ASSERT_EQ(db.get_curve_tree_leaf_count(), 0u);
 
-  // Operand A: what the template for the draining block reads -- the current
-  // root at chain height `draining_block`. It is also the per-height record
-  // under that key, written when the previous block connected (post-add
-  // keying, blockchain_db.cpp:636).
+  // What the template for the draining block reads, and what the admission
+  // check compares the header against: the current root at chain height
+  // `draining_block`. It is also the per-height record under that key,
+  // written when the previous block connected.
   const std::array<uint8_t, 32> header_source = db.get_curve_tree_root();
   EXPECT_EQ(header_source, db.get_curve_tree_root_at_height(draining_block));
 
@@ -3218,12 +3220,12 @@ TEST(archival_substrate_lmdb, cen_b5_post_add_root_is_not_the_state_the_header_w
   ASSERT_EQ(db.height(), draining_block + 1);
   ASSERT_EQ(db.get_curve_tree_leaf_count(), 1u);
 
-  // Operand B: what the post-connect check compares the header against -- the
-  // root after the add. It is the record under key `draining_block + 1`, not
-  // `draining_block`.
-  const std::array<uint8_t, 32> b5_operand = db.get_curve_tree_root();
-  EXPECT_NE(b5_operand, header_source);
-  EXPECT_EQ(b5_operand, db.get_curve_tree_root_at_height(draining_block + 1));
+  // The root after the add is the record under key `draining_block + 1`, not
+  // `draining_block`: a check reading it would reject the header it was
+  // filled from.
+  const std::array<uint8_t, 32> post_add_root = db.get_curve_tree_root();
+  EXPECT_NE(post_add_root, header_source);
+  EXPECT_EQ(post_add_root, db.get_curve_tree_root_at_height(draining_block + 1));
   // The record the header was filled from is unchanged by the add.
   EXPECT_EQ(header_source, db.get_curve_tree_root_at_height(draining_block));
 }

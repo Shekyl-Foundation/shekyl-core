@@ -79,6 +79,13 @@ pub mod difficulty_ffi;
 // `docs/design/RANDOMX_V2_PHASE3_PLAN.md`.
 pub mod pow_randomx_ffi;
 
+// Curve-tree replica FFI: an ephemeral `shekyl_curve_tree::CurveTreeClient`
+// the C++ test generator (`tests/core_tests/chaingen.cpp`) drives to compute
+// the `curve_tree_root` every generated block header must carry, now that
+// the admission-time header-root check (CEN-B5) runs on every nettype.
+// Test-generator surface; the daemon does not call it.
+pub mod curve_tree_replica_ffi;
+
 // Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
 pub mod archival_ffi;
 // D3/R3 bond-admission viability (kept separate so archival_ffi does not keep

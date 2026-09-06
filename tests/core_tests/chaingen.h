@@ -39,6 +39,7 @@
 
 #include <boost/program_options.hpp>
 #include <optional>
+#include <memory>
 #include <boost/serialization/vector.hpp>
 
 #include <boost/serialization/optional.hpp>
@@ -191,6 +192,12 @@ private:
 };
 
 
+// The generator's curve-tree replica (defined in chaingen.cpp): the Rust
+// CurveTreeClient over shekyl-ffi, replaying the generator's own chain so every
+// constructed header carries the curve_tree_root the daemon checks at admission
+// (CEN-B5). Shared between generator copies; it reconciles by block hash.
+struct curve_tree_replica;
+
 class test_generator
 {
 public:
@@ -241,15 +248,25 @@ public:
     bf_tx_fees   = 1 << 9
   };
 
+  /// The transaction bodies a recorded block carries -- what the curve-tree
+  /// replica ingests when a later block is built on it. Kept beside
+  /// block_info rather than inside it: block_info is copied by the hundred
+  /// on every weight-window query and serialized, bodies are neither.
+  struct block_txs
+  {
+    cryptonote::transaction miner_tx;
+    std::vector<cryptonote::transaction> txs;
+  };
+
   test_generator(): m_events(nullptr) {}
-  test_generator(const test_generator &other): m_blocks_info(other.m_blocks_info), m_events(other.m_events), m_nettype(other.m_nettype) {}
+  test_generator(const test_generator &other): m_blocks_info(other.m_blocks_info), m_block_txs(other.m_block_txs), m_replica(other.m_replica), m_events(other.m_events), m_nettype(other.m_nettype) {}
   void get_block_chain(std::vector<block_info>& blockchain, const crypto::hash& head, size_t n) const;
   void get_last_n_block_weights(std::vector<size_t>& block_weights, const crypto::hash& head, size_t n) const;
   uint64_t get_already_generated_coins(const crypto::hash& blk_id) const;
   uint64_t get_already_generated_coins(const cryptonote::block& blk) const;
 
   void add_block(const cryptonote::block& blk, size_t tsx_size, std::vector<size_t>& block_weights, uint64_t already_generated_coins, uint64_t block_reward,
-    uint8_t hf_version = 1);
+    uint8_t hf_version = 1, const std::vector<cryptonote::transaction>& txs = std::vector<cryptonote::transaction>());
   bool construct_block(cryptonote::block& blk, uint64_t height, const crypto::hash& prev_id,
     const cryptonote::account_base& miner_acc, uint64_t timestamp, uint64_t already_generated_coins,
     std::vector<size_t>& block_weights, const std::list<cryptonote::transaction>& tx_list,
@@ -268,13 +285,31 @@ public:
   bool construct_block_manually_tx(cryptonote::block& blk, const cryptonote::block& prev_block,
     const cryptonote::account_base& miner_acc, const std::vector<crypto::hash>& tx_hashes, size_t txs_size);
   void fill_nonce(cryptonote::block& blk, const cryptonote::difficulty_type& diffic, uint64_t height);
+  /// Fill blk.curve_tree_root with the root a block on blk.prev_id commits to:
+  /// the curve-tree state after every ancestor connected, computed by replaying
+  /// the ancestors' recorded transactions through the replica. An unknown
+  /// prev_id (a test's deliberate bad parent) gets the empty-tree root; any
+  /// replica failure throws -- a substituted root would only surface as a
+  /// rejected block ten or sixty blocks later.
+  void fill_curve_tree_root(cryptonote::block& blk);
   void set_events(const std::vector<test_event_entry> * events) { m_events = events; }
   void set_network_type(const cryptonote::network_type nettype) { m_nettype = nettype; }
 
 private:
+  /// Transaction bodies for `tx_hashes` a manually constructed block names,
+  /// looked up among the events (transaction / vector<transaction> entries);
+  /// a hash with no body is warned about and omitted.
+  std::vector<cryptonote::transaction> find_txs_in_events(const std::vector<crypto::hash>& tx_hashes) const;
+
   std::unordered_map<crypto::hash, block_info> m_blocks_info;
+  std::unordered_map<crypto::hash, block_txs> m_block_txs;
+  std::shared_ptr<curve_tree_replica> m_replica;
   const std::vector<test_event_entry> * m_events;
-  cryptonote::network_type m_nettype;
+  // The harness's network. Defaulted, not left indeterminate: fill_nonce
+  // reads it whenever a block's difficulty exceeds 1 and the events pointer
+  // is set (MAKE_GENESIS_BLOCK sets it), and every generator that never
+  // called set_network_type used to hand an uninitialized enum there.
+  cryptonote::network_type m_nettype = cryptonote::FAKECHAIN;
 
   friend class boost::serialization::access;
 
@@ -877,6 +912,7 @@ inline bool do_replay_file(const std::string& filename)
 
 #define MAKE_GENESIS_BLOCK(VEC_EVENTS, BLK_NAME, MINER_ACC, TS)                       \
   test_generator generator;                                                           \
+  generator.set_events(&VEC_EVENTS);                                                  \
   cryptonote::block BLK_NAME;                                                           \
   generator.construct_block(BLK_NAME, MINER_ACC, TS);                                 \
   VEC_EVENTS.push_back(BLK_NAME);

@@ -4223,6 +4223,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-ct-balance",
  "shekyl-curve-generators",
+ "shekyl-curve-tree",
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-encoding",

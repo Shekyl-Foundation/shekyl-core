@@ -22,6 +22,36 @@
 
 ### Fixed
 
+- **Consensus: the block header's `curve_tree_root` is now checked at
+  admission against the tip root, before the block is added (CEN-B5, S1).**
+  `handle_block_to_main_chain` compared the header against the tree root read
+  *after* `add_block` — the post-drain state — while `create_block_template`
+  fills the header from the root *before* it, the state at the block's own
+  height that the per-height record, the wallet client and the CT-2 KAT all
+  name. The two agree only when nothing matures at the block, so every
+  non-FAKECHAIN chain would have rejected block 60 (the genesis coinbase
+  matures there) and halted; the FAKECHAIN skip around the check hid it from
+  every Blockchain-level test and every `--regtest` run. The compare now runs
+  with the other header checks, after proof-of-work and before the miner-tx
+  prevalidation, and a mismatch rejects the block outright — the post-add
+  compare with its connect-then-pop arm is deleted. Observed red → green by
+  the first non-FAKECHAIN Blockchain fixture in the tree
+  (`curve_tree_header_root_check.cpp`: TESTNET, fixed difficulty 1, real
+  LMDB, block 60 rejected before and connected after). The FAKECHAIN skip
+  around the check is deleted: the core_tests generator now computes real
+  roots by replaying its own recorded chain through the Rust curve-tree
+  client, exposed to C++ as `shekyl_curve_tree_replica_*` in `shekyl-ffi`
+  (the client's parity with the daemon's store was KAT-pinned; every
+  generated block that connects is now a live cross-implementation check at
+  every height), and the fake-DB test doubles report the empty-tree sentinel
+  instead of zeros. `CurveTreeClient::next_block_root` — the one-past-tip
+  read a header producer needs — is added and pinned to the recon fixture.
+  `shekyl-ffi` gains the `shekyl-curve-tree` dependency, which brings `redb`
+  into the daemon image ahead of the daemon redb store that needs it anyway.
+  `FCMP_PLUS_PLUS.md` §5 now states the state the header commits to.
+  Register: CEN-B5 stays DIVERGENT until re-reviewed at the merged sha;
+  both its divergences are fixed.
+
 - **Consensus hardening: the curve-tree leaf collector aborts instead of
   silently dropping an output (CEN-L11/L12).** Three arms in the DB-side leaf
   collector discarded an output on a `continue` or an unchecked construct
@@ -79,6 +109,22 @@
   the FCMP++ spend builder.
 
 ### Added
+
+- **Shard-visual ruling B (spec half): the layered determinism bar,
+  pre-registered thresholds, and the sensitivity correction.** Ratified
+  2026-09-05. Hash-derived structure is bit-exact forever (pinned by
+  the twin Rust/Python recipe KATs); the painted raster is held to a
+  pre-registered perceptual metric (RGB-RMS ≤ θ = 2.0, decoded pixels
+  never PNG bytes), fixed before any cross-platform measurement
+  exists. The spec's bit-equivalence prose is retracted in place with
+  its reopening criterion (a deterministic rasterizer pinned across
+  both implementations). The reorg-continuity claim is corrected, not
+  softened: it was wrong as written and in direct opposition to the
+  integrity check's purpose — the ruled property is sensitivity, with
+  a two-limb avalanche falsifier (floor ≥ 20) whose second limb is
+  what makes it a test. The floor-device budget matrix, goldens, and
+  tests are the held measurement half (FOLLOWUPS). Also restores the
+  candidate-compositor § heading eaten by an earlier edit anchor.
 
 - **DRS-P0a — LMDB table reconciliation: the pin→HEAD delta is measured,
   registered, and gate-pinned.** The DRS design doc's Round-2 substrate
@@ -605,6 +651,7 @@
   to it. Fix-or-accept is Rick's (DRS
   §7.2); FOLLOWUPS carries the sketch. The "no S-graded divergence remains"
   claim is withdrawn at every surface it reached; DRS-0 is gated again.
+  *(Fixed 2026-09-05 — see the CEN-B5 entry under Fixed above.)*
 
 - **Consensus: the block-timestamp rule is ratified and single-sentence
   (C2-R3, `docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md`, ratified
