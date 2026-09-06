@@ -793,7 +793,24 @@ and clearnet does not. Until it carries one, `contrib/epee/src/net_utils_base.cp
 `identifies_a_host` guard and the `drop_connections` early return exist only to stop a
 zone-wide address from being read as a host key; both are marked for deletion at the
 line. Not scheduled here — admission policy (no endpoint ⇒ not a peer) is a separate
-ruling, and it has a `--hide-my-port` consequence.
+ruling.
+
+**The `--hide-my-port` consequence this row used to defer is settled, and it does not
+travel with that ruling** (Rick, 2026-09-05; landed with the PR that deleted the flag).
+The flag is gone **as an option and as a capability**: whether this node advertises a
+port is now derived — announced only where a peer could reach us on it, meaning the zone
+supports the back-ping that verifies the claim *and* we accept inbound connections at
+all. **No operator input remains anywhere in the advertisement decision**, so an
+admission ruling has no flag to interact with; it inherits a derived value rather than a
+configured one.
+
+Two consequences P2P-3 should carry rather than re-derive. An operator who wants not to
+be advertised refuses inbound (`--in-peers 0`) and the derivation follows; one who wants
+no p2p participation does not run a daemon — the posture the flag nominally served has
+no separate mechanism and needs none. `m_external_port` survives as the single
+operator-supplied value in the announcement, kept because a manual static NAT forward is
+not observable by the node and the claim is verified downstream by the peer's back-ping
+before anything is gossiped.
 
 ### PWD-I2 — peerlist *acceptance* is restricted; disclosure is retained unchanged, and the Shi et al. amplifiers are closed
 
