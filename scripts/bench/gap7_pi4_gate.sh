@@ -109,9 +109,30 @@ case "${PHASE}" in
       echo "  cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON && cmake --build build -j2 --target unit_tests" | tee -a "${OUT_FILE}"
       exit 3
     fi
+    # Rule 47: the gate asserts its SUBJECT, not just an executable file —
+    # an executable-only check let a stale, Debug, or test-less binary be
+    # archived as the shipped-verifier floor result (review finding; three
+    # stale-binary incidents in one day made this a pattern).
+    # (1) Provenance sidecar, written by the build/ship step: build type
+    #     must be Release and the revision must match this checkout.
+    INFO="${BIN}.buildinfo"
+    if [[ ! -f "${INFO}" ]]; then
+      echo "FATAL: ${INFO} missing — ship it with the binary: printf 'build_type=Release\ngit_rev=<rev>\ncompiler=<id>\n'" | tee -a "${OUT_FILE}"
+      exit 4
+    fi
+    grep -q '^build_type=Release$' "${INFO}" || { echo "FATAL: binary is not a Release build (${INFO})" | tee -a "${OUT_FILE}"; exit 4; }
+    WANT_REV="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+    grep -q "^git_rev=${WANT_REV}$" "${INFO}" || { echo "FATAL: binary rev != checkout ${WANT_REV} (${INFO})" | tee -a "${OUT_FILE}"; exit 4; }
+    cat "${INFO}" | sed 's/^/# buildinfo /' | tee -a "${OUT_FILE}"
+    # (2) The subject must EXIST in the binary before running.
+    "${BIN}" --gtest_list_tests --gtest_filter='gap7_bp_bench.*' 2>/dev/null | grep -q 'DISABLED_shipped_verifier_cost' \
+      || { echo "FATAL: gap7_bp_bench.DISABLED_shipped_verifier_cost absent from binary — stale build" | tee -a "${OUT_FILE}"; exit 4; }
     # The timing instrument is DISABLED_ in default ctest runs (correctness
     # coverage lives in bulletproofs_plus.cpp); this gate opts in.
     "${BIN}" --gtest_filter='gap7_bp_bench.*' --gtest_also_run_disabled_tests 2>&1 | tee -a "${OUT_FILE}"
+    # (3) The measurement must have RUN: a vacuous pass is not a capture.
+    grep -q '\[gap7_bp_bench\] shipped single-proof' "${OUT_FILE}" \
+      || { echo "FATAL: measurement sentinel absent — the bench did not run" | tee -a "${OUT_FILE}"; exit 4; }
     ;;
 esac
 

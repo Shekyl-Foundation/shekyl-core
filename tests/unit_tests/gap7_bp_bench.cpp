@@ -72,7 +72,9 @@ TEST(gap7_bp_bench, DISABLED_shipped_verifier_cost)
 {
   static const int K = 21;
 
-  for (const size_t outputs : {size_t(2), size_t(16)})
+  // All four padded tiers: the round-3 domain closure needs 4- and 8-slot
+  // shipped costs (the padded-boundary shapes 3/5/9 pay full-tier Bp+).
+  for (const size_t outputs : {size_t(2), size_t(4), size_t(8), size_t(16)})
   {
     ct::BulletproofPlus proof = prove_n(outputs);
     // Positive limb: the proof the loop times must VERIFY, or the numbers
@@ -100,8 +102,13 @@ TEST(gap7_bp_bench, DISABLED_shipped_verifier_cost)
   // batches across a tx's proofs and the block loop batches txs, so the
   // per-proof amortized figure under batching is the number the cold-block
   // model composes with.
+  // Batch cardinality points: 46 = zone-point argmax count; 150 = mid;
+  // 299 = the surge-ceiling count surge_max ~6.5 implies. The 46-point
+  // alone carried the composition while larger batches were bounded by the
+  // single-proof cost (review finding); these measure the curve.
+  for (const size_t n_batch : {size_t(46), size_t(150), size_t(299)})
   {
-    static const size_t N_ZONE_ARGMAX = 46;
+    const size_t N_ZONE_ARGMAX = n_batch;
     std::vector<ct::BulletproofPlus> proofs;
     proofs.reserve(N_ZONE_ARGMAX);
     ct::BulletproofPlus one = prove_n(2);

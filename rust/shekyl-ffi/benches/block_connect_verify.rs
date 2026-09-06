@@ -217,7 +217,7 @@
 //!
 //! Captures: `docs/benchmarks/gap7_block_verify_pi4_{pins,rust,cpp}_2026….txt`
 //! (device row, toolchain, flags, thermal trace, and the SD/8 GB as-found
-//! deviations recorded in each header). Pins ran FIRST and green (3/3 —
+//! deviations recorded in each header). Pins ran FIRST and green (4/4 —
 //! validating the instrument as well as the fixtures: the run also exposed
 //! a broken thermal reader whose vcgencmd branch presence-tested the BINARY
 //! when the capability is the DEVICE NODE). Thermal regime: CLEAN — stock
@@ -261,6 +261,57 @@
 //! at ≥ 1 — the inverted ratio was the one direction not priced. The ×50
 //! surge factor therefore re-derives to ×6 territory at today's
 //! verification costs.
+//!
+//! # Round-3 closures — domain, depth, batch, cache (each finding, one
+//! disposition, directions stated SEPARATELY per steering's ruling)
+//!
+//! **Output-domain closure (every valid count 2..16, computed from measured
+//! padded-tier costs + codec-exact weights — Bp+ cost depends only on the
+//! padded slot count, verified input-insensitive in the captures):** in the
+//! PROXY-SINGLE regime (what the fill times; the relay-admission shape) the
+//! density argmax is NOT 2-out — the padded-boundary shapes win: 1-in/5-out
+//! = 12.84 µs/B > 9-out 12.76 > 3-out 12.67 > 2-out 12.46 (a tx just past a
+//! padding boundary pays a full Bp+ tier on minimal extra weight — the
+//! review predicted exactly this). In the SHIPPED-BATCHED regime (the
+//! cold-block CONNECT path this instrument prices) the Bp+ term collapses
+//! (1.745 ms/proof measured at the zone count) and the argmax REVERTS to
+//! 1-in/2-out at 9.90 µs/B: the boundary shapes' edge is entirely Bp+, and
+//! batching removes it. The composed surge_max therefore stands on the
+//! 2-out argmax — with the 8/16-padded batched terms labeled
+//! composed-not-measured (ratio-scaled diagnostics); the batch-cardinality
+//! and tier points added to `gap7_bp_bench` measure them on the next floor
+//! run.
+//!
+//! **Two direction arguments, NOT jointly comforting — one is free, one is
+//! a dependency on the margin:**
+//!
+//! - **Batch cardinality (free, conservative):** batching was measured at
+//!   the zone count (46); the surge-ceiling block holds ≈ 299 minimal txs,
+//!   and per-proof batched cost cannot exceed the measured SINGLE cost —
+//!   composing at single-proof cost gives surge_max ≈ 6.0. So the batch
+//!   unknown brackets **surge_max ∈ [≈6.0, ≈6.5]** and errs safe: the
+//!   46-point bill overstates per-proof cost at larger batches.
+//! - **Tree depth (NOT free — this is what the ruling's margin absorbs):**
+//!   the sweep pins depth 2, today's shallowest tree; depth grows with the
+//!   chain, no code change. Composing the relay bench's FLOOR-MEASURED
+//!   per-layer slope (DAEMON_RELAY_PRIVACY.md §85.3: 1-in +3.76 ms/layer on
+//!   skl-pi) onto this campaign's terms: **surge_max ≈ 6.5 at d2, ≈ 5.7 at
+//!   d7, ≈ 4.0 at the consensus-max d24** (composed, labeled — same
+//!   machine, different fixture generation). An upper bound on ALLOWED
+//!   surge is the unsafe direction to sit at: the consuming ruling margins
+//!   below 6.5 precisely because depth eats toward it over chain life.
+//!   State the tier for the horizon the ruling covers; never quote 6.5
+//!   without its depth.
+//!
+//! **Cache-warmth fence (pointed the unsafe way; bounded, not waved off):**
+//! the fill reuses one fixture, keeping its ~13-80 kB working set hot,
+//! where a real block streams distinct txs. The measured terms are
+//! compute-dominated — the dominant working set is the SHARED generator/
+//! multiexp tables, identical for distinct txs — and the input-dependent
+//! bytes are read once per verify either way, so the hot-vs-streaming
+//! delta is bounded by budget-bytes over DRAM bandwidth: ≈ 0.2 ms per
+//! 600 kB block ≈ 0.003 % of the bill. A distinct-fixture fill is the
+//! named belt if any future term becomes memory-bound.
 //!
 //! # Fences
 //!
