@@ -53,6 +53,7 @@ enum class removed_reason
   public_node,       // P2P advertisement as a foreign remote-RPC endpoint
   bind_confirm,      // permission slip for binds that are now refused (RT-W2)
   ignore_ipv4,       // tolerated a failed v4 bind; a loopback bind failure is fatal by design
+  derived_advert,    // port advertisement is derived from listener + zone, not configured
 };
 
 struct removed_flag
@@ -65,7 +66,7 @@ struct removed_flag
 // source of truth — CHANGELOG.md and FOLLOWUPS.md reference it by name
 // rather than duplicating the list, so editing this array keeps the
 // documentation in sync automatically.
-constexpr std::array<removed_flag, 22> REMOVED_FLAGS = {{
+constexpr std::array<removed_flag, 23> REMOVED_FLAGS = {{
   // Daemonizer, deleted in V3.1 (background execution / service management).
   {"detach",                       removed_reason::daemonizer},
   {"pidfile",                      removed_reason::daemonizer},
@@ -106,6 +107,7 @@ constexpr std::array<removed_flag, 22> REMOVED_FLAGS = {{
   // (--rpc-use-ipv6), and a loopback bind failing is a fatal misconfiguration,
   // not something to ignore; the flag parsed into a field nothing read.
   {"rpc-ignore-ipv4",              removed_reason::ignore_ipv4},
+  {"hide-my-port",                 removed_reason::derived_advert},
 }};
 
 // boost::program_options::unknown_option::get_option_name() returns the
@@ -189,6 +191,15 @@ bool handle_removed_flag(
         "wildcard RPC bind (0.0.0.0, ::) is refused outright, and a bind on a network\n"
         "address is refused because the daemon RPC has no authentication. Bind\n"
         "127.0.0.1 or ::1 (the default); see docs/DAEMON_RPC_RUST.md.\n";
+      break;
+    case removed_reason::derived_advert:
+      std::cerr <<
+        "Error: '--" << view << "' was removed. Whether this node advertises a\n"
+        "port is now derived: it is announced only where a peer could reach us\n"
+        "on it -- the zone supports the back-ping that verifies the claim, and\n"
+        "we accept inbound connections at all. To not be advertised, refuse\n"
+        "inbound with '--in-peers 0'; to not take part in p2p, do not run a\n"
+        "daemon. See docs/USER_GUIDE.md.\n";
       break;
     case removed_reason::ignore_ipv4:
       std::cerr <<

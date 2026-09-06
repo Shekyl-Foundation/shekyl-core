@@ -84,6 +84,30 @@ const _: () = assert!(
 /// `(k·BLOCKS_PER_YEAR − 0)/BPY = k` but `(k·BPY − 1)/BPY = k − 1`.
 const GENESIS_NG_HEIGHT: u64 = 1;
 
+/// The minimum-dwell floor examined for FL-R18 (c) and **NOT ADOPTED**
+/// (round 14): the anonymity harm it was to prevent was refuted (§4.5b)
+/// and the floor was measured to destabilise the loop it was meant to
+/// calm (§4.5a). Kept as an instrument mode ONLY so that result stays
+/// reproducible from the branch — the same reason both pow2 snap rules
+/// are still modes. 240 blocks = the FL-C4a stationary gate, i.e. the
+/// best candidate the sweep found; nothing ships it.
+const FL_R18_MIN_DWELL_BLOCKS: u64 = 240;
+
+/// Quote-to-broadcast lags for the FL-R18 rejection-race measurement
+/// (§4.5b), in blocks at the 120 s target. STATED, not assumed:
+/// * **1** — the floor case: estimate fetched, transaction built and
+///   broadcast inside one block.
+/// * **3** (≈ 6 min) — the realistic case: FCMP++ proving at the rule-76
+///   device floor, a human confirmation step, and the Dandelion++ stem
+///   embargo before the transaction reaches a miner's pool.
+/// * **25** (≈ 50 min) — a signing session left open, or a wallet that
+///   quotes, waits on a second signer, then broadcasts.
+/// * **100** — the PROTOCOL's own ceiling, not a guess:
+///   `FCMP_REFERENCE_BLOCK_MAX_AGE` (100) is the oldest reference a
+///   proof may carry at admission, so no conforming transaction can be
+///   quoted more than 100 blocks before it is submitted.
+const RACE_LAGS: [u64; 4] = [1, 3, 25, 100];
+
 // ---------------------------------------------------------------------------
 // Correction factor
 // ---------------------------------------------------------------------------
@@ -576,8 +600,12 @@ enum LadderMode {
     /// `C` snapped to a power of two first.
     Quantized(SnapRule),
     /// The ceiling snap behind the §7 hysteresis construction — the map
-    /// the daemon actually serves once the implementing branch lands.
+    /// the daemon served before FL-R18.
     QuantizedHysteresis,
+    /// The band plus a minimum-dwell floor of `n` blocks on the served
+    /// value — examined for FL-R18 (c) and NOT ADOPTED; swept over
+    /// candidate `n` to produce the evidence at §4.5a.
+    RateLimited(u64),
 }
 
 /// The §7 hysteresis construction, transliterated from the implementing
@@ -615,6 +643,51 @@ impl HysteresisCq {
     }
 }
 
+/// The mechanism examined for FL-R18 (c), **withdrawn at round 14**: a
+/// minimum-dwell floor on the served `C_q`, composed ON TOP of the band. The band damps boundary noise;
+/// it cannot suppress a limit cycle driven by gain-≥2 demand feedback,
+/// because a deadband only helps once it exceeds the loop's excursion
+/// (the ruling's ground for rejecting a wider band). The floor makes the
+/// FL-C4a dwell property structural: a served value that has changed
+/// cannot change again for `n` blocks.
+///
+/// `blocks_since_change` counts blocks since the last CHANGE. The implementing branch
+/// carries `(value, since_height)` instead — equivalent, and the reason
+/// FL-R18 condition 1 names restart survival: this counter is state that
+/// a restart can lose.
+struct RateLimitedCq {
+    band: HysteresisCq,
+    served: u64,
+    blocks_since_change: u64,
+    n: u64,
+}
+
+impl RateLimitedCq {
+    fn new(n: u64) -> Self {
+        Self {
+            band: HysteresisCq { prev: 0 },
+            served: 0,
+            blocks_since_change: 0,
+            n,
+        }
+    }
+
+    fn step(&mut self, c_raw: u64) -> u64 {
+        let want = self.band.step(c_raw);
+        if self.served == 0 {
+            self.served = want;
+            self.blocks_since_change = 0;
+            return self.served;
+        }
+        self.blocks_since_change += 1;
+        if want != self.served && self.blocks_since_change >= self.n {
+            self.served = want;
+            self.blocks_since_change = 0;
+        }
+        self.served
+    }
+}
+
 impl LadderMode {
     fn name(self) -> String {
         match self {
@@ -626,6 +699,7 @@ impl LadderMode {
             LadderMode::QuantizedHysteresis => {
                 "corrected-quantized-pow2-ceil-hysteresis".to_owned()
             }
+            LadderMode::RateLimited(n) => format!("served-rate-limited-n{n}"),
         }
     }
 }
@@ -697,6 +771,10 @@ fn dwell_scenario(
 
     let mut ag = st.ag;
     let mut hyst = HysteresisCq { prev: 0 };
+    let mut rate_limited = match mode {
+        LadderMode::RateLimited(n) => RateLimitedCq::new(n),
+        _ => RateLimitedCq::new(1),
+    };
     // Per rung: (value, run_length, run_start_block) plus accumulators.
     let mut runs: [Vec<(u64, u64)>; 4] = [vec![], vec![], vec![], vec![]]; // (start, len)
     let mut values: [BTreeSet<u64>; 4] = Default::default();
@@ -731,6 +809,10 @@ fn dwell_scenario(
             LadderMode::QuantizedHysteresis => {
                 let c = correction_factor(v_avg, ag, height, params).c_scaled;
                 corrected_ladder(raw, hyst.step(c))
+            }
+            LadderMode::RateLimited(_) => {
+                let c = correction_factor(v_avg, ag, height, params).c_scaled;
+                corrected_ladder(raw, rate_limited.step(c))
             }
         };
         ag = advance_traced_state(ag, v_avg, params);
@@ -790,6 +872,23 @@ fn dwell_scenario(
 
 #[derive(Serialize)]
 pub struct FeedbackResult {
+    /// FL-R18 rejection-race (§4.5b): quotes issued along the trace, and
+    /// how many would be REFUSED at admission `RACE_LAGS[i]` blocks later
+    /// because the relay floor rose above the quoted (already
+    /// floor-clamped) economy rung. `check_fee`'s 2% buffer is applied,
+    /// so this counts real refusals, not near-misses.
+    pub race_quotes: u64,
+    pub race_refused: [u64; 4],
+    /// The race's REAL governing quantity (§4.5b). With the median held,
+    /// the relay floor is monotonically non-increasing (reward decay only
+    /// shrinks `R`), so `race_refused` is structurally zero and proves
+    /// nothing on its own. What decides a refusal is the MARGIN a quote
+    /// carries over the floor it was clamped against: `served/floor` in
+    /// thousandths, minimised over the trace. A quote survives a median
+    /// contraction of factor `f` iff `f² ≤ (served/floor)·(100/98)`, so
+    /// this margin converts directly into the median move the quote can
+    /// absorb — the exposure the fixed-median traces cannot show.
+    pub race_margin_min_milli: u64,
     /// Chain age and median of the swept state (§1.8 interior grid;
     /// PR #614 review — feedback was previously pinned to (age 4, zone)).
     pub age_years: u64,
@@ -839,27 +938,47 @@ fn feedback_scenario(
     mode: LadderMode,
     params: &EconomicParams,
 ) -> FeedbackResult {
-    let fee_at = |v_avg: u64, ag: u64, height: u64, hyst: &mut HysteresisCq| -> u64 {
+    // ONE per-block evaluation, returning everything the trace needs from
+    // it: the standard rung that drives the demand loop, and the SERVED
+    // economy rung (clamped up to the relay floor, §5.2) with the floor
+    // it was clamped against. The rejection race previously recomputed
+    // the economy rung from RAW `C`, which is not what any stateful mode
+    // serves — and it could not simply re-apply the band, because
+    // `HysteresisCq::step` and `RateLimitedCq::step` ADVANCE state and a
+    // second call per block would double-step them. Returning the served
+    // values from the single stepping site fixes both (PR #634 review,
+    // Bugbot + Copilot, same defect).
+    let step_at = |v_avg: u64,
+                   ag: u64,
+                   height: u64,
+                   hyst: &mut HysteresisCq,
+                   rl: &mut RateLimitedCq|
+     -> (u64, u64, u64) {
         let base = base_block_reward(ag, params).expect("base along trace");
         let raw = articmine_ladder_raw(base, median, median);
         let c = correction_factor(v_avg, ag, height, params).c_scaled;
         let c = match mode {
             LadderMode::Quantized(rule) => quantize_c_pow2(c, rule),
             LadderMode::QuantizedHysteresis => hyst.step(c),
+            LadderMode::RateLimited(_) => rl.step(c),
             _ => c,
         };
-        corrected_ladder(raw, c)[1].max(1)
+        let ladder = corrected_ladder(raw, c);
+        let floor_now = relay_floor(base, median);
+        (ladder[1].max(1), ladder[0].max(floor_now), floor_now)
     };
     // The reference fee is history-free and anchored at the trace's START
     // state — it defines the demand curve, so it must not move with the
     // loop; the loop's fee below evolves with the traced state (§1.8:
     // confirmed, not assumed) and carries the band's memory.
-    let f_ref = fee_at(
+    let f_ref = step_at(
         demand_scale,
         st.ag,
         st.height,
         &mut HysteresisCq { prev: 0 },
-    );
+        &mut RateLimitedCq::new(1),
+    )
+    .0;
 
     let eps = eps_milli as f64 / 1000.0;
     let blocks: u64 = 30_000;
@@ -875,14 +994,25 @@ fn feedback_scenario(
     let mut fee_max = 0u64;
     let mut v_min = u64::MAX;
     let mut v_max = 0u64;
+    let mut served_economy: Vec<u64> = Vec::with_capacity(blocks as usize);
+    let mut floors: Vec<u64> = Vec::with_capacity(blocks as usize);
     let mut tail_fees = BTreeSet::new();
     let mut tail_transitions = 0u64;
     let mut last_tail_fee: Option<u64> = None;
     let mut hyst = HysteresisCq { prev: 0 };
+    let mut rl = match mode {
+        LadderMode::RateLimited(n) => RateLimitedCq::new(n),
+        _ => RateLimitedCq::new(1),
+    };
     let mut ag = st.ag;
     for t in 0..blocks {
         let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
-        let fee = fee_at(v_avg, ag, st.height + t, &mut hyst);
+        // FL-R18 rejection race: the served economy rung and its
+        // quote-time floor come from the SAME stepping call as the fee,
+        // so the margin is measured on the map the mode actually serves.
+        let (fee, economy, floor_now) = step_at(v_avg, ag, st.height + t, &mut hyst, &mut rl);
+        served_economy.push(economy);
+        floors.push(floor_now);
         ag = advance_traced_state(ag, v_avg, params);
         // The registered §1.7 model has NO saturation (PR #614 review: a
         // hidden 10 000 clamp is a capacity bound the register never
@@ -910,7 +1040,32 @@ fn feedback_scenario(
             last_tail_fee = Some(fee);
         }
     }
+    // Refused iff the quote misses `check_fee`'s acceptance bound at
+    // admission: accept requires `fee >= needed - needed/50`, i.e.
+    // `served * 100 >= floor_at_admission * 98`.
+    let mut race_refused = [0u64; 4];
+    for (i, &lag) in RACE_LAGS.iter().enumerate() {
+        let lag = lag as usize;
+        for h in 0..served_economy.len().saturating_sub(lag) {
+            if u128::from(served_economy[h]) * 100 < u128::from(floors[h + lag]) * 98 {
+                race_refused[i] += 1;
+            }
+        }
+    }
+
+    let race_margin_min_milli = served_economy
+        .iter()
+        .zip(floors.iter())
+        .map(|(&sv, &fl)| {
+            u64::try_from(u128::from(sv) * 1000 / u128::from(fl.max(1))).unwrap_or(u64::MAX)
+        })
+        .min()
+        .unwrap_or(0);
+
     FeedbackResult {
+        race_quotes: served_economy.len() as u64,
+        race_refused,
+        race_margin_min_milli,
         age_years: st.height / BLOCKS_PER_YEAR,
         median,
         elasticity_milli: eps_milli,
@@ -929,6 +1084,20 @@ fn feedback_scenario(
 // ---------------------------------------------------------------------------
 // Degenerate pins (FL-C8)
 // ---------------------------------------------------------------------------
+
+/// One candidate `N` for FL-R18's minimum-dwell floor, with what it
+/// leaves oscillating on the swept interior.
+#[derive(Serialize)]
+pub struct NSweepPoint {
+    pub n: u64,
+    pub oscillating_cells: u64,
+    pub worst_tail_transitions: u64,
+    /// Cells whose served economy rung sits within 2% of the relay floor
+    /// (§4.5b's thin-margin measure) under this `N` — so the claim that a
+    /// dwell floor worsens the rejection race is MEASURED rather than
+    /// asserted (PR #634 review).
+    pub thin_margin_cells: u64,
+}
 
 #[derive(Serialize)]
 pub struct DegeneratePins {
@@ -1107,6 +1276,9 @@ pub struct FeeLadderReport {
     dwell: Vec<DwellResult>,
     feedback: Vec<FeedbackResult>,
     degenerate: DegeneratePins,
+    /// FL-R18's `N` measurement: oscillating cells remaining at each
+    /// candidate minimum-dwell floor (§4.5a).
+    n_sweep: Vec<NSweepPoint>,
     /// FL-C9 (§1 birth stamp: minted at maintainer direction, review
     /// round 5, after measurement began; re-labeled at round 6 to the
     /// anchored-attack candidate-set reduction).
@@ -1216,6 +1388,7 @@ pub fn report() -> FeeLadderReport {
             LadderMode::Quantized(SnapRule::Nearest),
             LadderMode::Quantized(SnapRule::Ceiling),
             LadderMode::QuantizedHysteresis,
+            LadderMode::RateLimited(FL_R18_MIN_DWELL_BLOCKS),
         ] {
             for &(label, m0, m1, median) in DWELL_SCENARIOS {
                 dwell.push(dwell_scenario(label, m0, m1, median, st, mode, &params));
@@ -1261,6 +1434,54 @@ pub fn report() -> FeeLadderReport {
         }
     }
 
+    // FL-R18 (c): MEASURE `N`. Candidates are the figures the register
+    // already contains — the ramp bar (60), the stationary dwell gate
+    // (240), and the volume window (720) — plus their midpoint; the
+    // ratified `N` is the smallest that closes every oscillating cell,
+    // with the next-smaller candidate's residual recorded so the margin
+    // is visible rather than asserted.
+    let mut n_sweep = Vec::new();
+    for n in [60u64, 120, 240, 480, 720] {
+        let mut oscillating = 0u64;
+        let mut worst_transitions = 0u64;
+        let mut thin_margin_cells = 0u64;
+        for &(_age, st) in &states {
+            let d_boundary = boundary_demand(st, &params);
+            for &median in &[zone, 3 * zone, 10 * zone, 50 * zone] {
+                for eps in [0u64, 500, 1000, 2000, 3000] {
+                    for demand_scale in [50u64, 100, d_boundary, 400] {
+                        for start in [demand_scale, 8 * demand_scale.min(1_250)] {
+                            let fb = feedback_scenario(
+                                eps,
+                                demand_scale,
+                                start,
+                                st,
+                                median,
+                                LadderMode::RateLimited(n),
+                                &params,
+                            );
+                            if fb.tail_transitions >= 2
+                                && fb.fee_tail_max > round_money_up_2(fb.fee_tail_min + 1)
+                            {
+                                oscillating += 1;
+                                worst_transitions = worst_transitions.max(fb.tail_transitions);
+                            }
+                            if fb.race_margin_min_milli < 1020 {
+                                thin_margin_cells += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        n_sweep.push(NSweepPoint {
+            n,
+            oscillating_cells: oscillating,
+            worst_tail_transitions: worst_transitions,
+            thin_margin_cells,
+        });
+    }
+
     let degenerate = degenerate_pins(&params);
 
     // FL-C9 under the registered traffic model and its §1.8 sensitivity
@@ -1286,6 +1507,7 @@ pub fn report() -> FeeLadderReport {
         feedback,
         degenerate,
         fee_signal_bits: fee_signal,
+        n_sweep,
     }
 }
 
@@ -1426,6 +1648,13 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             fs.reduction_factor_milli,
             fs.rung_surprisal_milli,
             fs.ladder_bits_per_tx_milli
+        );
+    }
+    for p in &r.n_sweep {
+        let _ = writeln!(
+            out,
+            "fee-ladder: FL-R18 n={} oscillating_cells={} worst_transitions={} thin_margin_cells={}",
+            p.n, p.oscillating_cells, p.worst_tail_transitions, p.thin_margin_cells
         );
     }
     let _ = writeln!(

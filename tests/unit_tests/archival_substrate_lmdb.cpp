@@ -60,6 +60,8 @@ crypto::public_key test_output_key_for_index(size_t i)
 using archival_test::kServeCreditTestBlockHeight;
 using archival_test::make_hash;
 using archival_test::EmissionSnapshotKat;
+using archival_test::append_minimal_blocks;
+using archival_test::connect_block_with_txs;
 using TempLMDB = archival_test::TempLMDB;
 
 /// Minimum-length bond LMDB value with a non-v6 version byte.
@@ -1893,83 +1895,8 @@ TEST(archival_substrate_lmdb, slash_revert_restores_complete_tree_demotion)
 
 namespace {
 
-/// Append `count` minimal miner-only blocks (heights `height()` upward).
-/// Each block carries a unique coinbase (txin_gen height) and no outputs, so
-/// the curve-tree path is a no-op and the per-block cost is a handful of LMDB
-/// puts — cheap enough to reach archival epoch heights (SEB = 10 000) in a
-/// unit test. add_block runs the production connect hooks, including
-/// process_archival_slash_at_height, which is the point: the slash KAT below
-/// exercises the scheduler at its production call site, not via a test shim.
-/// `accrual_per_block` rides into add_block as the redirected staker inflow
-/// (F-B1a): the DB layer writes the accrual row before the epoch-close hook,
-/// so the epoch-boundary KAT below can assert the close sums it.
-void append_minimal_blocks(BlockchainDB& db, uint64_t count, uint64_t accrual_per_block = 0)
-{
-  crypto::hash prev = db.height() == 0
-    ? crypto::null_hash : db.get_block_hash_from_height(db.height() - 1);
-  for (uint64_t i = 0; i < count; ++i)
-  {
-    const uint64_t height = db.height();
-    block blk{};
-    blk.major_version = 1;
-    blk.minor_version = 1;
-    blk.timestamp = 1500000000 + height;
-    blk.prev_id = prev;
-    blk.curve_tree_root = crypto::null_hash;
-    blk.nonce = 0;
-
-    transaction miner_tx{};
-    miner_tx.version = 1;
-    miner_tx.unlock_time = height + 60;
-    txin_gen gen{};
-    gen.height = height;
-    miner_tx.vin.push_back(gen);
-    blk.miner_tx = std::move(miner_tx);
-
-    db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-      height + 1, 0, accrual_per_block, {}, {});
-    prev = get_block_hash(blk);
-  }
-}
-
-// Connect one block at the current tip carrying `txs` through the real
-// add_block path (miner_tx + prev/height scaffolding that every bond-post /
-// emission connect KAT below otherwise open-codes identically). Returns the
-// connect height. Caller batch_stop/batch_start around it as needed.
-uint64_t connect_block_with_txs(BlockchainDB& db, const std::vector<transaction>& txs,
-  const blobdata& attestation_witness = {})
-{
-  const uint64_t connect_height = db.height();
-  block blk{};
-  blk.major_version = 1;
-  blk.minor_version = 1;
-  blk.timestamp = 1500000000 + connect_height;
-  // Guard the genesis case like append_minimal_blocks: height 0 has no
-  // predecessor to hash (connect_height - 1 would underflow).
-  blk.prev_id = connect_height == 0
-    ? crypto::null_hash : db.get_block_hash_from_height(connect_height - 1);
-  blk.curve_tree_root = crypto::null_hash;
-  blk.nonce = 0;
-  transaction miner_tx{};
-  miner_tx.version = 1;
-  miner_tx.unlock_time = connect_height + 60;
-  txin_gen gen{};
-  gen.height = connect_height;
-  miner_tx.vin.push_back(gen);
-  blk.miner_tx = std::move(miner_tx);
-
-  std::vector<std::pair<transaction, blobdata>> tx_blobs;
-  tx_blobs.reserve(txs.size());
-  for (const transaction& tx : txs)
-  {
-    blk.tx_hashes.push_back(get_transaction_hash(tx));
-    tx_blobs.emplace_back(tx, tx_to_blob(tx));
-  }
-
-  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-    connect_height + 1, 0, 0, attestation_witness, tx_blobs);
-  return connect_height;
-}
+// append_minimal_blocks / connect_block_with_txs live in
+// archival_lmdb_test_helpers.h (shared with tx_extra_pqc_field_shape.cpp).
 
 } // namespace
 
@@ -2983,6 +2910,9 @@ transaction make_connectable_emission_tx(const EmissionVinFixture& fx)
     tx.ct_signatures.enc_amounts.push_back({});
     tx.ct_signatures.enc_labels.push_back({});
   }
+  // CEN-I19: every transaction with outputs carries its 0x06/0x07 fields;
+  // the DB collector aborts otherwise (it used to zero-fill h_pqc).
+  shekyl_test_fixtures::append_pqc_fields(tx);
   return tx;
 }
 

@@ -1246,6 +1246,44 @@ bool shekyl_curve_tree_replica_next_block_root(
     const ShekylCurveTreeReplica* replica,
     uint8_t* out_root);
 
+// ---------------------------------------------------------------------------
+// tx_extra PQC field shape rule (rust/shekyl-ffi/src/tx_extra_ffi.rs;
+// GENESIS_TX_WIRE_FORMAT.md §9.6a as ruled 2026-09-05; census CEN-I19).
+//
+// With n = vout.size(): exactly one 0x06 KEM-ciphertext field of 1120·n bytes
+// and exactly one 0x07 leaf-hash field of 32·n bytes when n > 0; neither when
+// n == 0. The caller parses tx_extra itself and passes the byte length of
+// every 0x06 / 0x07 field it found, in order. Consensus: called from
+// core::check_tx_semantic and Blockchain::prevalidate_miner_transaction.
+// ---------------------------------------------------------------------------
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_OK                           0
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR                 1
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_PRESENT_WITHOUT_OUTPUTS  2
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_MISSING                  3
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_DUPLICATE                4
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_LENGTH                   5
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_PRESENT_WITHOUT_OUTPUTS 6
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_MISSING                 7
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE               8
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH                  9
+/// Buffer size for out_msg, NUL included.
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP                      256
+/// Returns SHEKYL_TX_EXTRA_PQC_SHAPE_OK or one of the codes above, and writes
+/// the rule's own sentence for that code into out_msg as a NUL-terminated
+/// string (empty on OK; truncated on a character boundary if it would not
+/// fit). The daemon LOGS THAT STRING rather than formatting a second one from
+/// the code: the rule's words belong to the crate that owns the rule, and two
+/// formatters agreeing is a promise nobody can keep. A null array pointer is
+/// accepted only with a zero count; out_msg may be null with out_msg_cap 0.
+int32_t shekyl_tx_extra_pqc_field_shape(
+    size_t n_outputs,
+    const size_t* kem_lens,
+    size_t kem_count,
+    const size_t* leaf_lens,
+    size_t leaf_count,
+    char* out_msg,
+    size_t out_msg_cap);
+
 /// Compose every curve-tree layer ABOVE the leaf layer, narrow from the leaf-chunk
 /// layer — the correct producer-side grow that telescopes to the reference root
 /// (fixes the depth-3 layer-2 incremental-deepening divergence: an in-place deepen

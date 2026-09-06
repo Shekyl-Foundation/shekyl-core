@@ -108,7 +108,7 @@ uncommitted and `cleanup_handle_incoming_blocks` aborts the batch.
 **Verdict: PASS** — one transaction per block (or per batch), including all
 archival journal writes and the boundary-epoch prune.
 
-## 3. Block pop (`BlockchainDB::pop_block`, `blockchain_db.cpp:695`)
+## 3. Block pop (`BlockchainDB::pop_block`, `blockchain_db.cpp:717`)
 
 One funnel, one write transaction (`block_wtxn` unless a batch is active),
 entered only above the prune-watermark floor (C2-R1b-Q1c: the floor comes
@@ -146,7 +146,7 @@ and the second is the sharper one:
   *"pop_block_from_blockchain() is private, so call directly through db"*
   (`blockchain_import.cpp:92`–`:119`, driven from `:779`–`:785`). Since the
   connect-side increment is also core-layer
-  (`handle_block_to_main_chain`, `:6455`), a database whose blocks were
+  (`handle_block_to_main_chain`, `:6464`), a database whose blocks were
   added through the verifying path and popped through that tool keeps a
   `total_burned` that counts burns the chain no longer contains, plus a
   `block_burn` row for a height that no longer exists. Deterministically,
@@ -161,7 +161,7 @@ live path, not a crash window — and the stale `block_burn` row is
 self-healing only if that height is re-added, since connect overwrites it.
 
 **Verdict: PASS for the funnel itself** — `BlockchainDB::pop_block` is one
-transaction and the pop-side invariant comment (`:841`) states the same
+transaction and the pop-side invariant comment (`:863`) states the same
 consensus-split consequence as connect's. The burn pair's placement outside
 it is DRS-W6, and the specification it implies for the Rust store is plain:
 **derived-total reversal belongs in the pop funnel**, so that popping
@@ -366,7 +366,7 @@ chain height *after* the block. The tx-connect journals key on the block's
 | segment-freeze revert | height-free (row count) | hook at `prev_height + 1` |
 
 **Why two bases — the in-code rationale, verbatim** (F-B5b,
-`blockchain_db.cpp:735`-ff): *"the slash/close hooks key on the chain
+`blockchain_db.cpp:757`-ff): *"the slash/close hooks key on the chain
 height AFTER the block (connect fires them at prev_height + 1), which
 equals removed_block_height here. The claim journal keys on the block's
 INDEX N = removed_block_height − 1, because the connect arm must journal at
@@ -380,7 +380,7 @@ re-derives verify's operand with them — it does not unify.
 
 ## 8. Transcription A-4 — pop revert partial order
 
-From the load-bearing-order comments in the pop funnel (`:726`–`:790`),
+From the load-bearing-order comments in the pop funnel (`:748`–`:798`),
 as journal × fields × must-run-after × reason:
 
 | Revert | Fields restored | Must run AFTER | Reason (from the comments) |
@@ -391,7 +391,7 @@ as journal × fields × must-run-after × reason:
 | unbonds (`N−1`) | `bonded_total`, holdings, interval log | slashes | defensive belt; a violation surfaces as `MISSING_CLEAN_CLOSE`, loud |
 | holdings updates (`N−1`) | `bonded_total`, `held_shard_ids`, `shard_add_epochs` | slashes | **ORDER IS LOAD-BEARING**: the slash journal restores the very same fields; reverting in the wrong order makes the exactly-one-FLOOR delta check see `FLOOR ± slashed_amount` and abort the pop with `NotSingleShardDelta` |
 | rebonds (`N−1`) | holdings/balance, closed interval | slashes | both journals touch `bad_intervals`; the slash revert strips its appended intervals before the rebond revert re-opens the journaled closed one |
-| segment freezes (count) | frozen-segment counter | epoch-close revert | `:875`: counted against post-close state |
+| segment freezes (count) | frozen-segment counter | epoch-close revert | `:903`: counted against post-close state |
 
 Inserting a new journal that touches `bonded_total`/`held_shard_ids`/
 `bad_intervals` **between** any of these breaks the delta checks by
