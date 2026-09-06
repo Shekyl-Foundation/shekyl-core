@@ -7,9 +7,10 @@ notes; Q10 with corrected headroom and the 0x0A rule-15 row); **Q3
 amended — the window/hysteresis half ratified, the ×50 surge factor
 REFUTED-NOT-SUPERSEDED by GAP-7's floor measurement** (§3 Q3 carries the
 strike-through, the named refuter, and the re-derived bound's numbers for
-signature); **Q2's rationale is under correction** — its own mandated
-instrument (the saturating trace, §3 Q2) refuted the early-chain half of
-the signed rate claim; the corrected text awaits countersignature.
+signature); **Q2 COUNTERSIGNED on the corrected two-regime rationale** — its own
+mandated instrument refuted the early-chain half of the first signed
+reason; the corrected text, Rick's account of the refutation, the
+embedded trace, and the load-bearing Q2↔Q3 coupling are all in §3 Q2.
 **Numbering note (family C2-R2-Q1…Q11): Q5 does not exist as a heading —
 it was allocated to the `margin` deliverable and DISSOLVED into §6 when
 that was reclassified as a derivation (a consequence of Q2/Q3), not a
@@ -306,8 +307,47 @@ is full; a RAMP-IN regime for the first 100 000 blocks (≈ 4.6 months)
 where the long-term governor is structurally weak and **the binding
 early-chain protection is Q3's re-derived verification-time bound**,
 which caps EM directly and does not lean on LTEM's slowness. The
-symmetric-clamp deflation argument stands unrefuted. Countersignature
-line: ________________
+symmetric-clamp deflation argument stands unrefuted.
+
+**COUNTERSIGNED (Rick, 2026-09-06), with his own account carried rather
+than smoothed:** *"I ratified Q2 on 'doubling ~2 half-windows ≈ 20
+weeks,' and the instrument I mandated shows that reason is false for the
+first 100,000 blocks — min(height, 100 000) means the median lags half
+the chain below full window, so saturation compounds to ~1,944× the zone
+by block 20,000. My stated reason was wrong precisely where a new chain
+lives, and it took running the check to see it."* The trace did the job
+the falsifier existed to do; recorded as such.
+
+**LOAD-BEARING COUPLING (in both this row and Q3's, so neither can be
+revisited alone):** the ramp-in regime's protection is load-bearing, not
+incidental — **Q3's verification-time bound at surge_max = 4 is the ONLY
+thing bounding early-chain weight growth** while the window fills, so
+**any future loosening of surge_max REOPENS Q2, not just Q3.** (Rick:
+*"that coupling is exactly the kind that goes silent otherwise, and it's
+the third time this week a bound has turned out to be the sole remaining
+guard on a property something else was assumed to cover."*)
+
+**The mandated saturating trace (embedded per the falsifier — this run
+is the record):** instrument = the exact `blockchain.cpp:6540–6566`
+machinery (stored weight = clamp(w, LTEM·10/17, LTEM·17/10); LTEM =
+max(zone, median of last min(height, 100 000) stored weights); miner
+saturates at the pre-refutation ceiling each block; 160 000 blocks):
+
+```text
+n=  20 000   LTEM/zone =  1 943.98   (claimed envelope: 1.7)
+n=  40 000   LTEM/zone =  3 304.70   (1.7)
+n=  60 000   LTEM/zone =  4 527.66   (2.89)
+n=  80 000   LTEM/zone =  5 617.94   (2.89)
+n= 100 000   LTEM/zone =  6 657.46   (2.89)     <- window full here
+n= 120 000   LTEM/zone =  8 666.88   (4.913)
+n= 140 000   LTEM/zone = 10 434.05   (4.913)
+n= 160 000   LTEM/zone = 13 084.77   (8.352)
+```
+
+Every pre-100k point refutes the old claim; the post-100k slope tends to
+the exact ×1.7/50 000 asymptote (a monotone window's median is its
+midpoint element: LTEM_n = 1.7·LTEM_{n−50 000}). The ratified two-regime
+statement is what this trace supports.
 
 **Falsifier:** the rate claim is checkable by construction — a simulated
 weight trace saturating every block must show LTEM ≤ LTEM₀·1.7^⌈n/50 000⌉.
@@ -368,7 +408,11 @@ reader sees the choice rather than the number: d2/d7 would have signed
 6.5/5.7 — the difference between those figures and the signed 4 IS the
 decay the reason names.** The ×50 strike-through above stands as
 refuted-by-measurement; ×4 is its re-derivation, not its successor by
-assertion.
+assertion. **LOAD-BEARING COUPLING (mirrored in Q2's row): during the
+first ~100 000 blocks this bound is the ONLY protection against
+early-chain weight growth — the long-term governor is structurally weak
+while its window fills (Q2's corrected rationale) — so any future
+loosening of surge_max reopens Q2, not just this row.**
 
 **Falsifier (defect):** the hysteresis claim ("51 full blocks minimum to
 move EM") is falsified by exhibiting a 100-value multiset where fewer than
