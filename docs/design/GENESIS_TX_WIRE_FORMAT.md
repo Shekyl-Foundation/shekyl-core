@@ -800,7 +800,7 @@ pre-renumber tags until recapture.)*
 | Bound | Value | Constant |
 |---|---|---|
 | tx / block | **0x10000000** | `CRYPTONOTE_MAX_TX_PER_BLOCK` (config:45) |
-| block weight | median-window limit (long-term window **100,000**; short-term surge **×50**) | `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` / `…_SURGE_FACTOR` (config) |
+| block weight | median-window limit (long-term window **100,000**; short-term surge factor **ratified S = 4** — census C2-R2 Q3 struck the inherited ×50, which the config constant still carries as implementation residue until the store port) | `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` / `…_SURGE_FACTOR` (config) |
 
 **Fossil flag (→ economics / block-weight owner, not this doc):**
 `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE` has **V1/V2/V5** variants
@@ -808,7 +808,13 @@ pre-renumber tags until recapture.)*
 genesis has **one** reward zone, not three version-gated ones referencing forks
 that never happened here; freezing V1/V2/V5 would immortalize Monero fork history
 in the block-weight rule. Surfaced in the bounds pass; the arbitration belongs to
-the economics doc.
+the economics doc. **Arbitration landed and SIGNED — this flag is CLOSED
+(census C2-R2 Q1, Rick, 2026-09-06):**
+[`CONSENSUS_C2_R2_WEIGHT_FEES.md`](../completed/CONSENSUS_C2_R2_WEIGHT_FEES.md) Q1
+ratifies 300,000 (the GAP-7 verification-cost condition discharged passing,
+measured on the Pi 4 floor) and specifies the V1/V2 variants +
+version-gated getter for deletion at the port. One reward zone; the fork
+history the flag warned about does not freeze.
 
 Each is a §7 negative-corpus reject case (a 9-input / 17-output tx, or an
 over-cap block, must be rejected by both impls).
