@@ -1000,10 +1000,22 @@ Default. Lands before genesis if it should exist at launch.
 - **Stage 5 — `ArchivalEngine` native actor build (simulation-
   - Target: pre-genesis
 
-- **[Shard-visual ruling B — measurement half](V3_SHARD_VISUALIZATION.md) (ratified 2026-09-05; spec § landed).**
-  Remaining: designated-reference goldens, full-recipe per-fixture KATs, two-limb avalanche test, skl-pi budget
-  matrix. Held by name: build-slowdown directive (P2P focus) + skl-pi occupancy; device slot via coordination.
+- **[Shard-visual floor re-run trigger](V3_SHARD_VISUALIZATION.md) — STANDING, never "done".** The amended
+  performance targets are regression bounds enforced by a named trigger (option (a) of *Where the bound is
+  enforced*), because nothing else re-runs them.
   - Target: pre-genesis
+  - **Trigger conditions — a change anywhere in the TIMED PATH obliges a floor re-run BEFORE merge.** The
+    measured operation is `render_candidate_png_from_params` end to end (render **plus** PNG encode), so the
+    trigger is its whole call graph, not just the renderers: `src/render/*.rs`, `src/candidate.rs`,
+    `src/compositor.rs`, `src/palette.rs`, `src/entropy.rs`, the encode path in `src/lib.rs`, and a version
+    change in the `image`/`imageproc`/`png` dependencies. Naming a subset would let a regression enter through
+    the part that was left out.
+  - **How:** cross-compile `--example budget_matrix` for `aarch64-unknown-linux-gnu` (skl-pi has no Rust
+    toolchain), run the `floor` profile on skl-pi — ping the board first, no sudo — and commit the capture
+    under `docs/benchmarks/`.
+  - **Verdict discipline:** over-budget cells are a REGRESSION to record against the 2026-09-06 baseline, never
+    a threshold to retune. CI's `shard-visual-x86-smoke` does NOT discharge this trigger: it cannot bound the
+    floor in either direction.
 
 - **Transport selection for the staker-archival path (gate 6 /
   - Target: pre-genesis
