@@ -155,14 +155,15 @@
   receipt written before the destruction it authorises; `prune_tx_data`
   commits per ≤256-height batch **with its resumption anchor in the same
   transaction**; `prune_worker` commits and reopens every 4096 deletions) —
-  `reset()` (enumeration wipe — its stale FOLLOWUPS row closed), and
-  `migrate()` (zero writes by design). The §10 coverage matrix is
+  and the store lifecycle — `open()` (one transaction, three exits, one of
+  which commits before it refuses: DRS-W10), `reset()` (enumeration wipe —
+  its stale FOLLOWUPS row closed) and `migrate()` (zero writes by design). The §10 coverage matrix is
   gate-pinned to `SHEKYL_LMDB_TABLES` (DRS §9.1 leg 3 now live; eight new
   failure paths observed red). The in-code-only conventions are
   transcribed for the Rust store: A-2 height bases with the F-B5b
   convert-don't-unify rationale verbatim, A-4's load-bearing revert
   partial order, A-6's guard census (22× `std::runtime_error` vs 2×
-  `DB_ERROR_TXN_START` for one precondition). Findings DRS-W1…DRS-W9 recorded —
+  `DB_ERROR_TXN_START` for one precondition). Findings DRS-W1…DRS-W10 recorded —
   none S-graded, no C++ touched — including `txs` (zero write or read
   sites; inherited-dead candidate) and `hf_starting_heights` (deleted at
   every writable `open()`, structurally absent at runtime), and the post-pop

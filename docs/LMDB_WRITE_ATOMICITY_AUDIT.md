@@ -3,8 +3,8 @@
 **Date:** 2026-09-05 (DRS-P0b; supersedes the April 2026 audit in place)
 **Pin:** `dev` `2dba46537` — every claim below was verified against this tree
 **Scope:** every `BlockchainLMDB` write path at the pin: block connect, block
-pop, the transaction pool, alt blocks, the three prunes, `reset()`,
-and `migrate()`. One coverage row per `SHEKYL_LMDB_TABLES` entry — the count
+pop, the transaction pool, alt blocks, the three prunes, and the store
+lifecycle (`open()`, `reset()`, `migrate()`). One coverage row per `SHEKYL_LMDB_TABLES` entry — the count
 is derived from the macro wherever it is used, never restated as a literal
 (the schema-coverage gate pins the matrix to the macro in both directions).
 **Goal:** confirm each logical mutation is fully contained in a single LMDB
@@ -84,13 +84,29 @@ Ordering at the pin (the funnel every connected block traverses):
    outputs, spent keys, **and the per-vin archival journal writes** (bond
    record mutations with their unbond/rebond/holdings-update pre-image
    journals, emission-claim journal, serve-credit bits) ride tx-connect.
-2. The FCMP++ curve-tree block: `block_pending_additions` journal, the
-   drain (auto-journaled per entry for `pop_block`), `grow_curve_tree`,
-   then the segment-freeze connect hook at `prev_height + 1`. The in-code
-   invariant (`:491`): *pending, drain, output↔leaf maps,
-   `block_pending_additions`, and `curve_tree_*` tables MUST be mutated
-   within the same `m_write_txn` as the block add — any partial commit here
-   is a consensus split.*
+2. The FCMP++ curve-tree block, in this order — the sequence is
+   load-bearing, so it is transcribed as the code has it rather than
+   summarised:
+   1. **`drain_pending_tree_leaves`** (`:625`) — matured leaves only, each
+      entry auto-journalled for `pop_block`, writing the output↔leaf
+      mappings as tree positions are assigned;
+   2. **`collect_outputs`** for the miner tx then each tx (`:629`–`:631`),
+      which is what writes *this* block's `pending_tree_leaves` and
+      `block_pending_additions` rows (`:617`–`:618`);
+   3. **`grow_curve_tree`** (`:635`), gated on a nonzero new-output count;
+   4. the **segment-freeze connect hook** at `prev_height + 1`, after grow
+      so a segment completed at this height is countable by an epoch close
+      at the same height.
+
+   **Draining before collecting is the deferral**: a block's own outputs
+   enter the pending table *after* that block's drain has run, so they
+   cannot reach the tree in the block that created them. The maturity
+   comparison and the ordering enforce the same rule, and a port that
+   keeps only the comparison would admit an output a block early. The
+   in-code invariant (`:491`) covers all four steps: *pending, drain,
+   output↔leaf maps, `block_pending_additions`, and `curve_tree_*` tables
+   MUST be mutated within the same `m_write_txn` as the block add — any
+   partial commit here is a consensus split.*
 3. Attestation witness store, keyed `archival_attestation_witness_key(prev_height)`.
 4. `BlockchainLMDB::add_block` — block blob, `block_info`, `block_heights`.
 5. The budget-accrual row at `prev_height` (F-B1a: written inside this
@@ -304,7 +320,37 @@ the archival retention prune is a single transaction, and only because it
 rides the block's. The receipt-before-destruction edge is R-2 in the RAW
 set (§6); the depth prune's anchor-with-batch is R-6.
 
-## 5b. `reset()` and `migrate()`
+## 5b. Store lifecycle — `open()`, `reset()`, `migrate()`
+
+`open()` (`:1537`) is a write path, and the audit's completeness claim
+owes it a verdict. One transaction (`mdb_txn_begin` at `:1651`, read-only
+flagged when the store is) does all of it: `lmdb_db_open(… MDB_CREATE)`
+for every name in the macro list — creating a missing named DB is itself
+a write to the unnamed main DB — plus the unconditional
+`mdb_drop(m_hf_starting_heights, 1)` on any writable open (DRS-W5) and,
+on an empty store, the `properties` version seed. It has **three exits**,
+and they do not agree about what a failed open leaves behind:
+
+- **newer DB than the binary** (`db_version > VERSION`) — `txn.abort()`,
+  return: nothing is written, which is right;
+- **empty or current DB** — seed the version if absent, `txn.commit()` at
+  the end: one transaction, all or nothing;
+- **older DB** (`db_version < VERSION`) — **`txn.commit()` *first*, then
+  `migrate(db_version)`** (`:1819`-ff). Since `migrate()` refuses loudly
+  pre-genesis (below), the open fails — but the table creations and the
+  `hf_starting_heights` drop are **already committed**. A refusing open
+  mutates the store's structure before refusing (**DRS-W10**).
+
+The consequence today is small, because the refusal's own remedy is to
+delete the datadir and resync, so nothing survives to be inconsistent.
+It is recorded because the shape does not survive contact with a store
+that *can* migrate: an open that fails should leave the store as it found
+it.
+
+**Verdict: PASS on atomicity** — every exit is a single transaction,
+committed or aborted as a whole; DRS-W10 is about *which* exit commits,
+not about a partial one.
+
 
 `reset()` (`:1911`): wipes by **enumerating** the environment's named
 tables (main-DB keys are table names) and dropping every one not in the
@@ -322,7 +368,8 @@ loudly and direct to resync; the Monero-era `migrate_0_1..5_6` ladder
 (whose quoted-literal opens dominated the April file's raw hit count) is
 deleted.
 
-**Verdict: PASS** (`reset()`); `migrate()` is a non-write path by design.
+**Verdict: PASS** (`reset()`); `migrate()` is a non-write path by design,
+and `open()` carries DRS-W10 above.
 
 ## 5c. Standalone write paths outside any block
 
@@ -451,6 +498,7 @@ tripped it.
 | DRS-W7 | Three sites, three semantics for the same scalar's impossible value: the pop reversal **clamps** to floor (`blockchain.cpp:902`), the slash revert **throws** `FATAL` on underflow (`db_lmdb.cpp:6362`), the slash add **throws** `FATAL` on overflow (`:6050`) — the paths disagree about what an impossible `total_burned` means, so the node's behavior under a divergence depends on which path meets it first: silent floor vs halt | wart (**reachable — regraded**: this row read "unreachable at the pin" until the §2 re-audit found DRS-W9, which commits a burn row without its aggregate and so produces exactly the too-LOW scalar the `:6362` FATAL underflow tests. The disagreement is therefore live, not a standing trap: the same impossible value halts one site and is silently clamped at another) | RECORD-AND-SPECIFY: the Rust store has **one** ruled semantic for an impossible derived total — and the ruling itself belongs to the economics lane, not the store |
 | DRS-W8 | `correct_block_cumulative_difficulties` (`:3034`) aborts explicitly on its size-mismatch guard but not on its loop throws, so the same function leaves the write transaction in two different states depending on which failure fires — and it has **no production caller** (§5c) | wart (atomicity holds either way; unwired) | RECORD-AND-SPECIFY: one unwinding path in the Rust store. The unwired status is a census datum, the `set_archival_settlement`/CEN-L8 shape |
 | DRS-W9 | The connect-side burn pair (`add_block_burn` + `total_burned` increment, `blockchain.cpp:6453`–`:6466`) runs **after** the try whose catches set `m_batch_success = false`. A throw between the two unwinds to `add_new_block`'s outer catch, which sets only `bvc`, so `cleanup_handle_incoming_blocks` still calls `batch_stop()`: the block, its txs and the `block_burn` row commit **without** the aggregate — a partial commit of one logical unit, and the production entry for a too-LOW `total_burned` that DRS-W7 lacked | wart (**the most severe of this set, and still not S-graded**: no consensus arithmetic reads the scalar and no fund-safety consequence follows, and the window needs an LMDB-level write failure — but it can leave a node whose next slash revert trips the `:6362` FATAL underflow, a local halt, and it falsified a PASS this audit had published) | RECORD-AND-SPECIFY, converging with DRS-W6: the burn bookkeeping is core-layer on **both** connect and pop, so neither side inherits the funnel's failure semantics. In the Rust store both belong **inside** the funnel |
+| DRS-W10 | `open()`'s older-DB exit **commits before it refuses**: `txn.commit()` runs, then `migrate()` throws (`:1819`-ff), so the table creations and the `hf_starting_heights` drop persist on a store the binary just declined to open (§5b) | wart (no partial transaction and no unsound state — the refusal's remedy is delete-and-resync, so nothing survives to be inconsistent; recorded because the shape does not survive a store that *can* migrate) | RECORD-AND-SPECIFY: in the Rust store, an open that fails leaves the store as it found it — structural changes commit only on the path that succeeds |
 | — | `hf_versions` not cleaned on pop | carried | P0c wart row (owned there since April; not re-opened here) |
 | — | Dead schema-doc row: `properties` key `staker_pool_balance` + both accessors, zero occurrences in `src/` | doc defect | fixed in this PR (`LMDB_SCHEMA.md` row and the Staking-section pointer) |
 

@@ -107,7 +107,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Daemon chain store (`DRS-*`) — gap-close pass landed in design.** SoT: [`docs/design/DAEMON_REDB_STORE.md`](./design/DAEMON_REDB_STORE.md)
   - Target: pre-genesis
 
-- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI — **DELIVERED 2026-09-05** (49-row reconciliation registry + heading/registry gate legs; see the P0a registry in [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)); **P0b** atomicity+journals+transcriptions — **DELIVERED 2026-09-05** ([`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) rewritten in place, §10 matrix gate-pinned, A-2/A-4/A-6 transcribed, DRS-W1…DRS-W9 recorded); **P0c/P0d**
+- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI — **DELIVERED 2026-09-05** (49-row reconciliation registry + heading/registry gate legs; see the P0a registry in [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)); **P0b** atomicity+journals+transcriptions — **DELIVERED 2026-09-05** ([`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) rewritten in place, §10 matrix gate-pinned, A-2/A-4/A-6 transcribed, DRS-W1…DRS-W10 recorded); **P0c/P0d**
   - Target: pre-genesis
 
 - **`txs` is a zero-write, zero-read LMDB table (P0b DRS-W4).** Handle's only occurrence is its `open()`; inherited-dead deletion candidate — C++ + schema-version change, census/DRS lane owns ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
