@@ -45,6 +45,25 @@ fn goldens_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/goldens")
 }
 
+/// The fixture corpus, with its own existence asserted (rule 47,
+/// `.cursor/rules/47-gate-subject-assertion.mdc`).
+///
+/// Every oracle in this file iterates the corpus, and `for x in empty {}`
+/// passes. Without this assertion an emptied `fixtures::all()` would turn all
+/// three tests green while measuring nothing — absence of signal read as
+/// absence of defect. The KAT is the worst case: an empty corpus and an
+/// empty artifact compare equal, so the set-equality check would agree that
+/// nothing matches nothing.
+fn corpus() -> Vec<fixtures::PreviewFixture> {
+    let all = fixtures::all();
+    assert!(
+        !all.is_empty(),
+        "fixture corpus is empty — these oracles measure nothing without it \
+         (rule 47: a gate asserts its own subject exists)"
+    );
+    all
+}
+
 /// Decode PNG bytes to raw RGB8 pixels. **The comparison axis is decoded
 /// pixels, never PNG file bytes** (spec: bytes go through the encoder's
 /// compression, filtering, and the ruling-A provenance chunks — a byte
@@ -107,7 +126,25 @@ fn full_recipe_kat_matches_committed_artifact() {
     let golden: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&raw).expect("recipes.json parses");
 
-    let fixtures = fixtures::all();
+    let fixtures = corpus();
+
+    // The provenance record is a PREREQUISITE of this artifact, not incidental
+    // metadata that may be filtered away unchecked (rule 47). What makes these
+    // generated goldens reviewable is that they name the run that produced
+    // them; if that record is deleted the nine ids still match and every
+    // recipe still compares equal, so this gate would stay green after the
+    // thing that justifies it disappeared.
+    let reference_run = golden
+        .get("_reference_run")
+        .expect("recipes.json must carry its _reference_run provenance record");
+    for field in ["implementation", "target_arch", "golden_size"] {
+        assert!(
+            reference_run.get(field).is_some(),
+            "_reference_run must name `{field}` — a provenance record missing \
+             it cannot identify the run that produced these goldens"
+        );
+    }
+
     // Id-set equality in both directions: a fixture added without a golden
     // recipe, or a golden orphaned by a removed fixture, is a failure — a
     // one-directional check lets the artifact and the corpus drift apart.
@@ -153,7 +190,7 @@ fn full_recipe_kat_matches_committed_artifact() {
 /// are. A run exceeding θ is a finding to adjudicate, not a dial to turn.
 #[test]
 fn raster_parity_within_theta_of_goldens() {
-    for fixture in fixtures::all() {
+    for fixture in corpus() {
         let golden_path = goldens_dir().join(format!("{}_{}.png", fixture.id, GOLDEN_SIZE));
         let golden_bytes = std::fs::read(&golden_path).expect("committed golden png");
         let (gw, gh, golden_px) = decode_rgb8(&format!("golden {}", fixture.id), &golden_bytes);
@@ -198,7 +235,7 @@ fn avalanche_bit_flip_moves_pixels_by_floor() {
 
     let mut min_rms = f64::INFINITY;
     let mut min_case = String::new();
-    for fixture in fixtures::all() {
+    for fixture in corpus() {
         let base_png = render_candidate_png_from_params(
             &parameters_from_aggregate(&fixture.aggregate),
             AVALANCHE_SIZE,

@@ -94,12 +94,30 @@ fn main() {
         std::env::consts::ARCH,
         std::env::consts::OS
     );
+    // Rule 47 (`.cursor/rules/47-gate-subject-assertion.mdc`): a gate asserts
+    // its own subject exists. `for x in empty {}` leaves over_budget == 0 and
+    // this gate would print PASS having measured nothing — and in CI a green
+    // line is read as "performance is fine", which is precisely the misreading
+    // the pass-line disclaimer exists to prevent. The population is printed as
+    // well as asserted, so a reader of the log sees what was measured.
+    let corpus = fixtures::all();
+    assert!(
+        !corpus.is_empty(),
+        "fixture corpus is empty — there is nothing to measure, which is a \
+         gate failure, not a pass"
+    );
+    println!(
+        "corpus: {} fixtures x {} sizes = {} cells",
+        corpus.len(),
+        profile.targets().len(),
+        corpus.len() * profile.targets().len()
+    );
     println!();
     println!("| fixture | size | threshold ms | median ms | verdict |");
     println!("|---|---|---|---|---|");
 
     let mut over_budget = 0u32;
-    for fixture in fixtures::all() {
+    for fixture in corpus {
         let params = parameters_from_aggregate(&fixture.aggregate);
         for (size, threshold_ms) in profile.targets() {
             // Warm-up render: not timed, primes caches/allocator.

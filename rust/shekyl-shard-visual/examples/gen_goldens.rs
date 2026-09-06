@@ -42,7 +42,15 @@ fn main() {
         }),
     );
 
-    for fixture in fixtures::all() {
+    let corpus = fixtures::all();
+    // An empty corpus would emit an artifact with no fixtures, against which
+    // the consuming KAT compares empty to empty and passes (rule 47).
+    assert!(
+        !corpus.is_empty(),
+        "fixture corpus is empty; nothing to generate"
+    );
+
+    for fixture in corpus {
         let params = parameters_from_aggregate(&fixture.aggregate);
         let recipe = recipe_from_params(&params);
         let png = render_candidate_png_from_params(&params, GOLDEN_SIZE).expect("render fixture");
