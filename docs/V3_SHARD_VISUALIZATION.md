@@ -478,10 +478,15 @@ sustained-frequency check stand in for it: they establish that the
 conditions for throttling were absent, which is the claim these
 numbers support (not the stronger "no throttling occurred").
 
-**Raster parity (θ = 2.0): RMS = 0.000000 on all nine fixtures.** The
-aarch64 raster is bit-identical to the x86-committed goldens — the
-anticipated boundary-rounding jitter did not appear at all on this
-architecture pair. Recorded as measured. **This does not reopen the
+**Raster parity (θ = 2.0): RMS = 0.000000 on all nine fixtures, at
+128px.** The aarch64 raster is bit-identical to the x86-committed
+goldens — the anticipated boundary-rounding jitter did not appear at
+all on this architecture pair. **Scope: 128px only.** The falsifier is
+quantified over (platform, fixture, size) cells, and goldens exist at
+one size, so parity at 256/512/1024px is *unmeasured*, not measured
+clean; committing goldens at every size would quadruple-plus the
+repo's binary weight for sizes that share one code path. Recorded as
+measured, at the size measured. **This does not reopen the
 bit-equivalence retraction**: the reopening criterion is a
 deterministic rasterizer *pinned across both implementations*, and
 one architecture pair happening to agree is an observation, not a
@@ -493,12 +498,19 @@ dissolves, so the zero is recorded and the criterion is restated.
 
 **Avalanche (floor ≥ 20): sweep minimum RMS = 34.165** (drain_burst,
 byte 15 bit 3), identical on x86 and aarch64, over 9 fixtures × 3 bit
-positions on the pixel axis. Sensitivity holds with ~1.7× margin.
+positions (first byte, interior, last byte) on the pixel axis, at
+128px. Sensitivity holds with ~1.7× margin. Same size caveat as
+parity: bit positions and sizes outside the sweep are unmeasured.
 
 **Budget matrix: 36/36 cells over budget.** Median of 5 timed runs
 after 1 warm-up, single-threaded, full render-plus-PNG-encode path
-(`examples/budget_matrix.rs`), release profile. Per-size medians
-across the nine fixtures, against the targets:
+(`examples/budget_matrix.rs`), release profile. **The full 36-cell
+table, per fixture, with the thermal bracket and toolchain manifest,
+is committed at
+[`docs/benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt`](benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt)**
+— the summary below compresses it, and the per-fixture spread is the
+part a ruling may turn on. Per-size medians across the nine fixtures,
+against the targets:
 
 | size   | budget  | floor medians (min–max) | over by   |
 |--------|---------|-------------------------|-----------|
@@ -508,7 +520,11 @@ across the nine fixtures, against the targets:
 | 1024px | 2000 ms | 2685–12440 ms           | 1.3×–6.2× |
 
 Worst fixture: `coinbase_heavy` (12.4 s at 1024px). Best:
-`confidential_stake`, still over in every cell. For orientation only
+`confidential_stake` (2.7 s at 1024px), still over in every cell —
+a **4.6× spread across content at one size**, so render cost is
+strongly fixture-dependent, not a flat per-pixel constant. Stated as
+an observation the ruling may want; this document does not draw a
+conclusion from it. For orientation only
 (non-probative for the floor, per this section): the x86 reference
 machine also missed 512px and 1024px on 5 of 9 fixtures. **This is a
 falsification, not a gap: candidate.v1 as specified does not fit the

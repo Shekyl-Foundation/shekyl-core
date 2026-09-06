@@ -100,9 +100,12 @@
   the same artifact); two-limb avalanche on the pixel axis (sweep min
   RMS 34.165 ≥ floor 20). Floor-device results (skl-pi, Pi 4, thermal
   bracket 50.6–59.4 °C at stock 1800 MHz): raster parity measured
-  **RMS = 0.000000 on all nine fixtures** (bit-identical to the x86
-  goldens — recorded as measured, does not reopen the bit-exactness
-  retraction); budget matrix **36/36 cells over budget** (1.3×–6.2×),
+  **RMS = 0.000000 on all nine fixtures at 128px** (bit-identical to
+  the x86 goldens — recorded as measured, does not reopen the
+  bit-exactness retraction; 256/512/1024px parity is unmeasured, since
+  goldens exist at the one size); budget matrix **36/36 cells over
+  budget** (1.3×–6.2×; full per-fixture table committed under
+  `docs/benchmarks/`),
   falsifying candidate.v1's fitness on the stated minimum device at
   every tier — ruling owed among budget / candidate / floor device
   (spec *Measurements of record*). Thresholds θ = 2.0 and floor ≥ 20

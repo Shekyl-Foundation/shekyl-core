@@ -1,0 +1,65 @@
+# Shard-visual ruling B — candidate.v1 floor budget matrix
+# subject=render+PNG-encode latency vs docs/V3_SHARD_VISUALIZATION.md "Performance targets"
+# captured_utc=20260906T090000Z
+# host=skl-pi  device_row: Raspberry Pi 4 Model B Rev 1.4, aarch64, 4 cores, 8 GB
+# git_rev=655d31cb2 (rust/shekyl-shard-visual; binaries cross-compiled on x86_64, not built on device)
+# rustc=rustc 1.95.0 (59807616e 2026-04-14)  target=aarch64-unknown-linux-gnu  profile=release
+# linker=aarch64-linux-gnu-gcc  RUSTFLAGS=<unset>
+# method=median of 5 timed runs after 1 untimed warm-up, per (fixture, size) cell; single-threaded;
+#        wall clock (std::time::Instant) around the full consumer call render_candidate_png_from_params
+#        (render + PNG encode), the path a wallet actually waits on. Source: examples/budget_matrix.rs
+# thermal_start: temp_mC=50634
+# thermal_end:   temp_mC=59400 cur_freq_kHz=1600000 (post-load step-down; governor=ondemand)
+# thermal_note: firmware throttle flag UNREADABLE without root (/dev/vcio absent, no sudo on shared
+#        hardware). Substitute: temperature bracket above + scaling_cur_freq sampled UNDER load, which
+#        held 1800000 (stock max) across six samples during a render. Supported claim: the conditions
+#        for throttling were absent. NOT the stronger claim that no throttling occurred.
+# result=36/36 cells over budget. Recorded as a FALSIFICATION of candidate.v1's fitness at the stated
+#        minimum device at every tier, per the spec's own consequence. Ruling owed among budget /
+#        candidate / floor device; this capture ranks none of them.
+# x86 orientation (NON-PROBATIVE for the floor — GAP-7 measured x86:A72 per-term ratios of 3.86x-12x
+#        with one axis changing sign): same binary source on i9-11950H missed 512px and 1024px on 5 of
+#        9 fixtures, worst 3388 ms at 1024px.
+budget matrix: 5 timed runs per cell (median), 1 warm-up, single-threaded, arch=aarch64 os=linux
+
+| fixture | size | budget ms | median ms | verdict |
+|---|---|---|---|---|
+| genesis | 128px | 50 | 81 | OVER BUDGET |
+| genesis | 256px | 100 | 209 | OVER BUDGET |
+| genesis | 512px | 300 | 1029 | OVER BUDGET |
+| genesis | 1024px | 2000 | 6379 | OVER BUDGET |
+| pre_drain | 128px | 50 | 75 | OVER BUDGET |
+| pre_drain | 256px | 100 | 191 | OVER BUDGET |
+| pre_drain | 512px | 300 | 824 | OVER BUDGET |
+| pre_drain | 1024px | 2000 | 4276 | OVER BUDGET |
+| coinbase_heavy | 128px | 50 | 105 | OVER BUDGET |
+| coinbase_heavy | 256px | 100 | 385 | OVER BUDGET |
+| coinbase_heavy | 512px | 300 | 1781 | OVER BUDGET |
+| coinbase_heavy | 1024px | 2000 | 12440 | OVER BUDGET |
+| drain_burst | 128px | 50 | 135 | OVER BUDGET |
+| drain_burst | 256px | 100 | 338 | OVER BUDGET |
+| drain_burst | 512px | 300 | 1727 | OVER BUDGET |
+| drain_burst | 1024px | 2000 | 10911 | OVER BUDGET |
+| quiet | 128px | 50 | 93 | OVER BUDGET |
+| quiet | 256px | 100 | 267 | OVER BUDGET |
+| quiet | 512px | 300 | 1419 | OVER BUDGET |
+| quiet | 1024px | 2000 | 8972 | OVER BUDGET |
+| active | 128px | 50 | 164 | OVER BUDGET |
+| active | 256px | 100 | 346 | OVER BUDGET |
+| active | 512px | 300 | 1403 | OVER BUDGET |
+| active | 1024px | 2000 | 8149 | OVER BUDGET |
+| stake_heavy | 128px | 50 | 105 | OVER BUDGET |
+| stake_heavy | 256px | 100 | 282 | OVER BUDGET |
+| stake_heavy | 512px | 300 | 1447 | OVER BUDGET |
+| stake_heavy | 1024px | 2000 | 9154 | OVER BUDGET |
+| confidential_stake | 128px | 50 | 69 | OVER BUDGET |
+| confidential_stake | 256px | 100 | 155 | OVER BUDGET |
+| confidential_stake | 512px | 300 | 535 | OVER BUDGET |
+| confidential_stake | 1024px | 2000 | 2685 | OVER BUDGET |
+| whale | 128px | 50 | 96 | OVER BUDGET |
+| whale | 256px | 100 | 247 | OVER BUDGET |
+| whale | 512px | 300 | 1153 | OVER BUDGET |
+| whale | 1024px | 2000 | 7257 | OVER BUDGET |
+
+36 cell(s) over budget — on the floor device this falsifies candidate.v1's fitness at those tiers (spec consequence: drop or restrict)
+exit=1
