@@ -1978,15 +1978,20 @@ TEST(block_sync_span_lifecycle, an_incorrect_height_span_leaves_the_queue_with_i
        "again forever against a peer that is already gone";
 }
 
+// A prepare failure IS charged, and this test exists to keep it that way.
+//
 // `prepare_handle_incoming_blocks` returns false for six of OUR-state reasons
-// (`blockchain.cpp` `m_cancel` at :7025, :7035, :7076, :7188; `!waiter.wait()`
-// at :7021, :7172), so a failure there is not attributable to the sender and
-// PWD-B7 forbids charging one for it. The origin is still disconnected -- a
-// bool cannot separate our cancellation from malformed input -- but the id
-// drop must add no score of its own. Run on a CLEARNET origin, because the
-// endpoint refuses to score a non-host address at all and could not tell the
-// two apart on an anonymity zone.
-TEST(block_sync_span_lifecycle, prepare_failure_disconnects_the_origin_without_charging_it)
+// (`m_cancel`, thread-pool `!waiter.wait()`) and for about as many
+// SENDER-attributable ones -- unparseable block blob, unparseable transaction,
+// duplicate transaction, duplicate key image, empty span. The boolean cannot
+// say which fired, so declining to charge would let a peer feed malformed
+// spans forever and reconnect with no score accumulating. An earlier revision
+// of this test asserted the opposite, on the premise that the failure was
+// always ours; that premise was wrong (review of #628).
+//
+// Run on a CLEARNET origin, because the endpoint refuses to score a non-host
+// address at all and could not observe the difference on an anonymity zone.
+TEST(block_sync_span_lifecycle, prepare_failure_charges_the_origin_it_disconnects)
 {
   test_core pr_core;
   pr_core.prepare_handle_incoming_blocks_result = false;
@@ -2004,14 +2009,25 @@ TEST(block_sync_span_lifecycle, prepare_failure_disconnects_the_origin_without_c
 
   ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
 
-  // The host sweep runs on a blockable address and charges: 5 for the host,
-  // then 1 for the connection it severs. Everything charged on this path is
-  // the sweep's -- the id drop that follows contributes nothing.
+  // Two properties, and the exact number pins both at once.
+  //
+  //   6 = the sweep's 5 for the host + 1 for the connection it severs.
+  //
+  // Lower than 6 means the path stopped charging -- the bypass: a peer that
+  // reaches this failure with malformed input could then repeat it forever,
+  // reconnecting each time with nothing accumulating.
+  //
+  // Higher than 6 means the origin was billed twice for one failure, because
+  // the id-drop below the sweep also passed `add_fail`. The parse-failure
+  // sibling passes false for exactly that reason, and an earlier revision of
+  // this PR asserted 7 while claiming it was testing "not zero" -- the extra
+  // point was redundant and the rationale did not match the assertion.
   unsigned total = 0;
   for (const auto &f : endpoint.host_fails)
     total += f.second;
   EXPECT_EQ(6u, total)
-    << "the id drop must not add a host-fail score: a prepare failure is not "
-       "attributable to the sender (PWD-B7)";
+    << "the sweep must charge (an unchargeable failure is one a peer can "
+       "repeat forever) and nothing may charge a second time for it";
   EXPECT_FALSE(endpoint.dropped.empty()) << "but the origin is still disconnected";
 }
+

@@ -210,7 +210,6 @@ namespace cryptonote
     epee::math_helper::once_a_time_seconds<8> m_idle_peer_kicker;
     epee::math_helper::once_a_time_milliseconds<100> m_standby_checker;
     epee::math_helper::once_a_time_seconds<101> m_sync_search_checker;
-    epee::math_helper::once_a_time_seconds<43> m_bad_peer_checker;
     std::unordered_map<epee::net_utils::zone, unsigned int> m_max_out_peers;
     mutable epee::critical_section m_max_out_peers_lock;
     tools::PerformanceTimer m_sync_timer, m_add_timer;
@@ -234,8 +233,6 @@ namespace cryptonote
     boost::mutex m_buffer_mutex;
     double get_avg_block_size();
     boost::circular_buffer<size_t> m_avg_buffer = boost::circular_buffer<size_t>(10);
-
-    boost::mutex m_bad_peer_check_lock;
 
     template<class t_parameter>
       bool post_notify(typename t_parameter::request& arg, cryptonote_connection_context& context)

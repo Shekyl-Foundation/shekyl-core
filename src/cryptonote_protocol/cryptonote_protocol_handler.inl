@@ -1480,22 +1480,32 @@ namespace cryptonote
           if (!m_core.prepare_handle_incoming_blocks(blocks, pblocks))
           {
             LOG_ERROR_CCONTEXT("Failure in prepare_handle_incoming_blocks");
+            // Charged, deliberately -- see PWD-B7. It is tempting to treat a
+            // prepare failure as our own fault, because six of this call's
+            // `return false` sites are (`m_cancel`, and a thread-pool
+            // `!waiter.wait()`). But it returns false for about as many
+            // SENDER-attributable reasons: an unparseable block blob, an
+            // unparseable transaction, a duplicate transaction, a duplicate
+            // key image, an empty span.
+            //
+            // The boolean cannot say which fired, so a caller cannot honestly
+            // classify this failure at all -- and declining to charge would
+            // let a peer feed malformed spans forever, reconnecting each time
+            // with no score accumulating. That is the concrete argument for
+            // the typed tri-state verdict, which is owned by the P2P-3
+            // drop-rule item in FOLLOWUPS and belongs in Rust.
+            //
+            // The sweep is the charge. The id-drop below passes `add_fail`
+            // false so the origin is not billed twice for one failure, which
+            // is what the parse-failure sibling does; on an anonymity zone the
+            // question is moot, since `add_host_fail` refuses an address that
+            // names no host whoever calls it.
             drop_connections(span_origin);
             // The sweep is a no-op where the address names no host, so this
             // site drops the origin by id and clears its spans itself, exactly
             // as the two sites below already do. `flush_all_spans` is true
             // because this span is filled: until now only the sweep's own
             // `flush_spans(id, true)` erased it, and that is gone here.
-            //
-            // No host-fail score, matching the parse-failure sibling below:
-            // `prepare_handle_incoming_blocks` returns false for six OUR-STATE
-            // reasons (`blockchain.cpp` `m_cancel` at :7025, :7035, :7076,
-            // :7188; `!waiter.wait()` at :7021, :7172), so a failure here is
-            // not attributable to the sender and PWD-B7 forbids charging one.
-            // The drop itself stays: a bool cannot separate our cancellation
-            // from malformed input, and removing it would relax severing on
-            // one zone only. The typed verdict that fixes it properly is
-            // owned by the P2P-3 drop-rule item in FOLLOWUPS.
             if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
               drop_connection(context, false, true);
               return 1;
