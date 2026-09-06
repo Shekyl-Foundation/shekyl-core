@@ -961,7 +961,11 @@ input, not fixes.
     (`tx_extra::check_pqc_field_shape(n_outputs, kem_lens, leaf_lens)`, KATs
     over every vector) and reaches the daemon through
     `shekyl_tx_extra_pqc_field_shape`; the C++ `check_tx_extra_pqc_field_shape`
-    is an adapter over the daemon's OWN parser's field lengths, called from
+    is an adapter over the daemon's OWN parser's field lengths — and over the
+    rule's own words: the call writes `PqcFieldShapeError`'s `Display` into a
+    caller buffer and the daemon logs that string, so the verdict and its
+    sentence have one author (round 1 on PR #630 retired a nine-arm C++
+    formatter that had promised to say the same thing). Called from
     `check_tx_semantic` and `prevalidate_miner_transaction`. Admission was
     deliberately NOT routed through the Rust parser: it lacks three legacy
     tags the C++ parser knows (`0x03` merge-mining, still emitted by the

@@ -157,9 +157,17 @@ mod tests {
         unsafe {
             shekyl_tx_extra_pqc_field_shape(
                 n,
-                if kem.is_empty() { std::ptr::null() } else { kem.as_ptr() },
+                if kem.is_empty() {
+                    std::ptr::null()
+                } else {
+                    kem.as_ptr()
+                },
                 kem.len(),
-                if leaf.is_empty() { std::ptr::null() } else { leaf.as_ptr() },
+                if leaf.is_empty() {
+                    std::ptr::null()
+                } else {
+                    leaf.as_ptr()
+                },
                 leaf.len(),
                 msg.as_mut_ptr(),
                 msg.len(),
@@ -167,13 +175,15 @@ mod tests {
         }
     }
 
+    /// The message the call wrote, as the daemon would read it. `CStr` keeps
+    /// this portable across platforms where `c_char` is unsigned.
     fn text(msg: &[c_char]) -> String {
-        let bytes: Vec<u8> = msg
-            .iter()
-            .take_while(|&&c| c != 0)
-            .map(|&c| c as u8)
-            .collect();
-        String::from_utf8(bytes).expect("the message is UTF-8")
+        // SAFETY: every path through the call under test NUL-terminates
+        // inside the buffer, which is what this asserts about.
+        unsafe { std::ffi::CStr::from_ptr(msg.as_ptr()) }
+            .to_str()
+            .expect("the message is UTF-8")
+            .to_owned()
     }
 
     #[test]
@@ -244,7 +254,15 @@ mod tests {
         assert_eq!(text(&small), "tx_extr");
         assert_eq!(
             unsafe {
-                shekyl_tx_extra_pqc_field_shape(1, [K].as_ptr(), 1, std::ptr::null(), 0, std::ptr::null_mut(), 0)
+                shekyl_tx_extra_pqc_field_shape(
+                    1,
+                    [K].as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                )
             },
             SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_MISSING
         );
