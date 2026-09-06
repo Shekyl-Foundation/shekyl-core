@@ -60,7 +60,7 @@ which is the sequencing rationale above applied twice, not once.
 **Authority chain:** census §10 R2 + rows CEN-G6, G6b, F14b, H1, H3, M3, M4,
 M10; census §12 GAP-6/GAP-7/GAP-8; FEE_LADDER_DERIVATION.md (FL-R12′, FL-R13,
 FL-D4, FL-D5 — pinned `ccfb85c72`); `DAEMON_SUBMIT_VERDICT.md` §8 rows N3, P2,
-P3; [`CONSENSUS_C2_R1_REORG.md`](CONSENSUS_C2_R1_REORG.md) (round-shape
+P3; [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) (round-shape
 precedent); rules 00 / 06 / 16 / 19 / 20 / 21 / 22 / 42 / 50 / 60 / 71 / 76 /
 90 / 94 / 95.
 
