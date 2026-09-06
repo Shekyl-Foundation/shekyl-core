@@ -1140,6 +1140,60 @@ the budget is spent whether or not anyone is transacting. A measurement taken
 on an idle node is therefore a *complete* measurement of the sustained cost,
 not a floor for it.
 
+#### 3.1c(i) How to run it (2026-09-05)
+
+**The switch had no operator path until now.** §3.1c was written as a
+pre-registration and left the arming to whoever ran it; in fact
+`set_carrier_development` had no caller outside `tests/unit_tests/levin.cpp`,
+so a stock `shekyld` could not turn the carrier on at all. The measurement was
+unrunnable as specified, and would have been run — if at all — off an
+uncommitted local patch, which is the one shape a pre-registered measurement
+must not have: nobody else can re-run it, so the reading is an impression
+again.
+
+`shekyld --carrier-development` arms it. **HIDDEN** — parsed, never in
+`--help` — because §3.1 ruled this a development switch and visibility is
+exactly what would make it an operator setting. `check_carrier_flag_hidden.sh`
+pins the registration site and the default; moving one `add_arg` argument is
+all it would take, and it would break no test.
+
+**Three arms, because the CV-4 signature needs a comparison.** The "dummies
+count" paragraph below is right that an idle node measures the full sustained
+COST — but the third defect is about how the rate responds to load, which one
+arm cannot show:
+
+| arm | carrier | load | answers |
+| --- | --- | --- | --- |
+| A | off | idle | the p2p baseline (timed sync, pings, handshakes) |
+| B | **on** | idle | defects 1 and 2, as **B − A** |
+| C | **on** | transacting | defect 3, as **C vs B** |
+
+Subtracting A is what keeps ordinary p2p chatter out of the carrier figure
+without having to model it.
+
+**Count levin PAYLOAD, not IP bytes.** The table above lists three discrepancy
+sources — jitter (either way), unbound slots (under), discards (neither) — and
+**none of them can produce an over-reading**. So an over-reading looks
+unambiguously like defect 1. But counting at the IP layer adds TCP/IP framing
+(~2–5 %) and the levin header adds ~33 B per 20 480 B window (~0.16 %),
+manufacturing the one direction this section says is impossible. Count at the
+node→proxy sockets, at the levin layer.
+
+**Window: 2 hours per arm.** The relative standard error of the aggregate rate
+is `0.0963/√n` per channel, with four channels at a 5 s mean: ~5 min resolves a
+4 % excess, ~30 min a 1.5 %, and 2 h a 0.75 %. Defect 2 is a 50 % excess and
+shows in a minute — the length is for defect 1.
+
+**Confirm all four slots are bound for the whole window**, or the run
+under-reads by construction (CV-2, the second row of the table above) and the
+under-reading is not a finding.
+
+**Histogram the intervals, do not only divide bytes by time.** Defect 2's
+signature is sharper in the distribution than in the mean: jitter applied gives
+a flat `U[3333, 6667]` ms, jitter absent gives a spike at 3333. And defect 3
+can modulate timing without changing the total, so compare B and C on the
+distribution as well as the rate.
+
 ### 3.1d What a carrier verdict of `sent` actually asserts (2026-08-31)
 
 **It asserts transport ACCEPTANCE, not delivery, and the contracts now say

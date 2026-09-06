@@ -65,7 +65,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Release-asset manifest signing owed before the first non-RC release
   - Target: pre-genesis
 
-- **F-7 structural gate for the test-only PQC FFI exports (added
+- **F-7 structural gate for the test-only FFI exports shipped in the production archive.** The PQC test helpers (`shekyl_pqc_keypair_generate`, `shekyl_pqc_sign_multisig_participant`, added under `shekyl-crypto-pq`'s `test-utils` feature because cmake builds one `-p shekyl-ffi` archive that every binary links) ship in production through feature unification; the header and Rust docs mark them, but nothing structural keeps them out. The curve-tree replica family `shekyl_curve_tree_replica_*` (PR #623 — the core_tests generator's header-root oracle, `rust/shekyl-ffi/src/curve_tree_replica_ffi.rs`) is the same class and belongs to the same gate. Remedy: a separate test-only archive, or a cmake feature that production targets never enable, with an `nm` gate asserting the families' absence from shipped binaries. *(This line was truncated on `dev` — "(added" and nothing after — and is restored here from the Cargo.toml note that cites it.)*
   - Target: pre-genesis
 
 - **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) — [`design/WALLET_MESSAGE_SIGNING.md`](./design/WALLET_MESSAGE_SIGNING.md)
@@ -104,7 +104,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Daemon chain store (`DRS-*`) — gap-close pass landed in design.** SoT: [`docs/design/DAEMON_REDB_STORE.md`](./design/DAEMON_REDB_STORE.md)
   - Target: pre-genesis
 
-- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI; **P0b**
+- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI — **DELIVERED 2026-09-05** (49-row reconciliation registry + heading/registry gate legs; see the P0a registry in [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)); **P0b**
   - Target: pre-genesis
 
 - **DRS-BENCH — resource/privacy/IBD/pop suite (not throughput).** File
@@ -635,7 +635,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Chore #3: retire every 32-bit target — leading with the security argument (`v3.1.0-alpha.5`, landed on `chore/retire-32bit-targets`).**
   - Target: pre-genesis
 
-- **The ~42 GB/month cover-traffic budget is signed off PROVISIONALLY and has never been measured against actual usage.** Condition of the 2026-08-29 sign-off: build the carrier so a real transaction rides it, then compare actual bytes on the wire against the ceiling. Expected discrepancy and the bar for a real defect are pre-registered [`COVER_TRAFFIC_RESTORATION.md` §3.1c](design/COVER_TRAFFIC_RESTORATION.md)
+- **The ~42 GB/month cover-traffic budget is signed off PROVISIONALLY and has never been measured against actual usage.** Condition of the 2026-08-29 sign-off: build the carrier so a real transaction rides it, then compare actual bytes on the wire against the ceiling. Expected discrepancy and the bar for a real defect are pre-registered [`COVER_TRAFFIC_RESTORATION.md` §3.1c](design/COVER_TRAFFIC_RESTORATION.md). **RUNNABLE as of 2026-09-05** — `shekyld --carrier-development` (hidden) arms the carrier, which nothing outside the gtests could do before; the three-arm method, the count-at-levin-payload trap and the 2 h window are at §3.1c(i). Still unrun.
   - Target: pre-genesis
 
 - **Relay: a transaction mined while the carrier holds it is still SENT — every remaining window, up to ~100 KiB.** The verdict-time `pool_has_tx` gate stops the record and the F-10 observation, but the verdict arrives only on completion, so a transaction mined before its first tick emits all of its windows: `MAX_FRAGMENTS` (5) × `WINDOW_BYTES` (20 480). An earlier entry said "one wasted window", understating it by the fragment cap. Named blocker: cancelling earlier needs an enqueue-cancellation API `NoiseQueues` does not have, and `unbind` clears a whole channel, so cancelling one message would discard its channel-mates. Bounded per transaction rather than per epoch, and it is cover carrying something peers already hold. Reopen if another caller needs cancellation, or if the §3.1c bandwidth measurement shows mined-while-queued traffic is a material share [`COVER_TRAFFIC_RESTORATION.md` §3.1e](design/COVER_TRAFFIC_RESTORATION.md)
@@ -1003,9 +1003,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Stage 5 — `ArchivalEngine` native actor build (simulation-
   - Target: pre-genesis
 
-- **[Shard-visual ruling B](V3_SHARD_VISUALIZATION.md) — candidate.v1 empirical closure + the determinism bar.** Owes the
-  mobile-budget/continuity review of ruling A's rewired aesthetics, ONE determinism bar (the spec holds
-  two incompatible claims), a property-axis oracle (pixels/perceptual metric), and Rust/Python parity pinned or retracted.
+- **[Shard-visual ruling B — measurement half](V3_SHARD_VISUALIZATION.md) (ratified 2026-09-05; spec § landed).**
+  Remaining: designated-reference goldens, full-recipe per-fixture KATs, two-limb avalanche test, skl-pi budget
+  matrix. Held by name: build-slowdown directive (P2P focus) + skl-pi occupancy; device slot via coordination.
   - Target: pre-genesis
 
 - **Transport selection for the staker-archival path (gate 6 /

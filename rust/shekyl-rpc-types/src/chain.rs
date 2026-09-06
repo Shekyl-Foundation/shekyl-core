@@ -42,7 +42,25 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.26: `get_info` gains `following_degraded`
+/// `CORE_RPC_VERSION_MINOR`. 3.27: three of the header methods change shape
+/// (RK-5b). `get_block_header_by_hash` answers **per element** — a
+/// `block_headers` array of `{hash, block_header?}` slots rather than a bare
+/// header array — and drops the singular `hash` request field, whose only
+/// effect beside `hashes` was to slip one request past the restricted cap;
+/// `hard_fork_info` reports `queried_version` and `active_version` in place
+/// of one `version` that meant whichever the request had implied; and
+/// `get_fee_estimate` drops the `fee` scalar, which the handler set to
+/// `fees[0]` (`core_rpc_server.cpp`, `on_get_base_fee_estimate`) and so
+/// carried no information the tiers did not. A changed member is a wire
+/// change, so it bumps this; the deltas are pinned test-by-test against the
+/// captured `_v1` vectors in `rust/shekyl-rpc-types/tests/vectors/rpc/`.
+/// **RK-5b drafted this as 3.26 and took 3.27 on merge**: `following_degraded`
+/// landed on `dev` first and claimed 26 while this branch was in flight, and
+/// the two edits agreed *character for character* on the constant's own line,
+/// so git merged it silently — the conflict appeared only in the prose above
+/// it. A number that two independent changes can both write is not protected
+/// by the fact that changing it is deliberate.
+/// 3.26: `get_info` gains `following_degraded`
 /// (C2-R1b F-1(a): sticky watermark-refusal flag; migrates into RK-5c's
 /// node-state hub). 3.25: `get_transactions` drops `txs_as_hex` and
 /// `txs_as_json` — the handler filled them "in case an old wallet asks" and
@@ -59,7 +77,7 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `get_public_nodes` deleted, advertised `rpc_port` / `rpc_credits_per_hash`
 /// dropped from the peer readouts (PR #533). A wire change bumps this and is
 /// recorded in the design doc; the KV cutover itself never does.
-pub const CORE_RPC_VERSION_MINOR: u32 = 26;
+pub const CORE_RPC_VERSION_MINOR: u32 = 27;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -103,10 +121,32 @@ pub const CORE_RPC_ERROR_CODE_WRONG_PARAM: i64 = -1;
 /// JSON-RPC error code for a height at or past the chain tip
 /// (`CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT`).
 pub const CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT: i64 = -2;
+
+/// JSON-RPC error code for a request the restricted listener declines
+/// (`CORE_RPC_ERROR_CODE_RESTRICTED`) — a cap exceeded, or a privileged field
+/// asked for. **A refusal, never a silently emptied field**: the C++ answered
+/// `fill_pow_hash` under restriction with an empty string and status OK,
+/// reporting success about a question it had declined.
+pub const CORE_RPC_ERROR_CODE_RESTRICTED: i64 = -19;
 /// JSON-RPC error code for a daemon-side failure the method has a contract
 /// for (`CORE_RPC_ERROR_CODE_INTERNAL_ERROR`) — e.g. a store that reports a
 /// height it cannot produce the block for.
 pub const CORE_RPC_ERROR_CODE_INTERNAL_ERROR: i64 = -5;
+
+/// JSON-RPC error code for a node that is not synchronised
+/// (`CORE_RPC_ERROR_CODE_CORE_BUSY`, `core_rpc_server_error_codes.h:41`).
+///
+/// **A refusal, where the C++ answered with a status and a zeroed payload.**
+/// `CHECK_CORE_READY()` set `status = BUSY` and returned success, leaving the
+/// reply's `block_header` default-constructed — so a client that read the
+/// header without checking the status got a block at height 0 with a zero
+/// hash. That is not hypothetical: `shekyl-rpc-client`'s
+/// `get_hardfork_version` reads `block_header.major_version` straight
+/// through, and against an unsynchronised C++ daemon it silently returned
+/// version 0. Refusing is the ruling this slice already applied twice
+/// (`pow_hash_or_refuse`, and `5b0c32f51`'s "loud, never the degrade arm"):
+/// a method that declines to answer must not report success.
+pub const CORE_RPC_ERROR_CODE_CORE_BUSY: i64 = -9;
 
 /// The REST error envelope a natively-served endpoint answers with when it
 /// cannot produce its reply (HTTP 500): `status` is never `OK`, and `error`
@@ -324,14 +364,26 @@ mod tests {
 
     #[test]
     fn core_rpc_version_packs_like_the_cpp_macro() {
-        // MAKE_CORE_RPC_VERSION(3, 26) == 0x0003_001A == 196634 (3.26:
-        // `get_info.following_degraded`, C2-R1b F-1(a); 3.25 was the RK-4c
+        // MAKE_CORE_RPC_VERSION(3, 27) == 0x0003_001B == 196635 (3.27:
+        // RK-5b's three header-method shape changes; 3.26 was
+        // `get_info.following_degraded`, C2-R1b F-1(a); 3.25 the RK-4c
         // `txs_as_hex`/`txs_as_json` removal). Captured vectors are never
         // edited to follow a constant — each bump mints a sibling vector —
         // so `assert_version_parity` compares every other field against
         // them and this pins the constant itself.
-        assert_eq!(CORE_RPC_VERSION, 196_634);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 26);
+        //
+        // Four spellings, and the last two are why. The literal catches a
+        // bump that forgot this test; the packing expression catches a bump
+        // that edited the literal without the fields it is made of; and the
+        // two component assertions catch what actually happened between 3.26
+        // and 3.27 — **two branches wrote the same new value for different
+        // reasons and git merged the line clean**, because a one-line change
+        // from 25 to 26 is textually identical whoever makes it. The minor
+        // number is not a lock.
+        assert_eq!(CORE_RPC_VERSION, 196_635);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 27);
+        assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 27);
     }
 
     #[test]

@@ -372,6 +372,12 @@ the claim-era C++ wire** (PR-4 retirement); staker inflow now persists
 through `archival_budget_accrual` → `archival_budget` (below). The coverage
 gate refuses a section for a table that is no longer in the live list.
 
+Three staking scalars live in the [`properties`](#properties) table, not in
+a staking table — `staker_pool_balance`, `total_bonded_atomic`,
+`total_burned`; see its **Known entries** rows. (This section used to carry
+a second `properties`-titled heading summarizing them; one table, one
+section — P0a, 2026-09-05.)
+
 ### `archival_serve_credit`
 
 Affirmative serve-credit pass per `(P_id, shard_id, settlement_epoch, block)`
@@ -781,16 +787,6 @@ a row parked here by a pop would otherwise leak for the life of the
 database. A block moving between main and alt carries its witness
 explicitly through `block_connect_supplement`.
 
-### `properties` — Staking keys
-
-The `properties` table (see below) stores these staking-related entries:
-
-| Key string | Value type | Description |
-|---|---|---|
-| `staker_pool_balance` | `uint64_t` (8 bytes) | Running balance of the staker reward pool. Incremented by emission + fee pool inflow per block (when stakers exist), decremented by successful claims. |
-| `total_bonded_atomic` | `uint64_t` (8 bytes) | Global audit scalar: sum of per-`P` `bonded_total_atomic` (gate-4 §4.5). Credited on JoinMarket `bond_credit`; debited on Unbond/slash connect paths. |
-| `total_burned` | `uint64_t` (8 bytes) | Cumulative amount of SHEKYL destroyed (zero-staker burns + explicit burns). |
-
 ---
 
 ## FCMP++ Curve Tree
@@ -1114,9 +1110,9 @@ General key-value store for database-level metadata.
 | `"pruning_seed"` (NUL-terminated) | `uint32_t` | Blockchain pruning seed |
 | `"tx_prune_next_block"` (NUL-terminated) | `uint64_t` | Next block height for tx pruning |
 | `"last_pruned_tx_data_height"` (NUL-terminated) | `uint64_t` | Height of last pruned tx data |
-| `"staker_pool_balance"` (no NUL) | `uint64_t` | Running staker reward pool balance |
-| `"total_bonded_atomic"` (no NUL) | `uint64_t` | Global bonded collateral audit scalar (gate-4 §4.5) |
-| `"total_burned"` (no NUL) | `uint64_t` | Cumulative destroyed SHEKYL |
+| `"staker_pool_balance"` (no NUL) | `uint64_t` | Running balance of the staker reward pool. Incremented by emission + fee pool inflow per block (when stakers exist), decremented by successful claims |
+| `"total_bonded_atomic"` (no NUL) | `uint64_t` | Global audit scalar: sum of per-`P` `bonded_total_atomic` (gate-4 §4.5). Credited on JoinMarket `bond_credit`; debited on Unbond/slash connect paths |
+| `"total_burned"` (no NUL) | `uint64_t` | Cumulative amount of SHEKYL destroyed (zero-staker burns + explicit burns) |
 | `"archival_frozen_shard_count"` (no NUL) | `uint64_t` | Pop-symmetric `archival_shard_segment` row counter — the M1 gate operand's O(1) backing store (V8; `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §4.4). +1 in `put_archival_shard_segment`, −1 per deleted row in `revert_archival_segment_freezes`; mutation surface CI-pinned |
 
 | Property | Value |

@@ -4,6 +4,36 @@
 
 ### Fixed
 
+- **Consensus: the block header's `curve_tree_root` is now checked at
+  admission against the tip root, before the block is added (CEN-B5, S1).**
+  `handle_block_to_main_chain` compared the header against the tree root read
+  *after* `add_block` — the post-drain state — while `create_block_template`
+  fills the header from the root *before* it, the state at the block's own
+  height that the per-height record, the wallet client and the CT-2 KAT all
+  name. The two agree only when nothing matures at the block, so every
+  non-FAKECHAIN chain would have rejected block 60 (the genesis coinbase
+  matures there) and halted; the FAKECHAIN skip around the check hid it from
+  every Blockchain-level test and every `--regtest` run. The compare now runs
+  with the other header checks, after proof-of-work and before the miner-tx
+  prevalidation, and a mismatch rejects the block outright — the post-add
+  compare with its connect-then-pop arm is deleted. Observed red → green by
+  the first non-FAKECHAIN Blockchain fixture in the tree
+  (`curve_tree_header_root_check.cpp`: TESTNET, fixed difficulty 1, real
+  LMDB, block 60 rejected before and connected after). The FAKECHAIN skip
+  around the check is deleted: the core_tests generator now computes real
+  roots by replaying its own recorded chain through the Rust curve-tree
+  client, exposed to C++ as `shekyl_curve_tree_replica_*` in `shekyl-ffi`
+  (the client's parity with the daemon's store was KAT-pinned; every
+  generated block that connects is now a live cross-implementation check at
+  every height), and the fake-DB test doubles report the empty-tree sentinel
+  instead of zeros. `CurveTreeClient::next_block_root` — the one-past-tip
+  read a header producer needs — is added and pinned to the recon fixture.
+  `shekyl-ffi` gains the `shekyl-curve-tree` dependency, which brings `redb`
+  into the daemon image ahead of the daemon redb store that needs it anyway.
+  `FCMP_PLUS_PLUS.md` §5 now states the state the header commits to.
+  Register: CEN-B5 stays DIVERGENT until re-reviewed at the merged sha;
+  both its divergences are fixed.
+
 - **Consensus hardening: the curve-tree leaf collector aborts instead of
   silently dropping an output (CEN-L11/L12).** Three arms in the DB-side leaf
   collector discarded an output on a `continue` or an unchecked construct
@@ -61,6 +91,45 @@
   the FCMP++ spend builder.
 
 ### Added
+
+- **Shard-visual ruling B (spec half): the layered determinism bar,
+  pre-registered thresholds, and the sensitivity correction.** Ratified
+  2026-09-05. Hash-derived structure is bit-exact forever (pinned by
+  the twin Rust/Python recipe KATs); the painted raster is held to a
+  pre-registered perceptual metric (RGB-RMS ≤ θ = 2.0, decoded pixels
+  never PNG bytes), fixed before any cross-platform measurement
+  exists. The spec's bit-equivalence prose is retracted in place with
+  its reopening criterion (a deterministic rasterizer pinned across
+  both implementations). The reorg-continuity claim is corrected, not
+  softened: it was wrong as written and in direct opposition to the
+  integrity check's purpose — the ruled property is sensitivity, with
+  a two-limb avalanche falsifier (floor ≥ 20) whose second limb is
+  what makes it a test. The floor-device budget matrix, goldens, and
+  tests are the held measurement half (FOLLOWUPS). Also restores the
+  candidate-compositor § heading eaten by an earlier edit anchor.
+
+- **DRS-P0a — LMDB table reconciliation: the pin→HEAD delta is measured,
+  registered, and gate-pinned.** The DRS design doc's Round-2 substrate
+  figures (46 tables, seven undocumented, two phantoms) had aged into
+  today's 49; P0a closes the delta by **set difference, not history
+  search** — births = 3 (both attestation-witness tables and
+  `archival_settlement`, each with owning commit and the schema
+  version-ladder as independent witness), **deaths = ∅ measured**, not
+  assumed by the total adding up. A 49-row reconciliation registry in
+  [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) records per-table
+  disposition (39 documented-at-pin + 7 since-documented + 3 born-since),
+  the pin-era doc closure (41 claimed = 39 real + 2 phantoms), and the
+  provenance trap that bit twice: a pickaxe on a bare name measures the
+  identifier *family* (`archival_settlement_epoch_at_height`, pre-pin),
+  the quoted literal measures the *table* (post-pin). The schema doc's
+  duplicate `properties`-titled heading — present since before the pin
+  and invisible to the property-row gate's set() dedup — is merged into
+  the one `properties` section, and `check_lmdb_schema_coverage.py`
+  gains the legs that would have seen all of it: section headings as a
+  duplicate-free bijection with `SHEKYL_LMDB_TABLES`, and the registry's
+  rows and stated count pinned to the same macro. Every new failure path
+  observed red before landing. DEL-005 closed; stale DRS figure sites
+  corrected with records-was pins kept.
 
 - **Shard-visual ruling A: parameter admissibility closed, with a
   pre-registered criterion and typed enforcement.** The spec's
@@ -224,11 +293,13 @@
   ran: **99 CHECKED-CONFORMANT, 1 DIVERGENT, 2 failed closed** (the divergent
   row is CEN-B5's rule-71 FAKECHAIN skip, which census R9 owns). CEN-L11 with
   CEN-L12 coupled were fixed by PR #609 and promoted at its merged sha. The
-  bucket-1/2 set has since grown to **111** — C2-R1b promoted nine rows on
-  2026-09-03 — and those nine are UNREVIEWED until reviewed. **Both S-graded findings ran the
+  bucket-1/2 set has since grown to **121** — C2-R1b promoted nine rows on
+  2026-09-03 and C2-R1c ten more on 2026-09-04 — and those nineteen are
+  UNREVIEWED until reviewed. **Both S-graded findings ran the
   full arc — found, ruled FIX, fixed, merged, re-reviewed:** the S0 (CEN-M8,
   with CEN-G4/J26) by PR #602 and the S1 (CEN-D2 with CEN-D1) by PR #604, so
-  no S-graded divergence remains and the register no longer gates DRS-0. Each
+  no S-graded divergence remained — until 2026-09-04, when CEN-B5's
+  header-check timing (S1, see the Changed entry) reopened the DRS-0 gate. Each
   row carries
   sha-pinned, arm-walked evidence and 15 routed REWRITE-NOTEs for the rebuild. The S0:
   **CEN-M8** — block connect's FCMP++ proof-skip *was* **presence-gated** where
@@ -470,6 +541,99 @@
   prune tool derives its table set from the schema source of truth.
 
 ### Changed
+
+- **Register: CEN-I12 re-reviewed at the merged reconciliation and promoted
+  CHECKED-CONFORMANT — 100 / 1 / 1 over P0f's 102-row snapshot.** At
+  `667817d47` all three FCMP++ verifier arms read the node's own per-height
+  record under the reference block's height, never the header, and that
+  record is the ruled state (the tree at chain height `ref_height`). The
+  verdict rests on the state definition, not the placeholder rationale slice
+  7 used. CEN-L8 is the one row still failed closed; CEN-B5 the one DIVERGENT.
+  The per-height root record is recorded as a spec-level requirement on any
+  store the rewrite uses. Register-only; no code.
+
+- **Daemon RPC: `get_block_header_by_hash`, `hard_fork_info` and
+  `get_fee_estimate` change shape; `CORE_RPC_VERSION` is now 3.27 (RK-5b).**
+  Those three plus `get_last_block_header` and `get_block_headers_range` (and
+  the `getlastblockheader` / `getblockheaderbyhash` / `getblockheadersrange`
+  aliases) are served natively from Rust. **The last two keep their response
+  shapes** — a client parses them exactly as before, and only their refusals
+  changed. **Operator impact — three replies a client parses differently.** `get_block_header_by_hash` answers **per
+  element**: `block_headers` is now an array of `{hash, block_header?}` slots
+  rather than a bare header array, so a client learns *which* hash was
+  unknown instead of receiving zero headers and an error string, and one
+  unknown hash no longer discards the other nine hundred; the request's
+  singular `hash` field is gone (it had no in-tree caller, and its only
+  effect beside `hashes` was to slip one lookup past the restricted cap of
+  1000). `hard_fork_info` splits the reply's single
+  `version` in two, and the mapping is exact: **`active_version` is that
+  field renamed** — the deleted handler always filled it from
+  `get_current_hard_fork_version()`, whatever the request asked about — and
+  **`queried_version` is new**, naming the version the `window` / `votes` /
+  `threshold` fields beside it actually describe. A client reading `version`
+  today wants `active_version`; nothing it could read before told it what the
+  voting counts were counting. `get_fee_estimate` drops the `fee` scalar,
+  which the C++ handler set to `fees[0]` and which therefore carried nothing
+  the tier array did not. Also corrected while porting: the restricted
+  header-range cap bounded `end - start` rather than the count, so a
+  restricted caller could obtain 1001 headers against a cap of 1000; and a
+  restricted caller asking for `fill_pow_hash` is now refused rather than
+  handed an empty field with status OK. `get_block_headers_range` refuses a
+  request that names no range (absent `params` or `{}`) instead of answering
+  for block 0 as the C++ did — a client that omits its heights is told it
+  omitted them — and bounds both endpoints against the chain tip before
+  reading anything, which the C++ also did and the first port did not.
+  `get_last_block_header` **refuses with `CORE_BUSY` (-9) on an
+  unsynchronized node**, where the C++ answered `status: BUSY` with a
+  zero-filled header — a shape that let a client reading the header without
+  checking the status report a fork version of 0. `hard_fork_info` no longer
+  accepts `version: 0`: it was the C++'s spelling of "absent", and omitting
+  the field is now the only way to ask about the next fork.
+
+- **The daemon console reads the DAA block target from the build, not from
+  the daemon it is talking to.** `T` is genesis-frozen and single-sourced
+  through `config/consensus_constants.json`, which generates both the C++
+  header and the Rust constant. The console previously computed its
+  block-statistics and hash-rate figures from `/get_info`'s `target`, which
+  gave one constant two sources — and over a remote connection, a source the
+  daemon controls. **Operator impact:** `shekyld status`,
+  `print_blockchain_dynamic_stats` and `alt_chain_info` now print a warning
+  when the daemon reports a different target, naming both values, and compute
+  from this build's. A daemon reporting a different `T` is running different
+  consensus rules, so this most likely means a mismatched binary or a
+  different chain.
+
+- **FCMP++ spec: the membership anchor is a state property, not a header
+  read (CEN-I12 reconciled).** `FCMP_PLUS_PLUS.md` §7 step 2's prose said the
+  verifier reads the reference block's header `curve_tree_root`; that was the
+  pre-2026-04-13 code, replaced by the per-height root record (`292c00aff7`)
+  without the prose following. Ruled: the anchor is the curve-tree state at
+  chain height `ref_height` — after the reference block's parent connects,
+  before its own drain (boundary corrected on review) — with the header
+  field and the per-height record as its two witnesses; the verifier reads
+  its own record, the prover reads the header. The in-code FAKECHAIN
+  comment is a consequence, not the rationale. Step 1's rationale also drops
+  the retired claim-era staked-maturity arm (CEN-L12). Found-not-ruled: step
+  2b/2c's depth pseudocode is split the same way (routed to CEN-I13). The
+  register's CEN-I12 row stayed failed-closed until re-reviewed at the merged
+  sha — promoted 2026-09-05, see the entry above.
+
+- **CEN-B5 has a second, live divergence — the post-connect header-root
+  check compares the wrong state (S1; found, graded and routed — not fixed
+  here).** `handle_block_to_main_chain` compares the header `curve_tree_root`
+  against the root read *after* `add_block`, but `create_block_template`
+  fills the header from the root *before* the add — the state at chain
+  height N that the per-height record, the wallet client and the CT-2 KAT
+  all name. The operands differ at every block where a leaf drains, observed
+  on real LMDB by a new keying pin in `archival_substrate_lmdb.cpp`; the
+  genesis coinbase drains when block 60 connects, so mainnet/testnet/stagenet
+  would reject block 60 and halt (derived; no non-FAKECHAIN fixture exists to
+  observe it). The rule-71 skip R9 owns is the cause, not the context:
+  nettype gating the check left every test and every `--regtest` run blind
+  to it. Fix-or-accept is Rick's (DRS
+  §7.2); FOLLOWUPS carries the sketch. The "no S-graded divergence remains"
+  claim is withdrawn at every surface it reached; DRS-0 is gated again.
+  *(Fixed 2026-09-05 — see the CEN-B5 entry under Fixed above.)*
 
 - **Consensus: the block-timestamp rule is ratified and single-sentence
   (C2-R3, `docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md`, ratified

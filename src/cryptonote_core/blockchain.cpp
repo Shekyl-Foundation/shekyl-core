@@ -4212,8 +4212,13 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
         *pmax_used_block_height = ref_height;
 
-        // Step 2: Curve tree root lookup (from per-height root table, not block header,
-        // because FAKECHAIN block headers carry placeholder roots from test_generator)
+        // Step 2: the membership anchor is the curve-tree state at chain height
+        // ref_height -- after the reference block's parent connected, before its
+        // own drain (CEN-I12). The verifier reads its own per-height record of
+        // that state, never the block header: the header is the block's
+        // attestation of the same value, bound to the record by the CEN-B5
+        // admission check, and a verifier that trusted it would be trusting the
+        // block it is validating.
         std::array<uint8_t, 32> tree_root = m_db->get_curve_tree_root_at_height(ref_height);
 
         MDEBUG("FCMP++ verify: ref_height=" << ref_height
@@ -4477,17 +4482,6 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
   }
 
   get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, base_reward, Mnw, Mlw_penalty_free_zone_for_wallet, fees);
-}
-
-//------------------------------------------------------------------
-uint64_t Blockchain::get_dynamic_base_fee_estimate(uint64_t grace_blocks) const
-{
-  if (grace_blocks >= CRYPTONOTE_REWARD_BLOCKS_WINDOW)
-    grace_blocks = CRYPTONOTE_REWARD_BLOCKS_WINDOW - 1;
-
-  std::vector<uint64_t> fees;
-  get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, fees);
-  return fees[0];
 }
 
 //------------------------------------------------------------------
@@ -5870,6 +5864,38 @@ leave:
 
   TIME_MEASURE_START(t3);
 
+  // CEN-B5: the header's curve_tree_root commits to the tree state AT this
+  // block's height -- the state after its parent connected and before this
+  // block's own drain (the template fills it from get_curve_tree_root() at
+  // that same point; the per-height record stores the same value under key
+  // blockchain_height at connect). The prev_id check above guarantees the tip
+  // is this block's parent, so the current tip root IS that state. Compare
+  // here, at admission, before add_block runs the drain: a mismatch is a
+  // rejected block, never a connected-then-popped one. (Comparing after
+  // add_block read the post-drain root and rejected every block that matures
+  // leaves -- the first one at height CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW,
+  // where the genesis coinbase matures, on every real nettype;
+  // tests/unit_tests/curve_tree_header_root_check.cpp.)
+  //
+  // Runs on every nettype, FAKECHAIN included (rule 71). The test generator
+  // computes real roots through the Rust curve-tree client
+  // (shekyl_curve_tree_replica_*), so a generated header that disagrees with
+  // this store is a real disagreement between the two implementations, and
+  // this is where it is caught.
+  {
+    const auto tip_root = m_db->get_curve_tree_root();
+    crypto::hash expected_root;
+    static_assert(sizeof(expected_root) == tip_root.size());
+    std::memcpy(&expected_root, tip_root.data(), tip_root.size());
+    if (bl.curve_tree_root != expected_root)
+    {
+      MERROR_VER("Block with id: " << id << " curve_tree_root mismatch at height " << blockchain_height
+        << ": header " << bl.curve_tree_root << ", chain tip " << expected_root);
+      bvc.m_verifivation_failed = true;
+      goto leave;
+    }
+  }
+
   // sanity check basic miner tx properties;
   if(!prevalidate_miner_transaction(bl, blockchain_height, hf_version))
   {
@@ -6407,23 +6433,6 @@ leave:
   }
 
   TIME_MEASURE_FINISH(addblock);
-
-  if (new_height > 0 && m_nettype != FAKECHAIN)
-  {
-    const auto computed_root = m_db->get_curve_tree_root();
-    crypto::hash expected_root;
-    static_assert(sizeof(expected_root) == computed_root.size());
-    std::memcpy(&expected_root, computed_root.data(), computed_root.size());
-    if (bl.curve_tree_root != expected_root)
-    {
-      MERROR_VER("Block " << id << " curve_tree_root mismatch: header "
-        << bl.curve_tree_root << ", computed " << expected_root);
-      bvc.m_verifivation_failed = true;
-      pop_block_from_blockchain();
-      return_txs_to_pool();
-      return false;
-    }
-  }
 
   // do this after updating the hard fork state since the weight limit may change due to fork
   if (!update_next_cumulative_weight_limit())

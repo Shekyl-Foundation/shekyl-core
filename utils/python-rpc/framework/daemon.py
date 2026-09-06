@@ -124,27 +124,32 @@ class Daemon(object):
         return self.rpc.send_json_rpc_request(getblock)
     get_block = getblock
 
-    def getlastblockheader(self, client = ""):
+    def getlastblockheader(self, fill_pow_hash = False):
+        params = {}
+        if fill_pow_hash:
+            params['fill_pow_hash'] = True
         getlastblockheader = {
             'method': 'getlastblockheader',
-            'params': {
-                'client': client,
-            },
-            'jsonrpc': '2.0', 
+            'params': params,
+            'jsonrpc': '2.0',
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(getlastblockheader)
     get_last_block_header = getlastblockheader
 
-    def getblockheaderbyhash(self, hash = "", hashes = [], client = ""):
+    def getblockheaderbyhash(self, hash = "", hashes = None, fill_pow_hash = False):
+        # The wire dropped the singular `hash` in 3.27; keep the Python
+        # argument as a convenience that becomes `hashes`.
+        requested = list(hashes) if hashes else []
+        if hash:
+            requested = [hash] + requested
+        params = {'hashes': requested}
+        if fill_pow_hash:
+            params['fill_pow_hash'] = True
         getblockheaderbyhash = {
             'method': 'getblockheaderbyhash',
-            'params': {
-                'client': client,
-                'hash': hash,
-                'hashes': hashes,
-            },
-            'jsonrpc': '2.0', 
+            'params': params,
+            'jsonrpc': '2.0',
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(getblockheaderbyhash)
@@ -163,16 +168,17 @@ class Daemon(object):
         return self.rpc.send_json_rpc_request(getblockheaderbyheight)
     get_block_header_by_height = getblockheaderbyheight
 
-    def getblockheadersrange(self, start_height, end_height, fill_pow_hash = False, client = ""):
+    def getblockheadersrange(self, start_height, end_height, fill_pow_hash = False):
+        params = {
+            'start_height': start_height,
+            'end_height': end_height,
+        }
+        if fill_pow_hash:
+            params['fill_pow_hash'] = True
         getblockheadersrange = {
             'method': 'getblockheadersrange',
-            'params': {
-                'client': client,
-                'start_height': start_height,
-                'end_height': end_height,
-                'fill_pow_hash': fill_pow_hash,
-            },
-            'jsonrpc': '2.0', 
+            'params': params,
+            'jsonrpc': '2.0',
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(getblockheadersrange)
@@ -199,15 +205,16 @@ class Daemon(object):
         return self.rpc.send_json_rpc_request(get_info)
     getinfo = get_info
 
-    def hard_fork_info(self, client = ""):
+    def hard_fork_info(self, version = None):
+        params = {}
+        if version is not None:
+            params['version'] = version
         hard_fork_info = {
             'method': 'hard_fork_info',
-            'params': {
-                'client': client,
-            },
+            'params': params,
             'jsonrpc': '2.0',
             'id': '0'
-        }    
+        }
         return self.rpc.send_json_rpc_request(hard_fork_info)
 
     def generateblocks(self, address, blocks=1, prev_block = "", starting_nonce = 0):

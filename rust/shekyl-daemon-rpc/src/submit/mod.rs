@@ -45,29 +45,6 @@ pub mod gate;
 pub mod phase_a;
 pub mod verifier;
 pub mod verify;
-
-/// FCMP++ reference-block age-window constants, generated from the JSON
-/// authority (`config/consensus_constants.json`) by `build.rs` — the same
-/// source that emits the C++ `shekyl/consensus_constants_generated.h`, so
-/// the engine's Phase-C arithmetic cannot drift from the consensus check.
-pub mod consensus {
-    include!(concat!(env!("OUT_DIR"), "/submit_consensus_constants.rs"));
-
-    // Decision-14 sentinels, mirroring the static_asserts in
-    // src/cryptonote_config.h: a JSON bump must be a reviewed consensus
-    // change, not a silent parameter drift.
-    const _: () = assert!(
-        FCMP_REFERENCE_BLOCK_MIN_AGE == 5,
-        "FCMP_REFERENCE_BLOCK_MIN_AGE diverged from Decision 14 baseline (5); \
-         review consensus implications before updating the sentinel"
-    );
-    const _: () = assert!(
-        FCMP_REFERENCE_BLOCK_MAX_AGE == 100,
-        "FCMP_REFERENCE_BLOCK_MAX_AGE diverged from baseline (100); \
-         review consensus implications before updating the sentinel"
-    );
-}
-
 pub use certificate::VerificationCertificate;
 pub use engine::{EngineFault, SubmitCaller, SubmitEngine};
 pub use facts::{

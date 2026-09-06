@@ -46,6 +46,13 @@ on:
       # workflow — that drift arriving with no docs edit is exactly the
       # case the gate exists to catch (rule 47: a gate that cannot see its
       # subject change is not a gate).
+      #
+      # NOTE (P0a, 2026-09-05): this workflow is not only link checking —
+      # check_lmdb_schema_coverage.py's subjects ride the paths above:
+      # docs/LMDB_SCHEMA.md and docs/design/DAEMON_REDB_STORE.md (the P0a
+      # reconciliation registry) via "docs/**", and the X-macro via the
+      # db_lmdb.cpp entry below. Pruning or narrowing these paths in a
+      # link-checker restructure silently unwires that gate.
       - "src/blockchain_db/lmdb/db_lmdb.cpp"
       - ".github/workflows/doc-links.yml"
 
