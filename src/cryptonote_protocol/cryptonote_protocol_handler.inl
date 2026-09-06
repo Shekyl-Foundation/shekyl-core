@@ -1481,12 +1481,15 @@ namespace cryptonote
           {
             LOG_ERROR_CCONTEXT("Failure in prepare_handle_incoming_blocks");
             // Not attributable, so nothing here charges the peer:
-            // `prepare_handle_incoming_blocks` returns false for six OUR-STATE
-            // reasons (`blockchain.cpp` `m_cancel` at :7025, :7035, :7076,
-            // :7188; `!waiter.wait()` at :7021, :7172). A score is an
-            // accusation and none is supportable, which PWD-B7 forbids -- so
-            // the sweep is told not to charge, and the id-drop below does not
-            // either.
+            // `prepare_handle_incoming_blocks` returns false on our own
+            // cancellation (`m_cancel`) and on a thread-pool wait failure
+            // (`!waiter.wait()`) -- neither describes the sender's input. A
+            // score is an accusation and none is supportable, which PWD-B7
+            // forbids, so the sweep is told not to charge and the id-drop
+            // below does not either. (Grep those two names in
+            // `Blockchain::prepare_handle_incoming_blocks` for the sites; line
+            // numbers are deliberately absent because they rot, and PWD-B7's
+            // row carries the enumeration.)
             //
             // The severing itself stays: a bool cannot separate our
             // cancellation from malformed input, and removing it would relax
