@@ -162,12 +162,18 @@
   transcribed for the Rust store: A-2 height bases with the F-B5b
   convert-don't-unify rationale verbatim, A-4's load-bearing revert
   partial order, A-6's guard census (22× `std::runtime_error` vs 2×
-  `DB_ERROR_TXN_START` for one precondition). Findings DRS-W1…DRS-W8 recorded —
+  `DB_ERROR_TXN_START` for one precondition). Findings DRS-W1…DRS-W9 recorded —
   none S-graded, no C++ touched — including `txs` (zero write or read
   sites; inherited-dead candidate) and `hf_starting_heights` (deleted at
   every writable `open()`, structurally absent at runtime), and the post-pop
   burn pair living outside the pop funnel — which `blockchain_import
-  --pop-blocks` reaches today by popping straight through the DB. The dead
+  --pop-blocks` reaches today by popping straight through the DB — and
+  **DRS-W9**, the connect side of the same architectural fact: the burn
+  pair also runs after the try whose catches set `m_batch_success`, so an
+  LMDB write failure between the row and its aggregate commits the block
+  and the row without the total. That one falsified a PASS this audit had
+  published, and it is the production entry that regrades DRS-W7 from
+  unreachable to live. The dead
   `staker_pool_balance` properties row left the schema doc, and the
   workflow carrying the schema gates is renamed `docs-gates.yml` for what
   it does (Rick's #624 boundary: P0b's item, no other lane's).

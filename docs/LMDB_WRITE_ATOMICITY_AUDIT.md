@@ -102,11 +102,40 @@ Ordering at the pin (the funnel every connected block traverses):
 
 Every step writes through `*m_write_txn` / `m_wcursors` under the block's
 transaction; `set_hard_fork_version` joins it via `TXN_BLOCK_PREFIX`. No
-`mdb_txn_commit` occurs mid-block; exceptions leave the transaction
-uncommitted and `cleanup_handle_incoming_blocks` aborts the batch.
+`mdb_txn_commit` occurs mid-block, and an exception raised **inside** the
+funnel leaves the transaction uncommitted: `handle_block_to_main_chain`
+wraps `m_db->add_block` in a try whose two catches set
+`m_batch_success = false` (`blockchain.cpp:6423`, `:6432`), and
+`cleanup_handle_incoming_blocks` reads that flag to choose `batch_abort()`
+over `batch_stop()` (`:6821`).
 
-**Verdict: PASS** — one transaction per block (or per batch), including all
-archival journal writes and the boundary-epoch prune.
+**Two writes run after that try block, and the flag does not cover them.**
+The connect-side burn pair — `add_block_burn`, then the `total_burned`
+increment (`:6453`–`:6466`) — is core-layer and post-funnel, the mirror of
+the pop-side pair in §3. Between them sits a real partial-commit window: if
+`add_block_burn` succeeds and the `get_total_burned`/`set_total_burned`
+pair then throws (any LMDB-level write failure — a full map, a disk error),
+the exception unwinds to `add_new_block`'s outer
+`catch (const std::exception&)`, which sets `bvc.m_verifivation_failed` and
+returns **without touching `m_batch_success`**. The flag is still true, so
+`cleanup_handle_incoming_blocks` calls `batch_stop()` and **commits the
+block, its transactions, and the `block_burn` row while the aggregate they
+belong to is not updated** (**DRS-W9**).
+
+That is a partial commit of one logical unit, so this section does not
+claim an unconditional PASS — and the correction reaches further than this
+section: the surviving `total_burned` is too **low**, the direction §9's
+DRS-W7 graded unreachable. It is reachable, by this path.
+
+**Verdict: PASS for the funnel** — `BlockchainDB::add_block` is one
+transaction per block (or per batch), including every archival journal
+write and the boundary-epoch prune, and an in-funnel failure aborts the
+batch. **The post-funnel burn pair is DRS-W9**, and it converges with
+DRS-W6 on a single specification: the burn bookkeeping is core-layer on
+*both* sides, so neither the connect increment nor the pop reversal
+inherits the funnel's failure semantics. In the Rust store both belong
+**inside** the funnel, where the block's transaction and its failure
+handling already are.
 
 ## 3. Block pop (`BlockchainDB::pop_block`, `blockchain_db.cpp:717`)
 
@@ -419,8 +448,9 @@ tripped it.
 | DRS-W4 | `txs` has **zero write and zero read sites** — the handle's only occurrence in `db_lmdb.cpp` is its `open()` (`:1662`); every live tx write goes to the pruned/prunable split. Verified wide across `src/` and `tests/` (the tests' `m_txs` is a test-local vector, not the handle) | wart (inherited-dead surface; no unsound state) | RECORD-AND-SPECIFY: the Rust store does not port the table. Deleting it here is a C++ **and** schema-version change, owned by the census/DRS lane, not by a docs pass |
 | DRS-W5 | `hf_starting_heights` is `mdb_drop(…, del=1)`-deleted at every writable `open()` (`:1778`) and never re-created, so the **declared** table set (49) and the **runtime** set (48) differ permanently — and the coverage gate cannot see the class, since both sides of its comparisons derive from the same macro (§10) | wart (structural divergence between register and runtime; no unsound state) | RECORD-AND-SPECIFY, and routed to census **R4**, which owns the hardfork machinery. A runtime census is out of this pass's scope by design |
 | DRS-W6 | The post-pop burn pair (`total_burned` reversal + `block_burn` row removal, `blockchain.cpp:896`–`:905`) sits at the **core layer, outside `BlockchainDB::pop_block`**. Two consequences: a batchless core-path caller pops in two transactions; and a caller popping through the DB funnel skips both writes entirely — **live today** via `blockchain_import --pop-blocks`, which calls `get_db().pop_block(...)` directly and documents why (§3). A database added through the verifying path and popped by that tool keeps burns the chain no longer contains | wart (**latent bookkeeping, live reachability** — graded on the complete five-site consumer census: RPC readout, connect add, pop reversal, and the two slash guards, both of which an *inflated* value satisfies with headroom; no emission, supply, or validation arithmetic consumes it — `shekyl-economics-sim/src/record.rs:143` refuses the `already_generated − total_burned` derivation on the record, and the conservation helper is KAT-only with synthetic operands. **Grade expires with its ground**: any consensus consumer of the scalar re-grades this at that consumer's design round) | RECORD-AND-SPECIFY: **derived-total reversal belongs in the pop funnel** in the Rust store, so popping through the store cannot mean something different from popping through the node |
-| DRS-W7 | Three sites, three semantics for the same scalar's impossible value: the pop reversal **clamps** to floor (`blockchain.cpp:902`), the slash revert **throws** `FATAL` on underflow (`db_lmdb.cpp:6362`), the slash add **throws** `FATAL` on overflow (`:6050`) — the paths disagree about what an impossible `total_burned` means, so the node's behavior under a (today unreachable) divergence depends on which path meets it first: silent floor vs halt | wart (unreachable at the pin — see DRS-W6's reachability argument — but the disagreement is a standing trap for whichever future change arms it) | RECORD-AND-SPECIFY: the Rust store has **one** ruled semantic for an impossible derived total — and the ruling itself belongs to the economics lane, not the store |
+| DRS-W7 | Three sites, three semantics for the same scalar's impossible value: the pop reversal **clamps** to floor (`blockchain.cpp:902`), the slash revert **throws** `FATAL` on underflow (`db_lmdb.cpp:6362`), the slash add **throws** `FATAL` on overflow (`:6050`) — the paths disagree about what an impossible `total_burned` means, so the node's behavior under a divergence depends on which path meets it first: silent floor vs halt | wart (**reachable — regraded**: this row read "unreachable at the pin" until the §2 re-audit found DRS-W9, which commits a burn row without its aggregate and so produces exactly the too-LOW scalar the `:6362` FATAL underflow tests. The disagreement is therefore live, not a standing trap: the same impossible value halts one site and is silently clamped at another) | RECORD-AND-SPECIFY: the Rust store has **one** ruled semantic for an impossible derived total — and the ruling itself belongs to the economics lane, not the store |
 | DRS-W8 | `correct_block_cumulative_difficulties` (`:3034`) aborts explicitly on its size-mismatch guard but not on its loop throws, so the same function leaves the write transaction in two different states depending on which failure fires — and it has **no production caller** (§5c) | wart (atomicity holds either way; unwired) | RECORD-AND-SPECIFY: one unwinding path in the Rust store. The unwired status is a census datum, the `set_archival_settlement`/CEN-L8 shape |
+| DRS-W9 | The connect-side burn pair (`add_block_burn` + `total_burned` increment, `blockchain.cpp:6453`–`:6466`) runs **after** the try whose catches set `m_batch_success = false`. A throw between the two unwinds to `add_new_block`'s outer catch, which sets only `bvc`, so `cleanup_handle_incoming_blocks` still calls `batch_stop()`: the block, its txs and the `block_burn` row commit **without** the aggregate — a partial commit of one logical unit, and the production entry for a too-LOW `total_burned` that DRS-W7 lacked | wart (**the most severe of this set, and still not S-graded**: no consensus arithmetic reads the scalar and no fund-safety consequence follows, and the window needs an LMDB-level write failure — but it can leave a node whose next slash revert trips the `:6362` FATAL underflow, a local halt, and it falsified a PASS this audit had published) | RECORD-AND-SPECIFY, converging with DRS-W6: the burn bookkeeping is core-layer on **both** connect and pop, so neither side inherits the funnel's failure semantics. In the Rust store both belong **inside** the funnel |
 | — | `hf_versions` not cleaned on pop | carried | P0c wart row (owned there since April; not re-opened here) |
 | — | Dead schema-doc row: `properties` key `staker_pool_balance` + both accessors, zero occurrences in `src/` | doc defect | fixed in this PR (`LMDB_SCHEMA.md` row and the Staking-section pointer) |
 
@@ -496,6 +526,19 @@ census is out of this pass's scope by design:
 | `txs_prunable_hash` | `add/remove_transaction_data` (v11: kept by the depth prune) | §2/§3/§5a |
 | `txs_prunable_tip` | `add/remove_transaction_data`; `prune_worker` | §2/§3/§5a |
 | `txs_pruned` | `add_transaction_data` / `remove_transaction_data` | §2/§3 |
+
+**Two writers are cross-cutting and are therefore stated once here rather
+than repeated down the column** — a universal fact copied into 47 rows is
+47 copies that can drift, and the per-row "Writers" column is for the
+writers that distinguish one table from another:
+
+- **`reset()` (§5b) writes every table it enumerates**, which is every
+  named table in the environment except the keep set (`txpool_meta`,
+  `txpool_blob`) — `mdb_drop(…, del=0)` per name, one transaction. So §5b
+  applies to every row below except those two, whose rows say
+  *reset-kept*.
+- **`open()` (§5b) drops `hf_starting_heights`** on every writable open
+  (DRS-W5), and seeds the `properties` version row on an empty database.
 
 Enumeration ground: 135 write call sites across 81 functions (79
 `BlockchainLMDB::` methods + the two anonymous-namespace journal template
