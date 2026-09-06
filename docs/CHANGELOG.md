@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **PWD-B8: a p2p timer that was never driven, and two lineage-dead wire
+  structs.** `m_bad_peer_checker` (`once_a_time_seconds<43>`) had exactly one
+  occurrence tree-wide — its own declaration — and `on_idle` never called it;
+  its orphaned `m_bad_peer_check_lock` goes with it. `connection_entry_base`
+  and its `connection_entry` typedef had **zero** references anywhere, and
+  `network_address_old` only two, both in the debug size printer. Nothing
+  observable changes, because none of it was reachable; the value is that a
+  cadence constant no code reads no longer reads as a cadence to anyone
+  auditing the file.
+
 ### Fixed
 
 - **Consensus: the `tx_extra` PQC fields have a shape rule, and the storage
