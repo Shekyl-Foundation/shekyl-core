@@ -411,7 +411,6 @@ namespace nodetool
       : m_payload_handler(payload_handler),
         m_external_port(0),
         m_allow_local_ip(false),
-        m_hide_my_port(false),
         m_igd(no_igd),
         m_offline(false),
         is_closing(false),
@@ -445,6 +444,7 @@ namespace nodetool
 
     //! \return The `peer_id` announced on `zone`, or 0 if this node has no such zone.
     peerid_type get_announced_peer_id(epee::net_utils::zone zone) const;
+    uint32_t get_announced_port(epee::net_utils::zone zone) const;
 
     void change_max_out_public_peers(size_t count);
     uint32_t get_max_out_public_peers() const;
@@ -519,7 +519,7 @@ namespace nodetool
       );
     bool idle_worker();
     bool handle_remote_peerlist(const std::vector<peerlist_entry>& peerlist, const epee::net_utils::connection_context_base& context);
-    bool get_local_node_data(basic_node_data& node_data, const network_zone& zone);
+    bool get_local_node_data(basic_node_data& node_data, const network_zone& zone) const;
     //bool get_local_handshake_data(handshake_data& hshd);
 
     bool connections_maker();
@@ -602,7 +602,6 @@ namespace nodetool
     uint32_t m_listening_port_ipv6;
     uint32_t m_external_port;
     bool m_allow_local_ip;
-    bool m_hide_my_port;
     igd_t m_igd;
     bool m_offline;
     bool m_use_ipv6;
@@ -678,7 +677,6 @@ namespace nodetool
     extern const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy;
     extern const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound;
     extern const command_line::arg_descriptor<std::string> arg_ban_list;
-    extern const command_line::arg_descriptor<bool> arg_p2p_hide_my_port;
     extern const command_line::arg_descriptor<bool> arg_no_sync;
 
     extern const command_line::arg_descriptor<bool>        arg_no_igd;
