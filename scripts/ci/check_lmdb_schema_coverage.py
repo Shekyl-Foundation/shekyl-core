@@ -43,6 +43,7 @@
 # match — the schema doc's own "Total: 41" drifted silently for exactly the
 # want of such a pin.
 
+import collections
 import pathlib
 import re
 import sys
@@ -57,6 +58,17 @@ AUDIT = ROOT / "docs" / "LMDB_WRITE_ATOMICITY_AUDIT.md"
 # A parse yielding fewer than this is a broken parse (or a mass table
 # deletion, which deserves a deliberate edit here either way).
 MIN_TABLES = 40
+
+
+def duplicates(names: list[str]) -> list[str]:
+    """Names appearing more than once, sorted.
+
+    Every leg below asks this question, so it is asked in one place: a
+    per-name `list.count()` inside a comprehension is quadratic and, more to
+    the point, invites the next leg to copy the wrong shape.
+    """
+    counts = collections.Counter(names)
+    return sorted(name for name, n in counts.items() if n > 1)
 
 
 def parse_table_list(text: str) -> list[str]:
@@ -79,9 +91,13 @@ def main() -> None:
     if "blocks" not in tables:
         sys.exit("FAIL: sentinel table 'blocks' missing from the parsed list "
                  "— the parse is not reading the real macro")
-    if len(set(tables)) != len(tables):
-        dupes = sorted({t for t in tables if tables.count(t) > 1})
+    dupes = duplicates(tables)
+    if dupes:
         sys.exit(f"FAIL: duplicate names in SHEKYL_LMDB_TABLES: {dupes}")
+
+    # The live table set, computed once: every leg below compares against it
+    # in both directions.
+    table_set = set(tables)
 
     doc = DOC.read_text(encoding="utf-8")
 
@@ -104,7 +120,7 @@ def main() -> None:
     # property row names a table absent from the list documents a table that
     # does not exist (found live: `staker_accrual` / `staker_claims` kept
     # their sections after the claim-era wire deletion removed the tables).
-    ghosts = sorted(documented - set(tables))
+    ghosts = sorted(documented - table_set)
     if ghosts:
         errors.append(
             "these tables have sections in docs/LMDB_SCHEMA.md but are NOT "
@@ -123,19 +139,20 @@ def main() -> None:
                  f"headings from docs/LMDB_SCHEMA.md (floor {MIN_TABLES}, "
                  "sentinel 'blocks') — the heading parse is not reading the "
                  "real doc")
-    dup_headings = sorted({h for h in headings if headings.count(h) > 1})
+    heading_set = set(headings)
+    dup_headings = duplicates(headings)
     if dup_headings:
         errors.append(
             "these tables have MORE THAN ONE '### `name`' section heading in "
             "docs/LMDB_SCHEMA.md (two sections claiming one table — invisible "
             "to the property-row legs):\n  " + "\n  ".join(dup_headings))
-    unheaded = [t for t in tables if t not in set(headings)]
+    unheaded = [t for t in tables if t not in heading_set]
     if unheaded:
         errors.append(
             "these tables have an 'LMDB name' property row but no '### "
             "`name`' section heading in docs/LMDB_SCHEMA.md (or neither):\n  "
             + "\n  ".join(unheaded))
-    stranded = sorted(set(headings) - set(tables))
+    stranded = sorted(heading_set - table_set)
     if stranded:
         errors.append(
             "these '### `name`' section headings in docs/LMDB_SCHEMA.md name "
@@ -200,17 +217,18 @@ def main() -> None:
         _fail(f"parsed only {len(reg_rows)} table rows from the P0a "
               f"reconciliation registry (floor {MIN_TABLES}, sentinel "
               "'blocks') — the registry parse is not reading real rows")
-    reg_dupes = sorted({t for t in reg_rows if reg_rows.count(t) > 1})
+    reg_set = set(reg_rows)
+    reg_dupes = duplicates(reg_rows)
     if reg_dupes:
         errors.append("duplicate rows in the P0a reconciliation registry "
                       "(DAEMON_REDB_STORE.md):\n  " + "\n  ".join(reg_dupes))
-    reg_missing = [t for t in tables if t not in set(reg_rows)]
+    reg_missing = [t for t in tables if t not in reg_set]
     if reg_missing:
         errors.append(
             "these tables exist in SHEKYL_LMDB_TABLES but have no row in the "
             "P0a reconciliation registry (DAEMON_REDB_STORE.md):\n  "
             + "\n  ".join(reg_missing))
-    reg_ghosts = sorted(set(reg_rows) - set(tables))
+    reg_ghosts = sorted(reg_set - table_set)
     if reg_ghosts:
         errors.append(
             "these P0a reconciliation registry rows name tables absent from "
@@ -248,18 +266,19 @@ def main() -> None:
         _fail(f"parsed only {len(mat_rows)} table rows from the audit "
               f"coverage matrix (floor {MIN_TABLES}, sentinel 'blocks') — "
               "the matrix parse is not reading real rows")
-    mat_dupes = sorted({t for t in mat_rows if mat_rows.count(t) > 1})
+    mat_set = set(mat_rows)
+    mat_dupes = duplicates(mat_rows)
     if mat_dupes:
         errors.append("duplicate rows in the audit coverage matrix "
                       "(LMDB_WRITE_ATOMICITY_AUDIT.md §10):\n  "
                       + "\n  ".join(mat_dupes))
-    mat_missing = [t for t in tables if t not in set(mat_rows)]
+    mat_missing = [t for t in tables if t not in mat_set]
     if mat_missing:
         errors.append(
             "these tables exist in SHEKYL_LMDB_TABLES but have no row in the "
             "audit coverage matrix (LMDB_WRITE_ATOMICITY_AUDIT.md §10):\n  "
             + "\n  ".join(mat_missing))
-    mat_ghosts = sorted(set(mat_rows) - set(tables))
+    mat_ghosts = sorted(mat_set - table_set)
     if mat_ghosts:
         errors.append(
             "these audit coverage matrix rows name tables absent from "
