@@ -2031,8 +2031,10 @@ TEST(block_sync_span_lifecycle, prepare_failure_charges_the_origin_it_disconnect
   EXPECT_FALSE(endpoint.dropped.empty()) << "but the origin is still disconnected";
 }
 
-// The endpoint advertisement is DERIVED, with no operator input, so the only
-// witness is the announced value itself -- there is no flag left to assert on.
+// The endpoint advertisement is DERIVED: no dedicated flag decides it, so the
+// only witness is the announced value itself. Operator influence remains and is
+// exercised below -- `--in-peers 0` suppresses the announcement BY DERIVATION,
+// which is the supported control and the second limb of this test.
 //
 // The middle limb is the defect this replaced. `check_incoming_connections`
 // has always treated "no inbound accepted" as "not advertising"; the

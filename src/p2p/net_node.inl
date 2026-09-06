@@ -2153,10 +2153,17 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::get_local_node_data(basic_node_data& node_data, const network_zone& zone) const
   {
     node_data.peer_id = zone.m_config.m_peer_id;
-    // Announce a port only where a peer could actually reach us on it. Both
-    // conditions are facts the node already holds, so there is no operator
-    // input in this decision: the zone must support the back-ping that
-    // verifies the claim, and we must accept inbound connections at all.
+    // Announce a port only where a peer could actually reach us on it: the
+    // zone must support the back-ping that verifies the claim, and we must
+    // accept inbound connections at all.
+    //
+    // There is no DEDICATED advertisement flag any more -- that is what was
+    // deleted. There is still operator influence, and it is the supported
+    // kind: `--in-peers` sets `max_in_connection_count`, so `--in-peers 0`
+    // suppresses the announcement by derivation rather than by overriding it.
+    // The difference matters to whoever reads this next: the decision follows
+    // from the node's reachability, and an operator changes it by changing
+    // that reachability, not by asserting a different answer.
     //
     // `check_incoming_connections` has always asked the second question; this
     // site asked only whether a flag was set, so a node run with `--in-peers 0`
@@ -2998,8 +3005,8 @@ namespace nodetool
   {
     /* The port `get_local_node_data` would put on the wire for this zone.
        Named so the derived advertisement has something a test can observe:
-       the decision has no operator input any more, so there is no flag to
-       assert on and the announced value is the only witness. */
+       the decision has no dedicated flag any more, so there is nothing to
+       assert on but the announced value itself. */
     const auto found = m_network_zones.find(zone);
     if (found == m_network_zones.end())
       return 0;
