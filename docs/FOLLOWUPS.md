@@ -104,22 +104,19 @@ Default. Lands before genesis if it should exist at launch.
 - **Daemon chain store (`DRS-*`) — gap-close pass landed in design.** SoT: [`docs/design/DAEMON_REDB_STORE.md`](./design/DAEMON_REDB_STORE.md)
   - Target: pre-genesis
 
-- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI — **DELIVERED 2026-09-05** (49-row reconciliation registry + heading/registry gate legs; see the P0a registry in [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)); **P0b** atomicity+journals+transcriptions — **DELIVERED 2026-09-05** ([`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) rewritten in place, §10 matrix gate-pinned, A-2/A-4/A-6 transcribed, W-1…W-7 recorded); **P0c/P0d**
+- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI — **DELIVERED 2026-09-05** (49-row reconciliation registry + heading/registry gate legs; see the P0a registry in [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)); **P0b** atomicity+journals+transcriptions — **DELIVERED 2026-09-05** ([`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) rewritten in place, §10 matrix gate-pinned, A-2/A-4/A-6 transcribed, DRS-W1…DRS-W8 recorded); **P0c/P0d**
   - Target: pre-genesis
 
-- **`txs` is a zero-write, zero-read LMDB table (P0b W-4).** Handle's only occurrence is its `open()`; inherited-dead deletion candidate — C++ + schema-version change, census/DRS lane owns ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
+- **`txs` is a zero-write, zero-read LMDB table (P0b DRS-W4).** Handle's only occurrence is its `open()`; inherited-dead deletion candidate — C++ + schema-version change, census/DRS lane owns ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
   - Target: pre-genesis
 
-- **`hf_starting_heights` deleted at every writable `open()` (P0b W-5).** `mdb_drop(…,1)` at `db_lmdb.cpp:1778`, never re-created — macro table structurally absent at runtime; feeds census R4 ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
+- **`hf_starting_heights` deleted at every writable `open()` (P0b DRS-W5).** `mdb_drop(…,1)` at `db_lmdb.cpp:1778`, never re-created — macro table structurally absent at runtime; feeds census R4 ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
   - Target: pre-genesis
 
 - **DRS-BENCH — resource/privacy/IBD/pop suite (not throughput).** File
   - Target: pre-genesis
 
 - **DRS-D3c — cross-store leaf/position KAT.** Daemon vs wallet LeafStore:
-  - Target: pre-genesis
-
-- **`BlockchainLMDB::reset()` incomplete drop set — CLOSED 2026-09-05 (P0b):** fixed the day the row was born (`190fd73a65`, enumeration wipe, keep set = txpool pair), never closed then; verified at `2dba46537` ([audit §5b](LMDB_WRITE_ATOMICITY_AUDIT.md))
   - Target: pre-genesis
 
 - **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with
