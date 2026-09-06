@@ -358,14 +358,17 @@ the canonical flagless floor capture and the signed f = 1/3):
 > consensus-max d24** (composed from the relay bench's floor-measured
 > per-layer slope). Never quote 6.5 without its depth.
 
-**The depth tier is the actual decision and is put to the maintainer
-explicitly rather than picked here.** Steering's recommendation, recorded
-as steering's: a consensus constant must hold at d24, because depth grows
-with the chain with no code change — a constant signed at the d2 figure
-silently becomes wrong over chain life while nothing fires. The
-alternative is a depth-indexed bound (the constant tracks the tree's
-ratified capacity tier). Signature line for the surge value and its
-depth: ________________
+**SIGNED (Rick, 2026-09-06): surge_max = 4 — the d24 CONSENSUS-MAX
+figure.** His reason, in the ruling: *"a constant signed at today's depth
+is a gate whose subject decays with the chain, silently, with nothing
+firing. Same class as `RETENTION_HORIZON_BLOCKS` and the doc-links
+coupling."* Derivation inputs, on the row: verify_floor = 128.77 ms/tx
+(9.90 µs/weight-byte), f = 1/3, f·T = 40 s, depth d24. **And so the next
+reader sees the choice rather than the number: d2/d7 would have signed
+6.5/5.7 — the difference between those figures and the signed 4 IS the
+decay the reason names.** The ×50 strike-through above stands as
+refuted-by-measurement; ×4 is its re-derivation, not its successor by
+assertion.
 
 **Falsifier (defect):** the hysteresis claim ("51 full blocks minimum to
 move EM") is falsified by exhibiting a 100-value multiset where fewer than
@@ -744,8 +747,8 @@ parent chain extends `k` blocks past it.
    **`margin(k) = min(2^k, S·LTEM/EM)`, S = the ratified surge factor** —
    the proved single-step bound iterated, cut by the surge clamp's
    absolute ceiling (`EM ≤ S·LTEM`; S = 50 in today's code, but Q3's
-   amendment REFUTED ×50 and the re-derivation lands near ×6 — carry the
-   symbol, never the literal,
+   amendment REFUTED ×50 and **the signed re-derivation is S = 4 (d24
+   denomination)** — carry the symbol, never the literal,
    so no legal announce ever exceeds `2·50·LTEM` regardless of lag). The
    receiver computes both `EM` (its `m_current_block_cumul_weight_limit/2`)
    and `LTEM` live, so the cap needs no protocol constant beyond the ×50
