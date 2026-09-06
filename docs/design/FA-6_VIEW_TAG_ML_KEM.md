@@ -698,6 +698,18 @@ reason to raise a ceiling or lower `O_per_block`.
 | `O_per_block` | **400** | `⌊ B_cap / W_out ⌋` = `⌊ 600,000 / 1,500 ⌋` |
 | `N_outputs` (scenario B) | **525,960,000** | `N_blocks × O_per_block` |
 
+> **Year convention (graded 2026-09-06, `CLIENT_VERSION_CONSTANTS_VALIDATION.md`
+> §3.12 (iii)).** `N_blocks` is derived on a 365.25-day year; the economics
+> authority uses 365 days (`config/economics_params.json`
+> `shekyl_blocks_per_year: 262800`, `DESIGN_CONCEPTS.md`'s `(60/2) × 24 × 365`),
+> so this horizon carries 180 blocks/year — 900 over the five years — that the
+> emission schedule does not. **The 365-day convention is authoritative for
+> anything touching emission, fee or staking arithmetic**, because it is the
+> value in the digested authority. This horizon is a security *margin*, where
+> 900 blocks in 1.3 million is noise, and keeps 365.25 deliberately; it is not
+> a second blocks-per-year constant (the implied 262,980 appears nowhere as a
+> literal, and must not be introduced as one).
+
 **Scenario A — incremental**
 
 | Symbol | Value |

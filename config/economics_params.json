@@ -1,4 +1,5 @@
 {
+  "_comment_digest": "MEMBERSHIP RULE (docs/design/CLIENT_VERSION_CONSTANTS_VALIDATION.md §3.7, §3.12; VC-D7, VC-D12): only a constant whose different value makes a DIFFERENT CHAIN belongs here. The canonical form of this file (every non-underscore key, bytewise-sorted, one `key value` line each) is digested together with config/consensus_constants.json into CONSENSUS_CONSTANTS_DIGEST by rust/shekyl-rpc-types/build.rs; once slices VC-2..VC-4 of that design land, every client will compare it against the daemon at connect. The digest is a CHANGE DETECTOR, NOT A FREEZE: the provisional-until-testnet numbers below (see _comment_escalation) still move it, and the re-pin in rust/shekyl-rpc-types/src/consensus_digest.rs is how a freeze ceremony becomes visible, not a gate against it. Keys beginning with an underscore are prose and are excluded from the digest; every other value must be a non-negative integer, or the build fails.",
   "money_supply": 4294967296000000000,
   "coin": 1000000000,
   "display_decimal_point": 9,

@@ -1,13 +1,14 @@
 # VC — Client-side version and constants validation
 
-**Status:** OPEN — design round 1. Dispositions `VC-D1`…`VC-D12` are
-**proposed**, not ruled. **`VC-1` is built in the PR that lands this
-document** (steering ruling, 2026-09-05: no wire change, no C++, so it clears
-the alpha.8 slowdown); `VC-2`…`VC-4` are not started. **No wire change is
-authorised while this banner reads round 1** (the design category is exempt
-from the slowdown; a `get_version` field is not). Every `file:line` below was
-read at `dev` = `2dba46537` (PR #619, RK-5b merge); the anchor for `VC-1`'s
-landing is `e54e5b983`.
+**Status:** OPEN — design round 2: **the four rulings of §6 are RULED
+(2026-09-06, relayed through the steering lane; provenance is the relay, not
+an in-channel signature — see §7).** `VC-1` is built in the PR that lands
+this document, widened to both integer authorities under `config/` per
+ruling 5 (`VC-D12`). **`VC-2`, `VC-3` and `VC-4` are authorised for alpha.8,
+folded into one PR** (ruling 2), and are not started; that PR's first
+paragraph must state all four axes. Every `file:line` below was read at
+`dev` = `2dba46537` (PR #619, RK-5b merge); the anchor for `VC-1`'s landing
+is `262c06ba9`.
 **Identifier family:** `VC-` (version and constants validation), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 in the commit that
 lands this document (rule 94). `VC-D*` are dispositions of this round;
@@ -21,7 +22,7 @@ building it.
 is invoked: multi-round, crosses the FFI boundary (`VC-2` widens the chain
 facts POD) and the wire (`VC-2` bumps `CORE_RPC_VERSION`), and touches
 consensus-adjacent constants. `VC-2` gets a pre-flight pass before code.
-**Decision authority:** Rick. §6 lists the rulings this round needs.
+**Decision authority:** Rick. §6 lists the rulings and their state.
 
 **Mission hierarchy** ([`00-mission`](../../.cursor/rules/00-mission.mdc)):
 privacy is the product, and a wallet that scans a daemon on a different
@@ -250,7 +251,7 @@ Each is proposed. Rick rules; the round closes when §6 is empty.
 
 ### 3.1 `VC-D1` — the wire handshake: strict equality, and it is forced, not chosen
 
-**Proposed:** a client refuses a daemon whose `get_version.version` differs
+**RULED with `VC-D5` (ruling 1, 2026-09-06, relayed).** As proposed: a client refuses a daemon whose `get_version.version` differs
 from its compiled `CORE_RPC_VERSION` in either component, and its message
 names which side is older (`daemon 3.27 < client 3.28: the daemon is the
 older build` and the converse).
@@ -297,10 +298,17 @@ than from a hand-maintained enumeration of it.
 ### 3.3 `VC-D3` — canonicalisation, pinned
 
 Both sides must hash identical bytes or the digest is a false-alarm
-generator. The rules, in full:
+generator. The rules, in full (canonical form **`v2`**, after `VC-D12` widened
+the file set; `v1` was `consensus_constants.json` alone and never shipped):
 
-1. Parse `config/consensus_constants.json` as JSON. Parse failure fails the
-   build.
+0. The form opens with the header line
+   `shekyl-consensus-constants-canonical-v2` + LF, and then, **per file in
+   the fixed order `config/consensus_constants.json`,
+   `config/economics_params.json`**, a section line `= <path>` + LF followed
+   by that file's lines per rules 1–5. Which file a constant lives in is part
+   of the binding, exactly as its key is: swapping two documents between
+   their section names is a different digest.
+1. Parse the file as JSON. Parse failure fails the build, naming the file.
 2. Drop every key whose name begins with `_`. These are the file's prose
    (`_comment`, `_comment_daa`, …: 9 of 31 keys at the anchor).
 3. Every remaining value **must be a JSON integer**. At the anchor all 22
@@ -313,10 +321,9 @@ generator. The rules, in full:
    case-insensitive). Key names are ASCII `[a-z0-9_]` at the anchor; a
    non-ASCII key is not forbidden but is sorted by its UTF-8 bytes.
 5. Emit, as UTF-8:
-   - one header line: `shekyl-consensus-constants-canonical-v1` followed by
-     LF. This is the domain tag ([`30-cryptography`](../../.cursor/rules/30-cryptography.mdc))
-     and the version of the canonical form; changing any rule in this list
-     bumps `v1`.
+   - (the header and section lines of rule 0 — the header is the domain tag
+     ([`30-cryptography`](../../.cursor/rules/30-cryptography.mdc)) and the
+     version of the canonical form; changing any rule in this list bumps it)
    - then, per key in sorted order: the key, one ASCII space, the value as
      a **decimal integer with no sign, no leading zeros and no separators**,
      LF. Values are non-negative by construction (the C++ generator already
@@ -369,7 +376,23 @@ would be a third implementation of §3.3 with no reader.
 
 ### 3.5 `VC-D5` — exposure: `get_version` grows two fields, and the version moves
 
-**Proposed:** `GetVersionResponse` gains
+**RULED (ruling 1, 2026-09-06, relayed): as proposed, with the one-byte FFI
+widening — and on a stronger ground than this section had given.** Rick's
+reason is **atomicity**: two calls can straddle a restart or a
+reconfiguration and return axes from different states, so a client that
+handshakes over two methods validates a tuple that never simultaneously
+existed. One call, one snapshot, no skew — and half the round trips on a
+path every client walks at connect. That argument kills the two-method
+alternative outright; the coupling argument below (tying the handshake to
+RK-5c's bridged leg) was the weaker one. **Corollary for `VC-4`:** the
+genesis axis rides a *second* call (`on_get_block_hash([0])`, §2), so the
+tuple is atomic across three axes and the genesis hash is checked beside it.
+That is acceptable because block 0's hash cannot change under a running
+daemon — it is the one value a restart or reconfiguration cannot move
+without the daemon being a different chain, which the other three axes then
+also report. Stated so the exception is seen to be reasoned, not missed.
+
+As proposed: `GetVersionResponse` gains
 
 ```
 consensus_constants_digest: String   // 64 lowercase hex chars, §3.3
@@ -491,6 +514,14 @@ handshake is one more fact that binding should carry, and building a poller
 here first would be building it in the wrong layer.
 
 #### 3.6.4 Regtest — a typed acceptance, never a string
+
+**RULED (ruling 3, 2026-09-06, relayed): the typed `FakechainPolicy` with
+default `Refuse`, and no equivalence ruling for an existing regtest lever.**
+Rick's reason: this is the `SEEDHASH_EPOCH` shape and rule 71's compliant
+counter-pattern — armed explicitly, refused by default, set only by the
+harness or a named operator flag — and reusing an existing lever would make
+the test affordance implicit again, *which is the exact defect that hid
+CEN-B5 and cost the block-60 halt*.
 
 A `shekyld --regtest` daemon reports `nettype: "fakechain"`
 (`cryptonote_core.cpp:423` sets `FAKECHAIN`); the regtest end-to-end suite
@@ -615,7 +646,53 @@ non-comment keys (`coin`, `display_decimal_point`, `shekyl_fixed_point_scale`,
 guard of any kind. The honest answer to "what guards `economics_params.json`
 against a client/daemon mismatch" is currently *nothing*.
 
-**Proposed: the rules digest covers both integer authorities under `config/`
+**RULED (ruling 5, 2026-09-06, relayed): widen to both integer authorities,
+before this PR merges; canonical form `v2`, one re-pin — built.** The file
+settled it: `economics_params.json` carries `money_supply`,
+`final_subsidy_per_minute: 300000000` and
+`emission_speed_factor_per_minute: 22` — genesis-frozen emission constants,
+and the final subsidy *is* the perpetual tail Rick signed in `FL-R12′`
+(0.3 SKL/min × 2 min/block = the 0.6/block rail). "A digest pinning
+`consensus_constants.json` while leaving the emission curve's own authority
+unguarded pins the smaller half."
+
+Three things ride with the widening:
+
+(i) **What the digest is — a change detector, not a freeze.** That file's
+own `_comment_escalation` states the D2 escalation numbers are
+provisional-until-testnet under a GF-7 freeze ceremony. The pin does not
+prevent that change; it makes each ceremony's re-pin *visible*. Written
+here, in the file's new `_comment_digest`, and in the sentinel's comment, so
+the next reader does not take a green digest as evidence the values are
+frozen and argue the ceremony against a gate that never claimed that.
+
+(ii) **Sequencing.** `money_supply` is renamed under `FL-R12′` (asymptote-
+named: it is the emission curve's asymptote, not a supply, under the
+perpetual tail). That rename lands in the fee lane's third PR and moves this
+file. **`VC-1` widens first; the rename re-pins.** Noted in the fee-ladder
+lane as well.
+
+(iii) **A discrepancy to grade, not necessarily to fix — two year
+conventions.** Economics uses 365 days: `shekyl_blocks_per_year: 262800`,
+derived explicitly in `DESIGN_CONCEPTS.md` as `(60/2) × 24 × 365`, eight
+code sites. `FA-6_VIEW_TAG_ML_KEM.md` :695 derives its key-rotation horizon
+on 365.25: `N_blocks = ⌊(5 × 365.25 × 86400) / T_block⌋ = 1,314,900`, which
+is 262,980 blocks/year *implied* — that literal appears nowhere in the tree.
+(The other 365.25 sites, `console/mod.rs:837` and `util.cpp:1096`, format
+human-readable durations and are out of scope.) The gap is 180 blocks a
+year, 900 over FA-6's five-year window. The question is not which constant
+wins but whether a rotation horizon derived on a different year length than
+the emission schedule matters across five years. **This document's grade:
+the 365-day economics convention is authoritative for anything that touches
+emission, fees or staking arithmetic, because it is the value in the
+digested authority; FA-6's horizon is a security margin, where 900 blocks of
+slack in 1.3 million is noise, and it may keep 365.25 provided it says so
+beside the derivation.** One line in FA-6 naming the convention closes it;
+that line is FA-6's, not this round's.
+
+The disposition as proposed, kept because the ruling adopted it:
+
+**The rules digest covers both integer authorities under `config/`
 — `consensus_constants.json` and `economics_params.json` — as one digest,
 one wire field.** The canonical form (§3.3) gains a per-file section: after
 the header line, for each file in a fixed order, one line naming the file
@@ -674,21 +751,25 @@ is for — a key addition forced through the question rather than past it —
 and it is recorded here so the first red is met as the design, not as a
 surprise.
 
-**Cost if ruled yes:** `VC-1`'s canonicaliser reads two files instead of
-one, the KAT gains a two-file case, the sentinel's pinned value changes
-once, the JSON `_comment` sentence moves to (or is duplicated in)
-`economics_params.json`, and `shekyl-economics`'s digest keeps its job
-untouched — two digests with different jobs is right; a gap between them
-was not. **Not built ahead of the ruling** (rule 21: the one-file form is not
-wrong, it is narrower than the surface, and widening it is Rick's call
-because it decides what a "consensus constant" is for this project).
+**Cost, paid:** `VC-1`'s canonicaliser reads two files (`CANONICAL_FILES`,
+one array, the build script and the tests both walk it), the KAT is a
+two-file case with its expected digest recomputed by the independent Python
+implementation, the sentinel was re-pinned once, `economics_params.json`
+gained a `_comment_digest` carrying the membership rule and (i), and
+`shekyl-economics`'s digest keeps its job untouched — two digests with
+different jobs is right; a gap between them was not. The C++ economics
+header generator's output is byte-identical before and after the comment
+(verified, not assumed). Three new tests: file identity and order are part
+of the form; an edit in *either* file moves the digest; a key rename with
+the value unchanged moves it.
 
 ---
 
 ## 4. Implementation slices — named, not started
 
-None of these is authorised to start by this document; §6 and the banner
-say what is. Each slice runs the CI-exact gates
+`VC-1` is built and widened (this PR). **`VC-2`…`VC-4` are authorised for
+alpha.8 as one folded PR (ruling 2); the PR body's first paragraph states the
+four axes.** They are not started. Each slice runs the CI-exact gates
 (`cargo fmt --all -- --check`; `cargo +1.94.0 clippy --workspace
 --all-targets --keep-going -- -D warnings`; `cargo test --locked --workspace
 --exclude shekyl-randomx-differential`) on the tree it pushes, plus the eight
@@ -697,17 +778,17 @@ doc gates, plus what each row names.
 | Slice | Contents | Wire change? | Additional gate |
 | --- | --- | --- | --- |
 | **`VC-1`** — **BUILT** in this document's PR (`dev` e54e5b983) | `shekyl-rpc-types/build.rs` + `CONSENSUS_CONSTANTS_DIGEST` and `CONSENSUS_CONSTANTS_CANONICAL` (§3.3, §3.4), with the canonicaliser in `build_support/consensus_canonical.rs` included by both the build script and the tests — one definition; canonical-form KAT whose expected digest was computed by an independent Python implementation of §3.3; live-file sentinel (`const _: () = assert!`); `DaemonNetwork` type with string round-trip and unknown-string refusal tests; the membership-rule sentence in the JSON's `_comment` (§3.7). | **No.** Nothing on the wire moves; the constant exists and is tested; nothing reads it yet, and `consensus_digest.rs`'s module doc says so. | Red observed before trusting green, two ways: with the sentinel disabled, a descending key sort fails `kat_pins_the_canonical_form_and_its_digest` and `the_live_canonical_form_has_the_shape_the_design_pins` while `the_build_used_these_rules_on_the_live_file` stays green (build script and tests share the mutated rules — the Python-derived KAT is what catches a drift both sides share); with the sentinel enabled, the same mutation fails **compilation** on the pinned digest, which is the sentinel doing its job first. |
-| **`VC-2`** | `GetVersionResponse` + 2 fields; `CORE_RPC_VERSION` → next minor, **read from `dev` at write time**; `get_version_synced_v5.json` and siblings for the other two `v1` states; chain-delta test extended per §3.5; chain-facts POD `nettype` byte + C export + ABI offset pin; `methods.rs` fills both fields. **Pre-flight pass first (rule 26).** | **Yes.** Needs Rick's ruling on alpha.8 timing (§6). | `rpc_parity` whole chain green; the four-spelling version pin updated; C++ `ninja -C build` + unit suite (the POD changed). |
+| **`VC-2`** — **AUTHORISED for alpha.8, fold with `VC-3`/`VC-4`** (ruling 2: "a wire change belongs in the paired release, not first-thing-after where it becomes the first uncovered delta of the next cycle") | `GetVersionResponse` + 2 fields; `CORE_RPC_VERSION` → next minor, **read from `dev` at write time**; `get_version_synced_v5.json` and siblings for the other two `v1` states; chain-delta test extended per §3.5; chain-facts POD `nettype` byte + C export + ABI offset pin; `methods.rs` fills both fields. **Pre-flight pass first (rule 26).** | **Yes.** Needs Rick's ruling on alpha.8 timing (§6). | `rpc_parity` whole chain green; the four-spelling version pin updated; C++ `ninja -C build` + unit suite (the POD changed). |
 | **`VC-3`** | Console remote arm handshake (§3.6.2); `version` exemption; delete `daa_target_seconds` and its tests (§3.11); operator-facing message tests for all three axes and both "older side" directions. | No (consumes `VC-2`). | A test per axis that observes the refusal on a fabricated mismatched reply, and one that observes `version` rendering both sides. |
 | **`VC-4`** | Engine open-time handshake (§3.6.3) on all four axes, including the per-network genesis-hash pins and the `on_get_block_hash([0])` comparison (`VC-D12`); `OpenError::DaemonIdentityMismatch`; `FakechainPolicy` (§3.6.4) threaded through `open_*`, set by `regtest_e2e.rs` and the operator flag; **fix the `daemon.rs:169` docstring** to say what the code now does; `shekyl-cli` / `shekyl-wallet-rpc` messages per rule 82. | No (consumes `VC-2`). | Regtest e2e green with the policy passed; a lifecycle test per axis observing `open_full` refuse; a test that `FakechainPolicy::Refuse` (the default) refuses a `fakechain` daemon. |
 
 `VC-1` landed with this document: the steering lane ruled (2026-09-05) that
 code with no wire change and no C++ clears the throttle, and the enabler
 ships with its own oracle (the KAT and the sentinel) rather than waiting for
-a consumer that cannot exist until `VC-2` is authorised. `VC-3` and `VC-4` land in **one PR** with `VC-2` or
-immediately after it on the same branch: producers and callers in one PR is
-the standing rule, and a `get_version` field with no consumer would be the
-very finding this round opened with, recreated.
+a consumer that cannot exist until `VC-2` is authorised. `VC-3` and `VC-4` land in **one PR** with `VC-2` (ruling 2 — fold, do not
+split): producers and callers in one PR is the standing rule, and a
+`get_version` field with no consumer would be the very finding this round
+opened with, recreated.
 
 ---
 
@@ -735,32 +816,25 @@ very finding this round opened with, recreated.
 
 ---
 
-## 6. Rulings this round needs (Rick)
+## 6. Rulings — all four RULED 2026-09-06 (relayed; see §7 for provenance)
 
-1. **The tuple and its carrier** (`VC-D2`, `VC-D5`): three axes, exposed on
-   `get_version`, with the one-byte FFI widening for `nettype`. The
-   alternative is the two-method handshake in §5.
-2. **Alpha.8 timing of `VC-2`**: the wire change is the one thing in this
-   document the steering direction holds. Land in alpha.8, or first thing
-   after. **What a yes buys:** `VC-3` and `VC-4` land with `VC-2`, and `VC-4`
-   now carries **four** axes, not three — the fourth adds per-network
-   genesis-hash pins in Rust and no wire change (`VC-D12`, §2). Fold or
-   split; but it should not be a surprise in the PR.
-3. **The fakechain shape** (`VC-D6`, §3.6.4): a typed `FakechainPolicy`
-   parameter with a default of `Refuse`, set by the regtest harness and an
-   explicit operator flag — versus reusing an existing regtest lever, if one
-   is ruled equivalent.
+1. **The tuple and its carrier** (`VC-D2`, `VC-D5`) — **RULED as
+   proposed**, on atomicity: one call, one snapshot, no skew (§3.5).
+2. **Alpha.8 timing of `VC-2`** — **RULED: lands in alpha.8, fold, do not
+   split.** `VC-3` and `VC-4` fold in, including the fourth axis. The PR
+   body's first paragraph states the four axes.
+3. **The fakechain shape** (`VC-D6`, §3.6.4) — **RULED: typed
+   `FakechainPolicy`, default `Refuse`; no equivalence ruling** for an
+   existing lever.
 4. ~~Whether `VC-1` lands now~~ — **ruled by the steering lane 2026-09-05:
    yes** (no wire change, no C++). Built in this PR.
-5. **The digest's file set** (`VC-D12`): `consensus_constants.json` alone
-   (as built) or both integer authorities under `config/`, with
-   `economics_params.json`'s seven unguarded keys as the argument for
-   widening. If yes, `VC-1` widens before this PR merges (canonical form
-   `v2`, one re-pin); if no, the doc must name what guards
-   `economics_params.json` — today, nothing.
+5. **The digest's file set** (`VC-D12`) — **RULED: both integer authorities,
+   widened before this PR merges** (§3.12), with the three carries (change
+   detector not freeze; `VC-1` widens first and the `FL-R12′` rename
+   re-pins; the two-year-convention grade).
 
-Until 1–3 and 5 are ruled the banner stays at round 1 and `VC-2`…`VC-4`
-stay a table.
+The banner moves to round 2. What remains open is implementation
+(`VC-2`…`VC-4`) and the one grade in §3.12 (iii) that belongs to FA-6.
 
 ---
 
@@ -768,6 +842,7 @@ stay a table.
 
 | Date | Entry |
 | --- | --- |
+| 2026-09-06 | **All four rulings RULED, relayed through the steering lane; `VC-1` widened to both integer authorities and re-pinned.** Provenance: the rulings reached this document as a relay quoting Rick, not as an in-channel signature — recorded as RULED with that provenance, per the standing rule that a relayed ruling is not a signature; an in-channel confirmation upgrades the rows without changing them. (1) tuple on `get_version` + one FFI byte, on **atomicity** — stronger than the coupling ground §3.5 had, and now stated there with its corollary for the genesis axis's second call; (2) `VC-2` in alpha.8, fold `VC-3`/`VC-4` including the fourth axis, four axes in the PR body's first paragraph; (3) typed `FakechainPolicy` default `Refuse`, no equivalence — the `SEEDHASH_EPOCH` shape, and the implicit-affordance defect that hid CEN-B5; (5) widen to both authorities before merge — `final_subsidy_per_minute` is the `FL-R12′` tail. Widened in this PR: canonical form `v2` with per-file section lines, `CANONICAL_FILES` walked by build script and tests alike, KAT re-derived in Python (`5e19c87d…`), live digest re-pinned (`6e1f9125…`), `economics_params.json` gains `_comment_digest`, economics C++ header byte-identical. Three carries recorded in §3.12: change detector not freeze; `VC-1` first, the `money_supply` rename re-pins; the 365 vs 365.25 year-convention grade (365 authoritative for emission arithmetic; FA-6's 365.25 horizon is a margin and may stay if it says so — FA-6's line to write). |
 | 2026-09-05 | **Round opened; the problem is two no-consumer facts, not one.** The dispatch named `CORE_RPC_VERSION` (§0.1, re-swept: 31 hits, zero comparisons). Grounding the network axis found the second: `get_info.nettype` has no Rust reader, `WALLET_REWRITE_PLAN.md` :216 lock 5 requires the daemon's network "verified via `get_info` before any wallet operation", the landed `OpenError::NetworkMismatch` compares the wallet file to the caller and never asks the daemon, and `engine/daemon.rs:169`'s docstring says the check is performed when it is not (§0.2). The regtest e2e suite passing `Mainnet` wallets against `fakechain` daemons is the proof the check is absent. **Recorded because it changes the round's shape:** the network axis is not a nice-to-have beside the digest, it is a Phase-1 commitment that never landed and has been claimed in prose as landed since. |
 | 2026-09-05 | **The digest is orthogonal to the network ID, not stronger than it.** The parent's §7 sketch said "stronger than a network-ID byte, because it commits to the rules rather than to a label". Half right: the constants file has no per-network data, so mainnet, testnet and stagenet share one digest. Identity is digest **and** network (§2); the design carries both and refuses on either. |
 | 2026-09-05 | **"Local console fatal at startup" rejected: it cannot fail.** `Source::Live` renders from the same binary that would answer; comparing a constant to itself is a check that exists to be seen. The remote arm is the only console consumer (§3.6.1). |
