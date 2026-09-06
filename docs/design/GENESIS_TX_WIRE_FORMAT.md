@@ -800,7 +800,7 @@ pre-renumber tags until recapture.)*
 | Bound | Value | Constant |
 |---|---|---|
 | tx / block | **0x10000000** | `CRYPTONOTE_MAX_TX_PER_BLOCK` (config:45) |
-| block weight | median-window limit (long-term window **100,000**; short-term surge **×50**) | `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` / `…_SURGE_FACTOR` (config) |
+| block weight | median-window limit (long-term window **100,000**; short-term surge factor **ratified S = 4** — census C2-R2 Q3 struck the inherited ×50, which the config constant still carries as implementation residue until the store port) | `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` / `…_SURGE_FACTOR` (config) |
 
 **Fossil flag (→ economics / block-weight owner, not this doc):**
 `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE` has **V1/V2/V5** variants

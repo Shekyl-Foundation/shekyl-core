@@ -286,18 +286,25 @@ cross-reference discharging it.
 
 **What they do:** the stored long-term weight is `clamp(w, LTEM·10/17,
 LTEM·1.7)`, so the 100 000-block median (LTEM) can move at most ×1.7 per
-half-window reached — the **slow governor**. Growth to a sustained new level
-is bounded by ×1.7 per ≥ 50 000 blocks (≈ 69 days at T = 120): full
-saturation multiplies capacity by at most ~1.7 every ~10 weeks. The
+half-window reached — the **slow governor**. At full window that is ×1.7
+per 50 000 blocks (≈ 69 days at T = 120: full saturation multiplies
+capacity by at most ~1.7 every ~10 weeks). Below height 100 000 the
+window is `min(height, 100 000)`, the half-window is half the CHAIN, and
+the governor is structurally weak — ×1.7 per chain-length *doubling*, the
+ramp-in regime the countersigned ruling below prices (Q3's
+verification-time bound is the binding early-chain protection there). The
 symmetric lower clamp (10/17) prevents a withholding miner coalition from
 deflating LTEM faster than it can grow.
 
 **Shekyl-specific check:** the clamps' *rate* interacts with two Shekyl
 surfaces the Monero lineage never had: (i) the archival-retention horizon
-(`retention_horizon_blocks: 420 000`) — a 1.7×/50 k-block growth curve can
-multiply stored-chain size by ≤ 1.7⁸ ≈ 70× inside one horizon, which the
-bond economics must (and per the D3/R2 linear-work record, does) price as
-work rather than assume away; (ii) the P2P lane's `entry_max` (§6), which
+(`retention_horizon_blocks: 420 000`) — at full window a 1.7×/50 k-block
+growth curve can multiply stored-chain size by ≤ 1.7⁸ ≈ 70× inside one
+horizon, and a horizon anchored at genesis carries the ramp-in on top of
+that (the trace below reaches ≈ 6 657× the zone by block 100 000 under
+full saturation) — either way a scale the bond economics must (and per
+the D3/R2 linear-work record, does) price as work rather than assume
+away; (ii) the P2P lane's `entry_max` (§6), which
 needs exactly this rate.
 
 **Ruling (Q2) — SIGNED; rationale CORRECTED AND COUNTERSIGNED
@@ -359,13 +366,25 @@ the exact ×1.7/50 000 asymptote (a monotone window's median is its
 midpoint element: LTEM_n = 1.7·LTEM_{n−50 000}). The ratified two-regime
 statement is what this trace supports.
 
-**Falsifier:** the rate claim is checkable by construction — a simulated
-weight trace saturating every block must show LTEM ≤ LTEM₀·1.7^⌈n/50 000⌉.
-The instrument is a simulation of the §2 formulas (the same instrument as
-§6's, which was run at draft time; `swing.rs` carries the constants but no
-trace generator — the simulation accompanies the signature record). A
-trace exceeding the bound falsifies the governor reading, and therefore
-the ratification's stated reason.
+**Falsifier:** the rate claim is checkable by construction — and the
+ratified statement is two-regime, so the falsifier is too. A simulated
+weight trace saturating every block must show: **(full window)** for
+n ≥ 100 000 with the window full at both endpoints,
+`LTEM_{n+50 000} ≤ 1.7·LTEM_n`; **(ramp-in)** for n < 100 000,
+`LTEM_n ≤ 1.7·LTEM_{⌈n/2⌉}` — ×1.7 per chain-length doubling, the
+midpoint-median law, which the embedded trace satisfies with
+near-equality (1.7 × 1 943.98 = 3 304.77 at n = 40 000 against the
+recorded 3 304.70; 1.7 × 3 304.70 = 5 618.0 at n = 80 000 against
+5 617.94). The pre-correction single-regime envelope
+`LTEM ≤ LTEM₀·1.7^⌈n/50 000⌉` is NOT the falsifier: the embedded trace
+itself fires it at every pre-100k point, so as written it falsified the
+signed rationale it accompanied (review finding, 2026-09-06 — it was
+testing the refuted reason, not the ratified one). The instrument is a
+simulation of the §2 formulas (the same instrument as §6's, which was run
+at draft time; `swing.rs` carries the constants but no trace generator —
+the simulation accompanies the signature record). A trace exceeding the
+regime bound falsifies the governor reading, and therefore the
+ratification's stated reason.
 
 ### Q3 — the ×50 surge factor and the 100-block short-term window
 
@@ -787,7 +806,9 @@ relay-policy values with the couplings stated (reference-age window makes
 the livetime load-light; the weight cap is a derived quantity). Class:
 `none` → `ratified` (policy). Eviction ordering (lowest fee/byte first) is
 ratified as the economically consistent choice under the ladder — the pool
-sheds exactly what a rational miner would shed last… **admission-semantics
+sheds first exactly what a rational miner would mine last (corrected
+2026-09-06: an earlier revision said "shed last", reversing the
+rationale)… **admission-semantics
 questions around it stay R7's** (fence).
 
 **Falsifier:** the "load-light" claim rests on the reference-age sweep
