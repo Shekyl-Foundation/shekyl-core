@@ -314,7 +314,6 @@ namespace nodetool
       {
         zone.second.m_peerlist.remove_from_peer_white(pe);
         zone.second.m_peerlist.remove_from_peer_gray(pe);
-        zone.second.m_peerlist.remove_from_peer_anchor(addr);
      }
 
       for (const auto &c: conns)
@@ -863,8 +862,13 @@ namespace nodetool
       CHECK_AND_ASSERT_MES(res, false, "Failed to init peerlist.");
     }
 
+    // `--add-peer` is a CANDIDATE, not a verified peer. It has never been
+    // dialled, so it enters gray and earns white the same way every other
+    // address does. This also bounds a real failure mode: a stale --add-peer
+    // used to sit in white permanently and be gossiped onward; in gray it is
+    // evicted by `gray_peerlist_housekeeping` on the first failed dial.
     for(const auto& p: m_command_line_peers)
-      m_network_zones.at(p.adr.get_zone()).m_peerlist.append_with_peer_white(p);
+      m_network_zones.at(p.adr.get_zone()).m_peerlist.append_with_peer_gray(p);
 
     //only in case if we really sure that we have external visible ip
     m_have_address = true;
@@ -1229,31 +1233,6 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::is_peer_used(const anchor_peerlist_entry& peer)
-  {
-    const auto zone = peer.adr.get_zone();
-    const auto server = m_network_zones.find(zone);
-    if (server == m_network_zones.end())
-      return false;
-
-    const bool is_public = (zone == epee::net_utils::zone::public_);
-    if(is_public && server->second.m_config.m_peer_id == peer.id)
-      return true;//dont make connections to ourself
-
-    bool used = false;
-    server->second.m_net_server.get_config_object().foreach_connection([&, is_public](const p2p_connection_context& cntxt)
-    {
-      if((is_public && cntxt.peer_id == peer.id && peer.adr.is_same_host(cntxt.m_remote_address)) || (!cntxt.m_is_income && peer.adr == cntxt.m_remote_address))
-      {
-        used = true;
-        return false;//stop enumerating
-      }
-      return true;
-    });
-    return used;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::is_addr_connected(const epee::net_utils::network_address& peer)
   {
     const auto zone = m_network_zones.find(peer.get_zone());
@@ -1284,7 +1263,7 @@ namespace nodetool
   } while(0)
 
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::try_to_connect_and_handshake_with_new_peer(const epee::net_utils::network_address& na, bool just_take_peerlist, uint64_t last_seen_stamp, PeerType peer_type, uint64_t first_seen_stamp)
+  bool node_server<t_payload_net_handler>::try_to_connect_and_handshake_with_new_peer(const epee::net_utils::network_address& na, bool just_take_peerlist, uint64_t last_seen_stamp, PeerType peer_type)
   {
     network_zone& zone = m_network_zones.at(na.get_zone());
     if (zone.m_connect == nullptr) // outgoing connections in zone not possible
@@ -1319,7 +1298,6 @@ namespace nodetool
       return false;
     }
 
-    con->m_anchor = peer_type == anchor;
     peerid_type pi = AUTO_VAL_INIT(pi);
     bool res = do_handshake_with_peer(pi, *con, just_take_peerlist);
 
@@ -1355,12 +1333,6 @@ namespace nodetool
     zone.m_peerlist.append_with_peer_white(pe_local);
     //update last seen and push it to peerlist manager
 
-    anchor_peerlist_entry ape = AUTO_VAL_INIT(ape);
-    ape.adr = na;
-    ape.id = pi;
-    ape.first_seen = first_seen_stamp ? first_seen_stamp : time(nullptr);
-
-    zone.m_peerlist.append_with_peer_anchor(ape);
     zone.m_notifier.on_handshake_complete(con->m_connection_id, con->m_is_income);
     zone.m_notifier.new_out_connection();
 
@@ -1389,7 +1361,6 @@ namespace nodetool
       return false;
     }
 
-    con->m_anchor = false;
     peerid_type pi = AUTO_VAL_INIT(pi);
     const bool res = do_handshake_with_peer(pi, *con, true);
     if (!res) {
@@ -1434,40 +1405,6 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::is_addr_recently_failed(const epee::net_utils::network_address& addr)
   {
     return m_conn_fails_cache.is_recently_failed(addr, time(NULL));
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::make_new_connection_from_anchor_peerlist(const std::vector<anchor_peerlist_entry>& anchor_peerlist)
-  {
-    for (const auto& pe: anchor_peerlist) {
-      _note("Considering connecting (out) to anchor peer: " << peerid_to_string(pe.id) << " " << pe.adr.str());
-
-      if(is_peer_used(pe)) {
-        _note("Peer is used");
-        continue;
-      }
-
-      if(!is_remote_host_allowed(pe.adr)) {
-        continue;
-      }
-
-      if(is_addr_recently_failed(pe.adr)) {
-        continue;
-      }
-
-      MDEBUG("Selected peer: " << peerid_to_string(pe.id) << " " << pe.adr.str()
-                               << "[peer_type=" << anchor
-                               << "] first_seen: " << epee::misc_utils::get_time_interval_string(time(NULL) - pe.first_seen));
-
-      if(!try_to_connect_and_handshake_with_new_peer(pe.adr, false, 0, anchor, pe.first_seen)) {
-        _note("Handshake failed");
-        continue;
-      }
-
-      return true;
-    }
-
-    return false;
   }
   //-----------------------------------------------------------------------------------
   // Find a single candidate from the given peer list in the given zone and connect to it if possible
@@ -1837,10 +1774,7 @@ namespace nodetool
         const size_t expected_white_connections = m_payload_handler.get_next_needed_pruning_stripe().second ? zone.second.m_config.m_net_config.max_out_connection_count : base_expected_white_connections;
         if(conn_count < expected_white_connections)
         {
-          //start from anchor list
-          while (get_outgoing_connections_count(zone.second) < P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT
-            && make_expected_connections_count(zone.second, anchor, P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT));
-          //then do white list
+          //start with the white list
           while (get_outgoing_connections_count(zone.second) < expected_white_connections
             && make_expected_connections_count(zone.second, white, expected_white_connections));
           //then do grey list
@@ -1886,12 +1820,6 @@ namespace nodetool
     if (m_offline)
       return false;
 
-    std::vector<anchor_peerlist_entry> apl;
-
-    if (peer_type == anchor) {
-      zone.m_peerlist.get_and_empty_anchor_peerlist(apl);
-    }
-
     size_t conn_count = get_outgoing_connections_count(zone);
     //add new connections from white peers
     if(conn_count < expected_connections)
@@ -1900,10 +1828,6 @@ namespace nodetool
         return false;
 
       MDEBUG("Making expected connection, type " << peer_type << ", " << conn_count << "/" << expected_connections << " connections");
-
-      if (peer_type == anchor && !make_new_connection_from_anchor_peerlist(apl)) {
-        return false;
-      }
 
       if (peer_type == white && !make_new_connection_from_peerlist(zone, true)) {
         return false;
@@ -2858,13 +2782,6 @@ namespace nodetool
   void node_server<t_payload_net_handler>::on_connection_close(p2p_connection_context& context)
   {
     network_zone& zone = m_network_zones.at(context.m_remote_address.get_zone());
-    if (!zone.m_net_server.is_stop_signal_sent() && !context.m_is_income) {
-      epee::net_utils::network_address na = AUTO_VAL_INIT(na);
-      na = context.m_remote_address;
-
-      zone.m_peerlist.remove_from_peer_anchor(na);
-    }
-
     if (!zone.m_net_server.is_stop_signal_sent()) {
       zone.m_notifier.on_connection_close(context.m_connection_id);
     }

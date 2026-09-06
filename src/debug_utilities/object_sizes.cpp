@@ -85,7 +85,6 @@ int main(int argc, char* argv[])
   SL(epee::net_utils::connection_basic);
 
   SL(nodetool::peerlist_entry);
-  SL(nodetool::anchor_peerlist_entry);
   SL(nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core>>);
   SL(nodetool::p2p_connection_context_t<cryptonote::t_cryptonote_protocol_handler<cryptonote::core>::connection_context>);
 

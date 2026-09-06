@@ -79,26 +79,8 @@ namespace nodetool
   };
   typedef peerlist_entry_base<epee::net_utils::network_address> peerlist_entry;
 
-  template<typename AddressType>
-  struct anchor_peerlist_entry_base
-  {
-    AddressType adr;
-    peerid_type id;
-    int64_t first_seen;
-
-    BEGIN_KV_SERIALIZE_MAP()
-      KV_SERIALIZE(adr)
-      KV_SERIALIZE(id)
-      KV_SERIALIZE(first_seen)
-    END_KV_SERIALIZE_MAP()
-
-    BEGIN_SERIALIZE()
-      FIELD(adr)
-      FIELD(id)
-      VARINT_FIELD(first_seen)
-    END_SERIALIZE()
-  };
-  typedef anchor_peerlist_entry_base<epee::net_utils::network_address> anchor_peerlist_entry;
+  // `anchor_peerlist_entry` was deleted with the anchor mechanism. Its only
+  // job was crossing the restart boundary -- see net_peerlist.h `init()`.
 
   inline 
   std::string print_peerlist_to_string(const std::vector<peerlist_entry>& pl)

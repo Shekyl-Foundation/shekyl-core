@@ -1814,8 +1814,7 @@ skip:
       if (context.m_state == cryptonote_connection_context::state_normal)
       {
         ++n_synced[zone];
-        if (!context.m_anchor)
-          last_synced_peer_id[zone] = context.m_connection_id;
+        last_synced_peer_id[zone] = context.m_connection_id;
       }
       return true;
     });
@@ -1975,11 +1974,6 @@ skip:
   template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::should_drop_connection(cryptonote_connection_context& context, uint32_t next_stripe)
   {
-    if (context.m_anchor)
-    {
-      MDEBUG(context << "This is an anchor peer, not dropping");
-      return false;
-    }
     if (context.m_pruning_seed == 0)
     {
       MDEBUG(context << "This peer is not striped, not dropping");

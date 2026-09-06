@@ -1216,7 +1216,71 @@ baseline**, at which point a tighter ratio trigger can replace this ceiling —
 but the ceiling stands on its own until then, rather than deferring to a figure
 that does not exist.
 
+#### Amendment (2026-09-06) — trust is earned in-process, and the anchor mechanism is deleted
+
+**RULED by Rick, in these words:** *"encryption is for privacy, verification is
+for trust. demote both, and start clean from reboot."*
+
+**The invariant.** The only thing that moves a peer from gray to white is this
+daemon, by dialling it and seeing it answer. A persisted white list breaks that
+quietly: it makes white mean *a file asserts that some earlier process observed
+something*. That is an assertion standing in for an observation — the same
+category error this cluster removed from the wire, relocated to disk.
+
+**Both lists demote, and the "both" is load-bearing.** White and anchors are
+restored by the same `peerlist_manager::init()` from the same datadir file, and
+anchors are dialled **first**. Demoting white while keeping anchors would pay
+the bootstrap cost while leaving the higher-priority pool exposed — strictly
+worse than either extreme.
+
+**What demotion costs is ordering, not addresses.** Every entry is still in the
+pool and still dialled; it simply has no head start it did not earn this run.
+You dial the same number of peers either way.
+
+**The anchor mechanism is therefore deleted rather than fixed**, and the
+drain defect (PWD-I4's `k <= 1`) is deleted with it rather than repaired. The
+mechanism is **only** a restart-boundary device, and this was verified rather
+than assumed:
+
+- An entry is in `m_peers_anchor` *iff* an outbound connection to it is
+  currently open — added on successful outbound handshake, removed in
+  `on_connection_close`.
+- `make_new_connection_from_anchor_peerlist` calls `is_peer_used` first, which
+  matches every such entry. **So within a session the anchor dial arm cannot
+  produce a connection at all.**
+- The removal in `on_connection_close` is guarded `!is_stop_signal_sent()`,
+  so anchors are deliberately *retained* at shutdown — the set exists to be
+  persisted and re-dialled next boot. That is the job this ruling removes.
+
+**Consequence, recorded because it is not obvious.** `m_anchor` on the
+connection context was a **drop protection** with two readers in the
+*cryptonote* layer, not the p2p one: an anchor connection was excluded from
+sync-slot churn and short-circuited `should_drop_connection`. Deleting the
+mechanism removes both, because the only path that set the flag is gone.
+**Nothing is drop-protected now.** Whether some class of connection should be
+is unruled and deliberately not invented here.
+
+**Encryption of the store is a separate, privacy-shaped mechanism.** Once the
+loader believes nothing on disk, the file's integrity stops mattering; what
+remains worth protecting is the **confidentiality of the peer graph**. Do not
+design it as "encrypt the trust store" — there is no trust in it to encrypt.
+
+**Store version 7 -> 8.** `load_peers` already drops a pre-current store
+wholesale, so the bump *is* the clean start for existing nodes.
+
 ### PWD-I3 — tenure is recognised by address, never serialized, and ordered by `first_seen`
+
+> **SUPERSEDED 2026-09-06 by the amendment above.** This row's mechanism *is*
+> the anchor list: its recognition key, its `first_seen` ordering and its
+> "never serialized" claim all describe a container that no longer exists.
+> Cross-reconnect tenure is also forbidden on its own terms now — it lets a
+> mechanism conclude that two observations involve the same party, which is
+> what the endpoint-is-not-identity ruling rules out. **What survives is
+> same-host concentration** (a fact about this node's own pool shape, asserting
+> nothing about who a peer is). Retained unedited below as the record of what
+> was ruled and why, per records-was: the reasoning about `first_seen`
+> ordering is still the correct reading of the code it described.
+
 
 **RULED**, and it ratifies what the tree already does rather than inventing a
 mechanism.

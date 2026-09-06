@@ -50,7 +50,7 @@ namespace nodetool
 {
   namespace
   {
-    constexpr unsigned CURRENT_PEERLIST_STORAGE_ARCHIVE_VER = 7;
+    constexpr unsigned CURRENT_PEERLIST_STORAGE_ARCHIVE_VER = 8;
  
     struct by_zone
     {
@@ -80,7 +80,9 @@ namespace nodetool
     {
       // A pre-current store is dropped wholesale (the node re-bootstraps):
       // v6 for an entry-format change, v7 for the removal of the dead
-      // rpc_port / rpc_credits_per_hash advertisement fields.
+      // rpc_port / rpc_credits_per_hash advertisement fields, v8 for the
+      // deleted third list -- one fewer list in the stream, so an old reader
+      // and a new stream disagree on structure, not merely on content.
       if (ver < CURRENT_PEERLIST_STORAGE_ARCHIVE_VER)
         return {};
 
@@ -153,7 +155,6 @@ namespace nodetool
   {
     elem.white = load_peers<peerlist_entry>(a, ver);
     elem.gray = load_peers<peerlist_entry>(a, ver);
-    elem.anchor = load_peers<anchor_peerlist_entry>(a, ver);
 
     if (ver == 0)
     {
@@ -168,7 +169,6 @@ namespace nodetool
   {
     save_peers(a, boost::range::join(elem.ours.white, elem.other.white));
     save_peers(a, boost::range::join(elem.ours.gray, elem.other.gray));
-    save_peers(a, boost::range::join(elem.ours.anchor, elem.other.anchor));
   }
 
   std::optional<peerlist_storage> peerlist_storage::open(std::istream& src, const bool new_format)
@@ -191,7 +191,6 @@ namespace nodetool
       {
         std::sort(out.m_types.white.begin(), out.m_types.white.end(), by_zone{});
         std::sort(out.m_types.gray.begin(), out.m_types.gray.end(), by_zone{});
-        std::sort(out.m_types.anchor.begin(), out.m_types.anchor.end(), by_zone{});
         return {std::move(out)};
       }
     }
@@ -265,7 +264,6 @@ namespace nodetool
     peerlist_types out{};
     out.white = do_take_zone(m_types.white, zone);
     out.gray = do_take_zone(m_types.gray, zone);
-    out.anchor = do_take_zone(m_types.anchor, zone);
     return out;
   }
 
@@ -273,12 +271,26 @@ namespace nodetool
   {
     CRITICAL_REGION_LOCAL(m_peerlist_lock);
 
-    if (!m_peers_white.empty() || !m_peers_gray.empty() || !m_peers_anchor.empty())
+    if (!m_peers_white.empty() || !m_peers_gray.empty())
       return false;
 
-    add_peers(m_peers_white.get<by_addr>(), std::move(peers.white));
+    // Trust is earned in-process. Everything restored from disk lands in
+    // GRAY, whichever list it was saved from -- white membership means "this
+    // process dialled it and it answered", with no past-session qualifier.
+    //
+    // A persisted white list is an assertion standing in for an observation:
+    // it asserts that some earlier process verified something, on the
+    // strength of a file. That is the same category error being removed from
+    // the wire, relocated to disk, and it is what let a supplied or stale
+    // datadir hand this node a pre-trusted peer set that is dialled in
+    // preference to others and gossiped onward (`get_peerlist_head` reads
+    // the white list only, so an injected entry propagates).
+    //
+    // Demotion costs ordering, not addresses: every entry is still here and
+    // still dialled, just without a head start it had not earned this run.
     add_peers(m_peers_gray.get<by_addr>(), std::move(peers.gray));
-    add_peers(m_peers_anchor.get<by_addr>(), std::move(peers.anchor));
+    add_peers(m_peers_gray.get<by_addr>(), std::move(peers.white));
+    trim_gray_peerlist();
     m_allow_local_ip = allow_local_ip;
     return true;
   }
@@ -293,13 +305,16 @@ namespace nodetool
   void peerlist_manager::get_peerlist(peerlist_types& peers)
   { 
     CRITICAL_REGION_LOCAL(m_peerlist_lock);
-    peers.white.reserve(peers.white.size() + m_peers_white.size());
-    peers.gray.reserve(peers.gray.size() + m_peers_gray.size());
-    peers.anchor.reserve(peers.anchor.size() + m_peers_anchor.size());
+    // Save path (sole caller: `node_server::store_config`). Both live lists
+    // are written into the GRAY section and the white section is left empty,
+    // because the loader demotes everything anyway: a file still carrying a
+    // white section would assert a trust its reader is required to ignore,
+    // which is a trap for whoever reads this format next. The section stays
+    // in the stream -- always empty -- so the shape does not change again.
+    peers.gray.reserve(peers.gray.size() + m_peers_gray.size() + m_peers_white.size());
 
-    copy_peers(peers.white, m_peers_white.get<by_addr>());
     copy_peers(peers.gray, m_peers_gray.get<by_addr>());
-    copy_peers(peers.anchor, m_peers_anchor.get<by_addr>());
+    copy_peers(peers.gray, m_peers_white.get<by_addr>());
   }
 
   void peerlist_manager::evict_host_from_peerlist(bool use_white, const peerlist_entry& pr)

@@ -60,9 +60,8 @@ namespace nodetool
   // Corruption ceiling for each list in the persisted peerlist store. A
   // legitimate store holds at most one list per network zone (public_ /
   // i2p / tor), each trimmed to its cap — the largest is
-  // P2P_LOCAL_GRAY_PEERLIST_LIMIT; anchors are untrimmed but are the
-  // distinct outbound connections of a single run. The 4x headroom over
-  // cap * zones keeps this a corruption detector, never an operational
+  // P2P_LOCAL_GRAY_PEERLIST_LIMIT. The 4x headroom over cap * zones
+  // keeps this a corruption detector, never an operational
   // limit: the length prefix is untrusted disk input, and past this
   // ceiling loading it would mean a reserve() of disk-chosen magnitude at
   // startup instead of the designed drop-and-rebootstrap.
@@ -73,7 +72,6 @@ namespace nodetool
   {
     std::vector<peerlist_entry> white;
     std::vector<peerlist_entry> gray;
-    std::vector<anchor_peerlist_entry> anchor;
   };
 
   class peerlist_storage
@@ -129,13 +127,10 @@ namespace nodetool
     void evict_host_from_peerlist(bool white, const peerlist_entry& pr);
     bool append_with_peer_white(const peerlist_entry& pr, bool trust_last_seen = false);
     bool append_with_peer_gray(const peerlist_entry& pr);
-    bool append_with_peer_anchor(const anchor_peerlist_entry& ple);
     bool set_peer_just_seen(peerid_type peer, const epee::net_utils::network_address& addr, uint32_t pruning_seed);
     bool is_host_allowed(const epee::net_utils::network_address &address);
     bool get_random_gray_peer(peerlist_entry& pe);
     bool remove_from_peer_gray(const peerlist_entry& pe);
-    bool get_and_empty_anchor_peerlist(std::vector<anchor_peerlist_entry>& apl);
-    bool remove_from_peer_anchor(const epee::net_utils::network_address& addr);
     bool remove_from_peer_white(const peerlist_entry& pe);
     template<typename F> size_t filter(bool white, const F &f); // f returns true: drop, false: keep
     
@@ -188,15 +183,6 @@ namespace nodetool
       > 
     > peers_indexed;
 
-    typedef boost::multi_index_container<
-      anchor_peerlist_entry,
-      boost::multi_index::indexed_by<
-      // access by anchor_peerlist_entry::net_adress
-      boost::multi_index::ordered_unique<boost::multi_index::tag<by_addr>, boost::multi_index::member<anchor_peerlist_entry,epee::net_utils::network_address,&anchor_peerlist_entry::adr> >,
-      // sort by anchor_peerlist_entry::first_seen
-      boost::multi_index::ordered_non_unique<boost::multi_index::tag<by_time>, boost::multi_index::member<anchor_peerlist_entry,int64_t,&anchor_peerlist_entry::first_seen> >
-      >
-    > anchor_peers_indexed;
 
   private: 
     void trim_white_peerlist();
@@ -211,7 +197,6 @@ namespace nodetool
 
     peers_indexed m_peers_gray;
     peers_indexed m_peers_white;
-    anchor_peers_indexed m_peers_anchor;
   };
   //--------------------------------------------------------------------------------------------------
   inline void peerlist_manager::trim_gray_peerlist()
@@ -428,24 +413,6 @@ namespace nodetool
   }
   //--------------------------------------------------------------------------------------------------
   inline
-  bool peerlist_manager::append_with_peer_anchor(const anchor_peerlist_entry& ple)
-  {
-    TRY_ENTRY();
-
-    CRITICAL_REGION_LOCAL(m_peerlist_lock);
-
-    auto by_addr_it_anchor = m_peers_anchor.get<by_addr>().find(ple.adr);
-
-    if(by_addr_it_anchor == m_peers_anchor.get<by_addr>().end()) {
-      m_peers_anchor.insert(ple);
-    }
-
-    return true;
-
-    CATCH_ENTRY_L0("peerlist_manager::append_with_peer_anchor()", false);
-  }
-  //--------------------------------------------------------------------------------------------------
-  inline
   bool peerlist_manager::get_random_gray_peer(peerlist_entry& pe)
   {
     TRY_ENTRY();
@@ -498,45 +465,6 @@ namespace nodetool
     return true;
 
     CATCH_ENTRY_L0("peerlist_manager::remove_from_peer_gray()", false);
-  }
-  //--------------------------------------------------------------------------------------------------
-  inline
-  bool peerlist_manager::get_and_empty_anchor_peerlist(std::vector<anchor_peerlist_entry>& apl)
-  {
-    TRY_ENTRY();
-
-    CRITICAL_REGION_LOCAL(m_peerlist_lock);
-
-    auto begin = m_peers_anchor.get<by_time>().begin();
-    auto end = m_peers_anchor.get<by_time>().end();
-
-    std::for_each(begin, end, [&apl](const anchor_peerlist_entry &a) {
-      apl.push_back(a);
-    });
-
-    m_peers_anchor.get<by_time>().clear();
-
-    return true;
-
-    CATCH_ENTRY_L0("peerlist_manager::get_and_empty_anchor_peerlist()", false);
-  }
-  //--------------------------------------------------------------------------------------------------
-  inline
-  bool peerlist_manager::remove_from_peer_anchor(const epee::net_utils::network_address& addr)
-  {
-    TRY_ENTRY();
-
-    CRITICAL_REGION_LOCAL(m_peerlist_lock);
-
-    anchor_peers_indexed::index_iterator<by_addr>::type iterator = m_peers_anchor.get<by_addr>().find(addr);
-
-    if (iterator != m_peers_anchor.get<by_addr>().end()) {
-      m_peers_anchor.erase(iterator);
-    }
-
-    return true;
-
-    CATCH_ENTRY_L0("peerlist_manager::remove_from_peer_anchor()", false);
   }
   //--------------------------------------------------------------------------------------------------
   template<typename F> size_t peerlist_manager::filter(bool white, const F &f)
