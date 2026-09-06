@@ -446,6 +446,25 @@ too): doubling points landed at exactly t = 51/102/153/204/255. So the
 until 51" characterization was never true of this implementation and the
 signed sentence citing "the order-statistic definition" is amended below.
 
+**The surviving crossing property carries a PRECONDITION, stated here
+because this document itself contains the case that violates it
+(countersignature note, Rick 2026-09-06 — he re-verified both halves:
+at X = 100, W = 100, k = 49 ⇒ median 0; k = 50 ⇒ 50; k = 51 ⇒ 100):**
+the ≥ 51-to-cross guarantee holds **when the level being crossed CAPS the
+window's values** — the new samples are the maximum, so one must reach
+`v[49]`. It FAILS for a window already holding stale samples ABOVE the
+new ones: §6 point 2's crash-preloaded ladder is exactly that case (the
+median climbs between the stale highs with no 51-block wait; ×6.5
+observed at k = 4), and Q2's ramp-in regime is where such windows arise.
+The two findings are both true under different window contents — a
+missing precondition, not a contradiction — and any consumer of the
+51-block guarantee must check the cap-precondition first. The sharper
+general rule (the countersignature's discriminator): *"nothing changes
+for 51 blocks" is WRONG — partial movement at k = 50 can carry a
+QUANTIZED value across a step boundary even when the level is never
+crossed; "the level cannot be crossed inside 51 blocks" is right, with
+this precondition.*
+
 ### Q4 — the ArticMine quadratic penalty curve (CEN-F14b)
 
 **Class today:** `KAT-port` — an 81-vector KAT asserts the Rust port equals
@@ -976,6 +995,22 @@ Ratification-only means these are **specifications the port consumes**:
   observed green at the pin (79 passed, `cargo test -p shekyl-economics`);
   `epee` median, `get_transaction_weight`, the fee-arm `return 0`, and the
   GTWF §9.6a/§10 byte arithmetic each read at their sites before citation.
+- **Post-countersignature sweep for consumers of the dead "51 to move"
+  sentence (2026-09-06; discriminator: movement-shaped = wrong,
+  crossing-shaped = fine with the cap-precondition). Full classification,
+  clean results included:** this doc :388/:445 (the ratified sentence +
+  falsifier) — crossing-shaped, precondition now stated in place; :809
+  (§6 monotone-history record) — IS the precondition's failure case,
+  cross-linked; :836 (genesis-era note) — crossing-shaped with its
+  window-size caveat, fine; :662 ("cannot move a tx between rungs") —
+  fee-tolerance arithmetic, does not rest on the ST median, out of
+  class; census CEN-G6/G6b rows — mechanism descriptions, no N-block
+  stability claim; FEE_LADDER_DERIVATION.md — every "hysteresis" hit is
+  its own §7 ladder-update dwell mechanism, not the ST median (the
+  ladder added its own hysteresis precisely because the median alone
+  holds nothing still), and ":379 cannot move any rung" is rung
+  structure; no movement-shaped consumer found anywhere. Zero hits
+  needing correction beyond the already-amended sentence.
 - **Draft-time falsifier run corrected §6:** the first committed margin
   bound (`2^{⌈k/51⌉}`, from the 51-sample hysteresis) was falsified by its
   own named simulation — a crash-preloaded window climbs the median
