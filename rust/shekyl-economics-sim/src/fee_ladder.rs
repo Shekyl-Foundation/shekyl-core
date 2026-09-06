@@ -84,11 +84,29 @@ const _: () = assert!(
 /// `(k·BLOCKS_PER_YEAR − 0)/BPY = k` but `(k·BPY − 1)/BPY = k − 1`.
 const GENESIS_NG_HEIGHT: u64 = 1;
 
-/// FL-R18 (c)'s minimum-dwell floor on the served `C_q`, in blocks. Set
-/// to the FL-C4a stationary gate itself (240 blocks = 8 h at 120 s), so
-/// the anonymity property the gate used to CHECK is the property the
-/// mechanism ENFORCES. §4.5a records the sweep this is measured from.
+/// The minimum-dwell floor examined for FL-R18 (c) and **NOT ADOPTED**
+/// (round 14): the anonymity harm it was to prevent was refuted (§4.5b)
+/// and the floor was measured to destabilise the loop it was meant to
+/// calm (§4.5a). Kept as an instrument mode ONLY so that result stays
+/// reproducible from the branch — the same reason both pow2 snap rules
+/// are still modes. 240 blocks = the FL-C4a stationary gate, i.e. the
+/// best candidate the sweep found; nothing ships it.
 const FL_R18_MIN_DWELL_BLOCKS: u64 = 240;
+
+/// Quote-to-broadcast lags for the FL-R18 rejection-race measurement
+/// (§4.5b), in blocks at the 120 s target. STATED, not assumed:
+/// * **1** — the floor case: estimate fetched, transaction built and
+///   broadcast inside one block.
+/// * **3** (≈ 6 min) — the realistic case: FCMP++ proving at the rule-76
+///   device floor, a human confirmation step, and the Dandelion++ stem
+///   embargo before the transaction reaches a miner's pool.
+/// * **25** (≈ 50 min) — a signing session left open, or a wallet that
+///   quotes, waits on a second signer, then broadcasts.
+/// * **100** — the PROTOCOL's own ceiling, not a guess:
+///   `FCMP_REFERENCE_BLOCK_MAX_AGE` (100) is the oldest reference a
+///   proof may carry at admission, so no conforming transaction can be
+///   quoted more than 100 blocks before it is submitted.
+const RACE_LAGS: [u64; 4] = [1, 3, 25, 100];
 
 // ---------------------------------------------------------------------------
 // Correction factor
@@ -584,9 +602,9 @@ enum LadderMode {
     /// The ceiling snap behind the §7 hysteresis construction — the map
     /// the daemon served before FL-R18.
     QuantizedHysteresis,
-    /// FL-R18 (c): the band plus a minimum-dwell floor of `n` blocks on
-    /// the served value — the ruled map. Swept over candidate `n` to
-    /// MEASURE the ratified figure (§4.5a).
+    /// The band plus a minimum-dwell floor of `n` blocks on the served
+    /// value — examined for FL-R18 (c) and NOT ADOPTED; swept over
+    /// candidate `n` to produce the evidence at §4.5a.
     RateLimited(u64),
 }
 
@@ -625,8 +643,8 @@ impl HysteresisCq {
     }
 }
 
-/// FL-R18's ruled mechanism (c): a **minimum-dwell floor on the served
-/// `C_q`**, composed ON TOP of the band. The band damps boundary noise;
+/// The mechanism examined for FL-R18 (c), **withdrawn at round 14**: a
+/// minimum-dwell floor on the served `C_q`, composed ON TOP of the band. The band damps boundary noise;
 /// it cannot suppress a limit cycle driven by gain-≥2 demand feedback,
 /// because a deadband only helps once it exceeds the loop's excursion
 /// (the ruling's ground for rejecting a wider band). The floor makes the
@@ -854,6 +872,23 @@ fn dwell_scenario(
 
 #[derive(Serialize)]
 pub struct FeedbackResult {
+    /// FL-R18 rejection-race (§4.5b): quotes issued along the trace, and
+    /// how many would be REFUSED at admission `RACE_LAGS[i]` blocks later
+    /// because the relay floor rose above the quoted (already
+    /// floor-clamped) economy rung. `check_fee`'s 2% buffer is applied,
+    /// so this counts real refusals, not near-misses.
+    pub race_quotes: u64,
+    pub race_refused: [u64; 4],
+    /// The race's REAL governing quantity (§4.5b). With the median held,
+    /// the relay floor is monotonically non-increasing (reward decay only
+    /// shrinks `R`), so `race_refused` is structurally zero and proves
+    /// nothing on its own. What decides a refusal is the MARGIN a quote
+    /// carries over the floor it was clamped against: `served/floor` in
+    /// thousandths, minimised over the trace. A quote survives a median
+    /// contraction of factor `f` iff `f² ≤ (served/floor)·(100/98)`, so
+    /// this margin converts directly into the median move the quote can
+    /// absorb — the exposure the fixed-median traces cannot show.
+    pub race_margin_min_milli: u64,
     /// Chain age and median of the swept state (§1.8 interior grid;
     /// PR #614 review — feedback was previously pinned to (age 4, zone)).
     pub age_years: u64,
@@ -946,6 +981,8 @@ fn feedback_scenario(
     let mut fee_max = 0u64;
     let mut v_min = u64::MAX;
     let mut v_max = 0u64;
+    let mut served_economy: Vec<u64> = Vec::with_capacity(blocks as usize);
+    let mut floors: Vec<u64> = Vec::with_capacity(blocks as usize);
     let mut tail_fees = BTreeSet::new();
     let mut tail_transitions = 0u64;
     let mut last_tail_fee: Option<u64> = None;
@@ -958,6 +995,23 @@ fn feedback_scenario(
     for t in 0..blocks {
         let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
         let fee = fee_at(v_avg, ag, st.height + t, &mut hyst, &mut rl);
+        // FL-R18 rejection race: the SERVED economy rung is the ladder's
+        // floor rung clamped up to the relay floor at QUOTE time (§5.2's
+        // acceptance identity); the refusal test compares it against the
+        // floor at ADMISSION time.
+        {
+            let base = base_block_reward(ag, params).expect("base along trace");
+            let raw_l = articmine_ladder_raw(base, median, median);
+            let c_now = correction_factor(v_avg, ag, st.height + t, params).c_scaled;
+            let c_served = match mode {
+                LadderMode::Quantized(rule) => quantize_c_pow2(c_now, rule),
+                _ => c_now,
+            };
+            let floor_now = relay_floor(base, median);
+            let economy = corrected_ladder(raw_l, c_served)[0].max(floor_now);
+            served_economy.push(economy);
+            floors.push(floor_now);
+        }
         ag = advance_traced_state(ag, v_avg, params);
         // The registered §1.7 model has NO saturation (PR #614 review: a
         // hidden 10 000 clamp is a capacity bound the register never
@@ -985,7 +1039,32 @@ fn feedback_scenario(
             last_tail_fee = Some(fee);
         }
     }
+    // Refused iff the quote misses `check_fee`'s acceptance bound at
+    // admission: accept requires `fee >= needed - needed/50`, i.e.
+    // `served * 100 >= floor_at_admission * 98`.
+    let mut race_refused = [0u64; 4];
+    for (i, &lag) in RACE_LAGS.iter().enumerate() {
+        let lag = lag as usize;
+        for h in 0..served_economy.len().saturating_sub(lag) {
+            if u128::from(served_economy[h]) * 100 < u128::from(floors[h + lag]) * 98 {
+                race_refused[i] += 1;
+            }
+        }
+    }
+
+    let race_margin_min_milli = served_economy
+        .iter()
+        .zip(floors.iter())
+        .map(|(&sv, &fl)| {
+            u64::try_from(u128::from(sv) * 1000 / u128::from(fl.max(1))).unwrap_or(u64::MAX)
+        })
+        .min()
+        .unwrap_or(0);
+
     FeedbackResult {
+        race_quotes: served_economy.len() as u64,
+        race_refused,
+        race_margin_min_milli,
         age_years: st.height / BLOCKS_PER_YEAR,
         median,
         elasticity_milli: eps_milli,

@@ -551,6 +551,74 @@ the maintainer were measured against the **held bundle**
 decl, the C++ marshal seam), **not against `dev`** — that file is not
 on `dev`, and the ruling was made with that disclosed.
 
+## Review round 14 (FL-R18's premise refuted; (a) indicated, 2026-09-06)
+
+**The anonymity premise under FL-R18 was examined and does not hold**,
+and both legs were verified in this tree before anything was recorded
+(§4.5b). (1) `reference_block: [u8; 32]` is written to the wire **in
+the clear** (`shekyl-wire` `transaction.rs`) with a daemon acceptance
+window of `MIN_AGE = 5` … `MAX_AGE = 100`
+(`shekyl-daemon-rpc`) — construction time is already public at finer
+resolution than a 125–429-block fee flip, and the reference-block
+cohort is *smaller* than the fee cohort §4.4 was protecting. (2) `C_q`
+is a deterministic function of public chain state, so every conforming
+wallet at a height posts the same rate and the fee is **redundant with
+the block carrying it** — a fact **this document already asserted in
+its own W3 row** while §4.4 built a gate on its opposite. Redundant
+data leaks nothing. The residual is the INVERSE case — a *non*-matching
+fee self-marks a wallet — which is a fingerprint, not a timing leak.
+
+**The one surviving harm with teeth was measured: the rejection race
+(§4.5b).** Lags stated and justified: 1 block; 3 (≈ 6 min: FCMP++
+proving at the rule-76 floor, human confirmation, Dandelion++ stem);
+25 (a signing session left open); and 100 — the protocol's own ceiling
+`FCMP_REFERENCE_BLOCK_MAX_AGE`, past which no conforming transaction
+can be submitted. **Refusals: 0 of 72 000 000 quotes at every lag,
+interior and oscillating cells alike — and that zero proves nothing.**
+It is structural: these traces hold the median fixed, and with a fixed
+median the floor is monotonically non-increasing while the clamp puts
+every quote at or above it, so a refusal was impossible by
+construction. Reporting the zero as the answer would have been a
+collapsed observable.
+
+**What actually governs the race is the MARGIN over the floor**, which
+IS measurable here: median 1.29×, but **154 of 800 served-map cells sit
+at the clamp with under 2% headroom**, where a **1% median contraction
+inside the quote window refuses the transaction**. Thin states cluster
+at `D = 50` and at the widest medians. This also corrects §5.4's "the
+clamp is never live on the reachable grid" — measured on the
+drift-honest interior it is live, often.
+
+**That measurement decides FL-R18: the race is
+DISPOSITION-INDEPENDENT.** It is a property of clamping at quote time,
+present under every option; the band already worsens it (51 → 154 thin
+cells) and a dwell floor would worsen it further. It gives no reason to
+prefer (c) — it argues the other way — so it does not hold the row
+open. **FL-R18 takes (a), accept as bounded**, recorded as *examined
+and refuted* rather than quietly superseded, with the failure mode
+named on the record: four layers of threat model were built on the
+premise without anyone asking what the leak was. **(c) is withdrawn as
+a mechanism** (its §4.5a delay-destabilises measurement stands as the
+independent second reason, and the instrument mode is kept only so
+that result stays reproducible). **No rework lands in the bundle** —
+the built `fee_correction_quantized` is unchanged.
+
+**Minted: FL-R19** — the thin-margin exposure the race measurement
+found, with four candidate dispositions and none adopted. It is a real
+finding that belongs in its own row rather than buried in FL-R18.
+
+**Kept from the (c) round, independent of the disposition:** FL-C4a's
+subject problem — **re-grounded** rather than replaced, since without a
+mechanism there is no tautology: dwell bounds the *stale-quote
+self-marking rate*, not cohort size, and every decision the criterion
+drove survives that re-grounding (raw `C` still fails, hardest). And
+the estimate clamp's real role at §5.2, now carrying the measured
+margin and the warning that any future staleness spends exactly the
+headroom shown to be thin.
+
+*Provenance: relayed through the umbrella lane; **in-tree
+countersignature owed** on both FL-R18's (a) and FL-R19's minting.*
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
@@ -794,22 +862,23 @@ directly. Dispositions:
    rename) and follows the design PR's merge.**
 2. ~~FL-R17~~ — **SIGNED (a) three tiers at review round 7**, standard
    as default (§5.5); single-rate rejected with named reopeners.
-3. ~~FL-R18~~ — **RULED (c) at round 13** (relayed; in-tree
-   countersignature owed), `N = 240` measured at §4.5a. Two conditions
-   ride the implementing PR: FL-C4a's replacement subject
-   (restart-inclusive floor application) and the acceptance-invariant
-   red test. **Open for the countersignature:** §4.5a's finding that
-   (c) trades cycle frequency for cycle breadth and does not close
-   FL-C7.
-4. **FL-R13 / FL-D5** — fee-floor basis calibration round: its FL-R12′
+3. ~~FL-R18~~ — **(a) ACCEPT AS BOUNDED at round 14**; the anonymity
+   premise was examined and refuted (§4.5b), (c) withdrawn, **no rework
+   in the bundle**. Relayed; in-tree countersignature owed.
+4. **FL-R19 — the rejection race's thin margin (minted round 14):
+   UNSIGNED, decision required.** 154 of 800 served-map cells sit at
+   the clamp with < 2% headroom; a 1% median contraction inside the
+   quote window refuses the transaction. Four candidate dispositions on
+   the row.
+5. **FL-R13 / FL-D5** — fee-floor basis calibration round: its FL-R12′
    gate is SATISFIED (signed round 8, amendment adopted), so the round is
    simply open — non-blocking (the perpetual-tail ruling retired the
    genesis-blocking escalation), scheduled on its own merits.
-5. **PRs** — the design PR is **this PR (#614)**; the implementation
+6. **PRs** — the design PR is **this PR (#614)**; the implementation
    follows as the round-9 split: `feat/fee-ladder-impl-1` (atomic
    bundle, built and gated) then `-impl-2` (mechanical rename), each
    opened after this document merges.
-6. Census-R2: **both resume conjuncts are SATISFIED** — FL-R12′ signed
+7. Census-R2: **both resume conjuncts are SATISFIED** — FL-R12′ signed
    (round 8) and the red test extant (graduated green on impl-1). R2 can
    resume per its own criterion; the routing to the consensus lane
    (C2-R0 phase 2, which edits `CONSENSUS_RULE_CENSUS.md` §10) carries
