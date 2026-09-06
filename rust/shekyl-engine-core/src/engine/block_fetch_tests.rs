@@ -12,6 +12,7 @@
 //! repository already uses).
 
 use super::*;
+use crate::engine::test_support::conforming_pqc_extra;
 use core::future::Future;
 use shekyl_rpc_types::HashHex;
 
@@ -113,7 +114,7 @@ fn coinbase_block(number: u64) -> Block {
                     key: [1u8; 32],
                     view_tag: 0,
                 }],
-                extra: vec![],
+                extra: conforming_pqc_extra(1),
             },
             ct: Ct::Null(CtBase {
                 enc_amounts: vec![[7u8; 9]],
@@ -211,7 +212,7 @@ fn parse_pruned_tx_rejects_coinbase_shaped() {
                 key: [1u8; 32],
                 view_tag: 0,
             }],
-            extra: vec![],
+            extra: conforming_pqc_extra(1),
         },
         ct: Ct::Null(CtBase {
             enc_amounts: vec![[0u8; 9]],
@@ -237,7 +238,7 @@ fn parse_pruned_tx_rejects_coinbase_shaped() {
                 key: [1u8; 32],
                 view_tag: 0,
             }],
-            extra: vec![],
+            extra: conforming_pqc_extra(1),
         },
         ct: Ct::Fcmp {
             fee: 0,
@@ -301,7 +302,7 @@ fn pruned_spend_tx(unlock_time: u64) -> Transaction {
                     view_tag: 1,
                 },
             ],
-            extra: vec![],
+            extra: conforming_pqc_extra(2),
         },
         ct: Ct::Fcmp {
             fee: 0,

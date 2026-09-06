@@ -8,6 +8,9 @@
 //! unlock_time block-height form, and `nbp == 1`. Chain-context rules (§13) are
 //! the consensus layer's and are not exercised here.
 
+mod common;
+use common::conforming_pqc_extra;
+
 use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{
     Block, BondPost, BondPostKind, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable,
@@ -94,7 +97,7 @@ fn spend(inputs: Vec<Input>, outputs: Vec<Output>, unlock_time: u64, nbp: usize)
             unlock_time,
             inputs,
             outputs,
-            extra: vec![],
+            extra: conforming_pqc_extra(n_out),
         },
         ct: Ct::Fcmp {
             fee: 0,
@@ -536,3 +539,86 @@ fn block_rejects_non_coinbase_miner_tx() {
     let err = Block::from_bytes(&bad.serialize()).unwrap_err();
     assert!(err.to_string().contains("miner tx"), "{err}");
 }
+
+// ── CEN-I19: the tx_extra PQC field shape, at the validator ──────────────────
+//
+// The shape rule's own KATs call `check_pqc_field_shape` directly, so they stay
+// green whether or not `validate_context_free_pruned` invokes it. These are the
+// falsifier for the WIRING: each mutates an otherwise-valid spend and asserts
+// the validator refuses it, so deleting or bypassing that call turns these red.
+
+/// Rebuild a valid two-output spend, then replace its `tx_extra` wholesale.
+fn spend_with_extra(extra: Vec<u8>) -> Transaction {
+    let mut tx = spend(vec![ki(2), ki(1)], vec![out(), out()], 0, 1);
+    tx.prefix.extra = extra;
+    tx
+}
+
+fn pqc_fields(kem_len: usize, leaf_len: usize) -> Vec<u8> {
+    use shekyl_wire::tx_extra::{serialize, TxExtraField};
+    serialize(&[
+        TxExtraField::PqcKemCiphertext(vec![0x6a; kem_len]),
+        TxExtraField::PqcLeafHashes(vec![0x7b; leaf_len]),
+    ])
+    .expect("test tx_extra serializes")
+}
+
+#[test]
+fn validator_accepts_the_conforming_field_shape() {
+    spend_with_extra(conforming_pqc_extra(2))
+        .validate_context_free_pruned()
+        .expect("one 0x06 of 1120*n and one 0x07 of 32*n must validate");
+}
+
+#[test]
+fn validator_rejects_both_pqc_fields_absent() {
+    let err = spend_with_extra(Vec::new())
+        .validate_context_free_pruned()
+        .unwrap_err();
+    assert!(err.to_string().contains("0x06"), "{err}");
+}
+
+#[test]
+fn validator_rejects_a_duplicate_leaf_hash_field() {
+    use shekyl_wire::tx_extra::{serialize, TxExtraField, PQC_LEAF_HASH_BYTES};
+    let mut extra = conforming_pqc_extra(2);
+    extra.extend_from_slice(
+        &serialize(&[TxExtraField::PqcLeafHashes(vec![
+            0x7b;
+            PQC_LEAF_HASH_BYTES * 2
+        ])])
+        .expect("second 0x07 serializes"),
+    );
+    let err = spend_with_extra(extra)
+        .validate_context_free_pruned()
+        .unwrap_err();
+    assert!(err.to_string().contains("0x07"), "{err}");
+    assert!(err.to_string().contains("exactly one"), "{err}");
+}
+
+#[test]
+fn validator_rejects_a_leaf_hash_field_of_the_wrong_length() {
+    // 32*(n-1) — the shape the DB used to zero-fill into a leaf.
+    let err = spend_with_extra(pqc_fields(1120 * 2, 32))
+        .validate_context_free_pruned()
+        .unwrap_err();
+    assert!(err.to_string().contains("0x07"), "{err}");
+    assert!(err.to_string().contains("64 required"), "{err}");
+}
+
+#[test]
+fn validator_rejects_a_kem_field_of_the_wrong_length() {
+    let err = spend_with_extra(pqc_fields(1120, 32 * 2))
+        .validate_context_free_pruned()
+        .unwrap_err();
+    assert!(err.to_string().contains("0x06"), "{err}");
+}
+
+// The zero-output arm of the rule is NOT exercised here on purpose. Every
+// zero-output shape this validator accepts is a serve-credit fee-only
+// transaction, and that arm's own shape check ("serve_credit tx must be
+// fee-only …") refuses a mutated fixture before the field-shape rule is
+// reached — a test asserting rejection here would pass without the CEN-I19
+// wiring at all. The arm is covered where it is reachable: at C++ admission
+// (`tx_extra_pqc_field_shape.cpp`, which drives the real serve-credit parity
+// transaction) and by the rule's own KAT in `shekyl-wire::tx_extra`.
