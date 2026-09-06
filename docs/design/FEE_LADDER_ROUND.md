@@ -724,6 +724,71 @@ same shape of bug at round 12 (frozen state) and this one at round 14
 not by the measurement looking wrong — because a wrong-but-plausible
 number looks exactly like a right one.
 
+## Round 16b — both rows countersigned (2026-09-06)
+
+**FL-R18 countersigned on (a)**, with the framing instruction binding:
+the row records *the premise as refuted*, not the disposition as
+chosen. The maintainer's own statement of the finding, now in the row:
+`C_q` is deterministic from public chain state, so every conforming
+wallet in a window computes the same value and an observer derives it
+from the block regardless — **the fee is redundant with what the block
+already discloses.** (a) is what is left once that is written down.
+
+**FL-R19 ruled (b)** — clamp the served economy rung with a fixed
+margin above the unbuffered floor — **and the threat is now stated
+properly, which this round had not done**: *adversary NONE.* It is a
+**liveness** failure, not a disclosure, and it needs **three
+conjuncts**: the construction-to-broadcast gap spans at least one block
+(the median cannot move within a block interval); the short-term median
+is the binding term, i.e. the quiet-chain case; and the state is
+thin-margin (**49 of 800** — the figure the ruling quoted, 154, predates
+the round-16 instrument correction). Consequence: a refused broadcast,
+recoverable by re-quoting; no fund loss, no leak.
+
+**(d) is REFUTED, not merely unchosen, and verified at source before
+recording:** `rv.txnFee` is an **operand of `shekyl_verify_ct_balance`**
+(`src/fcmp/ct_semantics.cpp`, the standard site and the bond-post
+variant), so the fee closes the commitment sum and re-quoting at
+broadcast means re-constructing and **re-signing**. For a hot
+interactive wallet that is a no-op dressed as a fix; for the exposed
+flows — offline signing, hardware confirmation, batched or scheduled
+sends — it is exactly the expensive round trip the failure would have
+cost anyway. **It helps the population that does not need it and cannot
+help the one that does.** **(c)** re-deriving the relay floor stays open
+at the cutover (CEN-M3 / FL-D2) but **must not be justified by this
+race**.
+
+**Binding implementation constraint, written as a constraint and not as
+advice: the margin must be a FIXED DETERMINISTIC MULTIPLIER — never
+randomized, never per-wallet.** Otherwise the quote stops being
+derivable from chain state and manufactures exactly the fingerprint
+FL-R18 just established does not otherwise exist.
+
+**Sizing is pre-registered BEFORE the numbers exist**, and the
+instrument is named including what it is not: the refusal *rate* cannot
+size this — the traces are structurally blind to it and that blindness
+is the finding, not a zero. The quantity that can see it is the
+**construction-to-broadcast gap distribution across real wallet
+flows** — wallet instrumentation, not chain simulation, so **not this
+lane's measurement**. Criterion: cover the plausible median contraction
+over the **p95 gap for the offline-signing flow**; if that distribution
+is sub-block for essentially all flows, the margin may be nominal.
+
+**For the round log, at the maintainer's instruction:** the §5.4
+correction — "the clamp is never live on the reachable grid", against a
+measured population of cells sitting *at* the clamp — is **the third
+refuted claim today**, the same shape as Q2's doubling time and
+FL-R18's parked-baseline premise: *a statement about the world, living
+in a rationale, that no instrument had ever checked.* All three landed
+the same day, which is the argument for **reason-needs-an-instrument
+being a gate rather than a habit**.
+
+*Provenance: both countersignatures were given in-channel and relayed
+through the umbrella lane. Checked before recording: PR #634 carries no
+approving review — the three `radawson`-attributed review comments on it
+are this lane's own GraphQL replies, posted under that account. So these
+are relayed countersignatures, not in-tree ones, and the rows say so.*
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
@@ -967,15 +1032,14 @@ directly. Dispositions:
    rename) and follows the design PR's merge.**
 2. ~~FL-R17~~ — **SIGNED (a) three tiers at review round 7**, standard
    as default (§5.5); single-rate rejected with named reopeners.
-3. ~~FL-R18~~ — **(a), because the premise is refuted** (rounds 14–15;
-   the residual corrected at 15 from staleness to implementation
-   divergence), (c) withdrawn, **no rework in the bundle**. Relayed;
-   in-tree countersignature owed.
-4. **FL-R19 — the rejection race's thin margin (minted round 14):
-   UNSIGNED, decision required.** 49 of 800 served-map cells sit at the
-   clamp with < 2% headroom (corrected at round 16); a 1% median
-   contraction inside the quote window refuses the transaction. Four
-   candidate dispositions on the row.
+3. ~~FL-R18~~ — **(a) COUNTERSIGNED (relayed)**, because the premise is
+   refuted (rounds 14–15; residual corrected at 15 to implementation
+   divergence), (c) withdrawn, **no rework in the bundle**.
+4. ~~FL-R19~~ — **(b) RULED (relayed)**: fixed deterministic margin
+   above the unbuffered floor; (d) refuted at source, (c) open but not
+   here. **Owed to the wallet lane, not this one:** the
+   construction-to-broadcast gap distribution that sizes the margin
+   against the pre-registered criterion.
 5. **FL-R13 / FL-D5** — fee-floor basis calibration round: its FL-R12′
    gate is SATISFIED (signed round 8, amendment adopted), so the round is
    simply open — non-blocking (the perpetual-tail ruling retired the
