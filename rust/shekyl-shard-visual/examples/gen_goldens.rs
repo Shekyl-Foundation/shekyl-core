@@ -43,6 +43,20 @@ fn capture(program: &str, args: &[&str]) -> String {
 }
 
 fn main() {
+    // Captured ONCE, and an indeterminate result stops generation rather than
+    // defaulting. `capture` returns "unknown" when the command fails, and
+    // "unknown" is non-empty -- so testing it inline for non-emptiness would
+    // record a tree whose state could not be read as CLEAN, which is the one
+    // value the consuming KAT accepts. A provenance field must never fail
+    // toward the answer that passes.
+    let status = capture("git", &["status", "--porcelain"]);
+    assert!(
+        status != "unknown",
+        "cannot determine whether the tree is clean (`git status` failed); \
+         refusing to write a provenance record that would claim either state"
+    );
+    let dirty = !status.is_empty();
+
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/goldens");
     fs::create_dir_all(&out_dir).expect("create tests/goldens");
 
@@ -67,8 +81,7 @@ fn main() {
             // uncommitted changes, without which the sha does not identify
             // what was actually rendered.
             "source_tree_commit": capture("git", &["rev-parse", "HEAD"]),
-            "source_tree_dirty": !capture("git", &["status", "--porcelain"]).is_empty()
-                && capture("git", &["status", "--porcelain"]) != "unknown",
+            "source_tree_dirty": dirty,
             "golden_size": GOLDEN_SIZE,
         }),
     );

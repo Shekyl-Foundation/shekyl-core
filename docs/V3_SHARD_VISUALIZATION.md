@@ -352,8 +352,9 @@ check.
 
 Ratified 2026-09-05 (all three questions as packaged, corrections in
 force). The measurement half — goldens, KATs, the avalanche test, the
-floor-device budget matrix — executes separately when sequenced; this
-section is its precondition, because the thresholds below are
+floor-device budget matrix — **was executed 2026-09-06**; see
+*Measurements of record* below. This section remained its
+precondition, because the thresholds below are
 **pre-registered**: they were fixed before any cross-platform run
 produced a number, and they may change only by a recorded amendment
 citing the measurement that motivated it, never by quiet retuning. A
@@ -881,8 +882,12 @@ plainly, because "regression bound" otherwise implies automation that
 does not exist:
 
 - **(a) Named trigger, manual — the standing mechanism.** Any change
-  to a renderer, the compositor, or the entropy draws obliges a
-  floor re-run before merge. Carried as a `docs/FOLLOWUPS.md` row
+  in the **timed path** obliges a floor re-run before merge. The
+  measured operation is `render_candidate_png_from_params` end to end
+  — render *plus* PNG encode — so the trigger covers its whole call
+  graph (renderers, compositor, palette, entropy draws, the encode
+  path, and the imaging dependencies), not just the renderers: a
+  subset would let a regression in through the part left out. Carried as a `docs/FOLLOWUPS.md` row
   with the trigger conditions written out. It relies on discipline —
   but so does every reopener in this program, and the alternative is
   pretending otherwise.
@@ -1214,9 +1219,11 @@ review and performance testing during the V3.x implementation cycle.
 **Final algorithm palette.** The **candidate.v1** two-stage difference
 compositor (see above) is the leading design from empirical exploration.
 Its determinism bar and the falsifiers for the closure are ruled
-(*Rendering determinism and empirical closure (ruling B)*); what
-remains open is the measurement half — the floor-device budget matrix
-and the committed goldens — which executes when sequenced.
+(*Rendering determinism and empirical closure (ruling B)*). The
+measurement half — the floor-device budget matrix and the committed
+goldens — was executed 2026-09-06 (*Measurements of record*); what
+remains open is the ruling it forced, recorded under *Performance
+targets*.
 The single-algorithm list below remains the documented fallback if
 candidate.v1 fails review. Final disposition closes during V3.x
 implementation against mobile budget and continuity testing.

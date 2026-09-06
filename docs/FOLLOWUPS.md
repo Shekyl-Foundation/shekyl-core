@@ -1007,9 +1007,12 @@ Default. Lands before genesis if it should exist at launch.
   performance targets are regression bounds enforced by a named trigger (option (a) of *Where the bound is
   enforced*), because nothing else re-runs them.
   - Target: pre-genesis
-  - **Trigger conditions — any of these obliges a floor re-run BEFORE merge:** a change to any renderer
-    (`rust/shekyl-shard-visual/src/render/*.rs`), to the compositor (`src/candidate.rs`), or to the entropy
-    draws (`src/entropy.rs` — namespace strings or draw indices).
+  - **Trigger conditions — a change anywhere in the TIMED PATH obliges a floor re-run BEFORE merge.** The
+    measured operation is `render_candidate_png_from_params` end to end (render **plus** PNG encode), so the
+    trigger is its whole call graph, not just the renderers: `src/render/*.rs`, `src/candidate.rs`,
+    `src/compositor.rs`, `src/palette.rs`, `src/entropy.rs`, the encode path in `src/lib.rs`, and a version
+    change in the `image`/`imageproc`/`png` dependencies. Naming a subset would let a regression enter through
+    the part that was left out.
   - **How:** cross-compile `--example budget_matrix` for `aarch64-unknown-linux-gnu` (skl-pi has no Rust
     toolchain), run the `floor` profile on skl-pi — ping the board first, no sudo — and commit the capture
     under `docs/benchmarks/`.
