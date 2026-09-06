@@ -619,6 +619,55 @@ headroom shown to be thin.
 *Provenance: relayed through the umbrella lane; **in-tree
 countersignature owed** on both FL-R18's (a) and FL-R19's minting.*
 
+## Review round 15 (maintainer, on PR #634): the residual was wrong, and the framing
+
+Two corrections, both taken; the first retracts something round 14
+asserted.
+
+- **The stated residual does not distinguish anything.** Round 14 wrote
+  that a fee "not matching the schedule" self-marks a stale wallet.
+  **`check_fee` is a FLOOR, not an equality** — verified at source:
+  `if (fee < needed_fee - needed_fee/50) reject` (`blockchain.cpp`) — so
+  a fee differing from the rate of its including block is the ORDINARY
+  case: any transaction that waits across a rate change lands that way
+  and is accepted, as does any deliberate overpayment. Stale wallet and
+  honest-but-delayed wallet are indistinguishable and neither is marked.
+  **Verified further, on the half this lane owns, and it sharpens the
+  correction:** the honest comparison is fee against the transaction's
+  own `reference_block`, but that is *not* an equality either —
+  `REF_ANCHOR_AGE = FCMP_REFERENCE_BLOCK_MIN_AGE + 1 = 6`, while the
+  wallet's estimate comes from `get_dynamic_base_fee_estimate`, which
+  computes at the **tip**. **Fee and reference height are six blocks
+  apart by construction**, so demanding `fee == C_q(reference_height)`
+  would mark conforming wallets built in the six blocks after a change.
+  The real observable is set membership in the one-or-two `C_q` values
+  spanning the construction window, and what it detects is
+  **IMPLEMENTATION DIVERGENCE, not staleness**.
+- **What that does to FL-C4a, said plainly rather than left to sit.**
+  Dwell's relationship to the surviving observable **points the wrong
+  way**: fewer rate changes mean fewer occasions for a divergent
+  implementation to betray itself — a benefit to a broken wallet, and
+  only derivatively to its users. **FL-C4a is therefore no longer an
+  anonymity criterion at all.** It is retained on
+  **quantization-quality and user-predictability** grounds (a quote that
+  moves every 3–6 blocks is a bad quote regardless of who is watching),
+  which carries every decision it drove — raw `C` fails hardest,
+  quantization passes — while removing the refuted justification. Round
+  14's re-grounding was thinner than it claimed; round 15 says how much.
+- **Framing (maintainer's explicit instruction): the row records the
+  PREMISE AS REFUTED, not the disposition as chosen.** FL-R18 is
+  restructured so the refutation *is* the row and the dispositions are
+  its consequence — the premise was examined and found empty, therefore
+  there is nothing for a mechanism to fix, therefore (a). (b)/(c)/(d)
+  are noted as mechanisms for a harm that does not exist rather than as
+  options out-competed on cost, with (c)'s delay-destabilises
+  measurement kept as the independent second reason since it stands
+  whatever the premise did. **(a) is not the cheap option; it is what
+  remains.**
+
+FL-R19 is untouched by both corrections and stands as minted, still
+unsigned. Nothing ships; no rework reaches the bundle.
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
@@ -862,9 +911,10 @@ directly. Dispositions:
    rename) and follows the design PR's merge.**
 2. ~~FL-R17~~ — **SIGNED (a) three tiers at review round 7**, standard
    as default (§5.5); single-rate rejected with named reopeners.
-3. ~~FL-R18~~ — **(a) ACCEPT AS BOUNDED at round 14**; the anonymity
-   premise was examined and refuted (§4.5b), (c) withdrawn, **no rework
-   in the bundle**. Relayed; in-tree countersignature owed.
+3. ~~FL-R18~~ — **(a), because the premise is refuted** (rounds 14–15;
+   the residual corrected at 15 from staleness to implementation
+   divergence), (c) withdrawn, **no rework in the bundle**. Relayed;
+   in-tree countersignature owed.
 4. **FL-R19 — the rejection race's thin margin (minted round 14):
    UNSIGNED, decision required.** 154 of 800 served-map cells sit at
    the clamp with < 2% headroom; a 1% median contraction inside the
