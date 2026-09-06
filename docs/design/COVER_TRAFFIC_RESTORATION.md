@@ -1250,31 +1250,42 @@ PWD-I1 and PWD-B9 land**, because those change the rule it was taken under.
 Calling it indeterminate invites throwing it away; calling it time-scoped
 invites repeating it, which is the correct instruction.
 
-**And on the zones this measurement runs on, PWD-B9 cannot secure the
-precondition at all.** `CEILING_ZONES` counts `is_encrypted()`, so the carrier
-exists on `tor` and `i2p` and nowhere else. A same-host cap is a real bound
-only where a distinct host costs something: on `public_` a distinct host means
-a distinct IP, so a cap of `k` is a genuine limit with a computable
-stem-capture consequence. On `tor` a "host" is an onion address — a keypair,
-free to mint — so the same cap recovers duplicate avoidance and bounds nothing
-an adversary cares about.
+**A same-host cap is not a sybil bound in ANY zone, and an earlier draft of
+this paragraph got that wrong in a way worth recording.** It said the cap binds
+on `public_` because a distinct host means a distinct IP, and fails only on
+`tor` because onions are free. That framing is a trap: stated as an overlay
+carve-out, the cap gets derived as a sybil bound for `public_` and inherits
+exactly the error the carve-out was meant to prevent.
 
-That asymmetry has to be stated here rather than assumed away, because the
-transport's name invites the opposite reading. Tor supplies transport
-encryption and IP concealment. It supplies **no sybil resistance** — that is
-what makes onion addresses free — and **no source ambiguity**, which is the
-stem's job, not the transport's. Encryption changes what an observer sees on
-the wire; it changes nothing about what a peer costs to create. (The inherited
-comment crediting Tor with sybil protection is already retired from the tree;
-the reasoning is retired at `levin_notify.cpp:732`. The habit of calling these
-"anonymity zones" is what would re-import it.)
+**The discriminator is MINTED versus OBSERVED, not overlay versus clearnet.**
+`peer_id` is minted by the peer that declares it, in every zone —
+`net_node.inl:1109` and `:2754` assign it straight off the wire; only our own
+is generated. And `is_same_host` for ipv4 is exact IP equality
+(`net_utils_base.h:83`, `ip() == other.ip()`), so a /24 supplies 256 free
+"hosts" on `public_` as surely as a keypair supplies one on `tor`. What the
+cap keys on is cheap to multiply everywhere; only the unit price differs.
 
-So the condition on the result is narrower and firmer than "wait for PWD-B9":
-on `tor` and `i2p`, no value of B9 makes the observed boundness adversarially
-meaningful, so a §3.1c reading is a measurement of the HONEST posture. That is
-the right thing to measure for a bandwidth budget — cover cost is paid against
-honest peers — but the number must not be cited as evidence about an
-adversarial one.
+So the transport's name must not do any work here. Tor supplies transport
+encryption and IP concealment. It supplies **no sybil resistance** and **no
+source ambiguity** — the latter is the stem's job, not the transport's.
+Encryption changes what an observer sees on the wire; it changes nothing about
+what a peer costs to create. (The inherited comment crediting Tor with sybil
+protection is already retired in-tree — `levin_notify.cpp:732` retires the
+reasoning. The habit of calling `tor`/`i2p` "the anonymity zone" is what would
+bring it back, so this section uses the `epee::net_utils::zone` names.)
+
+**The condition on the result therefore is not "wait for PWD-B9".** No cap of
+the kind B9 was scoped to set makes the observed boundness adversarially
+meaningful, in any zone. A §3.1c reading measures the **honest posture** — the
+right thing for a bandwidth budget, since cover cost is paid against honest
+peers — and must not be cited as evidence about an adversarial one. That is a
+property of the reading, not a defect awaiting a fix.
+
+**And do not treat B9's absence as temporary.** The P2P design rounds were
+halted 2026-09-06; the direction is the daemon owning its own onion key, an
+identity proven by possession rather than declared on the wire. B9 may never be
+written in the form this section's earlier drafts assumed, so nothing here
+should be sequenced behind it.
 
 Recorded here rather than tracked elsewhere because **an absent rule is
 invisible to every check that reads this document** — no gate, no test and no
