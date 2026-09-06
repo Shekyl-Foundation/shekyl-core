@@ -768,8 +768,8 @@ pre-renumber tags until recapture.)*
 **9.5 Inputs** — `gen 0x00`: `tag(1) · V(height)`. `fcmp 0x01`: `tag(1) · key_image[32]` (no `amount`/`key_offsets`, Q1).
 **9.6 Outputs** — `tagged_key 0x00` (sole type): `V(amount) · tag(1) · key[32] · view_tag(1)` (amount cleartext for coinbase, `0` for confidential spend outputs).
 **9.6a `tx_extra` PQC fields** (inside `extra` of §9.4 — genesis-pinned internal structure, not opaque; FA-6 / POST_QUANTUM_CRYPTOGRAPHY / CT2 §3.1):
-- **`0x06` KEM ciphertext** — **per output**: `varint(len) · x25519_eph[32] · ML-KEM-768 ct[1088]` (≈1120 B each).
-- **`0x07` PQC leaf hashes** — **per tx**: `h_pqc[32] × n_outputs` concatenated in vout order (`h_pqc = Blake2b(pqc_pk)`); **not self-describing** — consensus parses `32·n_outputs` (n from `vout`). Feeds the curve-tree leaf `{O.x, I.x, C.x, h_pqc}`.
+- **`0x06` KEM ciphertext** — ~~**per output**: `varint(len) · x25519_eph[32] · ML-KEM-768 ct[1088]` (≈1120 B each)~~ **Refuted 2026-09-05** (ruled by Rick; refuted, not superseded — the struck sentence stays as the record of what the spec claimed): both implementations emit and read **one field per transaction** — C++ `construct_miner_tx` / `construct_tx_with_tx_key` build a single `tx_extra_pqc_kem_ciphertext` reserving `n_outputs · HYBRID_KEM_CT_BYTES` (`src/cryptonote_core/cryptonote_tx_utils.cpp:197`, `:498`); Rust reads one blob (`rust/shekyl-wire/src/tx_extra.rs:222`, `read_blob`) that `pqc_kem_per_output` splits. **Corrected — per tx:** `varint(len) · (x25519_eph[32] · ML-KEM-768 ct[1088]) × n_outputs` in vout order, self-describing on the wire, and **consensus requires** `len == 1120·n_outputs` (n from `vout`): exactly one field when `n > 0`, none when `n == 0` (CEN-I19; a short or missing field leaves the recipient unable to ever see or spend the payment, which a relay-only rule would still let a miner commit).
+- **`0x07` PQC leaf hashes** — **per tx**: `h_pqc[32] × n_outputs` concatenated in vout order (`h_pqc = Blake2b(pqc_pk)`); ~~**not self-describing** — consensus parses `32·n_outputs` (n from `vout`)~~ **Refuted 2026-09-05** (ruled by Rick; refuted, not superseded): both serializers length-prefix the field — C++ `FIELD(blob)` on `std::string` writes `varint(size)` then the bytes and reads under a `remaining_bytes()` bound (`src/serialization/string.h:36-40`); Rust `read_blob` (`rust/shekyl-wire/src/tx_extra.rs:224-225`). **Corrected:** `varint(len) · h_pqc[32] × n_outputs`, self-describing on the wire, and **consensus requires** `len == 32·n_outputs`: exactly one field when `n > 0`, none when `n == 0` (CEN-I19; the field is the fourth scalar of every leaf these outputs become, so a short or missing field used to be zero-filled into the tree). Feeds the curve-tree leaf `{O.x, I.x, C.x, h_pqc}`.
 **9.7 Ct** — `ct_type(1)` then:
 - `Null` (coinbase, 1 output): `enc_amounts[1×9] · enc_labels[1×9] · outPk[1×32]`
 - `Fcmp` (spend): `V(fee) · referenceBlock[32] · enc_amounts[nout×9] · enc_labels[nout×9] · outPk[nout×32] · PqcAuths · Prunable`
@@ -1008,11 +1008,15 @@ they have different authorities:
    The **key derivation already exists** (`archival_p.rs:120-123`, KAT'd); only the
    **wire/record surfacing** is open and lands in the clean crate (§4),
    **not** by patching the to-be-retired `bond_wire.rs`. **Security-critical.**
-2. **`tx_extra` 0x06 (PQC KEM ct) is not opaque** — per output:
-   `varint(len) · x25519_eph[32] · ML-KEM-768 ct[1088]` (≈1120 B)
+2. **`tx_extra` 0x06 (PQC KEM ct) is not opaque** — ~~per output~~ **one field
+   per tx** (refuted 2026-09-05, §9.6a):
+   `varint(len) · (x25519_eph[32] · ML-KEM-768 ct[1088]) × n_outputs`, consensus
+   requires `len == 1120·n_outputs` (CEN-I19)
    (FA-6 / POST_QUANTUM_CRYPTOGRAPHY §Phase 2; `extra.rs` `PqcKemCiphertext`).
 3. **`tx_extra` 0x07 (PQC leaf hashes)** = per-tx `h_pqc[32] × n_outputs`
-   concatenated (vout order), **not self-describing** — parsed by output count
+   concatenated (vout order), ~~**not self-describing** — parsed by output count~~
+   **length-prefixed** (refuted 2026-09-05, §9.6a); consensus requires
+   `len == 32·n_outputs` (CEN-I19)
    (FA-6 §3.1; CT2_DRAIN_ORDER §3.1; `h_pqc = Blake2b(pqc_pk)`).
 4. **`view_tag` derivation is wrong in §2.2** — it is `HKDF-SHA512(ml_kem_ss,
    salt=shekyl-view-tag-prefilter-v1, label‖output_index_le64)[0]`, off the

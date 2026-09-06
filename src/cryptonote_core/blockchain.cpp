@@ -1574,6 +1574,14 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   }
 
   CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx, hf_version), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
+  // CEN-I19: the coinbase carries its outputs' 0x06 / 0x07 fields like every
+  // other transaction (construct_miner_tx emits both); the shape rule runs
+  // here because the coinbase never passes core::check_tx_semantic.
+  {
+    std::string why;
+    CHECK_AND_ASSERT_MES(check_tx_extra_pqc_field_shape(b.miner_tx, why), false,
+      "miner transaction " << why << " in block " << get_block_hash(b));
+  }
 
   // §2.3 output-point rule for coinbase output keys: pool txs get this via
   // core::check_tx_semantic -> check_outs_valid; the miner tx never passes

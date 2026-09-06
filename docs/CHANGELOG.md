@@ -4,6 +4,27 @@
 
 ### Fixed
 
+- **Consensus: the `tx_extra` PQC fields have a shape rule, and the storage
+  fail-open that hid its absence is gone (CEN-I19, S1).** A transaction whose
+  `0x07` leaf-hash field was missing, short, long or unparsable was accepted at
+  connect and the DB zero-filled `h_pqc` for the uncovered outputs — a leaf
+  whose post-quantum binding was to nothing (unspendable) and a leaf set a
+  faithful port would not have stored; the `0x06` KEM-ciphertext field had the
+  same gap, leaving a recipient unable to ever see or spend the payment. Ruled
+  by Rick 2026-09-05: with `n = vout.size()`, exactly one `0x06` of `1120·n`
+  bytes and exactly one `0x07` of `32·n` when `n > 0`, neither when `n == 0`
+  (serve-credit transactions), and duplicates are rejected because first-match
+  parsing let the same bytes mean two things. The rule lives in `shekyl-wire`
+  and reaches the daemon through `shekyl_tx_extra_pqc_field_shape`; the C++
+  adapter runs in `check_tx_semantic` (relay and block, no `kept_by_block`
+  exemption) and `prevalidate_miner_transaction`; the DB collector aborts on the
+  same shape instead of zero-filling. Red-first: every vector observed accepted
+  at all three gates before the rule. `GENESIS_TX_WIRE_FORMAT.md` §9.6a had
+  both lines wrong in mirrored ways (`0x06` "per output"; `0x07` "not
+  self-describing") — corrected under refuted-not-superseded with the
+  serializer lines that refute them. Every producer already emits both fields
+  at the full length, genesis included, so no conforming transaction changes.
+
 - **Consensus: the block header's `curve_tree_root` is now checked at
   admission against the tip root, before the block is added (CEN-B5, S1).**
   `handle_block_to_main_chain` compared the header against the tree root read

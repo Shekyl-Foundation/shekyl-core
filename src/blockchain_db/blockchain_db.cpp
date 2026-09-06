@@ -500,7 +500,6 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     const BlockHeight bh{block_height_raw};
     std::vector<uint8_t> leaf_data;
     uint64_t new_output_count = 0;
-    static constexpr uint8_t zero_pqc[32] = {};
 
     // Capture output count BEFORE add_transaction calls above added this block's outputs.
     // add_transaction has already run by this point, so we subtract back.
@@ -509,15 +508,34 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
       this_block_output_count += tx_pair.first.vout.size();
     uint64_t next_output_seq = get_num_outputs(0) - this_block_output_count;
 
+    // CEN-I19: admission guarantees every transaction with outputs carries
+    // exactly one 0x07 field of PQC_LEAF_HASH_BYTES * vout.size() bytes
+    // (check_tx_extra_pqc_field_shape, at core::check_tx_semantic and
+    // prevalidate_miner_transaction). This used to return {} on a parse
+    // failure, an absent field or a length that was not a multiple of 32, and
+    // collect_outputs then zero-filled h_pqc for every output past the end of
+    // the blob -- the fail-open that stored leaves whose PQ binding was to
+    // nothing, invisibly. Every arm below is unreachable for an admitted
+    // transaction and aborts rather than falls back, so the shape cannot
+    // return silently (CEN-L11 pattern). A transaction with no outputs carries
+    // no field and contributes no leaf.
     auto extract_leaf_hashes = [](const transaction& tx) -> std::vector<uint8_t> {
+      if (tx.vout.empty())
+        return {};
       std::vector<tx_extra_field> fields;
       if (!parse_tx_extra(tx.extra, fields))
-        return {};
+        throw DB_ERROR(("curve-tree leaf: tx_extra does not parse at DB add for tx "
+          + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+          + " (validated at admission?)").c_str());
       tx_extra_pqc_leaf_hashes lh;
       if (!find_tx_extra_field_by_type(fields, lh))
-        return {};
-      if (lh.blob.size() % PQC_LEAF_HASH_BYTES != 0)
-        return {};
+        throw DB_ERROR(("curve-tree leaf: no 0x07 leaf-hash field at DB add for tx "
+          + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+          + " with " + std::to_string(tx.vout.size()) + " output(s) (validated at admission?)").c_str());
+      if (lh.blob.size() != PQC_LEAF_HASH_BYTES * tx.vout.size())
+        throw DB_ERROR(("curve-tree leaf: 0x07 leaf-hash field is " + std::to_string(lh.blob.size())
+          + " bytes, " + std::to_string(PQC_LEAF_HASH_BYTES * tx.vout.size()) + " required, at DB add for tx "
+          + epee::string_tools::pod_to_hex(get_transaction_hash(tx)) + " (validated at admission?)").c_str());
       return std::vector<uint8_t>(lh.blob.begin(), lh.blob.end());
     };
 
@@ -525,14 +543,12 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     // Each output is tracked by its global output index for exact reversal.
     auto collect_outputs = [&](const transaction& tx, bool is_miner) {
       const auto leaf_hash_blob = extract_leaf_hashes(tx);
-      const size_t num_leaf_hashes = leaf_hash_blob.size() / PQC_LEAF_HASH_BYTES;
 
       for (uint64_t i = 0; i < tx.vout.size(); ++i) {
         const OutputIndex this_output{next_output_seq++};
         const auto& vout = tx.vout[i];
-        const uint8_t* h_pqc = (i < num_leaf_hashes)
-            ? (leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES)
-            : zero_pqc;
+        // extract_leaf_hashes pinned the blob to exactly one hash per output.
+        const uint8_t* h_pqc = leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES;
 
         crypto::public_key output_key;
         uint64_t maturity_raw;

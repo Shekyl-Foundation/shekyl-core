@@ -14,6 +14,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **The inherited merge-mining block-template path still emits `tx_extra` `0x03` into coinbases, a tag the Rust wire parser does not know.** `core_rpc_server.cpp:896-902` (`add_mm_merkle_root_to_tx_extra` on `get_block_template` with merge-mining arguments) is Monero lineage with no Shekyl consumer; a coinbase built through it parses in C++ and fails in `shekyl-wire` (`tx_extra.rs` `parse`: unknown tag ⇒ unparseable), the one place the daemon and the port disagree on what `extra` admits. Surfaced by CEN-I19 (census §7 #19), which for that reason applies its shape rule on the daemon's own parse rather than the port's. Delete the merge-mining path (rule 60) — then the port's parser can become the admission parser. `0x0B` (`tx_extra_archival_attestation`, no producer found) and `0xDE` (minergate) are the same class.
+  - Target: pre-genesis
+
 - **The block-weight penalty-free-zone arbitration was punted and never landed.** `GENESIS_TX_WIRE_FORMAT.md` :806–811 flagged the `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE` V1/V2/V5 lineage (300 000 consumed as given) as "the arbitration belongs to the economics doc"; no doc ever received it, and the long-term 1.7× clamps ride along unexamined (owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-G6b; C2 batch R2).
   - Target: pre-genesis
 

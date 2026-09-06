@@ -974,6 +974,56 @@ namespace cryptonote
   }
   //---------------------------------------------------------------
   //---------------------------------------------------------------
+  bool check_tx_extra_pqc_field_shape(const transaction& tx, std::string& reason)
+  {
+    std::vector<tx_extra_field> fields;
+    if (!parse_tx_extra(tx.extra, fields))
+    {
+      reason = "tx_extra does not parse; the PQC field shape cannot be established";
+      return false;
+    }
+    std::vector<size_t> kem_lens, leaf_lens;
+    for (const tx_extra_field& f : fields)
+    {
+      if (const auto* kem = std::get_if<tx_extra_pqc_kem_ciphertext>(&f))
+        kem_lens.push_back(kem->blob.size());
+      else if (const auto* leaf = std::get_if<tx_extra_pqc_leaf_hashes>(&f))
+        leaf_lens.push_back(leaf->blob.size());
+    }
+    const int32_t rc = shekyl_tx_extra_pqc_field_shape(tx.vout.size(),
+      kem_lens.empty() ? nullptr : kem_lens.data(), kem_lens.size(),
+      leaf_lens.empty() ? nullptr : leaf_lens.data(), leaf_lens.size());
+    if (rc == SHEKYL_TX_EXTRA_PQC_SHAPE_OK)
+      return true;
+    const size_t n = tx.vout.size();
+    std::ostringstream oss;
+    switch (rc)
+    {
+      case SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_PRESENT_WITHOUT_OUTPUTS:
+        oss << "tx_extra 0x06 present on a transaction with no outputs"; break;
+      case SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_MISSING:
+        oss << "tx_extra 0x06 missing on a transaction with " << n << " output(s)"; break;
+      case SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_DUPLICATE:
+        oss << "tx_extra 0x06 appears " << kem_lens.size() << " times; exactly one is admitted"; break;
+      case SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_LENGTH:
+        oss << "tx_extra 0x06 is " << kem_lens[0] << " bytes; " << HYBRID_KEM_CT_BYTES * n
+            << " required for " << n << " output(s)"; break;
+      case SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_PRESENT_WITHOUT_OUTPUTS:
+        oss << "tx_extra 0x07 present on a transaction with no outputs"; break;
+      case SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_MISSING:
+        oss << "tx_extra 0x07 missing on a transaction with " << n << " output(s)"; break;
+      case SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE:
+        oss << "tx_extra 0x07 appears " << leaf_lens.size() << " times; exactly one is admitted"; break;
+      case SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH:
+        oss << "tx_extra 0x07 is " << leaf_lens[0] << " bytes; " << PQC_LEAF_HASH_BYTES * n
+            << " required for " << n << " output(s)"; break;
+      default:
+        oss << "tx_extra PQC field shape check failed with code " << rc; break;
+    }
+    reason = oss.str();
+    return false;
+  }
+  //---------------------------------------------------------------
   bool check_output_types(const transaction& tx, const uint8_t hf_version)
   {
     for (const auto &o: tx.vout)

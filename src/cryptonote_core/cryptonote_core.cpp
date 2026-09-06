@@ -805,6 +805,23 @@ namespace cryptonote
       }
     }
 
+    // CEN-I19: the 0x06 / 0x07 fields are per-output consensus data (the
+    // recipient's KEM ciphertext; the curve-tree leaf's fourth scalar). Their
+    // count and length against vout.size() is checked here, on relay and on
+    // block, with no kept_by_block exemption -- a leaf-construction
+    // invariant, not relay policy. The DB collector below admission aborts
+    // on the same shape rather than zero-filling (blockchain_db.cpp).
+    {
+      std::string why;
+      if (!check_tx_extra_pqc_field_shape(tx, why))
+      {
+        MERROR_VER("tx " << why << ", rejected for tx id= " << get_transaction_hash(tx));
+        tvc.m_verifivation_failed = true;
+        tvc.m_invalid_output = true;
+        return false;
+      }
+    }
+
     if(!check_money_overflow(tx))
     {
       MERROR_VER("tx has money overflow, rejected for tx id= " << get_transaction_hash(tx));
