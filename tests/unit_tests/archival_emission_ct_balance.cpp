@@ -86,6 +86,7 @@ extern "C"
 #include "fcmp/bulletproofs_plus.h"
 #include "fcmp/ct_ops.h"
 #include "fcmp/ct_semantics.h"
+#include "pqc_spend_fixture.h"
 #include "shekyl/shekyl_ffi.h"
 
 using namespace cryptonote;
@@ -202,6 +203,9 @@ transaction make_emission_tx(const ct::CtSig& rv, const ct::key& backing_pseudo_
     auth.auth_version = 1;
 
   tx.ct_signatures = rv;
+  // CEN-I19: a transaction with outputs must carry its 0x06/0x07 fields or
+  // check_tx_semantic rejects it before the dispatch this test drives.
+  shekyl_test_fixtures::append_pqc_fields(tx);
   return tx;
 }
 
