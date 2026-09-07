@@ -869,7 +869,14 @@ design against the first.
      section names) showing **any cell over the amended targets**,
      where the change responsible is **retained rather than reverted**
      — that is, the cost is accepted as intended behaviour rather than
-     treated as the regression the standing trigger assumes; **or**
+     treated as the regression the standing trigger assumes. **This is
+     not an exception to that trigger.** Its rule — an over-budget cell
+     is a regression, never a *quiet* retune — still holds: the default
+     remains fix-or-revert, and retaining the change instead is itself
+     the decision that must be argued and recorded here, by the same
+     amendment discipline that moved the targets on 2026-09-06. What
+     reopens the palette is the recorded acceptance, not the raw
+     measurement; **or**
    - rule 76's floor device is redefined to hardware slower than the
      Raspberry Pi 4 Model B Rev 1.4, and a floor capture on that device
      exceeds the amended targets; **or**
