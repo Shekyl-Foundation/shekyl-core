@@ -95,8 +95,12 @@ def main() -> None:
     if dupes:
         sys.exit(f"FAIL: duplicate names in SHEKYL_LMDB_TABLES: {dupes}")
 
-    # The live table set, computed once: every leg below compares against it
-    # in both directions.
+    # The DECLARED table set, computed once: every leg below compares against
+    # it in both directions. Declared, not runtime — a writable open() drops
+    # `hf_starting_heights` (LMDB_WRITE_ATOMICITY_AUDIT.md, DRS-W5), so the
+    # running store holds one fewer. This gate cannot see that difference by
+    # construction, since both sides of every comparison it makes derive from
+    # this same macro; naming the set precisely is the least it can do.
     table_set = set(tables)
 
     doc = DOC.read_text(encoding="utf-8")
@@ -182,7 +186,7 @@ def main() -> None:
                       f"db_lmdb.cpp defines VERSION {code_v.group(1)}")
 
     # Registry leg. The P0a reconciliation registry in the DRS design doc
-    # claims one row per live table; that claim gets the same pin the schema
+    # claims one row per DECLARED table; that claim gets the same pin the schema
     # doc has, or it drifts the same way the schema doc's "Total: 41" did.
     # Subject assertion first (rule 47): the registry section itself must
     # exist and parse to a plausible row set before its content is compared.
@@ -245,7 +249,7 @@ def main() -> None:
                       f"{len(tables)} tables")
 
     # Audit leg (P0b, 2026-09-05). The atomicity audit's §10 coverage matrix
-    # claims one row per live table — the DRS §9.1 leg-3 pin ("every MDB_dbi
+    # claims one row per DECLARED table — the DRS §9.1 leg-3 pin ("every MDB_dbi
     # in the audit"), stated at the table-name layer the macro owns. Same
     # subject-assertion and non-masking discipline as the registry leg.
     try:
