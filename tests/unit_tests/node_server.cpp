@@ -181,20 +181,23 @@ TEST(node_server, sanitize_peerlist_drops_undialable_ipv4)
   cprotocol.set_p2p_endpoint(&server);
 
   std::vector<nodetool::peerlist_entry> peers;
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080), 1, 100});   // kept
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 2, 100});   // ip 0: dropped
-  peers.push_back({MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 3, 100});       // port 0: dropped
-  peers.push_back({net::tor_address::unknown(), 4, 100});                 // tor port 0: kept
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080), 100, 0});   // kept
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(0, 0, 0, 0, 18080), 100, 0});   // ip 0: dropped
+  peers.push_back({MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 0), 100, 0});       // port 0: dropped
+  peers.push_back({net::tor_address::unknown(), 100, 0});                 // tor port 0: kept
 
   ASSERT_TRUE(server.sanitize_peerlist(peers));
 
-  std::set<nodetool::peerid_type> ids;
+  std::set<std::string> kept;
   for (const auto &pe : peers)
   {
-    ids.insert(pe.id);
+    kept.insert(pe.adr.str());
     EXPECT_EQ(0, pe.last_seen); // remote-supplied timestamps are discarded
   }
-  EXPECT_EQ((std::set<nodetool::peerid_type>{1, 4}), ids);
+  EXPECT_EQ((std::set<std::string>{
+              MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080).str(),
+              net::tor_address::unknown().str()}),
+            kept);
 }
 
 TEST(ban, add)
@@ -626,8 +629,7 @@ TEST(cryptonote_protocol_handler, race_condition)
     using uuid_t = boost::uuids::uuid;
     using relay_t = cryptonote::relay_method;
     using blobs_t = std::vector<cryptonote::blobdata>;
-    using id_t = nodetool::peerid_type;
-    using callback_t = std::function<bool(contexts::cryptonote &, id_t, uint32_t)>;
+    using callback_t = std::function<bool(contexts::cryptonote &, uint32_t)>;
     using address_t = epee::net_utils::network_address;
     using connections_t = std::vector<std::pair<zone_t, uuid_t>>;
     struct bans {
@@ -691,7 +693,7 @@ TEST(cryptonote_protocol_handler, race_condition)
     virtual bool for_connection(const uuid_t& uuid, callback_t f) override {
       if (shared_state)
         return shared_state->for_connection(uuid,[&f](context_t &context){
-          return f(context, context.peer_id, context.support_flags);
+          return f(context, context.support_flags);
         });
       else
         return {};
@@ -734,7 +736,7 @@ TEST(cryptonote_protocol_handler, race_condition)
     virtual void for_each_connection(callback_t f) override {
       if (shared_state)
         shared_state->foreach_connection([&f](context_t &context){
-          return f(context, context.peer_id, context.support_flags);
+          return f(context, context.support_flags);
         });
     }
     virtual void request_callback(const contexts::basic &context) override {
@@ -1133,7 +1135,7 @@ TEST(node_server, race_condition)
       std::vector<blob_t> txs(128 / 64 * 1024 * 1024, blob_t(1, 'x'));
       worker_t worker([this]{
         p2p_endpoint->for_each_connection(
-          [this](context_t &, uint64_t, uint32_t){
+          [this](context_t &, uint32_t){
             {
               unique_lock_t guard(lock);
               ++counter;
@@ -1258,7 +1260,7 @@ TEST(node_server, race_condition)
     event_t handshaked;
     typename messages::handshake::request_t msg{{
       ::config::NETWORK_ID,
-      58080,
+      epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0, 58080}},
     }};
     epee::net_utils::async_invoke_remote_command2<typename messages::handshake::response>(
       context,
@@ -1392,23 +1394,81 @@ TEST(node_server, tx_proxy_outbound_floor_refuses_underprovisioned_counts)
   EXPECT_EQ(-1, omitted->front().max_connections);
 }
 
-TEST(node_server, anonymity_zone_announces_the_sentinel_peer_id)
+TEST(node_server, handshake_nonce_fires_once_and_only_within_its_zone)
 {
-  // Q12-R-W3. `peer_id` is announced on EVERY zone the node runs — in the
-  // handshake, in the anonymity-zone self-announcement peerlist entry, and in
-  // `handle_ping`'s response. Only the public zone is given a random value;
-  // an anonymity zone must keep the fixed sentinel, so the value carries no
-  // entropy and links nothing.
-  //
-  // Randomizing an anonymity zone's `peer_id` — which reads as a tidy-up,
-  // since "only the public zone is randomized" looks like an oversight — would
-  // give every node a stable unique identifier announced on both its clearnet
-  // and its Tor connections. Recovering the operator's IP from their `.onion`
-  // would then be a passive lookup with no timing analysis at all.
-  //
-  // The assertion is on the announced value rather than on `init` refusing,
-  // so it survives deletion of the guard in `init` and fails on the edit
-  // itself.
+  // The self-detection nonce's ruled contract (PWD-E3 + the zone-scoping
+  // requirement): recognised exactly ONCE (erase-on-match, so a peer that
+  // learned N by being dialed cannot make it fire twice), and only on the
+  // zone it was recorded for — a cross-zone match would turn the drop into
+  // a cross-zone correlation oracle, the exact leak the inherited peer_id
+  // check warned about.
+  struct test_data_t
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+
+    test_data_t(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+  };
+
+  test_data_t data;
+
+  boost::program_options::options_description desc_options("Command line options");
+  cryptonote::core::init_options(desc_options);
+  Server::init_options(desc_options);
+
+  const char* argv[2] = {nullptr, nullptr};
+  boost::program_options::variables_map vm;
+  boost::program_options::store(
+    boost::program_options::parse_command_line(1, argv, desc_options), vm);
+
+  vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+    boost::program_options::variable_value(std::string("127.0.0.2"), false);
+  vm.find(nodetool::arg_p2p_bind_port.name)->second =
+    boost::program_options::variable_value(std::string("48086"), false);
+  vm.find(nodetool::arg_tx_proxy.name)->second =
+    boost::program_options::variable_value(
+      std::vector<std::string>{"tor,127.0.0.1:9050,12"}, false);
+
+  boost::program_options::notify(vm);
+  ASSERT_TRUE(data.server->init(vm));
+
+  const std::array<uint8_t, 32> nonce{{0x5a}};
+  data.server->record_outbound_handshake_nonce(epee::net_utils::zone::public_, nonce);
+
+  // Within-zone only: the tor probe must NOT match — and must not consume.
+  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::zone::tor, nonce))
+    << "a nonce recorded on public_ matched on tor: the drop is a cross-zone "
+       "correlation oracle";
+
+  // Fires exactly once on its own zone...
+  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce));
+  // ...and a replay cannot fire it again.
+  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce))
+    << "erase-on-match failed: a peer that learned the nonce by being dialed "
+       "could replay it";
+
+  // The attempt-termination path: an erased nonce never matches.
+  data.server->record_outbound_handshake_nonce(epee::net_utils::zone::public_, nonce);
+  data.server->erase_outbound_handshake_nonce(epee::net_utils::zone::public_, nonce);
+  EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce));
+
+  data.server->deinit();
+}
+
+TEST(node_server, anonymity_zone_announces_the_constant_unknown_address)
+{
+  // Successor of the Q12-R-W3 sentinel-peer_id pin, for the identifier-free
+  // handshake (PWD-I1): nothing announced on an anonymity zone may carry
+  // entropy. `basic_node_data.address` is now the ONLY announced value, and
+  // a dialer-only tor zone must announce the zone's CONSTANT unknown
+  // sentinel — equal for every node, linking nothing. A per-node value here
+  // (an onion, a random address) would correlate this node's hidden-service
+  // activity with its clearnet identity exactly as a random peer_id did.
   struct test_data_t
   {
     test_core pr_core;
@@ -1452,18 +1512,21 @@ TEST(node_server, anonymity_zone_announces_the_sentinel_peer_id)
   boost::program_options::notify(vm);
   ASSERT_TRUE(data.server->init(vm));
 
-  EXPECT_EQ(nodetool::ANON_ZONE_SENTINEL_PEER_ID,
-            data.server->get_announced_peer_id(epee::net_utils::zone::tor))
-    << "an anonymity zone must announce the fixed sentinel: a per-node value here "
-       "correlates this node's hidden-service address with its public IP";
+  EXPECT_EQ(epee::net_utils::network_address{net::tor_address::unknown()},
+            data.server->get_announced_address(epee::net_utils::zone::tor))
+    << "a dialer-only anonymity zone must announce the constant unknown "
+       "sentinel: any per-node value correlates the hidden service with the "
+       "node's other identities";
 
-  // Negative control. Without this the assertion above would also pass on a
-  // harness that could not observe a per-zone difference at all — the public
-  // zone IS randomized, and the two must not agree.
-  EXPECT_NE(nodetool::ANON_ZONE_SENTINEL_PEER_ID,
-            data.server->get_announced_peer_id(epee::net_utils::zone::public_))
-    << "the public zone is randomized; if it reads as the sentinel the test is "
-       "not observing the per-zone value";
+  // Negative control, and the port-only public advert pinned at unit level:
+  // the public zone announces ipv4 with the HOST HALF ZEROED — only the
+  // port is the claim — so the two zones' announcements must differ and the
+  // public one must carry no host.
+  const auto pub = data.server->get_announced_address(epee::net_utils::zone::public_);
+  ASSERT_EQ(epee::net_utils::ipv4_network_address::get_type_id(), pub.get_type_id());
+  EXPECT_EQ(0u, pub.as<epee::net_utils::ipv4_network_address>().ip())
+    << "the public advert is port-only; the host half must stay zeroed";
+  EXPECT_EQ(data.server->get_announced_port(epee::net_utils::zone::public_), pub.port());
 
   data.server->deinit();
 }
@@ -1785,14 +1848,14 @@ namespace
     }
 
     virtual void for_each_connection(
-      std::function<bool(cryptonote::cryptonote_connection_context&, nodetool::peerid_type, uint32_t)> f) override
+      std::function<bool(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
     {
       for (auto &c : conns)
-        if (!f(c, 0, 0))
+        if (!f(c, 0))
           return;
     }
     virtual bool for_connection(const boost::uuids::uuid &id,
-      std::function<bool(cryptonote::cryptonote_connection_context&, nodetool::peerid_type, uint32_t)> f) override
+      std::function<bool(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
     {
       // Production propagates the callback's own result: epee's
       // `for_connection` returns false both when the id is absent and when the
@@ -1800,7 +1863,7 @@ namespace
       // `if(!cb(...)) return false;`). A double that always returned true on a
       // match would be more permissive than the endpoint it stands for.
       for (auto &c : conns)
-        if (c.m_connection_id == id) return f(c, 0, 0);
+        if (c.m_connection_id == id) return f(c, 0);
       return false;
     }
     virtual bool drop_connection(const epee::net_utils::connection_context_base &context) override

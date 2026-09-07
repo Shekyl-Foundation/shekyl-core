@@ -112,72 +112,10 @@ namespace nodetool
   socks_connect_internal(const std::atomic<bool>& stop_signal, boost::asio::io_context& service, const net::socks::endpoint& proxy, const epee::net_utils::network_address& remote);
 
 
-  /*! The `peer_id` every node announces on an anonymity zone.
-
-    \note DO NOT RANDOMIZE THIS. `peer_id` is announced on the wire in three
-      places — the handshake (`node_data.peer_id`), the anonymity-zone
-      self-announcement peerlist entry, and `handle_ping`'s response — and it
-      is announced on *every* zone the node runs. Only the public zone is
-      given a random value; an anonymity zone keeps this fixed sentinel, so
-      the value carries no entropy and correlates nothing.
-
-      Giving an anonymity zone a random `peer_id` would hand every node a
-      stable unique identifier announced on both its clearnet and its Tor
-      connections. Recovering the operator's IP from their `.onion` address
-      would then be a passive lookup — connect to the hidden service, read
-      `peer_id` from the handshake, scan clearnet for a match — with no
-      timing analysis and no traffic correlation. `node_server::init`
-      enforces this invariant and refuses to start if it is broken.
-
-      \note The cross-zone argument above does NOT survive the obvious
-      counter-proposal — "give the anonymity zone its own independently
-      random `peer_id`, sharing no entropy with clearnet". The same-zone
-      argument does, and it is the one that keeps this constant a constant.
-
-      A stable identifier on an anonymity zone is an **eclipse-completion
-      oracle**, and the direction of announcement hands it to exactly the
-      wrong party. Inbound anonymity connections carry no client identity:
-      `net_node.cpp` sets every hidden-service listener's `default_remote`
-      to `net::tor_address::unknown()`, so an attacker accepting N inbound
-      streams sees N identical remotes. But `get_local_node_data` fills
-      `node_data.peer_id` on the **dialer** side and the acceptor reads it
-      into `context.peer_id`, so a victim filling its outbound slots
-      announces to every attacker onion it dials while the attacker
-      announces nothing back that matters.
-
-      Eclipse is three steps: get onions into the victim's peerlist (cheap —
-      gossip does it), get the victim to dial them (probabilistic), and know
-      it worked. Step three has no cheap solution today — grouping must be
-      inferred from correlated handshake timing, matching sync heights and
-      correlated peerlist responses, which is noisy and confounded because
-      twelve streams from one victim look much like twelve streams from
-      twelve victims. A distinct `peer_id` collapses step three to a field
-      read at handshake, before any traffic, turning an open-loop gamble
-      into a closed-loop operation with a completion signal: at 9/12 the
-      attacker knows to publish more onions, and at 12/12 it knows every
-      subsequent observation is sound rather than possibly explained by an
-      honest link. The same read, against one onion accepting inbound, is a
-      census of the anonymity network.
-
-      The trade is not close, and it is not symmetric. The defender's use is
-      **retrospective** — a node learns it is eclipsed only after it is —
-      and the remedy (stop stemming, fluff at origin) is the branch that
-      gives the attacker deterministic origin attribution. The attacker's
-      use is **prospective**, and its remedy is to publish more onions, at
-      near-zero cost. So the distinctness such an identifier would buy is
-      negative-valued on its own terms, before the linkability cost is even
-      counted — and that cost is already spent elsewhere:
-      `shekyl-p-transport::derive_socks_user` gives per-persona SOCKS stream
-      isolation precisely so personas do not share a circuit fate, and a
-      stable per-zone `peer_id` would hand back at the p2p layer the linkage
-      the transport layer exists to deny.
-
-      It would also not work. `peer_id` is self-asserted and free to mint, so
-      an adversary running twelve daemons announces twelve distinct ids at
-      the same cost as twelve onions. A per-zone random value would catch the
-      accidental case and nothing adversarial — worse than no mechanism,
-      because it would read as a defense. */
-  constexpr peerid_type ANON_ZONE_SENTINEL_PEER_ID = 1;
+  // There is no announced node identifier of any kind. The eclipse-oracle
+  // doctrine that once pinned the anon-zone `peer_id` sentinel is preserved
+  // as the rationale for the field's ABSENCE at `basic_node_data`
+  // (`p2p_protocol_defs.h`): the handshake announces WHERE, never WHO.
 
   /*! Which addresses are currently suppressed after failed dials, and for how
     long (Q12-R13).
@@ -267,17 +205,13 @@ namespace nodetool
   template<class base_type>
   struct p2p_connection_context_t: base_type //t_payload_net_handler::connection_context //public net_utils::connection_context_base
   {
-    explicit p2p_connection_context_t(bool is_ping = false)
-      : peer_id(0),
-        support_flags(0),
-        is_ping(is_ping),
+    p2p_connection_context_t()
+      : support_flags(0),
         m_in_timedsync(false)
     {}
 
-    peerid_type peer_id;
     uint32_t support_flags;
     bool m_in_timedsync;
-    bool is_ping;
     std::set<epee::net_utils::network_address> sent_addresses;
   };
 
@@ -288,7 +222,6 @@ namespace nodetool
                      public epee::net_utils::i_connection_limit
   {
     struct by_conn_id{};
-    struct by_peer_id{};
     struct by_addr{};
 
     typedef p2p_connection_context_t<typename t_payload_net_handler::connection_context> p2p_connection_context;
@@ -306,12 +239,10 @@ namespace nodetool
     {
       config_t()
         : m_net_config(),
-          m_peer_id(ANON_ZONE_SENTINEL_PEER_ID),
           m_support_flags(0)
       {}
 
       network_config m_net_config;
-      uint64_t m_peer_id;
       uint32_t m_support_flags;
     };
     typedef epee::misc_utils::struct_init<config_t> config;
@@ -334,7 +265,7 @@ namespace nodetool
           m_current_number_of_out_peers(0),
           m_current_number_of_in_peers(0),
           m_seed_nodes_lock(),
-          m_can_pingback(false),
+          m_can_announce(false),
           m_seed_nodes_initialized(false)
       {
         set_config_defaults();
@@ -356,7 +287,7 @@ namespace nodetool
           m_current_number_of_out_peers(0),
           m_current_number_of_in_peers(0),
           m_seed_nodes_lock(),
-          m_can_pingback(false),
+          m_can_announce(false),
           m_seed_nodes_initialized(false)
       {
         set_config_defaults();
@@ -371,13 +302,27 @@ namespace nodetool
       std::string m_port_ipv6;
       cryptonote::levin::notify m_notifier;
       epee::net_utils::network_address m_our_address; // in anonymity networks
+      // Self-detection nonces for outbound handshakes in flight on THIS
+      // zone (SHEKYL_P2P_PROTOCOL.md, PWD-T1's token carried interim):
+      // inserted immediately before the handshake request is written,
+      // erased when the attempt terminates or on match, whichever first.
+      // Attempt-scoped by construction — bounded by in-flight outbound
+      // attempts, so there is no size limit to choose and no eviction
+      // policy to get wrong. Comparison is within-zone only; a global
+      // window would be a cross-zone correlation oracle.
+      std::set<std::array<uint8_t, 32>> m_inflight_handshake_nonces;
+      epee::critical_section m_nonce_lock;
       peerlist_manager m_peerlist;
       config m_config;
       net::socks::endpoint m_proxy_address;
       std::atomic<unsigned int> m_current_number_of_out_peers;
       std::atomic<unsigned int> m_current_number_of_in_peers;
       boost::shared_mutex m_seed_nodes_lock;
-      bool m_can_pingback;
+      // This zone may announce an inbound endpoint (public port-only advert
+      // or the zone's self-address). Renamed from m_can_pingback: the
+      // back-ping that once verified announcements is deleted (PWD-B10);
+      // the flag's surviving job is the announcement itself.
+      bool m_can_announce;
       bool m_seed_nodes_initialized;
 
     private:
@@ -442,9 +387,23 @@ namespace nodetool
     void get_peerlist(std::vector<peerlist_entry>& gray, std::vector<peerlist_entry>& white);
     bool sanitize_peerlist(std::vector<peerlist_entry>& local_peerlist);
 
-    //! \return The `peer_id` announced on `zone`, or 0 if this node has no such zone.
-    peerid_type get_announced_peer_id(epee::net_utils::zone zone) const;
     uint32_t get_announced_port(epee::net_utils::zone zone) const;
+    //! \return The address `get_local_node_data` would announce for `zone` —
+    //! the derived advertisement's observable (there is no dedicated flag,
+    //! and no identifier, so the announced value is the only witness). On an
+    //! anonymity zone run dialer-only it is the zone's CONSTANT unknown
+    //! sentinel: equal for every node, carrying no entropy, linking nothing.
+    epee::net_utils::network_address get_announced_address(epee::net_utils::zone zone) const;
+    //! Record / erase the self-detection nonce of an outbound handshake
+    //! attempt on `zone` (PWD-T1's token, carried interim on the request).
+    void record_outbound_handshake_nonce(epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce);
+    void erase_outbound_handshake_nonce(epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce);
+    //! \return True exactly once per recorded nonce, and only on the zone it
+    //! was recorded for: an arriving handshake carrying such a nonce IS this
+    //! node. Erases on match, so a replayed nonce cannot fire twice; a
+    //! cross-zone probe never matches — the drop would otherwise be a
+    //! cross-zone correlation oracle.
+    bool detect_self_handshake(epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce);
 
     void change_max_out_public_peers(size_t count);
     uint32_t get_max_out_public_peers() const;
@@ -475,7 +434,6 @@ namespace nodetool
 
       HANDLE_INVOKE_T2(COMMAND_HANDSHAKE, &node_server::handle_handshake)
       HANDLE_INVOKE_T2(COMMAND_TIMED_SYNC, &node_server::handle_timed_sync)
-      HANDLE_INVOKE_T2(COMMAND_PING, &node_server::handle_ping)
       HANDLE_INVOKE_T2(COMMAND_REQUEST_SUPPORT_FLAGS, &node_server::handle_get_support_flags)
       CHAIN_INVOKE_MAP_TO_OBJ_FORCE_CONTEXT(m_payload_handler, typename t_payload_net_handler::connection_context&)
     END_INVOKE_MAP2()
@@ -485,10 +443,8 @@ namespace nodetool
     //----------------- commands handlers ----------------------------------------------
     int handle_handshake(int command, typename COMMAND_HANDSHAKE::request& arg, typename COMMAND_HANDSHAKE::response& rsp, p2p_connection_context& context);
     int handle_timed_sync(int command, typename COMMAND_TIMED_SYNC::request& arg, typename COMMAND_TIMED_SYNC::response& rsp, p2p_connection_context& context);
-    int handle_ping(int command, COMMAND_PING::request& arg, COMMAND_PING::response& rsp, p2p_connection_context& context);
     int handle_get_support_flags(int command, COMMAND_REQUEST_SUPPORT_FLAGS::request& arg, COMMAND_REQUEST_SUPPORT_FLAGS::response& rsp, p2p_connection_context& context);
     bool init_config();
-    bool make_default_peer_id();
     bool make_default_config();
     bool store_config();
 
@@ -504,8 +460,8 @@ namespace nodetool
     virtual bool invoke_notify_to_peer(int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context) final;
     virtual bool drop_connection(const epee::net_utils::connection_context_base& context);
     virtual void request_callback(const epee::net_utils::connection_context_base& context);
-    virtual void for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, peerid_type, uint32_t)> f);
-    virtual bool for_connection(const boost::uuids::uuid&, std::function<bool(typename t_payload_net_handler::connection_context&, peerid_type, uint32_t)> f);
+    virtual void for_each_connection(std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f);
+    virtual bool for_connection(const boost::uuids::uuid&, std::function<bool(typename t_payload_net_handler::connection_context&, uint32_t)> f);
     virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score = 1);
     //----------------- i_connection_filter  --------------------------------------------------------
     virtual bool is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t = NULL);
@@ -519,13 +475,13 @@ namespace nodetool
       );
     bool idle_worker();
     bool handle_remote_peerlist(const std::vector<peerlist_entry>& peerlist, const epee::net_utils::connection_context_base& context);
-    bool get_local_node_data(basic_node_data& node_data, const network_zone& zone) const;
+    bool get_local_node_data(epee::net_utils::zone zone_type, basic_node_data& node_data, const network_zone& zone) const;
     //bool get_local_handshake_data(handshake_data& hshd);
 
     bool connections_maker();
     bool peer_sync_idle_maker();
-    bool do_handshake_with_peer(peerid_type& pi, p2p_connection_context& context, bool just_take_peerlist = false);
-    bool do_peer_timed_sync(const epee::net_utils::connection_context_base& context, peerid_type peer_id);
+    bool do_handshake_with_peer(p2p_connection_context& context, bool just_take_peerlist = false);
+    bool do_peer_timed_sync(const epee::net_utils::connection_context_base& context);
 
     bool make_new_connection_from_peerlist(network_zone& zone, bool use_white_list);
     bool try_to_connect_and_handshake_with_new_peer(const epee::net_utils::network_address& na, bool just_take_peerlist = false, uint64_t last_seen_stamp = 0, PeerType peer_type = white);
@@ -540,8 +496,6 @@ namespace nodetool
     void delete_upnp_port_mapping_v4(uint32_t port);
     void delete_upnp_port_mapping_v6(uint32_t port);
     void delete_upnp_port_mapping(uint32_t port);
-    template<class t_callback>
-    bool try_ping(basic_node_data& node_data, p2p_connection_context& context, const t_callback &cb);
     bool try_get_support_flags(const p2p_connection_context& context, std::function<void(p2p_connection_context&, const uint32_t&)> f);
     bool make_expected_connections_count(network_zone& zone, PeerType peer_type, size_t expected_connections);
     void record_addr_failed(const epee::net_utils::network_address& addr);
@@ -568,6 +522,8 @@ namespace nodetool
     bool set_rate_limit(const boost::program_options::variables_map& vm, int64_t limit);
 
     bool has_too_many_connections(const epee::net_utils::network_address &address);
+    //! \return True if this zone already holds an outbound connection to `adr`'s host.
+    bool has_outbound_connection_to_host(network_zone& zone, const epee::net_utils::network_address& adr);
     size_t get_incoming_connections_count();
     size_t get_incoming_connections_count(network_zone&);
     size_t get_outgoing_connections_count();

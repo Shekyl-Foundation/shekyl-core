@@ -1210,14 +1210,12 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
     nodetool::i_p2p_endpoint<cryptonote::cryptonote_connection_context>& endpoint =
       h->rpc->get_p2p();
     endpoint.for_each_connection(
-      [&](cryptonote::cryptonote_connection_context& ctx,
-          nodetool::peerid_type peer_id, uint32_t support_flags)
+      [&](cryptonote::cryptonote_connection_context& ctx, uint32_t support_flags)
     {
       shekyl_rpc_connection_facts e;
       std::memset(&e, 0, sizeof(e));
       owned->address.push_back(ctx.m_remote_address.str());
       owned->host.push_back(ctx.m_remote_address.host_str());
-      e.peer_id = peer_id;
       std::memcpy(e.connection_id, ctx.m_connection_id.data, sizeof(e.connection_id));
       e.started = static_cast<uint64_t>(ctx.m_started);
       e.last_recv = static_cast<uint64_t>(ctx.m_last_recv);
@@ -1359,7 +1357,6 @@ int shekyl_rpc_peer_list(core_rpc_handle* h, uint8_t public_only,
       {
         shekyl_rpc_peer_facts e;
         std::memset(&e, 0, sizeof(e));
-        e.id = entry.id;
         e.last_seen = static_cast<uint64_t>(entry.last_seen);
         e.pruning_seed = entry.pruning_seed;
         e.white = white;

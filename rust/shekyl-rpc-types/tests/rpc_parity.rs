@@ -790,7 +790,7 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 3] = [
+    let links: [(&str, &str); 4] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -802,6 +802,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         (
             include_str!("vectors/rpc/get_version_synced_v3.json"),
             include_str!("vectors/rpc/get_version_synced_v4.json"),
+        ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v4.json"),
+            include_str!("vectors/rpc/get_version_synced_v5.json"),
         ),
     ];
 
@@ -910,7 +914,6 @@ fn vector_connection() -> ConnectionInfo {
         host: "192.0.2.7".to_owned(),
         ip: "192.0.2.7".to_owned(),
         port: "18080".to_owned(),
-        peer_id: "ee32594917a6a97e".to_owned(),
         recv_count: 405,
         recv_idle_time: 2,
         send_count: 338,
@@ -986,7 +989,6 @@ fn get_peer_list_matches_the_oracle() {
         white_list: vec![
             // ipv4: `host` is the ip string the daemon rendered from `ip`.
             Peer {
-                id: 0x1122_3344_5566_7788,
                 host: "10.32.0.7".to_owned(),
                 ip: 0x0700_200a,
                 port: 18080,
@@ -996,7 +998,6 @@ fn get_peer_list_matches_the_oracle() {
             // ipv6: `host` is the bare host, `ip` stays zero, and this is the
             // pruned entry — so `pruning_seed` appears here and nowhere else.
             Peer {
-                id: 0x99aa_bbcc_ddee_ff00,
                 host: "2001:db8::1".to_owned(),
                 ip: 0,
                 port: 18081,
@@ -1005,7 +1006,6 @@ fn get_peer_list_matches_the_oracle() {
             },
         ],
         gray_list: vec![Peer {
-            id: 0x0102_0304_0506_0708,
             host: "abcdefghijklmnop.onion:18080".to_owned(),
             ip: 0,
             port: 0,
@@ -1013,12 +1013,15 @@ fn get_peer_list_matches_the_oracle() {
             pruning_seed: 0,
         }],
     };
-    assert_parity(include_str!("vectors/rpc/get_peer_list_v1.json"), &built);
+    // _v2 = _v1 minus the identifier fields 3.28 removed (PWD-I1) — derived,
+    // not recaptured: the C++ oracle for this method is gone (RK-5a), so the
+    // chain's memory continues from the Rust emitter's own prior contract.
+    assert_parity(include_str!("vectors/rpc/get_peer_list_v2.json"), &built);
 
     // `ip` is a JSON *number* here. `get_connections` carries a field of the
     // same name that is a *string*, and the pair of assertions is what keeps
     // a future edit from unifying them.
-    let doc = parsed(include_str!("vectors/rpc/get_peer_list_v1.json"));
+    let doc = parsed(include_str!("vectors/rpc/get_peer_list_v2.json"));
     assert!(
         doc["white_list"][0]["ip"].is_number(),
         "peer.ip is a number"
@@ -1048,9 +1051,9 @@ fn get_connections_matches_the_oracle() {
         status: RpcStatus::ok(),
         connections: vec![vector_connection()],
     };
-    assert_parity(include_str!("vectors/rpc/get_connections_v1.json"), &built);
+    assert_parity(include_str!("vectors/rpc/get_connections_v2.json"), &built);
 
-    let doc = parsed(include_str!("vectors/rpc/get_connections_v1.json"));
+    let doc = parsed(include_str!("vectors/rpc/get_connections_v2.json"));
     let entry = doc["connections"][0].as_object().expect("object");
     // `ip` is a string here — the counterpart of the `peer.ip` assertion.
     assert!(entry["ip"].is_string(), "connection_info.ip is a string");
@@ -1097,11 +1100,11 @@ fn sync_info_matches_the_oracle() {
         }],
         overview: "[<...m_o]".to_owned(),
     };
-    assert_parity(include_str!("vectors/rpc/sync_info_v1.json"), &built);
+    assert_parity(include_str!("vectors/rpc/sync_info_v2.json"), &built);
 
     // The nesting is the wire's: a `sync_info` peer wraps the connection
     // under `info`, where `get_connections` carries it directly.
-    let doc = parsed(include_str!("vectors/rpc/sync_info_v1.json"));
+    let doc = parsed(include_str!("vectors/rpc/sync_info_v2.json"));
     assert_eq!(
         doc["peers"][0].as_object().expect("object").len(),
         1,

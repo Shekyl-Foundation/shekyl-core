@@ -233,30 +233,29 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   // carry pointers, so a fill/check twin has nothing to compare and the
   // layout itself is what must agree with
   // `rust/shekyl-daemon-rpc/src/ffi.rs`.
-  static_assert(sizeof(shekyl_rpc_connection_facts) == 144, "connection facts changed size");
+  static_assert(sizeof(shekyl_rpc_connection_facts) == 136, "connection facts changed size");
   static_assert(offsetof(shekyl_rpc_connection_facts, address) == 0, "address offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, address_len) == 8, "address_len offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, host) == 16, "host offset");
   static_assert(offsetof(shekyl_rpc_connection_facts, host_len) == 24, "host_len offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, peer_id) == 32, "peer_id offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, connection_id) == 40, "connection_id offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, started) == 56, "started offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, last_recv) == 64, "last_recv offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, last_send) == 72, "last_send offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, recv_count) == 80, "recv_count offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, send_count) == 88, "send_count offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, current_speed_down) == 96, "current_speed_down offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, current_speed_up) == 104, "current_speed_up offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, height) == 112, "height offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, support_flags) == 120, "support_flags offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, pruning_seed) == 124, "pruning_seed offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, port) == 128, "port offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, state) == 130, "state offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, address_type) == 131, "address_type offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, incoming) == 132, "incoming offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, localhost) == 133, "localhost offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, local_ip) == 134, "local_ip offset");
-  static_assert(offsetof(shekyl_rpc_connection_facts, reserved) == 135, "reserved offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, connection_id) == 32, "connection_id offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, started) == 48, "started offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, last_recv) == 56, "last_recv offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, last_send) == 64, "last_send offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, recv_count) == 72, "recv_count offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, send_count) == 80, "send_count offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, current_speed_down) == 88, "current_speed_down offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, current_speed_up) == 96, "current_speed_up offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, height) == 104, "height offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, support_flags) == 112, "support_flags offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, pruning_seed) == 116, "pruning_seed offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, port) == 120, "port offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, state) == 122, "state offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, address_type) == 123, "address_type offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, incoming) == 124, "incoming offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, localhost) == 125, "localhost offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, local_ip) == 126, "local_ip offset");
+  static_assert(offsetof(shekyl_rpc_connection_facts, reserved) == 127, "reserved offset");
 
   static_assert(sizeof(shekyl_rpc_sync_span_facts) == 72, "sync span facts changed size");
   static_assert(offsetof(shekyl_rpc_sync_span_facts, remote_address) == 0, "remote_address offset");
@@ -270,15 +269,14 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_sync_span_facts, filled) == 64, "filled offset");
   static_assert(offsetof(shekyl_rpc_sync_span_facts, reserved) == 65, "reserved offset");
 
-  static_assert(sizeof(shekyl_rpc_peer_facts) == 48, "peer facts changed size");
+  static_assert(sizeof(shekyl_rpc_peer_facts) == 40, "peer facts changed size");
   static_assert(offsetof(shekyl_rpc_peer_facts, host) == 0, "host offset");
   static_assert(offsetof(shekyl_rpc_peer_facts, host_len) == 8, "host_len offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, id) == 16, "id offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, last_seen) == 24, "last_seen offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, ip) == 32, "ip offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, pruning_seed) == 36, "pruning_seed offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, port) == 40, "port offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, white) == 42, "white offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, blocked) == 43, "blocked offset");
-  static_assert(offsetof(shekyl_rpc_peer_facts, reserved) == 44, "reserved offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, last_seen) == 16, "last_seen offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, ip) == 24, "ip offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, pruning_seed) == 28, "pruning_seed offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, port) == 32, "port offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, white) == 34, "white offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, blocked) == 35, "blocked offset");
+  static_assert(offsetof(shekyl_rpc_peer_facts, reserved) == 36, "reserved offset");
 }
