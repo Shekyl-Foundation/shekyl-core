@@ -429,11 +429,10 @@ never erased from grows without limit however well the insert is ordered. The
 exits are *attempt termination* and *match*, and they are separate code paths —
 a test covering one passes while the other leaks.
 
-**Status in the removal lane (read at `p2p/basic-node-data-address`, PR #643).**
-Both properties are now discharged, and by different means. **The line numbers
-below are read on that branch, not on `dev`, and will move when it merges — the
-symbol names are the durable half of each citation and the lines are the
-perishable half.**
+**Status in the removal lane (PR #643, merged; read on `dev` after the merge).**
+Both properties are now discharged, and by different means. The citations below
+were re-read at `dev` **after** #643 landed rather than on the branch, so they
+are not awaiting confirmation.
 
 - **Ordering is structural, not tested-for.** `mint_recorded_handshake_nonce`
   generates the value, records it into the zone's set, and only *then* returns
