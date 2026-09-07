@@ -58,6 +58,15 @@
 # acted on has the same effect as no check, while costing the trust of the ones
 # that can.
 #
+# WHAT A GREEN HERE IS NOT EVIDENCE FOR, second entry. Other gates read these
+# same files and also go green — check_doc_links.py resolves relative links in
+# docs/, for instance — and two instruments passing over one file are not two
+# confirmations of one claim. Link RESOLUTION and citation LIVENESS are
+# different properties: a document can have every internal link resolve while
+# every `src/...:NNN` it cites points into deleted code, and the reverse. Do
+# not cite a green run of another docs gate as corroboration of this baseline,
+# or this one as corroboration of theirs.
+#
 # DEPTH SAFETY — this gate reads SINGLE REVISIONS, never history. Every git
 # call it makes (`submodule status`, `rev-parse --verify`, `ls-tree`, `show`)
 # answers a question about one named commit or the working tree, so it is
