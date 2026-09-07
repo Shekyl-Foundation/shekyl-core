@@ -920,8 +920,8 @@ fn render_peer(prefix: &str, peer: &shekyl_rpc_types::Peer, now: u64) -> String 
         format!("{}:{}", peer.host, peer.port)
     };
     format!(
-        "{prefix:<10} {:016x} {addr:<25} {:<4x} {elapsed}",
-        peer.id, peer.pruning_seed
+        "{prefix:<10} {addr:<25} {:<4x} {elapsed}",
+        peer.pruning_seed
     )
 }
 
@@ -1045,10 +1045,9 @@ fn print_connections(src: &Source) -> Result<String, String> {
         .unwrap_or(0)
         .max(21);
     let mut out = vec![format!(
-        "{:<width$}{:<8}{:<20}{:<15}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{}",
+        "{:<width$}{:<8}{:<15}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{}",
         "Remote Host",
         "Type",
-        "Peer id",
         "Support Flags",
         "Recv/Sent (inactive,sec)",
         "State",
@@ -1066,10 +1065,9 @@ fn print_connections(src: &Source) -> Result<String, String> {
             if c.local_ip { "[LAN]" } else { "" }
         );
         out.push(format!(
-            "{:<width$}{:<8}{:<20}{:<15}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{:<8}{tail}",
+            "{:<width$}{:<8}{:<15}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{:<8}{tail}",
             format!("{direction}{}", c.address),
             address_type_name(c.address_type),
-            c.peer_id,
             c.support_flags,
             format!(
                 "{}({})/{}({})",
@@ -1260,9 +1258,8 @@ fn sync_info(src: &Source) -> Result<String, String> {
         )]
         let megabytes = size as f64 / 1e6;
         out.push(format!(
-            "{:<24}  {}  {:<16}  {:<8x}  {}  {} kB/s, {nblocks} blocks / {} MB queued",
+            "{:<24}  {:<16}  {:<8x}  {}  {} kB/s, {nblocks} blocks / {} MB queued",
             p.info.address,
-            p.info.peer_id,
             p.info.state.as_str(),
             p.info.pruning_seed,
             p.info.height,

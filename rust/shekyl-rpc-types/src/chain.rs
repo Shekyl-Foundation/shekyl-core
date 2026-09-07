@@ -42,7 +42,14 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.27: three of the header methods change shape
+/// `CORE_RPC_VERSION_MINOR`. 3.28: the peer identifier leaves every readout
+/// (PWD-I1 amendment — no identifier on the wire): `get_connections` /
+/// `sync_info` connections drop `peer_id`, and `get_peer_list` entries drop
+/// `id`. A removed member is a wire change, so it bumps this; the deltas are
+/// pinned against new `_v2` sibling vectors (derived, not recaptured — the
+/// C++ oracle for these methods is gone since RK-5a); the `_v1` captures
+/// stay frozen per the vectors' README.
+/// 3.27: three of the header methods change shape
 /// (RK-5b). `get_block_header_by_hash` answers **per element** — a
 /// `block_headers` array of `{hash, block_header?}` slots rather than a bare
 /// header array — and drops the singular `hash` request field, whose only
@@ -77,7 +84,7 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `get_public_nodes` deleted, advertised `rpc_port` / `rpc_credits_per_hash`
 /// dropped from the peer readouts (PR #533). A wire change bumps this and is
 /// recorded in the design doc; the KV cutover itself never does.
-pub const CORE_RPC_VERSION_MINOR: u32 = 27;
+pub const CORE_RPC_VERSION_MINOR: u32 = 28;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -364,8 +371,9 @@ mod tests {
 
     #[test]
     fn core_rpc_version_packs_like_the_cpp_macro() {
-        // MAKE_CORE_RPC_VERSION(3, 27) == 0x0003_001B == 196635 (3.27:
-        // RK-5b's three header-method shape changes; 3.26 was
+        // MAKE_CORE_RPC_VERSION(3, 28) == 0x0003_001C == 196636 (3.28: the
+        // peer identifier leaves every readout, PWD-I1; 3.27 was RK-5b's
+        // three header-method shape changes; 3.26
         // `get_info.following_degraded`, C2-R1b F-1(a); 3.25 the RK-4c
         // `txs_as_hex`/`txs_as_json` removal). Captured vectors are never
         // edited to follow a constant — each bump mints a sibling vector —
@@ -380,10 +388,10 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_635);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 27);
+        assert_eq!(CORE_RPC_VERSION, 196_636);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 28);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 27);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 28);
     }
 
     #[test]

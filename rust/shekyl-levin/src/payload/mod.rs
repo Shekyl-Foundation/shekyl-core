@@ -22,9 +22,9 @@ mod types;
 pub use address::{NetworkAddress, ADDR_I2P, ADDR_IPV4, ADDR_IPV6, ADDR_TOR};
 pub use block::{BlockCompleteEntry, TxBlobEntry, ATTESTATION_WITNESS_MAX_BYTES};
 pub use commands::{
-    HandshakeRequest, HandshakeResponse, PingRequest, PingResponse, SupportFlagsRequest,
-    SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE, COMMAND_PING,
-    COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, PING_OK,
+    HandshakeRequest, HandshakeResponse, SupportFlagsRequest, SupportFlagsResponse,
+    TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE, COMMAND_REQUEST_SUPPORT_FLAGS,
+    COMMAND_TIMED_SYNC,
 };
 pub use error::Error;
 pub use get::HASH_SIZE;

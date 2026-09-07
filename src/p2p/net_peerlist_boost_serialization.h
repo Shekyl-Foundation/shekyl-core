@@ -41,7 +41,7 @@
 #include "net/i2p_address.h"
 #include "p2p/p2p_protocol_defs.h"
 
-BOOST_CLASS_VERSION(nodetool::peerlist_entry, 4)
+BOOST_CLASS_VERSION(nodetool::peerlist_entry, 5)
 
 namespace boost
 {
@@ -220,10 +220,13 @@ namespace boost
     template <class Archive, class ver_type>
     inline void serialize(Archive &a,  nodetool::peerlist_entry& pl, const ver_type ver)
     {
-      if (ver < 4)
-        throw std::runtime_error("peerlist_entry version < 4: pre-v7 peerlist stores must be dropped by load_peers, not read");
+      // v5: the identifier is gone (PWD-I1 amendment; folded into the v8
+      // store bump). The floor also covers an interim-branch v8 store that
+      // still carried v4 entries: it throws instead of desyncing, and
+      // open() turns the throw into the default-config fallback.
+      if (ver < 5)
+        throw std::runtime_error("peerlist_entry version < 5: pre-current peerlist stores must be dropped by load_peers, not read");
       a & pl.adr;
-      a & pl.id;
       a & pl.last_seen;
       a & pl.pruning_seed;
     }

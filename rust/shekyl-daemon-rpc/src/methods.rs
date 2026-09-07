@@ -1149,7 +1149,6 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         } else {
             String::new()
         },
-        peer_id: format!("{:016x}", c.peer_id),
         recv_count: c.recv_count,
         // Floored at the connection's own age: a peer that has never sent has
         // `last_recv == 0`, and the idle time then means "as long as we have
@@ -1266,7 +1265,6 @@ pub fn get_peer_list(
             continue;
         }
         let peer = Peer {
-            id: e.id,
             host: e.host,
             ip: e.ip,
             port: e.port,
@@ -1848,7 +1846,8 @@ pub(crate) mod tests {
         // Synchronized with a non-zero raw target: the rule zeroes it, and the
         // zero is omitted on the wire exactly as epee omitted it.
         //
-        // Against `_v4`: RK-5b's three header-method shape changes bumped
+        // Against `_v5`: 3.28 removed the peer identifier from every readout
+        // (PWD-I1). Before it: RK-5b's three header-method shape changes bumped
         // `CORE_RPC_VERSION` to 3.27 (3.26 was C2-R1b's `following_degraded`,
         // 3.25 the RK-4c removals), and the vectors are never hand-edited
         // (see their README), so each bump gets a file beside the C++ capture
@@ -1860,7 +1859,7 @@ pub(crate) mod tests {
         assert_eq!(out.target_height, 0);
         let ours: serde_json::Value = serde_json::to_value(&out).unwrap();
         let oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v4.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v5.json"
         ))
         .unwrap();
         assert_eq!(ours, oracle);
@@ -2762,7 +2761,6 @@ pub(crate) mod tests {
         crate::core::ConnectionFacts {
             address: "192.0.2.7:18080".to_owned(),
             host: "192.0.2.7".to_owned(),
-            peer_id: 0x00ee_3259_4917_a97e,
             connection_id: [
                 0x15, 0x1c, 0x23, 0x2a, 0x31, 0x38, 0x3f, 0x46, 0x4d, 0x54, 0x5b, 0x62, 0x69, 0x70,
                 0x77, 0x7e,
@@ -2823,7 +2821,6 @@ pub(crate) mod tests {
         assert_eq!(c.current_download, 4);
         assert_eq!(c.current_upload, 2);
         // Zero-padded to 16, as `peerid_to_string` pads.
-        assert_eq!(c.peer_id, "00ee32594917a97e");
         assert_eq!(c.connection_id, "151c232a31383f464d545b626970777e");
         assert_eq!(c.state, ConnectionState::Normal);
         // ipv4: `ip` echoes the host and `port` is the number as a string.
@@ -2909,10 +2906,9 @@ pub(crate) mod tests {
     /// split comes from the entry's own flag.
     #[test]
     fn the_peer_list_splits_by_list_and_filters_blocked_on_request() {
-        let peer = |id: u64, white: bool, blocked: bool| crate::core::PeerFacts {
-            host: format!("192.0.2.{id}"),
-            id,
-            last_seen: 1_750_000_000 + id,
+        let peer = |n: u64, white: bool, blocked: bool| crate::core::PeerFacts {
+            host: format!("192.0.2.{n}"),
+            last_seen: 1_750_000_000 + n,
             ip: 0,
             pruning_seed: 0,
             port: 18080,
@@ -2939,8 +2935,8 @@ pub(crate) mod tests {
         .expect("peer list");
         assert_eq!(hidden.white_list.len(), 1);
         assert_eq!(hidden.gray_list.len(), 1);
-        assert_eq!(hidden.white_list[0].id, 1);
-        assert_eq!(hidden.gray_list[0].id, 3);
+        assert_eq!(hidden.white_list[0].host, "192.0.2.1");
+        assert_eq!(hidden.gray_list[0].host, "192.0.2.3");
         assert!(facts.asked_public_only.load(Ordering::SeqCst));
 
         let shown = get_peer_list(

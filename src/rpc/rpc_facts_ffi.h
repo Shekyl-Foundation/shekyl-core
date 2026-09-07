@@ -337,7 +337,6 @@ typedef struct shekyl_rpc_connection_facts {
     // `network_address::host_str()` — the host alone.
     const char*  host;
     size_t       host_len;
-    uint64_t     peer_id;              // rendered as hex by the caller
     uint8_t      connection_id[16];    // raw uuid; hex is the caller's job
     uint64_t     started;              // unix seconds
     uint64_t     last_recv;            // unix seconds; 0 if never
@@ -412,7 +411,6 @@ void shekyl_rpc_sync_spans_free(void* owner);
 typedef struct shekyl_rpc_peer_facts {
     const char*  host;
     size_t       host_len;
-    uint64_t     id;
     uint64_t     last_seen;
     uint32_t     ip;                   // ipv4 only, octets in network order; else 0
     uint32_t     pruning_seed;

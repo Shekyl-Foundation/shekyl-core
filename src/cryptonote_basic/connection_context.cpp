@@ -43,8 +43,6 @@ namespace cryptonote
       return 65536;
     case nodetool::COMMAND_TIMED_SYNC_T<cryptonote::CORE_SYNC_DATA>::ID:
       return 65536;
-    case nodetool::COMMAND_PING::ID:
-      return 4096;
     case nodetool::COMMAND_REQUEST_SUPPORT_FLAGS::ID:
       return 4096;
     case cryptonote::NOTIFY_NEW_BLOCK::ID:

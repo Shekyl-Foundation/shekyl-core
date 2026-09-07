@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include <array>
 #include <iomanip>
 #include <boost/uuid/uuid.hpp>
 #include <boost/serialization/version.hpp>
@@ -46,33 +47,26 @@
 namespace nodetool
 {
   typedef boost::uuids::uuid uuid;
-  typedef uint64_t peerid_type;
 
-  static inline std::string peerid_to_string(peerid_type peer_id)
-  {
-    std::ostringstream s;
-    s << std::hex << peer_id;
-    return epee::string_tools::pad_string(s.str(), 16, '0', true);
-  }
-  
+  // A peerlist entry carries no identifier (PWD-I1 amendment): a stored id
+  // was a durable identifier keyed to an address — the shape the design
+  // forbids — and it was self-asserted, so it identified nothing anyway.
+  // The address IS the entry: a hypothesis about where a peer can be dialed.
   template<typename AddressType>
   struct peerlist_entry_base
   {
     AddressType adr;
-    peerid_type id;
     int64_t last_seen;
     uint32_t pruning_seed;
 
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE(adr)
-      KV_SERIALIZE(id)
       KV_SERIALIZE_OPT(last_seen, (int64_t)0)
       KV_SERIALIZE_OPT(pruning_seed, (uint32_t)0)
     END_KV_SERIALIZE_MAP()
 
     BEGIN_SERIALIZE()
       FIELD(adr)
-      FIELD(id)
       VARINT_FIELD(last_seen)
       VARINT_FIELD(pruning_seed)
     END_SERIALIZE()
@@ -91,7 +85,7 @@ namespace nodetool
     ss << std::setfill ('0') << std::setw (8) << std::hex << std::noshowbase;
     for(const peerlist_entry& pe: pl)
     {
-      ss << peerid_to_string(pe.id) << "\t" << pe.adr.str()
+      ss << pe.adr.str()
         << " \tpruning seed " << pe.pruning_seed
         << " \tlast_seen: " << (pe.last_seen == 0 ? std::string("never") : epee::misc_utils::get_time_interval_string(now_time - pe.last_seen))
         << std::endl;
@@ -120,21 +114,43 @@ namespace nodetool
     uint32_t send_peerlist_sz;
   };
 
+  /*! What a node announces about itself at handshake.
+
+    There is deliberately no node identifier here. `peer_id` (deleted per
+    the PWD-I1 amendment, `SHEKYL_P2P_PROTOCOL.md`) was self-asserted and
+    free to mint, so it asserted nothing about WHO a peer is — and on an
+    anonymity zone any distinct announced value is an eclipse-completion
+    oracle: the dialer announces it to every acceptor it dials, so an
+    attacker learns at handshake time how many of a victim's outbound slots
+    it holds. What a handshake can honestly establish is that THERE IS A
+    PEER AT THIS ADDRESS.
+
+    `address` is that announcement — a hypothesis about WHERE this node can
+    be dialed, never a claim about WHO is there:
+    - public zone: a port-only advert (host zeroed). The receiver never
+      reads the advertised host half; it combines the advertised port with
+      the host it OBSERVED on the socket — an announcement proves nothing,
+      a dial proves reachability. The derived entry lands in gray and earns
+      white only by being dialed (PWD-I2).
+    - anonymity zones, serving: the zone's own self-address
+      (`zone.m_our_address`), dialable — the only verification an overlay
+      address admits.
+    - dialer-only / hidden: the zone's unknown-address sentinel, recorded
+      nowhere (undialable). The address's type tag reveals only the zone,
+      which the acceptor already knows from its own listener. */
   struct basic_node_data
   {
     uuid network_id;
-    uint32_t my_port;
-    peerid_type peer_id;
+    epee::net_utils::network_address address;
     uint32_t support_flags;
 
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE_VAL_POD_AS_BLOB(network_id)
-      KV_SERIALIZE(peer_id)
-      KV_SERIALIZE(my_port)
+      KV_SERIALIZE(address)
       KV_SERIALIZE_OPT(support_flags, (uint32_t)0)
     END_KV_SERIALIZE_MAP()
   };
-  
+
 
 #define P2P_COMMANDS_POOL_BASE 1000
 
@@ -150,10 +166,22 @@ namespace nodetool
     {
       basic_node_data node_data;
       t_playload_type payload_data;
+      // Self-detection nonce (SHEKYL_P2P_PROTOCOL.md, PWD-T1's token carried
+      // interim on this request until the Noise handshake lands): 32 bytes
+      // of CSPRNG output, in the clear — its only job is to be recognised
+      // by the node that emitted it. Inserted into the dialing zone's
+      // in-flight set immediately before this request is written; an
+      // arriving handshake carrying a nonce this node recently emitted IS
+      // this node. Windows are per zone; comparison is within-zone only —
+      // a global window would let a peer dialed on one zone replay the
+      // nonce into another zone's listener and use the drop as a
+      // cross-zone correlation oracle.
+      std::array<uint8_t, 32> nonce;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(node_data)
         KV_SERIALIZE(payload_data)
+        KV_SERIALIZE_VAL_POD_AS_BLOB(nonce)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<request_t> request;
@@ -204,44 +232,13 @@ namespace nodetool
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  /************************************************************************/
-  /*                                                                      */
-  /************************************************************************/
+  // COMMAND_PING (1003) is deleted (PWD-B10 / PWC-B1): the back-ping was
+  // its only user, and the back-ping's only job was gating whitelist
+  // promotion of an inbound peer, which the earned-trust model forbids —
+  // an inbound advert lands in gray, and an ordinary outbound dial
+  // establishes for free what the ping spent a connection to learn.
+  // The command id is retired, never reused.
 
-  struct COMMAND_PING
-  {
-    /*
-      Used to make "callback" connection, to be sure that opponent node 
-      have accessible connection point. Only other nodes can add peer to peerlist,
-      and ONLY in case when peer has accepted connection and answered to ping.
-    */
-    const static int ID = P2P_COMMANDS_POOL_BASE + 3;
-
-#define PING_OK_RESPONSE_STATUS_TEXT "OK"
-
-    struct request_t
-    {
-      /*actually we don't need to send any real data*/
-
-      BEGIN_KV_SERIALIZE_MAP()
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      std::string status;
-      peerid_type peer_id;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(status)
-        KV_SERIALIZE(peer_id)
-      END_KV_SERIALIZE_MAP()    
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/

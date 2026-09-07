@@ -1343,9 +1343,23 @@ anchor exemption went.
 **The concern that motivated the exemption is real and lives elsewhere.** It was
 eclipse resistance — do not let churn rotate this node onto an adversary's
 peers. Under trust-is-earned that risk is not at the *drop* site at all: it is
-at the *selection* site, in what refills the freed slot (white first, then
-gray). Whether an adversary can bias that draw is the `g` bound, owned by
-**PWD-I4 (Q-10)** and **PWD-B9**. It is routed, not unruled.
+at the **selection** site, in what refills the freed slot.
+
+**And the refill order for this case is gray-first, not white-first.**
+`connections_maker` branches on the **total** outgoing count, not the white
+count: below the `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target it
+tries white then gray, but **at or above that target it tries gray then white**.
+A single churn drop from a full outbound set leaves the count above the target,
+so the freed slot normally draws from **gray** — the list fed by gossip and by
+`--add-peer`, and the one an adversary can populate cheaply. An earlier draft of
+this paragraph said "white first, then gray", which is the branch that does
+*not* apply to the case the paragraph is about, and it understated the exposure
+it was routing.
+
+Whether an adversary can bias that draw is the `g` bound, owned by
+**PWD-I4 (Q-10)** and **PWD-B9**. It is routed, not unruled — and the
+gray-first order is an input those rounds need, since it is the adversary-
+populated list that fills a churned slot.
 
 **Encryption of the store is a separate, privacy-shaped mechanism.** Once the
 loader believes nothing on disk, the file's integrity stops mattering; what
