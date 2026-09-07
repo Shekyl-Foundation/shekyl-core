@@ -103,6 +103,12 @@ numeric and structural claims against source, and **does not check
 rationales** — a document can pass it green and still be wrong about the
 world.
 
+The matrix that falsifies this gate also measures its own completeness: every
+discrepancy, non-coverage and refusal the gate can emit must be executed by
+some case, or the matrix fails and names the unreached ones. That check exists
+because the review of this gate kept finding holes the matrix could not — the
+first sweep found seven, one of them a branch no case reached at all.
+
 Where a leg declines a subject it cannot judge, it says so on a `Not checked:`
 line rather than staying quiet — `§N.M` references, for instance, are treated
 as pointing at *another* document's section and are reported as unchecked

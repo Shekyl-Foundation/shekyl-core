@@ -46,6 +46,11 @@ on:
       # once and not carried to the sibling. No live document cites scripts/
       # today; the trigger covers the checker's reach, not today's corpus.
       - "scripts/**"
+      # .gitmodules decides whether cited external/ content is trustworthy at
+      # all, so a change to the submodule mapping changes the checker's subject
+      # without touching a document — the same trigger/reach mismatch as the
+      # roots above, one level further out.
+      - ".gitmodules"
       - "docs/ci/doc-claims-baseline.txt"
       - ".github/workflows/doc-claims.yml"
 

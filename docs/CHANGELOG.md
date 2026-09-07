@@ -215,9 +215,13 @@
   second, and the pass line states the limit in its own output: it checks
   numeric and structural claims against source, **not rationales** — four
   premises refuted by review the same week would all have passed it green.
-  Its 46 failure paths and 4 negative controls are falsified by a committed,
+  Its 56 failure paths and 6 negative controls are falsified by a committed,
   runnable matrix (`check_doc_claims_falsification.py`) that builds a synthetic
-  corpus in a temp tree rather than mutating the repo. A ratchet in
+  corpus in a temp tree rather than mutating the repo, and which **measures
+  its own completeness**: every one of the gate's discrepancy, non-coverage and
+  refusal sites must be executed by some case, or the matrix fails. That sweep
+  found seven unexercised sites on its first run — including the wrong-commit
+  submodule branch, which no case reached at all. A ratchet in
   `docs/ci/doc-claims-baseline.txt` holds live dead-citation debt monotone
   downward and stops a document silently un-declaring a leg, because opt-in
   without a ratchet is adoption theatre. Both legs assert against the **base

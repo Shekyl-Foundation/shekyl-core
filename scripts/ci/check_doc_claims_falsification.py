@@ -20,6 +20,7 @@
 # "it went red" is the weakest possible evidence that it went red on its own
 # axis.
 
+import atexit
 import os
 import pathlib
 import re
@@ -29,6 +30,60 @@ import sys
 import tempfile
 
 GATE = pathlib.Path(__file__).resolve().parent / "check_doc_claims.py"
+
+# ── outcome coverage ──────────────────────────────────────────────────────────
+# Every case below was written because a reviewer found the hole it plugs. That
+# is the wrong order, and this is the fix: rather than asking "did I think of
+# every failure?", MEASURE which of the gate's outcomes this matrix actually
+# executes, and fail when any is never reached.
+#
+# It was not a hypothetical gap. The first run of this sweep found SEVEN of the
+# gate's thirty-nine outcome sites had never been exercised, including both git
+# read-failure branches and the `+` wrong-commit submodule state — that last
+# one because the fixtures wrote an untracked `.gitmodules` and `git submodule
+# status` returned success with no rows, so the branch could have been deleted
+# outright with the matrix still green.
+#
+# Tracing is injected through PYTHONPATH into the subprocesses the matrix
+# spawns, so the gate keeps no test-only hook: tests use the production entry
+# point exactly as CI does.
+_COV = pathlib.Path(tempfile.mkdtemp(prefix="doc-claims-cov-"))
+atexit.register(shutil.rmtree, _COV, True)
+(_COV / "sitecustomize.py").write_text(
+    "import atexit, os, sys, threading\n"
+    "NAME = os.environ.get('COV_TARGET', '')\n"
+    "OUT = os.environ.get('COV_OUT', '')\n"
+    "hits = set()\n"
+    "def tracer(frame, event, arg):\n"
+    "    if event == 'line' and os.path.basename(frame.f_code.co_filename) == NAME:\n"
+    "        hits.add(frame.f_lineno)\n"
+    "    return tracer\n"
+    "if NAME and OUT:\n"
+    "    threading.settrace(tracer); sys.settrace(tracer)\n"
+    "    @atexit.register\n"
+    "    def _dump():\n"
+    "        with open(OUT, 'a') as f:\n"
+    "            f.writelines(f'{n}\\n' for n in sorted(hits))\n",
+    encoding="utf-8")
+_HITS = _COV / "hits.txt"
+
+# What counts as an outcome: a reported discrepancy, a stated non-coverage, or
+# a refusal to run. If the gate grows one of these and no case reaches it, this
+# matrix goes red on the next run rather than on the next review.
+OUTCOME_PREFIXES = ("errs.append(", "errors.append(", "sys.exit(", "NOTES.append(")
+
+
+def outcome_sites() -> list[tuple[int, str]]:
+    return [(i, s.strip()[:70]) for i, s in
+            enumerate(GATE.read_text(encoding="utf-8").splitlines(), 1)
+            if s.strip().startswith(OUTCOME_PREFIXES)]
+
+
+def uncovered() -> list[tuple[int, str]]:
+    hits = {int(l) for l in _HITS.read_text(encoding="utf-8").splitlines() if l.strip()} \
+        if _HITS.exists() else set()
+    return [(n, s) for n, s in outcome_sites() if n not in hits]
+
 
 # A declaring document that satisfies every leg. Each case below breaks
 # exactly one thing in it (or in the corpus around it).
@@ -106,6 +161,8 @@ def commit(t: pathlib.Path, branch: str) -> None:
 
 def run(tmp: pathlib.Path, env: dict | None = None) -> tuple[int, str]:
     e = dict(os.environ)
+    e["PYTHONPATH"] = str(_COV) + os.pathsep + e.get("PYTHONPATH", "")
+    e["COV_TARGET"], e["COV_OUT"] = GATE.name, str(_HITS)
     # The base ref defaults to origin/dev, which a temp tree does not have; an
     # unset value would leave every git-backed case silently unchecked.
     e["DOC_CLAIMS_BASE_REF"] = "base"
@@ -130,8 +187,8 @@ def case(name: str, expect: str, doc: str = GOOD, restater: str = RESTATER,
 
 
 def green(name: str, doc: str = GOOD, restater: str = RESTATER,
-          extra=None, baseline: str | None = None,
-          env: dict | None = None) -> tuple[str, bool, str]:
+          extra=None, baseline: str | None = None, env: dict | None = None,
+          expect: str | None = None) -> tuple[str, bool, str]:
     """A negative control: the gate must PASS here.
 
     A check that cannot distinguish its subject from a lookalike is as useless
@@ -145,7 +202,14 @@ def green(name: str, doc: str = GOOD, restater: str = RESTATER,
         if extra:
             extra(tmp)
         rc, out = run(tmp, env)
-        return name, rc == 0, out.strip().splitlines()[0][:86] if out.strip() else ""
+        # A control may also have to prove the gate SAID something — a stated
+        # non-coverage passes the run, so exit status alone cannot distinguish
+        # "reported it" from "never noticed".
+        line = next((l.strip() for l in out.splitlines()
+                     if expect and expect.lower() in l.lower()), "")
+        ok = rc == 0 and (not expect or bool(line))
+        return name, ok, (line or (out.strip().splitlines()[0][:86]
+                                   if out.strip() else ""))
 
 
 def with_submodule(populated: bool, gitlink: bool = False):
@@ -265,6 +329,85 @@ NESTED = GOOD.replace("""1. one
 3. three""")
 
 
+def real_submodule(state: str):
+    """A REAL gitlink, so `git submodule status` actually reports -, + or clean.
+
+    The previous fixture wrote an untracked `.gitmodules` beside an ordinary
+    directory. `git submodule status` then returned success with NO rows, so
+    the production branch that reads its "-", "+" and "U" flags was never
+    executed by any case — the matrix reported dozens of green paths while that
+    branch had zero coverage, and deleting it outright would not have turned
+    anything red. A falsification matrix that cannot fail when a branch is
+    removed is not covering that branch.
+
+    Each recipe below was verified by hand before being written here: a gitlink
+    with no config entry reports "-" whatever the directory holds, and "+"
+    requires BOTH an initialised config entry and a HEAD other than the
+    recorded commit.
+    """
+    def f(t: pathlib.Path) -> None:
+        d = t / "external" / "sub"
+        d.mkdir(parents=True, exist_ok=True)
+        g = lambda *a, **k: subprocess.run(list(a), cwd=k.get("cwd", d),
+                                           check=True, capture_output=True,
+                                           text=True)
+        g("git", "init", "-q", "-b", "main", ".")
+        g("git", "config", "user.email", "matrix@example.invalid")
+        g("git", "config", "user.name", "matrix")
+        (d / "inc.h").write_text("one\ntwo\nthree\n", encoding="utf-8")
+        g("git", "add", "-A")
+        g("git", "-c", "commit.gpgsign=false", "commit", "-qm", "sub")
+        recorded = g("git", "rev-parse", "HEAD").stdout.strip()
+        if state == "wrong_commit":
+            # move the submodule's HEAD past the commit the gitlink records
+            (d / "inc.h").write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
+            g("git", "add", "-A")
+            g("git", "-c", "commit.gpgsign=false", "commit", "-qm", "moved")
+        (t / ".gitmodules").write_text(
+            '[submodule "external/sub"]\n\tpath = external/sub\n'
+            "\turl = ./external/sub\n", encoding="utf-8")
+        g("git", "update-index", "--add", "--cacheinfo",
+          f"160000,{recorded},external/sub", cwd=t)
+        # "-" is reported for an UNINITIALISED submodule regardless of content,
+        # so the config entry is what makes the "+" case reachable at all.
+        if state != "missing":
+            g("git", "config", "submodule.external/sub.url", "./external/sub",
+              cwd=t)
+        if state == "missing":
+            shutil.rmtree(d)
+            d.mkdir(parents=True)
+    return f
+
+
+def no_git_repo(t: pathlib.Path) -> None:
+    """A tree with submodules declared but no git to report on them."""
+    (t / ".gitmodules").write_text(
+        '[submodule "external/sub"]\n\tpath = external/sub\n'
+        "\turl = ./external/sub\n", encoding="utf-8")
+    shutil.rmtree(t / ".git")
+
+
+def drop_object(kind: str):
+    """Delete a git object so a specific read fails while others still succeed.
+
+    Verified by hand before use: with the BLOB gone, `ls-tree` still succeeds
+    and `git show` fails; with the root TREE gone as well, the commit still
+    resolves and `ls-tree` fails. That is precisely the pair of states the gate
+    must not collapse into "bootstrap", so the matrix has to be able to build
+    both.
+    """
+    def f(t: pathlib.Path) -> None:
+        def rev(spec):
+            return subprocess.run(["git", "rev-parse", spec], cwd=t, check=True,
+                                  capture_output=True, text=True).stdout.strip()
+        objs = [rev("base:docs/ci/doc-claims-baseline.txt")]
+        if kind == "tree":
+            objs.append(rev("base^{tree}"))
+        for o in objs:
+            (t / ".git" / "objects" / o[:2] / o[2:]).unlink(missing_ok=True)
+    return f
+
+
 def sub(old: str, new: str) -> str:
     assert GOOD.count(old) == 1, f"fixture anchor not unique: {old!r}"
     return GOOD.replace(old, new)
@@ -305,7 +448,7 @@ def main() -> None:
         # numbered
         case("numbered: gap in the list", "numbered list runs",
              doc=sub("2. two", "3. two")),
-        case("numbered: no list at all", "no numbered list of three",
+        case("numbered: no list at all", "no numbered list of two",
              doc=sub("1. one\n2. two\n3. three", "- one\n- two\n- three")),
         # counts
         case("counts: figure disagrees with table", "over a table of",
@@ -486,6 +629,43 @@ def main() -> None:
         case("records-was lookalike is still live", "rose to",
              corpus=lambda t: (t / "docs" / "FOO_CHANGELOG.md").write_text(
                  "# Lookalike\n\nSee `src/gone.cpp:1`.\n", encoding="utf-8")),
+        # REAL gitlinks: these are the cases that actually execute the
+        # -, + and clean branches of `git submodule status`.
+        case("submodule gitlink not checked out (git reports -)", "not checked out here",
+             doc=sub("`src/thing.cpp:3`", "`external/sub/inc.h:2`"),
+             corpus=real_submodule("missing")),
+        case("submodule at the WRONG commit (git reports +)", "not checked out here",
+             doc=sub("`src/thing.cpp:3`", "`external/sub/inc.h:2`"),
+             corpus=real_submodule("wrong_commit")),
+        case("submodules declared but git cannot report", "could not be read",
+             corpus=no_git_repo),
+        green("submodule at the recorded commit resolves normally",
+              doc=sub("`src/thing.cpp:3`", "`external/sub/inc.h:2`"),
+              extra=real_submodule("ok")),
+        # --- sites the coverage sweep found unexercised ---
+        case("range: no prefix given", "`claim-audit: range` needs a prefix",
+             doc=sub("<!-- claim-audit: range XX-W -->", "<!-- claim-audit: range -->"),
+             baseline="dead-citations: 0\ndeclares: docs/subject.md "
+                      "citations,counts,numbered,range,sections,series:XX-W\n"),
+        case("range: declaring doc owns no rows", "owns no",
+             doc=sub("<!-- claim-audit: range XX-W -->", "<!-- claim-audit: range ZZ-Q -->"),
+             baseline="dead-citations: 0\ndeclares: docs/subject.md "
+                      "citations,counts,numbered,range:ZZ-Q,sections,series:XX-W\n"),
+        case("sections: declared but no §N reference", "makes no §N reference",
+             doc=sub("See §2 for the table. ", "")),
+        case("local baseline states no figure", "states no `dead-citations:` figure",
+             baseline=f"declares: docs/subject.md citations,counts,numbered,range:XX-W,sections,series:XX-W\n"),
+        case("git itself cannot run", "git could not run",
+             env={"PATH": ""}),
+        case("base tree unreadable", "could not list",
+             corpus=drop_object("tree"), env={"DOC_CLAIMS_BASE_REF": "base"}),
+        case("base baseline present but unreadable", "could not be read",
+             corpus=drop_object("blob"), env={"DOC_CLAIMS_BASE_REF": "base"}),
+        # a stated non-coverage: the gate PASSES and says what it declined,
+        # because "checked and passed" and "not looked at" must not look alike.
+        green("dotted §N.M is reported as not checked, not failed",
+              doc=sub("See §2 for the table.", "See §2 for the table. Also DRS §6.6."),
+              expect="dotted §N.M reference"),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -496,7 +676,9 @@ def main() -> None:
     controls = {"historical restatement is not a live claim",
                 "populated submodule resolves normally",
                 "lowering the baseline against the base revision is allowed",
-                "deleting a document releases its registry line"}
+                "deleting a document releases its registry line",
+                "submodule at the recorded commit resolves normally",
+                "dotted §N.M is reported as not checked, not failed"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"
@@ -513,9 +695,24 @@ def main() -> None:
     print(f"\nclean synthetic tree: {'GREEN' if clean_ok else 'NOT GREEN'} — "
           f"{out.strip().splitlines()[0][:80] if out.strip() else '(no output)'}")
 
-    if bad or not clean_ok:
-        sys.exit(f"FAIL: {len(bad)} path(s) did not fire on their own axis: {bad}"
-                 + ("" if clean_ok else "; and the clean tree did not pass"))
+    # The sweep, after every case has run: an outcome the matrix never reaches
+    # is an outcome nobody has shown can happen, and a green here would be
+    # counting cases rather than covering the gate.
+    gaps = uncovered()
+    sites = outcome_sites()
+    print(f"\noutcome coverage: {len(sites) - len(gaps)}/{len(sites)} of the "
+          "gate's discrepancy, non-coverage and refusal sites were executed")
+    for n, s in gaps:
+        print(f"  NEVER REACHED  {GATE.name}:{n}: {s}")
+
+    if bad or not clean_ok or gaps:
+        sys.exit(
+            (f"FAIL: {len(bad)} path(s) did not fire on their own axis: {bad}\n"
+             if bad else "FAIL:\n")
+            + ("" if clean_ok else "  the clean tree did not pass\n")
+            + (f"  {len(gaps)} outcome site(s) are never reached by any case — "
+               "add a case or delete the branch; an outcome with no case is a "
+               "claim nobody has shown can happen\n" if gaps else ""))
     print(f"\nOK: {n_red} failure paths each fired on its own axis, {n_green} "
           "negative control(s) stayed green, and the clean tree passes.")
 

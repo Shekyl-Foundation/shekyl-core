@@ -256,7 +256,7 @@ def _numbered_runs(text: str) -> list[list[tuple[int, int]]]:
     A column-0-only matcher cannot see a nested list, and worse, it cannot see
     the list the nested one is inside: the indented children never match, the
     blank line after them closes the outer fragment, and a two-item remainder
-    falls under the three-item floor and is discarded. The declaring document
+    falls under the run floor and is discarded. The declaring document
     here has exactly that shape at §2, so the leg was reporting a tally while
     most of the structure it names went unchecked — checked-and-passed wearing
     the face of found-nothing-to-check.
@@ -270,7 +270,9 @@ def _numbered_runs(text: str) -> list[list[tuple[int, int]]]:
     across a repeated number — only the first item's number is honoured — so
     `1, 2, 1, 2, 3` is one five-item list that has been mis-numbered, which is
     exactly the fault this leg exists to report. Splitting it dropped the
-    two-item fragment under the three-item floor and passed the remainder.
+    two-item fragment under the old three-item floor and passed the remainder.
+    The floor is two now, for the same reason: a two-item list is a list, and
+    `1.` followed by `3.` beside an already-valid long list was unchecked.
     """
     runs: dict[int, list[tuple[int, int]]] = {}
     out: list[list[tuple[int, int]]] = []
@@ -278,7 +280,7 @@ def _numbered_runs(text: str) -> list[list[tuple[int, int]]]:
     def close(pred) -> None:
         for d in sorted([d for d in runs if pred(d)], reverse=True):
             r = runs.pop(d)
-            if len(r) >= 3:
+            if len(r) >= 2:
                 out.append(r)
 
     for i, line in enumerate(text.splitlines(), 1):
@@ -298,7 +300,7 @@ def check_numbered(p, text, _arg, errs):
     runs = _numbered_runs(text)
     if not runs:
         errs.append(f"{rel(p)}: declares `numbered` but has no numbered list of "
-                    "three or more items")
+                    "two or more items")
         return 0
     for run in runs:
         nums = [n for _, n in run]
@@ -618,10 +620,17 @@ def base_baseline() -> tuple[int | None, dict[str, set[str]], str]:
     the registry has exactly the same shape of hole.
 
     Read from the base branch rather than a second copy, because two copies of
-    a number drift and then one of them lies. When the ref cannot be resolved
-    (no remote, shallow clone, or the file does not exist on the base yet, as
-    on the change that introduces it) this returns None and the caller SAYS SO
-    in its output rather than reporting a check it did not run.
+    a number drift and then one of them lies.
+
+    THREE outcomes, deliberately distinct — conflating any two of them is how
+    this function has been wrong twice already:
+
+    - the ref does not resolve, or the baseline exists but cannot be read or
+      parsed -> FATAL. A missing prerequisite is not a lenient check.
+    - the ref resolves and the path is positively absent on it -> returns None,
+      the bootstrap, true exactly once for the change that adds the file. The
+      caller prints that state rather than implying a comparison happened.
+    - otherwise -> the base figures, and the comparison runs.
     """
     ref = os.environ.get("DOC_CLAIMS_BASE_REF", "origin/dev")
 
@@ -647,11 +656,26 @@ def base_baseline() -> tuple[int | None, dict[str, set[str]], str]:
                  "       Fetch it (`git fetch origin dev`) or point "
                  "DOC_CLAIMS_BASE_REF at a ref that exists. A ratchet with no "
                  "base is not a lenient ratchet, it is an absent one.")
+    # Absence is established SEPARATELY from reading. Treating every `git show`
+    # failure as bootstrap meant an unavailable object, a corrupt pack or a
+    # timeout all disabled both base-backed ratchets on a zero exit while
+    # reporting "no baseline yet" — a read failure wearing absence's name.
+    listed = git("ls-tree", "--name-only", ref, rel(BASELINE))
+    if listed.returncode != 0:
+        sys.exit(f"FAIL: could not list {rel(BASELINE)} on {ref}, so this run "
+                 "cannot tell whether the baseline is absent or merely "
+                 "unreadable. Both ratchets depend on that answer, and a read "
+                 "failure is not a bootstrap.")
+    if not listed.stdout.strip():
+        # Bootstrap, and now positively established: the ref is good and the
+        # path genuinely does not exist on it. True exactly once, for the
+        # change that adds the file.
+        return None, {}, f"{ref} carries no baseline yet (bootstrap)"
     r = git("show", f"{ref}:{rel(BASELINE)}")
     if r.returncode != 0:
-        # Bootstrap, and narrowly identifiable: the ref is good, the file is
-        # simply not on it yet. True exactly once, for the change that adds it.
-        return None, {}, f"{ref} carries no baseline yet (bootstrap)"
+        sys.exit(f"FAIL: {rel(BASELINE)} exists on {ref} but could not be read "
+                 f"({r.stderr.strip()[:200]}). An unreadable baseline is a "
+                 "broken prerequisite, not an absent one.")
     count, declares = parse_baseline(r.stdout)
     if count is None:
         sys.exit(f"FAIL: the baseline on {ref} states no `dead-citations:` "
