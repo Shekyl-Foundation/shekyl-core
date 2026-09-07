@@ -54,25 +54,26 @@ DELIM_CELL_STRICT_RE = re.compile(r"^:?-{3,}:?$")
 
 
 def looks_like_delimiter(line: str) -> bool:
-    """Would-be delimiter row: every cell is dashes OR EMPTY, at least one
-    dashed.
+    """Would-be delimiter row: ANY cell that is dash-shaped makes this a
+    candidate.
 
-    Empty cells are admitted deliberately. `| --- | |` is not a delimiter GFM
-    will accept, but refusing to RECOGNISE it means the header, the delimiter
-    and every body row beneath go unexamined — and with other tables keeping
-    the global counters nonzero, the gate would exit 0 having silently skipped
-    the one table that is broken. Recognising it hands the row to the strict
-    cell check and the width check, which reject it loudly. Requiring at least
-    one dashed cell keeps a row of bare pipes from opening a phantom table.
+    Recognition is deliberately weaker than validity. A row is a *candidate*
+    delimiter as soon as one cell looks like `---`; whether every cell is
+    well-formed is then decided by the strict check, which reports each bad
+    sibling by name. Tying recognition to all cells being well-formed is what
+    made the two previous versions wrong: `| --- | |` and `| --- | --x |` each
+    failed to match, so the header, the delimiter and every body row beneath
+    went unexamined, and the file's other tables kept the global counters
+    nonzero so the rule-47 subject assertion never fired. The gate would exit 0
+    having silently skipped the one broken table — the dangerous direction.
+
+    A loud false positive is the acceptable trade here, and it is nearly
+    unreachable in practice: the positional parse CONSUMES the body of every
+    recognised table, so a body row holding a `---` cell is never offered to
+    this function. Only a table that is already malformed reaches it.
     """
     cells = split_cells(line.strip())
-    if not cells:
-        return False
-    for cell in cells:
-        text = cell.strip()
-        if text and not DELIM_CELL_LOOSE_RE.match(text):
-            return False
-    return any("-" in cell for cell in cells)
+    return any(DELIM_CELL_LOOSE_RE.match(c.strip()) for c in cells)
 
 
 def split_cells(line: str) -> list[str]:
@@ -149,9 +150,10 @@ def main() -> int:
         if bad:
             shown = ", ".join("(empty)" if not c else repr(c) for c in bad)
             problems.append(
-                (i + 2, f"delimiter cell(s) {shown} are not `---` — an empty or "
-                        f"under-length cell means GitHub renders no table here, "
-                        f"so every row below it would go unchecked"))
+                (i + 2, f"delimiter cell(s) {shown} are not `---` (three or more "
+                        f"hyphens, optional leading/trailing colon) — GitHub "
+                        f"renders no table here, so every row below it would "
+                        f"go unchecked"))
         if delim != want:
             # GFM does not render a table at all when these disagree, so the
             # whole block is invisible — a stricter failure than a stray cell.
