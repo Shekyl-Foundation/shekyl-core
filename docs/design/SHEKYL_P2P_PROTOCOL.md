@@ -1304,10 +1304,71 @@ mechanism removes both, because the only path that set the flag is gone.
 protection in general** — `should_drop_connection` still refuses to drop a peer
 that is not striped, one carrying the stripe needed next, one usable for
 pruned-block sync, or one holding the next unpruned block. Those are all
-*sync-utility* protections. The anchor exemption was the only one that
-protected a connection for being a **durable relationship** rather than a
-currently useful one, and nothing replaces it. Whether some class deserves that
-second kind of protection is unruled and deliberately not invented here.
+*sync-utility* protections, and after this ruling they are the only kind there
+is to have.
+
+**There is no durable peer class, by design — so nothing is missing here.** An
+earlier revision of this paragraph said the anchor exemption was the only thing
+protecting a connection for being a *durable relationship*, and left "whether
+some class deserves that protection" open. **Both halves were wrong**, and the
+error is worth naming because it is easy to repeat: it described the new design
+in the deleted mechanism's vocabulary, and an open question phrased in that
+vocabulary is an invitation to re-invent anchors under another name.
+
+Trust is earned in-process and nothing survives a restart, so *durable* is not
+a property a peer can have. The only compiled-in peers are the **seed nodes**,
+and those are bootstrap data, not relationships — they carry no drop exemption
+and never did.
+
+**What the churn site actually does is narrower than "protection was removed",
+and narrower still than an earlier draft of this paragraph said.** It drops
+**an arbitrary already-synced connection** — every candidate is in
+`state_normal`, and the one chosen is simply whichever the connection scan
+visits last. (*Connection*, not *peer*: what is held and dropped is a
+`m_connection_id`, which is the distinction `dev`'s half of the rename was
+making.) That scan
+walks `boost::unordered_map<uuid, …>` (`m_connects`), so the order is hash order
+over random UUIDs: **not temporal, and not stable between passes.**
+
+> The first version of this correction said "the peer that most recently reached
+> `state_normal`", which is what the variable's inherited name implied and what
+> the code does not do. Recorded because it is the same error the rest of this
+> section corrects — trusting a name over the mechanism — committed while
+> correcting it.
+>
+> The variable is now `some_synced_connection`. It was `last_synced_peer_id`
+> when the misreading happened; `dev` renamed it to `last_synced_connection` in
+> the same window (dropping `peer_id` from its subject, with the identifier's
+> removal), and this change takes that correction and drops the false `last`
+> as well. Both halves were real: one about *what* it holds, one about *which
+> one* it holds.
+
+The behaviour is nonetheless defensible and is left alone: every candidate has
+already finished syncing, so there is no "mid-work" peer to spare and no ordering
+among them that would be better. What matters for this section is that the
+choice was **never tenure-based**, so nothing tenure-shaped was lost when the
+anchor exemption went.
+
+**The concern that motivated the exemption is real and lives elsewhere.** It was
+eclipse resistance — do not let churn rotate this node onto an adversary's
+peers. Under trust-is-earned that risk is not at the *drop* site at all: it is
+at the **selection** site, in what refills the freed slot.
+
+**And the refill order for this case is gray-first, not white-first.**
+`connections_maker` branches on the **total** outgoing count, not the white
+count: below the `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target it
+tries white then gray, but **at or above that target it tries gray then white**.
+A single churn drop from a full outbound set leaves the count above the target,
+so the freed slot normally draws from **gray** — the list fed by gossip and by
+`--add-peer`, and the one an adversary can populate cheaply. An earlier draft of
+this paragraph said "white first, then gray", which is the branch that does
+*not* apply to the case the paragraph is about, and it understated the exposure
+it was routing.
+
+Whether an adversary can bias that draw is the `g` bound, owned by
+**PWD-I4 (Q-10)** and **PWD-B9**. It is routed, not unruled — and the
+gray-first order is an input those rounds need, since it is the adversary-
+populated list that fills a churned slot.
 
 **Encryption of the store is a separate, privacy-shaped mechanism.** Once the
 loader believes nothing on disk, the file's integrity stops mattering; what

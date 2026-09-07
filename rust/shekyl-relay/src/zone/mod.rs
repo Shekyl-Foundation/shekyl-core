@@ -190,7 +190,7 @@ pub enum FluffReach {
     ///    impossible** (§91.4). To receive a fluff from node `Y`, an adversary
     ///    must be `Y`'s *outbound* — i.e. `Y` dialled it — which is exactly the
     ///    direction where the adversary holds `tor_address::unknown()` and
-    ///    `ANON_ZONE_SENTINEL_PEER_ID`. On the reverse link, where the
+    ///    **no node identifier at all**. On the reverse link, where the
     ///    adversary does know `Y`'s onion because it chose it, this rule skips
     ///    the send. **There is no direction carrying both the emit and the
     ///    name**, and §91 (Design A) now depends on that.
@@ -200,23 +200,19 @@ pub enum FluffReach {
     /// attribution it currently cannot obtain. Do not relax it without
     /// reopening §91.4.
     ///
-    /// **`ANON_ZONE_SENTINEL_PEER_ID` is superseded in design (2026-09-02,
-    /// `SHEKYL_P2P_PROTOCOL.md` PWD-I1) and the citation above outlives it.**
-    /// That decision removes `peer_id` from the wire entirely — from
-    /// `basic_node_data` and from `peerlist_entry` — so once P2P-3 lands, the
-    /// clause naming the sentinel names a constant that no longer exists.
+    /// **The identifier is gone from the wire (PWD-I1, landed), so this
+    /// clause cites its absence rather than a constant.** It used to name
+    /// `ANON_ZONE_SENTINEL_PEER_ID`, which pinned the announced value to `1`
+    /// and supplied one half of "no distinguishing identifier on the emit
+    /// direction"; `tor_address::unknown()` on inbound supplied the other.
+    /// `basic_node_data` now carries no identifier of any kind and
+    /// `peerlist_entry` none either, so the half that needed a pinned
+    /// constant needs nothing — the argument got shorter, not wider.
     ///
-    /// **Point 2 survives, and the claim stays scoped to anonymity zones.** It
-    /// needs the adversary to hold no distinguishing identifier on the
-    /// direction that carries the emit. The sentinel supplies **one half** of
-    /// that today by pinning the value to `1`; `tor_address::unknown()` on
-    /// inbound supplies the other, and **only the first half is superseded**.
-    /// Removing the field does not extend Point 2 to clearnet: a clearnet
+    /// **Removing the field does not extend Point 2 to clearnet**: a clearnet
     /// counterparty still holds the connection's IP address, and this spec
     /// concedes that clearnet gives confidentiality and integrity, not
-    /// anonymity (PW-3a). The leg is never unsatisfied in between. **When the
-    /// field is removed, rewrite the clause to cite the absence rather than the
-    /// constant** — the argument gets shorter, not wider.
+    /// anonymity (PW-3a). The leg was never unsatisfied in between.
     OutboundOnly,
 }
 
