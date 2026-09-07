@@ -124,8 +124,9 @@ the same PR.
 
    This governs concurrent **edits to one row**. It does not stop a
    lane reading another family's row, and it is not a claim that
-   families are independent in substance — cluster B still depends on
-   what cluster I ruled.
+   families are independent in substance: sub-families routinely build
+   on each other's rulings. It separates who may *write* a status
+   cell, nothing more.
 
 7. **A row that does not render does not exist.** A registry row's
    cell count must match its table's header. GFM splits cells on
