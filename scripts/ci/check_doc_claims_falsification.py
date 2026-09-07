@@ -102,6 +102,24 @@ def case(name: str, expect: str, doc: str = GOOD, restater: str = RESTATER,
         return name, (rc != 0 and bool(line)), (line or out.splitlines()[0][:90])
 
 
+def green(name: str, doc: str = GOOD, restater: str = RESTATER,
+          extra=None) -> tuple[str, bool, str]:
+    """A negative control: the gate must PASS here.
+
+    A check that cannot distinguish its subject from a lookalike is as useless
+    as one that cannot fail. The records-was exclusion is exactly that kind of
+    distinction, so it needs a case proving the exclusion excludes — otherwise
+    "no error" could mean the leg simply never ran.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        build(tmp, doc, restater)
+        if extra:
+            extra(tmp)
+        rc, out = run(tmp)
+        return name, rc == 0, out.strip().splitlines()[0][:86] if out.strip() else ""
+
+
 def sub(old: str, new: str) -> str:
     assert GOOD.count(old) == 1, f"fixture anchor not unique: {old!r}"
     return GOOD.replace(old, new)
@@ -176,14 +194,29 @@ def main() -> None:
              baseline="dead-citations: 4\ndeclares: docs/subject.md citations,counts\n"),
         case("ratchet: a declared leg was dropped", "has dropped the claim-audit",
              doc=sub("<!-- claim-audit: counts -->", "")),
+        # negative control: a stale range inside a records-was surface is
+        # history, not a live claim, and must NOT fail the gate — otherwise a
+        # register growing forces edits to closed round records.
+        green("historical restatement is not a live claim",
+              extra=lambda t: ((t / "docs" / "completed").mkdir(exist_ok=True),
+                               (t / "docs" / "completed" / "old.md").write_text(
+                                   "# Closed round\n\nIt held XX-W1…XX-W2 then.\n",
+                                   encoding="utf-8"))),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
 
-    print(f"{'FAILURE PATH':<38} {'RED':<5} message")
+    # Green negative controls are marked so the tally cannot claim a control
+    # as a failure path — a matrix that miscounts its own cases is the first
+    # thing a reader stops trusting.
+    controls = {"historical restatement is not a live claim"}
+    print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
-        print(f"{name:<38} {'yes' if ok else 'NO':<5} {msg[:86]}")
+        kind = "green" if name in controls else "red"
+        print(f"{name:<44} {('yes' if ok else 'NO') + f' ({kind})':<12} {msg[:74]}")
     bad = [n for n, ok, _ in cases if not ok]
+    n_red = len([c for c in cases if c[0] not in controls])
+    n_green = len(cases) - n_red
 
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
@@ -196,8 +229,8 @@ def main() -> None:
     if bad or not clean_ok:
         sys.exit(f"FAIL: {len(bad)} path(s) did not fire on their own axis: {bad}"
                  + ("" if clean_ok else "; and the clean tree did not pass"))
-    print(f"\nOK: {len(cases)} failure paths each fired on its own axis, and the "
-          "clean tree passes.")
+    print(f"\nOK: {n_red} failure paths each fired on its own axis, {n_green} "
+          "negative control(s) stayed green, and the clean tree passes.")
 
 
 if __name__ == "__main__":

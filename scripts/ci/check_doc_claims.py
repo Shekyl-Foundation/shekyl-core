@@ -153,6 +153,14 @@ def check_range(p, text, arg, errs, corpus):
     pat = re.compile(rf"{re.escape(arg)}-?\d+…(?:{re.escape(arg)}-?)?(\d+)")
     seen = 0
     for q, qtext in corpus:
+        # Records-was surfaces are excluded for the same reason the citation
+        # ratchet excludes them: a range quoted in a CHANGELOG entry or a
+        # closed round doc is what was true when it was written. Checking it
+        # as a live claim would mean rewriting history every time a register
+        # grows — the document would be edited to satisfy the gate rather than
+        # the gate serving the document.
+        if is_records_was(q):
+            continue
         for m in pat.finditer(qtext):
             seen += 1
             if int(m.group(1)) != high:

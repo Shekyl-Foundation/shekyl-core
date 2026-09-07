@@ -27,6 +27,12 @@
 # citations in docs/, 54 are historical and 6 are live rot — so this is not
 # mostly a wallet-deletion burn-down, and the largest single holder is
 # RANDOMX_V2_MINING_ASYMMETRY.md with 16.
+# Submodules matter to this number: one live citation points under external/,
+# and the gate resolves it. CI checks out with `submodules: true` (matching
+# docs-gates.yml) so it measures the same tree a properly initialised worktree
+# does. A local run with submodules uninitialised will over-count and fail —
+# the same false red the link gate produces in that state, and the fix is the
+# same: `git submodule update --init`.
 dead-citations: 56
 
 # ── declares ──────────────────────────────────────────────────────────────────

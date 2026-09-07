@@ -47,8 +47,19 @@ it to them — put any of these near the top of the file:
 <!-- claim-audit: sections -->       every §N names a section this document has
 <!-- claim-audit: numbered -->       numbered lists number themselves 1, 2, 3 …
 <!-- claim-audit: counts -->         "**N rows**" matches the table beneath it
-<!-- claim-audit: citations -->      every path:line cite resolves in the tree
+<!-- claim-audit: citations -->      path:line cites resolve (see scope below)
 ```
+
+The citation leg is **scoped, not universal**: it resolves tokens rooted at
+`src/`, `rust/`, `scripts/`, `tests/`, `external/` or a `shekyl-*` crate
+(resolved under `rust/`), ending in `.cpp`, `.h`, `.rs`, `.py`, `.sh` or
+`.inl`. An unrooted filename or another extension is not checked — so a green
+run says the cites it recognises resolve, not that every path-like token in the
+document does. Two ratchets keep the opt-in honest: the count of dead citations
+in live documents is a baseline in
+[`docs/ci/doc-claims-baseline.txt`](ci/doc-claims-baseline.txt) that may only
+move down, and a document that has declared a leg cannot silently un-declare
+it.
 
 Declaring is opt-in because inferring these corpus-wide produced 991 findings
 against a clean tree — `§17` usually cites another document, registers

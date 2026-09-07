@@ -33,6 +33,13 @@ on:
       # (rule 47: a gate that cannot see its subject change is not a gate).
       - "src/**"
       - "rust/**"
+      # tests/ and external/ are cited by live documents too (18 and 1 at the
+      # time of writing), and the citation leg resolves them, so a move in
+      # either can invalidate a documentation claim with no docs edit in the
+      # diff. A trigger set narrower than the checker's reach is a gate that
+      # cannot see its own subject change.
+      - "tests/**"
+      - "external/**"
       - "scripts/ci/check_doc_claims.py"
       - "scripts/ci/check_doc_claims_falsification.py"
       - "docs/ci/doc-claims-baseline.txt"
@@ -50,6 +57,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Submodules populated, matching docs-gates.yml. The citation leg
+          # resolves paths under external/, and a submodule left uninitialised
+          # makes every one of them look deleted — the gate would then measure
+          # a different tree in CI than the one a developer checks locally,
+          # and the ratchet's baseline would disagree with itself by
+          # environment rather than by fact.
+          submodules: true
 
       - name: Run the documentation claim audit
         run: python3 scripts/ci/check_doc_claims.py
