@@ -114,10 +114,17 @@ Ordering at the pin (the funnel every connected block traverses):
    partial commit here is a consensus split.*
 3. Attestation witness store, keyed `archival_attestation_witness_key(prev_height)`.
 4. `BlockchainLMDB::add_block` — block blob, `block_info`, `block_heights`.
-5. The budget-accrual row at `prev_height` (F-B1a: written inside this
+5. **`m_hardfork->add(blk, prev_height)`** (`blockchain_db.cpp:683`) —
+   immediately after the block row and before the accrual. It is a state
+   transition, not bookkeeping: `HardFork::add` calls
+   `db.set_hard_fork_version(height, …)` (`hardfork.cpp:141`), which writes
+   `hf_versions` through `TXN_BLOCK_PREFIX` and so joins this block's
+   transaction (§1). A port that loses this step loses the fork-version row
+   for the height it belongs to.
+6. The budget-accrual row at `prev_height` (F-B1a: written inside this
    funnel, before the hooks, not by `blockchain.cpp` after the fact).
-6. `process_archival_slash_at_height(prev_height + 1)`.
-7. `process_archival_epoch_close_at_height(prev_height + 1)` — which, at an
+7. `process_archival_slash_at_height(prev_height + 1)`.
+8. `process_archival_epoch_close_at_height(prev_height + 1)` — which, at an
    epoch boundary, also runs the archival retention prune (§5a) in the same
    transaction.
 
@@ -644,7 +651,7 @@ every row of the table that follows:
 | `archival_emission_claim_log` | journal helpers | §2/§3/§7/§8 |
 | `archival_epoch_close_log` | `process/revert_archival_epoch_close_at_height` | §2/§3 |
 | `archival_r_market` | epoch close put; `delete_…_for/before_epoch` | §2/§5a |
-| `archival_serve_credit` | `set/remove_archival_serve_credit_bit`; `delete_…_before_epoch` (prune) | §2/§3/§5a |
+| `archival_serve_credit` | `set/remove_archival_serve_credit_bit`; `delete_archival_serve_credit_before_epoch` (retention prune) | §2/§3/§5a |
 | `archival_settlement` | `set_archival_settlement` — caller's txn, unwired (CEN-L8); `delete_…_for/before_epoch` (prune) | §5a/§5c |
 | `archival_shard_segment` | `put_archival_shard_segment`; `revert_archival_segment_freezes`; corruption-test put | §2/§3 |
 | `archival_sigma_work` | epoch close put; `delete_…_for/before_epoch` | §2/§5a |
@@ -669,7 +676,7 @@ every row of the table that follows:
 | `output_txs` | `add_output` / `remove_output` | §2/§3 |
 | `pending_tree_drain` | `add_pending_tree_drain_entry`; `remove_pending_tree_drain_entries` | §2/§3 |
 | `pending_tree_leaves` | `add/remove_pending_tree_leaf`; `drain_pending_tree_leaves` | §2/§3 |
-| `properties` | `open()` version seed; `set_total_bonded_atomic` / `set_total_burned` (incl. the post-pop burn reversal, `blockchain.cpp:896` — §3/DRS-W6); prune receipts (`note_archival_prune_watermark_epoch`, frozen-shard count, `pruning_seed`, `tx_prune_next_block`); `set_settlement_epoch_blocks_pin` (own txn) | §2/§5a/§5b/§5c |
+| `properties` | `open()` version seed; `set_total_bonded_atomic` / `set_total_burned` (incl. the post-pop burn reversal, `blockchain.cpp:896` — §3/DRS-W6); `set_archival_last_slash_epoch` — written on **both** paths, by `process_archival_slash_at_height` on connect (`:6248`) and `revert_archival_slashes_at_height` on pop (`:6429`, `:6431`); prune receipts — `note_archival_prune_watermark_epoch` and `set_archival_frozen_shard_count_on_write_txn`, plus `pruning_seed` written by `prune_worker` (`:2365`) and `tx_prune_next_block` by `write_tx_prune_next_block_height` (`:10283`), both §5a; `set_settlement_epoch_blocks_pin` (own txn) | §2/§3/§5a/§5b/§5c |
 | `spent_keys` | `add_spent_key` / `remove_spent_key` | §2/§3 |
 | `tx_indices` | `add_transaction_data` / `remove_transaction_data` | §2/§3 |
 | `tx_outputs` | `add_tx_amount_output_indices` / `remove_transaction_data` | §2/§3 |
