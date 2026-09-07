@@ -49,8 +49,30 @@ INDEX = os.path.join(ROOT, "docs", "design", "IMPLEMENTATION_INDEX.md")
 # Both patterns are only ever tested against the line DIRECTLY BELOW a header:
 # the delimiter row is positional, so a body row holding bare dashes is
 # content, not a new table.
-DELIM_LOOSE_RE = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
+DELIM_CELL_LOOSE_RE = re.compile(r"^:?-+:?$")
 DELIM_CELL_STRICT_RE = re.compile(r"^:?-{3,}:?$")
+
+
+def looks_like_delimiter(line: str) -> bool:
+    """Would-be delimiter row: every cell is dashes OR EMPTY, at least one
+    dashed.
+
+    Empty cells are admitted deliberately. `| --- | |` is not a delimiter GFM
+    will accept, but refusing to RECOGNISE it means the header, the delimiter
+    and every body row beneath go unexamined — and with other tables keeping
+    the global counters nonzero, the gate would exit 0 having silently skipped
+    the one table that is broken. Recognising it hands the row to the strict
+    cell check and the width check, which reject it loudly. Requiring at least
+    one dashed cell keeps a row of bare pipes from opening a phantom table.
+    """
+    cells = split_cells(line.strip())
+    if not cells:
+        return False
+    for cell in cells:
+        text = cell.strip()
+        if text and not DELIM_CELL_LOOSE_RE.match(text):
+            return False
+    return any("-" in cell for cell in cells)
 
 
 def split_cells(line: str) -> list[str]:
@@ -114,7 +136,7 @@ def main() -> int:
         stripped = lines[i].strip()
         if not (stripped.startswith("|")
                 and i + 1 < len(lines)
-                and DELIM_LOOSE_RE.match(lines[i + 1].strip())):
+                and looks_like_delimiter(lines[i + 1])):
             i += 1
             continue
 
@@ -122,13 +144,14 @@ def main() -> int:
         want = len(split_cells(stripped))
         delim_cells = split_cells(lines[i + 1].strip())
         delim = len(delim_cells)
-        thin = [c.strip() for c in delim_cells
-                if not DELIM_CELL_STRICT_RE.match(c.strip())]
-        if thin:
+        bad = [c.strip() for c in delim_cells
+               if not DELIM_CELL_STRICT_RE.match(c.strip())]
+        if bad:
+            shown = ", ".join("(empty)" if not c else repr(c) for c in bad)
             problems.append(
-                (i + 2, f"delimiter cell(s) {thin} use fewer than three hyphens "
-                        f"— write `---`; GitHub may not render this as a table "
-                        f"at all, and the rows below would go unchecked"))
+                (i + 2, f"delimiter cell(s) {shown} are not `---` — an empty or "
+                        f"under-length cell means GitHub renders no table here, "
+                        f"so every row below it would go unchecked"))
         if delim != want:
             # GFM does not render a table at all when these disagree, so the
             # whole block is invisible — a stricter failure than a stray cell.
