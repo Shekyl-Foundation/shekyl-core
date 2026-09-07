@@ -31,7 +31,9 @@
 #     <!-- claim-audit: range DRS-W -->         "DRS-W1…DRS-Wn" restatements match it
 #     <!-- claim-audit: sections -->            every §N names a section this doc has
 #     <!-- claim-audit: numbered -->            numbered lists number themselves 1,2,3…
-#     <!-- claim-audit: citations -->           every path:line cite resolves in the tree
+#     <!-- claim-audit: citations -->           rooted path:line cites resolve (scoped;
+#                                               see docs/README.md for the roots and
+#                                               extensions it recognises)
 #     <!-- claim-audit: counts -->              "**N rows**" matches the table beneath it
 #
 # WHAT IT CANNOT CHECK, stated in the pass line rather than left to inference:
@@ -101,14 +103,21 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DOCS = ROOT / "docs"
 
-DECL = re.compile(r"<!--\s*claim-audit:\s*([a-z]+)(?:\s+([A-Za-z][\w-]*))?\s*-->")
+# Anchored at line start with at most three leading spaces. Four or more is a
+# CommonMark INDENTED CODE BLOCK, so a marker there is an example, not a
+# declaration — and matching it opted a document into checks it never asked
+# for. Requiring top-level placement is both the real convention ("put any of
+# these near the top of the file") and far simpler than deciding, in general,
+# whether an indented run is code or list continuation.
+DECL = re.compile(r"(?m)^ {0,3}<!--\s*claim-audit:\s*([a-z]+)"
+                  r"(?:\s+([A-Za-z][\w-]*))?\s*-->")
 # Every comment that MEANS to be a declaration, well-formed or not. A matcher
 # that only sees valid markers cannot see a typo: `claim-audit: Citations` fails
 # DECL's `[a-z]+`, matches nothing, and the document then looks opted in to a
 # reader while no check runs against it — and the adoption floor stays satisfied
 # by some other document, so nothing anywhere goes red. Absence of a match is
 # first evidence the subject is malformed, not that it is absent (rule 47).
-DECL_ANY = re.compile(r"<!--\s*claim-audit:[^>]*-->")
+DECL_ANY = re.compile(r"(?m)^ {0,3}<!--\s*claim-audit:[^>]*-->")
 KINDS = {"series", "range", "sections", "numbered", "citations", "counts"}
 
 # Floor on the corpus itself: this gate audits docs/, and a run that cannot
@@ -167,7 +176,10 @@ def strip_fences(text: str) -> str:
     """
     out, fence = [], None          # fence = (char, length) while open
     for line in text.splitlines():
-        m = re.match(r"\s*(`{3,}|~{3,})(.*)$", line)
+        # 0-3 spaces: at four the line is indented code, not a fence. `\s*`
+        # let a deeply indented ``` inside a list item open a fence and blank
+        # the remainder of the document.
+        m = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", line)
         if m:
             ch, n, tail = m.group(1)[0], len(m.group(1)), m.group(2)
             if fence is None:
@@ -297,8 +309,8 @@ def check_sections(p, text, _arg, errs):
             NOTES.append(f"{rel(p)}: {external} dotted §N.M reference(s) treated "
                          "as cross-document and NOT checked (this document has "
                          "no dotted headings of its own)")
-    pat = (r"§(\d+[a-z]?(?:\.\d+)?)(?![\d.])" if dotted_local
-           else r"§(\d+[a-z]?)(?![\d.])")
+    pat = (r"§(\d+[a-z]?(?:\.\d+)?)(?!\d)(?!\.\d)" if dotted_local
+           else r"§(\d+[a-z]?)(?!\d)(?!\.\d)")
     seen = 0
     for m in re.finditer(pat, text):
         seen += 1
@@ -651,12 +663,15 @@ def dead_citations(corpus) -> list[str]:
     for p, text in corpus:
         if is_records_was(p):
             continue
-        # Raw text, deliberately: citations are written INSIDE backticks by
-        # convention (`src/foo.cpp:123`), so stripping inline code here hides
-        # the very thing being counted — the first wiring of this ratchet
-        # reported 1 dead citation against a measured 56 for exactly that
-        # reason. strip_code() belongs on the DECLARATION scan, where a fenced
-        # example must not opt a document in, and nowhere else.
+        # FENCE-STRIPPED, with inline spans intact. Both halves matter: a
+        # citation is written INSIDE backticks by convention, so blanking
+        # inline code would hide the very thing being counted (the first
+        # wiring of this ratchet reported 1 against a measured 56 for exactly
+        # that reason) — while a citation written in a fenced EXAMPLE is not a
+        # claim this document makes, and counting it would inflate the
+        # baseline and fail edits that never touched a real citation.
+        # strip_fences() gives precisely that pair; strip_code() belongs on
+        # the DECLARATION scan alone.
         for m in CITE.finditer(text):
             path, want = m.group(1), int(m.group(2))
             if cite_fault(path, want, m.group(3), resolve(path)):
@@ -818,12 +833,13 @@ def main() -> None:
                 continue
             declarations += 1
             fn = CHECKS[kind]
-            # citations resolve tokens written inside backticks, so that leg
-            # alone sees the raw document; everything structural sees fences
-            # blanked.
-            body = text if kind == "citations" else fenced[p]
-            n = (fn(p, body, arg, errors, corpus_fenced) if kind == "range"
-                 else fn(p, body, arg, errors))
+            # EVERY leg reads fence-stripped text, citations included. I gave
+            # citations the raw document to protect inline spans, but
+            # strip_fences preserves those already — raw and fence-stripped
+            # differ only inside fenced blocks, and a `src/gone.cpp:1` written
+            # in an EXAMPLE is not a citation this document is making.
+            n = (fn(p, fenced[p], arg, errors, corpus_fenced) if kind == "range"
+                 else fn(p, fenced[p], arg, errors))
             tally[kind] = tally.get(kind, 0) + n
 
     if declarations < MIN_DECLARATIONS:
@@ -833,7 +849,7 @@ def main() -> None:
                  "audit with nothing to audit passes vacuously, so it fails here.")
     # ── ratchet ───────────────────────────────────────────────────────────
     baseline, must_declare = read_baseline()
-    dead = dead_citations(corpus)
+    dead = dead_citations(corpus_fenced)
     if len(dead) > baseline:
         errors.append(
             f"dead citations in live documents rose to {len(dead)} against a "

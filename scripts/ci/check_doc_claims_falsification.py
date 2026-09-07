@@ -91,6 +91,23 @@ _HITS = _COV / "hits.txt"
 DEPTH_SAFE = {"submodule", "rev-parse", "ls-tree", "show", "config", "status"}
 
 
+# Ancestry operators. An allowlisted subcommand can still walk history through
+# its REVISION argument: `show HEAD~1:path` and `rev-parse HEAD^` are both
+# "depth-safe" by name and both need a parent commit a shallow clone does not
+# have. A guard that checks only the verb would stay green through exactly the
+# change it exists to prevent.
+ANCESTRY = ("~", "^", "..", "@{")
+
+
+def _walks_ancestry(strings: list[str]) -> str | None:
+    for s in strings:
+        if s.startswith("-"):
+            continue
+        if any(op in s for op in ANCESTRY):
+            return s
+    return None
+
+
 def _subcommand(strings: list[str]) -> str | None:
     """The first non-flag token, which is the subcommand.
 
@@ -120,8 +137,13 @@ def unsafe_git_calls() -> list[str]:
         f, a0 = node.func, node.args[0]
         # the local `git(...)` helper: its first argument IS the subcommand
         if isinstance(f, ast.Name) and f.id == "git":
-            if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
-                found.append(a0.value)
+            args = [a.value for a in node.args
+                    if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+            if args:
+                found.append(args[0])
+                rev = _walks_ancestry(args[1:])
+                if rev:
+                    found.append(f"{args[0]} {rev}")
             continue
         # any call taking a literal argv sequence that starts with "git"
         if isinstance(a0, (ast.List, ast.Tuple)) and a0.elts:
@@ -133,6 +155,9 @@ def unsafe_git_calls() -> list[str]:
             sub = _subcommand(strings)
             if sub:
                 found.append(sub)
+                rev = _walks_ancestry([s for s in strings if s != sub])
+                if rev:
+                    found.append(f"{sub} {rev}")
     return sorted({s for s in found if s not in DEPTH_SAFE})
 
 # What counts as an outcome: a reported discrepancy, a stated non-coverage, or
@@ -823,6 +848,31 @@ def main() -> None:
         # restatement. All three appear together here and must be ignored.
         green("fenced examples are not document structure",
               doc=GOOD + "\n\n```\n1. one\n3. three\n5. five\n```\n\n```\n| ID | Note |\n| --- | --- |\n| XX-W9 | fake |\n```\n\n```\nThe range XX-W1…XX-W99 is complete.\n```\n"),
+        # a marker inside a 4-space INDENTED code block is an example
+        case("marker in an indented code block is not a declaration",
+             "passes vacuously",
+             doc=GOOD.replace("<!-- claim-audit: series XX-W -->",
+                              "Example:\n\n    <!-- claim-audit: series XX-W -->")
+                     .replace("<!-- claim-audit: range XX-W -->", "")
+                     .replace("<!-- claim-audit: sections -->", "")
+                     .replace("<!-- claim-audit: numbered -->", "")
+                     .replace("<!-- claim-audit: counts -->", "")
+                     .replace("<!-- claim-audit: citations -->", "")),
+        # §9. at the end of a sentence is a reference; only §9.1 is a subsection
+        case("sections: punctuated reference is still checked",
+             "which this document does not have",
+             doc=sub("See §2 for the table.", "See §7.")),
+        # a dead citation inside a fence is an EXAMPLE, not a claim — for the
+        # declared leg and for the corpus-wide ratchet alike.
+        green("dead citation inside a fence is not a citation",
+              doc=GOOD + "\n\n```\nsee `src/gone.cpp:9999` for the shape\n```\n",
+              extra=lambda t: (t / "docs" / "example.md").write_text(
+                  "# Example\n\n```\ncite `src/also-gone.cpp:1` here\n```\n",
+                  encoding="utf-8")),
+        # an indented fence opener must not blank the rest of the document
+        green("deeply indented ``` does not open a fence",
+              doc=GOOD.replace("## 2. Second",
+                               "- item\n\n      ```\n\n## 2. Second")),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -836,7 +886,9 @@ def main() -> None:
                 "deleting a document releases its registry line",
                 "submodule at the recorded commit resolves normally",
                 "dotted §N.M is reported as not checked, not failed",
-                "fenced examples are not document structure"}
+                "fenced examples are not document structure",
+                "dead citation inside a fence is not a citation",
+                "deeply indented ``` does not open a fence"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"
