@@ -1,0 +1,127 @@
+---
+description: Every disposition class (REJECTED / DEFERRED / STAGED / RESERVED) has a defined grep surface. Zero code symbols for anything not staged; refused names stay in namespace contracts as structured status entries, not header prose.
+alwaysApply: true
+---
+
+# Disposition visibility
+
+A disposition is not just a decision — it is a **grep surface**. An
+agent (human or AI) reconstructing intent greps two places: the tree
+for symbols, and `docs/FOLLOWUPS.md` for scheduled work. What each
+disposition class leaves in those places is part of the disposition
+itself, and getting the surface wrong reliably produces the wrong
+action later: a half-built layout gets "finished," a deleted refusal
+gets re-minted, a reserved slot gets "completed."
+
+This rule defines the four classes by what they leave behind. The
+*criteria* for choosing a class live elsewhere and are not restated
+here: deletion-vs-deferral in `15-deletion-and-debt.mdc`,
+reopening-clause shape in `21-reversion-clause-discipline.mdc`,
+deferral disclosure in `22-no-lazy-deferral.mdc`.
+
+## The four classes
+
+- **REJECTED** → zero **code** symbols, zero FOLLOWUPS rows. One
+  decision-log entry carrying the product reasoning. If the name
+  lives in an enumerated namespace (an RPC method table, a
+  discriminant table, an error-code range), the contract keeps the
+  entry marked REJECTED — a name that is simply gone is easier to
+  re-mint than one recorded as refused. Reasoning lives where humans
+  look and machines do not retry.
+- **DEFERRED** → zero **code** symbols, exactly one FOLLOWUPS row
+  with a named external blocker (rule 22 shape). Intent is the row,
+  not a half-built layout. Partial implementation plus genuine
+  intent is the combination most likely to get "finished" against a
+  substrate that does not exist yet — which is why deferred work
+  sheds its symbols *harder* than rejected work, not less.
+- **STAGED** → code symbols, plus a named consumer in a live plan.
+  An agent greps the tree and finds work that is supposed to exist.
+  Staging without the named live-plan consumer is not staging; it is
+  the silent deferral rule 22 forbids.
+- **RESERVED** → an unused slot documented in the **contract/spec**
+  (format doc, wire table, error-code range), zero code symbols,
+  zero FOLLOWUPS, not a product decision. Exists so the numbering is
+  not silently reused *in the spec*. A code constant for a reserved
+  value is forbidden: a bare `const` with no consuming arm is
+  exactly the grep hit that reads as unfinished work.
+
+Summary of visibility: rejected **code** is invisible to symbol grep
+and to FOLLOWUPS; rejected **names** stay in their namespace table,
+marked REJECTED. Deferred work is visible only in FOLLOWUPS. Staged
+work is visible in the tree. Reserved slots are visible only in the
+spec's table of unused values.
+
+## Code symbol vs contract entry
+
+This is the seam where the rule gets misapplied, so it is explicit.
+
+A **code symbol** is an implementation artifact: a type, constant,
+error variant, function, CLI flag, or partial layout. REJECTED,
+DEFERRED, and RESERVED all mean **zero code symbols**.
+
+A **contract entry** is a row in a namespace-enumerating contract:
+the RPC method table (`docs/api/wallet_rpc.yaml`), a format spec's
+discriminant table, an error-code range. Those tables may — and for
+REJECTED names, must — record a refused name or an unused slot so
+the namespace cannot be silently re-minted. That is namespace
+protection, not a product stub.
+
+Applied literally as "zero symbols including the contract," this
+rule would eat itself: an agent deletes `claim: REJECTED` from the
+method registry, and the next agent, finding nothing that says
+otherwise, adds `claim`. That is the failure the rule exists to
+prevent, produced by the rule.
+
+## Contract entries are structured data, not header prose
+
+A status that a checker cannot read decays into ambiguity. The
+motivating instance: `wallet_rpc.yaml` carried its RESERVED and
+REJECTED lists as header comment blocks, and the `sign_message` /
+`verify_message` entry sat below the REJECTED block while being
+reserved-never-rejected — a distinction that existed only because
+someone noticed and wrote a paragraph.
+
+Namespace contracts carry statuses as machine-readable keys (e.g.
+the `x-shekyl-method-registry` vendor extension in
+`wallet_rpc.yaml`, `status: SPECIFIED | RESERVED | REJECTED` per
+method). Header prose stays as **rationale**, never as the status of
+record. A liveness gate then holds both directions: everything
+SPECIFIED has a route and a production consumer; everything REJECTED
+or RESERVED has no route. Client-facing enumerations (e.g.
+`JsonRpcRequest.method.enum`) list SPECIFIED names only — a refused
+name in a client enum is pre-provisioning, not protection.
+
+## Worked instances (2026-09, wallet-audit slice)
+
+- **Cold signing** — REJECTED. Code deleted; `export_unsigned` /
+  `submit_signed` stay in the method registry as REJECTED; the
+  air-gap error range stays RESERVED; decision-log carries the
+  security reasoning. No FOLLOWUPS row.
+- **ViewOnly** — REJECTED. Envelope arm, constructors, named errors,
+  fixtures: deleted. Decision-log entry. The unused capability byte
+  is RESERVED in the format spec and is *not* labeled ViewOnly there.
+- **Hardware-offload** — DEFERRED. Same symbol deletion as ViewOnly
+  (including the `CAPABILITY_HARDWARE_OFFLOAD` constant); one
+  FOLLOWUPS row with the vendor-firmware blocker. The intent is the
+  row, not a guessed device-descriptor layout.
+- **`CAPABILITY_RESERVED_MULTISIG`** — the negative example: a bare
+  constant with no `CapabilityContent::Multisig` arm was a permanent
+  "unfinished work" grep hit. RESERVED means the slot lives in
+  `WALLET_FILE_FORMAT_V1.md`'s discriminant table, not in code.
+
+## Related rules
+
+- **`15-deletion-and-debt.mdc`** — when to delete vs defer; the
+  three work-item targets. This rule adds what each choice leaves
+  visible.
+- **`21-reversion-clause-discipline.mdc`** — every REJECTED entry's
+  rationale is a reversion-clause-shaped record; the decision-log
+  entry and the contract's REJECTED row are where the reopening
+  criteria live.
+- **`22-no-lazy-deferral.mdc`** — DEFERRED requires the named
+  blocker and in-flow disclosure; this rule adds that the deferral's
+  only artifacts are the FOLLOWUPS row and the disclosure, never
+  code.
+- **`47-gate-subject-assertion.mdc`** — gates that read a contract
+  registry must fail on empty extraction; a status table nothing
+  reads is header prose with extra steps.
