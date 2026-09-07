@@ -206,6 +206,40 @@ TEST(tx_extra_pqc_field_shape, rejects_both_fields_absent_with_outputs)
   EXPECT_FALSE(semantic_accepts(tx)) << "outputs with neither field";
 }
 
+// The rule has two conjuncts — `tx_extra` must PARSE, and the fields it holds
+// must have the right shape — and until these vectors the parse conjunct had no
+// falsifier: every other case here hands the check a well-formed `extra` and
+// varies only the shape, so deleting the parse arm would leave the suite green
+// while CEN-I19 still required it. Each transaction below is otherwise exactly
+// the conforming spend, with malformed bytes appended, so a rejection can only
+// come from the parse arm.
+
+TEST(tx_extra_pqc_field_shape, rejects_a_tx_extra_that_does_not_parse_truncated_field)
+{
+  transaction tx = conforming_spend();
+  ASSERT_TRUE(semantic_accepts(tx)) << "the base transaction must be accepted";
+  // A 0x06 tag whose varint length (256) runs past the end of the blob: the
+  // field cannot be read, so the whole extra fails to deserialize.
+  const std::vector<uint8_t> truncated{TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, 0x80, 0x02};
+  tx.extra.insert(tx.extra.end(), truncated.begin(), truncated.end());
+  std::vector<tx_extra_field> fields;
+  ASSERT_FALSE(parse_tx_extra(tx.extra, fields)) << "the fixture must actually be unparseable";
+  EXPECT_FALSE(semantic_accepts(tx)) << "an unparseable tx_extra was accepted";
+}
+
+TEST(tx_extra_pqc_field_shape, rejects_a_tx_extra_that_does_not_parse_unknown_tag)
+{
+  transaction tx = conforming_spend();
+  ASSERT_TRUE(semantic_accepts(tx)) << "the base transaction must be accepted";
+  // A tag no parser knows. tx_extra has no generic skip — an unknown tag makes
+  // the remainder unreadable, which is why "must parse" is part of the rule
+  // rather than a parser detail.
+  tx.extra.push_back(0x7f);
+  std::vector<tx_extra_field> fields;
+  ASSERT_FALSE(parse_tx_extra(tx.extra, fields)) << "the fixture must actually be unparseable";
+  EXPECT_FALSE(semantic_accepts(tx)) << "a tx_extra with an unknown tag was accepted";
+}
+
 // ---- Gate 2: the coinbase, on a real-nettype chain --------------------------
 
 TEST(tx_extra_pqc_field_shape, coinbase_with_duplicate_leaf_hash_field_is_rejected_before_writing)

@@ -352,8 +352,9 @@ check.
 
 Ratified 2026-09-05 (all three questions as packaged, corrections in
 force). The measurement half — goldens, KATs, the avalanche test, the
-floor-device budget matrix — executes separately when sequenced; this
-section is its precondition, because the thresholds below are
+floor-device budget matrix — **was executed 2026-09-06**; see
+*Measurements of record* below. This section remained its
+precondition, because the thresholds below are
 **pre-registered**: they were fixed before any cross-platform run
 produced a number, and they may change only by a recorded amendment
 citing the measurement that motivated it, never by quiet retuning. A
@@ -447,7 +448,7 @@ limb alone would pass against a broken renderer that ignores its
 input entirely, since any hash function avalanches whether or not the
 pixels listen to it.
 
-### Floor-device budget (measurement held, precondition met)
+### Floor-device budget (measured 2026-09-06: falsified at every tier)
 
 The *Performance targets* below are provisioned at the floor device
 (`rule 76`: Pi 4), measured **on the floor only**. An x86 measurement
@@ -457,8 +458,93 @@ scaling factor exists. Falsifier: any (fixture, size) cell over budget
 on the floor falsifies candidate.v1's fitness at that tier, with this
 document's stated consequence (drop or restrict what misses; the
 single-algorithm fallback remains the documented escape). The
-measurement runs when the device slot is granted; its thresholds are
-the targets already printed below, which predate any measurement.
+thresholds were the targets already printed below, which predate the
+measurement. **Result: all 36 (fixture, size) cells came in over
+budget** — see *Measurements of record* directly below. Which of the
+three gives was not a measurement's call; it was ruled separately on
+2026-09-06 (**the budget gives**), and the amendment that follows from
+it is recorded in *Performance targets*.
+
+### Measurements of record (2026-09-06)
+
+Executed under the pre-registered thresholds above, none of which were
+touched. Reference run producing the committed goldens
+(`rust/shekyl-shard-visual/tests/goldens/`): the Rust crate at
+`655d31cb2`, release profile, rustc 1.94.0 (the version
+`rust/rust-toolchain.toml` pins; the machine's default 1.95.0 does not
+apply inside `rust/`), x86_64-unknown-linux-gnu
+(i9-11950H). Floor device: `skl-pi`, Raspberry Pi 4 Model B Rev 1.4,
+aarch64, binaries cross-compiled from the same commit. Thermal
+regime: 50.6 °C at start, 59.4 °C at end, governor verified reaching
+stock 1800 MHz under load mid-render. The firmware throttle flag is
+unreadable without root, so the temperature bracket plus the
+sustained-frequency check stand in for it: they establish that the
+conditions for throttling were absent, which is the claim these
+numbers support (not the stronger "no throttling occurred").
+
+**Raster parity (θ = 2.0): RMS = 0.000000 on all nine fixtures, at
+128px.** The aarch64 raster is bit-identical to the x86-committed
+goldens — the anticipated boundary-rounding jitter did not appear at
+all on this architecture pair. **Scope: 128px only.** The falsifier is
+quantified over (platform, fixture, size) cells, and goldens exist at
+one size, so parity at 256/512/1024px is *unmeasured*, not measured
+clean; committing goldens at every size would quadruple-plus the
+repo's binary weight for sizes that share one code path. Recorded as
+measured, at the size measured. **This does not reopen the
+bit-equivalence retraction**: the reopening criterion is a
+deterministic rasterizer *pinned across both implementations*, and
+one architecture pair happening to agree is an observation, not a
+pin — two architectures agreeing today says nothing about a third
+architecture, a WASM target, or a toolchain bump on either side. The
+perceptual bar stays the ruled bar; a measurement that *looks like*
+it satisfies a criterion is precisely where a criterion quietly
+dissolves, so the zero is recorded and the criterion is restated.
+
+**Avalanche (floor ≥ 20): sweep minimum RMS = 34.165** (drain_burst,
+byte 15 bit 3), identical on x86 and aarch64, over 9 fixtures × 3 bit
+positions (first byte, interior, last byte) on the pixel axis, at
+128px. Sensitivity holds with ~1.7× margin. Same size caveat as
+parity: bit positions and sizes outside the sweep are unmeasured.
+
+**Budget matrix: 36/36 cells over budget.** Median of 5 timed runs
+after 1 warm-up, single-threaded, full render-plus-PNG-encode path
+(`examples/budget_matrix.rs`), release profile. **The full 36-cell
+table, per fixture, with the thermal bracket and toolchain manifest,
+is committed at
+[`docs/benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt`](benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt)**
+— the summary below compresses it, and the per-fixture spread is the
+part a ruling may turn on. Per-size medians across the nine fixtures,
+against the targets:
+
+| size   | budget  | floor medians (min–max) | over by   |
+|--------|---------|-------------------------|-----------|
+| 128px  | 50 ms   | 69–164 ms               | 1.4×–3.3× |
+| 256px  | 100 ms  | 155–385 ms              | 1.6×–3.9× |
+| 512px  | 300 ms  | 535–1781 ms             | 1.8×–5.9× |
+| 1024px | 2000 ms | 2685–12440 ms           | 1.3×–6.2× |
+
+Worst fixture: `coinbase_heavy` (12.4 s at 1024px). Best:
+`confidential_stake` (2.7 s at 1024px), still over in every cell —
+a **4.6× spread across content at one size**, so render cost is
+strongly fixture-dependent, not a flat per-pixel constant. Stated as
+an observation the ruling may want; this document does not draw a
+conclusion from it. For orientation only
+(non-probative for the floor, per this section): the x86 reference
+machine also missed 512px and 1024px on 5 of 9 fixtures. **This is a
+falsification, not a gap: candidate.v1 as specified does not fit the
+stated minimum device at any tier**, and the magnitudes rule out
+tuning as the answer — 6.2× at 1024px is not a constant factor away
+from fitting. The documented escape (drop or restrict what misses;
+single-algorithm fallback) cannot be applied selectively when every
+cell misses. The measurement itself ranked none of the three things
+that could give — the budget, the candidate, or the floor device.
+
+**RULED 2026-09-06 (Rick): the budget gives.** *"The scores on the Pi
+for shard rendering are acceptable."* The implementation and the floor
+device both stand; the original figures were the wrong numbers. The
+replacements, their derivation, and the change in what they assert are
+recorded as a dated amendment in *Performance targets* below. This
+paragraph stays as the record of the falsification that forced it.
 
 ## Candidate compositor (candidate.v1) — leading V3.x design
 
@@ -695,15 +781,133 @@ is plenty for a network with thousands of shards.
 
 ### Performance targets
 
-- **Mobile wallet thumbnail (128x128):** sub-50ms render
-- **Desktop wallet portfolio view (256x256):** sub-100ms render
-- **Detail view (512x512):** sub-300ms render
-- **Print-quality / share image (1024x1024):** sub-2s render
+**AMENDED 2026-09-06 — recorded amendment, per the amendment
+discipline in *Rendering determinism and empirical closure*.**
+Authority: Rick's ruling, *"the scores on the Pi for shard rendering
+are acceptable"* — of budget, candidate, and floor device, the
+**budget gives**. **Confirmed:** the ruling arrived relayed through a
+coordinating session and was then confirmed by Rick directly to
+steering on 2026-09-06 ("Shard visual B is ratified"). Recorded that
+way because a relayed ruling is not a signature — the confirmation is
+in-channel, not an artifact in this tree, and the record should say
+which it is. Evidence: the 36-cell floor matrix,
+[`docs/benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt`](benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt),
+which falsified every cell of the original figures. The originals are
+struck through below, **refuted, not superseded**.
 
-If a candidate algorithm can't hit these on the target devices, it
-gets dropped from the palette or restricted to higher-end rendering
-tiers. Mobile users seeing portfolio views at 128x128 must not have
-a slow experience.
+#### Why the originals failed: they named no statistic
+
+The lead finding is not that the numbers were too aggressive. It is
+that "sub-50ms at 128px" names **no statistic and no device state**.
+Median, p95, and worst-case differ by more than the numbers do, so
+the targets were **never falsifiable** — and an unfalsifiable
+threshold generates no failures, so nothing ever forced a look. That
+is why they survived years unexamined. A threshold without a
+statistic is not a threshold.
+
+Every replacement below is stated as **median on the floor device,
+warm, otherwise idle** — the exact quantity
+`rust/shekyl-shard-visual/examples/budget_matrix.rs` emits (median of
+5 timed runs after one untimed warm-up, single-threaded, full
+render-plus-PNG-encode, architecture recorded).
+
+#### These are regression bounds, not fitness bounds
+
+The struck-through figures asserted **fitness**: candidate.v1 must fit
+the floor device. The replacements do a **different job**, and saying
+so is load-bearing. At ~2× the measured corpus-worst, nothing the
+current implementation does can breach them — presented in the old
+voice they would be *a check that cannot fail*.
+
+> These thresholds no longer assert that the design fits a UX target.
+> They assert that it has **not regressed from the measured floor
+> baseline**. The UX question is answered by the async and caching
+> consequences below instead.
+
+#### Amended targets
+
+| tier | original | corpus-worst floor median | **amended** |
+|------|----------|---------------------------|-------------|
+| Mobile thumbnail (128×128) | ~~sub-50 ms~~ | 164 ms (`active`) | **350 ms** |
+| Portfolio view (256×256) | ~~sub-100 ms~~ | 385 ms (`coinbase_heavy`) | **800 ms** |
+| Detail view (512×512) | ~~sub-300 ms~~ | 1781 ms (`coinbase_heavy`) | **4 s** |
+| Share / print (1024×1024) | ~~sub-2 s~~ | 12440 ms (`coinbase_heavy`) | **25 s** |
+
+**Margin: 2× over the corpus-worst floor median.** Under a regression
+reading the margin is a **false-positive budget** — too tight and the
+check reddens on thermal noise until people learn to ignore it, and
+*a threshold people learn to ignore is worse than no threshold
+because it looks like coverage*; too loose and a real regression
+slips. Three one-sided sources of variation justify it, each able to
+make a real render slower and never faster:
+
+1. **The corpus cannot contain the worst case.** Nine fixtures, one
+   per regime of a *fake* chain, chosen for aesthetic diversity, not
+   render cost. Measured content-dependence is **4.6× at one size**
+   (`coinbase_heavy` 12.4 s vs `confidential_stake` 2.7 s at
+   1024px), so real-chain shards plausibly exceed the measured max.
+2. **Measurement conditions were favourable; a wallet's are not.**
+   Device idle at load 0.00, one render at a time, every timed cell
+   preceded by an untimed warm-up. A wallet renders while scanning
+   and syncing.
+3. **Thermal, quantified.** The run ended at 59.4 °C after minutes,
+   not hours, at stock 1800 MHz. A passively cooled Pi 4 under
+   sustained load throttles toward 1.0–1.5 GHz — **up to ~1.8×
+   slower on clock alone**, which nearly consumes 2× by itself and
+   leaves sources 1 and 2 unfunded.
+
+**Reopening criteria (rule 21) — the two things that would justify
+tightening:** a matrix over a **real** shard corpus (moves source 1
+from unquantified to measured), or a **sustained-load thermal run**
+(turns source 3 from a bound into a number). Absent one of those, the
+margin does not move.
+
+#### Consequences these numbers oblige (rules 80, 82)
+
+- **128px / 256px stay interactive only because the render is
+  cached** by the GUI's `cache_digest` (which includes
+  `RENDER_REVISION`): the cost is once per shard per revision, not
+  once per view. **That cache is load-bearing, not an
+  optimization** — the note lives at the cache site as well as here,
+  because a design doc does not defend a line of code from a cleanup
+  PR.
+- **512px / 1024px must be asynchronous with visible progress.** A
+  25 s synchronous export on the floor device is **a hang, not a slow
+  operation**. Blocking the UI at these sizes is a defect regardless
+  of the budget.
+
+#### Where the bound is enforced
+
+A regression bound is only real if something re-runs it. Named
+plainly, because "regression bound" otherwise implies automation that
+does not exist:
+
+- **(a) Named trigger, manual — the standing mechanism.** Any change
+  in the **timed path** obliges a floor re-run before merge. The
+  measured operation is `render_candidate_png_from_params` end to end
+  — render *plus* PNG encode — so the trigger covers its whole call
+  graph (renderers, compositor, palette, entropy draws, the encode
+  path, and the imaging dependencies), not just the renderers: a
+  subset would let a regression in through the part left out. Carried as a `docs/FOLLOWUPS.md` row
+  with the trigger conditions written out. It relies on discipline —
+  but so does every reopener in this program, and the alternative is
+  pretending otherwise.
+- **(b) Scheduled floor campaign — held in reserve**, as the
+  escalation if (a) is observed failing, not the opening move.
+- **(c) x86 smoke check in CI — taken, and muzzled.** CI runs the
+  same matrix on x86 against separate, x86-derived thresholds. It
+  catches gross regressions early and **cannot bound the floor** (see
+  the sign-flipping ratios above), so the disclaimer rides in the
+  gate's own **pass** line, not only on failure and not only in this
+  document: a green line in CI reads as "performance is fine" to
+  every human and every dashboard, and a paragraph three files away
+  does not travel with the checkmark. The gate is named
+  `shard-visual-x86-smoke` — not a budget or performance gate — so
+  the name cannot overclaim either.
+
+If a candidate algorithm can't hit the amended targets on the floor
+device, it gets dropped from the palette or restricted to higher-end
+rendering tiers.
 
 ### Reproducibility
 
@@ -1016,9 +1220,11 @@ review and performance testing during the V3.x implementation cycle.
 **Final algorithm palette.** The **candidate.v1** two-stage difference
 compositor (see above) is the leading design from empirical exploration.
 Its determinism bar and the falsifiers for the closure are ruled
-(*Rendering determinism and empirical closure (ruling B)*); what
-remains open is the measurement half — the floor-device budget matrix
-and the committed goldens — which executes when sequenced.
+(*Rendering determinism and empirical closure (ruling B)*). The
+measurement half — the floor-device budget matrix and the committed
+goldens — was executed 2026-09-06 (*Measurements of record*); what
+remains open is the ruling it forced, recorded under *Performance
+targets*.
 The single-algorithm list below remains the documented fallback if
 candidate.v1 fails review. Final disposition closes during V3.x
 implementation against mobile budget and continuity testing.
