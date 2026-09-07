@@ -12,6 +12,16 @@
 #
 # Instance of 47-gate-subject-assertion.mdc: a missing index, or a §2 table
 # with fewer than two family rows, is a missing subject.
+#
+# Two modes:
+#   (no args)            gate the registered §2 table, as CI runs it.
+#   --prefix CELL [...]  print the prefix each candidate Family cell parses to
+#                        and whether they collide. Rule 94 §6 requires this
+#                        before splitting one row into per-sub-family rows:
+#                        prefixes that stay distinct take branch (a), prefixes
+#                        that collapse take branch (b). The grammar has exactly
+#                        one implementation, so the answer the rule asks for and
+#                        the answer CI enforces can never drift apart.
 
 from __future__ import annotations
 
@@ -44,7 +54,49 @@ def family_prefix(cell: str) -> str | None:
     return pref
 
 
+def report_candidates(cells: list[str]) -> int:
+    """Rule 94 §6: print what each proposed Family cell parses to, and whether
+    the set stays distinct. Exit 0 when distinct (branch (a) is available),
+    1 when two candidates collapse to one prefix (branch (b) is required)."""
+    if not cells:
+        print("index prefixes: --prefix needs at least one Family cell",
+              file=sys.stderr)
+        return 2
+    seen: dict[str, str] = {}
+    collisions = []
+    width = max(len(c) for c in cells)
+    for cell in cells:
+        pref = family_prefix(cell)
+        if pref is None:
+            print(f"  {cell:<{width}}  -> (unparseable)")
+            print("index prefixes: a candidate cell has no parseable prefix",
+                  file=sys.stderr)
+            return 2
+        print(f"  {cell:<{width}}  -> {pref}")
+        if pref in seen and seen[pref] != cell:
+            collisions.append((pref, seen[pref], cell))
+        else:
+            seen[pref] = cell
+    if collisions:
+        for pref, a, b in collisions:
+            print(f"\nindex prefixes: {pref!r} is claimed by both {a!r} and {b!r}")
+        print("COLLIDE — rule 94 §6 branch (b): keep one row and put per-lane "
+              "status in the owning doc. Do NOT widen the grammar to separate "
+              "them; that costs the check its power to catch a real duplicate.")
+        return 1
+    print(f"\nDISTINCT ({len(seen)} prefixes) — rule 94 §6 branch (a): one row "
+          f"per sub-family is available.")
+    return 0
+
+
 def main() -> int:
+    argv = sys.argv[1:]
+    if argv and argv[0] == "--prefix":
+        return report_candidates(argv[1:])
+    if argv:
+        print(f"usage: {os.path.basename(__file__)} [--prefix CELL ...]",
+              file=sys.stderr)
+        return 2
     if not os.path.isfile(INDEX):
         print("index prefixes: IMPLEMENTATION_INDEX.md is missing", file=sys.stderr)
         return 2

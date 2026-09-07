@@ -101,10 +101,19 @@ the same PR.
    gone.
 
    Where a family is worked by concurrent lanes, satisfy the rule in
-   whichever branch the prefix grammar allows — **run
-   `family_prefix()` from `check_index_prefix_uniqueness.py` over the
-   proposed row shape and let the answer decide**, rather than
-   choosing by appearance:
+   whichever branch the prefix grammar allows. **Ask the grammar
+   itself rather than judging by appearance** — pass the candidate
+   Family cells to the same script CI gates with:
+
+   ```bash
+   python3 scripts/ci/check_index_prefix_uniqueness.py --prefix \
+     '**PWD-T1…PWD-T8**' '**PWD-B1…PWD-B12**' '**PWD-I1…PWD-I6**'
+   ```
+
+   It prints the prefix each cell parses to and exits **0 when they
+   stay distinct** (branch (a) is available) or **1 when two collapse**
+   (branch (b) is required). It is the gate's own parser, so the answer
+   here and the answer CI enforces cannot drift apart.
 
    - **(a) One row per lane-owned sub-family**, when the sub-families
      parse to distinct prefixes. `PWD-T`/`PWD-B`/`PWD-I`/`PWD-A`/
