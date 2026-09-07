@@ -31,12 +31,26 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 INDEX = os.path.join(ROOT, "docs", "design", "IMPLEMENTATION_INDEX.md")
 
-# A GFM delimiter cell is one or more hyphens with an optional leading and/or
-# trailing colon — `-` alone is legal, not just `---`. This pattern is only
-# ever tested against the line DIRECTLY BELOW a header: the delimiter row is
-# positional, so a body row that happens to hold bare dashes is content, not a
-# new table.
-DELIM_RE = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
+# Delimiter rows are matched LOOSELY (one or more hyphens) and then validated
+# STRICTLY (three or more). The GFM spec is genuinely ambiguous here: it says
+# only "cells whose only content are hyphens", states no minimum, and every
+# worked example uses three. Rather than bet the gate on one reading, the two
+# steps are split so the behaviour is correct under both:
+#
+#   loose match  — a would-be delimiter is never SILENTLY SKIPPED. Skipping is
+#                  the dangerous direction, because the whole table then goes
+#                  unchecked and the hidden-cell defect rides along inside it.
+#   strict check — fewer than three hyphens is REPORTED. If the spec means
+#                  three, that block renders as no table and this is the
+#                  invisible-table defect the gate exists to catch; if it means
+#                  one, `| - |` is still not how this file writes a table, and
+#                  a loud house-style failure beats an ambiguous pass.
+#
+# Both patterns are only ever tested against the line DIRECTLY BELOW a header:
+# the delimiter row is positional, so a body row holding bare dashes is
+# content, not a new table.
+DELIM_LOOSE_RE = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
+DELIM_CELL_STRICT_RE = re.compile(r"^:?-{3,}:?$")
 
 
 def split_cells(line: str) -> list[str]:
@@ -100,13 +114,21 @@ def main() -> int:
         stripped = lines[i].strip()
         if not (stripped.startswith("|")
                 and i + 1 < len(lines)
-                and DELIM_RE.match(lines[i + 1].strip())):
+                and DELIM_LOOSE_RE.match(lines[i + 1].strip())):
             i += 1
             continue
 
         tables += 1
         want = len(split_cells(stripped))
-        delim = len(split_cells(lines[i + 1].strip()))
+        delim_cells = split_cells(lines[i + 1].strip())
+        delim = len(delim_cells)
+        thin = [c.strip() for c in delim_cells
+                if not DELIM_CELL_STRICT_RE.match(c.strip())]
+        if thin:
+            problems.append(
+                (i + 2, f"delimiter cell(s) {thin} use fewer than three hyphens "
+                        f"— write `---`; GitHub may not render this as a table "
+                        f"at all, and the rows below would go unchecked"))
         if delim != want:
             # GFM does not render a table at all when these disagree, so the
             # whole block is invisible — a stricter failure than a stray cell.
