@@ -67,6 +67,39 @@ atexit.register(shutil.rmtree, _COV, True)
     encoding="utf-8")
 _HITS = _COV / "hits.txt"
 
+# ── depth safety ──────────────────────────────────────────────────────────────
+# This repository was briefly SHALLOW today (one reachable commit), and a peer
+# drew a false negative from it: a one-commit history answers "no earlier
+# version exists" for everything, which is indistinguishable from the true
+# answer and reads as a clean result.
+#
+# The gate is safe from that TODAY because every git call it makes reads a
+# SINGLE named revision — `submodule status`, `rev-parse --verify`, `ls-tree`,
+# `show` — and never walks history. That is not luck and it is not permanent:
+# it is a property a future maintainer can remove in one line, and CI fetches
+# the base with `--depth=1` on purpose, so a shallow clone is the NORMAL state
+# here rather than the broken one.
+#
+# So the guard is an allowlist, not a shallow-check. Refusing to run in a
+# shallow repository would be a false constraint that breaks this gate's own
+# workflow; forbidding the operations that a shallow repository cannot answer
+# is the constraint that actually matches the hazard.
+DEPTH_SAFE = {"submodule", "rev-parse", "ls-tree", "show", "config"}
+
+
+def unsafe_git_calls() -> list[str]:
+    src = GATE.read_text(encoding="utf-8")
+    found = []
+    for m in re.finditer(r'\bgit\(\s*"([a-z-]+)"', src):        # helper calls
+        if m.group(1) not in DEPTH_SAFE:
+            found.append(m.group(1))
+    for m in re.finditer(r'\["git",([^\]]*)\]', src):            # literal argv
+        toks = re.findall(r'"([^"]+)"', m.group(1))
+        sub = next((x for x in toks[1:] if not x.startswith("-")), None)
+        if sub and sub not in DEPTH_SAFE:
+            found.append(sub)
+    return sorted(set(found))
+
 # What counts as an outcome: a reported discrepancy, a stated non-coverage, or
 # a refusal to run. If the gate grows one of these and no case reaches it, this
 # matrix goes red on the next run rather than on the next review.
@@ -700,19 +733,29 @@ def main() -> None:
     # counting cases rather than covering the gate.
     gaps = uncovered()
     sites = outcome_sites()
+    unsafe = unsafe_git_calls()
+    print(f"depth safety: git subcommands used are "
+          + (", ".join(sorted(DEPTH_SAFE)) if not unsafe
+             else f"UNSAFE — {unsafe}"))
     print(f"\noutcome coverage: {len(sites) - len(gaps)}/{len(sites)} of the "
           "gate's discrepancy, non-coverage and refusal sites were executed")
     for n, s in gaps:
         print(f"  NEVER REACHED  {GATE.name}:{n}: {s}")
 
-    if bad or not clean_ok or gaps:
+    if bad or not clean_ok or gaps or unsafe:
         sys.exit(
             (f"FAIL: {len(bad)} path(s) did not fire on their own axis: {bad}\n"
              if bad else "FAIL:\n")
             + ("" if clean_ok else "  the clean tree did not pass\n")
             + (f"  {len(gaps)} outcome site(s) are never reached by any case — "
                "add a case or delete the branch; an outcome with no case is a "
-               "claim nobody has shown can happen\n" if gaps else ""))
+               "claim nobody has shown can happen\n" if gaps else "")
+            + (f"  the gate now uses history-walking git subcommand(s) {unsafe}. "
+               "CI fetches the base with --depth=1, so a shallow clone is the "
+               "NORMAL state here: a history walk would return a clean-looking "
+               "answer computed from one commit. Either keep to single-revision "
+               "reads, or make the gate refuse to run when the repository is "
+               "shallow.\n" if unsafe else ""))
     print(f"\nOK: {n_red} failure paths each fired on its own axis, {n_green} "
           "negative control(s) stayed green, and the clean tree passes.")
 

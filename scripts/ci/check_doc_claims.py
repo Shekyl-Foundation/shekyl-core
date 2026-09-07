@@ -58,6 +58,20 @@
 # acted on has the same effect as no check, while costing the trust of the ones
 # that can.
 #
+# DEPTH SAFETY — this gate reads SINGLE REVISIONS, never history. Every git
+# call it makes (`submodule status`, `rev-parse --verify`, `ls-tree`, `show`)
+# answers a question about one named commit or the working tree, so it is
+# correct in a shallow clone — which matters, because CI fetches the base with
+# `--depth=1` deliberately: shallow is the NORMAL state here, not the broken
+# one. Do not add `git log`, `rev-list`, a `-S` pickaxe or an ancestry walk
+# without either dropping that or making the gate refuse to run when the
+# repository is shallow. A one-commit history answers "no earlier version
+# exists" for everything, and that reads as a clean negative rather than as a
+# missing subject — a peer produced exactly that false negative on 2026-09-07
+# while this repository was briefly shallow. The rule is enforced rather than
+# trusted: check_doc_claims_falsification.py fails on any git subcommand
+# outside the depth-safe allowlist.
+#
 # SUBJECT ASSERTION (rule 47), per declaration rather than once. A document
 # that declares an invariant whose subject this gate cannot find FAILS: the
 # distinction that must never blur is CHECKED-AND-PASSED versus
