@@ -1531,6 +1531,82 @@ TEST(node_server, anonymity_zone_announces_the_constant_unknown_address)
   data.server->deinit();
 }
 
+// `--add-peer` is an operator-supplied address this node has NEVER dialled, so
+// it is a candidate, not a verified peer. It must land in gray.
+//
+// This is tested at the node_server level on purpose. The peerlist-manager
+// tests construct `peerlist_types` or call the append methods directly, so
+// reverting the routing line to `append_with_peer_white` leaves every one of
+// them green — they cannot see which method the option path calls. The
+// security property here is about the CALL SITE, so the test has to start
+// where the operator's input does.
+TEST(node_server, add_peer_enters_gray_not_white)
+{
+  struct test_data_t
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+
+    test_data_t(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+  };
+
+  test_data_t data;
+
+  boost::program_options::options_description desc_options("Command line options");
+  cryptonote::core::init_options(desc_options);
+  Server::init_options(desc_options);
+
+  const char* argv[2] = {nullptr, nullptr};
+  boost::program_options::variables_map vm;
+  boost::program_options::store(
+    boost::program_options::parse_command_line(1, argv, desc_options), vm);
+
+  // 127.0.0.2 for the same TIME_WAIT reason as bind_same_p2p_port above.
+  vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+    boost::program_options::variable_value(std::string("127.0.0.2"), false);
+  vm.find(nodetool::arg_p2p_bind_port.name)->second =
+    boost::program_options::variable_value(std::string("48085"), false);
+  vm.find(nodetool::arg_p2p_add_peer.name)->second =
+    boost::program_options::variable_value(
+      std::vector<std::string>{"203.0.113.9:18080"}, false);
+
+  boost::program_options::notify(vm);
+  ASSERT_TRUE(data.server->init(vm));
+
+  // RFC 5737 documentation range, NOT loopback and NOT RFC1918. Both
+  // `append_with_peer_white` and `append_with_peer_gray` gate on
+  // `is_host_allowed`, which refuses loopback unconditionally and refuses
+  // local addresses without `--allow-local-ip` -- so a 127.x fixture is
+  // dropped by both lists and the test would fail for a reason that has
+  // nothing to do with the routing it is pinning. (Checked: the two appends
+  // carry the SAME guard, so this PR introduces no divergence there.)
+  std::vector<nodetool::peerlist_entry> gray{}, white{};
+  data.server->get_peerlist(gray, white);
+
+  const auto holds = [](const std::vector<nodetool::peerlist_entry>& v) {
+    for (const auto& e : v)
+      if (e.adr.host_str() == "203.0.113.9") return true;
+    return false;
+  };
+
+  // The property: it is a candidate.
+  EXPECT_TRUE(holds(gray)) << "--add-peer must enter the gray list";
+  // The limb that actually pins the routing. Without it a change that put the
+  // entry in BOTH lists, or in white only, would still satisfy the assertion
+  // above or leave it unexercised -- and white is the list that is dialled
+  // preferentially and gossiped onward.
+  EXPECT_FALSE(holds(white))
+    << "--add-peer must NOT enter the white list: it has never been dialled, "
+       "and white entries are gossiped onward by get_peerlist_head";
+
+  data.server->deinit();
+}
+
 TEST(node_server, out_peers_floor_guards_public_zone_init_and_runtime)
 {
   // F-8b, the public-zone half: `--tx-proxy` counts are floored at the parser
@@ -1748,7 +1824,7 @@ TEST(node_server, unknown_zone_keeps_the_public_window)
 TEST(node_server, both_outbound_paths_clear_the_failure_history)
 {
   // node_server has TWO outbound connect+handshake routines:
-  // `try_to_connect_and_handshake_with_new_peer` (white/anchor selection) and
+  // `try_to_connect_and_handshake_with_new_peer` (white/gray selection) and
   // `check_connection_and_handshake_with_peer` (gray-peerlist housekeeping).
   // Both record failures. The first version of this fix cleared on success in
   // only one of them, so on the gray route the failure history was WRITE-ONLY:

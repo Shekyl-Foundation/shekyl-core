@@ -30,9 +30,56 @@
 
 #include "gtest/gtest.h"
 
+#include <boost/archive/portable_binary_oarchive.hpp>
+#include <boost/serialization/version.hpp>
+#include <boost/serialization/vector.hpp>
+
 #include "common/util.h"
 #include "p2p/net_peerlist.h"
+#include "p2p/net_peerlist_boost_serialization.h"
 #include "net/net_utils_base.h"
+
+namespace
+{
+  // A store whose declared class version is BELOW current. The version gate is
+  // the whole mechanism -- `load_peers` refuses on `ver < CURRENT` -- so the
+  // fixture must differ from a current store in exactly that: same body a
+  // current reader would parse, older declared version.
+  //
+  // An earlier attempt declared the literal v7 three-list layout. It was
+  // VACUOUS: removing the version check left it green, because a body the
+  // reader cannot parse yields no peers whether or not the gate rejects it.
+  // A fixture that fails for the wrong reason cannot distinguish the fix from
+  // its absence.
+  struct legacy_low_version_store
+  {
+    std::vector<nodetool::peerlist_entry> peers;
+  };
+}
+
+BOOST_CLASS_VERSION(legacy_low_version_store, 7)
+
+namespace boost
+{
+  namespace serialization
+  {
+    template<typename Archive>
+    void serialize(Archive& a, legacy_low_version_store& elem, const unsigned int /*ver*/)
+    {
+      // Mirrors the production writer `save_peers` EXACTLY: a bare uint64
+      // length followed by the elements. Boost's own vector serializer emits a
+      // collection header instead, and a fixture using it produced a body the
+      // reader could not parse -- so the test passed with the version gate
+      // removed, for the wrong reason. Verified by instrumenting the loader:
+      // the fixture drives `serialize(peerlist_types, ver=7)` against
+      // CURRENT=8, which is the comparison under test.
+      const uint64_t size = elem.peers.size();
+      a & size;
+      for (auto& p : elem.peers)
+        a & p;
+    }
+  }
+}
 
 TEST(peer_list, peer_list_general)
 {
@@ -138,6 +185,62 @@ TEST(peerlist_manager, restored_entries_are_all_demoted_to_gray)
   // the assertion above just as well, so the positive limb has to be here
   // or the test cannot tell the fix from a deletion.
   EXPECT_EQ(3u, plm.get_gray_peers_count());
+}
+
+// An operator-supplied candidate must survive a FULL gray list. It has never
+// been dialled, so its `last_seen` is 0 and it sorts oldest -- which means the
+// ordinary gray append would insert it and then trim it away on exactly the
+// well-connected node where an operator typed `--add-peer`. Demoting restored
+// peers into gray makes a full gray list the normal case, not the rare one.
+TEST(peerlist_manager, an_operator_candidate_survives_a_full_gray_list)
+{
+  nodetool::peerlist_manager plm;
+  ASSERT_TRUE(plm.init(nodetool::peerlist_types{}, true));
+
+  // Fill gray to its cap with entries that all have a NONZERO last_seen, so
+  // the operator entry is unambiguously the oldest by the `by_time` index.
+  // Distinct octets rather than integer arithmetic on a packed address:
+  // `MAKE_IP(...) + i` carries between octets and collides, which silently
+  // under-fills the pool and makes the test assert against the wrong state.
+  for (uint32_t i = 0; i < P2P_LOCAL_GRAY_PEERLIST_LIMIT; ++i)
+  {
+    nodetool::peerlist_entry ple{};
+    ple.adr = epee::net_utils::ipv4_network_address{
+      MAKE_IP(203, 0, 1 + (i / 250), 1 + (i % 250)), 8080};
+    ple.id = 1000 + i;
+    ple.last_seen = 5000 + i;
+    ASSERT_TRUE(plm.append_with_peer_gray(ple));
+  }
+  ASSERT_EQ(P2P_LOCAL_GRAY_PEERLIST_LIMIT, plm.get_gray_peers_count());
+
+  nodetool::peerlist_entry op{};
+  op.adr = epee::net_utils::ipv4_network_address{MAKE_IP(198, 51, 100, 7), 8080};
+  op.id = 777;
+  op.last_seen = 0;   // never dialled -- that is the point
+
+  ASSERT_TRUE(plm.append_operator_candidate(op));
+
+  // The property: it is present and dialable.
+  const auto gray_holds = [&plm](std::uint32_t ip) {
+    bool found = false;
+    plm.foreach(false, [&](const nodetool::peerlist_entry& e) {
+      if (e.adr.template as<epee::net_utils::ipv4_network_address>().ip() == ip)
+        found = true;
+      return true;
+    });
+    return found;
+  };
+  EXPECT_TRUE(gray_holds(MAKE_IP(198, 51, 100, 7)))
+      << "an operator candidate was trimmed away at the gray cap, so --add-peer "
+         "would silently do nothing on a well-connected node";
+
+  // The control limb: it made ROOM rather than growing the list past its cap.
+  // Without this, an implementation that simply skipped trimming would pass
+  // the assertion above while letting gray grow unbounded.
+  EXPECT_EQ(P2P_LOCAL_GRAY_PEERLIST_LIMIT, plm.get_gray_peers_count());
+
+  // And it is NOT represented as verified.
+  EXPECT_EQ(0u, plm.get_white_peers_count());
 }
 
 // Seed contact must be keyed on knowing NO peer, not on knowing no TRUSTED
@@ -258,6 +361,45 @@ TEST(peerlist_storage, store_shape_and_version_move_together)
     << ") while CURRENT_PEERLIST_STORAGE_ARCHIVE_VER is still "
     << nodetool::CURRENT_PEERLIST_STORAGE_ARCHIVE_VER
     << ": a shape change must bump the constant AND re-pin this digest together";
+}
+
+// The version bump is the mechanism that stops a pre-existing store handing
+// this node pre-trusted peers, so it needs a test that actually presents one.
+// Every other storage test here serializes the CURRENT one-list type and so
+// cannot catch a loader that accepted, or silently misread, the old
+// three-list format with its populated white section.
+TEST(peerlist_storage, a_v7_store_is_dropped_whole)
+{
+  using zone = epee::net_utils::zone;
+
+  std::string buffer{};
+  {
+    legacy_low_version_store legacy{};
+    legacy.peers.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44, 55});
+
+    std::ostringstream stream{};
+    {
+      boost::archive::portable_binary_oarchive a{stream};
+      a << legacy;
+    }
+    buffer = stream.str();
+  }
+  ASSERT_FALSE(buffer.empty());
+
+  std::istringstream stream{buffer};
+  std::optional<nodetool::peerlist_storage> read_peers =
+    nodetool::peerlist_storage::open(stream, true);
+
+  // Unconditional: no `if (read_peers)` guard. A guard would let the test pass
+  // by skipping its own assertion whenever `open` refused the stream, which is
+  // how the first version of this test passed with the version gate removed.
+  ASSERT_TRUE(bool(read_peers));
+  nodetool::peerlist_types restored = read_peers->take_zone(zone::public_);
+  EXPECT_TRUE(restored.gray.empty())
+    << "a store declaring a pre-current version restored " << restored.gray.size()
+    << " peer(s); the version gate is the only thing preventing an older "
+       "store's entries -- including its white section -- from being adopted";
+  EXPECT_TRUE(check_empty(*read_peers, {zone::invalid, zone::public_, zone::tor, zone::i2p}));
 }
 
 TEST(peerlist_storage, store)

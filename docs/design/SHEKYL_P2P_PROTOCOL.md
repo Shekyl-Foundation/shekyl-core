@@ -75,8 +75,11 @@ forbidden.* Test a proposal against that sentence **before** costing it.
 Two instances, both inherited, both flattering the defence, both of which would
 pass a review that reads only the constant:
 
-- **`ANCHOR_CONNECTIONS_COUNT = 2`** advertises two anchor-backed outbound
-  slots. The dial path delivers **at most one** — zero if every persisted anchor
+- **`ANCHOR_CONNECTIONS_COUNT = 2`** advertised two anchor-backed outbound
+  slots. **Records-was: the constant and the whole anchor mechanism were
+  deleted 2026-09-06** (amendment under PWD-I2); this stays as the record of
+  the inherited defect that motivated the deletion. The dial path delivered
+  **at most one** — zero if every persisted anchor
   fails to handshake — and destroys the rest of the persisted set on first use
   (PWD-I4). Found only because a review challenged the figure rather than the
   reasoning. *"At most one" is the honest form and this line said "one" through
@@ -452,7 +455,7 @@ instead of re-deriving it, and so P2P-3 has one list rather than six findings.
 | Declaration | Disposition |
 | --- | --- |
 | `peerlist_entry_base.id` (`p2p_protocol_defs.h:73`) | **Removed** — gossiped and persisted |
-| `anchor_peerlist_entry_base.id` (`:97`) | **Removed** — persisted; PWD-I3 makes anchors address-keyed |
+| ~~`anchor_peerlist_entry_base.id`~~ (`:97`) | **Moot 2026-09-06 — the whole struct is deleted** with the anchor mechanism, so there is no field to remove and no address-keyed anchor tenure (PWD-I3 is superseded). Was: **Removed** — persisted; PWD-I3 makes anchors address-keyed |
 | `connection_entry_base.id` (`:118`) | **Already dead** — PWC-F2, zero callers tree-wide since `68ba2887c` (2020); dies with the dead-struct deletion, not with this decision |
 | `basic_node_data.peer_id` (`:176`) | **Removed** — the wire field |
 | `COMMAND_PING::response.peer_id` (`:283`) | **Removed with the command** (PWD-B10) |
@@ -993,10 +996,20 @@ narrow.**
 > holding only `--add-peer` entries does not detour to a seed either. Nothing
 > the flag exists for breaks.
 >
-> **What the demotion buys.** An unreachable `--add-peer` entry in white sat
-> there permanently *and was gossiped onward* — `get_peerlist_head` reads the
-> white list only — so one operator's typo propagated to the network. In gray
-> it is evicted by `gray_peerlist_housekeeping` on the first failed dial.
+> **What the demotion buys, at the strength it actually holds.** An
+> unreachable `--add-peer` entry in white sat there permanently *and was
+> gossiped onward* — `get_peerlist_head` reads the white list only — so one
+> operator's typo propagated to the network. **In gray it is never disclosed,
+> so the propagation stops immediately.** Its removal, however, is **lazy and
+> probabilistic**: a failed refill dial only records the address in the
+> recently-failed cache; eviction waits for `gray_peerlist_housekeeping` to
+> draw that entry (one random gray peer per zone per cycle) and fail its own
+> probe, so the entry can outlive many failures and restarts. An earlier
+> revision of this row claimed eviction "on the first failed dial" — the dial
+> path does not do that, and making it do so would discard reachable peers
+> during a transient local outage, which is exactly what the recently-failed
+> retry window exists to prevent. **The propagation half is the load-bearing
+> benefit; the cleanup half is eventual.**
 >
 > Retained below as records-was: the reasoning was sound for the invariant it
 > was written against.
@@ -1287,8 +1300,14 @@ connection context was a **drop protection** with two readers in the
 *cryptonote* layer, not the p2p one: an anchor connection was excluded from
 sync-slot churn and short-circuited `should_drop_connection`. Deleting the
 mechanism removes both, because the only path that set the flag is gone.
-**Nothing is drop-protected now.** Whether some class of connection should be
-is unruled and deliberately not invented here.
+**What is removed is the *unconditional* anchor exemption, not connection
+protection in general** — `should_drop_connection` still refuses to drop a peer
+that is not striped, one carrying the stripe needed next, one usable for
+pruned-block sync, or one holding the next unpruned block. Those are all
+*sync-utility* protections. The anchor exemption was the only one that
+protected a connection for being a **durable relationship** rather than a
+currently useful one, and nothing replaces it. Whether some class deserves that
+second kind of protection is unruled and deliberately not invented here.
 
 **Encryption of the store is a separate, privacy-shaped mechanism.** Once the
 loader believes nothing on disk, the file's integrity stops mattering; what
@@ -1421,6 +1440,29 @@ below the warm-up any admission mechanism requires** — F-8's own condition,
 already stated as a comparison a measurement can settle.
 
 ### PWD-I4 — `ρ` / `g_max`: **DEFERRED to its own round, with the blocker named, and scheduled**
+
+> **AMENDED 2026-09-06 — this row is an ACTIVE instruction for open work, so it
+> is corrected here rather than marked records-was.** The anchor mechanism is
+> deleted (amendment under PWD-I2), and the inherited task changes with it:
+>
+> - **There is no `k` left to measure.** The sub-round was to measure how much
+>   stem-eligible outbound is *anchor-backed versus fresh-drawable*, with the
+>   honest answer recorded below as "at most 1 of 12". It is now **zero of 12 —
+>   there is no anchor-backed slot class at all**, so a bound of the form
+>   "≥ `k` slots are anchor-backed and thus not re-rollable" has no subject,
+>   rather than a small `k`.
+> - **Selection is otherwise unchanged, and the distinction is load-bearing for
+>   `g`:** `connections_maker` remains **white-first to the
+>   `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target, then gray**.
+>   Only the anchor-reserved share disappeared; the two-class ordering did not
+>   collapse into a single pool.
+> - **The question is reframed, not closed:** `ρ` still needs a
+>   non-re-rollable property, and the candidate this row and
+>   `DAEMON_RELAY_PRIVACY.md` §12.11 both named no longer exists. The
+>   sub-round must find another or record that none does.
+>
+> The body below is retained unedited as the record of the inherited defect and
+> of how the withdrawn "2 of 12" figure was traced.
 
 > **Rule 22 requires three things, not one: the blocker, a target, and the
 > reopening criterion.** An earlier version of this row named only the blocker.

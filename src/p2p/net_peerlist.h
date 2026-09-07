@@ -151,6 +151,7 @@ namespace nodetool
     void evict_host_from_peerlist(bool white, const peerlist_entry& pr);
     bool append_with_peer_white(const peerlist_entry& pr, bool trust_last_seen = false);
     bool append_with_peer_gray(const peerlist_entry& pr);
+    bool append_operator_candidate(const peerlist_entry& pr);
     bool set_peer_just_seen(const epee::net_utils::network_address& addr, uint32_t pruning_seed);
     bool is_host_allowed(const epee::net_utils::network_address &address);
     bool get_random_gray_peer(peerlist_entry& pe);
@@ -410,6 +411,49 @@ namespace nodetool
     }
     return true;
     CATCH_ENTRY_L0("peerlist_manager::append_with_peer_gray()", false);
+  }
+  //--------------------------------------------------------------------------------------------------
+  inline
+  bool peerlist_manager::append_operator_candidate(const peerlist_entry& ple)
+  {
+    TRY_ENTRY();
+    if(!is_host_allowed(ple.adr))
+      return true;
+
+    CRITICAL_REGION_LOCAL(m_peerlist_lock);
+
+    // Already known: verified this session, or already a candidate.
+    if(m_peers_white.get<by_addr>().find(ple.adr) != m_peers_white.get<by_addr>().end())
+      return true;
+    if(m_peers_gray.get<by_addr>().find(ple.adr) != m_peers_gray.get<by_addr>().end())
+      return true;
+
+    // MAKE ROOM FIRST, so the entry being added cannot be the one evicted.
+    //
+    // `append_with_peer_gray` cannot serve this caller: it inserts and then
+    // trims from the `by_time` front, and an operator-supplied entry has never
+    // been dialled so its `last_seen` is 0 -- it sorts first and is erased
+    // immediately whenever gray is at its cap. That is precisely the
+    // well-connected node where an operator's `--add-peer` would silently do
+    // nothing, and the demotion of restored peers into gray makes a full gray
+    // list the normal case rather than the rare one.
+    //
+    // This is a SLOT POLICY, not a trust claim: an operator-named candidate
+    // outranks the least-recently-seen gossiped candidate for a place in the
+    // pool. It says nothing about whether the address answers -- the entry is
+    // still gray, still undialled, still never gossiped, and still has to earn
+    // white by a dial like anything else.
+    //
+    // Deliberately NOT done by writing a synthetic `last_seen`: this node has
+    // not seen the address, and recording an observation it never made is the
+    // exact category error this change exists to remove.
+    auto& by_time_index = m_peers_gray.get<by_time>();
+    while(m_peers_gray.size() >= P2P_LOCAL_GRAY_PEERLIST_LIMIT && !by_time_index.empty())
+      by_time_index.erase(by_time_index.begin());
+
+    m_peers_gray.insert(ple);
+    return true;
+    CATCH_ENTRY_L0("peerlist_manager::append_operator_candidate()", false);
   }
   //--------------------------------------------------------------------------------------------------
   inline

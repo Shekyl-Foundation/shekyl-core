@@ -20,10 +20,15 @@
   would not have fixed this: encryption is a privacy mechanism for the peer
   graph, and verification is what supplies trust.
 
-  **Operator-visible effects.** A wrong or unreachable `--add-peer` address no
-  longer sits in the peerlist permanently and is no longer gossiped to other
-  nodes — it is evicted on the first failed dial, so a typo now shows up as a
-  missing peer instead of a silently propagated dead address. Seed contact is
+  **Operator-visible effects.** A wrong or unreachable `--add-peer` address is
+  **no longer gossiped to other nodes** — gray entries are never disclosed, so
+  a typo stops propagating immediately instead of being handed to every peer
+  that syncs with you. Its **removal is eventual, not immediate**: a failed
+  refill dial only records the address in the recently-failed cache, and
+  eviction waits for the periodic housekeeping probe to draw that entry (one
+  random gray peer per zone per cycle) and fail. A bad address can therefore
+  survive many failed dials and restarts; what changes is that it no longer
+  spreads, and no longer occupies a preferentially-dialled slot. Seed contact is
   keyed on holding **no candidate at all** rather than no trusted one, so a
   restarting node dials its stored pool instead of visiting a seed first. The
   first start after upgrading is a cold-ish start: the persisted store's
@@ -48,9 +53,12 @@
   constant — the whole persisted set was drained and destroyed to buy at most
   one connection.
 
-  **Consequence for operators:** anchor connections were exempt from being
-  dropped to make room during sync. That exemption is gone with the mechanism,
-  so no connection is drop-protected.
+  **Consequence for operators:** the anchor exemption in the
+  sync-slot drop logic went with the mechanism. `should_drop_connection` still
+  refuses to drop a peer that is not striped, one carrying the stripe we need
+  next, one usable for pruned-block sync, or one holding the next unpruned
+  block — what was removed is the *unconditional* exemption an anchor
+  connection had, not connection protection in general.
 
 - **`--hide-my-port` is gone, as an option and as a capability; whether this
   node advertises a port is now derived.** The flag expressed something the
@@ -189,6 +197,27 @@
   the FCMP++ spend builder.
 
 ### Added
+
+- **Shard-visual: ruling B's assigned residue CLOSED (2026-09-06), and
+  the single-algorithm fallback RETIRED.** Three items the spec handed
+  to ruling B by name and B never closed, ruled together: `time_density`
+  is **kept** (admitted, deliberately dormant — the paragraph is what
+  makes it deliberate rather than an oversight); the post-rewire
+  aesthetics are **accepted as they stand**; and the single-algorithm
+  palette is **retired** with a rule-21 reopening criterion, because
+  both of its trigger conditions resolved (continuity was ruled the
+  wrong property, and the floor budget was ruled in candidate.v1's
+  favour). Also closes the *Final algorithm palette* open question and
+  points the stale *Algorithm versioning* entry at the ruling that
+  already settled its privacy half.
+
+  One reported aesthetics finding was **withdrawn under measurement**:
+  the claim that distinguishability collapses at the 128px product size
+  does not survive — pairwise full-image RGB-RMS is min 42.0 / median
+  53.5 at 128px against min 42.9 / median 57.8 at 512px, so
+  distinguishability is size-independent. It was an impression of a
+  thumbnail strip, not a property of the renders, and the withdrawal is
+  recorded rather than the finding.
 
 - **Shard-visual performance targets AMENDED (2026-09-06), and the
   amendment changes what they assert.** **RATIFIED.** *Authority: the
