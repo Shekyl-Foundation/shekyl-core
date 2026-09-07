@@ -76,19 +76,6 @@ class Daemon(object):
         }
         return self.rpc.send_json_rpc_request(calc_pow)
 
-    def add_aux_pow(self, blocktemplate_blob, aux_pow, client = ""):
-        add_aux_pow = {
-            'method': 'add_aux_pow',
-            'params': {
-                'blocktemplate_blob': blocktemplate_blob,
-                'aux_pow' : aux_pow,
-                'client' : client,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(add_aux_pow)
-
     def submit_transaction(self, tx_as_hex):
         # Native typed submit route (DAEMON_SUBMIT_VERDICT.md sec. 2.4): the
         # response body is the serde-tagged SubmitVerdict. Transport-level
