@@ -166,8 +166,8 @@ TEST(peerlist_manager, a_restored_gray_pool_means_this_node_is_not_peerless)
 }
 
 // The saved file must not assert a trust its own loader is required to
-// ignore. Both live lists are written into the gray section; the white
-// section stays in the stream and stays empty.
+// ignore. Both live lists are written into the one persisted candidate list;
+// `peerlist_types` has no white member for a caller to fill even by accident.
 TEST(peerlist_manager, saved_store_carries_no_trust)
 {
   nodetool::peerlist_manager plm;

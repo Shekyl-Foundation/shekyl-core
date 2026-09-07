@@ -971,7 +971,37 @@ the writer inventory behind it, and an inventory is a claim that must be
 re-derived from the tree, never recalled.
 
 **Ruling on the operator-configured writer: exempt, and the exemption is
-narrow.** `--add-peer` entries are inserted by the node's **own operator, from
+narrow.**
+
+> **SUPERSEDED 2026-09-06 — `--add-peer` now enters GRAY.** The later
+> trust-is-earned ruling ("the only thing that moves a peer from gray to white
+> is the daemon itself") carries no carve-out for operator input, and this
+> exemption's two legs do not survive it.
+>
+> **The threat leg is true and no longer sufficient.** There is indeed no
+> remote party in `--add-peer`'s path. But the invariant is no longer only
+> *"deny a remote party the ability to insert itself"* — after the amendment
+> below, white means *"this process dialled it and it answered"*. An
+> operator-supplied address is a **claim about where a peer is**, and an
+> operator can be wrong — a typo, a decommissioned host, a stale runbook —
+> without being an adversary. Non-adversarial is not the same as verified,
+> and this row conflated them.
+>
+> **The bootstrap leg is false as stated, and that was checkable.** Gray
+> entries are dialled: `--add-peer` addresses are reached by the gray pass of
+> the same refill cycle, and `has_no_known_peers()` counts gray, so a node
+> holding only `--add-peer` entries does not detour to a seed either. Nothing
+> the flag exists for breaks.
+>
+> **What the demotion buys.** An unreachable `--add-peer` entry in white sat
+> there permanently *and was gossiped onward* — `get_peerlist_head` reads the
+> white list only — so one operator's typo propagated to the network. In gray
+> it is evicted by `gray_peerlist_housekeeping` on the first failed dial.
+>
+> Retained below as records-was: the reasoning was sound for the invariant it
+> was written against.
+
+`--add-peer` entries are inserted by the node's **own operator, from
 local configuration, before the network exists** — there is no remote party in
 the path, so this writer is not a channel any adversary can reach, and the
 invariant's purpose (deny a *remote* party the ability to insert itself) is
@@ -1641,10 +1671,19 @@ is the test in both cases, and the Q12-D6a rig can run it.
   white-list entries under the white-list writer invariant.** The measured
   quantity is *white-list entries held by **network-derived** peers this node
   never dialled*, whose target value is **zero**: the invariant makes any
-  non-zero reading a defect, not a threshold judgement. **"Network-derived" is
-  load-bearing and excludes the two permitted non-dial paths** — operator
-  `--add-peer` entries, which are placed in white before this node dials them,
-  and nothing else — an earlier version also exempted "not-yet-reclassified
+  non-zero reading a defect, not a threshold judgement.
+
+  > **AMENDED 2026-09-06 — there are now ZERO permitted non-dial paths**, so
+  > the qualifier below has nothing left to exclude and the metric is
+  > structurally guaranteed rather than measured: `--add-peer` enters gray
+  > (see the supersession above), and `peerlist_types` has no white member for
+  > a restore to write. The instrument is worth keeping as a regression
+  > detector on the *producers*, not as a threshold judgement.
+
+  **"Network-derived" was
+  load-bearing and excluded the two permitted non-dial paths** — operator
+  `--add-peer` entries, which were placed in white before this node dialled
+  them, and nothing else — an earlier version also exempted "not-yet-reclassified
   entries on a pre-bump store", which **cannot exist** now that the bump drops
   the store wholesale, and which would have made the falsifier appear to
   tolerate network-derived white entries the design says are impossible. Without

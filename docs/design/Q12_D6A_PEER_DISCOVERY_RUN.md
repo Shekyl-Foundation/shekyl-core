@@ -67,10 +67,23 @@ Four facts, all in [`src/p2p/net_node.inl`](../../src/p2p/net_node.inl):
    (`:753-786`) — consulted by the connection maintainer when a zone has no
    peers (`:1713-1726`).
 4. **`--add-peer` routes by parsed zone**: `m_command_line_peers` is dispatched
-   through `m_network_zones.at(p.adr.get_zone())` (`:845-846`), so
-   `--add-peer <addr>.onion:12021` lands in the **tor zone's white peerlist**.
+   through `m_network_zones.at(p.adr.get_zone())`, so
+   `--add-peer <addr>.onion:12021` lands in the **tor zone's peerlist**.
    `--seed-node`, by contrast, feeds `public_zone.m_seed_nodes` only
    (`:527-533`).
+
+   > **CORRECTED 2026-09-06 — it lands in GRAY, not white.** The original text
+   > said "the tor zone's white peerlist", which was true when written. Under
+   > the trust-is-earned ruling an address this node has not dialled is a
+   > candidate, so `--add-peer` enters gray and is promoted on a successful
+   > dial. **The unlock still holds** and the run needs no change: gray is
+   > dialled by the same refill cycle, and a node holding only `--add-peer`
+   > entries does not detour to a seed because the seed test counts both lists.
+   > What changes for an operator running this rig is that a **wrong or
+   > unreachable `--add-peer` address no longer sits in the peerlist
+   > permanently, and is no longer gossiped onward** — it is evicted on the
+   > first failed dial, so a typo shows up as a missing peer rather than as a
+   > silently propagated dead address.
 
 Fact 4 is the fleet unlock: **anon bootstrap needs no code change.**
 

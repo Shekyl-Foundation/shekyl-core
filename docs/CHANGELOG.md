@@ -2,7 +2,55 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Peerlist trust is earned in-process: nothing restored from disk is
+  trusted, and `--add-peer` is a candidate rather than a trusted peer.**
+  White-list membership now means exactly *"this process dialled it and it
+  answered"*. On startup every persisted address is loaded as a **gray**
+  candidate and earns white by a successful outbound dial; `--add-peer`
+  entries enter gray for the same reason, having never been dialled.
+
+  **Why it is security-relevant.** A persisted white list made white mean *a
+  file asserts that some earlier process verified something*. White entries
+  are dialled in preference to gray **and are the only ones gossiped onward**,
+  so a supplied or stale datadir — a pre-synced download, a restored backup, a
+  container volume, a shared mount — made a node both a preferential dialler
+  of, and an amplifier for, whatever the file contained. Encrypting the store
+  would not have fixed this: encryption is a privacy mechanism for the peer
+  graph, and verification is what supplies trust.
+
+  **Operator-visible effects.** A wrong or unreachable `--add-peer` address no
+  longer sits in the peerlist permanently and is no longer gossiped to other
+  nodes — it is evicted on the first failed dial, so a typo now shows up as a
+  missing peer instead of a silently propagated dead address. Seed contact is
+  keyed on holding **no candidate at all** rather than no trusted one, so a
+  restarting node dials its stored pool instead of visiting a seed first. The
+  first start after upgrading is a cold-ish start: the persisted store's
+  version is bumped, so the previous file is dropped whole.
+
+  **One capacity change, stated because it is not obvious.** White and gray
+  had separate caps (1000 + 5000). One trust class means one cap, so a node
+  saturating both now persists up to `P2P_LOCAL_GRAY_PEERLIST_LIMIT` rather
+  than the sum; the entries dropped are the least recently seen.
+
 ### Removed
+
+- **The anchor peerlist mechanism is deleted whole** — the persisted anchor
+  section, `anchor_peerlist_entry`, its container and manager methods, the
+  anchor dial arm, and `P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT`.
+
+  Anchors existed only to carry peers across a restart, and peerlist trust no
+  longer crosses that boundary. Within a session the mechanism could not
+  produce a connection at all: an entry was in the anchor set only while an
+  outbound connection to it was open, and the dial path skipped every entry it
+  already had a connection to. It also under-delivered against its own
+  constant — the whole persisted set was drained and destroyed to buy at most
+  one connection.
+
+  **Consequence for operators:** anchor connections were exempt from being
+  dropped to make room during sync. That exemption is gone with the mechanism,
+  so no connection is drop-protected.
 
 - **`--hide-my-port` is gone, as an option and as a capability; whether this
   node advertises a port is now derived.** The flag expressed something the
