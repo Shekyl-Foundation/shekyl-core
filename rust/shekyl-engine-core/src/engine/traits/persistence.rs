@@ -133,8 +133,9 @@ pub(crate) trait PersistenceEngine: Send + Sync + 'static {
     #[allow(dead_code)] // Stage 4 / wallet-RPC surface; V3.0 Engine caches network at open.
     fn network(&self) -> Network;
 
-    /// Capability profile of this wallet (`Full` / `ViewOnly` /
-    /// `HardwareOffload`).
+    /// Capability profile of this wallet. Always `Full` — the only
+    /// capability (rule 23) — decoded through the typed parse boundary
+    /// at open/create.
     ///
     /// # Cancellation
     ///

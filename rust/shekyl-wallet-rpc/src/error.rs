@@ -80,8 +80,10 @@ pub enum WalletRpcErrorCode {
     WalletFileNotFound = -29003,
     /// Open / change_password: MAC / password failure.
     InvalidPassword = -29004,
-    /// Operation requires a capability the open wallet lacks.
-    CapabilityForbids = -29005,
+    // -29005 CAPABILITY_FORBIDS is RETIRED (never reuse): FULL is the
+    // only capability (rule 23), so no operation can be refused on
+    // capability grounds. The number stays recorded in wallet_rpc.yaml
+    // so it is never reallocated with a new meaning.
     /// The open wallet's session has ended (its key actor stopped and the
     /// key material is wiped); close and reopen the wallet, then retry.
     WalletSessionEnded = -29006,
@@ -305,12 +307,6 @@ pub enum WalletRpcError {
     /// Open / change_password: wrong password (or corrupt envelope).
     #[error("invalid password")]
     InvalidPassword,
-    /// Operation requires a capability the open wallet lacks.
-    #[error("capability forbids this operation")]
-    CapabilityForbids {
-        /// OpenAPI capability mode string (`FULL` / `VIEW_ONLY` / …).
-        capability: String,
-    },
     /// The open wallet's session has ended: its key actor stopped and the
     /// key blob is already zeroized, so **no retry inside this session can
     /// succeed**. Terminal-with-remedy, its own code rather than `-32603`
@@ -720,7 +716,6 @@ impl WalletRpcError {
             Self::WalletFileExists => WalletRpcErrorCode::WalletFileExists,
             Self::WalletFileNotFound => WalletRpcErrorCode::WalletFileNotFound,
             Self::InvalidPassword => WalletRpcErrorCode::InvalidPassword,
-            Self::CapabilityForbids { .. } => WalletRpcErrorCode::CapabilityForbids,
             Self::WalletSessionEnded => WalletRpcErrorCode::WalletSessionEnded,
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
             Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
@@ -793,7 +788,6 @@ impl WalletRpcError {
     /// Optional structured `error.data` object.
     pub fn data(&self) -> Option<Value> {
         match self {
-            Self::CapabilityForbids { capability } => Some(json!({ "capability": capability })),
             Self::AbandonStateForbids { state } => Some(json!({ "state": state.as_str() })),
             Self::ContentGenMismatch { content_gen } => Some(json!({ "content_gen": content_gen })),
             Self::SubmitRejected { data } => Some(data.clone()),
@@ -877,12 +871,6 @@ impl From<OpenError> for WalletRpcError {
     fn from(err: OpenError) -> Self {
         match err {
             OpenError::IncorrectPassword => Self::InvalidPassword,
-            OpenError::CapabilityMismatch { found }
-            | OpenError::CapabilityNotYetImplemented { capability: found } => {
-                Self::CapabilityForbids {
-                    capability: crate::types::capability_mode_str(found).to_owned(),
-                }
-            }
             OpenError::OutstandingPendingTx { count } => {
                 Self::InternalError(format!("outstanding pending transaction(s): {count}"))
             }

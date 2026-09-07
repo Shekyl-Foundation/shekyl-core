@@ -119,16 +119,6 @@ pub(super) fn rederivation_failure_detail(_err: &shekyl_crypto_pq::CryptoError) 
     "rederive_account failed (HKDF / scalar / ML-KEM / X25519)"
 }
 
-/// Render a transitional-extract refusal into a static detail string.
-/// The function is unreachable on the FULL path (capability is
-/// pre-gated) but kept here so the `extract_rederivation_inputs`
-/// error-channel maps cleanly without an `unreachable!()` panic.
-pub(super) fn extract_failure_detail(
-    _err: &shekyl_engine_file::ExtractRederivationInputsError,
-) -> &'static str {
-    "wallet file refused master-seed extraction (defensive: capability pre-gated)"
-}
-
 /// Predicate for "this `SafetyOverrides` matches the create-time
 /// default of `none()`". Tests typically do; CLI runs with a non-
 /// default profile force a reopen so the session sees the requested

@@ -613,7 +613,12 @@ components:
         - -29002   # WALLET_FILE_EXISTS
         - -29003   # WALLET_FILE_NOT_FOUND
         - -29004   # INVALID_PASSWORD
-        - -29005   # CAPABILITY_FORBIDS
+        # -29005 CAPABILITY_FORBIDS is RETIRED (never reuse): FULL is the
+        # only capability (rule 23; decision log 2026-09-07), so no
+        # operation can be refused on capability grounds. The number stays
+        # out of the enum — emitting it is a conformance failure — and
+        # stays recorded here so it is never reallocated with a new
+        # meaning.
         - -29006   # WALLET_SESSION_ENDED
         - -29100   # INVALID_RECIPIENT
         - -29101   # INSUFFICIENT_FUNDS
@@ -678,8 +683,10 @@ components:
           -29002 WALLET_FILE_EXISTS       create: refusing to overwrite
           -29003 WALLET_FILE_NOT_FOUND    open: no such wallet file
           -29004 INVALID_PASSWORD         open/change_password: MAC failure
-          -29005 CAPABILITY_FORBIDS       operation requires FULL capability
-                                          (data: {"capability": "..."})
+          -29005 (RETIRED — never reuse)  was CAPABILITY_FORBIDS. FULL is
+                                          the only capability, so the
+                                          refusal is unreachable; the
+                                          number is retired, not freed
           -29006 WALLET_SESSION_ENDED     the open wallet's session ended
                                           (key actor stopped, key material
                                           wiped): terminal for the session —
@@ -3007,9 +3014,10 @@ components:
         bounds the holder's forward-linkage surface — revisit if a
         caller emerges that needs value-under-surveillance minimized
         instead.
-        Requires an open FULL wallet (-29005 otherwise; the proof signs
-        with the spend key). -29302 when the wallet has no eligible
-        outputs or the unspent total is below `amount`.
+        Requires an open wallet (-29001 otherwise; the proof signs with
+        the spend key, which every wallet holds — FULL is the only
+        capability). -29302 when the wallet has no eligible outputs or
+        the unspent total is below `amount`.
       properties:
         amount:
           $ref: "#/components/schemas/AtomicUnits"
@@ -3142,9 +3150,9 @@ components:
       required: [message]
       description: >
         Sign `message` as the open wallet's address (spend-tier mode).
-        Requires a FULL wallet (-29005 otherwise; -29001 with no wallet
-        open; -29006 if the session's key actor has stopped — close and
-        reopen). Multi-second by design — see the section header.
+        Requires an open wallet (-29001 otherwise; -29006 if the
+        session's key actor has stopped — close and reopen).
+        Multi-second by design — see the section header.
         Single-flight per wallet: concurrent calls queue FIFO behind the
         engine's sign permit rather than running in parallel.
       properties:

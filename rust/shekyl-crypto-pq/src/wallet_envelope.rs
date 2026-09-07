@@ -136,12 +136,14 @@ pub const DEFAULT_KDF_M_LOG2: u8 = 0x10; // 2^16 KiB = 64 MiB
 pub const DEFAULT_KDF_T: u8 = 0x03;
 pub const DEFAULT_KDF_P: u8 = 0x01;
 
-/// Capability mode discriminators. Match the `SHEKYL_CAPABILITY_*` constants
-/// in `src/shekyl/shekyl_ffi.h`.
+/// Capability mode discriminator. `0x01` (Full) is the only capability:
+/// ViewOnly is REJECTED and hardware-offload is DEFERRED with zero code
+/// (rule 23; decision log 2026-09-07). The retired v1 bytes `0x02`–`0x04`
+/// are RESERVED in `docs/WALLET_FILE_FORMAT_V1.md`'s discriminant table —
+/// in the spec, deliberately not as code constants — and any byte other
+/// than `0x01` is refused at open with
+/// [`WalletEnvelopeError::UnknownCapabilityMode`].
 pub const CAPABILITY_FULL: u8 = 0x01;
-pub const CAPABILITY_VIEW_ONLY: u8 = 0x02;
-pub const CAPABILITY_HARDWARE_OFFLOAD: u8 = 0x03;
-pub const CAPABILITY_RESERVED_MULTISIG: u8 = 0x04;
 
 /// Canonical 65-byte classical address body (version || spend_pk || view_pk)
 /// used by the address invariant check in region 1.
@@ -236,11 +238,8 @@ pub enum WalletEnvelopeError {
     #[error("cap_content_len {len} does not match capability mode {mode:#x}")]
     CapContentLenMismatch { mode: u8, len: u16 },
 
-    #[error("unknown capability mode {0:#x}")]
+    #[error("unsupported capability mode {0:#x} (this build supports 0x01 only)")]
     UnknownCapabilityMode(u8),
-
-    #[error("this wallet requires Shekyl V3.1 or later (multisig mode)")]
-    RequiresMultisigSupport,
 
     #[error("invalid password or corrupted wallet file")]
     InvalidPasswordOrCorrupt,
@@ -299,81 +298,32 @@ impl KdfParams {
 }
 
 /// Capability-mode content, borrowed. Callers own the storage; we only read
-/// during seal. Contents match `SHEKYL_CAPABILITY_*` modes in the FFI header.
+/// during seal. `Full` is the only capability (rule 23; decision log
+/// 2026-09-07) — the enum shape is kept because it is the seal-side parse
+/// boundary a ratified future capability would join through.
 pub enum CapabilityContent<'a> {
     /// FULL wallet: can spend. Contains the 64-byte master seed; everything
     /// else (spend_sk, view_sk, ml_kem_dk) is rederived on every open via
     /// `shekyl_account_rederive`.
     Full { master_seed_64: &'a [u8; 64] },
-
-    /// VIEW_ONLY wallet: can scan, cannot spend. Holds the classical view
-    /// secret (also the X25519 scan secret, by RFC 7748 birational map), the
-    /// ML-KEM-768 decapsulation key, and the spend public key required by
-    /// the scanner's `O = h_o·G + B + y·T` check.
-    ViewOnly {
-        view_sk: &'a [u8; 32],
-        ml_kem_dk: &'a [u8; ML_KEM_768_DK_LEN],
-        spend_pk: &'a [u8; 32],
-    },
-
-    /// HARDWARE_OFFLOAD wallet: same as VIEW_ONLY plus an opaque device
-    /// descriptor that wallet2 uses to reopen the signer channel. The
-    /// descriptor is length-prefixed; its contents are not interpreted here.
-    HardwareOffload {
-        view_sk: &'a [u8; 32],
-        ml_kem_dk: &'a [u8; ML_KEM_768_DK_LEN],
-        spend_pk: &'a [u8; 32],
-        device_desc: &'a [u8],
-    },
 }
 
 impl CapabilityContent<'_> {
     fn mode_byte(&self) -> u8 {
         match self {
             Self::Full { .. } => CAPABILITY_FULL,
-            Self::ViewOnly { .. } => CAPABILITY_VIEW_ONLY,
-            Self::HardwareOffload { .. } => CAPABILITY_HARDWARE_OFFLOAD,
         }
     }
 
     fn serialized_len(&self) -> usize {
         match self {
             Self::Full { .. } => 64,
-            Self::ViewOnly { .. } => 32 + ML_KEM_768_DK_LEN + 32,
-            Self::HardwareOffload { device_desc, .. } => {
-                32 + ML_KEM_768_DK_LEN + 32 + 2 + device_desc.len()
-            }
         }
     }
 
     fn write_into(&self, out: &mut Vec<u8>) {
         match self {
             Self::Full { master_seed_64 } => out.extend_from_slice(master_seed_64.as_slice()),
-            Self::ViewOnly {
-                view_sk,
-                ml_kem_dk,
-                spend_pk,
-            } => {
-                out.extend_from_slice(view_sk.as_slice());
-                out.extend_from_slice(ml_kem_dk.as_slice());
-                out.extend_from_slice(spend_pk.as_slice());
-            }
-            Self::HardwareOffload {
-                view_sk,
-                ml_kem_dk,
-                spend_pk,
-                device_desc,
-            } => {
-                out.extend_from_slice(view_sk.as_slice());
-                out.extend_from_slice(ml_kem_dk.as_slice());
-                out.extend_from_slice(spend_pk.as_slice());
-                let dev_len: u16 = device_desc
-                    .len()
-                    .try_into()
-                    .expect("device_desc exceeds u16::MAX; rejected earlier");
-                out.extend_from_slice(&dev_len.to_le_bytes());
-                out.extend_from_slice(device_desc);
-            }
         }
     }
 }
@@ -690,24 +640,19 @@ fn write_keys_file_header(out: &mut Vec<u8>, kdf: KdfParams, wrap_salt: &[u8; WR
 /// Validate capability-mode / cap_content_len pair on open. Separate from
 /// the Poly1305 check because we want a typed error for "my seal code
 /// wrote a wrong-length cap_content" rather than generic AEAD failure.
+/// Any mode byte other than [`CAPABILITY_FULL`] refuses with the generic
+/// unsupported-capability error — it names no specific future arm.
 fn validate_cap_content(mode: u8, cap_len: u16) -> Result<(), WalletEnvelopeError> {
-    let expected_min: usize = match mode {
-        CAPABILITY_FULL => 64,
-        CAPABILITY_VIEW_ONLY => 32 + ML_KEM_768_DK_LEN + 32,
-        CAPABILITY_HARDWARE_OFFLOAD => 32 + ML_KEM_768_DK_LEN + 32 + 2, // u16 device_len prefix
-        CAPABILITY_RESERVED_MULTISIG => return Err(WalletEnvelopeError::RequiresMultisigSupport),
-        other => return Err(WalletEnvelopeError::UnknownCapabilityMode(other)),
-    };
-    let cap_len_usize = usize::from(cap_len);
-    let ok = match mode {
-        CAPABILITY_FULL | CAPABILITY_VIEW_ONLY => cap_len_usize == expected_min,
-        CAPABILITY_HARDWARE_OFFLOAD => cap_len_usize >= expected_min,
-        _ => false,
-    };
-    if !ok {
-        return Err(WalletEnvelopeError::CapContentLenMismatch { mode, len: cap_len });
+    match mode {
+        CAPABILITY_FULL => {
+            if usize::from(cap_len) == 64 {
+                Ok(())
+            } else {
+                Err(WalletEnvelopeError::CapContentLenMismatch { mode, len: cap_len })
+            }
+        }
+        other => Err(WalletEnvelopeError::UnknownCapabilityMode(other)),
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1288,58 +1233,6 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_view_only() {
-        let view_sk = [0x22u8; 32];
-        let mut dk = [0u8; ML_KEM_768_DK_LEN];
-        for (i, b) in dk.iter_mut().enumerate() {
-            *b = u8::try_from(i & 0xff).expect("i masked to u8 range");
-        }
-        let spend_pk = [0x33u8; 32];
-        let cap = CapabilityContent::ViewOnly {
-            view_sk: &view_sk,
-            ml_kem_dk: &dk,
-            spend_pk: &spend_pk,
-        };
-        let pw = b"viewonly pw";
-        let addr = dummy_address();
-        let bytes = seal_keys_file(pw, 1, 1, &cap, 42, 0, &addr, kat_kdf()).expect("seal");
-        let opened = open_keys_file(pw, &bytes).expect("open");
-        assert_eq!(opened.capability_mode, CAPABILITY_VIEW_ONLY);
-        assert_eq!(opened.cap_content.len(), 32 + ML_KEM_768_DK_LEN + 32);
-        assert_eq!(&opened.cap_content[..32], &view_sk);
-        assert_eq!(&opened.cap_content[32..32 + ML_KEM_768_DK_LEN], &dk[..]);
-        assert_eq!(&opened.cap_content[32 + ML_KEM_768_DK_LEN..], &spend_pk);
-    }
-
-    #[test]
-    fn roundtrip_hardware_offload() {
-        let view_sk = [0x44u8; 32];
-        let dk = [0x55u8; ML_KEM_768_DK_LEN];
-        let spend_pk = [0x66u8; 32];
-        let device_desc = b"ledger:12345:foo";
-        let cap = CapabilityContent::HardwareOffload {
-            view_sk: &view_sk,
-            ml_kem_dk: &dk,
-            spend_pk: &spend_pk,
-            device_desc,
-        };
-        let pw = b"hw pw";
-        let addr = dummy_address();
-        let bytes = seal_keys_file(pw, 2, 1, &cap, 0, 0, &addr, kat_kdf()).expect("seal");
-        let opened = open_keys_file(pw, &bytes).expect("open");
-        assert_eq!(opened.capability_mode, CAPABILITY_HARDWARE_OFFLOAD);
-        // Skip over the fixed prefix and check device descriptor.
-        let dd_off = 32 + ML_KEM_768_DK_LEN + 32;
-        let dev_len =
-            u16::from_le_bytes([opened.cap_content[dd_off], opened.cap_content[dd_off + 1]]);
-        assert_eq!(usize::from(dev_len), device_desc.len());
-        assert_eq!(
-            &opened.cap_content[dd_off + 2..dd_off + 2 + device_desc.len()],
-            device_desc
-        );
-    }
-
-    #[test]
     fn password_rotation_preserves_seed_region_bytes() {
         let seed = [0x77u8; 64];
         let pw_old = b"old pw";
@@ -1432,21 +1325,93 @@ mod tests {
     }
 
     #[test]
-    fn reject_reserved_multisig_mode() {
-        // Build a valid FULL envelope, then flip the encrypted mode byte ...
-        // we can't do that cheaply without the key, so instead: test the
-        // validate_cap_content gate directly with the reserved mode.
-        let err = validate_cap_content(CAPABILITY_RESERVED_MULTISIG, 0).unwrap_err();
-        assert!(matches!(err, WalletEnvelopeError::RequiresMultisigSupport));
+    fn reject_unknown_capability_mode() {
+        // The retired v1 bytes (0x02 ViewOnly, 0x03 hardware-offload,
+        // 0x04 reserved-multisig — RESERVED in the format spec, unlabeled)
+        // and a never-assigned byte all hit the same generic gate.
+        for mode in [0x02u8, 0x03, 0x04, 0x07] {
+            let err = validate_cap_content(mode, 0).unwrap_err();
+            match err {
+                WalletEnvelopeError::UnknownCapabilityMode(b) => assert_eq!(b, mode),
+                other => panic!("mode {mode:#x}: expected UnknownCapabilityMode, got {other:?}"),
+            }
+        }
     }
 
+    /// Craft an authentically sealed keys file bearing an arbitrary
+    /// capability byte. `CapabilityContent` is Full-only by design, so no
+    /// production seal path can write another byte; the test seals a real
+    /// Full file with pinned entropy, then re-encrypts region 1 with the
+    /// mode byte replaced, under the known file KEK, same nonce, same AAD.
+    /// The result is correctly MACed end to end — a refusal at open is the
+    /// capability gate, not the AEAD.
+    fn seal_raw_mode_for_test(mode: u8) -> Vec<u8> {
+        let master_seed = [0x5Au8; 64];
+        let cap = CapabilityContent::Full {
+            master_seed_64: &master_seed,
+        };
+        let bytes = seal_keys_file_with_entropy(
+            KAT_PASSWORD,
+            0,
+            0,
+            &cap,
+            KAT_CREATION_TIMESTAMP,
+            KAT_RESTORE_HEIGHT,
+            &KAT_EXPECTED_ADDRESS,
+            kat_kdf(),
+            &KAT_WRAP_SALT_FULL,
+            &KAT_WRAP_NONCE_FULL,
+            &KAT_REGION1_NONCE_FULL,
+            &KAT_FILE_KEK_SEED,
+        )
+        .expect("seal full control");
+
+        // Rebuild region 1 plaintext from the same inputs, mode swapped.
+        let mut region1_plain: Vec<u8> = Vec::new();
+        region1_plain.push(mode);
+        region1_plain.push(0); // network
+        region1_plain.push(0); // seed_format
+        region1_plain.extend_from_slice(&KAT_EXPECTED_ADDRESS);
+        region1_plain.extend_from_slice(&64u16.to_le_bytes());
+        region1_plain.extend_from_slice(&master_seed);
+        region1_plain.extend_from_slice(&KAT_CREATION_TIMESTAMP.to_le_bytes());
+        region1_plain.extend_from_slice(&KAT_RESTORE_HEIGHT.to_le_bytes());
+
+        let region1_aad: Vec<u8> = bytes[OFF_MAGIC..OFF_KDF_ALGO].to_vec();
+        let key = derive_wrap_key_region_1(&KAT_FILE_KEK_SEED);
+        let mut region1_ct = region1_plain;
+        let tag = aead_encrypt(&key, &KAT_REGION1_NONCE_FULL, &region1_aad, &mut region1_ct)
+            .expect("re-encrypt region 1");
+
+        let mut out = bytes[..OFF_REGION1_CT].to_vec();
+        out.extend_from_slice(&region1_ct);
+        out.extend_from_slice(&tag);
+        out
+    }
+
+    /// Fail-closed replacement for the deleted non-Full round-trips
+    /// (rule 47: the deletion must leave a check that can fail). Files
+    /// bearing the retired capability bytes 0x02 / 0x03 / 0x04 — and a
+    /// never-assigned byte — are authentically sealed, and must refuse
+    /// to open with the generic unsupported-capability error naming the
+    /// byte and no future arm.
     #[test]
-    fn reject_unknown_capability_mode() {
-        let err = validate_cap_content(0x07, 0).unwrap_err();
-        assert!(matches!(
-            err,
-            WalletEnvelopeError::UnknownCapabilityMode(0x07)
-        ));
+    fn open_refuses_non_full_capability_bytes() {
+        // Control: the same splice path with mode 0x01 opens fine, so a
+        // refusal below is the capability gate, not a broken test helper.
+        let full = seal_raw_mode_for_test(CAPABILITY_FULL);
+        let opened = open_keys_file(KAT_PASSWORD, &full).expect("full-mode control must open");
+        assert_eq!(opened.capability_mode, CAPABILITY_FULL);
+        assert_eq!(opened.cap_content.as_slice(), &[0x5Au8; 64]);
+
+        for mode in [0x02u8, 0x03, 0x04, 0x7F] {
+            let bytes = seal_raw_mode_for_test(mode);
+            let err = open_keys_file(KAT_PASSWORD, &bytes).unwrap_err();
+            match err {
+                WalletEnvelopeError::UnknownCapabilityMode(b) => assert_eq!(b, mode),
+                other => panic!("mode {mode:#x}: expected UnknownCapabilityMode, got {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -1619,34 +1584,6 @@ mod tests {
         assert_eq!(opened.cap_content.as_slice(), &seed);
     }
 
-    #[test]
-    fn expected_address_matches_view_only_reconstruction() {
-        // VIEW_ONLY reconstruction: the loader recovers view_sk + ml_kem_dk
-        // from cap_content, and expected_classical_address pins the
-        // spend_pk+view_pk pair the wallet claims. This test pins the
-        // byte-for-byte preservation of both halves through the envelope.
-        let view_sk = [0xAAu8; 32];
-        let dk = [0xBBu8; ML_KEM_768_DK_LEN];
-        let spend_pk = [0xCCu8; 32];
-        let view_pk_expected = [0xDDu8; 32];
-        let mut expected_addr = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
-        expected_addr[0] = 0x02; // reserved for stagenet in the classical header
-        expected_addr[1..33].copy_from_slice(&spend_pk);
-        expected_addr[33..65].copy_from_slice(&view_pk_expected);
-        let cap = CapabilityContent::ViewOnly {
-            view_sk: &view_sk,
-            ml_kem_dk: &dk,
-            spend_pk: &spend_pk,
-        };
-        let bytes = seal_keys_file(b"pw", 1, 0, &cap, 0, 0, &expected_addr, kat_kdf()).unwrap();
-        let opened = open_keys_file(b"pw", &bytes).unwrap();
-        assert_eq!(opened.capability_mode, CAPABILITY_VIEW_ONLY);
-        assert_eq!(opened.expected_classical_address, expected_addr);
-        assert_eq!(&opened.cap_content[..32], &view_sk);
-        assert_eq!(&opened.cap_content[32..32 + ML_KEM_768_DK_LEN], &dk[..]);
-        assert_eq!(&opened.cap_content[32 + ML_KEM_768_DK_LEN..], &spend_pk);
-    }
-
     // ------------------------------------------------------------------
     // Tier-3 KAT fixtures
     //
@@ -1712,16 +1649,6 @@ mod tests {
         s
     }
 
-    fn kat_view_only_cap() -> ([u8; 32], [u8; ML_KEM_768_DK_LEN], [u8; 32]) {
-        let view_sk = [0x11u8; 32];
-        let mut dk = [0u8; ML_KEM_768_DK_LEN];
-        for (i, b) in dk.iter_mut().enumerate() {
-            *b = u8::try_from(i & 0xff).expect("masked");
-        }
-        let spend_pk = [0x22u8; 32];
-        (view_sk, dk, spend_pk)
-    }
-
     fn seal_kat_full() -> Vec<u8> {
         let seed = kat_full_seed();
         let cap = CapabilityContent::Full {
@@ -1730,56 +1657,6 @@ mod tests {
         seal_keys_file_with_entropy(
             KAT_PASSWORD,
             0,
-            0,
-            &cap,
-            KAT_CREATION_TIMESTAMP,
-            KAT_RESTORE_HEIGHT,
-            &KAT_EXPECTED_ADDRESS,
-            kat_kdf(),
-            &KAT_WRAP_SALT_FULL,
-            &KAT_WRAP_NONCE_FULL,
-            &KAT_REGION1_NONCE_FULL,
-            &KAT_FILE_KEK_SEED,
-        )
-        .expect("KAT seal")
-    }
-
-    fn seal_kat_view_only() -> Vec<u8> {
-        let (view_sk, dk, spend_pk) = kat_view_only_cap();
-        let cap = CapabilityContent::ViewOnly {
-            view_sk: &view_sk,
-            ml_kem_dk: &dk,
-            spend_pk: &spend_pk,
-        };
-        seal_keys_file_with_entropy(
-            KAT_PASSWORD,
-            1,
-            0,
-            &cap,
-            KAT_CREATION_TIMESTAMP,
-            KAT_RESTORE_HEIGHT,
-            &KAT_EXPECTED_ADDRESS,
-            kat_kdf(),
-            &KAT_WRAP_SALT_FULL,
-            &KAT_WRAP_NONCE_FULL,
-            &KAT_REGION1_NONCE_FULL,
-            &KAT_FILE_KEK_SEED,
-        )
-        .expect("KAT seal")
-    }
-
-    fn seal_kat_hardware_offload() -> Vec<u8> {
-        let (view_sk, dk, spend_pk) = kat_view_only_cap();
-        let device_desc = b"ledger-nano-s:kat-serial-001";
-        let cap = CapabilityContent::HardwareOffload {
-            view_sk: &view_sk,
-            ml_kem_dk: &dk,
-            spend_pk: &spend_pk,
-            device_desc,
-        };
-        seal_keys_file_with_entropy(
-            KAT_PASSWORD,
-            2,
             0,
             &cap,
             KAT_CREATION_TIMESTAMP,
@@ -1810,10 +1687,6 @@ mod tests {
     // wire-format break and must land as an explicit format-version bump.
     const KAT_FULL_HEX: &str =
         include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V1/full.hex");
-    const KAT_VIEW_ONLY_HEX: &str =
-        include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V1/view_only.hex");
-    const KAT_HARDWARE_OFFLOAD_HEX: &str =
-        include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V1/hardware_offload.hex");
     const KAT_STATE_HEX: &str =
         include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V1/state_for_full.hex");
 
@@ -1838,32 +1711,6 @@ mod tests {
         assert_eq!(opened.restore_height_hint, KAT_RESTORE_HEIGHT);
         assert_eq!(opened.expected_classical_address, KAT_EXPECTED_ADDRESS);
         assert_eq!(opened.cap_content.as_slice(), &kat_full_seed());
-    }
-
-    #[test]
-    fn kat_view_only_roundtrip() {
-        let bytes = seal_kat_view_only();
-        assert_eq!(bytes, decode_hex_fixture(KAT_VIEW_ONLY_HEX));
-        let opened = open_keys_file(KAT_PASSWORD, &bytes).expect("open KAT");
-        assert_eq!(opened.capability_mode, CAPABILITY_VIEW_ONLY);
-        let (view_sk, dk, spend_pk) = kat_view_only_cap();
-        assert_eq!(&opened.cap_content[..32], &view_sk);
-        assert_eq!(&opened.cap_content[32..32 + ML_KEM_768_DK_LEN], &dk[..]);
-        assert_eq!(&opened.cap_content[32 + ML_KEM_768_DK_LEN..], &spend_pk);
-    }
-
-    #[test]
-    fn kat_hardware_offload_roundtrip() {
-        let bytes = seal_kat_hardware_offload();
-        assert_eq!(bytes, decode_hex_fixture(KAT_HARDWARE_OFFLOAD_HEX));
-        let opened = open_keys_file(KAT_PASSWORD, &bytes).expect("open KAT");
-        assert_eq!(opened.capability_mode, CAPABILITY_HARDWARE_OFFLOAD);
-        // Device descriptor follows view_sk || dk || spend_pk.
-        let dd_off = 32 + ML_KEM_768_DK_LEN + 32;
-        let dev_len =
-            u16::from_le_bytes([opened.cap_content[dd_off], opened.cap_content[dd_off + 1]]);
-        let dev_desc = &opened.cap_content[dd_off + 2..dd_off + 2 + usize::from(dev_len)];
-        assert_eq!(dev_desc, b"ledger-nano-s:kat-serial-001");
     }
 
     #[test]
@@ -1901,12 +1748,8 @@ mod tests {
             eprintln!("wrote {}: {} bytes", path.display(), bytes.len());
         };
         let full = seal_kat_full();
-        let view_only = seal_kat_view_only();
-        let hardware_offload = seal_kat_hardware_offload();
         let state_for_full = seal_kat_state(&full);
         write("full.hex", &full);
-        write("view_only.hex", &view_only);
-        write("hardware_offload.hex", &hardware_offload);
         write("state_for_full.hex", &state_for_full);
     }
 }

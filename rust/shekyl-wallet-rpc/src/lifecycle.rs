@@ -22,8 +22,8 @@ use shekyl_crypto_pq::account::{
 use shekyl_crypto_pq::bip39::{mnemonic_from_entropy, SHEKYL_BIP39_ENTROPY_BYTES};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
-    Capability, CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network,
-    OpenedEngine, SoloSigner, StakeFacade, StakePosture,
+    CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network, OpenedEngine,
+    SoloSigner, StakeFacade, StakePosture,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
@@ -748,7 +748,8 @@ enum StakePostureParam {
 /// The user asks to stake; the protocol dance is hidden (rule 81). What
 /// actually runs (`ARCHIVAL_STAKE_ACTIVATION_PLAN.md` §5.0, SA-R1-b order):
 ///
-/// 1. Idempotency fast-path reads + `Capability::Full` gate (SA-DQ-1).
+/// 1. Idempotency fast-path reads (SA-DQ-1). No capability gate: every
+///    wallet is FULL (rule 23).
 /// 2. If no StakeEngine is resident (fresh first-stake): a credentialed
 ///    close → reopen **with the transient first-stake intent** (SA-R1-a) so
 ///    the actor spawns pre-persist, then the on-demand P-scan starts (the
@@ -826,12 +827,8 @@ pub(crate) async fn stake(
     };
     let (needs_intent_open, slot) = {
         let g = shared.read().await;
-        let capability = g.capability();
-        if capability != Capability::Full {
-            return Err(WalletRpcError::CapabilityForbids {
-                capability: capability_mode_str(capability).to_owned(),
-            });
-        }
+        // No capability gate: every wallet is FULL (rule 23); the
+        // envelope refuses any other capability byte at open.
         let ledger = g.ledger();
         let staking = &ledger.staking;
         let slot = if staking.staking_enabled {

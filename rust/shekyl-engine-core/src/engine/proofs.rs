@@ -14,9 +14,10 @@
 //!   source ciphertexts; OUTBOUND signs with the retained per-tx secret
 //!   (`TxMetaBlock.tx_keys`) engine-side — see
 //!   [`super::proof_bridge`]'s module docs for the split rationale.
-//! - **`get_reserve_proof`** — FULL-capability-gated; selects unspent
-//!   matured outputs (largest-first — the contract's fewest-beacons
-//!   choice) and signs inside the key actor.
+//! - **`get_reserve_proof`** — selects unspent matured outputs
+//!   (largest-first — the contract's fewest-beacons choice) and signs
+//!   inside the key actor. Every wallet is FULL (rule 23), so there is
+//!   no capability gate.
 //! - **`check_tx_proof` / `check_reserve_proof`** — WALLET-LESS: free
 //!   functions over any [`Rpc`] implementor, no `Engine` in sight. They
 //!   fetch on-chain data from the verifier's daemon and verify the
@@ -25,8 +26,8 @@
 //! # Decomposition shape (`ENGINE_COMPOSITION_DECOMPOSITION.md` §4)
 //!
 //! Workflow functions take an explicit `ProofsCtx`, never `&Engine`:
-//! the data dependencies (key handle, daemon, ledger, capability,
-//! primary address) are visible in the ctx fields, and a new dependency
+//! the data dependencies (key handle, daemon, ledger, primary
+//! address) are visible in the ctx fields, and a new dependency
 //! is a reviewable ctx-field addition rather than a silent `self.foo`.
 //! The `Engine` methods in this file are thin delegators that assemble
 //! the ctx and forward.
@@ -78,7 +79,7 @@ use super::proofs_chain_facts::{
 };
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
-use super::{Capability, Engine};
+use super::Engine;
 use shekyl_rpc_types::{IsKeyImageSpentRequest, IsKeyImageSpentResponse, KeyImageStatus};
 
 // ── Wire-framing constants (contract "Proofs" section) ──────────────
@@ -146,11 +147,6 @@ pub enum ProofsError {
     /// `-29304 PROOF_TX_UNCONFIRMED`.
     #[error("transaction {0} is unconfirmed (in the pool, not the chain)")]
     TxUnconfirmed(String),
-
-    /// `get_reserve_proof` on a non-FULL wallet (the proof signs with
-    /// the spend key). Contract `-29005`.
-    #[error("reserve proofs require an open FULL wallet")]
-    NotFullWallet,
 
     /// The counterparty address carries non-canonical key material (its
     /// Ed25519 view key does not map to an X25519 point). Contract
@@ -365,8 +361,6 @@ pub(crate) struct ProofsCtx<'a, D> {
     /// Wallet ledger: owned-output enumeration, retained tx secrets,
     /// reserve selection.
     pub ledger: &'a LocalLedger,
-    /// Wallet capability mode (the reserve FULL gate).
-    pub capability: Capability,
     /// The wallet's own primary address (INBOUND binding + direction
     /// selection).
     pub primary_address: ShekylAddress,
@@ -562,10 +556,6 @@ pub(crate) async fn get_reserve_proof<D: Rpc>(
     amount: Option<AtomicUnits>,
     message: &str,
 ) -> Result<GeneratedReserveProof, ProofsError> {
-    if ctx.capability != Capability::Full {
-        return Err(ProofsError::NotFullWallet);
-    }
-
     // Project candidates under a short read guard.
     let candidates: Vec<ReserveCandidate> = {
         let state = ctx.ledger.read();
@@ -978,7 +968,6 @@ impl<
             key: &self.key,
             daemon: &self.daemon,
             ledger: self.ledger.as_ref(),
-            capability: self.capability,
             primary_address: self.primary_address(),
         }
     }

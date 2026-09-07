@@ -90,11 +90,9 @@
 //! lifecycle methods on `Engine<SoloSigner>`. [`Engine::create`] and
 //! [`Engine::open_full`] ship end-to-end against the
 //! [`shekyl_engine_file::WalletFile`] envelope and the
-//! [`shekyl_crypto_pq::account::AllKeysBlob`] re-derivation path;
-//! [`Engine::open_view_only`] and [`Engine::open_hardware_offload`]
-//! ship as signature stubs that return
-//! [`OpenError::CapabilityNotYetImplemented`](error::OpenError::CapabilityNotYetImplemented)
-//! pending the matching `shekyl-crypto-pq` constructors.
+//! [`shekyl_crypto_pq::account::AllKeysBlob`] re-derivation path.
+//! FULL is the only capability (rule 23; decision log 2026-09-07) —
+//! there are no non-FULL openers.
 //! [`Engine::change_password`] and [`Engine::close`] ship for every
 //! signer kind. The struct is composition over field type — every
 //! member's purpose, mutability discipline, and ownership are
@@ -528,20 +526,13 @@ use crate::engine::traits::{
 ///
 /// - [`Engine::create`] — fresh wallet (BIP-39 seed for mainnet/stagenet,
 ///   raw 32-byte seed for testnet/fakechain).
-/// - [`Engine::open_full`] — open an existing `Capability::Full`
-///   wallet with the user's password.
-/// - [`Engine::open_view_only`] — open an existing `Capability::ViewOnly`
-///   wallet (no spend material).
-/// - [`Engine::open_hardware_offload`] — open an existing
-///   `Capability::HardwareOffload` wallet (signing happens out-of-band).
+/// - [`Engine::open_full`] — open an existing wallet with the user's
+///   password. Every wallet is `Capability::Full` (rule 23); the
+///   envelope refuses any other capability byte at open.
 /// - [`Engine::change_password`] — rotate the user-supplied password
 ///   without rederiving the master seed.
 /// - [`Engine::close`] — flush state to disk and release the advisory
 ///   lock; refuses if any [`PendingTx`] is in flight.
-///
-/// All six methods land in the lifecycle commit; this commit defines
-/// the struct shape and the read-only accessor surface that those
-/// methods produce.
 ///
 /// # Locking discipline
 ///
@@ -737,12 +728,10 @@ pub struct Engine<
     network: Network,
 
     /// Cached from `file.capability()` for O(1) accessor speed. Same
-    /// stability argument as `network`. Used by the lifecycle
-    /// constructors to decide which `open_*` is appropriate (mismatched
-    /// capability surfaces as
-    /// [`OpenError::CapabilityMismatch`](error::OpenError::CapabilityMismatch))
-    /// and by call sites that gate spend operations on
-    /// [`Capability::can_spend_locally`].
+    /// stability argument as `network`. Always [`Capability::Full`] —
+    /// the only capability (rule 23) — kept as a typed field because it
+    /// is the parse-boundary proof that the envelope validated the
+    /// capability byte at open/create.
     capability: Capability,
 
     /// Single-flight slot for [`Engine::start_refresh`]. Held by the

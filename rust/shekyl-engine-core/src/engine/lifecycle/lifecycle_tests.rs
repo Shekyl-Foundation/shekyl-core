@@ -603,10 +603,6 @@ async fn change_password_rewraps_envelope_then_reopen_uses_new_password() {
 /// wallet-file layer alone cannot decode, this test fails even when
 /// the orchestrator's own reopen path happens to succeed off cached
 /// bytes.
-///
-/// Capability coverage: FULL only. ViewOnly / HardwareOffload are
-/// added when their `open_*` bodies land (see the View/HW lifecycle
-/// entry in `docs/FOLLOWUPS.md`).
 #[tokio::test(flavor = "multi_thread")]
 async fn change_password_round_trips_via_independent_wallet_file_open() {
     let fix = make_create_fixture();
@@ -813,70 +809,6 @@ async fn persist_for_close_keeps_engine_on_outstanding_reservation() {
     wallet
         .close(&creds)
         .expect_err("still outstanding after failed persist");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn open_view_only_returns_capability_not_yet_implemented() {
-    let fix = make_create_fixture();
-    let password: &[u8] = b"correct horse";
-    let creds = Credentials::password_only(password);
-    let seed = fixed_seed();
-
-    // Create a FULL wallet on disk so the call site is realistic;
-    // the stub method returns the typed error before touching the
-    // file, but constructing the file makes the test resemble the
-    // real CLI flow.
-    let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
-    let network = params.network;
-    Engine::<SoloSigner>::create(params, dummy_daemon())
-        .expect("create FULL wallet")
-        .close(&creds)
-        .expect("close after create");
-
-    let err = Engine::<SoloSigner>::open_view_only(
-        &fix.base_path,
-        &creds,
-        network,
-        dummy_daemon(),
-        SafetyOverrides::none(),
-    )
-    .expect_err("view-only stub must refuse");
-    match err {
-        OpenError::CapabilityNotYetImplemented { capability } => {
-            assert_eq!(capability, Capability::ViewOnly);
-        }
-        other => panic!("expected CapabilityNotYetImplemented, got {other:?}"),
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn open_hardware_offload_returns_capability_not_yet_implemented() {
-    let fix = make_create_fixture();
-    let password: &[u8] = b"correct horse";
-    let creds = Credentials::password_only(password);
-    let seed = fixed_seed();
-
-    let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
-    let network = params.network;
-    Engine::<SoloSigner>::create(params, dummy_daemon())
-        .expect("create FULL wallet")
-        .close(&creds)
-        .expect("close after create");
-
-    let err = Engine::<SoloSigner>::open_hardware_offload(
-        &fix.base_path,
-        &creds,
-        network,
-        dummy_daemon(),
-        SafetyOverrides::none(),
-    )
-    .expect_err("hardware-offload stub must refuse");
-    match err {
-        OpenError::CapabilityNotYetImplemented { capability } => {
-            assert_eq!(capability, Capability::HardwareOffload);
-        }
-        other => panic!("expected CapabilityNotYetImplemented, got {other:?}"),
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

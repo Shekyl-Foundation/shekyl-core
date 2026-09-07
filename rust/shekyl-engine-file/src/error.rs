@@ -169,22 +169,16 @@ pub enum WalletFileError {
     #[error("network mismatch: keys file is {found}, but {expected} was requested")]
     NetworkMismatch { expected: Network, found: Network },
 
-    /// The keys file's `capability_mode` byte is neither FULL /
-    /// VIEW_ONLY / HARDWARE_OFFLOAD nor the RESERVED_MULTISIG
-    /// placeholder. The envelope layer already rejects unknown bytes at
-    /// seal/open time, so this variant is a belt-and-braces guard for
-    /// test helpers or future refactors that synthesize an
-    /// `OpenedKeysFile` outside the envelope's validation path.
-    #[error("unknown capability-mode discriminant {0:#04x} in keys file")]
+    /// The keys file's `capability_mode` byte is not FULL — the only
+    /// capability (rule 23: ViewOnly is REJECTED, hardware-offload is
+    /// DEFERRED with zero code; the retired v1 bytes are RESERVED in
+    /// `WALLET_FILE_FORMAT_V1.md`'s discriminant table). The envelope
+    /// layer already rejects unknown bytes at seal/open time, so this
+    /// variant is a belt-and-braces guard for test helpers or future
+    /// refactors that synthesize an `OpenedKeysFile` outside the
+    /// envelope's validation path.
+    #[error("unsupported capability-mode discriminant {0:#04x} in keys file")]
     UnknownCapability(u8),
-
-    /// The keys file carries the reserved multisig placeholder
-    /// (`CAPABILITY_RESERVED_MULTISIG`). Multisig is scoped out of the
-    /// v1 envelope on purpose (see `PQC_MULTISIG.md`), and silently
-    /// treating such a file as one of the three supported capabilities
-    /// would be unsafe.
-    #[error("multisig wallets are not supported by this envelope version")]
-    MultisigNotSupported,
 
     /// `save_as` was asked to relocate the wallet pair across a
     /// filesystem boundary. `rename(2)` is atomic only within a single
