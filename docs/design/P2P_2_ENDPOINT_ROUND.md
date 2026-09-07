@@ -1,8 +1,11 @@
 # P2P-2 cluster E — the node's own endpoint
 
-**Status:** OPEN, NARROWED 2026-09-06 — **PWD-E1, PWD-E2 only** (endpoint
-determination). PWD-E3/E4 were already ruled and merged on `dev`; PWD-E5/E6 are
-settled. See §0 before reading anything else. Rule 26 is cited explicitly
+**Status:** RULED 2026-09-06 — every row signed by Rick (§5). The round opened
+wider than it should have; PWD-E3/E4's mechanisms were already ruled on `dev`
+and are retained as records-was. What this round contributes: the direction of
+the nonce/address dependency, the dead `m_our_address` fact, PWD-E2's
+enforcement requirement, and PWD-E5's requirement on the removal lane. See §0
+before reading anything else. Rule 26 is cited explicitly
 (`26-sub-pr-design-discipline.mdc`): this is a multi-round design surface with
 untrusted-input and identity coupling, so A2 (audit-against-actual-code) and
 A3 (threat-model framing) are load-bearing here, not optional.
@@ -53,6 +56,49 @@ and it should have been cited, not re-derived.
   `peerid_type id` occurrences in their `p2p_protocol_defs.h`). It is kept
   because it is evidence *for* the adopted ruling.
 - **PWD-E6** records Rick's `--p2p-external-port` ruling and is unaffected.
+
+**The round's stated reason for existing is backwards (Rick, 2026-09-06).** §1
+says job 1 cannot be replaced without the daemon knowing its own endpoint.
+**That is false.** The nonce replaces job 1 completely and needs nothing about
+our address: dial, send a per-connection value, and a handshake arriving with a
+value we recently emitted is us. Endpoint determination is not a precondition
+for it.
+
+**The dependency in fact runs the other way, and E2(a) is that construction.**
+If we dial X and our own nonce comes back, **X is us** — an external address
+learned by our own socket, with no attestation trusted. So: nonce →
+self-detection → endpoint determination → address comparison *as an
+optimisation*. E2(a) already states this ("dial the candidate, recognise our own
+nonce on accept"), so the construction is not new; **the correction is to §1's
+framing, which had the arrow pointing the wrong way and used it to justify the
+round's scope.**
+
+**What that costs the round.** PWD-E1/E2 come **off PWD-I1's critical path**.
+They stop being a blocker on removing `peer_id` and become a separate question
+about `my_port` and NAT correctness — lower stakes, and `-43`'s lane. §6b's
+chain is amended accordingly.
+
+**Address comparison vs nonce is a cost difference, not a correctness gap —
+and the cost has a named failure mode.** Comparison avoids the dial; the nonce
+detects after it. On `public_` that is a wasted TCP connect. On an overlay it
+is a wasted circuit build, **and the failed-address suppression turns it into
+something stranger**: a self-dial that times out on a non-hairpinning NAT calls
+`record_addr_failed` (`net_node.inl:1318`, `:1332`, `:1387`, `:1399`) **on our
+own address**, and `is_addr_recently_failed` then gates candidate selection
+(`:1454`, `:1713`) *and* the peerlist merge (`:2148`). **So the first failed
+verification attempt suppresses the next one for the whole window** — E2(a)
+throttles itself exactly on the nodes that need E2(b).
+
+**RULED (Rick, 2026-09-06) — the nonce is its own field.** Per-connection,
+minted fresh, never persisted, and **not** the transport IV or ephemeral
+pubkey even once p2p encryption lands. Reusing key material would couple p2p
+dedup to the crypto key schedule so a change to one silently changes the
+other, and would make job 1 work only on encrypted links. Substrate check:
+`basic_node_data` is `{network_id, my_port, peer_id, support_flags}` — no
+nonce, no IV — and `net_node.inl:881` still passes
+`e_ssl_support_disabled`, so there is no ephemeral key material to reuse today
+regardless. The property that matters is that it is **not an identity**:
+persistence across connections is what made `peer_id` a correlation surface.
 
 **One consequence for PWD-E2, from the same line.** The adopted option deletes
 the **back-ping outright**. E2(b) was written as a reuse of that machinery; it
@@ -153,7 +199,53 @@ minted one.
 
 ---
 
-## 5. Open decisions
+## 5. Decisions — **RULED 2026-09-06 (Rick)**
+
+| Id | Verdict |
+|---|---|
+| **PWD-E1** | **(c)** — sources propose, a verifier decides. (b)'s falsifier is *satisfiable today*: under CGNAT `local_endpoint()` reports a private address and nothing signals it. (a)'s cost falls on the E6 population — operators who configured a forward and silently never receive inbound. |
+| **PWD-E2** | **(a) and (b) together**, with an enforcement requirement added below. |
+| **PWD-E3** | **(c)** — and the nonce does not merely precede the address, it **removes the address's necessity for job 1 entirely**. Underlying mechanism already ruled on `dev`; this records the direction. |
+| **PWD-E4** | **(a)**, with its adversarial limit moved into the concession column. Underlying mechanism already ruled on `dev`. |
+| **PWD-E5** | Requirement, satisfied in `-43`'s lane. |
+| **PWD-E6** | `--p2p-external-port` stays, as a verified candidate. |
+
+### Ruling additions that are not in the tables below
+
+**PWD-E2 — the precondition is stated but not enforced.** "A peer we dialled
+outbound knows only the address we announced" is true of an **honest** peer and
+false of an adversary that learned another endpoint from gossip. So dial-back's
+discrimination must be **scoped to peers we dialled, in a session where we
+announced exactly one candidate**, and *that scoping belongs in the mechanism,
+not in the prose describing it*. A precondition documented but not enforced is
+the gap between E2(b) working and E2(b) being believed to work.
+
+**PWD-E3 — a constraint at the definition site.** The nonce is **per-connection
+and never persisted**. Persistence across connections is what made `peer_id` a
+correlation surface, so **a nonce reused for two dials is `peer_id` with a
+shorter name**. It is also not the transport IV or ephemeral pubkey even once
+p2p encryption lands (§0).
+
+**PWD-E4 — the limit belongs in the concession column, not the overlay note.**
+`has_too_many_connections` keys on **host**, and host is cheap to multiply on
+**both** transports: a /24 gives 256 free hosts on `public_` as surely as a
+keypair gives one on tor. So the cap **bounds honest duplicates and nothing
+adversarial, in any zone**. Stated only as an overlay limitation, the row reads
+as clearnet-effective and overlay-limited — which is exactly the framing the
+§3.1c correction retired.
+
+> **Question routed to the deliverable, not asserted here.**
+> [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) `:146` justifies the cap as
+> *"nothing can be forged: the same-host cap (no value exists to spoof)"*.
+> **Unforgeable and adversarially binding are different properties**, and the
+> ruling above asserts only the first. Whether that distinction is recorded
+> anywhere in the adopted option's concessions is a question for that document's
+> owner — flagged rather than answered, since this round has already once
+> re-derived what it should have read.
+
+## 5b. The decision tables
+
+
 
 Each table: the options, the adversary and channel each answers, what it
 concedes, and the falsifier that reopens it.
@@ -318,7 +410,24 @@ unbuilt middle**:
    and separately: B9 restores the honest-duplicate half I1 removes
 ```
 
-**Why it must be drawn.** Each link is individually reasonable and the chain
+**AMENDED 2026-09-06 — the chain is three links, not four.**
+
+```
+  PR #637  ──►  p2p/basic-node-data-address  ──►  PWD-I1 complete
+  (OPEN)        (declared, UNBUILT)               (ruled)
+                        ▲
+                        └─ siblings, not a nested gate:
+                           PWD-E4 same-host cap (wiring exists)
+                           PWD-E3(b) nonce (a field + a bounded set)
+```
+
+**Why E1/E2 left it.** The nonce carries
+job 1 by itself, so PWD-I1's removal does not wait on endpoint determination.
+What remains gating I1 is the nonce (PWD-T1) and the same-host cap, both ruled;
+E1/E2 are a parallel question about `my_port` and NAT, not a link in this
+chain. The diagram above is retained as records-was.
+
+**Why it was drawn.** Each link is individually reasonable and the chain
 is not: the middle link is unbuilt, the link after it is ruled, and the two
 gates on it live in a round that is still open. A lane that lands `peer_id`'s
 removal because "I1 is ruled" would be reading one link, not the chain.
