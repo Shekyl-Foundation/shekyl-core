@@ -75,7 +75,12 @@ jobs:
 
       - name: Run the documentation claim audit
         env:
-          DOC_CLAIMS_BASE_REF: FETCH_HEAD
+          # The remote-tracking ref, NOT FETCH_HEAD. FETCH_HEAD is last-fetch
+          # wins and any intervening fetch silently repoints it — the checkout
+          # step above rewrites it five times fetching submodules. Comparing
+          # against the wrong revision while reporting "checked" is worse than
+          # not checking, because the output would name a ref it did not read.
+          DOC_CLAIMS_BASE_REF: origin/${{ github.base_ref }}
         run: python3 scripts/ci/check_doc_claims.py
 
       - name: Re-falsify the gate's own failure paths
