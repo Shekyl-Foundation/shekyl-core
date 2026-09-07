@@ -105,6 +105,14 @@ ANCESTRY = ("~", "^", "..", "@{")
 # scan could see it — a guard whose first act on gaining sight is a false red.
 PEEL = re.compile(r"\^\{[^}]*\}")
 
+# The placeholder for a substituted f-string part must contain NO brace: an
+# earlier `{…}` had the very shape PEEL strips, so `f"{ref}^{sub}"` rendered as
+# `{…}^{…}`, PEEL removed the `^{…}`, and a parent walk with a substitution
+# after the caret read as a type peel and stayed green. The docstring said the
+# placeholder could not match an ancestry operator while the value chosen could
+# create one — a comment describing the intent rather than the code.
+SUBST = "\x00"
+
 
 def _literal(node) -> str | None:
     """The static text of a string or f-string; substitutions become \x00.
@@ -120,7 +128,7 @@ def _literal(node) -> str | None:
         return node.value if isinstance(node.value, str) else None
     if isinstance(node, ast.JoinedStr):
         return "".join(v.value if isinstance(v, ast.Constant)
-                       and isinstance(v.value, str) else "{…}"
+                       and isinstance(v.value, str) else SUBST
                        for v in node.values)
     return None
 
@@ -171,7 +179,7 @@ def unsafe_git_calls() -> list[str]:
                 found.append(consts[0])
                 rev = _walks_ancestry([s for s in texts if s != consts[0]])
                 if rev:
-                    found.append(f"{consts[0]} {rev}")
+                    found.append(f"{consts[0]} {rev.replace(SUBST, '{…}')}")
             continue
         # any call taking a literal argv sequence that starts with "git"
         if isinstance(a0, (ast.List, ast.Tuple)) and a0.elts:
@@ -186,7 +194,7 @@ def unsafe_git_calls() -> list[str]:
                 found.append(sub)
                 rev = _walks_ancestry([s for s in texts if s != sub])
                 if rev:
-                    found.append(f"{sub} {rev}")
+                    found.append(f"{sub} {rev.replace(SUBST, '{…}')}")
     return sorted({s for s in found if s not in DEPTH_SAFE})
 
 # Probes for the depth guard itself. It had no falsification case at all — it
@@ -202,6 +210,8 @@ def unsafe_git_calls() -> list[str]:
 DEPTH_PROBES = [
     ("f-string ancestor",  'git("show", f"{ref}~1:docs/x")',                True),
     ("f-string parent",    'git("show", f"{ref}^:docs/x")',                 True),
+    # the collision case: a substitution AFTER the caret must not read as a peel
+    ("parent then substitution", 'git("show", f"{ref}^{path}")',            True),
     ("f-string range",     'git("diff", f"{a}..{b}")',                      True),
     ("single-quoted argv", "subprocess.run(['git', 'blame', 'f'])",         True),
     ("multiline argv",     'subprocess.run([\n    "git",\n    "log",\n])', True),
@@ -650,7 +660,7 @@ def main() -> None:
         # numbered
         case("numbered: gap in the list", "numbered list runs",
              doc=sub("2. two", "3. two")),
-        case("numbered: no list at all", "no numbered list of two",
+        case("numbered: no list at all", "no numbered item at all",
              doc=sub("1. one\n2. two\n3. three", "- one\n- two\n- three")),
         # counts
         case("counts: figure disagrees with table", "over a table of",
@@ -943,6 +953,33 @@ def main() -> None:
         green("deeply indented ``` does not open a fence",
               doc=GOOD.replace("## 2. Second",
                                "- item\n\n      ```\n\n## 2. Second")),
+        # a kind that takes no argument must reject one, or a typo registers
+        # as its own declaration and outlives the check meant to catch it
+        case("argument on a kind that takes none", "takes no",
+             doc=sub("<!-- claim-audit: citations -->",
+                     "<!-- claim-audit: citations typo -->")),
+        # an UNTERMINATED marker still means to be a declaration
+        case("marker missing its terminator", "malformed claim-audit marker",
+             doc=sub("<!-- claim-audit: counts -->", "<!-- claim-audit: counts")),
+        # a one-item list is a list, and it must still start at 1
+        case("single numbered item starting at 3", "numbered list runs",
+             doc=GOOD.replace("1. one\n2. two\n3. three",
+                              "Intro.\n\n3. only step\n\nOutro.")),
+        # a backtick in a backtick fence's info string means it is NOT a
+        # fence; opening one anyway blanked to EOF and HID the declarations
+        # The tail's backticks are PAIRED (`a`) deliberately. An odd one would
+        # legitimately open an inline span and blank the text after it — correct
+        # CommonMark, and it made the first version of this control fail for a
+        # reason unrelated to the property under test, reporting a defect the
+        # gate does not have. The property is only that a malformed OPENER does
+        # not blank through to EOF.
+        green("malformed fence opener does not swallow the document",
+              doc=GOOD.replace("See §2 for the table.",
+                               "```lang`a` bad\n\nSee §2 for the table.")),
+        # a two-backtick span cannot be closed by three
+        green("mismatched span delimiters do not blank a declaration",
+              doc=GOOD.replace("See §2 for the table.",
+                               "``open ```not-close``\n\nSee §2 for the table.")),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -958,7 +995,9 @@ def main() -> None:
                 "dotted §N.M is reported as not checked, not failed",
                 "fenced examples are not document structure",
                 "dead citation inside a fence is not a citation",
-                "deeply indented ``` does not open a fence"}
+                "deeply indented ``` does not open a fence",
+                "malformed fence opener does not swallow the document",
+                "mismatched span delimiters do not blank a declaration"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"

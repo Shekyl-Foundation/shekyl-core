@@ -117,8 +117,15 @@ DECL = re.compile(r"(?m)^ {0,3}<!--\s*claim-audit:\s*([a-z]+)"
 # reader while no check runs against it — and the adoption floor stays satisfied
 # by some other document, so nothing anywhere goes red. Absence of a match is
 # first evidence the subject is malformed, not that it is absent (rule 47).
-DECL_ANY = re.compile(r"(?m)^ {0,3}<!--\s*claim-audit:[^>]*-->")
+# No closing `-->` required. Demanding the terminator meant a truncated
+# `<!-- claim-audit: citations` matched nothing and was silently ignored, while
+# the adoption floor stayed satisfied by another document — the same vacuous
+# pass this matcher exists to prevent, reached by leaving the marker unfinished
+# instead of misspelling it.
+DECL_ANY = re.compile(r"(?m)^ {0,3}<!--\s*claim-audit:.*$")
 KINDS = {"series", "range", "sections", "numbered", "citations", "counts"}
+# The only two kinds that name a subject; the rest are bare.
+TAKES_ARG = {"series", "range"}
 
 # Floor on the corpus itself: this gate audits docs/, and a run that cannot
 # find the corpus has lost its subject rather than found a tidy tree.
@@ -183,6 +190,15 @@ def strip_fences(text: str) -> str:
         if m:
             ch, n, tail = m.group(1)[0], len(m.group(1)), m.group(2)
             if fence is None:
+                # CommonMark forbids a backtick in the info string of a
+                # BACKTICK fence, so ```lang`x is not a fence at all. Opening
+                # one anyway blanked everything to EOF or the next fence and
+                # silently swallowed any declaration in between — a parser bug
+                # that HIDES declarations rather than manufacturing them, which
+                # is the direction nothing else here would catch.
+                if ch == "`" and "`" in tail:
+                    out.append(line)
+                    continue
                 fence = (ch, n)
                 out.append("")
                 continue
@@ -205,7 +221,12 @@ def _blank_spans(text: str) -> str:
     written inside one visible. Newlines inside a span are preserved so every
     reported line number still points where a reader would look.
     """
-    return re.sub(r"(`+)(.+?)\1",
+    # Exact-length runs on both sides. `(`+)(.+?)\1` let a two-backtick span
+    # "close" on the first two of a three-backtick run, blanking through it and
+    # dropping any declaration in between. The lookarounds require the opening
+    # run to be whole and the closing run to be neither preceded nor followed
+    # by another backtick, which is CommonMark's rule.
+    return re.sub(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)",
                   lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S)
 
 
@@ -353,7 +374,7 @@ def _numbered_runs(text: str) -> list[list[tuple[int, int]]]:
     def close(pred) -> None:
         for d in sorted([d for d in runs if pred(d)], reverse=True):
             r = runs.pop(d)
-            if len(r) >= 2:
+            if len(r) >= 1:
                 out.append(r)
 
     for i, line in enumerate(text.splitlines(), 1):
@@ -372,8 +393,8 @@ def _numbered_runs(text: str) -> list[list[tuple[int, int]]]:
 def check_numbered(p, text, _arg, errs):
     runs = _numbered_runs(text)
     if not runs:
-        errs.append(f"{rel(p)}: declares `numbered` but has no numbered list of "
-                    "two or more items")
+        errs.append(f"{rel(p)}: declares `numbered` but the document contains "
+                    "no numbered item at all")
         return 0
     for run in runs:
         nums = [n for _, n in run]
@@ -804,8 +825,9 @@ def main() -> None:
     # Inline spans survive here on purpose. Citations are written inside
     # backticks by convention, so the citation leg keeps the RAW text — the
     # same split that made strip_code and strip_fences two functions.
-    fenced = {p: strip_fences(text) for p, text in corpus}
-    corpus_fenced = [(p, fenced[p]) for p, _ in corpus]
+    fenced = {p: strip_fences(text) for p, text in corpus}      # citations
+    coded = {p: strip_code(text) for p, text in corpus}          # everything else
+    corpus_fenced = [(p, fenced[p]) for p, _ in corpus]         # range restatements
 
     errors: list[str] = []
     tally: dict[str, int] = {}
@@ -815,9 +837,8 @@ def main() -> None:
         # Every marker that MEANS to be a declaration is a subject, including
         # the ones that are malformed. Checking only well-formed ones lets a
         # typo read as opted-in to a human and as absent to the gate.
-        well_formed = {m.group(0) for m in DECL.finditer(stripped)}
         for m in DECL_ANY.finditer(stripped):
-            if m.group(0) not in well_formed:
+            if not DECL.search(m.group(0)):
                 line = stripped[: m.start()].count("\n") + 1
                 errors.append(
                     f"{rel(p)}:{line}: malformed claim-audit marker "
@@ -831,15 +852,36 @@ def main() -> None:
                 errors.append(f"{rel(p)}: unknown claim-audit kind '{kind}' "
                               f"(known: {', '.join(sorted(KINDS))})")
                 continue
+            # Arity. The grammar allowed an argument on every kind while only
+            # two read one, so `claim-audit: citations typo` parsed clean and
+            # registered as a DISTINCT declaration — a typo surviving the very
+            # check added to catch typos, and then entrenched in the registry.
+            if arg and kind not in TAKES_ARG:
+                errors.append(f"{rel(p)}: `claim-audit: {kind}` takes no "
+                              f"argument, but carries '{arg}'. Only "
+                              f"{' and '.join(sorted(TAKES_ARG))} are "
+                              "prefixed; anything else is a typo that would "
+                              "otherwise register as its own declaration.")
+                continue
             declarations += 1
             fn = CHECKS[kind]
-            # EVERY leg reads fence-stripped text, citations included. I gave
-            # citations the raw document to protect inline spans, but
-            # strip_fences preserves those already — raw and fence-stripped
-            # differ only inside fenced blocks, and a `src/gone.cpp:1` written
-            # in an EXAMPLE is not a citation this document is making.
-            n = (fn(p, fenced[p], arg, errors, corpus_fenced) if kind == "range"
-                 else fn(p, fenced[p], arg, errors))
+            # Structural legs read FULLY code-stripped text, because a
+            # document explaining a literal `§99` was failing the sections leg
+            # for describing the syntax it documents — the same
+            # documenting-it-declares-it bug, one layer down.
+            #
+            # TWO legs keep inline spans, and both were checked rather than
+            # assumed. `citations` obviously: a citation IS written inside
+            # backticks. `range` less obviously — IMPLEMENTATION_INDEX.md
+            # states the register's extent as **`DRS-W1…DRS-W11`**, a real
+            # claim that happens to be typeset as code. Stripping inline spans
+            # for that leg silently dropped the identifier map from its
+            # subject set: 4 restatements checked became 3, on the surface most
+            # likely to go stale. A uniform rule would have been tidier and
+            # would have cost coverage where it matters most.
+            body = fenced[p] if kind in ("citations", "range") else coded[p]
+            n = (fn(p, body, arg, errors, corpus_fenced) if kind == "range"
+                 else fn(p, body, arg, errors))
             tally[kind] = tally.get(kind, 0) + n
 
     if declarations < MIN_DECLARATIONS:
@@ -849,13 +891,20 @@ def main() -> None:
                  "audit with nothing to audit passes vacuously, so it fails here.")
     # ── ratchet ───────────────────────────────────────────────────────────
     baseline, must_declare = read_baseline()
-    dead = dead_citations(corpus_fenced)
+    dead = dead_citations([(p, fenced[p]) for p, _ in corpus])
     if len(dead) > baseline:
         errors.append(
             f"dead citations in live documents rose to {len(dead)} against a "
-            f"baseline of {baseline} — new rot:\n    "
-            + "\n    ".join(dead[:12])
-            + (f"\n    …and {len(dead) - 12} more" if len(dead) > 12 else ""))
+            f"baseline of {baseline}. This run reads one tree, so it cannot "
+            "say WHICH of these is the new one — the list below is the "
+            "COMPLETE current set, not a delta, and the citation this change "
+            "broke is somewhere in it:\n    "
+            + "\n    ".join(dead)
+            + "\n       (Labelled precisely because the earlier wording said "
+              "'new rot' over the first twelve entries of the whole set: with "
+              "a baseline in the fifties the newly broken citation usually "
+              "sorts outside that window, so the message named pre-existing "
+              "debt and never the defect that triggered it.)")
     elif len(dead) < baseline:
         errors.append(
             f"dead citations in live documents fell to {len(dead)} from a "
