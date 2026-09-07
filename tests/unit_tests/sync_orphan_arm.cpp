@@ -148,8 +148,8 @@ struct recording_p2p : nodetool::p2p_endpoint_stub<cryptonote::cryptonote_connec
   }
   bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score) override
   { ++host_fails; return true; }
-  bool for_connection(const boost::uuids::uuid&, std::function<bool(cryptonote::cryptonote_connection_context&, nodetool::peerid_type, uint32_t)> f) override
-  { f(lambda_ctx, 0, 0); return true; }
+  bool for_connection(const boost::uuids::uuid&, std::function<bool(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
+  { f(lambda_ctx, 0); return true; }
 };
 
 cryptonote::block_complete_entry make_entry(uint64_t height, const crypto::hash& prev, crypto::hash* out_hash = nullptr)

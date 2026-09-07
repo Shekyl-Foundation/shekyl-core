@@ -598,7 +598,6 @@ pub struct ConnectionFactsFfi {
     /// `network_address::host_str()`: the host alone.
     pub host: *const u8,
     pub host_len: usize,
-    pub peer_id: u64,
     pub connection_id: [u8; 16],
     /// Unix seconds.
     pub started: u64,
@@ -655,7 +654,6 @@ pub struct PeerFactsFfi {
     /// ipv4, `host_str()` for ipv6, the whole `str()` for anything else.
     pub host: *const u8,
     pub host_len: usize,
-    pub id: u64,
     pub last_seen: u64,
     /// The ipv4 address with its four octets in **network** order, as
     /// `ipv4_network_address::ip()` returns it; 0 for every other arm.
@@ -676,31 +674,30 @@ pub struct PeerFactsFfi {
 // `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` are the whole pin.
 const _: () = assert!(std::mem::size_of::<NetStatsFactsFfi>() == 40);
 
-const _: () = assert!(std::mem::size_of::<ConnectionFactsFfi>() == 144);
+const _: () = assert!(std::mem::size_of::<ConnectionFactsFfi>() == 136);
 const _: () = assert!(std::mem::align_of::<ConnectionFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address) == 0);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_len) == 8);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, host) == 16);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, host_len) == 24);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, peer_id) == 32);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, connection_id) == 40);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, started) == 56);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, last_recv) == 64);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, last_send) == 72);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, recv_count) == 80);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, send_count) == 88);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, current_speed_down) == 96);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, current_speed_up) == 104);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, height) == 112);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, support_flags) == 120);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, pruning_seed) == 124);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, port) == 128);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, state) == 130);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_type) == 131);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 132);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 133);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 134);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, reserved) == 135);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, connection_id) == 32);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, started) == 48);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, last_recv) == 56);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, last_send) == 64);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, recv_count) == 72);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, send_count) == 80);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, current_speed_down) == 88);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, current_speed_up) == 96);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, height) == 104);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, support_flags) == 112);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, pruning_seed) == 116);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, port) == 120);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, state) == 122);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_type) == 123);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 124);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 125);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 126);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, reserved) == 127);
 
 const _: () = assert!(std::mem::size_of::<SyncSpanFactsFfi>() == 72);
 const _: () = assert!(std::mem::align_of::<SyncSpanFactsFfi>() == 8);
@@ -715,18 +712,17 @@ const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, speed_fraction) == 
 const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, filled) == 64);
 const _: () = assert!(std::mem::offset_of!(SyncSpanFactsFfi, reserved) == 65);
 
-const _: () = assert!(std::mem::size_of::<PeerFactsFfi>() == 48);
+const _: () = assert!(std::mem::size_of::<PeerFactsFfi>() == 40);
 const _: () = assert!(std::mem::align_of::<PeerFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, host) == 0);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, host_len) == 8);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, id) == 16);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, last_seen) == 24);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, ip) == 32);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, pruning_seed) == 36);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, port) == 40);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 42);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 43);
-const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, reserved) == 44);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, last_seen) == 16);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, ip) == 24);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, pruning_seed) == 28);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, port) == 32);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 34);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 35);
+const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, reserved) == 36);
 
 extern "C" {
     pub fn shekyl_rpc_hard_fork_info(

@@ -50,8 +50,6 @@ namespace nodetool
 {
   namespace
   {
-    constexpr unsigned CURRENT_PEERLIST_STORAGE_ARCHIVE_VER = 8;
- 
     struct by_zone
     {
       using zone = epee::net_utils::zone;
@@ -156,12 +154,6 @@ namespace nodetool
   {
     elem.gray = load_peers<peerlist_entry>(a, ver);
 
-    if (ver == 0)
-    {
-      // from v1, we do not store the peer id anymore
-      peerid_type peer_id{};
-      a & peer_id;
-    }
   }
  
   template<typename Archive>
