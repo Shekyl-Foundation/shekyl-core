@@ -82,13 +82,33 @@ def build(tmp: pathlib.Path, doc: str = GOOD, restater: str = RESTATER,
     (docs / "subject.md").write_text(doc, encoding="utf-8")
     if restater is not None:
         (docs / "restater.md").write_text(restater, encoding="utf-8")
+    # A resolvable base ref for every case. An unresolved ref is now FATAL —
+    # a ratchet with no base is an absent ratchet, not a lenient one — so the
+    # matrix has to model the normal state (base exists, and by default holds
+    # the same baseline as the candidate) or every case would fail on that
+    # axis instead of its own.
+    commit(tmp, "base")
+
+
+def commit(t: pathlib.Path, branch: str) -> None:
+    """Commit the tree as `branch` (idempotent init, so hooks can add commits)."""
+    if not (t / ".git").exists():
+        subprocess.run(["git", "init", "-q", "-b", branch], cwd=t, check=True,
+                       capture_output=True)
+        for k, v in (("user.email", "matrix@example.invalid"),
+                     ("user.name", "matrix")):
+            subprocess.run(["git", "config", k, v], cwd=t, check=True,
+                           capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=t, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", branch,
+                    "--allow-empty"], cwd=t, check=True, capture_output=True)
 
 
 def run(tmp: pathlib.Path, env: dict | None = None) -> tuple[int, str]:
     e = dict(os.environ)
     # The base ref defaults to origin/dev, which a temp tree does not have; an
     # unset value would leave every git-backed case silently unchecked.
-    e["DOC_CLAIMS_BASE_REF"] = "__no_such_ref__"
+    e["DOC_CLAIMS_BASE_REF"] = "base"
     e.update(env or {})
     r = subprocess.run([sys.executable, str(tmp / "scripts" / "ci" / GATE.name)],
                        capture_output=True, text=True, env=e)
@@ -186,12 +206,7 @@ def git_base(base_dead: int):
         bl.write_text(re.sub(r"dead-citations: \d+",
                              f"dead-citations: {base_dead}", candidate),
                       encoding="utf-8")
-        for cmd in (["git", "init", "-q", "-b", "base"],
-                    ["git", "config", "user.email", "matrix@example.invalid"],
-                    ["git", "config", "user.name", "matrix"],
-                    ["git", "add", "-A"],
-                    ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "base"]):
-            subprocess.run(cmd, cwd=t, check=True, capture_output=True)
+        commit(t, "base")
         bl.write_text(candidate, encoding="utf-8")   # restore the candidate
     return f
 
@@ -210,12 +225,7 @@ def git_base_text(text: str):
         bl = t / "docs" / "ci" / "doc-claims-baseline.txt"
         candidate = bl.read_text(encoding="utf-8")
         bl.write_text(text, encoding="utf-8")
-        for cmd in (["git", "init", "-q", "-b", "base"],
-                    ["git", "config", "user.email", "matrix@example.invalid"],
-                    ["git", "config", "user.name", "matrix"],
-                    ["git", "add", "-A"],
-                    ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "base"]):
-            subprocess.run(cmd, cwd=t, check=True, capture_output=True)
+        commit(t, "base")
         bl.write_text(candidate, encoding="utf-8")
     return f
 
@@ -238,6 +248,21 @@ def chain(*fns):
         for fn in fns:
             fn(t)
     return f
+
+
+# A nested list: the shape the column-0 matcher was blind to. The children are
+# indented, so they never matched; the blank line after them then closed the
+# outer fragment, which fell under the three-item floor and was discarded. Both
+# levels have to be checkable, or the leg reports a tally for structure it
+# never looked at.
+NESTED = GOOD.replace("""1. one
+2. two
+3. three""", """1. one
+2. two
+   1. child a
+   2. child b
+   3. child c
+3. three""")
 
 
 def sub(old: str, new: str) -> str:
@@ -393,6 +418,32 @@ def main() -> None:
                                                                 encoding="utf-8")),
               baseline="dead-citations: 0\ndeclares: docs/mini.md sections\n",
               env={"DOC_CLAIMS_BASE_REF": "base"}),
+        # malformed markers: a typo reads as opted-in to a human and as absent
+        # to a strict-only matcher, and the adoption floor stays satisfied by
+        # some other document, so nothing anywhere goes red.
+        case("malformed marker (wrong case)", "malformed claim-audit marker",
+             doc=GOOD.replace("<!-- claim-audit: counts -->",
+                              "<!-- claim-audit: Counts -->")),
+        case("malformed marker (two arguments)", "malformed claim-audit marker",
+             doc=GOOD.replace("<!-- claim-audit: series XX-W -->",
+                              "<!-- claim-audit: series XX-W extra -->")),
+        # nested lists — both levels must be checkable
+        case("numbered: gap in a NESTED list", "numbered list runs",
+             doc=NESTED.replace("   2. child b", "   3. child b")),
+        case("numbered: gap in the list AROUND a nested one", "numbered list runs",
+             doc=NESTED.replace("3. three", "4. three")),
+        # a count claim whose table vanished is a missing subject, not a claim
+        # that needs no checking
+        case("counts: a second claim lost its table", "no table with data rows",
+             doc=GOOD.replace("| XX-W3 | c |",
+                              "| XX-W3 | c |\n\n**2 rows** follow:\n")),
+        # an unresolved base ref disables BOTH base-backed ratchets, so it is
+        # fatal rather than skipped (rule 47: assert the prerequisite).
+        case("base ref does not resolve", "does not resolve",
+             env={"DOC_CLAIMS_BASE_REF": "__no_such_ref__"}),
+        case("established baseline is unparseable", "states no `dead-citations:`",
+             corpus=git_base_text("declares: docs/subject.md sections\n"),
+             env={"DOC_CLAIMS_BASE_REF": "base"}),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]

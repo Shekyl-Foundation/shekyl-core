@@ -79,6 +79,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 DOCS = ROOT / "docs"
 
 DECL = re.compile(r"<!--\s*claim-audit:\s*([a-z]+)(?:\s+([A-Za-z][\w-]*))?\s*-->")
+# Every comment that MEANS to be a declaration, well-formed or not. A matcher
+# that only sees valid markers cannot see a typo: `claim-audit: Citations` fails
+# DECL's `[a-z]+`, matches nothing, and the document then looks opted in to a
+# reader while no check runs against it — and the adoption floor stays satisfied
+# by some other document, so nothing anywhere goes red. Absence of a match is
+# first evidence the subject is malformed, not that it is absent (rule 47).
+DECL_ANY = re.compile(r"<!--\s*claim-audit:[^>]*-->")
 KINDS = {"series", "range", "sections", "numbered", "citations", "counts"}
 
 # Floor on the corpus itself: this gate audits docs/, and a run that cannot
@@ -212,18 +219,49 @@ def check_sections(p, text, _arg, errs):
     return seen
 
 
-def check_numbered(p, text, _arg, errs):
-    lines, runs, cur = text.splitlines(), [], []
-    for i, line in enumerate(lines, 1):
-        m = re.match(r"^(\d+)\. ", line)
+def _numbered_runs(text: str) -> list[list[tuple[int, int]]]:
+    """Numbered runs, tracked PER INDENT LEVEL.
+
+    A column-0-only matcher cannot see a nested list, and worse, it cannot see
+    the list the nested one is inside: the indented children never match, the
+    blank line after them closes the outer fragment, and a two-item remainder
+    falls under the three-item floor and is discarded. The declaring document
+    here has exactly that shape at §2, so the leg was reporting a tally while
+    most of the structure it names went unchecked — checked-and-passed wearing
+    the face of found-nothing-to-check.
+
+    Blank lines do not close a run: a loose markdown list is separated by them
+    and is still one list. What closes a run is prose at or left of its own
+    indent, or a fresh `1.` at the same indent, which is a new list rather than
+    a renumbering fault — that is how markdown renders it, so reading it any
+    other way would report a defect the document does not have.
+    """
+    runs: dict[int, list[tuple[int, int]]] = {}
+    out: list[list[tuple[int, int]]] = []
+
+    def close(pred) -> None:
+        for d in sorted([d for d in runs if pred(d)], reverse=True):
+            r = runs.pop(d)
+            if len(r) >= 3:
+                out.append(r)
+
+    for i, line in enumerate(text.splitlines(), 1):
+        m = re.match(r"^([ \t]*)(\d+)\. ", line)
         if m:
-            cur.append((i, int(m.group(1))))
-        elif cur and (line.strip() == "" or not line.startswith((" ", "\t"))):
-            if len(cur) >= 3:
-                runs.append(cur)
-            cur = []
-    if len(cur) >= 3:
-        runs.append(cur)
+            ind, num = len(m.group(1).expandtabs()), int(m.group(2))
+            close(lambda d, ind=ind: d > ind)      # children end at their parent
+            if num == 1 and runs.get(ind):
+                close(lambda d, ind=ind: d == ind)  # a new list, not a gap
+            runs.setdefault(ind, []).append((i, num))
+        elif line.strip():
+            ind = len(line[: len(line) - len(line.lstrip())].expandtabs())
+            close(lambda d, ind=ind: ind <= d)
+    close(lambda d: True)
+    return sorted(out, key=lambda r: r[0][0])
+
+
+def check_numbered(p, text, _arg, errs):
+    runs = _numbered_runs(text)
     if not runs:
         errs.append(f"{rel(p)}: declares `numbered` but has no numbered list of "
                     "three or more items")
@@ -346,6 +384,15 @@ def check_counts(p, text, _arg, errs):
             elif started:
                 break
         if len(rows) < 2:
+            # A claim with no table under it is the subject going missing, not
+            # a claim that needs no checking. Skipping it meant a document with
+            # one good table and one whose table was deleted passed on the
+            # strength of the first.
+            line = text[: m.start()].count("\n") + 1
+            errs.append(f"{rel(p)}:{line}: states **{m.group(1)} {m.group(2)}** "
+                        "but no table with data rows follows it — the subject "
+                        "of this count is missing, which is a broken check")
+            seen += 1
             continue
         seen += 1
         claimed, actual = int(m.group(1)), len(rows) - 1  # minus the header
@@ -448,17 +495,39 @@ def base_baseline() -> tuple[int | None, dict[str, set[str]], str]:
     in its output rather than reporting a check it did not run.
     """
     ref = os.environ.get("DOC_CLAIMS_BASE_REF", "origin/dev")
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(ROOT), *args],
+                              capture_output=True, text=True, timeout=30)
+
     try:
-        r = subprocess.run(["git", "-C", str(ROOT), "show",
-                            f"{ref}:{rel(BASELINE)}"],
-                           capture_output=True, text=True, timeout=30)
+        resolves = git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
     except (OSError, subprocess.SubprocessError) as e:      # pragma: no cover
-        return None, {}, f"git could not run ({e.__class__.__name__})"
+        sys.exit(f"FAIL: git could not run ({e.__class__.__name__}), so the "
+                 "base-revision ratchets cannot be evaluated. That is a broken "
+                 "run, not a clean one.")
+    # An UNRESOLVED ref is fatal. The two states this used to conflate are not
+    # the same thing: a base that carries no baseline is the one-time bootstrap
+    # of the change introducing the file, while a ref that does not resolve is
+    # a missing prerequisite — and rule 47 says assert the prerequisite is
+    # present rather than assume it. Left merged, the second would silently
+    # disable BOTH base-backed ratchets and still exit zero.
+    if resolves.returncode != 0:
+        sys.exit(f"FAIL: the base ref {ref!r} does not resolve, so the ratchets "
+                 "have nothing to compare against and would pass vacuously.\n"
+                 "       Fetch it (`git fetch origin dev`) or point "
+                 "DOC_CLAIMS_BASE_REF at a ref that exists. A ratchet with no "
+                 "base is not a lenient ratchet, it is an absent one.")
+    r = git("show", f"{ref}:{rel(BASELINE)}")
     if r.returncode != 0:
-        return None, {}, f"{ref} does not resolve, or carries no baseline yet"
+        # Bootstrap, and narrowly identifiable: the ref is good, the file is
+        # simply not on it yet. True exactly once, for the change that adds it.
+        return None, {}, f"{ref} carries no baseline yet (bootstrap)"
     count, declares = parse_baseline(r.stdout)
     if count is None:
-        return None, declares, f"{ref} has a baseline with no `dead-citations:` line"
+        sys.exit(f"FAIL: the baseline on {ref} states no `dead-citations:` "
+                 "figure. An established baseline that cannot be parsed is a "
+                 "broken prerequisite, not a reason to skip the check.")
     return count, declares, ref
 
 
@@ -474,7 +543,21 @@ def main() -> None:
     tally: dict[str, int] = {}
     declarations = 0
     for p, text in corpus:
-        for m in DECL.finditer(strip_code(text)):
+        stripped = strip_code(text)
+        # Every marker that MEANS to be a declaration is a subject, including
+        # the ones that are malformed. Checking only well-formed ones lets a
+        # typo read as opted-in to a human and as absent to the gate.
+        well_formed = {m.group(0) for m in DECL.finditer(stripped)}
+        for m in DECL_ANY.finditer(stripped):
+            if m.group(0) not in well_formed:
+                line = stripped[: m.start()].count("\n") + 1
+                errors.append(
+                    f"{rel(p)}:{line}: malformed claim-audit marker "
+                    f"{m.group(0)!r} — it reads as a declaration but matches no "
+                    "known form, so it opts the document in to nothing. Kinds "
+                    f"are lower-case ({', '.join(sorted(KINDS))}), with at most "
+                    "one argument.")
+        for m in DECL.finditer(stripped):
             kind, arg = m.group(1), m.group(2)
             if kind not in KINDS:
                 errors.append(f"{rel(p)}: unknown claim-audit kind '{kind}' "

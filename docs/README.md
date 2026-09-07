@@ -62,9 +62,9 @@ against the **base revision**, not just the tree in hand:
   [`docs/ci/doc-claims-baseline.txt`](ci/doc-claims-baseline.txt) that may only
   move **down**. The figure travels in the same commit as the change it
   constrains, so a single edit could otherwise add rot and lift the bar to
-  match; the gate reads the base branch's copy and rejects a raise. When the
-  base ref cannot be resolved the run **says so in its own output** rather than
-  reporting a check it did not make.
+  match; the gate reads the base branch's copy and rejects a raise. Whether it
+  compared, and against what, is printed on **every** run — a check that
+  quietly did not run must not look like one that ran and passed.
 - a document that has declared a leg cannot silently un-declare it, and the
   registry records the **full declaration** (`series:DRS-W`, not `series`) —
   a document holding two declarations of one kind could otherwise drop either
@@ -74,6 +74,12 @@ against the **base revision**, not just the tree in hand:
   the change under test could otherwise edit: dropping a declaration and
   deleting the token that recorded it in one change satisfies every check that
   reads only the tree in hand. Deleting the document releases its line.
+
+A base ref that **does not resolve** is fatal, not skipped: it would disable
+both base-backed ratchets while the run still exited zero, and a ratchet with
+no base is an absent ratchet rather than a lenient one. The one allowed gap is
+narrow and self-identifying — the ref resolves but carries no baseline yet,
+which is true exactly once, for the change that introduces the file.
 
 Because that count is a ratchet, it has to mean the same thing everywhere. A
 citation into a submodule that is **not checked out** therefore stops the run
