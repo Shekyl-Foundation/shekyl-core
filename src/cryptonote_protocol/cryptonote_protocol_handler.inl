@@ -1813,7 +1813,18 @@ skip:
 
     MTRACE("Checking for outgoing syncing peers...");
     std::unordered_map<epee::net_utils::zone, unsigned> n_syncing, n_synced;
-    std::unordered_map<epee::net_utils::zone, boost::uuids::uuid> last_synced_connection;
+    // NOT the most-recently-synced connection, despite what the inherited name
+    // said: this is assigned for every `state_normal` connection the scan
+    // visits, and that scan walks a `boost::unordered_map` keyed on random
+    // UUIDs, so what survives is whichever one hash order happened to put last.
+    // Arbitrary, and not stable between passes.
+    //
+    // Left arbitrary deliberately. Every candidate is already in `state_normal`,
+    // so there is no peer mid-work to spare and no ordering among them that
+    // would be better; imposing one would be invented policy. The name is what
+    // needed fixing -- it asserted a temporal property the code never provided,
+    // and it produced exactly that misreading in a design doc.
+    std::unordered_map<epee::net_utils::zone, boost::uuids::uuid> some_synced_connection;
     std::vector<epee::net_utils::zone> zones;
     m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
     {
@@ -1825,7 +1836,7 @@ skip:
       {
         n_syncing[zone] = 0;
         n_synced[zone] = 0;
-        last_synced_connection[zone] = boost::uuids::nil_uuid();
+        some_synced_connection[zone] = boost::uuids::nil_uuid();
         zones.push_back(zone);
       }
 
@@ -1834,7 +1845,7 @@ skip:
       if (context.m_state == cryptonote_connection_context::state_normal)
       {
         ++n_synced[zone];
-        last_synced_connection[zone] = context.m_connection_id;
+        some_synced_connection[zone] = context.m_connection_id;
       }
       return true;
     });
@@ -1844,10 +1855,10 @@ skip:
       const unsigned int max_out_peers = get_max_out_peers(zone);
       MTRACE("[" << epee::net_utils::zone_to_string(zone) << "] " << n_syncing[zone] << " syncing, " << n_synced[zone] << " synced, " << max_out_peers << " max out peers");
 
-      // if we're at max out peers, and not enough are syncing, drop the last sync'd peer
-      if (n_synced[zone] + n_syncing[zone] >= max_out_peers && n_syncing[zone] < P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT && last_synced_connection[zone] != boost::uuids::nil_uuid())
+      // if we're at max out peers, and not enough are syncing, drop one of the synced peers
+      if (n_synced[zone] + n_syncing[zone] >= max_out_peers && n_syncing[zone] < P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT && some_synced_connection[zone] != boost::uuids::nil_uuid())
       {
-        if (!m_p2p->for_connection(last_synced_connection[zone], [&](cryptonote_connection_context& ctx, uint32_t f)->bool{
+        if (!m_p2p->for_connection(some_synced_connection[zone], [&](cryptonote_connection_context& ctx, uint32_t f)->bool{
           MINFO(ctx << "dropping synced peer, " << n_syncing[zone] << " syncing, " << n_synced[zone] << " synced, " << max_out_peers << " max out peers");
           drop_connection(ctx, false, false);
           return true;
