@@ -18,8 +18,12 @@
 Shekyl's gross issuance follows a curve asymptotic to 4,294,967,296 coins
 (2³²) plus a perpetual tail of 0.6 coins per block (≈0.0037%/year at the
 asymptote) — and because the fee burn permanently destroys coins, **net
-supply declines whenever the chain is in use and issues only when usage
-cannot fund security**. Four interacting control loops decide *who*
+supply falls in any block where burned fees exceed new issuance, and
+rises otherwise**. That condition is a real one, not a formality: the
+burn scales with the circulating fraction, so early in the chain's life
+it is near zero while issuance is at its largest, and net supply grows
+even on a busy chain. The burn overtakes issuance only as the curve
+flattens and usage matures. Four interacting control loops decide *who*
 receives newly released coins, *how fast* they release, and *how many fees
 get destroyed*. None of the loops needs governance
 or manual tuning; each reads an on-chain quantity (transaction volume,
@@ -74,9 +78,12 @@ averaged over a 720-block (~1 day) window.
 - Baseline activity (50 tx): **1.0** → 1,000 coins.
 - Busy chain (80 tx): 80/50 = **1.6, clamped to 1.3** → 1,300 coins.
 
-This never creates coins — it only re-times the same fixed supply. When the
-economy is hot, coins release faster to meet demand; when it's cold, release
-slows and scarcity supports the price. It is the supply-side half of the
+This does not change the curve's asymptote — it re-times release along it.
+(It is not "a fixed supply" in the strict sense: the perpetual tail keeps
+issuing past the asymptote forever, and the multiplier paces the curve, not
+the tail — FL-R12′ floors the paid reward at the tail, so a dormant chain
+still issues.) When the economy is hot, coins release faster to meet demand;
+when it's cold, release slows and scarcity supports the price. It is the supply-side half of the
 regulator.
 
 ## Loop 3 — The adaptive burn (demand-responsive fee destruction)

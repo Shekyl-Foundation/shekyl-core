@@ -1081,6 +1081,40 @@ fn advance_already_generated_passes_the_asymptote() {
 // no-test-exists-means-write-the-test rule: these exports crossed with the
 // FL-R12′ bundle and had no boundary pin of their own.
 
+/// Rule 40: a malformed boundary input must not panic across
+/// `extern "C"`. This export is documented "cannot fail", and it very
+/// nearly could: the scalars are caller-controlled, and `σ` at its own
+/// clamp (`SCALE - 1`) with a dormant volume drives the integer division
+/// to `C = 0`, which trips `quantize_pow2_ceil`'s loud in-range assert
+/// (PR #640 review). No chain state reaches it — the measured floor is
+/// ≈ 0.68 — but the ABI is not entitled to assume its caller.
+///
+/// The exact adversarial triple from the review is pinned, plus the
+/// neighbouring degenerate corners, so the boundary stays total.
+#[test]
+fn fee_correction_quantized_is_total_at_hostile_scalars() {
+    let scale = shekyl_economics::params::SCALE;
+    // The reported case: sigma at its clamp, no burn, dormant volume.
+    let cq = shekyl_fee_correction_quantized(0, scale - 1, 0, 0);
+    assert!(cq > 0, "a total boundary must still return a usable step");
+
+    // The same state carried through the hysteresis band, and the
+    // saturating corners on both scalars.
+    for (v, sigma, burn, prev) in [
+        (0u64, scale - 1, 0u64, scale),
+        (0, u64::MAX, 0, 0),
+        (0, u64::MAX, u64::MAX, 0),
+        (u64::MAX, u64::MAX, u64::MAX, u64::MAX),
+        (u64::MAX, 0, u64::MAX, 0),
+    ] {
+        let out = shekyl_fee_correction_quantized(v, sigma, burn, prev);
+        assert!(
+            out > 0,
+            "boundary returned an unusable value at (v={v}, sigma={sigma}, burn={burn}, prev={prev})"
+        );
+    }
+}
+
 #[test]
 fn corrected_fee_ladder_null_out_returns_minus_one() {
     let st = unsafe {

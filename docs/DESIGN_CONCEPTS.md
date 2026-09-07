@@ -663,7 +663,7 @@ The harness uses the same formulas as the production `shekyl-economics` crate, d
 
 Adopt the **Four-Component Model**:
 
-1. **Fixed `2^32` whole SHEKYL supply** with 9-decimal atomic precision.
+1. **`2^32` whole SHEKYL as the emission curve's ASYMPTOTE**, with 9-decimal atomic precision — not a hard cap: the curve approaches it and the perpetual 0.6/block tail continues past it (FL-R12′). Item 2 states the same thing from the release side; they agree.
 2. **Transaction-responsive release rate** that accelerates or slows the emission curve based on real network usage, with gross issuance anchored to the curve's asymptote (plus the perpetual 0.6/block tail — there is no hard cutoff; FL-R12′).
 3. **Adaptive fee burn** driven algorithmically by transaction volume, chain maturity, and aggregate staking behavior — with a portion of the burn funding staker yields.
 4. **Decaying staker emission share** that bootstraps meaningful staker yields from launch, funded by redirecting a small, declining fraction of block emission from miners to stakers.

@@ -622,10 +622,21 @@ namespace cryptonote
      * the block reward and the two weight medians.
      *
      * @param grace_blocks number of blocks we want the fee to be valid for
-     * @param base_reward the block reward to price against
+     * @param base_reward the M_r-NEUTRAL total reward to price against
+     *   (`max(curve(remaining), TAIL)`) — the round-8 amendment's operand;
+     *   `M_r` lives inside `c_q`, so passing a modulated reward here would
+     *   double-count it
      * @param Mnw the median of the short-term weight window
      * @param Mlw the penalty-free zone the wallet sees
-     * @param fees out: the four tiers, low to high
+     * @param c_q the whole volume-dependent correction scalar
+     *   `Q_ceil((1-sigma)*M_r/(1-b))`, in SHEKYL_FIXED_POINT_SCALE units
+     *   (SCALE = 1.0x); derived from chain state, never remembered
+     * @param fees out: FOUR SLOTS carrying THREE tiers (FL-R17) —
+     *   [0] economy, [1] standard, [2] == [1], [3] priority. Slot 2 is the
+     *   RK-5 wire bridge: the retired `Fm` rung keeps the vector shape until
+     *   the RPC cutover, and mirrors standard so wallet2-transliterated
+     *   `Elevated` callers land in the largest anonymity set rather than on
+     *   a rung of their own. The CALLER clamps [0] up to the relay floor.
      */
     void get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, uint64_t c_q, std::vector<uint64_t> &fees) const;
 

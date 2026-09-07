@@ -2,6 +2,61 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Block reward: one Rust owner, and the composition the FL round signed
+  (FL-R12′).** The paid reward is now
+  `max(M_r · curve(remaining), TAIL) · penalty(x)`, computed by
+  `shekyl-economics::paid_block_reward`; C++ marshals to it and computes
+  nothing. The ordering is the consensus-visible part: the release
+  multiplier applies to the **curve** and the tail floors the result (at a
+  perpetual tail there is nothing to pace, and a multiplied floor would pay
+  least exactly when fees are lowest), while the weight penalty applies to
+  the **paid quantity, after the floor** (composed before it, the penalty
+  would be dead at the tail permanently, and there is no post-tail era).
+
+- **The supply cap is retired and the accumulator runs through the
+  asymptote.** `already_generated_coins` no longer saturates at the
+  emission-curve asymptote — a past-asymptote state is a legitimate
+  perpetual-tail state rather than an error — which closes the divergence
+  where the estimator and the relay floor dead-lettered at exhaustion. The
+  persisted width stays `u64` (FL-R14), guarded by a build-time assertion
+  on the ≈89,750-year headroom.
+
+- **Fee ladder: three tiers, state-computed (FL-R17).** The daemon serves
+  `economy` / `standard` / `priority` from
+  `shekyl-economics::corrected_fee_ladder`, scaled by the whole
+  volume-dependent correction `C_q = Q_ceil((1−σ)·M_r/(1−b))` on the
+  M_r-neutral operand. The `Fh` main arm is unconditional (the inherited
+  surge discount is gone), and the served economy rung is clamped up to the
+  relay floor so a conforming wallet's quote can only err toward
+  acceptance. **Wire shape is unchanged** — the vector still carries four
+  slots, with slot 2 mirroring `standard` as a bridge until the RPC
+  cutover.
+
+- **The served correction carries no daemon-local state.** Its
+  pow2-boundary hysteresis is seeded from the previous block's chain state
+  rather than from a remembered value, so every node at a height derives
+  the same rate; a restarted and a long-running daemon can no longer quote
+  differently.
+
+- **Wallet fee-rate ceiling raised to a structural bound.**
+  `absolute_fee_rate_cap()` is now derived with every factor at its own
+  extreme (220,000,000 atomic/weight) instead of at the genesis point. The
+  previous 28,000,000 value sat **below honest daemon quotes** from about
+  year 3 — the reachable maximum is ≈91,000,000 near year 7 — and would
+  have refused correct snapshots.
+
+### API
+
+- **`shekyl_block_reward` takes `tx_volume_avg`**, and the release
+  multiplier composes inside the one owner rather than being applied by the
+  caller; `shekyl_apply_release_multiplier` and
+  `shekyl_cap_reward_to_remaining_supply` are gone. New exports
+  `shekyl_fee_correction_quantized` and `shekyl_corrected_fee_ladder` carry
+  the ladder. `Blockchain::get_dynamic_base_fee_estimate_2021_scaling`
+  gains a `c_q` parameter.
+
 ### Removed
 
 - **`--hide-my-port` is gone, as an option and as a capability; whether this

@@ -132,7 +132,22 @@ pub fn fee_correction_quantized(
     let b = burn_pct_scaled.min(params.burn_cap).min(SCALE - 1);
     let c = u64::try_from(u128::from(SCALE - sigma) * u128::from(m_r) / u128::from(SCALE - b))
         .expect("C fits u64");
-    let cq = quantize_pow2_ceil(c);
+    // TOTALITY AT THE BOUNDARY. `quantize_pow2_ceil` is deliberately LOUD
+    // about a `C` outside the exactly-representable window — that guard
+    // earns its keep on the derivation path, where a parameter change
+    // that widened the range should stop the build rather than truncate.
+    // But this function is reached through `extern "C"`, where the
+    // scalars are caller-controlled, and rule 40 forbids a malformed
+    // boundary input from panicking across the ABI. `σ` and `b` are
+    // already clamped above; what remains is that a `σ` at its clamp
+    // (`SCALE - 1`) with a dormant multiplier drives integer division to
+    // `C = 0`, which no chain state produces (the reachable floor is
+    // ≈ 0.68) but a caller can hand us. Flooring at the representation
+    // minimum `2⁻⁶` keeps the boundary total, and the direction is the
+    // safe one: a smaller `C_q` can only under-price, which the caller's
+    // relay-floor clamp then lifts (§5.2's acceptance identity).
+    const MIN_REPRESENTABLE_C: u64 = SCALE >> 6;
+    let cq = quantize_pow2_ceil(c.max(MIN_REPRESENTABLE_C));
     if prev_cq_scaled == 0 || cq == prev_cq_scaled {
         return cq;
     }
@@ -141,7 +156,7 @@ pub fn fee_correction_quantized(
     // step's boundary by the margin before the served value moves.
     const HYSTERESIS_MARGIN_MILLI: u128 = 30; // 3%
     let prev = u128::from(prev_cq_scaled);
-    let c = u128::from(c);
+    let c = u128::from(c.max(MIN_REPRESENTABLE_C));
     let upper = prev * (1000 + HYSTERESIS_MARGIN_MILLI) / 1000;
     let lower = (prev / 2) * (1000 - HYSTERESIS_MARGIN_MILLI) / 1000;
     if c > upper || c < lower {
