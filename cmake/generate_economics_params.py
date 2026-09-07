@@ -45,7 +45,7 @@ def main() -> int:
 // Do not edit manually.
 #pragma once
 
-#define MONEY_SUPPLY                                    UINT64_C({data["money_supply"]})
+#define MONEY_SUPPLY                 UINT64_C({data["money_supply"]})
 #define COIN                                            ((uint64_t){data["coin"]})
 #define CRYPTONOTE_DISPLAY_DECIMAL_POINT                {data["display_decimal_point"]}
 #define EMISSION_SPEED_FACTOR_PER_MINUTE                ({data["emission_speed_factor_per_minute"]})

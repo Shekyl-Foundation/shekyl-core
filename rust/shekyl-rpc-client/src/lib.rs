@@ -623,4 +623,38 @@ mod tests {
         assert_eq!(fee_tier_for(custom(4)), FeeTier::High);
         assert_eq!(fee_tier_for(custom(u32::MAX)), FeeTier::High);
     }
+
+    /// An `Elevated` caller pays the STANDARD rate, and that is the point
+    /// of the RK-5 bridge rather than an accident of the mapping.
+    ///
+    /// `Elevated` maps to [`FeeTier::Medium`], which indexes slot 2 — the
+    /// old `Fm`. FL-R17 signed three tiers, and the daemon keeps the
+    /// vector four wide until the RPC cutover by serving slot 2 as a
+    /// mirror of standard. So a wallet2-transliterated `Elevated` caller
+    /// is priced with the majority instead of self-marking on a rung of
+    /// its own, which is the anonymity-set claim the bridge exists to
+    /// make.
+    ///
+    /// Asserted end to end — mapping *and* slot semantics — because each
+    /// half is separately true and harmless while together they carry the
+    /// claim. The producer's side is pinned in `shekyl-economics`
+    /// (`FeeLadder::as_slots`) and at the FFI boundary; this is the
+    /// consumer's.
+    #[test]
+    fn an_elevated_caller_is_priced_at_the_standard_rate_by_the_bridge() {
+        // A reply shaped as the daemon emits it: slot 2 mirrors slot 1.
+        let served = shekyl_rpc_types::FeeTiers([10, 20, 20, 40]);
+        let elevated = served.get(fee_tier_for(FeePriority::Elevated));
+        let standard = served.get(fee_tier_for(FeePriority::Normal));
+        assert_eq!(
+            elevated, standard,
+            "the bridge must price Elevated with standard; a distinct slot-2 \
+             rate would put those callers in a cohort of their own"
+        );
+        assert_ne!(
+            elevated,
+            served.get(fee_tier_for(FeePriority::Priority)),
+            "and it must not silently become the priority rate either"
+        );
+    }
 }
