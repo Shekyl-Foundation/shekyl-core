@@ -19,10 +19,12 @@
 //!    inversion is a defect or a lie, not a market condition.
 //! 2. **Absolute cap on the EFFECTIVE weight-1 charge** — for each
 //!    named tier, `fee_from_weight(rate, 1) ≤`
-//!    [`absolute_fee_rate_cap()`] (the daemon-rounded genesis-condition
-//!    `Fh` = 14,000,000 atomic units — derived, KAT-pinned; a 100,000
-//!    mid-regime literal was caught in review refusing honest
-//!    young-chain snapshots whose economy tier alone is ~68,266).
+//!    [`absolute_fee_rate_cap()`] (a STRUCTURAL bound on the served
+//!    priority rung = 220,000,000 atomic units — every factor at its own
+//!    extreme, derived from the parameters and KAT-pinned. Two earlier
+//!    values were caught refusing HONEST quotes: a 100,000 mid-regime
+//!    literal, and a 28,000,000 genesis-point maximum that the reachable
+//!    surface exceeds from year 3 — see [`absolute_fee_rate_cap`]).
 //!    The effective charge, not the raw `per_weight`: every fee is
 //!    rounded UP to a multiple of the daemon-controlled
 //!    `quantization_mask`, so a raw-rate cap is bypassable by mask
@@ -64,48 +66,51 @@ const DYNAMIC_FEE_REFERENCE_TX_WEIGHT: u64 = 3_000;
 /// (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`).
 const PENALTY_FREE_ZONE: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
 
-/// `round_money_up(x, 2)` (`cryptonote_format_utils.cpp`): round UP to
-/// two significant decimal digits — the daemon applies this to every
-/// tier it returns, so the legitimate maximum must be computed
-/// post-rounding. (The C++ comment says "5 or more"; the code bumps on
-/// ANY nonzero remainder, and the code is the contract.)
-const fn round_money_up_2(x: u64) -> u64 {
-    if x < 100 {
-        return x;
-    }
-    // unit = 10^(digit_count - 2)
-    let mut unit: u64 = 1;
-    let mut probe = x;
-    while probe >= 100 {
-        probe /= 10;
-        unit *= 10;
-    }
-    x.div_ceil(unit).saturating_mul(unit)
-}
-
 /// Absolute cap (atomic units) on every named tier's — and `Custom`'s —
 /// **effective weight-1 charge**: the maximum fee an honest daemon can
 /// legitimately quote over the whole emission era.
 ///
-/// Derived, not hand-picked. This review round caught a `100_000`
-/// literal provisioned from a mid-regime KAT row — **140× below the
-/// genesis-era `Fh`**, which would have refused every honest snapshot
-/// from block 1 (young-chain `economy` alone is ~68,266; `standard`
-/// is 4× that). The 2021-scaling fees rise with the block reward and
-/// fall with the weight medians; the reward is maximal at genesis
-/// (`base_block_reward(0)` — the estimate path uses the 5-arg reward,
-/// no release multiplier) and both medians floor at the penalty-free
-/// zone, so the era maximum is `Fh` at genesis conditions,
-/// daemon-rounded:
+/// Derived, not hand-picked — and derived as an **upper bound rather
+/// than a located maximum**, which is the correction this row carries.
+///
+/// The earlier derivation evaluated the maximum of a PRODUCT at the
+/// maximum of one factor: it took `C_q = 2` at genesis because the
+/// operand reward `R` peaks there. But `C_q` GROWS with age — `σ` decays
+/// toward zero and the burn fraction rises with the supply ratio — while
+/// `R` decays only as `remaining >> esf`. The product therefore peaks in
+/// the interior, not at genesis, and the resulting cap of 28,000,000 was
+/// **below honest daemon quotes**: swept over the reachable age/volume
+/// surface the served priority rung reaches **91,000,000** at ≈ year 7
+/// (`v = 500`, `C_q = 16`, `R ≈ 851.9e9`), and passes 38,000,000 as
+/// early as year 3. A wallet on that cap would have refused a correct
+/// quote — a liveness failure, and the expensive direction (PR #640
+/// review).
+///
+/// So the cap is now a **structural bound that cannot be wrong**, not a
+/// swept maximum that can be re-measured wrong. Every factor is taken at
+/// its own extreme, from the parameters:
 ///
 /// ```text
-/// Fm  = 16·R₀·Brw / Zm²                      (Mfw = Zm)
-/// Fh  = max(4·Fm, 4·Fm·Zm / (32·Brw·Zm/Zm))  (Mnw = Zm) = 12.5·Fm
-/// cap = round_money_up(Fh, 2) = 14,000,000
+/// C   = (1−σ)·M_r/(1−b)  ≤  1·release_max/(1−burn_cap)     (σ ⇒ 0)
+/// C_q = 2^ceil(log2 C)                                      (≤ 16 at canonical params)
+/// R   ≤ base_block_reward(0)                                (monotone in already_generated)
+/// Mfw ≥ Zm
+/// cap = corrected_fee_ladder(R₀, Zm, Zm, Zm, w_ref, C_q^max).priority
 /// ```
 ///
-/// Pinned by `absolute_cap_is_the_rounded_genesis_fh`, so an
-/// economics-parameter change moves this loudly. Deliberately NOT
+/// This is loose against the reachable maximum by design: a cap exists to
+/// refuse an absurd quote, and refusing an HONEST one dead-letters the
+/// wallet, so soundness beats tightness. `absolute_cap_bounds_the_swept_
+/// reachable_maximum` sweeps the reachable surface and asserts the
+/// measured maximum stays under this bound, so a parameter change that
+/// pushed the reachable peak above it fails loudly rather than silently.
+///
+/// Two tests carry different halves of the guarantee, and the split is
+/// deliberate: `absolute_cap_is_the_structural_bound` pins this value so
+/// a parameter change moves it loudly, while
+/// `absolute_cap_bounds_the_swept_reachable_maximum` is the one that
+/// matters — it sweeps the reachable surface and fails if an honest
+/// quote ever exceeds the bound. Deliberately NOT
 /// covering `BLOCK_REWARD_OVERESTIMATE` (the daemon's 10,000-SKL
 /// placeholder when its own reward computation fails): a daemon that
 /// just logged an internal error is not a daemon whose quote we pay —
@@ -120,11 +125,27 @@ pub fn absolute_fee_rate_cap() -> u64 {
     let r0 = shekyl_economics::emission::base_block_reward(0, &params)
         .expect("genesis reward is defined for already_generated = 0");
     let zm = PENALTY_FREE_ZONE;
-    let brw = DYNAMIC_FEE_REFERENCE_TX_WEIGHT;
-    // The C++ folded integer expressions, verbatim, at Mfw = Mnw = Zm.
-    let fm = 16 * r0 * brw / (zm * zm);
-    let fh = std::cmp::max(4 * fm, 4 * fm * zm / (32 * brw * zm / zm));
-    round_money_up_2(fh)
+    shekyl_economics::corrected_fee_ladder(
+        r0,
+        zm,
+        zm,
+        zm,
+        DYNAMIC_FEE_REFERENCE_TX_WEIGHT,
+        structural_max_correction(&params),
+    )
+    .priority
+}
+
+/// The largest `C_q` any chain state can produce, in `SCALE` units:
+/// `C = (1−σ)·M_r/(1−b)` with `σ` at its floor of zero, `M_r` at
+/// `release_max` and `b` at `burn_cap`, then ceiling-quantized the way
+/// the served ladder quantizes it. Computed from the parameters so a
+/// re-parameterization moves the bound with them rather than leaving a
+/// stale literal behind.
+fn structural_max_correction(params: &shekyl_economics::params::EconomicParams) -> u64 {
+    let scale = u128::from(shekyl_economics::params::SCALE);
+    let c_max = scale * u128::from(params.release_max) / (scale - u128::from(params.burn_cap));
+    shekyl_economics::quantize_pow2_ceil(u64::try_from(c_max).expect("C bound fits u64"))
 }
 
 /// Failures from fee estimation / snapshot validation.
@@ -522,26 +543,101 @@ mod tests {
         ValidatedFeeEstimates::try_new(snapshot(cap, cap, cap))
             .expect("exactly the absolute cap is within the ceiling");
     }
-
-    /// The cap IS the daemon-rounded genesis-condition `Fh` — pinned as
-    /// a literal so an economics-parameter change moves it loudly, and
-    /// cross-checked against the folded formula so a cap edit that
-    /// bypasses the derivation fails here.
+    /// The cap is a STRUCTURAL BOUND (see `absolute_fee_rate_cap`), and
+    /// this pins its value so a parameter change moves it loudly.
     #[test]
-    fn absolute_cap_is_the_rounded_genesis_fh() {
+    fn absolute_cap_is_the_structural_bound() {
         let cap = absolute_fee_rate_cap();
-        assert_eq!(cap, 14_000_000, "economics params moved the era-max fee");
-
-        let params = shekyl_economics::params::EconomicParams::default();
-        let r0 = shekyl_economics::emission::base_block_reward(0, &params).expect("r0");
-        assert_eq!(r0, 2_048_000_000_000, "genesis base reward moved");
-        let fm = 16 * r0 * 3_000 / (300_000u64 * 300_000);
-        let fh = 4 * fm * 300_000 / (32 * 3_000);
         assert_eq!(
-            cap,
-            round_money_up_2(fh),
-            "cap must equal rounded genesis Fh"
+            cap, 220_000_000,
+            "economics params moved the structural fee bound"
         );
+    }
+
+    /// The bound must actually BOUND — and the previous cap did not,
+    /// which is why this test exists (PR #640 review). It walks the
+    /// neutral emission trajectory once and, at every registered chain
+    /// age, evaluates the served priority rung across the reachable
+    /// volume grid; the maximum it finds must sit at or under the cap.
+    ///
+    /// If this fails, the cap is refusing honest daemon quotes — a
+    /// wallet-side liveness failure, not a safety one — and the bound
+    /// must be re-derived BEFORE the literal above is touched.
+    #[test]
+    fn absolute_cap_bounds_the_swept_reachable_maximum() {
+        use shekyl_economics::params::SCALE;
+        let p = shekyl_economics::params::EconomicParams::default();
+        let zm = PENALTY_FREE_ZONE;
+        let cap = absolute_fee_rate_cap();
+
+        let mut ag: u64 = 0;
+        let mut worst = (0u64, 0u64, 0u64);
+        let max_h = 30 * shekyl_economics::BLOCKS_PER_YEAR;
+        for h in 0..=max_h {
+            if h % shekyl_economics::BLOCKS_PER_YEAR == 0 {
+                let base = shekyl_economics::emission::base_block_reward(ag, &p)
+                    .expect("base reward along the neutral trajectory");
+                let sigma = shekyl_economics::calc_effective_emission_share(
+                    h,
+                    1,
+                    shekyl_economics::STAKER_EMISSION_SHARE,
+                    shekyl_economics::STAKER_EMISSION_DECAY,
+                    shekyl_economics::BLOCKS_PER_YEAR,
+                );
+                for v in [0u64, 5, 50, 100, 200, 500] {
+                    let m_r = shekyl_economics::calc_release_multiplier(
+                        v,
+                        p.tx_volume_baseline,
+                        p.release_min,
+                        p.release_max,
+                    );
+                    let b = shekyl_economics::calc_burn_pct(
+                        v,
+                        p.tx_volume_baseline,
+                        ag,
+                        p.money_supply,
+                        p.burn_base_rate,
+                        p.burn_cap,
+                    );
+                    let c = u64::try_from(
+                        u128::from(SCALE - sigma) * u128::from(m_r) / u128::from(SCALE - b),
+                    )
+                    .expect("C fits u64");
+                    let c_q = shekyl_economics::quantize_pow2_ceil(c);
+                    let prio = shekyl_economics::corrected_fee_ladder(
+                        base,
+                        zm,
+                        zm,
+                        zm,
+                        DYNAMIC_FEE_REFERENCE_TX_WEIGHT,
+                        c_q,
+                    )
+                    .priority;
+                    if prio > worst.0 {
+                        worst = (prio, h / shekyl_economics::BLOCKS_PER_YEAR, v);
+                    }
+                }
+            }
+            if h < max_h {
+                ag = ag.saturating_add(
+                    shekyl_economics::emission::base_block_reward(ag, &p)
+                        .expect("base reward along the neutral trajectory"),
+                );
+            }
+        }
+
+        assert!(
+            worst.0 <= cap,
+            "an honest quote exceeds the cap: swept maximum {} (age {}y, v={}) > cap {}",
+            worst.0,
+            worst.1,
+            worst.2,
+            cap
+        );
+        // The measured peak, recorded so the margin is visible rather
+        // than assumed: it is interior (≈ year 7), NOT at genesis.
+        assert_eq!(worst.0, 91_000_000, "the reachable maximum moved");
+        assert_eq!(worst.1, 7, "the reachable maximum is no longer at year 7");
     }
 
     /// The finding's scenario, pinned end to end: the honest YOUNG-CHAIN
@@ -555,8 +651,14 @@ mod tests {
         ValidatedFeeEstimates::try_new(snapshot(68_266, 273_066, 13_653_325))
             .expect("raw genesis-condition tiers are honest and must pass");
         // Daemon-rounded (round_money_up, 2 significant digits): the
-        // wire form. Priority lands exactly on the cap.
+        // wire form at C_q = 1, then at the genesis-congested C_q = 2.
+        // Both sit WELL UNDER the structural cap rather than on it — the
+        // genesis point is not the era maximum (that is ~91,000,000 near
+        // year 7), which is exactly the error the old 28,000,000 cap
+        // encoded.
         ValidatedFeeEstimates::try_new(snapshot(69_000, 280_000, 14_000_000))
-            .expect("rounded genesis-condition tiers are honest and must pass");
+            .expect("rounded genesis-condition C_q=1 tiers are honest and must pass");
+        ValidatedFeeEstimates::try_new(snapshot(140_000, 550_000, 28_000_000))
+            .expect("rounded genesis-congested C_q=2 tiers are honest and must pass");
     }
 }

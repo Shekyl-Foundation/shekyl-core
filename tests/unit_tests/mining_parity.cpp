@@ -42,6 +42,7 @@
 #include "crypto/hash-ops.h"
 #include "crypto/pow_registry.h"
 #include "cryptonote_config.h"
+#include "shekyl/economics.h"
 #include "shekyl/shekyl_ffi.h"
 
 namespace
@@ -95,6 +96,80 @@ TEST(mining_parity, reward_multiplier_is_neutral_at_baseline)
   ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, base_reward, version));
   ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, release_reward, version, SHEKYL_TX_VOLUME_BASELINE));
   ASSERT_EQ(base_reward, release_reward);
+}
+
+TEST(mining_parity, marshal_pins_the_signed_composition_at_the_tail)
+{
+  // The 6-arg get_block_reward is a marshaling shim ("C++ computes
+  // nothing"), and the order checks above cannot pin the FL-R12'
+  // composition: at the tail the two rejected orderings differ in VALUE,
+  // not direction. These are the FFI-side pin's probes (legacy_tests.rs
+  // block_reward_marshals_the_signed_composition) taken through the C++
+  // overload, so the shim's own additions — version -> zone threading and
+  // the status -> bool mapping — are inside the tested surface. Written
+  // under the no-test-exists-means-write-the-test rule: this overload
+  // crossed with the FL-R12' bundle carrying only directional coverage.
+  const uint8_t version = HF_VERSION_SHEKYL_NG;
+  const uint64_t tail = FINAL_SUBSIDY_PER_MINUTE * (SHEKYL_DAA_TARGET_SECONDS / 60);
+  const size_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
+  uint64_t reward = 0;
+
+  // Tail boundary under dormancy (v = 0 pins M_r at its 0.8 rail), no
+  // penalty: the floor pays TAIL whole. The shipped pre-FL-R12' order
+  // paid 480000000 here (the multiplier applied to the floored base).
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, MONEY_SUPPLY - tail + 1, reward, version, 0));
+  ASSERT_EQ(reward, tail);
+
+  // Past the asymptote with x = 1/2: penalty AFTER the floor => TAIL*3/4.
+  // Pre-FL-R12' this state was an error arm (FL-R16a).
+  ASSERT_TRUE(cryptonote::get_block_reward(zone, zone + zone / 2, MONEY_SUPPLY + tail, reward, version, 0));
+  ASSERT_EQ(reward, tail / 4 * 3);
+
+  // Surge rail (M_r at 1.3) at the asymptote: rail-independent TAIL — the
+  // axis that separates max(M_r*curve, TAIL) from a floor-inside-the-
+  // operand rebuild (FL round 10, T-3).
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, MONEY_SUPPLY, reward, version, SHEKYL_TX_VOLUME_BASELINE * 100));
+  ASSERT_EQ(reward, tail);
+
+  // Mid-curve dormancy, cross-checked against the DIRECT FFI call: the
+  // marshal identity that pins the tx_volume_avg threading itself. The
+  // three tail probes above are M_r-independent by contract, so only a
+  // mid-curve probe can catch a shim that drops or rewrites the volume
+  // argument on the way through.
+  uint64_t expected = 0;
+  uint64_t limit = 0;
+  ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
+            shekyl_block_reward(0, zone / 2, MONEY_SUPPLY / 2, zone, 0, &expected, &limit));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, MONEY_SUPPLY / 2, reward, version, 0));
+  ASSERT_EQ(reward, expected);
+}
+
+TEST(mining_parity, genesis_paid_reward_and_split_are_pinned)
+{
+  // The GENESIS-condition pin, and it lives HERE because the core test
+  // that checked it (`gen_block_reward`, tests/core_tests/block_reward.cpp)
+  // is NOT REGISTERED in chaingen_main.cpp — it was dropped with the v1
+  // coinbase siblings, so a pin placed there executes never. Copilot
+  // raised the tautology on that file (PR #640); this is the same pin in
+  // a test that runs.
+  //
+  // Independent literals, derived from the frozen parameters rather than
+  // read back from the owner under test: at genesis `curve(0) =
+  // MONEY_SUPPLY >> esf` = 2 048 000 000 000; `tx_volume_avg = 0` pins
+  // `M_r` at its 0.8 rail and the tail floor does not bind, so the paid
+  // pre-penalty quantity is 1 638 400 000 000; the genesis emission share
+  // is 15%, leaving the miner 1 392 640 000 000. A reward-math change
+  // fails this even though the marshal still agrees with itself.
+  uint64_t paid = 0;
+  uint64_t limit = 0;
+  ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
+            shekyl_block_reward(0, 1, 0, CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
+                                /*tx_volume_avg=*/0, &paid, &limit));
+  ASSERT_EQ(paid, UINT64_C(1638400000000));
+
+  const shekyl::EmissionSplit em = shekyl::compute_emission_split(paid, 0, 0);
+  ASSERT_EQ(em.miner_emission, UINT64_C(1392640000000));
+  ASSERT_EQ(em.miner_emission + em.staker_emission, paid);
 }
 
 TEST(mining_parity, pow_registry_is_randomx_only)

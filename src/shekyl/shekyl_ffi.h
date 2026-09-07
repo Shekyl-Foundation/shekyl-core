@@ -238,17 +238,16 @@ bool shekyl_tree_hash(
     size_t count,
     uint8_t* out_ptr);
 
-/// Calculate the adaptive release multiplier based on transaction volume.
-/// Returns multiplier in fixed-point (1e18 = 1.0).
+/// Release multiplier from demand pacing:
+/// clamp(tx_volume_avg / baseline, RELEASE_MIN, RELEASE_MAX), fixed-point
+/// SCALE. Since FL-R12' the PAID composition applies this Rust-side inside
+/// shekyl_block_reward; this export remains for observability (RPC
+/// get_info's release_multiplier field).
 uint64_t shekyl_calc_release_multiplier(
     uint64_t tx_volume_avg,
     uint64_t tx_volume_baseline,
     uint64_t release_min,
     uint64_t release_max);
-
-uint64_t shekyl_apply_release_multiplier(
-    uint64_t base_reward,
-    uint64_t multiplier);
 
 /// Calculate fee burn percentage based on network metrics.
 uint64_t shekyl_calc_burn_pct(
@@ -304,21 +303,48 @@ uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
+/// The quantized fee-correction scalar C_q (FL-R12' round-8 amendment,
+/// whole-scalar form) with pow2-boundary hysteresis. sigma_scaled and
+/// burn_pct_scaled are the SAME shekyl_calc_emission_share /
+/// shekyl_calc_burn_pct outputs validation computes at this state.
+/// prev_cq_scaled = 0 means no held value.
+uint64_t shekyl_fee_correction_quantized(
+    uint64_t tx_volume_avg,
+    uint64_t sigma_scaled,
+    uint64_t burn_pct_scaled,
+    uint64_t prev_cq_scaled);
+
+/// The corrected four-slot fee ladder (FL-R17 three tiers + the RK-5 wire
+/// bridge slot; Fh main arm unconditional). Writes exactly four values;
+/// the CALLER clamps fees[0] at the relay floor. Returns 0, or -1 on a
+/// null out_fees without writing.
+int32_t shekyl_corrected_fee_ladder(
+    uint64_t base_reward,
+    uint64_t mnw,
+    uint64_t mlw,
+    uint64_t full_reward_zone,
+    uint64_t ref_tx_weight,
+    uint64_t c_q,
+    uint64_t *out_fees);
+
 /// shekyl_block_reward status codes. Rejection is POSITIVE, caller misuse
 /// NEGATIVE, so "the block is invalid" is never confused with "the call was".
 #define SHEKYL_BLOCK_REWARD_OK             0
 #define SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG  1
 #define SHEKYL_BLOCK_REWARD_INVALID       (-1)
 
-/// Block reward after the median-weight penalty.
-/// The only fallible entry in the economics family: BLOCK_TOO_BIG is a
-/// consensus rejection, not an internal error. The limit is INCLUSIVE — a
-/// block at exactly 2 * effective median is accepted and earns zero; only
+/// The PAID block reward — the one owner of the FL-R12' signed composition
+/// max(M_r*curve(remaining), TAIL) * penalty(x): release multiplier on the
+/// curve, tail floor on the modulated result, quadratic penalty applied LAST
+/// (floors belong to emission; penalties apply to the paid quantity). The
+/// only fallible entry in the economics family: BLOCK_TOO_BIG is a consensus
+/// rejection, not an internal error. The limit is INCLUSIVE — a block at
+/// exactly 2 * effective median is accepted and earns zero; only
 /// current_block_weight > 2 * effective median is rejected. out_weight_limit
-/// receives that doubled effective median on EVERY path so a caller can report
-/// the limit it was rejected against without recomputing the clamp.
-/// already_generated_coins is clamped at money_supply, as in
-/// shekyl_base_block_reward. INVALID covers a null out-pointer and an input
+/// receives that doubled effective median on EVERY path so a caller can
+/// report the limit it was rejected against without recomputing the clamp.
+/// A past-asymptote already_generated_coins is a legitimate perpetual-tail
+/// state, not an error. INVALID covers a null out-pointer and an input
 /// beyond the exact arithmetic domain (medians around 2^43 and above, where
 /// the product leaves 128 bits) — fail-closed rather than wrapping.
 /// Neither out-pointer may be null.
@@ -327,22 +353,15 @@ int32_t shekyl_block_reward(
     uint64_t current_block_weight,
     uint64_t already_generated_coins,
     uint64_t full_reward_zone,
+    uint64_t tx_volume_avg,
     uint64_t *out_reward,
     uint64_t *out_weight_limit);
 
-/// Cap a block reward at the supply headroom still unminted. The emission-side
-/// twin of shekyl_advance_already_generated: that one stops the running total
-/// at the cap, this one stops a single block from exceeding what remains.
-/// Saturating, so an already_generated_coins beyond the cap yields zero
-/// headroom rather than the underflowed near-UINT64_MAX the C++ it replaces
-/// produced. Cannot fail.
-uint64_t shekyl_cap_reward_to_remaining_supply(
-    uint64_t reward,
-    uint64_t already_generated_coins);
 
-/// Advance already_generated_coins by a block reward, saturating at money_supply.
-/// One entry point for the main-chain and alt-chain connect paths, which each
-/// carried their own copy of this clamp.
+/// Advance already_generated_coins by a block reward. Under FL-R12' the
+/// accumulator passes the emission-curve asymptote (perpetual tail); the
+/// only saturation is the u64 rail (FL-R14). One entry point for both
+/// C++ connect paths.
 uint64_t shekyl_advance_already_generated(
     uint64_t already_generated_coins,
     uint64_t block_reward);

@@ -812,13 +812,28 @@ const ZONE: u64 = 300_000;
 /// from "written with something plausible".
 const SENTINEL: u64 = 0xDEAD_BEEF_DEAD_BEEF;
 
+/// Baseline volume (M_r = 1): the M_r-neutral vector set below stays pinned
+/// to the pre-FL-R12′ values through the composition change.
+fn baseline_v() -> u64 {
+    shekyl_economics::EconomicParams::default().tx_volume_baseline
+}
+
 #[test]
 fn block_reward_ok_writes_both_out_params() {
     let mut reward = SENTINEL;
     let mut limit = SENTINEL;
     // Below the effective median: no penalty, so the base subsidy is returned.
-    let status =
-        unsafe { shekyl_block_reward(0, ZONE / 2, 0, ZONE, &raw mut reward, &raw mut limit) };
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            0,
+            ZONE,
+            baseline_v(),
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
 
     assert_eq!(status, SHEKYL_BLOCK_REWARD_OK);
     assert_eq!(reward, shekyl_base_block_reward(0));
@@ -831,8 +846,17 @@ fn block_reward_accepts_the_inclusive_limit_and_pays_zero() {
     let mut limit = SENTINEL;
     // Exactly 2 * median is ACCEPTED, earning zero — the boundary the C++
     // rejection message describes, which is why that message says "at most".
-    let status =
-        unsafe { shekyl_block_reward(0, 2 * ZONE, 0, ZONE, &raw mut reward, &raw mut limit) };
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            2 * ZONE,
+            0,
+            ZONE,
+            baseline_v(),
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
 
     assert_eq!(status, SHEKYL_BLOCK_REWARD_OK);
     assert_eq!(reward, 0);
@@ -843,8 +867,17 @@ fn block_reward_accepts_the_inclusive_limit_and_pays_zero() {
 fn block_reward_too_big_writes_the_limit_and_leaves_the_reward_untouched() {
     let mut reward = SENTINEL;
     let mut limit = SENTINEL;
-    let status =
-        unsafe { shekyl_block_reward(0, 2 * ZONE + 1, 0, ZONE, &raw mut reward, &raw mut limit) };
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            2 * ZONE + 1,
+            0,
+            ZONE,
+            baseline_v(),
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
 
     assert_eq!(status, SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG);
     assert!(status > 0, "rejection is positive; misuse is negative");
@@ -870,8 +903,17 @@ fn block_reward_null_out_pointers_return_invalid_without_writing() {
     let mut reward = SENTINEL;
     let mut limit = SENTINEL;
 
-    let status =
-        unsafe { shekyl_block_reward(0, ZONE / 2, 0, ZONE, std::ptr::null_mut(), &raw mut limit) };
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            0,
+            ZONE,
+            baseline_v(),
+            std::ptr::null_mut(),
+            &raw mut limit,
+        )
+    };
     assert_eq!(status, SHEKYL_BLOCK_REWARD_INVALID);
     assert!(
         status < 0,
@@ -882,8 +924,17 @@ fn block_reward_null_out_pointers_return_invalid_without_writing() {
         "no write through the non-null pointer either"
     );
 
-    let status =
-        unsafe { shekyl_block_reward(0, ZONE / 2, 0, ZONE, &raw mut reward, std::ptr::null_mut()) };
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            0,
+            ZONE,
+            baseline_v(),
+            &raw mut reward,
+            std::ptr::null_mut(),
+        )
+    };
     assert_eq!(status, SHEKYL_BLOCK_REWARD_INVALID);
     assert_eq!(
         reward, SENTINEL,
@@ -896,6 +947,7 @@ fn block_reward_null_out_pointers_return_invalid_without_writing() {
             ZONE / 2,
             0,
             ZONE,
+            baseline_v(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
         )
@@ -911,8 +963,17 @@ fn block_reward_beyond_the_exact_domain_is_invalid_not_wrapped() {
     // crate reports Overflow; the boundary maps it to INVALID and the block is
     // rejected. Before this was checked it panicked across the FFI.
     let m: u64 = 1 << 48;
-    let status =
-        unsafe { shekyl_block_reward(m, m + m / 2, 0, ZONE, &raw mut reward, &raw mut limit) };
+    let status = unsafe {
+        shekyl_block_reward(
+            m,
+            m + m / 2,
+            0,
+            ZONE,
+            baseline_v(),
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
 
     assert_eq!(status, SHEKYL_BLOCK_REWARD_INVALID);
     assert_eq!(
@@ -922,44 +983,169 @@ fn block_reward_beyond_the_exact_domain_is_invalid_not_wrapped() {
 }
 
 #[test]
-fn block_reward_clamps_already_generated_like_the_base_export() {
+fn block_reward_past_the_asymptote_pays_the_tail() {
     let mut reward = SENTINEL;
     let mut limit = SENTINEL;
-    // Past the supply cap the input is clamped rather than rejected, matching
-    // shekyl_base_block_reward's documented behaviour.
+    // A past-asymptote accumulator is a legitimate perpetual-tail state,
+    // not a clamp and not an error (FL-R16a).
     let status = unsafe {
-        shekyl_block_reward(0, ZONE / 2, u64::MAX, ZONE, &raw mut reward, &raw mut limit)
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            u64::MAX,
+            ZONE,
+            baseline_v(),
+            &raw mut reward,
+            &raw mut limit,
+        )
     };
 
     assert_eq!(status, SHEKYL_BLOCK_REWARD_OK);
     assert_eq!(reward, shekyl_base_block_reward(u64::MAX));
 }
 
+/// The signed composition through the marshal, with M_r ≠ 1 (dormancy pins
+/// the multiplier at 0.8) and both tail-boundary values — the only test that
+/// would catch a marshal bug now that C++ computes nothing (FL-R12′).
 #[test]
-fn advance_already_generated_saturates_at_the_supply_cap() {
-    assert_eq!(shekyl_advance_already_generated(0, 100), 100);
-    // The boundary the two former C++ copies had to agree on.
-    let cap = shekyl_advance_already_generated(u64::MAX, u64::MAX);
-    assert_eq!(shekyl_advance_already_generated(cap, 1), cap);
-    assert_eq!(shekyl_advance_already_generated(cap - 1, 50), cap);
+fn block_reward_marshals_the_signed_composition() {
+    let p = shekyl_economics::EconomicParams::default();
+    let s = p.money_supply;
+    let tail = shekyl_economics::tail_subsidy_per_block(&p).unwrap();
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+
+    // Tail boundary under dormancy, no penalty: the floor pays TAIL whole
+    // (the pre-implementation red was 480,000,000 — M_r on the floored base).
+    let st = unsafe {
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            s - tail + 1,
+            ZONE,
+            0,
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
+    assert_eq!(st, SHEKYL_BLOCK_REWARD_OK);
+    assert_eq!(reward, tail);
+
+    // Past the asymptote with x = 1/2: penalty AFTER the floor ⇒ TAIL·3/4
+    // (the pre-implementation reds were an error arm and 360,000,000).
+    let st = unsafe {
+        shekyl_block_reward(
+            ZONE,
+            ZONE + ZONE / 2,
+            s + tail,
+            ZONE,
+            0,
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
+    assert_eq!(st, SHEKYL_BLOCK_REWARD_OK);
+    assert_eq!(reward, tail / 4 * 3);
+
+    // Mid-curve dormancy: the paid quantity carries M_r.
+    let st = unsafe {
+        shekyl_block_reward(0, ZONE / 2, s / 2, ZONE, 0, &raw mut reward, &raw mut limit)
+    };
+    assert_eq!(st, SHEKYL_BLOCK_REWARD_OK);
+    assert_eq!(
+        reward,
+        shekyl_economics::effective_emission(s / 2, 0, &p).unwrap()
+    );
 }
 
 #[test]
-fn cap_reward_to_remaining_supply_saturates_instead_of_underflowing() {
-    // Headroom available: the reward passes through.
-    assert_eq!(shekyl_cap_reward_to_remaining_supply(100, 0), 100);
+fn advance_already_generated_passes_the_asymptote() {
+    assert_eq!(shekyl_advance_already_generated(0, 100), 100);
+    // FL-R12′: through the asymptote (perpetual tail keeps accruing);
+    // the only saturation is the u64 rail, which keeps `remaining`
+    // floored at zero rather than un-saturated by a wrap (FL-R14).
+    let s = shekyl_economics::params::MONEY_SUPPLY;
+    assert_eq!(shekyl_advance_already_generated(s, 1), s + 1);
+    assert_eq!(
+        shekyl_advance_already_generated(u64::MAX, u64::MAX),
+        u64::MAX
+    );
+}
 
-    // The C++ this replaced computed `MONEY_SUPPLY - already_generated_coins`
-    // in uint64_t. Past the cap that underflows to a near-UINT64_MAX headroom,
-    // so `if (reward > remaining)` is never true and the clamp does nothing —
-    // the exact inverse of its purpose. Saturating gives zero headroom.
-    let past_cap = shekyl_cap_reward_to_remaining_supply(u64::MAX, u64::MAX);
-    assert_eq!(past_cap, 0, "past the cap nothing remains to be minted");
+// ─── shekyl_corrected_fee_ladder / shekyl_fee_correction_quantized ──────────
+//
+// Same boundary rationale as `shekyl_block_reward` above: the crate tests
+// own the ladder arithmetic (shekyl-economics `fee.rs`); what only exists
+// here is the null check, the four out-writes, and the fact that the
+// marshal reaches the crate function unchanged. Written under the
+// no-test-exists-means-write-the-test rule: these exports crossed with the
+// FL-R12′ bundle and had no boundary pin of their own.
 
-    // The pair is consistent: whatever advance() saturates to is the point at
-    // which cap() stops paying. Derived from the exports rather than from a
-    // literal, so the two cannot drift apart without this failing.
-    let cap = shekyl_advance_already_generated(u64::MAX, u64::MAX);
-    assert_eq!(shekyl_cap_reward_to_remaining_supply(1, cap), 0);
-    assert_eq!(shekyl_cap_reward_to_remaining_supply(1, cap - 1), 1);
+#[test]
+fn corrected_fee_ladder_null_out_returns_minus_one() {
+    let st = unsafe {
+        shekyl_corrected_fee_ladder(
+            10_000_000_000,
+            300_000,
+            300_000,
+            300_000,
+            3_000,
+            shekyl_economics::params::SCALE,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(
+        st, -1,
+        "caller misuse is negative, mirroring the reward FFI"
+    );
+}
+
+#[test]
+fn corrected_fee_ladder_marshals_the_heritage_vector() {
+    // 10 SKL reward, Mnw = Mlw = zone, C_q = 1: the FL-R17 signed shape over
+    // the heritage values — the same vector scaling_2021.cpp pins from the
+    // C++ side, so a drift in either marshal direction fails one of the two.
+    let mut fees = [SENTINEL; 4];
+    let st = unsafe {
+        shekyl_corrected_fee_ladder(
+            10_000_000_000,
+            300_000,
+            300_000,
+            300_000,
+            3_000,
+            shekyl_economics::params::SCALE,
+            fees.as_mut_ptr(),
+        )
+    };
+    assert_eq!(st, 0);
+    assert_eq!(fees, [340, 1400, 1400, 67_000]);
+}
+
+#[test]
+fn fee_correction_quantized_ffi_matches_the_crate() {
+    let p = shekyl_economics::EconomicParams::default();
+    let scale = shekyl_economics::params::SCALE;
+    // A decisive surge state (M_r pinned at 1.3, no sigma/burn, no previous
+    // value): C = 1.3 snaps up to the C_q = 2 step.
+    let v = 2 * p.tx_volume_baseline;
+    let got = shekyl_fee_correction_quantized(v, 0, 0, 0);
+    assert_eq!(
+        got,
+        shekyl_economics::fee_correction_quantized(v, 0, 0, 0, &p)
+    );
+    assert_eq!(got, 2 * scale);
+    // And the hysteresis argument is threaded, not dropped — asserted at a
+    // probe where held and fresh DIFFER (v = baseline + 1 puts raw C just
+    // past the 2^0 boundary, inside the 3% band): with the previous step it
+    // holds, without it it snaps up. A probe where both paths agree could
+    // not fail on a dropped argument.
+    let boundary_v = p.tx_volume_baseline + 1;
+    assert_eq!(
+        shekyl_fee_correction_quantized(boundary_v, 0, 0, scale),
+        scale
+    );
+    assert_eq!(
+        shekyl_fee_correction_quantized(boundary_v, 0, 0, 0),
+        2 * scale
+    );
 }

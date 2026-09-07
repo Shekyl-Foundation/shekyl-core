@@ -381,14 +381,6 @@ pub extern "C" fn shekyl_calc_release_multiplier(
     )
 }
 
-/// Apply a release multiplier to a base reward.
-///
-/// Returns: base_reward * multiplier / SCALE
-#[no_mangle]
-pub extern "C" fn shekyl_apply_release_multiplier(base_reward: u64, multiplier: u64) -> u64 {
-    shekyl_economics::release::apply_release_multiplier(base_reward, multiplier)
-}
-
 // ─── Economics: Fee Burn ────────────────────────────────────────────────────
 
 /// Calculate the burn percentage from chain state.
@@ -486,19 +478,17 @@ pub extern "C" fn shekyl_staker_pool_share_at(frozen_segment_count: u64) -> u64 
 
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 ///
-/// Saturating at `money_supply`: past full emission the base curve yields the
-/// tail floor, so clamping the input keeps `base_block_reward` in range and this
-/// `extern "C"` export cannot panic (or unwind) across the FFI boundary. The
-/// consensus connect path already caps `already_generated_coins` at
-/// `MONEY_SUPPLY`, so the clamp is only reached by out-of-range callers.
+/// Total since FL-R12′: `base_block_reward` floors `remaining` at zero, so a
+/// past-asymptote accumulator yields the perpetual tail rather than needing an
+/// input clamp — this `extern "C"` export cannot panic (or unwind) across the
+/// FFI boundary. Note this is the M_r-NEUTRAL view; the paid pipeline's floor
+/// applies after the release multiplier (see `shekyl_block_reward`).
 #[no_mangle]
 pub extern "C" fn shekyl_base_block_reward(already_generated_coins: u64) -> u64 {
     let params = shekyl_economics::params::EconomicParams::default();
-    let clamped = already_generated_coins.min(params.money_supply);
-    // After clamping `clamped <= money_supply`, so the only residual error is a
-    // tail-subsidy overflow that canonical params never trigger; fall back to 0
-    // deterministically rather than panicking.
-    shekyl_economics::base_block_reward(clamped, &params).unwrap_or(0)
+    // The only residual error is a tail-subsidy overflow that canonical
+    // params never trigger; fall back to 0 deterministically.
+    shekyl_economics::base_block_reward(already_generated_coins, &params).unwrap_or(0)
 }
 
 /// Status: reward computed. `out_reward` and `out_weight_limit` are written.
@@ -530,8 +520,11 @@ pub const SHEKYL_BLOCK_REWARD_INVALID: i32 = -1;
 /// `full_reward_zone` is supplied by the caller rather than read here; see
 /// `block_reward_with_penalty` for why the constant is not duplicated in Rust.
 ///
-/// `already_generated_coins` is clamped at `money_supply` before use, matching
-/// [`shekyl_base_block_reward`], so an out-of-range supply is not an error.
+/// Since FL-R12′ this marshals the ONE owner `paid_block_reward` — the full
+/// signed composition `max(M_r·curve(remaining), TAIL)·penalty(x)` — so it
+/// takes `tx_volume_avg` and there is no C++-side multiplier, cap, or flag
+/// path. A past-asymptote accumulator is a legitimate perpetual-tail state,
+/// not an error (FL-R16a).
 ///
 /// # Safety
 ///
@@ -544,6 +537,7 @@ pub unsafe extern "C" fn shekyl_block_reward(
     current_block_weight: u64,
     already_generated_coins: u64,
     full_reward_zone: u64,
+    tx_volume_avg: u64,
     out_reward: *mut u64,
     out_weight_limit: *mut u64,
 ) -> i32 {
@@ -559,12 +553,12 @@ pub unsafe extern "C" fn shekyl_block_reward(
     // SAFETY: non-null per the check above; the caller guarantees writability.
     unsafe { out_weight_limit.write(limit) };
 
-    let clamped = already_generated_coins.min(params.money_supply);
-    match shekyl_economics::block_reward_with_penalty(
+    match shekyl_economics::paid_block_reward(
         median_weight,
         current_block_weight,
-        clamped,
+        already_generated_coins,
         full_reward_zone,
+        tx_volume_avg,
         &params,
     ) {
         Ok(reward) => {
@@ -573,38 +567,85 @@ pub unsafe extern "C" fn shekyl_block_reward(
             SHEKYL_BLOCK_REWARD_OK
         }
         Err(shekyl_economics::EmissionError::BlockTooBig) => SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG,
-        // The supply clamp above removes the only other reachable error; a
-        // tail-subsidy overflow cannot occur with canonical params. Report
-        // misuse rather than panicking across the boundary.
+        // Total in `ag` (FL-R16a); the only other arms are overflow shapes
+        // canonical params never trigger. Report misuse rather than
+        // panicking across the boundary.
         Err(_) => SHEKYL_BLOCK_REWARD_INVALID,
     }
 }
 
-/// Cap a block reward at the supply headroom still unminted.
-///
-/// The emission-side twin of [`shekyl_advance_already_generated`]. Replaces a
-/// C++ `MONEY_SUPPLY - already_generated_coins` that underflowed past the cap
-/// and so disabled the very clamp it computed. Cannot fail.
+/// The quantized fee-correction scalar C_q (FL-R12′ round-8 amendment,
+/// whole-scalar form) with pow2-boundary hysteresis. `sigma_scaled` and
+/// `burn_pct_scaled` are the SAME `shekyl_calc_emission_share` /
+/// `shekyl_calc_burn_pct` outputs the validation path computes at this
+/// state — one source, no second derivation. `prev_cq_scaled = 0` means no
+/// held value. Cannot fail.
 #[no_mangle]
-pub extern "C" fn shekyl_cap_reward_to_remaining_supply(
-    reward: u64,
-    already_generated_coins: u64,
+pub extern "C" fn shekyl_fee_correction_quantized(
+    tx_volume_avg: u64,
+    sigma_scaled: u64,
+    burn_pct_scaled: u64,
+    prev_cq_scaled: u64,
 ) -> u64 {
     let params = shekyl_economics::params::EconomicParams::default();
-    shekyl_economics::cap_reward_to_remaining_supply(reward, already_generated_coins, &params)
+    shekyl_economics::fee_correction_quantized(
+        tx_volume_avg,
+        sigma_scaled,
+        burn_pct_scaled,
+        prev_cq_scaled,
+        &params,
+    )
 }
 
-/// Advance `already_generated_coins` by a block reward, saturating at supply.
+/// The corrected four-slot fee ladder (FL-R17 three tiers + the RK-5 wire
+/// bridge slot; `Fh` main arm unconditional; economy is clamped by the
+/// CALLER at the relay floor). Writes exactly four values through
+/// `out_fees`. Returns 0, or -1 on a null pointer without writing.
+///
+/// # Safety
+///
+/// `out_fees` must be null or valid for writing four `u64`s.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
+    base_reward: u64,
+    mnw: u64,
+    mlw: u64,
+    full_reward_zone: u64,
+    ref_tx_weight: u64,
+    c_q: u64,
+    out_fees: *mut u64,
+) -> i32 {
+    if out_fees.is_null() {
+        return -1;
+    }
+    let fees = shekyl_economics::corrected_fee_ladder(
+        base_reward,
+        mnw,
+        mlw,
+        full_reward_zone,
+        ref_tx_weight,
+        c_q,
+    )
+    .as_slots();
+    for (i, f) in fees.iter().enumerate() {
+        // SAFETY: non-null per the check; caller guarantees 4 writable u64s.
+        unsafe { out_fees.add(i).write(*f) };
+    }
+    0
+}
+
+/// Advance `already_generated_coins` by a block reward.
 ///
 /// One entry point for both C++ connect paths (main-chain and alt-chain),
-/// which each carried their own copy of the clamp. Cannot fail.
+/// which each carried their own copy of the rule. Cannot fail. Since
+/// FL-R12′ it advances THROUGH the emission-curve asymptote (perpetual
+/// tail); the only saturation is the u64 rail (FL-R14).
 #[no_mangle]
 pub extern "C" fn shekyl_advance_already_generated(
     already_generated_coins: u64,
     block_reward: u64,
 ) -> u64 {
-    let params = shekyl_economics::params::EconomicParams::default();
-    shekyl_economics::advance_already_generated(already_generated_coins, block_reward, &params)
+    shekyl_economics::advance_already_generated(already_generated_coins, block_reward)
 }
 
 // ─── Emission Share (Component 4) ───────────────────────────────────────────

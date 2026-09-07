@@ -23,9 +23,8 @@ use std::io::Write;
 use shekyl_economics::{
     base_block_reward,
     burn::{calc_burn_pct, compute_burn_split},
-    calc_effective_emission_share, calc_release_multiplier,
+    calc_effective_emission_share, effective_emission,
     params::{mul_scale, EconomicParams, SCALE},
-    release::apply_release_multiplier,
     split_block_emission, ScaledShare,
 };
 
@@ -192,7 +191,6 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         ..EconomicParams::default()
     };
     let total_blocks = params.blocks_per_year * config.sim_years;
-    let money_supply = u128::from(params.money_supply);
     let mut already_generated: u128 =
         (config.initial_emitted_fraction * params.money_supply as f64) as u128;
     let mut total_burned: u128 = 0;
@@ -204,23 +202,11 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 
     for block in 0..total_blocks {
         let abs_height = block + config.genesis_height_offset;
-        let base_reward = base_block_reward(
-            already_generated.min(u128::from(u64::MAX)) as u64,
-            &economic,
-        )
-        .unwrap_or(0);
+        let ag = already_generated.min(u128::from(u64::MAX)) as u64;
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
         cumulative_outputs += tx_volume as f64 * OUTPUTS_PER_TX_NORMAL;
 
-        let mult = calc_release_multiplier(
-            tx_volume,
-            params.tx_volume_baseline,
-            params.release_min,
-            params.release_max,
-        );
-        let remaining = money_supply.saturating_sub(already_generated);
-        let remaining_u64 = remaining.min(u128::from(u64::MAX)) as u64;
-        let effective = apply_release_multiplier(base_reward, mult).min(remaining_u64);
+        let effective = effective_emission(ag, tx_volume, &economic).unwrap_or(0);
 
         let emission_share = calc_effective_emission_share(
             abs_height,
@@ -254,7 +240,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 
         year_emission_atomic += u128::from(staker_emission);
         year_burn_atomic += u128::from(whole_burn);
-        already_generated = (already_generated + u128::from(effective)).min(money_supply);
+        already_generated += u128::from(effective);
         total_burned += u128::from(flat.actually_destroyed);
 
         if (block + 1) % params.blocks_per_year == 0 {

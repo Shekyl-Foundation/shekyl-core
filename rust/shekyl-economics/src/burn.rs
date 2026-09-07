@@ -72,9 +72,14 @@ pub fn calc_burn_pct(
         / u128::from(tx_baseline)) as u64;
     let sqrt_volume = isqrt(volume_ratio_scaled); // result is in SCALE units
 
-    // circulating_supply / total_supply scaled to SCALE
-    let supply_ratio =
-        (u128::from(circulating_supply) * u128::from(SCALE) / u128::from(total_supply)) as u64;
+    // circulating_supply / total_supply scaled to SCALE, saturated at 1.0
+    // (FL-R16c): under the perpetual tail gross issuance passes the
+    // curve's asymptote, and an unsaturated ratio would silently drift
+    // the burn toward its cap on a quantity that stopped meaning
+    // "fraction emitted" at that point.
+    let supply_ratio = (u128::from(circulating_supply) * u128::from(SCALE)
+        / u128::from(total_supply))
+    .min(u128::from(SCALE)) as u64;
 
     // burn_pct = burn_base_rate * sqrt_volume * supply_ratio / SCALE^2
     // We chain mul_scale to keep things in SCALE units:
@@ -256,6 +261,41 @@ mod tests {
         for (tx_volume, tx_baseline) in cases {
             let burn = calc_burn_pct(tx_volume, tx_baseline, supply / 2, supply, 500_000, cap);
             assert!(burn <= cap, "burn exceeds cap: {burn}");
+        }
+    }
+
+    /// FL-R16c: the supply ratio SATURATES past the emission-curve
+    /// asymptote. Under the perpetual tail gross issuance keeps growing
+    /// past `total_supply`, and an unsaturated ratio would drift the burn
+    /// toward its cap on a quantity that stopped meaning "fraction
+    /// emitted" at that point.
+    ///
+    /// This test exists because the branch had NO coverage that could
+    /// fail without it: every other burn test and every FFI vector stops
+    /// at `circulating == total`, so deleting the `.min(SCALE)` left the
+    /// suite green (PR #640 review). The assertions below are on the
+    /// axis the saturation lives on — past-asymptote inputs must return
+    /// exactly the at-asymptote value, and must not keep climbing.
+    #[test]
+    fn supply_ratio_saturates_past_the_asymptote() {
+        let supply = crate::params::MONEY_SUPPLY;
+        let (baseline, rate, cap) = (50u64, 500_000u64, 900_000u64);
+        // A volume well below the cap so the ratio, not the clamp, is
+        // what the assertions can see: a clamped burn would mask drift.
+        let v = baseline;
+
+        let at_asymptote = calc_burn_pct(v, baseline, supply, supply, rate, cap);
+        assert!(
+            at_asymptote < cap,
+            "probe must sit below the burn cap or the clamp hides the ratio: {at_asymptote}"
+        );
+
+        for past in [supply + 1, supply + supply / 2, u64::MAX] {
+            let burn = calc_burn_pct(v, baseline, past, supply, rate, cap);
+            assert_eq!(
+                burn, at_asymptote,
+                "burn moved past the asymptote at circulating={past}: the supply ratio did not saturate"
+            );
         }
     }
 }

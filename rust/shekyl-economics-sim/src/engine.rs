@@ -1,10 +1,8 @@
 use serde::Serialize;
 use shekyl_economics::{
-    base_block_reward,
     burn::{calc_burn_pct_from_activity, compute_burn_split_at},
-    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
+    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
     params::{calc_stake_ratio, EconomicParams, SCALE},
-    release::apply_release_multiplier,
     split_block_emission, FrozenSegmentCount,
 };
 
@@ -192,11 +190,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             year_start_circulating = already_generated.saturating_sub(total_burned);
         }
 
-        let remaining = money_supply.saturating_sub(already_generated);
-        let base_reward =
-            base_block_reward(already_generated.min(u64::MAX as u128) as u64, &economic)
-                .expect("sim neutral trajectory stays within supply bounds");
-
+        let ag = already_generated.min(u64::MAX as u128) as u64;
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
         // Consensus burn-site circulating: prev-block `already_generated`
@@ -223,11 +217,8 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             params.release_max,
         );
 
-        let mut effective_reward = apply_release_multiplier(base_reward, multiplier);
-        let remaining_u64 = remaining.min(u64::MAX as u128) as u64;
-        if effective_reward > remaining_u64 {
-            effective_reward = remaining_u64;
-        }
+        let effective_reward = effective_emission(ag, tx_volume, &economic)
+            .expect("sim paid emission stays within the arithmetic domain");
 
         let emission_share = calc_effective_emission_share(
             block + config.genesis_height_offset,
@@ -270,10 +261,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         let fee_split =
             compute_burn_split_at(total_fees, burn_pct, FrozenSegmentCount::ZERO, &economic);
 
-        already_generated += effective_reward as u128;
-        if already_generated > money_supply {
-            already_generated = money_supply;
-        }
+        already_generated += u128::from(effective_reward);
         total_burned += fee_split.actually_destroyed as u128;
 
         staker_emission_earned_year += staker_emission as u128;

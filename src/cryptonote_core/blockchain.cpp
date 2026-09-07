@@ -4390,6 +4390,13 @@ uint64_t Blockchain::get_current_fee_per_byte() const
   uint64_t median = m_current_block_cumul_weight_limit / 2;
   const uint64_t blockchain_height = m_db->height();
   uint64_t already_generated_coins = blockchain_height ? m_db->get_block_already_generated_coins(blockchain_height - 1) : 0;
+  // Deliberately the M_r-NEUTRAL overload (v = baseline): the relay floor is
+  // CEN-M3's held machinery and must not start tracking demand as a side
+  // effect of the FL-R12' cutover — at baseline the values are bit-for-bit
+  // the pre-cutover ones for every pre-asymptote state, no per-transaction
+  // tx_volume_avg scan lands on the pool-admission path, and past the
+  // asymptote the floor is now tail-derived instead of the failure-arm 0
+  // that rejected the entire mempool (FL-R16a's relay dead-letter).
   if (!get_block_reward(median, 1, already_generated_coins, base_reward, version))
     return 0;
 
@@ -4417,39 +4424,26 @@ bool Blockchain::check_fee(size_t tx_weight, uint64_t fee) const
 }
 
 //------------------------------------------------------------------
-void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, std::vector<uint64_t> &fees) const
+void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, uint64_t c_q, std::vector<uint64_t> &fees) const
 {
-  // variable names and calculations as per https://github.com/ArticMine/Monero-Documents/blob/master/MoneroScaling2021-02.pdf
-  // from (earlier than) this fork, the base fee is per byte
-  const uint64_t Mfw = std::min(Mnw, Mlw);
-
-  // 3 kB divided by something ? It's going to be either 0 or *very* quantized, so fold it into integer steps below
-  //const uint64_t Brlw = DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT / Mfw;
-
-  // constant.... equal to 0, unless floating point, so fold it into integer steps below
-  //const uint64_t Br = DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT / CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5
-
-  //const uint64_t Fl = base_reward * Brlw / Mfw; fold Brlw from above
-  const uint64_t Fl = base_reward * /*Brlw*/ DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT / (Mfw * Mfw);
-
-  // fold Fl into this for better precision (and to match the test cases in the PDF)
-  // const uint64_t Fn = 4 * Fl;
-  const uint64_t Fn = 4 * base_reward * /*Brlw*/ DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT / (Mfw * Mfw);
-
-  // const uint64_t Fm = 16 * base_reward * Br / Mfw; fold Br from above
-  const uint64_t Fm = 16 * base_reward * DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT / (CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 * Mfw);
-
-  // const uint64_t Fp = 2 * base_reward / Mnw;
-
-  // fold Br from above, move 4Fm in the max to decrease quantization effect
-  //const uint64_t Fh = 4 * Fm * std::max<uint64_t>(1, Mfw / (32 * DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT * Mnw / CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5));
-  const uint64_t Fh = std::max<uint64_t>(4 * Fm, 4 * Fm * Mfw / (32 * DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT * Mnw / CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5));
-
+  // FL round §5.2 (FL-R17 signed: three tiers; FL-R12' round-8 amendment:
+  // whole-scalar C_q on the M_r-neutral operand). The ladder arithmetic is
+  // Rust-owned (shekyl-economics `corrected_fee_ladder`); this marshals.
+  // fees[2] mirrors fees[1] — the RK-5 wire bridge: the dead Fm slot keeps
+  // the vector shape until the RPC cutover, and wallet2-transliterated
+  // `Elevated` callers stay inside the largest anonymity set. The Fh main
+  // arm is UNCONDITIONAL (2R/M — exact marginal pricing of full expansion;
+  // the inherited surge discount was FL-C2(b)'s one derived defect).
   fees.resize(4);
-  fees[0] = cryptonote::round_money_up(Fl, CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES);
-  fees[1] = cryptonote::round_money_up(Fn, CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES);
-  fees[2] = cryptonote::round_money_up(Fm, CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES);
-  fees[3] = cryptonote::round_money_up(Fh, CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES);
+  const int32_t rc = shekyl_corrected_fee_ladder(
+      base_reward,
+      Mnw,
+      Mlw,
+      CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
+      DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT,
+      c_q,
+      fees.data());
+  CHECK_AND_ASSERT_THROW_MES(rc == 0, "shekyl_corrected_fee_ladder rejected its out-pointer");
 }
 
 void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, std::vector<uint64_t> &fees) const
@@ -4483,13 +4477,85 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
 
   uint64_t already_generated_coins = db_height ? m_db->get_block_already_generated_coins(db_height - 1) : 0;
   uint64_t base_reward;
+  // The operand is the M_r-NEUTRAL total reward (round-8 amendment,
+  // whole-scalar form): max(curve(remaining), TAIL). M_r lives inside the
+  // quantized scalar below — quantizing C' and leaving M_r raw in the
+  // operand is identical in algebra and NOT in quantization, and the raw
+  // split re-created the measured FL-C4a dwell failure. Totality means
+  // this returns the perpetual tail past the asymptote instead of falling
+  // to the BLOCK_REWARD_OVERESTIMATE placeholder wallets refuse (FL-R16a).
   if (!get_block_reward(m_current_block_cumul_weight_limit / 2, 1, already_generated_coins, base_reward, version))
   {
     MERROR("Failed to determine block reward, using placeholder " << print_money(BLOCK_REWARD_OVERESTIMATE) << " as a high bound");
     base_reward = BLOCK_REWARD_OVERESTIMATE;
   }
 
-  get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, base_reward, Mnw, Mlw_penalty_free_zone_for_wallet, fees);
+  // C_q inputs read from the SAME sources validation uses at this state
+  // (one derivation, no estimate-side re-model): tx_volume_avg over the
+  // consensus window, sigma from the emission-share schedule, burn from
+  // the canonical burn curve.
+  //
+  // THE HYSTERESIS SEED IS DERIVED FROM CHAIN STATE, NOT REMEMBERED.
+  // An earlier draft carried the previous served value in a mutable
+  // member advanced only when this RPC happened, which made the served
+  // fee depend on the daemon's QUERY HISTORY: a freshly restarted node
+  // and a long-running one could quote different values at the same
+  // height, indefinitely, inside the band (PR #640 review). That
+  // contradicts the property the whole ladder rests on — that `C_q` is
+  // a deterministic function of public chain state, so every conforming
+  // wallet at a height derives the same rate — and it is the same
+  // hazard FL-R19's row makes binding for the clamp margin: a served
+  // value that stops being derivable from chain state manufactures the
+  // fingerprint FL-R18 established does not otherwise exist.
+  //
+  // So the band's `prev` is the snap at the PREVIOUS block's state,
+  // computed here from the DB. Every node at a height agrees, restart
+  // and reorg reconstruct for free (there is nothing to reconstruct),
+  // and the band still absorbs the single-block boundary crossing it
+  // was built for. It is weaker than path-dependent hysteresis over the
+  // full history — that would need connect-path maintenance and a
+  // reconstruction depth, which is a design question this bundle does
+  // not decide — and correspondingly it damps a one-block flicker, not
+  // a multi-block dither.
+  const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
+  const auto correction_at = [&](uint64_t height, uint64_t ag, uint64_t prev_cq) -> uint64_t {
+    const uint64_t v = get_tx_volume_avg(height);
+    const uint64_t s = shekyl_calc_emission_share(
+        height,
+        genesis_ng_height,
+        SHEKYL_STAKER_EMISSION_SHARE,
+        SHEKYL_STAKER_EMISSION_DECAY,
+        SHEKYL_BLOCKS_PER_YEAR);
+    const uint64_t b = shekyl_calc_burn_pct(
+        v,
+        SHEKYL_TX_VOLUME_BASELINE,
+        ag,
+        MONEY_SUPPLY,
+        SHEKYL_BURN_BASE_RATE,
+        SHEKYL_BURN_CAP);
+    return shekyl_fee_correction_quantized(v, s, b, prev_cq);
+  };
+
+  // `prev` = the unseeded snap one block back (prev_cq = 0 means "no
+  // history", i.e. the plain ceiling quantization at that state).
+  const uint64_t prev_cq = db_height > 1
+      ? correction_at(db_height - 1, m_db->get_block_already_generated_coins(db_height - 2), 0)
+      : 0;
+  const uint64_t fee_correction_cq = correction_at(db_height, already_generated_coins, prev_cq);
+
+  get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, base_reward, Mnw, Mlw_penalty_free_zone_for_wallet, fee_correction_cq, fees);
+
+  // FL-R12' round-8 rider, satisfied BY CONSTRUCTION: the estimate can
+  // only err toward acceptance. Where the quote is consumed as a floor it
+  // is the RELAY floor (CEN-M3: there is no consensus fee floor), and the
+  // relay floor prices from get_current_fee_per_byte() — a different
+  // function than this ladder, so divergence is possible by construction
+  // and the bounded C_q mispricing can err low exactly where the tail
+  // binds. Clamping the served economy rung at the very value check_fee
+  // prices from turns the signed direction claim into an identity: a
+  // conforming wallet's quote is never below the floor, so mispricing can
+  // only overquote (bounded by the pow2 step), never dead-letter.
+  fees[0] = std::max<uint64_t>(fees[0], get_current_fee_per_byte());
 }
 
 //------------------------------------------------------------------
@@ -6384,16 +6450,21 @@ leave:
   // populate various metadata about the block to be stored alongside it.
   block_weight = cumulative_block_weight;
   cumulative_difficulty = current_diffic;
-  // In the "tail" state when the minimum subsidy (implemented in get_block_reward) is in effect, the number of
-  // coins will eventually exceed MONEY_SUPPLY and overflow a uint64. To prevent overflow, cap already_generated_coins
-  // at MONEY_SUPPLY. already_generated_coins is only used to compute the block subsidy and MONEY_SUPPLY yields a
-  // subsidy of 0 under the base formula and therefore the minimum subsidy >0 in the tail state.
+  // FL-R12' (perpetual tail): the accumulator advances THROUGH the
+  // emission-curve asymptote and does not saturate there — the inherited
+  // Monero rationale that used to sit here ("MONEY_SUPPLY yields a subsidy
+  // of 0 under the base formula and therefore the minimum subsidy >0")
+  // was true of the base formula and false of the capped composition it
+  // predated (FL-V8's twins-that-were-not); under the signed ruling the
+  // tail keeps accruing forever and `remaining` floors at zero on the read
+  // side. The only saturation is the u64 rail, ~89,750 years out and
+  // build-asserted (FL-R14), where saturating — not wrapping — is what
+  // keeps `remaining` at zero.
   //
-  // The clamp itself is Rust-side (shekyl_advance_already_generated). It was
-  // written out here AND in the alt-chain path above; two hand-written copies
-  // of a consensus clamp are a drift pair, so both now call the one entry
-  // point (the division-one-site discipline consensus_constants.json records
-  // for segment_leaf_count).
+  // The advance is Rust-side (shekyl_advance_already_generated): it was
+  // written out here AND in the alt-chain path above; two hand-written
+  // copies of a consensus rule are a drift pair, so both call the one entry
+  // point.
   already_generated_coins = shekyl_advance_already_generated(already_generated_coins, base_reward);
   if(blockchain_height)
     cumulative_difficulty += m_db->get_block_cumulative_difficulty(blockchain_height - 1);

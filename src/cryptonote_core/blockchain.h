@@ -627,7 +627,7 @@ namespace cryptonote
      * @param Mlw the penalty-free zone the wallet sees
      * @param fees out: the four tiers, low to high
      */
-    void get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, std::vector<uint64_t> &fees) const;
+    void get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, uint64_t c_q, std::vector<uint64_t> &fees) const;
 
     /**
      * @brief get four levels of dynamic per byte fee estimate for the next few blocks

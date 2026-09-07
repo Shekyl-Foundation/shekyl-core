@@ -20,6 +20,41 @@ pub const MONEY_SUPPLY: u64 = GENERATED_MONEY_SUPPLY;
 /// provisional-until-testnet JSON number.
 pub const TX_VOLUME_WINDOW: u64 = GENERATED_TX_VOLUME_WINDOW;
 
+/// FL-R14 (ruled (b), review round 4): the accumulator stays `u64`
+/// persisted, because the binding bound is the genesis-frozen 64-bit
+/// range-proof width (`shekyl-bulletproofs` `prove_plus`, commitments in
+/// `[0, 2⁶⁴)`) — a wider accumulator cannot help a chain whose outputs
+/// cannot provably exceed 2⁶⁴ atomic. What this assertion actually guards
+/// is accumulator WRAP un-saturating `remaining` (a wrapped small
+/// accumulator would read as huge headroom and resume curve-scale
+/// rewards): under the perpetual tail (FL-R12′) the accumulator grows by
+/// `tail` per block forever, and the headroom above the emission-curve
+/// asymptote must last geological time. Re-parameterizing the tail, the
+/// block time, or the decimal scale so that it does not fails this build.
+const _: () = {
+    // The per-block tail below divides the target by 60. A target that is
+    // not a whole number of minutes would TRUNCATE, understating the tail
+    // and therefore OVERSTATING the headroom years this block asserts —
+    // the assertion would keep passing while the property it proves
+    // weakened (PR #640 review). `emission_speed_factor` carries the same
+    // invariant as a `debug_assert`, which release builds strip; this one
+    // is const-evaluated and cannot be.
+    assert!(
+        GENERATED_DAA_TARGET_SECONDS.is_multiple_of(60),
+        "DAA target must be a whole number of minutes, or the tail-per-block          division truncates and the FL-R14 headroom proof below is weakened"
+    );
+    const TAIL_PER_BLOCK: u64 =
+        GENERATED_FINAL_SUBSIDY_PER_MINUTE * (GENERATED_DAA_TARGET_SECONDS / 60);
+    const TAIL_PER_YEAR: u64 = TAIL_PER_BLOCK * GENERATED_BLOCKS_PER_YEAR;
+    const HEADROOM: u64 = u64::MAX - GENERATED_MONEY_SUPPLY;
+    // ≈ 89,750 years at canonical parameters; 10,000 is the loud floor.
+    assert!(
+        HEADROOM / TAIL_PER_YEAR >= 10_000,
+        "u64 accumulator headroom under the perpetual tail dropped below \
+         10,000 years - revisit FL-R14 (persisted width) before shipping"
+    );
+};
+
 /// Base staker emission share in fixed-point [`SCALE`] units
 /// (`shekyl_staker_emission_share`; `150_000` = 15%). This is the
 /// **base** share before the height-dependent decay in
