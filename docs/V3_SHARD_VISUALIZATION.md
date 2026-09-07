@@ -564,9 +564,12 @@ closure:
 Palettes and per-layer opacities are hash-derived via SHAKE256 namespaces
 (`candidate.v1.fg`, `candidate.v1.bg`, `candidate.v1.*.opacity`). Feature
 scalars from the shard aggregate drive renderer aesthetics inside each
-algorithm. The single-algorithm palette in the sections below remains the
-**fallback spec shape** if candidate.v1 fails mobile budget or continuity
-review; disposition closes during V3.x implementation.
+algorithm. The single-algorithm palette in the sections below was the
+**fallback spec shape** if candidate.v1 failed mobile budget or continuity
+review. **Both conditions have now resolved and the fallback is RETIRED
+(2026-09-06)** — see *Fallback disposition* below. The sections that
+describe it are kept as the record of the algorithms considered, not as
+a live alternative.
 
 #### Structural entropy: one SHAKE256 namespace per renderer
 
@@ -776,6 +779,88 @@ visual categories before content-derived parameter variation, which
 is plenty for a network with thousands of shards.
 
 ---
+
+## Ruling B's assigned residue — closed 2026-09-06
+
+Three items the sweep and the compositor section handed to ruling B by
+name, which ruling B did not close. Ruled together by Rick, 2026-09-06.
+
+### `time_density`: KEPT
+
+The sweep admitted `time_density` and left "whether it drives
+aesthetics" to ruling B. **Ruling: keep the field.** It remains
+admitted, computed in `features.rs`, and currently read by no renderer —
+a deliberate dormancy, not an oversight, and this paragraph is what
+makes it deliberate. Deleting it was the alternative considered and
+rejected; a later change that gives the visuals a time axis needs no
+re-ratification of admissibility, because the sweep already cleared it
+as holder-readable.
+
+### Post-rewire aesthetics: ACCEPTED as they stand
+
+Ruling A rewired renderer inputs from rejected features to hash draws
+and left "the resulting aesthetics" to ruling B. The corpus was
+rendered at 512px and at the 128px thumbnail size and inspected.
+**Ruling: accepted; no change.**
+
+One reported finding was **withdrawn under measurement** rather than
+carried, and is recorded because the withdrawal is the useful part. The
+claim was that distinguishability collapses at the 128px product size —
+that several fixtures converge on similar muted mid-tones once fine
+structure averages away. Measured pairwise over the nine fixtures, it
+does not hold: full-image RGB-RMS is **min 42.0 / median 53.5 at
+128px** against **min 42.9 / median 57.8 at 512px**, and the closest
+mean-colour pairs sit at ≈5 at *both* sizes. Distinguishability is
+size-independent across the corpus; the claim was an impression of a
+thumbnail strip, not a property of the renders.
+
+What is true, and is not a defect: a few pairs are close in mean colour
+at every size (`genesis`/`active`, `genesis`/`confidential_stake`).
+With six palettes and nine fixtures, colour collisions are expected by
+pigeonhole — the discriminating signal is structure plus colour, and
+full-image RMS above 42 for every pair is what carries it.
+
+Also noted and **not** changed: the `crystalline` layer plots its
+circle-map orbit at a constant `y` (`ys = k / 2.0`), so it contributes
+one bright horizontal line at a hash-derived height rather than a
+two-dimensional scatter. The Rust port is faithful — the Python
+reference does the same and calls it "a horizontal scatter" — so this
+is not the ported-renderer divergence class. Latent, for whoever
+revisits the renderer: that reference's own docstring attributes the
+aesthetic to "Arnold-tongue structure … showing as bright vertical
+bands", which an orbit plotted at constant `y` cannot produce. The
+reference implements something other than what it describes. Changing
+it changes pixels and carries the full cascade below.
+
+### Fallback disposition: the single-algorithm palette is RETIRED
+
+The compositor section made candidate.v1 the leading design "pending
+formal palette closure", with the single-algorithm palette as the
+fallback "if candidate.v1 fails mobile budget or continuity review".
+**Both trigger conditions have resolved**: continuity was ruled the
+wrong property (sensitivity replaced it), and the mobile budget was
+measured on the floor device with the ruling that *the budget gives*,
+not the candidate. The condition that would have promoted the fallback
+cannot now fire.
+
+**Ruling: candidate.v1 is the palette; the fallback is retired.** The
+algorithm sections below stay as the record of what was considered —
+they are not a live alternative, and no one should reconcile a second
+design against the first. **Reopening criterion (rule 21):** a
+floor-device measurement that candidate.v1 cannot be made to satisfy,
+after the amended targets have themselves been re-derived — that event,
+and nothing softer, reopens this.
+
+### What a pixel change would cost
+
+Recorded here because two of the three items above could have gone the
+other way, and the enforcement exists precisely so this cannot happen
+quietly: bump `RENDER_REVISION` or CI's
+`scripts/ci/check_golden_revision_bump.py` fails the change; regenerate
+the nine goldens from a clean tree (`_reference_run` must record
+`dirty: false`); regenerate the Python twin's copy of `recipes.json` if
+any recipe field moves; and re-run the floor budget matrix on `skl-pi`,
+committing the capture — the change would be inside the timed path.
 
 ## Rendering discipline
 
@@ -1224,10 +1309,10 @@ Its determinism bar and the falsifiers for the closure are ruled
 measurement half — the floor-device budget matrix and the committed
 goldens — was executed 2026-09-06 (*Measurements of record*); what
 remains open is the ruling it forced, recorded under *Performance
-targets*.
-The single-algorithm list below remains the documented fallback if
-candidate.v1 fails review. Final disposition closes during V3.x
-implementation against mobile budget and continuity testing.
+targets*, and it was ruled 2026-09-06 (the budget gives). **This
+question is CLOSED:** candidate.v1 is the palette, and the
+single-algorithm fallback is retired — *Fallback disposition* under
+*Candidate compositor*.
 
 **Color palette specifications.** The exact RGB values for each palette
 family. Candidates: hand-curated by a designer; algorithmically
@@ -1256,8 +1341,11 @@ palette, what happens to existing rendered shards? Two paths: (a)
 shards always render with the algorithm version specified at chain
 time (immutable); (b) shards re-render with the latest algorithm
 (visual changes when wallet upgrades). Path (b) is simpler, path (a)
-is more "true to the data." Worth thinking about; closes during V3.x
-design review.
+is more "true to the data." **Ruled on its privacy half** — path (a),
+immutable render at the creation height — in *Spec version is chain data
+(algorithm-versioning ruling)*. What remains is enforcement of the height
+pin, blocked by name (rule 22) on Stage 5 creation heights: no height
+exists for a fixture aggregate today.
 
 ---
 

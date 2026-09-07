@@ -1000,15 +1000,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Stage 5 — `ArchivalEngine` native actor build (simulation-
   - Target: pre-genesis
 
-- **[Shard-visual — ruling B's assigned residue](design/SHARD_VISUAL_B_RESIDUE.md) — awaiting ruling.** Three
-  items the spec assigns to ruling B by name and B never closed: `time_density` admitted but consumed by nothing,
-  the post-rewire aesthetics closure, and the single-algorithm fallback's disposition.
-  - Target: pre-genesis
-  - Design round 1 written 2026-09-06 with evidence (nine fixtures at 512px and at the 128px product size).
-    Every item changes pixels, so each carries the `RENDER_REVISION` + goldens + floor-re-run cascade.
-  - NOTE: there is **no** "layered bar / θ-sensitivity re-render" item. Ruling B's three questions were all
-    executed in #631 (merged `286e12598`); that claim was mine and was false.
-
 - **[Shard-visual floor re-run trigger](V3_SHARD_VISUALIZATION.md) — STANDING, never "done".** The amended
   performance targets are regression bounds enforced by a named trigger (option (a) of *Where the bound is
   enforced*), because nothing else re-runs them.
