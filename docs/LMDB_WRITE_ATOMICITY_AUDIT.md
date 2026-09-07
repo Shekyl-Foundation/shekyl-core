@@ -375,8 +375,8 @@ and `open()` carries DRS-W10 above.
 
 ## 5c. Standalone write paths outside any block
 
-Two writers run under neither a block funnel nor a prune, and the coverage
-matrix routes to this section:
+Four writers run under neither a block funnel nor a prune, and the
+coverage matrix routes to this section:
 
 **`set_settlement_epoch_blocks_pin`** (`:5013`): an init-time write from
 `Blockchain::init` (`blockchain.cpp:652`), guarded by `is_read_only()` so an
@@ -432,6 +432,23 @@ after this tool runs, the two tables the operator asked to drop end up
 in different states, one restored and one not. That is a property of
 `open()`'s unconditional drop, not of this path, and it is DRS-W5's
 consequence rather than a new finding. **Verdict: PASS.**
+
+**`set_archival_settlement`** (`:7410`): writes one `archival_settlement`
+row through the **caller's** transaction — it does not open one. It
+guards the precondition first (`if (!m_write_txn) throw` — one of A-6's
+22 bare `std::runtime_error` sites, §9/DRS-W1), then folds the row and
+`mdb_put`s it, throwing `DB_ERROR` if the put fails. Nothing commits
+here, so a failure leaves the caller's transaction to decide: under the
+block funnel (§2) that means the batch aborts and the row never lands.
+**Verdict: PASS**, inherited from whichever transaction the caller
+holds — which is the whole content of the verdict, and the reason the
+unwired status matters: **it has no production caller**
+(`set_archival_settlement` is CEN-L8's census question — the row's spec
+names a writer that nothing invokes, and SO-D7 puts that writer in the
+slash pass rather than at epoch close). An unwired writer's atomicity is
+a claim about code nobody runs, exactly as with
+`correct_block_cumulative_difficulties` above; both are recorded so the
+Rust store ports a *decision* rather than a dormant path.
 
 **Verdict for §5c: PASS** (each path atomic in itself), with DRS-W8
 recorded, its unwired status flagged for the census, and the
@@ -573,13 +590,20 @@ copies that can drift, and the per-row "Writers" column earns its keep by
 naming what *distinguishes* one table from another. They apply to every
 row of the table that follows:
 
+- **`open()` (§5b) creates every missing declared table** —
+  `lmdb_db_open(… MDB_CREATE)` per name in the macro list, which is a
+  write to the unnamed main DB — then **drops `hf_starting_heights`**
+  (`del=1`, DRS-W5) and seeds the `properties` version row on an empty
+  database, all in one transaction. So §5b is in every row's writer set.
 - **`reset()` (§5b) writes every table it enumerates**, which is every
-  named table in the environment except the keep set (`txpool_meta`,
-  `txpool_blob`) — `mdb_drop(…, del=0)` per name, one transaction. So §5b
-  is part of every row's writer set except those two, whose rows say
-  *reset-kept*.
-- **`open()` (§5b) drops `hf_starting_heights`** on every writable open
-  (DRS-W5), and seeds the `properties` version row on an empty database.
+  named table *present in the environment* except the keep set
+  (`txpool_meta`, `txpool_blob`) — `mdb_drop(…, del=0)` per name, one
+  transaction. It is therefore in every row's writer set except three,
+  and the third is the declared/runtime distinction biting again: the
+  two keep-set rows say *reset-kept*, and **`hf_starting_heights` is not
+  there to enumerate** — `open()` deleted the database before `reset()`
+  could see the name. A rule that said "every table except the keep set"
+  would contradict DRS-W5 one line after stating it.
 
 | Table | Writers at the pin | Path § |
 | --- | --- | --- |
@@ -596,7 +620,7 @@ row of the table that follows:
 | `archival_epoch_close_log` | `process/revert_archival_epoch_close_at_height` | §2/§3 |
 | `archival_r_market` | epoch close put; `delete_…_for/before_epoch` | §2/§5a |
 | `archival_serve_credit` | `set/remove_archival_serve_credit_bit`; `delete_…_before_epoch` (prune) | §2/§3/§5a |
-| `archival_settlement` | `set_archival_settlement` (production caller = census question CEN-L8); `delete_…_for/before_epoch` | §5a/§9 |
+| `archival_settlement` | `set_archival_settlement` — caller's txn, unwired (CEN-L8); `delete_…_for/before_epoch` (prune) | §5a/§5c |
 | `archival_shard_segment` | `put_archival_shard_segment`; `revert_archival_segment_freezes`; corruption-test put | §2/§3 |
 | `archival_sigma_work` | epoch close put; `delete_…_for/before_epoch` | §2/§5a |
 | `archival_slash_applied` | `set/remove_archival_slash_applied` | §2/§3 |
