@@ -69,47 +69,90 @@ DEFINITIONS = {
     "contrib/epee/src/hex.cpp": ["to_hex::string", "to_hex::formatted"],
 }
 
-# Matched against the identifier immediately preceding an enclosing `(`.
-#
-# DIGITS ARE THE POINT. An earlier pattern used `[A-Z_]*` throughout and so
-# could not match `LOG_PRINT_L0`..`L4` or `LOG_PRINT_CCONTEXT_L*` -- everyday
-# epee wrappers -- nor `MFATAL`, `MGINFO_RED` and the other colour variants,
-# `MIDEBUG`, or `CHECK_AND_ASSERT_MES`, which logs through `LOG_ERROR`. A dump
-# added on any of those would have left this gate green. The pattern was
-# written from memory of the macro family instead of from the header that
-# defines it; `assert_macro_coverage()` below now checks it against that
-# header so the next addition cannot slip through the same way.
-#
-# Deliberately over-inclusive: `M[A-Z0-9_]*` also matches non-logging
-# identifiers. That direction is safe -- a false positive costs one allowlist
-# row with a stated bound, while a false negative is the defect this file
-# exists to prevent.
-LOGMAC_RE = re.compile(r"^(M[A-Z0-9_]*|LOG_[A-Z0-9_]*|CHECK_AND_ASSERT_MES[A-Z0-9_]*)$")
+# Headers that DEFINE logging macros. More than one, and not only epee's:
+# `LOG_ERROR_CCONTEXT` and the `*_CCONTEXT_*` family live in net_utils_base.h,
+# and some are defined inline in .inl files. That is why the pattern below
+# keeps a permissive uppercase arm rather than being generated wholesale from
+# one header -- a generated-only pattern would silently drop every macro
+# defined somewhere else.
+LOG_HEADERS = (
+    "contrib/epee/include/misc_log_ex.h",
+    "contrib/epee/include/net/net_utils_base.h",
+)
 
-# Macros epee defines that are NOT logging calls, so a coverage check must not
-# demand the pattern match them.
-NOT_LOG_MACROS = frozenset({
-    "MAX_LOG_FILES", "MAX_LOG_FILE_SIZE", "MAKE_LOGGABLE", "MLOG_SET_THREAD_NAME",
-    "MLOG_TYPE", "MCLOG_TYPE", "MLOG_FILE", "MCLOG_FILE", "LOG_TO_STRING",
-})
+# Uppercase families, deliberately over-inclusive: a false positive costs one
+# allowlist row with a stated bound, a false negative is the defect this file
+# exists to prevent. Digits matter -- LOG_PRINT_L0..L4 and
+# LOG_PRINT_CCONTEXT_L* are everyday wrappers that a `[A-Z_]*` pattern misses.
+_UPPER_ARMS = r"M[A-Z0-9_]*|LOG_[A-Z0-9_]*|CHECK_AND_ASSERT_MES[A-Z0-9_]*"
 
-LOG_HEADER = "contrib/epee/include/misc_log_ex.h"
+
+def derive_log_macros():
+    """Return the logging macros the headers define, derived from macro BODIES.
+
+    Deliberately independent of the name pattern. An earlier version of this
+    check extracted candidates using the same shape it then validated, so it
+    could only ever find macros that already matched -- it reported clean while
+    `_erro`, `_warn` and `_dbg*` (real wrappers, used in net_node.inl itself)
+    went unmatched. A check that filters by the thing it is checking cannot
+    fail.
+
+    Seeds are macros whose body reaches the logging sink directly; the fixpoint
+    then adds any macro that calls one.
+    """
+    defs = {}
+    for rel in LOG_HEADERS:
+        path = os.path.join(REPO, rel)
+        if not os.path.exists(path):
+            return None, "%s is gone; log macros can no longer be derived." % rel
+        body = io.open(path, encoding="utf-8", errors="replace").read()
+        for m in re.finditer(r"^#define\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)(.*)$",
+                             body, re.M):
+            defs[m.group(1)] = m.group(2)
+
+    log = {n for n, b in defs.items() if "el::base::" in b or "el::Level::" in b}
+    changed = True
+    while changed:
+        changed = False
+        for n, b in defs.items():
+            if n in log:
+                continue
+            if any(re.search(r"\b%s\s*\(" % re.escape(k), b) for k in log):
+                log.add(n)
+                changed = True
+    return log, None
+
+
+def build_logmac_re(names):
+    """Permissive uppercase arms plus every derived name they do not already
+    cover -- which is how the lowercase wrappers get in without matching every
+    lowercase identifier in the tree."""
+    upper = re.compile(r"^(%s)$" % _UPPER_ARMS)
+    extra = sorted(n for n in names if not upper.match(n))
+    arms = _UPPER_ARMS + ("|" + "|".join(re.escape(e) for e in extra) if extra else "")
+    return re.compile(r"^(%s)$" % arms)
+
+
+# Names that MUST appear in the derived set. If the headers are restructured so
+# the derivation stops finding them, the gate fails closed rather than deriving
+# an empty set and matching nothing (rule 47).
+DERIVATION_ANCHORS = ("MERROR", "MDEBUG", "MWARNING", "LOG_PRINT_L0", "_erro", "MFATAL")
+
+_DERIVED, _DERIVE_ERR = derive_log_macros()
+LOGMAC_RE = build_logmac_re(_DERIVED or set())
 
 
 def assert_macro_coverage():
-    """Rule 47: the gate asserts its own subject. Every logging macro epee
-    defines must be matched by LOGMAC_RE, so adding one upstream fails here
-    rather than silently widening the blind spot."""
-    path = os.path.join(REPO, LOG_HEADER)
-    if not os.path.exists(path):
-        return ["%s is gone; the macro pattern can no longer be checked "
-                "against its source." % LOG_HEADER]
-    body = io.open(path, encoding="utf-8", errors="replace").read()
-    defined = set(re.findall(r"^#define\s+(M[A-Z0-9_]*|LOG_[A-Z0-9_]*|CHECK_AND_ASSERT_MES[A-Z0-9_]*)",
-                             body, re.M))
-    missed = sorted(m for m in defined - NOT_LOG_MACROS if not LOGMAC_RE.match(m))
+    if _DERIVE_ERR:
+        return [_DERIVE_ERR]
+    missing_anchor = [a for a in DERIVATION_ANCHORS if a not in _DERIVED]
+    if missing_anchor:
+        return ["log-macro derivation did not find %s -- the headers changed "
+                "shape, so the derived set cannot be trusted."
+                % ", ".join(missing_anchor)]
+    missed = sorted(m for m in _DERIVED if not LOGMAC_RE.match(m))
     if missed:
-        return ["LOGMAC_RE does not match epee log macro(s): %s" % ", ".join(missed)]
+        return ["LOGMAC_RE does not match derived log macro(s): %s" % ", ".join(missed)]
     return []
 
 
@@ -238,7 +281,7 @@ def tracked_sources():
     out = subprocess.check_output(
         ["git", "-C", REPO, "ls-files", "src", "contrib", "tests"], text=True
     )
-    return [f for f in out.split("\n") if f.endswith((".cpp", ".h", ".inl", ".hpp"))]
+    return [f for f in out.split("\n") if f.endswith((".cpp", ".cc", ".h", ".inl", ".hpp"))]
 
 
 def read_allowlist():
@@ -287,6 +330,17 @@ void f(const blobdata &blob) {
 }
 '''
 
+# A LOWERCASE wrapper. `_erro`/`_warn`/`_dbg*` are real logging macros
+# (misc_log_ex.h) used in net_node.inl itself, and no uppercase pattern reaches
+# them -- they are matched only because the derivation adds them by name. If
+# the derivation silently returned an empty set this fixture goes red, so the
+# coverage check cannot pass vacuously.
+FIXTURE_LOWERCASE_MACRO = '''
+void f(const blobdata &blob) {
+  _erro("bad block: " << epee::string_tools::buff_to_hex_nodelimer(blob));
+}
+'''
+
 # `LOG_PRINT_L0` carries a DIGIT, which the earlier macro pattern could not
 # match. Separate fixture from the comment one: a single fixture exercising
 # both would pass whenever either fix was present.
@@ -328,6 +382,12 @@ def selftest():
         print("SELFTEST FAIL: comment-paren fixture yielded %d hits, want 1 -- "
               "an unbalanced paren inside a `//` comment is walking the paren "
               "scanner out of the log macro it is standing in" % len(cmt))
+        return 1
+    low = list(scan_text(FIXTURE_LOWERCASE_MACRO, "fixture.cpp"))
+    if len(low) != 1:
+        print("SELFTEST FAIL: lowercase-wrapper fixture yielded %d hits, want 1 "
+              "-- `_erro` is not being recognised, so the header derivation is "
+              "returning an incomplete set" % len(low))
         return 1
     dig = list(scan_text(FIXTURE_DIGIT_MACRO, "fixture.cpp"))
     if len(dig) != 1:
