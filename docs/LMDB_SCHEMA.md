@@ -370,7 +370,7 @@ Set of all consumed key images. Uses the zerokval pattern.
 The claim-era `staker_accrual` / `staker_claims` tables were **deleted with
 the claim-era C++ wire** (PR-4 retirement); staker inflow now persists
 through `archival_budget_accrual` → `archival_budget` (below). The coverage
-gate refuses a section for a table that is no longer in the live list.
+gate refuses a section for a table that is no longer in the declared list.
 
 Two staking scalars live in the [`properties`](#properties) table, not in
 a staking table — `total_bonded_atomic`, `total_burned`; see its **Known

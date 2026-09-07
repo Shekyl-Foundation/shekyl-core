@@ -4,9 +4,12 @@
 **Pin:** `dev` `2dba46537` — every claim below was verified against this tree
 **Scope:** every `BlockchainLMDB` write path at the pin: block connect, block
 pop, the transaction pool, alt blocks, the three prunes, and the store
-lifecycle (`open()`, `reset()`, `migrate()`). One coverage row per `SHEKYL_LMDB_TABLES` entry — the count
-is derived from the macro wherever it is used, never restated as a literal
-(the schema-coverage gate pins the matrix to the macro in both directions).
+lifecycle (`open()`, `reset()`, `migrate()`). One coverage row per `SHEKYL_LMDB_TABLES` entry. Counts here
+are **gate-checked, not free-standing**: where a figure is stated (§10's
+row count) the schema-coverage gate compares it against the macro's
+length in the same run that checks the rows both ways, so a drifted
+literal fails CI rather than misleading a reader. Derived figures that
+no gate can check are written as descriptions rather than numbers.
 **Goal:** confirm each logical mutation is fully contained in a single LMDB
 transaction with no partial-commit risk — and record, for the redb store's
 specification, every convention this layer keeps only in code (DRS-P0b
@@ -375,8 +378,9 @@ and `open()` carries DRS-W10 above.
 
 ## 5c. Standalone write paths outside any block
 
-Four writers run under neither a block funnel nor a prune, and the
-coverage matrix routes to this section:
+Six writers run under neither a block funnel nor a prune — four
+production paths and two test-support seams — and the coverage matrix
+routes to this section:
 
 **`set_settlement_epoch_blocks_pin`** (`:5013`): an init-time write from
 `Blockchain::init` (`blockchain.cpp:652`), guarded by `is_read_only()` so an
@@ -449,6 +453,27 @@ slash pass rather than at epoch close). An unwired writer's atomicity is
 a claim about code nobody runs, exactly as with
 `correct_block_cumulative_difficulties` above; both are recorded so the
 Rust store ports a *decision* rather than a dormant path.
+
+**Two test-support writers** complete the write-path census and are named
+here so "every write path" is a claim rather than a hope:
+`put_archival_shard_segment_raw_for_corruption_test` (`:7963`) and
+`remove_curve_tree_layer_chunk_for_corruption_test` (`:7994`). Both write
+through the caller's `*m_write_txn` behind the standard guard, so their
+atomicity is the caller's like any other write here, and both exist for a
+stated reason: the production writers funnel through `encode()` and can
+only ever leave the store consistent, so the malformed-row and
+inconsistent-layer cases are **unreachable without a bypass** — and a
+consensus rule that refuses corrupt rows cannot be tested against a store
+that cannot hold one. Their callers are unit tests only
+(`archival_substrate_lmdb.cpp`, `archival_segment_freeze.cpp`).
+
+Worth one line for the port rather than a finding: they are ordinary
+public methods, compiled into the production binary and documented
+"test-support only; no production caller" by comment alone. That is a
+convention, not a boundary. The Rust store should put such seams behind
+a `#[cfg(test)]` or a capability type, so the compiler enforces what the
+comment currently asserts — the same instinct as gating an unsound
+surface with a type rather than a docstring.
 
 **Verdict for §5c: PASS** (each path atomic in itself), with DRS-W8
 recorded, its unwired status flagged for the census, and the
@@ -585,10 +610,10 @@ R4 (which owns the hardfork machinery) to rule on; building a runtime
 census is out of this pass's scope by design:
 
 **Two writers are cross-cutting, and are stated here once rather than
-repeated down the column** — a universal fact copied into 47 rows is 47
-copies that can drift, and the per-row "Writers" column earns its keep by
-naming what *distinguishes* one table from another. They apply to every
-row of the table that follows:
+repeated down the column** — a universal fact copied into every row is a
+copy per row that can drift, and the per-row "Writers" column earns its
+keep by naming what *distinguishes* one table from another. They apply to
+every row of the table that follows:
 
 - **`open()` (§5b) creates every missing declared table** —
   `lmdb_db_open(… MDB_CREATE)` per name in the macro list, which is a
