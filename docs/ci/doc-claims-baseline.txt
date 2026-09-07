@@ -22,11 +22,24 @@
 # re-anchor or retire the claim. Same text, opposite dispositions; only the
 # second is rot, and only the second is counted here.
 #
-# Measured 2026-09-07 at dev 3cb3ecd66: 55 in live documents, against 136 in
-# records-was surfaces that are NOT counted. Of the 60 dead `wallet2.cpp`
-# citations in docs/, 54 are historical and 6 are live rot — so this is not
-# mostly a wallet-deletion burn-down, and the largest single holder is
-# RANDOMX_V2_MINING_ASYMMETRY.md with 16.
+# Measured 2026-09-07 at bd6671b91 (this branch merged with dev 1878e89d3),
+# with all cited submodules checked out: 55 in live documents, against 136 in
+# records-was surfaces that are NOT counted, for 191 dead in docs/ overall.
+# The pin is the tree the number was actually observed on, which is the whole
+# point of stating one — an earlier draft of this line pinned 3cb3ecd66, where
+# 55 was never measured.
+#
+# Of the dead `wallet2.cpp` citations THIS GATE SEES, 20 are historical and 5
+# are live rot (25 total) — so this is not mostly a wallet-deletion burn-down,
+# and the largest single holder of live rot is RANDOMX_V2_MINING_ASYMMETRY.md
+# with 16, unrelated to wallet2. An earlier draft put those at 60/54/6, which
+# was a RAW FILENAME SEARCH standing next to gate-measured totals as though the
+# two were one split. They are not the same instrument: most `wallet2.cpp`
+# mentions in docs/ are prose, not rooted `path:line` citations, so they are
+# outside this gate's scope entirely and cannot be added to or subtracted from
+# the 55. Two instruments, one sentence, is how a number stops meaning
+# anything — and the correction only sharpens the point, since live wallet2 rot
+# is 5 of 55.
 #
 # The figure was first recorded as 56, and that number was wrong in a way worth
 # keeping on the record. It was measured in a worktree where external/miniupnp
