@@ -1234,12 +1234,6 @@ namespace cryptonote
     bool m_reset_timestamps_and_difficulties_height;
     uint64_t m_long_term_block_weights_window;
     uint64_t m_long_term_effective_median_block_weight;
-    // FL round §7: the last served fee-correction C_q (SCALE fixed-point),
-    // held so a state sitting on a pow2 boundary does not flicker between
-    // steps (hysteresis lives in shekyl_fee_correction_quantized; this is
-    // only its memory). Estimate-side cache, not consensus state; 0 = none
-    // yet. Mutable because the estimate entry points are const.
-    mutable uint64_t m_fee_correction_cq{0};
     mutable crypto::hash m_long_term_block_weights_cache_tip_hash;
     mutable epee::misc_utils::rolling_median_t<uint64_t> m_long_term_block_weights_cache_rolling_median;
     epee::critical_section m_difficulty_lock;

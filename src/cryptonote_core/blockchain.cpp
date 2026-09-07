@@ -4493,28 +4493,57 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
   // C_q inputs read from the SAME sources validation uses at this state
   // (one derivation, no estimate-side re-model): tx_volume_avg over the
   // consensus window, sigma from the emission-share schedule, burn from
-  // the canonical burn curve. Hysteresis memory keeps a pow2-boundary
-  // state from flickering (§7 construction requirement; the §4.4 dwell
-  // scenarios are the acceptance gate).
-  const uint64_t tx_volume_avg = get_tx_volume_avg(db_height);
+  // the canonical burn curve.
+  //
+  // THE HYSTERESIS SEED IS DERIVED FROM CHAIN STATE, NOT REMEMBERED.
+  // An earlier draft carried the previous served value in a mutable
+  // member advanced only when this RPC happened, which made the served
+  // fee depend on the daemon's QUERY HISTORY: a freshly restarted node
+  // and a long-running one could quote different values at the same
+  // height, indefinitely, inside the band (PR #640 review). That
+  // contradicts the property the whole ladder rests on — that `C_q` is
+  // a deterministic function of public chain state, so every conforming
+  // wallet at a height derives the same rate — and it is the same
+  // hazard FL-R19's row makes binding for the clamp margin: a served
+  // value that stops being derivable from chain state manufactures the
+  // fingerprint FL-R18 established does not otherwise exist.
+  //
+  // So the band's `prev` is the snap at the PREVIOUS block's state,
+  // computed here from the DB. Every node at a height agrees, restart
+  // and reorg reconstruct for free (there is nothing to reconstruct),
+  // and the band still absorbs the single-block boundary crossing it
+  // was built for. It is weaker than path-dependent hysteresis over the
+  // full history — that would need connect-path maintenance and a
+  // reconstruction depth, which is a design question this bundle does
+  // not decide — and correspondingly it damps a one-block flicker, not
+  // a multi-block dither.
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-  const uint64_t sigma = shekyl_calc_emission_share(
-      db_height,
-      genesis_ng_height,
-      SHEKYL_STAKER_EMISSION_SHARE,
-      SHEKYL_STAKER_EMISSION_DECAY,
-      SHEKYL_BLOCKS_PER_YEAR);
-  const uint64_t burn_pct = shekyl_calc_burn_pct(
-      tx_volume_avg,
-      SHEKYL_TX_VOLUME_BASELINE,
-      already_generated_coins,
-      MONEY_SUPPLY,
-      SHEKYL_BURN_BASE_RATE,
-      SHEKYL_BURN_CAP);
-  m_fee_correction_cq = shekyl_fee_correction_quantized(
-      tx_volume_avg, sigma, burn_pct, m_fee_correction_cq);
+  const auto correction_at = [&](uint64_t height, uint64_t ag, uint64_t prev_cq) -> uint64_t {
+    const uint64_t v = get_tx_volume_avg(height);
+    const uint64_t s = shekyl_calc_emission_share(
+        height,
+        genesis_ng_height,
+        SHEKYL_STAKER_EMISSION_SHARE,
+        SHEKYL_STAKER_EMISSION_DECAY,
+        SHEKYL_BLOCKS_PER_YEAR);
+    const uint64_t b = shekyl_calc_burn_pct(
+        v,
+        SHEKYL_TX_VOLUME_BASELINE,
+        ag,
+        MONEY_SUPPLY,
+        SHEKYL_BURN_BASE_RATE,
+        SHEKYL_BURN_CAP);
+    return shekyl_fee_correction_quantized(v, s, b, prev_cq);
+  };
 
-  get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, base_reward, Mnw, Mlw_penalty_free_zone_for_wallet, m_fee_correction_cq, fees);
+  // `prev` = the unseeded snap one block back (prev_cq = 0 means "no
+  // history", i.e. the plain ceiling quantization at that state).
+  const uint64_t prev_cq = db_height > 1
+      ? correction_at(db_height - 1, m_db->get_block_already_generated_coins(db_height - 2), 0)
+      : 0;
+  const uint64_t fee_correction_cq = correction_at(db_height, already_generated_coins, prev_cq);
+
+  get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, base_reward, Mnw, Mlw_penalty_free_zone_for_wallet, fee_correction_cq, fees);
 
   // FL-R12' round-8 rider, satisfied BY CONSTRUCTION: the estimate can
   // only err toward acceptance. Where the quote is consumed as a floor it
