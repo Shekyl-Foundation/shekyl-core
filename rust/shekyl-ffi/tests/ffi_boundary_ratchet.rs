@@ -95,6 +95,14 @@ const BASELINE: &[(&str, usize, usize)] = &[
     ("legacy_tx.rs", 1, 2),
     ("levin_ffi.rs", 4, 0),
     ("pow_randomx_ffi.rs", 1, 0),
+    // Curve-tree replica (test-generator surface, 2026-09-05): one typed-slice
+    // borrow of the caller-owned tx / output arrays (`borrow<T>`, which
+    // re-owns the isize::MAX byte bound); byte reads go through
+    // `slice_from_ptr`, and there are no raw reserves.
+    ("curve_tree_replica_ffi.rs", 1, 0),
+    // tx_extra shape rule adapter (2026-09-05): one typed-slice borrow of the
+    // caller's usize arrays (`usize_slice`, isize::MAX-bounded); no reserves.
+    ("tx_extra_ffi.rs", 1, 0),
     // 5 -> 3: `read_ids` and `read_tx_ids` moved onto `slice_from_ptr`, which
     // owns the `isize::MAX` bound `from_raw_parts` requires at the language
     // level (PR #498 review). Tightened so the win cannot grow back.

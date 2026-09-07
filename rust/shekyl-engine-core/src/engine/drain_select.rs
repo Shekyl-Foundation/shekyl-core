@@ -176,8 +176,8 @@ pub(crate) fn select_for_drain(
 /// unreserved** candidate subset (the projection strips the rest before
 /// selection), so any residue summed at this stage would silently drop the
 /// immature class — a pass emptying the mature subset would then report
-/// completion while immature payouts still hold the slot (the review-1
-/// finding). The remainder is the orchestrator's, computed over the slot's
+/// completion while immature payouts still hold the slot. The remainder
+/// is the orchestrator's, computed over the slot's
 /// UNfiltered record set ([`sweep_slot_remainder`]).
 ///
 /// [`sweep_slot_remainder`]: super::drain_orchestrator
@@ -218,8 +218,8 @@ pub(crate) enum SweepSelectError {
     /// can pay, since T-DS-6 requires every tx to carry two nonzero outputs
     /// and a drain-all splits its payment into both (`PaymentUnsplittable`
     /// is the assembly's own refusal of net < 2; classifying it HERE keeps a
-    /// user-reachable dust state out of the internal-error bucket —
-    /// review-2). The named dust residual: it stays in `P`, and the funded
+    /// user-reachable dust state out of the internal-error bucket). The
+    /// named dust residual: it stays in `P`, and the funded
     /// retirement gate stays held by it, until further value matures into
     /// the slot or the fee floor moves.
     DustPool,
@@ -291,7 +291,7 @@ pub(crate) fn select_for_sweep(
     // must split the payment into two nonzero principal outputs (T-DS-6),
     // so 1 atomic unit is as unpayable as 0 — refuse it here as the named
     // dust condition rather than let the assembly's PaymentUnsplittable
-    // surface a user-reachable state as an internal fault (review-2).
+    // surface a user-reachable state as an internal fault.
     let payment = input_total
         .checked_sub(fee)
         .filter(|p| p.to_raw() >= 2)
@@ -475,8 +475,8 @@ mod tests {
         );
         // The immature candidate's residue is NOT this stage's to report:
         // production hands this function the pre-filtered mature subset, so
-        // a remainder summed here would drop the immature class (review-1);
-        // the orchestrator's sweep_slot_remainder owns the figure.
+        // a remainder summed here would drop the immature class; the
+        // orchestrator's sweep_slot_remainder owns the figure.
     }
 
     /// This bites against the sweep refusing (or panicking) at the input cap
@@ -502,7 +502,7 @@ mod tests {
     /// This bites against the dust arm collapsing into an empty selection,
     /// a zero payment, or a 1-atomic payment the two-output assembly cannot
     /// split (the caller needs the named residual, not a downstream
-    /// `PaymentUnsplittable` internal — review-2). Boundary exact:
+    /// `PaymentUnsplittable` internal). Boundary exact:
     /// `Σ == fee + 1` is still dust (net 1 < the 2-unit split floor);
     /// `Σ == fee + 2` pays 2.
     #[test]

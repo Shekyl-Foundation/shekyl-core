@@ -93,6 +93,117 @@ int chain_tip(cryptonote::Blockchain& bc, uint8_t synchronized,
   }
 }
 
+// Body of `shekyl_rpc_hard_fork_info`. A projection: it copies what
+// `get_hard_fork_voting_info` reports and resolves which version was asked
+// about. It re-expresses no voting semantics — see the header for why that is
+// a ruling (CEN-B2/B3 are bucket 4, R4 owns the subsystem).
+//
+// The version resolution is here rather than in the adapter because it is the
+// one decision on this path and it needs a chain read: "0 means the next
+// fork" is request policy, and a fixture can drive both arms of it.
+int hard_fork_info(cryptonote::Blockchain& bc, uint8_t requested_version,
+  shekyl_rpc_hard_fork_facts* out) noexcept
+{
+  if (!out)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  try
+  {
+    std::memset(out, 0, sizeof(*out));
+    const std::lock_guard<cryptonote::Blockchain> guard(bc);
+    // Resolved once and reported, so a caller can tell which fork the voting
+    // fields below describe. The C++ this replaces resolved it into a local
+    // and then reported a *different* version in the same struct.
+    const uint8_t queried =
+      requested_version > 0 ? requested_version : bc.get_next_hard_fork_version();
+    out->queried_version = queried;
+    out->active_version = bc.get_current_hard_fork_version();
+    uint32_t window = 0, votes = 0, threshold = 0;
+    uint64_t earliest_height = 0;
+    uint8_t voting = 0;
+    out->enabled = bc.get_hard_fork_voting_info(queried, window, votes, threshold,
+      earliest_height, voting) ? 1 : 0;
+    out->window = window;
+    out->votes = votes;
+    out->threshold = threshold;
+    out->earliest_height = earliest_height;
+    out->voting = voting;
+    out->state = static_cast<uint32_t>(bc.get_hard_fork_state());
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("hard fork facts: exception: " << e.what());
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("hard fork facts: unknown exception");
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
+// Body of `shekyl_rpc_fee_estimate`.
+//
+// One estimator. The C++ handler chose between two on
+// `version >= HF_VERSION_2021_SCALING`, which is `>= 1` against a chain whose
+// `HardFork` is constructed with `original_version = 1` — a tautology, so the
+// other arm was unreachable by construction. It is gone, and so is
+// `Blockchain::get_dynamic_base_fee_estimate`, which it was the only caller of.
+int fee_estimate(cryptonote::Blockchain& bc, uint64_t grace_blocks,
+  shekyl_rpc_fee_estimate_facts* out) noexcept
+{
+  if (!out)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  try
+  {
+    std::memset(out, 0, sizeof(*out));
+    // The estimator asserts this and throws; refusing here makes the bound a
+    // reported refusal rather than an exception the caller reads as internal.
+    // The caller is expected to refuse first — `shekyl_rpc_fee_grace_blocks_max`
+    // exists so it can — and this is the backstop for a caller that did not.
+    if (grace_blocks > CRYPTONOTE_REWARD_BLOCKS_WINDOW)
+    {
+      MERROR("fee estimate facts: grace_blocks " << grace_blocks
+        << " exceeds the reward window " << CRYPTONOTE_REWARD_BLOCKS_WINDOW);
+      return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+    }
+    std::vector<uint64_t> fees;
+    {
+      const std::lock_guard<cryptonote::Blockchain> guard(bc);
+      bc.get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, fees);
+      out->quantization_mask = cryptonote::Blockchain::get_fee_quantization_mask();
+    }
+    // The estimator resizes to exactly four tiers (Fl, Fn, Fm, Fh). That
+    // four-ness lives in one function and nothing else asserted it, so a
+    // derivation that returned three would have produced a silently wrong
+    // "base fee" downstream. Checked here instead.
+    if (fees.size() != 4)
+    {
+      MERROR("fee estimate facts: estimator returned " << fees.size()
+        << " tiers, expected 4");
+      return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+    }
+    for (size_t i = 0; i < 4; ++i)
+      out->fees[i] = fees[i];
+    out->fee_count = 4;
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("fee estimate facts: exception: " << e.what());
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+  catch (...)
+  {
+    MERROR("fee estimate facts: unknown exception");
+    std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
 // Body of `shekyl_rpc_block_hash_at`; see the header for why it is separate.
 int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
   shekyl_rpc_block_hash_facts* out) noexcept
@@ -153,12 +264,12 @@ int block_hash_at(cryptonote::Blockchain& bc, uint64_t height,
 }
 
 // Body of `shekyl_rpc_block_header_at`. Carries what the deleted
-// `on_get_block_header_by_height` did together with
-// `fill_block_header_response` (which the header methods still in C++ keep
-// using): one lock, the bound, the block, and every field the wire's header
-// carries.
-int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
-  bool fill_pow_hash, shekyl_rpc_block_header_facts* out) noexcept
+// `on_get_block_header_by_height` did together with the equally deleted
+// `fill_block_header_response`: one lock, the bound, the block, and every
+// field the wire's header carries. This is the only header projection left
+// in the tree; `shekyl_rpc_types::BlockHeader` is what it fills.
+int block_header_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
+  uint64_t height, bool fill_pow_hash, shekyl_rpc_block_header_facts* out) noexcept
 {
   if (!out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
@@ -175,19 +286,70 @@ int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
       const std::lock_guard<cryptonote::Blockchain> guard(bc);
       const uint64_t chain_height = bc.get_current_blockchain_height();
       out->chain_height = chain_height;
-      if (height >= chain_height)
-        return SHEKYL_RPC_FACTS_OK;  // past the tip: data, not a fault
 
-      const crypto::hash id = bc.get_block_id_by_height(height);
-      // Either failure means the store reported a height it cannot produce the
-      // block for — the same data-integrity fault `block_hash_at` reports, and
-      // the condition the C++ handler answered "can't get block by height" to.
-      if (id == crypto::null_hash || !bc.get_block_by_hash(id, blk))
+      crypto::hash id = crypto::null_hash;
+      bool orphan = false;
+      if (block_hash)
       {
-        MERROR("block header facts: chain height " << chain_height
-          << " but no block at in-range height " << height);
-        std::memset(out, 0, sizeof(*out));
-        return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        // By hash. A hash this chain does not hold is a legitimate query
+        // outcome, not a fault — the caller asked about a block that may not
+        // exist. The C++ handler this replaces answered INTERNAL_ERROR here,
+        // which made a reorg between `get_alternate_chains` and this call
+        // look like a daemon fault to the console.
+        id = *block_hash;
+        if (!bc.get_block_by_hash(id, blk, &orphan))
+          return SHEKYL_RPC_FACTS_OK;
+      }
+      else
+      {
+        if (height >= chain_height)
+          return SHEKYL_RPC_FACTS_OK;  // past the tip: data, not a fault
+
+        id = bc.get_block_id_by_height(height);
+        // Either failure means the store reported a height it cannot produce
+        // the block for — the same data-integrity fault `block_hash_at`
+        // reports, and the condition the C++ handler answered "can't get
+        // block by height" to.
+        if (id == crypto::null_hash || !bc.get_block_by_hash(id, blk))
+        {
+          MERROR("block header facts: chain height " << chain_height
+            << " but no block at in-range height " << height);
+          std::memset(out, 0, sizeof(*out));
+          return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        }
+      }
+
+      // On the hash path the height is not the caller's — it comes from the
+      // coinbase, as `block_at` takes it, and every height-keyed field below
+      // is then read at THAT height (RK-D8; §7 2026-08-23).
+      if (block_hash)
+      {
+        if (blk.miner_tx.vin.size() != 1
+          || !std::holds_alternative<cryptonote::txin_gen>(blk.miner_tx.vin.front()))
+        {
+          MERROR("block header facts: coinbase of block " << id
+            << " is not a single txin_gen");
+          std::memset(out, 0, sizeof(*out));
+          return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
+        }
+        height = std::get<cryptonote::txin_gen>(blk.miner_tx.vin.front()).height;
+        // **The guard the height path never needed.** Reached by height, the
+        // bound above makes `height < chain_height` true by construction and
+        // `depth` cannot underflow. Reached by hash, the coinbase names its
+        // own height and can name one this chain has not reached — an alt
+        // block extending past the tip is exactly that — so `depth` would
+        // wrap to near 2^64 before the height-keyed reads below threw.
+        // `block_at` already guards this; widening the selector is what makes
+        // the guard load-bearing here too, and omitting it would have been a
+        // silent underflow reachable from a single RPC argument.
+        if (height >= chain_height)
+        {
+          MERROR("block header facts: block " << id << " claims coinbase height "
+            << height << " at chain height " << chain_height
+            << "; no coherent header can be built");
+          std::memset(out, 0, sizeof(*out));
+          return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+        }
       }
 
       std::memcpy(out->hash, id.data, sizeof(out->hash));
@@ -212,11 +374,12 @@ int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
 
       // The block's reward is the sum of its coinbase outputs, and
       // `get_outs_money_amount` is this tree's one definition of that sum.
-      // NB `core_rpc_server::get_block_reward` is a private third copy of the
-      // same loop, and its name collides with the *consensus*
-      // `cryptonote::get_block_reward(median_weight, ...)`, which computes the
-      // subsidy rather than reading a block. It dies with
-      // `fill_block_header_response` in RK-5; nothing new should call it.
+      // NB the name once had three homes. `core_rpc_server::get_block_reward`
+      // was a private third copy of this loop, deleted with
+      // `fill_block_header_response`, its only caller. The two that remain are
+      // the *consensus* `cryptonote::get_block_reward(median_weight, ...)`,
+      // which computes the subsidy rather than reading a block, and
+      // `miner::get_block_reward()`, an accessor — neither is this.
       out->reward = cryptonote::get_outs_money_amount(blk.miner_tx);
 
       out->block_weight = bc.get_db().get_block_weight(height);
@@ -225,8 +388,9 @@ int block_header_at(cryptonote::Blockchain& bc, uint64_t height,
       out->nonce = blk.nonce;
       out->major_version = blk.major_version;
       out->minor_version = blk.minor_version;
-      // Reached by height, so never an alt block.
-      out->orphan_status = 0;
+      // Only the hash path can reach a block off the main chain; the height
+      // path resolves through `get_block_id_by_height` and so never can.
+      out->orphan_status = orphan ? 1 : 0;
       out->found = 1;
 
       // The long hash is computed after this scope, but its RandomX seed is
@@ -283,7 +447,7 @@ struct block_payload_owner
 };
 
 // Body of `shekyl_rpc_block_at`. Carries what the deleted `on_get_block` did
-// together with `fill_block_header_response`.
+// together with the equally deleted `fill_block_header_response`.
 int block_at(cryptonote::Blockchain& bc, const crypto::hash* block_hash,
   uint64_t height, bool fill_pow_hash,
   shekyl_rpc_block_header_facts* out_header,
@@ -1323,13 +1487,40 @@ int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
     h->rpc->get_core().get_blockchain_storage(), height, out);
 }
 
-int shekyl_rpc_block_header_at(core_rpc_handle* h, uint64_t height,
-  uint8_t fill_pow_hash, shekyl_rpc_block_header_facts* out)
+int shekyl_rpc_hard_fork_info(core_rpc_handle* h, uint8_t requested_version,
+  shekyl_rpc_hard_fork_facts* out)
 {
   if (!h || !h->rpc || !out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
+  return daemon_rpc_facts::hard_fork_info(
+    h->rpc->get_core().get_blockchain_storage(), requested_version, out);
+}
+
+int shekyl_rpc_fee_estimate(core_rpc_handle* h, uint64_t grace_blocks,
+  shekyl_rpc_fee_estimate_facts* out)
+{
+  if (!h || !h->rpc || !out)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  return daemon_rpc_facts::fee_estimate(
+    h->rpc->get_core().get_blockchain_storage(), grace_blocks, out);
+}
+
+uint64_t shekyl_rpc_fee_grace_blocks_max(void)
+{
+  return CRYPTONOTE_REWARD_BLOCKS_WINDOW;
+}
+
+int shekyl_rpc_block_header_at(core_rpc_handle* h, const uint8_t* block_hash,
+  uint64_t height, uint8_t fill_pow_hash, shekyl_rpc_block_header_facts* out)
+{
+  if (!h || !h->rpc || !out)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  crypto::hash id;
+  if (block_hash)
+    std::memcpy(id.data, block_hash, sizeof(id.data));
   return daemon_rpc_facts::block_header_at(
-    h->rpc->get_core().get_blockchain_storage(), height, fill_pow_hash != 0, out);
+    h->rpc->get_core().get_blockchain_storage(), block_hash ? &id : nullptr,
+    height, fill_pow_hash != 0, out);
 }
 
 int shekyl_rpc_block_at(core_rpc_handle* h, const uint8_t* block_hash,
@@ -1434,6 +1625,51 @@ void shekyl_rpc_blocks_by_height_free(void* owner)
 void shekyl_rpc_block_free(void* owner)
 {
   delete static_cast<daemon_rpc_facts::block_payload_owner*>(owner);
+}
+
+void shekyl_rpc_hard_fork_facts_test_fill(shekyl_rpc_hard_fork_facts* out, uint64_t seed)
+{
+  if (!out)
+    return;
+  std::memset(out, 0, sizeof(*out));
+  out->earliest_height = field_value(seed, 0);
+  out->window = static_cast<uint32_t>(field_value(seed, 1));
+  out->votes = static_cast<uint32_t>(field_value(seed, 2));
+  out->threshold = static_cast<uint32_t>(field_value(seed, 3));
+  out->state = static_cast<uint32_t>(field_value(seed, 4));
+  out->queried_version = static_cast<uint8_t>(field_value(seed, 5));
+  out->active_version = static_cast<uint8_t>(field_value(seed, 6));
+  out->voting = static_cast<uint8_t>(field_value(seed, 7));
+  out->enabled = static_cast<uint8_t>(field_value(seed, 8));
+}
+
+int shekyl_rpc_hard_fork_facts_test_check(const shekyl_rpc_hard_fork_facts* facts, uint64_t seed)
+{
+  if (!facts)
+    return -1;
+  shekyl_rpc_hard_fork_facts expected;
+  shekyl_rpc_hard_fork_facts_test_fill(&expected, seed);
+  return std::memcmp(facts, &expected, sizeof(expected)) == 0 ? 0 : -1;
+}
+
+void shekyl_rpc_fee_estimate_facts_test_fill(shekyl_rpc_fee_estimate_facts* out, uint64_t seed)
+{
+  if (!out)
+    return;
+  std::memset(out, 0, sizeof(*out));
+  for (size_t i = 0; i < 4; ++i)
+    out->fees[i] = field_value(seed, i);
+  out->quantization_mask = field_value(seed, 4);
+  out->fee_count = static_cast<uint8_t>(field_value(seed, 5));
+}
+
+int shekyl_rpc_fee_estimate_facts_test_check(const shekyl_rpc_fee_estimate_facts* facts, uint64_t seed)
+{
+  if (!facts)
+    return -1;
+  shekyl_rpc_fee_estimate_facts expected;
+  shekyl_rpc_fee_estimate_facts_test_fill(&expected, seed);
+  return std::memcmp(facts, &expected, sizeof(expected)) == 0 ? 0 : -1;
 }
 
 void shekyl_rpc_net_stats_facts_test_fill(shekyl_rpc_net_stats_facts* out, uint64_t seed)

@@ -2,7 +2,87 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **`--hide-my-port` is gone, as an option and as a capability; whether this
+  node advertises a port is now derived.** The flag expressed something the
+  node can determine for itself, and its default meant a reachability
+  downgrade required no conscious act. `get_local_node_data` now announces the
+  listening (or `--p2p-external-port`) port only where a peer could actually
+  reach us on it: the zone must support the back-ping that verifies the claim,
+  and we must accept inbound connections at all. **This also fixes a
+  divergence** — `check_incoming_connections` has always asked the second
+  question, while the announcement site asked only whether the flag was set, so
+  a node run with `--in-peers 0` announced a port that refuses every connection
+  it attracts. Operators wanting no inbound use `--in-peers 0`, which now
+  suppresses the announcement by derivation; operators wanting no p2p
+  participation at all should not run a daemon. The flag never did anything on
+  Tor or I2P, where `m_can_pingback` is false by construction. NAT'd ports are
+  handled naturally by the revised p2p rather than by an operator flag.
+
+- **PWD-B8: a p2p timer that was never driven, and two lineage-dead wire
+  structs.** `m_bad_peer_checker` (`once_a_time_seconds<43>`) had exactly one
+  occurrence tree-wide — its own declaration — and `on_idle` never called it;
+  its orphaned `m_bad_peer_check_lock` goes with it. `connection_entry_base`
+  and its `connection_entry` typedef had **zero** references anywhere, and
+  `network_address_old` only two, both in the debug size printer. Nothing
+  observable changes, because none of it was reachable; the value is that a
+  cadence constant no code reads no longer reads as a cadence to anyone
+  auditing the file.
+
+
 ### Fixed
+
+- **Consensus: the `tx_extra` PQC fields have a shape rule, and the storage
+  fail-open that hid its absence is gone (CEN-I19, S1).** A transaction whose
+  `0x07` leaf-hash field was missing, short, long or unparsable was accepted at
+  connect and the DB zero-filled `h_pqc` for the uncovered outputs — a leaf
+  whose post-quantum binding was to nothing (unspendable) and a leaf set a
+  faithful port would not have stored; the `0x06` KEM-ciphertext field had the
+  same gap, leaving a recipient unable to ever see or spend the payment. Ruled
+  by Rick 2026-09-05: with `n = vout.size()`, exactly one `0x06` of `1120·n`
+  bytes and exactly one `0x07` of `32·n` when `n > 0`, neither when `n == 0`
+  (serve-credit transactions), and duplicates are rejected because first-match
+  parsing let the same bytes mean two things. The rule lives in `shekyl-wire`
+  and reaches the daemon through `shekyl_tx_extra_pqc_field_shape`; the C++
+  adapter runs in `check_tx_semantic` (relay and block, no `kept_by_block`
+  exemption) and `prevalidate_miner_transaction`; the DB collector aborts on the
+  same shape instead of zero-filling. Red-first: every vector observed accepted
+  at all three gates before the rule. `GENESIS_TX_WIRE_FORMAT.md` §9.6a had
+  both lines wrong in mirrored ways (`0x06` "per output"; `0x07` "not
+  self-describing") — corrected under refuted-not-superseded with the
+  serializer lines that refute them. Every producer already emits both fields
+  at the full length, genesis included, so no conforming transaction changes.
+
+- **Consensus: the block header's `curve_tree_root` is now checked at
+  admission against the tip root, before the block is added (CEN-B5, S1).**
+  `handle_block_to_main_chain` compared the header against the tree root read
+  *after* `add_block` — the post-drain state — while `create_block_template`
+  fills the header from the root *before* it, the state at the block's own
+  height that the per-height record, the wallet client and the CT-2 KAT all
+  name. The two agree only when nothing matures at the block, so every
+  non-FAKECHAIN chain would have rejected block 60 (the genesis coinbase
+  matures there) and halted; the FAKECHAIN skip around the check hid it from
+  every Blockchain-level test and every `--regtest` run. The compare now runs
+  with the other header checks, after proof-of-work and before the miner-tx
+  prevalidation, and a mismatch rejects the block outright — the post-add
+  compare with its connect-then-pop arm is deleted. Observed red → green by
+  the first non-FAKECHAIN Blockchain fixture in the tree
+  (`curve_tree_header_root_check.cpp`: TESTNET, fixed difficulty 1, real
+  LMDB, block 60 rejected before and connected after). The FAKECHAIN skip
+  around the check is deleted: the core_tests generator now computes real
+  roots by replaying its own recorded chain through the Rust curve-tree
+  client, exposed to C++ as `shekyl_curve_tree_replica_*` in `shekyl-ffi`
+  (the client's parity with the daemon's store was KAT-pinned; every
+  generated block that connects is now a live cross-implementation check at
+  every height), and the fake-DB test doubles report the empty-tree sentinel
+  instead of zeros. `CurveTreeClient::next_block_root` — the one-past-tip
+  read a header producer needs — is added and pinned to the recon fixture.
+  `shekyl-ffi` gains the `shekyl-curve-tree` dependency, which brings `redb`
+  into the daemon image ahead of the daemon redb store that needs it anyway.
+  `FCMP_PLUS_PLUS.md` §5 now states the state the header commits to.
+  Register: CEN-B5 stays DIVERGENT until re-reviewed at the merged sha;
+  both its divergences are fixed.
 
 - **Consensus hardening: the curve-tree leaf collector aborts instead of
   silently dropping an output (CEN-L11/L12).** Three arms in the DB-side leaf
@@ -15,7 +95,14 @@
   Those gates carry reverse pointers warning that relaxing them surfaces as a
   connect-time abort, and a Rust falsifier asserts they accept only what the
   leaf builder can encode. The FOLLOWUPS row that described this as a live
-  fund-loss path is corrected: it was latent.
+  fund-loss path is corrected: it was latent. **Both rows are now promoted
+  CHECKED-CONFORMANT by the follow-up re-review at the merged sha** —
+  register 99 / 1 / 2 over P0f's 102-row snapshot, CEN-B5 the sole DIVERGENT
+  row. For anyone grepping history: PR #609's merge commit carries the title
+  *"register 99/1/2"*, written before that PR's round 6 withdrew the
+  promotion (withdrawn-in-PR, records-was); the register was 97 / 3 / 2 at
+  that merge and reaches 99 / 1 / 2 only with this re-review, one PR later
+  than the title claims.
 
 - **The drain byte-parity e2e pinned a fixture state that never existed.**
   `e2e_drain_wire_shape_matches_a_real_transfer` asserted the confirmed
@@ -54,6 +141,143 @@
   the FCMP++ spend builder.
 
 ### Added
+
+- **Shard-visual performance targets AMENDED (2026-09-06), and the
+  amendment changes what they assert.** **RATIFIED.** *Authority: the
+  ruling reached this work relayed, and was then confirmed by Rick
+  directly to steering on 2026-09-06 ("Shard visual B is ratified") —
+  confirmed in-channel rather than by an artifact in the tree, which is
+  where the record stands.* The ruling: the floor scores are
+  acceptable, so of budget / candidate / floor device the **budget
+  gives**. New targets, stated as *median on the floor device, warm,
+  otherwise idle* — the quantity `examples/budget_matrix.rs` actually
+  emits: 128px 350 ms, 256px 800 ms, 512px 4 s, 1024px 25 s (2× the
+  corpus-worst floor median; the originals are struck through in
+  place, refuted not superseded). Two things recorded with them:
+  (1) the originals named **no statistic and no device state**, so
+  they were never falsifiable — an unfalsifiable threshold generates
+  no failures, which is why they survived unexamined; (2) the
+  replacements are **regression bounds, not fitness bounds** — at 2×
+  the measured worst nothing the implementation does can breach them,
+  and presenting them in the old voice would ship a check that cannot
+  fail. Enforced by named trigger (any renderer / compositor /
+  entropy-draw change obliges a floor re-run; `docs/FOLLOWUPS.md`)
+  plus a new CI gate `shard-visual-x86-smoke`, whose **pass** line
+  carries its own disclaimer because a green checkmark otherwise
+  reads as "performance is fine" and cannot bound the Pi 4 floor.
+
+- **Shard-visual ruling B (measurement half): goldens, KATs, avalanche,
+  floor budget matrix — executed 2026-09-06.** Designated-reference
+  goldens committed once (the run is recorded by the generator inside
+  `tests/goldens/recipes.json` → `_reference_run`, not restated in
+  prose where it would drift; x86_64, release, and the toolchain
+  `rust/rust-toolchain.toml` pins; never regenerated by consuming
+  tests); full-recipe KATs for
+  all nine fixtures on both implementations (shekyl-dev pins a copy of
+  the same artifact); two-limb avalanche on the pixel axis (sweep min
+  RMS 34.165 ≥ floor 20). Floor-device results (skl-pi, Pi 4, thermal
+  bracket 50.6–59.4 °C at stock 1800 MHz): raster parity measured
+  **RMS = 0.000000 on all nine fixtures at 128px** (bit-identical to
+  the x86 goldens — recorded as measured, does not reopen the
+  bit-exactness retraction; 256/512/1024px parity is unmeasured, since
+  goldens exist at the one size); budget matrix **36/36 cells over
+  budget** (1.3×–6.2×; full per-fixture table committed under
+  `docs/benchmarks/`),
+  falsifying candidate.v1's fitness on the stated minimum device at
+  every tier — ruling owed among budget / candidate / floor device
+  (spec *Measurements of record*). Thresholds θ = 2.0 and floor ≥ 20
+  untouched throughout.
+
+- **Shard-visual ruling B (spec half): the layered determinism bar,
+  pre-registered thresholds, and the sensitivity correction.** Ratified
+  2026-09-05. Hash-derived structure is bit-exact forever (pinned by
+  the twin Rust/Python recipe KATs); the painted raster is held to a
+  pre-registered perceptual metric (RGB-RMS ≤ θ = 2.0, decoded pixels
+  never PNG bytes), fixed before any cross-platform measurement
+  exists. The spec's bit-equivalence prose is retracted in place with
+  its reopening criterion (a deterministic rasterizer pinned across
+  both implementations). The reorg-continuity claim is corrected, not
+  softened: it was wrong as written and in direct opposition to the
+  integrity check's purpose — the ruled property is sensitivity, with
+  a two-limb avalanche falsifier (floor ≥ 20) whose second limb is
+  what makes it a test. The floor-device budget matrix, goldens, and
+  tests are the held measurement half (FOLLOWUPS). Also restores the
+  candidate-compositor § heading eaten by an earlier edit anchor.
+
+- **DRS-P0a — LMDB table reconciliation: the pin→HEAD delta is measured,
+  registered, and gate-pinned.** The DRS design doc's Round-2 substrate
+  figures (46 tables, seven undocumented, two phantoms) had aged into
+  today's 49; P0a closes the delta by **set difference, not history
+  search** — births = 3 (both attestation-witness tables and
+  `archival_settlement`, each with owning commit and the schema
+  version-ladder as independent witness), **deaths = ∅ measured**, not
+  assumed by the total adding up. A 49-row reconciliation registry in
+  [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) records per-table
+  disposition (39 documented-at-pin + 7 since-documented + 3 born-since),
+  the pin-era doc closure (41 claimed = 39 real + 2 phantoms), and the
+  provenance trap that bit twice: a pickaxe on a bare name measures the
+  identifier *family* (`archival_settlement_epoch_at_height`, pre-pin),
+  the quoted literal measures the *table* (post-pin). The schema doc's
+  duplicate `properties`-titled heading — present since before the pin
+  and invisible to the property-row gate's set() dedup — is merged into
+  the one `properties` section, and `check_lmdb_schema_coverage.py`
+  gains the legs that would have seen all of it: section headings as a
+  duplicate-free bijection with `SHEKYL_LMDB_TABLES`, and the registry's
+  rows and stated count pinned to the same macro. Every new failure path
+  observed red before landing. DEL-005 closed; stale DRS figure sites
+  corrected with records-was pins kept.
+
+- **Shard-visual ruling A: parameter admissibility closed, with a
+  pre-registered criterion and typed enforcement.** The spec's
+  parameter design-review checkpoint had inverted — the gate existed,
+  never ran, and the borderline set it was meant to gate shipped in the
+  GUI preview, because the feature set was designed against a fake
+  chain that publishes what the real chain hides (cleartext amounts,
+  cleartext tiers). The pre-registered criterion (a feature is
+  admissible iff it is a deterministic function of data any shard
+  holder reads from held block bytes) admits `activity_density`,
+  `output_richness`, count-based `coinbase_ratio`, and `time_density`;
+  rejects the value moments (CT) and `tier_skew_high` (confidential
+  staking / the F-ARCHIVAL tier oracle); and rule-21-rejects the
+  stake-event features with a named reopening criterion.
+  `ShardAggregate` and `Features` now carry only the admitted set;
+  renderer inputs that consumed rejected features draw from their own
+  SHAKE256 namespaces at fresh indices. Companion rulings: the
+  rendering-spec version is chain data pinned at shard creation height
+  (never wallet data), and overridden renders are non-canonical by
+  type (`CandidateRecipe.canonical`). The no-tradeability
+  enforcement-point inventory is verified and codified; the
+  `shard.v1.render.*` / `candidate.v1.*` namespace families are
+  registered in the implementation index. Aesthetics closure and the
+  determinism bar are ruling B (FOLLOWUPS).
+
+- **C2-R1c — alt admission + acceptance topology: ruled, and the sync
+  orphan arm stops punishing peers for our own state.** Seven rulings
+  signed ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md)
+  §5.5): the two-tier admission contract ratified as defense economics
+  under the intervals-not-averages constraint; CEN-K1 split into its two
+  conflated conditions; K9's `relay_method::block` tolerance fixed to
+  three named producers (the third found by the ruling's own falsifier,
+  executed pre-signature); K10 ratified as-composed with M8's hash gate,
+  dependency armed; storage floors ratified with bounds routed to GAP-4
+  by name; topology ratified with belts named. **The Q3b defect fix:**
+  the sync-loop orphan arm severed and scored every connection from a
+  span's origin on a flag that means "our store lost the parent" — local
+  pops, the checkpoint-rollback discard (reachable mid-span through the
+  600 s reload), and the Q1a flip-flop discard all reach it honestly.
+  The arm now cleans up and re-walks the chain directly via the new
+  shared `request_chain_history` helper (which also retired a three-copy
+  drift set); the queue-bookkeeping-mismatch drop keeps its teeth.
+  Enforced twice: consensus-invariants **[7/7]** (whole-arm extraction,
+  full punitive token set, both failure paths observed firing) and the
+  new behavioral rig `sync_orphan_arm.cpp` (scripted-core seam, three
+  vectors: the orphan arm's no-punishment-and-healing vector and the
+  cleanup-failure-recovery vector each observed red-first on their
+  pre-fix forms, while the bookkeeping-mismatch vector stays green on
+  both trees BY DESIGN — it guards against over-correction; five
+  review rounds hardened the fix through two Bugbot HIGHs and two
+  Bugbot MEDIUMs). Census: nine rows → bucket 2, counts 86/35/5/46 = 172;
+  the R1 batch is complete and the round doc is closed to completed/.
 
 - **The staking exit is REACHABLE: `unstake` + `collect_unstaked` (PR-C —
   the composed verb, wallet-RPC + CLI).** The reachability gate held since
@@ -121,7 +345,7 @@
 
 - **C2-R1b implementation — the fork-choice/depth contract and the
   operator-checkpoint surfaces**
-  ([`CONSENSUS_C2_R1_REORG.md`](design/CONSENSUS_C2_R1_REORG.md) §4b
+  ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md) §4b
   ratified 2026-09-03, §4c execution record). The prune now writes a
   **monotonic watermark** (its durable receipt, same txn as the
   deletions; exempt from every revert), and `BlockchainDB::pop_block` —
@@ -162,14 +386,16 @@
 
 - **DRS-P0f row coverage complete — and it found both of the review's S-graded defects.** The conformance
   register disposes the **102** bucket-1/2 census rows that existed when it
-  ran: **97 CHECKED-CONFORMANT, 3 DIVERGENT, 2 failed closed** (CEN-B5's
-  rule-71 FAKECHAIN skip, which census R9 owns; CEN-L11 with CEN-L12 coupled,
-  whose fix has landed and whose promotion is owed at a merged sha). The
-  bucket-1/2 set has since grown to **111** — C2-R1b promoted nine rows on
-  2026-09-03 — and those nine are UNREVIEWED until reviewed. **Both S-graded findings ran the
+  ran: **99 CHECKED-CONFORMANT, 1 DIVERGENT, 2 failed closed** (the divergent
+  row is CEN-B5's rule-71 FAKECHAIN skip, which census R9 owns). CEN-L11 with
+  CEN-L12 coupled were fixed by PR #609 and promoted at its merged sha. The
+  bucket-1/2 set has since grown to **121** — C2-R1b promoted nine rows on
+  2026-09-03 and C2-R1c ten more on 2026-09-04 — and those nineteen are
+  UNREVIEWED until reviewed. **Both S-graded findings ran the
   full arc — found, ruled FIX, fixed, merged, re-reviewed:** the S0 (CEN-M8,
   with CEN-G4/J26) by PR #602 and the S1 (CEN-D2 with CEN-D1) by PR #604, so
-  no S-graded divergence remains and the register no longer gates DRS-0. Each
+  no S-graded divergence remained — until 2026-09-04, when CEN-B5's
+  header-check timing (S1, see the Changed entry) reopened the DRS-0 gate. Each
   row carries
   sha-pinned, arm-walked evidence and 15 routed REWRITE-NOTEs for the rebuild. The S0:
   **CEN-M8** — block connect's FCMP++ proof-skip *was* **presence-gated** where
@@ -351,7 +577,7 @@
 
 - **The per-block-checkpoint fast-sync mechanism (consensus)** — C2-R1a,
   ratified 2026-09-02
-  ([`CONSENSUS_C2_R1_REORG.md`](design/CONSENSUS_C2_R1_REORG.md) §3).
+  ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md) §3).
   Deleted whole: the compiled-in hash-of-hashes table and its loader
   (mainnet's pin was a stale inherited constant no Shekyl blob could match;
   testnet/stagenet blobs loaded with no verification), the four
@@ -411,6 +637,99 @@
   prune tool derives its table set from the schema source of truth.
 
 ### Changed
+
+- **Register: CEN-I12 re-reviewed at the merged reconciliation and promoted
+  CHECKED-CONFORMANT — 100 / 1 / 1 over P0f's 102-row snapshot.** At
+  `667817d47` all three FCMP++ verifier arms read the node's own per-height
+  record under the reference block's height, never the header, and that
+  record is the ruled state (the tree at chain height `ref_height`). The
+  verdict rests on the state definition, not the placeholder rationale slice
+  7 used. CEN-L8 is the one row still failed closed; CEN-B5 the one DIVERGENT.
+  The per-height root record is recorded as a spec-level requirement on any
+  store the rewrite uses. Register-only; no code.
+
+- **Daemon RPC: `get_block_header_by_hash`, `hard_fork_info` and
+  `get_fee_estimate` change shape; `CORE_RPC_VERSION` is now 3.27 (RK-5b).**
+  Those three plus `get_last_block_header` and `get_block_headers_range` (and
+  the `getlastblockheader` / `getblockheaderbyhash` / `getblockheadersrange`
+  aliases) are served natively from Rust. **The last two keep their response
+  shapes** — a client parses them exactly as before, and only their refusals
+  changed. **Operator impact — three replies a client parses differently.** `get_block_header_by_hash` answers **per
+  element**: `block_headers` is now an array of `{hash, block_header?}` slots
+  rather than a bare header array, so a client learns *which* hash was
+  unknown instead of receiving zero headers and an error string, and one
+  unknown hash no longer discards the other nine hundred; the request's
+  singular `hash` field is gone (it had no in-tree caller, and its only
+  effect beside `hashes` was to slip one lookup past the restricted cap of
+  1000). `hard_fork_info` splits the reply's single
+  `version` in two, and the mapping is exact: **`active_version` is that
+  field renamed** — the deleted handler always filled it from
+  `get_current_hard_fork_version()`, whatever the request asked about — and
+  **`queried_version` is new**, naming the version the `window` / `votes` /
+  `threshold` fields beside it actually describe. A client reading `version`
+  today wants `active_version`; nothing it could read before told it what the
+  voting counts were counting. `get_fee_estimate` drops the `fee` scalar,
+  which the C++ handler set to `fees[0]` and which therefore carried nothing
+  the tier array did not. Also corrected while porting: the restricted
+  header-range cap bounded `end - start` rather than the count, so a
+  restricted caller could obtain 1001 headers against a cap of 1000; and a
+  restricted caller asking for `fill_pow_hash` is now refused rather than
+  handed an empty field with status OK. `get_block_headers_range` refuses a
+  request that names no range (absent `params` or `{}`) instead of answering
+  for block 0 as the C++ did — a client that omits its heights is told it
+  omitted them — and bounds both endpoints against the chain tip before
+  reading anything, which the C++ also did and the first port did not.
+  `get_last_block_header` **refuses with `CORE_BUSY` (-9) on an
+  unsynchronized node**, where the C++ answered `status: BUSY` with a
+  zero-filled header — a shape that let a client reading the header without
+  checking the status report a fork version of 0. `hard_fork_info` no longer
+  accepts `version: 0`: it was the C++'s spelling of "absent", and omitting
+  the field is now the only way to ask about the next fork.
+
+- **The daemon console reads the DAA block target from the build, not from
+  the daemon it is talking to.** `T` is genesis-frozen and single-sourced
+  through `config/consensus_constants.json`, which generates both the C++
+  header and the Rust constant. The console previously computed its
+  block-statistics and hash-rate figures from `/get_info`'s `target`, which
+  gave one constant two sources — and over a remote connection, a source the
+  daemon controls. **Operator impact:** `shekyld status`,
+  `print_blockchain_dynamic_stats` and `alt_chain_info` now print a warning
+  when the daemon reports a different target, naming both values, and compute
+  from this build's. A daemon reporting a different `T` is running different
+  consensus rules, so this most likely means a mismatched binary or a
+  different chain.
+
+- **FCMP++ spec: the membership anchor is a state property, not a header
+  read (CEN-I12 reconciled).** `FCMP_PLUS_PLUS.md` §7 step 2's prose said the
+  verifier reads the reference block's header `curve_tree_root`; that was the
+  pre-2026-04-13 code, replaced by the per-height root record (`292c00aff7`)
+  without the prose following. Ruled: the anchor is the curve-tree state at
+  chain height `ref_height` — after the reference block's parent connects,
+  before its own drain (boundary corrected on review) — with the header
+  field and the per-height record as its two witnesses; the verifier reads
+  its own record, the prover reads the header. The in-code FAKECHAIN
+  comment is a consequence, not the rationale. Step 1's rationale also drops
+  the retired claim-era staked-maturity arm (CEN-L12). Found-not-ruled: step
+  2b/2c's depth pseudocode is split the same way (routed to CEN-I13). The
+  register's CEN-I12 row stayed failed-closed until re-reviewed at the merged
+  sha — promoted 2026-09-05, see the entry above.
+
+- **CEN-B5 has a second, live divergence — the post-connect header-root
+  check compares the wrong state (S1; found, graded and routed — not fixed
+  here).** `handle_block_to_main_chain` compares the header `curve_tree_root`
+  against the root read *after* `add_block`, but `create_block_template`
+  fills the header from the root *before* the add — the state at chain
+  height N that the per-height record, the wallet client and the CT-2 KAT
+  all name. The operands differ at every block where a leaf drains, observed
+  on real LMDB by a new keying pin in `archival_substrate_lmdb.cpp`; the
+  genesis coinbase drains when block 60 connects, so mainnet/testnet/stagenet
+  would reject block 60 and halt (derived; no non-FAKECHAIN fixture exists to
+  observe it). The rule-71 skip R9 owns is the cause, not the context:
+  nettype gating the check left every test and every `--regtest` run blind
+  to it. Fix-or-accept is Rick's (DRS
+  §7.2); FOLLOWUPS carries the sketch. The "no S-graded divergence remains"
+  claim is withdrawn at every surface it reached; DRS-0 is gated again.
+  *(Fixed 2026-09-05 — see the CEN-B5 entry under Fixed above.)*
 
 - **Consensus: the block-timestamp rule is ratified and single-sentence
   (C2-R3, `docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md`, ratified

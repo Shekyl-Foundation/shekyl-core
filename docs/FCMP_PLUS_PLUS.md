@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-15
+> **Last updated:** 2026-09-04 (§7 step 2 anchor source reconciled — CEN-I12; step 1 rationale's retired staked arm removed — CEN-L12)
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -223,11 +223,16 @@ in `tx_extra.h`). The payload is a single `blob` of **N × 32** bytes:
 order**.
 
 The curve tree insertion code (`collect_outputs` in `blockchain_db.cpp`)
-extracts these hashes and commits them as the 4th leaf scalar. If the tag
-is absent (pre-existing outputs before this feature), a 32-byte zero
-placeholder is used. This field is emitted by both `construct_miner_tx`
-(coinbase) and `create_claim_transaction` (claim), and by the regular
-wallet transfer path.
+extracts these hashes and commits them as the 4th leaf scalar. The field is
+**consensus-mandatory** (CEN-I19, ruled 2026-09-05): admission rejects any
+transaction with outputs that does not carry exactly one `0x07` of exactly
+`N × 32` bytes (and exactly one `0x06` of `N × 1120`), and the collector
+aborts rather than substituting a placeholder — on a v3-from-genesis chain
+there are no pre-feature outputs. (Until 2026-09-06 an absent or short field
+was zero-filled into the leaf: a leaf bound to nothing, unspendable, and a
+leaf set a faithful port would not have stored.) This field is emitted by
+both `construct_miner_tx` (coinbase) and `create_claim_transaction`
+(claim), and by the regular wallet transfer path.
 
 ### Coinbase KEM self-encapsulation
 
@@ -262,8 +267,24 @@ The `prunable_hash` covers `fcmp_pp_proof`, `curve_trees_tree_depth`,
 ## 5. Block Header Commitment
 
 Each block header contains a `curve_tree_root` field (`crypto::hash`,
-32 bytes) that commits to the state of the curve tree after processing
-all transactions in the block.
+32 bytes) that commits to the state of the curve tree **at the block's own
+height** — after its parent connected and before the block's own drain: the
+state the block was built on, which the template reads at fill time, the
+node's per-height record stores under the block's height, the wallet client
+names as `drained_through = N − 1`, and the CT-2 KAT pins at height 61. The
+connect check compares the field against that state **at admission, before
+the block is added**; a mismatch rejects the block outright, never
+connect-then-pop.
+
+> **Ruled 2026-09-05 (fix authorized by Rick; census §7 #18).** This section
+> previously said "after processing all transactions in the block", a state
+> neither the template nor the client ever named, and the connect check
+> compared the field against the root read *after* the add — so the two
+> witnesses disagreed at every block where a leaf matures and every real
+> nettype would have halted at height 60 (the S1 of §7 #17). The check now
+> runs before the add against the tip root, on every nettype — the
+> FAKECHAIN skip around it was retired in the same PR once the test
+> generator computed real roots through the Rust curve-tree client.
 
 ### Serialization
 
@@ -284,8 +305,12 @@ A mismatch rejects the block.
 
 ### RPC Exposure
 
-The `block_header_response` RPC response includes `curve_tree_root` as a
-hex string.
+Every block-header reply carries `curve_tree_root` as a hex string. The wire
+type is `shekyl_rpc_types::BlockHeader` (`rust/shekyl-rpc-types/src/chain.rs`),
+shared by `get_block_header_by_height`, `get_block_header_by_hash`,
+`get_block_headers_range`, `get_last_block_header` and `get_block`. It
+replaced the C++ `block_header_response`, deleted in RK-5b — an implementer
+sent to that name would find nothing.
 
 ### `get_curve_tree_path` JSON-RPC
 
@@ -436,8 +461,9 @@ Constants from `cryptonote_config.h`:
 
 > **Design rationale (MIN_AGE = 5):** Maturity is enforced by universal
 > deferred tree insertion: outputs only enter the curve tree after their
-> type-specific maturity period (coinbase: 60 blocks, regular: 10 blocks,
-> staked: max(effective_lock_until, 10 blocks)).  MIN_AGE therefore only needs to
+> type-specific maturity period (coinbase: 60 blocks; every other output: 10
+> blocks — the claim-era "staked" arm was retired with the confidential-staking
+> cutover and never existed in code, CEN-L12).  MIN_AGE therefore only needs to
 > provide a reorg safety margin — 5 blocks (~10 minutes) is sufficient
 > to ensure the referenced tree state is stable.
 
@@ -452,9 +478,37 @@ Constants from `cryptonote_config.h`:
 The tree root and depth at `referenceBlock` height anchor the proof. A
 mismatch in `curve_trees_tree_depth` is a consensus failure.
 
-The per-block tree root is stored in the block header's `curve_tree_root`
-field. The `check_tx_inputs` code retrieves it via
-`m_db->get_block_header(rv.referenceBlock).curve_tree_root`.
+**What the anchor is (ruled 2026-09-04, CEN-I12).** The anchor is the
+curve-tree state **at chain height `ref_height`**: the tree as it stands
+after `referenceBlock`'s *parent* connects and before `referenceBlock`'s own
+drain — a property of chain state, not of any one place that state is
+written down. Every existing keying names that one state: the reference
+block's header `curve_tree_root` was filled from it at template time
+(`blockchain.cpp:2006`), the per-height record stores it under key
+`ref_height` (written by the parent's connect under post-add keying,
+`blockchain_db.cpp:636`), the wallet client names it `drained_through =
+ref_height − 1` (`shekyl-curve-tree/src/client.rs:908`), and the CT-2 KAT
+pins it at height 61. Two witnesses of it therefore exist — the header
+field (the block's *attestation*) and the node's own per-height record —
+and CEN-B5 is the consensus check that binds them (§5): at admission,
+before the block's own drain, the header must equal the tip root. Until
+2026-09-05 that binding held on no nettype — skipped on FAKECHAIN and,
+everywhere else, comparing the header against the root *after* the drain
+(census §7 #17, S1, fixed in §7 #18) — so the two witnesses agreed only
+because the template filled the header honestly. Today it holds on every
+nettype. One more reason
+the verifier reads its **own computed record**, never the header; a rewrite
+does the same in whatever form its store keeps that record. The prover holds no
+store and reads the header ([`CURVE_TREE_CLIENT.md`](design/CURVE_TREE_CLIENT.md) §3.3); today its only
+protection is its own leaf recompute against that header (`verify_root`
+refuses to build against a root it cannot reproduce), and B5 is the
+consensus-side binding of that header on every real nettype. The two reads
+name one value on every network, and B5 binds them on every one, so nothing
+makes the choice observable.
+
+*Reconciled 2026-09-04:* this paragraph previously narrated a header read
+the code stopped performing on 2026-04-13; the archaeology and the ruling
+are in [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) §7 #16.
 
 ### Step 3: Input Structural Checks (FCMP++ Specific)
 

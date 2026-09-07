@@ -46,4 +46,4 @@ pub use params::{
     calc_stake_ratio, EconomicParams, EconomicParamsError, BLOCKS_PER_YEAR, CALIBRATION_GENERATION,
     MONEY_SUPPLY, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
-pub use release::calc_release_multiplier;
+pub use release::{apply_release_multiplier, calc_release_multiplier};

@@ -616,19 +616,17 @@ namespace cryptonote
     static uint64_t get_dynamic_base_fee(uint64_t block_reward, size_t median_block_weight, uint8_t version);
 
     /**
-     * @brief get dynamic per kB or byte fee estimate for the next few blocks
+     * @brief the four-tier estimate with its inputs supplied rather than read
      *
-     * The dynamic fee is based on the block weight in a past window, and
-     * the current block reward. It is expressed by kB before v8, and
-     * per byte from v8.
-     * This function calculates an estimate for a dynamic fee which will be
-     * valid for the next grace_blocks
+     * Same computation as the overload below, for a caller that already holds
+     * the block reward and the two weight medians.
      *
      * @param grace_blocks number of blocks we want the fee to be valid for
-     *
-     * @return the fee estimate
+     * @param base_reward the block reward to price against
+     * @param Mnw the median of the short-term weight window
+     * @param Mlw the penalty-free zone the wallet sees
+     * @param fees out: the four tiers, low to high
      */
-    uint64_t get_dynamic_base_fee_estimate(uint64_t grace_blocks) const;
     void get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, uint64_t c_q, std::vector<uint64_t> &fees) const;
 
     /**

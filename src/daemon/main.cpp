@@ -35,6 +35,7 @@
 #include "common/scoped_message_writer.h"
 #include "common/util.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "cryptonote_protocol/levin_notify.h"
 #include "cryptonote_basic/miner.h"
 #include "daemon/command_server.h"
 #include "daemon/daemon.h"
@@ -115,6 +116,7 @@ int main(int argc, char const * argv[])
 
       // Hidden options
       command_line::add_arg(hidden_options, daemon_args::arg_command);
+      command_line::add_arg(hidden_options, daemon_args::arg_carrier_development);
 
       visible_options.add(core_settings);
       all_options.add(visible_options);
@@ -309,6 +311,31 @@ int main(int argc, char const * argv[])
 
     // logging is now set up
     MGINFO("Shekyl '" << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL << ")");
+
+    /* THE CARRIER OPT-IN, and it is read HERE for two reasons.
+
+       After `mlog_configure`, because arming it changes this node's network
+       posture and the warning below is the only thing that says so — read it
+       before logging exists and the operator gets silence. And before the
+       daemon is constructed, because the flag is process-wide state that
+       `make_relay_zone` consults as each zone is built; set it after and the
+       zones are already made.
+
+       No `else` branch: OFF is the default in every build and needs no
+       announcement. See `COVER_TRAFFIC_RESTORATION.md` §3.1 for why this is a
+       development switch rather than a product one, and §3.1c for the
+       measurement it exists to make runnable. */
+    if (command_line::get_arg(vm, daemon_args::arg_carrier_development))
+    {
+      cryptonote::levin::set_carrier_development(true);
+      MWARNING("--" << daemon_args::arg_carrier_development.name
+               << " is set: the Dandelion++ noise carrier is ARMED on every "
+                  "encrypted zone. This node now emits sustained cover traffic "
+                  "(~16 KiB/s, ~42 GB/month) it does not emit by default, and "
+                  "its traffic profile differs from an unarmed node's. This is "
+                  "a DEVELOPMENT switch for the COVER_TRAFFIC_RESTORATION.md "
+                  "§3.1c measurement, not an operator setting.");
+    }
 
     // If there are positional options, we're running a daemon command
     {

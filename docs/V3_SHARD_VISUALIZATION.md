@@ -21,8 +21,7 @@ The crate (`shekyl-shard-visual`) is referenced by:
 `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 — Engine architecture*
 (domain-primitive library crate, "stays as-is" in the rename scope);
 `docs/V3_STAKER_ARCHIVAL.md` (companion archival design that produces
-the shards); `docs/FOLLOWUPS.md` V3.x no-tradeability invariant
-codification.
+the shards).
 
 **Author / decision context:** Emerged in Phase 1 wallet-rewrite
 session (2026-04-26) while exploring gamification of the shard
@@ -113,26 +112,40 @@ designed.
 
 **The discipline: visualizations exist because they make archival
 legible, and for no other reason.** Anything that turns them into a
-separate economic asset breaks the model. The no-tradeability
-invariant is tracked in `docs/FOLLOWUPS.md` (V3.x — *No-tradeability
-invariant codification*) as a placeholder for the enforcement-point
-inventory that lands when archival/visualization implementation
-begins.
+separate economic asset breaks the model. The enforcement-point
+inventory below codifies the invariant (verified against landed code
+2026-09-04; the FOLLOWUPS placeholder that scheduled it is removed
+per rule 95 — resolved items are removed).
 
-Concrete enforcement:
+Concrete enforcement — **inventory verified against landed code
+2026-09-04** (the FOLLOWUPS placeholder's trigger, "when implementation
+begins", fired with the crate's first landing; this closes it):
 
 - `shekyl-shard-visual` library API surface has no functions that
   mint, register, sign, or otherwise endorse an instance of a
   visualization. Pure
-  `(shard_content) -> deterministic_image` only.
+  `(shard_content) -> deterministic_image` only. *(Verified: no
+  mint/transfer/register/owner symbol in `shekyl-shard-visual` or
+  `shekyl-shard-source`.)*
 - Wallet/daemon RPC surface has no methods that "own," "transfer,"
-  "claim," or "register" visualizations.
-- Wallet UI has no "trade" button on shard visuals.
+  "claim," or "register" visualizations. *(Verified: the RPC surfaces
+  have no visualization methods at all; their only shard references
+  are archival-assignment errors.)*
+- Wallet UI has no "trade" button on shard visuals. *(Cross-repo
+  claim, verified in the companion `shekyl-gui-wallet` repository —
+  `src/components/staking/ShardIdentityPreview.tsx` has no
+  trade/sell/transfer affordance; reproducible there, not from this
+  tree.)*
 - No wire format for transferring shard visual ownership.
-- No on-chain registry of who "owns" a visual.
-- Anyone running an archival client can render any shard's visual at
-  any time (no scarcity of *rendering*; scarcity is in *active
-  archival*).
+  *(Verified: `ShardSummary` / `ShardRenderHandle` carry no owner.)*
+- No on-chain registry of who "owns" a visual. *(None exists.)*
+- Anyone holding a shard can render its visual at any time (no
+  scarcity of *rendering*; scarcity is in *active archival*; complete
+  shards are visible only to their holders, per ruling A's criterion).
+
+A future PR that adds any such surface re-opens this inventory by
+construction; the verification is a statement about the tree at the
+date above, not a permanent property.
 
 If a community proposal in V3.x or beyond suggests adding tradeability,
 it gets evaluated against the simulation work that validated the
@@ -173,31 +186,365 @@ from the shard's content. Critically, **parameters are derived from
 properties that are already public** — never from anything that wallet
 privacy depends on.
 
-Candidate derived properties (all public, all computable by anyone
-holding the shard):
+Candidate derived properties, with their ruling-A dispositions
+(*Parameter admissibility* below; the original draft called all of
+these "public", which the sweep found untrue of the real chain):
 
-- Shard hash (256 bits, uniformly distributed)
-- Block count in shard
-- Transaction count (aggregate)
-- Time range (first block timestamp to last block timestamp)
-- Output count (number of new outputs created in the shard's block range)
-- Stake event count (stakes created, stakes claimed)
-- Distribution moments of output values (mean, variance — aggregate
-  statistics only, not individual values)
+- Shard hash (256 bits, uniformly distributed) — **admitted**
+- Block count in shard — **admitted**
+- Transaction count (aggregate) — **admitted**
+- Time range (first block timestamp to last block timestamp) — **admitted**
+- Output count (new outputs in the shard's block range) — **admitted**
 - Coinbase ratio (proportion of outputs from miner emission vs. user
-  transactions)
+  transactions; count-based) — **admitted, derived from counts**
+- Stake event count (stakes created, stakes claimed) — **rejected for
+  now** (rule 21; no ratified holder-readable surface yet)
+- Distribution moments of output values — **rejected** (CT hides user
+  output amounts; not computable from held bytes)
 
-These are aggregate, public, and chain-derived. None of them leak
-individual transaction information or undermine FCMP++'s privacy
-properties. Worth verifying explicitly during V3.x implementation that
-the chosen parameter set doesn't accidentally encode anything sensitive
-— this is a design-review checkpoint.
+The design-review checkpoint this list anticipated has run: it is
+ruling A's sweep, below.
 
 The shard hash provides the bulk of the "uniqueness" entropy. The
 content-derived properties make the visual *say something true* about
 the shard rather than being a pure hash visualization. A shard from a
 high-activity chain period looks visibly different from a quiet-period
 shard; experienced stakers learn to read this.
+
+## Parameter admissibility (ruling A)
+
+### The admissibility criterion (pre-registered 2026-09-04)
+
+This criterion is registered **before** the feature-by-feature sweep, so
+that every feature is judged against the same standard rather than one
+derived while walking the list. It is the design-review checkpoint from
+*Privacy considerations* below, stated as a testable rule:
+
+> **A feature is admissible iff it is a deterministic function of data
+> any holder of the shard can read from the shard's serialized blocks —
+> no key, no wallet state, no holder-specific privilege — so that a
+> rendering publishes nothing about the shard that holding the shard
+> does not.**
+
+Two clarifications that do work:
+
+- **"Holder" is the population, not the network.** Complete shards are
+  visible only to those who hold them (or otherwise have them on their
+  machine); the criterion is *holder-computability from held block
+  bytes*, not queryability over the network. This matches the original
+  framing ("computable by anyone holding the shard") and is what makes
+  the rendering an integrity check between holders.
+- **Aggregation is a design preference, not the privacy criterion.**
+  Features should be shard-wide aggregates for legibility and
+  continuity, but aggregation is neither necessary nor sufficient for
+  admissibility — an aggregate over data the chain hides (e.g. a mean
+  of confidential amounts) fails the criterion however aggregated.
+
+### The closed-world artifact property
+
+The criterion above is the feature-level application of a closed-world
+rule over the whole rendering:
+
+> **A rendering is a deterministic function of
+> (shard content, spec version) — and of nothing else.**
+
+The *and of nothing else* is load-bearing: any future input to the
+rendering — a new feature, a wallet setting, a locale, a device
+property — is a violation **by default** and must pass this section's
+criterion (and re-ratify this section) to be admitted. The burden runs
+toward exclusion; nothing is grandfathered by being convenient.
+
+### The sweep (2026-09-04) — verdicts on the shipped feature set
+
+**Root cause, first, because it explains how the checkpoint inverted
+without anyone noticing:** the feature set was designed against the
+`shekyl-dev/visualization/` fake chain, which *publishes things the
+real chain hides* — cleartext output amounts, cleartext stake tiers.
+Every feature looked public in the explorer because the explorer's
+chain made it public. This is a corpus-fidelity defect, not reviewer
+negligence, and the criterion above is stated against *held real block
+bytes* precisely so the fake chain can never again stand in for the
+real one in an admissibility argument.
+
+Verdicts on the nine features `features_from_aggregate` computed, plus
+the two aggregate fields that were not features:
+
+| Feature / field | Verdict | Ground |
+|---|---|---|
+| `activity_density` (tx per block) | **ADMIT** | tx and block counts are in held block bytes |
+| `output_richness` (user outputs per tx) | **ADMIT** | output counts are in held block bytes; coinbase txs are structurally distinguishable |
+| `coinbase_ratio` | **ADMIT, as a derived feature** | count-based (`coinbase_output_count / output_count`); computed in `features.rs` from the two counts — the redundant wire field on `ShardAggregate` is deleted (one value, one meaning) |
+| `time_density` | **ADMIT** | block timestamps are in held block bytes (currently unconsumed by candidate.v1; whether it drives aesthetics is ruling B's call) |
+| `value_magnitude`, `value_dispersion` | **REJECT** | user output amounts are Pedersen commitments (CT; `docs/FCMP_PLUS_PLUS.md`). Even a holder of every byte of the shard cannot compute value moments without recipient keys — the criterion fails at computability, before any leak analysis is needed |
+| `tier_skew_high` (from `tier_distribution`) | **REJECT** | stake tier is confidential-staking material: the F-ARCHIVAL resolution adopted tier-neutral shard pricing *specifically to kill the portfolio tier oracle* (`docs/V3_STAKER_ARCHIVAL.md`), and post-F0 the tier is not in block bytes. Rendering it would re-expose what that redesign deliberately removed |
+| `stake_intensity`, `claim_create_ratio` | **REJECT-NOW, reopening criterion named** (rule 21) | no ratified consensus surface makes per-shard stake-create or claim event counts a holder-readable quantity today (principal-stake lifecycle is mid-design-round; the reward-emission leg is unbuilt). Re-admit — by re-ratifying this section — when the respective surface lands and its per-shard event count is readable from held shard bytes |
+| `dominant_regime` | **not chain data** | fake-chain corpus classifier; moved off `ShardAggregate` onto the fixture type (`PreviewFixture`), where corpus annotation belongs |
+
+Enforcement is in the same change as this text: `ShardAggregate` now
+carries only `shard_id`, `shard_hash`, and the admitted counts and
+timestamps; `Features` carries only the four admitted scalars. Renderer
+inputs that consumed rejected features now draw from the renderer's own
+SHAKE256 structural namespace at previously-unused indices (hash-derived,
+so they publish nothing and per-shard visual diversity is preserved);
+the resulting aesthetics are ruling B's to close.
+
+### Spec version is chain data (algorithm-versioning ruling)
+
+The "Algorithm versioning" open question below is ruled on its privacy
+half: **the rendering-spec version is chain data — an activation height
+— never wallet data.** A shard renders under the spec version active at
+its creation height, immutably (path (a)).
+
+The discriminator is this document's own property 1 (the visual
+integrity check): under re-render-with-latest (path (b)), a stale
+wallet and an upgraded wallet mismatch on the *same* shard throughout
+every upgrade window — the integrity signal false-alarms exactly when
+the network is paying attention to versions. Under (a), an old wallet
+shows an explicit "newer spec" placeholder for a post-upgrade shard and
+never a wrong picture. Path (b) would also make every shared image a
+fingerprint of the sharer's wallet version, violating the closed-world
+property (a rendering would be a function of wallet state). Cost of
+(a): conforming implementations carry superseded renderers; spec
+versions are expected to be rare enough that this is bounded.
+
+Enforcement of the height pin lands with the Stage 5 cutover, when
+shards acquire creation heights — the named blocker (rule 22): no
+height exists for a fixture aggregate, and only one spec version
+exists today. What lands now is the operand: every `CandidateRecipe`
+carries `spec_version` (`"candidate.v1"`), so exports are
+self-describing and the future comparison has its field.
+
+### Overridden renders are visibly non-canonical (hash-override ruling)
+
+The preview tweak path (`hash_override`, structural overrides,
+synthetic feature vectors) produces **viewer-chosen artifacts, not
+chain state**. That category is acceptable *because it is stated*: an
+override render indistinguishable from a canonical one would poison
+the same integrity check the feature exists to serve. Enforcement is
+typed, not conventional, and unforgeable from outside the crate
+(review #617): `RenderParameters`' fields are crate-private, its
+constructors decide `canonical`, and the only public mutation
+(`push_structural_override`) can weaken the claim but never restore
+it. `CandidateRecipe.canonical` derives from
+`RenderParameters::is_canonical`, so every exported recipe carries the
+marker — and the PNG bytes themselves carry it too: every render stamps
+`tEXt` provenance chunks (`shekyl.spec_version`, `shekyl.canonical`),
+so a saved file stays self-describing with no recipe attached. The one
+render entry point (`render_candidate_png_from_params`) derives pixels,
+chunks, and recipe from the same parameter bundle, so they cannot
+disagree.
+
+**Scope of the claim (one value, one meaning).** `canonical` attests
+the *render pipeline's* provenance: the pixels were derived from the
+aggregate handed to the constructor, unmodified, with no override and
+no synthetic input. It does not attest that the aggregate is truthful
+chain data — the renderer is a pure function and cannot know; that
+binding belongs to the layer that produces aggregates
+(`shekyl-shard-source` rejects a stale handle whose hash disagrees
+with the resolved aggregate today; `ArchivalEngine` supplies verified
+shards at Stage 5). Asking the render layer to verify its input
+against the chain would put a chain-integrity check at a
+pure-function boundary that has no chain access — the same
+wrong-layer shape as demanding wire properties of a seal-admission
+check.
+
+## Rendering determinism and empirical closure (ruling B)
+
+Ratified 2026-09-05 (all three questions as packaged, corrections in
+force). The measurement half — goldens, KATs, the avalanche test, the
+floor-device budget matrix — **was executed 2026-09-06**; see
+*Measurements of record* below. This section remained its
+precondition, because the thresholds below are
+**pre-registered**: they were fixed before any cross-platform run
+produced a number, and they may change only by a recorded amendment
+citing the measurement that motivated it, never by quiet retuning. A
+threshold set after the measurement would be whatever the measurement
+happened to yield.
+
+### The layered determinism bar
+
+The derivation splits into two layers with different natural bars, and
+the ruling commits to both rather than averaging them:
+
+- **Hash-derived structure — bit-exact, forever.** The SHAKE256 draws,
+  palette and algorithm assignment, opacity quantization, and the
+  whole `CandidateRecipe` are integer/quantized arithmetic. They are
+  bit-exact across platforms and across implementations today, pinned
+  by the twin Rust/Python golden-recipe KATs (same literals on both
+  sides). Falsified by any recipe field differing on any platform or
+  implementation.
+- **Raster — perceptual, against committed goldens.** The renderer
+  interiors use `f64` transcendentals whose last-ulp behaviour is
+  platform-dependent; the bar for the painted pixels is a
+  pre-registered metric, not byte equality.
+
+**The oracle's axis is decoded pixels, never PNG file bytes.** The PNG
+container passes through the encoder's compression, adaptive
+filtering, and the ruling-A provenance `tEXt` chunks — a byte
+comparison would measure the compressor, not the picture. Every
+raster comparison decodes first.
+
+**Pre-registered raster metric and threshold.** The metric is
+per-pixel RGB root-mean-square distance: decode both images to RGB8 at
+identical dimensions, RMS over all pixels and channels, on the 0–255
+scale. The threshold is **θ = 2.0**. Reasoning, registered with it:
+the pipeline is exact everywhere except renderer-internal
+transcendentals, so cross-platform divergence can enter only as
+isolated boundary-rounding jitter — a coordinate rounding differently
+on rare pixels — which leaves almost every pixel identical and RMS
+well under 1. The defect classes the oracle exists to catch sit an
+order of magnitude above: a wrong palette shifts the whole image
+(RMS ≈ 30+), a dropped element (the class round 3 actually found —
+the unfilled edge outlines) or a wrong structural draw moves several
+percent of pixels at large deltas (RMS ≈ 10–20). θ = 2.0 splits the
+gap with roughly an order of magnitude of margin on each side. If an
+honest cross-platform run exceeds θ, that is a finding to adjudicate
+in the open — amend this section with the measurement attached — not
+a dial to turn.
+
+**Goldens are committed once, from a designated reference run** (named
+implementation, named architecture, named commit), and are never
+regenerated by the tests that consume them. Both implementations pin
+to the same committed artifact — never to each other at runtime. A
+parity test whose reference is the port under test proves nothing;
+that is how the dropped edge outlines stayed invisible.
+
+### Retraction, with its reopening criterion
+
+The bit-equivalence claims in *Implementation notes* below (struck
+through in place, not deleted) are **retracted**: the shipped
+transcendental-float renderers cannot produce bit-equivalent rasters
+across x86/ARM/WASM, and rewriting a non-consensus aesthetic surface
+in fixed-point buys nothing the layered bar does not. **Reopening
+criterion (rule 21):** the claim becomes ratifiable again if a
+deterministic rasterizer is ever pinned across both implementations —
+that event, and nothing softer, reopens this decision. Standing
+invariant either way: no protocol or reward surface may ever consume
+a rendering; if one ever proposes to, bar (a) must be revisited first.
+
+### Sensitivity, not continuity
+
+*Reorg behavior* below previously promised that small reorgs produce
+small visual changes. **That text was wrong as written, not merely
+imprecise**: it was authored for the retired single-algorithm design
+and was never carried into candidate.v1, under which palettes,
+opacities, and structural draws all derive from the shard hash through
+SHAKE256 — one changed block avalanches the hash and the whole
+picture. More importantly, continuity and integrity-detection are in
+**direct opposition** here: a rendering whose job is making corruption
+visible should have maximal sensitivity, and the old text asked for
+the property that defeats the feature's purpose — implemented, it
+would have been a silent-corruption hazard. The ratified property is
+**sensitivity**: any change to shard content produces a large, obvious
+visual change; magnitude carries no information.
+
+**Avalanche falsifier, both limbs pre-registered.** Flip one bit of a
+fixture's shard hash and render both: the raster metric must show a
+distance **≥ 20** (the pre-registered floor, same amendment
+discipline as θ). The second limb is what makes this a test rather
+than a demonstration: if any two adjacent hashes ever render
+near-identical pictures, the property is falsified — and the first
+limb alone would pass against a broken renderer that ignores its
+input entirely, since any hash function avalanches whether or not the
+pixels listen to it.
+
+### Floor-device budget (measured 2026-09-06: falsified at every tier)
+
+The *Performance targets* below are provisioned at the floor device
+(`rule 76`: Pi 4), measured **on the floor only**. An x86 measurement
+cannot bound the floor in either direction: measured per-term x86:A72
+ratios span 3.86×–12× **with one axis changing sign**, so no single
+scaling factor exists. Falsifier: any (fixture, size) cell over budget
+on the floor falsifies candidate.v1's fitness at that tier, with this
+document's stated consequence (drop or restrict what misses; the
+single-algorithm fallback remains the documented escape). The
+thresholds were the targets already printed below, which predate the
+measurement. **Result: all 36 (fixture, size) cells came in over
+budget** — see *Measurements of record* directly below. Which of the
+three gives was not a measurement's call; it was ruled separately on
+2026-09-06 (**the budget gives**), and the amendment that follows from
+it is recorded in *Performance targets*.
+
+### Measurements of record (2026-09-06)
+
+Executed under the pre-registered thresholds above, none of which were
+touched. Reference run producing the committed goldens
+(`rust/shekyl-shard-visual/tests/goldens/`): the Rust crate at
+`655d31cb2`, release profile, rustc 1.94.0 (the version
+`rust/rust-toolchain.toml` pins; the machine's default 1.95.0 does not
+apply inside `rust/`), x86_64-unknown-linux-gnu
+(i9-11950H). Floor device: `skl-pi`, Raspberry Pi 4 Model B Rev 1.4,
+aarch64, binaries cross-compiled from the same commit. Thermal
+regime: 50.6 °C at start, 59.4 °C at end, governor verified reaching
+stock 1800 MHz under load mid-render. The firmware throttle flag is
+unreadable without root, so the temperature bracket plus the
+sustained-frequency check stand in for it: they establish that the
+conditions for throttling were absent, which is the claim these
+numbers support (not the stronger "no throttling occurred").
+
+**Raster parity (θ = 2.0): RMS = 0.000000 on all nine fixtures, at
+128px.** The aarch64 raster is bit-identical to the x86-committed
+goldens — the anticipated boundary-rounding jitter did not appear at
+all on this architecture pair. **Scope: 128px only.** The falsifier is
+quantified over (platform, fixture, size) cells, and goldens exist at
+one size, so parity at 256/512/1024px is *unmeasured*, not measured
+clean; committing goldens at every size would quadruple-plus the
+repo's binary weight for sizes that share one code path. Recorded as
+measured, at the size measured. **This does not reopen the
+bit-equivalence retraction**: the reopening criterion is a
+deterministic rasterizer *pinned across both implementations*, and
+one architecture pair happening to agree is an observation, not a
+pin — two architectures agreeing today says nothing about a third
+architecture, a WASM target, or a toolchain bump on either side. The
+perceptual bar stays the ruled bar; a measurement that *looks like*
+it satisfies a criterion is precisely where a criterion quietly
+dissolves, so the zero is recorded and the criterion is restated.
+
+**Avalanche (floor ≥ 20): sweep minimum RMS = 34.165** (drain_burst,
+byte 15 bit 3), identical on x86 and aarch64, over 9 fixtures × 3 bit
+positions (first byte, interior, last byte) on the pixel axis, at
+128px. Sensitivity holds with ~1.7× margin. Same size caveat as
+parity: bit positions and sizes outside the sweep are unmeasured.
+
+**Budget matrix: 36/36 cells over budget.** Median of 5 timed runs
+after 1 warm-up, single-threaded, full render-plus-PNG-encode path
+(`examples/budget_matrix.rs`), release profile. **The full 36-cell
+table, per fixture, with the thermal bracket and toolchain manifest,
+is committed at
+[`docs/benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt`](benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt)**
+— the summary below compresses it, and the per-fixture spread is the
+part a ruling may turn on. Per-size medians across the nine fixtures,
+against the targets:
+
+| size   | budget  | floor medians (min–max) | over by   |
+|--------|---------|-------------------------|-----------|
+| 128px  | 50 ms   | 69–164 ms               | 1.4×–3.3× |
+| 256px  | 100 ms  | 155–385 ms              | 1.6×–3.9× |
+| 512px  | 300 ms  | 535–1781 ms             | 1.8×–5.9× |
+| 1024px | 2000 ms | 2685–12440 ms           | 1.3×–6.2× |
+
+Worst fixture: `coinbase_heavy` (12.4 s at 1024px). Best:
+`confidential_stake` (2.7 s at 1024px), still over in every cell —
+a **4.6× spread across content at one size**, so render cost is
+strongly fixture-dependent, not a flat per-pixel constant. Stated as
+an observation the ruling may want; this document does not draw a
+conclusion from it. For orientation only
+(non-probative for the floor, per this section): the x86 reference
+machine also missed 512px and 1024px on 5 of 9 fixtures. **This is a
+falsification, not a gap: candidate.v1 as specified does not fit the
+stated minimum device at any tier**, and the magnitudes rule out
+tuning as the answer — 6.2× at 1024px is not a constant factor away
+from fitting. The documented escape (drop or restrict what misses;
+single-algorithm fallback) cannot be applied selectively when every
+cell misses. The measurement itself ranked none of the three things
+that could give — the budget, the candidate, or the floor device.
+
+**RULED 2026-09-06 (Rick): the budget gives.** *"The scores on the Pi
+for shard rendering are acceptable."* The implementation and the floor
+device both stand; the original figures were the wrong numbers. The
+replacements, their derivation, and the change in what they assert are
+recorded as a dated amendment in *Performance targets* below. This
+paragraph stays as the record of the falsification that forced it.
 
 ## Candidate compositor (candidate.v1) — leading V3.x design
 
@@ -229,10 +576,15 @@ palette-spread jitter) from its own namespaced stream:
 
 | Renderer         | Namespace                        | Indices used        |
 |------------------|----------------------------------|---------------------|
-| `aperiodic_tile` | `shard.v1.render.aperiodic_tile` | `unit(0)`, `unit(1)`|
-| `phyllotaxis`    | `shard.v1.render.phyllotaxis`    | `unit(0..2)`        |
-| `truchet`        | `shard.v1.render.truchet`        | `unit(0)` + per-cell `Sha256`|
-| `crystalline`    | `shard.v1.render.crystalline`    | `unit(0..2)`, `uint32(3..4)`|
+| `aperiodic_tile` | `shard.v1.render.aperiodic_tile` | `unit(0..3)`        |
+| `phyllotaxis`    | `shard.v1.render.phyllotaxis`    | `unit(0..4)`        |
+| `truchet`        | `shard.v1.render.truchet`        | `unit(0..1)` + per-cell `Sha256`|
+| `crystalline`    | `shard.v1.render.crystalline`    | `unit(0..2)`, `uint32(3..4)`, `unit(5)`|
+
+Indices `2..3` (aperiodic), `3..4` (phyllotaxis), `1` (truchet) and `5`
+(crystalline) were added by ruling A: structural draws that replace the
+rejected features those renderers previously consumed, at
+previously-unused offsets so the pre-existing draws are unchanged.
 
 Rationale: the legacy layout carved the 256-bit hash into eight little-endian
 `uint32` words and let every renderer index the *same* pool, so renderers that
@@ -429,23 +781,145 @@ is plenty for a network with thousands of shards.
 
 ### Performance targets
 
-- **Mobile wallet thumbnail (128x128):** sub-50ms render
-- **Desktop wallet portfolio view (256x256):** sub-100ms render
-- **Detail view (512x512):** sub-300ms render
-- **Print-quality / share image (1024x1024):** sub-2s render
+**AMENDED 2026-09-06 — recorded amendment, per the amendment
+discipline in *Rendering determinism and empirical closure*.**
+Authority: Rick's ruling, *"the scores on the Pi for shard rendering
+are acceptable"* — of budget, candidate, and floor device, the
+**budget gives**. **Confirmed:** the ruling arrived relayed through a
+coordinating session and was then confirmed by Rick directly to
+steering on 2026-09-06 ("Shard visual B is ratified"). Recorded that
+way because a relayed ruling is not a signature — the confirmation is
+in-channel, not an artifact in this tree, and the record should say
+which it is. Evidence: the 36-cell floor matrix,
+[`docs/benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt`](benchmarks/shard_visual_budget_matrix_pi4_20260906T090000Z.txt),
+which falsified every cell of the original figures. The originals are
+struck through below, **refuted, not superseded**.
 
-If a candidate algorithm can't hit these on the target devices, it
-gets dropped from the palette or restricted to higher-end rendering
-tiers. Mobile users seeing portfolio views at 128x128 must not have
-a slow experience.
+#### Why the originals failed: they named no statistic
+
+The lead finding is not that the numbers were too aggressive. It is
+that "sub-50ms at 128px" names **no statistic and no device state**.
+Median, p95, and worst-case differ by more than the numbers do, so
+the targets were **never falsifiable** — and an unfalsifiable
+threshold generates no failures, so nothing ever forced a look. That
+is why they survived years unexamined. A threshold without a
+statistic is not a threshold.
+
+Every replacement below is stated as **median on the floor device,
+warm, otherwise idle** — the exact quantity
+`rust/shekyl-shard-visual/examples/budget_matrix.rs` emits (median of
+5 timed runs after one untimed warm-up, single-threaded, full
+render-plus-PNG-encode, architecture recorded).
+
+#### These are regression bounds, not fitness bounds
+
+The struck-through figures asserted **fitness**: candidate.v1 must fit
+the floor device. The replacements do a **different job**, and saying
+so is load-bearing. At ~2× the measured corpus-worst, nothing the
+current implementation does can breach them — presented in the old
+voice they would be *a check that cannot fail*.
+
+> These thresholds no longer assert that the design fits a UX target.
+> They assert that it has **not regressed from the measured floor
+> baseline**. The UX question is answered by the async and caching
+> consequences below instead.
+
+#### Amended targets
+
+| tier | original | corpus-worst floor median | **amended** |
+|------|----------|---------------------------|-------------|
+| Mobile thumbnail (128×128) | ~~sub-50 ms~~ | 164 ms (`active`) | **350 ms** |
+| Portfolio view (256×256) | ~~sub-100 ms~~ | 385 ms (`coinbase_heavy`) | **800 ms** |
+| Detail view (512×512) | ~~sub-300 ms~~ | 1781 ms (`coinbase_heavy`) | **4 s** |
+| Share / print (1024×1024) | ~~sub-2 s~~ | 12440 ms (`coinbase_heavy`) | **25 s** |
+
+**Margin: 2× over the corpus-worst floor median.** Under a regression
+reading the margin is a **false-positive budget** — too tight and the
+check reddens on thermal noise until people learn to ignore it, and
+*a threshold people learn to ignore is worse than no threshold
+because it looks like coverage*; too loose and a real regression
+slips. Three one-sided sources of variation justify it, each able to
+make a real render slower and never faster:
+
+1. **The corpus cannot contain the worst case.** Nine fixtures, one
+   per regime of a *fake* chain, chosen for aesthetic diversity, not
+   render cost. Measured content-dependence is **4.6× at one size**
+   (`coinbase_heavy` 12.4 s vs `confidential_stake` 2.7 s at
+   1024px), so real-chain shards plausibly exceed the measured max.
+2. **Measurement conditions were favourable; a wallet's are not.**
+   Device idle at load 0.00, one render at a time, every timed cell
+   preceded by an untimed warm-up. A wallet renders while scanning
+   and syncing.
+3. **Thermal, quantified.** The run ended at 59.4 °C after minutes,
+   not hours, at stock 1800 MHz. A passively cooled Pi 4 under
+   sustained load throttles toward 1.0–1.5 GHz — **up to ~1.8×
+   slower on clock alone**, which nearly consumes 2× by itself and
+   leaves sources 1 and 2 unfunded.
+
+**Reopening criteria (rule 21) — the two things that would justify
+tightening:** a matrix over a **real** shard corpus (moves source 1
+from unquantified to measured), or a **sustained-load thermal run**
+(turns source 3 from a bound into a number). Absent one of those, the
+margin does not move.
+
+#### Consequences these numbers oblige (rules 80, 82)
+
+- **128px / 256px stay interactive only because the render is
+  cached** by the GUI's `cache_digest` (which includes
+  `RENDER_REVISION`): the cost is once per shard per revision, not
+  once per view. **That cache is load-bearing, not an
+  optimization** — the note lives at the cache site as well as here,
+  because a design doc does not defend a line of code from a cleanup
+  PR.
+- **512px / 1024px must be asynchronous with visible progress.** A
+  25 s synchronous export on the floor device is **a hang, not a slow
+  operation**. Blocking the UI at these sizes is a defect regardless
+  of the budget.
+
+#### Where the bound is enforced
+
+A regression bound is only real if something re-runs it. Named
+plainly, because "regression bound" otherwise implies automation that
+does not exist:
+
+- **(a) Named trigger, manual — the standing mechanism.** Any change
+  in the **timed path** obliges a floor re-run before merge. The
+  measured operation is `render_candidate_png_from_params` end to end
+  — render *plus* PNG encode — so the trigger covers its whole call
+  graph (renderers, compositor, palette, entropy draws, the encode
+  path, and the imaging dependencies), not just the renderers: a
+  subset would let a regression in through the part left out. Carried as a `docs/FOLLOWUPS.md` row
+  with the trigger conditions written out. It relies on discipline —
+  but so does every reopener in this program, and the alternative is
+  pretending otherwise.
+- **(b) Scheduled floor campaign — held in reserve**, as the
+  escalation if (a) is observed failing, not the opening move.
+- **(c) x86 smoke check in CI — taken, and muzzled.** CI runs the
+  same matrix on x86 against separate, x86-derived thresholds. It
+  catches gross regressions early and **cannot bound the floor** (see
+  the sign-flipping ratios above), so the disclaimer rides in the
+  gate's own **pass** line, not only on failure and not only in this
+  document: a green line in CI reads as "performance is fine" to
+  every human and every dashboard, and a paragraph three files away
+  does not travel with the checkmark. The gate is named
+  `shard-visual-x86-smoke` — not a budget or performance gate — so
+  the name cannot overclaim either.
+
+If a candidate algorithm can't hit the amended targets on the floor
+device, it gets dropped from the palette or restricted to higher-end
+rendering tiers.
 
 ### Reproducibility
 
-The rendering specification must be tight enough that any conforming
-implementation produces *visually equivalent* output. Pixel-perfect
-equivalence is overkill for the use case (visual identity / integrity
-check); the bar is "a human comparing two renderings cannot
-distinguish them."
+The bar is **ruled** — see *Rendering determinism and empirical
+closure (ruling B)* above. It is layered: hash-derived structure
+(draws, palettes, opacities, the recipe) is bit-exact across platforms
+and implementations; the painted raster is held to the pre-registered
+perceptual metric (RGB-RMS ≤ θ = 2.0 against committed goldens,
+decoded pixels never PNG bytes). "A human comparing two renderings
+cannot distinguish them" is the intuition the metric operationalizes;
+the metric, not the intuition, is what a conforming implementation is
+tested against.
 
 This means specifying:
 
@@ -467,18 +941,23 @@ changes too. The visual is a faithful function of current content; that
 includes "current content after a reorg."
 
 Stakers seeing "my shard looks different now" should be able to
-understand it as "the chain reorganized." Small reorgs should produce
-small visual changes (continuous-function property of the chosen
-algorithms); large reorgs produce larger visual changes.
+understand it as "the chain reorganized — investigate."
 
-This is a useful property: visual change *is itself a signal* of chain
-events. A staker noticing a sudden visual shift might investigate and
-discover a reorg they otherwise wouldn't have noticed.
-
-The continuity-of-rendering requirement excludes algorithms with high
-sensitivity to small parameter changes. L-systems are the riskiest in
-this regard; they should be tested for continuity before inclusion in
-the palette.
+**The ruled property is sensitivity, not continuity** (ruling B,
+2026-09-05). An earlier version of this section promised that small
+reorgs produce small visual changes; that text was wrong as written —
+authored for the retired single-algorithm design and impossible under
+candidate.v1's hash-seeded derivation, where any content change
+avalanches the whole picture. And it asked for the wrong thing:
+continuity and integrity-detection are in direct opposition here — a
+rendering whose job is making corruption visible should change
+maximally on any change, and a continuous rendering would have been a
+silent-corruption hazard. Under sensitivity, visual change is a
+binary signal: the picture changed, so the content changed; the
+magnitude of the visual difference carries no information about the
+size of the reorg. The per-algorithm "Continuity:" notes in the
+fallback palette below are retained as historical assessment of the
+fallback design only; they are not a requirement on candidate.v1.
 
 ---
 
@@ -503,23 +982,21 @@ that means and the design-review checkpoint.
 - Wallet identifiers (addresses, view keys, etc.)
 - Anything wallet privacy depends on
 
-**Borderline cases requiring review:**
+**Borderline cases — CLOSED by ruling A** (*Parameter admissibility*
+above). The two cases this section held open resolved the opposite way
+from its "probably fine" leanings, and for a reason the leanings could
+not see: both assumed the underlying quantities were "computable from
+any node anyway", which is true of the fake-chain corpus and false of
+the real chain. Distribution moments of output values are **rejected**
+(CT hides user output amounts — the moments are not computable from
+held bytes at all); stake event ratios are **rejected for now** under
+rule 21 (no ratified holder-readable stake-event surface exists yet;
+the reopening criterion is named in the ruling).
 
-- Distribution moments of output values: aggregate statistics, but
-  could in principle leak macro-information about chain activity
-  patterns. Probably fine for V3.x ship since this information is
-  computable from any node anyway, but worth verifying.
-- Stake event ratios: same shape — aggregate, but encodes
-  macro-economic information. Probably fine.
-
-**Design-review checkpoint:** before V3.x ships, the chosen parameter
-derivation function gets reviewed for "does any of this leak
-information that the chain protects elsewhere?" If yes, that
-parameter is dropped. If no, it ships.
-
-The default should be conservative: start with shard hash + block
-count + time range only, add other parameters only if they pass
-review. This is safer than starting rich and trimming.
+**Design-review checkpoint — RUN (2026-09-04):** the checkpoint this
+paragraph scheduled is ruling A's sweep. Its criterion is
+pre-registered there; any change to the parameter set re-opens that
+section, not this paragraph.
 
 **Distinct concern — the *sharing behavior*, not the parameters.** The
 analysis above establishes that the rendered visual leaks nothing the
@@ -616,16 +1093,23 @@ The crate is:
 - **No-`std` compatible** for embedded / WASM use cases (with `std`
   feature for the desktop wallet)
 - **Async-free** (rendering is pure CPU; no need for async)
-- **Deterministic** (no system time, no thread-local random state, no
-  floating-point operations whose result depends on hardware)
-- **Reproducible across platforms** (bit-equivalent output on x86,
-  ARM, WASM)
+- **Deterministic** (no system time, no thread-local random state;
+  the raster's floating-point behaviour is governed by ruling B's
+  layered bar, not by bit-exactness)
+- ~~**Reproducible across platforms** (bit-equivalent output on x86,
+  ARM, WASM)~~ — **retracted by ruling B (2026-09-05)**, struck rather
+  than deleted so the reopening criterion travels with the claim: the
+  shipped transcendental-float renderers cannot meet it, and the
+  layered bar (structure bit-exact, raster perceptual) supersedes it.
+  **Reopens if and only if a deterministic rasterizer is pinned across
+  both implementations.**
 
-Floating-point determinism is the technically hardest of these.
+~~Floating-point determinism is the technically hardest of these.
 Different CPUs produce slightly different IEEE 754 results for some
 operations. The rendering pipeline either uses fixed-point arithmetic
 (cleanest) or constrains floating-point operations to those with
-bit-exact cross-platform behavior.
+bit-exact cross-platform behavior.~~ *(Struck with the retraction
+above; the ruled bar is in ruling B.)*
 
 ### Rendering output format
 
@@ -651,8 +1135,12 @@ Renderings are deterministic, so they're cacheable. A staker's wallet
 holding 100 shards renders each once on first display, caches the
 result, and re-renders only if the shard content changes (reorg).
 
-Cache invalidation: keyed on (shard_id, shard_content_hash). When the
-content hash changes, the cached render is invalidated.
+Cache invalidation: keyed on (shard_id, shard_content_hash, and the
+crate's exported `RENDER_REVISION`). The content hash changes on a
+reorg; the revision changes when the pixel derivation itself changes
+pre-freeze (review #617: a cache keyed without it can serve a stale
+PNG alongside a recipe the current code would not produce). Once a
+spec version freezes, a revision bump within it is a defect.
 
 This makes the rendering performance budget less critical for
 steady-state use — the user pays the cost once. But initial wallet-load
@@ -699,11 +1187,12 @@ RPC methods.
 
 The dependencies and timing:
 
-- **V3.0 ships without visualization machinery.** V3.0 wallets that
-  encounter shards (if any) render shards as plain hash strings or
-  "Shard #4712" text labels. There is no `shekyl-shard-visual` crate
-  surface in V3.0; the crate either doesn't exist yet or exists in
-  unpublished/unintegrated form awaiting V3.x activation.
+- **V3.0 ships without production visualization.** The
+  `shekyl-shard-visual` crate exists and is integrated today, but only
+  behind the pre-archival GUI preview (fixture aggregates on the
+  Staking tab, per the preview exception above); no production shard
+  surface renders visuals until `ArchivalEngine` (Stage 5) provides
+  real shards.
 - **V3.x ships `ArchivalEngine` (Stage 5) and `shekyl-shard-visual`
   together.** They are companion features: archival produces the
   shards; visualization makes them legible. Both gate on the
@@ -718,9 +1207,8 @@ V3.0's design surface forecloses nothing here. The
 domain-primitive crate name (`shekyl-shard-visual`) is pre-committed
 in the rename entry's "stays as-is" list; the crate has no V3.0
 dependency and is purely additive when V3.x activates it. The
-no-tradeability invariant has a placeholder FOLLOWUPS item (V3.x)
-that codifies the enforcement-point inventory when implementation
-begins.
+no-tradeability enforcement-point inventory is codified above (*Not
+tradeable*, "Concrete enforcement", verified 2026-09-04).
 
 ---
 
@@ -731,6 +1219,12 @@ review and performance testing during the V3.x implementation cycle.
 
 **Final algorithm palette.** The **candidate.v1** two-stage difference
 compositor (see above) is the leading design from empirical exploration.
+Its determinism bar and the falsifiers for the closure are ruled
+(*Rendering determinism and empirical closure (ruling B)*). The
+measurement half — the floor-device budget matrix and the committed
+goldens — was executed 2026-09-06 (*Measurements of record*); what
+remains open is the ruling it forced, recorded under *Performance
+targets*.
 The single-algorithm list below remains the documented fallback if
 candidate.v1 fails review. Final disposition closes during V3.x
 implementation against mobile budget and continuity testing.
@@ -787,7 +1281,8 @@ The mechanism is:
    transferable, exist only as renderings of chain state. This is a
    hard architectural constraint that prevents introducing economic
    dimensions the V3 simulations didn't validate. Codification of the
-   enforcement-point inventory tracked in `docs/FOLLOWUPS.md` (V3.x).
+   enforcement-point inventory codified in *Not tradeable* (verified
+   2026-09-04).
 6. **No NFT framing** in public communication — this is data art, not
    a separate asset class.
 7. **Library crate, not actor.** `shekyl-shard-visual` is a domain-
@@ -810,8 +1305,8 @@ resonant — the "real work" stakers perform becomes visible, both in
 the metaphorical sense (the network values it) and the literal sense
 (stakers see their portfolios). V3.0 ships the architectural surface
 that makes V3.x activation purely additive (rename entry pre-commits
-the `shekyl-shard-visual` crate name; FOLLOWUPS V3.x tracks the
-no-tradeability invariant codification).
+the `shekyl-shard-visual` crate name; the no-tradeability
+enforcement-point inventory is codified in *Not tradeable*).
 
 ---
 
@@ -824,9 +1319,9 @@ no-tradeability invariant codification).
   `shekyl-shard-visual` as library crate, not actor); *2026-04-27 —
   `Wallet<S>` renamed to `Engine<S>`* ("stays as-is" pre-commit of
   the crate name)
-- `docs/FOLLOWUPS.md` — V3.x *No-tradeability invariant codification*
-  (placeholder for the enforcement-point inventory); V3.x *Stage 5
-  ArchivalEngine native build* (companion archival ship)
+- `docs/FOLLOWUPS.md` — V3.x *Stage 5 ArchivalEngine native build*
+  (companion archival ship); the no-tradeability enforcement-point
+  inventory closed 2026-09-04 (codified in *Not tradeable* above)
 - `docs/DESIGN_CONCEPTS.md` — V3 economic structure (the model this
   must not undermine)
 - Future: `docs/PUBLIC_NARRATIVE_FAQ.md` — should grow a "shard

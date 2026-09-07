@@ -58,7 +58,13 @@ public:
   bool init(const boost::program_options::variables_map& vm) {return true ;}
   bool deinit(){return true;}
   bool get_short_chain_history(std::list<crypto::hash>& ids, uint64_t& current_height) const { return true; }
-  bool have_block(const crypto::hash& id, int *where = NULL) const {return false;}
+  // The blocks this core already has. Empty by default, so every test that
+  // does not populate it sees the previous unconditional `false`. A test
+  // driving `try_add_next_blocks` needs the span's parent to be known, which
+  // is what gates reaching `prepare_handle_incoming_blocks`.
+  std::vector<crypto::hash> blocks_we_have;
+  bool have_block(const crypto::hash& id, int *where = NULL) const
+  {return std::find(blocks_we_have.begin(), blocks_we_have.end(), id) != blocks_we_have.end();}
   bool have_block_unlocked(const crypto::hash& id, int *where = NULL) const {return false;}
   void get_blockchain_top(uint64_t& height, crypto::hash& top_id)const{height=0;top_id=crypto::null_hash;}
   bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone) { return true; }
@@ -73,7 +79,12 @@ public:
   cryptonote::blockchain_storage &get_blockchain_storage() { throw std::runtime_error("Called invalid member function: please never call get_blockchain_storage on the TESTING class test_core."); }
   bool get_test_drop_download() const {return true;}
   bool get_test_drop_download_height() const {return true;}
-  bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry>  &blocks_entry, std::vector<cryptonote::block> &blocks) { return true; }
+  // Configurable so a test can drive the failure arm at the
+  // `prepare_handle_incoming_blocks` check in `try_add_next_blocks`.
+  // Defaults to the previous hardcoded `true`, so existing tests are
+  // unaffected.
+  bool prepare_handle_incoming_blocks_result = true;
+  bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry>  &blocks_entry, std::vector<cryptonote::block> &blocks) { return prepare_handle_incoming_blocks_result; }
   bool cleanup_handle_incoming_blocks(bool force_sync = false) { return true; }
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return true; }
   bool update_checkpoints(const bool skip_dns = false) { return true; }
@@ -104,6 +115,26 @@ public:
   bool get_pool_transaction_hashes(std::vector<crypto::hash>& txs, bool include_unrelayed_txes = true) const { return false; }
   crypto::hash get_block_id_by_height(uint64_t height) const { return crypto::null_hash; }
   void stop() {}
+};
+
+//! Grants this file access to the protocol handler's private members. See the
+//! `friend` declaration in `cryptonote_protocol_handler.h` for what it exists
+//! for and when it retires.
+struct cryptonote_protocol_handler_test_seam
+{
+  template<class T>
+  static cryptonote::block_queue &queue(cryptonote::t_cryptonote_protocol_handler<T> &h)
+  { return h.m_block_queue; }
+
+  template<class T>
+  static void drop_connections(cryptonote::t_cryptonote_protocol_handler<T> &h,
+                               const epee::net_utils::network_address &addr)
+  { h.drop_connections(addr); }
+
+  template<class T>
+  static int try_add_next_blocks(cryptonote::t_cryptonote_protocol_handler<T> &h,
+                                 cryptonote::cryptonote_connection_context &ctx)
+  { return h.try_add_next_blocks(ctx); }
 };
 
 typedef nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<test_core>> Server;
@@ -1677,4 +1708,382 @@ TEST(node_server, both_outbound_paths_clear_the_failure_history)
   EXPECT_FALSE(cache.is_recently_failed(addr, t0 + P2P_ANON_FAILED_ADDR_FORGET_SECONDS + 1))
     << "after a success the next failure is charged the FIRST-failure window, "
        "whichever routine reported the success";
+}
+
+// ---------------------------------------------------------------------------
+// Anonymity-zone address keying (fix/anon-zone-address-keying)
+//
+// Every inbound connection in an anonymity zone is handed the zone's
+// `unknown()` sentinel as its remote address (`net_node.inl` `set_default_remote`,
+// one call per zone). `is_same_host` used to report two such addresses as the
+// same host, so `drop_connections(addr)` — which severs every connection
+// sharing a host — severed the entire inbound anon population on one bad span.
+// ---------------------------------------------------------------------------
+namespace
+{
+  //! A connection id that never varies between runs. `random_generator` would
+  //! make the fixture non-reproducible for no gain -- nothing here depends on
+  //! the ids being unpredictable, only on their being distinct.
+  boost::uuids::uuid fixed_uuid(unsigned char n)
+  {
+    boost::uuids::uuid u{};
+    u.data[15] = n;
+    return u;
+  }
+
+  //! One serialized block whose parent is `crypto::null_hash`, so a `test_core`
+  //! holding that hash reports the parent as known and `try_add_next_blocks`
+  //! reaches `prepare_handle_incoming_blocks`.
+  cryptonote::block_complete_entry one_block(const crypto::hash &parent = crypto::null_hash)
+  {
+    cryptonote::block b{};
+    b.major_version = 1;
+    b.minor_version = 1;
+    b.prev_id = parent;
+    b.miner_tx.version = 1;
+    b.miner_tx.unlock_time = 0;
+    cryptonote::block_complete_entry bce{};
+    bce.block = cryptonote::t_serializable_object_to_blob(b);
+    return bce;
+  }
+
+  //! The hash of a block that is never added to anything -- only used as a
+  //! parent identity the queue can be told about.
+  crypto::hash a_parent_hash()
+  {
+    cryptonote::block b{};
+    b.major_version = 1;
+    b.minor_version = 1;
+    b.nonce = 0xabcdef;
+    b.miner_tx.version = 1;
+    return cryptonote::get_block_hash(b);
+  }
+
+  //! Records what the protocol handler asks the p2p layer to do.
+  struct recording_endpoint final
+    : nodetool::p2p_endpoint_stub<cryptonote::cryptonote_connection_context>
+  {
+    std::vector<cryptonote::cryptonote_connection_context> conns;
+    std::vector<boost::uuids::uuid> dropped;
+    //! Address AND score: the score is what distinguishes a caller that
+    //! charges the peer from one that merely disconnects it, and several
+    //! call sites differ only in that argument.
+    std::vector<std::pair<epee::net_utils::network_address, unsigned>> host_fails;
+
+    void add(const boost::uuids::uuid &id, const epee::net_utils::network_address &addr)
+    {
+      // `m_connection_id`, `m_remote_address` and `m_is_income` are declared
+      // `const` (`contrib/epee/include/net/net_utils_base.h:368-370`), so
+      // writing them through a `const_cast` is undefined behaviour. Assigning
+      // the base subobject routes through the class's own `set_details`, which
+      // rebuilds it by placement-new -- the same path production takes on every
+      // connection copy.
+      cryptonote::cryptonote_connection_context c{};
+      static_cast<epee::net_utils::connection_context_base&>(c) =
+        epee::net_utils::connection_context_base{id, addr, /*is_income=*/true, /*ssl=*/false};
+      conns.push_back(std::move(c));
+    }
+
+    virtual void for_each_connection(
+      std::function<bool(cryptonote::cryptonote_connection_context&, nodetool::peerid_type, uint32_t)> f) override
+    {
+      for (auto &c : conns)
+        if (!f(c, 0, 0))
+          return;
+    }
+    virtual bool for_connection(const boost::uuids::uuid &id,
+      std::function<bool(cryptonote::cryptonote_connection_context&, nodetool::peerid_type, uint32_t)> f) override
+    {
+      // Production propagates the callback's own result: epee's
+      // `for_connection` returns false both when the id is absent and when the
+      // callback returns false (`levin_protocol_handler_async.h`,
+      // `if(!cb(...)) return false;`). A double that always returned true on a
+      // match would be more permissive than the endpoint it stands for.
+      for (auto &c : conns)
+        if (c.m_connection_id == id) return f(c, 0, 0);
+      return false;
+    }
+    virtual bool drop_connection(const epee::net_utils::connection_context_base &context) override
+    {
+      dropped.push_back(context.m_connection_id);
+      return true;
+    }
+    virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score) override
+    {
+      // Fidelity: production's `node_server::add_host_fail` opens with
+      // `if(!address.is_blockable()) return false;` (`net_node.inl:412`), so an
+      // address that names no host is never scored regardless of the caller. A
+      // double that recorded unconditionally would be MORE PERMISSIVE than the
+      // real endpoint, and a limb asserting the difference would pin the mock
+      // rather than the code.
+      if (!address.is_blockable())
+        return false;
+      host_fails.emplace_back(address, score);
+      return true;
+    }
+  };
+}
+
+TEST(anon_zone_address_keying, host_sweep_does_not_sever_a_zone)
+{
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto unknown_tor = epee::net_utils::network_address{net::tor_address::unknown()};
+  const boost::uuids::uuid anon1 = fixed_uuid(1);
+  const boost::uuids::uuid anon2 = fixed_uuid(2);
+  endpoint.add(anon1, unknown_tor);
+  endpoint.add(anon2, unknown_tor);
+
+  // Negative limb: the sweep must sever NOTHING when handed an address that
+  // names no host. Before the fix both anon connections were severed, because
+  // `unknown()` compared equal to `unknown()`.
+  cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, unknown_tor);
+  EXPECT_TRUE(endpoint.dropped.empty());
+  // Scoring: the mock models production's `is_blockable` bail, so this limb is
+  // guaranteed by the double rather than by the fix -- it documents the
+  // contract, it does not pin A1. A1's independent observables are the
+  // misleading `MWARNING` and the avoided scan; see the PR body.
+  EXPECT_TRUE(endpoint.host_fails.empty());
+
+  // Positive limb: the sweep still works where the address DOES name a host,
+  // so a guard that over-reached into "never sever" fails loudly here. This is
+  // the public-zone per-host cap's behaviour and it must be untouched.
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  const auto ip_other_port = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18081}};
+  const boost::uuids::uuid clear1 = fixed_uuid(3);
+  endpoint.add(clear1, ip_other_port);
+
+  cryptonote_protocol_handler_test_seam::drop_connections(cprotocol, ip);
+  ASSERT_EQ(1u, endpoint.dropped.size());
+  EXPECT_EQ(clear1, endpoint.dropped.front());   // the same host, different port
+  // The sweep scores the host, and `drop_connection(context, true, ...)` scores
+  // each severed peer again, so the count is not 1 -- assert the contract
+  // rather than a number: scoring happened, and it never names an address that
+  // names no host.
+  EXPECT_FALSE(endpoint.host_fails.empty());
+  for (const auto &f : endpoint.host_fails)
+    EXPECT_TRUE(f.first.is_blockable());
+}
+
+// The `prepare_handle_incoming_blocks` failure arm. The host sweep above is
+// now a no-op on an anonymity zone, so this site must drop the origin and
+// clear its spans by itself -- which is what its two siblings in the same
+// function already do. Without that, the failed span stays at the head of the
+// queue, `get_next_span` hands it out again, and sync stalls.
+TEST(anon_zone_address_keying, prepare_failure_drops_only_the_origin_and_clears_its_spans)
+{
+  test_core pr_core;
+  pr_core.prepare_handle_incoming_blocks_result = false;
+  pr_core.blocks_we_have.push_back(crypto::null_hash);   // the span's parent
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto unknown_tor = epee::net_utils::network_address{net::tor_address::unknown()};
+  const boost::uuids::uuid anon1 = fixed_uuid(1);
+  const boost::uuids::uuid anon2 = fixed_uuid(2);
+  endpoint.add(anon1, unknown_tor);
+  endpoint.add(anon2, unknown_tor);
+
+  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
+  // The span that fails, and a LATER one from the same peer. The later span is
+  // what distinguishes dropping with `flush_all_spans = true` from the
+  // `drop_connection(uuid)` overload's `false`: `remove_spans(id, start_height)`
+  // only erases spans at or before `start_height`, so a peer dropped with
+  // `false` would leave its higher spans behind.
+  queue.add_blocks(1, {one_block()}, anon1, unknown_tor, 1.0f, 1);
+  queue.add_blocks(100, {one_block()}, anon1, unknown_tor, 1.0f, 1);
+  ASSERT_EQ(2u, queue.get_num_filled_spans());
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
+
+  // The offending peer is dropped -- by id, since the host sweep selected
+  // nothing -- and the peer that shares its `unknown()` address is not.
+  ASSERT_EQ(1u, endpoint.dropped.size());
+  EXPECT_EQ(anon1, endpoint.dropped.front());
+  EXPECT_EQ(0u, queue.get_num_filled_spans())
+    << "the failed span, and every later span from the same peer, must leave "
+       "the queue -- otherwise get_next_span hands the failure back forever";
+}
+
+// The same site when the peer is already gone: `for_connection` finds nothing,
+// so the span must still be removed or it is stuck in the queue with no owner
+// left to drop. This is the case the siblings' `remove_spans` call exists for.
+TEST(anon_zone_address_keying, prepare_failure_clears_the_span_of_a_departed_peer)
+{
+  test_core pr_core;
+  pr_core.prepare_handle_incoming_blocks_result = false;
+  pr_core.blocks_we_have.push_back(crypto::null_hash);
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto unknown_tor = epee::net_utils::network_address{net::tor_address::unknown()};
+  const boost::uuids::uuid survivor = fixed_uuid(2);
+  const boost::uuids::uuid departed = fixed_uuid(9);   // owns the span, has no connection
+  endpoint.add(survivor, unknown_tor);
+
+  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
+  queue.add_blocks(1, {one_block()}, departed, unknown_tor, 1.0f, 1);
+  ASSERT_EQ(1u, queue.get_num_filled_spans());
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
+
+  EXPECT_TRUE(endpoint.dropped.empty()) << "there is no such connection to drop";
+  EXPECT_EQ(0u, queue.get_num_filled_spans())
+    << "removed anyway, so other threads can wake up and get past it";
+}
+
+// A span whose start height contradicts the height the queue holds for its
+// parent is rejected and its peer dropped -- but dropping by id flushes only
+// EMPTY spans, and neither `on_connection_close` nor `flush_stale_spans`
+// erases a filled one. Nothing removed this span, so if it sat lowest in the
+// queue `get_next_span` re-served it on every call and sync could not pass it.
+// Inherited; every sibling failure arm in the same loop already removes its
+// span. Same validation surface as the anonymity-zone arm above.
+TEST(block_sync_span_lifecycle, an_incorrect_height_span_leaves_the_queue_with_its_peer)
+{
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto unknown_tor = epee::net_utils::network_address{net::tor_address::unknown()};
+  const boost::uuids::uuid liar = fixed_uuid(4);
+  endpoint.add(liar, unknown_tor);
+
+  // Reserve a span at height 50 whose one requested hash is the parent, then
+  // fill it. The queue now believes that parent sits AT 50, while the span
+  // delivered for it also starts at 50 -- so the block's parent would have to
+  // be its own sibling. That is the contradiction the check rejects.
+  const crypto::hash parent = a_parent_hash();
+  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
+  const auto reserved = queue.reserve_span(50, 50, 1, liar, unknown_tor,
+    /*sync_pruned_blocks=*/true, /*local_pruning_seed=*/0, /*pruning_seed=*/0,
+    /*blockchain_height=*/51, {{parent, 0}}, boost::date_time::min_date_time);
+  ASSERT_EQ(50u, reserved.first);
+  queue.add_blocks(50, {one_block(parent)}, liar, unknown_tor, 1.0f, 1);
+  ASSERT_EQ(1u, queue.get_num_filled_spans());
+  ASSERT_EQ(50u, queue.have_height(parent));
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
+
+  ASSERT_EQ(1u, endpoint.dropped.size());
+  EXPECT_EQ(liar, endpoint.dropped.front());
+  EXPECT_EQ(0u, queue.get_num_filled_spans())
+    << "the rejected span must leave the queue, or get_next_span serves it "
+       "again forever against a peer that is already gone";
+}
+
+// A prepare failure IS charged, and this test exists to keep it that way.
+//
+// `prepare_handle_incoming_blocks` returns false for six of OUR-state reasons
+// (`m_cancel`, thread-pool `!waiter.wait()`) and for about as many
+// SENDER-attributable ones -- unparseable block blob, unparseable transaction,
+// duplicate transaction, duplicate key image, empty span. The boolean cannot
+// say which fired, so declining to charge would let a peer feed malformed
+// spans forever and reconnect with no score accumulating. An earlier revision
+// of this test asserted the opposite, on the premise that the failure was
+// always ours; that premise was wrong (review of #628).
+//
+// Run on a CLEARNET origin, because the endpoint refuses to score a non-host
+// address at all and could not observe the difference on an anonymity zone.
+TEST(block_sync_span_lifecycle, prepare_failure_charges_the_origin_it_disconnects)
+{
+  test_core pr_core;
+  pr_core.prepare_handle_incoming_blocks_result = false;
+  pr_core.blocks_we_have.push_back(crypto::null_hash);
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  const boost::uuids::uuid origin = fixed_uuid(5);
+  endpoint.add(origin, ip);
+
+  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
+  queue.add_blocks(1, {one_block()}, origin, ip, 1.0f, 1);
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
+
+  // Two properties, and the exact number pins both at once.
+  //
+  //   6 = the sweep's 5 for the host + 1 for the connection it severs.
+  //
+  // Lower than 6 means the path stopped charging -- the bypass: a peer that
+  // reaches this failure with malformed input could then repeat it forever,
+  // reconnecting each time with nothing accumulating.
+  //
+  // Higher than 6 means the origin was billed twice for one failure, because
+  // the id-drop below the sweep also passed `add_fail`. The parse-failure
+  // sibling passes false for exactly that reason, and an earlier revision of
+  // this PR asserted 7 while claiming it was testing "not zero" -- the extra
+  // point was redundant and the rationale did not match the assertion.
+  unsigned total = 0;
+  for (const auto &f : endpoint.host_fails)
+    total += f.second;
+  EXPECT_EQ(6u, total)
+    << "the sweep must charge (an unchargeable failure is one a peer can "
+       "repeat forever) and nothing may charge a second time for it";
+  EXPECT_FALSE(endpoint.dropped.empty()) << "but the origin is still disconnected";
+}
+
+// The endpoint advertisement is DERIVED: no dedicated flag decides it, so the
+// only witness is the announced value itself. Operator influence remains and is
+// exercised below -- `--in-peers 0` suppresses the announcement BY DERIVATION,
+// which is the supported control and the second limb of this test.
+//
+// The middle limb is the defect this replaced. `check_incoming_connections`
+// has always treated "no inbound accepted" as "not advertising"; the
+// announcement site asked only whether `--hide-my-port` was set, so a node run
+// with `--in-peers 0` refused every inbound connection and still announced a
+// port to attract them. Nothing in the tree observed that, which is why the
+// two sites could diverge silently.
+TEST(node_server, announced_port_is_derived_from_listener_and_zone)
+{
+  struct test_data_t
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+    test_data_t(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+  };
+
+  const auto announced = [](const std::string &port, const std::string &in_peers) {
+    test_data_t data;
+    boost::program_options::options_description desc_options("Command line options");
+    cryptonote::core::init_options(desc_options);
+    Server::init_options(desc_options);
+    const char* argv[2] = {nullptr, nullptr};
+    boost::program_options::variables_map vm;
+    boost::program_options::store(
+      boost::program_options::parse_command_line(1, argv, desc_options), vm);
+    vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+      boost::program_options::variable_value(std::string("127.0.0.2"), false);
+    vm.find(nodetool::arg_p2p_bind_port.name)->second =
+      boost::program_options::variable_value(port, false);
+    if (!in_peers.empty())
+      vm.find(nodetool::arg_in_peers.name)->second =
+        boost::program_options::variable_value(int64_t(std::stoll(in_peers)), false);
+    boost::program_options::notify(vm);
+    if (!data.server->init(vm))
+      return uint32_t(0xffffffff);   // distinguishable from a real 0
+    return data.server->get_announced_port(epee::net_utils::zone::public_);
+  };
+
+  // Accepting inbound on a pingback-capable zone: announce the listening port.
+  EXPECT_EQ(48086u, announced("48086", ""))
+    << "a reachable node must advertise, and nothing but the facts decides it";
+
+  // The corrected divergence: no inbound accepted, so nothing to advertise.
+  EXPECT_EQ(0u, announced("48087", "0"))
+    << "a node that refuses every inbound connection must not announce a port "
+       "for peers to attract themselves to";
 }

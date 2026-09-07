@@ -1,0 +1,11 @@
+{
+  "earliest_height": 1234000,
+  "enabled": true,
+  "state": 2,
+  "status": "OK",
+  "threshold": 0,
+  "version": 3,
+  "votes": 42,
+  "voting": 9,
+  "window": 10080
+}

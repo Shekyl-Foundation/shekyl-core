@@ -411,9 +411,9 @@ stopped at the p2p layer.** `for_each_connection` (`net_node.inl:155-160`)
 forwards `cntx.peer_id` as a **parameter** into every cryptonote-layer callback,
 and two of them read it as the same boolean:
 
-- `cryptonote_protocol_handler.inl:1725` — `if (!peer_id || context.m_is_income)`,
+- `cryptonote_protocol_handler.inl:1790` — `if (!peer_id || context.m_is_income)`,
   excluding pre-handshake peers from **sync-search**.
-- `:2659-2660` — `if (peer_id && …)`, excluding them from **fluffy-block relay**,
+- `:2701-2702` — `if (peer_id && …)`, excluding them from **fluffy-block relay**,
   with the tree's own comment: *"peer_id also filters out connections before
   handshake"*.
 
@@ -468,8 +468,8 @@ it:**
 
 | Site | Kind | Disposition |
 | --- | --- | --- |
-| `cryptonote_protocol_handler.inl:1723` | **Boolean** — excludes pre-handshake peers from sync-search | Migrate to `handshake_complete` |
-| `:2657-2660` | **Boolean** — same, for fluffy-block relay (*"peer_id also filters out connections before handshake"*) | Migrate to `handshake_complete` |
+| `cryptonote_protocol_handler.inl:1790` | **Boolean** — excludes pre-handshake peers from sync-search | Migrate to `handshake_complete` |
+| `:2701-2702` | **Boolean** — same, for fluffy-block relay (*"peer_id also filters out connections before handshake"*) | Migrate to `handshake_complete` |
 | `:347` | **Display** — `print_connections`' peer column | Drop the column or show `connection_id` |
 | `rpc_facts_ffi.h:315` / `.cpp:1050-1056` | **Display** — `get_connections` over RPC | Same: `connection_id` is already in the struct |
 
@@ -731,6 +731,88 @@ diversity — distinct hosts per node's outbound set — falling below the diver
 achieved with `peer_id`-based dedup**, which the Q12-D6a rig can measure on both
 configurations. The second is the one that would indict the same-host cap
 specifically, and it is the replacement carrying the most new risk.
+
+#### Correction (2026-09-05) — the address/port split is deliberate, and the gap is overlay-only
+
+**A premise stated in review, and in an earlier draft of `fix/anon-zone-address-keying`,
+was wrong: `basic_node_data`'s "port and no address" is not a missing field.** It was
+called one, and the conclusion drawn — that peers should announce a full `IP:port`
+endpoint — would have been a regression. Recorded here because the wrong version
+travelled through comments, a queue row and a PR body before it was caught.
+
+**On clearnet the split is correct and must stay.** The peerlist entry's address comes
+from the connection; the port is the only self-reported field **because it is the only
+one observation cannot supply**. An outbound dial's source port is an ephemeral NAT
+mapping bound to that one 5-tuple: the peer observes it, but an unsolicited inbound
+connection to the same `(IP, port)` from anyone else is dropped. Announcing `IP:port`
+would replace an observed fact with a claim — strictly worse, and it is exactly the
+dead-peerlist-entry problem the announcement exists to avoid.
+
+**The claim is never trusted; it is a hint that triggers a reachability test.**
+`net_node.inl:2747-2756` gates on `arg.node_data.my_port && zone.m_can_pingback` and
+calls `try_ping`, whose callback runs *"only(!) if success pinged"* before appending to
+the white peerlist. The gossiped fact is therefore "I personally reached this endpoint",
+not "this peer said so". That mechanism is what a rewrite keeps.
+
+**The gap is specific to anonymity zones**, where nothing is observed at all — so the
+endpoint itself must be announced. Note `zone.m_can_pingback` is set true only for the
+public zone (`net_node.inl:444`) and cleared when a SOCKS proxy is configured (`:818`),
+so **an anonymity zone verifies nothing today** — which is why it is the sentinel's zone
+and clearnet is not. The mechanism could not run there anyway: `try_ping` builds its
+target from the **observed** `context.m_remote_address` plus the claimed port and
+hard-refuses anything that is not IPv4/IPv6 (*"Only IPv4 or IPv6 addresses are supported
+here"*), so there is no address to dial on an overlay even if the gate were open.
+
+**A dial is NOT sufficient there, and an earlier draft of this correction said it was.**
+That draft read *"dialling the `.onion` is the verification"*. It is not, and the
+difference is the whole security content of this row:
+
+- **On clearnet the binding comes from the socket.** The address is *observed*, so TCP
+  already ties it to this peer; the ping only resolves the one field observation cannot
+  supply, and a false port claim can mis-attribute at worst to another port on the same
+  host.
+- **On an overlay there is no observed half.** A successful dial to an announced
+  `.onion` proves that *service* is reachable — **not that the peer on this inbound
+  session controls it.** An attacker can announce a victim's live onion, pass the
+  reachability check, and have its own misbehaviour scored and gossiped against the
+  victim. Reachability without a binding converts the sentinel's problem into a
+  **framing primitive**, which is strictly worse than an anonymous inbound remote.
+
+**So the queued work carries a binding requirement, not just a field.** The announced
+endpoint may be adopted only once the inbound session and the dialled endpoint are
+proven to be the same party — a challenge the dialled service must answer with a secret
+that only this session carried. **PWD-I1 already routes a zone-scoped handshake nonce to
+PWD-T1**; that token is the natural carrier and T1 must be drafted knowing this consumer
+exists. **Until such a binding exists, the inbound anonymity-zone remote stays
+anonymous** and the `identifies_a_host` guard stays with it — the guard's deletion
+trigger is a *verified* endpoint, and an unbound announcement does not meet it.
+Found in review of #620.
+
+**Consequence for the sentinel.** `unknown()` stands in for a field that overlays need
+and clearnet does not. Until it carries one, `contrib/epee/src/net_utils_base.cpp`'s
+`identifies_a_host` guard and the `drop_connections` early return exist only to stop a
+zone-wide address from being read as a host key; both are marked for deletion at the
+line. Not scheduled here — admission policy (no endpoint ⇒ not a peer) is a separate
+ruling.
+
+**The `--hide-my-port` consequence this row used to defer is settled, and it does not
+travel with that ruling** (Rick, 2026-09-05; landed with the PR that deleted the flag).
+The flag is gone **as an option and as a capability**: whether this node advertises a
+port is now derived — announced only where a peer could reach us on it, meaning the zone
+supports the back-ping that verifies the claim *and* we accept inbound connections at
+all. **No dedicated advertisement flag remains**, so an admission ruling has no toggle
+to interact with; it inherits a derived value rather than a configured one. Operator
+influence is not gone and should not be described as gone -- `--in-peers` feeds
+`max_in_connection_count`, so an operator still controls the outcome, but by changing the
+node's reachability rather than by asserting an answer that contradicts it.
+
+Two consequences P2P-3 should carry rather than re-derive. An operator who wants not to
+be advertised refuses inbound (`--in-peers 0`) and the derivation follows; one who wants
+no p2p participation does not run a daemon — the posture the flag nominally served has
+no separate mechanism and needs none. `m_external_port` survives as the single
+operator-supplied value in the announcement, kept because a manual static NAT forward is
+not observable by the node and the claim is verified downstream by the peer's back-ping
+before anything is gossiped.
 
 ### PWD-I2 — peerlist *acceptance* is restricted; disclosure is retained unchanged, and the Shi et al. amplifiers are closed
 
@@ -2485,7 +2567,24 @@ bytes** (`src/cryptonote_config.h:472-473`, bounded at the codec by
 > + `ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` + KV encoding overhead.**
 >
 > - **2008** (one announce): `entry_max`.
-> - **2004** (a batch): `n × entry_max` for the batch cardinality `n`.
+> - **2004** (a batch): **the byte budget**, *not* `n × entry_max` — see the
+>   correction below.
+
+> **Corrected 2026-09-04: `entry_max`'s only consumer is 2008.** This block
+> originally gave 2004 `n × entry_max`, and the ruling further down then showed
+> that a cardinality-derived bound **exceeds the plaintext ceiling** and
+> replaced it with a byte budget. **Both forms were left standing**, so a reader
+> could take either. The byte budget governs 2004; `n × entry_max` is retired.
+>
+> **Two things fall out, and the second is the one that matters to another
+> lane.** The two-layer ingress/handler split **collapses**: with a byte budget
+> the ingress cap is just that budget — **a static number, directly expressible
+> in `fn(u32) -> u64`** — so the layering existed only to work around a
+> cardinality bound that no longer exists. What survives at the handler is a
+> *correctness* check (a response bigger than what we asked for is wrong), not a
+> resource bound. And **`margin` is therefore needed only for the tip-adjacent
+> announce path**, never for the sync horizon — which is a materially smaller
+> derivation than "cover growth across an arbitrary lag".
 
 **`margin` is the one term this round does not fix, and it is named as owed
 rather than invented.** It exists to absorb the receiver being behind the tip,
@@ -2510,39 +2609,49 @@ inventing a consensus constant from a p2p round.
 > path a batch-sized bound. *An earlier version of this table gave both
 > commands the same disposition and would have done one or the other.*
 >
-> **Its bound is the batch this node asked for.** `NOTIFY_REQUEST_GET_OBJECTS`
-> (2003) carries `std::vector<crypto::hash> blocks` (`src/cryptonote_protocol/cryptonote_protocol_defs.h:156-171`), so the
-> receiver **already knows the cardinality it requested** — the cap is that
-> count times the per-block bound, and it needs nothing from the peer.
-> §1's fourth check again: the bound comes from this node's own record of what
-> it sent, not from a claim in the response. **A response to a request this node
-> did not make has a batch size of zero**, which the same rule rejects without a
-> separate mechanism.
+> **Its resource bound is the byte budget; the requested cardinality survives
+> as correctness.** `NOTIFY_REQUEST_GET_OBJECTS` (2003) carries
+> `std::vector<crypto::hash> blocks`
+> (`src/cryptonote_protocol/cryptonote_protocol_defs.h:156-171`), so the
+> receiver **already knows the count it requested** — *the original form of
+> this passage made that count times the per-block bound the cap; that form
+> is retired by the dated correction above.* What the count still buys, at
+> the handler: **a response carrying more entries than requested is wrong
+> regardless of size**, and **a response to a request this node did not make
+> has a requested count of zero**, which the same check rejects without a
+> separate mechanism. §1's fourth check holds in its new role — the
+> correctness check comes from this node's own record of what it sent, not
+> from a claim in the response.
 
-**Enforced in two layers, because the ingress seam cannot see per-connection
-state — and it does not need to.** `BucketReader`'s hook is
-`fn(u32) -> u64` (`rust/shekyl-levin/src/reader.rs:177-185`), command-only, and
-the requested cardinality lives in per-connection handler state. Rather than
-widen the framing seam to carry connection state — which would push protocol
-policy into the framing crate, against `25-rust-architecture` — the bound
-splits along the boundary that already exists:
+**One resource bound at ingress, one correctness check at the handler — no
+longer two bounds.** `BucketReader`'s hook is `fn(u32) -> u64`
+(`rust/shekyl-levin/src/reader.rs:177-185`), command-only; with the byte
+budget the ingress cap is static and needs no per-connection state, and the
+requested cardinality — which does live in per-connection handler state —
+survives only as a correctness rule. Nothing widens the framing seam to carry
+connection state, which would push protocol policy into the framing crate
+against `25-rust-architecture`. *The original two-layer split (two resource
+bounds) is retired with the cardinality cap it existed to serve — the dated
+correction above; what remains splits by KIND:*
 
 | Layer | Bound | Why it fits there |
 | --- | --- | --- |
-| **Ingress** (`fn(u32) -> u64`) | `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT × entry_max` — **100 × entry_max** (`src/cryptonote_protocol/cryptonote_protocol_handler.h:58`) | Depends only on the receiver's own consensus state and a compile-time constant, so it is expressible in the existing signature. Bounds the allocation before any handler runs |
-| **Handler** (per connection) | the **exact** requested cardinality × `entry_max` | The request state is already there; this is a tightening, not the only bound, so nothing is unbounded if the handler check is reached late |
+| **Ingress** (`fn(u32) -> u64`) | **the byte budget** — a static value, since PWD-B3's cap for 2004 is byte-derived rather than cardinality-derived | Expressible in the existing signature *without* consensus state, and it bounds the allocation before any handler runs. *Originally stated as `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT × entry_max`; that form is retired with the cardinality bound it came from* |
+| **Handler** (per connection) | the **exact** requested cardinality | A **correctness** check — a response carrying more entries than we asked for is wrong regardless of size — and no longer a resource bound, which the ingress layer now carries alone |
 
-**The static layer is what makes the claim safe**; the per-request layer is what
-makes it tight. *An earlier version of this row asserted only the tight bound,
-which the framing seam cannot express — so it named a cap that nothing could
-enforce at ingress.* The multiple absorbs the receiver being behind the tip;
-it is a consensus-adjacent constant and is **named as owed to the consensus
-lane**, not invented here.
+**The static budget is what makes the bound safe**; the per-request check is
+what makes over-delivery detectable. *An earlier version of this passage
+asserted only a tight cardinality cap, which the framing seam cannot express
+— it named a cap nothing could enforce at ingress — and its closing sentence
+gave the tip-lag multiple a role in 2004's bound. Both are retired: `margin`
+belongs to the announce path (2008) alone, per the dated correction above,
+and nothing in 2004's byte budget is owed to the consensus lane — the budget's
+own value is owed to sync measurements instead (FOLLOWUPS).*
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
-| **Derive from the receiver's own current weight limit × a fixed margin** | The oversize-block flooder, pre-validation | **Adopted.** The only form that is a real bound at every chain height, and it uses state the receiver already has and the peer cannot influence — §1's fourth check, observation over claim |
-| A static ceiling picked to survive expected growth | The same | **Refused.** It is a number that has not yet been questioned (§1's second check); it becomes wrong in one direction or the other and gives no signal when it does |
+| **Derive from the receiver's own current weight limit × a fixed margin** | The oversize-block flooder, pre-validation | **Adopted — for the single-block announce (2008), where it is `entry_max`.** The only form that is a real bound at every chain height, and it uses state the receiver already has and the peer cannot influence — §1's fourth check, observation over claim. *Scope narrowed by the 2026-09-04 correction: 2004's batch does NOT take a cardinality multiple of this bound; it takes the byte budget of the Ruled block below* |
+| A static ceiling picked to survive expected growth | The same | **Refused** — for the announce bound this table decides. It is a number that has not yet been questioned (§1's second check); it becomes wrong in one direction or the other and gives no signal when it does. *2004's byte budget (Ruled below) is static but is not this option: it is anchored at the transport's own plaintext ceiling with truncation semantics, and its value is named as owed to sync measurements — not a growth guess standing in for a per-block bound* |
 | Keep 128 MB | The same | **Refused.** It is 32× the compact path's own inherited figure and bounds nothing a node would otherwise reject |
 
 > **Two inputs this round does not have, and the ruling says so rather than
@@ -2574,8 +2683,31 @@ lane**, not invented here.
 **Ruled, because the contradiction forces the shape even though it does not
 fix the number: `NOTIFY_RESPONSE_GET_OBJECTS` is bounded in BYTES, not by
 cardinality alone.** The responder fills a byte budget and **truncates the
-batch**, leaving the requester to ask for the remainder — which it already
-must handle, since `missed_ids` exists. A cardinality bound multiplies two
+batch**, leaving the requester to ask for the remainder.
+
+> **Corrected 2026-09-04 (review finding, verified at source): the shipped
+> requester does NOT already handle truncation.** An earlier version of this
+> passage claimed it "already must handle" the remainder "since `missed_ids`
+> exists" — but `missed_ids` is filled by the *responder*
+> (`cryptonote_protocol_handler.inl:1053`) and never consumed by the response
+> handler, which erases only the hashes actually delivered and **drops the
+> peer whenever `m_requested_objects` is non-empty afterwards** ("returned
+> not all requested objects", `:1174-1202`). A byte-budgeted responder would
+> be disconnected on every truncated batch by today's code.
+>
+> **Continuation semantics are therefore an explicit implementation action
+> riding this ruling into P2P-3** (FOLLOWUPS carries it), with two
+> constraints ruled here: *(1)* the wire must distinguish
+> **deferred-by-budget** from **genuinely unavailable** — `missed_ids` means
+> "I do not have it" and budget truncation means "I have it and ran out of
+> room"; conflating them poisons availability bookkeeping and re-request
+> routing. *(2)* The not-all-returned drop is **narrowed, never deleted** —
+> it is the withholding detector (a peer silently returning less than asked
+> is the adversary it catches), and it must keep firing whenever a shortfall
+> is not budget-marked. Deleting it to admit truncation would remove a
+> load-bearing defence to fix a wire-shape problem.
+
+A cardinality bound multiplies two
 independent worst cases (every block at maximum weight *and* maximum witness
 simultaneously), producing a buffer no honest exchange ever fills, and here it
 produces one the decompressor is required to reject.
@@ -2840,7 +2972,7 @@ and calling it resource exhaustion protection.*
 
 **Scoping the bucket to the four invoke routes would have left the entire
 cryptonote command family unmetered** — all nine `HANDLE_NOTIFY_T2` entries
-(`src/cryptonote_protocol/cryptonote_protocol_handler.h:89-98`), which carry
+(`src/cryptonote_protocol/cryptonote_protocol_handler.h:94-102`), which carry
 the blocks and the transaction batches, i.e. **the large payloads and the
 flood vector PWD-B12 exists to bound.** *A second earlier version made that
 mistake, and it is the same one twice: naming the surface I had been reading
@@ -3014,12 +3146,274 @@ has to cover.
 
 **Sum check: 4 ruled + 0 absorbed + 0 deferred = 4 rows.** ✅
 
-**Running total against the round's gate — authoritative:** **26 of 46**
+**Running total as of cluster B's second sub-round — historical:** **26 of 46**
 bucket-4 rows dispositioned — cluster I's 10 + cluster T's 8 + sub-round 1's 4
 + this sub-round's 4. **20 rows remain**, all in cluster B: `PWC-A7`,
 `PWC-B1`, `PWC-B2`, `PWC-B4`, `PWC-B5`, `PWC-B6`, `PWC-B7`, `PWC-C1`,
 `PWC-C5`, `PWC-C6`, `PWC-C8`, `PWC-E4a`, `PWC-E5`, `PWC-E7`, `PWC-E8`,
 `PWC-E9`, `PWC-E11`, `PWC-E13`, `PWC-E14`, `PWC-F4`.
+
+## 3.8 Cluster B, third sub-round — drop semantics, and one dead timer
+
+**Two decisions: PWD-B7 and PWD-B8.** The validation surface is **what we do to
+a peer whose message we reject** — distinct from *whether we accept the
+message*, which is the consensus lane's. That boundary was confirmed by
+steering before this round drafted, and it is what keeps a p2p ruling out of
+mempool acceptance.
+
+> **Scope line, stated because the subject lives in `tx_pool.cpp`.** This round
+> rules the **p2p consequence** only. It does **not** re-rule the acceptance
+> rules, and it does **not** touch `kept_by_block`'s input-check tolerance —
+> `add_tx` inserts transactions whose input check failed with
+> `fcmp_verified = 0` (`src/cryptonote_core/blockchain.cpp:6068`), contained by
+> **CEN-M8's hash-gated skip**, which is cited here as already-decided and
+> reasoned about nowhere.
+
+### PWD-B7 — a rejection justifies a drop only when it is attributable to the sender
+
+**RULED.** Today the answer is a **list** of four conditions that set
+`tvc.m_no_drop_offense`; nothing states the principle behind it, which is why
+nobody can tell whether a *fifth* condition belongs in it.
+
+> **Ruled: drop the peer only when the rejection is *attributable to the
+> sender's choice*. That requires two things together — the rejection must
+> describe the INPUT rather than our own state, *and* the rule it fails must be
+> UNIVERSAL rather than local policy.**
+
+**Both conjuncts are load-bearing, and each catches two of the four sites.**
+Steering's form of the test — *does the rejection describe the input, the
+sender, or our own state?* — disqualifies the first pair. It does **not**
+disqualify the second, which is why the universality conjunct is not
+decoration:
+
+| Site | What the rejection describes | Universal? | Verdict |
+| --- | --- | --- | --- |
+| **`:257` fee too low** | **Our own state.** The floor is computed by **`get_current_fee_per_byte`** (`src/cryptonote_core/blockchain.cpp:4372-4385`) from `m_current_block_cumul_weight_limit`, `m_db->height()`, `get_block_already_generated_coins(height-1)` and `m_long_term_effective_median_block_weight` — **our chain, at our height** — and `check_fee` (`:4388`) only compares against it | No — **CEN-M3 records there is no consensus fee floor**; it is relay-tier | **No drop.** A peer relaying below *our* floor may be entirely honest on a different valid policy |
+| **`:291` double-spend** | **Our own state.** `have_tx_keyimges_as_spent` takes `m_transactions_lock` **and** `m_blockchain` and tests against our pool and chain (`src/cryptonote_core/tx_pool.cpp:1688-1701`) | No — node-local and **reorg-dependent**; our own view changes underneath us | **No drop.** A tx conflicting in our view can be fine in theirs |
+| **`:267` oversized `tx_extra`** | **The input** — `tx.extra.size()` against a compile-time constant | **No.** The `!kept_by_block` gate says so outright: the same transaction is acceptable inside a block, so this is relay policy | **No drop.** Dropping here punishes configuration divergence |
+| **`:276` non-zero `unlock_time`** | **The input** — `tx.unlock_time` | **No**, for the same reason and by the same gate | **No drop** |
+
+**So all four are correctly no-drop, and the two pairs are correct for
+*different* reasons.** A round that applied only the state-versus-input test
+would have marked `:267` and `:276` as droppable and fractured the network
+along policy lines — every node running a slightly different `tx_extra` limit
+severing its neighbours.
+
+**The droppable class exists and is implemented by omission.** Malformed,
+unparseable and structurally invalid transactions **never set the flag**, so
+they fall through
+`if (!m_core.handle_incoming_tx(...) && !tvc.m_no_drop_offense) { drop_connection(...) }`
+(`src/cryptonote_protocol/cryptonote_protocol_handler.inl:909-913`). Nothing
+special-cases them; they drop because the carve-out does not reach them.
+**PWD-B7 states that as a rule** — form failures are context-free, universal,
+and the sender chose to send those bytes — so a future condition is decidable
+rather than inheriting whatever the default happens to be.
+
+> **Corrected 2026-09-04 (review finding, verified at source): omission does
+> not identify *form* — it identifies everything that is not one of the four
+> carve-outs, and that set includes our own failures.** Two paths return false
+> with the flag unset while the failure describes **our own state**, not the
+> input: `insert_key_images`' pool-bookkeeping invariant
+> (`src/cryptonote_core/tx_pool.cpp:785-787` — a `CHECK_AND_ASSERT_MES` whose
+> message begins "internal error"; reached from `add_tx` at `:337`/`:496`) and
+> `add_tx`'s catch-alls (`:344`, `:506-509` — "internal error: error adding
+> transaction to txpool"). Both fall through the same
+> `!tvc.m_no_drop_offense` gate
+> (`src/cryptonote_protocol/cryptonote_protocol_handler.inl:909-913`) and
+> disconnect the sender — **our own storage throwing severs an innocent
+> peer**, the exact outcome the rule forbids. The ruling stands; the
+> mechanism does not satisfy it.
+>
+> **Implementation action (rides PWD-B7 into the implementing PR; P2P-3, per
+> this round's charter):** the drop decision must key on an **affirmative**
+> input-attributable verdict, not on flag-absence. The verdict surface is
+> tri-state — *attributable form failure* (drop) / *policy-or-state
+> rejection* (no drop) / *internal failure* (no drop, loud log) — typed so
+> that an unset or newly added arm defaults to **no drop**: mis-classifying a
+> form failure as internal keeps one hostile connection alive for PWD-B1's
+> token bucket to charge, while the opposite default partitions the network
+> on our own bugs. A boolean whose absence means "droppable" is the unsound
+> surface; the type is the gate. The FOLLOWUPS queue carries this action.
+>
+> **The announce path, checked rather than assumed (same review round).** The
+> parse arm of `handle_notify_new_fluffy_block`
+> (`cryptonote_protocol_handler.inl:545-556`) is genuine *form* —
+> input-describing, universal — and its drop stands. The size arm
+> (`check_incoming_block_size`, `:536-540`) is **state-describing**: it
+> compares the blob against **our** current weight limit + 100
+> (`src/cryptonote_core/cryptonote_core.cpp:1408-1420`), and the limit a few
+> heights ahead can legally exceed ours (how fast is the consensus lane's
+> derivation — the same `margin` question, owed above). The false-drop window
+> is narrow in practice — the announce blob is header + tx hashes, far
+> smaller than the weight the limit bounds — but the test is on the wrong
+> axis for a drop under this rule, so the same implementation action carries
+> it: decline to process, do not sever.
+>
+> **The block-sync path — a third site, and the one that proves the type is
+> necessary rather than merely tidier (reviews of #620 and #628).** The
+> `prepare_handle_incoming_blocks` failure arm severs and charges the span's
+> origin. That call has **ten** syntactic `return false` sites but **fifteen
+> distinct conditions**, because `SCAN_TABLE_QUIT`'s single return serves six
+> of them. Classified by condition, not by return, they fall in **three**
+> classes:
+>
+> | Condition | Count | Describes | Attributable? |
+> | --- | --- | --- | --- |
+> | `m_cancel` — our own shutdown or cancellation | 4 | our state | no |
+> | thread-pool `!waiter.wait()` | 2 | our state | no |
+> | unparseable block blob | 2 | the input | **yes** |
+> | unparseable tx, duplicate tx, duplicate key image (via `SCAN_TABLE_QUIT`) | 3 | the input | **yes** |
+> | empty span | 1 | the input | **yes** |
+> | `tx_index is out of sync` ×2, `Tx not found on scan table` (via `SCAN_TABLE_QUIT`) | 3 | **an internal invariant of ours** | no — and this is the class PWD-B7 most clearly forbids charging for |
+>
+> **The third class was missed twice, and that is itself the lesson.** The
+> first enumeration grepped for the reasons it expected and found six; the
+> second counted syntactic returns and reported a two-way split. Both times the
+> instrument shaped the result — `SCAN_TABLE_QUIT` hides six conditions behind
+> one `return false`, so any census that counts returns undercounts conditions
+> and any census that greps its hypothesis finds only the hypothesis.
+>
+> **The first reading of this site was wrong, and recording the error is the
+> point of this paragraph.** #620 removed the id-drop's score here, and #628
+> proposed removing the sweep's too, both on the premise that a prepare failure
+> always describes our own state. It does not. **The boolean cannot say which
+> of the fifteen fired**, so the caller cannot classify the failure at all — and
+> declining to charge would let a peer feed malformed spans indefinitely,
+> reconnecting each time with no score accumulating.
+>
+> **#628 therefore withdrew its own change rather than restoring anything.**
+> The sweep charges as it always did -- that is the charge, and it is what
+> makes the failure cost the sender. The id-drop below it keeps `add_fail`
+> false, as `#620` left it and as the parse-failure sibling does, so the origin
+> is not billed twice for one failure; an earlier revision of #628 restored
+> that point and was reverted, because the redundant charge pinned a number
+> rather than the invariant. On an anonymity zone the question is moot:
+> `add_host_fail` refuses an address that names no host whoever calls it.
+>
+> **This is the concrete argument for the tri-state.** Under one bit both
+> answers are wrong: charge, and our own shutdown punishes an honest peer;
+> decline, and a hostile peer is never priced. Neither the sever nor the score
+> is separable without a classified verdict, which is why the implementation
+> action carries this site with the other two and why it belongs in Rust rather
+> than in a wider C++ signature.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **State the attributability principle; derive the list from it** | The peer we would sever for our own state or our own policy — i.e. **an honest peer**, which is the adversary a drop rule creates rather than answers | **Adopted.** It makes the fifth case decidable by whoever adds it, which the enumeration cannot do |
+| Keep the four-condition list | The same | **Refused.** It is correct today and cannot say why, so the next condition is added by resemblance |
+| Drop on anything checkable, keep only the truly unknowable | The same | **Refused — this is the trap.** "It could have checked our rule, so drop it" punishes legitimate policy divergence and fractures the network along configuration lines |
+
+**Conceded.** Attributability is a judgement at the margin: a peer that floods
+us with transactions each individually below our fee floor is not answerable
+under this rule, and **PWD-B1's token bucket is what charges that**, not the
+drop rule. Separating them is the point — a drop rule doing rate limiting's job
+is what severs honest peers.
+
+**Falsifier.** **Reopen if a rejection class appears that is universal and
+input-describing yet must not drop**, or one that is local yet must — either
+would mean attributability is the wrong axis rather than a mis-scored site.
+
+#### The inherited `TODO` is answered, not inherited
+
+`// TODO: Investigate why not?` (`src/cryptonote_core/tx_pool.cpp:282`) asks why
+block-borne transactions skip the key-image-spent check. **It is the same
+question for all four conditions**, because all four are `kept_by_block`-gated
+— `:267` and `:276` inline, `:291` by its enclosing `if`, and `:257` by
+short-circuit (`fee_good = kept_by_block || m_blockchain.check_fee(...)`).
+
+> **Answer: there is no peer to punish. That is the whole of it, and it is
+> verified at every call site rather than inferred from one.**
+>
+> `kept_by_block` **is** `(tx_relay == relay_method::block)`
+> (`src/cryptonote_core/tx_pool.cpp:229`), and **every block-owned caller
+> passes `origin = epee::net_utils::zone::invalid`** — the pop path
+> (`src/cryptonote_core/blockchain.cpp:870`), the alt-block pool supplement
+> (`:2347`), the return-taken-transaction path (`:5932`), and the block
+> importer (`src/blockchain_utilities/blockchain_import.cpp:156`), whose own
+> comment says it outright: *"Imported from a block file: nothing arrived over
+> a transport."* **No connection exists to attribute an offense to, so an
+> offense classification has nothing to classify.**
+
+**A leg this row previously rested on was wrong, and it is retracted rather
+than quietly dropped.** It read: *"documented as 'from a previously-verified
+block', so consensus has already ruled."* **`relay_method::block` does not
+prove consensus has accepted the transaction.** The importer calls
+`handle_incoming_tx(..., relay_method::block, ...)` at
+`blockchain_import.cpp:156` and only reaches `handle_incoming_block` at `:181`;
+the alt-block supplement admits before input validation
+(`blockchain.cpp:2336-2348`). **Block connect still performs consensus
+validation** — the transaction is not unvalidated, it is *not yet* validated at
+pool-admission time — but that was never the load-bearing point. *The mistake
+was trusting an inherited doc comment as a statement of invariant; the comment
+describes the common case, not the contract.*
+
+> **What makes this satisfying rather than merely correct: the inherited
+> question is answered by PWD-B7's own rule.** "Drop only when attributable"
+> disposes of it — a block-owned transaction has no attributable party, so the
+> classification the four sites skip is a classification with no subject.
+
+### PWD-B8 — the timer that is declared and never driven
+
+**RULED: `m_bad_peer_checker` is deleted.** `once_a_time_seconds<43>` has
+**exactly one occurrence tree-wide — its declaration**, at
+`src/cryptonote_protocol/cryptonote_protocol_handler.h:189` **at this round's pin** (PWC-E4a cites `:186` from its own; #612 moved it, and the census records stale pointers rather than correcting them silently) — and `on_idle`
+does not call it (PWC-E4a). A cadence constant no code reads is not a cadence; it reads
+as one to anyone auditing the file, which is the whole cost.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Delete it** | Not an adversary — **the next auditor**, who counts four timers where three run | **Adopted.** Rule 15: the mechanism does not exist, so the honest tree says so |
+| Wire it up | — | **Refused.** There is no ruling that says a bad-peer sweep is wanted, and inventing one from a leftover constant is deriving a requirement from an artifact |
+
+**Conceded, and it is small but not nothing.** If a periodic bad-peer sweep is
+ever wanted, it must be **designed** — a requirement, a cadence derived like
+PWD-B2's, and a definition of "bad" that PWD-B7 now constrains — rather than
+resurrected by wiring up a leftover. **The 43 s carries no information worth
+preserving**: it is unattributable to any Shekyl derivation, and treating it as
+a starting point would be deriving a requirement from an artifact, which is the
+option refused above.
+
+**Falsifier.** **Reopen if a requirement is specified for periodic peer
+re-evaluation that none of the three live timers can serve** — the idle-peer
+kick (8 s), the standby check (100 ms) and the sync search (101 s) — because
+that would mean the deletion removed a scheduling slot rather than a fossil.
+Checkable against the requirement, not against a benchmark.
+
+**Two lineage-dead structs go with it, and they are outside the round's gate.**
+`network_address_old` (PWC-F1) and `connection_entry_base`/`connection_entry`
+(PWC-F2, `src/p2p/p2p_protocol_defs.h:115`) have no callers — F1's only references are two lines in
+`debug_utilities/object_sizes.cpp:91-92`, **which must be deleted with it or the
+debug build breaks**. Both are **bucket 3**, not bucket 4, so they do not move
+the 46-row counter; they are ruled here because this is the sub-round that owns
+dead surface.
+
+### Cluster B third sub-round disposition
+
+| Row | Disposition | Where |
+| --- | --- | --- |
+| PWC-E7 (double-spend is a no-drop offense) | **Ruled** — no drop, and now for a stated reason: it describes our own state | PWD-B7 |
+| PWC-E8 (the three other no-drop classes) | **Ruled** — fee is our-own-state; `tx_extra` and `unlock_time` are non-universal policy | PWD-B7 |
+| PWC-E5 (idle kick 240 s; score floor `DROP_PEERS_ON_SCORE = -2`) | **Deferred — named blocker: both of its inputs are owed by rows this round did not close.** The **score floor** cannot be derived until it is known what increments the score: PWD-B7 decides *which rejections are attributable*, but the tri-state verdict that makes that operational is owed to P2P-3, and PWD-B1's bucket decides what a peer may do before scoring is reached at all — its four parameters are owed too. The **idle kick** is a liveness judgement whose 240 s has never been derived (`pinned-not-re-derived` in the census) and belongs with the cadence work. Target pre-genesis | PWD-B1, PWD-B7's P2P-3 action |
+| PWC-E9 (`drop_connections(address)` severs every connection sharing a host, +5 host-fail) | **Deferred — and the original named blocker was wrong; the corrected one is stronger** (2026-09-04 review finding, verified at source). `is_same_host` does **not** need an IP: `network_address::is_same_host` dispatches to the concrete type (`contrib/epee/src/net_utils_base.cpp:134-135`) and Tor/I2P compare hostname strings (`src/net/tor_address.cpp:181-184`, `src/net/i2p_address.cpp:165-167`). The real blockers were: **(a)** every inbound anonymity-zone peer is recorded as the zone's `unknown()` sentinel (`src/p2p/net_node.cpp:336`, `:340`) — an inbound anon peer's identity is unlearnable *by design* — so host-keying compared `unknown == unknown` and `drop_connections` would sever **every inbound anon peer at once**; **(b)** even a learnable onion identity is free to mint, so a per-host key prices nothing an adversary pays. **(a) is closed** by `fix/anon-zone-address-keying`: `is_same_host` no longer equates two addresses that name no host, and `drop_connections` returns early on one, so the sweep selects nothing rather than everything. **(b) is untouched and still defers this row** — the sweep is now safe on an anonymity zone, not useful there. Host-keyed severing therefore cannot be ported to anonymity zones for identity-policy reasons, not comparator reasons — it is the same *identity* problem as the anonymity-zone inbound cap (whose absence is `has_too_many_connections`' explicit non-public early return, `src/p2p/net_node.inl:3091-3092`, not a comparator gap), so both re-derive together, count- or work-based | PWD-I4 sub-round |
+| PWC-E4a (the never-driven 43 s timer) | **Ruled** — deleted | PWD-B8 |
+
+**Sum check: 3 ruled + 0 absorbed + 2 deferred = 5 rows.** ✅
+
+*PWC-E5 moved deferred-from-ruled in review, recorded here rather than in its
+own cell — a history note inside a verdict cell makes the cell parse as two
+verdicts at once, which is how the sum-check sweep first read it. The earlier
+version marked it ruled while the same cell said PWD-B7's rule does not reach
+it: a disposition contradicting its own justification, with no option table and
+no falsifier, which §0 requires of a ruling. The row count and the running
+total are unchanged — a deferred row is still dispositioned — but the claim
+about what this sub-round ruled is not.*
+
+**Running total against the round's gate — authoritative:** **31 of 46**
+bucket-4 rows dispositioned — cluster I's 10 + cluster T's 8 + B sub-round 1's
+4 + B sub-round 2's 4 + this sub-round's 5. **15 rows remain**, all in cluster
+B: `PWC-A7`, `PWC-B1`, `PWC-B2`, `PWC-B4`, `PWC-B5`, `PWC-B6`, `PWC-B7`,
+`PWC-C1`, `PWC-C5`, `PWC-C6`, `PWC-C8`, `PWC-E11`, `PWC-E13`, `PWC-E14`,
+`PWC-F4`.
 
 ## 4. What cluster I does not decide
 
