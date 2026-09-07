@@ -20,6 +20,7 @@
 # "it went red" is the weakest possible evidence that it went red on its own
 # axis.
 
+import ast
 import atexit
 import os
 import pathlib
@@ -103,13 +104,48 @@ def unsafe_git_calls() -> list[str]:
 # What counts as an outcome: a reported discrepancy, a stated non-coverage, or
 # a refusal to run. If the gate grows one of these and no case reaches it, this
 # matrix goes red on the next run rather than on the next review.
-OUTCOME_PREFIXES = ("errs.append(", "errors.append(", "sys.exit(", "NOTES.append(")
+# An outcome REPORTS something, so its argument is a message. That is the
+# referent test, and line-prefix matching cannot make it.
+#
+# Ported to a sibling gate, the prefix version did not find zero sites — it
+# found exactly ONE, `sys.exit(main())`, the entry point, which is not an
+# outcome at all. That is worse than matching nothing: zero is conspicuous and
+# one looks like the instrument working, and every floor here tests a COUNT
+# while a count cannot test the KIND of thing counted. So the sites are read
+# from the syntax tree and required to carry a string-shaped argument, which
+# `sys.exit(main())` does not.
+OUTCOME_CALLS = {"errs", "errors", "NOTES"}
+MIN_SITES = 20          # a detector that finds almost nothing has broken
+
+
+def _is_message(node) -> bool:
+    """A literal string, an f-string, or strings joined with +."""
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, str)
+    if isinstance(node, ast.JoinedStr):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _is_message(node.left) or _is_message(node.right)
+    if isinstance(node, ast.IfExp):
+        return _is_message(node.body) or _is_message(node.orelse)
+    return False
 
 
 def outcome_sites() -> list[tuple[int, str]]:
-    return [(i, s.strip()[:70]) for i, s in
-            enumerate(GATE.read_text(encoding="utf-8").splitlines(), 1)
-            if s.strip().startswith(OUTCOME_PREFIXES)]
+    src = GATE.read_text(encoding="utf-8")
+    lines = src.splitlines()
+    out = []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        f = node.func
+        hit = (isinstance(f, ast.Attribute) and f.attr == "append"
+               and isinstance(f.value, ast.Name) and f.value.id in OUTCOME_CALLS)
+        hit = hit or (isinstance(f, ast.Attribute) and f.attr == "exit"
+                      and isinstance(f.value, ast.Name) and f.value.id == "sys")
+        if hit and _is_message(node.args[0]):
+            out.append((node.lineno, lines[node.lineno - 1].strip()[:70]))
+    return sorted(set(out))
 
 
 def uncovered() -> list[tuple[int, str]]:
@@ -733,6 +769,11 @@ def main() -> None:
     # counting cases rather than covering the gate.
     gaps = uncovered()
     sites = outcome_sites()
+    if len(sites) < MIN_SITES:
+        sys.exit(f"FAIL: the outcome detector found only {len(sites)} site(s) "
+                 f"(floor {MIN_SITES}). Full coverage of almost nothing is the "
+                 "failure this floor exists to catch — a count cannot tell you "
+                 "WHAT it counted.")
     unsafe = unsafe_git_calls()
     print(f"depth safety: git subcommands used are "
           + (", ".join(sorted(DEPTH_SAFE)) if not unsafe
