@@ -567,7 +567,8 @@ scalars from the shard aggregate drive renderer aesthetics inside each
 algorithm. The single-algorithm palette in the sections below was the
 **fallback spec shape** if candidate.v1 failed mobile budget or continuity
 review. **Both conditions have now resolved and the fallback is RETIRED
-(2026-09-06)** — see *Fallback disposition* below. The sections that
+(2026-09-06)** — see *Fallback disposition* under *Ruling B's assigned
+residue* below. The sections that
 describe it are kept as the record of the algorithms considered, not as
 a live alternative.
 
@@ -1302,17 +1303,20 @@ tradeable*, "Concrete enforcement", verified 2026-09-04).
 These gate the V3.x ship dot-version. Each closes against design
 review and performance testing during the V3.x implementation cycle.
 
-**Final algorithm palette.** The **candidate.v1** two-stage difference
-compositor (see above) is the leading design from empirical exploration.
-Its determinism bar and the falsifiers for the closure are ruled
-(*Rendering determinism and empirical closure (ruling B)*). The
-measurement half — the floor-device budget matrix and the committed
-goldens — was executed 2026-09-06 (*Measurements of record*); what
-remains open is the ruling it forced, recorded under *Performance
-targets*, and it was ruled 2026-09-06 (the budget gives). **This
-question is CLOSED:** candidate.v1 is the palette, and the
-single-algorithm fallback is retired — *Fallback disposition* under
-*Candidate compositor*.
+**A question settled by a later ruling is kept here, marked, and
+pointed at its ruling** rather than deleted — this section is the index
+of every question this design posed, so a reader who comes looking for
+one finds where it was answered instead of finding nothing. Entries
+below carry **CLOSED** or **RULED IN PART** where that has happened.
+
+**Final algorithm palette — CLOSED (2026-09-06).** **candidate.v1 is
+the palette**, and the single-algorithm fallback is retired. Route: its
+determinism bar and falsifiers were ruled in *Rendering determinism and
+empirical closure (ruling B)*; the floor-device measurement ran
+2026-09-06 (*Measurements of record*); the ruling that measurement
+forced is recorded under *Performance targets*; and the fallback's
+disposition is *Fallback disposition: the single-algorithm palette is
+RETIRED*, under *Ruling B's assigned residue*.
 
 **Color palette specifications.** The exact RGB values for each palette
 family. Candidates: hand-curated by a designer; algorithmically
@@ -1341,7 +1345,7 @@ palette, what happens to existing rendered shards? Two paths: (a)
 shards always render with the algorithm version specified at chain
 time (immutable); (b) shards re-render with the latest algorithm
 (visual changes when wallet upgrades). Path (b) is simpler, path (a)
-is more "true to the data." **Ruled on its privacy half** — path (a),
+is more "true to the data." **RULED IN PART: ruled on its privacy half** — path (a),
 immutable render at the creation height — in *Spec version is chain data
 (algorithm-versioning ruling)*. What remains is enforcement of the height
 pin, blocked by name (rule 22) on Stage 5 creation heights: no height
