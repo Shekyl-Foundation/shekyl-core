@@ -86,6 +86,28 @@
 
 namespace cryptonote
 {
+  /*!
+   * \brief Render a peer-supplied blob for a log line: digest and length, never content.
+   *
+   * A hex dump of a rejected blob is a remote-triggerable amplifier, and these
+   * blobs are bounded only by what the transport accepts. A block blob in
+   * `NOTIFY_RESPONSE_GET_OBJECTS` has no tighter bound than levin's
+   * post-handshake `LEVIN_DEFAULT_MAX_PACKET_SIZE` (100 MB), and hex doubles
+   * it, so one packet can write ~200 MB to an operator's disk -- and the peer
+   * is free to reconnect and repeat, because these paths deliberately do not
+   * score the drop (that is PWD-B7's tri-state, not this fix).
+   *
+   * A diagnostic needs to identify the blob and size it. It never needs the
+   * bytes: an operator who has the blob can already run `cn_deserialize`, and
+   * one who does not cannot obtain it from a log line either way. The digest
+   * is what makes two reports of "the same bad block" comparable.
+   */
+  inline std::string describe_peer_blob(const blobdata& blob)
+  {
+    return epee::string_tools::pod_to_hex(get_blob_hash(blob))
+      + " (" + std::to_string(blob.size()) + " bytes)";
+  }
+
   template <class CryptoHashContainer>
   inline bool make_block_connect_supplement_from_block_entry(
     const std::vector<cryptonote::tx_blob_entry>& tx_entries,
@@ -137,7 +159,7 @@ namespace cryptonote
       if (!parse_success)
       {
         MERROR("failed to parse and/or validate transaction: "
-          << epee::string_tools::buff_to_hex_nodelimer(tx_entry.blob)
+          << describe_peer_blob(tx_entry.blob)
         );
         return false;
       }
@@ -161,7 +183,7 @@ namespace cryptonote
     if (!cryptonote::parse_and_validate_block_from_blob(blk_entry.block, blk))
     {
       MERROR("sent bad block: failed to parse and/or validate block: "
-        << epee::string_tools::buff_to_hex_nodelimer(blk_entry.block)
+        << describe_peer_blob(blk_entry.block)
       );
       return false;
     }
@@ -171,14 +193,14 @@ namespace cryptonote
     if (blk_tx_hashes.size() != blk_entry.txs.size())
     {
       MERROR("sent bad block entry: number of hashes is not equal number of tx blobs: "
-        << epee::string_tools::buff_to_hex_nodelimer(blk_entry.block)
+        << describe_peer_blob(blk_entry.block)
       );
       return false;
     }
     else if (blk_tx_hashes.size() != blk.tx_hashes.size())
     {
       MERROR("sent bad block entry: there are duplicate tx hashes in parsed block: "
-        << epee::string_tools::buff_to_hex_nodelimer(blk_entry.block));
+        << describe_peer_blob(blk_entry.block));
       return false;
     }
 
@@ -547,7 +569,7 @@ namespace cryptonote
       LOG_ERROR_CCONTEXT
       (
         "sent wrong block: failed to parse and validate block: "
-        << epee::string_tools::buff_to_hex_nodelimer(arg.b.block)
+        << describe_peer_blob(arg.b.block)
         << ", dropping connection"
       );
 
@@ -578,7 +600,7 @@ namespace cryptonote
     if (blk_txids_set.size() != new_block.tx_hashes.size())
     {
       MERROR("sent bad block entry: there are duplicate tx hashes in parsed block: "
-        << epee::string_tools::buff_to_hex_nodelimer(arg.b.block));
+        << describe_peer_blob(arg.b.block));
       drop_connection(context, false, false);
       return 1;
     }
@@ -1092,15 +1114,15 @@ namespace cryptonote
       if(!parse_and_validate_block_from_blob(arg.blocks[i].block, b, block_hash))
       {
         LOG_ERROR_CCONTEXT("sent wrong block: failed to parse and validate block: "
-          << epee::string_tools::buff_to_hex_nodelimer(arg.blocks[i].block) << ", dropping connection");
+          << describe_peer_blob(arg.blocks[i].block) << ", dropping connection");
         drop_connection(context, false, false);
         ++m_sync_bad_spans_downloaded;
         return 1;
       }
       if (b.miner_tx.vin.size() != 1 || !std::holds_alternative<txin_gen>(b.miner_tx.vin.front()))
       {
-        LOG_ERROR_CCONTEXT("sent wrong block: block: miner tx does not have exactly one txin_gen input"
-          << epee::string_tools::buff_to_hex_nodelimer(arg.blocks[i].block) << ", dropping connection");
+        LOG_ERROR_CCONTEXT("sent wrong block: block: miner tx does not have exactly one txin_gen input: "
+          << describe_peer_blob(arg.blocks[i].block) << ", dropping connection");
         drop_connection(context, false, false);
         ++m_sync_bad_spans_downloaded;
         return 1;
