@@ -143,19 +143,39 @@ def decl_token(kind: str, arg: str | None) -> str:
 def strip_code(text: str) -> str:
     """Blank out fenced and inline code, preserving line numbers.
 
+    Handles both fence characters and arbitrary delimiter lengths, because
+    CommonMark does: `~~~` opens a fence and a double-backtick span is a span.
+    A marker surviving either would opt a document into checks it never asked
+    for, and into the registry that then refuses to let it opt back out.
+
     Documenting the marker syntax must not opt a document in. This gate's own
     README section and CHANGELOG entry show the markers as examples, and the
     first version read them as declarations — so the documentation of a check
     became a subject of it. Newlines are preserved so every reported line
     number still points where a reader would look.
     """
-    out, fenced = [], False
+    out, fence = [], None          # fence = (char, length) while open
     for line in text.splitlines():
-        if line.lstrip().startswith("```"):
-            fenced = not fenced
+        m = re.match(r"\s*(`{3,}|~{3,})", line)
+        if m:
+            ch, n = m.group(1)[0], len(m.group(1))
+            if fence is None:
+                fence = (ch, n)
+                out.append("")
+                continue
+            # A fence closes only on its OWN character and at least its own
+            # length; anything else is content inside it.
+            if ch == fence[0] and n >= fence[1]:
+                fence = None
+                out.append("")
+                continue
+        if fence is not None:
             out.append("")
             continue
-        out.append("" if fenced else re.sub(r"`[^`]*`", "", line))
+        # Backreferenced delimiter, so ``a `b` c`` is one span rather than two.
+        # A fixed single-backtick pattern left the inner text exposed, and a
+        # marker written there was read as a real declaration.
+        out.append(re.sub(r"(`+)(.+?)\1", "", line))
     return "\n".join(out)
 
 
@@ -408,8 +428,29 @@ def untrusted_submodules() -> tuple[str, ...]:
                  "stale one — a weaker check wearing the stronger one's name.")
     if r is not None and not failed:
         for line in r.stdout.splitlines():
-            if line[:1] in ("-", "+", "U") and len(line.split()) >= 2:
-                out.append(line.split()[1].rstrip("/") + "/")
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            if line[:1] in ("-", "+", "U"):
+                out.append(parts[1].rstrip("/") + "/")
+                continue
+            # A leading SPACE means "HEAD matches the gitlink" and NOTHING
+            # about the worktree: `git submodule status` reports clean for a
+            # submodule with modified tracked files, verified directly. Since
+            # resolve() reads that worktree, a dirty submodule would resolve
+            # citations against content the superproject does not record — the
+            # local-vs-CI disagreement this whole guard exists to prevent,
+            # reached from the one direction the commit check cannot see.
+            d = ROOT / parts[1]
+            try:
+                dirty = subprocess.run(
+                    ["git", "-C", str(d), "status", "--porcelain"],
+                    capture_output=True, text=True, timeout=60)
+            except (OSError, subprocess.SubprocessError):    # pragma: no cover
+                out.append(parts[1].rstrip("/") + "/")
+                continue
+            if dirty.returncode != 0 or dirty.stdout.strip():
+                out.append(parts[1].rstrip("/") + "/")
     # ...and the directory test as well, not instead: it still catches a tree
     # git cannot speak for at all, which is the state every synthetic corpus in
     # the falsification matrix is in. The two detectors cover different gaps,

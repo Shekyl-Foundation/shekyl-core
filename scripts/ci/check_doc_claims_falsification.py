@@ -85,7 +85,10 @@ _HITS = _COV / "hits.txt"
 # shallow repository would be a false constraint that breaks this gate's own
 # workflow; forbidding the operations that a shallow repository cannot answer
 # is the constraint that actually matches the hazard.
-DEPTH_SAFE = {"submodule", "rev-parse", "ls-tree", "show", "config"}
+# "status" reads the WORKING TREE, not history, so it is depth-safe — added
+# when the dirty-submodule check introduced it, and the allowlist caught that
+# addition on its first run rather than letting it through unexamined.
+DEPTH_SAFE = {"submodule", "rev-parse", "ls-tree", "show", "config", "status"}
 
 
 def unsafe_git_calls() -> list[str]:
@@ -95,8 +98,14 @@ def unsafe_git_calls() -> list[str]:
         if m.group(1) not in DEPTH_SAFE:
             found.append(m.group(1))
     for m in re.finditer(r'\["git",([^\]]*)\]', src):            # literal argv
+        # The capture already starts AFTER "git", so token zero is the first
+        # ARGUMENT. Skipping it treated the subcommand as a flag whenever the
+        # call had no leading flag: `["git", "log", "-1"]` scanned as ["-1"]
+        # and matched nothing. The falsification that "proved" this scanner
+        # worked injected the -C form, which happens to survive the off-by-one
+        # — a case that tested the passing shape rather than the risky one.
         toks = re.findall(r'"([^"]+)"', m.group(1))
-        sub = next((x for x in toks[1:] if not x.startswith("-")), None)
+        sub = next((x for x in toks if not x.startswith("-")), None)
         if sub and sub not in DEPTH_SAFE:
             found.append(sub)
     return sorted(set(found))
@@ -445,6 +454,10 @@ def real_submodule(state: str):
         if state == "missing":
             shutil.rmtree(d)
             d.mkdir(parents=True)
+        if state == "dirty":
+            # HEAD still matches the gitlink, so `git submodule status` reports
+            # CLEAN — verified directly. Only a worktree check sees this.
+            (d / "inc.h").write_text("one\ntwo\nthree\nEDITED\n", encoding="utf-8")
     return f
 
 
@@ -735,6 +748,29 @@ def main() -> None:
         green("dotted §N.M is reported as not checked, not failed",
               doc=sub("See §2 for the table.", "See §2 for the table. Also DRS §6.6."),
               expect="dotted §N.M reference"),
+        case("submodule worktree is DIRTY (status still reports clean)",
+             "not checked out here",
+             doc=sub("`src/thing.cpp:3`", "`external/sub/inc.h:2`"),
+             corpus=real_submodule("dirty")),
+        # CommonMark code forms strip_code must also blank: a marker surviving
+        # either would opt a document into checks it never asked for.
+        case("marker inside a TILDE fence is not a declaration", "passes vacuously",
+             doc=GOOD.replace("<!-- claim-audit: series XX-W -->",
+                              "~~~\n<!-- claim-audit: series XX-W -->\n~~~")
+                     .replace("<!-- claim-audit: range XX-W -->", "")
+                     .replace("<!-- claim-audit: sections -->", "")
+                     .replace("<!-- claim-audit: numbered -->", "")
+                     .replace("<!-- claim-audit: counts -->", "")
+                     .replace("<!-- claim-audit: citations -->", "")),
+        case("marker inside a DOUBLE-BACKTICK span is not a declaration",
+             "passes vacuously",
+             doc=GOOD.replace("<!-- claim-audit: series XX-W -->",
+                              "``<!-- claim-audit: series XX-W -->``")
+                     .replace("<!-- claim-audit: range XX-W -->", "")
+                     .replace("<!-- claim-audit: sections -->", "")
+                     .replace("<!-- claim-audit: numbered -->", "")
+                     .replace("<!-- claim-audit: counts -->", "")
+                     .replace("<!-- claim-audit: citations -->", "")),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
