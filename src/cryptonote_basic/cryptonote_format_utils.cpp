@@ -975,7 +975,6 @@ namespace cryptonote
     }
   }
   //---------------------------------------------------------------
-  //---------------------------------------------------------------
   bool check_tx_extra_pqc_field_shape(const transaction& tx, std::string& reason)
   {
     std::vector<tx_extra_field> fields;

@@ -198,3 +198,37 @@ fn attestation_does_not_disturb_the_pqc_shape_check() {
     tx_extra::check_pqc_field_shape_of(&fields, n_out)
         .expect("an attestation field is invisible to the 0x06/0x07 shape rule");
 }
+
+/// Cross-language grammar parity for `0x0B`: the same two literals the C++ leg
+/// asserts in `tests/unit_tests/archival_credit_wire.cpp`
+/// (`attestation_field_bytes_match_the_port`). The round-trip tests on each side
+/// prove each encoder is self-consistent, which two mutually wrong encoders
+/// would also satisfy; only a shared literal tests that they agree.
+#[test]
+fn attestation_field_bytes_match_the_daemon() {
+    let non_empty = tx_extra::serialize(&[TxExtraField::ArchivalAttestation(vec![1, 2, 3])])
+        .expect("serialize attestation");
+    assert_eq!(
+        non_empty,
+        vec![0x0B, 0x03, 0x01, 0x02, 0x03],
+        "the 0x0B encoding must match the daemon byte for byte"
+    );
+
+    let empty = tx_extra::serialize(&[TxExtraField::ArchivalAttestation(Vec::new())])
+        .expect("serialize empty attestation");
+    assert_eq!(
+        empty,
+        vec![0x0B, 0x00],
+        "a present-but-empty attestation is two bytes, not zero"
+    );
+
+    // Both literals must parse back to what the daemon wrote.
+    assert_eq!(
+        tx_extra::parse(&non_empty).expect("parse"),
+        vec![TxExtraField::ArchivalAttestation(vec![1, 2, 3])]
+    );
+    assert_eq!(
+        tx_extra::parse(&empty).expect("parse empty"),
+        vec![TxExtraField::ArchivalAttestation(Vec::new())]
+    );
+}
