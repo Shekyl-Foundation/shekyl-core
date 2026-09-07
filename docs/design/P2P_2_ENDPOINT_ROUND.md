@@ -234,14 +234,34 @@ adversarial, in any zone**. Stated only as an overlay limitation, the row reads
 as clearnet-effective and overlay-limited — which is exactly the framing the
 §3.1c correction retired.
 
-> **Question routed to the deliverable, not asserted here.**
-> [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) `:146` justifies the cap as
-> *"nothing can be forged: the same-host cap (no value exists to spoof)"*.
-> **Unforgeable and adversarially binding are different properties**, and the
-> ruling above asserts only the first. Whether that distinction is recorded
-> anywhere in the adopted option's concessions is a question for that document's
-> owner — flagged rather than answered, since this round has already once
-> re-derived what it should have read.
+> **Question routed to the deliverable, not asserted here — and re-posed
+> 2026-09-06 after reading the passage properly.**
+>
+> [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) `:142-150` is a **three-tier
+> ladder** — *worst: verify a claim; better: replace it with your own
+> observation; best: bind it into the transcript* — and the same-host cap
+> appears as the **worked example of tier two**, not as a claim about its
+> adversarial strength. As that example it is **correct**: nothing is claimed,
+> so nothing can be forged.
+>
+> **So the line needs no correction. What is missing is a fourth statement the
+> ladder does not make:** tier two closes the **forgery** surface and is silent
+> on the **multiplication** surface. An observed property can still be cheap to
+> produce — a /24 gives 256 hosts, a keypair gives one onion — so "nothing to
+> spoof" and "adversarially binding" are **independent**. This is why `-43`
+> could stop leaning on the justification without the line being wrong: they
+> needed a property the ladder does not supply.
+>
+> **The risk is that the ladder reads as a completeness ordering.** A reader
+> reaching tier two concludes they have arrived somewhere adequate, and tier
+> three is stronger against a *different* problem.
+>
+> **The answerable question, therefore, is about the framework and not about
+> any adopted option:** *does the ladder need a note that tier two is silent on
+> cost-to-multiply — that a tier-two mechanism can be correct and still bound
+> nothing an adversary cares about?* Posed as "is the cap's justification
+> adequate?" it invites a defence of a line that is not wrong. Still that
+> document's owner's call.
 
 ## 5b. The decision tables
 
@@ -390,6 +410,23 @@ the strongest argument for PWD-E2(b).
 | F2 | Whatever PWD-E3/E4 rule must land **with** the `peer_id` removal, not after it | same lane — removing job 1 and job 2 with no replacement is the regression this round exists to prevent |
 | F3 | Rust shape (endpoint typestate `Candidate<Source>` → `Verified{at}` → `Stale`; `Zone` marker types with `type Dedup`/`type Announced`, distinct from `RelayZone`) | the Rust p2p node; rule-18 question of whether `RelayZone` derives from the transport zone is **not** settled here |
 | F4 | Re-home PWD-I2's eclipse-completion-oracle argument when `ANON_ZONE_SENTINEL_PEER_ID` is deleted | the removal lane — the argument outlives its subject and is the standing reason not to reintroduce per-node identity |
+
+## 5c. The check to run when the removal lane lands
+
+`-43` reports the nonce is inserted into the zone's in-flight set **before the
+request is written**, and erased on attempt termination or match. **That
+ordering is the whole of the bounded-set requirement**: if it holds, the bound
+is satisfied *by construction*; if the insert moves after the write, it is
+satisfied only while someone remembers to keep it there.
+
+> **Falsifier, to be written against that unit rather than asserted about it:**
+> a test that goes red when the insert is moved after the request write. Not
+> yet written — this round does not own that unit, and the claim is a report,
+> not an audit. Recorded so the check is not re-derived.
+
+Field placement — request-level on `COMMAND_HANDSHAKE` rather than inside
+`basic_node_data` — is right for the layering reason in §0, independently of
+whether p2p encryption ever lands.
 
 ## 6b. The chain, drawn (added 2026-09-06)
 
