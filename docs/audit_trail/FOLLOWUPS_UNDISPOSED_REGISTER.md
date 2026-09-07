@@ -22,8 +22,8 @@ each item *should* get is its owner's decision, not this document's.
 
 Against `docs/FOLLOWUPS.md` at the commit that closed the bold markers:
 
-- 350 entries total (`^- \*\*`); 196 had unclosed bold, now closed.
-- **117 are incomplete as written** and are listed below.
+- 350 entries total (`^- \*\*`); **198** had unclosed bold, now closed.
+- **119 are incomplete as written** and are listed below.
 - Nothing was truncated: across all 1,167 revisions of the file, 195 of 196
   were born at their current length; the one exception gained five characters
   in a version itself unclosed and itself mid-sentence. Recovery is **zero**.
@@ -185,3 +185,22 @@ surface. The **Owning doc** column carries the path where the entry has one.
 | 1056 | incomplete | pre-genesis | *undetermined* | Age-stratify the foundation floor AND the terminal subsidy toward |
 | 1059 | incomplete | pre-genesis | *undetermined* | L12 floor-decay schedule should be coupled to the growth↔entry |
 | 1068 | incomplete | pre-genesis | *undetermined* | Validate `prev_id` before attestation verify on the alt-chain path |
+
+## Section 3 — found by parity, after a narrower definition missed them
+
+The first pass defined "unclosed" as *fewer than two* `**` on the entry line.
+That is wrong for an entry whose first bold closes and whose **second** bold
+does not: the count is three, which is `>= 2`, so the entry passed. Two
+entries are in that shape, and both are incomplete as written. The correct
+predicate is **odd parity**, and it is what the gate uses.
+
+This is also the reconciliation of the two counts this unit started with:
+196 was mine under the narrow definition, 198 is the parity count, and 198 is
+right. A neighbouring entry (line 1032, `**Closed (spec).**`) shows the form
+these two were reaching for; the qualifier is not supplied here, because
+supplying it would be inventing content.
+
+| Line | Target | Owning doc | Entry as it stands |
+| ---: | --- | --- | --- |
+| 1029 | pre-genesis | *undetermined* | Foundation archiver key rotation (gate 4–6; pre-genesis).** **Closed |
+| 1038 | pre-genesis | *undetermined* | Archival data scope — sets A/B/C (gate 4–6; pre-genesis).** **Closed |

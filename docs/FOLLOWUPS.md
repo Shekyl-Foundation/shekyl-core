@@ -1026,7 +1026,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Soundness pass step 0: pin retrieval SLA per class (gate 4–6;**
   - Target: pre-genesis
 
-- **Foundation archiver key rotation (gate 4–6; pre-genesis).** **Closed
+- **Foundation archiver key rotation (gate 4–6; pre-genesis).** **Closed**
   - Target: pre-genesis
 
 - **Foundation bond posture (gate 4–6; pre-genesis).** **Closed (spec).**
@@ -1035,7 +1035,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`ARCHIVAL_BOND_FLOOR` numeric pin + genesis `bond_floor_atomic`**
   - Target: pre-genesis
 
-- **Archival data scope — sets A/B/C (gate 4–6; pre-genesis).** **Closed
+- **Archival data scope — sets A/B/C (gate 4–6; pre-genesis).** **Closed**
   - Target: pre-genesis
 
 - **Foundation genesis-enumeration — legal / regulatory disclosure**
