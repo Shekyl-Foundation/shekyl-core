@@ -4966,4 +4966,50 @@ FULL); `docs/WALLET_FILE_FORMAT_V1.md` discriminant table;
 `.cursor/rules/23-disposition-visibility.mdc`; wallet-rewrite audit
 plan (2026-09-07).
 
+## 2026-09-07 — Pinned wallet-envelope vectors regenerated: composition rebuild on a real derived address
+
+**Decision.** The `WALLET_FILE_FORMAT_V1` pinned vectors (`full.hex`,
+`state_for_full.hex`) are regenerated. This entry is the authorization
+the armed regenerator (`pinned_fixtures_regenerate`, gated on
+`SHEKYL_PINNED_REGEN_DECISION`) requires, and the **template** for every
+future regeneration: what moved, why, and what vouches for the new
+bytes.
+
+**What moved.**
+
+1. `expected_classical_address` was a counting pattern
+   (`0x01 ‖ 0xAA×32 ‖ 0xBB×32`) with no relation to the sealed seed. It
+   is now **derived**: the 65-byte `version ‖ spend_pk ‖ view_pk` prefix
+   of `rederive_account(master_seed, Mainnet, Bip39)` — the production
+   derivation the engine open path runs.
+2. `seed_format` was `0`, a wire byte `SeedFormat::from_u8` rejects — a
+   wallet that could not exist. It is now `0x01` (Bip39), valid with
+   `network = 0` (mainnet).
+
+**Why.** A format vector whose fields cannot co-exist in a real wallet
+exercises the sealing code but not the format's composition. The rebuilt
+fixture is internally consistent, so
+`pinned_fixture_address_derives_from_fixture_seed` (oracle: independent,
+tier 2 — the production account derivation) can check the composition
+property against the frozen bytes.
+
+**Containment note.** The doc-SSOT slice (same date) deliberately did
+*not* move these vectors — an unchanged `full.hex` was its proof that
+deleting the non-Full capability arms had no blast radius. This
+regeneration is a separate, documented format-vector rebuild, not a
+violation of that containment.
+
+**Oracle statement (rule per `50-testing.mdc`).** The vectors remain
+**self-pinned (tier 3)** drift tripwires — the sealing module vouches
+for the bytes. The composition property and the §2.6 wrap-key derivation
+carry independent (tier-2) checks alongside.
+
+**Regeneration citation used.**
+`SHEKYL_PINNED_REGEN_DECISION="2026-09-07 composition-vector rebuild on
+real derived address (KAT taxonomy PR)"`.
+
+**Reference.** `docs/test_vectors/WALLET_FILE_FORMAT_V1/manifest.json`;
+`rust/shekyl-crypto-pq/src/wallet_envelope.rs` tests module;
+`.cursor/rules/50-testing.mdc` §"Every vector declares its oracle".
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

@@ -1175,6 +1175,25 @@ mod tests {
     /// Golden HKDF outputs for the fixture `file_kek` +
     /// `expected_classical_address`.
     ///
+    /// Fixed address input for the HKDF golden tripwire below. Arbitrary
+    /// bytes with no product meaning — deliberately **not**
+    /// [`fixture_expected_address`], so the tripwire's pinned R2 value
+    /// does not silently invalidate when the sealed-fixture inputs move.
+    const TRIPWIRE_ADDR: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES] = {
+        let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
+        a[0] = 0x01;
+        let mut i = 1;
+        while i < 33 {
+            a[i] = 0xAA;
+            i += 1;
+        }
+        while i < 65 {
+            a[i] = 0xBB;
+            i += 1;
+        }
+        a
+    };
+
     /// Oracle: **self-pinned (tier 3)** — the R1/R2 values below were
     /// produced by this module and frozen. This is a drift tripwire
     /// against unintentional formula or info-string change, not a KAT.
@@ -1189,7 +1208,7 @@ mod tests {
             176, 218, 122, 95, 106, 251, 69, 182, 143, 58, 49, 203, 65,
         ];
         let r1 = derive_wrap_key_region_1(&FIXTURE_FILE_KEK_SEED);
-        let r2 = derive_wrap_key_region_2(&FIXTURE_FILE_KEK_SEED, &FIXTURE_EXPECTED_ADDRESS);
+        let r2 = derive_wrap_key_region_2(&FIXTURE_FILE_KEK_SEED, &TRIPWIRE_ADDR);
         assert_eq!(r1.as_ref(), &R1);
         assert_eq!(r2.as_ref(), &R2);
     }
@@ -1197,7 +1216,7 @@ mod tests {
     #[test]
     fn hkdf_region_wrap_keys_are_distinct() {
         let file_kek = FIXTURE_FILE_KEK_SEED;
-        let addr = FIXTURE_EXPECTED_ADDRESS;
+        let addr = TRIPWIRE_ADDR;
         let r1 = derive_wrap_key_region_1(&file_kek);
         let r2 = derive_wrap_key_region_2(&file_kek, &addr);
         assert_ne!(r1.as_ref(), r2.as_ref());
@@ -1207,11 +1226,11 @@ mod tests {
     #[test]
     fn hkdf_region1_is_independent_of_address() {
         let file_kek = FIXTURE_FILE_KEK_SEED;
-        let mut addr2 = FIXTURE_EXPECTED_ADDRESS;
+        let mut addr2 = TRIPWIRE_ADDR;
         addr2[10] ^= 0x01;
         let r1_a = derive_wrap_key_region_1(&file_kek);
         let r1_b = derive_wrap_key_region_1(&file_kek);
-        let r2_a = derive_wrap_key_region_2(&file_kek, &FIXTURE_EXPECTED_ADDRESS);
+        let r2_a = derive_wrap_key_region_2(&file_kek, &TRIPWIRE_ADDR);
         let r2_b = derive_wrap_key_region_2(&file_kek, &addr2);
         assert_eq!(r1_a.as_ref(), r1_b.as_ref());
         assert_ne!(r2_a.as_ref(), r2_b.as_ref());
@@ -1371,7 +1390,7 @@ mod tests {
             &cap,
             FIXTURE_CREATION_TIMESTAMP,
             FIXTURE_RESTORE_HEIGHT,
-            &FIXTURE_EXPECTED_ADDRESS,
+            &TRIPWIRE_ADDR,
             fixture_kdf(),
             &FIXTURE_WRAP_SALT_FULL,
             &FIXTURE_WRAP_NONCE_FULL,
@@ -1385,7 +1404,7 @@ mod tests {
         region1_plain.push(mode);
         region1_plain.push(0); // network
         region1_plain.push(0); // seed_format
-        region1_plain.extend_from_slice(&FIXTURE_EXPECTED_ADDRESS);
+        region1_plain.extend_from_slice(&TRIPWIRE_ADDR);
         region1_plain.extend_from_slice(&64u16.to_le_bytes());
         region1_plain.extend_from_slice(&master_seed);
         region1_plain.extend_from_slice(&FIXTURE_CREATION_TIMESTAMP.to_le_bytes());
@@ -1643,20 +1662,36 @@ mod tests {
         0x6E, 0x6F,
     ];
     const FIXTURE_PASSWORD: &[u8] = b"shekyl-kat-pw-v1";
-    const FIXTURE_EXPECTED_ADDRESS: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES] = {
-        let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
-        a[0] = 0x01;
-        let mut i = 1;
-        while i < 33 {
-            a[i] = 0xAA;
-            i += 1;
-        }
-        while i < 65 {
-            a[i] = 0xBB;
-            i += 1;
-        }
-        a
-    };
+    /// Wire bytes the fixture seals: mainnet, BIP-39. These are the
+    /// production-valid values (`SeedFormat::from_u8(0)` is `None`, so
+    /// the pre-2026-09-07 fixture's `seed_format = 0` described a wallet
+    /// that could not exist).
+    const FIXTURE_NETWORK: u8 = 0;
+    const FIXTURE_SEED_FORMAT: u8 = crate::account::SEED_FORMAT_BIP39;
+
+    /// The fixture wallet's expected classical address: the 65-byte
+    /// `version ‖ spend_pk ‖ view_pk` prefix derived from
+    /// [`fixture_full_seed`] on (Mainnet, Bip39) through the production
+    /// account derivation — the same path the engine open flow runs. The
+    /// sealed fixture is therefore a *composition* vector (its address
+    /// really derives from its seed), not a counting pattern;
+    /// `pinned_fixture_address_derives_from_fixture_seed` checks the
+    /// property against the frozen bytes.
+    fn fixture_expected_address() -> &'static [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES] {
+        use std::sync::OnceLock;
+        static ADDR: OnceLock<[u8; EXPECTED_CLASSICAL_ADDRESS_BYTES]> = OnceLock::new();
+        ADDR.get_or_init(|| {
+            let blob = crate::account::rederive_account(
+                &fixture_full_seed(),
+                crate::account::DerivationNetwork::Mainnet,
+                crate::account::SeedFormat::Bip39,
+            )
+            .expect("fixture seed derives");
+            let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
+            a.copy_from_slice(&blob.classical_address_bytes[..EXPECTED_CLASSICAL_ADDRESS_BYTES]);
+            a
+        })
+    }
     const FIXTURE_CREATION_TIMESTAMP: u64 = 1_700_000_000;
     const FIXTURE_RESTORE_HEIGHT: u32 = 2_500_000;
     const FIXTURE_STATE_NONCE: [u8; AEAD_NONCE_BYTES] = [
@@ -1680,12 +1715,12 @@ mod tests {
         };
         seal_keys_file_with_entropy(
             FIXTURE_PASSWORD,
-            0,
-            0,
+            FIXTURE_NETWORK,
+            FIXTURE_SEED_FORMAT,
             &cap,
             FIXTURE_CREATION_TIMESTAMP,
             FIXTURE_RESTORE_HEIGHT,
-            &FIXTURE_EXPECTED_ADDRESS,
+            fixture_expected_address(),
             fixture_kdf(),
             &FIXTURE_WRAP_SALT_FULL,
             &FIXTURE_WRAP_NONCE_FULL,
@@ -1729,12 +1764,42 @@ mod tests {
         );
         let opened = open_keys_file(FIXTURE_PASSWORD, &bytes).expect("open pinned fixture");
         assert_eq!(opened.capability_mode, CAPABILITY_FULL);
-        assert_eq!(opened.network, 0);
-        assert_eq!(opened.seed_format, 0);
+        assert_eq!(opened.network, FIXTURE_NETWORK);
+        assert_eq!(opened.seed_format, FIXTURE_SEED_FORMAT);
         assert_eq!(opened.creation_timestamp, FIXTURE_CREATION_TIMESTAMP);
         assert_eq!(opened.restore_height_hint, FIXTURE_RESTORE_HEIGHT);
-        assert_eq!(opened.expected_classical_address, FIXTURE_EXPECTED_ADDRESS);
+        assert_eq!(
+            &opened.expected_classical_address,
+            fixture_expected_address()
+        );
         assert_eq!(opened.cap_content.as_slice(), &fixture_full_seed());
+    }
+
+    /// Composition check against the **frozen** fixture bytes (oracle:
+    /// independent, tier 2 — the production account derivation
+    /// [`crate::account::rederive_account`] vouches for the value): the
+    /// address stored inside `full.hex` really is the 65-byte
+    /// `version ‖ spend_pk ‖ view_pk` prefix derived from the seed
+    /// stored next to it, under the wire (network, seed_format) the
+    /// fixture declares. This bites against a fixture regenerated with a
+    /// made-up address or invalid wire bytes; it does NOT cover the
+    /// envelope byte layout itself (the pinned round-trips do that).
+    #[test]
+    fn pinned_fixture_address_derives_from_fixture_seed() {
+        let opened = open_keys_file(FIXTURE_PASSWORD, &decode_hex_fixture(PINNED_FULL_HEX))
+            .expect("open pinned fixture");
+        let net = crate::account::DerivationNetwork::from_u8(opened.network)
+            .expect("fixture network byte must be a real network");
+        let fmt = crate::account::SeedFormat::from_u8(opened.seed_format)
+            .expect("fixture seed_format byte must be a real seed format");
+        let mut seed = [0u8; 64];
+        seed.copy_from_slice(opened.cap_content.as_slice());
+        let blob = crate::account::rederive_account(&seed, net, fmt).expect("derive");
+        assert_eq!(
+            &blob.classical_address_bytes[..EXPECTED_CLASSICAL_ADDRESS_BYTES],
+            &opened.expected_classical_address,
+            "fixture address does not derive from the fixture seed"
+        );
     }
 
     #[test]
@@ -1795,6 +1860,10 @@ mod tests {
              a format decision, not a test fix — see 50-testing.mdc."
         );
         eprintln!("regenerating pinned vectors under decision: {decision}");
+        eprintln!(
+            "fixture expected_classical_address (derived, 65B) = {}",
+            hex::encode(fixture_expected_address())
+        );
         eprintln!(
             "reminder: commit the decision-log entry and update \
              docs/test_vectors/WALLET_FILE_FORMAT_V1/manifest.json in the same change"
