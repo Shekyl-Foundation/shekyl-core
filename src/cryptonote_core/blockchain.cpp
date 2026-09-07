@@ -216,6 +216,9 @@ Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_long_term_block_weights_cache_rolling_median(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE),
   m_difficulty_for_next_block_top_hash(crypto::null_hash),
   m_difficulty_for_next_block(1),
+  m_tx_volume_avg_top_hash(crypto::null_hash),
+  m_tx_volume_avg_height(0),
+  m_tx_volume_avg_value(0),
   m_btc_valid(false),
   m_genesis_timestamp(0),
   m_batch_success(true),
@@ -2056,14 +2059,53 @@ uint64_t Blockchain::get_tx_volume_avg(uint64_t height) const
   if (blocks == 0)
     return 0;
 
+  // MEMOIZED, and it has to be. This walks SHEKYL_TX_VOLUME_WINDOW (720)
+  // blocks and `get_block_from_height` loads and PARSES each full block
+  // blob only to read `tx_hashes.size()`. Validation, `check_fee`
+  // admission, the info RPC and the fee estimate all land here, so a
+  // wallet polling its own node for a quote between blocks would re-walk
+  // 720 blocks per call while the estimate path holds the blockchain
+  // lock: the daemon stalling its own operator. That is the case worth
+  // preventing. We deliberately do NOT model a remote attacker — the
+  // daemon RPC is not recommended to be internet-exposed, and exposing it
+  // is a configuration decision this function cannot defend against.
+  //
+  // The key is (top block hash, height), which makes this a memoization
+  // of a pure function of chain state and NOT daemon-local held state:
+  // every node at the same tip returns the same value, and a reorg
+  // changes the top hash so the entry simply misses. That distinction is
+  // load-bearing on this path — FL-R3 is the record of what held state
+  // does to a served fee — and the shape is the one
+  // `get_difficulty_for_next_block` already uses.
+  //
+  // One entry: alternating heights under one tip degrade to the
+  // uncached cost, which is the pre-existing behaviour, while the
+  // repeated-same-height case that motivates this becomes O(1). The
+  // structural fix — a cheap per-block tx count in the storage layer,
+  // so even a cold call stops parsing blobs — belongs to the storage
+  // lane and is queued in FOLLOWUPS.
+  const crypto::hash top_hash = get_tail_id();
+  {
+    CRITICAL_REGION_LOCAL(m_tx_volume_avg_lock);
+    if (top_hash == m_tx_volume_avg_top_hash && height == m_tx_volume_avg_height)
+      return m_tx_volume_avg_value;
+  }
+
   uint64_t tx_count_sum = 0;
   for (uint64_t h = start_height; h < height; ++h)
   {
     const block blk = m_db->get_block_from_height(h);
     tx_count_sum += blk.tx_hashes.size();
   }
+  const uint64_t avg = tx_count_sum / blocks;
 
-  return tx_count_sum / blocks;
+  {
+    CRITICAL_REGION_LOCAL(m_tx_volume_avg_lock);
+    m_tx_volume_avg_top_hash = top_hash;
+    m_tx_volume_avg_height = height;
+    m_tx_volume_avg_value = avg;
+  }
+  return avg;
 }
 //------------------------------------------------------------------
 // for an alternate chain, get the timestamps from the main chain to complete

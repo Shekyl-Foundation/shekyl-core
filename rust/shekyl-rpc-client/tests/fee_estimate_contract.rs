@@ -41,13 +41,29 @@ fn the_daemons_captured_reply_parses_and_carries_four_tiers() {
         FeeTier::Medium,
         FeeTier::High,
     ];
-    // Ascending and distinct: a mapping that collapsed two tiers, or an
-    // estimator that returned the same number four times, would make the
-    // tier choice unobservable in every other test.
+    // FOUR SLOTS, THREE TIERS (FL-R17 + the RK-5 wire bridge). The
+    // strictly-ascending assertion this replaces encoded the retired
+    // contract: the daemon now serves `fees[2]` as a MIRROR of `fees[1]`,
+    // so no reply it can emit is strictly ascending, and the vector this
+    // reads was carrying a shape the producer had stopped producing.
+    //
+    // Asserting the bridge is strictly stronger than asserting distinctness
+    // was. The old check would pass on any four ascending numbers; this one
+    // goes red if the bridge slot ever drifts from standard — which is the
+    // failure that matters, because a `Medium` caller silently paying
+    // something other than the standard rate leaves the largest anonymity
+    // set without anyone noticing.
     let values: Vec<u64> = tiers.iter().map(|t| reply.fees.get(*t)).collect();
+    assert_eq!(
+        reply.fees.get(FeeTier::Medium),
+        reply.fees.get(FeeTier::Normal),
+        "slot 2 is the RK-5 bridge and must mirror standard: {values:?}"
+    );
+    let distinct = [FeeTier::Low, FeeTier::Normal, FeeTier::High];
+    let priced: Vec<u64> = distinct.iter().map(|t| reply.fees.get(*t)).collect();
     assert!(
-        values.windows(2).all(|w| w[0] < w[1]),
-        "tiers must ascend: {values:?}"
+        priced.windows(2).all(|w| w[0] < w[1]),
+        "the three priced tiers must ascend: {priced:?}"
     );
 }
 

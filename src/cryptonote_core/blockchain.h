@@ -1251,6 +1251,15 @@ namespace cryptonote
     crypto::hash m_difficulty_for_next_block_top_hash;
     difficulty_type m_difficulty_for_next_block;
 
+    // Memo for get_tx_volume_avg, keyed on (top block hash, height) so it
+    // is a memoization of a pure function of chain state and never a held
+    // value two nodes could disagree on. See the function for why it is
+    // needed.
+    mutable epee::critical_section m_tx_volume_avg_lock;
+    mutable crypto::hash m_tx_volume_avg_top_hash;
+    mutable uint64_t m_tx_volume_avg_height;
+    mutable uint64_t m_tx_volume_avg_value;
+
     boost::asio::io_context m_async_service;
     boost::thread_group m_async_pool;
     std::unique_ptr<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>> m_async_work_idle;

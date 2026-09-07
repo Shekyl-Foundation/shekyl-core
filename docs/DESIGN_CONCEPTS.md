@@ -114,10 +114,14 @@ In Cryptonote-family code, `MONEY_SUPPLY` is interpreted in **atomic units**, no
   (`config/economics_params.json`: `"display_decimal_point": 9`,
   `"coin": 1000000000`); see §3.
 
-Reward logic in `src/cryptonote_basic/cryptonote_basic_impl.cpp`:
+Reward logic is **Rust-owned**, in `shekyl-economics::emission`.
+`src/cryptonote_basic/cryptonote_basic_impl.cpp` is a marshal-only shim
+that computes nothing (#640):
 
-- `curve = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor` (saturating at zero; the paid reward is `max(M_r·curve, TAIL)·penalty` per FL-R12′)
-- `base_reward` is clamped to a minimum via `FINAL_SUBSIDY_PER_MINUTE`
+- `curve = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor`, saturating at zero
+- the paid reward is the FL-R12′ signed composition `max(M_r·curve, TAIL)·penalty(x)` — the release multiplier applies to the **curve**, the tail floors the modulated result, and the weight penalty applies **last**, to the paid quantity
+- so the tail is a floor on the composition, **not** a clamp staged onto `base_reward`: multiplying an already-floored reward is the shape FL-R12′ retired, because at a perpetual tail there is nothing left to pace and a multiplied floor pays least exactly when fees are lowest
+- there is no remaining-supply cap; the accumulator runs *through* the curve's asymptote, which is a landmark rather than an end
 
 Given the mismatch above, the original chain effectively entered minimum-subsidy behavior immediately.
 
