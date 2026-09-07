@@ -107,7 +107,7 @@ pub const CALIBRATION_GENERATION: u32 = 0;
 /// (or [`EconomicParams::try_escalation`]), which is the typed door for apply.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EconomicParamsError {
-    /// Escalation shape (§6.1) rejected by [`EscalationParams::try_new`].
+    /// Escalation shape (§6.1) rejected by [`EscalationParams::try_new`](crate::escalation::EscalationParams::try_new).
     #[error(transparent)]
     Escalation(#[from] crate::escalation::EscalationShapeError),
 }

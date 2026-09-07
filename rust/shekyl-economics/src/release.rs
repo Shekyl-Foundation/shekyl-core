@@ -62,10 +62,23 @@ mod tests {
     /// wrapping cast this replaces landed on `release_min` instead — the
     /// far end of the range — because truncation makes a huge ratio look
     /// small and `clamp` cannot tell the difference.
+    ///
+    /// The input is chosen to DISCRIMINATE, which most inputs past the
+    /// rail do not: `u64::MAX` wraps to `2⁶⁴ − 10⁶`, still enormous, so
+    /// both the wrapping and the saturating form clamp to `release_max`
+    /// and a test built on it passes either way. `⌈2⁶⁴/SCALE⌉` puts the
+    /// product just past the rail, so it wraps to 448 384 — below
+    /// `release_min` — and the two forms separate: 800 000 wrapping,
+    /// 1 300 000 saturating.
     #[test]
     fn a_ratio_past_the_rail_clamps_to_the_top_not_the_bottom() {
-        let got = calc_release_multiplier(u64::MAX, 1, 800_000, 1_300_000);
-        assert_eq!(got, 1_300_000, "saturating ratio must clamp at release_max");
+        let just_past_the_rail = 18_446_744_073_710u64; // ⌈2⁶⁴ / SCALE⌉
+        let got = calc_release_multiplier(just_past_the_rail, 1, 800_000, 1_300_000);
+        assert_eq!(
+            got, 1_300_000,
+            "a ratio past the rail belongs at release_max; \
+             a wrapping cast puts it at release_min instead"
+        );
     }
 
     #[test]

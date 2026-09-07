@@ -212,7 +212,7 @@ pub fn base_emission_at(height: u64, params: &EconomicParams) -> Result<u64, Emi
 /// Kept as the 81-vector KAT's call shape so those pins stay on one
 /// function. C++ marshals [`paid_block_reward`] through `shekyl_block_reward`,
 /// not this alias. Domain and overflow behaviour are those of
-/// [`apply_weight_penalty`].
+/// `apply_weight_penalty` (crate-private).
 pub fn block_reward_with_penalty(
     median_weight: u64,
     current_block_weight: u64,
