@@ -1,6 +1,8 @@
 # P2P-2 cluster E — the node's own endpoint
 
-**Status:** OPEN — design round, wargame pending. Rule 26 is cited explicitly
+**Status:** OPEN, NARROWED 2026-09-06 — **PWD-E1, PWD-E2 only** (endpoint
+determination). PWD-E3/E4 were already ruled and merged on `dev`; PWD-E5/E6 are
+settled. See §0 before reading anything else. Rule 26 is cited explicitly
 (`26-sub-pr-design-discipline.mdc`): this is a multi-round design surface with
 untrusted-input and identity coupling, so A2 (audit-against-actual-code) and
 A3 (threat-model framing) are load-bearing here, not optional.
@@ -14,6 +16,52 @@ beyond what those lanes already scope (rule 20).
 **Pinned sha:** `93e7860ba2755fbd61614f0fe5bbed66f83b920a` (`dev` tip,
 `git ls-remote origin`-verified 2026-09-06). Every `file:line` below was read
 at this sha.
+
+---
+
+## 0. Correction (2026-09-06) — this round opened too wide
+
+**PWD-E3 and PWD-E4 were already ruled and are merged on `dev`.** They are
+retained below as **RULED ELSEWHERE** rows, with pins, rather than deleted —
+but they are not open, and nothing in this round re-decides them. The failure
+was mine: I opened the round without reading its own family's deliverable,
+[`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md), whose peer-identity section
+already carries the adopted option at `:639` —
+
+> *No identifier on the wire; nonce + same-host cap + local session-state flag,
+> and the back-ping deleted outright* — **Adopted.**
+
+**What that costs the round beyond two tables.** The deliverable enumerates
+**four** jobs for `peer_id` (`:639`: "two are nonce-shaped, one is better
+served by an address cap, one is *weakened* by the exposure"). §3 below found
+**two**. The two-jobs framing was presented as this round's load-bearing
+discovery; it is a **subset of a more complete table that already existed**,
+and it should have been cited, not re-derived.
+
+**What survives, and why the round stays open.**
+
+- **PWD-E1 / PWD-E2 — endpoint determination — are genuinely open.** The
+  deliverable rules what replaces `peer_id`; it does not rule how a node
+  learns its own reachable endpoint. `p2p/basic-node-data-address`'s execution
+  note defers to this round by name for exactly that.
+- **§3's `m_our_address` fact is new and load-bearing.** The public zone's
+  pre-dial self-check is **dead**, not merely weaker — assigned only inside
+  the `--anonymous-inbound` block. `-43` reports this corrects what steering
+  was told, and their note now records it credited here.
+- **§4's finding stands as a record, not an open item.** It dies with
+  `peerlist_entry.id`, which `-43`'s worktree already removes (verified: zero
+  `peerid_type id` occurrences in their `p2p_protocol_defs.h`). It is kept
+  because it is evidence *for* the adopted ruling.
+- **PWD-E6** records Rick's `--p2p-external-port` ruling and is unaffected.
+
+**One consequence for PWD-E2, from the same line.** The adopted option deletes
+the **back-ping outright**. E2(b) was written as a reuse of that machinery; it
+is not available, so E2(b) must specify its own dial-back mechanism or be
+withdrawn. **This is now E2's first open question.**
+
+**Pin note (verified, not assumed).** `-43` builds on `dev` `66bcf1f0f`; this
+round pins `93e7860ba`. The gap changes four files and **none under
+`src/p2p/`**, so every `file:line` below is identical at both pins.
 
 ---
 
@@ -164,7 +212,14 @@ proof, and it fails against a peer that learned another endpoint of ours from
 gossip. **State it as a conditional guarantee; do not cite (b) as
 unconditional reachability proof.**
 
-### PWD-E3 — self-dial avoidance once `peer_id` is gone
+### PWD-E3 — self-dial avoidance once `peer_id` is gone — **RULED ELSEWHERE, NOT OPEN**
+
+> **Ruled on `dev`:** zone-scoped handshake nonce, owner **PWD-T1**, with a
+> **stem-width** falsifier because the failure mode is an undetected self-edge
+> rather than a wasted dial ([`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md)
+> `:602-628`, `:639`). The zone scoping is a *requirement*, not a detail: a
+> naive nonce re-creates the cross-zone oracle `handle_handshake` already warns
+> about. The table below is retained as records-was; it does not rule.
 
 | Option | Adversary / channel | Concedes | Falsifier |
 |---|---|---|---|
@@ -177,7 +232,15 @@ an optimisation that saves the wasted dial. Note the dependency direction:
 **the nonce is what makes PWD-E2(a) possible at all**, so it is upstream of the
 address, not replaced by it.
 
-### PWD-E4 — cross-port duplicate avoidance (job 2)
+### PWD-E4 — cross-port duplicate avoidance (job 2) — **RULED ELSEWHERE, NOT OPEN**
+
+> **Ruled on `dev`:** address-based same-host outbound cap
+> ([`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) `:519`, `:639`), with the
+> multi-node-host concession stated against the invariant rather than a number,
+> and PWD-B9 owning the value. My proposed (a) — reuse
+> `has_too_many_connections` — matches what `-43`'s unit reports it will do, so
+> the pointer stands even though the decision was not mine to make. Retained as
+> records-was.
 
 | Option | Adversary / channel | Concedes | Falsifier |
 |---|---|---|---|
