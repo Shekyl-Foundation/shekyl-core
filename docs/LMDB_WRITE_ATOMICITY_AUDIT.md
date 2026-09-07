@@ -385,9 +385,9 @@ and `open()` carries DRS-W10 above.
 
 ## 5c. Standalone write paths outside any block
 
-Six writers run under neither a block funnel nor a prune — four
-production paths and two test-support seams — and the coverage matrix
-routes to this section:
+Seven writers run under neither a block funnel nor a prune — four
+production paths, one nettype-fenced RPC injector, and two test-support
+seams — and the coverage matrix routes to this section:
 
 **`set_settlement_epoch_blocks_pin`** (`:5013`): an init-time write from
 `Blockchain::init` (`blockchain.cpp:652`), guarded by `is_read_only()` so an
@@ -428,21 +428,37 @@ observations belong on the record:
   (CEN-L8). An unwired writer's atomicity is a claim about code nobody
   runs, which is worth knowing before the Rust store reproduces it.
 
-**`drop_hard_fork_info`** (`:4675`): deletes **both** hard-fork tables —
-`mdb_drop(…, del=1)` on `hf_starting_heights` and `hf_versions` — under
-one `TXN_PREFIX(0)`, which joins an active batch if one exists and
-otherwise opens and commits its own transaction. Both drops share that
-transaction, so the pair cannot half-apply. Like the pop path in §3, it
-is reached by a shipped tool rather than by the node: `blockchain_import
---drop-hard-fork` calls it directly and then deinitialises
-(`blockchain_import.cpp:788`–`:793`). Worth stating for the port:
-`del=1` **deletes the databases**, not just their contents, and
-`hf_versions` is re-created by the next `open()` while
-`hf_starting_heights` is dropped again on that same open (DRS-W5) — so
-after this tool runs, the two tables the operator asked to drop end up
-in different states, one restored and one not. That is a property of
-`open()`'s unconditional drop, not of this path, and it is DRS-W5's
-consequence rather than a new finding. **Verdict: PASS.**
+**`drop_hard_fork_info`** (`:4675`): intended to delete **both** hard-fork
+tables under one `TXN_PREFIX(0)`. It cannot, and the reason is DRS-W5
+reaching further than the table count. LMDB's `del=1` does not only delete
+the database — it **closes the handle**: the header says so ("delete it
+from the environment and close the DB handle",
+`liblmdb/lmdb.h:1216`–`:1225`) and the implementation marks the slot
+`DB_STALE` and calls `mdb_dbi_close` (`mdb.c:10970`–`:10973`). Every
+writable `open()` already does exactly that to `m_hf_starting_heights`
+(`:1778`), so by the time this function runs, its first argument is a
+handle LMDB has closed. The first `mdb_drop` therefore fails and the
+function throws (`:4683`) **before reaching the `hf_versions` drop**:
+`blockchain_import --drop-hard-fork` (`blockchain_import.cpp:788`–`:793`)
+cannot do the thing it exists to do (**DRS-W11**).
+
+The transaction property still holds — nothing half-applies, because
+nothing applies — but the earlier reading of this path ("both drops share
+one transaction, so the pair cannot half-apply") was resting on a handle
+that was already closed, which is a verdict about code that cannot run
+rather than about atomicity.
+
+One consequence is worth recording as spec-derived rather than observed:
+LMDB documents that a closed handle's slot may be **reused** by a later
+`mdb_dbi_open`, so a stale member handle can come to name a different
+table. Nothing in this tree demonstrates that path — `drop_hard_fork_info`
+throws first, and it is the only other user of the member — but "a member
+handle that outlives its database" is the shape, and the Rust store's rule
+follows from it: deleting a table consumes its handle, so a stale one is
+unrepresentable rather than merely unused.
+
+**Verdict: FAILS in the shipped tool**, recorded as DRS-W11; atomicity
+itself is not the defect.
 
 **`set_archival_settlement`** (`:7410`): writes one `archival_settlement`
 row through the **caller's** transaction — it does not open one. It
@@ -460,6 +476,17 @@ slash pass rather than at epoch close). An unwired writer's atomicity is
 a claim about code nobody runs, exactly as with
 `correct_block_cumulative_difficulties` above; both are recorded so the
 Rust store ports a *decision* rather than a dormant path.
+
+**`Blockchain::regtest_inject_archival_serve_credit`** (`blockchain.cpp:5238`):
+a live RPC-reachable writer — `on_inject_archival_serve_credit`
+(`core_rpc_server.cpp:1078`) drives it — that sets one
+`archival_serve_credit` bit outside connect, pop and prune. It opens its
+own `db_wtxn_guard` (a no-op under a batch, its own transaction
+otherwise) around a single `set_archival_serve_credit_bit`, so it is
+atomic by construction, and it is **nettype-fenced**: the first thing it
+does is refuse unless `m_nettype == FAKECHAIN` (`:5242`), which is
+rule 71's shape — the divergence is named, loud, and confined to the
+test network rather than branching consensus behaviour. **Verdict: PASS.**
 
 **Two test-support writers** complete the write-path census and are named
 here so "every write path" is a claim rather than a hope:
@@ -599,6 +626,7 @@ on the unguarded set.
 | DRS-W8 | `correct_block_cumulative_difficulties` (`:3034`) aborts explicitly on its size-mismatch guard but not on its loop throws — and there is no stack owner to unwind them: `block_wtxn_start` heap-allocates into `m_write_txn` (`:4311`) and only stop/abort delete and clear it (`:4344`, `:4361`). A loop throw therefore leaves the LMDB write transaction **live** and the member non-null, so the next `block_wtxn_start()` throws `DB_ERROR_TXN_START` and every subsequent block write fails until the process restarts. It also has **no production caller** (§5c) | wart (no partial commit — nothing commits — but a **poisoned writer**, not merely an open transaction; unwired today) | RECORD-AND-SPECIFY: one unwinding path in the Rust store, and a write handle whose lifetime is owned by the scope that opened it rather than by a raw member pointer |
 | DRS-W9 | The connect-side burn pair (`add_block_burn` + `total_burned` increment, `blockchain.cpp:6453`–`:6466`) runs **after** the try whose catches set `m_batch_success = false`. A throw between the two unwinds to `add_new_block`'s outer catch, which sets only `bvc`, so `cleanup_handle_incoming_blocks` still calls `batch_stop()`: the block, its txs and the `block_burn` row commit **without** the aggregate — a partial commit of one logical unit, and the production entry for a too-LOW `total_burned` that DRS-W7 lacked | wart (**the most severe of this set, and still not S-graded**: no consensus arithmetic reads the scalar and no fund-safety consequence follows, and the window needs an LMDB-level write failure — but it can leave a node whose next slash revert trips the `:6362` FATAL underflow, a local halt, and it falsified a PASS this audit had published) | RECORD-AND-SPECIFY, converging with DRS-W6: the burn bookkeeping is core-layer on **both** connect and pop, so neither side inherits the funnel's failure semantics. In the Rust store both belong **inside** the funnel |
 | DRS-W10 | `open()`'s older-DB exit **commits before it refuses**: `txn.commit()` runs, then `migrate()` throws (`:1819`-ff), so the table creations and the `hf_starting_heights` drop persist on a store the binary just declined to open (§5b) | wart (no partial transaction and no unsound state — the refusal's remedy is delete-and-resync, so nothing survives to be inconsistent; recorded because the shape does not survive a store that *can* migrate) | RECORD-AND-SPECIFY: in the Rust store, an open that fails leaves the store as it found it — structural changes commit only on the path that succeeds |
+| DRS-W11 | `drop_hard_fork_info` (`:4675`) reuses `m_hf_starting_heights`, a handle every writable `open()` has already **closed** — LMDB's `del=1` deletes the database *and* closes the handle (`lmdb.h:1216`–`:1225`; `mdb.c:10970`–`:10973`). The first `mdb_drop` fails and the function throws before reaching the `hf_versions` drop, so the shipped `blockchain_import --drop-hard-fork` cannot do its job. Spec-derived consequence, not observed here: a closed handle's slot may be reused, so a stale member handle can come to name a different table (§5c) | wart (**loud, not silent** — the tool throws `DB_ERROR` rather than dropping the wrong thing, and it is the only other user of the member; graded on that, not on the aliasing path, which nothing in this tree reaches) | RECORD-AND-SPECIFY: in the Rust store, deleting a table **consumes** its handle, so a stale handle is unrepresentable rather than merely unused. Whether `--drop-hard-fork` should work at all is the census/R4 question, not this pass's |
 | — | `hf_versions` not cleaned on pop | carried | P0c wart row (owned there since April; not re-opened here) |
 | — | Dead schema-doc row: `properties` key `staker_pool_balance` + both accessors, zero occurrences in `src/` | doc defect | fixed in this PR (`LMDB_SCHEMA.md` row and the Staking-section pointer) |
 
@@ -653,15 +681,15 @@ every row of the table that follows:
 | `archival_bond_holdings_update_log` | journal helpers | §2/§3/§7/§8 |
 | `archival_bond_rebond_log` | journal helpers | §2/§3/§7/§8 |
 | `archival_bond_unbond_log` | journal helpers (`archival_journal_put/delete`, param dbi) | §2/§3/§7/§8 |
-| `archival_budget` | epoch close put; `delete_…_for/before_epoch` | §2/§5a |
+| `archival_budget` | epoch-close put; `delete_archival_budget_for_epoch` — the **pop-side** revert (`revert_archival_epoch_close_at_height`, `:8536`); `delete_archival_budget_before_epoch` — the retention prune | §2/§3/§5a |
 | `archival_budget_accrual` | `add/remove_archival_budget_accrual`; `delete_…_before_height` | §2/§3/§5a |
 | `archival_emission_claim_log` | journal helpers | §2/§3/§7/§8 |
 | `archival_epoch_close_log` | `process/revert_archival_epoch_close_at_height` | §2/§3 |
-| `archival_r_market` | epoch close put; `delete_…_for/before_epoch` | §2/§5a |
-| `archival_serve_credit` | `set/remove_archival_serve_credit_bit`; `delete_archival_serve_credit_before_epoch` (retention prune) | §2/§3/§5a |
-| `archival_settlement` | `set_archival_settlement` — caller's txn, unwired (CEN-L8); `delete_…_for/before_epoch` (prune) | §5a/§5c |
-| `archival_shard_segment` | `put_archival_shard_segment`; `revert_archival_segment_freezes`; corruption-test put | §2/§3 |
-| `archival_sigma_work` | epoch close put; `delete_…_for/before_epoch` | §2/§5a |
+| `archival_r_market` | epoch-close put; `delete_archival_r_market_for_epoch` — **pop-side** revert (`:8528`); `delete_archival_r_market_before_epoch` — retention prune | §2/§3/§5a |
+| `archival_serve_credit` | `set/remove_archival_serve_credit_bit`; `delete_archival_serve_credit_before_epoch` (retention prune); FAKECHAIN-fenced RPC injector `regtest_inject_archival_serve_credit` (§5c) | §2/§3/§5a/§5c |
+| `archival_settlement` | `set_archival_settlement` — caller's txn, unwired (CEN-L8); `delete_archival_settlement_for_epoch` — **pop-side**, from `revert_archival_slashes_at_height` (`:6423`), not a prune; `delete_archival_settlement_before_epoch` — retention prune | §3/§5a/§5c |
+| `archival_shard_segment` | `put_archival_shard_segment`; `revert_archival_segment_freezes`; corruption-test put (§5c) | §2/§3/§5c |
+| `archival_sigma_work` | epoch-close put; `delete_archival_sigma_work_for_epoch` — **pop-side** revert (`:8529`); `delete_archival_sigma_work_before_epoch` — retention prune | §2/§3/§5a |
 | `archival_slash_applied` | `set/remove_archival_slash_applied` | §2/§3 |
 | `archival_slash_log` | `append_archival_slash_log`; `revert_archival_slashes_at_height` | §2/§3 |
 | `block_burn` | `add_block_burn` / `remove_block_burn` | §2/§3 |
@@ -670,7 +698,7 @@ every row of the table that follows:
 | `block_pending_additions` | `add_block_pending_addition`; `remove_block_pending_additions` | §2/§3 |
 | `blocks` | `add_block` / `remove_block` (`m_wcursors`) | §2/§3 |
 | `curve_tree_checkpoints` | `save_curve_tree_checkpoint`; `prune_curve_tree_intermediate_layers` | §2/§3 |
-| `curve_tree_layers` | `grow/trim_curve_tree`; `prune_curve_tree_intermediate_layers`; corruption-test del | §2/§3 |
+| `curve_tree_layers` | `grow/trim_curve_tree`; `prune_curve_tree_intermediate_layers`; corruption-test del (§5c) | §2/§3/§5c |
 | `curve_tree_leaves` | `grow_curve_tree` / `trim_curve_tree` | §2/§3 |
 | `curve_tree_meta` | `grow/trim_curve_tree` | §2/§3 |
 | `curve_tree_roots` | `store/remove_curve_tree_root_at_height` | §2/§3 |
