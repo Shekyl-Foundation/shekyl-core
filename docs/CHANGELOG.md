@@ -20,10 +20,15 @@
   would not have fixed this: encryption is a privacy mechanism for the peer
   graph, and verification is what supplies trust.
 
-  **Operator-visible effects.** A wrong or unreachable `--add-peer` address no
-  longer sits in the peerlist permanently and is no longer gossiped to other
-  nodes — it is evicted on the first failed dial, so a typo now shows up as a
-  missing peer instead of a silently propagated dead address. Seed contact is
+  **Operator-visible effects.** A wrong or unreachable `--add-peer` address is
+  **no longer gossiped to other nodes** — gray entries are never disclosed, so
+  a typo stops propagating immediately instead of being handed to every peer
+  that syncs with you. Its **removal is eventual, not immediate**: a failed
+  refill dial only records the address in the recently-failed cache, and
+  eviction waits for the periodic housekeeping probe to draw that entry (one
+  random gray peer per zone per cycle) and fail. A bad address can therefore
+  survive many failed dials and restarts; what changes is that it no longer
+  spreads, and no longer occupies a preferentially-dialled slot. Seed contact is
   keyed on holding **no candidate at all** rather than no trusted one, so a
   restarting node dials its stored pool instead of visiting a seed first. The
   first start after upgrading is a cold-ish start: the persisted store's

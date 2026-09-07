@@ -30,9 +30,56 @@
 
 #include "gtest/gtest.h"
 
+#include <boost/archive/portable_binary_oarchive.hpp>
+#include <boost/serialization/version.hpp>
+#include <boost/serialization/vector.hpp>
+
 #include "common/util.h"
 #include "p2p/net_peerlist.h"
+#include "p2p/net_peerlist_boost_serialization.h"
 #include "net/net_utils_base.h"
+
+namespace
+{
+  // A store whose declared class version is BELOW current. The version gate is
+  // the whole mechanism -- `load_peers` refuses on `ver < CURRENT` -- so the
+  // fixture must differ from a current store in exactly that: same body a
+  // current reader would parse, older declared version.
+  //
+  // An earlier attempt declared the literal v7 three-list layout. It was
+  // VACUOUS: removing the version check left it green, because a body the
+  // reader cannot parse yields no peers whether or not the gate rejects it.
+  // A fixture that fails for the wrong reason cannot distinguish the fix from
+  // its absence.
+  struct legacy_low_version_store
+  {
+    std::vector<nodetool::peerlist_entry> peers;
+  };
+}
+
+BOOST_CLASS_VERSION(legacy_low_version_store, 7)
+
+namespace boost
+{
+  namespace serialization
+  {
+    template<typename Archive>
+    void serialize(Archive& a, legacy_low_version_store& elem, const unsigned int /*ver*/)
+    {
+      // Mirrors the production writer `save_peers` EXACTLY: a bare uint64
+      // length followed by the elements. Boost's own vector serializer emits a
+      // collection header instead, and a fixture using it produced a body the
+      // reader could not parse -- so the test passed with the version gate
+      // removed, for the wrong reason. Verified by instrumenting the loader:
+      // the fixture drives `serialize(peerlist_types, ver=7)` against
+      // CURRENT=8, which is the comparison under test.
+      const uint64_t size = elem.peers.size();
+      a & size;
+      for (auto& p : elem.peers)
+        a & p;
+    }
+  }
+}
 
 TEST(peer_list, peer_list_general)
 {
@@ -224,6 +271,45 @@ TEST(peerlist_storage, oversized_persisted_list_is_rejected)
 
   std::istringstream in{stream.str()};
   EXPECT_FALSE(bool(nodetool::peerlist_storage::open(in, true)));
+}
+
+// The version bump is the mechanism that stops a pre-existing store handing
+// this node pre-trusted peers, so it needs a test that actually presents one.
+// Every other storage test here serializes the CURRENT one-list type and so
+// cannot catch a loader that accepted, or silently misread, the old
+// three-list format with its populated white section.
+TEST(peerlist_storage, a_v7_store_is_dropped_whole)
+{
+  using zone = epee::net_utils::zone;
+
+  std::string buffer{};
+  {
+    legacy_low_version_store legacy{};
+    legacy.peers.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44, 55});
+
+    std::ostringstream stream{};
+    {
+      boost::archive::portable_binary_oarchive a{stream};
+      a << legacy;
+    }
+    buffer = stream.str();
+  }
+  ASSERT_FALSE(buffer.empty());
+
+  std::istringstream stream{buffer};
+  std::optional<nodetool::peerlist_storage> read_peers =
+    nodetool::peerlist_storage::open(stream, true);
+
+  // Unconditional: no `if (read_peers)` guard. A guard would let the test pass
+  // by skipping its own assertion whenever `open` refused the stream, which is
+  // how the first version of this test passed with the version gate removed.
+  ASSERT_TRUE(bool(read_peers));
+  nodetool::peerlist_types restored = read_peers->take_zone(zone::public_);
+  EXPECT_TRUE(restored.gray.empty())
+    << "a store declaring a pre-current version restored " << restored.gray.size()
+    << " peer(s); the version gate is the only thing preventing an older "
+       "store's entries -- including its white section -- from being adopted";
+  EXPECT_TRUE(check_empty(*read_peers, {zone::invalid, zone::public_, zone::tor, zone::i2p}));
 }
 
 TEST(peerlist_storage, store)

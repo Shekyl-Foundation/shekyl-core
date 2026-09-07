@@ -864,9 +864,19 @@ namespace nodetool
 
     // `--add-peer` is a CANDIDATE, not a verified peer. It has never been
     // dialled, so it enters gray and earns white the same way every other
-    // address does. This also bounds a real failure mode: a stale --add-peer
-    // used to sit in white permanently and be gossiped onward; in gray it is
-    // evicted by `gray_peerlist_housekeeping` on the first failed dial.
+    // address does.
+    //
+    // What this fixes, stated at the strength it actually holds: a stale
+    // `--add-peer` used to sit in white permanently AND be gossiped onward,
+    // since `get_peerlist_head` reads the white list only. In gray it is never
+    // disclosed, so the propagation stops immediately. Its REMOVAL is lazy --
+    // a failed refill dial only records the address in the recently-failed
+    // cache; eviction waits for `gray_peerlist_housekeeping` to draw that
+    // entry (one random gray peer per zone per cycle) and fail its probe. An
+    // earlier version of this comment claimed eviction "on the first failed
+    // dial", which the dial path does not do. Evicting there would be worse:
+    // a transient local outage would discard reachable peers, which is what
+    // the recently-failed retry window exists to avoid.
     for(const auto& p: m_command_line_peers)
       m_network_zones.at(p.adr.get_zone()).m_peerlist.append_with_peer_gray(p);
 

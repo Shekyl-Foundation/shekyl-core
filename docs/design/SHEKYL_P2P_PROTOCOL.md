@@ -993,10 +993,20 @@ narrow.**
 > holding only `--add-peer` entries does not detour to a seed either. Nothing
 > the flag exists for breaks.
 >
-> **What the demotion buys.** An unreachable `--add-peer` entry in white sat
-> there permanently *and was gossiped onward* — `get_peerlist_head` reads the
-> white list only — so one operator's typo propagated to the network. In gray
-> it is evicted by `gray_peerlist_housekeeping` on the first failed dial.
+> **What the demotion buys, at the strength it actually holds.** An
+> unreachable `--add-peer` entry in white sat there permanently *and was
+> gossiped onward* — `get_peerlist_head` reads the white list only — so one
+> operator's typo propagated to the network. **In gray it is never disclosed,
+> so the propagation stops immediately.** Its removal, however, is **lazy and
+> probabilistic**: a failed refill dial only records the address in the
+> recently-failed cache; eviction waits for `gray_peerlist_housekeeping` to
+> draw that entry (one random gray peer per zone per cycle) and fail its own
+> probe, so the entry can outlive many failures and restarts. An earlier
+> revision of this row claimed eviction "on the first failed dial" — the dial
+> path does not do that, and making it do so would discard reachable peers
+> during a transient local outage, which is exactly what the recently-failed
+> retry window exists to prevent. **The propagation half is the load-bearing
+> benefit; the cleanup half is eventual.**
 >
 > Retained below as records-was: the reasoning was sound for the invariant it
 > was written against.

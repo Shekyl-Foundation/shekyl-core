@@ -2111,8 +2111,12 @@ the origin's *outbound* pool, and **`g` is not bounded by `f`**, the network-wid
 adversary fraction. The outbound pool of 12 is filled **70 % from the white list
 plus 2 anchors** (`P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT = 70`,
 `P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`) — **records-was: the anchor
-constant and mechanism were deleted 2026-09-06, so the pool is filled from one
-candidate pool with no anchor share; see the STALE note above** — and the white list
+constant and mechanism were deleted 2026-09-06, so the 2-anchor share is gone.
+Selection is otherwise unchanged and the `g` derivation must be grounded on
+what remains: `connections_maker` is still white-first up to the 70 % target,
+then gray for the remainder. The two-class ordering did NOT collapse into a
+single pool — only the anchor-reserved share disappeared. See the STALE note
+above** — and the white list
 is populated by gossiped / handshaked addresses — the adversarially-shapeable
 surface the anchor and white/gray machinery *exist to resist*. So `g` is an
 *outcome* of peerlist composition, and an eclipse-capable adversary who poisons

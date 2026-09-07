@@ -29,8 +29,10 @@ use super::util::usize_from;
 /// [`simulate_transport_observation`]'s `dial_fraction`, so importing that inbound
 /// reach here would measure a phantom (a channel the capability cannot reach). But
 /// this capability is **not** necessarily costly: the outbound pool is 70 %
-/// white-list + 2 anchors (`P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT`,
-/// `P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT`), and the white list is gossip-fed, so an
+/// white-list, then gray for the remainder (`P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT`).
+/// The 2 anchor-reserved slots this comment previously named were deleted with
+/// the anchor mechanism (2026-09-06) — only that share disappeared; the
+/// white-first-then-gray ordering is unchanged. The white list is gossip-fed, so an
 /// eclipse-capable adversary drives `g` **above** the network fraction `f` by cheap
 /// peerlist poisoning. This instrument measures `W3(g)` but does **not** bound `g`
 /// — that bound is owed by the anti-eclipse peer-selection grounding (§12.6, Q-10),

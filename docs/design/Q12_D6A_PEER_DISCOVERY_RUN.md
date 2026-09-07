@@ -80,10 +80,13 @@ Four facts, all in [`src/p2p/net_node.inl`](../../src/p2p/net_node.inl):
    > dialled by the same refill cycle, and a node holding only `--add-peer`
    > entries does not detour to a seed because the seed test counts both lists.
    > What changes for an operator running this rig is that a **wrong or
-   > unreachable `--add-peer` address no longer sits in the peerlist
-   > permanently, and is no longer gossiped onward** — it is evicted on the
-   > first failed dial, so a typo shows up as a missing peer rather than as a
-   > silently propagated dead address.
+   > unreachable `--add-peer` address is no longer gossiped onward** — gray is
+   > never disclosed — so a typo stops propagating immediately. **Removal is
+   > eventual, not immediate:** a failed refill dial only records the address
+   > in the recently-failed cache, and eviction waits for the housekeeping
+   > probe to draw that entry (one random gray peer per zone per cycle) and
+   > fail, so a typo can survive many retries and restarts. Budget the rig for
+   > that rather than for first-failure cleanup.
 
 Fact 4 is the fleet unlock: **anon bootstrap needs no code change.**
 
