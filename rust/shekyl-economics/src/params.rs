@@ -40,7 +40,7 @@ const _: () = {
     // invariant as a `debug_assert`, which release builds strip; this one
     // is const-evaluated and cannot be.
     assert!(
-        GENERATED_DAA_TARGET_SECONDS % 60 == 0,
+        GENERATED_DAA_TARGET_SECONDS.is_multiple_of(60),
         "DAA target must be a whole number of minutes, or the tail-per-block          division truncates and the FL-R14 headroom proof below is weakened"
     );
     const TAIL_PER_BLOCK: u64 =
