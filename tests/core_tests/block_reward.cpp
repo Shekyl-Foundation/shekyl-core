@@ -265,7 +265,20 @@ bool gen_block_reward::check_block_rewards(cryptonote::core& /*c*/, size_t /*ev_
         &weight_limit);
     CHECK_TEST_CONDITION(st == SHEKYL_BLOCK_REWARD_OK);
 
+    // INDEPENDENT PINS, not just internal consistency. The coinbase and
+    // the expected value below are both produced by the Rust owner, so
+    // comparing them alone would move together under any reward-math
+    // change and catch only a marshalling disagreement (PR #640 review).
+    // These literals are derived from the frozen parameters and fail if
+    // the arithmetic moves: at genesis `curve(0) = MONEY_SUPPLY >> esf`
+    // = 2 048 000 000 000, `tx_volume_avg = 0` pins `M_r` at its 0.8
+    // rail, and the tail floor does not bind, so the paid pre-penalty
+    // quantity is 1 638 400 000 000; the genesis emission share is 15%,
+    // leaving the miner 1 392 640 000 000.
+    CHECK_EQ(base_reward, UINT64_C(1638400000000));
+
     shekyl::EmissionSplit em = shekyl::compute_emission_split(base_reward, 0, 0);
+    CHECK_EQ(em.miner_emission, UINT64_C(1392640000000));
 
     block blk_0 = std::get<block>(events[m_checked_blocks_indices[0]]);
     CHECK_EQ(em.miner_emission, get_tx_out_amount(blk_0.miner_tx));

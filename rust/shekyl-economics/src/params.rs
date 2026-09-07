@@ -32,6 +32,17 @@ pub const TX_VOLUME_WINDOW: u64 = GENERATED_TX_VOLUME_WINDOW;
 /// asymptote must last geological time. Re-parameterizing the tail, the
 /// block time, or the decimal scale so that it does not fails this build.
 const _: () = {
+    // The per-block tail below divides the target by 60. A target that is
+    // not a whole number of minutes would TRUNCATE, understating the tail
+    // and therefore OVERSTATING the headroom years this block asserts —
+    // the assertion would keep passing while the property it proves
+    // weakened (PR #640 review). `emission_speed_factor` carries the same
+    // invariant as a `debug_assert`, which release builds strip; this one
+    // is const-evaluated and cannot be.
+    assert!(
+        GENERATED_DAA_TARGET_SECONDS % 60 == 0,
+        "DAA target must be a whole number of minutes, or the tail-per-block          division truncates and the FL-R14 headroom proof below is weakened"
+    );
     const TAIL_PER_BLOCK: u64 =
         GENERATED_FINAL_SUBSIDY_PER_MINUTE * (GENERATED_DAA_TARGET_SECONDS / 60);
     const TAIL_PER_YEAR: u64 = TAIL_PER_BLOCK * GENERATED_BLOCKS_PER_YEAR;

@@ -42,6 +42,7 @@
 #include "crypto/hash-ops.h"
 #include "crypto/pow_registry.h"
 #include "cryptonote_config.h"
+#include "shekyl/economics.h"
 #include "shekyl/shekyl_ffi.h"
 
 namespace
@@ -141,6 +142,34 @@ TEST(mining_parity, marshal_pins_the_signed_composition_at_the_tail)
             shekyl_block_reward(0, zone / 2, MONEY_SUPPLY / 2, zone, 0, &expected, &limit));
   ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, MONEY_SUPPLY / 2, reward, version, 0));
   ASSERT_EQ(reward, expected);
+}
+
+TEST(mining_parity, genesis_paid_reward_and_split_are_pinned)
+{
+  // The GENESIS-condition pin, and it lives HERE because the core test
+  // that checked it (`gen_block_reward`, tests/core_tests/block_reward.cpp)
+  // is NOT REGISTERED in chaingen_main.cpp — it was dropped with the v1
+  // coinbase siblings, so a pin placed there executes never. Copilot
+  // raised the tautology on that file (PR #640); this is the same pin in
+  // a test that runs.
+  //
+  // Independent literals, derived from the frozen parameters rather than
+  // read back from the owner under test: at genesis `curve(0) =
+  // MONEY_SUPPLY >> esf` = 2 048 000 000 000; `tx_volume_avg = 0` pins
+  // `M_r` at its 0.8 rail and the tail floor does not bind, so the paid
+  // pre-penalty quantity is 1 638 400 000 000; the genesis emission share
+  // is 15%, leaving the miner 1 392 640 000 000. A reward-math change
+  // fails this even though the marshal still agrees with itself.
+  uint64_t paid = 0;
+  uint64_t limit = 0;
+  ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
+            shekyl_block_reward(0, 1, 0, CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
+                                /*tx_volume_avg=*/0, &paid, &limit));
+  ASSERT_EQ(paid, UINT64_C(1638400000000));
+
+  const shekyl::EmissionSplit em = shekyl::compute_emission_split(paid, 0, 0);
+  ASSERT_EQ(em.miner_emission, UINT64_C(1392640000000));
+  ASSERT_EQ(em.miner_emission + em.staker_emission, paid);
 }
 
 TEST(mining_parity, pow_registry_is_randomx_only)

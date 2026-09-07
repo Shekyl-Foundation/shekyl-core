@@ -8,6 +8,8 @@
 #pragma once
 
 #include <list>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "chaingen.h"
@@ -64,8 +66,15 @@ inline uint64_t expected_full_subsidy(uint64_t already_generated)
       /*tx_volume_avg=*/0,
       &computed,
       &limit);
+  // Fail LOUDLY. Returning 0 here would hand the conservation identity a
+  // bogus subsidy: the identity could be satisfied trivially, or fail far
+  // downstream with a misleading number, and either way the real fault —
+  // a rejected FFI call — would be invisible (PR #640 review). This is a
+  // test oracle; a refusal must reach the test, not be absorbed.
   if (st != SHEKYL_BLOCK_REWARD_OK)
-    return 0;
+    throw std::runtime_error(
+        "expected_full_subsidy: shekyl_block_reward rejected the call (status " +
+        std::to_string(st) + ") at already_generated=" + std::to_string(already_generated));
   return computed;
 }
 
