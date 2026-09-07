@@ -117,11 +117,20 @@ PWD-I1 removes `peer_id` from the wire. The lane that implements it
 (`p2p/basic-node-data-address`, declared but not yet built) replaces it with a
 `network_address` absorbing `my_port`. That lane owns the wire.
 
-This round exists because **`peer_id` has two jobs in `is_peer_used`, and only
-one of them has a replacement anywhere in the tree.** Removing the field
-without ruling the second is a silent regression, and the second job needs
-something the daemon does not currently have: knowledge of its own reachable
-endpoint.
+This round **opened** because `peer_id` has two jobs in `is_peer_used` and only
+one of them had a replacement anywhere in the tree — the second read as needing
+something the daemon does not have: knowledge of its own reachable endpoint.
+
+> **That premise did not survive the round — see §0.** The nonce replaces job 1
+> standing alone, needing nothing about our address, so endpoint determination
+> never gated `peer_id`'s removal. The sentence above is kept as records-was
+> because it is why the round was scoped as it was; **it is not a live claim.**
+
+**What the round is worth, stated in the present tense.** Two things it
+established do change the surrounding work: the public zone's pre-dial
+self-check is **dead**, not merely weaker (§3), and the nonce/address
+dependency runs the opposite way to how it was scoped (§0), which takes
+PWD-E1/E2 off PWD-I1's critical path.
 
 **Not owned here.** The wire encoding of the new field (`-43`'s lane). The
 peerlist trust model — [PR #637](https://github.com/Shekyl-Foundation/shekyl-core/pull/637)
@@ -402,15 +411,6 @@ the strongest argument for PWD-E2(b).
 
 ---
 
-## 6. Forward actions (rule 26 A5)
-
-| # | Action | Target |
-|---|---|---|
-| F1 | Answer PWD-E5 against the built field set | `p2p/basic-node-data-address` |
-| F2 | Whatever PWD-E3/E4 rule must land **with** the `peer_id` removal, not after it | same lane — removing job 1 and job 2 with no replacement is the regression this round exists to prevent |
-| F3 | Rust shape (endpoint typestate `Candidate<Source>` → `Verified{at}` → `Stale`; `Zone` marker types with `type Dedup`/`type Announced`, distinct from `RelayZone`) | the Rust p2p node; rule-18 question of whether `RelayZone` derives from the transport zone is **not** settled here |
-| F4 | Re-home PWD-I2's eclipse-completion-oracle argument when `ANON_ZONE_SENTINEL_PEER_ID` is deleted | the removal lane — the argument outlives its subject and is the standing reason not to reintroduce per-node identity |
-
 ## 5c. The check to run when the removal lane lands
 
 `-43` reports the nonce is inserted into the zone's in-flight set **before the
@@ -427,6 +427,16 @@ satisfied only while someone remembers to keep it there.
 Field placement — request-level on `COMMAND_HANDSHAKE` rather than inside
 `basic_node_data` — is right for the layering reason in §0, independently of
 whether p2p encryption ever lands.
+
+## 6. Forward actions (rule 26 A5)
+
+| # | Action | Target |
+|---|---|---|
+| F1 | Answer PWD-E5 against the built field set | `p2p/basic-node-data-address` |
+| F2 | Whatever PWD-E3/E4 rule must land **with** the `peer_id` removal, not after it | same lane — removing job 1 and job 2 with no replacement is the regression this round exists to prevent |
+| F3 | Rust shape (endpoint typestate `Candidate<Source>` → `Verified{at}` → `Stale`; `Zone` marker types with `type Dedup`/`type Announced`, distinct from `RelayZone`) | the Rust p2p node; rule-18 question of whether `RelayZone` derives from the transport zone is **not** settled here |
+| F4 | Re-home PWD-I2's eclipse-completion-oracle argument when `ANON_ZONE_SENTINEL_PEER_ID` is deleted | the removal lane — the argument outlives its subject and is the standing reason not to reintroduce per-node identity |
+| F5 | Write the in-flight-set ordering falsifier described in §5c — a test that reds when the nonce insert moves after the request write | the removal lane; this round does not own that unit |
 
 ## 6b. The chain, drawn (added 2026-09-06)
 
