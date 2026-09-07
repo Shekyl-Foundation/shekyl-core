@@ -175,9 +175,9 @@ profile:
 - `t = 0x03`
 - `p = 0x01`
 
-These produce ≈1 s derivation on a 2024-era laptop. The KAT profile
-clamps `m_log2 = 0x08` (256 KiB) so the test suite runs in seconds; KATs
-explicitly flag this relaxation as KAT-only.
+These produce ≈1 s derivation on a 2024-era laptop. The pinned-vector
+profile clamps `m_log2 = 0x08` (256 KiB) so the test suite runs in
+seconds; the fixtures explicitly flag this relaxation as fixture-only.
 
 ### 2.5 Capability decode posture
 
@@ -285,8 +285,8 @@ cache only `wrap_key_region_2` (and other derived subkeys such as
 
 **Pre-genesis note.** On-disk **layout** is unchanged; **ciphertext** produced
 under a pre-amendment implementation that keyed region AEAD with raw `file_kek`
-does not decrypt under this prescription. Regenerate wallets and Tier-3 KATs;
-no migration code. Design record:
+does not decrypt under this prescription. Regenerate wallets and the pinned
+format vectors; no migration code. Design record:
 [`docs/design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md).
 
 ## 3. `<name>.wallet` layout
@@ -478,8 +478,13 @@ open time from `.wallet.keys`'s last 16 bytes.
   should not be resurrected from git history without re-deciding its
   shape.
 - [`docs/test_vectors/WALLET_FILE_FORMAT_V1/`](test_vectors/WALLET_FILE_FORMAT_V1/)
-  — Tier-3 KATs: two sealed blobs (`full.hex`, `state_for_full.hex`)
-  plus a `manifest.json` describing the inputs
-  that produced each blob. The KAT generator runs Argon2id at
-  `m_log2 = 0x08` (256 KiB) so the `cargo test` cycle stays fast; the
-  production wallets always use the defaults in §2.4.
+  — self-pinned (tier-3) format vectors per `50-testing.mdc`'s
+  vector-oracle taxonomy — drift tripwires, not KATs: two sealed blobs
+  (`full.hex`, `state_for_full.hex`) plus a `manifest.json` describing
+  the inputs that produced each blob. Regeneration is gated on a
+  decision-log citation (`SHEKYL_PINNED_REGEN_DECISION`). The
+  regenerator runs Argon2id at `m_log2 = 0x08` (256 KiB) so the
+  `cargo test` cycle stays fast; production wallets always use the
+  defaults in §2.4. The §2.6 wrap-key derivation carries a true KAT
+  (independent tier-2 oracle: raw HMAC per RFC 5869 against the spec's
+  byte-exact labels) in `wallet_envelope.rs`.

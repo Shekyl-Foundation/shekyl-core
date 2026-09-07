@@ -4,6 +4,20 @@
 
 ### Changed
 
+- **Wallet-envelope test vectors renamed by oracle tier; pinned vectors
+  rebuilt on a real derived address.** Per the new `50-testing.mdc`
+  vector-oracle rule (external / independent / self-pinned; only the
+  first two are KATs), the `WALLET_FILE_FORMAT_V1` sealed fixtures are
+  now named as the self-pinned drift tripwires they are, their
+  regenerator refuses to run without a decision-log citation
+  (`SHEKYL_PINNED_REGEN_DECISION`), and the published vectors under
+  `docs/test_vectors/WALLET_FILE_FORMAT_V1/` were regenerated so
+  `expected_classical_address` derives from the sealed seed and
+  `seed_format` is a production-valid wire byte. A true tier-2 KAT for
+  the §2.6 wrap-key derivation (raw HMAC per RFC 5869 against the
+  spec's byte-exact labels) lands alongside. Wire format unchanged.
+  (Decision log 2026-09-07.)
+
 - **Wallet capability collapsed to `FULL`-only; cold signing rejected
   permanently.** The `ViewOnly` capability is REJECTED (no product use
   case; FCMP++ has no view-key chain scan) and `HardwareOffload` is
