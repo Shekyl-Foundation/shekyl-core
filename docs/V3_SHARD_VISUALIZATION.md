@@ -274,7 +274,7 @@ the two aggregate fields that were not features:
 | `activity_density` (tx per block) | **ADMIT** | tx and block counts are in held block bytes |
 | `output_richness` (user outputs per tx) | **ADMIT** | output counts are in held block bytes; coinbase txs are structurally distinguishable |
 | `coinbase_ratio` | **ADMIT, as a derived feature** | count-based (`coinbase_output_count / output_count`); computed in `features.rs` from the two counts — the redundant wire field on `ShardAggregate` is deleted (one value, one meaning) |
-| `time_density` | **ADMIT** | block timestamps are in held block bytes (currently unconsumed by candidate.v1; whether it drives aesthetics is ruling B's call) |
+| `time_density` | **ADMIT** | block timestamps are in held block bytes (unconsumed by candidate.v1 — **ruled 2026-09-06: kept, deliberately dormant**, see *Ruling B's assigned residue*) |
 | `value_magnitude`, `value_dispersion` | **REJECT** | user output amounts are Pedersen commitments (CT; `docs/FCMP_PLUS_PLUS.md`). Even a holder of every byte of the shard cannot compute value moments without recipient keys — the criterion fails at computability, before any leak analysis is needed |
 | `tier_skew_high` (from `tier_distribution`) | **REJECT** | stake tier is confidential-staking material: the F-ARCHIVAL resolution adopted tier-neutral shard pricing *specifically to kill the portfolio tier oracle* (`docs/V3_STAKER_ARCHIVAL.md`), and post-F0 the tier is not in block bytes. Rendering it would re-expose what that redesign deliberately removed |
 | `stake_intensity`, `claim_create_ratio` | **REJECT-NOW, reopening criterion named** (rule 21) | no ratified consensus surface makes per-shard stake-create or claim event counts a holder-readable quantity today (principal-stake lifecycle is mid-design-round; the reward-emission leg is unbuilt). Re-admit — by re-ratifying this section — when the respective surface lands and its per-shard event count is readable from held shard bytes |
@@ -286,7 +286,8 @@ timestamps; `Features` carries only the four admitted scalars. Renderer
 inputs that consumed rejected features now draw from the renderer's own
 SHAKE256 structural namespace at previously-unused indices (hash-derived,
 so they publish nothing and per-shard visual diversity is preserved);
-the resulting aesthetics are ruling B's to close.
+the resulting aesthetics were ruling B's to close, and were **ruled
+2026-09-06: accepted as they stand** (*Ruling B's assigned residue*).
 
 ### Spec version is chain data (algorithm-versioning ruling)
 
@@ -456,8 +457,11 @@ cannot bound the floor in either direction: measured per-term x86:A72
 ratios span 3.86×–12× **with one axis changing sign**, so no single
 scaling factor exists. Falsifier: any (fixture, size) cell over budget
 on the floor falsifies candidate.v1's fitness at that tier, with this
-document's stated consequence (drop or restrict what misses; the
-single-algorithm fallback remains the documented escape). The
+document's stated consequence: drop or restrict what misses. (This
+sentence originally also named the single-algorithm fallback as the
+escape; that fallback was **retired 2026-09-06** — *Fallback
+disposition* — so the escape is now to drop or restrict, or to amend
+the targets, which is what the ruling below did.) The
 thresholds were the targets already printed below, which predate the
 measurement. **Result: all 36 (fixture, size) cells came in over
 budget** — see *Measurements of record* directly below. Which of the
@@ -546,13 +550,14 @@ replacements, their derivation, and the change in what they assert are
 recorded as a dated amendment in *Performance targets* below. This
 paragraph stays as the record of the falsification that forced it.
 
-## Candidate compositor (candidate.v1) — leading V3.x design
+## Candidate compositor (candidate.v1) — the V3.x design
 
 Empirical exploration in `shekyl-dev/visualization/` (2026-05) converged on a
 **two-stage difference compositor** rather than the single-algorithm 3-bit
-bucket assignment described below. This pipeline is the **leading design** for
-the V3.x `shekyl-shard-visual` reference implementation pending formal palette
-closure:
+bucket assignment described below. Palette closure was completed 2026-09-06,
+so this pipeline is no longer the *leading* candidate pending a decision — it
+is **the** design for the V3.x `shekyl-shard-visual` reference
+implementation (*Final algorithm palette*, closed):
 
 1. **Foreground composite** — `aperiodic_tile` ⊖ `phyllotaxis`, difference
    blend, opacity from `candidate.v1.fg.opacity` (bell curve, mean 0.5).
@@ -847,10 +852,39 @@ cannot now fire.
 **Ruling: candidate.v1 is the palette; the fallback is retired.** The
 algorithm sections below stay as the record of what was considered —
 they are not a live alternative, and no one should reconcile a second
-design against the first. **Reopening criterion (rule 21):** a
-floor-device measurement that candidate.v1 cannot be made to satisfy,
-after the amended targets have themselves been re-derived — that event,
-and nothing softer, reopens this.
+design against the first.
+
+**Reversion clause (rule 21), in its three parts:**
+
+1. **The rejection.** The single-algorithm palette is rejected as a
+   live alternative because both conditions that would have promoted it
+   have resolved against it: continuity was ruled the wrong property
+   (*Sensitivity, not continuity*), and the floor-device budget was
+   ruled in candidate.v1's favour (*Performance targets*, amended). No
+   condition currently reachable selects the fallback.
+2. **The reopening criteria** — observable, and anchored to artifacts
+   this repository already produces:
+   - a committed floor capture under `docs/benchmarks/` from
+     `examples/budget_matrix.rs` (`floor` profile, the method that
+     section names) showing **any cell over the amended targets**,
+     where the change responsible is **retained rather than reverted**
+     — that is, the cost is accepted as intended behaviour rather than
+     treated as the regression the standing trigger assumes; **or**
+   - rule 76's floor device is redefined to hardware slower than the
+     Raspberry Pi 4 Model B Rev 1.4, and a floor capture on that device
+     exceeds the amended targets; **or**
+   - a conforming implementation demonstrates it cannot carry
+     candidate.v1's four renderers (a porting constraint, not a
+     performance one).
+3. **The re-evaluation shape.** Design round 1 on this document,
+   decided by Rick. Required evidence: the floor capture above, a
+   statement of what candidate.v1 tuning was attempted and rejected,
+   and the resulting choice between amending *Performance targets*
+   again (the budget gives, as in 2026-09-06) or promoting a
+   replacement design. A promoted replacement does **not** inherit
+   ruling B's determinism bar: that bar is written against
+   candidate.v1's layered derivation, so a new design needs its own
+   bar ratified before it can ship.
 
 ### What a pixel change would cost
 
