@@ -108,6 +108,14 @@ name in a client enum is pre-provisioning, not protection.
   constant with no `CapabilityContent::Multisig` arm was a permanent
   "unfinished work" grep hit. RESERVED means the slot lives in
   `WALLET_FILE_FORMAT_V1.md`'s discriminant table, not in code.
+- **`-29522 UNSTAKE_FATE_UNKNOWN` (PR-C)** — the model for how a
+  STAGED surface talks about a substrate that is not built yet: a
+  **named** error that seals the record funds-safe (do not re-fire),
+  never a fake "not yet" pointing at a gate that will never open.
+  The contrast is `--do-not-relay`, which shipped a "gated on the
+  offline cold-signing workflow" string about a workflow that was
+  later rejected — a refusal must state what *is* (not offered;
+  funds held; use X instead), not promise what might be.
 
 ## Related rules
 
