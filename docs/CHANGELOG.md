@@ -142,6 +142,27 @@
 
 ### Added
 
+- **Shard-visual: ruling B's assigned residue CLOSED (2026-09-06), and
+  the single-algorithm fallback RETIRED.** Three items the spec handed
+  to ruling B by name and B never closed, ruled together: `time_density`
+  is **kept** (admitted, deliberately dormant — the paragraph is what
+  makes it deliberate rather than an oversight); the post-rewire
+  aesthetics are **accepted as they stand**; and the single-algorithm
+  palette is **retired** with a rule-21 reopening criterion, because
+  both of its trigger conditions resolved (continuity was ruled the
+  wrong property, and the floor budget was ruled in candidate.v1's
+  favour). Also closes the *Final algorithm palette* open question and
+  points the stale *Algorithm versioning* entry at the ruling that
+  already settled its privacy half.
+
+  One reported aesthetics finding was **withdrawn under measurement**:
+  the claim that distinguishability collapses at the 128px product size
+  does not survive — pairwise full-image RGB-RMS is min 42.0 / median
+  53.5 at 128px against min 42.9 / median 57.8 at 512px, so
+  distinguishability is size-independent. It was an impression of a
+  thumbnail strip, not a property of the renders, and the withdrawal is
+  recorded rather than the finding.
+
 - **Shard-visual performance targets AMENDED (2026-09-06), and the
   amendment changes what they assert.** **RATIFIED.** *Authority: the
   ruling reached this work relayed, and was then confirmed by Rick
