@@ -32,9 +32,12 @@
 #
 # Method registry status. The STATUS OF RECORD is the machine-readable
 # `x-shekyl-method-registry` vendor extension below (rule 23: contract
-# entries are structured data a checker can read, not header prose). This
-# header block is RATIONALE — the reasoning behind each status — and the
-# per-status meaning is:
+# entries are structured data a checker can read, not header prose). It is
+# CI-ENFORCED in both directions by scripts/ci/check_wallet_rpc_liveness.sh
+# (.github/workflows/wallet-rpc-liveness.yml): SPECIFIED ⇒ dispatch arm +
+# production consumer; REJECTED/RESERVED ⇒ no arm; every arm ⇒ a registry
+# row. This header block is RATIONALE — the reasoning behind each status —
+# and the per-status meaning is:
 #   SPECIFIED — full request/response schemas below; implementable now.
 #   RESERVED  — name + error-code range allocated; full schemas land in the
 #               sub-PR that implements the method, gated on the named

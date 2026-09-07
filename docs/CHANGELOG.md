@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Wallet RPC liveness gate (`ci/wallet-rpc-liveness`).** Sibling of the
+  daemon's `ci/rpc-route-liveness`: `wallet_rpc.yaml`'s
+  `x-shekyl-method-registry` is now CI-enforced in both directions —
+  every SPECIFIED method has a dispatch arm and a production consumer
+  outside the server crate; every REJECTED/RESERVED method has no arm;
+  every arm has a registry row. The reverse direction is what turns
+  "`claim` stays REJECTED in the contract" from a note into an
+  invariant: a handler added while the registry still says refused now
+  fails CI instead of shipping. Grep-cheap (no toolchain), fails closed
+  on empty extraction (rule 47).
+
 ### Changed
 
 - **Wallet-envelope test vectors renamed by oracle tier; pinned vectors
