@@ -70,10 +70,47 @@ DEFINITIONS = {
 }
 
 # Matched against the identifier immediately preceding an enclosing `(`.
-LOGMAC_RE = re.compile(
-    r"^(M[A-Z_]*ERROR[A-Z_]*|MWARNING|MINFO|MDEBUG|MTRACE|MGINFO|MLOG[A-Z_]*"
-    r"|LOG_[A-Z_]*|MC[A-Z_]+)$"
-)
+#
+# DIGITS ARE THE POINT. An earlier pattern used `[A-Z_]*` throughout and so
+# could not match `LOG_PRINT_L0`..`L4` or `LOG_PRINT_CCONTEXT_L*` -- everyday
+# epee wrappers -- nor `MFATAL`, `MGINFO_RED` and the other colour variants,
+# `MIDEBUG`, or `CHECK_AND_ASSERT_MES`, which logs through `LOG_ERROR`. A dump
+# added on any of those would have left this gate green. The pattern was
+# written from memory of the macro family instead of from the header that
+# defines it; `assert_macro_coverage()` below now checks it against that
+# header so the next addition cannot slip through the same way.
+#
+# Deliberately over-inclusive: `M[A-Z0-9_]*` also matches non-logging
+# identifiers. That direction is safe -- a false positive costs one allowlist
+# row with a stated bound, while a false negative is the defect this file
+# exists to prevent.
+LOGMAC_RE = re.compile(r"^(M[A-Z0-9_]*|LOG_[A-Z0-9_]*|CHECK_AND_ASSERT_MES[A-Z0-9_]*)$")
+
+# Macros epee defines that are NOT logging calls, so a coverage check must not
+# demand the pattern match them.
+NOT_LOG_MACROS = frozenset({
+    "MAX_LOG_FILES", "MAX_LOG_FILE_SIZE", "MAKE_LOGGABLE", "MLOG_SET_THREAD_NAME",
+    "MLOG_TYPE", "MCLOG_TYPE", "MLOG_FILE", "MCLOG_FILE", "LOG_TO_STRING",
+})
+
+LOG_HEADER = "contrib/epee/include/misc_log_ex.h"
+
+
+def assert_macro_coverage():
+    """Rule 47: the gate asserts its own subject. Every logging macro epee
+    defines must be matched by LOGMAC_RE, so adding one upstream fails here
+    rather than silently widening the blind spot."""
+    path = os.path.join(REPO, LOG_HEADER)
+    if not os.path.exists(path):
+        return ["%s is gone; the macro pattern can no longer be checked "
+                "against its source." % LOG_HEADER]
+    body = io.open(path, encoding="utf-8", errors="replace").read()
+    defined = set(re.findall(r"^#define\s+(M[A-Z0-9_]*|LOG_[A-Z0-9_]*|CHECK_AND_ASSERT_MES[A-Z0-9_]*)",
+                             body, re.M))
+    missed = sorted(m for m in defined - NOT_LOG_MACROS if not LOGMAC_RE.match(m))
+    if missed:
+        return ["LOGMAC_RE does not match epee log macro(s): %s" % ", ".join(missed)]
+    return []
 
 
 def blank_literals(text):
@@ -86,7 +123,13 @@ def blank_literals(text):
     while i < n:
         c = text[i]
         if c == "/" and i + 1 < n and text[i + 1] == "/":
+            # Blank the contents, do not merely skip them: an unbalanced
+            # parenthesis inside a `// ...` comment would otherwise stay in the
+            # scrubbed text and walk `enclosing_log_macro` out of the call it
+            # is standing in. Block comments were already blanked; this is the
+            # same hazard through the other comment syntax.
             while i < n and text[i] != "\n":
+                out[i] = " "
                 i += 1
             continue
         if c == "/" and i + 1 < n and text[i + 1] == "*":
@@ -233,6 +276,26 @@ void f(const blobdata &blob) {
 }
 '''
 
+# Line comments must be BLANKED, not skipped. The unbalanced "(" in the
+# comment below would otherwise stay in the scrubbed text and walk the paren
+# scanner out of the MDEBUG call, hiding a real dump.
+FIXTURE_COMMENT_PAREN = '''
+void f(const blobdata &blob) {
+  MDEBUG("bad block"
+    // an unbalanced ) inside a comment, between the macro and the dump
+    << epee::string_tools::buff_to_hex_nodelimer(blob));
+}
+'''
+
+# `LOG_PRINT_L0` carries a DIGIT, which the earlier macro pattern could not
+# match. Separate fixture from the comment one: a single fixture exercising
+# both would pass whenever either fix was present.
+FIXTURE_DIGIT_MACRO = '''
+void f(const blobdata &blob) {
+  LOG_PRINT_L0("bad block: " << epee::string_tools::buff_to_hex_nodelimer(blob));
+}
+'''
+
 # The regression limb. The dump is the LAST argument, so its line also closes
 # the macro; and the format string contains parentheses, so a scanner that
 # counts them without blanking literals mis-locates the enclosing call. Both
@@ -259,6 +322,18 @@ def selftest():
         return 1
     if ok:
         print("SELFTEST FAIL: negative fixture yielded %d hits, want 0" % len(ok))
+        return 1
+    cmt = list(scan_text(FIXTURE_COMMENT_PAREN, "fixture.cpp"))
+    if len(cmt) != 1:
+        print("SELFTEST FAIL: comment-paren fixture yielded %d hits, want 1 -- "
+              "an unbalanced paren inside a `//` comment is walking the paren "
+              "scanner out of the log macro it is standing in" % len(cmt))
+        return 1
+    dig = list(scan_text(FIXTURE_DIGIT_MACRO, "fixture.cpp"))
+    if len(dig) != 1:
+        print("SELFTEST FAIL: digit-macro fixture yielded %d hits, want 1 -- "
+              "LOG_PRINT_L0 is not being recognised as a log macro, so the "
+              "pattern is missing digit-suffixed epee wrappers" % len(dig))
         return 1
     last = list(scan_text(FIXTURE_LAST_ARG, "fixture.cpp"))
     if len(last) != 1:
@@ -294,6 +369,12 @@ def main():
                       "removed; update IDIOMS/DEFINITIONS before this gate can "
                       "be believed." % (n, rel))
                 return 2
+
+    problems = assert_macro_coverage()
+    if problems:
+        for p in problems:
+            print("FATAL: %s" % p)
+        return 2
 
     files = tracked_sources()
     if not files:
