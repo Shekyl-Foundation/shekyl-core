@@ -22,21 +22,28 @@
 #     otherwise.
 #   - Amounts are atomic units only, encoded as u64 DECIMAL STRINGS (JSON
 #     numbers lose precision past 2^53). No floats, no coin-name units.
-#   - Capability mode ("FULL" | "VIEW_ONLY" | "HARDWARE_OFFLOAD") is carried
+#   - Capability mode ("FULL" — the only capability; ViewOnly is REJECTED
+#     and hardware-offload is DEFERRED with zero code, rule 23) is carried
 #     explicitly on every wallet-handle response — never inferred.
 #   - Hybrid PQC signatures are structured: {"ed25519": hex, "ml_dsa_65": hex}.
 #     Never a single opaque signature blob.
 #   - CTTypeFcmpPlusPlusPqc is the only transaction type; no "ct_type"
 #     field exists anywhere in this API.
 #
-# Method registry status. Every planned method is listed in one of two
-# states:
+# Method registry status. The STATUS OF RECORD is the machine-readable
+# `x-shekyl-method-registry` vendor extension below (rule 23: contract
+# entries are structured data a checker can read, not header prose). This
+# header block is RATIONALE — the reasoning behind each status — and the
+# per-status meaning is:
 #   SPECIFIED — full request/response schemas below; implementable now.
 #   RESERVED  — name + error-code range allocated; full schemas land in the
 #               sub-PR that implements the method, gated on the named
 #               engine-layer prerequisite (rule 21 reversion shape: the
 #               reopening criterion for each reserved method is the landing
 #               of its named prerequisite on dev, verified per rule 94).
+#   REJECTED  — name refused, never to be implemented as shaped; the entry
+#               stays so the namespace cannot be silently re-minted. Each
+#               carries a rule-21 reopening clause in its rationale.
 #
 #   SPECIFIED (this commit):
 #     create_wallet, open_wallet, close_wallet, change_password,
@@ -177,14 +184,21 @@
 #       narrowing history are preserved in PRINCIPAL_STAKE_LIFECYCLE.md's
 #       PR-P4 row.)
 #
-#   RESERVED (prerequisite in parentheses):
-#     match_transfer_to_request                    (Phase 2c orchestrator
-#                                                   wrapper over the FA-8
-#                                                   engine substrate; the
-#                                                   create/list/URI half
-#                                                   landed with WI-RPC-1)
+#   RESERVED: none at present. (sign_message / verify_message shipped with
+#     PR-SM-2; match_transfer_to_request was re-ruled REJECTED 2026-09-07 —
+#     see below.)
 #
 #   REJECTED (rule 21 reversion shape — removed from RESERVED, not landed):
+#     match_transfer_to_request                    (RESERVED→REJECTED
+#       2026-09-07, wallet-rewrite audit. The rewrite plan already makes
+#       inbound reconciliation auto-applied during scan/merge — attribution
+#       is automatic, and `get_transfers.attribution` plus CLI
+#       `history incoming --unattributed` are the read surface. This name
+#       was a leftover from when matching was going to be a user step; an
+#       explicit match method would imply a manual attribution workflow
+#       that does not exist. Reopen when: a merchant product round
+#       demonstrates after-the-fact attach is required; the re-evaluation
+#       shape is a fresh contract sub-PR citing this note.)
 #     claim                                        (WI-RPC-5, 2026-08-26.
 #       Emission claims are engine-side automation, not a user action: the
 #       claim assembly/dispatch path (EMISSION_CLAIM_BUILDER.md) runs inside
@@ -247,8 +261,20 @@
 #       threat-model review accepting the key-image disclosure; the
 #       re-evaluation shape is a fresh contract sub-PR citing this
 #       note.)
-#     export_unsigned, submit_signed               (Phase 2d UnsignedTxBundle
-#                                                   / SignedTxBundle)
+#     export_unsigned, submit_signed               (Cold signing is NOT a
+#       feature — settled 2026-09-07, superseding A4's "post-genesis,
+#       named blocker" framing (decision log). An unsigned spend leaving a
+#       networked wallet and a signed spend returning is the opposite of
+#       Shekyl's secret-locality and verified-display requirements. Cold
+#       STORAGE (seed custody) ships; cold SIGNING never will. The names
+#       stay here as REJECTED because a gone name is easier to re-mint
+#       than a recorded refusal; the -29700..-29799 error range stays
+#       RESERVED unused so no client can pin a meaning we later reassign.
+#       No reopening clause: this is a security rejection under the
+#       00-mission hierarchy, not a deferral.)
+#     claim_rewards                                (alias-shape of `claim`;
+#       rejected with it 2026-09-07 so the same surface cannot return
+#       under a synonym. Same rationale and reopening clause as `claim`.)
 #   SPECIFIED (PR-SM-2 — message-signing projection; formerly the
 #   "sign, verify" RESERVED entry, which sat ambiguously below the
 #   REJECTED block — it was reserved, never rejected):
@@ -280,13 +306,16 @@
 #                            the exit pair); rest reserved — never reuse an
 #                            allocated code)
 #   -29600..-29699           payment requests (RESERVED range)
-#   -29700..-29799           air-gapped bundles (RESERVED, UNUSED --
-#                            not pending work. A4 (2026-08-06) descoped
-#                            cold bundles from V3.0; the range is held,
-#                            not withdrawn, so a reopening under the
-#                            rule-21 clause cannot collide with a reused
-#                            code, and so no client can pin a meaning we
-#                            later reassign)
+#   -29700..-29799           air-gapped bundles (RESERVED, UNUSED — and
+#                            NOT pending work. Cold signing was rejected
+#                            outright 2026-09-07 (decision log; supersedes
+#                            A4's 2026-08-06 "descoped from V3.0" framing
+#                            and its reopen-later clause). The range is
+#                            held purely as namespace protection: no code
+#                            in it will ever be allocated, and holding it
+#                            means no client can pin a meaning we later
+#                            reassign and no future PR can silently reuse
+#                            the numbers)
 #   -29800..-29899           sign / verify message (PR-SM-2:
 #                            -29800..-29802 allocated; -29803
 #                            ADDRESS_UNBOUND was allocated for the
@@ -322,7 +351,15 @@ info:
   # required another_pool_remains (the lane-wide half of the completion
   # fact: a per-persona remainder "0" must not read as lane-wide
   # completion while another exited persona's pool is uncollected).
-  version: 0.3.1
+  # 0.4.0: wallet-rewrite audit step 1 (rule 23) — machine-readable
+  # x-shekyl-method-registry / x-shekyl-error-ranges become the status of
+  # record (header prose stays as rationale); match_transfer_to_request
+  # RESERVED→REJECTED; export_unsigned / submit_signed re-rationalized as
+  # NEVER (cold signing rejected outright, superseding A4); claim_rewards
+  # added REJECTED as an alias-shape of claim; CapabilityMode narrowed to
+  # FULL (ViewOnly REJECTED / hardware-offload DEFERRED, symbols deleted
+  # tree-wide).
+  version: 0.4.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -345,6 +382,84 @@ servers:
       non-loopback TCP/IP bind without --rpc-login (a uds:// socket or the
       Windows pipe carry their authorization in the transport). Design record:
       docs/design/RPC_TRANSPORT_POSTURE.md, RT-1 and RT-2.
+
+# ── Method registry (STATUS OF RECORD — rule 23) ──────────────────────────
+# Machine-readable disposition per method name. The wallet RPC liveness gate
+# reads this table: every SPECIFIED method must have a dispatch arm and a
+# production consumer; every REJECTED or RESERVED name must have NO dispatch
+# arm. JsonRpcRequest.method.enum must equal the SPECIFIED set exactly.
+# Rationale for each non-SPECIFIED status lives in the header comment block
+# at the top of this file; this table is the status, the header is the why.
+x-shekyl-method-registry:
+  create_wallet: { status: SPECIFIED }
+  restore_wallet: { status: SPECIFIED }
+  open_wallet: { status: SPECIFIED }
+  close_wallet: { status: SPECIFIED }
+  change_password: { status: SPECIFIED }
+  get_balance: { status: SPECIFIED }
+  get_primary_address: { status: SPECIFIED }
+  build_pending_tx: { status: SPECIFIED }
+  submit_pending_tx: { status: SPECIFIED }
+  discard_pending_tx: { status: SPECIFIED }
+  abandon_tx: { status: SPECIFIED }
+  set_tx_note: { status: SPECIFIED }
+  get_tx_note: { status: SPECIFIED }
+  get_transfers: { status: SPECIFIED }
+  get_transfer_by_id: { status: SPECIFIED }
+  get_wallet_info: { status: SPECIFIED }
+  refresh: { status: SPECIFIED }
+  rescan_blockchain: { status: SPECIFIED }
+  get_height: { status: SPECIFIED }
+  get_version: { status: SPECIFIED }
+  stake: { status: SPECIFIED }
+  create_payment_request: { status: SPECIFIED }
+  list_payment_requests: { status: SPECIFIED }
+  make_uri: { status: SPECIFIED }
+  parse_uri: { status: SPECIFIED }
+  estimate_tx_size_and_weight: { status: SPECIFIED }
+  get_default_fee_priority: { status: SPECIFIED }
+  get_staked_balance: { status: SPECIFIED }
+  get_staked_outputs: { status: SPECIFIED }
+  staking_info: { status: SPECIFIED }
+  stake_in: { status: SPECIFIED }
+  get_drain_balance: { status: SPECIFIED }
+  drain: { status: SPECIFIED }
+  unstake: { status: SPECIFIED }
+  collect_unstaked: { status: SPECIFIED }
+  get_tx_proof: { status: SPECIFIED }
+  check_tx_proof: { status: SPECIFIED }
+  get_reserve_proof: { status: SPECIFIED }
+  check_reserve_proof: { status: SPECIFIED }
+  sign_message: { status: SPECIFIED }
+  verify_message: { status: SPECIFIED }
+  match_transfer_to_request: { status: REJECTED }
+  claim: { status: REJECTED }
+  claim_rewards: { status: REJECTED }
+  get_stakes: { status: REJECTED }
+  get_tx_key: { status: REJECTED }
+  check_tx_key: { status: REJECTED }
+  get_spend_proof: { status: REJECTED }
+  check_spend_proof: { status: REJECTED }
+  export_unsigned: { status: REJECTED }
+  submit_signed: { status: REJECTED }
+
+# ── Error-code ranges (STATUS OF RECORD — rule 23) ────────────────────────
+# SPECIFIED ranges carry allocated codes (enumerated in WalletRpcErrorCode);
+# RESERVED ranges carry none and a PR allocating into one without flipping
+# its status here is a contract violation. The -29700 range is RESERVED
+# permanently: cold signing is REJECTED (never work), and the range is held
+# only so the numbers cannot be silently reused.
+x-shekyl-error-ranges:
+  - { start: -29000, end: -29099, subject: wallet lifecycle, status: SPECIFIED }
+  - { start: -29100, end: -29199, subject: send / build / submit / discard, status: SPECIFIED }
+  - { start: -29200, end: -29299, subject: refresh / rescan, status: SPECIFIED }
+  - { start: -29300, end: -29399, subject: proofs, status: SPECIFIED }
+  - { start: -29400, end: -29499, subject: transfers / history, status: SPECIFIED }
+  - { start: -29500, end: -29599, subject: staking, status: SPECIFIED }
+  - { start: -29600, end: -29699, subject: payment requests, status: RESERVED }
+  - { start: -29700, end: -29799, subject: air-gapped bundles (refused namespace), status: RESERVED }
+  - { start: -29800, end: -29899, subject: sign / verify message, status: SPECIFIED }
+  - { start: -29900, end: -29999, subject: server / transport / tenancy, status: SPECIFIED }
 
 paths:
   /:
@@ -1044,11 +1159,17 @@ components:
 
     CapabilityMode:
       type: string
-      enum: [FULL, VIEW_ONLY, HARDWARE_OFFLOAD]
+      enum: [FULL]
       description: >
         Typed projection of the wallet envelope capability
         (`shekyl_engine_file::Capability`). Carried explicitly on every
-        wallet-handle response; never inferred by the client.
+        wallet-handle response; never inferred by the client. FULL is the
+        only capability: ViewOnly is REJECTED and hardware-offload is
+        DEFERRED with zero code (rule 23; decision log 2026-09-07). The
+        envelope capability byte is still validated at open — any byte
+        other than 0x01 refuses with the generic unsupported-capability
+        error — so the one-variant enum is a parse boundary, not a
+        formality.
 
     FeePriority:
       description: >
@@ -2711,11 +2832,10 @@ components:
         raw strings — Bech32m admits an all-uppercase encoding of the
         same address, and a string compare would silently misroute
         INBOUND to OUTBOUND and fail -29301 on correct-looking input.
-        Capability: INBOUND requires only view material and is permitted
-        on VIEW_ONLY wallets (the auditor-wallet use case, deliberate);
-        OUTBOUND is not capability-gated — it needs the retained tx
-        secret, not spend material, and a view-only wallet answers
-        -29301 naturally because it never sent.
+        Capability: neither direction is capability-gated (FULL is the
+        only capability). INBOUND needs only view material; OUTBOUND
+        needs the retained tx secret, not spend material, and a wallet
+        that did not send the tx answers -29301 naturally.
         OUTBOUND PREREQUISITE (in-scope for WI-RPC-3, its own commit
         ordered before the proof wrapper): the send path must persist
         the per-tx secret into TxMetaBlock.tx_keys — the schema exists
