@@ -142,6 +142,43 @@
 
 ### Added
 
+- **DRS-P0b — the atomicity audit covers the store that exists.** The
+  April 2026 `LMDB_WRITE_ATOMICITY_AUDIT.md` was a PASS doing work it was
+  never entitled to do: 22 of the 49 declared tables post-dated it (49 declared, 48 at runtime — DRS-W5), while its
+  covered subjects included the dead claim-era staking paths and two dead
+  tables. Rewritten in place at `dev 2dba46537` over every write path —
+  connect, pop, txpool (re-censused: 14 `LockedTXN` constructions / 13
+  commits, the read-snapshot `get_transaction_info` recorded as the
+  deliberate baseline; the April D++ fix verified alive and intact), alt
+  blocks, **three** prune shapes — one atomic and two deliberately
+  checkpointed (archival retention rides the block's transaction with its
+  receipt written before the destruction it authorises; `prune_tx_data`
+  commits per ≤256-height batch **with its resumption anchor in the same
+  transaction**; `prune_worker` commits and reopens every 4096 deletions) —
+  and the store lifecycle — `open()` (one transaction, three exits, one of
+  which commits before it refuses: DRS-W10), `reset()` (enumeration wipe —
+  its stale FOLLOWUPS row closed) and `migrate()` (zero writes by design). The §10 coverage matrix is
+  gate-pinned to `SHEKYL_LMDB_TABLES` (DRS §9.1 leg 3 now live; eight new
+  failure paths observed red). The in-code-only conventions are
+  transcribed for the Rust store: A-2 height bases with the F-B5b
+  convert-don't-unify rationale verbatim, A-4's load-bearing revert
+  partial order, A-6's guard census (22× `std::runtime_error` vs 2×
+  `DB_ERROR_TXN_START` for one precondition). Findings DRS-W1…DRS-W11 recorded —
+  none S-graded, no C++ touched — including `txs` (zero write or read
+  sites; inherited-dead candidate) and `hf_starting_heights` (deleted at
+  every writable `open()`, structurally absent at runtime), and the post-pop
+  burn pair living outside the pop funnel — which `blockchain_import
+  --pop-blocks` reaches today by popping straight through the DB — and
+  **DRS-W9**, the connect side of the same architectural fact: the burn
+  pair also runs after the try whose catches set `m_batch_success`, so an
+  LMDB write failure between the row and its aggregate commits the block
+  and the row without the total. That one falsified a PASS this audit had
+  published, and it is the production entry that regrades DRS-W7 from
+  unreachable to live. The dead
+  `staker_pool_balance` properties row left the schema doc, and the
+  workflow carrying the schema gates is renamed `docs-gates.yml` for what
+  it does (Rick's #624 boundary: P0b's item, no other lane's).
+
 - **Shard-visual: ruling B's assigned residue CLOSED (2026-09-06), and
   the single-algorithm fallback RETIRED.** Three items the spec handed
   to ruling B by name and B never closed, ruled together: `time_density`
