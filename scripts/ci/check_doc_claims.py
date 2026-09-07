@@ -240,6 +240,12 @@ def uninitialised_submodules() -> tuple[str, ...]:
     bitten by that: the link gate reports every path under an uninitialised
     submodule as a dead link. Absence of the file is the first evidence that the
     SUBJECT is absent, not that the claim is wrong (rule 47).
+
+    "Empty" ignores a lone `.git`, which is the state an interrupted or partial
+    `submodule update` leaves behind: the gitlink is written before any content
+    arrives. Counting that directory as populated would resolve every path under
+    it to "deleted" and report a tree's worth of phantom rot — the same
+    misattribution this function exists to prevent, reached by a narrower door.
     """
     gm = ROOT / ".gitmodules"
     if not gm.is_file():
@@ -248,7 +254,7 @@ def uninitialised_submodules() -> tuple[str, ...]:
     for m in re.finditer(r"^\s*path\s*=\s*(\S+)", gm.read_text(encoding="utf-8"),
                          re.M):
         d = ROOT / m.group(1)
-        if not d.is_dir() or not any(d.iterdir()):
+        if not d.is_dir() or not any(c.name != ".git" for c in d.iterdir()):
             out.append(m.group(1).rstrip("/") + "/")
     return tuple(out)
 

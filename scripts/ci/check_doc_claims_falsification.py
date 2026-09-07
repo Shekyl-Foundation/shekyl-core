@@ -120,7 +120,7 @@ def green(name: str, doc: str = GOOD, restater: str = RESTATER,
         return name, rc == 0, out.strip().splitlines()[0][:86] if out.strip() else ""
 
 
-def with_submodule(populated: bool):
+def with_submodule(populated: bool, gitlink: bool = False):
     """Give the synthetic tree a .gitmodules and an external/sub, or not.
 
     The distinction under test is between a file that was DELETED and one that
@@ -136,6 +136,12 @@ def with_submodule(populated: bool):
         d.mkdir(parents=True, exist_ok=True)
         if populated:
             (d / "inc.h").write_text("one\ntwo\nthree\n", encoding="utf-8")
+        elif gitlink:
+            # What an interrupted `submodule update` leaves: the gitlink is
+            # written before any content arrives, so the directory is non-empty
+            # while holding none of the files a citation could resolve against.
+            (d / ".git").write_text("gitdir: ../../.git/modules/external/sub\n",
+                                    encoding="utf-8")
     return f
 
 
@@ -218,6 +224,12 @@ def main() -> None:
         case("dead citation elsewhere is still rot", "which does not exist",
              doc=sub("`src/thing.cpp:3`", "`src/absent.cpp:3`"),
              corpus=with_submodule(populated=False)),
+        # A bare .git gitlink is not content: an interrupted update leaves the
+        # directory non-empty and holding nothing a citation resolves against,
+        # so a naive "is it empty" test would call the whole tree deleted.
+        case("submodule holding only a gitlink", "not checked out here",
+             doc=sub("`src/thing.cpp:3`", "`external/sub/inc.h:2`"),
+             corpus=with_submodule(populated=False, gitlink=True)),
         # ratchet — opt-in without one is adoption theatre, so each direction
         # of the ratchet has to be able to bite.
         case("ratchet: dead citations rose", "rose to",
