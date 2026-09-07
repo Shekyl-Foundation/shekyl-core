@@ -1118,17 +1118,21 @@ disclosure.
   at all.** *(Measured against pre-implementation code; FL-R12′ SIGNED at
   round 8 and FL-D1 closed — the authorized implementation retires this
   state: the reward floor is permanent and these exhaustion rows are the
-  defect record the implementing KATs close.* **DISCHARGED: with the
-  FL-R12′ implementation in the tree the instrument now reports
-  `val_reward_at_exhaustion = 600 000 000`, equal to the estimate side —
-  FL-V1's terminal divergence is closed and the `[0, 0, 0, 0]` ladder
-  above is history, not behaviour. The rows are retained as the defect
-  record they became.**)* The corrected estimate at
-  least stops quoting fees from a reward that no longer exists. This pin
-  also refutes the user-facing
+  defect record the implementing KATs close. At the time of measurement
+  the corrected estimate at least stopped quoting fees from a reward that
+  no longer existed, and this pin is what refuted the user-facing
   "perpetual tail" claims — escalated separately as **FL-V7** with its own
   decision row (FL-R12′), because a false monetary-policy promise and a
-  missing governance mechanism need different owners and different urgency.
+  missing governance mechanism needed different owners and different
+  urgency.)*
+
+  **DISCHARGED at the implementing PR (#640).** With FL-R12′ in the tree
+  the instrument reports `val_reward_at_exhaustion = 600 000 000`, equal
+  to the estimate side: FL-V1's terminal divergence is CLOSED, and every
+  sentence above — the `[0, 0, 0, 0]` ladder, the collapsed relay floor,
+  the reward that "no longer exists", the refuted tail promise — is the
+  historical defect record, not current behaviour. It is kept because it
+  is the evidence the ruling was made on.
 
 ### §4.7 Anchored candidate-set reduction (FL-C9; measured at round 5, re-labeled at round 6)
 

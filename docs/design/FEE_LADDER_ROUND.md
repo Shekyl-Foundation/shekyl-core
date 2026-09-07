@@ -846,8 +846,14 @@ Bundle contents:
   boundaries. Heritage `scaling_2021` pins updated to the signed shape
   (`[340, 1400, 1400, 67000]`-class; the surge case's 22 000 → 67 000
   deliberately) + a `C_q = 2` case. Wallet cap re-derived (FL-R9):
-  14 000 000 → **28 000 000** (served sweep max), KAT re-pinned.
-- **FL-R15 rename executed:** `money_supply` →
+  14 000 000 → 28 000 000 (served sweep max) — **and re-derived AGAIN at
+  the implementing PR #640 to a 220 000 000 STRUCTURAL bound, because
+  28 000 000 sat below honest quotes from ≈ year 3**: the sweep had
+  located a product's maximum at one factor's maximum. KAT re-pinned
+  there.
+- **FL-R15 rename (NOT in the landed bundle — it is the follow-up
+  mechanical PR; this records the work as prepared, and #640 explicitly
+  excludes it along with FL-R16b):** `money_supply` →
   `emission_curve_asymptote` across the JSON authority, both codegen
   paths, the Rust field/const surface (incl. the engine snapshot field
   `emission_curve_asymptote_atomic` — no out-of-workspace consumer), and

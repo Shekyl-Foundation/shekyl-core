@@ -555,14 +555,28 @@ mod tests {
     }
 
     /// The bound must actually BOUND — and the previous cap did not,
-    /// which is why this test exists (PR #640 review). It walks the
-    /// neutral emission trajectory once and, at every registered chain
-    /// age, evaluates the served priority rung across the reachable
-    /// volume grid; the maximum it finds must sit at or under the cap.
+    /// which is why this test exists (PR #640 review). It walks emission
+    /// trajectories and, at every registered chain age, evaluates the
+    /// served priority rung across the reachable volume grid; the
+    /// maximum it finds must sit at or under the cap.
     ///
-    /// If this fails, the cap is refusing honest daemon quotes — a
-    /// wallet-side liveness failure, not a safety one — and the bound
-    /// must be re-derived BEFORE the literal above is touched.
+    /// **It sweeps trajectories, not just states, and that distinction
+    /// was a correction.** An earlier version walked only the NEUTRAL
+    /// (`M_r = 1`) accumulation and called its peak "the reachable
+    /// maximum". It is not: history matters, because a slower-emitting
+    /// past leaves more `remaining` and therefore a larger `R` at the
+    /// same height. A chain dormant at the `M_r = 0.8` rail and then
+    /// busy reaches **98,000,000** at ≈ year 8, above the 91,000,000 the
+    /// neutral walk finds at year 7 (both still far under the bound).
+    /// So the release rails are swept as the accumulation extremes.
+    ///
+    /// **Even this does not enumerate reachable histories** — arbitrary
+    /// volume paths are uncountable — and that is precisely why the cap
+    /// is a STRUCTURAL bound rather than a swept maximum. What this test
+    /// guarantees is a floor under the bound's adequacy, not a proof of
+    /// tightness. If it fails, the cap is refusing honest daemon quotes
+    /// — a wallet liveness failure — and the bound must be re-derived
+    /// BEFORE the literal is touched.
     #[test]
     fn absolute_cap_bounds_the_swept_reachable_maximum() {
         use shekyl_economics::params::SCALE;
@@ -570,74 +584,87 @@ mod tests {
         let zm = PENALTY_FREE_ZONE;
         let cap = absolute_fee_rate_cap();
 
-        let mut ag: u64 = 0;
-        let mut worst = (0u64, 0u64, 0u64);
-        let max_h = 30 * shekyl_economics::BLOCKS_PER_YEAR;
-        for h in 0..=max_h {
-            if h % shekyl_economics::BLOCKS_PER_YEAR == 0 {
-                let base = shekyl_economics::emission::base_block_reward(ag, &p)
-                    .expect("base reward along the neutral trajectory");
-                let sigma = shekyl_economics::calc_effective_emission_share(
-                    h,
-                    1,
-                    shekyl_economics::STAKER_EMISSION_SHARE,
-                    shekyl_economics::STAKER_EMISSION_DECAY,
-                    shekyl_economics::BLOCKS_PER_YEAR,
-                );
-                for v in [0u64, 5, 50, 100, 200, 500] {
-                    let m_r = shekyl_economics::calc_release_multiplier(
-                        v,
-                        p.tx_volume_baseline,
-                        p.release_min,
-                        p.release_max,
+        // The accumulation extremes: a chain that has emitted as slowly
+        // as the release multiplier allows retains the most `remaining`,
+        // and therefore prices highest at any given age.
+        let mut worst = (0u64, 0u64, 0u64, 0u64);
+        for &m_r in &[p.release_min, SCALE, p.release_max] {
+            let mut ag: u64 = 0;
+            let max_h = 30 * shekyl_economics::BLOCKS_PER_YEAR;
+            for h in 0..=max_h {
+                if h % shekyl_economics::BLOCKS_PER_YEAR == 0 {
+                    let base = shekyl_economics::emission::base_block_reward(ag, &p)
+                        .expect("base reward along the trajectory");
+                    let sigma = shekyl_economics::calc_effective_emission_share(
+                        h,
+                        1,
+                        shekyl_economics::STAKER_EMISSION_SHARE,
+                        shekyl_economics::STAKER_EMISSION_DECAY,
+                        shekyl_economics::BLOCKS_PER_YEAR,
                     );
-                    let b = shekyl_economics::calc_burn_pct(
-                        v,
-                        p.tx_volume_baseline,
-                        ag,
-                        p.money_supply,
-                        p.burn_base_rate,
-                        p.burn_cap,
-                    );
-                    let c = u64::try_from(
-                        u128::from(SCALE - sigma) * u128::from(m_r) / u128::from(SCALE - b),
-                    )
-                    .expect("C fits u64");
-                    let c_q = shekyl_economics::quantize_pow2_ceil(c);
-                    let prio = shekyl_economics::corrected_fee_ladder(
-                        base,
-                        zm,
-                        zm,
-                        zm,
-                        DYNAMIC_FEE_REFERENCE_TX_WEIGHT,
-                        c_q,
-                    )
-                    .priority;
-                    if prio > worst.0 {
-                        worst = (prio, h / shekyl_economics::BLOCKS_PER_YEAR, v);
+                    for v in [0u64, 5, 50, 100, 200, 500] {
+                        let mult = shekyl_economics::calc_release_multiplier(
+                            v,
+                            p.tx_volume_baseline,
+                            p.release_min,
+                            p.release_max,
+                        );
+                        let b = shekyl_economics::calc_burn_pct(
+                            v,
+                            p.tx_volume_baseline,
+                            ag,
+                            p.money_supply,
+                            p.burn_base_rate,
+                            p.burn_cap,
+                        );
+                        let c = u64::try_from(
+                            u128::from(SCALE - sigma) * u128::from(mult) / u128::from(SCALE - b),
+                        )
+                        .expect("C fits u64");
+                        let c_q = shekyl_economics::quantize_pow2_ceil(c);
+                        let prio = shekyl_economics::corrected_fee_ladder(
+                            base,
+                            zm,
+                            zm,
+                            zm,
+                            DYNAMIC_FEE_REFERENCE_TX_WEIGHT,
+                            c_q,
+                        )
+                        .priority;
+                        if prio > worst.0 {
+                            worst = (prio, h / shekyl_economics::BLOCKS_PER_YEAR, v, m_r);
+                        }
                     }
                 }
-            }
-            if h < max_h {
-                ag = ag.saturating_add(
-                    shekyl_economics::emission::base_block_reward(ag, &p)
-                        .expect("base reward along the neutral trajectory"),
-                );
+                if h < max_h {
+                    // Advance along THIS trajectory's release rail.
+                    let paid = shekyl_economics::emission::base_block_reward(ag, &p)
+                        .expect("base reward along the trajectory");
+                    ag = ag.saturating_add(
+                        u64::try_from(u128::from(paid) * u128::from(m_r) / u128::from(SCALE))
+                            .unwrap_or(u64::MAX),
+                    );
+                }
             }
         }
 
         assert!(
             worst.0 <= cap,
-            "an honest quote exceeds the cap: swept maximum {} (age {}y, v={}) > cap {}",
+            "an honest quote exceeds the cap: swept maximum {} (age {}y, v={}, rail M_r={}) > cap {}",
             worst.0,
             worst.1,
             worst.2,
+            worst.3,
             cap
         );
-        // The measured peak, recorded so the margin is visible rather
-        // than assumed: it is interior (≈ year 7), NOT at genesis.
-        assert_eq!(worst.0, 91_000_000, "the reachable maximum moved");
-        assert_eq!(worst.1, 7, "the reachable maximum is no longer at year 7");
+        // The peak over the SWEPT trajectories — not a claim about every
+        // reachable history. It sits on the dormant rail, which is the
+        // point: the neutral walk alone understated it.
+        assert_eq!(worst.0, 98_000_000, "the swept maximum moved");
+        assert_eq!(
+            worst.3, p.release_min,
+            "the swept peak left the dormant rail"
+        );
     }
 
     /// The finding's scenario, pinned end to end: the honest YOUNG-CHAIN

@@ -1134,6 +1134,47 @@ fn corrected_fee_ladder_null_out_returns_minus_one() {
     );
 }
 
+/// Rule 40, the other export: `corrected_fee_ladder` forms
+/// `4·R·w_ref·C_q` in `u128`, which OVERFLOWS before any conversion
+/// fallback can see it once the bare-`u64` ABI is handed operands near
+/// `u64::MAX` — an abort in an overflow-checked build, wrapped fee
+/// values otherwise (PR #640 review). The i32 ABI already carries a
+/// failure shape, so the domain is checked and refused with `-2`.
+#[test]
+fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
+    let mut fees = [SENTINEL; 4];
+    for (base, mnw, mlw, zone, w, cq) in [
+        (u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX),
+        (u64::MAX, 300_000, 300_000, 300_000, 3_000, u64::MAX),
+        (u64::MAX, 300_000, 300_000, 300_000, u64::MAX, 1_000_000),
+        (1, u64::MAX, u64::MAX, u64::MAX, 3_000, 1_000_000),
+    ] {
+        let st =
+            unsafe { shekyl_corrected_fee_ladder(base, mnw, mlw, zone, w, cq, fees.as_mut_ptr()) };
+        assert_eq!(
+            st, -2,
+            "out-of-domain scalars must be refused, not computed \
+             (base={base}, mnw={mnw}, mlw={mlw}, zone={zone}, w={w}, cq={cq})"
+        );
+        assert_eq!(fees, [SENTINEL; 4], "a refused call must not write");
+    }
+
+    // And the honest domain still computes: the refusal is not a blanket.
+    let st = unsafe {
+        shekyl_corrected_fee_ladder(
+            10_000_000_000,
+            300_000,
+            300_000,
+            300_000,
+            3_000,
+            shekyl_economics::params::SCALE,
+            fees.as_mut_ptr(),
+        )
+    };
+    assert_eq!(st, 0);
+    assert_eq!(fees, [340, 1400, 1400, 67_000]);
+}
+
 #[test]
 fn corrected_fee_ladder_marshals_the_heritage_vector() {
     // 10 SKL reward, Mnw = Mlw = zone, C_q = 1: the FL-R17 signed shape over

@@ -600,7 +600,25 @@ pub extern "C" fn shekyl_fee_correction_quantized(
 /// The corrected four-slot fee ladder (FL-R17 three tiers + the RK-5 wire
 /// bridge slot; `Fh` main arm unconditional; economy is clamped by the
 /// CALLER at the relay floor). Writes exactly four values through
-/// `out_fees`. Returns 0, or -1 on a null pointer without writing.
+/// `out_fees`. Returns:
+///
+/// * `0` — the four values were written;
+/// * `-1` — null `out_fees`, nothing written;
+/// * `-2` — the scalars are outside the arithmetic's domain, nothing
+///   written (see below).
+///
+/// **Domain check, per rule 40.** The ladder forms `4·R·w_ref·C_q` over
+/// `Mfw²·SCALE` in `u128`. Every honest input is far inside that — `R` is
+/// bounded by the subsidy curve at ≈2⁴¹, `w_ref` is 3 000 and `C_q` ≤ 16
+/// in `SCALE` units — but the ABI takes bare `u64`s, and operands near
+/// `u64::MAX` overflow `u128` BEFORE the existing conversion fallback can
+/// see it: an abort in an overflow-checked build, wrapped fee values
+/// otherwise. Neither may cross `extern "C"`. The products are therefore
+/// checked here and a caller handing us an impossible state gets `-2`
+/// rather than an abort. This is validated at the boundary rather than by
+/// making the crate function fallible, because the honest domain cannot
+/// fail and every internal caller would otherwise carry an error arm that
+/// no chain state produces.
 ///
 /// # Safety
 ///
@@ -617,6 +635,20 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
 ) -> i32 {
     if out_fees.is_null() {
         return -1;
+    }
+    // Mirrors the owner's own `mfw` so the check covers what it computes.
+    let mfw = u128::from(mnw.min(mlw).max(full_reward_zone).max(1));
+    let numerator_fits = u128::from(base_reward)
+        .checked_mul(u128::from(ref_tx_weight))
+        .and_then(|x| x.checked_mul(u128::from(c_q)))
+        .and_then(|x| x.checked_mul(4))
+        .is_some();
+    let denominator_fits = mfw
+        .checked_mul(mfw)
+        .and_then(|x| x.checked_mul(u128::from(shekyl_economics::params::SCALE)))
+        .is_some();
+    if !numerator_fits || !denominator_fits {
+        return -2;
     }
     let fees = shekyl_economics::corrected_fee_ladder(
         base_reward,
