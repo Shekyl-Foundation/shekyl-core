@@ -1322,8 +1322,11 @@ and never did.
 
 **What the churn site actually does is narrower than "protection was removed",
 and narrower still than an earlier draft of this paragraph said.** It drops
-**an arbitrary already-synced peer** — every candidate is in `state_normal`, and
-the one chosen is simply whichever the connection scan visits last. That scan
+**an arbitrary already-synced connection** — every candidate is in
+`state_normal`, and the one chosen is simply whichever the connection scan
+visits last. (*Connection*, not *peer*: what is held and dropped is a
+`m_connection_id`, which is the distinction `dev`'s half of the rename was
+making.) That scan
 walks `boost::unordered_map<uuid, …>` (`m_connects`), so the order is hash order
 over random UUIDs: **not temporal, and not stable between passes.**
 
