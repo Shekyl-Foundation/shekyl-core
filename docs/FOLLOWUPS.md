@@ -1013,9 +1013,13 @@ Default. Lands before genesis if it should exist at launch.
   - **How:** cross-compile `--example budget_matrix` for `aarch64-unknown-linux-gnu` (skl-pi has no Rust
     toolchain), run the `floor` profile on skl-pi — ping the board first, no sudo — and commit the capture
     under `docs/benchmarks/`.
-  - **Verdict discipline:** over-budget cells are a REGRESSION to record against the 2026-09-06 baseline, never
-    a threshold to retune. CI's `shard-visual-x86-smoke` does NOT discharge this trigger: it cannot bound the
-    floor in either direction.
+  - **Verdict discipline:** over-budget cells are a REGRESSION to record against the 2026-09-06 baseline.
+    **Never a quiet retune** — moving a number so the matrix passes is the one response that is always wrong.
+    A threshold moves only by a *recorded amendment* citing the measurement and ratified by the decider (the
+    spec's amendment discipline; that path was exercised 2026-09-06), which is also the reopening path in the
+    fallback's reversion clause. Regression first: the default is that the change caused it and the change is
+    fixed or reverted. CI's `shard-visual-x86-smoke` does NOT discharge this trigger: it cannot bound the floor
+    in either direction.
 
 - **Transport selection for the staker-archival path (gate 6 /
   - Target: pre-genesis
