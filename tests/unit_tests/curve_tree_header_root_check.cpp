@@ -66,79 +66,11 @@
 #include "cryptonote_config.h"
 #include "cryptonote_core/blockchain.h"
 #include "cryptonote_core/tx_pool.h"
+#include "testnet_chain_fixture.h"
 
 using namespace cryptonote;
 
-namespace
-{
-
-struct TestnetChain
-{
-  boost::filesystem::path tmpdir;
-  tx_memory_pool txpool;
-  Blockchain bc;
-  account_base miner;
-
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wuninitialized"
-#endif
-  TestnetChain(): txpool(bc), bc(txpool)
-  {
-    tmpdir = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path();
-    boost::filesystem::create_directories(tmpdir);
-    BlockchainLMDB* db = new BlockchainLMDB();
-    db->open(tmpdir.string());
-    // TESTNET, offline, NO test_options (they would force FAKECHAIN), fixed
-    // difficulty 1. Blockchain takes ownership of the DB.
-    if (!bc.init(db, TESTNET, true, nullptr, 1))
-      throw std::runtime_error("Blockchain::init failed on TESTNET over LMDB");
-    miner.generate(crypto::secret_key{}, false, false, TESTNET);
-  }
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
-
-  ~TestnetChain()
-  {
-    bc.deinit();
-    boost::system::error_code ec;
-    boost::filesystem::remove_all(tmpdir, ec);
-  }
-
-  // The production template: fills the header root from the current tree
-  // root. At difficulty 1 the first nonce satisfies check_hash, so no search.
-  bool make_template(block& b)
-  {
-    b = block{};
-    difficulty_type diff = 0;
-    uint64_t height = 0, reward = 0, seed_height = 0;
-    crypto::hash seed_hash = crypto::null_hash;
-    if (!bc.create_block_template(b, miner.get_keys().m_account_address, diff, height,
-          reward, blobdata(), seed_height, seed_hash))
-      return false;
-    b.nonce = 0;
-    return true;
-  }
-
-  // The production connect path. It writes inside a caller-held LMDB write
-  // transaction, as core::handle_incoming_block and Blockchain::init's
-  // genesis add both do.
-  bool submit(const block& b, block_verification_context& bvc)
-  {
-    bvc = block_verification_context{};
-    db_wtxn_guard wtxn(&bc.get_db());
-    return bc.add_new_block(b, bvc);
-  }
-
-  bool mine_next(block_verification_context& bvc)
-  {
-    block b;
-    return make_template(b) && submit(b, bvc);
-  }
-};
-
-} // namespace
+using shekyl_test_fixtures::TestnetChain;
 
 TEST(curve_tree_header_root_check, testnet_chain_connects_through_the_first_maturing_block)
 {

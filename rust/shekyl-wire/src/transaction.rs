@@ -47,6 +47,7 @@ use shekyl_crypto_hash::keccak256;
 
 use crate::bytes::{read_array, read_byte};
 use crate::hash::hash_concat;
+use crate::tx_extra::{check_pqc_field_shape_of, parse as parse_tx_extra};
 use crate::varint::{read_varint, write_varint};
 use crate::READ_LEN_CAP;
 
@@ -1808,6 +1809,25 @@ impl Transaction {
                 "shekyl-wire: tx_extra {} exceeds {MAX_TX_EXTRA}",
                 self.prefix.extra.len()
             )));
+        }
+        // CEN-I19 (`GENESIS_TX_WIRE_FORMAT.md` §9.6a): exactly one `0x06` of
+        // `1120·n` and one `0x07` of `32·n` when the transaction has `n > 0`
+        // outputs, neither when `n == 0`. The daemon enforces this at admission
+        // through the same [`check_pqc_field_shape_of`]; enforcing it here is
+        // what makes that one rule, rather than one rule and a claim.
+        //
+        // Applied only when `extra` parses. This parser rejects three tags the
+        // C++ one accepts — `0x03` merge-mining, `0x0B` archival attestation,
+        // `0xDE` minergate — so rejecting on a parse failure would refuse
+        // transactions (and, through block fetch, coinbases) that the daemon
+        // accepts: a divergence in the reject direction, which is worse than
+        // the gap it would close. The daemon still rejects an unparseable
+        // `extra` at admission, so nothing reaches consensus unchecked. Those
+        // three tags have no live producer except merge-mining's block-template
+        // path (FOLLOWUPS, rule 60); deleting them makes this unconditional and
+        // lets this parser become the admission parser.
+        if let Ok(fields) = parse_tx_extra(&self.prefix.extra) {
+            check_pqc_field_shape_of(&fields, n_out).map_err(io::Error::other)?;
         }
         let size = self.serialized_len();
         if size > MAX_TX_SIZE {
