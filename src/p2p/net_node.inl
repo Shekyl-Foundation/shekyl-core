@@ -878,7 +878,7 @@ namespace nodetool
     // a transient local outage would discard reachable peers, which is what
     // the recently-failed retry window exists to avoid.
     for(const auto& p: m_command_line_peers)
-      m_network_zones.at(p.adr.get_zone()).m_peerlist.append_with_peer_gray(p);
+      m_network_zones.at(p.adr.get_zone()).m_peerlist.append_operator_candidate(p);
 
     //only in case if we really sure that we have external visible ip
     m_have_address = true;

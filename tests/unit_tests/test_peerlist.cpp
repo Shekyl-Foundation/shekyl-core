@@ -188,6 +188,62 @@ TEST(peerlist_manager, restored_entries_are_all_demoted_to_gray)
   EXPECT_EQ(3u, plm.get_gray_peers_count());
 }
 
+// An operator-supplied candidate must survive a FULL gray list. It has never
+// been dialled, so its `last_seen` is 0 and it sorts oldest -- which means the
+// ordinary gray append would insert it and then trim it away on exactly the
+// well-connected node where an operator typed `--add-peer`. Demoting restored
+// peers into gray makes a full gray list the normal case, not the rare one.
+TEST(peerlist_manager, an_operator_candidate_survives_a_full_gray_list)
+{
+  nodetool::peerlist_manager plm;
+  ASSERT_TRUE(plm.init(nodetool::peerlist_types{}, true));
+
+  // Fill gray to its cap with entries that all have a NONZERO last_seen, so
+  // the operator entry is unambiguously the oldest by the `by_time` index.
+  // Distinct octets rather than integer arithmetic on a packed address:
+  // `MAKE_IP(...) + i` carries between octets and collides, which silently
+  // under-fills the pool and makes the test assert against the wrong state.
+  for (uint32_t i = 0; i < P2P_LOCAL_GRAY_PEERLIST_LIMIT; ++i)
+  {
+    nodetool::peerlist_entry ple{};
+    ple.adr = epee::net_utils::ipv4_network_address{
+      MAKE_IP(203, 0, 1 + (i / 250), 1 + (i % 250)), 8080};
+    ple.id = 1000 + i;
+    ple.last_seen = 5000 + i;
+    ASSERT_TRUE(plm.append_with_peer_gray(ple));
+  }
+  ASSERT_EQ(P2P_LOCAL_GRAY_PEERLIST_LIMIT, plm.get_gray_peers_count());
+
+  nodetool::peerlist_entry op{};
+  op.adr = epee::net_utils::ipv4_network_address{MAKE_IP(198, 51, 100, 7), 8080};
+  op.id = 777;
+  op.last_seen = 0;   // never dialled -- that is the point
+
+  ASSERT_TRUE(plm.append_operator_candidate(op));
+
+  // The property: it is present and dialable.
+  const auto gray_holds = [&plm](std::uint32_t ip) {
+    bool found = false;
+    plm.foreach(false, [&](const nodetool::peerlist_entry& e) {
+      if (e.adr.template as<epee::net_utils::ipv4_network_address>().ip() == ip)
+        found = true;
+      return true;
+    });
+    return found;
+  };
+  EXPECT_TRUE(gray_holds(MAKE_IP(198, 51, 100, 7)))
+      << "an operator candidate was trimmed away at the gray cap, so --add-peer "
+         "would silently do nothing on a well-connected node";
+
+  // The control limb: it made ROOM rather than growing the list past its cap.
+  // Without this, an implementation that simply skipped trimming would pass
+  // the assertion above while letting gray grow unbounded.
+  EXPECT_EQ(P2P_LOCAL_GRAY_PEERLIST_LIMIT, plm.get_gray_peers_count());
+
+  // And it is NOT represented as verified.
+  EXPECT_EQ(0u, plm.get_white_peers_count());
+}
+
 // Seed contact must be keyed on knowing NO peer, not on knowing no TRUSTED
 // peer. White is empty on every boot now, so a white-only test would send
 // every restarting node to a seed ahead of a gray pool of thousands.
