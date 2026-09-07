@@ -2084,9 +2084,27 @@ uint64_t Blockchain::get_tx_volume_avg(uint64_t height) const
   // structural fix — a cheap per-block tx count in the storage layer,
   // so even a cold call stops parsing blobs — belongs to the storage
   // lane and is queued in FOLLOWUPS.
-  const crypto::hash top_hash = get_tail_id();
+  crypto::hash top_hash = get_tail_id();
   {
     CRITICAL_REGION_LOCAL(m_tx_volume_avg_lock);
+    if (top_hash == m_tx_volume_avg_top_hash && height == m_tx_volume_avg_height)
+      return m_tx_volume_avg_value;
+  }
+
+  // THE SCAN AND ITS KEY MUST COME FROM ONE CHAIN SNAPSHOT. `get_info`
+  // reaches this without the blockchain lock, so a reorg between the
+  // unlocked probe above and the walk below would average blocks from two
+  // chains and then publish that under a tip which never produced it. The
+  // uncached code had the same transient, but a memo makes it PERSISTENT:
+  // the mixed value would be served to every later caller at that tip.
+  // So take the lock, re-read the tip, and re-check the memo before
+  // scanning — the same order `get_difficulty_for_next_block` uses. The
+  // unlocked probe stays, because it is what keeps the common case (a
+  // repeat query at an unchanged tip) off the blockchain lock entirely.
+  CRITICAL_REGION_LOCAL(m_blockchain_lock);
+  top_hash = get_tail_id(); // get it again now that we have the lock
+  {
+    CRITICAL_REGION_LOCAL1(m_tx_volume_avg_lock);
     if (top_hash == m_tx_volume_avg_top_hash && height == m_tx_volume_avg_height)
       return m_tx_volume_avg_value;
   }
@@ -2100,7 +2118,7 @@ uint64_t Blockchain::get_tx_volume_avg(uint64_t height) const
   const uint64_t avg = tx_count_sum / blocks;
 
   {
-    CRITICAL_REGION_LOCAL(m_tx_volume_avg_lock);
+    CRITICAL_REGION_LOCAL1(m_tx_volume_avg_lock);
     m_tx_volume_avg_top_hash = top_hash;
     m_tx_volume_avg_height = height;
     m_tx_volume_avg_value = avg;
