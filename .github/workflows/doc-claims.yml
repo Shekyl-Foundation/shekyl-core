@@ -74,8 +74,19 @@ jobs:
       # citation and lift the bar to match. The base revision is what makes it
       # a ratchet rather than an honour system, and the gate can only read it
       # if the ref is here — checkout fetches only the merge commit by default.
+      # An EXPLICIT destination refspec, not a bare branch name. A source-only
+      # `git fetch origin dev` lands in FETCH_HEAD and updates
+      # refs/remotes/origin/dev only opportunistically, as a side effect of the
+      # remote's configured fetch refspec. It does happen with the checkout
+      # this job uses — verified in the run log — but the gate now treats an
+      # unresolved base ref as fatal, so the ref it reads must be one this step
+      # guarantees rather than one it usually gets. Naming the destination also
+      # forces an update when the ref already exists, which is the difference
+      # between comparing against dev and comparing against an old copy of it.
       - name: Fetch the base revision the ratchet compares against
-        run: git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+        run: |
+          git fetch --no-tags --depth=1 origin \
+            "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
 
       - name: Run the documentation claim audit
         env:
