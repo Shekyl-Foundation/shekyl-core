@@ -215,12 +215,20 @@
   second, and the pass line states the limit in its own output: it checks
   numeric and structural claims against source, **not rationales** — four
   premises refuted by review the same week would all have passed it green.
-  Its 18 failure paths are falsified by a committed, runnable matrix
-  (`check_doc_claims_falsification.py`) that builds a synthetic corpus in a
-  temp tree rather than mutating the repo. First adopted by the P0b atomicity
-  audit, where it immediately caught a live defect: `V4_DESIGN_NOTES.md` still
-  restated the finding range with its old upper bound after the register
-  had grown past it.
+  Its 26 failure paths and 2 negative controls are falsified by a committed,
+  runnable matrix (`check_doc_claims_falsification.py`) that builds a synthetic
+  corpus in a temp tree rather than mutating the repo. A ratchet in
+  `docs/ci/doc-claims-baseline.txt` holds live dead-citation debt monotone
+  downward and stops a document silently un-declaring a leg, because opt-in
+  without a ratchet is adoption theatre. A citation into a submodule that is
+  **not checked out** aborts the run and names the init command rather than
+  counting as rot: absence of the file is first evidence the *subject* is
+  absent, which is the misattribution the link gate makes in that same state.
+  First adopted by the P0b atomicity audit, where it immediately caught a live
+  defect: `V4_DESIGN_NOTES.md` still restated the finding range with its old
+  upper bound after the register had grown past it. It then caught one in
+  itself — the ratchet's own baseline had been measured in a worktree with a
+  submodule absent, and CI went red on the first push.
 
 - **DRS-P0b — the atomicity audit covers the store that exists.** The
   April 2026 `LMDB_WRITE_ATOMICITY_AUDIT.md` was a PASS doing work it was
