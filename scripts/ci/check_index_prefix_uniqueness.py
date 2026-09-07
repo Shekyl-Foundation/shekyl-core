@@ -73,19 +73,31 @@ def report_candidates(cells: list[str]) -> int:
                   file=sys.stderr)
             return 2
         print(f"  {cell:<{width}}  -> {pref}")
-        if pref in seen and seen[pref] != cell:
+        # Every argument is a PROPOSED SEPARATE ROW, so a repeated prefix is a
+        # collision even when the two cells are byte-identical — identical text
+        # means two rows registering one family, which the registry cannot
+        # hold. Do not reuse a "same text is the same family" shortcut here.
+        if pref in seen:
             collisions.append((pref, seen[pref], cell))
         else:
             seen[pref] = cell
     if collisions:
         for pref, a, b in collisions:
-            print(f"\nindex prefixes: {pref!r} is claimed by both {a!r} and {b!r}")
+            if a == b:
+                print(f"\nindex prefixes: {pref!r} claimed twice — the cell "
+                      f"{a!r} was passed more than once")
+            else:
+                print(f"\nindex prefixes: {pref!r} is claimed by both {a!r} "
+                      f"and {b!r}")
         print("COLLIDE — rule 94 §6 branch (b): keep one row and put per-lane "
               "status in the owning doc. Do NOT widen the grammar to separate "
               "them; that costs the check its power to catch a real duplicate.")
         return 1
-    print(f"\nDISTINCT ({len(seen)} prefixes) — rule 94 §6 branch (a): one row "
-          f"per sub-family is available.")
+    # Invariant worth stating out loud: branch (a) is available only when the
+    # candidates and the prefixes they claim are in one-to-one correspondence.
+    assert len(seen) == len(cells)
+    print(f"\nDISTINCT ({len(cells)} candidates -> {len(seen)} prefixes) — "
+          f"rule 94 §6 branch (a): one row per sub-family is available.")
     return 0
 
 
@@ -134,13 +146,22 @@ def main() -> int:
         if not pref:
             skipped += 1
             continue
-        if pref in seen and seen[pref] != cell:
+        # `rows` holds one entry per table LINE, so two entries can only be
+        # byte-identical when two rows register the same family — itself a
+        # rule 94 §1 violation. An earlier `and seen[pref] != cell` guard
+        # excused exactly that case, suppressing the duplicate it was meant
+        # to catch; a repeated prefix is a collision however the cells read.
+        if pref in seen:
             collisions.append((pref, seen[pref], cell))
         else:
             seen[pref] = cell
     if collisions:
         for pref, a, b in collisions:
-            print(f"index prefixes: prefix {pref!r} collides: {a!r} vs {b!r}")
+            if a == b:
+                print(f"index prefixes: prefix {pref!r} registered by two "
+                      f"identical rows: {a!r}")
+            else:
+                print(f"index prefixes: prefix {pref!r} collides: {a!r} vs {b!r}")
         print(f"\n{len(collisions)} prefix collision(s) in §2.", file=sys.stderr)
         return 1
     if skipped:
