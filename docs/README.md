@@ -55,8 +55,12 @@ The citation leg is **scoped, not universal**: it resolves tokens rooted at
 (resolved under `rust/`), ending in `.cpp`, `.h`, `.rs`, `.py`, `.sh` or
 `.inl`. An unrooted filename or another extension is not checked — so a green
 run says the cites it recognises resolve, not that every path-like token in the
-document does. Two ratchets keep the opt-in honest, and both are enforced
-against the **base revision**, not just the tree in hand:
+document does. Range citations (`file.rs:81-127`) are checked at **both**
+endpoints, since a range is a claim about its whole span and a file truncated
+inside one still resolves at its start.
+
+Two ratchets keep the opt-in honest, and both are enforced against the **base
+revision**, not just the tree in hand:
 
 - the count of dead citations in live documents is a baseline in
   [`docs/ci/doc-claims-baseline.txt`](ci/doc-claims-baseline.txt) that may only
@@ -82,11 +86,13 @@ narrow and self-identifying — the ref resolves but carries no baseline yet,
 which is true exactly once, for the change that introduces the file.
 
 Because that count is a ratchet, it has to mean the same thing everywhere. A
-citation into a submodule that is **not checked out** therefore stops the run
-and names the init command, rather than being counted as rot: a missing file is
-first evidence the subject is absent, not that the claim went stale. Run
-`git submodule update --init` if the gate says so — it is a broken run, not a
-finding.
+citation into a submodule this tree cannot speak for — **not checked out, or
+sitting at a commit other than the recorded one** — therefore stops the run and
+names the init command, rather than being counted as rot. A missing file is
+first evidence the subject is absent, not that the claim went stale; and a
+submodule at the wrong commit still has the file, so its line numbers are
+somebody else's. Run `git submodule update --init` if the gate says so — it is
+a broken run, not a finding.
 
 Declaring is opt-in because inferring these corpus-wide produced 991 findings
 against a clean tree — `§17` usually cites another document, registers

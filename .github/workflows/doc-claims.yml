@@ -40,8 +40,12 @@ on:
       # cannot see its own subject change.
       - "tests/**"
       - "external/**"
-      - "scripts/ci/check_doc_claims.py"
-      - "scripts/ci/check_doc_claims_falsification.py"
+      # scripts/** entire, not just this gate's own two files. The citation
+      # matcher resolves scripts/ paths like any other root, so naming only the
+      # gate scripts left the same gap that tests/ and external/ had — fixed
+      # once and not carried to the sibling. No live document cites scripts/
+      # today; the trigger covers the checker's reach, not today's corpus.
+      - "scripts/**"
       - "docs/ci/doc-claims-baseline.txt"
       - ".github/workflows/doc-claims.yml"
 

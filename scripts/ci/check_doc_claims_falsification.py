@@ -444,6 +444,18 @@ def main() -> None:
         case("established baseline is unparseable", "states no `dead-citations:`",
              corpus=git_base_text("declares: docs/subject.md sections\n"),
              env={"DOC_CLAIMS_BASE_REF": "base"}),
+        # citation bounds: line numbers are one-based, and a range is a claim
+        # about its whole span rather than just where it starts.
+        case("citations: line zero", "line numbers start at 1",
+             doc=sub("`src/thing.cpp:3`", "`src/thing.cpp:0`")),
+        case("citations: range end past EOF", "the range's end",
+             doc=sub("`src/thing.cpp:3`", "`src/thing.cpp:2-99`")),
+        case("citations: range ends before it starts", "ends (2) before it starts",
+             doc=sub("`src/thing.cpp:3`", "`src/thing.cpp:3-2`")),
+        # numbered lists start at 1 — the invariant the marker documents
+        case("numbered: run does not start at 1", "numbered list runs",
+             doc=GOOD.replace("1. one\n2. two\n3. three",
+                              "2. one\n3. two\n4. three")),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]

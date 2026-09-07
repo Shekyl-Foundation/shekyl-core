@@ -268,9 +268,16 @@ def check_numbered(p, text, _arg, errs):
         return 0
     for run in runs:
         nums = [n for _, n in run]
-        if nums != list(range(nums[0], nums[0] + len(nums))):
-            errs.append(f"{rel(p)}:{run[0][0]}: numbered list runs {nums} — a gap "
-                        "or repeat means a step was inserted or removed without "
+        # From 1, not from whatever the first item happens to say. An earlier
+        # round rejected this as a false constraint, citing a corpus run that
+        # started at 3 — but that run was an artefact of the column-0 matcher
+        # mis-parsing a nested list, and with the parser fixed every run in the
+        # corpus starts at 1. The measurement was taken with a broken
+        # instrument, so it could not support the conclusion drawn from it.
+        if nums != list(range(1, len(nums) + 1)):
+            errs.append(f"{rel(p)}:{run[0][0]}: numbered list runs {nums} — the "
+                        "declared invariant is 1, 2, 3 …, so a gap, repeat, or "
+                        "wrong start means a step was inserted or removed without "
                         "renumbering")
     return sum(len(r) for r in runs)
 
@@ -285,14 +292,24 @@ def check_numbered(p, text, _arg, errs):
 # and the ratchet's corpus-wide count need exactly this, and they carried
 # verbatim copies until the submodule case below had to land in both — which is
 # how the third copy starts. A duplicate gets deleted, not synchronised.
+# The optional second endpoint is not decoration: `file.rs:81-127` is the house
+# citation style and there are 143 of them in live documents. Matching only the
+# start line meant a file truncated INSIDE a cited range still resolved, and the
+# ratchet stayed green over a citation that no longer points at what it names.
 CITE = re.compile(r"(?<![\w/-])((?:src|rust|scripts|tests|external|shekyl-[\w-]+)"
-                  r"/[\w./-]+\.(?:cpp|h|rs|py|sh|inl)):(\d+)")
+                  r"/[\w./-]+\.(?:cpp|h|rs|py|sh|inl)):(\d+)"
+                  r"(?:\s*[-–—]\s*(\d+))?")
 ROOTS = ("src/", "rust/", "scripts/", "tests/", "external/")
 
 
 @functools.cache
-def uninitialised_submodules() -> tuple[str, ...]:
-    """Submodule prefixes listed in .gitmodules whose directory is empty.
+def untrusted_submodules() -> tuple[str, ...]:
+    """Submodule prefixes whose content is not provably the recorded content.
+
+    Named for the question actually being asked. "Uninitialised" was too narrow
+    once git's own status became the primary signal: a submodule at the WRONG
+    commit is checked out, and still cannot answer what line 77 of one of its
+    files says.
 
     A submodule that was never checked out looks exactly like a deleted file to
     anything that only asks `is_file()`, and this repository has already been
@@ -306,16 +323,33 @@ def uninitialised_submodules() -> tuple[str, ...]:
     it to "deleted" and report a tree's worth of phantom rot — the same
     misattribution this function exists to prevent, reached by a narrower door.
     """
-    gm = ROOT / ".gitmodules"
-    if not gm.is_file():
-        return ()
     out = []
-    for m in re.finditer(r"^\s*path\s*=\s*(\S+)", gm.read_text(encoding="utf-8"),
-                         re.M):
-        d = ROOT / m.group(1)
-        if not d.is_dir() or not any(c.name != ".git" for c in d.iterdir()):
-            out.append(m.group(1).rstrip("/") + "/")
-    return tuple(out)
+    # Authoritative first: git reports "-" for not-initialised and "+" for
+    # checked out at a commit other than the one the superproject records. A
+    # non-empty directory proves neither — a stale or partial checkout has
+    # files, they are simply not the recorded ones, and citations resolved
+    # against them measure a different tree than CI does.
+    try:
+        r = subprocess.run(["git", "-C", str(ROOT), "submodule", "status"],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                if line[:1] in ("-", "+", "U") and len(line.split()) >= 2:
+                    out.append(line.split()[1].rstrip("/") + "/")
+    except (OSError, subprocess.SubprocessError):           # pragma: no cover
+        pass
+    # ...and the directory test as well, not instead: it still catches a tree
+    # git cannot speak for at all, which is the state every synthetic corpus in
+    # the falsification matrix is in. The two detectors cover different gaps,
+    # so the answer is their union.
+    gm = ROOT / ".gitmodules"
+    if gm.is_file():
+        for m in re.finditer(r"^\s*path\s*=\s*(\S+)",
+                             gm.read_text(encoding="utf-8"), re.M):
+            d = ROOT / m.group(1)
+            if not d.is_dir() or not any(c.name != ".git" for c in d.iterdir()):
+                out.append(m.group(1).rstrip("/") + "/")
+    return tuple(dict.fromkeys(out))
 
 
 _LENGTHS: dict[str, int] = {}
@@ -324,36 +358,67 @@ _LENGTHS: dict[str, int] = {}
 def resolve(path: str) -> int:
     """Lines in a cited file, or -1 if it genuinely does not exist.
 
-    Refuses to answer for a path inside an uninitialised submodule rather than
-    calling it dead. The alternative — count it and carry on — was measured on
-    this very PR: the baseline was taken in a worktree where external/miniupnp
-    was not checked out, so a live citation read as rot and the figure shipped
-    one too high. Counting it the other way is no better, because then a number
-    that is supposed to mean one thing would mean "of what this checkout could
-    see", and a genuinely dead submodule citation would pass locally and fail in
-    CI — inverting this gate's premise that the local run is the mechanism and
-    CI the backstop. So the run stops and says which command fixes it.
+    Refuses to answer for a path inside a submodule this tree cannot speak for,
+    rather than calling it dead. The alternative — count it and carry on — was
+    measured on this very PR: the baseline was taken in a worktree where
+    external/miniupnp was not checked out, so a live citation read as rot and
+    the figure shipped one too high. Counting it the other way is no better,
+    because then a number that is supposed to mean one thing would mean "of what
+    this checkout could see", and a genuinely dead submodule citation would pass
+    locally and fail in CI — inverting this gate's premise that the local run is
+    the mechanism and CI the backstop. So the run stops and says which command
+    fixes it.
+
+    The trust test runs BEFORE resolution, not only when the file is missing. A
+    submodule sitting at the wrong commit still has the file; its line numbers
+    are simply somebody else's, so the citation resolves and means nothing.
+    Gating on `is_file()` could catch only the absent case, never that one.
     """
     if path not in _LENGTHS:
+        for sm in untrusted_submodules():
+            if path.startswith(sm):
+                sys.exit(
+                    f"FAIL: a live document cites {path}, which lies inside the "
+                    f"submodule {sm.rstrip('/')} — and that submodule is either "
+                    "not checked out here or sits at a commit other than the one "
+                    "this tree records, so this run cannot tell a deleted file "
+                    "from an absent one, nor a moved line from a stale one.\n"
+                    f"       Run `git submodule update --init {sm.rstrip('/')}` "
+                    "and re-run. This is a broken run, not a dirty tree: the "
+                    "citation count is a ratchet, and a number measured against "
+                    "files that are merely missing locally, or present at some "
+                    "other commit, would disagree with CI by environment rather "
+                    "than by fact.")
         f = ROOT / path
         if not f.is_file() and not path.startswith(ROOTS):
             f = ROOT / "rust" / path           # crate-relative citation
-        if not f.is_file():
-            for sm in uninitialised_submodules():
-                if path.startswith(sm):
-                    sys.exit(
-                        f"FAIL: a live document cites {path}, which lies inside "
-                        f"the submodule {sm.rstrip('/')} — and that submodule is "
-                        "not checked out here, so this run cannot tell a deleted "
-                        "file from an absent one.\n"
-                        f"       Run `git submodule update --init {sm.rstrip('/')}` "
-                        "and re-run. This is a broken run, not a dirty tree: the "
-                        "citation count is a ratchet, and a number measured "
-                        "against files that are merely missing locally would "
-                        "disagree with CI by environment rather than by fact.")
         _LENGTHS[path] = (len(f.read_text(encoding="utf-8", errors="replace")
                               .splitlines()) if f.is_file() else -1)
     return _LENGTHS[path]
+
+
+def cite_fault(path: str, start: int, end: str | None, n: int) -> str | None:
+    """Why this citation does not resolve, or None if it does.
+
+    Line numbers are ONE-based, so `:0` is not a lenient citation but an
+    impossible one — and rejecting only `want > n` accepted it silently at both
+    call sites. Both endpoints are bounded, because a range is a claim about
+    its whole span.
+    """
+    if n < 0:
+        return "which does not exist"
+    if start < 1:
+        return f"but line numbers start at 1, so :{start} names nothing"
+    if start > n:
+        return f"but that file has {n} lines"
+    if end is None:
+        return None
+    last = int(end)
+    if last < start:
+        return f"but that range ends ({last}) before it starts ({start})"
+    if last > n:
+        return f"but that file has {n} lines, so the range's end ({last}) is past it"
+    return None
 
 
 def check_citations(p, text, _arg, errs):
@@ -361,12 +426,10 @@ def check_citations(p, text, _arg, errs):
     for m in CITE.finditer(text):
         seen += 1
         path, want = m.group(1), int(m.group(2))
-        n, line = resolve(path), text[: m.start()].count("\n") + 1
-        if n < 0:
-            errs.append(f"{rel(p)}:{line}: cites {path}:{want}, which does not exist")
-        elif want > n:
-            errs.append(f"{rel(p)}:{line}: cites {path}:{want}, but that file has "
-                        f"{n} lines")
+        fault = cite_fault(path, want, m.group(3), resolve(path))
+        if fault:
+            line = text[: m.start()].count("\n") + 1
+            errs.append(f"{rel(p)}:{line}: cites {m.group(0)}, {fault}")
     if seen == 0:
         errs.append(f"{rel(p)}: declares `citations` but makes none")
     return seen
@@ -439,9 +502,8 @@ def dead_citations(corpus) -> list[str]:
         # example must not opt a document in, and nowhere else.
         for m in CITE.finditer(text):
             path, want = m.group(1), int(m.group(2))
-            n = resolve(path)
-            if n < 0 or want > n:
-                out.append(f"{rel(p)}: {path}:{want}")
+            if cite_fault(path, want, m.group(3), resolve(path)):
+                out.append(f"{rel(p)}: {m.group(0)}")
     return out
 
 
