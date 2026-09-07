@@ -2069,8 +2069,10 @@ borrow checking; Stage 4's mailbox replaces the mutex.
 
 - **Q9.11 (`load_state()` method): closed no.** Loading is
   exclusively a one-shot at construction (lifecycle constructors:
-  `Engine::create`, `Engine::open_full`, `Engine::open_view_only`,
-  `Engine::open_hardware_offload`). Those run before any trait
+  `Engine::create`, `Engine::open_full`; the `open_view_only` /
+  `open_hardware_offload` stubs named here at close time were
+  deleted 2026-09-07 — ViewOnly REJECTED, HardwareOffload DEFERRED
+  with zero symbols per rule 23). Those run before any trait
   surface is in scope and stay as inherent constructors on
   `Engine<S>`. The trait covers the ongoing save/rotate surface
   only. See §2.8 for the full lifecycle treatment.
@@ -2425,8 +2427,9 @@ per-entity state.
 ### 2.8 Lifecycle and construction (new in Round 3)
 
 Lifecycle methods (`Engine::create`, `Engine::open_full`,
-`Engine::open_view_only`, `Engine::open_hardware_offload`,
-`Engine::change_password`, `Engine::close`) stay as inherent
+`Engine::change_password`, `Engine::close`; the two capability-stub
+constructors listed here originally were deleted 2026-09-07 per
+rule 23) stay as inherent
 methods on `Engine<S>` (Q9.11). The construction protocol they
 implement is itself part of the spec: at Stage 1 it is mostly
 trivial (concrete fields constructed inline), but at Stage 4 it is

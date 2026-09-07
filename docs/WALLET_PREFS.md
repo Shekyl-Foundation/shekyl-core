@@ -264,8 +264,8 @@ anywhere in the new surface:
 | Field                    | Disposition |
 |--------------------------|-------------|
 | `encrypted_secret_keys`  | The envelope itself is AEAD-encrypted; this redundant marker is meaningless. |
-| `original_keys_available`| Superseded by capability modes (`FULL` / `VIEW_ONLY` / `HARDWARE_OFFLOAD`). |
-| `watch_only`             | Superseded by `capability_mode == VIEW_ONLY`. |
+| `original_keys_available`| Superseded by the capability mode byte; `FULL` is the only live mode (view-only REJECTED, decision log 2026-09-07). |
+| `watch_only`             | REJECTED with the view-only capability (decision log 2026-09-07); no watch-only product exists. |
 | `background_sync_type`   | Not part of V3.0 scope; re-introduce as a TOML field if and when the feature ships. |
 | `nettype`                | Not a pref — part of wallet identity, committed in `.wallet.keys` AAD. |
 

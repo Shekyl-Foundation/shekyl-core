@@ -386,9 +386,6 @@ Default. Lands before genesis if it should exist at launch.
 - **`kameo` dependency pin and MSRV alignment before Stage 2 cuts.**
   - Target: pre-genesis
 
-- **View/HW lifecycle bodies in `shekyl-wallet-core`.**
-  - Target: pre-genesis
-
 - **Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression
   - Target: pre-genesis
 

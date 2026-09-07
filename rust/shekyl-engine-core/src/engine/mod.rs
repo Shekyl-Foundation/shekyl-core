@@ -41,9 +41,13 @@
 //!   at index 0. Exchanges that need stronger isolation use multiple wallet
 //!   files (separate keys are a strictly stronger boundary than shared keys).
 //! - **The `export_outputs` / `import_outputs` / `export_key_images` /
-//!   `import_key_images` four-call dance.** Air-gapped flows use two
-//!   typed bundle types (`UnsignedTxBundle`, `SignedTxBundle`) — see
-//!   Phase 2d.
+//!   `import_key_images` four-call dance — and cold signing itself.**
+//!   Air-gapped signing is REJECTED, permanently (decision log
+//!   2026-09-07: an FCMP++ witness needs the live curve tree, so the
+//!   "offline" half of a cold-signing flow cannot exist without
+//!   shipping chain state to the cold device — the isolation the flow
+//!   claims to buy is not delivered). Cold *storage* is the seed
+//!   phrase. No bundle types exist; do not add them.
 //! - **A god-object `Engine` with hundreds of public members.** Every
 //!   [`Engine`] member's mutability and locking discipline is explicit;
 //!   the type is *composition*, not *inheritance*. Staking product API is [`Engine::stake`] / [`stake_facade::StakeFacade`].

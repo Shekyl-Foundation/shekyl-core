@@ -4,6 +4,28 @@
 
 ### Changed
 
+- **Wallet capability collapsed to `FULL`-only; cold signing rejected
+  permanently.** The `ViewOnly` capability is REJECTED (no product use
+  case; FCMP++ has no view-key chain scan) and `HardwareOffload` is
+  DEFERRED with zero code symbols (the v1 layout was a guess against no
+  real device; the future layout will be designed against one). The
+  wallet envelope now seals and opens mode byte `0x01` only — bytes
+  `0x02`/`0x03` are RETIRED and `0x04` RESERVED in
+  `WALLET_FILE_FORMAT_V1.md` §2.3, all refused fail-closed as
+  `UnknownCapabilityMode` (new splice-tamper tests pin the refusal).
+  Cold signing (`export_unsigned` / `submit_signed` air-gap flow) is
+  rejected permanently, superseding the A4 post-genesis deferral: an
+  FCMP++ witness needs the live curve tree, so the offline half cannot
+  deliver the isolation it claims; cold storage is the seed phrase.
+  API deltas: wallet-RPC error `-29005` (`CAPABILITY_FORBIDS`) is
+  RETIRED — unreachable with one capability, the numeric code is never
+  reused; `wallet_rpc.yaml` gains a machine-readable
+  `x-shekyl-method-registry` (SPECIFIED / RESERVED / REJECTED per
+  method) and `x-shekyl-error-ranges`; the `capability` field on wallet
+  handle responses always reads `"FULL"`. Envelope wire format for
+  existing `FULL` wallets is unchanged. (Decision log 2026-09-07; rule
+  `23-disposition-visibility`.)
+
 - **Peerlist trust is earned in-process: nothing restored from disk is
   trusted, and `--add-peer` is a candidate rather than a trusted peer.**
   White-list membership now means exactly *"this process dialled it and it

@@ -39,20 +39,6 @@
       "cap_content_description": "master_seed[64] with byte i set to 0x80 | (i & 0x7f)",
       "sealed_bytes": 288
     },
-    "view_only.hex": {
-      "mode": "VIEW_ONLY (0x02)",
-      "network": 1,
-      "seed_format": 0,
-      "cap_content_description": "view_sk[32]=0x11.., ml_kem_dk[2400] with byte i = i & 0xff, spend_pk[32]=0x22..",
-      "sealed_bytes": 2688
-    },
-    "hardware_offload.hex": {
-      "mode": "HARDWARE_OFFLOAD (0x03)",
-      "network": 2,
-      "seed_format": 0,
-      "cap_content_description": "same as view_only + device_desc = \"ledger-nano-s:kat-serial-001\" (28 bytes)",
-      "sealed_bytes": 2718
-    },
     "state_for_full.hex": {
       "companion_keys_file": "full.hex",
       "state_payload_ascii": "shekyl-kat-state-v1",

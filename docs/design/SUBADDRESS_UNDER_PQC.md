@@ -549,6 +549,14 @@ counterexample today.**
 | **Compromise isolation** | `subaddress_keys`: `m_i = f(view_secret, i)`; spend `b_i = b + m_i`. View or spend secret compromise → **full wallet**. | One-subaddress compromise = full compromise today. |
 | **V3.1 multisig / V4 threshold** | `RESERVED_MULTISIG` mode placeholder; `PQC_MULTISIG_V3_1_ANALYSIS.md` models per-signer sessions, not per-subaddress view delegation. `WALLET_REWRITE_PLAN.md`: exchange isolation → **separate wallet files**. | No roadmap item for per-subaddress selective view disclosure. |
 
+**UPDATE 2026-09-07.** The substrate moved further from the
+counterexample: the view-only capability was REJECTED outright
+(decision log 2026-09-07; rule 23 — the `0x02` envelope byte is
+retired, no view-delegation surface of any scope exists). The rows
+above record the 2026-05-31 substrate; the verdict is unchanged and
+strictly stronger. The R1-F6 reopening criterion below is unaffected —
+it was always conditioned on a *future* design landing.
+
 **Reopening criterion (R1-F6).** Re-evaluate End-state 1's "attribution
 only" disposition if a **future** design lands **per-subaddress view
 delegation** (a view capability scoped to `{i}` without the account view
