@@ -1304,10 +1304,35 @@ mechanism removes both, because the only path that set the flag is gone.
 protection in general** — `should_drop_connection` still refuses to drop a peer
 that is not striped, one carrying the stripe needed next, one usable for
 pruned-block sync, or one holding the next unpruned block. Those are all
-*sync-utility* protections. The anchor exemption was the only one that
-protected a connection for being a **durable relationship** rather than a
-currently useful one, and nothing replaces it. Whether some class deserves that
-second kind of protection is unruled and deliberately not invented here.
+*sync-utility* protections, and after this ruling they are the only kind there
+is to have.
+
+**There is no durable peer class, by design — so nothing is missing here.** An
+earlier revision of this paragraph said the anchor exemption was the only thing
+protecting a connection for being a *durable relationship*, and left "whether
+some class deserves that protection" open. **Both halves were wrong**, and the
+error is worth naming because it is easy to repeat: it described the new design
+in the deleted mechanism's vocabulary, and an open question phrased in that
+vocabulary is an invitation to re-invent anchors under another name.
+
+Trust is earned in-process and nothing survives a restart, so *durable* is not
+a property a peer can have. The only compiled-in peers are the **seed nodes**,
+and those are bootstrap data, not relationships — they carry no drop exemption
+and never did.
+
+**What the churn site actually does is narrower than "protection was removed".**
+It drops `last_synced_peer_id`: the peer that most recently reached
+`state_normal`. Not the longest-held, not a random one. The anchor exemption
+merely skipped anchor connections when choosing that victim; the choice is now
+unconditional. Selection was never tenure-based, so nothing tenure-shaped was
+lost.
+
+**The concern that motivated the exemption is real and lives elsewhere.** It was
+eclipse resistance — do not let churn rotate this node onto an adversary's
+peers. Under trust-is-earned that risk is not at the *drop* site at all: it is
+at the *selection* site, in what refills the freed slot (white first, then
+gray). Whether an adversary can bias that draw is the `g` bound, owned by
+**PWD-I4 (Q-10)** and **PWD-B9**. It is routed, not unruled.
 
 **Encryption of the store is a separate, privacy-shaped mechanism.** Once the
 loader believes nothing on disk, the file's integrity stops mattering; what
