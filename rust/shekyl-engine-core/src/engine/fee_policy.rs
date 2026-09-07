@@ -19,10 +19,12 @@
 //!    inversion is a defect or a lie, not a market condition.
 //! 2. **Absolute cap on the EFFECTIVE weight-1 charge** — for each
 //!    named tier, `fee_from_weight(rate, 1) ≤`
-//!    [`absolute_fee_rate_cap()`] (the served genesis-congested priority
-//!    rung = 28,000,000 atomic units — derived, KAT-pinned; a 100,000
-//!    mid-regime literal was caught in review refusing honest
-//!    young-chain snapshots whose economy tier alone is ~68,266).
+//!    [`absolute_fee_rate_cap()`] (a STRUCTURAL bound on the served
+//!    priority rung = 220,000,000 atomic units — every factor at its own
+//!    extreme, derived from the parameters and KAT-pinned. Two earlier
+//!    values were caught refusing HONEST quotes: a 100,000 mid-regime
+//!    literal, and a 28,000,000 genesis-point maximum that the reachable
+//!    surface exceeds from year 3 — see [`absolute_fee_rate_cap`]).
 //!    The effective charge, not the raw `per_weight`: every fee is
 //!    rounded UP to a multiple of the daemon-controlled
 //!    `quantization_mask`, so a raw-rate cap is bypassable by mask
@@ -103,8 +105,12 @@ const PENALTY_FREE_ZONE: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64
 /// measured maximum stays under this bound, so a parameter change that
 /// pushed the reachable peak above it fails loudly rather than silently.
 ///
-/// Pinned by `absolute_cap_is_the_swept_served_maximum`, so an
-/// economics-parameter change moves this loudly. Deliberately NOT
+/// Two tests carry different halves of the guarantee, and the split is
+/// deliberate: `absolute_cap_is_the_structural_bound` pins this value so
+/// a parameter change moves it loudly, while
+/// `absolute_cap_bounds_the_swept_reachable_maximum` is the one that
+/// matters — it sweeps the reachable surface and fails if an honest
+/// quote ever exceeds the bound. Deliberately NOT
 /// covering `BLOCK_REWARD_OVERESTIMATE` (the daemon's 10,000-SKL
 /// placeholder when its own reward computation fails): a daemon that
 /// just logged an internal error is not a daemon whose quote we pay —
@@ -645,11 +651,14 @@ mod tests {
         ValidatedFeeEstimates::try_new(snapshot(68_266, 273_066, 13_653_325))
             .expect("raw genesis-condition tiers are honest and must pass");
         // Daemon-rounded (round_money_up, 2 significant digits): the
-        // wire form at C_q = 1. Priority is the uncongested genesis Fh,
-        // half the C_q = 2 cap.
+        // wire form at C_q = 1, then at the genesis-congested C_q = 2.
+        // Both sit WELL UNDER the structural cap rather than on it — the
+        // genesis point is not the era maximum (that is ~91,000,000 near
+        // year 7), which is exactly the error the old 28,000,000 cap
+        // encoded.
         ValidatedFeeEstimates::try_new(snapshot(69_000, 280_000, 14_000_000))
             .expect("rounded genesis-condition C_q=1 tiers are honest and must pass");
         ValidatedFeeEstimates::try_new(snapshot(140_000, 550_000, 28_000_000))
-            .expect("rounded genesis-congested C_q=2 tiers sit on the cap");
+            .expect("rounded genesis-congested C_q=2 tiers are honest and must pass");
     }
 }
