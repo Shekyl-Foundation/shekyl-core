@@ -53,9 +53,12 @@
   constant — the whole persisted set was drained and destroyed to buy at most
   one connection.
 
-  **Consequence for operators:** anchor connections were exempt from being
-  dropped to make room during sync. That exemption is gone with the mechanism,
-  so no connection is drop-protected.
+  **Consequence for operators:** the anchor exemption in the
+  sync-slot drop logic went with the mechanism. `should_drop_connection` still
+  refuses to drop a peer that is not striped, one carrying the stripe we need
+  next, one usable for pruned-block sync, or one holding the next unpruned
+  block — what was removed is the *unconditional* exemption an anchor
+  connection had, not connection protection in general.
 
 - **`--hide-my-port` is gone, as an option and as a capability; whether this
   node advertises a port is now derived.** The flag expressed something the
