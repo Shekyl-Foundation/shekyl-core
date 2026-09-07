@@ -340,6 +340,12 @@ namespace
     boost::program_options::variables_map vm;
     boost::program_options::store(
       boost::program_options::command_line_parser(args).options(options_description).run(), vm);
+    // Production startup notifies (src/daemon/main.cpp), and so does every
+    // other `init(vm)` site in this file. No option in `core::init_options` or
+    // `Server::init_options` currently carries a notifier or `required()`, so
+    // this is behaviour-neutral today — it is here so the harness keeps
+    // matching production when one does, rather than diverging silently.
+    boost::program_options::notify(vm);
     return vm;
   }
 }
