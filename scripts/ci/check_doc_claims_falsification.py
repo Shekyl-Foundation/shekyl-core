@@ -64,13 +64,18 @@ See §2 for the table. The cite is `src/thing.cpp:3`.
 RESTATER = "# Restater\n\nThe range XX-W1…XX-W3 is complete.\n"
 
 
-def build(tmp: pathlib.Path, doc: str = GOOD, restater: str = RESTATER) -> None:
+def build(tmp: pathlib.Path, doc: str = GOOD, restater: str = RESTATER,
+          baseline: str | None = None) -> None:
     (tmp / "scripts" / "ci").mkdir(parents=True, exist_ok=True)
     shutil.copy(GATE, tmp / "scripts" / "ci" / GATE.name)
     (tmp / "src").mkdir(parents=True, exist_ok=True)
     (tmp / "src" / "thing.cpp").write_text("a\nb\nc\nd\n", encoding="utf-8")
     docs = tmp / "docs"
-    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "ci").mkdir(parents=True, exist_ok=True)
+    (docs / "ci" / "doc-claims-baseline.txt").write_text(
+        baseline if baseline is not None else
+        "dead-citations: 0\ndeclares: docs/subject.md citations,counts\n",
+        encoding="utf-8")
     for i in range(60):  # clear the corpus floor
         (docs / f"filler{i:02d}.md").write_text(f"# Filler {i}\n", encoding="utf-8")
     (docs / "subject.md").write_text(doc, encoding="utf-8")
@@ -85,10 +90,10 @@ def run(tmp: pathlib.Path) -> tuple[int, str]:
 
 
 def case(name: str, expect: str, doc: str = GOOD, restater: str = RESTATER,
-         corpus=None) -> tuple[str, bool, str]:
+         corpus=None, baseline: str | None = None) -> tuple[str, bool, str]:
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
-        build(tmp, doc, restater)
+        build(tmp, doc, restater, baseline)
         if corpus:
             corpus(tmp)
         rc, out = run(tmp)
@@ -163,6 +168,16 @@ def main() -> None:
              doc=sub("`src/thing.cpp:3`", "`src/thing.cpp:99`")),
         case("citations: none present", "declares `citations` but makes none",
              doc=sub("The cite is `src/thing.cpp:3`.", "No cite here.")),
+        # ratchet — opt-in without one is adoption theatre, so each direction
+        # of the ratchet has to be able to bite.
+        case("ratchet: dead citations rose", "rose to",
+             doc=sub("`src/thing.cpp:3`", "`src/gone.cpp:3`")),
+        case("ratchet: baseline left above the truth", "lower the `dead-citations:`",
+             baseline="dead-citations: 4\ndeclares: docs/subject.md citations,counts\n"),
+        case("ratchet: a declared leg was dropped", "has dropped the claim-audit",
+             doc=sub("<!-- claim-audit: counts -->", "")),
+        case("ratchet: baseline file missing", "has no baseline",
+             corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
 
     print(f"{'FAILURE PATH':<38} {'RED':<5} message")

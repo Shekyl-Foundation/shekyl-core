@@ -1,0 +1,37 @@
+# Ratchet baseline for scripts/ci/check_doc_claims.py.
+#
+# Opt-in with no ratchet is adoption theatre: a leg documents can decline
+# forever lets the debt grow while the gate reports green. This file is the
+# mechanism the repository has already proven twice — check_network_uniformity's
+# allowlist can only shrink deliberately, and the schema gate's row count is
+# pinned to the macro rather than restated. Both numbers below move in one
+# direction, and moving them is an edit somebody has to make on purpose.
+#
+# ── dead-citations ────────────────────────────────────────────────────────────
+# How many `path:line` citations in LIVE documents point at a file that does not
+# exist, or past the end of one that does. The gate fails if the count goes UP
+# (new rot) and also if it goes DOWN without this number being lowered (the
+# ratchet tightens deliberately, not silently). Floor is zero.
+#
+# The count is LIVE documents only, and the distinction is not bookkeeping. A
+# `wallet2.cpp:NNN` citation in a round record or the CHANGELOG is legitimately
+# historical — the file existed when the claim was made, and its repair is to
+# PIN THE SHA the claim was true at, exactly as PR #626 resolved the CEN-I12 row
+# by citing two shas. The same string in a live design document is a claim about
+# the CURRENT tree pointing at a file Phase 5 deleted, and its repair is to
+# re-anchor or retire the claim. Same text, opposite dispositions; only the
+# second is rot, and only the second is counted here.
+#
+# Measured 2026-09-07 at dev 3cb3ecd66: 56 in live documents, against 136 in
+# records-was surfaces that are NOT counted. Of the 60 dead `wallet2.cpp`
+# citations in docs/, 54 are historical and 6 are live rot — so this is not
+# mostly a wallet-deletion burn-down, and the largest single holder is
+# RANDOMX_V2_MINING_ASYMMETRY.md with 16.
+dead-citations: 56
+
+# ── declares ──────────────────────────────────────────────────────────────────
+# Documents that have opted a leg in cannot quietly opt back out: dropping a
+# declaration listed here fails the gate. Deleting the document is fine — the
+# check is against un-declaring while the document still exists. Adding legs
+# needs no edit here; removing one does.
+declares: docs/LMDB_WRITE_ATOMICITY_AUDIT.md citations,counts,numbered,range,sections,series

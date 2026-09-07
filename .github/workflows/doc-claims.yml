@@ -35,6 +35,7 @@ on:
       - "rust/**"
       - "scripts/ci/check_doc_claims.py"
       - "scripts/ci/check_doc_claims_falsification.py"
+      - "docs/ci/doc-claims-baseline.txt"
       - ".github/workflows/doc-claims.yml"
 
 concurrency:

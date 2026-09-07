@@ -43,6 +43,21 @@
 # reality. Green here means "the numbers match their own tables and the tree",
 # never "this document is right".
 #
+# WHAT IT DOES CATCH, as the worked example opposite those four: within an hour
+# of the first declaration it found that V4_DESIGN_NOTES.md still restated the
+# DRS-W finding range at its old upper bound — a fifth surface, updated in
+# review round 7 and missed by the round-13 sweep of four. The rule generated
+# the gate and the gate immediately caught the rule's own class in its own
+# parent work.
+#
+# UNUSABLE AND ABSENT ARE THE SAME STATE. This is why the model is declaration
+# rather than inference, and it is a rule rather than a preference: a 1.5x
+# threshold that fires on thermal variation gets ignored, a flaky required
+# check gets bypassed, a gate nobody can read gets disabled, and a claim audit
+# with 991 findings on a clean tree gets scrolled past. A check that cannot be
+# acted on has the same effect as no check, while costing the trust of the ones
+# that can.
+#
 # SUBJECT ASSERTION (rule 47), per declaration rather than once. A document
 # that declares an invariant whose subject this gate cannot find FAILS: the
 # distinction that must never blur is CHECKED-AND-PASSED versus
@@ -252,6 +267,70 @@ CHECKS = {"series": check_series, "range": check_range, "sections": check_sectio
           "counts": check_counts}
 
 
+# Records-was surfaces: a round record or an archived plan states what was true
+# when written, so a citation into a since-deleted file is history, not rot —
+# its repair is to pin the sha, not to re-anchor. The ratchet counts live
+# documents only.
+RECORDS_WAS = ("completed/", "audit_trail/", "benchmarks/", "CHANGELOG.md",
+               "V3_WALLET_DECISION_LOG.md")
+BASELINE = DOCS / "ci" / "doc-claims-baseline.txt"
+
+
+def is_records_was(p: pathlib.Path) -> bool:
+    r = rel(p)
+    return any(seg in r for seg in RECORDS_WAS)
+
+
+def dead_citations(corpus) -> list[str]:
+    """Every unresolvable `path:line` in a LIVE document."""
+    cite = re.compile(r"(?<![\w/-])((?:src|rust|scripts|tests|external|shekyl-[\w-]+)"
+                      r"/[\w./-]+\.(?:cpp|h|rs|py|sh|inl)):(\d+)")
+    out, lengths = [], {}
+    for p, text in corpus:
+        if is_records_was(p):
+            continue
+        # Raw text, deliberately: citations are written INSIDE backticks by
+        # convention (`src/foo.cpp:123`), so stripping inline code here hides
+        # the very thing being counted — the first wiring of this ratchet
+        # reported 1 dead citation against a measured 56 for exactly that
+        # reason. strip_code() belongs on the DECLARATION scan, where a fenced
+        # example must not opt a document in, and nowhere else.
+        for m in cite.finditer(text):
+            path, want = m.group(1), int(m.group(2))
+            if path not in lengths:
+                f = ROOT / path
+                if not f.is_file() and not path.startswith(
+                        ("src/", "rust/", "scripts/", "tests/", "external/")):
+                    f = ROOT / "rust" / path
+                lengths[path] = (len(f.read_text(encoding="utf-8", errors="replace")
+                                     .splitlines()) if f.is_file() else -1)
+            n = lengths[path]
+            if n < 0 or want > n:
+                out.append(f"{rel(p)}: {path}:{want}")
+    return out
+
+
+def read_baseline() -> tuple[int, dict[str, set[str]]]:
+    if not BASELINE.is_file():
+        sys.exit(f"FAIL: {rel(BASELINE)} is missing — the ratchet this gate "
+                 "enforces has no baseline, so nothing holds the count down. "
+                 "That is a broken run, not a clean one.")
+    count, declares = None, {}
+    for line in BASELINE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("dead-citations:"):
+            count = int(line.split(":", 1)[1])
+        elif line.startswith("declares:"):
+            _, doc, legs = line.split(None, 2)
+            declares[doc] = set(legs.split(","))
+    if count is None:
+        sys.exit(f"FAIL: {rel(BASELINE)} states no `dead-citations:` figure — "
+                 "the ratchet cannot assert against a number that is not there")
+    return count, declares
+
+
 def main() -> None:
     files = sorted(p for p in DOCS.rglob("*.md") if p.is_file())
     if len(files) < MIN_DOCS:
@@ -281,13 +360,44 @@ def main() -> None:
                  f"{len(files)} documents (floor {MIN_DECLARATIONS}) — either the "
                  "marker syntax has changed or the declarations were removed. An "
                  "audit with nothing to audit passes vacuously, so it fails here.")
+    # ── ratchet ───────────────────────────────────────────────────────────
+    baseline, must_declare = read_baseline()
+    dead = dead_citations(corpus)
+    if len(dead) > baseline:
+        errors.append(
+            f"dead citations in live documents rose to {len(dead)} against a "
+            f"baseline of {baseline} — new rot:\n    "
+            + "\n    ".join(dead[:12])
+            + (f"\n    …and {len(dead) - 12} more" if len(dead) > 12 else ""))
+    elif len(dead) < baseline:
+        errors.append(
+            f"dead citations in live documents fell to {len(dead)} from a "
+            f"baseline of {baseline} — lower the `dead-citations:` figure in "
+            f"{rel(BASELINE)} to {len(dead)} in this change. The ratchet "
+            "tightens deliberately; a baseline left above the truth is slack "
+            "the next regression hides in.")
+    present = {rel(p): {m.group(1) for m in DECL.finditer(strip_code(t))}
+               for p, t in corpus}
+    for doc, legs in must_declare.items():
+        if doc not in present:
+            continue  # deleting the document is allowed; un-declaring is not
+        dropped = sorted(legs - present[doc])
+        if dropped:
+            errors.append(
+                f"{doc} has dropped the claim-audit declaration(s) {dropped}, "
+                f"which {rel(BASELINE)} records it as holding. A document may "
+                "add legs freely; removing one is an opt-out that has to be "
+                "argued, not a silent edit.")
+
     if errors:
         sys.exit(f"FAIL: {len(errors)} declared documentation claim(s) disagree "
                  "with what they describe:\n" + "\n".join("  " + e for e in errors))
 
     body = ", ".join(f"{tally[k]} {k}" for k in sorted(tally))
     print(f"OK: {declarations} declaration(s) across {len(files)} documents — "
-          f"{body} — all consistent.")
+          f"{body} — all consistent; dead citations in live documents at the "
+          f"baseline of {baseline} (records-was surfaces excluded: a historical "
+          f"citation is repaired by pinning its sha, not by re-anchoring).")
     print("     Scope: checks numeric and structural claims against source; "
           "does not check rationales.")
 
