@@ -878,7 +878,6 @@ fn a_time_interval_is_the_dotted_dhms_form() {
 #[test]
 fn a_peer_never_seen_has_no_interval() {
     let peer = shekyl_rpc_types::Peer {
-        id: 0x1122_3344_5566_7788,
         host: "10.32.0.7".to_owned(),
         ip: 0x0700_200a,
         port: 18080,
@@ -887,9 +886,6 @@ fn a_peer_never_seen_has_no_interval() {
     };
     let line = render_peer("white", &peer, 1_750_000_000);
     assert!(line.contains("never"), "{line}");
-    // The id is zero-padded to 16 hex characters, as `peerid_to_string`
-    // padded it.
-    assert!(line.contains("1122334455667788"), "{line}");
     assert!(line.contains("10.32.0.7:18080"), "{line}");
 
     let seen = shekyl_rpc_types::Peer {
@@ -910,7 +906,6 @@ fn a_peer_never_seen_has_no_interval() {
 #[test]
 fn a_peer_address_gains_a_port_only_when_it_has_one() {
     let peer = |host: &str, port: u16| shekyl_rpc_types::Peer {
-        id: 1,
         host: host.to_owned(),
         ip: 0,
         port,

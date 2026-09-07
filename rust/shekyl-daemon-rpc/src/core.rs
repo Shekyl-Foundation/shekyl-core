@@ -91,7 +91,6 @@ pub struct ConnectionFacts {
     pub address: String,
     /// `network_address::host_str()`: the host alone.
     pub host: String,
-    pub peer_id: u64,
     pub connection_id: [u8; 16],
     /// Unix seconds.
     pub started: u64,
@@ -161,7 +160,6 @@ pub struct SyncSpansSnapshot {
 pub struct PeerFacts {
     /// Already resolved per address arm by the adapter.
     pub host: String,
-    pub id: u64,
     pub last_seen: u64,
     /// The ipv4 address packed as `epee`'s `ipv4_network_address::ip()`
     /// returns it: the four octets in **network** order. On a little-endian
@@ -415,7 +413,6 @@ impl CoreRpc {
                     connections.push(ConnectionFacts {
                         address: borrowed_string(e.address, e.address_len),
                         host: borrowed_string(e.host, e.host_len),
-                        peer_id: e.peer_id,
                         connection_id: e.connection_id,
                         started: e.started,
                         last_recv: e.last_recv,
@@ -512,7 +509,6 @@ impl CoreRpc {
                 for e in std::slice::from_raw_parts(rows, len) {
                     peers.push(PeerFacts {
                         host: borrowed_string(e.host, e.host_len),
-                        id: e.id,
                         last_seen: e.last_seen,
                         ip: e.ip,
                         pruning_seed: e.pruning_seed,

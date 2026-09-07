@@ -74,6 +74,15 @@ namespace nodetool
   // future caller assert a trust no observation backs. The restore path cannot
   // write the white list because it has no white list to write -- the
   // invariant is enforced by the type rather than by a comment nobody reads.
+  // The persisted peerlist store's schema version. Bumped on every change
+  // to the persisted shape; `load_peers` drops any pre-current store
+  // wholesale (the cache is disposable and re-bootstraps). Mechanical
+  // coupling: `peerlist_storage.store_shape_and_version_move_together`
+  // (tests/unit_tests/test_peerlist.cpp) pins a digest of the serialized
+  // shape NEXT TO an assertion of this value, so a shape change that
+  // forgets this constant goes red with a message naming both.
+  constexpr unsigned CURRENT_PEERLIST_STORAGE_ARCHIVE_VER = 8;
+
   struct peerlist_types
   {
     std::vector<peerlist_entry> gray;
@@ -143,7 +152,7 @@ namespace nodetool
     bool append_with_peer_white(const peerlist_entry& pr, bool trust_last_seen = false);
     bool append_with_peer_gray(const peerlist_entry& pr);
     bool append_operator_candidate(const peerlist_entry& pr);
-    bool set_peer_just_seen(peerid_type peer, const epee::net_utils::network_address& addr, uint32_t pruning_seed);
+    bool set_peer_just_seen(const epee::net_utils::network_address& addr, uint32_t pruning_seed);
     bool is_host_allowed(const epee::net_utils::network_address &address);
     bool get_random_gray_peer(peerlist_entry& pe);
     bool remove_from_peer_gray(const peerlist_entry& pe);
@@ -152,30 +161,7 @@ namespace nodetool
     
   private:
     struct by_time{};
-    struct by_id{};
     struct by_addr{};
-
-    struct modify_all_but_id
-    {
-      modify_all_but_id(const peerlist_entry& ple):m_ple(ple){}
-      void operator()(peerlist_entry& e)
-      {
-        e.id = m_ple.id;
-      }
-    private:
-      const peerlist_entry& m_ple;
-    };
-
-    struct modify_all
-    {
-      modify_all(const peerlist_entry& ple):m_ple(ple){}
-      void operator()(peerlist_entry& e)
-      {
-        e = m_ple;
-      }
-    private:
-      const peerlist_entry& m_ple;
-    };
 
     struct modify_last_seen
     {
@@ -345,14 +331,13 @@ namespace nodetool
   }
   //--------------------------------------------------------------------------------------------------
   inline
-  bool peerlist_manager::set_peer_just_seen(peerid_type peer, const epee::net_utils::network_address& addr, uint32_t pruning_seed)
+  bool peerlist_manager::set_peer_just_seen(const epee::net_utils::network_address& addr, uint32_t pruning_seed)
   {
     TRY_ENTRY();
     CRITICAL_REGION_LOCAL(m_peerlist_lock);
     //find in white list
     peerlist_entry ple;
     ple.adr = addr;
-    ple.id = peer;
     ple.last_seen = time(NULL);
     ple.pruning_seed = pruning_seed;
     return append_with_peer_white(ple, true);

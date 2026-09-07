@@ -19,16 +19,16 @@
 //! speaks mainnet `NETWORK_ID` (`cryptonote_config.h` `get_config`).
 
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use shekyl_levin::{
     invoke, response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest,
-    HandshakeResponse, PingRequest, PingResponse, PortableMap, Received, SupportFlagsRequest,
-    SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE, COMMAND_PING,
-    COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE, PING_OK,
+    HandshakeResponse, NetworkAddress, PortableMap, Received, SupportFlagsRequest,
+    SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE,
+    COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
 
 /// `config::NETWORK_ID` — FAKECHAIN (`--regtest`) uses mainnet id.
@@ -200,6 +200,33 @@ fn get_info(rpc_port: u16) -> Result<ChainTip, String> {
     Ok(ChainTip { height, top_id })
 }
 
+/// The raw `gray_list` slice of `/get_peer_list` — string matching is all
+/// the pin needs, and it keeps the harness free of a JSON dependency.
+fn get_gray_list(rpc_port: u16) -> Result<String, String> {
+    let mut stream = TcpStream::connect(("127.0.0.1", rpc_port)).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|e| e.to_string())?;
+    let req = format!(
+        "POST /get_peer_list HTTP/1.1\r\nHost: 127.0.0.1:{rpc_port}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+    );
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&buf);
+    let json = text.split("\r\n\r\n").nth(1).unwrap_or(&text);
+    let start = json
+        .find("\"gray_list\"")
+        .ok_or_else(|| format!("no gray_list in {json}"))?;
+    let end = json[start..]
+        .find("\"white_list\"")
+        .map(|o| start + o)
+        .unwrap_or(json.len());
+    Ok(json[start..end].to_owned())
+}
+
 fn json_u64(body: &str, key: &str) -> Option<u64> {
     let needle = format!("\"{key}\":");
     let rest = body.split(&needle).nth(1)?;
@@ -339,13 +366,10 @@ impl Session {
     }
 }
 
-fn our_peer_id() -> u64 {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time")
-        .as_secs();
-    secs.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ u64::from(std::process::id()) | 1
-}
+/// A fixed client nonce: the daemon must treat it as any other value — it
+/// only ever matches a nonce the DAEMON itself put in flight, and this
+/// client is not the daemon.
+const CLIENT_NONCE: [u8; 32] = [0x42; 32];
 
 #[ignore = "LV-2b dual-stack: requires SHEKYLD_BIN; spawns a live daemon"]
 #[test]
@@ -354,11 +378,17 @@ fn rust_client_handshakes_with_shekyld() {
     let tip = get_info(daemon.rpc_port).expect("get_info after ready");
 
     let mut session = Session::connect(daemon.p2p_port, daemon.log_path());
+    // The Q1 pin, live and cross-stack: advertise a LYING host half with a
+    // real port. The daemon must record socket-host:advertised-port in GRAY
+    // and never the advertised host — an announcement proves nothing.
+    let advertised_port: u16 = 28_099;
     let req = HandshakeRequest {
         node_data: BasicNodeData {
             network_id: MAINNET_NETWORK_ID,
-            peer_id: our_peer_id(),
-            my_port: 0,
+            address: NetworkAddress::Ipv4 {
+                ip: Ipv4Addr::new(9, 9, 9, 9),
+                port: advertised_port,
+            },
             support_flags: P2P_SUPPORT_FLAGS,
         },
         payload_data: CoreSyncData {
@@ -369,22 +399,26 @@ fn rust_client_handshakes_with_shekyld() {
             top_version: 0,
             pruning_seed: 0,
         },
+        nonce: CLIENT_NONCE,
     };
     let (rc, payload) = session.invoke_map(COMMAND_HANDSHAKE, &req);
     assert_eq!(rc, COMMAND_OK, "handshake return_code");
     let hs = HandshakeResponse::load(&payload).expect("decode handshake response");
     assert_eq!(hs.node_data.network_id, MAINNET_NETWORK_ID);
-    assert_ne!(hs.node_data.peer_id, 0);
     assert_eq!(hs.payload_data.current_height, tip.height);
     assert_eq!(hs.payload_data.top_id, tip.top_id);
 
     session.reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
 
-    let (rc, payload) = session.invoke_map(COMMAND_PING, &PingRequest);
-    assert_eq!(rc, COMMAND_OK, "ping return_code");
-    let ping = PingResponse::load(&payload).expect("decode ping");
-    assert_eq!(ping.status, PING_OK);
-    assert_eq!(ping.peer_id, hs.node_data.peer_id);
+    let gray = get_gray_list(daemon.rpc_port).expect("get_peer_list after handshake");
+    assert!(
+        gray.contains("127.0.0.1") && gray.contains(&advertised_port.to_string()),
+        "gray list must hold socket-host + advertised port, got {gray}"
+    );
+    assert!(
+        !gray.contains("9.9.9.9"),
+        "the advertised host must never be recorded, got {gray}"
+    );
 
     let (rc, payload) = session.invoke_map(
         COMMAND_TIMED_SYNC,

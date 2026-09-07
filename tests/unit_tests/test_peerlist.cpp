@@ -86,21 +86,21 @@ TEST(peer_list, peer_list_general)
   nodetool::peerlist_manager plm;
   plm.init(nodetool::peerlist_types{}, false);
 #define MAKE_IPV4_ADDRESS(a,b,c,d,e) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),e}
-#define ADD_GRAY_NODE(addr_, id_, last_seen_) {  nodetool::peerlist_entry ple; ple.last_seen=last_seen_;ple.adr = addr_; ple.id = id_;plm.append_with_peer_gray(ple);}  
-#define ADD_WHITE_NODE(addr_, id_, last_seen_) {  nodetool::peerlist_entry ple;ple.last_seen=last_seen_; ple.adr = addr_; ple.id = id_;plm.append_with_peer_white(ple);}  
+#define ADD_GRAY_NODE(addr_, last_seen_) {  nodetool::peerlist_entry ple; ple.last_seen=last_seen_;ple.adr = addr_;plm.append_with_peer_gray(ple);}  
+#define ADD_WHITE_NODE(addr_, last_seen_) {  nodetool::peerlist_entry ple;ple.last_seen=last_seen_; ple.adr = addr_;plm.append_with_peer_white(ple);}  
 
 #define PRINT_HEAD(step) {std::vector<nodetool::peerlist_entry> bs_head; bool r = plm.get_peerlist_head(bs_head, 100);std::cout << "step " << step << ": " << bs_head.size() << std::endl;}
 
-  ADD_GRAY_NODE(MAKE_IPV4_ADDRESS(123,43,12,1, 8080), 121241, 34345);
-  ADD_GRAY_NODE(MAKE_IPV4_ADDRESS(123,43,12,2, 8080), 121241, 34345);
-  ADD_GRAY_NODE(MAKE_IPV4_ADDRESS(123,43,12,3, 8080), 121241, 34345);
-  ADD_GRAY_NODE(MAKE_IPV4_ADDRESS(123,43,12,4, 8080), 121241, 34345);
-  ADD_GRAY_NODE(MAKE_IPV4_ADDRESS(123,43,12,5, 8080), 121241, 34345);
+  ADD_GRAY_NODE(MAKE_IPV4_ADDRESS(123,43,12,1, 8080), 34345);
+  ADD_GRAY_NODE(MAKE_IPV4_ADDRESS(123,43,12,2, 8080), 34345);
+  ADD_GRAY_NODE(MAKE_IPV4_ADDRESS(123,43,12,3, 8080), 34345);
+  ADD_GRAY_NODE(MAKE_IPV4_ADDRESS(123,43,12,4, 8080), 34345);
+  ADD_GRAY_NODE(MAKE_IPV4_ADDRESS(123,43,12,5, 8080), 34345);
 
-  ADD_WHITE_NODE(MAKE_IPV4_ADDRESS(123,43,12,1, 8080), 121241, 34345);
-  ADD_WHITE_NODE(MAKE_IPV4_ADDRESS(123,43,12,2, 8080), 121241, 34345);
-  ADD_WHITE_NODE(MAKE_IPV4_ADDRESS(123,43,12,3, 8080), 121241, 34345);
-  ADD_WHITE_NODE(MAKE_IPV4_ADDRESS(123,43,12,4, 8080), 121241, 34345);
+  ADD_WHITE_NODE(MAKE_IPV4_ADDRESS(123,43,12,1, 8080), 34345);
+  ADD_WHITE_NODE(MAKE_IPV4_ADDRESS(123,43,12,2, 8080), 34345);
+  ADD_WHITE_NODE(MAKE_IPV4_ADDRESS(123,43,12,3, 8080), 34345);
+  ADD_WHITE_NODE(MAKE_IPV4_ADDRESS(123,43,12,4, 8080), 34345);
 
   size_t gray_list_size = plm.get_gray_peers_count();
   ASSERT_EQ(gray_list_size, 1);
@@ -113,7 +113,7 @@ TEST(peer_list, peer_list_general)
   ASSERT_EQ(bs_head.size(), 4);
 
 
-  ADD_GRAY_NODE(MAKE_IPV4_ADDRESS(123,43,12,5, 8080), 121241, 34345);
+  ADD_GRAY_NODE(MAKE_IPV4_ADDRESS(123,43,12,5, 8080), 34345);
   ASSERT_EQ(plm.get_gray_peers_count(), 1);
   ASSERT_EQ(plm.get_white_peers_count(), 4);
 }
@@ -126,7 +126,7 @@ TEST(peer_list, merge_peer_lists)
   nodetool::peerlist_manager plm;
   plm.init(nodetool::peerlist_types{}, false);
   std::vector<nodetool::peerlist_entry> outer_bs;
-#define ADD_NODE_TO_PL(ip_, port_, id_, timestamp_) {  nodetool::peerlist_entry ple; epee::string_tools::get_ip_int32_from_string(ple.adr.ip, ip_); ple.last_seen = timestamp_; ple.adr.port = port_; ple.id = id_;outer_bs.push_back(ple);}  
+#define ADD_NODE_TO_PL(ip_, port_, timestamp_) {  nodetool::peerlist_entry ple; epee::string_tools::get_ip_int32_from_string(ple.adr.ip, ip_); ple.last_seen = timestamp_; ple.adr.port = port_;outer_bs.push_back(ple);}  
 }
 
 namespace
@@ -150,7 +150,6 @@ namespace
   {
     nodetool::peerlist_entry ple{};
     ple.adr = epee::net_utils::ipv4_network_address{MAKE_IP(123, 43, 12, last_octet), 8080};
-    ple.id = 121241;
     ple.last_seen = last_seen;
     return ple;
   }
@@ -208,7 +207,6 @@ TEST(peerlist_manager, an_operator_candidate_survives_a_full_gray_list)
     nodetool::peerlist_entry ple{};
     ple.adr = epee::net_utils::ipv4_network_address{
       MAKE_IP(203, 0, 1 + (i / 250), 1 + (i % 250)), 8080};
-    ple.id = 1000 + i;
     ple.last_seen = 5000 + i;
     ASSERT_TRUE(plm.append_with_peer_gray(ple));
   }
@@ -216,7 +214,6 @@ TEST(peerlist_manager, an_operator_candidate_survives_a_full_gray_list)
 
   nodetool::peerlist_entry op{};
   op.adr = epee::net_utils::ipv4_network_address{MAKE_IP(198, 51, 100, 7), 8080};
-  op.id = 777;
   op.last_seen = 0;   // never dialled -- that is the point
 
   ASSERT_TRUE(plm.append_operator_candidate(op));
@@ -320,13 +317,48 @@ TEST(peerlist_storage, oversized_persisted_list_is_rejected)
   nodetool::peerlist_types types{};
   types.gray.reserve(nodetool::PEERLIST_STORE_LIST_CEILING + 1);
   for (std::uint64_t i = 0; i <= nodetool::PEERLIST_STORE_LIST_CEILING; ++i)
-    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44, 55});
+    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55, 0});
 
   std::ostringstream stream{};
   EXPECT_TRUE(peers.store(stream, types));
 
   std::istringstream in{stream.str()};
   EXPECT_FALSE(bool(nodetool::peerlist_storage::open(in, true)));
+}
+
+TEST(peerlist_storage, store_shape_and_version_move_together)
+{
+  // The mechanical coupling for CURRENT_PEERLIST_STORAGE_ARCHIVE_VER, which
+  // has no other tree-wide enforcement: a FIXED peerlist_types serialized
+  // through the PORTABLE archive path (the plain boost binary archive
+  // embeds a library version in its header, so a digest over it would move
+  // on a toolchain bump with no shape change) must hash to the checked-in
+  // literal below — a hex string typed in, never computed from the build
+  // under test. A red here with the digest changed and the constant
+  // unchanged means the persisted shape moved without a version bump: bump
+  // the constant in net_peerlist.h AND re-pin the digest, in the same
+  // change.
+  nodetool::peerlist_types types{};
+  types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55, 0});
+  types.gray.push_back({net::tor_address::unknown(), 88, 384});
+
+  nodetool::peerlist_storage peers{};
+  std::ostringstream stream{};
+  ASSERT_TRUE(peers.store(stream, types)); // store() writes the portable archive
+  const std::string bytes = stream.str();
+  const crypto::hash digest = crypto::cn_fast_hash(bytes.data(), bytes.size());
+  const std::string digest_hex = epee::string_tools::pod_to_hex(digest);
+
+  // v8 store shape (id-less v5 entries), pinned 2026-09-06.
+  const char* pinned = "61787d1a71a8e63149cab08aafc45780f1f1ed064bbd0ca4aea365990f06f536";
+  EXPECT_EQ(8u, nodetool::CURRENT_PEERLIST_STORAGE_ARCHIVE_VER)
+    << "store version moved to " << nodetool::CURRENT_PEERLIST_STORAGE_ARCHIVE_VER
+    << ": re-pin the digest literal in this test in the same change";
+  EXPECT_EQ(pinned, digest_hex)
+    << "persisted peerlist shape changed (digest now " << digest_hex
+    << ") while CURRENT_PEERLIST_STORAGE_ARCHIVE_VER is still "
+    << nodetool::CURRENT_PEERLIST_STORAGE_ARCHIVE_VER
+    << ": a shape change must bump the constant AND re-pin this digest together";
 }
 
 // The version bump is the mechanism that stops a pre-existing store handing
@@ -373,15 +405,16 @@ TEST(peerlist_storage, store)
   using address_type = epee::net_utils::address_type;
   using zone = epee::net_utils::zone;
 
-  // The store carries ONE list. Entries are given distinct addresses and ids
+  // The store carries ONE list. Entries are given distinct last_seen stamps
   // so every assertion below is a lookup rather than a positional read --
-  // `do_take_zone` sorts by zone and makes within-zone order an implementation
-  // detail no test should depend on.
-  const auto find_id = [](const std::vector<nodetool::peerlist_entry>& v,
-                          nodetool::peerid_type id) -> const nodetool::peerlist_entry*
+  // `do_take_zone` sorts by zone and makes within-zone order an
+  // implementation detail no test should depend on. (Entries carry no id
+  // any more; last_seen is the discriminator the fixture controls.)
+  const auto find_seen = [](const std::vector<nodetool::peerlist_entry>& v,
+                            std::int64_t last_seen) -> const nodetool::peerlist_entry*
   {
     for (const auto& e : v)
-      if (e.id == id) return &e;
+      if (e.last_seen == last_seen) return &e;
     return nullptr;
   };
 
@@ -391,10 +424,10 @@ TEST(peerlist_storage, store)
   std::string buffer{};
   {
     nodetool::peerlist_types types{};
-    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44, 55});
-    types.gray.push_back({epee::net_utils::ipv4_network_address{2000, 20}, 84, 45});
-    types.gray.push_back({net::tor_address::unknown(), 64, 75});
-    types.gray.push_back({net::tor_address::unknown(), 99, 88});
+    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 55, 0});
+    types.gray.push_back({epee::net_utils::ipv4_network_address{2000, 20}, 45, 0});
+    types.gray.push_back({net::tor_address::unknown(), 75, 0});
+    types.gray.push_back({net::tor_address::unknown(), 88, 0});
 
     std::ostringstream stream{};
     EXPECT_TRUE(peers.store(stream, types));
@@ -415,14 +448,14 @@ TEST(peerlist_storage, store)
 
   ASSERT_EQ(2u, types.gray.size());
   {
-    const nodetool::peerlist_entry* a = find_id(types.gray, 44);
+    const nodetool::peerlist_entry* a = find_seen(types.gray, 55);
     ASSERT_NE(nullptr, a);
     ASSERT_EQ(address_type::ipv4, a->adr.get_type_id());
     EXPECT_EQ(1000u, a->adr.template as<epee::net_utils::ipv4_network_address>().ip());
     EXPECT_EQ(10u, a->adr.template as<epee::net_utils::ipv4_network_address>().port());
     EXPECT_EQ(55u, a->last_seen);
 
-    const nodetool::peerlist_entry* b = find_id(types.gray, 84);
+    const nodetool::peerlist_entry* b = find_seen(types.gray, 45);
     ASSERT_NE(nullptr, b);
     EXPECT_EQ(2000u, b->adr.template as<epee::net_utils::ipv4_network_address>().ip());
     EXPECT_EQ(20u, b->adr.template as<epee::net_utils::ipv4_network_address>().port());
@@ -434,14 +467,14 @@ TEST(peerlist_storage, store)
 
   ASSERT_EQ(2u, types.gray.size());
   {
-    const nodetool::peerlist_entry* a = find_id(types.gray, 64);
+    const nodetool::peerlist_entry* a = find_seen(types.gray, 75);
     ASSERT_NE(nullptr, a);
     ASSERT_EQ(address_type::tor, a->adr.get_type_id());
     EXPECT_STREQ(net::tor_address::unknown_str(),
                  a->adr.template as<net::tor_address>().host_str());
     EXPECT_EQ(75u, a->last_seen);
 
-    const nodetool::peerlist_entry* b = find_id(types.gray, 99);
+    const nodetool::peerlist_entry* b = find_seen(types.gray, 88);
     ASSERT_NE(nullptr, b);
     EXPECT_EQ(88u, b->last_seen);
   }

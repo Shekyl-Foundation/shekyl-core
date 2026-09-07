@@ -2687,7 +2687,9 @@ TEST_F(levin_notify, fluff_via_scheduled_drive)
 
 TEST_F(levin_notify, command_max_bytes)
 {
-    static constexpr int ping_command = nodetool::COMMAND_PING::ID;
+    // COMMAND_PING is deleted (PWD-B10); SUPPORT_FLAGS carries the same
+    // 4096-byte cap and is the surviving small-cap command this test needs.
+    static constexpr int capped_command = nodetool::COMMAND_REQUEST_SUPPORT_FLAGS::ID;
 
     add_connection(true);
 
@@ -2696,7 +2698,7 @@ TEST_F(levin_notify, command_max_bytes)
     {
         epee::levin::message_writer dest{};
         dest.buffer.write(epee::to_span(payload));
-        bytes = dest.finalize_notify(ping_command);
+        bytes = dest.finalize_notify(capped_command);
     }
 
     EXPECT_EQ(1, get_connections().send(bytes.clone(), contexts_.front().get_id()));
@@ -2704,7 +2706,7 @@ TEST_F(levin_notify, command_max_bytes)
     EXPECT_EQ(1u, receiver_.notified_size());
 
     const received_message msg = receiver_.get_raw_notification();
-    EXPECT_EQ(ping_command, msg.command);
+    EXPECT_EQ(capped_command, msg.command);
     EXPECT_EQ(contexts_.front().get_id(), msg.connection);
     EXPECT_EQ(payload, msg.payload);
 
@@ -2712,7 +2714,7 @@ TEST_F(levin_notify, command_max_bytes)
         payload.push_back('h');
         epee::levin::message_writer dest{};
         dest.buffer.write(epee::to_span(payload));
-        bytes = dest.finalize_notify(ping_command);
+        bytes = dest.finalize_notify(capped_command);
     }
 
     EXPECT_EQ(1, get_connections().send(std::move(bytes), contexts_.front().get_id()));

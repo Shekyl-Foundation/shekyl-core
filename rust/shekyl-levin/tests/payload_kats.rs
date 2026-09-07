@@ -14,20 +14,25 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use shekyl_levin::{
     invoke, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
-    NetworkAddress, PayloadError, PeerlistEntry, PingRequest, PingResponse, PortableMap, Received,
-    SupportFlagsRequest, SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse,
-    COMMAND_HANDSHAKE, COMMAND_PING, PING_OK,
+    NetworkAddress, PayloadError, PeerlistEntry, PortableMap, Received, SupportFlagsRequest,
+    SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE,
 };
 use shekyl_portable_storage::{store_to_binary, Section, HEADER};
 
 fn node() -> BasicNodeData {
     BasicNodeData {
         network_id: [0x11; 16],
-        peer_id: 0x0102_0304_0506_0708,
-        my_port: 18_080,
+        // The public-zone port-only advert: host zeroed, only the port is
+        // the claim.
+        address: NetworkAddress::Ipv4 {
+            ip: Ipv4Addr::new(0, 0, 0, 0),
+            port: 18_080,
+        },
         support_flags: 0,
     }
 }
+
+const NONCE: [u8; 32] = [0x5a; 32];
 
 fn sync_data() -> CoreSyncData {
     CoreSyncData {
@@ -47,18 +52,13 @@ fn round_trip<T: PortableMap + PartialEq + std::fmt::Debug>(value: &T) {
 }
 
 #[test]
-fn ping_request_is_empty_section() {
-    let bytes = PingRequest.store().expect("store");
+fn support_flags_request_is_empty_section() {
+    // COMMAND_PING is deleted (PWD-B10); this is the surviving empty-map
+    // command, so it carries the LV-2a empty-section byte pin directly.
+    let bytes = SupportFlagsRequest.store().expect("store");
     let mut expected = HEADER.to_vec();
     expected.push(0x00);
     assert_eq!(bytes, expected);
-    assert_eq!(PingRequest::load(&bytes).expect("load"), PingRequest);
-}
-
-#[test]
-fn support_flags_request_is_empty_section() {
-    let bytes = SupportFlagsRequest.store().expect("store");
-    assert_eq!(bytes, PingRequest.store().expect("ping"));
     assert_eq!(
         SupportFlagsRequest::load(&bytes).expect("load"),
         SupportFlagsRequest
@@ -68,14 +68,6 @@ fn support_flags_request_is_empty_section() {
 #[test]
 fn support_flags_response_round_trip() {
     round_trip(&SupportFlagsResponse { support_flags: 1 });
-}
-
-#[test]
-fn ping_response_round_trip() {
-    round_trip(&PingResponse {
-        status: PING_OK.to_string(),
-        peer_id: 99,
-    });
 }
 
 #[test]
@@ -123,7 +115,6 @@ fn deleted_rpc_advert_fields_never_written_still_readable() {
             ip: Ipv4Addr::new(10, 0, 0, 1),
             port: 18_080,
         },
-        id: 7,
         last_seen: 0,
         pruning_seed: 0,
     });
@@ -202,17 +193,13 @@ fn unknown_address_type_is_hard_error() {
 
 #[test]
 fn extra_fields_ignored() {
-    let mut ping = PingResponse {
-        status: PING_OK.to_string(),
-        peer_id: 1,
-    }
-    .to_section()
-    .expect("section");
-    ping.insert("future", shekyl_portable_storage::Value::Bool(true));
-    let bytes = store_to_binary(&ping).expect("encode");
-    let loaded = PingResponse::load(&bytes).expect("load");
-    assert_eq!(loaded.peer_id, 1);
-    assert_eq!(loaded.status, PING_OK);
+    let mut flags = SupportFlagsResponse { support_flags: 1 }
+        .to_section()
+        .expect("section");
+    flags.insert("future", shekyl_portable_storage::Value::Bool(true));
+    let bytes = store_to_binary(&flags).expect("encode");
+    let loaded = SupportFlagsResponse::load(&bytes).expect("load");
+    assert_eq!(loaded.support_flags, 1);
 }
 
 #[test]
@@ -220,6 +207,7 @@ fn handshake_with_ipv4_peerlist_round_trip() {
     let req = HandshakeRequest {
         node_data: node(),
         payload_data: sync_data(),
+        nonce: NONCE,
     };
     round_trip(&req);
 
@@ -231,7 +219,6 @@ fn handshake_with_ipv4_peerlist_round_trip() {
                 ip: Ipv4Addr::new(10, 0, 0, 1),
                 port: 18_080,
             },
-            id: 7,
             last_seen: 0,
             pruning_seed: 0,
         }],
@@ -265,6 +252,7 @@ fn handshake_invoke_survives_bucket_reader() {
     let req = HandshakeRequest {
         node_data: node(),
         payload_data: sync_data(),
+        nonce: NONCE,
     };
     let body = req.store().expect("store");
     let bucket = invoke(COMMAND_HANDSHAKE, &body);
@@ -278,19 +266,4 @@ fn handshake_invoke_survives_bucket_reader() {
         other => panic!("unexpected {other:?}"),
     }
     assert_eq!(reader.next_message().expect("drain"), None);
-}
-
-#[test]
-fn ping_invoke_survives_bucket_reader() {
-    let body = PingRequest.store().expect("store");
-    let bucket = invoke(COMMAND_PING, &body);
-    let mut reader = BucketReader::new();
-    reader.feed(&bucket).expect("feed");
-    match reader.next_message().expect("parse") {
-        Some(Received::Request { command, payload }) => {
-            assert_eq!(command, COMMAND_PING);
-            assert_eq!(PingRequest::load(&payload).expect("load"), PingRequest);
-        }
-        other => panic!("unexpected {other:?}"),
-    }
 }

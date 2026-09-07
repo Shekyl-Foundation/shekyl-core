@@ -357,14 +357,13 @@ namespace cryptonote
       << std::setw(13) << "Up(now)"
       << ENDL;
 
-    m_p2p->for_each_connection([&](const connection_context& cntxt, nodetool::peerid_type peer_id, uint32_t support_flags)
+    m_p2p->for_each_connection([&](const connection_context& cntxt, uint32_t support_flags)
     {
       bool local_ip = cntxt.m_remote_address.is_local();
       auto connection_time = time(NULL) - cntxt.m_started;
       ss << std::setw(30) << std::left << std::string(cntxt.m_is_income ? " [INC]":"[OUT]") +
         cntxt.m_remote_address.str()
-        << std::setw(20) << nodetool::peerid_to_string(peer_id)
-        << std::setw(20) << std::hex << support_flags
+                << std::setw(20) << std::hex << support_flags
         << std::setw(30) << std::to_string(cntxt.m_recv_cnt)+ "(" + std::to_string(time(NULL) - cntxt.m_last_recv) + ")" + "/" + std::to_string(cntxt.m_send_cnt) + "(" + std::to_string(time(NULL) - cntxt.m_last_send) + ")"
         << std::setw(25) << get_protocol_state_string(cntxt.m_state)
         << std::setw(20) << std::to_string(time(NULL) - cntxt.m_started)
@@ -1528,7 +1527,7 @@ namespace cryptonote
             // as the two sites below already do. `flush_all_spans` is true
             // because this span is filled: until now only the sweep's own
             // `flush_spans(id, true)` erased it, and that is gone here.
-            if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
+            if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
               drop_connection(context, false, true);
               return 1;
             }))
@@ -1563,7 +1562,7 @@ namespace cryptonote
             if (!make_full_block_connect_supplement_from_block_entry(block_entry, connect))
             {
                 drop_connections(span_origin);
-                if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
+                if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
                   LOG_ERROR_CCONTEXT("transaction parsing failed for 1 or more txs in NOTIFY_RESPONSE_GET_OBJECTS,"
                     "dropping connections");
                   drop_connection(context, false, true);
@@ -1597,7 +1596,7 @@ namespace cryptonote
             if(bvc.m_verifivation_failed)
             {
               drop_connections(span_origin);
-              if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
+              if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
                 LOG_PRINT_CCONTEXT_L1("Block verification failed, dropping connection");
                 drop_connection_with_score(context, bvc.m_bad_pow ? P2P_IP_FAILS_BEFORE_BLOCK : 1, true);
                 return 1;
@@ -1751,7 +1750,7 @@ skip:
   template<class t_core>
   void t_cryptonote_protocol_handler<t_core>::notify_new_stripe(cryptonote_connection_context& cntxt, uint32_t stripe)
   {
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool
+    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
     {
       if (cntxt.m_connection_id == context.m_connection_id)
         return true;
@@ -1783,7 +1782,7 @@ skip:
   bool t_cryptonote_protocol_handler<t_core>::kick_idle_peers()
   {
     MTRACE("Checking for idle peers...");
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool
+    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
     {
       if (context.m_state == cryptonote_connection_context::state_synchronizing && context.m_last_request_time != boost::date_time::not_a_date_time)
       {
@@ -1815,11 +1814,11 @@ skip:
 
     MTRACE("Checking for outgoing syncing peers...");
     std::unordered_map<epee::net_utils::zone, unsigned> n_syncing, n_synced;
-    std::unordered_map<epee::net_utils::zone, boost::uuids::uuid> last_synced_peer_id;
+    std::unordered_map<epee::net_utils::zone, boost::uuids::uuid> last_synced_connection;
     std::vector<epee::net_utils::zone> zones;
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool
+    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
     {
-      if (!peer_id || context.m_is_income) // only consider connected outgoing peers
+      if (!context.handshake_complete() || context.m_is_income) // only consider connected outgoing peers
         return true;
 
       const epee::net_utils::zone zone = context.m_remote_address.get_zone();
@@ -1827,7 +1826,7 @@ skip:
       {
         n_syncing[zone] = 0;
         n_synced[zone] = 0;
-        last_synced_peer_id[zone] = boost::uuids::nil_uuid();
+        last_synced_connection[zone] = boost::uuids::nil_uuid();
         zones.push_back(zone);
       }
 
@@ -1836,7 +1835,7 @@ skip:
       if (context.m_state == cryptonote_connection_context::state_normal)
       {
         ++n_synced[zone];
-        last_synced_peer_id[zone] = context.m_connection_id;
+        last_synced_connection[zone] = context.m_connection_id;
       }
       return true;
     });
@@ -1847,9 +1846,9 @@ skip:
       MTRACE("[" << epee::net_utils::zone_to_string(zone) << "] " << n_syncing[zone] << " syncing, " << n_synced[zone] << " synced, " << max_out_peers << " max out peers");
 
       // if we're at max out peers, and not enough are syncing, drop the last sync'd peer
-      if (n_synced[zone] + n_syncing[zone] >= max_out_peers && n_syncing[zone] < P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT && last_synced_peer_id[zone] != boost::uuids::nil_uuid())
+      if (n_synced[zone] + n_syncing[zone] >= max_out_peers && n_syncing[zone] < P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT && last_synced_connection[zone] != boost::uuids::nil_uuid())
       {
-        if (!m_p2p->for_connection(last_synced_peer_id[zone], [&](cryptonote_connection_context& ctx, nodetool::peerid_type peer_id, uint32_t f)->bool{
+        if (!m_p2p->for_connection(last_synced_connection[zone], [&](cryptonote_connection_context& ctx, uint32_t f)->bool{
           MINFO(ctx << "dropping synced peer, " << n_syncing[zone] << " syncing, " << n_synced[zone] << " synced, " << max_out_peers << " max out peers");
           drop_connection(ctx, false, false);
           return true;
@@ -1864,7 +1863,7 @@ skip:
   template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::check_standby_peers()
   {
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool
+    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
     {
       if (context.m_state == cryptonote_connection_context::state_standby)
       {
@@ -1943,7 +1942,7 @@ skip:
         if (standby && dt >= REQUEST_NEXT_SCHEDULED_SPAN_THRESHOLD_STANDBY && dl_speed > 0)
         {
           bool download = false;
-          if (m_p2p->for_connection(connection_id, [&](cryptonote_connection_context& ctx, nodetool::peerid_type peer_id, uint32_t f)->bool{
+          if (m_p2p->for_connection(connection_id, [&](cryptonote_connection_context& ctx, uint32_t f)->bool{
             const time_t nowt = time(NULL);
             const time_t time_since_last_recv = nowt - ctx.m_last_recv;
             const float last_activity = std::min((float)time_since_last_recv, dt/1e6f);
@@ -2028,7 +2027,7 @@ skip:
     if (next_stripe > 0)
     {
       unsigned int n_out_peers = 0, n_peers_on_next_stripe = 0;
-      m_p2p->for_each_connection([&](cryptonote_connection_context& ctx, nodetool::peerid_type peer_id, uint32_t support_flags)->bool{
+      m_p2p->for_each_connection([&](cryptonote_connection_context& ctx, uint32_t support_flags)->bool{
         if (!ctx.m_is_income)
           ++n_out_peers;
         if (ctx.m_state >= cryptonote_connection_context::state_synchronizing && tools::get_pruning_stripe(ctx.m_pruning_seed) == next_stripe)
@@ -2089,7 +2088,7 @@ skip:
   {
     // flush stale spans
     std::set<boost::uuids::uuid> live_connections;
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool{
+    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool{
       live_connections.insert(context.m_connection_id);
       return true;
     });
@@ -2530,7 +2529,7 @@ skip:
     val_expected = true;
     if (m_ask_for_txpool_complement.compare_exchange_strong(val_expected, false))
     {
-      m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool
+      m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
       {
         if(context.m_state < cryptonote_connection_context::state_synchronizing)
         {
@@ -2553,7 +2552,7 @@ skip:
   size_t t_cryptonote_protocol_handler<t_core>::get_synchronizing_connections_count()
   {
     size_t count = 0;
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool{
+    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool{
       if(context.m_state == cryptonote_connection_context::state_synchronizing)
         ++count;
       return true;
@@ -2722,10 +2721,10 @@ skip:
   {
     // sort peers between fluffy ones and others
     std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> fluffyConnections;
-    m_p2p->for_each_connection([&exclude_context, &fluffyConnections](connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)
+    m_p2p->for_each_connection([&exclude_context, &fluffyConnections](connection_context& context, uint32_t support_flags)
     {
-      // peer_id also filters out connections before handshake
-      if (peer_id && exclude_context.m_connection_id != context.m_connection_id && context.m_remote_address.get_zone() == epee::net_utils::zone::public_)
+      // handshake_complete() filters out connections before handshake
+      if (context.handshake_complete() && exclude_context.m_connection_id != context.m_connection_id && context.m_remote_address.get_zone() == epee::net_utils::zone::public_)
       {
         LOG_DEBUG_CC(context, "RELAYING FLUFFY BLOCK TO PEER");
         fluffyConnections.push_back({context.m_remote_address.get_zone(), context.m_connection_id});
@@ -2797,7 +2796,7 @@ skip:
   {
     std::stringstream ss;
     const boost::posix_time::ptime now = boost::posix_time::microsec_clock::universal_time();
-    m_p2p->for_each_connection([&](const connection_context &ctx, nodetool::peerid_type peer_id, uint32_t support_flags) {
+    m_p2p->for_each_connection([&](const connection_context &ctx, uint32_t support_flags) {
       const uint32_t stripe = tools::get_pruning_stripe(ctx.m_pruning_seed);
       char state_char = cryptonote::get_protocol_state_char(ctx.m_state);
       ss << stripe + state_char;
@@ -2825,7 +2824,7 @@ skip:
     // if we already have a few peers on this stripe, but none on next one, try next one
     unsigned int n_next = 0, n_subsequent = 0, n_others = 0;
     const uint32_t subsequent_pruning_stripe = 1 + next_pruning_stripe % (1<<CRYPTONOTE_PRUNING_LOG_STRIPES);
-    m_p2p->for_each_connection([&](const connection_context &context, nodetool::peerid_type peer_id, uint32_t support_flags) {
+    m_p2p->for_each_connection([&](const connection_context &context, uint32_t support_flags) {
       if (context.m_state >= cryptonote_connection_context::state_synchronizing)
       {
         if (context.m_pruning_seed == 0 || tools::get_pruning_stripe(context.m_pruning_seed) == next_pruning_stripe)
@@ -2858,7 +2857,7 @@ skip:
     if (target && target <= height)
       return false;
     size_t n_out_peers = 0;
-    m_p2p->for_each_connection([&](cryptonote_connection_context& ctx, nodetool::peerid_type peer_id, uint32_t support_flags)->bool{
+    m_p2p->for_each_connection([&](cryptonote_connection_context& ctx, uint32_t support_flags)->bool{
       if (!ctx.m_is_income && ctx.m_remote_address.get_zone() == zone)
         ++n_out_peers;
       return true;
@@ -2899,7 +2898,7 @@ skip:
   template<class t_core>
   void t_cryptonote_protocol_handler<t_core>::drop_connection(const boost::uuids::uuid& id)
   {
-    m_p2p->for_connection(id, [this](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
+    m_p2p->for_connection(id, [this](cryptonote_connection_context& context, uint32_t f)->bool{
       // This _could be_ outside of strand, so careful on actions
       drop_connection(context, true, false);
       return true;
@@ -2932,7 +2931,7 @@ skip:
     m_p2p->add_host_fail(address, 5);
 
     std::vector<boost::uuids::uuid> drop;
-    m_p2p->for_each_connection([&](const connection_context& cntxt, nodetool::peerid_type peer_id, uint32_t support_flags) {
+    m_p2p->for_each_connection([&](const connection_context& cntxt, uint32_t support_flags) {
       if (address.is_same_host(cntxt.m_remote_address))
         drop.push_back(cntxt.m_connection_id);
       return true;
@@ -2940,7 +2939,7 @@ skip:
     for (const boost::uuids::uuid &id: drop)
     {
       m_block_queue.flush_spans(id, true);
-      m_p2p->for_connection(id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
+      m_p2p->for_connection(id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
         // This _could be_ outside of strand, so careful on actions
         drop_connection(context, true, false);
         return true;
@@ -2952,7 +2951,7 @@ skip:
   void t_cryptonote_protocol_handler<t_core>::on_connection_close(cryptonote_connection_context &context)
   {
     uint64_t target = 0;
-    m_p2p->for_each_connection([&](const connection_context& cntxt, nodetool::peerid_type peer_id, uint32_t support_flags) {
+    m_p2p->for_each_connection([&](const connection_context& cntxt, uint32_t support_flags) {
       if (cntxt.m_state >= cryptonote_connection_context::state_synchronizing && cntxt.m_connection_id != context.m_connection_id)
         target = std::max(target, cntxt.m_remote_blockchain_height);
       return true;
