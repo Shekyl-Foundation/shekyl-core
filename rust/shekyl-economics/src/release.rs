@@ -1,12 +1,25 @@
 //! Transaction-responsive release rate multiplier.
 //!
-//! The release multiplier adjusts how quickly the CryptoNote emission curve
-//! releases coins from the fixed supply. It does NOT create additional coins.
+//! The multiplier paces how quickly the emission CURVE releases what
+//! remains, toward demand. It is applied to the curve, and the perpetual
+//! tail floors the result afterward (FL-R12′):
 //!
 //! ```text
-//! release_multiplier = clamp(tx_volume_avg / tx_volume_baseline, RELEASE_MIN, RELEASE_MAX)
-//! effective_reward = base_reward * release_multiplier / SCALE
+//! M_r  = clamp(tx_volume_avg / tx_volume_baseline, RELEASE_MIN, RELEASE_MAX)
+//! paid = max(M_r · curve(remaining), TAIL) · penalty(x)
 //! ```
+//!
+//! **The multiplier never scales an already-floored reward.**
+//! [`crate::base_block_reward`] is `max(curve, TAIL)`, so multiplying THAT
+//! is the composition FL-R12′ retired: at a perpetual tail there is
+//! nothing left to defer, and a multiplied floor would pay least exactly
+//! when fees are lowest — the dormancy case the floor exists for. The one
+//! place the composition is formed is `emission::effective_emission`.
+//!
+//! Nor is emission bounded by a fixed supply any longer: FL-R12′ retired
+//! the remaining-supply cap, so the accumulator runs THROUGH the curve's
+//! asymptote and the tail is perpetual. The asymptote is a landmark, not
+//! an end.
 
 use crate::params::{clamp, SCALE};
 
@@ -46,12 +59,21 @@ pub fn calc_release_multiplier(
     clamp(ratio, release_min, release_max)
 }
 
-/// Apply the release multiplier to a base reward.
+/// Apply the release multiplier to a CURVE emission.
 ///
-/// Uses u128 intermediate to prevent overflow.
-#[allow(clippy::cast_possible_truncation)]
-pub fn apply_release_multiplier(base_reward: u64, multiplier: u64) -> u64 {
-    (u128::from(base_reward) * u128::from(multiplier) / u128::from(SCALE)) as u64
+/// Crate-internal on purpose. The only correct operand is
+/// `curve_emission`'s output, and the only caller that composes it
+/// correctly is `effective_emission`; a public export invited the
+/// retired composition — multiplying the already-tail-floored
+/// [`crate::base_block_reward`] — which is exactly what this module's own
+/// documentation used to describe. Nothing outside the crate called it.
+///
+/// Saturating rather than truncating, matching
+/// [`calc_release_multiplier`]: unreachable for any curve emission, and a
+/// wrapped reward is the one failure this must never produce quietly.
+pub(crate) fn apply_release_multiplier(base_reward: u64, multiplier: u64) -> u64 {
+    u64::try_from(u128::from(base_reward) * u128::from(multiplier) / u128::from(SCALE))
+        .unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
