@@ -37,6 +37,28 @@ Do **not** implement from `docs/completed/`. Those are closed plans, preflights,
 
 Lifecycle rule: [`.cursor/rules/95-documentation-lifecycle.mdc`](../.cursor/rules/95-documentation-lifecycle.mdc). Completing a plan includes archive-or-contract in the same change. Structural gates live in [`.github/workflows/docs-gates.yml`](../.github/workflows/docs-gates.yml) (named `doc-links.yml` until P0b, 2026-09-05 — it had outgrown link checking).
 
+**Claim audit.** A document can declare the invariants it means to hold, and
+[`.github/workflows/doc-claims.yml`](../.github/workflows/doc-claims.yml) holds
+it to them — put any of these near the top of the file:
+
+```
+<!-- claim-audit: series DRS-W -->   register rows contiguous, no duplicates
+<!-- claim-audit: range DRS-W -->    "DRS-W1…DRS-Wn" restated elsewhere must match
+<!-- claim-audit: sections -->       every §N names a section this document has
+<!-- claim-audit: numbered -->       numbered lists number themselves 1, 2, 3 …
+<!-- claim-audit: counts -->         "**N rows**" matches the table beneath it
+<!-- claim-audit: citations -->      every path:line cite resolves in the tree
+```
+
+Declaring is opt-in because inferring these corpus-wide produced 991 findings
+against a clean tree — `§17` usually cites another document, registers
+legitimately skip a retired number, and the CHANGELOG cites files that existed
+when it was written. Run it before pushing (`python3
+scripts/ci/check_doc_claims.py`); that is where it earns its keep. It checks
+numeric and structural claims against source, and **does not check
+rationales** — a document can pass it green and still be wrong about the
+world.
+
 ## Work-item targets
 
 There is no V3.1 / V3.2 / V3.x release train. Allowed FOLLOWUPS / plan `Target:` values:
