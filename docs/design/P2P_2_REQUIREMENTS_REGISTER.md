@@ -221,7 +221,7 @@ Tenure bookkeeping is local state about a relationship between this node and
 one peer; it is never serialized, announced, or echoed on the wire. This
 keeps "tenure needs a key across reconnects" from quietly regressing into
 "put a linkable identifier back on the wire." Supporting evidence from
-source: `anchor_peerlist_entry_base` (`p2p_protocol_defs.h:100`) already
+source: `anchor_peerlist_entry_base` (**deleted 2026-09-06** with the anchor mechanism; was `p2p_protocol_defs.h:100`) already
 keys on `(adr, id, first_seen)`, but `is_peer_used`'s outbound-connection
 match (`net_node.inl:1225`) uses address alone (`!cntxt.m_is_income &&
 peer.adr == cntxt.m_remote_address`) — `peer_id` is a secondary check, not

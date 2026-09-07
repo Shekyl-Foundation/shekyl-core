@@ -60,20 +60,23 @@ namespace nodetool
   // Corruption ceiling for each list in the persisted peerlist store. A
   // legitimate store holds at most one list per network zone (public_ /
   // i2p / tor), each trimmed to its cap — the largest is
-  // P2P_LOCAL_GRAY_PEERLIST_LIMIT; anchors are untrimmed but are the
-  // distinct outbound connections of a single run. The 4x headroom over
-  // cap * zones keeps this a corruption detector, never an operational
+  // P2P_LOCAL_GRAY_PEERLIST_LIMIT. The 4x headroom over cap * zones
+  // keeps this a corruption detector, never an operational
   // limit: the length prefix is untrusted disk input, and past this
   // ceiling loading it would mean a reserve() of disk-chosen magnitude at
   // startup instead of the designed drop-and-rebootstrap.
   constexpr std::uint64_t PEERLIST_STORE_LIST_CEILING =
     P2P_LOCAL_GRAY_PEERLIST_LIMIT * 3 * 4;
 
+  // The persisted peerlist carries CANDIDATES and nothing else. There is no
+  // `white` member on purpose: white membership means "this process dialled it
+  // and it answered", so a type that could express restored-white would let a
+  // future caller assert a trust no observation backs. The restore path cannot
+  // write the white list because it has no white list to write -- the
+  // invariant is enforced by the type rather than by a comment nobody reads.
   struct peerlist_types
   {
-    std::vector<peerlist_entry> white;
     std::vector<peerlist_entry> gray;
-    std::vector<anchor_peerlist_entry> anchor;
   };
 
   class peerlist_storage
@@ -119,6 +122,16 @@ namespace nodetool
     bool init(peerlist_types&& peers, bool allow_local_ip);
     size_t get_white_peers_count(){CRITICAL_REGION_LOCAL(m_peerlist_lock); return m_peers_white.size();}
     size_t get_gray_peers_count(){CRITICAL_REGION_LOCAL(m_peerlist_lock); return m_peers_gray.size();}
+    //! \return True only when this zone knows NO peer at all, in either list.
+    //
+    // Seed contact is the one thing this answers, and it must be keyed on the
+    // union rather than on the white list. White is empty on every boot now
+    // that trust is earned in-process, so a white-only test would report
+    // "I know nobody" to a node holding thousands of restored candidates --
+    // sending it to a seed ahead of dials that would have succeeded, showing
+    // seeds every restart, and letting a seed's handshake peerlist evict
+    // stored entries at cap.
+    bool has_no_known_peers(){CRITICAL_REGION_LOCAL(m_peerlist_lock); return m_peers_white.empty() && m_peers_gray.empty();}
     bool merge_peerlist(const std::vector<peerlist_entry>& outer_bs, const std::function<bool(const peerlist_entry&)> &f = NULL);
     bool get_peerlist_head(std::vector<peerlist_entry>& bs_head, bool anonymize, uint32_t depth = P2P_DEFAULT_PEERS_IN_HANDSHAKE);
     void get_peerlist(std::vector<peerlist_entry>& pl_gray, std::vector<peerlist_entry>& pl_white);
@@ -129,13 +142,11 @@ namespace nodetool
     void evict_host_from_peerlist(bool white, const peerlist_entry& pr);
     bool append_with_peer_white(const peerlist_entry& pr, bool trust_last_seen = false);
     bool append_with_peer_gray(const peerlist_entry& pr);
-    bool append_with_peer_anchor(const anchor_peerlist_entry& ple);
+    bool append_operator_candidate(const peerlist_entry& pr);
     bool set_peer_just_seen(peerid_type peer, const epee::net_utils::network_address& addr, uint32_t pruning_seed);
     bool is_host_allowed(const epee::net_utils::network_address &address);
     bool get_random_gray_peer(peerlist_entry& pe);
     bool remove_from_peer_gray(const peerlist_entry& pe);
-    bool get_and_empty_anchor_peerlist(std::vector<anchor_peerlist_entry>& apl);
-    bool remove_from_peer_anchor(const epee::net_utils::network_address& addr);
     bool remove_from_peer_white(const peerlist_entry& pe);
     template<typename F> size_t filter(bool white, const F &f); // f returns true: drop, false: keep
     
@@ -188,15 +199,6 @@ namespace nodetool
       > 
     > peers_indexed;
 
-    typedef boost::multi_index_container<
-      anchor_peerlist_entry,
-      boost::multi_index::indexed_by<
-      // access by anchor_peerlist_entry::net_adress
-      boost::multi_index::ordered_unique<boost::multi_index::tag<by_addr>, boost::multi_index::member<anchor_peerlist_entry,epee::net_utils::network_address,&anchor_peerlist_entry::adr> >,
-      // sort by anchor_peerlist_entry::first_seen
-      boost::multi_index::ordered_non_unique<boost::multi_index::tag<by_time>, boost::multi_index::member<anchor_peerlist_entry,int64_t,&anchor_peerlist_entry::first_seen> >
-      >
-    > anchor_peers_indexed;
 
   private: 
     void trim_white_peerlist();
@@ -211,7 +213,6 @@ namespace nodetool
 
     peers_indexed m_peers_gray;
     peers_indexed m_peers_white;
-    anchor_peers_indexed m_peers_anchor;
   };
   //--------------------------------------------------------------------------------------------------
   inline void peerlist_manager::trim_gray_peerlist()
@@ -428,21 +429,46 @@ namespace nodetool
   }
   //--------------------------------------------------------------------------------------------------
   inline
-  bool peerlist_manager::append_with_peer_anchor(const anchor_peerlist_entry& ple)
+  bool peerlist_manager::append_operator_candidate(const peerlist_entry& ple)
   {
     TRY_ENTRY();
+    if(!is_host_allowed(ple.adr))
+      return true;
 
     CRITICAL_REGION_LOCAL(m_peerlist_lock);
 
-    auto by_addr_it_anchor = m_peers_anchor.get<by_addr>().find(ple.adr);
+    // Already known: verified this session, or already a candidate.
+    if(m_peers_white.get<by_addr>().find(ple.adr) != m_peers_white.get<by_addr>().end())
+      return true;
+    if(m_peers_gray.get<by_addr>().find(ple.adr) != m_peers_gray.get<by_addr>().end())
+      return true;
 
-    if(by_addr_it_anchor == m_peers_anchor.get<by_addr>().end()) {
-      m_peers_anchor.insert(ple);
-    }
+    // MAKE ROOM FIRST, so the entry being added cannot be the one evicted.
+    //
+    // `append_with_peer_gray` cannot serve this caller: it inserts and then
+    // trims from the `by_time` front, and an operator-supplied entry has never
+    // been dialled so its `last_seen` is 0 -- it sorts first and is erased
+    // immediately whenever gray is at its cap. That is precisely the
+    // well-connected node where an operator's `--add-peer` would silently do
+    // nothing, and the demotion of restored peers into gray makes a full gray
+    // list the normal case rather than the rare one.
+    //
+    // This is a SLOT POLICY, not a trust claim: an operator-named candidate
+    // outranks the least-recently-seen gossiped candidate for a place in the
+    // pool. It says nothing about whether the address answers -- the entry is
+    // still gray, still undialled, still never gossiped, and still has to earn
+    // white by a dial like anything else.
+    //
+    // Deliberately NOT done by writing a synthetic `last_seen`: this node has
+    // not seen the address, and recording an observation it never made is the
+    // exact category error this change exists to remove.
+    auto& by_time_index = m_peers_gray.get<by_time>();
+    while(m_peers_gray.size() >= P2P_LOCAL_GRAY_PEERLIST_LIMIT && !by_time_index.empty())
+      by_time_index.erase(by_time_index.begin());
 
+    m_peers_gray.insert(ple);
     return true;
-
-    CATCH_ENTRY_L0("peerlist_manager::append_with_peer_anchor()", false);
+    CATCH_ENTRY_L0("peerlist_manager::append_operator_candidate()", false);
   }
   //--------------------------------------------------------------------------------------------------
   inline
@@ -498,45 +524,6 @@ namespace nodetool
     return true;
 
     CATCH_ENTRY_L0("peerlist_manager::remove_from_peer_gray()", false);
-  }
-  //--------------------------------------------------------------------------------------------------
-  inline
-  bool peerlist_manager::get_and_empty_anchor_peerlist(std::vector<anchor_peerlist_entry>& apl)
-  {
-    TRY_ENTRY();
-
-    CRITICAL_REGION_LOCAL(m_peerlist_lock);
-
-    auto begin = m_peers_anchor.get<by_time>().begin();
-    auto end = m_peers_anchor.get<by_time>().end();
-
-    std::for_each(begin, end, [&apl](const anchor_peerlist_entry &a) {
-      apl.push_back(a);
-    });
-
-    m_peers_anchor.get<by_time>().clear();
-
-    return true;
-
-    CATCH_ENTRY_L0("peerlist_manager::get_and_empty_anchor_peerlist()", false);
-  }
-  //--------------------------------------------------------------------------------------------------
-  inline
-  bool peerlist_manager::remove_from_peer_anchor(const epee::net_utils::network_address& addr)
-  {
-    TRY_ENTRY();
-
-    CRITICAL_REGION_LOCAL(m_peerlist_lock);
-
-    anchor_peers_indexed::index_iterator<by_addr>::type iterator = m_peers_anchor.get<by_addr>().find(addr);
-
-    if (iterator != m_peers_anchor.get<by_addr>().end()) {
-      m_peers_anchor.erase(iterator);
-    }
-
-    return true;
-
-    CATCH_ENTRY_L0("peerlist_manager::remove_from_peer_anchor()", false);
   }
   //--------------------------------------------------------------------------------------------------
   template<typename F> size_t peerlist_manager::filter(bool white, const F &f)

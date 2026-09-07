@@ -1836,8 +1836,7 @@ skip:
       if (context.m_state == cryptonote_connection_context::state_normal)
       {
         ++n_synced[zone];
-        if (!context.m_anchor)
-          last_synced_peer_id[zone] = context.m_connection_id;
+        last_synced_peer_id[zone] = context.m_connection_id;
       }
       return true;
     });
@@ -1847,7 +1846,7 @@ skip:
       const unsigned int max_out_peers = get_max_out_peers(zone);
       MTRACE("[" << epee::net_utils::zone_to_string(zone) << "] " << n_syncing[zone] << " syncing, " << n_synced[zone] << " synced, " << max_out_peers << " max out peers");
 
-      // if we're at max out peers, and not enough are syncing, drop the last sync'd non-anchor
+      // if we're at max out peers, and not enough are syncing, drop the last sync'd peer
       if (n_synced[zone] + n_syncing[zone] >= max_out_peers && n_syncing[zone] < P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT && last_synced_peer_id[zone] != boost::uuids::nil_uuid())
       {
         if (!m_p2p->for_connection(last_synced_peer_id[zone], [&](cryptonote_connection_context& ctx, nodetool::peerid_type peer_id, uint32_t f)->bool{
@@ -1997,11 +1996,6 @@ skip:
   template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::should_drop_connection(cryptonote_connection_context& context, uint32_t next_stripe)
   {
-    if (context.m_anchor)
-    {
-      MDEBUG(context << "This is an anchor peer, not dropping");
-      return false;
-    }
     if (context.m_pruning_seed == 0)
     {
       MDEBUG(context << "This peer is not striped, not dropping");

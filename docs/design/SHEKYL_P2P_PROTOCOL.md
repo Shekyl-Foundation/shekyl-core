@@ -75,8 +75,11 @@ forbidden.* Test a proposal against that sentence **before** costing it.
 Two instances, both inherited, both flattering the defence, both of which would
 pass a review that reads only the constant:
 
-- **`ANCHOR_CONNECTIONS_COUNT = 2`** advertises two anchor-backed outbound
-  slots. The dial path delivers **at most one** — zero if every persisted anchor
+- **`ANCHOR_CONNECTIONS_COUNT = 2`** advertised two anchor-backed outbound
+  slots. **Records-was: the constant and the whole anchor mechanism were
+  deleted 2026-09-06** (amendment under PWD-I2); this stays as the record of
+  the inherited defect that motivated the deletion. The dial path delivered
+  **at most one** — zero if every persisted anchor
   fails to handshake — and destroys the rest of the persisted set on first use
   (PWD-I4). Found only because a review challenged the figure rather than the
   reasoning. *"At most one" is the honest form and this line said "one" through
@@ -452,7 +455,7 @@ instead of re-deriving it, and so P2P-3 has one list rather than six findings.
 | Declaration | Disposition |
 | --- | --- |
 | `peerlist_entry_base.id` (`p2p_protocol_defs.h:73`) | **Removed** — gossiped and persisted |
-| `anchor_peerlist_entry_base.id` (`:97`) | **Removed** — persisted; PWD-I3 makes anchors address-keyed |
+| ~~`anchor_peerlist_entry_base.id`~~ (`:97`) | **Moot 2026-09-06 — the whole struct is deleted** with the anchor mechanism, so there is no field to remove and no address-keyed anchor tenure (PWD-I3 is superseded). Was: **Removed** — persisted; PWD-I3 makes anchors address-keyed |
 | `connection_entry_base.id` (`:118`) | **Already dead** — PWC-F2, zero callers tree-wide since `68ba2887c` (2020); dies with the dead-struct deletion, not with this decision |
 | `basic_node_data.peer_id` (`:176`) | **Removed** — the wire field |
 | `COMMAND_PING::response.peer_id` (`:283`) | **Removed with the command** (PWD-B10) |
@@ -971,7 +974,47 @@ the writer inventory behind it, and an inventory is a claim that must be
 re-derived from the tree, never recalled.
 
 **Ruling on the operator-configured writer: exempt, and the exemption is
-narrow.** `--add-peer` entries are inserted by the node's **own operator, from
+narrow.**
+
+> **SUPERSEDED 2026-09-06 — `--add-peer` now enters GRAY.** The later
+> trust-is-earned ruling ("the only thing that moves a peer from gray to white
+> is the daemon itself") carries no carve-out for operator input, and this
+> exemption's two legs do not survive it.
+>
+> **The threat leg is true and no longer sufficient.** There is indeed no
+> remote party in `--add-peer`'s path. But the invariant is no longer only
+> *"deny a remote party the ability to insert itself"* — after the amendment
+> below, white means *"this process dialled it and it answered"*. An
+> operator-supplied address is a **claim about where a peer is**, and an
+> operator can be wrong — a typo, a decommissioned host, a stale runbook —
+> without being an adversary. Non-adversarial is not the same as verified,
+> and this row conflated them.
+>
+> **The bootstrap leg is false as stated, and that was checkable.** Gray
+> entries are dialled: `--add-peer` addresses are reached by the gray pass of
+> the same refill cycle, and `has_no_known_peers()` counts gray, so a node
+> holding only `--add-peer` entries does not detour to a seed either. Nothing
+> the flag exists for breaks.
+>
+> **What the demotion buys, at the strength it actually holds.** An
+> unreachable `--add-peer` entry in white sat there permanently *and was
+> gossiped onward* — `get_peerlist_head` reads the white list only — so one
+> operator's typo propagated to the network. **In gray it is never disclosed,
+> so the propagation stops immediately.** Its removal, however, is **lazy and
+> probabilistic**: a failed refill dial only records the address in the
+> recently-failed cache; eviction waits for `gray_peerlist_housekeeping` to
+> draw that entry (one random gray peer per zone per cycle) and fail its own
+> probe, so the entry can outlive many failures and restarts. An earlier
+> revision of this row claimed eviction "on the first failed dial" — the dial
+> path does not do that, and making it do so would discard reachable peers
+> during a transient local outage, which is exactly what the recently-failed
+> retry window exists to prevent. **The propagation half is the load-bearing
+> benefit; the cleanup half is eventual.**
+>
+> Retained below as records-was: the reasoning was sound for the invariant it
+> was written against.
+
+`--add-peer` entries are inserted by the node's **own operator, from
 local configuration, before the network exists** — there is no remote party in
 the path, so this writer is not a channel any adversary can reach, and the
 invariant's purpose (deny a *remote* party the ability to insert itself) is
@@ -1216,7 +1259,101 @@ baseline**, at which point a tighter ratio trigger can replace this ceiling —
 but the ceiling stands on its own until then, rather than deferring to a figure
 that does not exist.
 
+#### Amendment (2026-09-06) — trust is earned in-process, and the anchor mechanism is deleted
+
+**RULED by Rick, in these words:** *"encryption is for privacy, verification is
+for trust. demote both, and start clean from reboot."*
+
+**The invariant.** The only thing that moves a peer from gray to white is this
+daemon, by dialling it and seeing it answer. A persisted white list breaks that
+quietly: it makes white mean *a file asserts that some earlier process observed
+something*. That is an assertion standing in for an observation — the same
+category error this cluster removed from the wire, relocated to disk.
+
+**Both lists demote, and the "both" is load-bearing.** White and anchors are
+restored by the same `peerlist_manager::init()` from the same datadir file, and
+anchors are dialled **first**. Demoting white while keeping anchors would pay
+the bootstrap cost while leaving the higher-priority pool exposed — strictly
+worse than either extreme.
+
+**What demotion costs is ordering, not addresses.** Every entry is still in the
+pool and still dialled; it simply has no head start it did not earn this run.
+You dial the same number of peers either way.
+
+**The anchor mechanism is therefore deleted rather than fixed**, and the
+drain defect (PWD-I4's `k <= 1`) is deleted with it rather than repaired. The
+mechanism is **only** a restart-boundary device, and this was verified rather
+than assumed:
+
+- An entry is in `m_peers_anchor` *iff* an outbound connection to it is
+  currently open — added on successful outbound handshake, removed in
+  `on_connection_close`.
+- `make_new_connection_from_anchor_peerlist` calls `is_peer_used` first, which
+  matches every such entry. **So within a session the anchor dial arm cannot
+  produce a connection at all.**
+- The removal in `on_connection_close` is guarded `!is_stop_signal_sent()`,
+  so anchors are deliberately *retained* at shutdown — the set exists to be
+  persisted and re-dialled next boot. That is the job this ruling removes.
+
+**Consequence, recorded because it is not obvious.** `m_anchor` on the
+connection context was a **drop protection** with two readers in the
+*cryptonote* layer, not the p2p one: an anchor connection was excluded from
+sync-slot churn and short-circuited `should_drop_connection`. Deleting the
+mechanism removes both, because the only path that set the flag is gone.
+**What is removed is the *unconditional* anchor exemption, not connection
+protection in general** — `should_drop_connection` still refuses to drop a peer
+that is not striped, one carrying the stripe needed next, one usable for
+pruned-block sync, or one holding the next unpruned block. Those are all
+*sync-utility* protections. The anchor exemption was the only one that
+protected a connection for being a **durable relationship** rather than a
+currently useful one, and nothing replaces it. Whether some class deserves that
+second kind of protection is unruled and deliberately not invented here.
+
+**Encryption of the store is a separate, privacy-shaped mechanism.** Once the
+loader believes nothing on disk, the file's integrity stops mattering; what
+remains worth protecting is the **confidentiality of the peer graph**. Do not
+design it as "encrypt the trust store" — there is no trust in it to encrypt.
+
+**Store version 7 → 8.** `load_peers` already drops a pre-current store
+wholesale, so the bump *is* the clean start for existing nodes. **The stream
+now carries one list where it carried three:** the anchor section went with the
+mechanism, and the white section went with the trust it used to assert.
+
+**The invariant is typed, not commented.** `peerlist_types` has no `white`
+member, so the restore path cannot write the white list — it has no white list
+to write. An earlier revision kept the field and relied on the loader to demote
+it, which is a convention a later implementer can drop; this cannot be dropped
+without a compile error.
+
+**One cost stated exactly, because "ordering, not addresses" is not true at
+saturation.** White and gray had separate caps (1000 + 5000). One trust class
+means one cap, so a node saturating both now persists up to
+`P2P_LOCAL_GRAY_PEERLIST_LIMIT` rather than the sum. `trim_gray_peerlist`
+erases from the `by_time` front, so what goes is the **least recently seen**,
+and entries earned by a dial this session carry a fresh `last_seen` and survive
+preferentially. That is one cap doing its job on one pool — not arbitrary loss
+— but it is a real reduction in persisted capacity.
+
+**Seed contact is keyed on having no candidates at all, not on having no
+trusted ones.** `connections_maker`'s seed fallback previously tested the white
+count; with white empty on every boot that would have sent every restarting
+node to a seed ahead of a gray pool of thousands — showing seeds every restart,
+letting a seed's handshake peerlist evict stored gray entries at cap, and
+delaying dials that would have succeeded.
+
 ### PWD-I3 — tenure is recognised by address, never serialized, and ordered by `first_seen`
+
+> **SUPERSEDED 2026-09-06 by the amendment above.** This row's mechanism *is*
+> the anchor list: its recognition key, its `first_seen` ordering and its
+> "never serialized" claim all describe a container that no longer exists.
+> Cross-reconnect tenure is also forbidden on its own terms now — it lets a
+> mechanism conclude that two observations involve the same party, which is
+> what the endpoint-is-not-identity ruling rules out. **What survives is
+> same-host concentration** (a fact about this node's own pool shape, asserting
+> nothing about who a peer is). Retained unedited below as the record of what
+> was ruled and why, per records-was: the reasoning about `first_seen`
+> ordering is still the correct reading of the code it described.
+
 
 **RULED**, and it ratifies what the tree already does rather than inventing a
 mechanism.
@@ -1303,6 +1440,29 @@ below the warm-up any admission mechanism requires** — F-8's own condition,
 already stated as a comparison a measurement can settle.
 
 ### PWD-I4 — `ρ` / `g_max`: **DEFERRED to its own round, with the blocker named, and scheduled**
+
+> **AMENDED 2026-09-06 — this row is an ACTIVE instruction for open work, so it
+> is corrected here rather than marked records-was.** The anchor mechanism is
+> deleted (amendment under PWD-I2), and the inherited task changes with it:
+>
+> - **There is no `k` left to measure.** The sub-round was to measure how much
+>   stem-eligible outbound is *anchor-backed versus fresh-drawable*, with the
+>   honest answer recorded below as "at most 1 of 12". It is now **zero of 12 —
+>   there is no anchor-backed slot class at all**, so a bound of the form
+>   "≥ `k` slots are anchor-backed and thus not re-rollable" has no subject,
+>   rather than a small `k`.
+> - **Selection is otherwise unchanged, and the distinction is load-bearing for
+>   `g`:** `connections_maker` remains **white-first to the
+>   `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target, then gray**.
+>   Only the anchor-reserved share disappeared; the two-class ordering did not
+>   collapse into a single pool.
+> - **The question is reframed, not closed:** `ρ` still needs a
+>   non-re-rollable property, and the candidate this row and
+>   `DAEMON_RELAY_PRIVACY.md` §12.11 both named no longer exists. The
+>   sub-round must find another or record that none does.
+>
+> The body below is retained unedited as the record of the inherited defect and
+> of how the withdrawn "2 of 12" figure was traced.
 
 > **Rule 22 requires three things, not one: the blocker, a target, and the
 > reopening criterion.** An earlier version of this row named only the blocker.
@@ -1553,10 +1713,19 @@ is the test in both cases, and the Q12-D6a rig can run it.
   white-list entries under the white-list writer invariant.** The measured
   quantity is *white-list entries held by **network-derived** peers this node
   never dialled*, whose target value is **zero**: the invariant makes any
-  non-zero reading a defect, not a threshold judgement. **"Network-derived" is
-  load-bearing and excludes the two permitted non-dial paths** — operator
-  `--add-peer` entries, which are placed in white before this node dials them,
-  and nothing else — an earlier version also exempted "not-yet-reclassified
+  non-zero reading a defect, not a threshold judgement.
+
+  > **AMENDED 2026-09-06 — there are now ZERO permitted non-dial paths**, so
+  > the qualifier below has nothing left to exclude and the metric is
+  > structurally guaranteed rather than measured: `--add-peer` enters gray
+  > (see the supersession above), and `peerlist_types` has no white member for
+  > a restore to write. The instrument is worth keeping as a regression
+  > detector on the *producers*, not as a threshold judgement.
+
+  **"Network-derived" was
+  load-bearing and excluded the two permitted non-dial paths** — operator
+  `--add-peer` entries, which were placed in white before this node dialled
+  them, and nothing else — an earlier version also exempted "not-yet-reclassified
   entries on a pre-bump store", which **cannot exist** now that the bump drops
   the store wholesale, and which would have made the falsifier appear to
   tolerate network-derived white entries the design says are impossible. Without
