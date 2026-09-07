@@ -207,7 +207,6 @@ TEST(peerlist_manager, an_operator_candidate_survives_a_full_gray_list)
     nodetool::peerlist_entry ple{};
     ple.adr = epee::net_utils::ipv4_network_address{
       MAKE_IP(203, 0, 1 + (i / 250), 1 + (i % 250)), 8080};
-    ple.id = 1000 + i;
     ple.last_seen = 5000 + i;
     ASSERT_TRUE(plm.append_with_peer_gray(ple));
   }
@@ -215,7 +214,6 @@ TEST(peerlist_manager, an_operator_candidate_survives_a_full_gray_list)
 
   nodetool::peerlist_entry op{};
   op.adr = epee::net_utils::ipv4_network_address{MAKE_IP(198, 51, 100, 7), 8080};
-  op.id = 777;
   op.last_seen = 0;   // never dialled -- that is the point
 
   ASSERT_TRUE(plm.append_operator_candidate(op));

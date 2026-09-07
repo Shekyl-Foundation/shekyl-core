@@ -85,6 +85,36 @@ trusting it. (Gate constraints per the #637 lane's review; the ping-job
 inventory in §1 row 4 was independently reproduced here before PWD-B10's
 text was read — same sole-invoker result.)
 
+## 3b. What this shape leaves open for PWD-E2's verifier (PWD-E6)
+
+`--p2p-external-port` stays and becomes an operator-supplied **candidate**
+(PWD-E6, ruled). This unit does not build the verifier and does not foreclose
+one; stated plainly, as the round asks:
+
+- **The announced value is still DECLARED, not verified** — exactly its status
+  on `dev` today, since the back-ping that once "verified" it verified only a
+  port the peer had already asserted. This unit changes the value's *shape*
+  (an address absorbing the port), not its epistemic status, so it neither
+  adds nor removes a verification claim.
+- **There is exactly one construction site** — `get_local_node_data` — where
+  the announced address is derived from `m_external_port ? m_external_port :
+  m_listening_port` under the announce gate. A verifier gates that one site
+  ("announce only a candidate that passed"), so E1's ruled shape (sources
+  propose, a verifier decides) drops in without touching the wire type.
+- **E2(a) hairpin self-dial is admitted, and this unit supplies its
+  recognizer**: (a) is "dial the candidate, recognise our own nonce on
+  accept", which is precisely `mint_recorded_handshake_nonce` +
+  `detect_self_handshake` — already zone-scoped and single-fire here. A
+  hairpin verifier needs no new mechanism from this lane.
+- **E2(b) peer-assisted dial-back is admitted too**, and nothing here reads a
+  peer-reported port as truth: the acceptor takes an advertised port only as
+  a **gray candidate** and never as a verified endpoint, which is the same
+  minted-versus-observed line (b) draws. (b) would read its port from our own
+  accepting socket, a path this unit does not touch.
+- Not admitted, and not by accident: (c) accepting a peer's echo directly —
+  the round rejects it on its face, and this unit's receive side already
+  refuses to read an advertised host at all.
+
 ## 4. Open questions for steering (recommendations attached)
 
 - **Q1 — address type discipline.** Keep `network_address` as the field type

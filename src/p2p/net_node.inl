@@ -1069,8 +1069,8 @@ namespace nodetool
     // request strictly before this invoke can complete: detection is by
     // ordering, not by timing.
     const epee::net_utils::zone zone_type = context_.m_remote_address.get_zone();
-    crypto::generate_random_bytes_thread_safe(arg.nonce.size(), arg.nonce.data());
-    record_outbound_handshake_nonce(zone_type, arg.nonce);
+    // Recorded before it exists to be written: see mint_recorded_handshake_nonce.
+    arg.nonce = mint_recorded_handshake_nonce(zone_type);
     const auto nonce_guard = epee::misc_utils::create_scope_leave_handler([this, zone_type, nonce = arg.nonce](){
       erase_outbound_handshake_nonce(zone_type, nonce);
     });
@@ -1206,6 +1206,15 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
+  std::array<uint8_t, 32> node_server<t_payload_net_handler>::mint_recorded_handshake_nonce(const epee::net_utils::zone zone)
+  {
+    std::array<uint8_t, 32> nonce{};
+    crypto::generate_random_bytes_thread_safe(nonce.size(), nonce.data());
+    record_outbound_handshake_nonce(zone, nonce);
+    return nonce;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
   void node_server<t_payload_net_handler>::record_outbound_handshake_nonce(const epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce)
   {
     const auto found = m_network_zones.find(zone);
@@ -1223,6 +1232,16 @@ namespace nodetool
       return;
     CRITICAL_REGION_LOCAL(found->second.m_nonce_lock);
     found->second.m_inflight_handshake_nonces.erase(nonce);
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  size_t node_server<t_payload_net_handler>::inflight_handshake_nonce_count(const epee::net_utils::zone zone) const
+  {
+    const auto found = m_network_zones.find(zone);
+    if (found == m_network_zones.end())
+      return 0;
+    CRITICAL_REGION_LOCAL(found->second.m_nonce_lock);
+    return found->second.m_inflight_handshake_nonces.size();
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>

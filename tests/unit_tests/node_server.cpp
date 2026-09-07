@@ -1394,6 +1394,65 @@ TEST(node_server, tx_proxy_outbound_floor_refuses_underprovisioned_counts)
   EXPECT_EQ(-1, omitted->front().max_connections);
 }
 
+TEST(node_server, handshake_nonce_is_recorded_before_it_can_be_written)
+{
+  // The §5c falsifier (P2P_2_ENDPOINT_ROUND.md): the in-flight-set insert
+  // must precede the request write, or the bounded-set property holds only
+  // while someone remembers to keep it there. This reds if the recording
+  // moves out of the minting function — which is the only way the insert
+  // can come to follow the write, because the request cannot be built
+  // without the value this returns.
+  //
+  // Why this rather than a self-dial: a real self-dial's detection is a
+  // race the acceptor usually wins, so an insert-after-write regression
+  // would make such a test FLAKY rather than red — a falsifier that fails
+  // to fail is the defect it is meant to catch.
+  struct test_data_t
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+
+    test_data_t(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+  };
+
+  test_data_t data;
+
+  boost::program_options::options_description desc_options("Command line options");
+  cryptonote::core::init_options(desc_options);
+  Server::init_options(desc_options);
+
+  const char* argv[2] = {nullptr, nullptr};
+  boost::program_options::variables_map vm;
+  boost::program_options::store(
+    boost::program_options::parse_command_line(1, argv, desc_options), vm);
+
+  vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+    boost::program_options::variable_value(std::string("127.0.0.2"), false);
+  vm.find(nodetool::arg_p2p_bind_port.name)->second =
+    boost::program_options::variable_value(std::string("48088"), false);
+
+  boost::program_options::notify(vm);
+  ASSERT_TRUE(data.server->init(vm));
+
+  // The value a caller would put on the wire...
+  const std::array<uint8_t, 32> nonce =
+    data.server->mint_recorded_handshake_nonce(epee::net_utils::zone::public_);
+  // ...is already recognisable the moment it exists. If the recording moved
+  // after the request write, this handshake — an inbound arriving before the
+  // insert — would not be detected as self.
+  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce))
+    << "the minted nonce was not in its zone's in-flight set on return: the "
+       "insert now follows the value's availability to the writer, so a "
+       "self-connection arriving in that window goes undetected";
+
+  data.server->deinit();
+}
+
 TEST(node_server, handshake_nonce_fires_once_and_only_within_its_zone)
 {
   // The self-detection nonce's ruled contract (PWD-E3 + the zone-scoping
@@ -1452,10 +1511,38 @@ TEST(node_server, handshake_nonce_fires_once_and_only_within_its_zone)
     << "erase-on-match failed: a peer that learned the nonce by being dialed "
        "could replay it";
 
-  // The attempt-termination path: an erased nonce never matches.
+  // THE ERASE LEG, which is what BOUNDEDNESS rests on — independent of the
+  // insert ordering the sibling test pins. Both exits are checked, because a
+  // single-exit test passes while the other path leaks, and each is checked
+  // by COUNT as well as by detection: a set that still holds the value is a
+  // leak whether or not anything would still match it.
+  //
+  // Exit 1 — attempt termination (what do_handshake_with_peer's scope guard
+  // calls on every path: success, failure, timeout).
+  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_))
+    << "the match above must have removed it";
   data.server->record_outbound_handshake_nonce(epee::net_utils::zone::public_, nonce);
+  EXPECT_EQ(1u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_));
   data.server->erase_outbound_handshake_nonce(epee::net_utils::zone::public_, nonce);
+  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_))
+    << "an attempt that terminated left its nonce in the set: the set grows "
+       "without bound across attempts";
   EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce));
+
+  // Exit 2 — match. Erase-on-match is the other removal path, and the count
+  // is the observable a missing erase cannot satisfy.
+  const std::array<uint8_t, 32> second{{0x7c}};
+  data.server->record_outbound_handshake_nonce(epee::net_utils::zone::public_, second);
+  EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::zone::public_, second));
+  EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_))
+    << "a matched nonce stayed in the set: matches accumulate and the set "
+       "grows without bound";
+
+  // Coverage boundary, stated so it is not mistaken for completeness: this
+  // pins BOTH erase implementations the two exits call. That
+  // do_handshake_with_peer attaches the scope guard at all is structural
+  // (RAII over a local, so every exit path runs it) and is NOT observed
+  // here.
 
   data.server->deinit();
 }

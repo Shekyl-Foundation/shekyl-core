@@ -311,7 +311,7 @@ namespace nodetool
       // policy to get wrong. Comparison is within-zone only; a global
       // window would be a cross-zone correlation oracle.
       std::set<std::array<uint8_t, 32>> m_inflight_handshake_nonces;
-      epee::critical_section m_nonce_lock;
+      mutable epee::critical_section m_nonce_lock;
       peerlist_manager m_peerlist;
       config m_config;
       net::socks::endpoint m_proxy_address;
@@ -394,6 +394,16 @@ namespace nodetool
     //! anonymity zone run dialer-only it is the zone's CONSTANT unknown
     //! sentinel: equal for every node, carrying no entropy, linking nothing.
     epee::net_utils::network_address get_announced_address(epee::net_utils::zone zone) const;
+    //! Mint a self-detection nonce for one outbound handshake attempt on
+    //! `zone`, RECORDED IN THAT ZONE'S IN-FLIGHT SET BEFORE IT IS RETURNED.
+    //!
+    //! The ordering the bounded-set requirement rests on (PWD-E3 / the round
+    //! doc §5c: the insert must precede the request write) is structural
+    //! here rather than remembered — a caller cannot obtain the value to
+    //! write without it already being recorded. Pinned by
+    //! `node_server.handshake_nonce_is_recorded_before_it_can_be_written`,
+    //! which reds if the recording moves out of this function.
+    std::array<uint8_t, 32> mint_recorded_handshake_nonce(epee::net_utils::zone zone);
     //! Record / erase the self-detection nonce of an outbound handshake
     //! attempt on `zone` (PWD-T1's token, carried interim on the request).
     void record_outbound_handshake_nonce(epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce);
@@ -404,6 +414,12 @@ namespace nodetool
     //! cross-zone probe never matches — the drop would otherwise be a
     //! cross-zone correlation oracle.
     bool detect_self_handshake(epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce);
+    //! \return How many outbound-handshake nonces `zone` currently holds in
+    //! flight. The set's BOUNDEDNESS rests on the erase leg (on attempt
+    //! termination and on match), which is independent of the insert
+    //! ordering; this is what lets a test observe a leak rather than infer
+    //! one from detection behaviour alone.
+    size_t inflight_handshake_nonce_count(epee::net_utils::zone zone) const;
 
     void change_max_out_public_peers(size_t count);
     uint32_t get_max_out_public_peers() const;
