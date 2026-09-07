@@ -398,13 +398,15 @@ def dead_citations(corpus) -> list[str]:
     return out
 
 
-def read_baseline() -> tuple[int, dict[str, set[str]]]:
-    if not BASELINE.is_file():
-        sys.exit(f"FAIL: {rel(BASELINE)} is missing — the ratchet this gate "
-                 "enforces has no baseline, so nothing holds the count down. "
-                 "That is a broken run, not a clean one.")
+def parse_baseline(text: str) -> tuple[int | None, dict[str, set[str]]]:
+    """One parser, used for the working file and for the base revision.
+
+    Both readers need the same two fields, and a second parser would be a
+    second thing to keep in step — the duplication that this gate's own
+    citation resolver had to have deleted rather than synchronised.
+    """
     count, declares = None, {}
-    for line in BASELINE.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -413,19 +415,31 @@ def read_baseline() -> tuple[int, dict[str, set[str]]]:
         elif line.startswith("declares:"):
             _, doc, legs = line.split(None, 2)
             declares[doc] = set(legs.split(","))
+    return count, declares
+
+
+def read_baseline() -> tuple[int, dict[str, set[str]]]:
+    if not BASELINE.is_file():
+        sys.exit(f"FAIL: {rel(BASELINE)} is missing — the ratchet this gate "
+                 "enforces has no baseline, so nothing holds the count down. "
+                 "That is a broken run, not a clean one.")
+    count, declares = parse_baseline(BASELINE.read_text(encoding="utf-8"))
     if count is None:
         sys.exit(f"FAIL: {rel(BASELINE)} states no `dead-citations:` figure — "
                  "the ratchet cannot assert against a number that is not there")
     return count, declares
 
 
-def base_baseline() -> tuple[int | None, str]:
-    """The dead-citation figure recorded on the BASE revision, read via git.
+def base_baseline() -> tuple[int | None, dict[str, set[str]], str]:
+    """The baseline recorded on the BASE revision, read via git.
 
-    Without this the ratchet is honour-system: the number it asserts against
+    Without this the ratchet is honour-system: everything it asserts against
     lives in the same commit as the change being asserted, so one edit can add
-    a dead citation and raise the figure to match, and the gate says green. A
-    dial the caller can turn proves nothing about what it is supposed to hold.
+    a dead citation and raise the figure to match, or drop a declaration and
+    delete the line that recorded it, and the gate says green. A dial the
+    caller can turn proves nothing about what it is supposed to hold. BOTH
+    fields are read here for that reason — the count was the obvious half, and
+    the registry has exactly the same shape of hole.
 
     Read from the base branch rather than a second copy, because two copies of
     a number drift and then one of them lies. When the ref cannot be resolved
@@ -439,13 +453,13 @@ def base_baseline() -> tuple[int | None, str]:
                             f"{ref}:{rel(BASELINE)}"],
                            capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as e:      # pragma: no cover
-        return None, f"git could not run ({e.__class__.__name__})"
+        return None, {}, f"git could not run ({e.__class__.__name__})"
     if r.returncode != 0:
-        return None, f"{ref} does not resolve, or carries no baseline yet"
-    for line in r.stdout.splitlines():
-        if line.strip().startswith("dead-citations:"):
-            return int(line.split(":", 1)[1]), ref
-    return None, f"{ref} has a baseline with no `dead-citations:` line"
+        return None, {}, f"{ref} does not resolve, or carries no baseline yet"
+    count, declares = parse_baseline(r.stdout)
+    if count is None:
+        return None, declares, f"{ref} has a baseline with no `dead-citations:` line"
+    return count, declares, ref
 
 
 def main() -> None:
@@ -497,7 +511,7 @@ def main() -> None:
     # `series DRS-W` and `series R` to `series` meant one document holding both
     # could drop either and still satisfy the record — the registry would be
     # protecting a kind while the subject it was minted for walked away.
-    base, base_note = base_baseline()
+    base, base_declares, base_note = base_baseline()
     if base is not None and baseline > base:
         errors.append(
             f"the `dead-citations:` figure was RAISED from {base} to {baseline} "
@@ -523,6 +537,23 @@ def main() -> None:
     # never registered can be removed later with nothing to notice. Adding a
     # leg therefore costs one line here, which is the same deliberate act the
     # rest of this file is built on.
+    # ...and the registry LINE is itself base-checked, for the same reason the
+    # count is. Dropping a declaration and deleting the token that recorded it
+    # in one change satisfies both of the checks above — no drop, because the
+    # candidate registry no longer claims the leg; no incompleteness, because
+    # the document no longer declares it. The registry was the last reference
+    # value the change under test could still edit.
+    for doc, legs in sorted(base_declares.items()):
+        if doc not in present:
+            continue          # deleting the document takes its line with it
+        shrunk = sorted(legs - must_declare.get(doc, set()))
+        if shrunk:
+            errors.append(
+                f"the registry line for {doc} was SHRUNK against {base_note}: "
+                f"{shrunk} no longer recorded. Un-declaring a leg and deleting "
+                "the record of it in one change is the move this registry "
+                "exists to catch, and it passes every check that reads only "
+                "the tree in hand.")
     for doc, legs in sorted(present.items()):
         if not legs:
             continue

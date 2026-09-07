@@ -196,6 +196,30 @@ def git_base(base_dead: int):
     return f
 
 
+# A second declaring document, so a control that deletes the first does not
+# simply trip the adoption floor instead. The first attempt at that control did
+# exactly this and reported the floor's message — a case failing for the wrong
+# reason is a case testing nothing.
+MINI = ("# Mini\n\n<!-- claim-audit: sections -->\n\nSee §1 below.\n\n"
+        "## 1. One\n\nBody.\n")
+
+
+def git_base_text(text: str):
+    """Commit a base revision whose baseline file holds exactly `text`."""
+    def f(t: pathlib.Path) -> None:
+        bl = t / "docs" / "ci" / "doc-claims-baseline.txt"
+        candidate = bl.read_text(encoding="utf-8")
+        bl.write_text(text, encoding="utf-8")
+        for cmd in (["git", "init", "-q", "-b", "base"],
+                    ["git", "config", "user.email", "matrix@example.invalid"],
+                    ["git", "config", "user.name", "matrix"],
+                    ["git", "add", "-A"],
+                    ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "base"]):
+            subprocess.run(cmd, cwd=t, check=True, capture_output=True)
+        bl.write_text(candidate, encoding="utf-8")
+    return f
+
+
 def rot(n: int):
     """Add `n` dead citations in a NON-declaring document.
 
@@ -350,6 +374,25 @@ def main() -> None:
               baseline="dead-citations: 0\ndeclares: docs/subject.md "
                        "citations,counts,numbered,range:XX-W,sections,series:XX-W\n",
               extra=git_base(3), env={"DOC_CLAIMS_BASE_REF": "base"}),
+        # the registry line is a reference value too: dropping a declaration
+        # AND deleting the token recording it passes every single-tree check.
+        case("registry line shrunk against the base revision", "was SHRUNK against",
+             doc=TWO_SERIES.replace("<!-- claim-audit: series YY-Q -->\n", ""),
+             baseline="dead-citations: 0\ndeclares: docs/subject.md "
+                      "citations,counts,numbered,range:XX-W,sections,series:XX-W\n",
+             corpus=git_base_text("dead-citations: 0\ndeclares: docs/subject.md "
+                                  f"{TWO_SERIES_LEGS}\n"),
+             env={"DOC_CLAIMS_BASE_REF": "base"}),
+        green("deleting a document releases its registry line",
+              extra=chain(
+                  git_base_text("dead-citations: 0\n"
+                                f"declares: docs/subject.md {TWO_SERIES_LEGS}\n"
+                                "declares: docs/mini.md sections\n"),
+                  lambda t: (t / "docs" / "subject.md").unlink(),
+                  lambda t: (t / "docs" / "mini.md").write_text(MINI,
+                                                                encoding="utf-8")),
+              baseline="dead-citations: 0\ndeclares: docs/mini.md sections\n",
+              env={"DOC_CLAIMS_BASE_REF": "base"}),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -359,7 +402,8 @@ def main() -> None:
     # thing a reader stops trusting.
     controls = {"historical restatement is not a live claim",
                 "populated submodule resolves normally",
-                "lowering the baseline against the base revision is allowed"}
+                "lowering the baseline against the base revision is allowed",
+                "deleting a document releases its registry line"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"

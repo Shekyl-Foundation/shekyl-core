@@ -70,6 +70,10 @@ against the **base revision**, not just the tree in hand:
   a document holding two declarations of one kind could otherwise drop either
   and still satisfy a kind-keyed record. The registry is complete: declaring a
   new leg costs one line in the baseline, and the gate prints the line to add.
+  The registry **line** is base-checked too, because it is a reference value
+  the change under test could otherwise edit: dropping a declaration and
+  deleting the token that recorded it in one change satisfies every check that
+  reads only the tree in hand. Deleting the document releases its line.
 
 Because that count is a ratchet, it has to mean the same thing everywhere. A
 citation into a submodule that is **not checked out** therefore stops the run
