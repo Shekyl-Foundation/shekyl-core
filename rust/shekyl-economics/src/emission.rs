@@ -188,14 +188,35 @@ pub fn projected_already_generated(
     height: u64,
     params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
+    let tail = tail_subsidy_per_block(params)?;
     let mut ag = 0u64;
-    for _ in 0..height {
+    let mut h = 0u64;
+    while h < height {
         let base = base_block_reward(ag, params)?;
+        if base == tail {
+            // STATIONARY FROM HERE — close the form rather than iterate.
+            // `curve_emission` is non-increasing in `already_generated`
+            // and `ag` only grows, so once the curve has fallen to the
+            // tail floor every remaining block adds exactly `tail`.
+            //
+            // This is not tidying a loop that would have finished. The
+            // `ag >= money_supply` early return that FL-R12′ retired with
+            // the supply cap was ALSO what bounded this walk: removing the
+            // defect removed a load-bearing side effect. Without this arm
+            // a large `height` spends ~23.6 billion iterations — the
+            // FL-R14 headroom, ≈ 89 750 years of tail — adding the same
+            // number to itself before reporting `Overflow`, which is a
+            // hang in a public projection rather than an answer.
+            let added = u64::try_from(u128::from(height - h) * u128::from(tail))
+                .map_err(|_| EmissionError::Overflow)?;
+            return ag.checked_add(added).ok_or(EmissionError::Overflow);
+        }
         // No saturation at the asymptote (FL-R12′): the neutral trajectory
         // keeps accruing the perpetual tail past it, exactly as consensus
         // does. The FL-R14 build assertion in `params.rs` documents why
         // this cannot overflow on any realistic horizon.
         ag = ag.checked_add(base).ok_or(EmissionError::Overflow)?;
+        h += 1;
     }
     Ok(ag)
 }
@@ -256,6 +277,71 @@ pub fn advance_already_generated(already_generated_coins: u64, block_reward: u64
 mod tests {
     use super::*;
     use crate::params::EconomicParams;
+
+    /// A height past tail entry must TERMINATE, not walk the tail one
+    /// block at a time.
+    ///
+    /// The defect-falsifier for the fast-forward arm: before it, this call
+    /// spent ~23.6 billion iterations — the FL-R14 headroom, ≈ 89 750
+    /// years of tail — adding the identical number to itself before
+    /// reporting `Overflow`. The assertion is ordinary; the fact that this
+    /// test finishes at all is the check.
+    #[test]
+    fn a_height_past_tail_entry_terminates_instead_of_walking_the_tail() {
+        let p = EconomicParams::default();
+        assert!(
+            matches!(
+                projected_already_generated(u64::MAX, &p),
+                Err(EmissionError::Overflow)
+            ),
+            "u64::MAX blocks of tail overflows the accumulator, and must say so promptly"
+        );
+    }
+
+    /// The closed form must equal the walk it replaces, including across
+    /// the transition — so the arm is an identity and not an
+    /// approximation that happens to be close.
+    #[test]
+    fn the_fast_forward_agrees_with_the_naive_walk_across_tail_entry() {
+        // Canonical parameters put tail entry ~65 years out, where a naive
+        // comparison is not runnable, so shrink the emission-speed factor
+        // and the supply until the curve crosses within a few dozen
+        // blocks. Only the crossing's POSITION moves; the recurrence and
+        // the stationarity being asserted are the shipped ones.
+        let mut p = EconomicParams::default();
+        p.emission_speed_factor_per_minute = (p.daa_target_seconds / 60) + 3;
+        let esf = emission_speed_factor(&p);
+        let tail = tail_subsidy_per_block(&p).expect("tail");
+        p.money_supply = (tail << esf) * 4;
+
+        let naive = |height: u64| -> u64 {
+            let mut ag = 0u64;
+            for _ in 0..height {
+                ag += base_block_reward(ag, &p).expect("base");
+            }
+            ag
+        };
+
+        // Locate the crossing rather than assuming where it is: a test
+        // that never reaches the transition would assert agreement only on
+        // the branch that did not change.
+        let mut ag = 0u64;
+        let mut crossing = 0u64;
+        while base_block_reward(ag, &p).expect("base") > tail {
+            ag += base_block_reward(ag, &p).expect("base");
+            crossing += 1;
+            assert!(crossing < 100_000, "setup never reaches the tail");
+        }
+        assert!(crossing > 1, "setup must start above the tail, not on it");
+
+        for height in [0, 1, crossing - 1, crossing, crossing + 1, crossing + 500] {
+            assert_eq!(
+                projected_already_generated(height, &p).expect("projection"),
+                naive(height),
+                "closed form and walk must agree at height {height} (crossing at {crossing})"
+            );
+        }
+    }
 
     #[test]
     fn base_block_reward_matches_cpp_first_values() {
