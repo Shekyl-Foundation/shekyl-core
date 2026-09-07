@@ -1747,15 +1747,59 @@ mod tests {
         assert_eq!(opened.as_slice(), FIXTURE_STATE_PAYLOAD);
     }
 
-    /// Regenerates the KAT fixtures on disk. Run manually with
-    /// `cargo test -p shekyl-crypto-pq pinned_fixtures_regenerate -- --ignored --nocapture`
+    /// Environment variable that arms [`pinned_fixtures_regenerate`].
+    ///
+    /// Its value must cite the `docs/V3_WALLET_DECISION_LOG.md` entry
+    /// authorizing the regeneration: `YYYY-MM-DD <one-line rationale>`,
+    /// where the date is the decision-log entry's date. The regenerator
+    /// refuses to run without it, so a failing pinned vector cannot be
+    /// silenced by re-running one command (50-testing.mdc, "Regenerating
+    /// a self-pinned vector is a decision, not a command").
+    const PINNED_REGEN_DECISION_ENV: &str = "SHEKYL_PINNED_REGEN_DECISION";
+
+    /// Regenerates the pinned format vectors on disk. Armed: refuses to
+    /// run unless [`PINNED_REGEN_DECISION_ENV`] cites the decision-log
+    /// entry that authorizes moving the vectors. Run manually with
+    ///
+    /// ```text
+    /// SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
+    ///   cargo test -p shekyl-crypto-pq pinned_fixtures_regenerate -- --ignored --nocapture
+    /// ```
+    ///
     /// whenever a deliberate, documented format change requires rotating
-    /// the on-disk vectors. Commit the resulting `.hex` files.
+    /// the on-disk vectors. Commit the resulting `.hex` files together
+    /// with the decision-log entry and the updated `manifest.json`.
     #[test]
-    #[ignore = "fixture regenerator; run manually after format changes"]
+    #[ignore = "armed fixture regenerator; requires SHEKYL_PINNED_REGEN_DECISION"]
     fn pinned_fixtures_regenerate() {
         use std::fs;
         use std::path::PathBuf;
+
+        // Refuse to run without a decision-log citation. The format is
+        // "YYYY-MM-DD <rationale>"; the date names the decision-log entry.
+        let decision = std::env::var(PINNED_REGEN_DECISION_ENV).unwrap_or_default();
+        let cited = decision.len() > 11
+            && decision.as_bytes()[..10]
+                .iter()
+                .enumerate()
+                .all(|(i, b)| match i {
+                    4 | 7 => *b == b'-',
+                    _ => b.is_ascii_digit(),
+                })
+            && decision.as_bytes()[10] == b' ';
+        assert!(
+            cited,
+            "refusing to regenerate pinned vectors: set {PINNED_REGEN_DECISION_ENV}=\
+             \"YYYY-MM-DD <rationale>\" citing the docs/V3_WALLET_DECISION_LOG.md entry \
+             that authorizes moving them (got: {decision:?}). Moving a pinned vector is \
+             a format decision, not a test fix — see 50-testing.mdc."
+        );
+        eprintln!("regenerating pinned vectors under decision: {decision}");
+        eprintln!(
+            "reminder: commit the decision-log entry and update \
+             docs/test_vectors/WALLET_FILE_FORMAT_V1/manifest.json in the same change"
+        );
+
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../docs/test_vectors/WALLET_FILE_FORMAT_V1");
         fs::create_dir_all(&dir).expect("mkdir -p");
