@@ -86,13 +86,18 @@ narrow and self-identifying — the ref resolves but carries no baseline yet,
 which is true exactly once, for the change that introduces the file.
 
 Because that count is a ratchet, it has to mean the same thing everywhere. A
-citation into a submodule this tree cannot speak for — **not checked out, or
-sitting at a commit other than the recorded one** — therefore stops the run and
-names the init command, rather than being counted as rot. A missing file is
-first evidence the subject is absent, not that the claim went stale; and a
-submodule at the wrong commit still has the file, so its line numbers are
-somebody else's. Run `git submodule update --init` if the gate says so — it is
-a broken run, not a finding.
+citation into a submodule this tree cannot vouch for therefore stops the run
+rather than being counted as rot. Three states qualify, and they do not share a
+remedy:
+
+| State | Why it is not measurable | Fix |
+| --- | --- | --- |
+| Not checked out | a missing file is first evidence the *subject* is absent, not that the claim went stale | `git submodule update --init <path>` |
+| At another commit | the file is present, so its line numbers are somebody else's | `git submodule update --init <path>` |
+| Worktree dirty | at the recorded commit, but the content is not what the superproject records | commit, stash or restore inside the submodule — **`update --init` will not do this, by design** |
+
+The dirty case is the one that surprises: the checkout is at the right commit
+and still fails, and nothing here will discard local work to make a gate pass.
 
 Declaring is opt-in because inferring these corpus-wide produced 991 findings
 against a clean tree — `§17` usually cites another document, registers

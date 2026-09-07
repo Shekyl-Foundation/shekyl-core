@@ -154,29 +154,47 @@ def strip_code(text: str) -> str:
     became a subject of it. Newlines are preserved so every reported line
     number still points where a reader would look.
     """
+    return _blank_spans(strip_fences(text))
+
+
+def strip_fences(text: str) -> str:
+    """Blank fenced blocks only, preserving line numbers and inline code.
+
+    Separate from strip_code because the two callers need different things: a
+    DECLARATION must not be readable inside any code form, while a CITATION is
+    written inside backticks by convention and would vanish if inline spans
+    were stripped from the text the citation leg reads.
+    """
     out, fence = [], None          # fence = (char, length) while open
     for line in text.splitlines():
-        m = re.match(r"\s*(`{3,}|~{3,})", line)
+        m = re.match(r"\s*(`{3,}|~{3,})(.*)$", line)
         if m:
-            ch, n = m.group(1)[0], len(m.group(1))
+            ch, n, tail = m.group(1)[0], len(m.group(1)), m.group(2)
             if fence is None:
                 fence = (ch, n)
                 out.append("")
                 continue
-            # A fence closes only on its OWN character and at least its own
-            # length; anything else is content inside it.
-            if ch == fence[0] and n >= fence[1]:
+            # CommonMark: a CLOSING fence carries its delimiter and nothing
+            # else. Accepting a trailing info string as a close let ```python
+            # inside a block end it early and expose the examples below it as
+            # real declarations.
+            if ch == fence[0] and n >= fence[1] and not tail.strip():
                 fence = None
                 out.append("")
                 continue
-        if fence is not None:
-            out.append("")
-            continue
-        # Backreferenced delimiter, so ``a `b` c`` is one span rather than two.
-        # A fixed single-backtick pattern left the inner text exposed, and a
-        # marker written there was read as a real declaration.
-        out.append(re.sub(r"(`+)(.+?)\1", "", line))
+        out.append("" if fence is not None else line)
     return "\n".join(out)
+
+
+def _blank_spans(text: str) -> str:
+    """Blank inline code spans, INCLUDING those that cross line breaks.
+
+    CommonMark code spans may span lines, and a per-line pass leaves a marker
+    written inside one visible. Newlines inside a span are preserved so every
+    reported line number still points where a reader would look.
+    """
+    return re.sub(r"(`+)(.+?)\1",
+                  lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S)
 
 
 def _series_rows(text: str, prefix: str) -> list[int]:
@@ -489,18 +507,24 @@ def resolve(path: str) -> int:
     if path not in _LENGTHS:
         for sm in untrusted_submodules():
             if path.startswith(sm):
+                s = sm.rstrip("/")
                 sys.exit(
                     f"FAIL: a live document cites {path}, which lies inside the "
-                    f"submodule {sm.rstrip('/')} — and that submodule is either "
-                    "not checked out here or sits at a commit other than the one "
-                    "this tree records, so this run cannot tell a deleted file "
-                    "from an absent one, nor a moved line from a stale one.\n"
-                    f"       Run `git submodule update --init {sm.rstrip('/')}` "
-                    "and re-run. This is a broken run, not a dirty tree: the "
-                    "citation count is a ratchet, and a number measured against "
-                    "files that are merely missing locally, or present at some "
-                    "other commit, would disagree with CI by environment rather "
-                    "than by fact.")
+                    f"submodule {s}, and this tree cannot vouch for that "
+                    "submodule's content. One of three things is true:\n"
+                    "         - it is not checked out here, or\n"
+                    "         - it sits at a commit other than the one this "
+                    "tree records, or\n"
+                    "         - its worktree has local modifications or "
+                    "untracked files.\n"
+                    f"       For the first two: `git submodule update --init {s}`.\n"
+                    "       For the third, that command will NOT help and is not "
+                    "meant to — commit, stash or restore the changes inside "
+                    f"{s} first, and nothing here will discard them for you.\n"
+                    "       Either way this is a broken run rather than a "
+                    "finding: the citation count is a ratchet, and a number "
+                    "measured against content this tree does not record would "
+                    "disagree with CI by environment rather than by fact.")
         # `..` never appears in a real citation, and `ROOT / path` would happily
         # resolve one outside the repository and report an unrelated host file
         # as a live citation. The token is not this gate's subject: it is not a
@@ -755,6 +779,18 @@ def main() -> None:
                  f"(floor {MIN_DOCS}) — the corpus this gate audits is missing or "
                  "mis-rooted. That is a broken run, not a clean tree.")
     corpus = [(p, p.read_text(encoding="utf-8")) for p in files]
+    # Structural legs read the corpus with FENCES BLANKED. Only declaration
+    # discovery was stripped before, so every structural checker was reading
+    # raw markdown and treating examples as document structure: a fenced
+    # `1.`/`3.` snippet failed the `numbered` leg, fenced register rows could
+    # satisfy or corrupt a `series` check, and a fenced range read as a live
+    # restatement. An example of a defect is not a defect.
+    #
+    # Inline spans survive here on purpose. Citations are written inside
+    # backticks by convention, so the citation leg keeps the RAW text — the
+    # same split that made strip_code and strip_fences two functions.
+    fenced = {p: strip_fences(text) for p, text in corpus}
+    corpus_fenced = [(p, fenced[p]) for p, _ in corpus]
 
     errors: list[str] = []
     tally: dict[str, int] = {}
@@ -782,8 +818,12 @@ def main() -> None:
                 continue
             declarations += 1
             fn = CHECKS[kind]
-            n = (fn(p, text, arg, errors, corpus) if kind == "range"
-                 else fn(p, text, arg, errors))
+            # citations resolve tokens written inside backticks, so that leg
+            # alone sees the raw document; everything structural sees fences
+            # blanked.
+            body = text if kind == "citations" else fenced[p]
+            n = (fn(p, body, arg, errors, corpus_fenced) if kind == "range"
+                 else fn(p, body, arg, errors))
             tally[kind] = tally.get(kind, 0) + n
 
     if declarations < MIN_DECLARATIONS:

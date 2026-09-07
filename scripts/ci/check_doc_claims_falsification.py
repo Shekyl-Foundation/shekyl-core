@@ -91,24 +91,49 @@ _HITS = _COV / "hits.txt"
 DEPTH_SAFE = {"submodule", "rev-parse", "ls-tree", "show", "config", "status"}
 
 
+def _subcommand(strings: list[str]) -> str | None:
+    """The first non-flag token, which is the subcommand.
+
+    A `-C <path>` pair contributes no literal for the path (it is an
+    expression), so skipping flags is enough — there is no flag-value to
+    mistake for a subcommand.
+    """
+    return next((s for s in strings if not s.startswith("-")), None)
+
+
 def unsafe_git_calls() -> list[str]:
-    src = GATE.read_text(encoding="utf-8")
+    """Git subcommands the gate invokes that a shallow clone cannot answer.
+
+    Read from the SYNTAX TREE rather than from text. The regex version
+    recognised only DOUBLE-QUOTED calls, so an equally valid `git('log')` or
+    `['git', 'log']` was invisible and the guard would have reported an unsafe
+    history walk as safe — a check that passes because of how the code is
+    punctuated is not a check. It also had an off-by-one that hid the unflagged
+    `["git", "log"]` form, which my own falsification missed by injecting the
+    `-C` form that happens to survive it. Both classes disappear here: the AST
+    does not know what quotes are, and multi-line calls parse identically.
+    """
     found = []
-    for m in re.finditer(r'\bgit\(\s*"([a-z-]+)"', src):        # helper calls
-        if m.group(1) not in DEPTH_SAFE:
-            found.append(m.group(1))
-    for m in re.finditer(r'\["git",([^\]]*)\]', src):            # literal argv
-        # The capture already starts AFTER "git", so token zero is the first
-        # ARGUMENT. Skipping it treated the subcommand as a flag whenever the
-        # call had no leading flag: `["git", "log", "-1"]` scanned as ["-1"]
-        # and matched nothing. The falsification that "proved" this scanner
-        # worked injected the -C form, which happens to survive the off-by-one
-        # — a case that tested the passing shape rather than the risky one.
-        toks = re.findall(r'"([^"]+)"', m.group(1))
-        sub = next((x for x in toks if not x.startswith("-")), None)
-        if sub and sub not in DEPTH_SAFE:
-            found.append(sub)
-    return sorted(set(found))
+    for node in ast.walk(ast.parse(GATE.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        f, a0 = node.func, node.args[0]
+        # the local `git(...)` helper: its first argument IS the subcommand
+        if isinstance(f, ast.Name) and f.id == "git":
+            if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
+                found.append(a0.value)
+            continue
+        # any call taking a literal argv sequence that starts with "git"
+        if isinstance(a0, (ast.List, ast.Tuple)) and a0.elts:
+            head = a0.elts[0]
+            if not (isinstance(head, ast.Constant) and head.value == "git"):
+                continue
+            strings = [e.value for e in a0.elts[1:]
+                       if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+            sub = _subcommand(strings)
+            if sub:
+                found.append(sub)
+    return sorted({s for s in found if s not in DEPTH_SAFE})
 
 # What counts as an outcome: a reported discrepancy, a stated non-coverage, or
 # a refusal to run. If the gate grows one of these and no case reaches it, this
@@ -771,6 +796,33 @@ def main() -> None:
                      .replace("<!-- claim-audit: numbered -->", "")
                      .replace("<!-- claim-audit: counts -->", "")
                      .replace("<!-- claim-audit: citations -->", "")),
+        # CommonMark: a CLOSING fence carries its delimiter and nothing else.
+        # Treating an info string as a close ended the block early and exposed
+        # the examples below it as real declarations.
+        case("info string does not close a fence", "passes vacuously",
+             doc=GOOD.replace("<!-- claim-audit: series XX-W -->",
+                              "```\n```python\n<!-- claim-audit: series XX-W -->\n```")
+                     .replace("<!-- claim-audit: range XX-W -->", "")
+                     .replace("<!-- claim-audit: sections -->", "")
+                     .replace("<!-- claim-audit: numbered -->", "")
+                     .replace("<!-- claim-audit: counts -->", "")
+                     .replace("<!-- claim-audit: citations -->", "")),
+        # code spans may cross line breaks, and a per-line pass missed those
+        case("marker inside a MULTILINE span is not a declaration",
+             "passes vacuously",
+             doc=GOOD.replace("<!-- claim-audit: series XX-W -->",
+                              "``example\n<!-- claim-audit: series XX-W -->\nend``")
+                     .replace("<!-- claim-audit: range XX-W -->", "")
+                     .replace("<!-- claim-audit: sections -->", "")
+                     .replace("<!-- claim-audit: numbered -->", "")
+                     .replace("<!-- claim-audit: counts -->", "")
+                     .replace("<!-- claim-audit: citations -->", "")),
+        # An EXAMPLE of a defect is not a defect. Before this, structural legs
+        # read raw markdown: a fenced 1./3. list failed `numbered`, fenced
+        # register rows entered `series`, and a fenced range became a live
+        # restatement. All three appear together here and must be ignored.
+        green("fenced examples are not document structure",
+              doc=GOOD + "\n\n```\n1. one\n3. three\n5. five\n```\n\n```\n| ID | Note |\n| --- | --- |\n| XX-W9 | fake |\n```\n\n```\nThe range XX-W1…XX-W99 is complete.\n```\n"),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -783,7 +835,8 @@ def main() -> None:
                 "lowering the baseline against the base revision is allowed",
                 "deleting a document releases its registry line",
                 "submodule at the recorded commit resolves normally",
-                "dotted §N.M is reported as not checked, not failed"}
+                "dotted §N.M is reported as not checked, not failed",
+                "fenced examples are not document structure"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"

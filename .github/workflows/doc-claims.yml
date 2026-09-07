@@ -88,19 +88,27 @@ jobs:
       # guarantees rather than one it usually gets. Naming the destination also
       # forces an update when the ref already exists, which is the difference
       # between comparing against dev and comparing against an old copy of it.
+      # The immutable base SHA of the merge commit under test, not the branch
+      # tip. A branch tip is mutable: if dev advances while this run is queued,
+      # the tip is no longer the base of the merge commit being tested, and the
+      # gate would compare against a revision this PR was never built on —
+      # falsely reporting a raised count or a shrunken registry. Same
+      # wrong-referent class as the FETCH_HEAD fix, one level further out, and
+      # the failure mode is a red on work that is fine.
       - name: Fetch the base revision the ratchet compares against
         run: |
           git fetch --no-tags --depth=1 origin \
-            "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+            "${{ github.event.pull_request.base.sha }}"
 
       - name: Run the documentation claim audit
         env:
-          # The remote-tracking ref, NOT FETCH_HEAD. FETCH_HEAD is last-fetch
-          # wins and any intervening fetch silently repoints it — the checkout
-          # step above rewrites it five times fetching submodules. Comparing
+          # A SHA, which is the only kind of reference that cannot be
+          # repointed. FETCH_HEAD was last-fetch-wins (the checkout step
+          # rewrites it five times fetching submodules); a remote-tracking
+          # branch fixed that but still names a moving target. Comparing
           # against the wrong revision while reporting "checked" is worse than
-          # not checking, because the output would name a ref it did not read.
-          DOC_CLAIMS_BASE_REF: origin/${{ github.base_ref }}
+          # not checking, because the output names a ref it did not read.
+          DOC_CLAIMS_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: python3 scripts/ci/check_doc_claims.py
 
       - name: Re-falsify the gate's own failure paths
