@@ -153,7 +153,10 @@ fn archival_attestation_field_round_trips() {
     ];
 
     let bytes = tx_extra::serialize(&fields).expect("serialize attestation extra");
-    assert_eq!(bytes[33], 0x0B, "the attestation tag byte follows the pubkey");
+    assert_eq!(
+        bytes[33], 0x0B,
+        "the attestation tag byte follows the pubkey"
+    );
 
     let parsed = tx_extra::parse(&bytes).expect("parse attestation extra");
     assert_eq!(parsed, fields, "attestation extra must round-trip");
