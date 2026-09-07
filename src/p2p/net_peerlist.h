@@ -74,6 +74,15 @@ namespace nodetool
   // future caller assert a trust no observation backs. The restore path cannot
   // write the white list because it has no white list to write -- the
   // invariant is enforced by the type rather than by a comment nobody reads.
+  // The persisted peerlist store's schema version. Bumped on every change
+  // to the persisted shape; `load_peers` drops any pre-current store
+  // wholesale (the cache is disposable and re-bootstraps). Mechanical
+  // coupling: `peerlist_storage.store_shape_and_version_move_together`
+  // (tests/unit_tests/test_peerlist.cpp) pins a digest of the serialized
+  // shape NEXT TO an assertion of this value, so a shape change that
+  // forgets this constant goes red with a message naming both.
+  constexpr unsigned CURRENT_PEERLIST_STORAGE_ARCHIVE_VER = 8;
+
   struct peerlist_types
   {
     std::vector<peerlist_entry> gray;
@@ -143,7 +152,7 @@ namespace nodetool
     bool append_with_peer_white(const peerlist_entry& pr, bool trust_last_seen = false);
     bool append_with_peer_gray(const peerlist_entry& pr);
     bool append_operator_candidate(const peerlist_entry& pr);
-    bool set_peer_just_seen(peerid_type peer, const epee::net_utils::network_address& addr, uint32_t pruning_seed);
+    bool set_peer_just_seen(const epee::net_utils::network_address& addr, uint32_t pruning_seed);
     bool is_host_allowed(const epee::net_utils::network_address &address);
     bool get_random_gray_peer(peerlist_entry& pe);
     bool remove_from_peer_gray(const peerlist_entry& pe);
@@ -152,30 +161,7 @@ namespace nodetool
     
   private:
     struct by_time{};
-    struct by_id{};
     struct by_addr{};
-
-    struct modify_all_but_id
-    {
-      modify_all_but_id(const peerlist_entry& ple):m_ple(ple){}
-      void operator()(peerlist_entry& e)
-      {
-        e.id = m_ple.id;
-      }
-    private:
-      const peerlist_entry& m_ple;
-    };
-
-    struct modify_all
-    {
-      modify_all(const peerlist_entry& ple):m_ple(ple){}
-      void operator()(peerlist_entry& e)
-      {
-        e = m_ple;
-      }
-    private:
-      const peerlist_entry& m_ple;
-    };
 
     struct modify_last_seen
     {
@@ -345,14 +331,13 @@ namespace nodetool
   }
   //--------------------------------------------------------------------------------------------------
   inline
-  bool peerlist_manager::set_peer_just_seen(peerid_type peer, const epee::net_utils::network_address& addr, uint32_t pruning_seed)
+  bool peerlist_manager::set_peer_just_seen(const epee::net_utils::network_address& addr, uint32_t pruning_seed)
   {
     TRY_ENTRY();
     CRITICAL_REGION_LOCAL(m_peerlist_lock);
     //find in white list
     peerlist_entry ple;
     ple.adr = addr;
-    ple.id = peer;
     ple.last_seen = time(NULL);
     ple.pruning_seed = pruning_seed;
     return append_with_peer_white(ple, true);
@@ -412,7 +397,14 @@ namespace nodetool
     auto by_addr_it_gr = m_peers_gray.get<by_addr>().find(ple.adr);
     if(by_addr_it_gr == m_peers_gray.get<by_addr>().end())
     {
-      //put new record into white list
+      // A host holds at most ONE gray entry -- the same bound
+      // `append_with_peer_white` has always enforced, inherited rather than
+      // minted (SHEKYL_P2P_PROTOCOL.md, PWD-I6). Gray is keyed by full
+      // address INCLUDING PORT, so without this one IP reconnecting on
+      // varying ports fills all 5,000 entries; and under the outbound
+      // same-host cap only one entry per host can ever be dialled, so the
+      // extra entries are amplifier surface with no discovery value.
+      evict_host_from_peerlist(false, ple);
       m_peers_gray.insert(ple);
       trim_gray_peerlist();    
     }else
@@ -442,6 +434,13 @@ namespace nodetool
       return true;
     if(m_peers_gray.get<by_addr>().find(ple.adr) != m_peers_gray.get<by_addr>().end())
       return true;
+
+    // The per-host occupancy bound applies to THIS writer too -- it is an
+    // invariant of the list, not of one insertion path, and an operator
+    // re-pointing a host at a new port should replace that host's entry
+    // rather than add a second one that the outbound same-host cap could
+    // never dial. Evicting first also makes room, so it precedes the trim.
+    evict_host_from_peerlist(false, ple);
 
     // MAKE ROOM FIRST, so the entry being added cannot be the one evicted.
     //
