@@ -59,7 +59,7 @@ per-connection loop:
 - **Job 2 — cross-port duplicate avoidance** (`:1221`), disjunct 1: `is_public && cntxt.peer_id == peer.id && peer.adr.is_same_host(cntxt.m_remote_address)`. Disjunct 2 (`!cntxt.m_is_income && peer.adr == cntxt.m_remote_address`) is address-exact and outbound-only, so it cannot see the case disjunct 1 exists for.
 
 **The case job 2 covers is every inbound peer.** On a successful inbound
-handshake (`:2758-2783`) the live context holds *(their IP, ephemeral source
+handshake (`:2759-2785`) the live context holds *(their IP, ephemeral source
 port)* while the peerlist entry written after pingback holds *(their IP,
 `my_port`)* — same host, same instant, two ports, tied together only by
 `peer_id`.
@@ -168,11 +168,24 @@ limitation is not a regression — `peer_id` was a shared constant there
 |---|---|---|
 | (a) Yes — no `id` field survives, so nothing gossiped decides a dial | assumes `PeerlistEntry.id` goes too, not only `basic_node_data.peer_id` | a surviving `id` on any gossiped structure |
 | (b) No — the same shape recurs if the new address field is gossiped and then used to *skip* a dial | — | — |
+| (c) **Neither — `id` becomes a dead wire field that every consumer still reads** | this is the likeliest outcome of the field set as currently scoped | — | a lane that strips `id` from the gossiped peerlist too |
 
-**Proposed: the round must answer this against `-43`'s actual field set, not
-in the abstract.** The discriminator is narrow: does any *gossiped* value reach
-a decision to **not** dial an address? §4's delta came from a skip, not from a
-connect.
+**(c) is the state to design against, and it is not hypothetical.** `id` is a
+field of `peerlist_entry_base` (`src/p2p/p2p_protocol_defs.h:62`), which is a
+*separate* structure from `basic_node_data` (`:141-153`) — and
+`p2p/basic-node-data-address`'s lane names `basic_node_data` only. In that
+field set `peer_id` leaves the handshake while a gossiped `id` stays on every
+peerlist entry, and `set_peer_just_seen(pe.id, …)` at `net_node.inl:3167` goes
+on storing it. §4 would then be **undischarged and harder to see**, because the
+field that carries it no longer has a producer anyone can point at.
+
+**So E5 resolves to a requirement, not a question:** either the removal strips
+`id` from the gossiped peerlist wire as well, or it deletes every `id` read
+before landing. There is no third schedule — a field with no meaning and live
+consumers is exactly the deferral rule 22 forbids.
+
+The discriminator stays narrow: does any *gossiped* value reach a decision to
+**not** dial an address? §4's delta came from a skip, not from a connect.
 
 ### PWD-E6 — `--p2p-external-port` (RULED, recorded)
 
