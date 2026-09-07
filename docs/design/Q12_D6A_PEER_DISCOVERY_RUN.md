@@ -67,10 +67,26 @@ Four facts, all in [`src/p2p/net_node.inl`](../../src/p2p/net_node.inl):
    (`:753-786`) — consulted by the connection maintainer when a zone has no
    peers (`:1713-1726`).
 4. **`--add-peer` routes by parsed zone**: `m_command_line_peers` is dispatched
-   through `m_network_zones.at(p.adr.get_zone())` (`:845-846`), so
-   `--add-peer <addr>.onion:12021` lands in the **tor zone's white peerlist**.
+   through `m_network_zones.at(p.adr.get_zone())`, so
+   `--add-peer <addr>.onion:12021` lands in the **tor zone's peerlist**.
    `--seed-node`, by contrast, feeds `public_zone.m_seed_nodes` only
    (`:527-533`).
+
+   > **CORRECTED 2026-09-06 — it lands in GRAY, not white.** The original text
+   > said "the tor zone's white peerlist", which was true when written. Under
+   > the trust-is-earned ruling an address this node has not dialled is a
+   > candidate, so `--add-peer` enters gray and is promoted on a successful
+   > dial. **The unlock still holds** and the run needs no change: gray is
+   > dialled by the same refill cycle, and a node holding only `--add-peer`
+   > entries does not detour to a seed because the seed test counts both lists.
+   > What changes for an operator running this rig is that a **wrong or
+   > unreachable `--add-peer` address is no longer gossiped onward** — gray is
+   > never disclosed — so a typo stops propagating immediately. **Removal is
+   > eventual, not immediate:** a failed refill dial only records the address
+   > in the recently-failed cache, and eviction waits for the housekeeping
+   > probe to draw that entry (one random gray peer per zone per cycle) and
+   > fail, so a typo can survive many retries and restarts. Budget the rig for
+   > that rather than for first-failure cleanup.
 
 Fact 4 is the fleet unlock: **anon bootstrap needs no code change.**
 
