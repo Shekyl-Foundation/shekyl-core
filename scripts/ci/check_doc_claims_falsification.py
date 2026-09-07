@@ -98,12 +98,38 @@ DEPTH_SAFE = {"submodule", "rev-parse", "ls-tree", "show", "config", "status"}
 # change it exists to prevent.
 ANCESTRY = ("~", "^", "..", "@{")
 
+# `^{commit}` and `^{tree}` PEEL an object to a type. They are not history: the
+# object is the one already named, and a shallow clone answers them fine. The
+# gate's own `rev-parse --verify {ref}^{{commit}}` is exactly this, so a bare
+# "does it contain ^" test would have reported the gate unsafe the moment the
+# scan could see it — a guard whose first act on gaining sight is a false red.
+PEEL = re.compile(r"\^\{[^}]*\}")
+
+
+def _literal(node) -> str | None:
+    """The static text of a string or f-string; substitutions become \x00.
+
+    Every revision the gate passes is an f-string — `f"{ref}^{{commit}}"`,
+    `f"{ref}:{rel(BASELINE)}"` — so a scan that reads only ast.Constant is
+    blind to precisely the arguments it exists to inspect. The substituted
+    parts are unknowable here and are replaced by a byte that matches no
+    ancestry operator, which is the honest reading: this check constrains the
+    syntax the author wrote, not the value a variable may hold.
+    """
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value if isinstance(v, ast.Constant)
+                       and isinstance(v.value, str) else "{…}"
+                       for v in node.values)
+    return None
+
 
 def _walks_ancestry(strings: list[str]) -> str | None:
     for s in strings:
         if s.startswith("-"):
             continue
-        if any(op in s for op in ANCESTRY):
+        if any(op in PEEL.sub("", s) for op in ANCESTRY):
             return s
     return None
 
@@ -137,13 +163,15 @@ def unsafe_git_calls() -> list[str]:
         f, a0 = node.func, node.args[0]
         # the local `git(...)` helper: its first argument IS the subcommand
         if isinstance(f, ast.Name) and f.id == "git":
-            args = [a.value for a in node.args
-                    if isinstance(a, ast.Constant) and isinstance(a.value, str)]
-            if args:
-                found.append(args[0])
-                rev = _walks_ancestry(args[1:])
+            # the subcommand is always a plain literal; the REVISIONS are not
+            consts = [a.value for a in node.args
+                      if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+            texts = [s for s in (_literal(a) for a in node.args) if s is not None]
+            if consts:
+                found.append(consts[0])
+                rev = _walks_ancestry([s for s in texts if s != consts[0]])
                 if rev:
-                    found.append(f"{args[0]} {rev}")
+                    found.append(f"{consts[0]} {rev}")
             continue
         # any call taking a literal argv sequence that starts with "git"
         if isinstance(a0, (ast.List, ast.Tuple)) and a0.elts:
@@ -152,13 +180,55 @@ def unsafe_git_calls() -> list[str]:
                 continue
             strings = [e.value for e in a0.elts[1:]
                        if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+            texts = [s for s in (_literal(e) for e in a0.elts[1:]) if s is not None]
             sub = _subcommand(strings)
             if sub:
                 found.append(sub)
-                rev = _walks_ancestry([s for s in strings if s != sub])
+                rev = _walks_ancestry([s for s in texts if s != sub])
                 if rev:
                     found.append(f"{sub} {rev}")
     return sorted({s for s in found if s not in DEPTH_SAFE})
+
+# Probes for the depth guard itself. It had no falsification case at all — it
+# was only ever exercised by hand — and each hand probe found something the
+# previous one had missed: the unflagged argv form, then single quotes, then
+# f-strings. The gate's own revisions are ALL f-strings, so the guard was blind
+# to precisely the arguments it exists to inspect while reporting them safe.
+#
+# The peel case is not optional. `^{commit}` is a type dereference rather than
+# a walk, and the gate's own `rev-parse --verify` uses it — so a guard that
+# gained sight without gaining that distinction would have gone red on clean
+# code, which is the failure that gets a check deleted rather than fixed.
+DEPTH_PROBES = [
+    ("f-string ancestor",  'git("show", f"{ref}~1:docs/x")',                True),
+    ("f-string parent",    'git("show", f"{ref}^:docs/x")',                 True),
+    ("f-string range",     'git("diff", f"{a}..{b}")',                      True),
+    ("single-quoted argv", "subprocess.run(['git', 'blame', 'f'])",         True),
+    ("multiline argv",     'subprocess.run([\n    "git",\n    "log",\n])', True),
+    ("type peel",          'git("rev-parse", "--verify", f"{ref}^{{commit}}")', False),
+    ("plain f-string rev", 'git("show", f"{ref}:docs/x")',                  False),
+]
+
+
+def probe_depth_guard() -> list[str]:
+    """Every probe must land on its stated side. Returns the failures."""
+    global GATE
+    src = GATE.read_text(encoding="utf-8")
+    real, bad = GATE, []
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="depth-probe-")) / GATE.name
+    atexit.register(shutil.rmtree, tmp.parent, True)
+    for name, snippet, expect_unsafe in DEPTH_PROBES:
+        tmp.write_text(src + "\n\ndef _probe(ref='r', a='a', b='b'):\n    "
+                       + snippet.replace("\n", "\n    ") + "\n", encoding="utf-8")
+        GATE = tmp
+        got = bool(unsafe_git_calls())
+        if got != expect_unsafe:
+            bad.append(f"{name}: expected "
+                       f"{'unsafe' if expect_unsafe else 'safe'}, got "
+                       f"{'unsafe' if got else 'safe'}")
+    GATE = real
+    return bad
+
 
 # What counts as an outcome: a reported discrepancy, a stated non-coverage, or
 # a refusal to run. If the gate grows one of these and no case reaches it, this
@@ -916,6 +986,10 @@ def main() -> None:
                  "failure this floor exists to catch — a count cannot tell you "
                  "WHAT it counted.")
     unsafe = unsafe_git_calls()
+    probe_fails = probe_depth_guard()
+    print(f"depth guard probes: {len(DEPTH_PROBES) - len(probe_fails)}/"
+          f"{len(DEPTH_PROBES)} landed on the expected side"
+          + ("" if not probe_fails else f" — {probe_fails}"))
     print(f"depth safety: git subcommands used are "
           + (", ".join(sorted(DEPTH_SAFE)) if not unsafe
              else f"UNSAFE — {unsafe}"))
@@ -924,7 +998,7 @@ def main() -> None:
     for n, s in gaps:
         print(f"  NEVER REACHED  {GATE.name}:{n}: {s}")
 
-    if bad or not clean_ok or gaps or unsafe:
+    if bad or not clean_ok or gaps or unsafe or probe_fails:
         sys.exit(
             (f"FAIL: {len(bad)} path(s) did not fire on their own axis: {bad}\n"
              if bad else "FAIL:\n")
@@ -932,6 +1006,8 @@ def main() -> None:
             + (f"  {len(gaps)} outcome site(s) are never reached by any case — "
                "add a case or delete the branch; an outcome with no case is a "
                "claim nobody has shown can happen\n" if gaps else "")
+            + (f"  the depth guard mis-classified: {probe_fails}\n"
+               if probe_fails else "")
             + (f"  the gate now uses history-walking git subcommand(s) {unsafe}. "
                "CI fetches the base with --depth=1, so a shallow clone is the "
                "NORMAL state here: a history walk would return a clean-looking "
