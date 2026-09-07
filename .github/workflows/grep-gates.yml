@@ -139,6 +139,8 @@ jobs:
             scripts/ci/check_carrier_flag_hidden.sh
           run_one "§94: transit provenance marker outlives its constant" \
             scripts/ci/check_transit_marker.sh
+          run_one "No unbounded blob dump in a log line" \
+            python3 scripts/ci/check_log_blob_dumps.py
 
           grep_absent "C++ residue: no shekyl_y" \
             grep -rn 'shekyl_y' src/crypto/ --include='*.cpp' --include='*.h'

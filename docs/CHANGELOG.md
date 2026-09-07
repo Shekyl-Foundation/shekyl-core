@@ -4,6 +4,41 @@
 
 ### Changed
 
+- **Peerlist trust is earned in-process: nothing restored from disk is
+  trusted, and `--add-peer` is a candidate rather than a trusted peer.**
+  White-list membership now means exactly *"this process dialled it and it
+  answered"*. On startup every persisted address is loaded as a **gray**
+  candidate and earns white by a successful outbound dial; `--add-peer`
+  entries enter gray for the same reason, having never been dialled.
+
+  **Why it is security-relevant.** A persisted white list made white mean *a
+  file asserts that some earlier process verified something*. White entries
+  are dialled in preference to gray **and are the only ones gossiped onward**,
+  so a supplied or stale datadir — a pre-synced download, a restored backup, a
+  container volume, a shared mount — made a node both a preferential dialler
+  of, and an amplifier for, whatever the file contained. Encrypting the store
+  would not have fixed this: encryption is a privacy mechanism for the peer
+  graph, and verification is what supplies trust.
+
+  **Operator-visible effects.** A wrong or unreachable `--add-peer` address is
+  **no longer gossiped to other nodes** — gray entries are never disclosed, so
+  a typo stops propagating immediately instead of being handed to every peer
+  that syncs with you. Its **removal is eventual, not immediate**: a failed
+  refill dial only records the address in the recently-failed cache, and
+  eviction waits for the periodic housekeeping probe to draw that entry (one
+  random gray peer per zone per cycle) and fail. A bad address can therefore
+  survive many failed dials and restarts; what changes is that it no longer
+  spreads, and no longer occupies a preferentially-dialled slot. Seed contact is
+  keyed on holding **no candidate at all** rather than no trusted one, so a
+  restarting node dials its stored pool instead of visiting a seed first. The
+  first start after upgrading is a cold-ish start: the persisted store's
+  version is bumped, so the previous file is dropped whole.
+
+  **One capacity change, stated because it is not obvious.** White and gray
+  had separate caps (1000 + 5000). One trust class means one cap, so a node
+  saturating both now persists up to `P2P_LOCAL_GRAY_PEERLIST_LIMIT` rather
+  than the sum; the entries dropped are the least recently seen.
+
 - **Block reward: one Rust owner, and the composition the FL round signed
   (FL-R12′).** The paid reward is now
   `max(M_r · curve(remaining), TAIL) · penalty(x)`, computed by
@@ -58,6 +93,25 @@
   gains a `c_q` parameter.
 
 ### Removed
+
+- **The anchor peerlist mechanism is deleted whole** — the persisted anchor
+  section, `anchor_peerlist_entry`, its container and manager methods, the
+  anchor dial arm, and `P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT`.
+
+  Anchors existed only to carry peers across a restart, and peerlist trust no
+  longer crosses that boundary. Within a session the mechanism could not
+  produce a connection at all: an entry was in the anchor set only while an
+  outbound connection to it was open, and the dial path skipped every entry it
+  already had a connection to. It also under-delivered against its own
+  constant — the whole persisted set was drained and destroyed to buy at most
+  one connection.
+
+  **Consequence for operators:** the anchor exemption in the
+  sync-slot drop logic went with the mechanism. `should_drop_connection` still
+  refuses to drop a peer that is not striped, one carrying the stripe we need
+  next, one usable for pruned-block sync, or one holding the next unpruned
+  block — what was removed is the *unconditional* exemption an anchor
+  connection had, not connection protection in general.
 
 - **`--hide-my-port` is gone, as an option and as a capability; whether this
   node advertises a port is now derived.** The flag expressed something the
@@ -196,6 +250,64 @@
   the FCMP++ spend builder.
 
 ### Added
+
+- **DRS-P0b — the atomicity audit covers the store that exists.** The
+  April 2026 `LMDB_WRITE_ATOMICITY_AUDIT.md` was a PASS doing work it was
+  never entitled to do: 22 of the 49 declared tables post-dated it (49 declared, 48 at runtime — DRS-W5), while its
+  covered subjects included the dead claim-era staking paths and two dead
+  tables. Rewritten in place at `dev 2dba46537` over every write path —
+  connect, pop, txpool (re-censused: 14 `LockedTXN` constructions / 13
+  commits, the read-snapshot `get_transaction_info` recorded as the
+  deliberate baseline; the April D++ fix verified alive and intact), alt
+  blocks, **three** prune shapes — one atomic and two deliberately
+  checkpointed (archival retention rides the block's transaction with its
+  receipt written before the destruction it authorises; `prune_tx_data`
+  commits per ≤256-height batch **with its resumption anchor in the same
+  transaction**; `prune_worker` commits and reopens every 4096 deletions) —
+  and the store lifecycle — `open()` (one transaction, three exits, one of
+  which commits before it refuses: DRS-W10), `reset()` (enumeration wipe —
+  its stale FOLLOWUPS row closed) and `migrate()` (zero writes by design). The §10 coverage matrix is
+  gate-pinned to `SHEKYL_LMDB_TABLES` (DRS §9.1 leg 3 now live; eight new
+  failure paths observed red). The in-code-only conventions are
+  transcribed for the Rust store: A-2 height bases with the F-B5b
+  convert-don't-unify rationale verbatim, A-4's load-bearing revert
+  partial order, A-6's guard census (22× `std::runtime_error` vs 2×
+  `DB_ERROR_TXN_START` for one precondition). Findings DRS-W1…DRS-W11 recorded —
+  none S-graded, no C++ touched — including `txs` (zero write or read
+  sites; inherited-dead candidate) and `hf_starting_heights` (deleted at
+  every writable `open()`, structurally absent at runtime), and the post-pop
+  burn pair living outside the pop funnel — which `blockchain_import
+  --pop-blocks` reaches today by popping straight through the DB — and
+  **DRS-W9**, the connect side of the same architectural fact: the burn
+  pair also runs after the try whose catches set `m_batch_success`, so an
+  LMDB write failure between the row and its aggregate commits the block
+  and the row without the total. That one falsified a PASS this audit had
+  published, and it is the production entry that regrades DRS-W7 from
+  unreachable to live. The dead
+  `staker_pool_balance` properties row left the schema doc, and the
+  workflow carrying the schema gates is renamed `docs-gates.yml` for what
+  it does (Rick's #624 boundary: P0b's item, no other lane's).
+
+- **Shard-visual: ruling B's assigned residue CLOSED (2026-09-06), and
+  the single-algorithm fallback RETIRED.** Three items the spec handed
+  to ruling B by name and B never closed, ruled together: `time_density`
+  is **kept** (admitted, deliberately dormant — the paragraph is what
+  makes it deliberate rather than an oversight); the post-rewire
+  aesthetics are **accepted as they stand**; and the single-algorithm
+  palette is **retired** with a rule-21 reopening criterion, because
+  both of its trigger conditions resolved (continuity was ruled the
+  wrong property, and the floor budget was ruled in candidate.v1's
+  favour). Also closes the *Final algorithm palette* open question and
+  points the stale *Algorithm versioning* entry at the ruling that
+  already settled its privacy half.
+
+  One reported aesthetics finding was **withdrawn under measurement**:
+  the claim that distinguishability collapses at the 128px product size
+  does not survive — pairwise full-image RGB-RMS is min 42.0 / median
+  53.5 at 128px against min 42.9 / median 57.8 at 512px, so
+  distinguishability is size-independent. It was an impression of a
+  thumbnail strip, not a property of the renders, and the withdrawal is
+  recorded rather than the finding.
 
 - **Shard-visual performance targets AMENDED (2026-09-06), and the
   amendment changes what they assert.** **RATIFIED.** *Authority: the

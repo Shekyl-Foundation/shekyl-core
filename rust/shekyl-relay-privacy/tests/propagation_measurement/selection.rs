@@ -94,8 +94,10 @@ fn two_slot_occupancy_is_the_reshape_residual() {
         "\n  W3 (both outbound stem slots adversarial) is the ONLY delta reshape\n  \
          cannot route around, so it is the number a rho decision is taken against.\n  \
          It is a function of g = the adversary's OUTBOUND-selection share -- and g\n  \
-         is NOT f. The outbound pool is 70% white-list + 2 anchors\n  \
-         (cryptonote_config.h:144); the white list is gossip-fed, so an eclipse-\n  \
+         is NOT f. The outbound pool is 70% white-list, then gray for the\n  \
+         remainder (P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT); the 2 anchor\n  \
+         slots this line once named were deleted with the anchor mechanism\n  \
+         (2026-09-06). The white list is gossip-fed, so an eclipse-\n  \
          capable adversary poisons it and drives g ABOVE f cheaply. So W3 ~= 0\n  \
          holds only under HONEST selection (g ~= f); the g=0.30->0.077 and\n  \
          g=0.50->0.192 rows are what an eclipse attacker buys. This instrument\n  \

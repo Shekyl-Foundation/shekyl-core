@@ -1041,7 +1041,12 @@ heuristics quietly punish legitimate home users behind shared NAT/CGNAT). So the
 defence scopes to *how* peers have behaved (a **behavioural floor**: eviction on
 dropping/misbehaviour) and *whether* they have been stably known (**guard-pinning**:
 tenure for stably-known peers, of which the existing anchor connections
-[`ANCHOR_CONNECTIONS_COUNT = 2`](../../src/cryptonote_config.h#L145) are the seed).
+(`ANCHOR_CONNECTIONS_COUNT = 2`) are the seed).
+
+> **STALE 2026-09-06 — there is no seed.** The anchor mechanism was deleted
+> whole, so guard-pinning has no existing tenure class to build on: it would
+> have to establish one. The behavioural-floor half of this defence is
+> unaffected; only the guard-pinning half loses its starting point.
 Ruling out the address family is itself useful output: nobody burns a Q-10 round
 building subnet-tracking that would punish home users. *(Behavioural floor and
 guard-pinning are the Q-10 design **direction**, not existing mechanisms; anchors
@@ -1297,7 +1302,20 @@ instruments for both are built or scoped. What remains is the *arguments*:
   refills** — each induced disconnect is another `~g` chance at the slot, strictly
   more capability than one-shot poisoning. The likely defense lives in the same
   subsystem and is worth naming as the candidate mechanism: **anchor slots**
-  ([`P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`](../../src/cryptonote_config.h#L145)),
+  (`P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`),
+
+  > **STALE 2026-09-06 — the candidate mechanism no longer exists.** The anchor
+  > mechanism was deleted whole (`SHEKYL_P2P_PROTOCOL.md`, amendment
+  > "trust is earned in-process"): it was only a restart-boundary device, and
+  > peerlist trust no longer crosses that boundary. **There are no
+  > anchor-backed slots**, so a bound of the form "≥ `k` of the `STEMS` slots
+  > are anchor-backed and thus not re-rollable" has no `k` — not `k ≤ 1` as the
+  > earlier correction below says, but no such slot class at all. The `ρ`
+  > derivation must find a different non-re-rollable property or record that
+  > none exists. Every code citation in this subsection and the anchor
+  > arithmetic in the `g` derivation below are retained as records-was; their
+  > line anchors no longer resolve to the described code.
+
   which are *not* fresh gossip-fed draws, so they resist the re-roll — a bound of
   the form "≥ `k` of the `STEMS` slots are anchor-backed and thus not re-rollable"
   is the shape of answer that would unblock `ρ`. (This "repeated-refills" bound is
@@ -1426,11 +1444,12 @@ instruments for both are built or scoped. What remains is the *arguments*:
      > corrected now**, because Q-10's *"≥ k slots are anchor-backed and thus not
      > re-rollable"* framing reads `k = 2` and the tree gives `k = 1` at best.
 
-     Anchors (`ANCHOR_CONNECTIONS_COUNT = 2`,
-     [`get_and_empty_anchor_peerlist`](../../src/p2p/net_peerlist.h#L497), restart-
-     persistent, `first_seen`-indexed, filled at
-     [net_node.inl:1820](../../src/p2p/net_node.inl#L1820)) are **already a partial
-     pin** — the eclipse-resistance mechanism is a pinning mechanism under another
+     Anchors (`ANCHOR_CONNECTIONS_COUNT = 2`, `get_and_empty_anchor_peerlist`,
+     restart-persistent, `first_seen`-indexed) **were** a partial
+     pin — **records-was: deleted 2026-09-06, so no partial pin exists and the
+     citations below no longer resolve to live code**; the paragraph is kept
+     because the reasoning about what a pin must provide is what the
+     replacement has to satisfy. They were — the eclipse-resistance mechanism is a pinning mechanism under another
      name, so this is *not* greenfield. Is stem-eligibility pinning an extension of
      anchors or a separate layer? And is **`anchors = 2` colliding with `STEMS = 2` a
      hazard** — an adversary that becomes an anchor getting a persistent
@@ -2097,8 +2116,13 @@ phantom one level up.** The table is a function of `g`, the adversary's share of
 the origin's *outbound* pool, and **`g` is not bounded by `f`**, the network-wide
 adversary fraction. The outbound pool of 12 is filled **70 % from the white list
 plus 2 anchors** (`P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT = 70`,
-`P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`,
-[cryptonote_config.h:144](../../src/cryptonote_config.h#L144)), and the white list
+`P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`) — **records-was: the anchor
+constant and mechanism were deleted 2026-09-06, so the 2-anchor share is gone.
+Selection is otherwise unchanged and the `g` derivation must be grounded on
+what remains: `connections_maker` is still white-first up to the 70 % target,
+then gray for the remainder. The two-class ordering did NOT collapse into a
+single pool — only the anchor-reserved share disappeared. See the STALE note
+above** — and the white list
 is populated by gossiped / handshaked addresses — the adversarially-shapeable
 surface the anchor and white/gray machinery *exist to resist*. So `g` is an
 *outcome* of peerlist composition, and an eclipse-capable adversary who poisons
@@ -2390,6 +2414,11 @@ successful outbound handshake, unconditionally; on reconnect the anchor slots ar
 attempted *first* ([net_node.inl:1820](../../src/p2p/net_node.inl#L1820)) — **at
 most one of the configured 2 is actually filled, per the correction in §12.11's
 item 2** — then white
+
+> **RECORDS-WAS 2026-09-06: none of this is live.** The anchor mechanism was
+> deleted whole; there is no anchor admission and no anchor-first refill.
+> Retained as the record G-4 was verified against. Current behaviour:
+> white-first to the 70 % target, then gray.
 (~70 %), then grey. So anchors are a **weak persistent pin populated by any
 accepted peer**, not a behavioural-floor pin.
 
@@ -4187,8 +4216,8 @@ where does the fact live now."**
 | G-2b | Trigger: stem-send-failure retry | `dandelionpp_notify:575` | **holds, restructured** | `dandelionpp_notify` `:745-751` — plus a *new* earlier trigger, below |
 | G-2b | Trigger: `new_out_connection` | `net_node.inl:1349` | **holds, but noise-only** | `notify::new_out_connection` early-returns on `noise.empty()`, so on the **clearnet path where stem selection actually happens (G-1) this trigger never fires**. It was already noise-only pre-RP-3a; the design's trigger list reads as though both fire on the path W3c is about. |
 | G-3 | Stem pool is all synced outbound, anchors included | `get_out_connections:142-159` | **holds** | `:186-192` |
-| G-4 | Anchor admission is any successful outbound handshake, no behavioural criterion | `net_node.inl:1347` | **holds, line exact** | unchanged — RP-3a did not touch `net_node.inl` |
-| G-4 | On reconnect the 2 anchor slots fill first | `net_node.inl:1820` | **holds, line exact** | unchanged |
+| G-4 | ~~Anchor admission is any successful outbound handshake~~ | ~~`net_node.inl:1347`~~ | **NO LONGER HOLDS — mechanism deleted 2026-09-06** | The anchor list, its admission and its dial arm were removed whole; there is no anchor admission to verify. See the STALE note in §12.11 |
+| G-4 | ~~On reconnect the 2 anchor slots fill first~~ | ~~`net_node.inl:1820`~~ | **NO LONGER HOLDS — mechanism deleted 2026-09-06** | No anchor slots exist. Refill is white-first to the 70 % target, then gray |
 | §12.6 | Fluff is transport-gated: on Tor it fluffs outbound-only | `fluff_notify` `:448` | **holds — moved languages** | `FluffReach::OutboundOnly` (`zone/mod.rs`). RP-3a dropped this rule and the eight `private_*` gtests caught it; restored with `a_private_zone_fluffs_only_to_outbound_peers` |
 | — | `send_noise` pads every channel to a constant rate on its own timer | `:663` | **holds** | `:780`, `:811` |
 

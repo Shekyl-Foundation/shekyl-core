@@ -107,16 +107,19 @@ Default. Lands before genesis if it should exist at launch.
 - **Daemon chain store (`DRS-*`) — gap-close pass landed in design.** SoT: [`docs/design/DAEMON_REDB_STORE.md`](./design/DAEMON_REDB_STORE.md)
   - Target: pre-genesis
 
-- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI — **DELIVERED 2026-09-05** (49-row reconciliation registry + heading/registry gate legs; see the P0a registry in [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)); **P0b**
+- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI — **DELIVERED 2026-09-05** (49-row reconciliation registry + heading/registry gate legs; see the P0a registry in [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)); **P0b** atomicity+journals+transcriptions — **DELIVERED 2026-09-05** ([`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) rewritten in place, §10 matrix gate-pinned, A-2/A-4/A-6 transcribed, DRS-W1…DRS-W11 recorded); **P0c/P0d**
+  - Target: pre-genesis
+
+- **`txs` is a zero-write, zero-read LMDB table (P0b DRS-W4).** Handle's only occurrence is its `open()`; inherited-dead deletion candidate — C++ + schema-version change, census/DRS lane owns ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
+  - Target: pre-genesis
+
+- **`hf_starting_heights` deleted at every writable `open()` (P0b DRS-W5).** `mdb_drop(…,1)` at `db_lmdb.cpp:1778`, never re-created — macro table structurally absent at runtime; feeds census R4 ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
   - Target: pre-genesis
 
 - **DRS-BENCH — resource/privacy/IBD/pop suite (not throughput).** File
   - Target: pre-genesis
 
 - **DRS-D3c — cross-store leaf/position KAT.** Daemon vs wallet LeafStore:
-  - Target: pre-genesis
-
-- **`BlockchainLMDB::reset()` drops an INCOMPLETE table set — stale Shekyl
   - Target: pre-genesis
 
 - **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with
@@ -689,9 +692,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Levin p2p migration — LV-2 payload codec and LV-3 connection-path [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)
   - Target: pre-genesis
 
-- **p2p lane: fix the anchor dial path so it fills `ANCHOR_CONNECTIONS_COUNT` slots instead of destroying the persisted anchor set on first use** — it currently yields at most one anchor-backed connection (zero if every anchor fails), which caps Q-10's `k` at 1. Full trace and the `g_max` consequence in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4
-  - Target: pre-genesis
-
 - **Relay lane: add a derivation check asserting `fluff_return_ms` equals the max over measured zones**, so adding a zone slower than Tor fails loudly instead of silently under-provisioning `F′`; `tests/carrier_window.rs` is the shape — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) §91.2
   - Target: pre-genesis
 
@@ -701,7 +701,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Execute PWD-T6's PWC-F3 deletion: remove `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size`, and `network_config`'s KV serializer.** Ruled, not deferred — the never-sent map would otherwise advertise a 50 MB packet limit against the 100 MB the transport enforces, and PWD-T6 names the authoritative limits so there is one source. The struct keeps its live fields; `handshake_interval`, `config_id` and `send_peerlist_sz` are also write-only but belong to PWD-B1/B2 and PWD-I2. PWC-F3 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-T6
   - Target: pre-genesis
 
-- **Implement PWD-I2's peerlist-acceptance rules: outbound-only acceptance and the `P2P_MAX_PEERS_IN_HANDSHAKE` per-connection ceiling.** The white-list writer invariant lands with the back-ping deletion and store bump in the row below, which is one composable change. PWC-D1/D3 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I2
+- **Implement PWD-I2's peerlist-acceptance rules: outbound-only acceptance and the `P2P_MAX_PEERS_IN_HANDSHAKE` per-connection ceiling.** The white-list writer invariant lands with the back-ping deletion in the row below, which is one composable change. **The store bump that row also once carried has already landed** (7 → 8, `fix/peerlist-trust-is-earned`), so it is a completed prerequisite here, not pending work. PWC-D1/D3 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I2
   - Target: pre-genesis
 
 - **Examine the inherited double-spend no-drop guard (`f7fd209ed`, upstream Monero) and decide it deliberately, so a rewrite re-deriving tx ingest does not drop it silently.** Separate validation surface from the peerlist work above, per [`19-validation-surface-discipline`](../.cursor/rules/19-validation-surface-discipline.mdc). PWC-E7, §5.2 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-B7
@@ -742,13 +742,13 @@ Default. Lands before genesis if it should exist at launch.
 - **Re-derive initial-sync verification cost at the Pi-4 floor now that C2-R1a has deleted `PER_BLOCK_CHECKPOINT`.** `DAEMON_RELAY_PRIVACY.md` §74.2 concluded *"the 11-day figure is the worst case"* because the checkpoint skip rescued historical blocks; `fast_check` and `m_blocks_hash_check` no longer occur in `blockchain.cpp`, so the un-checkpointed case is now the only case. Blocker: the replacement figure needs a measurement, not an argument. Rule 76 — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 
-- **Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.** Blocker: it must derive against the *fixed* anchor and white/gray behaviour, so it follows the p2p tree changes rather than preceding them; reopening criterion and the §12.10/§7 reconciliation it must carry are in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4, PWD-I5
+- **Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.** **Its inputs changed 2026-09-06: the anchor mechanism is deleted, so the `k ≤ 1` anchor-backed-connection cap this sub-round was to derive against no longer exists — there are no anchor-backed connections at all.** Selection is otherwise unchanged and the distinction still matters for this derivation: `connections_maker` remains **white-first up to the `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target, then gray for the remainder**. Only the anchor-reserved share disappeared — the two-class white/gray ordering did not collapse into a single pool. Blocker: it must derive against the *settled* white/gray behaviour, so it follows the p2p tree changes rather than preceding them — the "fixed anchor behaviour" this once waited on no longer exists to be fixed; reopening criterion and the §12.10/§7 reconciliation it must carry are in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4, PWD-I5
   - Target: pre-genesis
 
 - **Decide `sanitize_peerlist`'s port-0 handling, where the IPv4-only rule collides with `tor_address::unknown()` being port 0.** Blocker: the tor port-0 semantics are disputed (named by #587, not invented here). PWC-D9 — [`P2P_2_DISPATCH_BRIEF.md`](design/P2P_2_DISPATCH_BRIEF.md) PWD-B11
   - Target: pre-genesis
 
-- **p2p lane, one composable change: delete the back-ping and `COMMAND_PING`, insert the inbound peer directly into **gray** after handshake, bound gray occupancy per host, and bump the peerlist store version (which drops the persisted list).** The four are one outcome: `net_node.inl:2766` sits *inside* the `try_ping` callback the deletion removes, so a standalone reroute would be erased by it; without the per-host gray bound the deletion opens a new injection path, since `my_port` is peer-controlled and `append_with_peer_gray` has no same-host eviction; and without the bump, old inbound-earned white entries stay trusted. Public-zone only; behavioural, so PWD-I4 must derive against the fixed composition. PWC-D11 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I1/PWD-I2/PWD-B9/PWD-B10
+- **p2p lane, one composable change: delete the back-ping and `COMMAND_PING`, insert the inbound peer directly into `gray` after handshake, and bound gray occupancy per host.** **Prerequisite, already landed:** the peerlist store-version bump (7 → 8, with the anchor and white sections' deletion) drops a pre-current store wholesale, so old inbound-earned white entries can no longer survive an upgrade. **The three remaining changes are one outcome:** `net_node.inl:2766` sits *inside* the `try_ping` callback the deletion removes, so a standalone reroute would be erased by it; without the per-host gray bound the deletion opens a new injection path, since `my_port` is peer-controlled and `append_with_peer_gray` has no same-host eviction; — and the already-landed bump is what stops old inbound-earned white entries staying trusted. Public-zone only; behavioural, so PWD-I4 must derive against the fixed composition. PWC-D11 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I1/PWD-I2/PWD-B9/PWD-B10
   - Target: pre-genesis
 
 - **Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
@@ -1013,9 +1013,13 @@ Default. Lands before genesis if it should exist at launch.
   - **How:** cross-compile `--example budget_matrix` for `aarch64-unknown-linux-gnu` (skl-pi has no Rust
     toolchain), run the `floor` profile on skl-pi — ping the board first, no sudo — and commit the capture
     under `docs/benchmarks/`.
-  - **Verdict discipline:** over-budget cells are a REGRESSION to record against the 2026-09-06 baseline, never
-    a threshold to retune. CI's `shard-visual-x86-smoke` does NOT discharge this trigger: it cannot bound the
-    floor in either direction.
+  - **Verdict discipline:** over-budget cells are a REGRESSION to record against the 2026-09-06 baseline.
+    **Never a quiet retune** — moving a number so the matrix passes is the one response that is always wrong.
+    A threshold moves only by a *recorded amendment* citing the measurement and ratified by the decider (the
+    spec's amendment discipline; that path was exercised 2026-09-06), which is also the reopening path in the
+    fallback's reversion clause. Regression first: the default is that the change caused it and the change is
+    fixed or reverted. CI's `shard-visual-x86-smoke` does NOT discharge this trigger: it cannot bound the floor
+    in either direction.
 
 - **Transport selection for the staker-archival path (gate 6 /
   - Target: pre-genesis

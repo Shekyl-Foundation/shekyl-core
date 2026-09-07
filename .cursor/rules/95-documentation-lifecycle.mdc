@@ -82,7 +82,7 @@ doc. A plan that only rearranges documentation does not owe a
 CHANGELOG novel; a one-line Unreleased note is enough when the change
 is process-only.
 
-CI (`.github/workflows/doc-links.yml`) holds the banners, FOLLOWUPS
+CI (`.github/workflows/docs-gates.yml`) holds the banners, FOLLOWUPS
 `Target:` tokens, forbidden fossils in always-applied rules, index §2
 prefix uniqueness, and the claim-era basename refusal. A closed plan
 left in `docs/design/` with a DRAFT banner, or a new

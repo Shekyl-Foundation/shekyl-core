@@ -298,25 +298,84 @@ TEST(ban, limit)
   ASSERT_TRUE(is_blocked(server,MAKE_IPV4_ADDRESS(1,2,3,4)));
 }
 
+namespace
+{
+  // A private --data-dir for a test that runs node_server::init. The
+  // option's default is the operator's real data directory
+  // (tools::get_default_data_dir()), whose p2pstate.bin init_config would
+  // read and whose peerlist a test must neither depend on nor rewrite.
+  boost::filesystem::path create_node_dir()
+  {
+    boost::system::error_code ec;
+    auto path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("daemon-%%%%%%%%%%%%%%%%", ec);
+    if (ec)
+      return boost::filesystem::path{};
+    auto success = boost::filesystem::create_directory(path, ec);
+    if (!ec && success)
+      return path;
+    return boost::filesystem::path{};
+  }
+
+  // Options for a node_server whose init must not open a listener. --offline
+  // returns from init before the p2p bind (net_node.inl: "from here onwards,
+  // it's online stuff"), after the command line, the ban list and the
+  // peerlist have been processed — everything the ban tests exercise. Without
+  // it, init bound the network default P2P_DEFAULT_PORT, so the suite went
+  // red whenever a daemon was running on the same box, for a reason none of
+  // these tests tests. A test that fails for a non-subject reason trains its
+  // own dismissal: RK-5b hit that failure on every full run and two lanes
+  // triaged it as environmental on the same day.
+  //
+  // TEST(node_server, bind_same_p2p_port) deliberately does not use this: a
+  // listener is its subject.
+  boost::program_options::variables_map offline_node_vm(const boost::filesystem::path& node_dir, std::vector<std::string> extra_args)
+  {
+    std::vector<std::string> args{"--data-dir", node_dir.string(), "--offline"};
+    args.insert(args.end(), extra_args.begin(), extra_args.end());
+
+    boost::program_options::options_description options_description{};
+    cryptonote::core::init_options(options_description);
+    Server::init_options(options_description);
+
+    boost::program_options::variables_map vm;
+    boost::program_options::store(
+      boost::program_options::command_line_parser(args).options(options_description).run(), vm);
+    // Production startup notifies (src/daemon/main.cpp), and so does every
+    // other `init(vm)` site in this file. No option in `core::init_options` or
+    // `Server::init_options` currently carries a notifier or `required()`, so
+    // this is behaviour-neutral today — it is here so the harness keeps
+    // matching production when one does, rather than diverging silently.
+    boost::program_options::notify(vm);
+    return vm;
+  }
+}
+
 TEST(ban, subnet)
 {
-  GTEST_SKIP() << "Intermittent allocator failure in constrained environments; tracked for dedicated fix.";
+  // Formerly GTEST_SKIP'd as "intermittent allocator failure in constrained
+  // environments; tracked for dedicated fix" — nothing in the tree tracked
+  // it, and the stated cause was wrong on all three counts. The body called
+  // boost::program_options::parse_command_line(0, nullptr, opts); boost's
+  // parser builds std::vector<std::string>(argv+1, argv+argc), a reversed
+  // range when argc == 0, and libstdc++ throws std::length_error
+  // deterministically (older libstdc++ attempted the negative length and
+  // raised bad_alloc — the "allocator failure"). So the test threw before
+  // init ran. Had it parsed, it would have read the operator's real
+  // p2pstate.bin (no --data-dir), bound P2P_DEFAULT_PORT (no --offline), and
+  // never asserted init's result. All of that is gone; the assertion is
+  // present.
   time_t seconds;
   test_core pr_core;
   cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
   Server server(cprotocol);
-  {
-    boost::program_options::options_description opts{};
-    Server::init_options(opts);
-    cryptonote::core::init_options(opts);
 
-    char** args = nullptr;
-    boost::program_options::variables_map vm;
-    boost::program_options::store(
-      boost::program_options::parse_command_line(0, args, opts), vm
-    );
-    server.init(vm);
-  }
+  const auto node_dir = create_node_dir();
+  ASSERT_TRUE(!node_dir.empty());
+  auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
+      boost::filesystem::remove_all(node_dir);
+    });
+
+  ASSERT_TRUE(server.init(offline_node_vm(node_dir, {})));
   cprotocol.set_p2p_endpoint(&server);
 
   ASSERT_TRUE(server.block_subnet(MAKE_IPV4_SUBNET(1,2,3,4,24), 10));
@@ -366,39 +425,16 @@ TEST(ban, file_banlist)
   Server server(cprotocol);
   cprotocol.set_p2p_endpoint(&server);
 
-  auto create_node_dir = [](){
-    boost::system::error_code ec;
-    auto path = boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("daemon-%%%%%%%%%%%%%%%%", ec);
-    if (ec)
-      return boost::filesystem::path{};
-    auto success = boost::filesystem::create_directory(path, ec);
-    if (!ec && success)
-      return path;
-    return boost::filesystem::path{};
-  };
   const auto node_dir = create_node_dir();
   ASSERT_TRUE(!node_dir.empty());
   auto auto_remove_node_dir = epee::misc_utils::create_scope_leave_handler([&node_dir](){
       boost::filesystem::remove_all(node_dir);
     });
 
-  boost::program_options::variables_map vm;
-  boost::program_options::store(
-    boost::program_options::command_line_parser({
-      "--data-dir",
-      node_dir.string(),
-      "--ban-list",
-      (unit_test::data_dir / "node" / "banlist_1.txt").string()
-    }).options([]{
-      boost::program_options::options_description options_description{};
-      cryptonote::core::init_options(options_description);
-      Server::init_options(options_description);
-      return options_description;
-    }()).run(),
-    vm
-  );
-
-  ASSERT_TRUE(server.init(vm));
+  ASSERT_TRUE(server.init(offline_node_vm(node_dir, {
+    "--ban-list",
+    (unit_test::data_dir / "node" / "banlist_1.txt").string()
+  })));
 
   // Test cases (look in the banlist_1.txt file)
 
@@ -1468,6 +1504,82 @@ TEST(node_server, anonymity_zone_announces_the_sentinel_peer_id)
   data.server->deinit();
 }
 
+// `--add-peer` is an operator-supplied address this node has NEVER dialled, so
+// it is a candidate, not a verified peer. It must land in gray.
+//
+// This is tested at the node_server level on purpose. The peerlist-manager
+// tests construct `peerlist_types` or call the append methods directly, so
+// reverting the routing line to `append_with_peer_white` leaves every one of
+// them green — they cannot see which method the option path calls. The
+// security property here is about the CALL SITE, so the test has to start
+// where the operator's input does.
+TEST(node_server, add_peer_enters_gray_not_white)
+{
+  struct test_data_t
+  {
+    test_core pr_core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    std::unique_ptr<Server> server;
+
+    test_data_t(): cprotocol(pr_core, NULL)
+    {
+      server.reset(new Server(cprotocol));
+      cprotocol.set_p2p_endpoint(server.get());
+    }
+  };
+
+  test_data_t data;
+
+  boost::program_options::options_description desc_options("Command line options");
+  cryptonote::core::init_options(desc_options);
+  Server::init_options(desc_options);
+
+  const char* argv[2] = {nullptr, nullptr};
+  boost::program_options::variables_map vm;
+  boost::program_options::store(
+    boost::program_options::parse_command_line(1, argv, desc_options), vm);
+
+  // 127.0.0.2 for the same TIME_WAIT reason as bind_same_p2p_port above.
+  vm.find(nodetool::arg_p2p_bind_ip.name)->second =
+    boost::program_options::variable_value(std::string("127.0.0.2"), false);
+  vm.find(nodetool::arg_p2p_bind_port.name)->second =
+    boost::program_options::variable_value(std::string("48085"), false);
+  vm.find(nodetool::arg_p2p_add_peer.name)->second =
+    boost::program_options::variable_value(
+      std::vector<std::string>{"203.0.113.9:18080"}, false);
+
+  boost::program_options::notify(vm);
+  ASSERT_TRUE(data.server->init(vm));
+
+  // RFC 5737 documentation range, NOT loopback and NOT RFC1918. Both
+  // `append_with_peer_white` and `append_with_peer_gray` gate on
+  // `is_host_allowed`, which refuses loopback unconditionally and refuses
+  // local addresses without `--allow-local-ip` -- so a 127.x fixture is
+  // dropped by both lists and the test would fail for a reason that has
+  // nothing to do with the routing it is pinning. (Checked: the two appends
+  // carry the SAME guard, so this PR introduces no divergence there.)
+  std::vector<nodetool::peerlist_entry> gray{}, white{};
+  data.server->get_peerlist(gray, white);
+
+  const auto holds = [](const std::vector<nodetool::peerlist_entry>& v) {
+    for (const auto& e : v)
+      if (e.adr.host_str() == "203.0.113.9") return true;
+    return false;
+  };
+
+  // The property: it is a candidate.
+  EXPECT_TRUE(holds(gray)) << "--add-peer must enter the gray list";
+  // The limb that actually pins the routing. Without it a change that put the
+  // entry in BOTH lists, or in white only, would still satisfy the assertion
+  // above or leave it unexercised -- and white is the list that is dialled
+  // preferentially and gossiped onward.
+  EXPECT_FALSE(holds(white))
+    << "--add-peer must NOT enter the white list: it has never been dialled, "
+       "and white entries are gossiped onward by get_peerlist_head";
+
+  data.server->deinit();
+}
+
 TEST(node_server, out_peers_floor_guards_public_zone_init_and_runtime)
 {
   // F-8b, the public-zone half: `--tx-proxy` counts are floored at the parser
@@ -1685,7 +1797,7 @@ TEST(node_server, unknown_zone_keeps_the_public_window)
 TEST(node_server, both_outbound_paths_clear_the_failure_history)
 {
   // node_server has TWO outbound connect+handshake routines:
-  // `try_to_connect_and_handshake_with_new_peer` (white/anchor selection) and
+  // `try_to_connect_and_handshake_with_new_peer` (white/gray selection) and
   // `check_connection_and_handshake_with_peer` (gray-peerlist housekeeping).
   // Both record failures. The first version of this fix cleared on success in
   // only one of them, so on the gray route the failure history was WRITE-ONLY:
