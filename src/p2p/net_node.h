@@ -437,9 +437,10 @@ namespace nodetool
     //! is checked against the set before the value is in it) is structural
     //! here rather than remembered — a caller cannot obtain the value to
     //! write without it already being recorded. This ordering bounds
-    //! nothing: the set's SIZE rests on the erase leg's two exits
-    //! (`erase_outbound_handshake_nonce` on termination, erase-on-match in
-    //! `detect_self_handshake`). Pinned by
+    //! nothing: the set's SIZE rests on the attempt scope guard alone — see
+    //! `m_inflight_handshake_nonces`, which is attempt-scoped by
+    //! construction. Erase-on-match is not a second size bound; it pins
+    //! single-fire/anti-replay and shortens residency. Pinned by
     //! `node_server.handshake_nonce_is_recorded_before_it_can_be_written`,
     //! which reds if the recording moves out of this function.
     std::array<uint8_t, 32> mint_recorded_handshake_nonce(epee::net_utils::zone zone);

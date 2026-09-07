@@ -1492,10 +1492,12 @@ TEST(node_server, handshake_nonce_is_recorded_before_it_can_be_written)
   // The §5c falsifier (P2P_2_ENDPOINT_ROUND.md): the in-flight-set insert
   // must precede the request write, or DETECTION is lost — our own arriving
   // connection would be checked against the set before the value is in it.
-  // This ordering bounds nothing; the set's size rests on the erase leg,
-  // whose two erase IMPLEMENTATIONS the sibling test pins (its own comment
-  // states the boundary: attachment of the termination guard is structural,
-  // not observed). This reds if the recording
+  // This ordering bounds nothing; the set's size rests on the attempt scope
+  // guard alone (m_inflight_handshake_nonces is attempt-scoped by
+  // construction). The sibling test pins both erase IMPLEMENTATIONS, but for
+  // different guarantees — termination for the size bound, match for
+  // single-fire — and its own comment states what it does not observe. This
+  // reds if the recording
   // moves out of the minting function — which is the only way the insert
   // can come to follow the write, because the request cannot be built
   // without the value this returns.
