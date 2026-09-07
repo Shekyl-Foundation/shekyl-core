@@ -111,8 +111,12 @@ rejection wearing a conditional's clothes.
 
 ## Interaction with existing rules
 
-- **`15-deletion-and-debt.mdc`** — "while we're here" governs scope
-  *additions*; this rule governs scope *sheddings*. Both move work
+- **`15-deletion-and-debt.mdc`** — its three dispositions
+  (REJECTED / DEFERRED / STAGED, each defined by its grep signature) decide
+  *which* disposition an item has; this rule decides what a DEFERRED one must
+  contain and disclose. An item that cannot name a blocker is not deferred at
+  all — it is undisposed, and that rule says so. Separately, "while we're
+  here" governs scope *additions*; this rule governs scope *sheddings*. Both move work
   across the PR boundary without review; both are named so the review
   catches them.
 - **`21-reversion-clause-discipline.mdc`** — a legitimate deferral is

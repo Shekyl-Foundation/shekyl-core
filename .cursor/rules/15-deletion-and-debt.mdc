@@ -11,6 +11,54 @@ Code with no live caller, code that handles state that doesn't exist, code
 marked `[[deprecated]]` for more than one release cycle — all of it goes. Dead
 code is audit surface, attack surface, and review fatigue.
 
+## Three dispositions, and each is defined by its grep signature
+
+Work that has been decided about has exactly one of three dispositions. They
+are distinguished by **what a machine can find**, not by what the prose says,
+because the next agent does not read the prose — it greps:
+
+| Disposition | Symbols | `FOLLOWUPS.md` rows | Decision log |
+| --- | --- | --- | --- |
+| **REJECTED** | zero | zero | exactly one entry |
+| **DEFERRED** | zero | exactly one, naming an external blocker | not required |
+| **STAGED** | present | not required | named consumer in a live plan |
+
+An agent greps for symbols and finds staged work. It greps `FOLLOWUPS.md` and
+finds deferred work. Rejected work is invisible to both, and its reasoning
+lives where humans look and machines do not retry.
+
+That invisibility is the whole mechanism. **A rejected decision that leaves a
+symbol or a FOLLOWUPS row is a standing invitation to re-attempt it**, because
+both surfaces read as "someone meant to do this". Such residue does not merely
+fail to record the rejection — it contradicts it, on the one surface the
+machine actually reads.
+
+What follows from the table, rather than from taste:
+
+- **A row that cannot name a blocker is not a deferral.** It is an *undisposed*
+  item sitting on the surface agents grep to find deferred work. Give it a
+  blocker, reject it and delete the row, or stage it. It does not get to wait
+  in the queue as an unanswered question.
+- **A rejection is not recorded by deleting quietly.** Zero symbols and zero
+  rows, with no decision-log entry, is indistinguishable from work nobody ever
+  considered — so the next agent proposes it again, and the rejection has cost
+  more than it saved.
+- **Staged work owes a named consumer** (`22-no-lazy-deferral.mdc`,
+  callee-without-caller). Symbols with no consumer are not staged; they are
+  dead code under *Default: delete* above.
+
+### What this section does not cover
+
+- **Which disposition an item gets.** That is the reviewer's decision; this
+  fixes only the form each takes once the decision is made.
+- **Work in flight.** An open PR is not disposed, it is in progress.
+- **The wording of a FOLLOWUPS row** — `95-documentation-lifecycle.mdc` owns
+  the one-liner form and the `Target:` tokens; this owns how many rows exist.
+- **What makes a blocker acceptable** — `22-no-lazy-deferral.mdc` owns that,
+  and adds the requirement that a deferral be disclosed in the flow that made
+  it.
+- **Vendored and inherited trees**, which carry symbols nobody here staged.
+
 ## When to use `[[deprecated]]`
 
 Almost never. The annotation is a promise to delete by a specific version. If
