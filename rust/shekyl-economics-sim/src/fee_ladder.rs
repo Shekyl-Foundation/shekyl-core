@@ -611,12 +611,16 @@ enum LadderMode {
     CorrectedRaw,
     /// `C` snapped to a power of two first.
     Quantized(SnapRule),
-    /// The ceiling snap behind the §7 hysteresis construction. The round
-    /// adopted this map, but it is NOT what the daemon serves: #640
-    /// review cycle 5 took the band off the served path because no
-    /// deterministic previous value exists for a per-height query, and
-    /// the ruling on serving it is owed (FL-R3). [`Self::Quantized`] with
-    /// [`SnapRule::Ceiling`] is the served map.
+    /// The ceiling snap behind the §7 hysteresis construction — the
+    /// RULED served map (FL-R3, round 17).
+    ///
+    /// The shipped daemon does not reach it yet: #640 review cycle 5
+    /// found the band unreachable on the served path, and restoring it
+    /// needs a grid-anchored previous value, which is its own round. So
+    /// this mode is the design's map and [`Self::Quantized`] with
+    /// [`SnapRule::Ceiling`] is what is served in the interim — measure
+    /// against this one when the question is what the ladder IS, and
+    /// against that one when it is what the daemon does today.
     QuantizedHysteresis,
     /// The band plus a minimum-dwell floor of `n` blocks on the served
     /// value — examined for FL-R18 (c) and NOT ADOPTED; swept over

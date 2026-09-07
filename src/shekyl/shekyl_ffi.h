@@ -308,8 +308,9 @@ uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 /// burn_pct_scaled are the SAME shekyl_calc_emission_share /
 /// shekyl_calc_burn_pct outputs validation computes at this state.
 /// prev_cq_scaled = 0 means no held value, and it is what the daemon
-/// passes: the band is a capability of this export, not a property of
-/// the served rate (FL-R3 — the ruling on serving it is still owed).
+/// passes today: the band is a capability of this export, not yet a
+/// property of the served rate. FL-R3 is RULED -- the band stays and is
+/// restored -- pending the grid-anchored previous value's own round.
 uint64_t shekyl_fee_correction_quantized(
     uint64_t tx_volume_avg,
     uint64_t sigma_scaled,

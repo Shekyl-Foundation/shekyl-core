@@ -114,19 +114,27 @@ pub fn quantize_pow2_ceil(c_scaled: u64) -> u64 {
 /// previous step's implied band by more than `HYSTERESIS_MARGIN_MILLI`
 /// (3%); within the band the previous quantized value is kept.
 ///
-/// **The daemon does not reach this branch.** `blockchain.cpp` passes
-/// `prev_cq = 0`, so what is served is the plain ceiling snap. The band
-/// needs a previous value, and there is no deterministic one to hand it:
+/// **The daemon does not reach this branch yet, and that is a gap being
+/// closed, not the design.** `blockchain.cpp` passes `prev_cq = 0`, so
+/// what is served today is the plain ceiling snap. FL-R3 is RULED: the
+/// band stays and is restored to the served path.
+///
+/// What blocks the restoration is the SHAPE of the previous value, not
+/// the decision. The band needs one, and neither obvious source works:
 /// a remembered value makes the served rate depend on the process's
 /// query history, and the previous block's unseeded snap is a one-step
-/// approximation that inverts the result rather than the recurrence
-/// `C_q(h) = f(C(h), C_q(h−1))`, which cannot be evaluated without an
-/// anchor. Serving hysteresis therefore requires `C_q` persisted as
-/// chain state. The band is kept here, exercised by its own tests and by
-/// the sim, because that is the open ruling's subject — FL-R3 in
-/// `FEE_LADDER_DERIVATION.md` §8 carries the blocker and the two ways to
-/// close it. Do not wire a caller to a nonzero `prev_cq` before it is
-/// ruled.
+/// approximation that inverts the result rather than evaluating the
+/// recurrence `C_q(h) = f(C(h), C_q(h−1))`. The answer is a
+/// grid-anchored previous value — bounded to evaluate and still a pure
+/// function of chain state — which is a design change and comes back as
+/// its own round.
+///
+/// **So do not wire a caller to a nonzero `prev_cq` until that round
+/// lands, and when it does, honour FL-R3's two binding constraints: the
+/// band stays a PURE FUNCTION OF CHAIN STATE (a per-node remembered
+/// value repeals FL-R18 rather than restoring FL-R3), and it keeps a
+/// SINGLE OWNER — see [`hysteresis_step`], which exists because a
+/// transliterated copy had already drifted.**
 #[must_use]
 pub fn fee_correction_quantized(
     tx_volume_avg: u64,
@@ -395,8 +403,15 @@ mod tests {
     }
 
     /// Genesis-condition top rung with `C_q = 1` is the uncongested
-    /// genesis `Fh` (14,000,000); at the genesis-congested `C_q = 2` it is
-    /// the 28,000,000 FL-R9 wallet-cap bound.
+    /// genesis `Fh` (14,000,000); at the genesis-congested `C_q = 2` it
+    /// is 28,000,000.
+    ///
+    /// 28,000,000 is the GENESIS ANCHOR, not a cap. It was FL-R9's wallet
+    /// cap until #640 re-derived that as the 220,000,000 structural bound
+    /// — the old value sat below honest daemon quotes from ≈ year 3, so
+    /// naming it a cap here would preserve the superseded contract in the
+    /// new owner's own documentation. What this pins is the genesis point
+    /// of the ladder; the cap's adequacy is pinned in `fee_policy.rs`.
     #[test]
     fn genesis_top_rung_anchors() {
         let p = EconomicParams::default();

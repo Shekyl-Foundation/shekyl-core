@@ -676,6 +676,76 @@ asserted.
 FL-R19 is untouched by both corrections and stands as minted, still
 unsigned. Nothing ships; no rework reaches the bundle.
 
+## Review round 17 (maintainer, relayed 2026-09-07): FL-R3 RULED — the band stays and is RESTORED
+
+Raised by #640 review cycle 6, which found by grepping callers rather
+than the flagged line that **no production caller passes a nonzero
+`prev_cq`**: the ratified §7 band was built, tested, and unreachable on
+the served path. The cycle put two options to the maintainer — persist
+`C_q` as chain state, or retire served hysteresis against FL-R19's clamp
+margin. **Both were declined, and the framing with them: it was a false
+pair.** The ruling is that hysteresis stays and FL-R3 closes by
+restoring it to the production path, which makes the structural blocker
+the work item rather than the reason to pick a loser.
+
+**The ground, as ruled.** The banded map's worst inter-flip dwell is
+≈ 125 blocks. At this tree's own constants — `BLOCKS_PER_YEAR` = 262 800,
+so a 120 s target — that is **4.2 hours**, and a ten-minute quote window
+carries a **4.0 %** chance the re-quote differs. (Both re-derived here
+from the constants rather than taken on relay.) Against what users
+actually live with — Bitcoin and Ethereum estimates can move several-fold
+*within one block* under congestion, which is why those wallets present
+low/medium/high and everyone treats the number as soft — that is
+*stabler*, and it sits below the level at which anyone forms an
+expectation there is something to violate. So "barely moves" is accurate,
+and the residual needs no mechanism; it needs the band it already has.
+
+**Two binding constraints, both lifted from findings already on this
+record rather than invented for the ruling:**
+
+1. **The band stays a PURE FUNCTION OF CHAIN STATE.** No per-node held
+   state. Derivability is the property FL-R18 closed on and the reason a
+   conforming wallet's fee leaks nothing — a restoration that quietly
+   acquires state repeals FL-R18 instead of restoring FL-R3. Named in the
+   row explicitly so the fix cannot pick up state while nobody is
+   watching.
+2. **Single owner.** The band's arithmetic lives in one place and the
+   instrument transliterates nothing — this cycle's own finding, where
+   the sim's copy had silently lost the owner's `MIN_REPRESENTABLE_C`
+   floor, so §4.5 was measuring a mechanism that was not the shipped one.
+
+**Where that leaves the work, stated against constraint 1 rather than
+around it.** The blocker *is* that the band needs history:
+`C_q(h) = f(C(h), C_q(h−1))` is a recurrence, and both failed attempts
+failed on exactly that — a remembered value tracked the process's query
+history, and the previous block's unseeded snap is a one-step
+approximation that inverts. By the ruling's own terms this is therefore
+the **time-grid** branch: a previous value taken from a grid-aligned
+anchor rather than unbounded history — a fold over a fixed window from a
+grid height, or a seed at an epoch boundary — which is bounded to
+evaluate and still derivable by every node. Its open questions (grid
+period, fold depth, reorg behaviour, per-query cost) are design
+questions, so **it comes back as its own round** and is not invented at
+the call site. Until it lands the daemon serves the un-banded ceiling —
+an implementation gap with an owner, not a design regression: FL-C7's
+ratified figures are the banded ones and stand, FL-C4a is insensitive to
+the band (446 banded, 464 un-banded, bar 240), and the rejection race
+moves three cells.
+
+**Also minted: FL-D8 — boundary-cell occupancy.** Banked at the
+maintainer's direction even though it gates nothing. Every disposition
+that has turned on flicker argued it from **cell count** — how many of
+the 800 swept cells oscillate — which is a property of the sweep grid and
+not of the chain: it says how much of the parameter space flickers, never
+how often anyone is standing there. FL-C4a, FL-C7 and FL-R18 each rested
+on that unknown and FL-R3 is the fourth. Registered as an owed
+measurement, due the next time a disposition turns on flicker, so the
+fifth occasion reaches for a number instead of an argument.
+
+*Provenance: relayed in-channel, 2026-09-07. A relayed ruling, not an
+in-tree signature — no approving review or maintainer commit carries it,
+and the rows say so.*
+
 ## Review round 16 (PR #634 bots): the race instrument measured a map nothing serves
 
 **Bugbot and Copilot independently found the same High defect, and it

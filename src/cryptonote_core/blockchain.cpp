@@ -4507,8 +4507,10 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
   // consensus window, sigma from the emission-share schedule, burn from
   // the canonical burn curve.
   //
-  // NO BAND ON THE SERVED VALUE: `C_q` is the plain ceiling snap of the
-  // correction at THIS state, and nothing else.
+  // NO BAND ON THE SERVED VALUE **YET**: `C_q` is the plain ceiling snap
+  // of the correction at THIS state. FL-R3 is RULED — the band stays and
+  // is restored here — so treat this as a gap with an owner, not as the
+  // design. Do not "simplify" it away.
   //
   // Two attempts preceded this, and both failed for the same underlying
   // reason — the §7 hysteresis band needs the previous SERVED value, and
@@ -4521,15 +4523,24 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
   // of phase, charging the high rate exactly when the correction says low
   // (PR #640 review). That is worse than the flicker it was meant to damp.
   //
-  // Reconstructing the true served sequence would mean folding chain
-  // history with a defined depth and reorg behaviour — a mechanism with
-  // its own design questions, and one nothing has ruled. What IS ruled is
-  // FL-R18 (a): the residual boundary oscillation is accepted as bounded,
-  // its anonymity premise having been examined and refuted. So the served
-  // value is the pure function of chain state that ruling permits, and
-  // the band's remaining use is measurement (the instrument keeps it as a
-  // mode). Simpler, deterministic, and one fewer failure mode before
-  // genesis.
+  // Reconstructing the true served sequence means folding chain history
+  // with a defined depth and reorg behaviour. That is the RULED direction
+  // (FL-R3, round 17): a grid-anchored previous value — bounded to
+  // evaluate, and still a pure function of chain state — restores the
+  // band here. It carries its own design questions (grid period, fold
+  // depth, reorg behaviour, per-query cost), so it comes back as its own
+  // round rather than being invented at this call site.
+  //
+  // Two constraints bind whoever wires it, both from findings on the
+  // record: the previous value must stay derivable from chain state — a
+  // remembered one repeals FL-R18's determinism rather than restoring
+  // FL-R3 — and the band keeps a single owner in shekyl-economics, never
+  // a copy here.
+  //
+  // Until then the served value is the plain snap. FL-R18 (a) is what
+  // makes that tolerable in the interim: the residual boundary
+  // oscillation is accepted as bounded, its anonymity premise examined
+  // and refuted.
   const uint64_t tx_volume_avg = get_tx_volume_avg(db_height);
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
   const uint64_t sigma = shekyl_calc_emission_share(

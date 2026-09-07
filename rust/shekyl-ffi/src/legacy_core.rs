@@ -579,10 +579,11 @@ pub unsafe extern "C" fn shekyl_block_reward(
 /// `burn_pct_scaled` are the SAME `shekyl_calc_emission_share` /
 /// `shekyl_calc_burn_pct` outputs the validation path computes at this
 /// state — one source, no second derivation. `prev_cq_scaled = 0` means no
-/// held value, and it is what the daemon passes: the band is a capability
-/// of this export, not a property of the served rate. See the crate
-/// function's note and FL-R3 before wiring a caller to a nonzero value.
-/// Cannot fail.
+/// held value, and it is what the daemon passes today — so the band is a
+/// capability of this export, not yet a property of the served rate.
+/// FL-R3 is ruled: it is restored once the grid-anchored previous value
+/// has its own round. See the crate function's note for the two binding
+/// constraints before wiring a caller to a nonzero value. Cannot fail.
 #[no_mangle]
 pub extern "C" fn shekyl_fee_correction_quantized(
     tx_volume_avg: u64,

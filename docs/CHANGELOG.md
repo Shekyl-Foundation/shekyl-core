@@ -73,19 +73,25 @@
   pow2 ceiling snap of the correction at the queried height, so every node
   derives the same rate there; a restarted and a long-running daemon
   cannot quote differently. The pow2-boundary hysteresis the design round
-  ruled is built and tested in `shekyl-economics`, but is **not on the
-  served path**: a remembered value makes the rate depend on the process's
-  query history, and a one-step seed from the previous block inverts it,
-  so serving it needs `C_q` persisted as chain state. That is a consensus
-  change and is not in this bundle — see FL-R3, which carries the blocker
-  and the ruling still owed.
+  ruled is built and tested in `shekyl-economics` but is **not on the
+  served path yet**: a remembered value makes the rate depend on the
+  process's query history, and a one-step seed from the previous block
+  inverts it. FL-R3 rules that the band stays and is restored, via a
+  grid-anchored previous value that keeps it derivable from chain state;
+  that shape is a design change and lands in its own round. Until then
+  the served correction is the plain snap.
 
 - **Wallet fee-rate ceiling raised to a structural bound.**
   `absolute_fee_rate_cap()` is now derived with every factor at its own
   extreme (220,000,000 atomic/weight) instead of at the genesis point. The
   previous 28,000,000 value sat **below honest daemon quotes** from about
-  year 3 — the reachable maximum is ≈91,000,000 near year 7 — and would
-  have refused correct snapshots.
+  year 3 and would have refused correct snapshots. The swept peaks are
+  91,000,000 at ≈ year 7 on the neutral accumulation and 98,000,000 at
+  ≈ year 8 on a dormant-then-busy trajectory — history matters, because a
+  slower-emitting past leaves a larger `R` at the same height. **Neither
+  is the reachable maximum**: arbitrary volume paths are uncountable, so
+  the sweep is a floor under the bound's adequacy, not a proof of
+  tightness. That is why the cap is structural rather than swept.
 
 ### API
 
