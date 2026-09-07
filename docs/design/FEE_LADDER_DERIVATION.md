@@ -816,8 +816,11 @@ scenario passes the ramp's own registered bar (min in-ramp run 1 457 ≥
 60; the round-12 gate correction measures each scenario kind against
 ITS registered statistic) while flickering identically in its
 stationary tail — the stationary rows carry the verdict. FL-C4a verdict:
-`C` enters the formula only as `C_q` (ceiling, behind the §7
-hysteresis). Residual, re-measured on the evolved traces: boundary-
+`C` enters the formula only as `C_q` (ceiling; the §7 hysteresis was
+behind it when this verdict was taken and is no longer on the served
+path — FL-R3. The verdict does not turn on the band: the ceiling clears
+the dwell gate with it or without it, 446 and 464 blocks). Residual,
+re-measured on the evolved traces: boundary-
 parked states still 2-cycle on the un-hysteretic map, and at the
 high-elasticity corner a residual oscillation SURVIVES the hysteresis
 band — measured, bounded, and surfaced as **FL-R18** (§4.5, §8), not
@@ -902,7 +905,10 @@ boundary-parked high-elasticity corner, which was SURFACED as FL-R18
 not ship a smoothed number whose stability is unproven." The §7
 hysteresis requirement remains **load-bearing** (necessary: without it
 the map fails broadly) but is measured as **not sufficient at that
-corner**. **FL-R18 accepts that residual as bounded (round 14)**,
+corner**. **This is precisely the sentence FL-R3 now cashes out:** the
+requirement is load-bearing on FL-C7 and the daemon does not meet it,
+because the served path has no deterministic previous value to band
+against. **FL-R18 accepts that residual as bounded (round 14)**,
 after the mechanism proposed to close it was measured and rejected on
 its own terms (§4.5a) and the harm it was to prevent was refuted
 (§4.5b). The deadband/limit-cycle asymmetry still holds — a deadband
