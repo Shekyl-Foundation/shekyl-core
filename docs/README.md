@@ -61,6 +61,13 @@ in live documents is a baseline in
 move down, and a document that has declared a leg cannot silently un-declare
 it.
 
+Because that count is a ratchet, it has to mean the same thing everywhere. A
+citation into a submodule that is **not checked out** therefore stops the run
+and names the init command, rather than being counted as rot: a missing file is
+first evidence the subject is absent, not that the claim went stale. Run
+`git submodule update --init` if the gate says so — it is a broken run, not a
+finding.
+
 Declaring is opt-in because inferring these corpus-wide produced 991 findings
 against a clean tree — `§17` usually cites another document, registers
 legitimately skip a retired number, and the CHANGELOG cites files that existed

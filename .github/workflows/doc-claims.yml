@@ -58,12 +58,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Submodules populated, matching docs-gates.yml. The citation leg
-          # resolves paths under external/, and a submodule left uninitialised
-          # makes every one of them look deleted — the gate would then measure
-          # a different tree in CI than the one a developer checks locally,
-          # and the ratchet's baseline would disagree with itself by
-          # environment rather than by fact.
+          # Submodules populated, matching docs-gates.yml. This is required,
+          # not merely tidy: the citation leg resolves paths under external/,
+          # and the gate now REFUSES to run when a cited submodule is absent
+          # rather than counting it as rot. Drop this and the job stops with
+          # "not checked out here" instead of auditing anything.
           submodules: true
 
       - name: Run the documentation claim audit

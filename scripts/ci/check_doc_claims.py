@@ -68,6 +68,7 @@
 # nothing. A claim auditor that cannot find the table it was told to check and
 # prints "no discrepancies" is that same defect wearing this script's name.
 
+import functools
 import pathlib
 import re
 import sys
@@ -215,26 +216,87 @@ def check_numbered(p, text, _arg, errs):
     return sum(len(r) for r in runs)
 
 
+# Anchored at a path boundary: without the leading (?<![\w/-]) a token like
+# `shekyl-economics-sim/src/record.rs:143` matches from its inner "src/" and the
+# gate then reports a file that was never cited. Crate-relative paths are
+# resolved under rust/ before being called missing, and a token under no known
+# root is not this gate's subject rather than a failure.
+#
+# One regex and one resolver, deliberately. Both the declared `citations` leg
+# and the ratchet's corpus-wide count need exactly this, and they carried
+# verbatim copies until the submodule case below had to land in both — which is
+# how the third copy starts. A duplicate gets deleted, not synchronised.
+CITE = re.compile(r"(?<![\w/-])((?:src|rust|scripts|tests|external|shekyl-[\w-]+)"
+                  r"/[\w./-]+\.(?:cpp|h|rs|py|sh|inl)):(\d+)")
+ROOTS = ("src/", "rust/", "scripts/", "tests/", "external/")
+
+
+@functools.cache
+def uninitialised_submodules() -> tuple[str, ...]:
+    """Submodule prefixes listed in .gitmodules whose directory is empty.
+
+    A submodule that was never checked out looks exactly like a deleted file to
+    anything that only asks `is_file()`, and this repository has already been
+    bitten by that: the link gate reports every path under an uninitialised
+    submodule as a dead link. Absence of the file is the first evidence that the
+    SUBJECT is absent, not that the claim is wrong (rule 47).
+    """
+    gm = ROOT / ".gitmodules"
+    if not gm.is_file():
+        return ()
+    out = []
+    for m in re.finditer(r"^\s*path\s*=\s*(\S+)", gm.read_text(encoding="utf-8"),
+                         re.M):
+        d = ROOT / m.group(1)
+        if not d.is_dir() or not any(d.iterdir()):
+            out.append(m.group(1).rstrip("/") + "/")
+    return tuple(out)
+
+
+_LENGTHS: dict[str, int] = {}
+
+
+def resolve(path: str) -> int:
+    """Lines in a cited file, or -1 if it genuinely does not exist.
+
+    Refuses to answer for a path inside an uninitialised submodule rather than
+    calling it dead. The alternative — count it and carry on — was measured on
+    this very PR: the baseline was taken in a worktree where external/miniupnp
+    was not checked out, so a live citation read as rot and the figure shipped
+    one too high. Counting it the other way is no better, because then a number
+    that is supposed to mean one thing would mean "of what this checkout could
+    see", and a genuinely dead submodule citation would pass locally and fail in
+    CI — inverting this gate's premise that the local run is the mechanism and
+    CI the backstop. So the run stops and says which command fixes it.
+    """
+    if path not in _LENGTHS:
+        f = ROOT / path
+        if not f.is_file() and not path.startswith(ROOTS):
+            f = ROOT / "rust" / path           # crate-relative citation
+        if not f.is_file():
+            for sm in uninitialised_submodules():
+                if path.startswith(sm):
+                    sys.exit(
+                        f"FAIL: a live document cites {path}, which lies inside "
+                        f"the submodule {sm.rstrip('/')} — and that submodule is "
+                        "not checked out here, so this run cannot tell a deleted "
+                        "file from an absent one.\n"
+                        f"       Run `git submodule update --init {sm.rstrip('/')}` "
+                        "and re-run. This is a broken run, not a dirty tree: the "
+                        "citation count is a ratchet, and a number measured "
+                        "against files that are merely missing locally would "
+                        "disagree with CI by environment rather than by fact.")
+        _LENGTHS[path] = (len(f.read_text(encoding="utf-8", errors="replace")
+                              .splitlines()) if f.is_file() else -1)
+    return _LENGTHS[path]
+
+
 def check_citations(p, text, _arg, errs):
-    # Anchored at a path boundary: without the leading (?<![\w/-]) a token like
-    # `shekyl-economics-sim/src/record.rs:143` matches from its inner "src/" and
-    # the gate then reports a file that was never cited. Crate-relative paths are
-    # resolved under rust/ before being called missing, and a token under no
-    # known root is not this gate's subject rather than a failure.
-    cite = re.compile(r"(?<![\w/-])((?:src|rust|scripts|tests|external|shekyl-[\w-]+)"
-                      r"/[\w./-]+\.(?:cpp|h|rs|py|sh|inl)):(\d+)")
-    seen, lengths = 0, {}
-    for m in cite.finditer(text):
+    seen = 0
+    for m in CITE.finditer(text):
         seen += 1
         path, want = m.group(1), int(m.group(2))
-        if path not in lengths:
-            f = ROOT / path
-            if not f.is_file() and not path.startswith(("src/", "rust/", "scripts/",
-                                                        "tests/", "external/")):
-                f = ROOT / "rust" / path        # crate-relative citation
-            lengths[path] = (len(f.read_text(encoding="utf-8", errors="replace")
-                                 .splitlines()) if f.is_file() else -1)
-        n, line = lengths[path], text[: m.start()].count("\n") + 1
+        n, line = resolve(path), text[: m.start()].count("\n") + 1
         if n < 0:
             errs.append(f"{rel(p)}:{line}: cites {path}:{want}, which does not exist")
         elif want > n:
@@ -291,9 +353,7 @@ def is_records_was(p: pathlib.Path) -> bool:
 
 def dead_citations(corpus) -> list[str]:
     """Every unresolvable `path:line` in a LIVE document."""
-    cite = re.compile(r"(?<![\w/-])((?:src|rust|scripts|tests|external|shekyl-[\w-]+)"
-                      r"/[\w./-]+\.(?:cpp|h|rs|py|sh|inl)):(\d+)")
-    out, lengths = [], {}
+    out = []
     for p, text in corpus:
         if is_records_was(p):
             continue
@@ -303,16 +363,9 @@ def dead_citations(corpus) -> list[str]:
         # reported 1 dead citation against a measured 56 for exactly that
         # reason. strip_code() belongs on the DECLARATION scan, where a fenced
         # example must not opt a document in, and nowhere else.
-        for m in cite.finditer(text):
+        for m in CITE.finditer(text):
             path, want = m.group(1), int(m.group(2))
-            if path not in lengths:
-                f = ROOT / path
-                if not f.is_file() and not path.startswith(
-                        ("src/", "rust/", "scripts/", "tests/", "external/")):
-                    f = ROOT / "rust" / path
-                lengths[path] = (len(f.read_text(encoding="utf-8", errors="replace")
-                                     .splitlines()) if f.is_file() else -1)
-            n = lengths[path]
+            n = resolve(path)
             if n < 0 or want > n:
                 out.append(f"{rel(p)}: {path}:{want}")
     return out

@@ -120,6 +120,25 @@ def green(name: str, doc: str = GOOD, restater: str = RESTATER,
         return name, rc == 0, out.strip().splitlines()[0][:86] if out.strip() else ""
 
 
+def with_submodule(populated: bool):
+    """Give the synthetic tree a .gitmodules and an external/sub, or not.
+
+    The distinction under test is between a file that was DELETED and one that
+    is merely not checked out. Both look identical to `is_file()`, which is how
+    the real baseline shipped one too high, so the matrix has to exercise a
+    populated submodule and an empty one against the same citation.
+    """
+    def f(t: pathlib.Path) -> None:
+        (t / ".gitmodules").write_text(
+            '[submodule "external/sub"]\n\tpath = external/sub\n'
+            "\turl = https://example.invalid/sub.git\n", encoding="utf-8")
+        d = t / "external" / "sub"
+        d.mkdir(parents=True, exist_ok=True)
+        if populated:
+            (d / "inc.h").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    return f
+
+
 def sub(old: str, new: str) -> str:
     assert GOOD.count(old) == 1, f"fixture anchor not unique: {old!r}"
     return GOOD.replace(old, new)
@@ -186,6 +205,19 @@ def main() -> None:
              doc=sub("`src/thing.cpp:3`", "`src/thing.cpp:99`")),
         case("citations: none present", "declares `citations` but makes none",
              doc=sub("The cite is `src/thing.cpp:3`.", "No cite here.")),
+        # submodule discrimination — the defect this PR shipped and CI caught.
+        # A path inside a submodule that is not checked out must STOP the run,
+        # because a count taken against files that are merely absent locally
+        # disagrees with CI by environment rather than by fact.
+        case("citation into an uninitialised submodule", "not checked out here",
+             doc=sub("`src/thing.cpp:3`", "`external/sub/inc.h:2`"),
+             corpus=with_submodule(populated=False)),
+        # ...and the branch must discriminate by PATH, not merely notice that
+        # some submodule is empty. Same empty submodule, a dead citation that
+        # has nothing to do with it: still ordinary rot, still reported as rot.
+        case("dead citation elsewhere is still rot", "which does not exist",
+             doc=sub("`src/thing.cpp:3`", "`src/absent.cpp:3`"),
+             corpus=with_submodule(populated=False)),
         # ratchet — opt-in without one is adoption theatre, so each direction
         # of the ratchet has to be able to bite.
         case("ratchet: dead citations rose", "rose to",
@@ -202,6 +234,12 @@ def main() -> None:
                                (t / "docs" / "completed" / "old.md").write_text(
                                    "# Closed round\n\nIt held XX-W1…XX-W2 then.\n",
                                    encoding="utf-8"))),
+        # negative control: a POPULATED submodule is ordinary tree, and its
+        # citations resolve. Without this, "skip everything under a submodule"
+        # would pass the matrix while silently retiring the leg for external/.
+        green("populated submodule resolves normally",
+              doc=sub("`src/thing.cpp:3`", "`external/sub/inc.h:2`"),
+              extra=with_submodule(populated=True)),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -209,7 +247,8 @@ def main() -> None:
     # Green negative controls are marked so the tally cannot claim a control
     # as a failure path — a matrix that miscounts its own cases is the first
     # thing a reader stops trusting.
-    controls = {"historical restatement is not a live claim"}
+    controls = {"historical restatement is not a live claim",
+                "populated submodule resolves normally"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"
