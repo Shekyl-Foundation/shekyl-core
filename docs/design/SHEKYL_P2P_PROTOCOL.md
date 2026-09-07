@@ -1320,12 +1320,25 @@ a property a peer can have. The only compiled-in peers are the **seed nodes**,
 and those are bootstrap data, not relationships — they carry no drop exemption
 and never did.
 
-**What the churn site actually does is narrower than "protection was removed".**
-It drops `last_synced_peer_id`: the peer that most recently reached
-`state_normal`. Not the longest-held, not a random one. The anchor exemption
-merely skipped anchor connections when choosing that victim; the choice is now
-unconditional. Selection was never tenure-based, so nothing tenure-shaped was
-lost.
+**What the churn site actually does is narrower than "protection was removed",
+and narrower still than an earlier draft of this paragraph said.** It drops
+**an arbitrary already-synced peer** — every candidate is in `state_normal`, and
+the one chosen is simply whichever the connection scan visits last. That scan
+walks `boost::unordered_map<uuid, …>` (`m_connects`), so the order is hash order
+over random UUIDs: **not temporal, and not stable between passes.**
+
+> The first version of this correction said "the peer that most recently reached
+> `state_normal`", which is what the variable's inherited name
+> (`last_synced_peer_id`) implies and what the code does not do. Recorded because
+> it is the same error the rest of this section corrects — trusting a name over
+> the mechanism — committed while correcting it. The variable is renamed in this
+> change so the next reader does not inherit the same trap.
+
+The behaviour is nonetheless defensible and is left alone: every candidate has
+already finished syncing, so there is no "mid-work" peer to spare and no ordering
+among them that would be better. What matters for this section is that the
+choice was **never tenure-based**, so nothing tenure-shaped was lost when the
+anchor exemption went.
 
 **The concern that motivated the exemption is real and lives elsewhere.** It was
 eclipse resistance — do not let churn rotate this node onto an adversary's
