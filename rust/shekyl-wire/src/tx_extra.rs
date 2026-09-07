@@ -19,8 +19,8 @@
 //! is a run of zero bytes (≤ `TX_EXTRA_PADDING_MAX_COUNT`). Inherited Monero tags that
 //! are **not** part of the genesis grammar — merge-mining (`0x03`) and the "mysterious
 //! minergate" (`0xDE`) — are deliberately **rejected** (shed, per the
-//! `60-no-monero-legacy` rule); their removal from the C++ oracle's `tx_extra` variant is
-//! a follow-up shed (cf. the §5 dead-arm cuts).
+//! `60-no-monero-legacy` rule). They are no longer in the C++ variant either, so the two
+//! parsers now admit the same tag set.
 
 use std::io::{self, Read, Write};
 
@@ -48,6 +48,11 @@ pub const TX_EXTRA_TAG_MULTISIG_MIGRATION: u8 = 0x08;
 pub const TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS: u8 = 0x09;
 /// `0x0A` — PQC spend-auth pubkeys blob.
 pub const TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS: u8 = 0x0A;
+
+/// `0x0B` — archival attestation blob. The C++ daemon reads this on a live
+/// consensus path, so the port models it; a present tag with an empty blob is
+/// the committed empty set and is distinct from an absent tag.
+pub const TX_EXTRA_TAG_ARCHIVAL_ATTESTATION: u8 = 0x0B;
 
 /// X25519 ciphertext bytes per output (`tx_extra.h`).
 pub const X25519_CT_BYTES: usize = 32;
@@ -116,6 +121,8 @@ pub enum TxExtraField {
     PqcViewTagHints(Vec<u8>),
     /// `0x0A` — PQC spend-auth pubkeys blob.
     PqcSpendAuthPubkeys(Vec<u8>),
+    /// `0x0B` — archival attestation blob.
+    ArchivalAttestation(Vec<u8>),
 }
 
 /// A per-output hybrid KEM ciphertext from a `0x06` field.
@@ -233,6 +240,9 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
             TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS => {
                 TxExtraField::PqcSpendAuthPubkeys(read_blob(&mut cur, "pqc_spend_auth_pubkeys")?)
             }
+            TX_EXTRA_TAG_ARCHIVAL_ATTESTATION => {
+                TxExtraField::ArchivalAttestation(read_blob(&mut cur, "archival_attestation")?)
+            }
             other => {
                 return Err(io::Error::other(format!(
                     "tx_extra: unknown tag {other:#04x}"
@@ -295,6 +305,7 @@ pub fn serialize(fields: &[TxExtraField]) -> io::Result<Vec<u8>> {
             | TxExtraField::MultisigMigration(b)
             | TxExtraField::PqcViewTagHints(b)
             | TxExtraField::PqcSpendAuthPubkeys(b)
+            | TxExtraField::ArchivalAttestation(b)
                 if b.len() > READ_LEN_CAP =>
             {
                 return Err(io::Error::other(format!(
@@ -362,6 +373,9 @@ fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {
         TxExtraField::PqcViewTagHints(blob) => write_blob(w, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS, blob),
         TxExtraField::PqcSpendAuthPubkeys(blob) => {
             write_blob(w, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS, blob)
+        }
+        TxExtraField::ArchivalAttestation(blob) => {
+            write_blob(w, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, blob)
         }
     }
 }

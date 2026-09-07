@@ -606,6 +606,40 @@ fn validator_rejects_a_leaf_hash_field_of_the_wrong_length() {
     assert!(err.to_string().contains("64 required"), "{err}");
 }
 
+/// An `extra` that does not parse is refused outright.
+///
+/// This was previously tolerated: the shape check ran only when `extra` parsed,
+/// because this parser rejected three tags the C++ one accepted, so failing hard
+/// would have refused transactions the daemon accepts. All three are resolved --
+/// `0x03` and `0xDE` are deleted from the C++ variant, `0x0B` is modelled here --
+/// so the two parsers now admit the same tag set and the tolerance is what would
+/// diverge. This test is the falsifier for that: restoring the `if let Ok`
+/// wrapper turns it red.
+#[test]
+fn validator_rejects_an_unparseable_extra() {
+    // 0x03 was the merge-mining tag. It is retired, so it is simply unknown now.
+    let err = spend_with_extra(vec![0x03, 0x21, 0x00])
+        .validate_context_free_pruned()
+        .unwrap_err();
+    assert!(err.to_string().contains("tx_extra"), "{err}");
+}
+
+/// The positive limb of the flip: an attestation field is now in the grammar,
+/// so a coinbase-shaped `extra` carrying one still validates rather than being
+/// refused by the newly unconditional parse.
+#[test]
+fn validator_accepts_an_attestation_alongside_the_pqc_fields() {
+    use shekyl_wire::tx_extra::{serialize, TxExtraField};
+    let mut extra = conforming_pqc_extra(2);
+    extra.extend_from_slice(
+        &serialize(&[TxExtraField::ArchivalAttestation(vec![0xA7; 16])])
+            .expect("attestation field serializes"),
+    );
+    spend_with_extra(extra)
+        .validate_context_free_pruned()
+        .expect("an attestation field must not make a valid spend invalid");
+}
+
 #[test]
 fn validator_rejects_a_kem_field_of_the_wrong_length() {
     let err = spend_with_extra(pqc_fields(1120, 32 * 2))

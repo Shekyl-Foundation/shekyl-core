@@ -22,6 +22,9 @@
 //! self-validates it against `shekyl_fcmp::proof::verify` (the consensus rule),
 //! then round-trips it through this serializer.
 
+mod common;
+use common::conforming_pqc_extra;
+
 use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
@@ -77,7 +80,16 @@ fn synthetic_spend() -> Transaction {
                     view_tag: 9,
                 },
             ],
-            extra: vec![0x06, 0xAA, 0xBB, 0xCC],
+            // Two outputs, so the PQC scan fields must be present and correctly
+            // sized. This was `vec![0x06, 0xAA, 0xBB, 0xCC]`, a truncated varint
+            // that never parsed; the validator only tolerated it while the
+            // tx_extra parse was conditional.
+            //
+            // `extra` is part of TxPrefix, so correcting it moved the three
+            // pinned hashes below. They moved because the fixture changed, not
+            // because a layout regressed: the cross-language parity pin lives on
+            // its own fixture in `pruned_tx_hash_parity.rs` and is untouched.
+            extra: conforming_pqc_extra(2),
         },
         ct: Ct::Fcmp {
             fee: 12_345,
@@ -337,7 +349,7 @@ fn synthetic_spend_hash_preimage_is_pinned() {
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(
-        h, "d6cb346f02830be0a91c395dcf64ba1492b05e47c17e6b2f54f0858735a0d03e",
+        h, "32e2207f96d09ef2c5c72ab3a2737e77fdd20cf0b09b998bf9c00da2bf588c99",
         "synthetic FCMP++ spend hash preimage drifted (see the §11 note above)"
     );
 }
@@ -372,7 +384,7 @@ fn synthetic_spend_prefix_hash_is_pinned() {
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(
-        h, "271a9c0a13de6a1a7e81db6ef7e2cde7d2ac7145581050ae3dbe34e5858d9f9c",
+        h, "131e4af4d1fb26be406470eacbc8f8e59e75dd921e8aac727f693746bbae1057",
         "FCMP++ prefix (signable_tx_hash) drifted (§1.2)"
     );
 }
@@ -387,7 +399,7 @@ fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
     assert_eq!(hashes.len(), 1, "one PQC signing hash per input");
     let h: String = hashes[0].iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
-        h, "12997863855a3d6f731199b75780966075a36aa587b13adeef7f45e9100355dd",
+        h, "5cc2aea0f8f7d57bbb8f0ef77709b41aca673bd8e3caf8e9c59cc6c253e98ed1",
         "FCMP++ PQC signing preimage drifted (§1.1)"
     );
     // Structural: the fee is bound into the preimage (it lives in ct_base_blob), so

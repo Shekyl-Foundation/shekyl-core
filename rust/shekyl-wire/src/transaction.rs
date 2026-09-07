@@ -1816,19 +1816,16 @@ impl Transaction {
         // through the same [`check_pqc_field_shape_of`]; enforcing it here is
         // what makes that one rule, rather than one rule and a claim.
         //
-        // Applied only when `extra` parses. This parser rejects three tags the
-        // C++ one accepts — `0x03` merge-mining, `0x0B` archival attestation,
-        // `0xDE` minergate — so rejecting on a parse failure would refuse
-        // transactions (and, through block fetch, coinbases) that the daemon
-        // accepts: a divergence in the reject direction, which is worse than
-        // the gap it would close. The daemon still rejects an unparseable
-        // `extra` at admission, so nothing reaches consensus unchecked. Those
-        // three tags have no live producer except merge-mining's block-template
-        // path (FOLLOWUPS, rule 60); deleting them makes this unconditional and
-        // lets this parser become the admission parser.
-        if let Ok(fields) = parse_tx_extra(&self.prefix.extra) {
-            check_pqc_field_shape_of(&fields, n_out).map_err(io::Error::other)?;
-        }
+        // An unparseable `extra` is refused outright. This was once conditional,
+        // because this parser rejected three tags the C++ one accepted (`0x03`
+        // merge-mining, `0x0B` archival attestation, `0xDE` minergate) and
+        // failing hard would have refused transactions the daemon accepts — a
+        // divergence in the reject direction. All three are resolved: `0x03` and
+        // `0xDE` are deleted from the C++ variant (rule 60) and `0x0B` is
+        // modelled here, so the two parsers admit the same tag set and it is the
+        // tolerance, not the strictness, that would now diverge.
+        let fields = parse_tx_extra(&self.prefix.extra).map_err(io::Error::other)?;
+        check_pqc_field_shape_of(&fields, n_out).map_err(io::Error::other)?;
         let size = self.serialized_len();
         if size > MAX_TX_SIZE {
             return Err(io::Error::other(format!(
