@@ -1,0 +1,62 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Documentation claim audit — checks the invariants a document declares about
+# itself against its own tables and against the tree.
+#
+# This workflow is deliberately its own, and named for what it gates. The
+# schema-coverage gate spent months riding a workflow called "doc links",
+# which is coupling that breaks silently the moment someone prunes
+# link-checking work; that rename is on DRS-P0b's envelope row precisely
+# because it went unnoticed. This one starts named correctly.
+#
+# CI is the backstop, not the mechanism. The evidence that produced this gate
+# is a measured before-and-after on PR #633, where the improvement came from
+# running the check BEFORE pushing — thirteen review rounds, with the change
+# of character at exactly the round the author started running it locally. So
+# the script is a plain `python3 scripts/ci/check_doc_claims.py` with no CI-only
+# inputs, runnable in any worktree, and this job exists to catch what a human
+# forgot to run rather than to be the only thing that runs it.
+
+name: ci/doc-claims
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "docs/**"
+      # The gate resolves file:line citations against the tree, so a source
+      # move can invalidate a documentation claim with no docs edit in the
+      # diff — that drift is exactly what the citation leg exists to catch
+      # (rule 47: a gate that cannot see its subject change is not a gate).
+      - "src/**"
+      - "rust/**"
+      - "scripts/ci/check_doc_claims.py"
+      - "scripts/ci/check_doc_claims_falsification.py"
+      - ".github/workflows/doc-claims.yml"
+
+concurrency:
+  group: doc-claims-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  doc-claims:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the documentation claim audit
+        run: python3 scripts/ci/check_doc_claims.py
+
+      - name: Re-falsify the gate's own failure paths
+        # A gate is only worth its green if each leg can still go red. The
+        # matrix runs against a synthetic corpus in a temp directory, so it
+        # costs seconds and touches nothing; running it here means a refactor
+        # that silently disables a leg fails CI instead of passing quietly.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_doc_claims_falsification.py
