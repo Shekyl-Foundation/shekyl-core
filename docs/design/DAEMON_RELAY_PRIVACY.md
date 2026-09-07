@@ -1297,7 +1297,20 @@ instruments for both are built or scoped. What remains is the *arguments*:
   refills** — each induced disconnect is another `~g` chance at the slot, strictly
   more capability than one-shot poisoning. The likely defense lives in the same
   subsystem and is worth naming as the candidate mechanism: **anchor slots**
-  ([`P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`](../../src/cryptonote_config.h#L145)),
+  (`P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`),
+
+  > **STALE 2026-09-06 — the candidate mechanism no longer exists.** The anchor
+  > mechanism was deleted whole (`SHEKYL_P2P_PROTOCOL.md`, amendment
+  > "trust is earned in-process"): it was only a restart-boundary device, and
+  > peerlist trust no longer crosses that boundary. **There are no
+  > anchor-backed slots**, so a bound of the form "≥ `k` of the `STEMS` slots
+  > are anchor-backed and thus not re-rollable" has no `k` — not `k ≤ 1` as the
+  > earlier correction below says, but no such slot class at all. The `ρ`
+  > derivation must find a different non-re-rollable property or record that
+  > none exists. Every code citation in this subsection and the anchor
+  > arithmetic in the `g` derivation below are retained as records-was; their
+  > line anchors no longer resolve to the described code.
+
   which are *not* fresh gossip-fed draws, so they resist the re-roll — a bound of
   the form "≥ `k` of the `STEMS` slots are anchor-backed and thus not re-rollable"
   is the shape of answer that would unblock `ρ`. (This "repeated-refills" bound is
@@ -2097,8 +2110,9 @@ phantom one level up.** The table is a function of `g`, the adversary's share of
 the origin's *outbound* pool, and **`g` is not bounded by `f`**, the network-wide
 adversary fraction. The outbound pool of 12 is filled **70 % from the white list
 plus 2 anchors** (`P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT = 70`,
-`P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`,
-[cryptonote_config.h:144](../../src/cryptonote_config.h#L144)), and the white list
+`P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT = 2`) — **records-was: the anchor
+constant and mechanism were deleted 2026-09-06, so the pool is filled from one
+candidate pool with no anchor share; see the STALE note above** — and the white list
 is populated by gossiped / handshaked addresses — the adversarially-shapeable
 surface the anchor and white/gray machinery *exist to resist*. So `g` is an
 *outcome* of peerlist composition, and an eclipse-capable adversary who poisons

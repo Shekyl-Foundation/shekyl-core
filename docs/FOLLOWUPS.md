@@ -689,8 +689,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Levin p2p migration — LV-2 payload codec and LV-3 connection-path [`docs/design/LV2_PORTABLE_STORAGE.md`](design/LV2_PORTABLE_STORAGE.md)
   - Target: pre-genesis
 
-  - Target: pre-genesis
-
 - **Relay lane: add a derivation check asserting `fluff_return_ms` equals the max over measured zones**, so adding a zone slower than Tor fails loudly instead of silently under-provisioning `F′`; `tests/carrier_window.rs` is the shape — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md) §91.2
   - Target: pre-genesis
 
@@ -741,13 +739,13 @@ Default. Lands before genesis if it should exist at launch.
 - **Re-derive initial-sync verification cost at the Pi-4 floor now that C2-R1a has deleted `PER_BLOCK_CHECKPOINT`.** `DAEMON_RELAY_PRIVACY.md` §74.2 concluded *"the 11-day figure is the worst case"* because the checkpoint skip rescued historical blocks; `fast_check` and `m_blocks_hash_check` no longer occur in `blockchain.cpp`, so the un-checkpointed case is now the only case. Blocker: the replacement figure needs a measurement, not an argument. Rule 76 — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 
-- **Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.** Blocker: it must derive against the *fixed* anchor and white/gray behaviour, so it follows the p2p tree changes rather than preceding them; reopening criterion and the §12.10/§7 reconciliation it must carry are in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4, PWD-I5
+- **Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.** **Its inputs changed 2026-09-06: the anchor mechanism is deleted, so the `k ≤ 1` anchor-backed-connection cap this sub-round was to derive against no longer exists — there are no anchor-backed connections at all, and every outbound slot is filled from one candidate pool.** Blocker: it must derive against the *fixed* anchor and white/gray behaviour, so it follows the p2p tree changes rather than preceding them; reopening criterion and the §12.10/§7 reconciliation it must carry are in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4, PWD-I5
   - Target: pre-genesis
 
 - **Decide `sanitize_peerlist`'s port-0 handling, where the IPv4-only rule collides with `tor_address::unknown()` being port 0.** Blocker: the tor port-0 semantics are disputed (named by #587, not invented here). PWC-D9 — [`P2P_2_DISPATCH_BRIEF.md`](design/P2P_2_DISPATCH_BRIEF.md) PWD-B11
   - Target: pre-genesis
 
-- **p2p lane, one composable change: delete the back-ping and `COMMAND_PING`, insert the inbound peer directly into **gray** after handshake, bound gray occupancy per host, and bound gray occupancy per host.** **The store-version bump this row asked for LANDED separately (7 -> 8, with the anchor list's deletion), so a pre-current store is already dropped wholesale and old inbound-earned white entries can no longer survive an upgrade — that half of this item is done.** The four are one outcome: `net_node.inl:2766` sits *inside* the `try_ping` callback the deletion removes, so a standalone reroute would be erased by it; without the per-host gray bound the deletion opens a new injection path, since `my_port` is peer-controlled and `append_with_peer_gray` has no same-host eviction; and without the bump, old inbound-earned white entries stay trusted. Public-zone only; behavioural, so PWD-I4 must derive against the fixed composition. PWC-D11 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I1/PWD-I2/PWD-B9/PWD-B10
+- **p2p lane, one composable change: delete the back-ping and `COMMAND_PING`, insert the inbound peer directly into `gray` after handshake, and bound gray occupancy per host.** The store-version bump this row also asked for **has landed separately** (7 → 8, with the anchor and white sections' deletion), so a pre-current store is already dropped wholesale and old inbound-earned white entries can no longer survive an upgrade — that subtask is done and is not part of the composable change that remains. The four are one outcome: `net_node.inl:2766` sits *inside* the `try_ping` callback the deletion removes, so a standalone reroute would be erased by it; without the per-host gray bound the deletion opens a new injection path, since `my_port` is peer-controlled and `append_with_peer_gray` has no same-host eviction; and without the bump, old inbound-earned white entries stay trusted. Public-zone only; behavioural, so PWD-I4 must derive against the fixed composition. PWC-D11 — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I1/PWD-I2/PWD-B9/PWD-B10
   - Target: pre-genesis
 
 - **Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)

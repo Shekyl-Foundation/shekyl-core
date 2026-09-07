@@ -1265,8 +1265,32 @@ loader believes nothing on disk, the file's integrity stops mattering; what
 remains worth protecting is the **confidentiality of the peer graph**. Do not
 design it as "encrypt the trust store" — there is no trust in it to encrypt.
 
-**Store version 7 -> 8.** `load_peers` already drops a pre-current store
-wholesale, so the bump *is* the clean start for existing nodes.
+**Store version 7 → 8.** `load_peers` already drops a pre-current store
+wholesale, so the bump *is* the clean start for existing nodes. **The stream
+now carries one list where it carried three:** the anchor section went with the
+mechanism, and the white section went with the trust it used to assert.
+
+**The invariant is typed, not commented.** `peerlist_types` has no `white`
+member, so the restore path cannot write the white list — it has no white list
+to write. An earlier revision kept the field and relied on the loader to demote
+it, which is a convention a later implementer can drop; this cannot be dropped
+without a compile error.
+
+**One cost stated exactly, because "ordering, not addresses" is not true at
+saturation.** White and gray had separate caps (1000 + 5000). One trust class
+means one cap, so a node saturating both now persists up to
+`P2P_LOCAL_GRAY_PEERLIST_LIMIT` rather than the sum. `trim_gray_peerlist`
+erases from the `by_time` front, so what goes is the **least recently seen**,
+and entries earned by a dial this session carry a fresh `last_seen` and survive
+preferentially. That is one cap doing its job on one pool — not arbitrary loss
+— but it is a real reduction in persisted capacity.
+
+**Seed contact is keyed on having no candidates at all, not on having no
+trusted ones.** `connections_maker`'s seed fallback previously tested the white
+count; with white empty on every boot that would have sent every restarting
+node to a seed ahead of a gray pool of thousands — showing seeds every restart,
+letting a seed's handshake peerlist evict stored gray entries at cap, and
+delaying dials that would have succeeded.
 
 ### PWD-I3 — tenure is recognised by address, never serialized, and ordered by `first_seen`
 

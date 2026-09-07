@@ -81,8 +81,9 @@ namespace nodetool
       // A pre-current store is dropped wholesale (the node re-bootstraps):
       // v6 for an entry-format change, v7 for the removal of the dead
       // rpc_port / rpc_credits_per_hash advertisement fields, v8 for the
-      // deleted third list -- one fewer list in the stream, so an old reader
-      // and a new stream disagree on structure, not merely on content.
+      // deleted anchor AND white lists -- the stream carries one list where it
+      // carried three, so an old reader and a new stream disagree on
+      // structure, not merely on content.
       if (ver < CURRENT_PEERLIST_STORAGE_ARCHIVE_VER)
         return {};
 
@@ -153,7 +154,6 @@ namespace nodetool
   template<typename Archive>
   void serialize(Archive& a, peerlist_types& elem, unsigned ver)
   {
-    elem.white = load_peers<peerlist_entry>(a, ver);
     elem.gray = load_peers<peerlist_entry>(a, ver);
 
     if (ver == 0)
@@ -167,7 +167,6 @@ namespace nodetool
   template<typename Archive>
   void serialize(Archive& a, peerlist_join elem, unsigned ver)
   {
-    save_peers(a, boost::range::join(elem.ours.white, elem.other.white));
     save_peers(a, boost::range::join(elem.ours.gray, elem.other.gray));
   }
 
@@ -189,7 +188,6 @@ namespace nodetool
 
       if (src.good())
       {
-        std::sort(out.m_types.white.begin(), out.m_types.white.end(), by_zone{});
         std::sort(out.m_types.gray.begin(), out.m_types.gray.end(), by_zone{});
         return {std::move(out)};
       }
@@ -262,7 +260,6 @@ namespace nodetool
   peerlist_types peerlist_storage::take_zone(epee::net_utils::zone zone)
   {
     peerlist_types out{};
-    out.white = do_take_zone(m_types.white, zone);
     out.gray = do_take_zone(m_types.gray, zone);
     return out;
   }
@@ -286,10 +283,21 @@ namespace nodetool
     // preference to others and gossiped onward (`get_peerlist_head` reads
     // the white list only, so an injected entry propagates).
     //
-    // Demotion costs ordering, not addresses: every entry is still here and
-    // still dialled, just without a head start it had not earned this run.
+    // Demotion costs ordering, not addresses -- BELOW THE CAP. Every entry is
+    // still here and still dialled, just without a head start it had not
+    // earned this run.
+    //
+    // At the cap that claim stops being exact, so state what actually happens.
+    // The two live lists had separate caps (1000 white + 5000 gray); one trust
+    // class means one cap, so a node saturating both persists up to
+    // P2P_LOCAL_GRAY_PEERLIST_LIMIT rather than the sum. `trim_gray_peerlist`
+    // erases from the `by_time` front, so what goes is the LEAST RECENTLY
+    // SEEN, and entries earned by a dial this session carry a fresh
+    // `last_seen` and survive preferentially. That is the cap doing its job on
+    // one pool instead of two -- not an arbitrary loss -- but it is a real
+    // reduction in persisted capacity and is not covered by "ordering, not
+    // addresses".
     add_peers(m_peers_gray.get<by_addr>(), std::move(peers.gray));
-    add_peers(m_peers_gray.get<by_addr>(), std::move(peers.white));
     trim_gray_peerlist();
     m_allow_local_ip = allow_local_ip;
     return true;
@@ -305,12 +313,12 @@ namespace nodetool
   void peerlist_manager::get_peerlist(peerlist_types& peers)
   { 
     CRITICAL_REGION_LOCAL(m_peerlist_lock);
-    // Save path (sole caller: `node_server::store_config`). Both live lists
-    // are written into the GRAY section and the white section is left empty,
-    // because the loader demotes everything anyway: a file still carrying a
-    // white section would assert a trust its reader is required to ignore,
-    // which is a trap for whoever reads this format next. The section stays
-    // in the stream -- always empty -- so the shape does not change again.
+    // Save path (sole caller: `node_server::store_config`). Both live lists go
+    // into the one persisted list. `peerlist_types` has no white member to
+    // write even by accident, so a file cannot carry a trust assertion its
+    // loader is required to ignore -- the earlier version of this relied on
+    // the caller passing a value-initialised struct, which is a convention,
+    // not an invariant.
     peers.gray.reserve(peers.gray.size() + m_peers_gray.size() + m_peers_white.size());
 
     copy_peers(peers.gray, m_peers_gray.get<by_addr>());

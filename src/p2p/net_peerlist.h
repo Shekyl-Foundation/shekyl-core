@@ -68,9 +68,14 @@ namespace nodetool
   constexpr std::uint64_t PEERLIST_STORE_LIST_CEILING =
     P2P_LOCAL_GRAY_PEERLIST_LIMIT * 3 * 4;
 
+  // The persisted peerlist carries CANDIDATES and nothing else. There is no
+  // `white` member on purpose: white membership means "this process dialled it
+  // and it answered", so a type that could express restored-white would let a
+  // future caller assert a trust no observation backs. The restore path cannot
+  // write the white list because it has no white list to write -- the
+  // invariant is enforced by the type rather than by a comment nobody reads.
   struct peerlist_types
   {
-    std::vector<peerlist_entry> white;
     std::vector<peerlist_entry> gray;
   };
 
@@ -117,6 +122,16 @@ namespace nodetool
     bool init(peerlist_types&& peers, bool allow_local_ip);
     size_t get_white_peers_count(){CRITICAL_REGION_LOCAL(m_peerlist_lock); return m_peers_white.size();}
     size_t get_gray_peers_count(){CRITICAL_REGION_LOCAL(m_peerlist_lock); return m_peers_gray.size();}
+    //! \return True only when this zone knows NO peer at all, in either list.
+    //
+    // Seed contact is the one thing this answers, and it must be keyed on the
+    // union rather than on the white list. White is empty on every boot now
+    // that trust is earned in-process, so a white-only test would report
+    // "I know nobody" to a node holding thousands of restored candidates --
+    // sending it to a seed ahead of dials that would have succeeded, showing
+    // seeds every restart, and letting a seed's handshake peerlist evict
+    // stored entries at cap.
+    bool has_no_known_peers(){CRITICAL_REGION_LOCAL(m_peerlist_lock); return m_peers_white.empty() && m_peers_gray.empty();}
     bool merge_peerlist(const std::vector<peerlist_entry>& outer_bs, const std::function<bool(const peerlist_entry&)> &f = NULL);
     bool get_peerlist_head(std::vector<peerlist_entry>& bs_head, bool anonymize, uint32_t depth = P2P_DEFAULT_PEERS_IN_HANDSHAKE);
     void get_peerlist(std::vector<peerlist_entry>& pl_gray, std::vector<peerlist_entry>& pl_white);

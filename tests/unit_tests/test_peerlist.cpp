@@ -90,9 +90,8 @@ namespace
     for (const epee::net_utils::zone zone : zones)
     {
       const nodetool::peerlist_types types{peers.take_zone(zone)};
-      EXPECT_TRUE(types.white.empty());
       EXPECT_TRUE(types.gray.empty());
-      pass = (types.white.empty() && types.gray.empty());
+      pass = types.gray.empty();
     }
     return pass;
   }
@@ -123,8 +122,8 @@ namespace
 TEST(peerlist_manager, restored_entries_are_all_demoted_to_gray)
 {
   nodetool::peerlist_types restored{};
-  restored.white.push_back(make_peer(1));
-  restored.white.push_back(make_peer(2));
+  restored.gray.push_back(make_peer(1));
+  restored.gray.push_back(make_peer(2));
   restored.gray.push_back(make_peer(3));
 
   nodetool::peerlist_manager plm;
@@ -142,6 +141,30 @@ TEST(peerlist_manager, restored_entries_are_all_demoted_to_gray)
   EXPECT_EQ(3u, plm.get_gray_peers_count());
 }
 
+// Seed contact must be keyed on knowing NO peer, not on knowing no TRUSTED
+// peer. White is empty on every boot now, so a white-only test would send
+// every restarting node to a seed ahead of a gray pool of thousands.
+TEST(peerlist_manager, a_restored_gray_pool_means_this_node_is_not_peerless)
+{
+  nodetool::peerlist_manager empty;
+  ASSERT_TRUE(empty.init(nodetool::peerlist_types{}, true));
+  // A genuinely empty node does need a seed.
+  EXPECT_TRUE(empty.has_no_known_peers());
+
+  nodetool::peerlist_types restored{};
+  restored.gray.push_back(make_peer(1));
+
+  nodetool::peerlist_manager plm;
+  ASSERT_TRUE(plm.init(std::move(restored), true));
+
+  // The regression limb: white IS empty here -- that is the whole point of the
+  // demotion -- so a predicate reading only the white list would report this
+  // node as peerless and send it to a seed.
+  EXPECT_EQ(0u, plm.get_white_peers_count());
+  EXPECT_EQ(1u, plm.get_gray_peers_count());
+  EXPECT_FALSE(plm.has_no_known_peers());
+}
+
 // The saved file must not assert a trust its own loader is required to
 // ignore. Both live lists are written into the gray section; the white
 // section stays in the stream and stays empty.
@@ -157,7 +180,6 @@ TEST(peerlist_manager, saved_store_carries_no_trust)
   nodetool::peerlist_types saved{};
   plm.get_peerlist(saved);
 
-  EXPECT_TRUE(saved.white.empty());
   EXPECT_EQ(2u, saved.gray.size());
 }
 
@@ -193,9 +215,9 @@ TEST(peerlist_storage, oversized_persisted_list_is_rejected)
   // disk-chosen magnitude at startup.
   nodetool::peerlist_storage peers{};
   nodetool::peerlist_types types{};
-  types.white.reserve(nodetool::PEERLIST_STORE_LIST_CEILING + 1);
+  types.gray.reserve(nodetool::PEERLIST_STORE_LIST_CEILING + 1);
   for (std::uint64_t i = 0; i <= nodetool::PEERLIST_STORE_LIST_CEILING; ++i)
-    types.white.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44, 55});
+    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44, 55});
 
   std::ostringstream stream{};
   EXPECT_TRUE(peers.store(stream, types));
@@ -206,9 +228,20 @@ TEST(peerlist_storage, oversized_persisted_list_is_rejected)
 
 TEST(peerlist_storage, store)
 {
-
   using address_type = epee::net_utils::address_type;
   using zone = epee::net_utils::zone;
+
+  // The store carries ONE list. Entries are given distinct addresses and ids
+  // so every assertion below is a lookup rather than a positional read --
+  // `do_take_zone` sorts by zone and makes within-zone order an implementation
+  // detail no test should depend on.
+  const auto find_id = [](const std::vector<nodetool::peerlist_entry>& v,
+                          nodetool::peerid_type id) -> const nodetool::peerlist_entry*
+  {
+    for (const auto& e : v)
+      if (e.id == id) return &e;
+    return nullptr;
+  };
 
   nodetool::peerlist_storage peers{};
   EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::tor, zone::i2p}));
@@ -216,10 +249,10 @@ TEST(peerlist_storage, store)
   std::string buffer{};
   {
     nodetool::peerlist_types types{};
-    types.white.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44, 55});
-    types.white.push_back({net::tor_address::unknown(), 64, 75});
-    types.gray.push_back({net::tor_address::unknown(), 99, 88});
+    types.gray.push_back({epee::net_utils::ipv4_network_address{1000, 10}, 44, 55});
     types.gray.push_back({epee::net_utils::ipv4_network_address{2000, 20}, 84, 45});
+    types.gray.push_back({net::tor_address::unknown(), 64, 75});
+    types.gray.push_back({net::tor_address::unknown(), 99, 88});
 
     std::ostringstream stream{};
     EXPECT_TRUE(peers.store(stream, types));
@@ -238,87 +271,36 @@ TEST(peerlist_storage, store)
   nodetool::peerlist_types types = peers.take_zone(zone::public_);
   EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::i2p}));
 
-  ASSERT_EQ(1u, types.white.size());
-  ASSERT_EQ(address_type::ipv4, types.white[0].adr.get_type_id());
-  EXPECT_EQ(1000u, types.white[0].adr.template as<epee::net_utils::ipv4_network_address>().ip());
-  EXPECT_EQ(10u, types.white[0].adr.template as<epee::net_utils::ipv4_network_address>().port());
-  EXPECT_EQ(44u, types.white[0].id);
-  EXPECT_EQ(55u, types.white[0].last_seen);
-
-  ASSERT_EQ(1u, types.gray.size());
-  ASSERT_EQ(address_type::ipv4, types.gray[0].adr.get_type_id());
-  EXPECT_EQ(2000u, types.gray[0].adr.template as<epee::net_utils::ipv4_network_address>().ip());
-  EXPECT_EQ(20u, types.gray[0].adr.template as<epee::net_utils::ipv4_network_address>().port());
-  EXPECT_EQ(84u, types.gray[0].id);
-  EXPECT_EQ(45u, types.gray[0].last_seen);
-
+  ASSERT_EQ(2u, types.gray.size());
   {
-    std::ostringstream stream{};
-    EXPECT_TRUE(peers.store(stream, types));
-    buffer = stream.str();
+    const nodetool::peerlist_entry* a = find_id(types.gray, 44);
+    ASSERT_NE(nullptr, a);
+    ASSERT_EQ(address_type::ipv4, a->adr.get_type_id());
+    EXPECT_EQ(1000u, a->adr.template as<epee::net_utils::ipv4_network_address>().ip());
+    EXPECT_EQ(10u, a->adr.template as<epee::net_utils::ipv4_network_address>().port());
+    EXPECT_EQ(55u, a->last_seen);
+
+    const nodetool::peerlist_entry* b = find_id(types.gray, 84);
+    ASSERT_NE(nullptr, b);
+    EXPECT_EQ(2000u, b->adr.template as<epee::net_utils::ipv4_network_address>().ip());
+    EXPECT_EQ(20u, b->adr.template as<epee::net_utils::ipv4_network_address>().port());
+    EXPECT_EQ(45u, b->last_seen);
   }
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::i2p}));
 
   types = peers.take_zone(zone::tor);
   EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::i2p, zone::tor}));
 
-  ASSERT_EQ(1u, types.white.size());
-  ASSERT_EQ(address_type::tor, types.white[0].adr.get_type_id());
-  EXPECT_STREQ(net::tor_address::unknown_str(), types.white[0].adr.template as<net::tor_address>().host_str());
-  EXPECT_EQ(0u, types.white[0].adr.template as<net::tor_address>().port());
-  EXPECT_EQ(64u, types.white[0].id);
-  EXPECT_EQ(75u, types.white[0].last_seen);
-
-  ASSERT_EQ(1u, types.gray.size());
-  ASSERT_EQ(address_type::tor, types.gray[0].adr.get_type_id());
-  EXPECT_STREQ(net::tor_address::unknown_str(), types.gray[0].adr.template as<net::tor_address>().host_str());
-  EXPECT_EQ(0u, types.gray[0].adr.template as<net::tor_address>().port());
-  EXPECT_EQ(99u, types.gray[0].id);
-  EXPECT_EQ(88u, types.gray[0].last_seen);
-
-
+  ASSERT_EQ(2u, types.gray.size());
   {
-    std::istringstream stream{buffer};
-    std::optional<nodetool::peerlist_storage> read_peers =
-      nodetool::peerlist_storage::open(stream, true);
-    ASSERT_TRUE(bool(read_peers));
-    peers = std::move(*read_peers);
+    const nodetool::peerlist_entry* a = find_id(types.gray, 64);
+    ASSERT_NE(nullptr, a);
+    ASSERT_EQ(address_type::tor, a->adr.get_type_id());
+    EXPECT_STREQ(net::tor_address::unknown_str(),
+                 a->adr.template as<net::tor_address>().host_str());
+    EXPECT_EQ(75u, a->last_seen);
+
+    const nodetool::peerlist_entry* b = find_id(types.gray, 99);
+    ASSERT_NE(nullptr, b);
+    EXPECT_EQ(88u, b->last_seen);
   }
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::i2p}));
-
-  types = peers.take_zone(zone::public_);
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::i2p}));
-
-  ASSERT_EQ(1u, types.white.size());
-  ASSERT_EQ(address_type::ipv4, types.white[0].adr.get_type_id());
-  EXPECT_EQ(1000u, types.white[0].adr.template as<epee::net_utils::ipv4_network_address>().ip());
-  EXPECT_EQ(10u, types.white[0].adr.template as<epee::net_utils::ipv4_network_address>().port());
-  EXPECT_EQ(44u, types.white[0].id);
-  EXPECT_EQ(55u, types.white[0].last_seen);
-
-  ASSERT_EQ(1u, types.gray.size());
-  ASSERT_EQ(address_type::ipv4, types.gray[0].adr.get_type_id());
-  EXPECT_EQ(2000u, types.gray[0].adr.template as<epee::net_utils::ipv4_network_address>().ip());
-  EXPECT_EQ(20u, types.gray[0].adr.template as<epee::net_utils::ipv4_network_address>().port());
-  EXPECT_EQ(84u, types.gray[0].id);
-  EXPECT_EQ(45u, types.gray[0].last_seen);
-
-
-  types = peers.take_zone(zone::tor);
-  EXPECT_TRUE(check_empty(peers, {zone::invalid, zone::public_, zone::i2p, zone::tor}));
-
-  ASSERT_EQ(1u, types.white.size());
-  ASSERT_EQ(address_type::tor, types.white[0].adr.get_type_id());
-  EXPECT_STREQ(net::tor_address::unknown_str(), types.white[0].adr.template as<net::tor_address>().host_str());
-  EXPECT_EQ(0u, types.white[0].adr.template as<net::tor_address>().port());
-  EXPECT_EQ(64u, types.white[0].id);
-  EXPECT_EQ(75u, types.white[0].last_seen);
-
-  ASSERT_EQ(1u, types.gray.size());
-  ASSERT_EQ(address_type::tor, types.gray[0].adr.get_type_id());
-  EXPECT_STREQ(net::tor_address::unknown_str(), types.gray[0].adr.template as<net::tor_address>().host_str());
-  EXPECT_EQ(0u, types.gray[0].adr.template as<net::tor_address>().port());
-  EXPECT_EQ(99u, types.gray[0].id);
-  EXPECT_EQ(88u, types.gray[0].last_seen);
-
 }

@@ -1757,7 +1757,9 @@ namespace nodetool
     for(auto& zone : m_network_zones)
     {
       size_t start_conn_count = get_outgoing_connections_count(zone.second);
-      if(!zone.second.m_peerlist.get_white_peers_count() && !connect_to_seed(zone.first))
+      // Seeds are for a node that knows NOBODY -- see `has_no_known_peers`,
+      // which carries why this is keyed on both lists rather than on white.
+      if(zone.second.m_peerlist.has_no_known_peers() && !connect_to_seed(zone.first))
       {
         continue;
       }
