@@ -302,7 +302,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11
   - Target: pre-genesis
 
-- **`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` dedup (CT-1).** Target: PHASE_2B / [`config/consensus_constants.json`](../config/consensus_constants.json)
+- **`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` dedup (CT-1).** Lands with PHASE_2B, in [`config/consensus_constants.json`](../config/consensus_constants.json)
   - Target: pre-genesis
 
 - **Gate-6 synchronized-exit wargame round (swan-2/W8, 2026-06-11).** A black [`design/F1_TA3_TA7_LIFETIME_WINDOW.md`](./design/F1_TA3_TA7_LIFETIME_WINDOW.md)
@@ -1088,7 +1088,7 @@ Default. Lands before genesis if it should exist at launch.
 
 Exceptional deferral with a named blocker. This list stays tiny.
 
-- **A4 cold signing (`UnsignedTxBundle` / `SignedTxBundle`).** Genesis ships cold *storage* (seed custody), not cold *signing*. Named blocker: verified display on the offline device and the envelope-sealed bundle are unstarted product work; a half-form is worse than none.
+- **Hardware-offload wallet capability.** Signing offload to a hardware device, as a wallet capability. Named blocker: no vendor ships firmware that signs hybrid ML-DSA-65 + Ed25519 over FCMP++ witnesses. Zero code exists by design (rule 23 DEFERRED): the v1 envelope layout will be designed against a real device, not guessed in advance. Unused v1 capability bytes are RESERVED in [`WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) without naming this feature.
   - Target: post-genesis
 
 - **PQC multisig hardware-wallet integration / BIP-39 derivation parity.** Named blocker: vendor SDK availability and outreach; `HARDWARE_WALLETS.md` authoring is the prerequisite.
