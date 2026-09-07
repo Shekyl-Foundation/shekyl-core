@@ -126,15 +126,43 @@ part that makes an operator's declaration and a router's claim safe to use.
 | Option | Adversary / channel | Concedes | Falsifier |
 |---|---|---|---|
 | (a) Hairpin self-dial: dial the candidate, recognise our own nonce on accept | trusts no remote | **false negatives on routers that do not hairpin** — common consumer gear | a NAT class where hairpin succeeds but the endpoint is not externally reachable |
-| (b) Peer-assisted dial: ask a peer to dial the candidate; a nonce-bearing arrival on our listener proves it | a lying peer can only produce an arrival by dialling *some* reachable endpoint of ours, and the **accepting socket** names the port | proves the **port**, not the address — we never observe our own external IP | a construction where a peer causes an arrival on listener P without P being externally reachable |
+| (b) Peer-assisted **dial-back**: ask a peer to dial the candidate; the port is read from **our own accepting socket**, never from anything the peer reports | a peer reporting a false port — inadmissible, because no reported value is read | proves reachability of *an* endpoint, not specifically the candidate (see below); proves no address either way | an attesting peer names a port our listener is not bound to and the mechanism accepts it |
 | (c) Peer echo (`addr_you`) accepted directly | — | **reproduces §4 in address form**: an attacker echoes an honest node's address | — (rejected on its face) |
 | (d) k-of-n echo corroboration | an attacker holding k of our connections | that is the eclipse precondition, not a defence against it | — |
 
 **Proposed: (a) and (b) together, (c)/(d) as candidate sources only.** The two
 verifiers are complementary in exactly the way the sources are: echo can give
-an address but not a port; peer-assisted dial gives a port but not an address.
-**(b)'s reasoning is this round's least-tested claim and the first thing the
-wargame should attack.**
+an address but not a port; dial-back gives a port but not an address.
+
+#### (b) is two mechanisms, and only one is admissible (amended 2026-09-06)
+
+The round's own discriminator — **minted versus observed**, not overlay versus
+clearnet — applies to (b) itself, and separates two things the first draft's
+summary did not distinguish:
+
+- **Peer observes our outbound connection and reports the port.** The port it
+  sees is the **ephemeral source port** of an outbound socket, not our
+  listener's, and it arrives as a value the peer chose to send. Minted by the
+  attester, with extra steps. **Rejected.**
+- **Peer dials back, and we read the port off our own accepting socket.**
+  Observed locally; nothing the peer says is consulted. **Adopted.**
+
+**The requirement this forces, stated so no implementation can drift into the
+first variant: no port value is ever read from a field a peer sends.** The
+peer's role is to cause a connection, never to describe one. Rick's falsifier
+is the gate: an attesting peer names a port our listener is not bound to, and
+the mechanism must reject it — if it cannot, the value is minted.
+
+**And the adopted variant is weaker than the first draft claimed.** An arrival
+proves that *some* endpoint of ours routed a connection, **not that the
+candidate did** — with a single listener, every arrival lands identically
+however it was reached. It discriminates between candidates only while the
+attesting peer has **no other known route to our listener**. For a peer we
+dialled outbound that precondition typically holds, since the only listener
+address it has is the one we announced — but it is a precondition, not a
+proof, and it fails against a peer that learned another endpoint of ours from
+gossip. **State it as a conditional guarantee; do not cite (b) as
+unconditional reachability proof.**
 
 ### PWD-E3 — self-dial avoidance once `peer_id` is gone
 
@@ -207,6 +235,32 @@ the strongest argument for PWD-E2(b).
 | F2 | Whatever PWD-E3/E4 rule must land **with** the `peer_id` removal, not after it | same lane — removing job 1 and job 2 with no replacement is the regression this round exists to prevent |
 | F3 | Rust shape (endpoint typestate `Candidate<Source>` → `Verified{at}` → `Stale`; `Zone` marker types with `type Dedup`/`type Announced`, distinct from `RelayZone`) | the Rust p2p node; rule-18 question of whether `RelayZone` derives from the transport zone is **not** settled here |
 | F4 | Re-home PWD-I2's eclipse-completion-oracle argument when `ANON_ZONE_SENTINEL_PEER_ID` is deleted | the removal lane — the argument outlives its subject and is the standing reason not to reintroduce per-node identity |
+
+## 6b. The chain, drawn (added 2026-09-06)
+
+The ordering hazard is no longer a two-item sequence. `peer_id` leaving before
+its replacements exist is now a property of a **four-link chain with an
+unbuilt middle**:
+
+```
+  PR #637  ──►  p2p/basic-node-data-address  ──►  PWD-I1 complete
+  (OPEN)        (declared, UNBUILT)               (ruled, unimplemented)
+                        ▲
+                        │  gated on BOTH:
+                        ├── job 2 replacement  ── PWD-E4 (wiring exists, unconsulted)
+                        └── job 1 replacement  ── PWD-E3
+                                                    └── gated on endpoint
+                                                        determination — PWD-E1/E2
+                                                        (this round)
+   and separately: B9 restores the honest-duplicate half I1 removes
+```
+
+**Why it must be drawn.** Each link is individually reasonable and the chain
+is not: the middle link is unbuilt, the link after it is ruled, and the two
+gates on it live in a round that is still open. A lane that lands `peer_id`'s
+removal because "I1 is ruled" would be reading one link, not the chain.
+PWD-E5's requirement sits on the same middle link and makes it strictly larger
+than its title suggests.
 
 ## 7. What would reopen this round
 
