@@ -1328,11 +1328,17 @@ walks `boost::unordered_map<uuid, …>` (`m_connects`), so the order is hash ord
 over random UUIDs: **not temporal, and not stable between passes.**
 
 > The first version of this correction said "the peer that most recently reached
-> `state_normal`", which is what the variable's inherited name
-> (`last_synced_peer_id`) implies and what the code does not do. Recorded because
-> it is the same error the rest of this section corrects — trusting a name over
-> the mechanism — committed while correcting it. The variable is renamed in this
-> change so the next reader does not inherit the same trap.
+> `state_normal`", which is what the variable's inherited name implied and what
+> the code does not do. Recorded because it is the same error the rest of this
+> section corrects — trusting a name over the mechanism — committed while
+> correcting it.
+>
+> The variable is now `some_synced_connection`. It was `last_synced_peer_id`
+> when the misreading happened; `dev` renamed it to `last_synced_connection` in
+> the same window (dropping `peer_id` from its subject, with the identifier's
+> removal), and this change takes that correction and drops the false `last`
+> as well. Both halves were real: one about *what* it holds, one about *which
+> one* it holds.
 
 The behaviour is nonetheless defensible and is left alone: every candidate has
 already finished syncing, so there is no "mid-work" peer to spare and no ordering
