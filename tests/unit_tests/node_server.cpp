@@ -1610,14 +1610,24 @@ TEST(node_server, handshake_nonce_fires_once_and_only_within_its_zone)
     << "erase-on-match failed: a peer that learned the nonce by being dialed "
        "could replay it";
 
-  // THE ERASE LEG, which is what BOUNDEDNESS rests on — independent of the
-  // insert ordering the sibling test pins. Both exits are checked, because a
-  // single-exit test passes while the other path leaks, and each is checked
-  // by COUNT as well as by detection: a set that still holds the value is a
-  // leak whether or not anything would still match it.
+  // THE ERASE LEG — independent of the insert ordering the sibling test
+  // pins. Both exits are checked, because a single-exit test passes while
+  // the other path leaks, and each is checked by COUNT as well as by
+  // detection: a set that still holds the value is a leak whether or not
+  // anything would still match it.
+  //
+  // The two exits do NOT carry the same guarantee, and saying they do is the
+  // conflation P2P_2_ENDPOINT_ROUND.md §5c corrects:
+  //   - termination is what BOUNDEDNESS rests on. The set is attempt-scoped
+  //     by construction (see m_inflight_handshake_nonces), so this exit
+  //     alone bounds cardinality by in-flight attempts.
+  //   - match is SINGLE-FIRE / anti-replay plus prompt removal. Delete it
+  //     and the set is still bounded — the scope guard still clears the
+  //     entry at termination — but a nonce could fire twice in the window
+  //     before then.
   //
   // Exit 1 — attempt termination (what do_handshake_with_peer's scope guard
-  // calls on every path: success, failure, timeout).
+  // calls on every path: success, failure, timeout). This is the size bound.
   EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_))
     << "the match above must have removed it";
   data.server->record_outbound_handshake_nonce(epee::net_utils::zone::public_, nonce);
@@ -1628,17 +1638,19 @@ TEST(node_server, handshake_nonce_fires_once_and_only_within_its_zone)
        "without bound across attempts";
   EXPECT_FALSE(data.server->detect_self_handshake(epee::net_utils::zone::public_, nonce));
 
-  // Exit 2 — match. Erase-on-match is the other removal path, and the count
-  // is the observable a missing erase cannot satisfy.
+  // Exit 2 — match. Erase-on-match is the other removal path; the count is
+  // the observable a missing erase cannot satisfy. What this pins is
+  // single-fire and prompt removal, NOT a second size bound.
   const std::array<uint8_t, 32> second{{0x7c}};
   data.server->record_outbound_handshake_nonce(epee::net_utils::zone::public_, second);
   EXPECT_TRUE(data.server->detect_self_handshake(epee::net_utils::zone::public_, second));
   EXPECT_EQ(0u, data.server->inflight_handshake_nonce_count(epee::net_utils::zone::public_))
-    << "a matched nonce stayed in the set: matches accumulate and the set "
-       "grows without bound";
+    << "a matched nonce stayed in the set: it would linger until the attempt "
+       "terminates and could fire a second time in that window";
 
   // Coverage boundary, stated so it is not mistaken for completeness: this
-  // pins BOTH erase implementations the two exits call. That
+  // pins BOTH erase implementations the two exits call, each for the
+  // guarantee named above. That
   // do_handshake_with_peer attaches the scope guard at all is structural
   // (RAII over a local, so every exit path runs it) and is NOT observed
   // here.
