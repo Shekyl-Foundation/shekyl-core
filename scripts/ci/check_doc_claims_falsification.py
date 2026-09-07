@@ -456,6 +456,36 @@ def main() -> None:
         case("numbered: run does not start at 1", "numbered list runs",
              doc=GOOD.replace("1. one\n2. two\n3. three",
                               "2. one\n3. two\n4. three")),
+        # a repeated `1.` at the same indent is a mis-numbered list, not a new
+        # one — CommonMark continues an ordered list across a repeated number.
+        case("numbered: list restarts mid-run", "numbered list runs",
+             doc=GOOD.replace("1. one\n2. two\n3. three",
+                              "1. one\n2. two\n1. three\n2. four\n3. five")),
+        # a count claim must bind to ITS table, not the next one anywhere below
+        case("counts: table deleted, later table below", "no table with data rows",
+             doc=GOOD.replace("""**3 rows** follow:
+
+| ID | Note |
+| --- | --- |
+| XX-W1 | a |
+| XX-W2 | b |
+| XX-W3 | c |""", """**3 rows** follow:
+
+## 3. Elsewhere
+
+| ID | Note |
+| --- | --- |
+| XX-W1 | a |
+| XX-W2 | b |
+| XX-W3 | c |""")),
+        # a citation must not escape the repository
+        case("citations: path escapes the tree", "which does not exist",
+             doc=sub("`src/thing.cpp:3`", "`src/../../etc/thing.py:1`")),
+        # records-was must match path components, not substrings: a live
+        # document must not be excused from the gate by its NAME.
+        case("records-was lookalike is still live", "rose to",
+             corpus=lambda t: (t / "docs" / "FOO_CHANGELOG.md").write_text(
+                 "# Lookalike\n\nSee `src/gone.cpp:1`.\n", encoding="utf-8")),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]

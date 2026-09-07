@@ -103,6 +103,12 @@ numeric and structural claims against source, and **does not check
 rationales** — a document can pass it green and still be wrong about the
 world.
 
+Where a leg declines a subject it cannot judge, it says so on a `Not checked:`
+line rather than staying quiet — `§N.M` references, for instance, are treated
+as pointing at *another* document's section and are reported as unchecked
+rather than failed, since a document without dotted headings of its own cannot
+tell a cross-reference from a typo.
+
 ## Work-item targets
 
 There is no V3.1 / V3.2 / V3.x release train. Allowed FOLLOWUPS / plan `Target:` values:

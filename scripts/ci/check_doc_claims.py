@@ -96,6 +96,12 @@ MIN_DOCS = 50
 # document opted out.
 MIN_DECLARATIONS = 1
 
+# Stated non-coverage. Not errors — a leg declining a subject it cannot judge
+# is correct behaviour — but never silent either, because "checked and passed"
+# and "not looked at" must not share an appearance. Printed on every run,
+# green or red.
+NOTES: list[str] = []
+
 
 def rel(p: pathlib.Path) -> str:
     return str(p.relative_to(ROOT))
@@ -203,12 +209,37 @@ def check_range(p, text, arg, errs, corpus):
 
 
 def check_sections(p, text, _arg, errs):
-    have = {m.group(1) for m in re.finditer(r"^#{2,4} (\d+[a-z]?)\.", text, re.M)}
+    """Every §N names a section this document has — and §N.M is another's.
+
+    Dotted references are NOT silently dropped, they are deliberately out of
+    scope, and the difference has to be visible. In the adopting audit all four
+    `§6.6` references mean DRS §6.6 — a section of DAEMON_REDB_STORE.md, named
+    as such at its own §6 heading. Checking them against this document's
+    headings would fail four correct cross-document references, which is the
+    expensive direction: a false constraint teaches readers to work around the
+    gate. But leaving them unmentioned would let `§99.9` — a typo — pass as
+    though it had been checked, so the count of skipped references is reported
+    rather than assumed to be zero.
+
+    Documents that DO use dotted headings get their dotted references checked,
+    because there the ambiguity does not arise.
+    """
+    have = {m.group(1) for m in
+            re.finditer(r"^#{2,4} (\d+[a-z]?(?:\.\d+)?)\.?\s", text, re.M)}
     if not have:
         errs.append(f"{rel(p)}: declares `sections` but has no numbered headings")
         return 0
+    dotted_local = any("." in h for h in have)
+    if not dotted_local:
+        external = len(re.findall(r"§\d+[a-z]?\.\d+", text))
+        if external:
+            NOTES.append(f"{rel(p)}: {external} dotted §N.M reference(s) treated "
+                         "as cross-document and NOT checked (this document has "
+                         "no dotted headings of its own)")
+    pat = (r"§(\d+[a-z]?(?:\.\d+)?)(?![\d.])" if dotted_local
+           else r"§(\d+[a-z]?)(?![\d.])")
     seen = 0
-    for m in re.finditer(r"§(\d+[a-z]?)(?![\d.])", text):
+    for m in re.finditer(pat, text):
         seen += 1
         if m.group(1) not in have:
             line = text[: m.start()].count("\n") + 1
@@ -231,10 +262,15 @@ def _numbered_runs(text: str) -> list[list[tuple[int, int]]]:
     the face of found-nothing-to-check.
 
     Blank lines do not close a run: a loose markdown list is separated by them
-    and is still one list. What closes a run is prose at or left of its own
-    indent, or a fresh `1.` at the same indent, which is a new list rather than
-    a renumbering fault — that is how markdown renders it, so reading it any
-    other way would report a defect the document does not have.
+    and is still one list. Only prose at or left of a run's own indent closes
+    it.
+
+    A repeated `1.` at the same indent does NOT start a new list, though an
+    earlier draft treated it as one. CommonMark continues an ordered list
+    across a repeated number — only the first item's number is honoured — so
+    `1, 2, 1, 2, 3` is one five-item list that has been mis-numbered, which is
+    exactly the fault this leg exists to report. Splitting it dropped the
+    two-item fragment under the three-item floor and passed the remainder.
     """
     runs: dict[int, list[tuple[int, int]]] = {}
     out: list[list[tuple[int, int]]] = []
@@ -250,8 +286,6 @@ def _numbered_runs(text: str) -> list[list[tuple[int, int]]]:
         if m:
             ind, num = len(m.group(1).expandtabs()), int(m.group(2))
             close(lambda d, ind=ind: d > ind)      # children end at their parent
-            if num == 1 and runs.get(ind):
-                close(lambda d, ind=ind: d == ind)  # a new list, not a gap
             runs.setdefault(ind, []).append((i, num))
         elif line.strip():
             ind = len(line[: len(line) - len(line.lstrip())].expandtabs())
@@ -329,20 +363,32 @@ def untrusted_submodules() -> tuple[str, ...]:
     # non-empty directory proves neither — a stale or partial checkout has
     # files, they are simply not the recorded ones, and citations resolved
     # against them measure a different tree than CI does.
+    gm = ROOT / ".gitmodules"
     try:
         r = subprocess.run(["git", "-C", str(ROOT), "submodule", "status"],
                            capture_output=True, text=True, timeout=60)
-        if r.returncode == 0:
-            for line in r.stdout.splitlines():
-                if line[:1] in ("-", "+", "U") and len(line.split()) >= 2:
-                    out.append(line.split()[1].rstrip("/") + "/")
-    except (OSError, subprocess.SubprocessError):           # pragma: no cover
-        pass
+        failed = r.returncode != 0
+    except (OSError, subprocess.SubprocessError):
+        r, failed = None, True
+    # If this tree HAS submodules and git cannot say what state they are in,
+    # stop. Falling back to "is the directory non-empty" would answer a
+    # different question and call it the same answer: a populated directory
+    # does not prove the recorded commit, which is the very thing the fallback
+    # would be standing in for. An unavailable check is not a passed check.
+    if failed and gm.is_file():
+        sys.exit("FAIL: `git submodule status` could not be read, so this run "
+                 "cannot establish whether cited submodule content is the "
+                 "content this tree records. The directory test that remains "
+                 "detects an empty checkout only, and would silently accept a "
+                 "stale one — a weaker check wearing the stronger one's name.")
+    if r is not None and not failed:
+        for line in r.stdout.splitlines():
+            if line[:1] in ("-", "+", "U") and len(line.split()) >= 2:
+                out.append(line.split()[1].rstrip("/") + "/")
     # ...and the directory test as well, not instead: it still catches a tree
     # git cannot speak for at all, which is the state every synthetic corpus in
     # the falsification matrix is in. The two detectors cover different gaps,
     # so the answer is their union.
-    gm = ROOT / ".gitmodules"
     if gm.is_file():
         for m in re.finditer(r"^\s*path\s*=\s*(\S+)",
                              gm.read_text(encoding="utf-8"), re.M):
@@ -389,6 +435,13 @@ def resolve(path: str) -> int:
                     "files that are merely missing locally, or present at some "
                     "other commit, would disagree with CI by environment rather "
                     "than by fact.")
+        # `..` never appears in a real citation, and `ROOT / path` would happily
+        # resolve one outside the repository and report an unrelated host file
+        # as a live citation. The token is not this gate's subject: it is not a
+        # path into the tree at all.
+        if ".." in pathlib.PurePosixPath(path).parts:
+            _LENGTHS[path] = -1
+            return _LENGTHS[path]
         f = ROOT / path
         if not f.is_file() and not path.startswith(ROOTS):
             f = ROOT / "rust" / path           # crate-relative citation
@@ -438,6 +491,12 @@ def check_citations(p, text, _arg, errs):
 def check_counts(p, text, _arg, errs):
     seen = 0
     for m in re.finditer(r"\*\*(\d+) (rows|sub-databases)\*\*", text):
+        # Bounded to the claim's own neighbourhood. Scanning forward until the
+        # first table found meant a claim whose table was DELETED bound to the
+        # next unrelated one — possibly sections later — and passed whenever
+        # that table's row count happened to match. A heading, or the next
+        # count claim, ends the search: past either, any table belongs to
+        # something else.
         rows, started = [], False
         for line in text[m.end():].splitlines():
             if line.startswith("|"):
@@ -445,6 +504,9 @@ def check_counts(p, text, _arg, errs):
                 if not re.match(r"^\|[\s:|-]+\|?\s*$", line):
                     rows.append(line)
             elif started:
+                break
+            elif line.startswith("#") or re.search(r"\*\*\d+ (rows|sub-databases)\*\*",
+                                                   line):
                 break
         if len(rows) < 2:
             # A claim with no table under it is the subject going missing, not
@@ -478,14 +540,19 @@ CHECKS = {"series": check_series, "range": check_range, "sections": check_sectio
 # when written, so a citation into a since-deleted file is history, not rot —
 # its repair is to pin the sha, not to re-anchor. The ratchet counts live
 # documents only.
-RECORDS_WAS = ("completed/", "audit_trail/", "benchmarks/", "CHANGELOG.md",
-               "V3_WALLET_DECISION_LOG.md")
+# Directory components and exact filenames. A substring test classified any
+# path merely CONTAINING one of these as historical, so `FOO_CHANGELOG.md` or a
+# directory named `notcompleted/` would drop out of the ratchet and the range
+# check — a live document could be excused from the gate by its name.
+RECORDS_WAS_DIRS = ("completed", "audit_trail", "benchmarks")
+RECORDS_WAS_FILES = ("CHANGELOG.md", "V3_WALLET_DECISION_LOG.md")
 BASELINE = DOCS / "ci" / "doc-claims-baseline.txt"
 
 
 def is_records_was(p: pathlib.Path) -> bool:
-    r = rel(p)
-    return any(seg in r for seg in RECORDS_WAS)
+    parts = pathlib.PurePosixPath(rel(p)).parts
+    return (any(d in parts[:-1] for d in RECORDS_WAS_DIRS)
+            or parts[-1] in RECORDS_WAS_FILES)
 
 
 def dead_citations(corpus) -> list[str]:
@@ -710,6 +777,8 @@ def main() -> None:
                 f"Add to the baseline:\n    declares: {doc} "
                 + ",".join(sorted(legs)))
 
+    for n in NOTES:
+        print(f"     Not checked: {n}")
     if errors:
         sys.exit(f"FAIL: {len(errors)} declared documentation claim(s) disagree "
                  "with what they describe:\n" + "\n".join("  " + e for e in errors))
