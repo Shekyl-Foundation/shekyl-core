@@ -41,7 +41,7 @@ const _: () = {
     // is const-evaluated and cannot be.
     assert!(
         GENERATED_DAA_TARGET_SECONDS.is_multiple_of(60),
-        "DAA target must be a whole number of minutes, or the tail-per-block          division truncates and the FL-R14 headroom proof below is weakened"
+        "DAA target must be a whole number of minutes, or the tail-per-block division truncates and the FL-R14 headroom proof below is weakened"
     );
     const TAIL_PER_BLOCK: u64 =
         GENERATED_FINAL_SUBSIDY_PER_MINUTE * (GENERATED_DAA_TARGET_SECONDS / 60);
