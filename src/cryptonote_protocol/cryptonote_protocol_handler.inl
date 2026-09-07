@@ -346,7 +346,6 @@ namespace cryptonote
     double up_curr_sum = 0.0;
 
     ss << std::setw(30) << std::left << "Remote Host"
-      << std::setw(20) << "Peer id"
       << std::setw(20) << "Support Flags"      
       << std::setw(30) << "Recv/Sent (inactive,sec)"
       << std::setw(25) << "State"

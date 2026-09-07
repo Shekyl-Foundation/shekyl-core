@@ -107,6 +107,41 @@ namespace nodetool
   //! \return True if `commnd` is filtered (ignored/dropped) for `address`
   bool is_filtered_command(epee::net_utils::network_address const& address, int command);
 
+  /*! Combine the host this node OBSERVED on the socket with the port a peer
+    ADVERTISED, or nothing if no endpoint can be derived.
+
+    The advertised host is not a parameter, which is the point: a peer's
+    announcement is a claim about WHERE it can be dialed, and only the port
+    half of that claim is admissible — the host is the one we observed. A
+    caller cannot pass the advertised host where the observed one belongs
+    because there is nowhere to put it. `handle_handshake` reads
+    `node_data.address.port()` and this `observed` from the connection.
+
+    \return nothing for a zero port (undialable) or an `observed` address
+      whose type carries no host we can re-port (the anonymity zones, whose
+      self-addresses travel as peerlist entries instead). */
+  std::optional<epee::net_utils::network_address> derive_advertised_endpoint(
+    const epee::net_utils::network_address& observed, uint16_t advertised_port);
+
+  /*! Does an existing connection consume `candidate`'s host for outbound use?
+
+    The same-host outbound cap's per-connection test, named so it can be
+    exercised without a live server. Two properties live here and both are
+    load-bearing:
+
+    - it matches on HOST, not address, which is what makes it stronger than
+      the deleted `peer_id` arm: that arm needed a self-declared id AND exact
+      IP equality, so an adversary minting ids never tripped it;
+    - it consults OUTBOUND connections only. Capping on inbound would let any
+      peer suppress this node's dials to a host simply by connecting to us. */
+  inline bool outbound_connection_takes_host(
+    const bool connection_is_income,
+    const epee::net_utils::network_address& connected,
+    const epee::net_utils::network_address& candidate)
+  {
+    return !connection_is_income && candidate.is_same_host(connected);
+  }
+
   // hides boost::future and chrono stuff from mondo template file
   std::optional<boost::asio::ip::tcp::socket>
   socks_connect_internal(const std::atomic<bool>& stop_signal, boost::asio::io_context& service, const net::socks::endpoint& proxy, const epee::net_utils::network_address& remote);

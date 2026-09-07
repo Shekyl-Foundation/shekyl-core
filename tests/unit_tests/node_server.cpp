@@ -1394,6 +1394,63 @@ TEST(node_server, tx_proxy_outbound_floor_refuses_underprovisioned_counts)
   EXPECT_EQ(-1, omitted->front().max_connections);
 }
 
+TEST(node_server, an_advert_contributes_its_port_and_never_its_host)
+{
+  // The receive-side discipline, at the seam that owns it. An announcement
+  // is a claim about WHERE a peer can be dialed and only its PORT is
+  // admissible; the host is the one this node OBSERVED on the socket.
+  // `derive_advertised_endpoint` takes the two as separate inputs, so a
+  // caller cannot pass the advertised host where the observed one belongs --
+  // there is nowhere to put it. This is the POSITIVE limb; the live
+  // `dual_stack` run carries the negative one (a lying host never appears in
+  // a readout) but cannot carry this one, because a loopback-bound test
+  // daemon's derived entry is refused by `is_host_allowed` before it can be
+  // observed.
+  const epee::net_utils::network_address observed{MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 44444)};
+  const epee::net_utils::network_address expected{MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 28099)};
+
+  const auto derived = nodetool::derive_advertised_endpoint(observed, 28099);
+  ASSERT_TRUE(bool(derived));
+  EXPECT_EQ(expected.str(), derived->str())
+    << "the endpoint must be the OBSERVED host with the ADVERTISED port";
+  // The socket's own ephemeral port is not the claim either.
+  EXPECT_NE(observed.str(), derived->str());
+
+  // A zero port is not dialable, so there is nothing to record.
+  EXPECT_FALSE(bool(nodetool::derive_advertised_endpoint(observed, 0)));
+
+  // An anonymity-zone remote carries no host to re-port: those self-addresses
+  // travel as timed-sync peerlist entries, never through this path.
+  EXPECT_FALSE(bool(nodetool::derive_advertised_endpoint(
+    epee::net_utils::network_address{net::tor_address::unknown()}, 28099)));
+}
+
+TEST(node_server, same_host_outbound_cap_matches_host_and_only_outbound)
+{
+  // The cap is the load-bearing replacement for peer_id's duplicate-detection
+  // arm -- the amendment names it the condition under which removing the
+  // field is safe -- so it gets its own test rather than riding on the
+  // selection loop that calls it.
+  const epee::net_utils::network_address candidate{MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 18080)};
+  const epee::net_utils::network_address same_host_other_port{MAKE_IPV4_ADDRESS_PORT(1, 2, 3, 4, 9999)};
+  const epee::net_utils::network_address other_host{MAKE_IPV4_ADDRESS_PORT(5, 6, 7, 8, 18080)};
+
+  // Host, not address: the exact-address check this replaces would miss it,
+  // and so did the peer_id arm (which also needed a self-declared id to
+  // match, so an adversary minting ids never tripped it).
+  EXPECT_TRUE(nodetool::outbound_connection_takes_host(false, same_host_other_port, candidate));
+
+  // Control. Without it a predicate that refused everything would pass.
+  EXPECT_FALSE(nodetool::outbound_connection_takes_host(false, other_host, candidate));
+
+  // INBOUND must never cap an outbound dial: otherwise any peer suppresses
+  // this node's dials to a host just by connecting to us.
+  EXPECT_TRUE(nodetool::outbound_connection_takes_host(false, candidate, candidate));
+  EXPECT_FALSE(nodetool::outbound_connection_takes_host(true, candidate, candidate))
+    << "an inbound connection consumed the host's outbound slot: a peer can "
+       "suppress our dials by dialling us";
+}
+
 TEST(node_server, handshake_nonce_is_recorded_before_it_can_be_written)
 {
   // The §5c falsifier (P2P_2_ENDPOINT_ROUND.md): the in-flight-set insert

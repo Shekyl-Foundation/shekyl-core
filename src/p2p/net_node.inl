@@ -1267,7 +1267,7 @@ namespace nodetool
     bool found = false;
     zone.m_net_server.get_config_object().foreach_connection([&](const p2p_connection_context& cntxt)
     {
-      if (!cntxt.m_is_income && adr.is_same_host(cntxt.m_remote_address))
+      if (outbound_connection_takes_host(cntxt.m_is_income, cntxt.m_remote_address, adr))
       {
         found = true;
         return false; // stop enumerating
@@ -2160,7 +2160,16 @@ namespace nodetool
     // and thereby suppresses the announcement -- the decision follows from
     // the node's reachability, and an operator changes it by changing that
     // reachability, not by asserting a different answer.
-    if (zone.m_can_announce && zone.m_config.m_net_config.max_in_connection_count > 0)
+    // `m_can_announce` is the PUBLIC zone's reachability flag (it is what the
+    // deleted back-ping's pingback capability became). An anonymity zone's
+    // reachability is its configured self-address instead: a serving zone has
+    // one because `--anonymous-inbound` gave it one, so gating it on the
+    // public flag would silently announce the unknown sentinel from a node
+    // that is in fact reachable.
+    const bool zone_is_reachable = (zone_type == epee::net_utils::zone::public_)
+      ? zone.m_can_announce
+      : (zone.m_our_address.get_type_id() != epee::net_utils::address_type::invalid);
+    if (zone_is_reachable && zone.m_config.m_net_config.max_in_connection_count > 0)
     {
       if (zone_type == epee::net_utils::zone::public_)
       {
@@ -2676,34 +2685,29 @@ namespace nodetool
     context.m_in_timedsync = false;
     context.support_flags = arg.node_data.support_flags;
 
-    // The advertised address is a claim about WHERE this peer can be
-    // dialed. Only its PORT is read; the host half is never trusted, never
-    // even inspected -- the host is the one this node OBSERVED on the
-    // socket. The derived entry enters GRAY: white is earned by an actual
-    // outbound dial (earned trust), and a wrong port costs that later dial
-    // nothing but the failure that evicts the entry. Gray is never
-    // disclosed to peers, so an unverified entry poisons no view but our
-    // own, for one dial. Anonymity-zone self-addresses travel via the
-    // timed-sync peerlist self-announcement instead, never through this
-    // socket-derived path.
+    // An advert is a claim about WHERE this peer can be dialed, and only its
+    // PORT is admissible: the host is the one this node OBSERVED on the
+    // socket, which is why `derive_advertised_endpoint` takes the two as
+    // separate inputs -- the advertised host has nowhere to go. The derived
+    // entry enters GRAY (white is earned by an actual outbound dial), and a
+    // wrong port costs that later dial nothing but the failure that evicts
+    // the entry. Gray is never disclosed to peers, so an unverified entry
+    // poisons no view but our own, for one dial. Anonymity-zone
+    // self-addresses are not derivable from a socket and travel as
+    // timed-sync peerlist self-announcements instead.
     {
-      const uint32_t advertised_port = arg.node_data.address.port();
-      const epee::net_utils::network_address na = context.m_remote_address;
-      if(advertised_port != 0 && azone == epee::net_utils::zone::public_)
+      const auto derived = derive_advertised_endpoint(
+        context.m_remote_address, arg.node_data.address.port());
+      if (derived)
       {
-        peerlist_entry pe;
-        if (na.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
-          pe.adr = epee::net_utils::ipv4_network_address(na.as<epee::net_utils::ipv4_network_address>().ip(), advertised_port);
-        else if (na.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
-          pe.adr = epee::net_utils::ipv6_network_address(na.as<epee::net_utils::ipv6_network_address>().ip(), advertised_port);
-        if (pe.adr.get_type_id() != epee::net_utils::address_type::invalid)
-        {
-          pe.last_seen = 0; // an unverified claim has never been "seen"
-          pe.pruning_seed = context.m_pruning_seed;
-          zone.m_peerlist.append_with_peer_gray(pe);
-        }
+        peerlist_entry pe{};
+        pe.adr = *derived;
+        pe.last_seen = 0; // an unverified claim has never been "seen"
+        pe.pruning_seed = context.m_pruning_seed;
+        zone.m_peerlist.append_with_peer_gray(pe);
       }
     }
+
     
     if (context.support_flags == 0)
       try_get_support_flags(context, [](p2p_connection_context& flags_context, const uint32_t& support_flags) 

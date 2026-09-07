@@ -774,6 +774,65 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
     );
 }
 
+/// Every `_v2` sibling is its `_v1` capture MINUS exactly the identifier
+/// fields 3.28 removed — nothing else moved.
+///
+/// A derived sibling is not an oracle capture (the C++ emitter for these
+/// methods is gone since RK-5a), so the thing that keeps it honest is the
+/// delta: without this, unrelated fixture drift would ride into `_v2` and be
+/// accepted by the parity tests as if the oracle had said so. Asserted as a
+/// subtraction rather than by eyeballing the files.
+#[test]
+fn every_v2_sibling_is_its_v1_capture_minus_only_the_identifier() {
+    fn strip(value: &Value, field: &str) -> Value {
+        match value {
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .filter(|(k, _)| k.as_str() != field)
+                    .map(|(k, v)| (k.clone(), strip(v, field)))
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(items.iter().map(|v| strip(v, field)).collect()),
+            other => other.clone(),
+        }
+    }
+
+    // (v1 capture, derived v2 sibling, the field 3.28 removed)
+    let deltas: [(&str, &str, &str); 3] = [
+        (
+            include_str!("vectors/rpc/get_peer_list_v1.json"),
+            include_str!("vectors/rpc/get_peer_list_v2.json"),
+            "id",
+        ),
+        (
+            include_str!("vectors/rpc/get_connections_v1.json"),
+            include_str!("vectors/rpc/get_connections_v2.json"),
+            "peer_id",
+        ),
+        (
+            include_str!("vectors/rpc/sync_info_v1.json"),
+            include_str!("vectors/rpc/sync_info_v2.json"),
+            "peer_id",
+        ),
+    ];
+
+    for (v1_raw, v2_raw, field) in deltas {
+        let v1 = parsed(v1_raw);
+        let v2 = parsed(v2_raw);
+        assert_eq!(
+            strip(&v1, field),
+            v2,
+            "the _v2 sibling is not its _v1 capture minus only `{field}`"
+        );
+        // The subtraction must have had something to subtract, or this test
+        // would pass on a pair that never carried the field at all.
+        assert_ne!(
+            v1, v2,
+            "`{field}` was not present in the _v1 capture: the delta is vacuous"
+        );
+    }
+}
+
 /// The whole `get_version` vector chain, not just its newest pair.
 ///
 /// **This used to pin one pair and was renamed at each bump**, on the

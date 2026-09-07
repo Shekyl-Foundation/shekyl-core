@@ -165,6 +165,48 @@ namespace
 // only ones `get_peerlist_head` gossips onward, so believing the file makes
 // this node both a preferential dialler of, and an amplifier for, whatever
 // a supplied or stale datadir contains.
+// Gray holds at most ONE entry per host -- the bound white has always had,
+// inherited rather than minted (SHEKYL_P2P_PROTOCOL.md / PWD-I6, which rules
+// the value at 1 and assigns the bound to the lane that adds handle_handshake
+// as a second gray writer). Gray is keyed by full address INCLUDING PORT, so
+// without this one IP reconnecting on varying ports fills all 5,000 entries
+// without sending a single peerlist record; and under the outbound same-host
+// cap only one entry per host can ever be dialled, so the surplus is
+// amplifier surface with no discovery value.
+TEST(peerlist_manager, gray_holds_one_entry_per_host)
+{
+  nodetool::peerlist_manager plm;
+  ASSERT_TRUE(plm.init(nodetool::peerlist_types{}, false));
+
+  nodetool::peerlist_entry a{};
+  a.adr = epee::net_utils::ipv4_network_address{MAKE_IP(203, 0, 113, 7), 18080};
+  a.last_seen = 1000;
+  ASSERT_TRUE(plm.append_with_peer_gray(a));
+
+  nodetool::peerlist_entry b{};
+  b.adr = epee::net_utils::ipv4_network_address{MAKE_IP(203, 0, 113, 7), 29999};
+  b.last_seen = 2000;
+  ASSERT_TRUE(plm.append_with_peer_gray(b));
+
+  EXPECT_EQ(1u, plm.get_gray_peers_count())
+    << "a second port on the same host took a second gray slot: one host can "
+       "fill the list by reconnecting on varying ports";
+
+  // Positive limb: the bound RECLASSIFIES, it does not discard the host. An
+  // implementation that dropped both entries would satisfy the count above.
+  nodetool::peerlist_entry got{};
+  ASSERT_TRUE(plm.get_gray_peer_by_index(got, 0));
+  EXPECT_EQ(b.adr.str(), got.adr.str()) << "the newest entry for the host must survive";
+
+  // Control: a DIFFERENT host is unaffected, or a bound that emptied gray
+  // would pass everything above.
+  nodetool::peerlist_entry other{};
+  other.adr = epee::net_utils::ipv4_network_address{MAKE_IP(198, 51, 100, 9), 18080};
+  other.last_seen = 3000;
+  ASSERT_TRUE(plm.append_with_peer_gray(other));
+  EXPECT_EQ(2u, plm.get_gray_peers_count());
+}
+
 TEST(peerlist_manager, restored_entries_are_all_demoted_to_gray)
 {
   nodetool::peerlist_types restored{};

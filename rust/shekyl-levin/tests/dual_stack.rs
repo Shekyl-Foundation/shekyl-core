@@ -200,9 +200,9 @@ fn get_info(rpc_port: u16) -> Result<ChainTip, String> {
     Ok(ChainTip { height, top_id })
 }
 
-/// The raw `gray_list` slice of `/get_peer_list` — string matching is all
-/// the pin needs, and it keeps the harness free of a JSON dependency.
-fn get_gray_list(rpc_port: u16) -> Result<String, String> {
+/// The raw `/get_peer_list` body — string matching is all the pin needs, and
+/// it keeps the harness free of a JSON dependency.
+fn get_peer_list(rpc_port: u16) -> Result<String, String> {
     let mut stream = TcpStream::connect(("127.0.0.1", rpc_port)).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
@@ -216,15 +216,11 @@ fn get_gray_list(rpc_port: u16) -> Result<String, String> {
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&buf);
-    let json = text.split("\r\n\r\n").nth(1).unwrap_or(&text);
-    let start = json
-        .find("\"gray_list\"")
-        .ok_or_else(|| format!("no gray_list in {json}"))?;
-    let end = json[start..]
-        .find("\"white_list\"")
-        .map(|o| start + o)
-        .unwrap_or(json.len());
-    Ok(json[start..end].to_owned())
+    // The whole body: an empty peer list omits both list keys entirely, and
+    // that is a legitimate state for this pin (a loopback-derived entry is
+    // refused by `is_host_allowed`), so requiring a key here would fail the
+    // test on the daemon behaving correctly.
+    Ok(text.split("\r\n\r\n").nth(1).unwrap_or(&text).to_owned())
 }
 
 fn json_u64(body: &str, key: &str) -> Option<u64> {
@@ -410,14 +406,17 @@ fn rust_client_handshakes_with_shekyld() {
 
     session.reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
 
-    let gray = get_gray_list(daemon.rpc_port).expect("get_peer_list after handshake");
+    // The NEGATIVE limb, live and cross-stack: a lying advertised host is
+    // never adopted. The positive limb (observed host + advertised port IS
+    // what gets derived) cannot be observed here and is not asserted --
+    // `peerlist_manager::is_host_allowed` refuses loopback unconditionally,
+    // so a loopback-bound test daemon discards the derived entry before any
+    // readout can see it. That limb is
+    // `node_server.an_advert_contributes_its_port_and_never_its_host`.
+    let peers = get_peer_list(daemon.rpc_port).expect("get_peer_list after handshake");
     assert!(
-        gray.contains("127.0.0.1") && gray.contains(&advertised_port.to_string()),
-        "gray list must hold socket-host + advertised port, got {gray}"
-    );
-    assert!(
-        !gray.contains("9.9.9.9"),
-        "the advertised host must never be recorded, got {gray}"
+        !peers.contains("9.9.9.9"),
+        "the advertised host was adopted; only the port is admissible: {peers}"
     );
 
     let (rc, payload) = session.invoke_map(

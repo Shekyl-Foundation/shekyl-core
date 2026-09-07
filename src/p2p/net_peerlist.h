@@ -397,7 +397,14 @@ namespace nodetool
     auto by_addr_it_gr = m_peers_gray.get<by_addr>().find(ple.adr);
     if(by_addr_it_gr == m_peers_gray.get<by_addr>().end())
     {
-      //put new record into white list
+      // A host holds at most ONE gray entry -- the same bound
+      // `append_with_peer_white` has always enforced, inherited rather than
+      // minted (SHEKYL_P2P_PROTOCOL.md, PWD-I6). Gray is keyed by full
+      // address INCLUDING PORT, so without this one IP reconnecting on
+      // varying ports fills all 5,000 entries; and under the outbound
+      // same-host cap only one entry per host can ever be dialled, so the
+      // extra entries are amplifier surface with no discovery value.
+      evict_host_from_peerlist(false, ple);
       m_peers_gray.insert(ple);
       trim_gray_peerlist();    
     }else
@@ -427,6 +434,13 @@ namespace nodetool
       return true;
     if(m_peers_gray.get<by_addr>().find(ple.adr) != m_peers_gray.get<by_addr>().end())
       return true;
+
+    // The per-host occupancy bound applies to THIS writer too -- it is an
+    // invariant of the list, not of one insertion path, and an operator
+    // re-pointing a host at a new port should replace that host's entry
+    // rather than add a second one that the outbound same-host cap could
+    // never dial. Evicting first also makes room, so it precedes the trim.
+    evict_host_from_peerlist(false, ple);
 
     // MAKE ROOM FIRST, so the entry being added cannot be the one evicted.
     //
