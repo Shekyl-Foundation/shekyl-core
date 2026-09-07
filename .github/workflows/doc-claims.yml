@@ -65,7 +65,17 @@ jobs:
           # "not checked out here" instead of auditing anything.
           submodules: true
 
+      # The ratchet asserts against a figure that lives in the same commit as
+      # the change being asserted, so on a single tree one edit can add a dead
+      # citation and lift the bar to match. The base revision is what makes it
+      # a ratchet rather than an honour system, and the gate can only read it
+      # if the ref is here — checkout fetches only the merge commit by default.
+      - name: Fetch the base revision the ratchet compares against
+        run: git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+
       - name: Run the documentation claim audit
+        env:
+          DOC_CLAIMS_BASE_REF: FETCH_HEAD
         run: python3 scripts/ci/check_doc_claims.py
 
       - name: Re-falsify the gate's own failure paths

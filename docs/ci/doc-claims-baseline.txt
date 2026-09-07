@@ -61,6 +61,18 @@ dead-citations: 55
 # ── declares ──────────────────────────────────────────────────────────────────
 # Documents that have opted a leg in cannot quietly opt back out: dropping a
 # declaration listed here fails the gate. Deleting the document is fine — the
-# check is against un-declaring while the document still exists. Adding legs
-# needs no edit here; removing one does.
-declares: docs/LMDB_WRITE_ATOMICITY_AUDIT.md citations,counts,numbered,range,sections,series
+# check is against un-declaring while the document still exists.
+#
+# Entries are the FULL declaration, `kind:argument`, not the kind. An earlier
+# revision recorded bare kinds, which meant the audit below — holding both
+# `series DRS-W` and `series R` — could drop either one and still satisfy the
+# record: the registry was protecting a kind while the subject it was minted
+# for walked away.
+#
+# The registry is also COMPLETE, and the gate fails a declaration that is not
+# recorded here. Leaving additions unregistered would put a hole in the
+# protection the width of every leg added since this file was written, since
+# an unregistered declaration can be removed later with nothing to notice. So
+# adding a leg costs one line here — the same deliberate act as everything
+# else in this file, and the gate prints the exact line to paste.
+declares: docs/LMDB_WRITE_ATOMICITY_AUDIT.md citations,counts,numbered,range:DRS-W,sections,series:DRS-W,series:R

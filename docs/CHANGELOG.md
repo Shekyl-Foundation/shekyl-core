@@ -215,12 +215,16 @@
   second, and the pass line states the limit in its own output: it checks
   numeric and structural claims against source, **not rationales** — four
   premises refuted by review the same week would all have passed it green.
-  Its 26 failure paths and 2 negative controls are falsified by a committed,
+  Its 30 failure paths and 3 negative controls are falsified by a committed,
   runnable matrix (`check_doc_claims_falsification.py`) that builds a synthetic
   corpus in a temp tree rather than mutating the repo. A ratchet in
   `docs/ci/doc-claims-baseline.txt` holds live dead-citation debt monotone
   downward and stops a document silently un-declaring a leg, because opt-in
-  without a ratchet is adoption theatre. A citation into a submodule that is
+  without a ratchet is adoption theatre. Both legs assert against the **base
+  revision**: the figure otherwise travels in the same commit as the change it
+  constrains, so one edit could add rot and lift the bar to match, and the
+  registry records the full declaration (`series:DRS-W`, not `series`) so a
+  document holding two of one kind cannot drop either unnoticed. A citation into a submodule that is
   **not checked out** aborts the run and names the init command rather than
   counting as rot: absence of the file is first evidence the *subject* is
   absent, which is the misattribution the link gate makes in that same state.

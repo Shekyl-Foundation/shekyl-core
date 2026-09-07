@@ -20,6 +20,7 @@
 # "it went red" is the weakest possible evidence that it went red on its own
 # axis.
 
+import os
 import pathlib
 import re
 import shutil
@@ -74,7 +75,7 @@ def build(tmp: pathlib.Path, doc: str = GOOD, restater: str = RESTATER,
     (docs / "ci").mkdir(parents=True, exist_ok=True)
     (docs / "ci" / "doc-claims-baseline.txt").write_text(
         baseline if baseline is not None else
-        "dead-citations: 0\ndeclares: docs/subject.md citations,counts\n",
+        "dead-citations: 0\ndeclares: docs/subject.md citations,counts,numbered,range:XX-W,sections,series:XX-W\n",
         encoding="utf-8")
     for i in range(60):  # clear the corpus floor
         (docs / f"filler{i:02d}.md").write_text(f"# Filler {i}\n", encoding="utf-8")
@@ -83,27 +84,34 @@ def build(tmp: pathlib.Path, doc: str = GOOD, restater: str = RESTATER,
         (docs / "restater.md").write_text(restater, encoding="utf-8")
 
 
-def run(tmp: pathlib.Path) -> tuple[int, str]:
+def run(tmp: pathlib.Path, env: dict | None = None) -> tuple[int, str]:
+    e = dict(os.environ)
+    # The base ref defaults to origin/dev, which a temp tree does not have; an
+    # unset value would leave every git-backed case silently unchecked.
+    e["DOC_CLAIMS_BASE_REF"] = "__no_such_ref__"
+    e.update(env or {})
     r = subprocess.run([sys.executable, str(tmp / "scripts" / "ci" / GATE.name)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=e)
     return r.returncode, (r.stdout + r.stderr)
 
 
 def case(name: str, expect: str, doc: str = GOOD, restater: str = RESTATER,
-         corpus=None, baseline: str | None = None) -> tuple[str, bool, str]:
+         corpus=None, baseline: str | None = None,
+         env: dict | None = None) -> tuple[str, bool, str]:
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
         build(tmp, doc, restater, baseline)
         if corpus:
             corpus(tmp)
-        rc, out = run(tmp)
+        rc, out = run(tmp, env)
         line = next((l.strip() for l in out.splitlines()
                      if expect.lower() in l.lower()), "")
         return name, (rc != 0 and bool(line)), (line or out.splitlines()[0][:90])
 
 
 def green(name: str, doc: str = GOOD, restater: str = RESTATER,
-          extra=None) -> tuple[str, bool, str]:
+          extra=None, baseline: str | None = None,
+          env: dict | None = None) -> tuple[str, bool, str]:
     """A negative control: the gate must PASS here.
 
     A check that cannot distinguish its subject from a lookalike is as useless
@@ -113,10 +121,10 @@ def green(name: str, doc: str = GOOD, restater: str = RESTATER,
     """
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
-        build(tmp, doc, restater)
+        build(tmp, doc, restater, baseline)
         if extra:
             extra(tmp)
-        rc, out = run(tmp)
+        rc, out = run(tmp, env)
         return name, rc == 0, out.strip().splitlines()[0][:86] if out.strip() else ""
 
 
@@ -145,6 +153,69 @@ def with_submodule(populated: bool, gitlink: bool = False):
     return f
 
 
+# A document holding TWO declarations of the SAME KIND. This is the fixture that
+# distinguishes a registry keyed on `kind` from one keyed on the full
+# declaration: with only the kind recorded, dropping `series YY-Q` leaves
+# `series` still present via XX-W and the drop goes unnoticed.
+TWO_SERIES = GOOD + """
+## 3. Third
+
+| ID | Note |
+| --- | --- |
+| YY-Q1 | a |
+| YY-Q2 | b |
+"""
+TWO_SERIES = TWO_SERIES.replace("<!-- claim-audit: series XX-W -->",
+                                "<!-- claim-audit: series XX-W -->\n"
+                                "<!-- claim-audit: series YY-Q -->")
+TWO_SERIES_LEGS = ("citations,counts,numbered,range:XX-W,sections,"
+                   "series:XX-W,series:YY-Q")
+
+
+def git_base(base_dead: int):
+    """Commit a base revision whose baseline carries `base_dead`.
+
+    The ratchet asserts against a figure that travels in the same commit as the
+    change being asserted, so without a base revision one edit can add rot and
+    lift the bar to match. Exercising that needs a real git history, so the
+    matrix builds one in the temp tree — still touching nothing in the repo.
+    """
+    def f(t: pathlib.Path) -> None:
+        bl = t / "docs" / "ci" / "doc-claims-baseline.txt"
+        candidate = bl.read_text(encoding="utf-8")
+        bl.write_text(re.sub(r"dead-citations: \d+",
+                             f"dead-citations: {base_dead}", candidate),
+                      encoding="utf-8")
+        for cmd in (["git", "init", "-q", "-b", "base"],
+                    ["git", "config", "user.email", "matrix@example.invalid"],
+                    ["git", "config", "user.name", "matrix"],
+                    ["git", "add", "-A"],
+                    ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "base"]):
+            subprocess.run(cmd, cwd=t, check=True, capture_output=True)
+        bl.write_text(candidate, encoding="utf-8")   # restore the candidate
+    return f
+
+
+def rot(n: int):
+    """Add `n` dead citations in a NON-declaring document.
+
+    Kept out of the declaring document on purpose: the ratchet is what is under
+    test, and routing the rot through a declared `citations` leg would make the
+    case fire on that leg's axis instead.
+    """
+    def f(t: pathlib.Path) -> None:
+        body = "\n".join(f"- see `src/gone{i}.cpp:1`" for i in range(n))
+        (t / "docs" / "rot.md").write_text(f"# Rot\n\n{body}\n", encoding="utf-8")
+    return f
+
+
+def chain(*fns):
+    def f(t: pathlib.Path) -> None:
+        for fn in fns:
+            fn(t)
+    return f
+
+
 def sub(old: str, new: str) -> str:
     assert GOOD.count(old) == 1, f"fixture anchor not unique: {old!r}"
     return GOOD.replace(old, new)
@@ -169,7 +240,7 @@ def main() -> None:
         case("series: no prefix given", "needs a prefix",
              doc=sub("<!-- claim-audit: series XX-W -->", "<!-- claim-audit: series -->")),
         # range
-        case("range: restatement disagrees", "restates the XX-W range ending at",
+        case("range: restatement disagrees", "restates the XX-W range as",
              restater="# Restater\n\nThe range XX-W1…XX-W2 is complete.\n"),
         case("range: nothing restates it", "no document restates that range",
              restater=None),
@@ -235,7 +306,7 @@ def main() -> None:
         case("ratchet: dead citations rose", "rose to",
              doc=sub("`src/thing.cpp:3`", "`src/gone.cpp:3`")),
         case("ratchet: baseline left above the truth", "lower the `dead-citations:`",
-             baseline="dead-citations: 4\ndeclares: docs/subject.md citations,counts\n"),
+             baseline="dead-citations: 4\ndeclares: docs/subject.md citations,counts,numbered,range:XX-W,sections,series:XX-W\n"),
         case("ratchet: a declared leg was dropped", "has dropped the claim-audit",
              doc=sub("<!-- claim-audit: counts -->", "")),
         # negative control: a stale range inside a records-was surface is
@@ -252,6 +323,33 @@ def main() -> None:
         green("populated submodule resolves normally",
               doc=sub("`src/thing.cpp:3`", "`external/sub/inc.h:2`"),
               extra=with_submodule(populated=True)),
+        # range: the LOWER endpoint is half the claim. Matching only the upper
+        # one let a restatement say the series starts where it does not.
+        case("range: wrong lower endpoint", "restates the XX-W range as",
+             restater="# Restater\n\nThe range XX-W2…XX-W3 is complete.\n"),
+        # declaration identity — a registry keyed on kind alone cannot tell
+        # which of two same-kind declarations it is holding.
+        case("one of two same-kind declarations dropped", "series:YY-Q",
+             doc=TWO_SERIES.replace("<!-- claim-audit: series YY-Q -->\n", ""),
+             baseline=f"dead-citations: 0\ndeclares: docs/subject.md {TWO_SERIES_LEGS}\n"),
+        # ...and the registry must be COMPLETE, or a leg added after it was
+        # written can be removed later with nothing to notice.
+        case("declaration absent from the registry", "does not record it as holding",
+             doc=TWO_SERIES,
+             baseline="dead-citations: 0\ndeclares: docs/subject.md "
+                      "citations,counts,numbered,range:XX-W,sections,series:XX-W\n"),
+        # the ratchet's own bar: a change that adds rot AND lifts the baseline
+        # to match passes every single-tree check, because the bar travels in
+        # the same commit as the change it is supposed to constrain.
+        case("ratchet: baseline raised against the base revision", "was RAISED from",
+             baseline="dead-citations: 3\ndeclares: docs/subject.md "
+                      "citations,counts,numbered,range:XX-W,sections,series:XX-W\n",
+             corpus=chain(git_base(0), rot(3)),
+             env={"DOC_CLAIMS_BASE_REF": "base"}),
+        green("lowering the baseline against the base revision is allowed",
+              baseline="dead-citations: 0\ndeclares: docs/subject.md "
+                       "citations,counts,numbered,range:XX-W,sections,series:XX-W\n",
+              extra=git_base(3), env={"DOC_CLAIMS_BASE_REF": "base"}),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -260,7 +358,8 @@ def main() -> None:
     # as a failure path — a matrix that miscounts its own cases is the first
     # thing a reader stops trusting.
     controls = {"historical restatement is not a live claim",
-                "populated submodule resolves normally"}
+                "populated submodule resolves normally",
+                "lowering the baseline against the base revision is allowed"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"

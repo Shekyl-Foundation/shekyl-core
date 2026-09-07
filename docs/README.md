@@ -41,7 +41,7 @@ Lifecycle rule: [`.cursor/rules/95-documentation-lifecycle.mdc`](../.cursor/rule
 [`.github/workflows/doc-claims.yml`](../.github/workflows/doc-claims.yml) holds
 it to them — put any of these near the top of the file:
 
-```
+```text
 <!-- claim-audit: series DRS-W -->   register rows contiguous, no duplicates
 <!-- claim-audit: range DRS-W -->    "DRS-W1…DRS-Wn" restated elsewhere must match
 <!-- claim-audit: sections -->       every §N names a section this document has
@@ -55,11 +55,21 @@ The citation leg is **scoped, not universal**: it resolves tokens rooted at
 (resolved under `rust/`), ending in `.cpp`, `.h`, `.rs`, `.py`, `.sh` or
 `.inl`. An unrooted filename or another extension is not checked — so a green
 run says the cites it recognises resolve, not that every path-like token in the
-document does. Two ratchets keep the opt-in honest: the count of dead citations
-in live documents is a baseline in
-[`docs/ci/doc-claims-baseline.txt`](ci/doc-claims-baseline.txt) that may only
-move down, and a document that has declared a leg cannot silently un-declare
-it.
+document does. Two ratchets keep the opt-in honest, and both are enforced
+against the **base revision**, not just the tree in hand:
+
+- the count of dead citations in live documents is a baseline in
+  [`docs/ci/doc-claims-baseline.txt`](ci/doc-claims-baseline.txt) that may only
+  move **down**. The figure travels in the same commit as the change it
+  constrains, so a single edit could otherwise add rot and lift the bar to
+  match; the gate reads the base branch's copy and rejects a raise. When the
+  base ref cannot be resolved the run **says so in its own output** rather than
+  reporting a check it did not make.
+- a document that has declared a leg cannot silently un-declare it, and the
+  registry records the **full declaration** (`series:DRS-W`, not `series`) —
+  a document holding two declarations of one kind could otherwise drop either
+  and still satisfy a kind-keyed record. The registry is complete: declaring a
+  new leg costs one line in the baseline, and the gate prints the line to add.
 
 Because that count is a ratchet, it has to mean the same thing everywhere. A
 citation into a submodule that is **not checked out** therefore stops the run

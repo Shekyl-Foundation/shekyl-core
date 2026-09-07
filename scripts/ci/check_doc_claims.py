@@ -69,8 +69,10 @@
 # prints "no discrepancies" is that same defect wearing this script's name.
 
 import functools
+import os
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -90,6 +92,16 @@ MIN_DECLARATIONS = 1
 
 def rel(p: pathlib.Path) -> str:
     return str(p.relative_to(ROOT))
+
+
+def decl_token(kind: str, arg: str | None) -> str:
+    """`series DRS-W` -> "series:DRS-W"; `sections` -> "sections".
+
+    The identity of a declaration is the pair, not the kind. One document here
+    declares `series DRS-W` and `series R`, and a registry keyed on kind alone
+    cannot tell which of the two it is holding.
+    """
+    return f"{kind}:{arg}" if arg else kind
 
 
 def strip_code(text: str) -> str:
@@ -150,8 +162,15 @@ def check_range(p, text, arg, errs, corpus):
         errs.append(f"{rel(p)}: declares `range {arg}` but owns no "
                     f"`| {arg}-N |` rows — nothing to be the range of")
         return 0
-    high = max(nums)
-    pat = re.compile(rf"{re.escape(arg)}-?\d+…(?:{re.escape(arg)}-?)?(\d+)")
+    # BOTH endpoints. Matching only the upper one let `DRS-W2…DRS-W11` pass
+    # against a register running 1..11: the restatement would be claiming the
+    # series starts where it does not, which is the same class of false claim
+    # as ending where it does not, and the declared contract is that the
+    # restated range MATCHES. Every restatement in the corpus is a full-extent
+    # one, so this tightens the check without inventing a constraint the
+    # documents do not already meet.
+    low, high = min(nums), max(nums)
+    pat = re.compile(rf"{re.escape(arg)}-?(\d+)…(?:{re.escape(arg)}-?)?(\d+)")
     seen = 0
     for q, qtext in corpus:
         # Records-was surfaces are excluded for the same reason the citation
@@ -164,10 +183,12 @@ def check_range(p, text, arg, errs, corpus):
             continue
         for m in pat.finditer(qtext):
             seen += 1
-            if int(m.group(1)) != high:
+            lo, hi = int(m.group(1)), int(m.group(2))
+            if (lo, hi) != (low, high):
                 line = qtext[: m.start()].count("\n") + 1
-                errs.append(f"{rel(q)}:{line}: restates the {arg} range ending at "
-                            f"{m.group(1)}, but {rel(p)} holds {arg}-{high}")
+                errs.append(f"{rel(q)}:{line}: restates the {arg} range as "
+                            f"{arg}{lo}…{arg}{hi}, but {rel(p)} holds "
+                            f"{arg}{low}…{arg}{high}")
     if seen == 0:
         errs.append(f"{rel(p)}: declares `range {arg}` but no document restates "
                     f"that range — the check has no subject")
@@ -398,6 +419,35 @@ def read_baseline() -> tuple[int, dict[str, set[str]]]:
     return count, declares
 
 
+def base_baseline() -> tuple[int | None, str]:
+    """The dead-citation figure recorded on the BASE revision, read via git.
+
+    Without this the ratchet is honour-system: the number it asserts against
+    lives in the same commit as the change being asserted, so one edit can add
+    a dead citation and raise the figure to match, and the gate says green. A
+    dial the caller can turn proves nothing about what it is supposed to hold.
+
+    Read from the base branch rather than a second copy, because two copies of
+    a number drift and then one of them lies. When the ref cannot be resolved
+    (no remote, shallow clone, or the file does not exist on the base yet, as
+    on the change that introduces it) this returns None and the caller SAYS SO
+    in its output rather than reporting a check it did not run.
+    """
+    ref = os.environ.get("DOC_CLAIMS_BASE_REF", "origin/dev")
+    try:
+        r = subprocess.run(["git", "-C", str(ROOT), "show",
+                            f"{ref}:{rel(BASELINE)}"],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:      # pragma: no cover
+        return None, f"git could not run ({e.__class__.__name__})"
+    if r.returncode != 0:
+        return None, f"{ref} does not resolve, or carries no baseline yet"
+    for line in r.stdout.splitlines():
+        if line.strip().startswith("dead-citations:"):
+            return int(line.split(":", 1)[1]), ref
+    return None, f"{ref} has a baseline with no `dead-citations:` line"
+
+
 def main() -> None:
     files = sorted(p for p in DOCS.rglob("*.md") if p.is_file())
     if len(files) < MIN_DOCS:
@@ -443,7 +493,20 @@ def main() -> None:
             f"{rel(BASELINE)} to {len(dead)} in this change. The ratchet "
             "tightens deliberately; a baseline left above the truth is slack "
             "the next regression hides in.")
-    present = {rel(p): {m.group(1) for m in DECL.finditer(strip_code(t))}
+    # Registry keyed on the FULL declaration, not its kind. Reducing
+    # `series DRS-W` and `series R` to `series` meant one document holding both
+    # could drop either and still satisfy the record — the registry would be
+    # protecting a kind while the subject it was minted for walked away.
+    base, base_note = base_baseline()
+    if base is not None and baseline > base:
+        errors.append(
+            f"the `dead-citations:` figure was RAISED from {base} to {baseline} "
+            f"against {base_note}. The ratchet only tightens: a change that adds "
+            "rot and lifts the bar to match is exactly what it exists to stop, "
+            "and it would otherwise pass because the bar it asserts against "
+            "travels in the same commit.")
+    present = {rel(p): {decl_token(m.group(1), m.group(2))
+                        for m in DECL.finditer(strip_code(t))}
                for p, t in corpus}
     for doc, legs in must_declare.items():
         if doc not in present:
@@ -455,6 +518,21 @@ def main() -> None:
                 f"which {rel(BASELINE)} records it as holding. A document may "
                 "add legs freely; removing one is an opt-out that has to be "
                 "argued, not a silent edit.")
+    # ...and the registry has to be COMPLETE, or the protection has a hole the
+    # width of every leg added since it was written: a declaration that was
+    # never registered can be removed later with nothing to notice. Adding a
+    # leg therefore costs one line here, which is the same deliberate act the
+    # rest of this file is built on.
+    for doc, legs in sorted(present.items()):
+        if not legs:
+            continue
+        missing = sorted(legs - must_declare.get(doc, set()))
+        if missing:
+            errors.append(
+                f"{doc} declares {missing} but {rel(BASELINE)} does not record "
+                f"it as holding them, so nothing would notice their removal. "
+                f"Add to the baseline:\n    declares: {doc} "
+                + ",".join(sorted(legs)))
 
     if errors:
         sys.exit(f"FAIL: {len(errors)} declared documentation claim(s) disagree "
@@ -467,6 +545,13 @@ def main() -> None:
           f"citation is repaired by pinning its sha, not by re-anchoring).")
     print("     Scope: checks numeric and structural claims against source; "
           "does not check rationales.")
+    # Said out loud, every run. A monotonicity check that quietly did not run
+    # is indistinguishable from one that ran and passed, and this gate's whole
+    # posture is that those two must never look alike.
+    print("     Baseline monotonicity: "
+          + (f"checked against {base_note} ({base})." if base is not None
+             else f"NOT CHECKED HERE — {base_note}. CI resolves the base ref; "
+                  "locally, `git fetch origin dev` enables it."))
 
 
 if __name__ == "__main__":
