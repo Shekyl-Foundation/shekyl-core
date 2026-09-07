@@ -122,6 +122,13 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_targets.py
 
+      - name: Run FOLLOWUPS gate selftest (unclosed-bold leg)
+        # That gate's unclosed-bold leg carries a falsifier; run it, because a
+        # check nobody exercises is a check nobody knows still fires. Only that
+        # leg is falsified — see the script header.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_followups_targets.py --selftest
+
       - name: Run index prefix-uniqueness check
         # Rule 94 §2 family prefixes must not collide.
         # Instance of 47-gate-subject-assertion.mdc.
