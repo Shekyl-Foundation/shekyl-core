@@ -315,7 +315,12 @@ Copilot's third pass: 9 open threads + 23 suppressed comments
     already-truncated rung, which is bit-exact with the SERVED
     arithmetic (`corrected_fee_ladder` truncates first; 210-vs-220 at
     10 SKL/1.5 MB/`C_q` = 16 discriminates, the `C_q` = 2 KAT does
-    not). The real defect was the comment's false one-atomic-unit
+    not). ***Correction (#640 review): the parenthetical was wrong about
+    the owner. `corrected_fee_ladder` divides ONCE, with `C_q` in the
+    numerator, so that case returns 220, not 210 — the round-14 pin was
+    guarding the instrument against agreeing with the daemon. The
+    instrument now calls the owner and the pin was re-taken; this line
+    is left as the round-11 disposition it was.*** The real defect was the comment's false one-atomic-unit
     bound (< `C_q` atomic pre-rounding is the true bound); a
     discriminating pin now fails any "fix" toward the algebraic form,
     falsifier observed.
@@ -710,7 +715,11 @@ modest.
 race is disposition-independent — every quantized served map lands
 within 49–64 thin cells of 800, and the exposure tracks the degenerate
 large-median regime they all share rather than the mode. FL-R19 stands
-as minted with corrected figures.
+as minted with corrected figures. *(Re-measured again at #640 once the
+instrument called the shipped owner: the band is 22–39 across the same
+maps, not 49–64. The conclusion is unchanged — the spread is still
+narrow and still tracks the regime, not the mode — and §4.5b carries
+the current figures. This paragraph is left as the round-16 record.)*
 
 Also taken: `RateLimitedCq::held` renamed `blocks_since_change`
 (Copilot), which also reads straight across to the implementing
@@ -825,15 +834,20 @@ Bundle contents:
   held).
 - **FL-R16a first, as instructed:** the past-asymptote error arm is
   gone; both dead-letters closed (estimate path returns the tail via
-  totality; relay floor tail-derived instead of failure-arm 0). FL-R16b
-  (ActivityMetric guard) and FL-R16c (supply-ratio saturation +
-  the gross-emission note) landed with it. FL-R14's build-time
+  totality; relay floor tail-derived instead of failure-arm 0). FL-R16c
+  (supply-ratio saturation + the gross-emission note) landed with it.
+  **FL-R16b (the `ActivityMetric` cap guard) did NOT** — its ratified row
+  puts it on the follow-up rename PR, not the build's critical path; see
+  the FL-R15 note below, which excludes both. FL-R14's build-time
   assertion lives in `params.rs` (≥10 000-year headroom floor,
   range-proof width and wrap-un-saturation named).
 - **Estimate side (round-8 amendment as adopted):** `fee.rs` —
   `corrected_fee_ladder` (three tiers, `fees[2]` bridge, `Fh` main arm
   unconditional) + `fee_correction_quantized` (whole-scalar `C_q`,
-  exact-integer ceiling snap, 3% hysteresis band) + `round_money_up_2`
+  exact-integer ceiling snap, and the 3% hysteresis band — built and
+  tested, but **NOT on the served path**: the wrapper passes
+  `prev_cq = 0`, and FL-R3 carries the blocker and the owed ruling) +
+  `round_money_up_2`
   (first Rust production owner). C++ 4-arg = marshal; the 2-arg wrapper
   computes `C_q` inputs from the SAME sources validation uses and
   **clamps the served economy rung at `get_current_fee_per_byte()`** —
@@ -1050,10 +1064,11 @@ directly. Dispositions:
    gate is SATISFIED (signed round 8, amendment adopted), so the round is
    simply open — non-blocking (the perpetual-tail ruling retired the
    genesis-blocking escalation), scheduled on its own merits.
-6. **PRs** — the design PR is **this PR (#614)**; the implementation
-   follows as the round-9 split: `feat/fee-ladder-impl-1` (atomic
-   bundle, built and gated) then `-impl-2` (mechanical rename), each
-   opened after this document merges.
+6. **PRs — SETTLED, no longer pending.** The design PR (#614) and the
+   FL-R18/FL-R19 ruling record (#634) are MERGED. The round-9 split is
+   under way: `feat/fee-ladder-impl-1` (atomic bundle, built and gated)
+   is open as **#640**; `-impl-2` (the mechanical FL-R15 rename, with
+   FL-R16b) follows it.
 7. Census-R2: **both resume conjuncts are SATISFIED** — FL-R12′ signed
    (round 8) and the red test extant (graduated green on impl-1). R2 can
    resume per its own criterion; the routing to the consensus lane

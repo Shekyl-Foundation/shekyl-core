@@ -112,8 +112,21 @@ pub fn quantize_pow2_ceil(c_scaled: u64) -> u64 {
 /// exactly on a pow2 boundary must not flicker between steps. The raw
 /// `C_q` replaces the previous one only when `C` has moved beyond the
 /// previous step's implied band by more than `HYSTERESIS_MARGIN_MILLI`
-/// (3%); within the band the previous quantized value is kept. The §4.4
-/// dwell scenarios are the acceptance gate.
+/// (3%); within the band the previous quantized value is kept.
+///
+/// **The daemon does not reach this branch.** `blockchain.cpp` passes
+/// `prev_cq = 0`, so what is served is the plain ceiling snap. The band
+/// needs a previous value, and there is no deterministic one to hand it:
+/// a remembered value makes the served rate depend on the process's
+/// query history, and the previous block's unseeded snap is a one-step
+/// approximation that inverts the result rather than the recurrence
+/// `C_q(h) = f(C(h), C_q(h−1))`, which cannot be evaluated without an
+/// anchor. Serving hysteresis therefore requires `C_q` persisted as
+/// chain state. The band is kept here, exercised by its own tests and by
+/// the sim, because that is the open ruling's subject — FL-R3 in
+/// `FEE_LADDER_DERIVATION.md` §8 carries the blocker and the two ways to
+/// close it. Do not wire a caller to a nonzero `prev_cq` before it is
+/// ruled.
 #[must_use]
 pub fn fee_correction_quantized(
     tx_volume_avg: u64,
@@ -132,31 +145,51 @@ pub fn fee_correction_quantized(
     let b = burn_pct_scaled.min(params.burn_cap).min(SCALE - 1);
     let c = u64::try_from(u128::from(SCALE - sigma) * u128::from(m_r) / u128::from(SCALE - b))
         .expect("C fits u64");
-    // TOTALITY AT THE BOUNDARY. `quantize_pow2_ceil` is deliberately LOUD
-    // about a `C` outside the exactly-representable window — that guard
-    // earns its keep on the derivation path, where a parameter change
-    // that widened the range should stop the build rather than truncate.
-    // But this function is reached through `extern "C"`, where the
-    // scalars are caller-controlled, and rule 40 forbids a malformed
-    // boundary input from panicking across the ABI. `σ` and `b` are
-    // already clamped above; what remains is that a `σ` at its clamp
-    // (`SCALE - 1`) with a dormant multiplier drives integer division to
-    // `C = 0`, which no chain state produces (the reachable floor is
-    // ≈ 0.68) but a caller can hand us. Flooring at the representation
-    // minimum `2⁻⁶` keeps the boundary total, and the direction is the
-    // safe one: a smaller `C_q` can only under-price, which the caller's
-    // relay-floor clamp then lifts (§5.2's acceptance identity).
+    // TOTALITY AT THE BOUNDARY is `hysteresis_step`'s floor: `σ` and `b`
+    // are clamped just above, so what remains is a `C` of 0, which the
+    // floor absorbs. The reasoning lives there, with the code that does
+    // it.
+    hysteresis_step(c, prev_cq_scaled)
+}
+
+/// The pow2 ceiling snap of a raw correction `C`, behind the §7
+/// hysteresis band.
+///
+/// Split out of [`fee_correction_quantized`] so the band has ONE
+/// implementation. The derivation instrument sweeps raw `C` directly and
+/// so cannot enter through the whole-scalar function; it used to carry a
+/// transliterated copy of this logic, which had already drifted — the
+/// copy never picked up the `MIN_REPRESENTABLE_C` floor — and a
+/// measurement taken on a drifted copy is a measurement of a different
+/// mechanism than the one shipped.
+///
+/// `prev_cq_scaled = 0` means no history: the plain ceiling snap. With a
+/// history the raw `C` must clear the new step's boundary by
+/// `HYSTERESIS_MARGIN_MILLI` before the value moves, i.e. `C` must leave
+/// `[prev/2·(1−m), prev·(1+m)]`.
+///
+/// `C` is floored at the smallest exactly-representable value first.
+/// [`quantize_pow2_ceil`] is deliberately LOUD about a `C` outside that
+/// window — the guard earns its keep on the derivation path, where a
+/// parameter change that widened the range should stop the build rather
+/// than truncate — but this is reached through `extern "C"`, where rule
+/// 40 forbids a malformed input from panicking across the ABI. A `σ` at
+/// its clamp with a dormant multiplier drives integer division to
+/// `C = 0`, which no chain state produces (the reachable floor is ≈ 0.68)
+/// but a caller can hand us. Flooring keeps the boundary total, and the
+/// direction is the safe one: a smaller `C_q` can only under-price, which
+/// the caller's relay-floor clamp then lifts (§5.2's acceptance identity).
+#[must_use]
+pub fn hysteresis_step(c_scaled: u64, prev_cq_scaled: u64) -> u64 {
     const MIN_REPRESENTABLE_C: u64 = SCALE >> 6;
-    let cq = quantize_pow2_ceil(c.max(MIN_REPRESENTABLE_C));
+    const HYSTERESIS_MARGIN_MILLI: u128 = 30; // 3%
+    let c = c_scaled.max(MIN_REPRESENTABLE_C);
+    let cq = quantize_pow2_ceil(c);
     if prev_cq_scaled == 0 || cq == prev_cq_scaled {
         return cq;
     }
-    // Boundary band around the PREVIOUS step: keep it unless C has left
-    // [prev/2·(1+m), prev·(1+m)] — i.e. the raw C must clear the new
-    // step's boundary by the margin before the served value moves.
-    const HYSTERESIS_MARGIN_MILLI: u128 = 30; // 3%
     let prev = u128::from(prev_cq_scaled);
-    let c = u128::from(c.max(MIN_REPRESENTABLE_C));
+    let c = u128::from(c);
     let upper = prev * (1000 + HYSTERESIS_MARGIN_MILLI) / 1000;
     let lower = (prev / 2) * (1000 - HYSTERESIS_MARGIN_MILLI) / 1000;
     if c > upper || c < lower {
@@ -178,6 +211,15 @@ pub struct FeeLadder {
 }
 
 impl FeeLadder {
+    /// Every rung at the `u64` rail. The saturation
+    /// [`corrected_fee_ladder`] takes outside its `u128` domain, which no
+    /// chain state reaches.
+    pub const SATURATED: Self = Self {
+        economy: u64::MAX,
+        standard: u64::MAX,
+        priority: u64::MAX,
+    };
+
     /// Wire shape `[economy, standard, standard, priority]`.
     #[must_use]
     pub const fn as_slots(self) -> [u64; 4] {
@@ -207,6 +249,12 @@ impl FeeLadder {
 /// integer reading of the signed expression, not a post-hoc rescale.
 ///
 /// Each rung is then daemon-rounded to 2 significant digits.
+///
+/// Total: outside the arithmetic's `u128` domain — which no chain state
+/// reaches, see [`checked_corrected_fee_ladder`] — every rung saturates,
+/// the same fallback the division already takes. Callers that must
+/// distinguish that input from a priced ladder use the checked form; the
+/// FFI boundary does, and refuses it.
 #[must_use]
 pub fn corrected_fee_ladder(
     base_reward: u64,
@@ -216,6 +264,38 @@ pub fn corrected_fee_ladder(
     ref_tx_weight: u64,
     c_q: u64,
 ) -> FeeLadder {
+    checked_corrected_fee_ladder(base_reward, mnw, mlw, full_reward_zone, ref_tx_weight, c_q)
+        .unwrap_or(FeeLadder::SATURATED)
+}
+
+/// [`corrected_fee_ladder`], or `None` when the scalars cannot form the
+/// rungs' products in `u128`.
+///
+/// Every honest input is far inside the domain — `R` is bounded by the
+/// subsidy curve at ≈2⁴¹, `w_ref` is 3 000, `C_q` ≤ 16 in `SCALE` units,
+/// and `Mfw` is a block weight — so the fallible arm exists for the
+/// `extern "C"` boundary alone (rule 40): the ABI takes bare `u64`s, and
+/// operands near `u64::MAX` overflow `u128` BEFORE `round_scaled`'s
+/// conversion fallback can see it, which is an abort in an
+/// overflow-checked build and wrapped fees otherwise.
+///
+/// The domain is decided HERE, from the same operands the rungs
+/// multiply, rather than being re-derived at the boundary. **The three
+/// rungs do not share an operand list** — `priority` is `2·R·C_q` and is
+/// the only rung that does not carry `w_ref` — so a boundary check
+/// written against one representative product is not a check of the
+/// others: `w_ref = 0` zeroes every `w_ref`-bearing product and passes,
+/// then `2·R·C_q` overflows. That is not a hypothetical; it is what the
+/// hand-mirrored boundary copy this replaces actually did.
+#[must_use]
+pub fn checked_corrected_fee_ladder(
+    base_reward: u64,
+    mnw: u64,
+    mlw: u64,
+    full_reward_zone: u64,
+    ref_tx_weight: u64,
+    c_q: u64,
+) -> Option<FeeLadder> {
     let mfw = mnw.min(mlw).max(full_reward_zone).max(1);
     let round_scaled = |num: u128, den: u128| -> u64 {
         round_money_up_2(u64::try_from(num / den).unwrap_or(u64::MAX))
@@ -225,12 +305,15 @@ pub fn corrected_fee_ladder(
     let m = u128::from(mfw);
     let cq = u128::from(c_q);
     let s = u128::from(SCALE);
-    let m2s = m * m * s;
-    FeeLadder {
-        economy: round_scaled(base * w_ref * cq, m2s),
-        standard: round_scaled(4 * base * w_ref * cq, m2s),
-        priority: round_scaled(2 * base * cq, m * s),
-    }
+    let ms = m.checked_mul(s)?;
+    let m2s = m.checked_mul(ms)?;
+    let base_w_cq = base.checked_mul(w_ref)?.checked_mul(cq)?;
+    let base_cq = base.checked_mul(cq)?;
+    Some(FeeLadder {
+        economy: round_scaled(base_w_cq, m2s),
+        standard: round_scaled(base_w_cq.checked_mul(4)?, m2s),
+        priority: round_scaled(base_cq.checked_mul(2)?, ms),
+    })
 }
 
 #[cfg(test)]
@@ -261,6 +344,42 @@ mod tests {
             corrected_fee_ladder(10 * coin, 1_500_000, 1_500_000, 300_000, 3_000, SCALE).as_slots(),
             [13, 53, 53, 14_000]
         );
+    }
+
+    /// The domain must be decided per RUNG, not against a representative
+    /// product. Each case below overflows exactly one rung's operand
+    /// list while leaving the others formable, so a check written against
+    /// any single product lets one of them through — which is how
+    /// `priority` (`2·R·C_q`, the rung with no `w_ref`) survived a
+    /// boundary check written against `4·R·w_ref·C_q`.
+    #[test]
+    fn the_domain_covers_each_rung_separately() {
+        let z = 300_000;
+        // `w_ref = 0` collapses every `w_ref`-bearing product to zero;
+        // only `priority`'s `2·R·C_q` can still overflow.
+        assert!(checked_corrected_fee_ladder(u64::MAX, z, z, z, 0, u64::MAX).is_none());
+        // …and with `C_q` small it is back in the domain, so the refusal
+        // above is the arithmetic and not a blanket on `w_ref = 0`.
+        assert!(checked_corrected_fee_ladder(u64::MAX, z, z, z, 0, SCALE).is_some());
+        // `C_q = 1` (a scalar, not `SCALE`) keeps `priority` formable
+        // while `4·R·w_ref·C_q` overflows.
+        assert!(checked_corrected_fee_ladder(u64::MAX, z, z, z, u64::MAX, 1).is_none());
+        // A denominator past the rail, with a numerator that fits.
+        assert!(checked_corrected_fee_ladder(1, u64::MAX, u64::MAX, u64::MAX, 1, 1).is_none());
+        // The honest domain is not swept up by any of it.
+        assert!(checked_corrected_fee_ladder(10_000_000_000, z, z, z, 3_000, SCALE).is_some());
+    }
+
+    /// The infallible entry saturates rather than aborting, and does so
+    /// at the same input the checked form refuses.
+    #[test]
+    fn the_infallible_entry_saturates_outside_the_domain() {
+        let z = 300_000;
+        assert_eq!(
+            corrected_fee_ladder(u64::MAX, z, z, z, 0, u64::MAX),
+            FeeLadder::SATURATED
+        );
+        assert_eq!(FeeLadder::SATURATED.as_slots(), [u64::MAX; 4]);
     }
 
     /// `C_q` in the numerator before the median division, not a rescale of

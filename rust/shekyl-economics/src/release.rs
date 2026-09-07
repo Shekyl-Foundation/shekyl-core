@@ -20,7 +20,6 @@ use crate::params::{clamp, SCALE};
 ///
 /// # Returns
 /// Fixed-point multiplier in SCALE units. 1_000_000 = 1.0x release rate.
-#[allow(clippy::cast_possible_truncation)]
 pub fn calc_release_multiplier(
     tx_volume_avg: u64,
     tx_volume_baseline: u64,
@@ -31,9 +30,18 @@ pub fn calc_release_multiplier(
         return SCALE; // 1.0x if baseline is unconfigured
     }
 
-    // ratio = tx_volume_avg / tx_volume_baseline, scaled to SCALE
-    let ratio =
-        (u128::from(tx_volume_avg) * u128::from(SCALE) / u128::from(tx_volume_baseline)) as u64;
+    // ratio = tx_volume_avg / tx_volume_baseline, scaled to SCALE.
+    // Saturating, not truncating: this is reached through `extern "C"`
+    // (`shekyl_calc_release_multiplier`, and `fee_correction_quantized`'s
+    // `M_r`), where the volume and baseline are bare `u64`s. A wrapping
+    // cast turns a ratio past the rail into a SMALL one, which `clamp`
+    // then honours as `release_min` — the opposite end of the range from
+    // the truth. Saturating lands on `release_max`, which is where an
+    // unboundedly-high volume belongs.
+    let ratio = u64::try_from(
+        u128::from(tx_volume_avg) * u128::from(SCALE) / u128::from(tx_volume_baseline),
+    )
+    .unwrap_or(u64::MAX);
 
     clamp(ratio, release_min, release_max)
 }
@@ -49,6 +57,16 @@ pub fn apply_release_multiplier(base_reward: u64, multiplier: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A ratio past the `u64` rail must clamp to `release_max`. The
+    /// wrapping cast this replaces landed on `release_min` instead — the
+    /// far end of the range — because truncation makes a huge ratio look
+    /// small and `clamp` cannot tell the difference.
+    #[test]
+    fn a_ratio_past_the_rail_clamps_to_the_top_not_the_bottom() {
+        let got = calc_release_multiplier(u64::MAX, 1, 800_000, 1_300_000);
+        assert_eq!(got, 1_300_000, "saturating ratio must clamp at release_max");
+    }
 
     #[test]
     fn test_baseline_volume_returns_1x() {

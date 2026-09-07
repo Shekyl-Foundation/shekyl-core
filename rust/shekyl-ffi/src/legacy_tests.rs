@@ -1148,6 +1148,14 @@ fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
         (u64::MAX, 300_000, 300_000, 300_000, 3_000, u64::MAX),
         (u64::MAX, 300_000, 300_000, 300_000, u64::MAX, 1_000_000),
         (1, u64::MAX, u64::MAX, u64::MAX, 3_000, 1_000_000),
+        // The PRIORITY rung, which is `2·R·C_q` and is the one rung that
+        // does not carry `w_ref`: a `w_ref` of zero makes every product
+        // that DOES carry it vanish, so a domain check written against a
+        // representative `w_ref`-bearing product passes this and then
+        // overflows forming `2·R·C_q` (PR #640 review, cycle 6). The
+        // rungs do not share an operand list, so the domain cannot be
+        // checked against one of them.
+        (u64::MAX, 300_000, 300_000, 300_000, 0, u64::MAX),
     ] {
         let st =
             unsafe { shekyl_corrected_fee_ladder(base, mnw, mlw, zone, w, cq, fees.as_mut_ptr()) };

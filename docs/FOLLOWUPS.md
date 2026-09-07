@@ -1069,6 +1069,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Validate `prev_id` before attestation verify on the alt-chain path
   - Target: pre-genesis
 
+- **FL-R3's hysteresis is built but NOT served — ruling owed on which way to close it.** The daemon serves the plain pow2 ceiling (`prev_cq = 0`). Named blocker: a served band needs a deterministic previous value, and none exists for a per-height query — a remembered one tracks the process's query history, and a one-step seed from the previous block inverts the result instead of evaluating the recurrence; serving it therefore requires `C_q` persisted as chain state (a consensus + rule-42 change). Measured cost of the un-banded served map (#640): FL-C4a dwell still passes at a 464-block minimum median (banded 446) and the rejection race barely moves (25 thin cells vs 22), but FL-C7 worst tail transitions go 24 → 1 161. Close it by persisting `C_q`, or by retiring served hysteresis on the ground that FL-R19's fixed clamp margin covers the acceptance half — noting it does not buy a stable quoted rate.
+  - Target: pre-genesis
+
 
 ## Post-genesis
 

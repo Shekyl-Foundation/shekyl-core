@@ -307,7 +307,9 @@ uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 /// whole-scalar form) with pow2-boundary hysteresis. sigma_scaled and
 /// burn_pct_scaled are the SAME shekyl_calc_emission_share /
 /// shekyl_calc_burn_pct outputs validation computes at this state.
-/// prev_cq_scaled = 0 means no held value.
+/// prev_cq_scaled = 0 means no held value, and it is what the daemon
+/// passes: the band is a capability of this export, not a property of
+/// the served rate (FL-R3 — the ruling on serving it is still owed).
 uint64_t shekyl_fee_correction_quantized(
     uint64_t tx_volume_avg,
     uint64_t sigma_scaled,
@@ -316,8 +318,13 @@ uint64_t shekyl_fee_correction_quantized(
 
 /// The corrected four-slot fee ladder (FL-R17 three tiers + the RK-5 wire
 /// bridge slot; Fh main arm unconditional). Writes exactly four values;
-/// the CALLER clamps fees[0] at the relay floor. Returns 0, or -1 on a
-/// null out_fees without writing.
+/// the CALLER clamps fees[0] at the relay floor. Returns:
+///   0  - the four values were written;
+///  -1  - null out_fees, nothing written;
+///  -2  - the scalars cannot form the rungs' products in 128 bits,
+///        nothing written. No chain state reaches this; it exists so a
+///        corrupt or synthetic caller gets a status instead of an abort
+///        across the ABI (rule 40).
 int32_t shekyl_corrected_fee_ladder(
     uint64_t base_reward,
     uint64_t mnw,

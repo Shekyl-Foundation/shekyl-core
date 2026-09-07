@@ -69,11 +69,16 @@
   slots, with slot 2 mirroring `standard` as a bridge until the RPC
   cutover.
 
-- **The served correction carries no daemon-local state.** Its
-  pow2-boundary hysteresis is seeded from the previous block's chain state
-  rather than from a remembered value, so every node at a height derives
-  the same rate; a restarted and a long-running daemon can no longer quote
-  differently.
+- **The served correction carries no daemon-local state.** It is the plain
+  pow2 ceiling snap of the correction at the queried height, so every node
+  derives the same rate there; a restarted and a long-running daemon
+  cannot quote differently. The pow2-boundary hysteresis the design round
+  ruled is built and tested in `shekyl-economics`, but is **not on the
+  served path**: a remembered value makes the rate depend on the process's
+  query history, and a one-step seed from the previous block inverts it,
+  so serving it needs `C_q` persisted as chain state. That is a consensus
+  change and is not in this bundle — see FL-R3, which carries the blocker
+  and the ruling still owed.
 
 - **Wallet fee-rate ceiling raised to a structural bound.**
   `absolute_fee_rate_cap()` is now derived with every factor at its own
@@ -89,7 +94,12 @@
   caller; `shekyl_apply_release_multiplier` and
   `shekyl_cap_reward_to_remaining_supply` are gone. New exports
   `shekyl_fee_correction_quantized` and `shekyl_corrected_fee_ladder` carry
-  the ladder. `Blockchain::get_dynamic_base_fee_estimate_2021_scaling`
+  the ladder. `shekyl_corrected_fee_ladder` returns `0` on success, `-1`
+  for a null out-pointer, and `-2` for scalars the rungs cannot form in
+  128 bits — no chain state reaches the last one; it exists so a corrupt
+  caller gets a status instead of an abort across the ABI (rule 40).
+  `shekyl_fee_correction_quantized` is total.
+  `Blockchain::get_dynamic_base_fee_estimate_2021_scaling`
   gains a `c_q` parameter.
 
 ### Removed

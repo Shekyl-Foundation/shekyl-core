@@ -579,7 +579,10 @@ pub unsafe extern "C" fn shekyl_block_reward(
 /// `burn_pct_scaled` are the SAME `shekyl_calc_emission_share` /
 /// `shekyl_calc_burn_pct` outputs the validation path computes at this
 /// state — one source, no second derivation. `prev_cq_scaled = 0` means no
-/// held value. Cannot fail.
+/// held value, and it is what the daemon passes: the band is a capability
+/// of this export, not a property of the served rate. See the crate
+/// function's note and FL-R3 before wiring a caller to a nonzero value.
+/// Cannot fail.
 #[no_mangle]
 pub extern "C" fn shekyl_fee_correction_quantized(
     tx_volume_avg: u64,
@@ -607,18 +610,18 @@ pub extern "C" fn shekyl_fee_correction_quantized(
 /// * `-2` — the scalars are outside the arithmetic's domain, nothing
 ///   written (see below).
 ///
-/// **Domain check, per rule 40.** The ladder forms `4·R·w_ref·C_q` over
-/// `Mfw²·SCALE` in `u128`. Every honest input is far inside that — `R` is
-/// bounded by the subsidy curve at ≈2⁴¹, `w_ref` is 3 000 and `C_q` ≤ 16
-/// in `SCALE` units — but the ABI takes bare `u64`s, and operands near
-/// `u64::MAX` overflow `u128` BEFORE the existing conversion fallback can
-/// see it: an abort in an overflow-checked build, wrapped fee values
-/// otherwise. Neither may cross `extern "C"`. The products are therefore
-/// checked here and a caller handing us an impossible state gets `-2`
-/// rather than an abort. This is validated at the boundary rather than by
-/// making the crate function fallible, because the honest domain cannot
-/// fail and every internal caller would otherwise carry an error arm that
-/// no chain state produces.
+/// **Domain, per rule 40.** The rungs form products in `u128` that
+/// operands near `u64::MAX` overflow BEFORE the conversion fallback can
+/// see it — an abort in an overflow-checked build, wrapped fee values
+/// otherwise, and neither may cross `extern "C"`. No chain state reaches
+/// that input, so the domain is not made fallible for internal callers;
+/// it is decided by
+/// [`shekyl_economics::checked_corrected_fee_ladder`], which lives with
+/// the arithmetic and reads the same operands the rungs multiply, and a
+/// caller handing us an impossible state gets `-2` rather than an abort.
+/// The check is NOT re-derived here: the three rungs do not share an
+/// operand list, and a boundary copy written against one of them missed
+/// `priority`'s `2·R·C_q` for a full review cycle.
 ///
 /// # Safety
 ///
@@ -636,29 +639,17 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     if out_fees.is_null() {
         return -1;
     }
-    // Mirrors the owner's own `mfw` so the check covers what it computes.
-    let mfw = u128::from(mnw.min(mlw).max(full_reward_zone).max(1));
-    let numerator_fits = u128::from(base_reward)
-        .checked_mul(u128::from(ref_tx_weight))
-        .and_then(|x| x.checked_mul(u128::from(c_q)))
-        .and_then(|x| x.checked_mul(4))
-        .is_some();
-    let denominator_fits = mfw
-        .checked_mul(mfw)
-        .and_then(|x| x.checked_mul(u128::from(shekyl_economics::params::SCALE)))
-        .is_some();
-    if !numerator_fits || !denominator_fits {
-        return -2;
-    }
-    let fees = shekyl_economics::corrected_fee_ladder(
+    let Some(ladder) = shekyl_economics::checked_corrected_fee_ladder(
         base_reward,
         mnw,
         mlw,
         full_reward_zone,
         ref_tx_weight,
         c_q,
-    )
-    .as_slots();
+    ) else {
+        return -2;
+    };
+    let fees = ladder.as_slots();
     for (i, f) in fees.iter().enumerate() {
         // SAFETY: non-null per the check; caller guarantees 4 writable u64s.
         unsafe { out_fees.add(i).write(*f) };

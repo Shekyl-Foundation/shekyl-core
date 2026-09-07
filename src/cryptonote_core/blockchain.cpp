@@ -4443,7 +4443,19 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
       DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT,
       c_q,
       fees.data());
-  CHECK_AND_ASSERT_THROW_MES(rc == 0, "shekyl_corrected_fee_ladder rejected its out-pointer");
+  // Neither rejection is reachable from here — the out-pointer is a
+  // just-resized vector, and the scalars are chain state, far inside the
+  // ladder's u128 domain. The throw names WHICH one fired anyway: -1 is a
+  // null out-pointer (this marshal), -2 is scalars the arithmetic cannot
+  // form (the state that produced them). Reporting only the pointer case
+  // would send a reader hunting the wrong side of the boundary.
+  CHECK_AND_ASSERT_THROW_MES(rc == 0,
+      "shekyl_corrected_fee_ladder failed: rc=" << rc << " ("
+      << (rc == -1 ? "null out-pointer"
+                   : rc == -2 ? "scalars outside the ladder's arithmetic domain"
+                              : "unknown status")
+      << "), base_reward=" << base_reward << " Mnw=" << Mnw << " Mlw=" << Mlw
+      << " c_q=" << c_q);
 }
 
 void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, std::vector<uint64_t> &fees) const

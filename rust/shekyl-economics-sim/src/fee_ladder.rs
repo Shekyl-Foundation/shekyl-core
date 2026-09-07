@@ -30,9 +30,9 @@
 //! ladder transliteration (the round's *subject* — porting it faithfully is
 //! the point of the comparison column), `REF_TX_WEIGHT` (a C++ constant
 //! with no single Rust owner yet; `fee_policy.rs` carries the same pinned
-//! copy wallet-side), `GENESIS_NG_HEIGHT` (the hardfork table has no Rust
-//! owner), and [`HysteresisCq`] (the §7 construction, whose canonical
-//! owner lives on the implementing branch until it merges).
+//! copy wallet-side) and `GENESIS_NG_HEIGHT` (the hardfork table has no
+//! Rust owner). [`HysteresisCq`] was the third; it now calls
+//! `shekyl-economics::hysteresis_step` and that exception is discharged.
 //!
 //! I/O convention: this module renders; the binary target performs the
 //! writes (`main.rs --fee-ladder`), per the crate's stage2 precedent.
@@ -45,9 +45,9 @@ use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
     calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
-    effective_emission, emission_speed_factor, paid_block_reward, projected_already_generated,
-    tail_subsidy_per_block, EconomicParams, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY,
-    STAKER_EMISSION_SHARE,
+    effective_emission, emission_speed_factor, hysteresis_step, paid_block_reward,
+    projected_already_generated, tail_subsidy_per_block, EconomicParams, BLOCKS_PER_YEAR,
+    STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
@@ -611,8 +611,12 @@ enum LadderMode {
     CorrectedRaw,
     /// `C` snapped to a power of two first.
     Quantized(SnapRule),
-    /// The ceiling snap behind the §7 hysteresis construction — the map
-    /// the daemon served before FL-R18.
+    /// The ceiling snap behind the §7 hysteresis construction. The round
+    /// adopted this map, but it is NOT what the daemon serves: #640
+    /// review cycle 5 took the band off the served path because no
+    /// deterministic previous value exists for a per-height query, and
+    /// the ruling on serving it is owed (FL-R3). [`Self::Quantized`] with
+    /// [`SnapRule::Ceiling`] is the served map.
     QuantizedHysteresis,
     /// The band plus a minimum-dwell floor of `n` blocks on the served
     /// value — examined for FL-R18 (c) and NOT ADOPTED; swept over
@@ -620,38 +624,27 @@ enum LadderMode {
     RateLimited(u64),
 }
 
-/// The §7 hysteresis construction, transliterated from the implementing
-/// branch's `shekyl-economics::fee_correction_quantized`
-/// (`feat/fee-ladder-impl-1`; 3% band, `HYSTERESIS_MARGIN_MILLI = 30`,
-/// band around the PREVIOUS step, `prev = 0` ⇒ no history). Declared
-/// exception #3 (with the transliteration and `REF_TX_WEIGHT`): the
-/// canonical owner does not exist on this branch yet, and §1.7's
-/// registered remedy requires measuring the CONSTRUCTED map — hysteresis
-/// on `C`, then re-test. At the impl-1 merge this copy must be replaced by
-/// the crate function or the §4.5 acceptance claim is about a different
-/// mechanism than the one shipped.
+/// The §7 hysteresis construction — the history, held so the sweep can
+/// walk a trace; the step itself is
+/// `shekyl-economics::hysteresis_step`.
+///
+/// **Declared exception #3 is DISCHARGED here.** This carried a
+/// transliterated copy of the band while the canonical owner lived only
+/// on the implementing branch, under a standing obligation to replace it
+/// at that merge "or the §4.5 acceptance claim is about a different
+/// mechanism than the one shipped". That obligation was live: the copy
+/// had already drifted, never picking up the owner's
+/// `MIN_REPRESENTABLE_C` floor. It now calls the owner, so the
+/// acceptance claim is about the shipped mechanism by construction
+/// rather than by inspection.
 struct HysteresisCq {
     prev: u64,
 }
 
 impl HysteresisCq {
     fn step(&mut self, c_raw: u64) -> u64 {
-        let cq = quantize_c_pow2(c_raw, SnapRule::Ceiling);
-        if self.prev == 0 || cq == self.prev {
-            self.prev = cq;
-            return cq;
-        }
-        const MARGIN_MILLI: u128 = 30;
-        let prev = u128::from(self.prev);
-        let c = u128::from(c_raw);
-        let upper = prev * (1000 + MARGIN_MILLI) / 1000;
-        let lower = (prev / 2) * (1000 - MARGIN_MILLI) / 1000;
-        if c > upper || c < lower {
-            self.prev = cq;
-            cq
-        } else {
-            self.prev
-        }
+        self.prev = hysteresis_step(c_raw, self.prev);
+        self.prev
     }
 }
 
@@ -732,10 +725,9 @@ const DWELL_SCENARIOS: &[(&str, f64, f64, u64)] = &[
 ];
 
 /// Advance the traced chain state by one block: the SHIPPED paid emission
-/// at the trace's windowed volume (multiplier on the floored base, then
-/// the remaining-supply cap — the composition the measured tree pays; the
-/// FL-R12′ implementation changes the payer in its own PR, with
-/// first-order-identical drift). §1.8 requires the quasi-static claim to
+/// at the trace's windowed volume — FL-R12′'s composition, the multiplier
+/// on the CURVE and no remaining-supply cap, so the accumulator runs
+/// through the asymptote. §1.8 requires the quasi-static claim to
 /// be CONFIRMED, not assumed (PR #614 review): the traces now evolve
 /// `already_generated` and height per block, so any rung or `C_q`
 /// crossing that supply/σ drift can cause is measured rather than frozen
@@ -1123,15 +1115,20 @@ pub struct DegeneratePins {
     pub release_at_zero: u64,
     pub release_at_double_baseline: u64,
     /// Tail subsidy per block, and the supply headroom at tail entry
-    /// (`tail << esf`). The tail era is `2^esf` blocks by IDENTITY
-    /// (doc §FL-V7: `remaining/tail = 2^esf`), then the supply cap zeroes
-    /// the validation reward permanently.
+    /// (`tail << esf`). `tail_era_blocks` is `2^esf` by IDENTITY (doc
+    /// §FL-V7: `remaining/tail = 2^esf`) — but since FL-R12′ retired the
+    /// supply cap it is no longer an ERA BOUNDARY: the tail is perpetual
+    /// and the accumulator runs through the asymptote. It is now the
+    /// number of tail-rate blocks the headroom to the asymptote covers,
+    /// which is what makes the asymptote a landmark rather than an end.
     pub tail_subsidy_per_block: u64,
     pub headroom_at_tail_entry: u64,
     pub tail_era_blocks: u64,
-    /// At `already_generated == money_supply`: what the 5-arg estimate path
-    /// still believes the reward is (it has no supply cap) vs what
-    /// validation pays. FL-V1's divergence in its terminal form.
+    /// At `already_generated == money_supply`: the 5-arg estimate path's
+    /// pre-penalty curve value vs the paid quantity validation settles on.
+    /// FL-V1's divergence in its terminal form — since FL-R12′ that is a
+    /// gap between two nonzero rewards, not the estimate-vs-ZERO it was
+    /// while the supply cap stood.
     pub estimate_reward_at_exhaustion: u64,
     pub validation_reward_at_exhaustion: u64,
     /// The KAT-pinned penalty through the crate's block-reward entry point
@@ -1824,10 +1821,11 @@ mod tests {
     /// FL-C7 at 18 reachable boundary cells; the 800-cell convergence
     /// result rests on this band), so its boundaries are pinned directly —
     /// a threshold or inequality drift must fail HERE, not silently
-    /// invalidate the §4.5 measurement (PR #614 review). Semantics mirror
-    /// impl-1's `fee_correction_quantized`: 3% margin, band around the
-    /// PREVIOUS step, escape is strictly-outside (`>` / `<`), `prev = 0`
-    /// means no history.
+    /// invalidate the §4.5 measurement (PR #614 review). Since #640 the
+    /// semantics are not mirrored but CALLED —
+    /// `shekyl-economics::hysteresis_step` — so this pins the owner's
+    /// boundaries: 3% margin, band around the PREVIOUS step, escape
+    /// strictly-outside (`>` / `<`), `prev = 0` means no history.
     #[test]
     fn hysteresis_band_boundaries_are_exact() {
         // Initialization: no history ⇒ the plain ceiling snap, stored.
