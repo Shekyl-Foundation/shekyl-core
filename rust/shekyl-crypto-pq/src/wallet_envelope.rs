@@ -1213,6 +1213,59 @@ mod tests {
         assert_eq!(r2.as_ref(), &R2);
     }
 
+    /// Oracle: **independent (tier 2)** — a KAT per `50-testing.mdc`.
+    ///
+    /// Re-derives both region wrap keys from `WALLET_FILE_FORMAT_V1.md`
+    /// §2.6's normative text through a code path that shares nothing with
+    /// the implementation under test: HKDF-Expand is spelled out as raw
+    /// HMAC-SHA-256 per RFC 5869 §2.3 (`hmac` crate, not the `hkdf`
+    /// wrapper), and the info labels are spelled from the spec's
+    /// byte-exact table, not the module's `HKDF_INFO_*` constants. Catches
+    /// a formula drift (e.g. extract-then-expand creeping in, which §2.6
+    /// forbids) and a label drift in the same test.
+    #[test]
+    fn kat_region_wrap_keys_match_spec_2_6() {
+        use hmac::{Hmac, Mac};
+
+        /// RFC 5869 §2.3 HKDF-Expand at L = 32 = HashLen, so N = 1 and
+        /// `OKM = T(1) = HMAC-Hash(PRK, T(0) || info || 0x01)` with
+        /// `T(0)` empty.
+        fn hkdf_expand_32_rfc5869(prk: &[u8], info_parts: &[&[u8]]) -> [u8; 32] {
+            let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(prk)
+                .expect("HMAC-SHA-256 accepts any key length");
+            for part in info_parts {
+                mac.update(part);
+            }
+            mac.update(&[0x01]);
+            mac.finalize().into_bytes().into()
+        }
+
+        // Spec §2.6 "Normative info labels" table: byte-exact, 22 bytes
+        // each. Spelled here from the spec, independently of the module's
+        // HKDF_INFO_REGION{1,2}_AEAD_V1 constants.
+        const SPEC_LABEL_R1: &[u8] = b"shekyl-region1-aead-v1";
+        const SPEC_LABEL_R2: &[u8] = b"shekyl-region2-aead-v1";
+        assert_eq!(SPEC_LABEL_R1.len(), 22, "spec table pins 22 bytes");
+        assert_eq!(SPEC_LABEL_R2.len(), 22, "spec table pins 22 bytes");
+
+        for addr in [&TRIPWIRE_ADDR, fixture_expected_address()] {
+            let expect_r1 = hkdf_expand_32_rfc5869(&FIXTURE_FILE_KEK_SEED, &[SPEC_LABEL_R1]);
+            let expect_r2 = hkdf_expand_32_rfc5869(&FIXTURE_FILE_KEK_SEED, &[SPEC_LABEL_R2, addr]);
+            let got_r1 = derive_wrap_key_region_1(&FIXTURE_FILE_KEK_SEED);
+            let got_r2 = derive_wrap_key_region_2(&FIXTURE_FILE_KEK_SEED, addr);
+            assert_eq!(
+                got_r1.as_ref(),
+                &expect_r1,
+                "region-1 wrap key diverged from §2.6"
+            );
+            assert_eq!(
+                got_r2.as_ref(),
+                &expect_r2,
+                "region-2 wrap key diverged from §2.6"
+            );
+        }
+    }
+
     #[test]
     fn hkdf_region_wrap_keys_are_distinct() {
         let file_kek = FIXTURE_FILE_KEK_SEED;
