@@ -1493,7 +1493,9 @@ TEST(node_server, handshake_nonce_is_recorded_before_it_can_be_written)
   // must precede the request write, or DETECTION is lost — our own arriving
   // connection would be checked against the set before the value is in it.
   // This ordering bounds nothing; the set's size rests on the erase leg,
-  // whose two exits are covered separately. This reds if the recording
+  // whose two erase IMPLEMENTATIONS the sibling test pins (its own comment
+  // states the boundary: attachment of the termination guard is structural,
+  // not observed). This reds if the recording
   // moves out of the minting function — which is the only way the insert
   // can come to follow the write, because the request cannot be built
   // without the value this returns.
