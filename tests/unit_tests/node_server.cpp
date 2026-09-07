@@ -1490,8 +1490,10 @@ TEST(node_server, same_host_outbound_cap_matches_host_and_only_outbound)
 TEST(node_server, handshake_nonce_is_recorded_before_it_can_be_written)
 {
   // The §5c falsifier (P2P_2_ENDPOINT_ROUND.md): the in-flight-set insert
-  // must precede the request write, or the bounded-set property holds only
-  // while someone remembers to keep it there. This reds if the recording
+  // must precede the request write, or DETECTION is lost — our own arriving
+  // connection would be checked against the set before the value is in it.
+  // This ordering bounds nothing; the set's size rests on the erase leg,
+  // whose two exits are covered separately. This reds if the recording
   // moves out of the minting function — which is the only way the insert
   // can come to follow the write, because the request cannot be built
   // without the value this returns.

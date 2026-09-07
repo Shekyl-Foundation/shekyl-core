@@ -434,15 +434,18 @@ Both properties are now discharged, and by different means. The citations below
 were re-read at `dev` **after** #643 landed rather than on the branch, so they
 are not awaiting confirmation.
 
-- **Ordering is structural, not tested-for.** `mint_recorded_handshake_nonce`
+- **Ordering is enforced by construction, and a test pins the construction.**
+  `mint_recorded_handshake_nonce`
   generates the value, records it into the zone's set, and only *then* returns
   it (`net_node.inl:1209-1215`), so a request cannot be built from an
-  unrecorded nonce. The regression is unrepresentable rather than caught
-  probabilistically — which is stronger than the falsifier this section
-  originally asked for, and correctly so: a self-dial's detection is a race the
-  acceptor usually wins, so an insert-after-write regression would have made
-  such a test **flaky**, and a falsifier that fails to fail is exactly the
-  defect §5c exists to prevent.
+  unrecorded nonce. `node_server.handshake_nonce_is_recorded_before_it_can_be_written`
+  pins it — **the test's job is to red when the construction is dismantled, not
+  to catch a race**, which is the distinction that makes it sound: a real
+  self-dial's detection is a race the acceptor usually wins, so an
+  insert-after-write regression would have made such a test **flaky**, and a
+  falsifier that fails to fail is exactly the defect §5c exists to prevent.
+  Stronger than the falsifier this section originally asked for, and correctly
+  so.
 - **Both erase exits are covered independently** — `erase_outbound_handshake_nonce`
   on termination (`:1228`), and erase-on-match inside `detect_self_handshake`,
   which returns `erase(nonce) > 0` (`:1248-1257`) so detection and removal are
