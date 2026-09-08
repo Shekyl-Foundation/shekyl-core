@@ -88,7 +88,11 @@ _HITS = _COV / "hits.txt"
 # "status" reads the WORKING TREE, not history, so it is depth-safe — added
 # when the dirty-submodule check introduced it, and the allowlist caught that
 # addition on its first run rather than letting it through unexamined.
-DEPTH_SAFE = {"submodule", "rev-parse", "ls-tree", "show", "config", "status"}
+# "ls-files" reads the INDEX — no history — added when the tracked-file check
+# for cited submodule paths introduced it, and again the allowlist caught the
+# new call on its first run rather than letting it through unexamined.
+DEPTH_SAFE = {"submodule", "rev-parse", "ls-tree", "show", "config", "status",
+              "ls-files"}
 
 
 # Ancestry operators. An allowlisted subcommand can still walk history through
@@ -174,6 +178,18 @@ def unsafe_git_calls() -> list[str]:
         if not isinstance(node, ast.Call) or not node.args:
             continue
         f, a0 = node.func, node.args[0]
+        # SUBJECT ASSERTION for the scanner itself. It reads two shapes: an
+        # inline argv list and the local git() helper. A third — `cmd = [...]`
+        # then `subprocess.run(cmd)` — was invisible, so an unsafe history walk
+        # introduced that way left this list empty and the guard reported safe.
+        # The probes could not catch it either, because they inject only the
+        # shapes the scanner already knows. Any process launch whose argv this
+        # cannot READ is now itself the finding.
+        if (isinstance(f, ast.Attribute) and f.attr in
+                ("run", "Popen", "call", "check_call", "check_output")
+                and not isinstance(a0, (ast.List, ast.Tuple))):
+            found.append(f"unreadable argv at line {node.lineno}")
+            continue
         # the local `git(...)` helper: its first argument IS the subcommand
         if isinstance(f, ast.Name) and f.id == "git":
             # the subcommand is always a plain literal; the REVISIONS are not
@@ -224,6 +240,8 @@ DEPTH_PROBES = [
     ("bare type peel",     'git("rev-parse", f"{ref}^{{}}")',                    False),
     # `^{/text}` is a HISTORY SEARCH wearing peel syntax
     ("commit-message search", 'git("show", f"{ref}^{{/fix}}")',                  True),
+    # argv the scanner cannot read is itself unsafe: it could be anything
+    ("variable argv",      'cmd = ["git", "log"]; subprocess.run(cmd)',          True),
     ("plain f-string rev", 'git("show", f"{ref}:docs/x")',                  False),
 ]
 
@@ -1053,6 +1071,9 @@ def main() -> None:
         green("quoted fence ends when its container does",
               doc=GOOD.replace("See §2 for the table.",
                                "> ```text\n> example\n\nSee §2 for the table.")),
+        # a table without its delimiter row is not a table
+        case("counts: table delimiter row deleted", "no delimiter row",
+             doc=GOOD.replace("| --- | --- |\n", "")),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]

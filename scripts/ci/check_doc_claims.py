@@ -122,7 +122,14 @@ DECL = re.compile(r"(?m)^ {0,3}<!--\s*claim-audit:\s*([a-z]+)"
 # the adoption floor stayed satisfied by another document — the same vacuous
 # pass this matcher exists to prevent, reached by leaving the marker unfinished
 # instead of misspelling it.
-DECL_ANY = re.compile(r"(?m)^ {0,3}<!--\s*claim-audit:.*$")
+# Non-greedy, and anchored per OCCURRENCE rather than per line. A greedy
+# `.*$` swallowed two adjacent markers into one match, so
+# `<!-- claim-audit: sections --><!-- claim-audit: Citations -->` reported
+# neither the malformed second marker nor the missing declaration: the line
+# "contained a valid declaration", so it passed. Two VALID adjacent markers
+# likewise registered only the first — the silent opt-out this scan exists to
+# prevent, reached by putting two markers on one line.
+DECL_ANY = re.compile(r"(?m)^ {0,3}<!--\s*claim-audit:.*?(?:-->|$)")
 KINDS = {"series", "range", "sections", "numbered", "citations", "counts"}
 # The only two kinds that name a subject; the rest are bare.
 TAKES_ARG = {"series", "range"}
@@ -143,7 +150,15 @@ NOTES: list[str] = []
 
 
 def rel(p: pathlib.Path) -> str:
-    return str(p.relative_to(ROOT))
+    """Repo-relative, POSIX-separated.
+
+    `str(Path)` emits backslashes on Windows while the baseline's registry keys,
+    the records-was directory names and every citation in the corpus are POSIX.
+    On a Windows worktree the registry lookups would miss and `is_records_was`
+    would stop recognising historical directories — the documented local command
+    failing against a valid checkout.
+    """
+    return p.relative_to(ROOT).as_posix()
 
 
 def decl_token(kind: str, arg: str | None) -> str:
@@ -170,7 +185,22 @@ def strip_code(text: str) -> str:
     became a subject of it. Newlines are preserved so every reported line
     number still points where a reader would look.
     """
-    return _blank_spans(strip_fences(text))
+    return _blank_comments(_blank_spans(strip_fences(text)))
+
+
+def _blank_comments(text: str) -> str:
+    """Blank ordinary HTML comments, preserving declarations and line numbers.
+
+    Commented-out markdown is DISABLED markdown, and it was still feeding every
+    structural leg: register rows left inside `<!-- ... -->` satisfied `series`
+    after the rendered register was deleted — a vacuous green built out of text
+    no reader can see. Declarations are themselves HTML comments, so they are
+    the one form preserved.
+    """
+    def repl(m):
+        body = m.group(0)
+        return body if DECL_ANY.search(body) else "\n" * body.count("\n")
+    return re.sub(r"<!--.*?-->", repl, text, flags=re.S)
 
 
 def strip_fences(text: str) -> str:
@@ -394,7 +424,13 @@ def _numbered_runs(text: str) -> list[list[tuple[int, int]]]:
             if len(r) >= 1:
                 out.append(r)
 
-    for i, line in enumerate(text.splitlines(), 1):
+    for i, raw in enumerate(text.splitlines(), 1):
+        # Block-quote prefixes are containers here too. Matching digits at the
+        # start of the RAW line skipped every quoted ordered list, and this
+        # corpus uses them (docs/WALLET_PREFS.md:77-83 is a 1./2./3. list inside
+        # a quote) — so the leg promised to check numbered lists while a whole
+        # container class was invisible to it.
+        line = re.sub(r"^(?:\s*>)+\s?", "", raw)
         m = re.match(r"^([ \t]*)(\d+)\. ", line)
         if m:
             ind, num = len(m.group(1).expandtabs()), int(m.group(2))
@@ -519,6 +555,12 @@ def untrusted_submodules() -> tuple[str, ...]:
                 continue
             if dirty.returncode != 0 or dirty.stdout.strip():
                 out.append(parts[1].rstrip("/") + "/")
+    # `status --porcelain` omits IGNORED files, so a citation into a generated
+    # artifact inside a submodule resolves locally and vanishes in a clean CI
+    # checkout. The fix is NOT `--ignored`: that would call every submodule
+    # dirty for anyone who has built the project, which is a false red on
+    # ordinary work. The precise question is whether the CITED FILE is tracked,
+    # and resolve() asks it per path rather than condemning the whole submodule.
     # ...and the directory test as well, not instead: it still catches a tree
     # git cannot speak for at all, which is the state every synthetic corpus in
     # the falsification matrix is in. The two detectors cover different gaps,
@@ -533,6 +575,52 @@ def untrusted_submodules() -> tuple[str, ...]:
 
 
 _LENGTHS: dict[str, int] = {}
+
+
+@functools.cache
+def _submodule_paths() -> tuple[str, ...]:
+    gm = ROOT / ".gitmodules"
+    if not gm.is_file():
+        return ()
+    return tuple(m.group(1).rstrip("/") + "/" for m in
+                 re.finditer(r"^\s*path\s*=\s*(\S+)",
+                             gm.read_text(encoding="utf-8"), re.M))
+
+
+def _submodule_of(path: str) -> str | None:
+    return next((s for s in _submodule_paths() if path.startswith(s)), None)
+
+
+@functools.cache
+def _tracked_in(sub: str, path: str) -> bool:
+    """Is this file tracked by the submodule, or merely sitting in it?
+
+    An IGNORED build artifact is present locally and absent from a clean CI
+    checkout, so a citation into one resolves here and dies there — the
+    environment disagreement this whole guard exists to prevent, arriving
+    through the one door `status --porcelain` does not report.
+    """
+    d = ROOT / sub.rstrip("/")
+    # Only ask a real submodule CHECKOUT. Without its own `.git` the directory
+    # is not a submodule in this tree at all, and `-C` would run the query in
+    # the SUPERPROJECT with the pathspec resolved relative to that directory —
+    # answering a different question and condemning paths git has no submodule
+    # opinion about. The uninitialised and dirty checks already own that state.
+    if not (d / ".git").exists():
+        return True
+    try:
+        r = subprocess.run(["git", "-C", str(d),
+                            "ls-files", "--error-unmatch",
+                            path[len(sub):]],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):           # pragma: no cover
+        return True                 # cannot tell; the dirty check already ran
+    # `ls-files --error-unmatch` exits 1 for a file git knows nothing about and
+    # 128 when it cannot answer at all (the path is not a repository). Only the
+    # first is evidence of an untracked file; treating the second as untracked
+    # condemned every citation in a directory git has no opinion about, which
+    # is a different claim entirely.
+    return r.returncode != 1
 
 
 def resolve(path: str) -> int:
@@ -585,6 +673,11 @@ def resolve(path: str) -> int:
         f = ROOT / path
         if not f.is_file() and not path.startswith(ROOTS):
             f = ROOT / "rust" / path           # crate-relative citation
+        if f.is_file():
+            sub = _submodule_of(path)
+            if sub and not _tracked_in(sub, path):
+                _LENGTHS[path] = -1            # present locally, not recorded
+                return _LENGTHS[path]
         _LENGTHS[path] = (len(f.read_text(encoding="utf-8", errors="replace")
                               .splitlines()) if f.is_file() else -1)
     return _LENGTHS[path]
@@ -637,17 +730,34 @@ def check_counts(p, text, _arg, errs):
         # that table's row count happened to match. A heading, or the next
         # count claim, ends the search: past either, any table belongs to
         # something else.
-        rows, started = [], False
+        # A markdown table is a header, a DELIMITER row, then data. Counting
+        # pipe-prefixed lines without requiring the delimiter meant deleting it
+        # left the header and every data line still counted: `len(rows) - 1`
+        # was unchanged and the figure still matched, so the check passed over
+        # a table that no longer existed as a table.
+        rows, started, delim = [], False, False
         for line in text[m.end():].splitlines():
             if line.startswith("|"):
+                if re.match(r"^\|[\s:|-]+\|?\s*$", line):
+                    if len(rows) == 1:      # immediately after the header
+                        delim = True
+                    started = True
+                    continue
                 started = True
-                if not re.match(r"^\|[\s:|-]+\|?\s*$", line):
-                    rows.append(line)
+                rows.append(line)
             elif started:
                 break
             elif line.startswith("#") or re.search(r"\*\*\d+ (rows|sub-databases)\*\*",
                                                    line):
                 break
+        if rows and not delim:
+            line = text[: m.start()].count("\n") + 1
+            errs.append(f"{rel(p)}:{line}: states **{m.group(1)} {m.group(2)}** "
+                        "over pipe-prefixed lines with no delimiter row — that "
+                        "is not a markdown table, so the subject of this count "
+                        "does not exist as one")
+            seen += 1
+            continue
         if len(rows) < 2:
             # A claim with no table under it is the subject going missing, not
             # a claim that needs no checking. Skipping it meant a document with
@@ -967,7 +1077,24 @@ def main() -> None:
     # value the change under test could still edit.
     for doc, legs in sorted(base_declares.items()):
         if doc not in present:
-            continue          # deleting the document takes its line with it
+            # Deleting a document takes its registry line with it, and that is
+            # legitimate. But a RENAME looks identical from one tree: move an
+            # adopted document, strip its markers, drop its registry line, and
+            # every check here passes while the declarations simply cease. This
+            # run cannot tell those apart — rename detection needs git's
+            # similarity index across two trees, which is follow-up work — so
+            # it refuses to be silent about the event instead of pretending to
+            # have judged it. The tokens that stopped being audited are named,
+            # which is what a reviewer needs to tell deletion from evasion.
+            orphaned = sorted(legs - {tok for toks in present.values()
+                                      for tok in toks})
+            if orphaned:
+                NOTES.append(
+                    f"{doc} was registered on {base_note} and is absent here, "
+                    f"and no document declares {orphaned} any more. If it was "
+                    "DELETED that is expected; if it was RENAMED the "
+                    "declarations must move with it.")
+            continue
         shrunk = sorted(legs - must_declare.get(doc, set()))
         if shrunk:
             errors.append(
