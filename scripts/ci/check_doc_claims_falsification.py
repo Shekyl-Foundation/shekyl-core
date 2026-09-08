@@ -1138,6 +1138,17 @@ def main() -> None:
               doc=GOOD.replace("See §2 for the table.",
                                "Write `<!-- claim-audit: sections` to opt in.\n\n"
                                "See §2 for the table.")),
+        # inside a comment, CommonMark stops interpreting markdown, so a
+        # `-->` between backticks IS the closer. Masking it left the comment
+        # open and swallowed the declaration below.
+        # The remainder is backtick-BALANCED on purpose. The comment consumes
+        # `<!-- x `-->`, leaving one orphaned backtick, and an odd backtick
+        # legitimately pairs with the next one in the document and blanks what
+        # lies between — correct CommonMark, and it made the first version of
+        # this control fail for a reason unrelated to the property.
+        green("comment closer inside backticks still closes",
+              doc=GOOD.replace("See §2 for the table.",
+                               "note <!-- x `--> ` y ` z\n\nSee §2 for the table.")),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -1167,7 +1178,8 @@ def main() -> None:
                 "comment holding a fence delimiter eats nothing",
                 "comment opener inside a fence eats nothing past it",
                 "two separated quoted lists are two runs",
-                "comment token inside backticks eats nothing"}
+                "comment token inside backticks eats nothing",
+                "comment closer inside backticks still closes"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"

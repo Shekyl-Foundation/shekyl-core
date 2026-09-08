@@ -215,12 +215,20 @@ def _split_comments(raw: str) -> tuple[str, bool]:
     masked = _mask_spans(raw)
     out, i = [], 0
     while True:
+        # The OPENER is masked: a `<!--` written inside backticks is a
+        # documented example. The CLOSER is not, and that asymmetry is the
+        # rule rather than an oversight — once a comment is open, CommonMark
+        # stops interpreting markdown inside it, so a `-->` between backticks
+        # is a real closer. Masking both hid it, the comment stayed open, and
+        # the declaration below was swallowed; it also made the same token
+        # honoured or ignored depending on which line it landed on, since the
+        # continuation path reads raw text.
         a = masked.find("<!--", i)
         if a < 0:
             out.append(raw[i:])
             return "".join(out), False
         out.append(raw[i:a])
-        b = masked.find("-->", a + 4)
+        b = raw.find("-->", a + 4)
         if b < 0:
             return "".join(out), True
         i = b + 3
