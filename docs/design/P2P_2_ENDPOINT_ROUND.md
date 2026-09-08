@@ -621,76 +621,95 @@ depending on whose address it is. Every mechanism added under this row must
 answer *does this let anything conclude that two observations involve the same
 party?* — and if yes, stop.
 
-### PWD-E8 — address volatility: the measurement owed before PWD-E7 is built
+### PWD-E8 — address volatility: the measurement PWD-E7 must ship **before** it can exist
 
-**OPEN — and it is derivable in half, which is why it is a measurement and not
-a guess.** Rick named it as the one place ephemeral-by-default could fail
-quietly: every default node re-addresses on restart, so gossiped overlay
-addresses have a shelf life. Each dead address is handled *cleanly* — a failed
-dial, aged out of gray — but a high enough dead fraction degrades overlay peer
-discovery while no individual case misbehaves.
+**DEFERRED, with a real external blocker and a falsifier chain.** An earlier
+revision of this row had the dependency **backwards** — it read "the measurement
+owed before PWD-E7 is built". Rick, 2026-09-08: *"we need to stress the fleet to
+get an actual read on T, so we need working code before we can come up with a
+REAL T rather than conjecture."*
 
-**The half that is derivable now, from shipped constants.** A gossiped address
-enters **gray**. On a saturated node the only prober is
-`gray_peerlist_housekeeping`, which draws **one random gray entry per zone per
-60 s** (`net_node.h:631`) from a pool capped at
-`P2P_LOCAL_GRAY_PEERLIST_LIMIT = 5000`. A uniform random draw with replacement
-gives an expected wait of `N` cycles for any specific entry:
+**`T` is the mean uptime between restarts of real nodes.** It cannot be derived,
+assumed, or read off a constant. Without E7 shipped there is no fleet running
+the thing whose volatility `T` describes, so **the measurement has no subject**.
+Building E7 first is not a convenience justified by "the mechanism is identical
+either way" — it is the only order that can produce `T` at all.
 
-> `D = N × 60 s = 5000 × 60 s ≈ **3.5 days**` — the mean time a gossiped overlay
-> address sits in a saturated peer's gray list before anything dials it.
+#### The half that IS derived, and may be stated as such
 
-**The half that must be measured: `T`, the mean uptime between restarts of a
-default-posture node.** The dead fraction at probe time is then
-`1 − e^(−D/T)`.
+A gossiped overlay address enters **gray**. On a saturated node the only prober
+is `gray_peerlist_housekeeping`, which draws **one random gray entry per zone
+per 60 s** (`net_node.h:631`) from a pool capped at
+`P2P_LOCAL_GRAY_PEERLIST_LIMIT = 5000`. A uniform draw with replacement gives an
+expected wait of `N` cycles for any specific entry:
 
-> **Every figure below is CONDITIONAL ON AN ASSUMED `T` and none of them is an
-> established property of this network.** `T` has not been measured. The row is
-> a sensitivity table showing what the answer depends on — it is not a result,
-> and no document, comment or PR body may quote one of these numbers as a
-> property, or assert that ephemeral addressing is sound at scale, until the
-> rig supplies `T`. `D` is the only derived quantity here; it comes from shipped
-> constants and may be stated as derived.
+> `D = N × 60 s = 5000 × 60 s ≈ **3.5 days**` — derived from shipped constants,
+> and statable as derived. It moves with the gray cap and the cadence, so
+> changing either re-opens this row.
 
-| **assumed** `T` (mean uptime) | dead on probe **if `T` were that** |
+#### The half that is CONJECTURE until the fleet reports
+
+The dead-on-probe fraction is `1 − e^(−D/T)`. **`T` is unmeasured, so every
+number below is conjecture in Rick's own word — not a property of this network,
+and not merely "conditional".**
+
+| **assumed** `T` | model output **if `T` were that** |
 |---|---|
 | 30 days | ~11 % |
-| 14 days | ~22 % |
 | 7 days | ~39 % |
-| 3.5 days | ~63 % |
 | 1 day | ~97 % |
 
-**So the ruling threshold is a statement about `D/T`, not about either alone**,
-and the shape of the answer is already visible: at weekly restarts nearly two
-in five gossiped overlay addresses are dead before they are tried, and the
-degradation is in *pool quality*, not in any single dial.
+> **Quotation rule.** These may appear only in the form *"assuming `T` = 7 days,
+> the model gives ~39 %"* — never as a property, and **never in a summary line
+> where the assumption can be dropped in a restatement.** A figure that loses its
+> qualifier reads as measured, which is worse than no figure.
 
-**Three things this round must not do**, each of which would look like progress:
+#### The falsifier is a CHAIN, and every link is named
 
-- **Do not shorten `D` by probing gray harder.** That trades one measured
-  quantity for unmeasured dial volume on an overlay, and PWD-B1's rate limiting
-  has no derived parameters yet.
-- **Do not conclude "clean per-case failure ⇒ acceptable aggregate."** That is
-  the exact inference Rick flagged; it is what makes this failure quiet.
-- **Do not read `D` as fixed.** It is `N × 60 s` — it moves with the gray cap
-  and the housekeeping cadence, so any change to either re-opens this row.
+"Blocked on `T`" alone would leave a reader thinking a rig run produces it. It
+does not: **Q12-D6a is the instrument, not the source.** The source is nodes
+restarting in the wild under load.
 
-**Measurement rig: Q12-D6a**, which already exists for fleet peer-discovery
-observations. `T` is the new input it must carry.
+> **E7 ships → nodes run it → the fleet is stressed → `T` is measured under
+> those conditions → the threshold becomes Rick's.**
 
-**Blocked on `T`, with the falsifier named** — a blocked entry states the check
-that closes it, or it parks work and fires no event:
+Each link is a real precondition: no ship, no fleet; no fleet, no restarts; no
+stress, no admissible `T`; no `T`, no threshold.
 
-> **Falsify by running the Q12-D6a fleet artifact to produce `T`**, the mean
-> uptime between restarts of a default-posture node. `D` is already derived
-> (`N × 60 s` from the shipped gray cap and housekeeping cadence). With both in
-> hand the dead fraction is arithmetic, and **the acceptable threshold is
-> Rick's to rule** — it is a judgement about whether overlay *discovery*
-> converges, not about whether individual dials succeed.
+#### What makes a `T` admissible — stated because this is where the number goes wrong
 
-Nothing else blocks it: no design decision waits on another, and the rig
-exists.
+Restart behaviour **under load** is the thing being measured, and **a quiet fleet
+reports a `T` that flatters the design**. An inadmissible `T` that gets quoted is
+worse than no `T`, because it reads as measured. A `T` is admissible only with:
 
+- **Duration** — long enough to observe restarts, not a brief run whose window
+  is shorter than the restart interval it is trying to estimate.
+- **Stressor** — the fleet under load, since load is what causes the restarts
+  (OOM, operator intervention, upgrade cycles) that `T` is about.
+- **Heterogeneity** — not a homogeneous set of well-behaved nodes. A fleet of
+  identical healthy hosts measures the operator's discipline, not the network's.
+
+Any `T` reported without all three is not the `T` this model needs, and the row
+should reject it rather than absorb it.
+
+#### Blocker (rule 22)
+
+**Named external blocker: `T` cannot exist until E7 ships and a stressed,
+heterogeneous fleet runs long enough to observe restarts.** Zero symbols; one
+FOLLOWUPS row; lifts exactly when the chain above completes. The acceptable
+threshold is **Rick's** to rule once `T` is in hand — it is a judgement about
+whether overlay *discovery* converges, not about whether individual dials
+succeed.
+
+**Three non-fixes, named so they cannot look like progress:**
+
+- **Do not shorten `D` by probing gray harder** — trades a measured quantity for
+  unmeasured overlay dial volume, and PWD-B1's rate limiting has no derived
+  parameters yet.
+- **Do not infer an acceptable aggregate from the clean per-case failure** —
+  that inference is exactly what makes this degrade quietly.
+- **Do not substitute a convenient `T`.** An assumed value that survives one
+  restatement becomes a measured one.
 
 ### PWD-E9 — PWD-E7's isolation boundary: what "the daemon gets its own path" forbids
 
