@@ -111,14 +111,25 @@ def report_candidates(cells: list[str]) -> int:
     # byte-identical to a candidate are excluded: those are the rows being
     # replaced by this proposal, and a row cannot collide with itself.
     rows = registry_rows()
+    if rows is None:
+        print("index prefixes: IMPLEMENTATION_INDEX.md is missing",
+              file=sys.stderr)
+        return 2
+    if len(rows) < 2:
+        # Same subject assertion main() makes. An absent or stub registry must
+        # not read as "nothing to collide with": that would be a vacuous pass
+        # in the one mode whose whole job is detecting collisions.
+        print("index prefixes: §2 family table missing or too small — cannot "
+              "check candidates against a registry that was never read",
+              file=sys.stderr)
+        return 2
     registered: dict[str, str] = {}
-    if rows:
-        for row in rows:
-            if row in cells:
-                continue
-            pref = family_prefix(row)
-            if pref:
-                registered.setdefault(pref, row)
+    for row in rows:
+        if row in cells:
+            continue
+        pref = family_prefix(row)
+        if pref:
+            registered.setdefault(pref, row)
     seen: dict[str, str] = {}
     collisions = []
     registry_hits: list[tuple[str, str, str]] = []
@@ -141,16 +152,13 @@ def report_candidates(cells: list[str]) -> int:
             seen[pref] = cell
         if pref in registered:
             registry_hits.append((pref, cell, registered[pref]))
-    if registry_hits:
-        for pref, cand, row in registry_hits:
-            print(f"\nindex prefixes: {pref!r} is ALREADY REGISTERED in §2 by "
-                  f"{row!r}, so candidate {cand!r} cannot take it")
-        print("COLLIDES WITH THE REGISTRY — this shape cannot be added as "
-              "proposed, whatever the candidates do among themselves. Rename "
-              "the family, or, if this proposal REPLACES that row, pass the "
-              "row's exact Family cell as one of the candidates so it is "
-              "excluded as the row being replaced.")
-        return 1
+    # THE PAIRWISE VERDICT COMES FIRST, because it is the question this mode
+    # was built to answer: may one row become several? When candidates collapse
+    # into one prefix, the answer is §6 branch (b) — and that is exactly the
+    # case where a registry hit is EXPECTED rather than a separate fault, since
+    # the prefix they collapse to is usually the family's own. Reporting the
+    # registry first told the caller to "rename the family" for the canonical
+    # C2-R shape, which is the wrong instruction for the right observation.
     if collisions:
         for pref, a, b in collisions:
             if a == b:
@@ -159,9 +167,25 @@ def report_candidates(cells: list[str]) -> int:
             else:
                 print(f"\nindex prefixes: {pref!r} is claimed by both {a!r} "
                       f"and {b!r}")
+        for pref, row in dict((p, r) for p, _, r in registry_hits).items():
+            print(f"index prefixes: (and {pref!r} is already registered by "
+                  f"{row!r} — consistent with this being that family's own "
+                  f"split, not a second fault)")
         print("COLLIDE — rule 94 §6 branch (b): keep one row and put per-lane "
               "status in the owning doc. Do NOT widen the grammar to separate "
               "them; that costs the check its power to catch a real duplicate.")
+        return 1
+    # Only once the candidates are distinct among themselves does a registry
+    # hit mean what it says: this shape wants a prefix another family holds.
+    if registry_hits:
+        for pref, cand, row in registry_hits:
+            print(f"\nindex prefixes: {pref!r} is ALREADY REGISTERED in §2 by "
+                  f"{row!r}, so candidate {cand!r} cannot take it")
+        print("COLLIDES WITH THE REGISTRY — the candidates are distinct among "
+              "themselves, but one wants a prefix another family already "
+              "holds. Rename it, or, if this proposal REPLACES that row, pass "
+              "the row's exact Family cell as one of the candidates so it is "
+              "excluded as the row being replaced.")
         return 1
     # Invariant worth stating out loud: branch (a) is available only when the
     # candidates and the prefixes they claim are in one-to-one correspondence.
