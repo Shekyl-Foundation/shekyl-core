@@ -18,6 +18,14 @@ more precision than that: **the statement of the work is incomplete, so no
 blocker is nameable and no disposition can be evaluated.** Which disposition
 each item *should* get is its owner's decision, not this document's.
 
+No *falsifier* column is offered, and its absence is deliberate.
+`22-no-lazy-deferral.mdc` requires a blocked entry to name the check that would
+falsify it — but an entry that never finishes stating the work cannot state a
+blocker, so it cannot state a falsifier either, and the column would read "no"
+on every row. It would record the consequence and hide the cause. Falsifiers
+become answerable per row only once the entry says what the work is, which is
+its owner's edit, not this register's.
+
 ## Measurements
 
 Against `docs/FOLLOWUPS.md` at the commit that closed the bold markers:

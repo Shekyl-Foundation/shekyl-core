@@ -20,7 +20,7 @@ because the next agent does not read the prose — it greps:
 | Disposition | Symbols | `FOLLOWUPS.md` rows | Decision log |
 | --- | --- | --- | --- |
 | **REJECTED** | zero | zero | exactly one entry |
-| **DEFERRED** | zero | exactly one, naming an external blocker | not required |
+| **DEFERRED** | zero | exactly one, naming an external blocker **and its falsifier** | not required |
 | **STAGED** | present | not required | named consumer in a live plan |
 
 An agent greps for symbols and finds staged work. It greps `FOLLOWUPS.md` and
@@ -35,6 +35,10 @@ machine actually reads.
 
 What follows from the table, rather than from taste:
 
+- **A blocker is not named until its falsifier is.** The row must say how a
+  reader would discover the blocker had lifted — `22-no-lazy-deferral.mdc`
+  owns the form and the worked example. A blocker nobody can check does not
+  expire, so the row outlives the condition that justified it.
 - **A row that cannot name a blocker is not a deferral.** It is an *undisposed*
   item sitting on the surface agents grep to find deferred work. Give it a
   blocker, reject it and delete the row, or stage it. It does not get to wait
