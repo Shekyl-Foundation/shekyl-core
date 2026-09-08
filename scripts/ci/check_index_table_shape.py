@@ -32,7 +32,7 @@ import sys
 # sys.path, which differs between `python3 scripts/ci/x.py` and an import.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _gfm_table import has_pipe, split_cells
+from _gfm_table import fenced_lines, has_pipe, split_cells
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 INDEX = os.path.join(ROOT, "docs", "design", "IMPLEMENTATION_INDEX.md")
@@ -108,21 +108,18 @@ def main() -> int:
     # is blank-separated, so nothing short of a blank ends one. Scanning for a
     # delimiter pattern anywhere instead would let a body row of bare dashes
     # silently restart the column count from whatever preceded it.
+    # One fence computation for both the parse and the closing sweep. A fenced
+    # block is verbatim: a shell pipeline inside one is not a table, and
+    # treating it as a malformed one would fail the gate on a correct document.
+    in_fence, fence_open = fenced_lines(lines)
+
     i = 0
-    fenced = False
     while i < len(lines):
+        if i in in_fence:
+            i += 1
+            continue
         stripped = lines[i].strip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            # A fenced block is verbatim: a shell pipeline inside one is not a
-            # table, and treating it as a malformed one would fail the gate on
-            # a correct document.
-            fenced = not fenced
-            i += 1
-            continue
-        if fenced:
-            i += 1
-            continue
-        nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        nxt = "" if (i + 1 >= len(lines) or i + 1 in in_fence) else lines[i + 1].strip()
         # See the recognition note at the top of the file. Table syntax plus a
         # non-blank successor, or a pipe line above a delimiter-shaped one.
         # Nothing is asked about the delimiter's CONTENT: every content test
@@ -214,13 +211,9 @@ def main() -> int:
     # would be a gate that fails on correct markdown. A malformed block whose
     # header and delimiter both lost their pipes is still caught here, through
     # whichever of its rows kept one.
-    in_fence = False
     for n, line in enumerate(lines):
         text = line.strip()
-        if text.startswith("```") or text.startswith("~~~"):
-            in_fence = not in_fence
-            continue
-        if in_fence or not text or n in consumed:
+        if n in in_fence or not text or n in consumed:
             continue
         if is_table_syntax(text):
             problems.append(
@@ -228,7 +221,7 @@ def main() -> int:
                         f"a header, delimiter or row that GFM will not render "
                         f"as part of one: {text[:60]}…"))
 
-    if fenced:
+    if fence_open:
         # An unterminated fence swallows every line after it. That is a silent
         # skip wearing a plausible disguise — the run reports on a prefix of
         # the file while looking like a clean pass over all of it.

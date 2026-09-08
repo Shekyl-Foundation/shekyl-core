@@ -189,7 +189,11 @@ def report_candidates(cells: list[str], replaced: list[str] | None = None) -> in
                   file=sys.stderr)
             registry_bad = True
             continue
-        if pref in registered and registered[pref] != row:
+        # No `!= row` escape here. Two byte-identical Family rows are two
+        # rows registering one family — the defect this check exists to find —
+        # and excusing them made --prefix answer 0 where CI answers 1. Same
+        # shortcut, third location; the first two were removed earlier.
+        if pref in registered:
             print(f"index prefixes: registered prefix {pref!r} is already held "
                   f"by {registered[pref]!r}, and {row!r} claims it too — the "
                   f"registry itself does not pass the gate", file=sys.stderr)
