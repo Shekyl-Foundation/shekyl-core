@@ -270,7 +270,17 @@ jobs:
   build-ubuntu:
     name: ${{ matrix.name }}
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    # NO JOB-LEVEL `if:` HERE, deliberately, and it is not an oversight.
+    #
+    # `Ubuntu 22.04` and `Ubuntu 24.04` are required contexts and they come from
+    # `${{ matrix.name }}`. A job-level `if:` is evaluated BEFORE the matrix
+    # expands, so a skipped job has no `matrix.name` to interpolate and cannot
+    # emit checks under those names — protection would keep waiting, which is
+    # the very deadlock this workflow change exists to remove. The other jobs
+    # here carry literal names and gate at the job level safely; this one must
+    # run so the legs exist, and gates its WORK at the step level instead.
+    #
+    # Cost on a docs-only PR: two runner allocations that finish in seconds.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -294,17 +304,23 @@ jobs:
         CCACHE_DIR: ~/.ccache
     steps:
       - name: set apt conf
+        if: needs.changes.outputs.docs_only != 'true'
         run: ${{env.APT_SET_CONF}}
       - name: update apt
+        if: needs.changes.outputs.docs_only != 'true'
         run: apt update
       - name: install build dependencies
+        if: needs.changes.outputs.docs_only != 'true'
         run: ${{env.APT_INSTALL_LINUX}}
       - name: configure git
+        if: needs.changes.outputs.docs_only != 'true'
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           submodules: recursive
       - name: install Rust
+        if: needs.changes.outputs.docs_only != 'true'
         # Composite action (.github/actions/install-rust): the one
         # hardened download-then-run recipe, installing the
         # rust-toolchain.toml pin + components up front so the daemon
@@ -315,12 +331,15 @@ jobs:
         # the runner until the repo is checked out.
         uses: ./.github/actions/install-rust
       - uses: actions/cache@v5
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           path: ~/.ccache
           key: ccache-${{ matrix.container }}-build-${{ github.sha }}
           restore-keys: ccache-${{ matrix.container }}-build-
       - uses: ./.github/actions/set-make-job-count
+        if: needs.changes.outputs.docs_only != 'true'
       - name: build
+        if: needs.changes.outputs.docs_only != 'true'
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
         run: |
@@ -339,7 +358,7 @@ jobs:
       # of the ordinary Rust lane, which builds no daemon; SHEKYLD_BIN is how
       # it finds one.
       - name: live-daemon gates (restricted RPC + console in-process arm)
-        if: matrix.pack_ctest
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         # `shell: bash` like the CTest-artifact step below, and for the same
         # reason: the job's default shell in this container is dash, which
         # rejects `set -o pipefail` outright — the script dies on line 1
@@ -403,12 +422,12 @@ jobs:
       # on both sides. tests/data/ is repo-tracked — the test job reads
       # it from checkout, not this tarball.
       - name: Pack CTest tree
-        if: matrix.pack_ctest
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         run: |
           tar --exclude='**/CMakeFiles' --exclude='**/*.o' --exclude='**/*.a' \
             -czf ubuntu-24.04-ctest.tar.gz build/
       - name: Verify CTest artifact
-        if: matrix.pack_ctest
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -432,7 +451,7 @@ jobs:
           fi
           echo "OK: artifact contains CTestTestfile.cmake and excludes CMakeFiles/*.o/*.a"
       - uses: actions/upload-artifact@v4
-        if: matrix.pack_ctest
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         with:
           name: ubuntu-24.04-ctest
           path: ubuntu-24.04-ctest.tar.gz
