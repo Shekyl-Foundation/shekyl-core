@@ -92,6 +92,9 @@ struct GetInfoResp {
     /// `mine_until_pool_empty`).
     #[serde(default)]
     tx_pool_size: u64,
+    /// Daemon version string — provenance for the live-oracle spend capture.
+    #[serde(default)]
+    version: String,
     /// Cumulative destroyed atomic units — `compute_fee_burn`'s
     /// `actually_destroyed` term only (`blockchain.cpp` feeds it
     /// `block_burn_amount` and rolls it back on pop). The sibling
@@ -339,6 +342,19 @@ impl RegtestDaemon {
 
     /// Transactions currently in the daemon's pool — the drain loop's
     /// condition and the pop legs' return-to-pool observable.
+    /// The accepting daemon's own version string (`get_info.version`).
+    ///
+    /// Recorded into the live-oracle capture as provenance: a chain-attested
+    /// fixture is only as meaningful as the identity of the node that attested
+    /// it, and this crate's version is not that identity.
+    pub(super) async fn version(&self) -> String {
+        self.rpc
+            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .await
+            .expect("get_info")
+            .version
+    }
+
     pub(super) async fn tx_pool_size(&self) -> u64 {
         self.rpc
             .json_rpc_call::<GetInfoResp>("get_info", None)
@@ -1009,6 +1025,49 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     );
 
     eprintln!("spend confirmed in the block that connected at height {after}");
+
+    // Live-oracle capture. These bytes are the only FCMP++ spend in the tree
+    // that a real daemon has accepted and connected, which is the one property
+    // a locally-built KAT can never have. Writing is opt-in so an ordinary run
+    // of this gate asserts without rewriting a committed fixture.
+    //
+    // Only the bytes and the txid are recorded. Every other identity in the
+    // parity legs (the prunable digest, the `serialize_base` framing) is
+    // *derived* from these bytes by each language's production code — recording
+    // them here as well would let a fixture disagree with itself, and would pin
+    // values this test never independently checked.
+    if std::env::var_os("SHEKYL_CAPTURE_SPEND_KAT").is_some() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../shekyl-wire/tests/fixtures/live_oracle_spend_v1.json");
+        let json = serde_json::json!({
+            "description":
+                "Live-oracle FCMP++/PQC spend KAT: the exact bytes a running shekyld \
+                 accepted (consensus verify) and then connected in a block. Sibling to \
+                 pruned_tx_hash_parity_v1.json, which is hand-built, deterministic and \
+                 daemon-free and binds Rust to C++; this one binds both to a chain. \
+                 Neither subsumes the other — do not consolidate them. Regenerate with \
+                 SHEKYL_CAPTURE_SPEND_KAT=1 and SHEKYLD_BIN set, running \
+                 engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon --ignored.",
+            "format_version": 1,
+            // The daemon's own version string, read from the node that accepted
+            // these bytes — not this crate's version, which says nothing about
+            // the binary that did the accepting.
+            "accepted_by_daemon_version": daemon.version().await,
+            "connected_at_height": after,
+            "tx_hash_hex": accepted,
+            "tx_hex": pending
+                .tx_bytes
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>(),
+        });
+        std::fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string_pretty(&json).unwrap()),
+        )
+        .expect("write live-oracle spend fixture");
+        eprintln!("captured live-oracle spend KAT -> {}", path.display());
+    }
 }
 
 /// Mainnet [`EngineCreateParams`](super::lifecycle::EngineCreateParams) for the
