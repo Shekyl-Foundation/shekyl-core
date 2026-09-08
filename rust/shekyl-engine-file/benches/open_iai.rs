@@ -21,7 +21,6 @@ use std::hint::black_box;
 use tempfile::TempDir;
 
 use shekyl_address::Network;
-use shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN;
 use shekyl_crypto_pq::wallet_envelope::{
     CapabilityContent, KdfParams, EXPECTED_CLASSICAL_ADDRESS_BYTES,
 };
@@ -34,16 +33,12 @@ const BENCH_PASSWORD: &[u8] = b"correct horse battery staple";
 fn prepared_wallet() -> (TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let base = dir.path().join("bench.wallet");
-    let view_sk = [0x11u8; 32];
-    let ml_kem_dk = [0x22u8; ML_KEM_768_DK_LEN];
-    let spend_pk = [0x33u8; 32];
+    let master_seed = [0x11u8; 64];
     let mut address = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
     address[0] = 0x01;
 
-    let cap = CapabilityContent::ViewOnly {
-        view_sk: &view_sk,
-        ml_kem_dk: &ml_kem_dk,
-        spend_pk: &spend_pk,
+    let cap = CapabilityContent::Full {
+        master_seed_64: &master_seed,
     };
     let ledger = WalletLedger::empty();
     let params = CreateParams {

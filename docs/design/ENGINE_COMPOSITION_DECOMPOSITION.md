@@ -131,7 +131,7 @@ Benefits:
 
 - **Compile-time and review-time scoping** — stake code cannot casually call transfer-only helpers if they’re not on the facet (or only via shared Caps traits).
 - RPC/CLI map cleanly: wallet-rpc “send” only takes `TransferFacade`.
-- Matches capability reality (`can_spend_locally`, view-only stubs) better than dumping methods on `Engine`.
+- Matches workflow reality (send, staking, refresh are distinct surfaces) better than dumping methods on `Engine`. *(This bullet originally cited `can_spend_locally` and the view-only stubs; both were deleted 2026-09-07 when capability collapsed to `Full`-only — the facet argument stands on workflow separation alone.)*
 
 Under the hood still one process, one ledger lock discipline — facets are **views**, not separate processes (until Stage 4).
 

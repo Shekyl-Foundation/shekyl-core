@@ -421,6 +421,10 @@ explains the pattern.
 
 ## 2026-04-25 — Cold-wallet flow: kept, reshaped via typed bundles
 
+> **OVERTURNED 2026-09-07** — cold signing is NEVER; see the
+> 2026-09-07 entry "Cold signing is not a feature." This entry is
+> retained as history only.
+
 **Decision.** Air-gapped (offline-signing) wallets are a supported
 flow in the V3 wallet stack, distinct from hardware-offload mode.
 The export/import dance uses two typed file artifacts:
@@ -4830,7 +4834,7 @@ grep for the underlying fetch — before writing the claim down.
 tx_fee_model,daemon,bond_orchestrator}.rs`;
 `rust/shekyl-wallet-rpc/src/lifecycle.rs`; PR #490 review round 2.
 
-<!-- Append new entries above this line. Date format YYYY-MM-DD. -->
+---
 
 ## 2026-08-19 — Phase 5 does not wait on staking: the C++ wallet never had it
 
@@ -4873,3 +4877,139 @@ this entry only removes it from Phase 5's critical path.
 commit); the Phase-5 deletion commit message (dispositions D1/D2);
 `ARCHIVAL_BOND_GATE4.md` §3.4 allowed-terms table;
 `docs/CLI_PARITY_MATRIX.md` row 9.
+
+---
+
+## 2026-09-07 — Cold signing is not a feature: NEVER (overturns 2026-04-25 "Cold-wallet flow: kept" and A4's reopen clause)
+
+**Decision.** There is no cold signing. Not at genesis, not
+post-genesis, not as a kept capability. Air-gapped export/sign/import —
+`UnsignedTxBundle` / `SignedTxBundle`, `export_unsigned` /
+`sign_unsigned` / `submit_signed`, the simplewallet-era `sign_transfer`
+/ `submit_transfer` verbs — will **never** be implemented. All code
+symbols are deleted; the RPC names stay in
+`docs/api/wallet_rpc.yaml`'s `x-shekyl-method-registry` as
+`status: REJECTED`, and the `-29700..-29799` error range stays RESERVED
+unused, both as pure namespace protection (rule 23: a gone name is
+easier to re-mint than a recorded refusal).
+
+**Why.** An unsigned spend leaving a networked wallet, and a signed
+spend returning to it, is the opposite of Shekyl's secret-locality
+(rule 36) and verified-display requirements. The flow's security value
+rests entirely on product work (verified display on the offline device,
+an envelope-sealed bundle format) that A4 correctly called unstarted —
+but A4's framing treated a refused design as delayed product work. A
+half-form is not worse than none; the *whole form* is the hazard: the
+bundle handoff is a social-engineering and file-tamper surface aimed at
+exactly the users who believe they have opted into more security.
+Priority-1 (security) binds per `00-mission.mdc`.
+
+**What this overturns.** The 2026-04-25 entry "Cold-wallet flow: kept,
+reshaped via typed bundles" is overturned in full, including its
+rejected-alternatives reasoning ("drop air-gapped flow" was rejected
+then; it is the ruling now). A4 (2026-08-06)'s post-genesis deferral
+with reopen clause is closed **won't-fix**; its FOLLOWUPS row is
+removed. `IMPLEMENTATION_INDEX.md` Phase 2d stays DESCOPED.
+
+**What still exists and is legitimate: cold storage.** Generate, write
+the seed phrase down, receive, hold. Spending requires the seed on a
+machine that can talk to the network. That posture is deliberate and
+user-facing docs describe it without a "forthcoming" pointer at the
+refused flow.
+
+**No reopening clause.** This is a security rejection under the
+priority hierarchy, not a deferral. A future product round that wants
+offline signing starts from a fresh threat-model review, not from this
+entry.
+
+**Reference.** `docs/api/wallet_rpc.yaml` `x-shekyl-method-registry`;
+`.cursor/rules/23-disposition-visibility.mdc`; wallet-rewrite audit
+plan (2026-09-07).
+
+---
+
+## 2026-09-07 — ViewOnly capability: REJECTED (zero code, zero FOLLOWUPS)
+
+**Decision.** The ViewOnly wallet capability is rejected. All code
+symbols are deleted: `CapabilityContent::ViewOnly`,
+`Capability::ViewOnly`, `CAPABILITY_VIEW_ONLY`, constructors, named
+errors (`SignMessageError::ViewOnly`, extract-refusal arms), corpus and
+bench fixtures, and the `"VIEW_ONLY"` RPC wire label. The unused v1
+capability bytes are RESERVED in `WALLET_FILE_FORMAT_V1.md`'s
+discriminant table and are deliberately **not** labeled ViewOnly there.
+
+**Why.**
+
+1. **FCMP++ is not a chain window.** A view key that scans the chain
+   for incoming outputs is a CryptoNote-era concept; under FCMP++ the
+   membership proof hides exactly the linkage a view-only auditor
+   wallet would need to be useful as a third-party attestation.
+2. **Watching your own incoming is not a product.** The one thing a
+   ViewOnly wallet could do — show the owner their own incoming
+   transfers without spend authority — serves no user the Full wallet
+   does not serve better, and no third party at all (see 1).
+3. **View material cannot reconstruct the address.** `msg_sign_pk` is
+   seed-derived, so a view-material-only wallet cannot even re-derive
+   its own primary address; the capability was structurally partial
+   from the start.
+
+**Grep surface after this entry (rule 23).** Zero code symbols, zero
+FOLLOWUPS rows. The envelope open path refuses any capability byte
+other than `0x01` with a generic unsupported-capability error that
+names no future arm, and hand-crafted `0x02`/`0x03`/`0x04` files are
+fail-closed tests. Reserve-proof INBOUND (the "auditor wallet" use
+case formerly cited for ViewOnly) is served by the Full wallet's
+wallet-less `check_reserve_proof`.
+
+**Reference.** `docs/api/wallet_rpc.yaml` (CapabilityMode narrowed to
+FULL); `docs/WALLET_FILE_FORMAT_V1.md` discriminant table;
+`.cursor/rules/23-disposition-visibility.mdc`; wallet-rewrite audit
+plan (2026-09-07).
+
+## 2026-09-07 — Pinned wallet-envelope vectors regenerated: composition rebuild on a real derived address
+
+**Decision.** The `WALLET_FILE_FORMAT_V1` pinned vectors (`full.hex`,
+`state_for_full.hex`) are regenerated. This entry is the authorization
+the armed regenerator (`pinned_fixtures_regenerate`, gated on
+`SHEKYL_PINNED_REGEN_DECISION`) requires, and the **template** for every
+future regeneration: what moved, why, and what vouches for the new
+bytes.
+
+**What moved.**
+
+1. `expected_classical_address` was a counting pattern
+   (`0x01 ‖ 0xAA×32 ‖ 0xBB×32`) with no relation to the sealed seed. It
+   is now **derived**: the 65-byte `version ‖ spend_pk ‖ view_pk` prefix
+   of `rederive_account(master_seed, Mainnet, Bip39)` — the production
+   derivation the engine open path runs.
+2. `seed_format` was `0`, a wire byte `SeedFormat::from_u8` rejects — a
+   wallet that could not exist. It is now `0x01` (Bip39), valid with
+   `network = 0` (mainnet).
+
+**Why.** A format vector whose fields cannot co-exist in a real wallet
+exercises the sealing code but not the format's composition. The rebuilt
+fixture is internally consistent, so
+`pinned_fixture_address_derives_from_fixture_seed` (oracle: independent,
+tier 2 — the production account derivation) can check the composition
+property against the frozen bytes.
+
+**Containment note.** The doc-SSOT slice (same date) deliberately did
+*not* move these vectors — an unchanged `full.hex` was its proof that
+deleting the non-Full capability arms had no blast radius. This
+regeneration is a separate, documented format-vector rebuild, not a
+violation of that containment.
+
+**Oracle statement (rule per `50-testing.mdc`).** The vectors remain
+**self-pinned (tier 3)** drift tripwires — the sealing module vouches
+for the bytes. The composition property and the §2.6 wrap-key derivation
+carry independent (tier-2) checks alongside.
+
+**Regeneration citation used.**
+`SHEKYL_PINNED_REGEN_DECISION="2026-09-07 composition-vector rebuild on
+real derived address (KAT taxonomy PR)"`.
+
+**Reference.** `docs/test_vectors/WALLET_FILE_FORMAT_V1/manifest.json`;
+`rust/shekyl-crypto-pq/src/wallet_envelope.rs` tests module;
+`.cursor/rules/50-testing.mdc` §"Every vector declares its oracle".
+
+<!-- Append new entries above this line. Date format YYYY-MM-DD. -->

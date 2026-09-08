@@ -136,12 +136,14 @@ pub const DEFAULT_KDF_M_LOG2: u8 = 0x10; // 2^16 KiB = 64 MiB
 pub const DEFAULT_KDF_T: u8 = 0x03;
 pub const DEFAULT_KDF_P: u8 = 0x01;
 
-/// Capability mode discriminators. Match the `SHEKYL_CAPABILITY_*` constants
-/// in `src/shekyl/shekyl_ffi.h`.
+/// Capability mode discriminator. `0x01` (Full) is the only capability:
+/// ViewOnly is REJECTED and hardware-offload is DEFERRED with zero code
+/// (rule 23; decision log 2026-09-07). The retired v1 bytes `0x02`–`0x04`
+/// are RESERVED in `docs/WALLET_FILE_FORMAT_V1.md`'s discriminant table —
+/// in the spec, deliberately not as code constants — and any byte other
+/// than `0x01` is refused at open with
+/// [`WalletEnvelopeError::UnknownCapabilityMode`].
 pub const CAPABILITY_FULL: u8 = 0x01;
-pub const CAPABILITY_VIEW_ONLY: u8 = 0x02;
-pub const CAPABILITY_HARDWARE_OFFLOAD: u8 = 0x03;
-pub const CAPABILITY_RESERVED_MULTISIG: u8 = 0x04;
 
 /// Canonical 65-byte classical address body (version || spend_pk || view_pk)
 /// used by the address invariant check in region 1.
@@ -236,11 +238,8 @@ pub enum WalletEnvelopeError {
     #[error("cap_content_len {len} does not match capability mode {mode:#x}")]
     CapContentLenMismatch { mode: u8, len: u16 },
 
-    #[error("unknown capability mode {0:#x}")]
+    #[error("unsupported capability mode {0:#x} (this build supports 0x01 only)")]
     UnknownCapabilityMode(u8),
-
-    #[error("this wallet requires Shekyl V3.1 or later (multisig mode)")]
-    RequiresMultisigSupport,
 
     #[error("invalid password or corrupted wallet file")]
     InvalidPasswordOrCorrupt,
@@ -282,7 +281,7 @@ impl KdfParams {
     /// Validate that the parameters are within ranges accepted by the
     /// `argon2` crate. We allow m_log2 ∈ [8, 22] (256 KiB to 4 GiB),
     /// t ∈ [1, 64], p ∈ [1, 16]. The lower bound on m_log2 is intentionally
-    /// loose so KAT fixtures can use a fast-stretching profile.
+    /// loose so pinned test fixtures can use a fast-stretching profile.
     fn validate(&self) -> Result<(), WalletEnvelopeError> {
         if !(8..=22).contains(&self.m_log2)
             || !(1..=64).contains(&self.t)
@@ -299,81 +298,32 @@ impl KdfParams {
 }
 
 /// Capability-mode content, borrowed. Callers own the storage; we only read
-/// during seal. Contents match `SHEKYL_CAPABILITY_*` modes in the FFI header.
+/// during seal. `Full` is the only capability (rule 23; decision log
+/// 2026-09-07) — the enum shape is kept because it is the seal-side parse
+/// boundary a ratified future capability would join through.
 pub enum CapabilityContent<'a> {
     /// FULL wallet: can spend. Contains the 64-byte master seed; everything
     /// else (spend_sk, view_sk, ml_kem_dk) is rederived on every open via
     /// `shekyl_account_rederive`.
     Full { master_seed_64: &'a [u8; 64] },
-
-    /// VIEW_ONLY wallet: can scan, cannot spend. Holds the classical view
-    /// secret (also the X25519 scan secret, by RFC 7748 birational map), the
-    /// ML-KEM-768 decapsulation key, and the spend public key required by
-    /// the scanner's `O = h_o·G + B + y·T` check.
-    ViewOnly {
-        view_sk: &'a [u8; 32],
-        ml_kem_dk: &'a [u8; ML_KEM_768_DK_LEN],
-        spend_pk: &'a [u8; 32],
-    },
-
-    /// HARDWARE_OFFLOAD wallet: same as VIEW_ONLY plus an opaque device
-    /// descriptor that wallet2 uses to reopen the signer channel. The
-    /// descriptor is length-prefixed; its contents are not interpreted here.
-    HardwareOffload {
-        view_sk: &'a [u8; 32],
-        ml_kem_dk: &'a [u8; ML_KEM_768_DK_LEN],
-        spend_pk: &'a [u8; 32],
-        device_desc: &'a [u8],
-    },
 }
 
 impl CapabilityContent<'_> {
     fn mode_byte(&self) -> u8 {
         match self {
             Self::Full { .. } => CAPABILITY_FULL,
-            Self::ViewOnly { .. } => CAPABILITY_VIEW_ONLY,
-            Self::HardwareOffload { .. } => CAPABILITY_HARDWARE_OFFLOAD,
         }
     }
 
     fn serialized_len(&self) -> usize {
         match self {
             Self::Full { .. } => 64,
-            Self::ViewOnly { .. } => 32 + ML_KEM_768_DK_LEN + 32,
-            Self::HardwareOffload { device_desc, .. } => {
-                32 + ML_KEM_768_DK_LEN + 32 + 2 + device_desc.len()
-            }
         }
     }
 
     fn write_into(&self, out: &mut Vec<u8>) {
         match self {
             Self::Full { master_seed_64 } => out.extend_from_slice(master_seed_64.as_slice()),
-            Self::ViewOnly {
-                view_sk,
-                ml_kem_dk,
-                spend_pk,
-            } => {
-                out.extend_from_slice(view_sk.as_slice());
-                out.extend_from_slice(ml_kem_dk.as_slice());
-                out.extend_from_slice(spend_pk.as_slice());
-            }
-            Self::HardwareOffload {
-                view_sk,
-                ml_kem_dk,
-                spend_pk,
-                device_desc,
-            } => {
-                out.extend_from_slice(view_sk.as_slice());
-                out.extend_from_slice(ml_kem_dk.as_slice());
-                out.extend_from_slice(spend_pk.as_slice());
-                let dev_len: u16 = device_desc
-                    .len()
-                    .try_into()
-                    .expect("device_desc exceeds u16::MAX; rejected earlier");
-                out.extend_from_slice(&dev_len.to_le_bytes());
-                out.extend_from_slice(device_desc);
-            }
         }
     }
 }
@@ -690,24 +640,19 @@ fn write_keys_file_header(out: &mut Vec<u8>, kdf: KdfParams, wrap_salt: &[u8; WR
 /// Validate capability-mode / cap_content_len pair on open. Separate from
 /// the Poly1305 check because we want a typed error for "my seal code
 /// wrote a wrong-length cap_content" rather than generic AEAD failure.
+/// Any mode byte other than [`CAPABILITY_FULL`] refuses with the generic
+/// unsupported-capability error — it names no specific future arm.
 fn validate_cap_content(mode: u8, cap_len: u16) -> Result<(), WalletEnvelopeError> {
-    let expected_min: usize = match mode {
-        CAPABILITY_FULL => 64,
-        CAPABILITY_VIEW_ONLY => 32 + ML_KEM_768_DK_LEN + 32,
-        CAPABILITY_HARDWARE_OFFLOAD => 32 + ML_KEM_768_DK_LEN + 32 + 2, // u16 device_len prefix
-        CAPABILITY_RESERVED_MULTISIG => return Err(WalletEnvelopeError::RequiresMultisigSupport),
-        other => return Err(WalletEnvelopeError::UnknownCapabilityMode(other)),
-    };
-    let cap_len_usize = usize::from(cap_len);
-    let ok = match mode {
-        CAPABILITY_FULL | CAPABILITY_VIEW_ONLY => cap_len_usize == expected_min,
-        CAPABILITY_HARDWARE_OFFLOAD => cap_len_usize >= expected_min,
-        _ => false,
-    };
-    if !ok {
-        return Err(WalletEnvelopeError::CapContentLenMismatch { mode, len: cap_len });
+    match mode {
+        CAPABILITY_FULL => {
+            if usize::from(cap_len) == 64 {
+                Ok(())
+            } else {
+                Err(WalletEnvelopeError::CapContentLenMismatch { mode, len: cap_len })
+            }
+        }
+        other => Err(WalletEnvelopeError::UnknownCapabilityMode(other)),
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -750,8 +695,9 @@ pub fn seal_keys_file(
 /// Deterministic seal helper. Used by:
 ///
 /// - [`seal_keys_file`] (with `OsRng`-derived entropy);
-/// - Tier-3 KAT fixtures that need byte-identical sealed blobs across
-///   runs (same password + same entropy → same bytes).
+/// - the self-pinned format vectors (tier-3 drift tripwires; see the
+///   tests module) that need byte-identical sealed blobs across runs
+///   (same password + same entropy → same bytes).
 ///
 /// `file_kek_seed` is the 32-byte plaintext of `wrap_ct` — i.e. the
 /// `file_kek` that the wrap layer will protect. It is treated as a
@@ -1009,8 +955,8 @@ pub fn seal_state_file(
 }
 
 /// Deterministic state-seal helper. Used by [`seal_state_file`] (with
-/// an `OsRng`-drawn nonce) and Tier-3 KAT fixtures that need
-/// byte-identical sealed blobs.
+/// an `OsRng`-drawn nonce) and the self-pinned format vectors (tier-3
+/// drift tripwires) that need byte-identical sealed blobs.
 pub(crate) fn seal_state_file_with_entropy(
     password: &[u8],
     keys_file_bytes: &[u8],
@@ -1207,10 +1153,10 @@ mod tests {
     use fips203::ml_kem_768;
     use fips203::traits::{KeyGen, SerDes};
 
-    // KAT profile: Argon2id clamped to m_log2=8 (256 KiB), t=1, p=1 so the
-    // test suite runs in seconds on a commodity laptop. Production wallets
-    // use DEFAULT_KDF_* (64 MiB, t=3, p=1).
-    fn kat_kdf() -> KdfParams {
+    // Fixture KDF profile: Argon2id clamped to m_log2=8 (256 KiB), t=1,
+    // p=1 so the test suite runs in seconds on a commodity laptop.
+    // Production wallets use DEFAULT_KDF_* (64 MiB, t=3, p=1).
+    fn fixture_kdf() -> KdfParams {
         KdfParams {
             m_log2: 8,
             t: 1,
@@ -1226,10 +1172,33 @@ mod tests {
         a
     }
 
-    /// Golden HKDF outputs for KAT `file_kek` + `expected_classical_address`.
-    /// Tripwire against unintentional formula or info-string drift.
+    /// Golden HKDF outputs for the fixture `file_kek` +
+    /// `expected_classical_address`.
+    ///
+    /// Fixed address input for the HKDF golden tripwire below. Arbitrary
+    /// bytes with no product meaning — deliberately **not**
+    /// [`fixture_expected_address`], so the tripwire's pinned R2 value
+    /// does not silently invalidate when the sealed-fixture inputs move.
+    const TRIPWIRE_ADDR: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES] = {
+        let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
+        a[0] = 0x01;
+        let mut i = 1;
+        while i < 33 {
+            a[i] = 0xAA;
+            i += 1;
+        }
+        while i < 65 {
+            a[i] = 0xBB;
+            i += 1;
+        }
+        a
+    };
+
+    /// Oracle: **self-pinned (tier 3)** — the R1/R2 values below were
+    /// produced by this module and frozen. This is a drift tripwire
+    /// against unintentional formula or info-string change, not a KAT.
     #[test]
-    fn hkdf_golden_outputs_kat_profile() {
+    fn hkdf_golden_outputs_pinned_tripwire() {
         const R1: [u8; FILE_KEK_BYTES] = [
             146, 74, 110, 113, 243, 58, 14, 95, 184, 29, 119, 97, 7, 191, 250, 191, 14, 164, 133,
             22, 152, 170, 137, 68, 159, 190, 195, 234, 226, 85, 160, 18,
@@ -1238,16 +1207,69 @@ mod tests {
             200, 171, 223, 169, 7, 117, 109, 9, 112, 251, 12, 186, 60, 96, 136, 137, 182, 233, 134,
             176, 218, 122, 95, 106, 251, 69, 182, 143, 58, 49, 203, 65,
         ];
-        let r1 = derive_wrap_key_region_1(&KAT_FILE_KEK_SEED);
-        let r2 = derive_wrap_key_region_2(&KAT_FILE_KEK_SEED, &KAT_EXPECTED_ADDRESS);
+        let r1 = derive_wrap_key_region_1(&FIXTURE_FILE_KEK_SEED);
+        let r2 = derive_wrap_key_region_2(&FIXTURE_FILE_KEK_SEED, &TRIPWIRE_ADDR);
         assert_eq!(r1.as_ref(), &R1);
         assert_eq!(r2.as_ref(), &R2);
     }
 
+    /// Oracle: **independent (tier 2)** — a KAT per `50-testing.mdc`.
+    ///
+    /// Re-derives both region wrap keys from `WALLET_FILE_FORMAT_V1.md`
+    /// §2.6's normative text through a code path that shares nothing with
+    /// the implementation under test: HKDF-Expand is spelled out as raw
+    /// HMAC-SHA-256 per RFC 5869 §2.3 (`hmac` crate, not the `hkdf`
+    /// wrapper), and the info labels are spelled from the spec's
+    /// byte-exact table, not the module's `HKDF_INFO_*` constants. Catches
+    /// a formula drift (e.g. extract-then-expand creeping in, which §2.6
+    /// forbids) and a label drift in the same test.
+    #[test]
+    fn kat_region_wrap_keys_match_spec_2_6() {
+        use hmac::{Hmac, Mac};
+
+        /// RFC 5869 §2.3 HKDF-Expand at L = 32 = HashLen, so N = 1 and
+        /// `OKM = T(1) = HMAC-Hash(PRK, T(0) || info || 0x01)` with
+        /// `T(0)` empty.
+        fn hkdf_expand_32_rfc5869(prk: &[u8], info_parts: &[&[u8]]) -> [u8; 32] {
+            let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(prk)
+                .expect("HMAC-SHA-256 accepts any key length");
+            for part in info_parts {
+                mac.update(part);
+            }
+            mac.update(&[0x01]);
+            mac.finalize().into_bytes().into()
+        }
+
+        // Spec §2.6 "Normative info labels" table: byte-exact, 22 bytes
+        // each. Spelled here from the spec, independently of the module's
+        // HKDF_INFO_REGION{1,2}_AEAD_V1 constants.
+        const SPEC_LABEL_R1: &[u8] = b"shekyl-region1-aead-v1";
+        const SPEC_LABEL_R2: &[u8] = b"shekyl-region2-aead-v1";
+        assert_eq!(SPEC_LABEL_R1.len(), 22, "spec table pins 22 bytes");
+        assert_eq!(SPEC_LABEL_R2.len(), 22, "spec table pins 22 bytes");
+
+        for addr in [&TRIPWIRE_ADDR, fixture_expected_address()] {
+            let expect_r1 = hkdf_expand_32_rfc5869(&FIXTURE_FILE_KEK_SEED, &[SPEC_LABEL_R1]);
+            let expect_r2 = hkdf_expand_32_rfc5869(&FIXTURE_FILE_KEK_SEED, &[SPEC_LABEL_R2, addr]);
+            let got_r1 = derive_wrap_key_region_1(&FIXTURE_FILE_KEK_SEED);
+            let got_r2 = derive_wrap_key_region_2(&FIXTURE_FILE_KEK_SEED, addr);
+            assert_eq!(
+                got_r1.as_ref(),
+                &expect_r1,
+                "region-1 wrap key diverged from §2.6"
+            );
+            assert_eq!(
+                got_r2.as_ref(),
+                &expect_r2,
+                "region-2 wrap key diverged from §2.6"
+            );
+        }
+    }
+
     #[test]
     fn hkdf_region_wrap_keys_are_distinct() {
-        let file_kek = KAT_FILE_KEK_SEED;
-        let addr = KAT_EXPECTED_ADDRESS;
+        let file_kek = FIXTURE_FILE_KEK_SEED;
+        let addr = TRIPWIRE_ADDR;
         let r1 = derive_wrap_key_region_1(&file_kek);
         let r2 = derive_wrap_key_region_2(&file_kek, &addr);
         assert_ne!(r1.as_ref(), r2.as_ref());
@@ -1256,12 +1278,12 @@ mod tests {
 
     #[test]
     fn hkdf_region1_is_independent_of_address() {
-        let file_kek = KAT_FILE_KEK_SEED;
-        let mut addr2 = KAT_EXPECTED_ADDRESS;
+        let file_kek = FIXTURE_FILE_KEK_SEED;
+        let mut addr2 = TRIPWIRE_ADDR;
         addr2[10] ^= 0x01;
         let r1_a = derive_wrap_key_region_1(&file_kek);
         let r1_b = derive_wrap_key_region_1(&file_kek);
-        let r2_a = derive_wrap_key_region_2(&file_kek, &KAT_EXPECTED_ADDRESS);
+        let r2_a = derive_wrap_key_region_2(&file_kek, &TRIPWIRE_ADDR);
         let r2_b = derive_wrap_key_region_2(&file_kek, &addr2);
         assert_eq!(r1_a.as_ref(), r1_b.as_ref());
         assert_ne!(r2_a.as_ref(), r2_b.as_ref());
@@ -1275,8 +1297,17 @@ mod tests {
             master_seed_64: &seed,
         };
         let addr = dummy_address();
-        let bytes = seal_keys_file(pw, 0, 0, &cap, 1_700_000_000, 2_500_000, &addr, kat_kdf())
-            .expect("seal");
+        let bytes = seal_keys_file(
+            pw,
+            0,
+            0,
+            &cap,
+            1_700_000_000,
+            2_500_000,
+            &addr,
+            fixture_kdf(),
+        )
+        .expect("seal");
         let opened = open_keys_file(pw, &bytes).expect("open");
         assert_eq!(opened.capability_mode, CAPABILITY_FULL);
         assert_eq!(opened.network, 0);
@@ -1285,58 +1316,6 @@ mod tests {
         assert_eq!(opened.creation_timestamp, 1_700_000_000);
         assert_eq!(opened.restore_height_hint, 2_500_000);
         assert_eq!(opened.cap_content.as_slice(), &seed);
-    }
-
-    #[test]
-    fn roundtrip_view_only() {
-        let view_sk = [0x22u8; 32];
-        let mut dk = [0u8; ML_KEM_768_DK_LEN];
-        for (i, b) in dk.iter_mut().enumerate() {
-            *b = u8::try_from(i & 0xff).expect("i masked to u8 range");
-        }
-        let spend_pk = [0x33u8; 32];
-        let cap = CapabilityContent::ViewOnly {
-            view_sk: &view_sk,
-            ml_kem_dk: &dk,
-            spend_pk: &spend_pk,
-        };
-        let pw = b"viewonly pw";
-        let addr = dummy_address();
-        let bytes = seal_keys_file(pw, 1, 1, &cap, 42, 0, &addr, kat_kdf()).expect("seal");
-        let opened = open_keys_file(pw, &bytes).expect("open");
-        assert_eq!(opened.capability_mode, CAPABILITY_VIEW_ONLY);
-        assert_eq!(opened.cap_content.len(), 32 + ML_KEM_768_DK_LEN + 32);
-        assert_eq!(&opened.cap_content[..32], &view_sk);
-        assert_eq!(&opened.cap_content[32..32 + ML_KEM_768_DK_LEN], &dk[..]);
-        assert_eq!(&opened.cap_content[32 + ML_KEM_768_DK_LEN..], &spend_pk);
-    }
-
-    #[test]
-    fn roundtrip_hardware_offload() {
-        let view_sk = [0x44u8; 32];
-        let dk = [0x55u8; ML_KEM_768_DK_LEN];
-        let spend_pk = [0x66u8; 32];
-        let device_desc = b"ledger:12345:foo";
-        let cap = CapabilityContent::HardwareOffload {
-            view_sk: &view_sk,
-            ml_kem_dk: &dk,
-            spend_pk: &spend_pk,
-            device_desc,
-        };
-        let pw = b"hw pw";
-        let addr = dummy_address();
-        let bytes = seal_keys_file(pw, 2, 1, &cap, 0, 0, &addr, kat_kdf()).expect("seal");
-        let opened = open_keys_file(pw, &bytes).expect("open");
-        assert_eq!(opened.capability_mode, CAPABILITY_HARDWARE_OFFLOAD);
-        // Skip over the fixed prefix and check device descriptor.
-        let dd_off = 32 + ML_KEM_768_DK_LEN + 32;
-        let dev_len =
-            u16::from_le_bytes([opened.cap_content[dd_off], opened.cap_content[dd_off + 1]]);
-        assert_eq!(usize::from(dev_len), device_desc.len());
-        assert_eq!(
-            &opened.cap_content[dd_off + 2..dd_off + 2 + device_desc.len()],
-            device_desc
-        );
     }
 
     #[test]
@@ -1349,7 +1328,7 @@ mod tests {
         };
         let addr = dummy_address();
         let bytes_before =
-            seal_keys_file(pw_old, 0, 0, &cap, 0, 0, &addr, kat_kdf()).expect("seal");
+            seal_keys_file(pw_old, 0, 0, &cap, 0, 0, &addr, fixture_kdf()).expect("seal");
         let bytes_after =
             rewrap_keys_file_password(pw_old, pw_new, &bytes_before, None).expect("rewrap");
 
@@ -1382,7 +1361,7 @@ mod tests {
             master_seed_64: &seed,
         };
         let bytes =
-            seal_keys_file(b"right", 0, 0, &cap, 0, 0, &dummy_address(), kat_kdf()).unwrap();
+            seal_keys_file(b"right", 0, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
         let err = open_keys_file(b"wrong", &bytes).unwrap_err();
         assert!(matches!(err, WalletEnvelopeError::InvalidPasswordOrCorrupt));
     }
@@ -1393,7 +1372,7 @@ mod tests {
             master_seed_64: &[0u8; 64],
         };
         let mut bytes =
-            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), kat_kdf()).unwrap();
+            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
         bytes[0] ^= 0x80;
         assert!(matches!(
             inspect_keys_file(&bytes),
@@ -1407,7 +1386,7 @@ mod tests {
             master_seed_64: &[0u8; 64],
         };
         let mut bytes =
-            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), kat_kdf()).unwrap();
+            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
         bytes[OFF_KDF_T] = 0x05; // legitimate value, but not the one sealed with
                                  // parse_header_view now uses the wrong kdf_t; Argon2id derives a
                                  // different wrap_key; wrap AEAD fails; we see InvalidPasswordOrCorrupt.
@@ -1421,7 +1400,7 @@ mod tests {
             master_seed_64: &[0u8; 64],
         };
         let mut bytes =
-            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), kat_kdf()).unwrap();
+            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
         // Flip a bit somewhere inside region 1 ciphertext.
         let mid = OFF_REGION1_CT + 5;
         bytes[mid] ^= 1;
@@ -1432,21 +1411,98 @@ mod tests {
     }
 
     #[test]
-    fn reject_reserved_multisig_mode() {
-        // Build a valid FULL envelope, then flip the encrypted mode byte ...
-        // we can't do that cheaply without the key, so instead: test the
-        // validate_cap_content gate directly with the reserved mode.
-        let err = validate_cap_content(CAPABILITY_RESERVED_MULTISIG, 0).unwrap_err();
-        assert!(matches!(err, WalletEnvelopeError::RequiresMultisigSupport));
+    fn reject_unknown_capability_mode() {
+        // The retired v1 bytes (0x02 ViewOnly, 0x03 hardware-offload,
+        // 0x04 reserved-multisig — RESERVED in the format spec, unlabeled)
+        // and a never-assigned byte all hit the same generic gate.
+        for mode in [0x02u8, 0x03, 0x04, 0x07] {
+            let err = validate_cap_content(mode, 0).unwrap_err();
+            match err {
+                WalletEnvelopeError::UnknownCapabilityMode(b) => assert_eq!(b, mode),
+                other => panic!("mode {mode:#x}: expected UnknownCapabilityMode, got {other:?}"),
+            }
+        }
     }
 
+    /// Craft an authentically sealed keys file bearing an arbitrary
+    /// capability byte. `CapabilityContent` is Full-only by design, so no
+    /// production seal path can write another byte; the test seals a real
+    /// Full file with pinned entropy, then re-encrypts region 1 with the
+    /// mode byte replaced, under the known file KEK, same nonce, same AAD.
+    /// The result is correctly MACed end to end — a refusal at open is the
+    /// capability gate, not the AEAD.
+    fn seal_raw_mode_for_test(mode: u8) -> Vec<u8> {
+        let master_seed = [0x5Au8; 64];
+        let cap = CapabilityContent::Full {
+            master_seed_64: &master_seed,
+        };
+        let bytes = seal_keys_file_with_entropy(
+            FIXTURE_PASSWORD,
+            0,
+            0,
+            &cap,
+            FIXTURE_CREATION_TIMESTAMP,
+            FIXTURE_RESTORE_HEIGHT,
+            &TRIPWIRE_ADDR,
+            fixture_kdf(),
+            &FIXTURE_WRAP_SALT_FULL,
+            &FIXTURE_WRAP_NONCE_FULL,
+            &FIXTURE_REGION1_NONCE_FULL,
+            &FIXTURE_FILE_KEK_SEED,
+        )
+        .expect("seal full control");
+
+        // Rebuild region 1 plaintext from the same inputs, mode swapped.
+        let mut region1_plain: Vec<u8> = Vec::new();
+        region1_plain.push(mode);
+        region1_plain.push(0); // network
+        region1_plain.push(0); // seed_format
+        region1_plain.extend_from_slice(&TRIPWIRE_ADDR);
+        region1_plain.extend_from_slice(&64u16.to_le_bytes());
+        region1_plain.extend_from_slice(&master_seed);
+        region1_plain.extend_from_slice(&FIXTURE_CREATION_TIMESTAMP.to_le_bytes());
+        region1_plain.extend_from_slice(&FIXTURE_RESTORE_HEIGHT.to_le_bytes());
+
+        let region1_aad: Vec<u8> = bytes[OFF_MAGIC..OFF_KDF_ALGO].to_vec();
+        let key = derive_wrap_key_region_1(&FIXTURE_FILE_KEK_SEED);
+        let mut region1_ct = region1_plain;
+        let tag = aead_encrypt(
+            &key,
+            &FIXTURE_REGION1_NONCE_FULL,
+            &region1_aad,
+            &mut region1_ct,
+        )
+        .expect("re-encrypt region 1");
+
+        let mut out = bytes[..OFF_REGION1_CT].to_vec();
+        out.extend_from_slice(&region1_ct);
+        out.extend_from_slice(&tag);
+        out
+    }
+
+    /// Fail-closed replacement for the deleted non-Full round-trips
+    /// (rule 47: the deletion must leave a check that can fail). Files
+    /// bearing the retired capability bytes 0x02 / 0x03 / 0x04 — and a
+    /// never-assigned byte — are authentically sealed, and must refuse
+    /// to open with the generic unsupported-capability error naming the
+    /// byte and no future arm.
     #[test]
-    fn reject_unknown_capability_mode() {
-        let err = validate_cap_content(0x07, 0).unwrap_err();
-        assert!(matches!(
-            err,
-            WalletEnvelopeError::UnknownCapabilityMode(0x07)
-        ));
+    fn open_refuses_non_full_capability_bytes() {
+        // Control: the same splice path with mode 0x01 opens fine, so a
+        // refusal below is the capability gate, not a broken test helper.
+        let full = seal_raw_mode_for_test(CAPABILITY_FULL);
+        let opened = open_keys_file(FIXTURE_PASSWORD, &full).expect("full-mode control must open");
+        assert_eq!(opened.capability_mode, CAPABILITY_FULL);
+        assert_eq!(opened.cap_content.as_slice(), &[0x5Au8; 64]);
+
+        for mode in [0x02u8, 0x03, 0x04, 0x7F] {
+            let bytes = seal_raw_mode_for_test(mode);
+            let err = open_keys_file(FIXTURE_PASSWORD, &bytes).unwrap_err();
+            match err {
+                WalletEnvelopeError::UnknownCapabilityMode(b) => assert_eq!(b, mode),
+                other => panic!("mode {mode:#x}: expected UnknownCapabilityMode, got {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -1455,7 +1511,7 @@ mod tests {
             master_seed_64: &[0u8; 64],
         };
         let mut bytes =
-            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), kat_kdf()).unwrap();
+            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
         bytes[OFF_FILE_VERSION] = 0xFF;
         assert!(matches!(
             inspect_keys_file(&bytes),
@@ -1478,8 +1534,8 @@ mod tests {
             master_seed_64: &seed_b,
         };
         let addr = dummy_address();
-        let keys_a = seal_keys_file(pw, 0, 0, &cap_a, 0, 0, &addr, kat_kdf()).unwrap();
-        let keys_b = seal_keys_file(pw, 0, 0, &cap_b, 0, 0, &addr, kat_kdf()).unwrap();
+        let keys_a = seal_keys_file(pw, 0, 0, &cap_a, 0, 0, &addr, fixture_kdf()).unwrap();
+        let keys_b = seal_keys_file(pw, 0, 0, &cap_b, 0, 0, &addr, fixture_kdf()).unwrap();
 
         let state_a_plain = b"state payload A";
         let state_a = seal_state_file(pw, &keys_a, state_a_plain).unwrap();
@@ -1503,7 +1559,7 @@ mod tests {
             master_seed_64: &seed,
         };
         let addr = dummy_address();
-        let keys_v1 = seal_keys_file(pw_old, 0, 0, &cap, 0, 0, &addr, kat_kdf()).unwrap();
+        let keys_v1 = seal_keys_file(pw_old, 0, 0, &cap, 0, 0, &addr, fixture_kdf()).unwrap();
         let state_plain = b"state across rotation";
         let state_v1 = seal_state_file(pw_old, &keys_v1, state_plain).unwrap();
 
@@ -1532,7 +1588,7 @@ mod tests {
         let cap = CapabilityContent::Full {
             master_seed_64: &seed,
         };
-        let keys = seal_keys_file(pw, 0, 0, &cap, 0, 0, &dummy_address(), kat_kdf()).unwrap();
+        let keys = seal_keys_file(pw, 0, 0, &cap, 0, 0, &dummy_address(), fixture_kdf()).unwrap();
         let s1 = seal_state_file(pw, &keys, b"payload").unwrap();
         let s2 = seal_state_file(pw, &keys, b"payload").unwrap();
         // Same plaintext, same key, different nonce ⇒ different ciphertext.
@@ -1564,7 +1620,7 @@ mod tests {
         let cap = CapabilityContent::Full {
             master_seed_64: &seed,
         };
-        let bytes = seal_keys_file(pw, 0, 0, &cap, 1, 2, &dummy_address(), kat_kdf()).unwrap();
+        let bytes = seal_keys_file(pw, 0, 0, &cap, 1, 2, &dummy_address(), fixture_kdf()).unwrap();
 
         // Check a representative byte in each region rather than every byte
         // (would bloat test time with many Argon2 calls). One byte per region
@@ -1613,98 +1669,91 @@ mod tests {
         let cap = CapabilityContent::Full {
             master_seed_64: &seed,
         };
-        let bytes = seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &expected_addr, kat_kdf()).unwrap();
+        let bytes = seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &expected_addr, fixture_kdf()).unwrap();
         let opened = open_keys_file(b"pw", &bytes).unwrap();
         assert_eq!(opened.expected_classical_address, expected_addr);
         assert_eq!(opened.cap_content.as_slice(), &seed);
     }
 
-    #[test]
-    fn expected_address_matches_view_only_reconstruction() {
-        // VIEW_ONLY reconstruction: the loader recovers view_sk + ml_kem_dk
-        // from cap_content, and expected_classical_address pins the
-        // spend_pk+view_pk pair the wallet claims. This test pins the
-        // byte-for-byte preservation of both halves through the envelope.
-        let view_sk = [0xAAu8; 32];
-        let dk = [0xBBu8; ML_KEM_768_DK_LEN];
-        let spend_pk = [0xCCu8; 32];
-        let view_pk_expected = [0xDDu8; 32];
-        let mut expected_addr = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
-        expected_addr[0] = 0x02; // reserved for stagenet in the classical header
-        expected_addr[1..33].copy_from_slice(&spend_pk);
-        expected_addr[33..65].copy_from_slice(&view_pk_expected);
-        let cap = CapabilityContent::ViewOnly {
-            view_sk: &view_sk,
-            ml_kem_dk: &dk,
-            spend_pk: &spend_pk,
-        };
-        let bytes = seal_keys_file(b"pw", 1, 0, &cap, 0, 0, &expected_addr, kat_kdf()).unwrap();
-        let opened = open_keys_file(b"pw", &bytes).unwrap();
-        assert_eq!(opened.capability_mode, CAPABILITY_VIEW_ONLY);
-        assert_eq!(opened.expected_classical_address, expected_addr);
-        assert_eq!(&opened.cap_content[..32], &view_sk);
-        assert_eq!(&opened.cap_content[32..32 + ML_KEM_768_DK_LEN], &dk[..]);
-        assert_eq!(&opened.cap_content[32 + ML_KEM_768_DK_LEN..], &spend_pk);
-    }
-
     // ------------------------------------------------------------------
-    // Tier-3 KAT fixtures
+    // Pinned format vectors (oracle: self-pinned, tier 3)
     //
     // The fixtures under docs/test_vectors/WALLET_FILE_FORMAT_V1/ are
     // frozen sealed blobs produced with fixed entropy by the `seal_*_
-    // with_entropy` helpers. Two invariants are pinned:
+    // with_entropy` helpers. Their oracle is this module itself: they
+    // are drift tripwires per 50-testing.mdc's vector taxonomy, NOT
+    // Known Answer Tests — if the sealing code was wrong the day a
+    // vector was pinned, the vector is wrong with it.
+    //
+    // Two invariants are pinned:
     //
     //   1. Re-running the same seal with the same entropy reproduces the
     //      fixture bytes exactly (format stability across commits).
     //   2. Opening the fixture under the fixed password recovers the
     //      documented plaintext (decryption stability).
     //
-    // The KAT profile clamps Argon2id to m_log2=8 (256 KiB) so the test
-    // cycle runs in < 1 s per blob. Production wallets always use
-    // DEFAULT_KDF_M_LOG2 (64 MiB).
+    // The fixture KDF profile clamps Argon2id to m_log2=8 (256 KiB) so
+    // the test cycle runs in < 1 s per blob. Production wallets always
+    // use DEFAULT_KDF_M_LOG2 (64 MiB).
     // ------------------------------------------------------------------
 
-    const KAT_WRAP_SALT_FULL: [u8; WRAP_SALT_BYTES] = [
+    const FIXTURE_WRAP_SALT_FULL: [u8; WRAP_SALT_BYTES] = [
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
         0x0F,
     ];
-    const KAT_WRAP_NONCE_FULL: [u8; AEAD_NONCE_BYTES] = [
+    const FIXTURE_WRAP_NONCE_FULL: [u8; AEAD_NONCE_BYTES] = [
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
         0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
     ];
-    const KAT_REGION1_NONCE_FULL: [u8; AEAD_NONCE_BYTES] = [
+    const FIXTURE_REGION1_NONCE_FULL: [u8; AEAD_NONCE_BYTES] = [
         0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E,
         0x3F, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
     ];
-    const KAT_FILE_KEK_SEED: [u8; FILE_KEK_BYTES] = [
+    const FIXTURE_FILE_KEK_SEED: [u8; FILE_KEK_BYTES] = [
         0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E,
         0x5F, 0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D,
         0x6E, 0x6F,
     ];
-    const KAT_PASSWORD: &[u8] = b"shekyl-kat-pw-v1";
-    const KAT_EXPECTED_ADDRESS: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES] = {
-        let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
-        a[0] = 0x01;
-        let mut i = 1;
-        while i < 33 {
-            a[i] = 0xAA;
-            i += 1;
-        }
-        while i < 65 {
-            a[i] = 0xBB;
-            i += 1;
-        }
-        a
-    };
-    const KAT_CREATION_TIMESTAMP: u64 = 1_700_000_000;
-    const KAT_RESTORE_HEIGHT: u32 = 2_500_000;
-    const KAT_STATE_NONCE: [u8; AEAD_NONCE_BYTES] = [
+    const FIXTURE_PASSWORD: &[u8] = b"shekyl-kat-pw-v1";
+    /// Wire bytes the fixture seals: mainnet, BIP-39. These are the
+    /// production-valid values (`SeedFormat::from_u8(0)` is `None`, so
+    /// the pre-2026-09-07 fixture's `seed_format = 0` described a wallet
+    /// that could not exist).
+    const FIXTURE_NETWORK: u8 = 0;
+    const FIXTURE_SEED_FORMAT: u8 = crate::account::SEED_FORMAT_BIP39;
+
+    /// The fixture wallet's expected classical address: the 65-byte
+    /// `version ‖ spend_pk ‖ view_pk` prefix derived from
+    /// [`fixture_full_seed`] on (Mainnet, Bip39) through the production
+    /// account derivation — the same path the engine open flow runs. The
+    /// sealed fixture is therefore a *composition* vector (its address
+    /// really derives from its seed), not a counting pattern;
+    /// `pinned_fixture_address_derives_from_fixture_seed` checks the
+    /// property against the frozen bytes.
+    fn fixture_expected_address() -> &'static [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES] {
+        use std::sync::OnceLock;
+        static ADDR: OnceLock<[u8; EXPECTED_CLASSICAL_ADDRESS_BYTES]> = OnceLock::new();
+        ADDR.get_or_init(|| {
+            let blob = crate::account::rederive_account(
+                &fixture_full_seed(),
+                crate::account::DerivationNetwork::Mainnet,
+                crate::account::SeedFormat::Bip39,
+            )
+            .expect("fixture seed derives");
+            let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
+            a.copy_from_slice(&blob.classical_address_bytes[..EXPECTED_CLASSICAL_ADDRESS_BYTES]);
+            a
+        })
+    }
+    const FIXTURE_CREATION_TIMESTAMP: u64 = 1_700_000_000;
+    const FIXTURE_RESTORE_HEIGHT: u32 = 2_500_000;
+    const FIXTURE_STATE_NONCE: [u8; AEAD_NONCE_BYTES] = [
         0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E,
         0x7F, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
     ];
-    const KAT_STATE_PAYLOAD: &[u8] = b"shekyl-kat-state-v1";
+    const FIXTURE_STATE_PAYLOAD: &[u8] = b"shekyl-kat-state-v1";
 
-    fn kat_full_seed() -> [u8; 64] {
+    fn fixture_full_seed() -> [u8; 64] {
         let mut s = [0u8; 64];
         for (i, b) in s.iter_mut().enumerate() {
             *b = 0x80 | u8::try_from(i & 0x7f).expect("masked");
@@ -1712,109 +1761,45 @@ mod tests {
         s
     }
 
-    fn kat_view_only_cap() -> ([u8; 32], [u8; ML_KEM_768_DK_LEN], [u8; 32]) {
-        let view_sk = [0x11u8; 32];
-        let mut dk = [0u8; ML_KEM_768_DK_LEN];
-        for (i, b) in dk.iter_mut().enumerate() {
-            *b = u8::try_from(i & 0xff).expect("masked");
-        }
-        let spend_pk = [0x22u8; 32];
-        (view_sk, dk, spend_pk)
-    }
-
-    fn seal_kat_full() -> Vec<u8> {
-        let seed = kat_full_seed();
+    fn seal_fixture_full() -> Vec<u8> {
+        let seed = fixture_full_seed();
         let cap = CapabilityContent::Full {
             master_seed_64: &seed,
         };
         seal_keys_file_with_entropy(
-            KAT_PASSWORD,
-            0,
-            0,
+            FIXTURE_PASSWORD,
+            FIXTURE_NETWORK,
+            FIXTURE_SEED_FORMAT,
             &cap,
-            KAT_CREATION_TIMESTAMP,
-            KAT_RESTORE_HEIGHT,
-            &KAT_EXPECTED_ADDRESS,
-            kat_kdf(),
-            &KAT_WRAP_SALT_FULL,
-            &KAT_WRAP_NONCE_FULL,
-            &KAT_REGION1_NONCE_FULL,
-            &KAT_FILE_KEK_SEED,
+            FIXTURE_CREATION_TIMESTAMP,
+            FIXTURE_RESTORE_HEIGHT,
+            fixture_expected_address(),
+            fixture_kdf(),
+            &FIXTURE_WRAP_SALT_FULL,
+            &FIXTURE_WRAP_NONCE_FULL,
+            &FIXTURE_REGION1_NONCE_FULL,
+            &FIXTURE_FILE_KEK_SEED,
         )
-        .expect("KAT seal")
+        .expect("fixture seal")
     }
 
-    fn seal_kat_view_only() -> Vec<u8> {
-        let (view_sk, dk, spend_pk) = kat_view_only_cap();
-        let cap = CapabilityContent::ViewOnly {
-            view_sk: &view_sk,
-            ml_kem_dk: &dk,
-            spend_pk: &spend_pk,
-        };
-        seal_keys_file_with_entropy(
-            KAT_PASSWORD,
-            1,
-            0,
-            &cap,
-            KAT_CREATION_TIMESTAMP,
-            KAT_RESTORE_HEIGHT,
-            &KAT_EXPECTED_ADDRESS,
-            kat_kdf(),
-            &KAT_WRAP_SALT_FULL,
-            &KAT_WRAP_NONCE_FULL,
-            &KAT_REGION1_NONCE_FULL,
-            &KAT_FILE_KEK_SEED,
-        )
-        .expect("KAT seal")
-    }
-
-    fn seal_kat_hardware_offload() -> Vec<u8> {
-        let (view_sk, dk, spend_pk) = kat_view_only_cap();
-        let device_desc = b"ledger-nano-s:kat-serial-001";
-        let cap = CapabilityContent::HardwareOffload {
-            view_sk: &view_sk,
-            ml_kem_dk: &dk,
-            spend_pk: &spend_pk,
-            device_desc,
-        };
-        seal_keys_file_with_entropy(
-            KAT_PASSWORD,
-            2,
-            0,
-            &cap,
-            KAT_CREATION_TIMESTAMP,
-            KAT_RESTORE_HEIGHT,
-            &KAT_EXPECTED_ADDRESS,
-            kat_kdf(),
-            &KAT_WRAP_SALT_FULL,
-            &KAT_WRAP_NONCE_FULL,
-            &KAT_REGION1_NONCE_FULL,
-            &KAT_FILE_KEK_SEED,
-        )
-        .expect("KAT seal")
-    }
-
-    fn seal_kat_state(keys_bytes: &[u8]) -> Vec<u8> {
+    fn seal_fixture_state(keys_bytes: &[u8]) -> Vec<u8> {
         seal_state_file_with_entropy(
-            KAT_PASSWORD,
+            FIXTURE_PASSWORD,
             keys_bytes,
-            KAT_STATE_PAYLOAD,
-            &KAT_STATE_NONCE,
+            FIXTURE_STATE_PAYLOAD,
+            &FIXTURE_STATE_NONCE,
         )
-        .expect("KAT state seal")
+        .expect("fixture state seal")
     }
 
     // Frozen fixture bytes. See docs/test_vectors/WALLET_FILE_FORMAT_V1/.
     // The bytes are checked in alongside this test module; any drift in
     // seal_keys_file_with_entropy vs. these fixtures constitutes a
     // wire-format break and must land as an explicit format-version bump.
-    const KAT_FULL_HEX: &str =
+    const PINNED_FULL_HEX: &str =
         include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V1/full.hex");
-    const KAT_VIEW_ONLY_HEX: &str =
-        include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V1/view_only.hex");
-    const KAT_HARDWARE_OFFLOAD_HEX: &str =
-        include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V1/hardware_offload.hex");
-    const KAT_STATE_HEX: &str =
+    const PINNED_STATE_HEX: &str =
         include_str!("../../../docs/test_vectors/WALLET_FILE_FORMAT_V1/state_for_full.hex");
 
     fn decode_hex_fixture(s: &str) -> Vec<u8> {
@@ -1823,67 +1808,120 @@ mod tests {
     }
 
     #[test]
-    fn kat_full_roundtrip() {
-        let bytes = seal_kat_full();
+    fn pinned_vector_full_roundtrip() {
+        let bytes = seal_fixture_full();
         assert_eq!(
             bytes,
-            decode_hex_fixture(KAT_FULL_HEX),
+            decode_hex_fixture(PINNED_FULL_HEX),
             "FULL-mode seal output diverged from fixture (format break?)"
         );
-        let opened = open_keys_file(KAT_PASSWORD, &bytes).expect("open KAT");
+        let opened = open_keys_file(FIXTURE_PASSWORD, &bytes).expect("open pinned fixture");
         assert_eq!(opened.capability_mode, CAPABILITY_FULL);
-        assert_eq!(opened.network, 0);
-        assert_eq!(opened.seed_format, 0);
-        assert_eq!(opened.creation_timestamp, KAT_CREATION_TIMESTAMP);
-        assert_eq!(opened.restore_height_hint, KAT_RESTORE_HEIGHT);
-        assert_eq!(opened.expected_classical_address, KAT_EXPECTED_ADDRESS);
-        assert_eq!(opened.cap_content.as_slice(), &kat_full_seed());
+        assert_eq!(opened.network, FIXTURE_NETWORK);
+        assert_eq!(opened.seed_format, FIXTURE_SEED_FORMAT);
+        assert_eq!(opened.creation_timestamp, FIXTURE_CREATION_TIMESTAMP);
+        assert_eq!(opened.restore_height_hint, FIXTURE_RESTORE_HEIGHT);
+        assert_eq!(
+            &opened.expected_classical_address,
+            fixture_expected_address()
+        );
+        assert_eq!(opened.cap_content.as_slice(), &fixture_full_seed());
+    }
+
+    /// Composition check against the **frozen** fixture bytes (oracle:
+    /// independent, tier 2 — the production account derivation
+    /// [`crate::account::rederive_account`] vouches for the value): the
+    /// address stored inside `full.hex` really is the 65-byte
+    /// `version ‖ spend_pk ‖ view_pk` prefix derived from the seed
+    /// stored next to it, under the wire (network, seed_format) the
+    /// fixture declares. This bites against a fixture regenerated with a
+    /// made-up address or invalid wire bytes; it does NOT cover the
+    /// envelope byte layout itself (the pinned round-trips do that).
+    #[test]
+    fn pinned_fixture_address_derives_from_fixture_seed() {
+        let opened = open_keys_file(FIXTURE_PASSWORD, &decode_hex_fixture(PINNED_FULL_HEX))
+            .expect("open pinned fixture");
+        let net = crate::account::DerivationNetwork::from_u8(opened.network)
+            .expect("fixture network byte must be a real network");
+        let fmt = crate::account::SeedFormat::from_u8(opened.seed_format)
+            .expect("fixture seed_format byte must be a real seed format");
+        let mut seed = [0u8; 64];
+        seed.copy_from_slice(opened.cap_content.as_slice());
+        let blob = crate::account::rederive_account(&seed, net, fmt).expect("derive");
+        assert_eq!(
+            &blob.classical_address_bytes[..EXPECTED_CLASSICAL_ADDRESS_BYTES],
+            &opened.expected_classical_address,
+            "fixture address does not derive from the fixture seed"
+        );
     }
 
     #[test]
-    fn kat_view_only_roundtrip() {
-        let bytes = seal_kat_view_only();
-        assert_eq!(bytes, decode_hex_fixture(KAT_VIEW_ONLY_HEX));
-        let opened = open_keys_file(KAT_PASSWORD, &bytes).expect("open KAT");
-        assert_eq!(opened.capability_mode, CAPABILITY_VIEW_ONLY);
-        let (view_sk, dk, spend_pk) = kat_view_only_cap();
-        assert_eq!(&opened.cap_content[..32], &view_sk);
-        assert_eq!(&opened.cap_content[32..32 + ML_KEM_768_DK_LEN], &dk[..]);
-        assert_eq!(&opened.cap_content[32 + ML_KEM_768_DK_LEN..], &spend_pk);
+    fn pinned_vector_state_roundtrip_against_full() {
+        let keys = seal_fixture_full();
+        let state = seal_fixture_state(&keys);
+        assert_eq!(state, decode_hex_fixture(PINNED_STATE_HEX));
+        let opened =
+            open_state_file(FIXTURE_PASSWORD, &keys, &state).expect("open pinned state fixture");
+        assert_eq!(opened.as_slice(), FIXTURE_STATE_PAYLOAD);
     }
 
-    #[test]
-    fn kat_hardware_offload_roundtrip() {
-        let bytes = seal_kat_hardware_offload();
-        assert_eq!(bytes, decode_hex_fixture(KAT_HARDWARE_OFFLOAD_HEX));
-        let opened = open_keys_file(KAT_PASSWORD, &bytes).expect("open KAT");
-        assert_eq!(opened.capability_mode, CAPABILITY_HARDWARE_OFFLOAD);
-        // Device descriptor follows view_sk || dk || spend_pk.
-        let dd_off = 32 + ML_KEM_768_DK_LEN + 32;
-        let dev_len =
-            u16::from_le_bytes([opened.cap_content[dd_off], opened.cap_content[dd_off + 1]]);
-        let dev_desc = &opened.cap_content[dd_off + 2..dd_off + 2 + usize::from(dev_len)];
-        assert_eq!(dev_desc, b"ledger-nano-s:kat-serial-001");
-    }
+    /// Environment variable that arms [`pinned_fixtures_regenerate`].
+    ///
+    /// Its value must cite the `docs/V3_WALLET_DECISION_LOG.md` entry
+    /// authorizing the regeneration: `YYYY-MM-DD <one-line rationale>`,
+    /// where the date is the decision-log entry's date. The regenerator
+    /// refuses to run without it, so a failing pinned vector cannot be
+    /// silenced by re-running one command (50-testing.mdc, "Regenerating
+    /// a self-pinned vector is a decision, not a command").
+    const PINNED_REGEN_DECISION_ENV: &str = "SHEKYL_PINNED_REGEN_DECISION";
 
-    #[test]
-    fn kat_state_roundtrip_against_full() {
-        let keys = seal_kat_full();
-        let state = seal_kat_state(&keys);
-        assert_eq!(state, decode_hex_fixture(KAT_STATE_HEX));
-        let opened = open_state_file(KAT_PASSWORD, &keys, &state).expect("open state KAT");
-        assert_eq!(opened.as_slice(), KAT_STATE_PAYLOAD);
-    }
-
-    /// Regenerates the KAT fixtures on disk. Run manually with
-    /// `cargo test -p shekyl-crypto-pq kat_regenerate_fixtures -- --ignored --nocapture`
+    /// Regenerates the pinned format vectors on disk. Armed: refuses to
+    /// run unless [`PINNED_REGEN_DECISION_ENV`] cites the decision-log
+    /// entry that authorizes moving the vectors. Run manually with
+    ///
+    /// ```text
+    /// SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
+    ///   cargo test -p shekyl-crypto-pq pinned_fixtures_regenerate -- --ignored --nocapture
+    /// ```
+    ///
     /// whenever a deliberate, documented format change requires rotating
-    /// the on-disk vectors. Commit the resulting `.hex` files.
+    /// the on-disk vectors. Commit the resulting `.hex` files together
+    /// with the decision-log entry and the updated `manifest.json`.
     #[test]
-    #[ignore = "fixture regenerator; run manually after format changes"]
-    fn kat_regenerate_fixtures() {
+    #[ignore = "armed fixture regenerator; requires SHEKYL_PINNED_REGEN_DECISION"]
+    fn pinned_fixtures_regenerate() {
         use std::fs;
         use std::path::PathBuf;
+
+        // Refuse to run without a decision-log citation. The format is
+        // "YYYY-MM-DD <rationale>"; the date names the decision-log entry.
+        let decision = std::env::var(PINNED_REGEN_DECISION_ENV).unwrap_or_default();
+        let cited = decision.len() > 11
+            && decision.as_bytes()[..10]
+                .iter()
+                .enumerate()
+                .all(|(i, b)| match i {
+                    4 | 7 => *b == b'-',
+                    _ => b.is_ascii_digit(),
+                })
+            && decision.as_bytes()[10] == b' ';
+        assert!(
+            cited,
+            "refusing to regenerate pinned vectors: set {PINNED_REGEN_DECISION_ENV}=\
+             \"YYYY-MM-DD <rationale>\" citing the docs/V3_WALLET_DECISION_LOG.md entry \
+             that authorizes moving them (got: {decision:?}). Moving a pinned vector is \
+             a format decision, not a test fix — see 50-testing.mdc."
+        );
+        eprintln!("regenerating pinned vectors under decision: {decision}");
+        eprintln!(
+            "fixture expected_classical_address (derived, 65B) = {}",
+            hex::encode(fixture_expected_address())
+        );
+        eprintln!(
+            "reminder: commit the decision-log entry and update \
+             docs/test_vectors/WALLET_FILE_FORMAT_V1/manifest.json in the same change"
+        );
+
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../docs/test_vectors/WALLET_FILE_FORMAT_V1");
         fs::create_dir_all(&dir).expect("mkdir -p");
@@ -1900,13 +1938,9 @@ mod tests {
             fs::write(&path, text).expect("write fixture");
             eprintln!("wrote {}: {} bytes", path.display(), bytes.len());
         };
-        let full = seal_kat_full();
-        let view_only = seal_kat_view_only();
-        let hardware_offload = seal_kat_hardware_offload();
-        let state_for_full = seal_kat_state(&full);
+        let full = seal_fixture_full();
+        let state_for_full = seal_fixture_state(&full);
         write("full.hex", &full);
-        write("view_only.hex", &view_only);
-        write("hardware_offload.hex", &hardware_offload);
         write("state_for_full.hex", &state_for_full);
     }
 }

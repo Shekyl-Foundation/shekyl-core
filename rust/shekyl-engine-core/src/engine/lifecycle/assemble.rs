@@ -331,7 +331,7 @@ impl Engine<SoloSigner> {
             capability,
             refresh_slot: crate::engine::refresh::RefreshSlot::new(),
             open_slots: crate::engine::refresh_slot::OpenTaskSlots::new(),
-            pending_write_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            pending_gate: crate::engine::pending_post_gate::PendingPostGate::new(),
             refresh,
             economics,
             stake,

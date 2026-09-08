@@ -1969,8 +1969,8 @@ async fn stake_persona_to_confirmed_bond(
     // comes due (see the module docs for why the driver's decorrelation
     // timing is deliberately not exercised here).
     let post = {
-        let pending_write_lock = { arc.read().await.pending_write_lock.clone() };
-        let store = pending_post_store_for_engine(arc.clone(), pending_write_lock);
+        let pending_gate = { arc.read().await.pending_gate.clone() };
+        let store = pending_post_store_for_engine(arc.clone(), pending_gate);
         store
             .read(|block| block.posts().first().cloned())
             .await
