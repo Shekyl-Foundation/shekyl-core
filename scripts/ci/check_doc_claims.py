@@ -182,7 +182,13 @@ def strip_fences(text: str) -> str:
     were stripped from the text the citation leg reads.
     """
     out, fence = [], None          # fence = (char, length) while open
-    for line in text.splitlines():
+    for raw in text.splitlines():
+        # A block-quote prefix is a CONTAINER, not content: `> ```text` opens a
+        # fence exactly as ```text does. Matching only after indentation left
+        # blockquoted fences unrecognised, so a citation, range or numbered
+        # example inside one was audited as a live claim. Four documents in
+        # this corpus use the form.
+        line = re.sub(r"^(?:\s*>)+\s?", "", raw)
         # 0-3 spaces: at four the line is indented code, not a fence. `\s*`
         # let a deeply indented ``` inside a list item open a fence and blank
         # the remainder of the document.
@@ -197,7 +203,7 @@ def strip_fences(text: str) -> str:
                 # that HIDES declarations rather than manufacturing them, which
                 # is the direction nothing else here would catch.
                 if ch == "`" and "`" in tail:
-                    out.append(line)
+                    out.append(raw)
                     continue
                 fence = (ch, n)
                 out.append("")
@@ -210,7 +216,7 @@ def strip_fences(text: str) -> str:
                 fence = None
                 out.append("")
                 continue
-        out.append("" if fence is not None else line)
+        out.append("" if fence is not None else raw)
     return "\n".join(out)
 
 

@@ -491,6 +491,15 @@ MINI = ("# Mini\n\n<!-- claim-audit: sections -->\n\nSee §1 below.\n\n"
         "## 1. One\n\nBody.\n")
 
 
+def git_base_absent(t: pathlib.Path) -> None:
+    """Commit a base revision that does NOT contain the baseline file."""
+    bl = t / "docs" / "ci" / "doc-claims-baseline.txt"
+    candidate = bl.read_text(encoding="utf-8")
+    bl.unlink()
+    commit(t, "base")
+    bl.write_text(candidate, encoding="utf-8")
+
+
 def git_base_text(text: str):
     """Commit a base revision whose baseline file holds exactly `text`."""
     def f(t: pathlib.Path) -> None:
@@ -618,6 +627,31 @@ def drop_object(kind: str):
         for o in objs:
             (t / ".git" / "objects" / o[:2] / o[2:]).unlink(missing_ok=True)
     return f
+
+
+# Every root, resolution mode and extension the CITE matcher claims to
+# recognise, each as a DEAD citation so its removal is detectable.
+#
+# This is the sharpest gap review found, because the ratchet would ASSIST the
+# damage. Drop the `rust` alternative and `rust/x.rs:1` stops matching at all —
+# not dead, simply unseen — so the dead count FALLS, the gate instructs the
+# author to lower the baseline, the matrix still reports full outcome coverage,
+# and the gate's subject has permanently shrunk with every check agreeing.
+#
+# The corpus uses all of them, and the two the matrix had never exercised are
+# the two used most: `.rs` (154 live citations) and crate-relative `shekyl-*`
+# resolution (66). Only `src/*.cpp`, `external/*.h` and one `.py` were covered.
+CITE_BRANCHES = [
+    ("root src/",            "src/gone.cpp:1"),
+    ("root rust/",           "rust/gone.rs:1"),
+    ("root scripts/",        "scripts/gone.py:1"),
+    ("root tests/",          "tests/gone.sh:1"),
+    ("root external/",       "external/gone.h:1"),
+    ("crate-relative",       "shekyl-thing/src/gone.rs:1"),
+    ("extension .inl",       "src/gone.inl:1"),
+    ("extension .h",         "src/gone.h:1"),
+    ("extension .sh",        "scripts/gone.sh:1"),
+]
 
 
 def sub(old: str, new: str) -> str:
@@ -980,6 +1014,22 @@ def main() -> None:
         green("mismatched span delimiters do not blank a declaration",
               doc=GOOD.replace("See §2 for the table.",
                                "``open ```not-close``\n\nSee §2 for the table.")),
+        # every matcher branch, proved live by a dead citation it must report
+        *[case(f"CITE recognises {label}", token,
+               doc=sub("`src/thing.cpp:3`", f"`{token}`"))
+          for label, token in CITE_BRANCHES],
+        # The one-time bootstrap this very PR runs on, and it had NO control.
+        # The sweep cannot see its loss either: the bootstrap return and the
+        # status line are not outcome sites, so deleting the branch would make
+        # an unresolvable base look identical to a base with no baseline yet.
+        green("bootstrap: base resolves but carries no baseline",
+              extra=git_base_absent, env={"DOC_CLAIMS_BASE_REF": "base"},
+              expect="carries no baseline yet"),
+        # a fenced block inside a BLOCK QUOTE is still a fence; four documents
+        # in the real corpus use the form, and an example inside one was being
+        # audited as a live claim.
+        green("blockquoted fence hides its citation",
+              doc=GOOD + "\n\n> Example:\n>\n> ```\n> see `src/gone.cpp:1`\n> ```\n"),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -997,7 +1047,9 @@ def main() -> None:
                 "dead citation inside a fence is not a citation",
                 "deeply indented ``` does not open a fence",
                 "malformed fence opener does not swallow the document",
-                "mismatched span delimiters do not blank a declaration"}
+                "mismatched span delimiters do not blank a declaration",
+                "bootstrap: base resolves but carries no baseline",
+                "blockquoted fence hides its citation"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"
