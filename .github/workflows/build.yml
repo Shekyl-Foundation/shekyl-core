@@ -345,71 +345,18 @@ jobs:
         run: |
           ${{env.CCACHE_SETTINGS}}
           ${{env.BUILD_DEFAULT_LINUX}}
-      # The restricted-RPC gate's only production-path guard. It spawns the
-      # shekyld just built and puts real over-cap requests to a restricted
-      # listener, which is the one assertion that can see whether the C++
-      # dispatch bridge passes a connection context — the C++ unit tests
-      # cannot, by construction, and without this the privacy regression it
-      # guards could merge green.
-      #
-      # It runs here rather than in the test job because that job installs no
-      # Rust by design, and here the binary and the toolchain already coexist:
-      # no extra build, ~3 seconds. `--ignored` because the test is opted out
-      # of the ordinary Rust lane, which builds no daemon; SHEKYLD_BIN is how
-      # it finds one.
-      - name: live-daemon gates (restricted RPC + console in-process arm)
+      # Armed #[ignore]d regtest_e2e gates against the shekyld just built.
+      # Runs here rather than in the test job because that job installs no
+      # Rust by design, and here the binary and the toolchain already coexist.
+      # The north-star spend is 76-99 s; the other four are a few seconds.
+      - name: live-daemon gates
         if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         # `shell: bash` like the CTest-artifact step below, and for the same
         # reason: the job's default shell in this container is dash, which
         # rejects `set -o pipefail` outright — the script dies on line 1
         # before running anything.
         shell: bash
-        run: |
-          set -eu
-          # `$PWD`, not `${{ github.workspace }}`: that expression is evaluated
-          # on the runner host and yields /home/runner/work/..., while this step
-          # executes inside the container, where the same tree is /__w/... A
-          # step starts in the workspace, so the relative path is the one that
-          # is right on both sides.
-          export SHEKYLD_BIN="$PWD/build/bin/shekyld"
-          test -x "$SHEKYLD_BIN" || { echo "FATAL: no shekyld at $SHEKYLD_BIN" >&2; exit 1; }
-          cd rust
-          # Redirected, not piped: a pipeline's status is the last command's, so
-          # `| tee` would swallow cargo's verdict. Read the log afterwards.
-          #
-          # The filter is the FULL test path — `--exact` matches
-          # `module::path::name`, so the bare function name selects nothing, and
-          # `cargo test` reports "0 passed" and exits 0 when a filter matches
-          # nothing. The count assertion is what refuses that green no-op
-          # (rule 47: a gate must assert its own subject exists).
-          # Run one at a time so each asserts its own "1 passed": the
-          # restricted gate through the FFI bridge, the caps the migrated
-          # handlers apply themselves, and the console's in-process arm —
-          # which RK-4c shipped broken because only the remote arm was ever
-          # exercised. The p2p console leg carries an extra job: it is what
-          # makes `print_net_stats`' bridged `/get_limit` call safe to keep
-          # until RK-8 migrates that route (§2.1.1).
-          for t in \
-            engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge \
-            engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm \
-            engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm \
-            engine::regtest_e2e::native_handlers_apply_their_own_request_caps
-          do
-            set +e
-            cargo test -p shekyl-engine-core --lib "$t" \
-              -- --ignored --exact --nocapture > gate.log 2>&1
-            status=$?
-            set -e
-            cat gate.log
-            if [ "$status" -ne 0 ]; then
-              echo "FATAL: $t failed" >&2
-              exit "$status"
-            fi
-            grep -qE '^test result: ok\. 1 passed' gate.log || {
-              echo "FATAL: $t selected no test — the filter or the name moved" >&2
-              exit 1
-            }
-          done
+        run: scripts/ci/run_live_daemon_gates.sh
 
       # Pack the CTest tree for the 24.04 test job. Same shape as
       # economics-c2a-prime.yml: Release defaults BUILD_SHARED_LIBS OFF

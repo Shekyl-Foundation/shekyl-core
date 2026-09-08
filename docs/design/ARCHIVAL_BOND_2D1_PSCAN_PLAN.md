@@ -388,7 +388,8 @@ designs these alongside the per-SP work, not as a cleanup pass after.
   read-side; it never broadcasts, so it does **not** depend on the daemon-accept gate
   (`e2e_fcmp_spend_accepted_by_daemon`) *functionally* — which is why the **design** could and
   did proceed in parallel. The **implementation**, however, branches off `dev` only **after
-  PR #193 lands** (the north-star: "first daemon-accepted FCMP++ spend"). PR #193's own scope
+  PR #193 lands** (the north-star: "first daemon-accepted FCMP++ spend") — **which it did on
+  2026-06-27 (`1829a15d9e`), so this condition is discharged and no longer gates the SP-0 build.** PR #193's own scope
   unblocks 2d (a bond-post *is* an FCMP++ spend) and reworks the **engine / prover / scanner**
   surfaces SP-0..SP-7 sit on (witness `x = ho + b`, the per-`(tx_hash, output_index)` bundle
   cache, strict vin sorting, the refresh-scan path). Branching 2d-1 before it lands would force

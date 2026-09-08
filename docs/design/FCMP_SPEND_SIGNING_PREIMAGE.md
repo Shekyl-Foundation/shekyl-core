@@ -1,7 +1,8 @@
 # FCMP++ spend serialization & PQC signing preimage — C++ ↔ shekyl-wire reconciliation
 
 **Status:** spec-grounded; consensus-critical. Written to ground the tx-builder
-spend-encoding migration (§8 step-4) and the open §1.1 "Live FCMP++ spend KAT".
+spend-encoding migration (§8 step-4) and the §1.1 "Live FCMP++ spend KAT"
+(`live_oracle_spend_v1.json`, now landed).
 **No code lands on this spec alone** — it pins the C++ (daemon) layout so the
 eventual implementation PR is reviewable, and documents that the *current*
 tx-builder spend encoder diverges from the daemon in four consensus-critical spots.
@@ -18,8 +19,8 @@ Migrating tx-builder onto `shekyl-wire` is therefore not a transparent swap. The
 current encoder is built on `shekyl-oxide`, whose spend layout **does not match the
 C++ daemon**; `shekyl-wire`'s layout **does**. So the migration is a *correctness
 fix* whose parity target is the **C++ daemon / shekyl-wire**, never the current
-shekyl-oxide output. Its full end-to-end proof is the live C++ oracle — the open
-§1.1 spend KAT, blocked on the daemon spend path.
+shekyl-oxide output. Its full end-to-end proof is the live-oracle spend KAT
+(`live_oracle_spend_v1.json`, both language legs in `pruned_tx_hash_parity`).
 
 ## 1. Canonical layout — the C++ daemon
 
@@ -137,15 +138,16 @@ proof-type imports are removed.
   round-trip #169 (prunable).
 - **Golden vectors (new):** pin `prefix_hash` + `pqc_signing_payload_hashes` for fixed
   inputs so a future drift fails closed (mirror the `scan_output_kat` idiom).
-- **Live C++ oracle (residual = §1.1):** build via tx-builder → the C++ daemon
-  verifies the PQC auths + FCMP++ proof. Blocked on the daemon spend path; this is the
-  end-to-end proof that closes both this migration and §1.1. Until it lands, the
-  migration is *source- and corpus-validated but not live-proven*.
+- **Live C++ oracle (§1.1):** **landed.** `e2e_fcmp_spend_accepted_by_daemon`
+  builds via the production Engine; a live `shekyld` accepts and connects the
+  spend; `live_oracle_spend_v1.json` is the captured blob, with Rust and C++
+  legs deriving the identities independently.
 
 ## 6. Decision (resolved): **implemented**
 
 Implemented (`feat/tx-builder-shekyl-wire-spend`) as the "implement now" path — source +
-corpus + golden validated, with the live C++ oracle (§1.1) as the remaining residual:
+corpus + golden validated; the live C++ oracle (§1.1) has since landed as
+`live_oracle_spend_v1.json`:
 
 - **shekyl-wire** gained `Transaction::prefix_hash()` (§1.2 signable_tx_hash, version
   included) and `pqc_signing_payload_hashes()` (§1.1 per-input preimage), composed from
