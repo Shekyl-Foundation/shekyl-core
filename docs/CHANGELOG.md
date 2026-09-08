@@ -215,7 +215,7 @@
   second, and the pass line states the limit in its own output: it checks
   numeric and structural claims against source, **not rationales** — four
   premises refuted by review the same week would all have passed it green.
-  Its 81 failure paths and 22 negative controls are falsified by a committed,
+  Its 81 failure paths and 23 negative controls are falsified by a committed,
   runnable matrix (`check_doc_claims_falsification.py`) that builds a synthetic
   corpus in a temp tree rather than mutating the repo, and which **measures
   its own completeness**: every one of the gate's discrepancy, non-coverage and

@@ -199,6 +199,33 @@ def strip_code(text: str) -> str:
     return _blank_spans(strip_fences(text))
 
 
+def _mask_spans(line: str) -> str:
+    """Same line with inline-span CONTENT replaced by spaces.
+
+    Index-preserving on purpose: the mask is used to locate comment delimiters
+    that are really comment delimiters, and the cut is then applied to the
+    ORIGINAL line at the same offsets.
+    """
+    return re.sub(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)",
+                  lambda m: " " * len(m.group(0)), line)
+
+
+def _split_comments(raw: str) -> tuple[str, bool]:
+    """(line with complete comments removed, whether one was left open)."""
+    masked = _mask_spans(raw)
+    out, i = [], 0
+    while True:
+        a = masked.find("<!--", i)
+        if a < 0:
+            out.append(raw[i:])
+            return "".join(out), False
+        out.append(raw[i:a])
+        b = masked.find("-->", a + 4)
+        if b < 0:
+            return "".join(out), True
+        i = b + 3
+
+
 def strip_fences(text: str) -> str:
     """Blank fenced code AND html comments in ONE pass, keeping line numbers.
 
@@ -255,10 +282,15 @@ def strip_fences(text: str) -> str:
             continue
 
         # complete inline comments vanish; an unterminated one blanks the rest
-        # of the line and continues to the next.
-        line_no_comments = re.sub(r"<!--.*?-->", "", raw)
-        if "<!--" in line_no_comments:
-            line_no_comments = line_no_comments[:line_no_comments.index("<!--")]
+        # of the line and continues to the next. Detection ignores what is
+        # inside INLINE CODE SPANS: a `<!--` written in backticks is a
+        # documented example, and treating it as a comment opener swallowed
+        # every following line until some `-->` — including a well-formed
+        # declaration carrying that closer, which took the document out of the
+        # audit silently. The emitted line keeps its spans, because the
+        # citation leg reads this output and citations live in them.
+        line_no_comments, opened = _split_comments(raw)
+        if opened:
             in_comment = True
 
         body = line_no_comments[len(prefix):] if line_no_comments.startswith(prefix) \

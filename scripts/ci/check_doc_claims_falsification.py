@@ -1131,6 +1131,13 @@ def main() -> None:
         green("two separated quoted lists are two runs",
               doc=GOOD.replace("1. one\n2. two\n3. three",
                                "> 1. a\n> 2. b\n\ntext\n\n> 1. c\n> 2. d")),
+        # a `<!--` written inside BACKTICKS is a documented example, not a
+        # comment opener. Treating it as one swallowed every following line
+        # until some `-->`, including the real declaration carrying it.
+        green("comment token inside backticks eats nothing",
+              doc=GOOD.replace("See §2 for the table.",
+                               "Write `<!-- claim-audit: sections` to opt in.\n\n"
+                               "See §2 for the table.")),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -1159,7 +1166,8 @@ def main() -> None:
                 "quoted list does not merge with the list above",
                 "comment holding a fence delimiter eats nothing",
                 "comment opener inside a fence eats nothing past it",
-                "two separated quoted lists are two runs"}
+                "two separated quoted lists are two runs",
+                "comment token inside backticks eats nothing"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"
