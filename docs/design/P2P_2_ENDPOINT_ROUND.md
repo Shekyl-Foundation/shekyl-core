@@ -742,19 +742,30 @@ P2P onion and the archival-serving persona's onion **on the same host**.
 | tor **binary discovery + hash pin** | **YES, as policy** | a verification *rule*, not a runtime handle. Both sides should verify the same binary against the same pin; that shares a decision, not a session |
 | **listening ports** | **NO**, and must not collide | not shared state, but two instances need disjoint control/SOCKS ports — an allocation constraint the build must make explicit rather than discover |
 
-**Three classes are genuinely ambiguous and are named rather than decided
-quietly, because an ambiguous class decided silently is how crossover arrives
-later as a convenience:**
+**Two of the three ambiguous classes are now RULED (Rick, 2026-09-08); the
+third remains open.** They were named rather than decided quietly because an
+ambiguous class settled silently is how crossover arrives later as a
+convenience.
 
-- **Operator config file.** One `shekyl.conf` naming both tors is a shared *file*
-  but not shared runtime state. It is also the single place an operator can
-  mis-wire them onto one instance. Undecided.
-- **Log sinks.** Both sides treat control-channel data as a forensic surface that
-  must not be logged. A shared sink does not link the identities by itself, but
-  it is where a future "just log the address" would link them. Undecided.
-- **Managed-tor launch path.** If both sides can spawn a managed tor, the launch
-  code is shared while the *instances* must not be. Reuse looks safe and is the
-  most likely accidental route to one process serving both. Undecided.
+- **Operator config file — SEPARATE FILES.** One `shekyl.conf` naming both tors
+  would be a shared *file* and not shared runtime state, so nothing links the
+  identities at runtime. It is nevertheless the single place an operator can
+  mis-wire both onto one instance, and that failure would present as a config
+  typo rather than a design breach. The convenience is small; the failure is
+  exactly the crossover this row forbids.
+- **Log sinks — SEPARATE SINKS.** Both sides already treat control-channel data
+  as a forensic surface that must not be logged, so a shared sink does not link
+  the identities *today*. It is where a future "just log the onion address for
+  debugging" would link them in one line that looks harmless. Separate sinks
+  mean that line cannot do damage even if someone writes it.
+- **Managed-tor launch path — STILL OPEN.** If both sides can spawn a managed
+  tor, the launch *code* is shared while the *instances* must not be. Reuse
+  looks safe and is the most likely accidental route to one process serving
+  both. **This is the one decision that cannot be inferred from the posture
+  ruling:** PWD-E7 says the ephemeral posture *requires tor's control port*,
+  which is a requirement on what must exist, not a statement about who starts
+  it — a control port is equally available from a daemon-spawned tor and from an
+  operator-run one. See the note below.
 
 #### The apparent contradiction with the accepted §7 residual, and why it is not one
 
@@ -804,6 +815,26 @@ become a second consumer of that ownership without making that sentence false.
 long-lived managed tor with vanguard pinning and a retry policy — the wallet's
 posture. Driving it from the daemon imports exactly the state this row forbids.
 
-**Owed before code, and not decidable here:** the three ambiguous classes above,
-and whether the daemon's tor is *managed* (we spawn it) or *attached* (operator
-runs it) — which decides whether the launch path is shared at all.
+**Owed before code:** whether the daemon's tor is *managed* (we spawn it) or
+*attached* (the operator runs it), which decides whether the launch path is
+shared at all.
+
+> **Why the posture ruling does not settle it.** PWD-E7 gives the ephemeral
+> posture as requiring **tor's control port**. That is a statement about what
+> must be reachable, not about who starts the process, and both answers satisfy
+> it. The two differ in what a default node asks of its operator:
+>
+> - **Managed (daemon spawns):** the default posture works out of the box, which
+>   is what "default" has to mean. Cost: the launch code is shared, and shared
+>   launch code is the most plausible route to one process serving both.
+> - **Attached (operator runs tor):** no shared launch path, so the crossover
+>   risk is zero by construction. Cost: every default-posture node needs an
+>   operator to configure a control port first, which makes "ephemeral by
+>   default" conditional on setup most operators will not do — and a default
+>   nobody reaches is not a default.
+>
+> **Recommended: managed, with the launch code lifted into the neutral crate and
+> the instance identity passed in as a parameter**, so sharing the *code* cannot
+> produce a shared *instance*. That keeps the default reachable while making the
+> failure mode a compile-time argument rather than a convention. It is a product
+> decision about what a default node requires of its operator, so it is Rick's.
