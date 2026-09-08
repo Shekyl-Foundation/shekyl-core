@@ -1074,6 +1074,29 @@ def main() -> None:
         # a table without its delimiter row is not a table
         case("counts: table delimiter row deleted", "no delimiter row",
              doc=GOOD.replace("| --- | --- |\n", "")),
+        # two markers on ONE line: a greedy match validated only the first
+        case("same line: valid then malformed marker",
+             "malformed claim-audit marker",
+             doc=sub("<!-- claim-audit: counts -->",
+                     "<!-- claim-audit: counts --><!-- claim-audit: Citations -->")),
+        # commented-out markdown is DISABLED markdown, for structure and cites
+        case("commented-out register rows do not satisfy series",
+             "the subject this declaration names is missing",
+             doc=GOOD.replace("| XX-W1 | a |\n| XX-W2 | b |\n| XX-W3 | c |",
+                              "<!--\n| XX-W1 | a |\n| XX-W2 | b |\n| XX-W3 | c |\n-->")),
+        # a misnumbered ordered list inside a block quote is still misnumbered
+        case("numbered: misnumbered list inside a block quote",
+             "numbered list runs",
+             doc=GOOD.replace("1. one\n2. two\n3. three",
+                              "> 1. one\n> 3. two\n> 4. three")),
+        # two VALID markers on one line must BOTH register
+        green("same line: two valid markers both register",
+              doc=GOOD.replace("<!-- claim-audit: sections -->\n<!-- claim-audit: numbered -->",
+                               "<!-- claim-audit: sections --><!-- claim-audit: numbered -->"),
+              expect="numbered"),
+        # a citation inside an HTML comment is not a citation
+        green("commented-out citation is not a citation",
+              doc=GOOD + "\n\n<!--\nsee `src/gone.cpp:1` here\n-->\n"),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -1096,7 +1119,9 @@ def main() -> None:
                 "blockquoted fence hides its citation",
                 "quoted delimiter inside a fence is not a closer",
                 "quoted fence closes despite a differing prefix",
-                "quoted fence ends when its container does"}
+                "quoted fence ends when its container does",
+                "same line: two valid markers both register",
+                "commented-out citation is not a citation"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"

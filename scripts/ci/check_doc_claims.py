@@ -109,7 +109,7 @@ DOCS = ROOT / "docs"
 # for. Requiring top-level placement is both the real convention ("put any of
 # these near the top of the file") and far simpler than deciding, in general,
 # whether an indented run is code or list continuation.
-DECL = re.compile(r"(?m)^ {0,3}<!--\s*claim-audit:\s*([a-z]+)"
+DECL = re.compile(r"<!--\s*claim-audit:\s*([a-z]+)"
                   r"(?:\s+([A-Za-z][\w-]*))?\s*-->")
 # Every comment that MEANS to be a declaration, well-formed or not. A matcher
 # that only sees valid markers cannot see a typo: `claim-audit: Citations` fails
@@ -122,14 +122,27 @@ DECL = re.compile(r"(?m)^ {0,3}<!--\s*claim-audit:\s*([a-z]+)"
 # the adoption floor stayed satisfied by another document — the same vacuous
 # pass this matcher exists to prevent, reached by leaving the marker unfinished
 # instead of misspelling it.
-# Non-greedy, and anchored per OCCURRENCE rather than per line. A greedy
-# `.*$` swallowed two adjacent markers into one match, so
+# A marker is found ANYWHERE on a top-level line, not only at its start. The
+# anchored version could not see a second marker on the same line at all, so
 # `<!-- claim-audit: sections --><!-- claim-audit: Citations -->` reported
-# neither the malformed second marker nor the missing declaration: the line
-# "contained a valid declaration", so it passed. Two VALID adjacent markers
-# likewise registered only the first — the silent opt-out this scan exists to
-# prevent, reached by putting two markers on one line.
-DECL_ANY = re.compile(r"(?m)^ {0,3}<!--\s*claim-audit:.*?(?:-->|$)")
+# neither the malformed second nor the missing declaration, and two VALID
+# adjacent markers registered only the first — the silent opt-out this scan
+# exists to prevent, reached by putting two markers on one line.
+#
+# The 0-3 space rule stays, but it now qualifies the LINE: four or more spaces
+# is a CommonMark indented code block, and a marker there is an example.
+TOP_LEVEL = re.compile(r"^ {0,3}\S")
+MARKER = re.compile(r"<!--\s*claim-audit:.*?(?:-->|$)")
+
+
+def markers(text: str):
+    """(line number, marker text) for every claim-audit marker at top level."""
+    for i, line in enumerate(text.splitlines(), 1):
+        if TOP_LEVEL.match(line):
+            for m in MARKER.finditer(line):
+                yield i, m.group(0)
+
+
 KINDS = {"series", "range", "sections", "numbered", "citations", "counts"}
 # The only two kinds that name a subject; the rest are bare.
 TAKES_ARG = {"series", "range"}
@@ -185,10 +198,10 @@ def strip_code(text: str) -> str:
     became a subject of it. Newlines are preserved so every reported line
     number still points where a reader would look.
     """
-    return _blank_comments(_blank_spans(strip_fences(text)))
+    return strip_comments(_blank_spans(strip_fences(text)))
 
 
-def _blank_comments(text: str) -> str:
+def strip_comments(text: str) -> str:
     """Blank ordinary HTML comments, preserving declarations and line numbers.
 
     Commented-out markdown is DISABLED markdown, and it was still feeding every
@@ -199,7 +212,7 @@ def _blank_comments(text: str) -> str:
     """
     def repl(m):
         body = m.group(0)
-        return body if DECL_ANY.search(body) else "\n" * body.count("\n")
+        return body if MARKER.search(body) else "\n" * body.count("\n")
     return re.sub(r"<!--.*?-->", repl, text, flags=re.S)
 
 
@@ -952,7 +965,11 @@ def main() -> None:
     # Inline spans survive here on purpose. Citations are written inside
     # backticks by convention, so the citation leg keeps the RAW text — the
     # same split that made strip_code and strip_fences two functions.
-    fenced = {p: strip_fences(text) for p, text in corpus}      # citations
+    # Citations: fences and COMMENTS blanked, inline spans kept — a citation is
+    # written inside backticks, and a citation inside `<!-- -->` is disabled
+    # markdown like any other. Blanking comments only inside strip_code() left
+    # the citation leg and the ratchet reading commented-out cites as live.
+    fenced = {p: strip_comments(strip_fences(text)) for p, text in corpus}
     coded = {p: strip_code(text) for p, text in corpus}          # everything else
     corpus_fenced = [(p, fenced[p]) for p, _ in corpus]         # range restatements
 
@@ -964,16 +981,16 @@ def main() -> None:
         # Every marker that MEANS to be a declaration is a subject, including
         # the ones that are malformed. Checking only well-formed ones lets a
         # typo read as opted-in to a human and as absent to the gate.
-        for m in DECL_ANY.finditer(stripped):
-            if not DECL.search(m.group(0)):
-                line = stripped[: m.start()].count("\n") + 1
+        for line, text_of in markers(stripped):
+            if not DECL.fullmatch(text_of):
                 errors.append(
                     f"{rel(p)}:{line}: malformed claim-audit marker "
-                    f"{m.group(0)!r} — it reads as a declaration but matches no "
+                    f"{text_of!r} — it reads as a declaration but matches no "
                     "known form, so it opts the document in to nothing. Kinds "
                     f"are lower-case ({', '.join(sorted(KINDS))}), with at most "
                     "one argument.")
-        for m in DECL.finditer(stripped):
+                continue
+            m = DECL.fullmatch(text_of)
             kind, arg = m.group(1), m.group(2)
             if kind not in KINDS:
                 errors.append(f"{rel(p)}: unknown claim-audit kind '{kind}' "
@@ -1051,8 +1068,9 @@ def main() -> None:
             "rot and lifts the bar to match is exactly what it exists to stop, "
             "and it would otherwise pass because the bar it asserts against "
             "travels in the same commit.")
-    present = {rel(p): {decl_token(m.group(1), m.group(2))
-                        for m in DECL.finditer(strip_code(t))}
+    present = {rel(p): {decl_token(*DECL.fullmatch(txt).groups())
+                        for _, txt in markers(strip_code(t))
+                        if DECL.fullmatch(txt)}
                for p, t in corpus}
     for doc, legs in must_declare.items():
         if doc not in present:
