@@ -1,0 +1,118 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Documentation claim audit — checks the invariants a document declares about
+# itself against its own tables and against the tree.
+#
+# This workflow is deliberately its own, and named for what it gates. The
+# schema-coverage gate spent months riding a workflow called "doc links",
+# which is coupling that breaks silently the moment someone prunes
+# link-checking work; that rename is on DRS-P0b's envelope row precisely
+# because it went unnoticed. This one starts named correctly.
+#
+# CI is the backstop, not the mechanism. The evidence that produced this gate
+# is a measured before-and-after on PR #633, where the improvement came from
+# running the check BEFORE pushing — thirteen review rounds, with the change
+# of character at exactly the round the author started running it locally. So
+# the script is a plain `python3 scripts/ci/check_doc_claims.py` with no CI-only
+# inputs, runnable in any worktree, and this job exists to catch what a human
+# forgot to run rather than to be the only thing that runs it.
+
+name: ci/doc-claims
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "docs/**"
+      # The gate resolves file:line citations against the tree, so a source
+      # move can invalidate a documentation claim with no docs edit in the
+      # diff — that drift is exactly what the citation leg exists to catch
+      # (rule 47: a gate that cannot see its subject change is not a gate).
+      - "src/**"
+      - "rust/**"
+      # tests/ and external/ are cited by live documents too (18 and 1 at the
+      # time of writing), and the citation leg resolves them, so a move in
+      # either can invalidate a documentation claim with no docs edit in the
+      # diff. A trigger set narrower than the checker's reach is a gate that
+      # cannot see its own subject change.
+      - "tests/**"
+      - "external/**"
+      # scripts/** entire, not just this gate's own two files. The citation
+      # matcher resolves scripts/ paths like any other root, so naming only the
+      # gate scripts left the same gap that tests/ and external/ had — fixed
+      # once and not carried to the sibling. No live document cites scripts/
+      # today; the trigger covers the checker's reach, not today's corpus.
+      - "scripts/**"
+      # .gitmodules decides whether cited external/ content is trustworthy at
+      # all, so a change to the submodule mapping changes the checker's subject
+      # without touching a document — the same trigger/reach mismatch as the
+      # roots above, one level further out.
+      - ".gitmodules"
+      - "docs/ci/doc-claims-baseline.txt"
+      - ".github/workflows/doc-claims.yml"
+
+concurrency:
+  group: doc-claims-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  doc-claims:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Submodules populated, matching docs-gates.yml. This is required,
+          # not merely tidy: the citation leg resolves paths under external/,
+          # and the gate now REFUSES to run when a cited submodule is absent
+          # rather than counting it as rot. Drop this and the job stops with
+          # "not checked out here" instead of auditing anything.
+          submodules: true
+
+      # The ratchet asserts against a figure that lives in the same commit as
+      # the change being asserted, so on a single tree one edit can add a dead
+      # citation and lift the bar to match. The base revision is what makes it
+      # a ratchet rather than an honour system, and the gate can only read it
+      # if the ref is here — checkout fetches only the merge commit by default.
+      # A SHA needs no destination refspec: the object is fetched and the gate
+      # resolves it directly, so there is no ref to repoint and none to keep
+      # updated. This paragraph previously described the refspec form that came
+      # before, which is worth noting rather than deleting — the earlier
+      # iterations all named a MOVING target (FETCH_HEAD, then a
+      # remote-tracking branch, then the branch tip), and each fix looked
+      # complete until the next one. Do not reintroduce a ref here.
+      # The immutable base SHA of the merge commit under test, not the branch
+      # tip. A branch tip is mutable: if dev advances while this run is queued,
+      # the tip is no longer the base of the merge commit being tested, and the
+      # gate would compare against a revision this PR was never built on —
+      # falsely reporting a raised count or a shrunken registry. Same
+      # wrong-referent class as the FETCH_HEAD fix, one level further out, and
+      # the failure mode is a red on work that is fine.
+      - name: Fetch the base revision the ratchet compares against
+        run: |
+          git fetch --no-tags --depth=1 origin \
+            "${{ github.event.pull_request.base.sha }}"
+
+      - name: Run the documentation claim audit
+        env:
+          # A SHA, which is the only kind of reference that cannot be
+          # repointed. FETCH_HEAD was last-fetch-wins (the checkout step
+          # rewrites it five times fetching submodules); a remote-tracking
+          # branch fixed that but still names a moving target. Comparing
+          # against the wrong revision while reporting "checked" is worse than
+          # not checking, because the output names a ref it did not read.
+          DOC_CLAIMS_BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/ci/check_doc_claims.py
+
+      - name: Re-falsify the gate's own failure paths
+        # A gate is only worth its green if each leg can still go red. The
+        # matrix runs against a synthetic corpus in a temp directory, so it
+        # costs seconds and touches nothing; running it here means a refactor
+        # that silently disables a leg fails CI instead of passing quietly.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_doc_claims_falsification.py

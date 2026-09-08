@@ -267,6 +267,48 @@
 
 ### Added
 
+- **A documentation claim audit, and the measurement that argued for it.**
+  PR #633 took thirteen review rounds. The first nine were reactive — a
+  reviewer found an instance, it was fixed, the next round found another of
+  the same class — and from round ten the author ran a mechanical claim check
+  before each push. That pass caught three defects no reviewer had filed (a
+  matrix row routed to a section that did not exist, a register that jumped
+  W-3 to W-6, a stated writer count gone stale), and the rounds after it found
+  only what it could not see. `scripts/ci/check_doc_claims.py` makes that
+  check a gate: a document **declares** which invariants it means to hold
+  (`<!-- claim-audit: series DRS-W -->` and five siblings) and the gate checks
+  exactly those. Declared rather than inferred, because the first cut inferred
+  them corpus-wide and reported **991 findings against a clean tree** — a gate
+  that unusable is convention theatre pointing the other way. Every extraction
+  distinguishes checked-and-passed from found-nothing-to-check and fails on the
+  second, and the pass line states the limit in its own output: it checks
+  numeric and structural claims against source, **not rationales** — four
+  premises refuted by review the same week would all have passed it green.
+  Its 81 failure paths and 24 negative controls are falsified by a committed,
+  runnable matrix (`check_doc_claims_falsification.py`) that builds a synthetic
+  corpus in a temp tree rather than mutating the repo, and which **measures
+  its own completeness**: every one of the gate's discrepancy, non-coverage and
+  refusal sites must be executed by some case, or the matrix fails. That sweep
+  found seven unexercised sites on its first run — including the wrong-commit
+  submodule branch, which no case reached at all. A ratchet in
+  `docs/ci/doc-claims-baseline.txt` holds live dead-citation debt monotone
+  downward and stops a document silently un-declaring a leg, because opt-in
+  without a ratchet is adoption theatre. Both legs assert against the **base
+  revision**: the figure otherwise travels in the same commit as the change it
+  constrains, so one edit could add rot and lift the bar to match, and the
+  registry records the full declaration (`series:DRS-W`, not `series`) so a
+  document holding two of one kind cannot drop either unnoticed — and the
+  registry line is itself base-checked, since dropping a declaration and
+  deleting the token recording it passes every single-tree check. A citation into a submodule that is
+  **not checked out** aborts the run and names the init command rather than
+  counting as rot: absence of the file is first evidence the *subject* is
+  absent, which is the misattribution the link gate makes in that same state.
+  First adopted by the P0b atomicity audit, where it immediately caught a live
+  defect: `V4_DESIGN_NOTES.md` still restated the finding range with its old
+  upper bound after the register had grown past it. It then caught one in
+  itself — the ratchet's own baseline had been measured in a worktree with a
+  submodule absent, and CI went red on the first push.
+
 - **DRS-P0b — the atomicity audit covers the store that exists.** The
   April 2026 `LMDB_WRITE_ATOMICITY_AUDIT.md` was a PASS doing work it was
   never entitled to do: 22 of the 49 declared tables post-dated it (49 declared, 48 at runtime — DRS-W5), while its
