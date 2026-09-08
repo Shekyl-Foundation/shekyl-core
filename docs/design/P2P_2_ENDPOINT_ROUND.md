@@ -279,6 +279,12 @@ as clearnet-effective and overlay-limited — which is exactly the framing the
 Each table: the options, the adversary and channel each answers, what it
 concedes, and the falsifier that reopens it.
 
+> **Implementation status for cluster E lives in the deliverable, not here.**
+> [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) §0.5 carries a
+> per-decision status with evidence for all 37 P2P-2 decisions, E1–E9
+> included. One table, one owner: a second status here would be the
+> restatement that goes stale (rule 94 §6).
+
 ### PWD-E1 — does a node determine its own reachable endpoint?
 
 | Option | Adversary / channel | Concedes | Falsifier |
