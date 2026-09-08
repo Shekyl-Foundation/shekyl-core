@@ -518,9 +518,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Async `Engine::close` / `change_password` lifecycle (PR 6 PR #83).** [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
   - Target: pre-genesis
 
-- **Shekyl-native end-to-end wallet/daemon test harness [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./completed/ELECTRUM_WORDS_REMOVAL_PLAN.md)
-  - Target: pre-genesis
-
 - **RandomX v2 — Guix reproducible-build obligation pickup (trigger: [`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md)
   - Target: pre-genesis
 
