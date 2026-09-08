@@ -432,10 +432,15 @@ namespace nodetool
     //! Mint a self-detection nonce for one outbound handshake attempt on
     //! `zone`, RECORDED IN THAT ZONE'S IN-FLIGHT SET BEFORE IT IS RETURNED.
     //!
-    //! The ordering the bounded-set requirement rests on (PWD-E3 / the round
-    //! doc §5c: the insert must precede the request write) is structural
+    //! The ordering DETECTION rests on (PWD-E3 / the round doc §5c: the
+    //! insert must precede the request write, or our own arriving connection
+    //! is checked against the set before the value is in it) is structural
     //! here rather than remembered — a caller cannot obtain the value to
-    //! write without it already being recorded. Pinned by
+    //! write without it already being recorded. This ordering bounds
+    //! nothing: the set's SIZE rests on the attempt scope guard alone — see
+    //! `m_inflight_handshake_nonces`, which is attempt-scoped by
+    //! construction. Erase-on-match is not a second size bound; it pins
+    //! single-fire/anti-replay and shortens residency. Pinned by
     //! `node_server.handshake_nonce_is_recorded_before_it_can_be_written`,
     //! which reds if the recording moves out of this function.
     std::array<uint8_t, 32> mint_recorded_handshake_nonce(epee::net_utils::zone zone);
@@ -450,8 +455,9 @@ namespace nodetool
     //! cross-zone correlation oracle.
     bool detect_self_handshake(epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce);
     //! \return How many outbound-handshake nonces `zone` currently holds in
-    //! flight. The set's BOUNDEDNESS rests on the erase leg (on attempt
-    //! termination and on match), which is independent of the insert
+    //! flight. The set's BOUNDEDNESS rests on the attempt scope guard alone —
+    //! `m_inflight_handshake_nonces` is attempt-scoped by construction, and
+    //! erase-on-match only removes earlier — and is independent of the insert
     //! ordering; this is what lets a test observe a leak rather than infer
     //! one from detection behaviour alone.
     size_t inflight_handshake_nonce_count(epee::net_utils::zone zone) const;

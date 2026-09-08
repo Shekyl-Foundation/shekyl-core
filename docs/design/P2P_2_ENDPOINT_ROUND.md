@@ -413,16 +413,80 @@ the strongest argument for PWD-E2(b).
 
 ## 5c. The check to run when the removal lane lands
 
-`-43` reports the nonce is inserted into the zone's in-flight set **before the
-request is written**, and erased on attempt termination or match. **That
-ordering is the whole of the bounded-set requirement**: if it holds, the bound
-is satisfied *by construction*; if the insert moves after the write, it is
-satisfied only while someone remembers to keep it there.
+> **CORRECTED 2026-09-07.** This section previously said the insert ordering
+> *"is the whole of the bounded-set requirement"*. **It is not**, and the error
+> is the kind that reads as coverage: it told a maintainer that the ordering
+> test discharges boundedness, so they would not build erase coverage at all.
+> The two properties are independent and are separated below.
 
-> **Falsifier, to be written against that unit rather than asserted about it:**
-> a test that goes red when the insert is moved after the request write. Not
-> yet written — this round does not own that unit, and the claim is a report,
-> not an audit. Recorded so the check is not re-derived.
+**Ordering governs detection.** Recording the nonce **before the request is
+written** is what makes a self-dial detectable: it closes the race in which our
+own connection arrives and is checked against the set before the value is in
+it. Nothing about this bounds the set's size.
+
+**Boundedness rests on the termination guard alone.** A set that is never
+erased from grows without limit however well the insert is ordered — but the
+mechanism that bounds it is the *attempt scope guard*, not the erase leg taken
+as a whole. Its declaration states the invariant and this section will not
+paraphrase it a fourth time:
+
+> *"Attempt-scoped by construction — bounded by in-flight outbound attempts, so
+> there is no size limit to choose and no eviction policy to get wrong."*
+> — `src/p2p/net_node.h:344-346`
+
+The guard is unconditional RAII over a local (`net_node.inl:1074-1077`), so it
+runs on success, failure and timeout alike. **Erase-on-match is not a second
+boundedness requirement**: remove it and the guard still removes the nonce. What
+it *does* buy is **single-fire / anti-replay** semantics — a nonce cannot fire
+twice, so a peer that learned it by being dialled cannot replay it — plus
+shorter residency. Those are correctness properties of detection, not of the
+set's size.
+
+**Status in the removal lane.** Both properties are now discharged, and by
+different means.
+
+> **This section carries its own pin, and must.** The symbols below **did not
+> exist** at the document's pin (`93e7860ba`) — they landed with PR #643. Every
+> `file:line` in this section is read at **`1878e89d3f6e51f32056dee6f13500859640c407`**
+> (#643's merge commit), not at the document pin and not at "`dev` after the
+> merge", which is a moving target that would stop resolving at the next merge.
+
+- **Ordering is enforced by construction, and a test pins the construction.**
+  `mint_recorded_handshake_nonce`
+  generates the value, records it into the zone's set, and only *then* returns
+  it (`net_node.inl:1209-1215`), so a request cannot be built from an
+  unrecorded nonce. `node_server.handshake_nonce_is_recorded_before_it_can_be_written`
+  pins it — **the test's job is to red when the construction is dismantled, not
+  to catch a race**, which is the distinction that makes it sound: a real
+  self-dial's detection is a race the acceptor usually wins, so an
+  insert-after-write regression would have made such a test **flaky**, and a
+  falsifier that fails to fail is exactly the defect §5c exists to prevent.
+  Stronger than the falsifier this section originally asked for, and correctly
+  so.
+- **Both erase *implementations* are pinned by test — but they are pinned for
+  different guarantees.** `erase_outbound_handshake_nonce` (`:1228`) is the
+  boundedness mechanism, because the scope guard calls it on every exit path;
+  erase-on-match inside `detect_self_handshake`, which returns
+  `erase(nonce) > 0` (`:1248-1257`) so detection and removal are the same act,
+  pins **single-fire behaviour and prompt removal**, not a second size bound.
+  Each is exercised by count as well as by detection, with
+  `inflight_handshake_nonce_count` (`:1238`) as the observable.
+  **What no test observes** is that `do_handshake_with_peer` attaches the
+  termination erase at all — RAII over a local — and the test states that
+  boundary itself at `tests/unit_tests/node_server.cpp:1634-1638` rather than
+  leaving it to be assumed. **Implementation coverage, not termination-path
+  coverage.**
+
+> **What this round got right and wrong — and the pattern in the wrongness.**
+> Right: that the check needed writing, and that it should be authored against
+> the unit rather than asserted about it. Wrong three times, each time by
+> attributing a property to the wrong mechanism: first ordering ⇒ boundedness
+> (#641), then the erase leg's *two exits* ⇒ boundedness (this PR's first
+> pass), and finally erase-on-match credited with a size guarantee it does not
+> carry. **The declaration at `net_node.h:344-346` stated the invariant
+> correctly throughout.** Every error came from paraphrasing a contract instead
+> of citing it — which is why the boundedness paragraph above now quotes the
+> declaration rather than restating it.
 
 Field placement — request-level on `COMMAND_HANDSHAKE` rather than inside
 `basic_node_data` — is right for the layering reason in §0, independently of
@@ -436,7 +500,7 @@ whether p2p encryption ever lands.
 | F2 | Whatever PWD-E3/E4 rule must land **with** the `peer_id` removal, not after it | same lane — removing job 1 and job 2 with no replacement is the regression this round exists to prevent |
 | F3 | Rust shape (endpoint typestate `Candidate<Source>` → `Verified{at}` → `Stale`; `Zone` marker types with `type Dedup`/`type Announced`, distinct from `RelayZone`) | the Rust p2p node; rule-18 question of whether `RelayZone` derives from the transport zone is **not** settled here |
 | F4 | Re-home PWD-I2's eclipse-completion-oracle argument when `ANON_ZONE_SENTINEL_PEER_ID` is deleted | the removal lane — the argument outlives its subject and is the standing reason not to reintroduce per-node identity |
-| F5 | Write the in-flight-set ordering falsifier described in §5c — a test that reds when the nonce insert moves after the request write | the removal lane; this round does not own that unit |
+| F5 | **DISCHARGED 2026-09-07.** §5c's check, corrected: ordering is enforced by construction (`mint_recorded_handshake_nonce`) with a test pinning the construction; **boundedness rests on the attempt scope guard alone** (`net_node.h:344-346` — attempt-scoped by construction), while erase-on-match pins single-fire/anti-replay rather than a second size bound. Both erase implementations are exercised by count and by detection; the termination *wiring* is RAII and deliberately unobserved — see §5c, which states the boundary rather than claiming path coverage | the removal lane, PR #643 |
 
 ## 6b. The chain, drawn (added 2026-09-06)
 
