@@ -1,0 +1,78 @@
+# Ratchet baseline for scripts/ci/check_doc_claims.py.
+#
+# Opt-in with no ratchet is adoption theatre: a leg documents can decline
+# forever lets the debt grow while the gate reports green. This file is the
+# mechanism the repository has already proven twice — check_network_uniformity's
+# allowlist can only shrink deliberately, and the schema gate's row count is
+# pinned to the macro rather than restated. Both numbers below move in one
+# direction, and moving them is an edit somebody has to make on purpose.
+#
+# ── dead-citations ────────────────────────────────────────────────────────────
+# How many `path:line` citations in LIVE documents point at a file that does not
+# exist, or past the end of one that does. The gate fails if the count goes UP
+# (new rot) and also if it goes DOWN without this number being lowered (the
+# ratchet tightens deliberately, not silently). Floor is zero.
+#
+# The count is LIVE documents only, and the distinction is not bookkeeping. A
+# `wallet2.cpp:NNN` citation in a round record or the CHANGELOG is legitimately
+# historical — the file existed when the claim was made, and its repair is to
+# PIN THE SHA the claim was true at, exactly as PR #626 resolved the CEN-I12 row
+# by citing two shas. The same string in a live design document is a claim about
+# the CURRENT tree pointing at a file Phase 5 deleted, and its repair is to
+# re-anchor or retire the claim. Same text, opposite dispositions; only the
+# second is rot, and only the second is counted here.
+#
+# Measured 2026-09-07 at bd6671b91 (this branch merged with dev 1878e89d3),
+# with all cited submodules checked out: 55 in live documents, against 136 in
+# records-was surfaces that are NOT counted, for 191 dead in docs/ overall.
+# The pin is the tree the number was actually observed on, which is the whole
+# point of stating one — an earlier draft of this line pinned 3cb3ecd66, where
+# 55 was never measured.
+#
+# Of the dead `wallet2.cpp` citations THIS GATE SEES, 20 are historical and 5
+# are live rot (25 total) — so this is not mostly a wallet-deletion burn-down,
+# and the largest single holder of live rot is RANDOMX_V2_MINING_ASYMMETRY.md
+# with 16, unrelated to wallet2. An earlier draft put those at 60/54/6, which
+# was a RAW FILENAME SEARCH standing next to gate-measured totals as though the
+# two were one split. They are not the same instrument: most `wallet2.cpp`
+# mentions in docs/ are prose, not rooted `path:line` citations, so they are
+# outside this gate's scope entirely and cannot be added to or subtracted from
+# the 55. Two instruments, one sentence, is how a number stops meaning
+# anything — and the correction only sharpens the point, since live wallet2 rot
+# is 5 of 55.
+#
+# The figure was first recorded as 56, and that number was wrong in a way worth
+# keeping on the record. It was measured in a worktree where external/miniupnp
+# was not checked out, so the one live citation under external/ —
+# P2P_2_ENDPOINT_ROUND.md's cite of upnpcommands.h:77, which resolves to
+# UPNP_GetExternalIPAddress and is entirely valid — read as rot. The comment
+# right here predicted that exact failure and then sat above the number
+# measured under it. CI, checking out with `submodules: true`, measured 55 and
+# went red on the first run.
+#
+# The gate no longer permits that measurement: a citation into a submodule that
+# is not checked out STOPS the run and names the init command, because absence
+# of the file is first evidence the SUBJECT is absent (rule 47), not that the
+# claim rotted. Counting such a path either way would make this number mean
+# "of what this checkout could see" and let it disagree with CI by environment
+# rather than by fact.
+dead-citations: 55
+
+# ── declares ──────────────────────────────────────────────────────────────────
+# Documents that have opted a leg in cannot quietly opt back out: dropping a
+# declaration listed here fails the gate. Deleting the document is fine — the
+# check is against un-declaring while the document still exists.
+#
+# Entries are the FULL declaration, `kind:argument`, not the kind. An earlier
+# revision recorded bare kinds, which meant the audit below — holding both
+# `series DRS-W` and `series R` — could drop either one and still satisfy the
+# record: the registry was protecting a kind while the subject it was minted
+# for walked away.
+#
+# The registry is also COMPLETE, and the gate fails a declaration that is not
+# recorded here. Leaving additions unregistered would put a hole in the
+# protection the width of every leg added since this file was written, since
+# an unregistered declaration can be removed later with nothing to notice. So
+# adding a leg costs one line here — the same deliberate act as everything
+# else in this file, and the gate prints the exact line to paste.
+declares: docs/LMDB_WRITE_ATOMICITY_AUDIT.md citations,counts,numbered,range:DRS-W,sections,series:DRS-W,series:R
