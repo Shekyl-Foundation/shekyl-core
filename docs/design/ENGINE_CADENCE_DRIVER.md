@@ -1,11 +1,15 @@
 # Engine cadence driver
 
-**Status: OPEN — design of record (2026-09-07); implementation PR pending.**
+**Status: LIVING CONTRACT — implemented 2026-09-07 (legs 1–3 live;
+leg 4 slot registered, body staged per FOLLOWUPS); last verified
+2026-09-07.**
 
 Ruling of record: `.cursor/plans/wallet_rewrite_audit_cbf7c720.plan.md`
-§"Engine cadence driver" (2026-09-07). This document is the
-specification the implementation PR builds against (rule 05:
-specification first). Index row: `IMPLEMENTATION_INDEX.md` §5.
+§"Engine cadence driver" (2026-09-07). This document is the contract of
+record for the driver's leg semantics (rule 05: specification first) —
+code comments cite its §3/§4 by section. Index row:
+`IMPLEMENTATION_INDEX.md` §5. Implementation:
+`rust/shekyl-engine-core/src/engine/cadence.rs`.
 
 ---
 
@@ -469,6 +473,13 @@ are out of scope here; a FOLLOWUPS row already tracks promoting them.
 - Live-daemon rows land in the phase6-ci workstream, not here.
 
 ## 8. Implementation checklist (one PR, ordered commits)
+
+All seven commits landed 2026-09-07. One spec amendment surfaced during
+commit 6 and was folded back into §4: the value hold is all-or-nothing,
+so the `value_deferred` *field* named in item 6 below (a sibling of
+`size_deferred` on a successful assembly) would always have been empty;
+the landed shape is the typed refusal `EmissionClaimError::ValueDeferred`.
+Item 6's text is retained as written for the record.
 
 1. `shekyl-operator-alarm`: chain-progress + epoch-claim conditions
    (§5's named surface).

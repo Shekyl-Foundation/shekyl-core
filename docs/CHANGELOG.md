@@ -4,6 +4,25 @@
 
 ### Added
 
+- **Staking rewards now claim automatically.** The engine runs a cadence
+  driver (`ENGINE_CADENCE_DRIVER.md`) that submits the emission-claim
+  transaction once each reward epoch settles — no manual step, and the
+  `claim`/`claim_rewards` RPC methods remain REJECTED in the wallet-RPC
+  contract. Rewards below the compiled-in fee floor
+  (`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`) are held and aggregated
+  until they cover the fee; anything still unclaimed at its claim-window
+  floor is evaluated once and forfeited loudly (operator alarm). A
+  background claim never contends with a user-initiated send: the claim
+  leg yields whenever user work holds the pending lock.
+- **Stuck-transaction watchdog and serving liveness run unattended.**
+  The same cadence driver fires the submit-lifecycle escape ladder on
+  chain progress (a pending transaction can no longer stall forever just
+  because no RPC poll arrived), re-arms hidden-service serving whenever
+  the obligation exists and the task is not live (covers both
+  failed-at-open and died-later), and raises a `ChainProgress` operator
+  alarm when the observed tip stops advancing — worded to cover both
+  "chain stalled" and "your daemon is unreachable."
+
 - **Wallet RPC liveness gate (`ci/wallet-rpc-liveness`).** Sibling of the
   daemon's `ci/rpc-route-liveness`: `wallet_rpc.yaml`'s
   `x-shekyl-method-registry` is now CI-enforced in both directions —

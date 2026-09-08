@@ -517,8 +517,11 @@ timing and funding footguns that matter for your privacy.
   reward budget is divided among stakers in proportion to *capped* verified
   serve-work, so a larger position does not buy a proportionally larger share.
 - **Rewards arrive automatically.** They are paid through the loud
-  reward-emission leg (public amounts) and received to a firewalled pseudonym
-  — there is no manual "claim" step and no separate claim transaction.
+  reward-emission leg (public amounts) and received to a firewalled pseudonym.
+  There is no manual "claim" step: the open wallet submits the claim
+  transaction itself once each reward epoch settles. Very small rewards are
+  held until enough accumulate to be worth the network fee, and a wallet that
+  was closed for a while claims its backlog shortly after you reopen it.
 - **Principal stays liquid.** You can release collateral by unbonding, subject
   to a release cooldown. There is no fixed lock height to wait out.
 
