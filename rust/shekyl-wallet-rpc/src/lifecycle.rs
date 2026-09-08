@@ -481,6 +481,11 @@ async fn take_and_close_tenant(
     };
     let engine = lock.into_inner();
     if let Err(e) = tokio::task::block_in_place(|| engine.persist_for_close()) {
+        // A raw wrap rather than `into_shared`: `restart_tasks` below arms
+        // the cadence driver (via `Engine::start_cadence`) for both restore
+        // call sites uniformly, so wrapping through `into_shared` here would
+        // spawn a second driver. The open-wallet ⇒ driver-running property
+        // still holds — `restart_tasks` is unconditional on this path.
         let shared: SharedEngine = Arc::new(RwLock::new(engine));
         let tasks = restart_tasks(&shared, &daemon_address).await;
         tenants.lock().await.tenant.set_open(name, shared, tasks);
@@ -632,12 +637,15 @@ pub(crate) async fn make_daemon(daemon: &DaemonEndpoint) -> Result<DaemonClient,
     Ok(DaemonClient::new(rpc))
 }
 
-/// Wrap a freshly opened / created engine in its shared arc and, for a staker,
-/// spawn the driving P-scan and serving tasks — the **sole production call
-/// site** for [`StakeFacade::start_pscan_if_staker`] and
+/// Wrap a freshly opened / created engine in its shared arc — via
+/// [`Engine::into_shared`], which spawns the cadence driver as a structural
+/// consequence of the wrap (`ENGINE_CADENCE_DRIVER.md` §1) — and, for a
+/// staker, spawn the driving P-scan and serving tasks: the **sole production
+/// call site** for [`StakeFacade::start_pscan_if_staker`] and
 /// [`StakeFacade::start_serving_if_staker`]. Returns the arc plus the embedder-held
-/// [`OpenTasks`] (`None`/`None` for a non-staker), which the tenant parks for
-/// the wallet's open lifetime and [`close_wallet`] shuts down (serving first).
+/// [`OpenTasks`] (P-scan/serving `None` for a non-staker; cadence always
+/// `Some`), which the tenant parks for the wallet's open lifetime and
+/// [`close_wallet`] shuts down (serving first).
 ///
 /// A staker whose sealed P-scan state cannot load, or whose serving path
 /// cannot be configured, fails **closed** here: a staker must not open into
@@ -647,7 +655,7 @@ async fn wrap_and_start_tasks(
     engine: Engine<SoloSigner>,
     daemon_address: &str,
 ) -> Result<(SharedEngine, OpenTasks), WalletRpcError> {
-    let shared: SharedEngine = Arc::new(RwLock::new(engine));
+    let (shared, cadence) = engine.into_shared();
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -660,6 +668,10 @@ async fn wrap_and_start_tasks(
                 "a staker's sealed P-scan state failed to load; aborting the open \
                  (fail-closed — a staker must not open with its firewall scan dark)"
             );
+            // The cadence driver was spawned by the wrap above; an aborted
+            // open must take it down *and await it*, for the same reason the
+            // serving-abort path below awaits the P-scan.
+            cadence.shutdown().await;
             return Err(e.into());
         }
     };
@@ -683,6 +695,7 @@ async fn wrap_and_start_tasks(
             OpenTasks {
                 pscan,
                 serving: None,
+                cadence: Some(cadence),
             }
             .shutdown()
             .await;
@@ -694,7 +707,14 @@ async fn wrap_and_start_tasks(
             return Err(e.into());
         }
     };
-    Ok((shared, OpenTasks { pscan, serving }))
+    Ok((
+        shared,
+        OpenTasks {
+            pscan,
+            serving,
+            cadence: Some(cadence),
+        },
+    ))
 }
 
 /// Params for `stake` (the wallet-level first-stake entry,
@@ -1085,7 +1105,7 @@ async fn reopen_with_first_stake_intent(
     // wallet stays open with the actor resident and NO parked scan — the
     // exact state the `stake` entry's `has_pscan` check routes back through
     // this reopen, so a retry re-attempts the scan instead of spinning dark.
-    let shared: SharedEngine = Arc::new(RwLock::new(engine));
+    let (shared, cadence) = engine.into_shared();
     match Engine::start_pscan(shared.clone()).await {
         Ok(handle) => {
             // The scan is the fail-closed one on this path (above); serving is
@@ -1108,6 +1128,7 @@ async fn reopen_with_first_stake_intent(
                 OpenTasks {
                     pscan: Some(handle),
                     serving,
+                    cadence: Some(cadence),
                 },
             );
             Ok(shared)
@@ -1118,11 +1139,17 @@ async fn reopen_with_first_stake_intent(
                 "first-stake intent reopen: on-demand P-scan failed to start; the next \
                  stake retry will reopen and re-attempt it"
             );
-            tenants
-                .lock()
-                .await
-                .tenant
-                .set_open(name, shared, OpenTasks::default());
+            // The cadence driver stays armed even though the scan did not
+            // start: its submit-lifecycle leg is not staker-gated, and the
+            // `stake` retry path re-attempts the scan without re-wrapping.
+            tenants.lock().await.tenant.set_open(
+                name,
+                shared,
+                OpenTasks {
+                    cadence: Some(cadence),
+                    ..OpenTasks::default()
+                },
+            );
             Err(WalletRpcError::InternalError(format!(
                 "stake: persona scan failed to start ({e}); wallet remains open — retry"
             )))
@@ -1130,15 +1157,21 @@ async fn reopen_with_first_stake_intent(
     }
 }
 
-/// Re-arm the P-scan task on a restore path (a close that could not complete
-/// leaves the wallet open). Unlike [`wrap_and_start_pscan`], a start failure
-/// here degrades to `None` rather than propagating: the restore must not itself
-/// fail and re-strand the engine, and the primary error the caller returns is
-/// the close failure, not this. The failure is logged (never silent), and the
-/// dark-scan window lasts only until the next successful close / reopen (the
-/// `stake` entry also self-heals it: a resident actor with no parked scan
-/// takes the intent reopen, which re-arms the scan).
+/// Re-arm the open-wallet tasks on a restore path (a close that could not
+/// complete leaves the wallet open). Unlike [`wrap_and_start_tasks`], a start
+/// failure here degrades to `None` rather than propagating: the restore must
+/// not itself fail and re-strand the engine, and the primary error the caller
+/// returns is the close failure, not this. The failure is logged (never
+/// silent), and the dark-scan window lasts only until the next successful
+/// close / reopen (the `stake` entry also self-heals it: a resident actor
+/// with no parked scan takes the intent reopen, which re-arms the scan).
+///
+/// The cadence driver re-arms here too — via [`Engine::start_cadence`], the
+/// already-shared form of the wrap (`ENGINE_CADENCE_DRIVER.md` §1) — and
+/// that one is infallible: the driver polls its way to health rather than
+/// failing to start.
 async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks {
+    let cadence = Some(Engine::start_cadence(shared));
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -1168,7 +1201,11 @@ async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks
             None
         }
     };
-    OpenTasks { pscan, serving }
+    OpenTasks {
+        pscan,
+        serving,
+        cadence,
+    }
 }
 
 #[cfg(test)]

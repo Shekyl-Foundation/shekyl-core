@@ -215,9 +215,6 @@ pub(crate) mod bond_watch;
 /// (submit lifecycle, serving liveness, per-epoch claim, terminal-reject
 /// prune/resubmit). Chain-progress tick base + wall-clock watchdog;
 /// `Weak` upgrade per tick so close is never blocked.
-// Production caller is `Engine::into_shared` — the next commit of this PR
-// (ENGINE_CADENCE_DRIVER.md §8 commit 3); the allow comes off with it.
-#[allow(dead_code)]
 pub(crate) mod cadence;
 /// PR-4's CB-3 dispatch seam (`EMISSION_CLAIM_BUILDER.md` §8): the Engine-side
 /// emission-claim **request path** — activate the claimant slot, assemble via

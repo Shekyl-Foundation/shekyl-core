@@ -25,7 +25,9 @@
 //! Multi-tenant `--wallet-dir` exchanges extend this seam later
 //! (`WALLET_REWRITE_PLAN.md`).
 
-use shekyl_engine_core::{Engine, PScanHandle, ServingHandle, ServingPosture, SoloSigner};
+use shekyl_engine_core::{
+    CadenceHandle, Engine, PScanHandle, ServingHandle, ServingPosture, SoloSigner,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -44,7 +46,10 @@ pub type SharedEngine = Arc<RwLock<Engine<SoloSigner>>>;
 /// than another parameter on `set_open` / `take_open` / `restore_open` and
 /// every call site of each.
 ///
-/// Both are `None` for a non-staker.
+/// The P-scan and serving handles are `None` for a non-staker; the cadence
+/// driver runs for **every** wallet (its submit-lifecycle leg is not
+/// staker-gated), so `cadence` is `Some` on every production open — it is
+/// `Option` only so `Default` stays derivable for the empty-slot states.
 #[derive(Default)]
 pub struct OpenTasks {
     /// The driving P-scan task (WI-1).
@@ -53,23 +58,33 @@ pub struct OpenTasks {
     /// serve-set refresh cadence, and the ordered teardown that stops tor
     /// before its listener.
     pub serving: Option<ServingHandle>,
+    /// The engine cadence driver (`ENGINE_CADENCE_DRIVER.md`): chain-progress
+    /// tick over the maintenance legs. Parked by `wrap_and_start_tasks` via
+    /// [`Engine::into_shared`].
+    pub cadence: Option<CadenceHandle>,
 }
 
 impl OpenTasks {
-    /// Wind both tasks down, awaiting each.
+    /// Wind the tasks down, awaiting each.
     ///
     /// **Serving first.** Stopping the advertisement before stopping the scan
     /// is the right order for the same reason the host stops tor before its
     /// listener: a published descriptor must never outlive the ability to
     /// answer at it. The P-scan then winds down and releases its clone of the
     /// engine arc, which is what makes the close path's `Arc::try_unwrap`
-    /// possible.
+    /// possible. The cadence driver goes last (`ENGINE_CADENCE_DRIVER.md` §1
+    /// shutdown order): it holds only a `Weak`, so it never blocks the
+    /// unwrap, but awaiting its exit here makes the teardown deterministic
+    /// rather than next-poll.
     pub async fn shutdown(self) {
         if let Some(serving) = self.serving {
             serving.shutdown().await;
         }
         if let Some(pscan) = self.pscan {
             pscan.shutdown().await;
+        }
+        if let Some(cadence) = self.cadence {
+            cadence.shutdown().await;
         }
     }
 }

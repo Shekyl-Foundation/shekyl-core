@@ -45,10 +45,16 @@ use std::time::Duration;
 
 use shekyl_operator_alarm::cadence::{apply_chain_progress, ChainProgressObservation};
 use shekyl_operator_alarm::{AlarmCondition, OperatorAlarms};
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::pscan::cadence::{FixedRateSchedule, ScanSchedule};
+use super::signer::EngineSignerKind;
+use super::traits::{
+    DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
+};
+use super::Engine;
 
 /// Wall-clock interval between tip polls (rule 75: rationale + bounds).
 ///
@@ -259,6 +265,92 @@ pub(crate) fn production_legs() -> Vec<Box<dyn CadenceLeg>> {
 /// Convenience for production spawns: the default fixed-rate poll.
 pub(crate) fn production_schedule() -> FixedRateSchedule {
     FixedRateSchedule::new(DEFAULT_CADENCE_POLL)
+}
+
+// `private_bounds`: the engine traits are deliberately `pub(crate)` behind the
+// `pub` `Engine` (see the `#[allow(private_bounds)]` on the struct itself); every
+// engine impl that restates them carries the same allow.
+#[allow(private_bounds)]
+impl<S, D, L, E, R, P, F> Engine<S, D, L, E, R, P, F>
+where
+    S: EngineSignerKind,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    F: PersistenceEngine,
+    Self: Send + Sync + 'static,
+{
+    /// Wrap an opened engine in its shared arc **and start the cadence
+    /// driver** — the canonical wrap point (`ENGINE_CADENCE_DRIVER.md` §1
+    /// "The structural start guarantee"). Replaces the bare
+    /// `Arc::new(RwLock::new(engine))` in embedders so a wallet cannot be
+    /// shared without its maintenance legs scheduled: a missing driver was
+    /// the failure mode that left `run_submit_lifecycle_tick` with zero
+    /// callers for a month.
+    ///
+    /// The driver task holds only a `Weak` to the returned arc (upgrade per
+    /// poll; failed upgrade exits), so close is never blocked by it — but
+    /// the embedder should still [`CadenceHandle::shutdown`] before
+    /// `Arc::try_unwrap` so the exit is deterministic rather than
+    /// next-poll.
+    ///
+    /// # Panics
+    ///
+    /// Requires an ambient tokio runtime, because it spawns the driver task.
+    /// This is not a new constraint — constructing an `Engine` already
+    /// spawns the key-engine actor — but it is asserted here **by name** so
+    /// a non-runtime embedder fails with the named requirement instead of a
+    /// bare `tokio::spawn` panic (§1 "Runtime context").
+    pub fn into_shared(self) -> (Arc<RwLock<Self>>, CadenceHandle) {
+        drop(tokio::runtime::Handle::try_current().expect(
+            "Engine::into_shared spawns the cadence driver task and must be \
+             called from within a tokio runtime (ENGINE_CADENCE_DRIVER.md §1)",
+        ));
+        let shared = Arc::new(RwLock::new(self));
+        let handle = Self::start_cadence(&shared);
+        (shared, handle)
+    }
+
+    /// Start the cadence driver against an **already-shared** engine — the
+    /// restore-path re-arm (wallet-rpc's `restart_tasks` shape: a close that
+    /// could not complete leaves the wallet open and must re-arm the tasks
+    /// it shut down). New code wraps via [`into_shared`](Self::into_shared);
+    /// this exists because the restore path structurally cannot (the engine
+    /// is already inside its arc). Infallible: the driver polls its way to
+    /// health rather than failing to start.
+    ///
+    /// # Panics
+    ///
+    /// Same runtime requirement as [`into_shared`](Self::into_shared).
+    pub fn start_cadence(self_arc: &Arc<RwLock<Self>>) -> CadenceHandle {
+        let weak = Arc::downgrade(self_arc);
+        let poll = move || {
+            let weak = weak.clone();
+            async move {
+                let Some(engine) = weak.upgrade() else {
+                    return TipPoll::EngineGone;
+                };
+                // Clone the daemon under a brief read guard, then drop both
+                // the guard and the strong arc before the round-trip: the
+                // poll must never hold the engine (lock or liveness) across
+                // a daemon await (§2 merge write-lock constraint).
+                let daemon = engine.read().await.daemon.clone();
+                drop(engine);
+                match daemon.get_health().await {
+                    Ok(health) => TipPoll::Height(health.height),
+                    Err(_) => TipPoll::Unavailable,
+                }
+            }
+        };
+        spawn_cadence_loop(
+            production_schedule(),
+            poll,
+            production_legs(),
+            CHAIN_STALL_HORIZON,
+        )
+    }
 }
 
 /// The driver loop. Exits on cancellation or [`TipPoll::EngineGone`];
