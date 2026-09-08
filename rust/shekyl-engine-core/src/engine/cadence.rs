@@ -364,6 +364,349 @@ impl CadenceLeg for TerminalRejectSlot {
     }
 }
 
+/// Consecutive claim-leg faults before [`AlarmCondition::EpochClaim`]
+/// raises (rule 75: rationale + bounds).
+///
+/// **Rationale.** One fault is routine (a daemon restart, a transient
+/// transport refusal); the leg retries on the next chain advance for free.
+/// Three consecutive faults span ≥ 3 observed block advances — minutes of
+/// wall time over distinct daemon round-trips — at which point the refusal
+/// is a condition, not a blip.
+///
+/// **Bounds.** [2, 10]: 1 alarm-fatigues on transients; past ~10 the
+/// operator has been blind to a real refusal for the better part of an
+/// hour.
+const CLAIM_FAULT_ALARM_THRESHOLD: u32 = 3;
+
+/// Byte allowance for the single claim vin row, added to
+/// [`EMISSION_NON_CLAIMS_RESERVE_BYTES`] when pricing the claim envelope —
+/// the regtest-e2e fee model (live run 4: the bond's 32 KiB ceiling
+/// underprices a claim, which carries two input proofs; overpaying is a
+/// miner transfer, never a conservation term).
+///
+/// [`EMISSION_NON_CLAIMS_RESERVE_BYTES`]: super::emission_claim::EMISSION_NON_CLAIMS_RESERVE_BYTES
+const CLAIM_VIN_ALLOWANCE_BYTES: usize = 2048;
+
+/// Request timeout for the claim leg's loopback claim-source transport.
+const CLAIM_RPC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Leg 3's cross-tick state, shared between fires through an `Arc<Mutex>`
+/// (a fire's future is `'static`, so it cannot borrow the leg).
+/// Session-scoped, deliberately: everything durable about a claim lives in
+/// the sealed [`PendingEmissionClaim`] record and the chain itself; this is
+/// only the leg's memory of what it deferred and what it already looked at.
+///
+/// [`PendingEmissionClaim`]: shekyl_engine_state::pending_post_block::PendingEmissionClaim
+#[derive(Default)]
+struct ClaimLegState {
+    /// The settled epoch as of the last **completed** evaluation (claimed,
+    /// idle, or value-deferred). `None` until the first one — which is why
+    /// a wallet closed for months evaluates its whole backlog on the first
+    /// post-open tick (§4: expected; for a serving persona, liveness is
+    /// already public). Not advanced by yields, faults, or a pending claim,
+    /// so those retry on the next chain advance instead of waiting a close.
+    evaluated_at_epoch: Option<u64>,
+    /// The last `ValueDeferred` set, `(epoch, reward)` — kept because the
+    /// reward is recomputed inside derivation and is no longer derivable
+    /// once the window expires the epoch; pricing a forfeit honestly needs
+    /// it (§4 evaluate-and-forfeit).
+    held: Vec<(u64, u64)>,
+    /// Consecutive faulted fires; reset by any completed evaluation.
+    consecutive_faults: u32,
+    /// Session-running forfeited total ([`record_forfeit`]'s contract: the
+    /// standing alarm shows the full amount lost this session).
+    forfeited_total: u64,
+}
+
+/// How one claim attempt resolved, classified from the dispatch seam's
+/// error taxonomy into what the leg's state machine actually branches on.
+enum ClaimOutcome {
+    /// Policy hold (§4): the set is underwater; carry it.
+    Deferred(Vec<(u64, u64)>),
+    /// Nothing claimable — the idle state, not a fault.
+    Idle,
+    /// Not this tick, and not a fault: a live claim is already in flight
+    /// (`ClaimPending`), or user work won an input race (`InputRaced` —
+    /// the §3 asymmetry: user work always wins, the leg yields and the
+    /// next tick selects against a fresh snapshot).
+    Yield,
+    /// A real refusal (transport, state read, assembly, dispatch).
+    Fault,
+}
+
+/// Leg 3 (`ENGINE_CADENCE_DRIVER.md` §3 leg 3, §4): the per-epoch emission
+/// claim. Un-GF-4: the "scheduling stays external (the GF-4 seam)"
+/// comments deferred to a grading scheduler that was never built; this leg
+/// is the scheduler, and the schedule is **uniform** — every staker wallet
+/// evaluates at every settlement close (plus its own poll phase), no
+/// per-wallet jitter, no grading. The *inclusion decision* is
+/// value-conditional (the §4 concession): Σreward across held epochs must
+/// clear [`EMISSION_CLAIM_FEE_FLOOR`] or the whole set holds
+/// ([`EmissionClaimError::ValueDeferred`]), re-evaluated at every close,
+/// **evaluate-and-forfeit** at the window floor — never force a claim whose
+/// fee exceeds its reward.
+///
+/// Fire shape, in order:
+///
+/// 1. **Once per close:** no-op unless the settled epoch advanced past the
+///    last completed evaluation (or a prior fire faulted/yielded — those
+///    retry every advance).
+/// 2. **Staker + active persona:** a non-staker produces no claim
+///    observations at all (the board reads "not watched", honestly); an
+///    idle staker has no claimant to sign as.
+/// 3. **User work always wins (§3):** a `try_lock` probe of the engine's
+///    pending write lock; held means a user build/submit is mid-mutation,
+///    and the leg yields the tick outright. The probe is advisory — the
+///    lock is released before assembly — so the seal-time generation gate
+///    remains the authoritative backstop, and `InputRaced` on the leg side
+///    is a normal outcome, never a fault.
+/// 4. **Fee + transport:** the daemon's live economy estimate over the
+///    claim envelope ([`CLAIM_VIN_ALLOWANCE_BYTES`]); the claim-source
+///    fetch rides a fresh loopback [`LocalNodeRpc`] over the driver's
+///    daemon address (a non-loopback daemon is a named, alarmable refusal:
+///    claims currently require a loopback daemon).
+/// 5. **Dispatch** through [`Engine::submit_emission_claim`] — the CB-3
+///    seam, persist-before-dispatch and the audited submitter choke point
+///    included.
+///
+/// [`EMISSION_CLAIM_FEE_FLOOR`]: shekyl_economics::EMISSION_CLAIM_FEE_FLOOR
+/// [`EmissionClaimError::ValueDeferred`]: super::emission_claim::EmissionClaimError::ValueDeferred
+/// [`LocalNodeRpc`]: super::prpc::LocalNodeRpc
+struct EpochClaimLeg<S, D, L, E, R, P>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+{
+    engine: WeakEngine<S, D, L, E, R, P, WalletFile>,
+    /// The loopback daemon endpoint the claim-source fetch rides — the
+    /// same embedder-supplied address leg 2 serves over.
+    daemon_address: String,
+    /// The driver's shared board ([`CadenceHandle::alarms`]).
+    alarms: Arc<OperatorAlarms>,
+    state: Arc<std::sync::Mutex<ClaimLegState>>,
+}
+
+/// Map the dispatch seam's refusal taxonomy onto the leg's branches.
+fn classify_claim(error: &super::claim_dispatch::EmissionClaimRequestError) -> ClaimOutcome {
+    use super::claim_dispatch::EmissionClaimRequestError as E;
+    use super::claim_orchestrator::ClaimOrchestrationError as O;
+    use super::emission_claim::EmissionClaimError as C;
+    use super::stake_engine::StakeEngineError as SE;
+    match error {
+        E::ClaimPending | E::InputRaced => ClaimOutcome::Yield,
+        E::Claim(O::Stake(SE::EmissionClaim(C::NoClaimableEpochs))) => ClaimOutcome::Idle,
+        E::Claim(O::Stake(SE::EmissionClaim(C::ValueDeferred { value_deferred, .. }))) => {
+            ClaimOutcome::Deferred(value_deferred.clone())
+        }
+        _ => ClaimOutcome::Fault,
+    }
+}
+
+/// One completed evaluation (claimed / deferred / idle): sweep the
+/// previously-held set for forfeits, replace it, advance the epoch
+/// cursor, clear the fault streak, and read healthy on the board.
+///
+/// **Forfeit rule (§4):** a previously-held epoch that is in neither
+/// the newly-claimed nor the newly-deferred set *and* has passed the
+/// claim-window floor was let expire underwater — record it at its held
+/// reward. (Missing but unexpired epochs just fell out of this
+/// evaluation — a re-derivation picks them up next close; nothing to
+/// record.)
+fn claim_complete(
+    state: &std::sync::Mutex<ClaimLegState>,
+    alarms: &OperatorAlarms,
+    settled: u64,
+    claimed: &[u64],
+    new_held: Vec<(u64, u64)>,
+) {
+    let mut s = state.lock().expect("claim leg state lock");
+    let previously_held = std::mem::take(&mut s.held);
+    for (epoch, reward) in previously_held {
+        let still_present = claimed.contains(&epoch) || new_held.iter().any(|(e, _)| *e == epoch);
+        if !still_present && shekyl_archival_retention::epoch_is_claim_expired(epoch, settled) {
+            s.forfeited_total += reward;
+            shekyl_operator_alarm::cadence::record_forfeit(alarms, epoch, s.forfeited_total);
+            tracing::warn!(
+                epoch,
+                forfeited_atomic = reward,
+                session_total = s.forfeited_total,
+                "emission claim forfeited: epoch reached the window floor \
+                 still below the fee floor and was let expire (§4 \
+                 evaluate-and-forfeit)"
+            );
+        }
+    }
+    s.held = new_held;
+    s.evaluated_at_epoch = Some(settled);
+    s.consecutive_faults = 0;
+    shekyl_operator_alarm::cadence::apply_claim(
+        alarms,
+        shekyl_operator_alarm::cadence::ClaimObservation::Current,
+    );
+}
+
+/// One faulted fire: count it, and past the threshold raise the
+/// backlog alarm. The oldest/outstanding figures derive from the last
+/// completed evaluation — a heuristic that may **under**state the
+/// backlog when the leg never completed one (it claims one outstanding
+/// epoch, not the true count it cannot know without the derivation
+/// that is itself faulting) — honest, never overstated.
+fn claim_fault(
+    state: &std::sync::Mutex<ClaimLegState>,
+    alarms: &OperatorAlarms,
+    settled: u64,
+    detail: &dyn std::fmt::Display,
+) {
+    let mut s = state.lock().expect("claim leg state lock");
+    s.consecutive_faults += 1;
+    tracing::warn!(
+        error = %detail,
+        consecutive = s.consecutive_faults,
+        "epoch-claim leg: attempt faulted; retrying on the next chain advance"
+    );
+    if s.consecutive_faults >= CLAIM_FAULT_ALARM_THRESHOLD {
+        let oldest_epoch = s.evaluated_at_epoch.map_or(settled, |e| e + 1);
+        let outstanding_epochs = settled.saturating_sub(oldest_epoch).max(1);
+        shekyl_operator_alarm::cadence::apply_claim(
+            alarms,
+            shekyl_operator_alarm::cadence::ClaimObservation::Behind {
+                oldest_epoch,
+                outstanding_epochs,
+            },
+        );
+    }
+}
+
+impl<S, D, L, E, R, P> CadenceLeg for EpochClaimLeg<S, D, L, E, R, P>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync + 'static,
+{
+    fn name(&self) -> &'static str {
+        "epoch-claim"
+    }
+
+    fn park_condition(&self) -> Option<AlarmCondition> {
+        Some(AlarmCondition::EpochClaim)
+    }
+
+    fn fire(&mut self, tip: u64) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        let weak = Weak::clone(&self.engine);
+        let address = self.daemon_address.clone();
+        let alarms = Arc::clone(&self.alarms);
+        let state = Arc::clone(&self.state);
+        Box::pin(async move {
+            let settled = shekyl_archival_retention::settlement_epoch_at_height(tip);
+            {
+                let s = state.lock().expect("claim leg state lock");
+                // Once per close — unless the last fire faulted or yielded,
+                // which retry on every advance rather than waiting a close.
+                if s.consecutive_faults == 0 && s.evaluated_at_epoch == Some(settled) {
+                    return;
+                }
+            }
+            let Some(engine) = weak.upgrade() else {
+                return;
+            };
+            let (stake, daemon, pending_write_lock) = {
+                let g = engine.read().await;
+                let Some(stake) = g.stake_handle() else {
+                    // Not a staker: no claim obligation, and deliberately no
+                    // claim observation either — the board carries no
+                    // EpochClaim row at all ("not watched", the honest
+                    // rendering).
+                    return;
+                };
+                (stake, g.daemon().clone(), g.pending_write_lock.clone())
+            };
+            let p_slot = match stake.active_persona().await {
+                Ok(Some(identity)) => identity.p_slot,
+                // An idle staker has no claimant to sign as this tick.
+                Ok(None) => return,
+                Err(e) => return claim_fault(&state, &alarms, settled, &e),
+            };
+
+            // §3: user work always wins. A held pending write lock means a
+            // user build/submit is mid-mutation; yield the whole tick. The
+            // probe guard drops immediately (advisory only — blocking user
+            // work with it would invert the asymmetry it implements).
+            if pending_write_lock.try_lock().is_err() {
+                return;
+            }
+
+            let fee = match daemon.get_fee_estimates().await {
+                Ok(estimates) => estimates.economy.calculate_fee_from_weight(
+                    super::emission_claim::EMISSION_NON_CLAIMS_RESERVE_BYTES
+                        + CLAIM_VIN_ALLOWANCE_BYTES,
+                ),
+                Err(e) => return claim_fault(&state, &alarms, settled, &e.into()),
+            };
+            let claim_rpc = match super::prpc::LocalNodeRpc::new(address, CLAIM_RPC_TIMEOUT).await {
+                Ok(rpc) => rpc,
+                Err(e) => {
+                    // Named requirement (rule 82): the claim-source fetch is
+                    // persona-isolated and currently loopback-only.
+                    tracing::warn!(
+                        error = %e,
+                        "epoch-claim leg: emission claims require a loopback \
+                         daemon address; claims are on hold until one is \
+                         configured"
+                    );
+                    return claim_fault(&state, &alarms, settled, &e);
+                }
+            };
+
+            match Engine::submit_emission_claim(
+                engine,
+                &claim_rpc,
+                p_slot,
+                shekyl_units::AtomicUnits::from_raw(fee),
+                &super::bond_assembly::SpentRecordsDurablyPruned::arm1_watch_pruning_live(),
+            )
+            .await
+            {
+                Ok(receipt) => {
+                    tracing::info!(
+                        claimed = ?receipt.claim.claimed_epochs,
+                        total_reward = receipt.claim.total_reward,
+                        verdict = ?receipt.submit,
+                        "emission claim dispatched"
+                    );
+                    claim_complete(
+                        &state,
+                        &alarms,
+                        settled,
+                        &receipt.claim.claimed_epochs,
+                        Vec::new(),
+                    );
+                }
+                Err(e) => match classify_claim(&e) {
+                    ClaimOutcome::Idle => claim_complete(&state, &alarms, settled, &[], Vec::new()),
+                    ClaimOutcome::Deferred(held) => {
+                        tracing::debug!(
+                            held = ?held,
+                            "emission claim value-deferred: holding until the \
+                             accumulated set clears the fee floor (§4)"
+                        );
+                        claim_complete(&state, &alarms, settled, &[], held);
+                    }
+                    ClaimOutcome::Yield => {}
+                    ClaimOutcome::Fault => claim_fault(&state, &alarms, settled, &e),
+                },
+            }
+        })
+    }
+}
+
 /// The embedder-held driver handle: cancel-on-drop token + join handle
 /// (the [`PScanHandle`] shape), parked beside the pscan/serving handles
 /// for the open lifetime.
@@ -465,10 +808,14 @@ struct LegSlot {
 /// production); the loop itself is engine-generic-free so its behavior —
 /// fire-on-advance, watchdog, ordering, isolation — is testable with
 /// scripted polls.
+/// `alarms` is caller-created (production: [`Engine::start_cadence`])
+/// because the claim leg raises through the same board the loop's watchdog
+/// and the handle's accessor share.
 pub(crate) fn spawn_cadence_loop<Sched, TipFn, TipFut>(
     schedule: Sched,
     poll_tip: TipFn,
     legs: Vec<Box<dyn CadenceLeg>>,
+    alarms: Arc<OperatorAlarms>,
     stall_horizon: Duration,
     serving: ServingSlot,
 ) -> CadenceHandle
@@ -477,7 +824,6 @@ where
     TipFn: FnMut() -> TipFut + Send + 'static,
     TipFut: Future<Output = TipPoll> + Send + 'static,
 {
-    let alarms = Arc::new(OperatorAlarms::new());
     let cancel_token = CancellationToken::new();
     let join = tokio::spawn(run_cadence_loop(
         schedule,
@@ -499,17 +845,20 @@ where
 /// assemble — leg 1 releases reservations before leg 3 snapshots the
 /// funding set; leg 4's prune is retire-class and precedes leg 3 too).
 ///
-/// Grows with the implementation commits: leg 3 (per-epoch claim)
-/// registers here as it lands, after the leg-4 slot. Today: leg 1 (submit
-/// lifecycle), leg 2 (serving liveness), and the leg-4 slot.
+/// Complete as of commit 6: leg 1 (submit lifecycle), leg 2 (serving
+/// liveness), the leg-4 slot (terminal-reject, body staged), leg 3
+/// (per-epoch claim) — registered last so every retire-class leg has
+/// already run when it snapshots the funding set.
 ///
-/// `WalletFile`-specialized because leg 2's construction site
-/// (`start_serving_if_staker`) is; `daemon_address` and the shared
-/// `serving` slot are leg 2's (see [`ServingLivenessLeg`]).
+/// `WalletFile`-specialized because legs 2 and 3's construction sites
+/// (`start_serving_if_staker`, `submit_emission_claim`) are;
+/// `daemon_address` is legs 2 and 3's, the shared `serving` slot is
+/// leg 2's, and `alarms` is leg 3's (the driver-shared board).
 pub(crate) fn production_legs<S, D, L, E, R, P>(
     engine: WeakEngine<S, D, L, E, R, P, WalletFile>,
     daemon_address: &str,
     serving: &ServingSlot,
+    alarms: &Arc<OperatorAlarms>,
 ) -> Vec<Box<dyn CadenceLeg>>
 where
     S: EngineSignerKind + Send + Sync + 'static,
@@ -525,11 +874,17 @@ where
             engine: Weak::clone(&engine),
         }),
         Box::new(ServingLivenessLeg {
-            engine,
+            engine: Weak::clone(&engine),
             daemon_address: daemon_address.to_owned(),
             slot: Arc::clone(serving),
         }),
         Box::new(TerminalRejectSlot),
+        Box::new(EpochClaimLeg {
+            engine,
+            daemon_address: daemon_address.to_owned(),
+            alarms: Arc::clone(alarms),
+            state: Arc::default(),
+        }),
     ]
 }
 
@@ -601,7 +956,8 @@ where
     /// Same runtime requirement as [`into_shared`](Self::into_shared).
     pub fn start_cadence(self_arc: &Arc<RwLock<Self>>, daemon_address: &str) -> CadenceHandle {
         let serving = ServingSlot::default();
-        let legs = production_legs(Arc::downgrade(self_arc), daemon_address, &serving);
+        let alarms = Arc::new(OperatorAlarms::new());
+        let legs = production_legs(Arc::downgrade(self_arc), daemon_address, &serving, &alarms);
         let weak = Arc::downgrade(self_arc);
         let poll = move || {
             let weak = weak.clone();
@@ -625,6 +981,7 @@ where
             production_schedule(),
             poll,
             legs,
+            alarms,
             CHAIN_STALL_HORIZON,
             serving,
         )
@@ -846,6 +1203,7 @@ mod tests {
             EagerSchedule,
             scripted(polls),
             legs,
+            Arc::new(OperatorAlarms::new()),
             stall_horizon,
             ServingSlot::default(),
         )
@@ -883,6 +1241,7 @@ mod tests {
             FixedRateSchedule::new(Duration::from_secs(60)),
             scripted(polls),
             vec![RecordingLeg::recording("leg", &log)],
+            Arc::new(OperatorAlarms::new()),
             Duration::from_secs(120),
             ServingSlot::default(),
         );
@@ -921,6 +1280,7 @@ mod tests {
                 TipPoll::Unavailable,
             ]),
             Vec::new(),
+            Arc::new(OperatorAlarms::new()),
             Duration::from_secs(120),
             ServingSlot::default(),
         );
@@ -1019,16 +1379,20 @@ mod tests {
         // is registration and invocation, not tick effect.
         let dead: Weak<RwLock<Engine<super::super::signer::SoloSigner>>> = Weak::new();
         let log = Arc::new(Mutex::new(Vec::new()));
-        let legs: Vec<Box<dyn CadenceLeg>> =
-            production_legs(dead, "http://127.0.0.1:1", &ServingSlot::default())
-                .into_iter()
-                .map(|inner| {
-                    Box::new(Witness {
-                        inner,
-                        log: Arc::clone(&log),
-                    }) as Box<dyn CadenceLeg>
-                })
-                .collect();
+        let legs: Vec<Box<dyn CadenceLeg>> = production_legs(
+            dead,
+            "http://127.0.0.1:1",
+            &ServingSlot::default(),
+            &Arc::new(OperatorAlarms::new()),
+        )
+        .into_iter()
+        .map(|inner| {
+            Box::new(Witness {
+                inner,
+                log: Arc::clone(&log),
+            }) as Box<dyn CadenceLeg>
+        })
+        .collect();
         let handle = drive(
             vec![TipPoll::Height(1), TipPoll::Height(2)],
             legs,
@@ -1037,7 +1401,12 @@ mod tests {
         let mut handle = handle;
         handle.join.take().expect("join").await.expect("loop exit");
         let fired = log.lock().expect("log").clone();
-        for leg in ["submit-lifecycle", "serving-liveness", "terminal-reject"] {
+        for leg in [
+            "submit-lifecycle",
+            "serving-liveness",
+            "terminal-reject",
+            "epoch-claim",
+        ] {
             assert!(
                 fired.contains(&(leg, 1)) && fired.contains(&(leg, 2)),
                 "{leg} must be registered and invoked on every advance, got {fired:?}"
@@ -1045,11 +1414,12 @@ mod tests {
         }
         // Fire order is the §3 retire-before-assemble registration order.
         assert_eq!(
-            fired[..3],
+            fired[..4],
             [
                 ("submit-lifecycle", 1),
                 ("serving-liveness", 1),
-                ("terminal-reject", 1)
+                ("terminal-reject", 1),
+                ("epoch-claim", 1)
             ],
             "registration order must be preserved per tick"
         );
@@ -1070,6 +1440,7 @@ mod tests {
             EagerSchedule,
             || std::future::ready(TipPoll::Unavailable),
             Vec::new(),
+            Arc::new(OperatorAlarms::new()),
             CHAIN_STALL_HORIZON,
             ServingSlot::default(),
         );
@@ -1084,6 +1455,7 @@ mod tests {
             EagerSchedule,
             || std::future::ready(TipPoll::Unavailable),
             Vec::new(),
+            Arc::new(OperatorAlarms::new()),
             CHAIN_STALL_HORIZON,
             ServingSlot::default(),
         );
@@ -1125,6 +1497,7 @@ mod tests {
             vec![Box::new(TeardownProbe {
                 log: Arc::clone(&log),
             }) as Box<dyn CadenceLeg>],
+            Arc::new(OperatorAlarms::new()),
             CHAIN_STALL_HORIZON,
             ServingSlot::default(),
         );
@@ -1189,7 +1562,8 @@ mod tests {
         let arc = Arc::new(RwLock::new(engine));
 
         let slot = ServingSlot::default();
-        let legs = production_legs(Arc::downgrade(&arc), "http://127.0.0.1:1", &slot);
+        let alarms = Arc::new(OperatorAlarms::new());
+        let legs = production_legs(Arc::downgrade(&arc), "http://127.0.0.1:1", &slot, &alarms);
         let (tick, rx) = tokio::sync::mpsc::unbounded_channel();
         let heights = std::sync::atomic::AtomicU64::new(0);
         let handle = spawn_cadence_loop(
@@ -1199,6 +1573,7 @@ mod tests {
                 std::future::ready(TipPoll::Height(h))
             },
             legs,
+            alarms,
             CHAIN_STALL_HORIZON,
             Arc::clone(&slot),
         );
@@ -1256,6 +1631,247 @@ mod tests {
         assert!(
             !arc.read().await.open_slots.serving.is_claimed(),
             "driver shutdown must wind the serving task down and release its slot"
+        );
+    }
+
+    /// Leg 3's refusal taxonomy (`ENGINE_CADENCE_DRIVER.md` §4): yields,
+    /// idle, and value-deferral are policy outcomes, never faults — and
+    /// everything else is one.
+    #[test]
+    fn claim_classify_maps_the_refusal_taxonomy() {
+        use super::super::claim_dispatch::EmissionClaimRequestError as E;
+        use super::super::claim_orchestrator::ClaimOrchestrationError as O;
+        use super::super::emission_claim::EmissionClaimError as C;
+        use super::super::stake_engine::StakeEngineError as SE;
+
+        assert!(matches!(
+            classify_claim(&E::ClaimPending),
+            ClaimOutcome::Yield
+        ));
+        assert!(matches!(
+            classify_claim(&E::InputRaced),
+            ClaimOutcome::Yield
+        ));
+        assert!(matches!(
+            classify_claim(&E::Claim(O::Stake(SE::EmissionClaim(C::NoClaimableEpochs)))),
+            ClaimOutcome::Idle
+        ));
+        let deferred = E::Claim(O::Stake(SE::EmissionClaim(C::ValueDeferred {
+            value_deferred: vec![(7, 100), (8, 200)],
+            total_reward: 300,
+            fee_floor: 1_000,
+        })));
+        match classify_claim(&deferred) {
+            ClaimOutcome::Deferred(held) => assert_eq!(held, vec![(7, 100), (8, 200)]),
+            _ => panic!("ValueDeferred must classify as Deferred"),
+        }
+        assert!(matches!(classify_claim(&E::NotStaker), ClaimOutcome::Fault));
+    }
+
+    /// §4 evaluate-and-forfeit: a completed evaluation forfeits a
+    /// previously-held epoch only when it is missing from both new sets
+    /// *and* expired — an unexpired missing epoch is next close's problem,
+    /// and a still-held epoch is never a forfeit.
+    #[test]
+    fn claim_complete_forfeits_only_expired_missing_epochs() {
+        let settled = 1_000;
+        let floor = shekyl_archival_retention::claim_window_floor(settled);
+        assert!(floor > 1, "test needs room below the claim window");
+        let expired = floor - 1;
+        let unexpired = settled - 1;
+
+        let alarms = OperatorAlarms::new();
+        let state = std::sync::Mutex::new(ClaimLegState {
+            evaluated_at_epoch: None,
+            held: vec![(expired, 111), (unexpired, 222), (settled - 2, 333)],
+            consecutive_faults: 2,
+            forfeited_total: 0,
+        });
+        // The new evaluation claims one held epoch, re-defers nothing, and
+        // drops the other two: one expired (forfeit), one not (no record).
+        claim_complete(&state, &alarms, settled, &[settled - 2], Vec::new());
+
+        let s = state.lock().expect("state");
+        assert_eq!(s.forfeited_total, 111, "only the expired epoch's reward");
+        assert_eq!(s.evaluated_at_epoch, Some(settled));
+        assert_eq!(s.consecutive_faults, 0, "completion clears the streak");
+        assert!(s.held.is_empty());
+        drop(s);
+
+        let board = alarms.board();
+        match board
+            .condition(AlarmCondition::ClaimForfeiture)
+            .expect("forfeiture condition reported")
+            .live()
+            .map(shekyl_operator_alarm::RaisedAlarm::alarm)
+        {
+            Some(OperatorAlarm::ClaimForfeited {
+                epoch,
+                forfeited_atomic,
+            }) => {
+                assert_eq!(epoch, expired);
+                assert_eq!(forfeited_atomic, 111, "priced at the held reward");
+            }
+            other => panic!("expected a ClaimForfeited alarm, got {other:?}"),
+        }
+        // The claim condition itself reads healthy: forfeiture is its own
+        // latched condition, not a claim-backlog fault.
+        assert!(
+            board
+                .condition(AlarmCondition::EpochClaim)
+                .expect("claim condition reported")
+                .live()
+                .is_none(),
+            "a completed evaluation reads current on the claim board"
+        );
+    }
+
+    /// Fault accounting: the backlog alarm raises only at the threshold,
+    /// and one completed evaluation clears both the streak and the board.
+    #[test]
+    fn claim_fault_threshold_raises_and_complete_clears() {
+        let alarms = OperatorAlarms::new();
+        let state = std::sync::Mutex::new(ClaimLegState::default());
+        let settled = 50;
+
+        let below = CLAIM_FAULT_ALARM_THRESHOLD - 1;
+        for _ in 0..below {
+            claim_fault(&state, &alarms, settled, &"transport refused");
+        }
+        assert!(
+            alarms
+                .board()
+                .condition(AlarmCondition::EpochClaim)
+                .is_none_or(|c| c.live().is_none()),
+            "below the threshold the board stays quiet"
+        );
+
+        claim_fault(&state, &alarms, settled, &"transport refused");
+        match alarms
+            .board()
+            .condition(AlarmCondition::EpochClaim)
+            .expect("condition reported")
+            .live()
+            .map(shekyl_operator_alarm::RaisedAlarm::alarm)
+        {
+            Some(OperatorAlarm::EpochUnclaimed {
+                oldest_epoch,
+                outstanding_epochs,
+            }) => {
+                // No completed evaluation yet: the leg claims one
+                // outstanding epoch — honest, never overstated.
+                assert_eq!(oldest_epoch, settled);
+                assert_eq!(outstanding_epochs, 1);
+            }
+            other => panic!("expected EpochUnclaimed at the threshold, got {other:?}"),
+        }
+
+        claim_complete(&state, &alarms, settled, &[], Vec::new());
+        assert!(
+            alarms
+                .board()
+                .condition(AlarmCondition::EpochClaim)
+                .expect("condition reported")
+                .live()
+                .is_none(),
+            "a completed evaluation clears the backlog alarm"
+        );
+        assert_eq!(
+            state.lock().expect("state").consecutive_faults,
+            0,
+            "and the streak"
+        );
+    }
+
+    /// §3's asymmetry, the mirror of the stale-seal test: while a user
+    /// build/submit holds the pending write lock the leg yields its whole
+    /// tick — no evaluation, no fault, no alarm. Releasing the lock proves
+    /// the yield was the lock's doing: the same fire then proceeds past the
+    /// probe (and faults on this rig's unreachable daemon, which is the
+    /// point — the gate opened).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_leg_yields_while_user_work_holds_the_pending_lock() {
+        let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 13);
+        crate::engine::test_support::activate_persona(&engine, 3).await;
+        let pending_lock = engine.pending_write_lock.clone();
+        let arc = Arc::new(RwLock::new(engine));
+
+        let alarms = Arc::new(OperatorAlarms::new());
+        let state = Arc::new(std::sync::Mutex::new(ClaimLegState::default()));
+        let mut leg = EpochClaimLeg {
+            engine: Arc::downgrade(&arc),
+            daemon_address: "http://127.0.0.1:1".to_owned(),
+            alarms: Arc::clone(&alarms),
+            state: Arc::clone(&state),
+        };
+
+        let tip = 10 * shekyl_archival_retention::effective_settlement_epoch_blocks();
+
+        // User work in flight: the leg must yield without evaluating.
+        let user_guard = pending_lock.lock().await;
+        leg.fire(tip).await;
+        {
+            let s = state.lock().expect("state");
+            assert_eq!(
+                s.evaluated_at_epoch, None,
+                "a yielded tick is not an evaluation"
+            );
+            assert_eq!(s.consecutive_faults, 0, "a yield is never a fault");
+        }
+        drop(user_guard);
+
+        // Lock released: the same fire proceeds past the probe and reaches
+        // the daemon (unreachable here → fault), proving the earlier yield
+        // was the user lock and nothing else.
+        leg.fire(tip).await;
+        assert_eq!(
+            state.lock().expect("state").consecutive_faults,
+            1,
+            "with the lock free the leg proceeds to the daemon round-trip"
+        );
+    }
+
+    /// §4 policy determinism (not timing): given the same settled epoch and
+    /// the same leg state, the inclusion decision is the same — one
+    /// evaluation per settlement close, and a clean cursor never re-fires
+    /// within the epoch. A faulted fire does retry on the next advance.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_leg_evaluates_once_per_settled_epoch() {
+        let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 17);
+        crate::engine::test_support::activate_persona(&engine, 3).await;
+        let arc = Arc::new(RwLock::new(engine));
+
+        let alarms = Arc::new(OperatorAlarms::new());
+        let state = Arc::new(std::sync::Mutex::new(ClaimLegState::default()));
+        let mut leg = EpochClaimLeg {
+            engine: Arc::downgrade(&arc),
+            daemon_address: "http://127.0.0.1:1".to_owned(),
+            alarms: Arc::clone(&alarms),
+            state: Arc::clone(&state),
+        };
+
+        let blocks = shekyl_archival_retention::effective_settlement_epoch_blocks();
+        let tip = 10 * blocks;
+        let settled = shekyl_archival_retention::settlement_epoch_at_height(tip);
+
+        // A completed evaluation for this settled epoch already exists: any
+        // tip inside the same epoch is a deterministic no-op.
+        state.lock().expect("state").evaluated_at_epoch = Some(settled);
+        leg.fire(tip).await;
+        leg.fire(tip + 1).await;
+        {
+            let s = state.lock().expect("state");
+            assert_eq!(s.consecutive_faults, 0, "same epoch: gated, no attempt");
+            assert_eq!(s.evaluated_at_epoch, Some(settled));
+        }
+
+        // The next settlement close opens the gate (observable on this rig
+        // as the daemon round-trip faulting).
+        leg.fire(tip + blocks).await;
+        assert_eq!(
+            state.lock().expect("state").consecutive_faults,
+            1,
+            "a new settled epoch must re-open the evaluation gate"
         );
     }
 }

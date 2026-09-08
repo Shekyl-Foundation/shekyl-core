@@ -290,6 +290,36 @@ pub enum EmissionClaimError {
     /// compiled constants, const-asserted above).
     #[error("epoch {epoch} shard {shard_id}: recomputed scarcity exceeds the u32 wire field")]
     ScarcityConversion { epoch: u64, shard_id: u64 },
+    /// The whole candidate set is held below the value floor — **a policy
+    /// outcome, not a fault** (`ENGINE_CADENCE_DRIVER.md` §4 value-defer:
+    /// claiming rewards worth less than the sweep fee converts a zero into
+    /// a negative). The hold is all-or-nothing by construction — one claim
+    /// tx carries every held epoch, so the floor gates the set's Σreward,
+    /// never a per-epoch cut — which is why deferral surfaces as this
+    /// typed refusal rather than an [`AssembledClaims`] field: an
+    /// all-deferred assembly has no vin to build (an empty claims leg is
+    /// unrepresentable on the wire).
+    ///
+    /// Carries `(epoch, reward)` per held epoch so the cadence driver's
+    /// claim leg can both re-evaluate the accumulated set next close and
+    /// price a later forfeit honestly (the expired epoch's reward is no
+    /// longer derivable once the window drops it).
+    #[error(
+        "claim value-deferred: Σreward {total_reward} across {} held epoch(s) is below the \
+         fee floor {fee_floor}; holding until the accumulated set clears it",
+        value_deferred.len()
+    )]
+    ValueDeferred {
+        /// `(settlement_epoch, recomputed reward)` per held epoch, in
+        /// window order — the §4 `value_deferred` surface.
+        value_deferred: Vec<(u64, u64)>,
+        /// `checked_add` Σ of the held rewards (below the floor).
+        total_reward: u64,
+        /// The floor the set failed to clear
+        /// ([`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`] in production;
+        /// a parameter so the gate is testable at exact boundaries).
+        fee_floor: u64,
+    },
     /// A single epoch's claim alone exceeds the claims-leg size budget —
     /// nothing further to split (§2 step 5 bound-or-split's terminal
     /// refusal).
@@ -606,14 +636,50 @@ pub struct AssembledClaims {
 /// `claims_size_budget` is the claims-leg byte bound
 /// ([`EMISSION_CLAIMS_SIZE_BUDGET`] is the documented default; the
 /// parameter exists so the bound is testable at exact boundaries).
+///
+/// `fee_floor` is the value gate (`ENGINE_CADENCE_DRIVER.md` §4:
+/// [`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`] in production, a
+/// parameter for the same boundary-testability reason): Σreward across
+/// the **whole** candidate set below the floor refuses
+/// [`EmissionClaimError::ValueDeferred`] — all-or-nothing, before the
+/// size loop, because the floor prices the one claim tx the set would
+/// share, and a set that cannot pay for that tx has no subset that
+/// should. Deterministic by construction: the same derived set and floor
+/// produce the same inclusion decision on every wallet (the §4
+/// uniformity claim — policy, not timing).
 pub fn assemble_claims(
     derived: &ClaimableEpochs<'_>,
     claims_size_budget: usize,
+    fee_floor: u64,
 ) -> Result<AssembledClaims, EmissionClaimError> {
     debug_assert!(
         !derived.claimable.is_empty(),
         "derive_claimable_epochs never returns an empty batch"
     );
+
+    // Value gate (§4) — over the full candidate Σ, checked (budgets are
+    // daemon-supplied; an overflowing sum is malformed source, not
+    // arithmetic to saturate through).
+    let mut candidate_sum: u64 = 0;
+    for c in &derived.claimable {
+        candidate_sum =
+            candidate_sum
+                .checked_add(c.reward)
+                .ok_or(EmissionClaimError::SourceInvalid {
+                    epoch: c.settlement_epoch,
+                })?;
+    }
+    if candidate_sum < fee_floor {
+        return Err(EmissionClaimError::ValueDeferred {
+            value_deferred: derived
+                .claimable
+                .iter()
+                .map(|c| (c.settlement_epoch, c.reward))
+                .collect(),
+            total_reward: candidate_sum,
+            fee_floor,
+        });
+    }
 
     // Step 5 sizing — bound or split (GF-4b item 5) over **one** vin
     // ([`claims_vin`], the single construction site), built once with the
@@ -897,6 +963,10 @@ mod tests {
         SETTLEMENT_EPOCH_BLOCKS,
     };
 
+    /// Disable the §4 value gate for tests whose subject is elsewhere
+    /// (sizing, ordering, self-check): no candidate Σ is below zero.
+    const NO_FLOOR: u64 = 0;
+
     /// The derivation's structural checks in one grid: boundary verdicts
     /// come from the read-only predicates (each skip reason at its exact
     /// boundary), share positivity is the claimability predicate, and the
@@ -1045,7 +1115,8 @@ mod tests {
         // the rejoined record, surfaced as the blind `SelfCheckFailed`.
         let pre_rejoin = source_with(10, vec![], epochs());
         let derived_pre = derive_claimable_epochs(&pre_rejoin).expect("all claimable");
-        let assembled = assemble_claims(&derived_pre, EMISSION_CLAIMS_SIZE_BUDGET).expect("fits");
+        let assembled =
+            assemble_claims(&derived_pre, EMISSION_CLAIMS_SIZE_BUDGET, NO_FLOOR).expect("fits");
         let vin = dummy_leg_vin(&assembled);
         self_check_claims(&pre_rejoin, &vin, assembled.total_reward)
             .expect("sanity: verifies against the pre-rejoin record");
@@ -1154,7 +1225,8 @@ mod tests {
         assert_eq!(derived.skipped, vec![(5, EpochSkip::NotFinalized)]);
 
         // The deferred batch passes the self-check at the boundary count.
-        let assembled = assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET).expect("fits");
+        let assembled =
+            assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, NO_FLOOR).expect("fits");
         self_check_claims(
             &at_boundary,
             &dummy_leg_vin(&assembled),
@@ -1182,7 +1254,7 @@ mod tests {
             "one count past the boundary the epoch is claimable"
         );
         let assembled_past =
-            assemble_claims(&derived_past, EMISSION_CLAIMS_SIZE_BUDGET).expect("fits");
+            assemble_claims(&derived_past, EMISSION_CLAIMS_SIZE_BUDGET, NO_FLOOR).expect("fits");
         let e_bearing = dummy_leg_vin(&assembled_past);
         self_check_claims(&past_boundary, &e_bearing, assembled_past.total_reward)
             .expect("sanity: the E-bearing vin verifies one count past the boundary");
@@ -1319,7 +1391,8 @@ mod tests {
         resigma(&mut snap);
         let source = source_with(10, vec![], vec![snap]);
         let derived = derive_claimable_epochs(&source).expect("claimable");
-        let assembled = assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET).expect("fits");
+        let assembled =
+            assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, NO_FLOOR).expect("fits");
 
         assert_eq!(assembled.settlement_epochs, vec![5]);
         assert_eq!(
@@ -1443,7 +1516,8 @@ mod tests {
         let source = source_with(10, vec![], vec![snapshot(3), snapshot(4), snapshot(5)]);
         let derived = derive_claimable_epochs(&source).expect("three claimable");
 
-        let full = assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET).expect("fits default");
+        let full =
+            assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, NO_FLOOR).expect("fits default");
         assert_eq!(full.settlement_epochs, vec![3, 4, 5]);
         let max_len = |n: usize| {
             claims_vin(
@@ -1461,11 +1535,11 @@ mod tests {
         let len3 = max_len(3);
         let len1 = max_len(1);
 
-        let at = assemble_claims(&derived, len3).expect("exactly at the bound");
+        let at = assemble_claims(&derived, len3, NO_FLOOR).expect("exactly at the bound");
         assert_eq!(at.settlement_epochs, vec![3, 4, 5]);
         assert!(at.size_deferred.is_empty());
 
-        let under = assemble_claims(&derived, len3 - 1).expect("splits");
+        let under = assemble_claims(&derived, len3 - 1, NO_FLOOR).expect("splits");
         assert_eq!(under.settlement_epochs, vec![3, 4], "oldest retained");
         assert_eq!(under.size_deferred, vec![5]);
         assert_eq!(
@@ -1474,12 +1548,61 @@ mod tests {
         );
 
         assert!(matches!(
-            assemble_claims(&derived, len1 - 1),
+            assemble_claims(&derived, len1 - 1, NO_FLOOR),
             Err(EmissionClaimError::SizeBoundExceeded {
                 epoch: 3,
                 projected,
                 budget,
             }) if projected == len1 && budget == len1 - 1
+        ));
+    }
+
+    /// The §4 value gate at its exact boundary (`ENGINE_CADENCE_DRIVER.md`
+    /// §4): Σreward at the floor assembles; one atomic unit under, the
+    /// whole set is held (`ValueDeferred` carries every `(epoch, reward)`
+    /// pair and the Σ), and the refusal fires **before** the size loop —
+    /// with an impossible byte budget alongside the failing floor, the
+    /// verdict is still `ValueDeferred`, pinning the gate order the
+    /// assembly doc claims. Same derived set + same floor ⇒ same verdict
+    /// both calls — the inclusion decision is policy-deterministic
+    /// (uniform across wallets), which is the §4 uniformity property as
+    /// distinct from submission *timing*.
+    #[test]
+    fn value_gate_holds_whole_set_below_floor_and_precedes_sizing() {
+        let source = source_with(10, vec![], vec![snapshot(3), snapshot(4), snapshot(5)]);
+        let derived = derive_claimable_epochs(&source).expect("three claimable");
+        let total: u64 = derived.claimable.iter().map(|c| c.reward).sum();
+        assert!(total > 0, "fixture must carry non-zero rewards");
+
+        // At the floor: assembles (the floor is a minimum, not exceeded-by).
+        let at = assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, total).expect("at floor");
+        assert_eq!(at.total_reward, total);
+
+        // One under: the whole set is held, pairs and Σ carried.
+        let expected_pairs: Vec<(u64, u64)> = derived
+            .claimable
+            .iter()
+            .map(|c| (c.settlement_epoch, c.reward))
+            .collect();
+        let verdict = assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, total + 1);
+        match verdict {
+            Err(EmissionClaimError::ValueDeferred {
+                value_deferred,
+                total_reward,
+                fee_floor,
+            }) => {
+                assert_eq!(value_deferred, expected_pairs);
+                assert_eq!(total_reward, total);
+                assert_eq!(fee_floor, total + 1);
+            }
+            other => panic!("expected ValueDeferred, got {other:?}"),
+        }
+
+        // Gate order: a budget that would refuse every epoch on size never
+        // gets consulted when the value gate holds the set.
+        assert!(matches!(
+            assemble_claims(&derived, 1, total + 1),
+            Err(EmissionClaimError::ValueDeferred { .. })
         ));
     }
 
@@ -1575,7 +1698,8 @@ mod tests {
             vec![snapshot(4), snapshot(5), zero_share_snapshot(6, true)],
         );
         let derived = derive_claimable_epochs(&source).expect("epochs 4, 5 claimable");
-        let assembled = assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET).expect("fits");
+        let assembled =
+            assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, NO_FLOOR).expect("fits");
         let base = dummy_leg_vin(&assembled);
 
         // Premise: the unmutated assembly is verifier-accepted.
@@ -1693,7 +1817,7 @@ mod tests {
         let source = source_with(10, vec![], vec![snap]);
         let derived = derive_claimable_epochs(&source).expect("admitted");
         assert!(matches!(
-            assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET),
+            assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, NO_FLOOR),
             Err(EmissionClaimError::RowsUnencodable(
                 EmissionWireError::ShardEntriesExceeded { got }
             )) if got == MAX_HOLDINGS_SHARDS + 1

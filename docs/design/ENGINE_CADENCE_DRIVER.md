@@ -319,9 +319,28 @@ now built, so reasoning *from* its absence is invalidated).
 the byte budget. The value axis is its sibling: **hold epoch E until
 Σreward across held epochs covers the claim fee.** The cadence still
 fires every close; the fire may no-op (nothing settled, nothing above
-water). Deferral is a driver-side policy over which epochs to include,
-surfaced as `value_deferred: Vec<u64>` alongside `size_deferred` in
-the assembly result.
+water).
+
+**Shape amendment (implementation, commit 6).** The doc originally
+specified a `value_deferred: Vec<u64>` field alongside `size_deferred`.
+Implementation showed that shape is wrong for this axis: the hold is
+**all-or-nothing** by construction — one claim tx carries every held
+epoch, so the floor gates the set's Σreward, never a per-epoch cut —
+which means a successful assembly's `value_deferred` field would be
+empty always (an all-deferred assembly has no vin to build; an empty
+claims leg is unrepresentable on the wire). The gate therefore
+surfaces as a typed refusal, `EmissionClaimError::ValueDeferred
+{ value_deferred: Vec<(epoch, reward)>, total_reward, fee_floor }`,
+raised in `assemble_claims` **before** the size loop (a set that
+cannot pay for its one tx has no subset that should). The rewards
+ride the refusal because they are recomputed inside derivation and
+are no longer derivable once the window expires an epoch — the leg
+needs them to price a forfeit honestly. The floor reaches the
+assembly as a field on `AssembleEmissionClaim`, passed by its sole
+production sender (the claim orchestrator) from
+`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR` — a parameter for the
+same reason `assemble_claims` takes its size budget: testable at
+exact boundaries.
 
 ### The floor and the window
 

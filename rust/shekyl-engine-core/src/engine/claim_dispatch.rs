@@ -12,9 +12,11 @@
 //! explicit claim intent in, one assembled claim dispatched through the
 //! audited posture→submitter choke point
 //! ([`BroadcastSubmitter::for_posture`] → [`submit_bound`]) out. Scheduling
-//! policy — which epochs, when, batched how — stays external (the GF-4
-//! seam grades cadence jointly with amount + holdings stratum; this method
-//! fires once per caller intent, never on a loop of its own).
+//! policy — which epochs, when, batched how — lives in the cadence
+//! driver's epoch-claim leg (`ENGINE_CADENCE_DRIVER.md` §4: uniform
+//! schedule, value-conditional inclusion; the GF-4 grading-scheduler
+//! premise was refuted, not rescheduled). This method still fires once
+//! per caller intent, never on a loop of its own — the leg is the caller.
 //!
 //! Mirrors [`Engine::assemble_bond_post`](super::bond_orchestrator)'s shape:
 //! a self-arc method that clones its actor handles under one brief read
@@ -83,10 +85,9 @@ use super::Engine;
 /// facts plus the network verdict. Secrets never cross the boundary — the
 /// contained [`PBoundBytes`](super::bond_assembly::PBoundBytes) redacts its
 /// own `Debug`.
-// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the receipt's
-// production reader is the RPC stake entry (rule-21, same retirement condition
-// as `assemble_bond_post`'s allow); the PR-4 regtest e2e is the test consumer.
-#[allow(dead_code)]
+///
+/// The production reader is the cadence driver's epoch-claim leg, which
+/// logs the claimed epochs and submit verdict.
 #[derive(Debug)]
 pub(crate) struct EmissionClaimReceipt {
     /// The dispatched claim exactly as assembled (bytes, fee reservation,
@@ -197,11 +198,10 @@ where
     /// compile-blocked on a production [`SpentRecordsDurablyPruned`] mint
     /// (SP-R0), exactly as the bond path; tests pass
     /// [`SpentRecordsDurablyPruned::for_test`].
-    // Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the
-    // production caller is the RPC stake entry — the same rule-21 retirement
-    // condition `assemble_bond_post` carries; the PR-4 regtest e2e (this
-    // PR's commit 8) is the test consumer.
-    #[allow(dead_code)]
+    ///
+    /// The production caller is the cadence driver's epoch-claim leg
+    /// (`ENGINE_CADENCE_DRIVER.md` §3 leg 3) — the `claim` RPC method
+    /// stays REJECTED per `WALLET_RPC_METHODS.md`.
     pub(crate) async fn submit_emission_claim<T: PersonaIsolatedTransport>(
         self_arc: Arc<RwLock<Self>>,
         claim_rpc: &T,
@@ -292,6 +292,10 @@ where
                 reserved,
                 p_canonical_id,
                 fee: fee.to_raw(),
+                // The production floor (`ENGINE_CADENCE_DRIVER.md` §4):
+                // every production claim rides this choke point, so the
+                // constant is named exactly once.
+                fee_floor: shekyl_economics::EMISSION_CLAIM_FEE_FLOOR,
             },
             block_hash_at,
         )

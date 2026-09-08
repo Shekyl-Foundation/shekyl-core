@@ -219,7 +219,8 @@ pub(crate) mod cadence;
 /// PR-4's CB-3 dispatch seam (`EMISSION_CLAIM_BUILDER.md` §8): the Engine-side
 /// emission-claim **request path** — activate the claimant slot, assemble via
 /// `claim_orchestrator`, dispatch through the audited posture→submitter choke
-/// point. Scheduling policy stays external (the GF-4 seam).
+/// point. Scheduling policy is the cadence driver's epoch-claim leg
+/// (`ENGINE_CADENCE_DRIVER.md` §4).
 pub(crate) mod claim_dispatch;
 /// PR-3's Engine-side emission-claim orchestration (`EMISSION_CLAIM_BUILDER.md`
 /// §8): the fetch → designate → fee-sweep → path-assembly →
