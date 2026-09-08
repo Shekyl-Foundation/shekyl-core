@@ -354,11 +354,16 @@ domain tag is hygiene, not a separation requirement.
   unsorted keys, values across the `u8`/`u64` range) and its expected
   canonical bytes and digest, so the *rules* are pinned independently of
   the live file;
-- a **live-file sentinel**: `const _: () = assert!(CONSENSUS_CONSTANTS_DIGEST
-  == "…")` in the style of `shekyl-daemon-rpc/src/lib.rs`'s Decision-14
-  sentinels, so a change to the JSON is a reviewed change to a Rust source
-  line rather than a silent move of every client's refusal. This is the
-  existing convention for exactly this file, extended to the whole of it.
+- a **live-file pin**: `PINNED_DIGEST` in `build.rs`, compared there so the
+  panic can print the computed digest, so a change to either JSON is a
+  reviewed change to a Rust source line rather than a silent move of every
+  client's refusal. It began as a `const _: () = assert!` beside the
+  constant, in the style of `shekyl-daemon-rpc/src/lib.rs`'s Decision-14
+  sentinels; `VC-R5` moved it, because that form cannot name the value the
+  developer must copy (§8). The panic **branches on what moved** — value,
+  rename, or added/removed key — since the single chain question is answered
+  "no" by a pure rename and the old wording then pointed at deleting the
+  constant (`VC-R13`, §9).
 
 ### 3.4 `VC-D4` — one computation, in `shekyl-rpc-types`
 
@@ -791,6 +796,21 @@ and a second thing a client can forget to compare. Rule 19 says bundle by
 validation surface, and the surface is "the constants this binary was built
 from".
 
+**A rename is cheap now and a compatibility break later — named while it is
+still free to write down.** The rule below (a key is part of the binding)
+was argued; its cost is now *observed*, because the pin fired on the first
+merge after `VC-1` was built, on a refactor with no consensus content at all
+(`FL-R15`, §7). Pre-genesis that costs a re-pin. **Once `VC-2`…`VC-4` land, a
+rename in either authority file makes every older client refuse every newer
+daemon while the chain is identical** — the digest cannot tell a rename from
+a rule change, and by `VC-D15` it will not guess. So **post-genesis a rename
+in these files is a client-compatibility break that rides a release
+boundary, not a cleanup PR**, and the release note owes it a line. **Reopen**
+the value-only view only if renames in these files ever become frequent
+enough that the compatibility cost outweighs a rename's ability to silently
+repoint a consumer — which is the reason the value-only view was rejected,
+and which does not weaken with time.
+
 **A key rename moves the digest, and should.** The fee-ladder bundle's
 `FL-R15` renames `money_supply` → `emission_curve_asymptote` with the value
 unchanged. Under the canonical form the digest moves, because the key is
@@ -1022,12 +1042,17 @@ alpha.8 as one folded PR (ruling 2); the PR body's first paragraph states the
 four axes.** They are not started. Each slice runs the CI-exact gates
 (`cargo fmt --all -- --check`; `cargo +1.94.0 clippy --workspace
 --all-targets --keep-going -- -D warnings`; `cargo test --locked --workspace
---exclude shekyl-randomx-differential`) on the tree it pushes, plus the eight
-doc gates, plus what each row names.
+--exclude shekyl-randomx-differential`) on the tree it pushes, plus what each
+row names, plus **the doc gates enumerated from `scripts/ci/check_*.py` at
+that moment rather than from a remembered list** — a remembered nine against
+17 in the tree is what `VC-R14` caught, and a gate set is a moving
+denominator. The citation ratchet needs `git submodule update --init
+--force --recursive` first or it refuses, which is a broken run and not a
+pass.
 
 | Slice | Contents | Wire change? | Additional gate |
 | --- | --- | --- | --- |
-| **`VC-1`** — **BUILT** in this document's PR (`dev` e54e5b983) | `shekyl-rpc-types/build.rs` + `CONSENSUS_CONSTANTS_DIGEST` and `CONSENSUS_CONSTANTS_CANONICAL` (§3.3, §3.4), with the canonicaliser in `build_support/consensus_canonical.rs` included by both the build script and the tests — one definition; canonical-form KAT whose expected digest was computed by an independent Python implementation of §3.3; live-file sentinel (`const _: () = assert!`); `DaemonNetwork` type with string round-trip and unknown-string refusal tests; the membership-rule sentence in the JSON's `_comment` (§3.7). | **No.** Nothing on the wire moves; the constant exists and is tested; nothing reads it yet, and `consensus_digest.rs`'s module doc says so. | Red observed before trusting green, two ways: with the sentinel disabled, a descending key sort fails `kat_pins_the_canonical_form_and_its_digest` and `the_live_canonical_form_has_the_shape_the_design_pins` while `the_build_used_these_rules_on_the_live_file` stays green (build script and tests share the mutated rules — the Python-derived KAT is what catches a drift both sides share); with the sentinel enabled, the same mutation fails **compilation** on the pinned digest, which is the sentinel doing its job first. |
+| **`VC-1`** — **BUILT** in this document's PR (`dev` e54e5b983) | `shekyl-rpc-types/build.rs` + `CONSENSUS_CONSTANTS_DIGEST` and `CONSENSUS_CONSTANTS_CANONICAL` (§3.3, §3.4), with the canonicaliser in `build_support/consensus_canonical.rs` included by both the build script and the tests — one definition; canonical-form KAT whose expected digest was computed by an independent Python implementation of §3.3; live-file pin (`PINNED_DIGEST` in `build.rs`, with a case-branching panic — `VC-R5`, `VC-R13`); `DaemonNetwork` type with string round-trip and unknown-string refusal tests; the membership-rule sentence in the JSON's `_comment` (§3.7). | **No.** Nothing on the wire moves; the constant exists and is tested; nothing reads it yet, and `consensus_digest.rs`'s module doc says so. | Red observed before trusting green, two ways: with the sentinel disabled, a descending key sort fails `kat_pins_the_canonical_form_and_its_digest` and `the_live_canonical_form_has_the_shape_the_design_pins` while `the_build_used_these_rules_on_the_live_file` stays green (build script and tests share the mutated rules — the Python-derived KAT is what catches a drift both sides share); with the sentinel enabled, the same mutation fails **compilation** on the pinned digest, which is the sentinel doing its job first. |
 | **`VC-2`** — **AUTHORISED for alpha.8, fold with `VC-3`/`VC-4`** (ruling 2: "a wire change belongs in the paired release, not first-thing-after where it becomes the first uncovered delta of the next cycle") | `GetVersionResponse` + **3** fields (digest, `nettype`, `genesis_hash` — `VC-R2`), each strictly deserialized with an omission test (`VC-D14`); `CORE_RPC_VERSION` → next minor, **read from `dev` at write time**; `get_version_synced_v5.json` and siblings for the other two `v1` states; chain-delta test extended per §3.5; chain-facts POD `nettype` byte + genesis-hash bytes + C export + ABI offset pin. **The POD widening is an ABI change to a struct with layout twins and a round-trip pin** (Rick, with ruling 1): `_test_fill` / `_rust_fill` and the seeded field indices move with it, and the offset pins are re-derived rather than edited. Consequence, not objection — but it is the part of `VC-2` that breaks quietly if done by hand; `methods.rs` fills both fields. **Pre-flight pass first (rule 26).** | **Yes.** Needs Rick's ruling on alpha.8 timing (§6). | `rpc_parity` whole chain green; the four-spelling version pin updated; C++ `ninja -C build` + unit suite (the POD changed). |
 | **`VC-3`** | Console remote arm handshake (§3.6.2); `version` exemption; delete `daa_target_seconds` and its tests (§3.11); operator-facing message tests for all three axes and both "older side" directions. | No (consumes `VC-2`). | A test per axis that observes the refusal on a fabricated mismatched reply, and one that observes `version` rendering both sides. |
 | **`VC-4`** | Engine open-time handshake (§3.6.3) on all four axes, including the per-network genesis-hash pins compared against `get_version.genesis_hash` (`VC-D12`, `VC-R2` — one reply, not a second call); the connect-time-only claim stated in operator terms (`VC-D13`); refusal wording per `VC-D15`; `OpenError::DaemonIdentityMismatch`; `FakechainPolicy` (§3.6.4) threaded through `open_*`, set by `regtest_e2e.rs` and the operator flag; **fix the `daemon.rs:169` docstring** to say what the code now does; `shekyl-cli` / `shekyl-wallet-rpc` messages per rule 82. | No (consumes `VC-2`). | Regtest e2e green with the policy passed; a lifecycle test per axis observing `open_full` refuse; a test that `FakechainPolicy::Refuse` (the default) refuses a `fakechain` daemon. |
@@ -1343,6 +1368,8 @@ ruling 5's wording (`VC-R11`, `VC-R12`).
 | `VC-R10` | A digest mismatch cannot name the stale side | **Applied** — `VC-D15` |
 | `VC-R11` | The digest's boundary is set by an adjective, not a stated decision | **Applied** — §3.12 coverage table |
 | `VC-R12` | The `genesis_recipients.*` exclusion rests on a ruling that has not landed | **Applied** — §3.12 trigger |
+| `VC-R13` | The pin's panic asks one question; a rename answers it wrongly and it points at deleting the constant | **Applied** — `build.rs` |
+| `VC-R14` | The branch's index row failed a gate minted after the cut, and had never rendered | **Applied** — index row |
 
 ### `VC-R8` — one atomic call is a statement about one instant
 
@@ -1459,6 +1486,64 @@ This is the same shape as `VC-R2` and the first draft's genesis exclusion: a
 disposition resting on a property that is stated but not yet enforced. Third
 instance in this document alone, which is why the trigger is written as a
 condition with a firing event rather than as a sentence of prose.
+
+### `VC-R13` — the panic asked one question, and a rename answers it wrongly
+
+**Found by the second reviewer against the pin's first live trip, and it is
+the sharpest finding of either round.** The message told the developer to
+answer *"does a different value of what moved make a different chain?"* — and
+in the case that actually fired, `money_supply` → `emission_curve_asymptote`
+at a byte-identical value, **no value moved**. Answered as written the answer
+is "no", and the panic's own next sentence then reads "the constant does not
+belong in these files". **The failure text steered toward deleting a
+genesis-frozen economic constant from its authority.**
+
+This is `82-failure-mode-ux.mdc` at its narrowest: a message that only ever
+fires at a moment of confusion has to be right in *every* case it fires, and
+on its first real trip this one misdirected. That it did not misdirect *me*
+is not evidence — I wrote the ruling that says a rename is expected, so I
+answered from the design rather than from the message. A reader without that
+context follows the text.
+
+**Applied.** The panic now branches on what moved and says how to tell:
+`git diff` the two files against the pinned tree, then read off the case. A
+**value** change asks the chain question and can legitimately conclude the
+constant does not belong. A **rename** at an unchanged value moves the digest
+*by design* (`VC-D12`), so the instruction is re-pin and keep the constant,
+asking the chain question of the value the new name binds. An **added or
+removed** key asks the chain question of that key. No case now ends at
+"delete a constant" by default.
+
+**Recorded as a class, because the first fix had the same shape.** `VC-R5`
+fixed *what the message could say*; this fixes *whether what it says is
+right*. Both are the diagnostic failing rather than the check failing, and a
+check can be correct on every input while its diagnostic is wrong on the
+input that actually arrives.
+
+### `VC-R14` — the branch's own index row failed a gate minted after the cut
+
+`check_index_table_shape.py` arrived on `dev` with `docs-gates.yml` while
+this branch was unmerged. The branch's VC row carried **three cells against
+a two-column header**: GFM drops the surplus, so the status half **had never
+rendered** — and inside that invisibility it had gone stale, still reading
+`VC-D1…VC-D12` and "round 2 (2026-09-06)" against a document at `VC-D15`
+with rounds signed on the 7th. Exactly the decay the gate was minted to
+catch, on the row this branch added.
+
+**Applied:** the row is two cells, with the status folded into the
+description where it renders.
+
+**The general failure is mine and it is worth naming: I was running a gate
+list, not the gate directory.** Nine names, carried forward from when I
+learned them, against **17** `scripts/ci/check_*.py` in the tree — eight I
+had never run. (Scope and unit, since this document now has a rule about
+that: 17 gate *scripts* matching `check_*.py`; `scripts/ci/` holds 50 files
+in total, and the CI workflows invoke a subset of the scripts by name.) A
+gate set is a moving denominator and enumerating the directory costs one
+command. All 17 now pass; the one I had never run caught a real defect on
+its first execution, and the citation ratchet — which refuses to run at all
+against unfetched submodules — passes at the `origin/dev` baseline once they
+are initialised, so this branch adds no dead citations.
 
 ### What round 2 did not find
 

@@ -81,17 +81,42 @@ fn main() {
     // and given nothing to re-pin to. A build-script panic formats, so the
     // enforcement is the same and the re-pin is mechanical.
     if digest != PINNED_DIGEST {
+        // The message branches on WHAT moved, because the single question
+        // "does a different value make a different chain?" is answered "no"
+        // by a pure rename — where no value moved at all — and the old
+        // wording then steered the reader toward deleting a genesis-frozen
+        // constant from its authority. Observed on this pin's first live
+        // trip: `money_supply` -> `emission_curve_asymptote` (FL-R15),
+        // value byte-identical. A message that only ever fires at a moment
+        // of confusion has to be right in every case it fires
+        // (`82-failure-mode-ux.mdc`).
         panic!(
             "the consensus-constant authorities changed: their canonical-form digest is now\n\
              \x20   {digest}\n\
              but this build pins\n\
              \x20   {PINNED_DIGEST}\n\
-             Re-pin `PINNED_DIGEST` in rust/shekyl-rpc-types/build.rs to the first value, and\n\
-             answer the question the pin exists to force\n\
-             (docs/design/CLIENT_VERSION_CONSTANTS_VALIDATION.md §3.7): does a different value\n\
-             of what moved make a different chain? If yes, this is a consensus change and every\n\
-             client built before it will refuse every daemon built after it once VC-2..VC-4 land.\n\
-             If no, the constant does not belong in {files:?}.",
+             \n\
+             Re-pin `PINNED_DIGEST` in rust/shekyl-rpc-types/build.rs to the first value. Then\n\
+             answer the question the pin exists to force, which depends on WHAT moved --\n\
+             `git diff` {files:?} against the pinned tree and read off the case\n\
+             (docs/design/CLIENT_VERSION_CONSTANTS_VALIDATION.md §3.7, §3.12):\n\
+             \n\
+             \x20 * A VALUE changed. Does the new value make a different chain? If yes, this is\n\
+             \x20   a consensus change: re-pin, and expect every client built before it to\n\
+             \x20   refuse every daemon built after it once VC-2..VC-4 land. If no, the\n\
+             \x20   constant does not belong in these files -- move it out, do not silence\n\
+             \x20   this.\n\
+             \n\
+             \x20 * Only a KEY changed -- a rename at an unchanged value. The digest moves BY\n\
+             \x20   DESIGN (VC-D12): a key is part of the binding, because every generator\n\
+             \x20   reads it by name. Re-pin and keep the constant. Do NOT conclude it does\n\
+             \x20   not belong here; ask the chain question of the value the NEW name binds.\n\
+             \x20   Post-genesis a rename in these files is a client-compatibility break and\n\
+             \x20   rides a release boundary, not a cleanup PR (§3.12).\n\
+             \n\
+             \x20 * A key was ADDED or REMOVED. Same chain question, asked of that key: if a\n\
+             \x20   different value of it would make a different chain it belongs here and you\n\
+             \x20   re-pin; if not, it does not belong here.",
             files = consensus_canonical::CANONICAL_FILES
         );
     }

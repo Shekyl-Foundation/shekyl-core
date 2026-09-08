@@ -7,13 +7,28 @@
 //! (`docs/design/CLIENT_VERSION_CONSTANTS_VALIDATION.md` §2; slice `VC-1`).
 //!
 //! A client establishes, once per connection, that the daemon it dialed is
-//! the daemon it was built for, on three axes: **wire** ([`CORE_RPC_VERSION`]),
-//! **rules** ([`CONSENSUS_CONSTANTS_DIGEST`]) and **network**
-//! ([`DaemonNetwork`]). This module carries the second and third. Neither is
-//! on the wire yet: `VC-2` adds both to `get_version` and bumps the version;
-//! `VC-3` (console) and `VC-4` (wallet engine) are the consumers. Until then
-//! this is the constant, its pins and its type — nothing reads it, and that
-//! is stated here rather than left for the next census to rediscover.
+//! the daemon it was built for, on four axes: **wire**
+//! ([`CORE_RPC_VERSION`]), **rules** ([`CONSENSUS_CONSTANTS_DIGEST`]),
+//! **network** ([`DaemonNetwork`]) and **genesis** (block 0's hash, added by
+//! `VC-R2`). This module carries the second and third.
+//!
+//! # Disposition: STAGED, not RESERVED (`23-disposition-visibility.mdc`)
+//!
+//! **Nothing in the tree reads either symbol yet, and that is the designed
+//! state, not unfinished work.** Rule 23 forbids a bare `const` with no
+//! consuming arm as RESERVED, and permits code symbols under **STAGED** —
+//! which requires a named consumer in a live plan. The consumers are named
+//! and the plan is live: `VC-2` puts both on `get_version` and bumps the
+//! version, `VC-3` (console) and `VC-4` (wallet engine) compare them, all
+//! three are authorised for alpha.8 and folded into one PR by ruling 2 of
+//! `docs/design/CLIENT_VERSION_CONSTANTS_VALIDATION.md` §6, and §4 of that
+//! document is the slice table.
+//!
+//! An agent grepping this crate finds work that is **supposed** to exist. It
+//! is stated here rather than left for the next census to rediscover,
+//! because "a correct mechanism with no consumer" is the finding that
+//! opened this round — and the difference between that defect and this
+//! state is exactly the named live-plan consumer above.
 //!
 //! [`CORE_RPC_VERSION`]: crate::CORE_RPC_VERSION
 
