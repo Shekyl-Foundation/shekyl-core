@@ -31,25 +31,36 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 INDEX = os.path.join(ROOT, "docs", "design", "IMPLEMENTATION_INDEX.md")
 
-# Delimiter rows are matched LOOSELY (one or more hyphens) and then validated
-# STRICTLY (three or more). The GFM spec is genuinely ambiguous here: it says
-# only "cells whose only content are hyphens", states no minimum, and every
-# worked example uses three. Rather than bet the gate on one reading, the two
-# steps are split so the behaviour is correct under both:
+# RECOGNITION IS SEPARATE FROM VALIDITY, and deliberately far weaker.
 #
-#   loose match  — a would-be delimiter is never SILENTLY SKIPPED. Skipping is
-#                  the dangerous direction, because the whole table then goes
-#                  unchecked and the hidden-cell defect rides along inside it.
-#   strict check — fewer than three hyphens is REPORTED. If the spec means
-#                  three, that block renders as no table and this is the
-#                  invisible-table defect the gate exists to catch; if it means
-#                  one, `| - |` is still not how this file writes a table, and
-#                  a loud house-style failure beats an ambiguous pass.
+# A header/delimiter pair is RECOGNISED when a pipe-bearing line is followed by
+# a line that either bears a pipe or is made only of dashes, colons and spaces.
+# That is the whole test — it asks "might these two lines be trying to be a
+# table?", never "are they a valid one". Validity is decided afterwards by the
+# strict cell check and the width check, which REPORT.
 #
-# Both patterns are only ever tested against the line DIRECTLY BELOW a header:
-# the delimiter row is positional, so a body row holding bare dashes is
-# content, not a new table.
+# The separation is the entire design, arrived at the hard way: five earlier
+# versions tied recognition to some degree of validity — every cell well
+# formed, then all-or-empty, then one well formed, then any pipe — and each one
+# let a malformed table escape unexamined, because a table had to be well
+# formed before it qualified to be examined for being well formed. Every hole
+# was also invisible, since the file's other tables kept the subject counters
+# nonzero and the gate exited 0.
+#
+# The strict cell form requires three or more hyphens. The GFM spec is
+# genuinely ambiguous — it says only "cells whose only content are hyphens",
+# states no minimum, and every worked example uses three — so this is enforced
+# as a house rule rather than a spec claim. Under either reading the behaviour
+# is right: if the spec means three, a thinner cell renders no table and this
+# is the invisible-table defect; if it means one, `| - |` is still not how this
+# file writes a table, and a loud failure beats an ambiguous pass.
+#
+# Recognition never fabricates a table. A run of lines that fails these checks
+# is not rendered as a table by GFM either — it becomes paragraph text, or a
+# setext heading where a bare `---` follows a pipe row — which is precisely the
+# invisible-content defect this gate exists to report.
 DELIM_CELL_STRICT_RE = re.compile(r"^:?-{3,}:?$")
+DASHY_LINE_RE = re.compile(r"^[-:\s]+$")
 
 
 def has_pipe(line: str) -> bool:
@@ -141,19 +152,12 @@ def main() -> int:
     while i < len(lines):
         stripped = lines[i].strip()
         nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
-        # RECOGNITION IS MAXIMAL: any pipe-bearing line directly beneath another
-        # is a header/delimiter candidate. Every narrower rule tried here left a
-        # hole — all-typo cells, empty cells, thin cells, a header without its
-        # leading pipe — and each hole SKIPPED a table, which the other tables
-        # then hid by keeping the counters nonzero. Nothing about a would-be
-        # table may depend on that table being well formed.
-        #
-        # This cannot produce a spurious table in practice: a run of pipe lines
-        # with no valid delimiter is not rendered as a table by GFM at all, it
-        # is rendered as paragraph text — which is the invisible-content defect
-        # this gate exists to report. Flagging it is the correct answer, not a
-        # false positive.
-        if not (has_pipe(stripped) and has_pipe(nxt)):
+        # See the recognition note at the top of the file. A delimiter that has
+        # lost its pipes entirely (`--- ---`) is still a would-be delimiter, so
+        # a dash/colon/space-only line qualifies as well; without that arm the
+        # block is skipped and the other tables hide it.
+        if not (stripped and has_pipe(stripped)
+                and nxt and (has_pipe(nxt) or DASHY_LINE_RE.match(nxt))):
             i += 1
             continue
 
