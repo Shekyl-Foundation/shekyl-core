@@ -550,3 +550,125 @@ than its title suggests.
 - PWD-E2(b) shown unsound — the port-proving claim is reasoning, not a verified result.
 - A measurement showing endpoint determination is not needed because the announce-and-hope path already reaches the network reliably.
 - `-43`'s lane landing a field set that makes PWD-E3/E4 moot.
+
+
+### PWD-E7 — how a node obtains an **overlay** endpoint: two postures, ephemeral by default
+
+**RULED by Rick, 2026-09-07.** PWD-E1/E2 answer the clearnet question — a
+candidate endpoint proposed by NAT, IGD or an operator, and a verifier that
+decides. **This row is the overlay case, and it is not the same question.**
+
+| Posture | How the address exists | Requires | Ruling |
+|---|---|---|---|
+| **Daemon-held, ephemeral per boot** | the daemon mints a service key and publishes it; the address is the `ServiceID` tor returns from `ADD_ONION` | tor **control port** | **DEFAULT** |
+| **Operator-provisioned, stable** | the operator runs a hidden service in `torrc`; the address is handed to the daemon as a string (`--anonymous-inbound`, `net_node.cpp:159`, parsed `:297`) | SOCKS + a `torrc` service | **SUPPORTED** |
+
+**These are different privacy postures, not two custodies of one thing, and the
+distinction is the ruling.** Rick, verbatim: *"the second isn't 'the same thing
+with different custody.' It's a different privacy posture, chosen
+deliberately."* An ephemeral address is **a route**; a stable one is **a durable
+identifier the operator has knowingly accepted**. The stable posture exists for
+seeds and deliberately-persistent infrastructure, where a fixed address is the
+point.
+
+> **State it wherever the flag is documented, because the failure mode is
+> quiet:** someone reads "both supported" as "pick either, they're equivalent",
+> copies a config example that uses `--anonymous-inbound`, and a
+> default-posture node ends up with a permanent address it never chose. The
+> flag is not a custody preference; taking it is opting into a durable address.
+
+**The ephemeral default is what keeps the daemon secret-free.** `discard_pk:
+true` (`onion_service.rs:243`) means tor retains no copy — so a *stable*
+daemon-held key would have to be persisted by the daemon, giving it its first
+long-lived on-disk secret and escalating the peerlist-store question from
+privacy into integrity. Ephemeral-per-boot removes that entirely: **no
+persisted secret, no durable join key, no store-encryption escalation.** The
+key is minted at startup, lives in memory, and dies with the process.
+
+**Behaviour at every seam, both postures** — required because both are
+supported, so no seam may be defined in only one:
+
+| Seam | Ephemeral (default) | Operator-provisioned |
+|---|---|---|
+| Where the address comes from | `ADD_ONION` reply `ServiceID`, read from our own control connection | the flag's parsed string |
+| Verification | **none needed, and none admissible to add** — see below | none today; unchanged |
+| Restart | new key, **new address** | same address, from `torrc` |
+| tor control unavailable | no address ⇒ no overlay inbound; the node is outbound-only on that zone | unaffected — needs only SOCKS |
+| First run vs later | identical; there is no "later" state | identical |
+
+**Why the overlay case needs no verifier, stated as a property rather than an
+exception.** PWD-E2's adversary is *a remote party proposing an address we
+cannot check*. On the self-provisioned path there is no remote party in the
+channel at all: the address is returned by the local process that just created
+the service, over a local control connection, and `ServiceIdMismatch`
+(`onion_service.rs:59,72`) already rejects a reply that does not match what we
+asked for. **This is the one case where a node genuinely knows its own
+address** — locally authoritative, not locally *asserted*. Adding a dial-back
+here would verify reachability we have not claimed and cannot use.
+
+**It also over-determines PWD-I1's exit.** The ruling that overlay inbound peers
+are not gossip-bound on possession rested on *posture heterogeneity* — a
+possession proof is unverifiable across a mixed network. Under ephemeral-by-
+default there is now a **second, independent** reason: a boot-scoped address has
+**nothing durable to bind to**. Two independent grounds is a better place for a
+genesis-frozen ruling to sit than one.
+
+**The forbidden direction is unchanged and this row does not touch it.** Owning
+*our own* key is the precondition for having an address; it asserts nothing
+about anyone. Using a key to decide who a **remote** peer is, or to carry a
+claim across reconnects, stays forbidden. Same fact, opposite consequence,
+depending on whose address it is. Every mechanism added under this row must
+answer *does this let anything conclude that two observations involve the same
+party?* — and if yes, stop.
+
+### PWD-E8 — address volatility: the measurement owed before PWD-E7 is built
+
+**OPEN — and it is derivable in half, which is why it is a measurement and not
+a guess.** Rick named it as the one place ephemeral-by-default could fail
+quietly: every default node re-addresses on restart, so gossiped overlay
+addresses have a shelf life. Each dead address is handled *cleanly* — a failed
+dial, aged out of gray — but a high enough dead fraction degrades overlay peer
+discovery while no individual case misbehaves.
+
+**The half that is derivable now, from shipped constants.** A gossiped address
+enters **gray**. On a saturated node the only prober is
+`gray_peerlist_housekeeping`, which draws **one random gray entry per zone per
+60 s** (`net_node.h:631`) from a pool capped at
+`P2P_LOCAL_GRAY_PEERLIST_LIMIT = 5000`. A uniform random draw with replacement
+gives an expected wait of `N` cycles for any specific entry:
+
+> `D = N × 60 s = 5000 × 60 s ≈ **3.5 days**` — the mean time a gossiped overlay
+> address sits in a saturated peer's gray list before anything dials it.
+
+**The half that must be measured: `T`, the mean uptime between restarts of a
+default-posture node.** The dead fraction at probe time is then
+`1 − e^(−D/T)`:
+
+| `T` (mean uptime) | dead on probe |
+|---|---|
+| 30 days | ~11 % |
+| 14 days | ~22 % |
+| 7 days | ~39 % |
+| 3.5 days | ~63 % |
+| 1 day | ~97 % |
+
+**So the ruling threshold is a statement about `D/T`, not about either alone**,
+and the shape of the answer is already visible: at weekly restarts nearly two
+in five gossiped overlay addresses are dead before they are tried, and the
+degradation is in *pool quality*, not in any single dial.
+
+**Three things this round must not do**, each of which would look like progress:
+
+- **Do not shorten `D` by probing gray harder.** That trades one measured
+  quantity for unmeasured dial volume on an overlay, and PWD-B1's rate limiting
+  has no derived parameters yet.
+- **Do not conclude "clean per-case failure ⇒ acceptable aggregate."** That is
+  the exact inference Rick flagged; it is what makes this failure quiet.
+- **Do not read `D` as fixed.** It is `N × 60 s` — it moves with the gray cap
+  and the housekeeping cadence, so any change to either re-opens this row.
+
+**Measurement rig: Q12-D6a**, which already exists for fleet peer-discovery
+observations. `T` is the new input it must carry.
+
+**Blocker: none.** `D` is derived above; `T` needs fleet data the rig can
+produce; the threshold is Rick's to rule once both are in hand.
