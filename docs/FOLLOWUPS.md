@@ -1062,7 +1062,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Validate `prev_id` before attestation verify on the alt-chain path
   - Target: pre-genesis
 
-- **Restore the §7 hysteresis band to the served fee correction** — the daemon serves the plain pow2 ceiling (`prev_cq = 0`); blocked on the grid-anchored previous value, which is its own round. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §8 FL-R3 (ruling, blocker, two binding constraints).
+- **Restore the §7 hysteresis band to the served fee correction** — the daemon serves the plain pow2 ceiling (`prev_cq = 0`); the time-grid round that unblocks it is OPEN. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10 (round: pre-registered criteria, candidate shapes, cost table and its named blocker), §8 FL-R3 (ruling, two binding constraints).
   - Target: pre-genesis
 
 - **Size and wire FL-R19's relay-floor clamp margin** — blocked on the construction-to-broadcast gap distribution, which is wallet instrumentation and not this lane's to measure. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §8 FL-R19 (pre-registered sizing criterion; margin must be fixed and deterministic).
@@ -1074,7 +1074,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Give the storage layer a cheap per-block transaction count** — `Blockchain::get_tx_volume_avg` walks a 720-block window and `get_block_from_height` loads and parses each full block blob to read `tx_hashes.size()`; #640 memoized the repeat case but a cold call still parses 720 blocks. Owned by the storage lane: [DAEMON_REDB_STORE.md](design/DAEMON_REDB_STORE.md).
   - Target: pre-genesis
 
-- **Measure boundary-cell occupancy** — how much chain *time* is spent near a pow2 boundary, as against how many swept cells oscillate. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §9 FL-D8 (why it is owed, and when it comes due).
+- **Measure boundary-cell occupancy** — how much chain *time* is spent near a pow2 boundary, as against how many swept cells oscillate; **folded into the §10 time-grid round's instrument**, where it is the input that selects the grid period. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.9 and §9 FL-D8 (why it is owed).
   - Target: pre-genesis
 
 

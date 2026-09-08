@@ -6,9 +6,9 @@ FL-R14 ruled). The round-9 implementation bundle **merged as PR #640**
 is in flight on `feat/fee-ladder-impl-2`. What keeps the round OPEN is
 the residue queued in [`FOLLOWUPS.md`](../FOLLOWUPS.md) — each row a
 one-liner pointing at its owning §-row, which carries the named blocker.
-FL-R3 (restoring the hysteresis band to the served path, which needs the
-time-grid shape and returns as its own round) is the one with a
-consensus-surface consequence.
+FL-R3 is the one with a consensus-surface consequence, and **its
+time-grid round is now OPEN as §10 of the derivation** (opened
+2026-09-08 on `design/fl-r3-time-grid`).
 All substance lives in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md);
 this file is the thin round-state record only (rule 95 — one owner per
 claim, no restatement). Consensus behavior changes live in the
@@ -1152,3 +1152,39 @@ directly. Dispositions:
    resume per its own criterion; the routing to the consensus lane
    (C2-R0 phase 2, which edits `CONSENSUS_RULE_CENSUS.md` §10) carries
    the criteria, and this file records their satisfaction.
+
+## Round 18 (opened 2026-09-08): FL-R3 restoration — the time-grid round
+
+**OPEN.** Substance in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md)
+§10; this record carries state only (rule 95 — one owner per claim).
+
+Opened against `dev` `c1709cf2f`, citing rule 26. Jurisdiction is narrow
+by construction: the band staying and `C_q` not becoming chain state are
+RULED and are inputs, not questions. The round decides the *shape* of the
+previous value — the four questions `blockchain.cpp` already names at the
+call site: grid period, fold depth, reorg behaviour, per-query cost.
+
+Two findings the opening already puts on the record, both of which change
+what the implementing PR can do:
+
+- **The fold's first step is the ruled-out unseeded snap**, confined to
+  one block per grid cell. Its weight falls as `1/P`, which bounds `P`
+  from below *independently of cost* — and disqualifies the
+  "seed at the anchor, one step to `h`" shape as the rejected shape with
+  a longer lever.
+- **The naive fold is disqualifying on cost.** `get_tx_volume_avg` parses
+  720 full block blobs and memoizes ONE entry, so a depth-`D` fold thrashes
+  it: `D × 720` parses under the blockchain lock. The restoration
+  therefore rides a single-scan shape (the `D` windows overlap; their
+  union is one contiguous range) or it is **BLOCKED on the storage-lane
+  cheap per-block tx count**, named per rule 22.
+
+Pre-registration is committed before the instrument exists, and the
+commit ordering in this branch is the register. **FL-D8 folds into this
+round's instrument** — boundary-cell occupancy is the input that selects
+the grid period, and it has been load-bearing in four dispositions while
+unmeasured.
+
+Precedent followed for scope: the design PR #614 carried its own
+instrument (`fee_ladder.rs`), so the grid arms belong in this round's PR
+rather than a separate code branch.

@@ -1449,7 +1449,7 @@ ride each row.
 | --- | --- | --- | --- |
 | FL-R1 | The ladder derives from the validation-path miner economics. **Operand per the ADOPTED round-8 amendment (whole-scalar form)**: the estimate prices against the M_r-neutral total operand `max(curve(remaining), TAIL)` with the WHOLE volume-dependent scalar quantized — `C_q = Q_ceil((1−σ)·M_r/(1−b))`, unchanged from the round's adopted design. The drafted split (`R_eff` carrying raw `M_r`, only `C′` snapped) was measured and REJECTED: `Q(C′)·M_r ≠ Q(C′·M_r)` — identical in algebra, not in quantization — and it re-created the FL-C4a dwell failure (4-block cohorts at baseline), flipped the FL-C6 clamp live at genesis-quiet, and broke launch continuity at quiet-mature. **BUILT** | adopt — **built** | ⚖ (F14b-adjacent) |
 | FL-R2 | Rung values are state-computed daemon-side each estimate | adopt | |
-| FL-R3 | The correction enters only pow2-quantized (ceiling) and hysteresis-guarded; per the adopted round-8 amendment the quantized quantity is the WHOLE scalar `C = (1−σ)·M_r/(1−b)` — exactly the round's measured design. Hysteresis implemented Rust-side (`fee_correction_quantized`, 3% band). **RULED at review round 17: the hysteresis STAYS, and FL-R3 closes by RESTORING it to the production path** — not by persisting `C_q` as chain state, and not by retiring the band. *(Maintainer, in-channel and relayed 2026-09-07. A relayed ruling, not an in-tree signature — no approving review or maintainer commit carries it — and this row says so rather than letting a relay read as a signature.)* **The ground, as ruled, and it is the banded map's own figures:** the worst inter-flip dwell is ≈ 125 blocks, which at this tree's 120 s target (`BLOCKS_PER_YEAR` = 262 800) is **4.2 hours**, so a 2× move roughly every four hours in a minority of states, and a **4.0 %** chance that a re-quote changes across a ten-minute window. Against the baseline users actually live with — Bitcoin and Ethereum estimates can move several-fold *within one block* under congestion, which is why those wallets present low/medium/high and the number is understood to be soft — that is stabler, and it sits below the threshold at which anyone forms an expectation there is something to violate. So "barely moves" is accurate, the residual needs no mechanism, and the disposition is to serve the band rather than to argue the band away. **TWO BINDING CONSTRAINTS ON THE RESTORATION, both from findings already on this record:** **(1) the band must remain a PURE FUNCTION OF CHAIN STATE.** Whatever unblocks the production caller may not introduce per-node held state. Derivability is the property FL-R18 closed on and the whole reason a conforming wallet's fee leaks nothing; a restoration that quietly acquires state does not restore this row, it repeals FL-R18. Named here so the fix cannot acquire state while nobody is watching. **(2) SINGLE OWNER.** The band's arithmetic lives in one place and the instrument transliterates nothing — this cycle's own finding, where the sim's copied band had silently lost the owner's `MIN_REPRESENTABLE_C` floor, so a measurement was being taken on a mechanism that was not the shipped one. It binds whatever caller gets wired up. **WHERE THAT LEAVES THE WORK, stated against constraint (1) rather than around it: the blocker IS that the band needs history.** `C_q(h) = f(C(h), C_q(h−1))` is a recurrence, and the two attempts that failed each failed on this: a daemon-local remembered value made the served rate track the process's query history, and the previous block's UNSEEDED snap is a one-step approximation, not the recurrence, and inverts the result. By the ruling's own terms that puts the restoration on the **time-grid** branch — a band whose "previous" is taken from a grid-aligned anchor rather than from unbounded history (a fold over a fixed window from a grid height, or a seed at an epoch boundary), which is a pure function of chain state and bounded to evaluate, at the cost of extra evaluations per query. **That is a design change, so it comes back as a round; it is not smuggled in as an implementation detail here.** **Until it lands the daemon serves the un-banded ceiling. That is a temporary implementation state, NOT a design regression:** FL-C7's ratified figures are the banded ones and stand as ratified, the FL-C4a dwell gate is insensitive to the band either way (446 banded, 464 un-banded, bar 240), and §4.5b's rejection-race exposure moves by three cells (22 → 25). | **RULED — hysteresis STAYS; ceiling served today, band restoration owed as the time-grid round** | adopt — **built; served-path restoration owed, constraints (1) and (2) binding** | ruled in-channel at review round 17 |
+| FL-R3 | The correction enters only pow2-quantized (ceiling) and hysteresis-guarded; per the adopted round-8 amendment the quantized quantity is the WHOLE scalar `C = (1−σ)·M_r/(1−b)` — exactly the round's measured design. Hysteresis implemented Rust-side (`fee_correction_quantized`, 3% band). **RULED at review round 17: the hysteresis STAYS, and FL-R3 closes by RESTORING it to the production path** — not by persisting `C_q` as chain state, and not by retiring the band. *(Maintainer, in-channel and relayed 2026-09-07. A relayed ruling, not an in-tree signature — no approving review or maintainer commit carries it — and this row says so rather than letting a relay read as a signature.)* **The ground, as ruled, and it is the banded map's own figures:** the worst inter-flip dwell is ≈ 125 blocks, which at this tree's 120 s target (`BLOCKS_PER_YEAR` = 262 800) is **4.2 hours**, so a 2× move roughly every four hours in a minority of states, and a **4.0 %** chance that a re-quote changes across a ten-minute window. Against the baseline users actually live with — Bitcoin and Ethereum estimates can move several-fold *within one block* under congestion, which is why those wallets present low/medium/high and the number is understood to be soft — that is stabler, and it sits below the threshold at which anyone forms an expectation there is something to violate. So "barely moves" is accurate, the residual needs no mechanism, and the disposition is to serve the band rather than to argue the band away. **TWO BINDING CONSTRAINTS ON THE RESTORATION, both from findings already on this record:** **(1) the band must remain a PURE FUNCTION OF CHAIN STATE.** Whatever unblocks the production caller may not introduce per-node held state. Derivability is the property FL-R18 closed on and the whole reason a conforming wallet's fee leaks nothing; a restoration that quietly acquires state does not restore this row, it repeals FL-R18. Named here so the fix cannot acquire state while nobody is watching. **(2) SINGLE OWNER.** The band's arithmetic lives in one place and the instrument transliterates nothing — this cycle's own finding, where the sim's copied band had silently lost the owner's `MIN_REPRESENTABLE_C` floor, so a measurement was being taken on a mechanism that was not the shipped one. It binds whatever caller gets wired up. **WHERE THAT LEAVES THE WORK, stated against constraint (1) rather than around it: the blocker IS that the band needs history.** `C_q(h) = f(C(h), C_q(h−1))` is a recurrence, and the two attempts that failed each failed on this: a daemon-local remembered value made the served rate track the process's query history, and the previous block's UNSEEDED snap is a one-step approximation, not the recurrence, and inverts the result. By the ruling's own terms that puts the restoration on the **time-grid** branch — a band whose "previous" is taken from a grid-aligned anchor rather than from unbounded history (a fold over a fixed window from a grid height, or a seed at an epoch boundary), which is a pure function of chain state and bounded to evaluate, at the cost of extra evaluations per query. **That is a design change, so it comes back as a round; it is not smuggled in as an implementation detail here.** **Until it lands the daemon serves the un-banded ceiling. That is a temporary implementation state, NOT a design regression:** FL-C7's ratified figures are the banded ones and stand as ratified, the FL-C4a dwell gate is insensitive to the band either way (446 banded, 464 un-banded, bar 240), and §4.5b's rejection-race exposure moves by three cells (22 → 25). **ROUND OPENED 2026-09-08 — see §10**, which carries the pre-registered criteria (C10-1…C10-5), the candidate shapes, and the cost table. Two things §10 settles that this row could not: the fold's FIRST step is the ruled-out unseeded snap, confined to one block per grid cell, which puts a lower bound on `P` independent of cost; and the naive fold is DISQUALIFYING on cost (`D × 720` full block parses under the blockchain lock, since `get_tx_volume_avg`'s memo holds one entry), so the restoration rides a single-scan shape or is **BLOCKED on the storage-lane cheap per-block tx count** — named per rule 22 rather than implied. | **RULED — hysteresis STAYS; ceiling served today, band restoration owed as the time-grid round (OPEN, §10)** | adopt — **built; served-path restoration owed, constraints (1) and (2) binding; round open** | ruled in-channel at review round 17; round opened 2026-09-08 |
 | FL-R4 | Rung count = 3; `Fm` deleted; FL-C3-vs-C4b conflict resolved for privacy per §5.3 | ~~adopt~~ ~~CONTESTED round 5~~ **RESOLVED: confirmed by FL-R17's signature (three tiers), round 7** | reopened round 5; resolved round 7 |
 | FL-R5 | Top rung = `C_q·2·R/Mfw` unconditional (surge discount removed; operand per the adopted amendment). **BUILT** (`corrected_fee_ladder`; heritage surge case 22 000 → 67 000, pinned) | adopt — **built** | |
 | FL-R6 | `fees[0]` clamped to the unbuffered relay floor (`blockchain.h:682` seam) | adopt | ⚖ CEN-M3 |
@@ -1493,3 +1493,201 @@ maintainer chooses to add: ________________
 (`--fee-ladder`). Pre-registration commit precedes the instrument in this
 branch's history — that ordering is the pre-registration register, stated here so a
 later reader sees method, not accident.*
+
+---
+
+## §10 FL-R3 restoration — the time-grid round (OPEN, round 1)
+
+**Status:** OPEN. Opened 2026-09-08 against `dev` `c1709cf2f`. This round
+exists because FL-R3 was RULED at review round 17 — the hysteresis band
+**stays** and FL-R3 closes by **restoring it to the served path** — and
+the ruling put the restoration on the time-grid branch rather than
+leaving it to the implementing PR. Rule 26
+(`26-sub-pr-design-discipline`) is cited: the surface is
+consensus-adjacent, crosses the FFI, and is designed before it is cut.
+
+### §10.0 Jurisdiction — what this round may and may not decide
+
+**May not.** The band stays (ruled). `C_q` is not persisted as chain
+state (ruled). The two binding constraints are inputs, not questions:
+the band remains a **pure function of chain state**, and it keeps a
+**single owner**. A proposal that acquires per-node state does not
+restore FL-R3, it repeals FL-R18 — the row says so and this round
+inherits that.
+
+**May.** The *shape* of the previous value: grid period, fold depth,
+evaluation cost, reorg behaviour, and where the fold lives across the
+FFI. These are the four questions `blockchain.cpp` already names at the
+call site, and they are this round's agenda.
+
+### §10.1 Pre-registered decision criteria
+
+**Registered before the instrument's grid arm exists**, per the same
+mandate §1 carried. The pre-registration commit precedes the instrument
+commit in this branch's history; that ordering is the register.
+
+- **C10-1 — restoration is measured against FL-C7's ratified banded
+  figures, not against "better than today".** Restored means the served
+  map's worst boundary-cell transition count returns to the banded order
+  (ratified: worst 24, 14 boundary-parked cells) rather than the served
+  un-banded 1 161. A result between the two is a partial restoration and
+  is reported as one, with the number, not rounded up to success.
+- **C10-2 — dwell must not regress.** The FL-C4a dwell gate (bar 240;
+  banded 446, un-banded 464) is insensitive to the band either way. A
+  grid that *lowers* dwell below the bar fails regardless of what it does
+  for boundary flicker.
+- **C10-3 — a per-query cost budget is a gate, not a note.** The
+  restoration must not make a fee quote cost more block parses than the
+  un-banded path does today (one `get_tx_volume_avg`, memoized). Any
+  shape exceeding that budget is BLOCKED on the storage-lane per-block tx
+  count (§10.4), and the FL-R3 row must name that blocker rather than
+  implying it (rule 22).
+- **C10-4 — the grid period `P` is selected from measurement, not
+  taste.** `P` is chosen from the §10.4 cost table together with FL-D8's
+  boundary-cell occupancy. Neither alone is sufficient: cost bounds `P`
+  from below, occupancy says whether the residual `P` leaves is worth
+  paying for.
+- **C10-5 — pre-registered reading of the grid-only arm (§10.3 C).** If
+  grid-only matches the banded map on C10-1 within one transition, the
+  finding is *the grid subsumes the band's boundary job* and it goes to
+  the maintainer as a question, because the band staying is ruled and
+  this round may not retire it. If grid-only does not match, the finding
+  is *the band is doing work the grid cannot do* and the fold (§10.3 B)
+  is the shape. Both readings are written here before either is
+  observed — the failure mode this guards is that both arguments drift
+  toward the decision already taken.
+
+### §10.2 The recurrence, and why both earlier attempts failed on it
+
+`C_q(h) = f(C(h), C_q(h−1))` is a recurrence, and that is the whole
+difficulty. Two attempts are on the record, each archived rather than
+merely described:
+
+- **Daemon-local remembered value.** `blockchain.h` carried
+  `mutable uint64_t m_fee_correction_cq{0}`, threaded as `prev_cq`. It
+  makes the served rate track *the process's query history*: two nodes at
+  the same tip serve different quotes depending on what they were asked
+  before. Archived at tag
+  `archive/fee-ladder-r12-impl-rejected-2026-09-08`, which exists so this
+  round does not rebuild it.
+- **Previous block's unseeded snap.** A one-step approximation rather
+  than the recurrence, and it inverts the result.
+
+**The second failure has a consequence this round must carry.** A fold
+that starts at a grid anchor `h₀` with no history takes its first step
+from `snap(h₀)` — which *is* the unseeded one-step shape. The grid does
+not eliminate that flaw; it **confines it to the first block of each
+grid cell**. So the flaw's weight falls as `1/P`, which is a lower bound
+on `P` independent of cost, and is the reason the "seed at `h₀`, single
+step straight to `h`" shape is **not** a candidate below: it skips
+`h₀+1 … h−1` and is the rejected shape with a longer lever.
+
+### §10.3 Candidate shapes
+
+**(B) Fold over a fixed window from the grid anchor — the ruling's named
+shape.** `h₀ = h − (h mod P)`; `C_q(h₀) = snap(C(h₀))`; then iterate
+`hysteresis_step` over `h₀+1 … h`. Pure function of `(chain state, h)`,
+bounded by `P` evaluations. This is the shape to beat.
+
+**(C) Grid-only, as INSTRUMENTATION.** Evaluate the snap at `h₀` and
+serve it for the whole cell — the quote changes at most once per `P`
+blocks, so a grid alone produces dwell `≥ P` without any band. This is
+**not proposed**; the band staying is ruled. It is built as a sim arm so
+the measurement exists, because the question "does a time grid already
+do the band's boundary job" will otherwise be argued rather than
+answered, and C10-5 pre-registers how each outcome reads.
+
+### §10.4 Cost — the crux, and where the round is blocked
+
+`get_tx_volume_avg(h)` walks `SHEKYL_TX_VOLUME_WINDOW` = 720 blocks and
+**parses each full block blob** to read `tx_hashes.size()`. It is
+memoized, but on a **single entry** keyed `(top_hash, height)`. A fold
+evaluating `D` distinct heights therefore thrashes that memo.
+
+| shape | block parses per quote | note |
+|---|---|---|
+| today (un-banded) | 720, memoized to ~0 on repeat | the budget C10-3 protects |
+| naive fold, depth `D` | `D × 720` | memo thrashes; at `D` = 60 that is 43 200 parses **under the blockchain lock** |
+| single-scan fold | `D + 720` | the `D` windows overlap; their union is one contiguous range |
+| storage-lane per-block count | ≈ 0 parses | the structural fix |
+
+**The naive column is disqualifying, and it is why this is a round and
+not a patch.** The single-scan column is the interesting one: consecutive
+heights share 719 of their 720 blocks, so the union of all `D` windows is
+the contiguous range `(h₀ − 720, h]` — scanned **once**, with the rolling
+means and the fold computed from one pass. That requires a different
+shape at the boundary than "call the FFI per height" (§10.7).
+
+**Named blocker, per rule 22.** If the single-scan shape cannot meet
+C10-3's budget, FL-R3's restoration is BLOCKED on the storage-lane cheap
+per-block tx count already queued in FOLLOWUPS — which this round would
+promote from a nicety to FL-R3's critical path. That dependency is to be
+stated in the FL-R3 row, with the measurement that decided it.
+
+### §10.5 The grid period `P`
+
+Candidates, with the reason each is on the list:
+
+| `P` | wall time at 120 s | provenance | first-look objection |
+|---|---|---|---|
+| 720 | 24 h | `SHEKYL_TX_VOLUME_WINDOW` — the correction's own averaging window | fold depth up to 720; quote frozen up to a day |
+| 60 | 2 h | ≈ the measured worst inter-flip dwell (≈ 125 blocks ≈ 4.2 h) | none yet — nearest to the dynamics being damped |
+| 10 000 | ≈ 13.9 days | `settlement_epoch_blocks`, an existing consensus constant | **reject**: a fee quote frozen for two weeks is not a fee quote; reusing a constant whose job is settlement, not pricing, is coupling by coincidence |
+
+Reusing an existing constant is attractive — it mints nothing and
+inherits a ratified value — but only where the two jobs share a cadence.
+Settlement and fee pricing do not, and the table records that rejection
+so it is not re-proposed. `P` is selected per C10-4.
+
+### §10.6 Purity: a memo is not held state, and the line is already drawn
+
+The distinction this round leans on is **already in the tree**, at the
+function whose cost created the problem. `get_tx_volume_avg`'s memo is
+keyed `(top_hash, height)` and its comment states the reasoning: that
+makes it *"a memoization of a pure function of chain state and NOT
+daemon-local held state — every node at the same tip returns the same
+value, and a reorg changes the top hash so the entry simply misses."*
+
+The fold may be memoized the same way, and may be advanced incrementally
+as blocks arrive, **provided the cold from-`h₀` path exists and is what
+the memo is verified against** — the memo must be an optimization of a
+computation that is defined without it. The rejected
+`m_fee_correction_cq` was keyed on *nothing*: there was no cold path it
+approximated. Stating the difference explicitly is required, or this
+round reads as reintroducing what round 17 ruled out.
+
+### §10.7 Single owner across the FFI
+
+Constraint (2) is not satisfiable by discipline alone here. If C++
+iterates and calls the FFI once per step, **C++ owns the fold** — the
+recurrence structure, its bounds, and its boundary behaviour would live
+on the C++ side and the Rust owner would hold only one step. That is the
+FL-R12′ shape inverted.
+
+So: **Rust folds, C++ marshals.** One call carrying the bounded
+per-height inputs, matching #640's marshal-only shape, under rule 40 (no
+panic across the ABI; length-checked, total at the boundary). The
+instrument's grid arm calls the **same** fold function — which makes
+constraint (2) true by construction rather than by review, and is the
+direct lesson of the drifted transliterated band that lost
+`MIN_REPRESENTABLE_C`.
+
+### §10.8 Reorg behaviour
+
+A reorg shallower than `h − h₀` changes intermediate blocks and therefore
+changes `C_q`. **That is correct, not a defect**: the value is a pure
+function of chain state, so a different chain is entitled to a different
+quote, and the memo misses because `top_hash` changed. Recorded because
+"the quote moved after a reorg" will otherwise be read as instability.
+
+### §10.9 What the instrument must produce
+
+- The grid arm (B) and the grid-only arm (C), both calling the one owner.
+- Per `P` candidate: worst boundary-cell transition count and parked-cell
+  count (against C10-1), dwell (against C10-2), and evaluation depth
+  distribution (against C10-3).
+- **FL-D8 folds into this round's instrument.** Boundary-cell occupancy —
+  how much chain *time* sits near a pow2 boundary, as against how many
+  swept cells oscillate — is the input C10-4 needs to choose `P`, and it
+  has been load-bearing in four dispositions while remaining unmeasured.
+  Its FOLLOWUPS row is repointed here rather than left standing alone.
