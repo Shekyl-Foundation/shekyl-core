@@ -25,7 +25,7 @@
 //! Multi-tenant `--wallet-dir` exchanges extend this seam later
 //! (`WALLET_REWRITE_PLAN.md`).
 
-use shekyl_engine_core::{Engine, PScanHandle, ServingHandle, ServingPosture, SoloSigner};
+use shekyl_engine_core::{CadenceHandle, Engine, PScanHandle, ServingPosture, SoloSigner};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -44,29 +44,39 @@ pub type SharedEngine = Arc<RwLock<Engine<SoloSigner>>>;
 /// than another parameter on `set_open` / `take_open` / `restore_open` and
 /// every call site of each.
 ///
-/// Both are `None` for a non-staker.
+/// The P-scan handle is `None` for a non-staker; the cadence driver runs for
+/// **every** wallet (its submit-lifecycle leg is not staker-gated), so
+/// `cadence` is `Some` on every production open — it is `Option` only so
+/// `Default` stays derivable for the empty-slot states. The SH-2b-2 serving
+/// lifecycle has no field here: its handle parks **inside** the cadence
+/// driver (`CadenceHandle::adopt_serving`), whose serving-liveness leg owns
+/// restart and whose teardown owns the ordered stop
+/// (`ENGINE_CADENCE_DRIVER.md` §3 leg 2).
 #[derive(Default)]
 pub struct OpenTasks {
     /// The driving P-scan task (WI-1).
     pub pscan: Option<PScanHandle>,
-    /// The persona serving lifecycle (SH-2b-2): the §10.9 launch standoff, the
-    /// serve-set refresh cadence, and the ordered teardown that stops tor
-    /// before its listener.
-    pub serving: Option<ServingHandle>,
+    /// The engine cadence driver (`ENGINE_CADENCE_DRIVER.md`): chain-progress
+    /// tick over the maintenance legs, carrying the parked serving lifecycle.
+    /// Parked by `wrap_and_start_tasks` via [`Engine::into_shared`].
+    pub cadence: Option<CadenceHandle>,
 }
 
 impl OpenTasks {
-    /// Wind both tasks down, awaiting each.
+    /// Wind the tasks down, awaiting each.
     ///
-    /// **Serving first.** Stopping the advertisement before stopping the scan
-    /// is the right order for the same reason the host stops tor before its
-    /// listener: a published descriptor must never outlive the ability to
-    /// answer at it. The P-scan then winds down and releases its clone of the
+    /// **Cadence first** (`ENGINE_CADENCE_DRIVER.md` §1 shutdown order): its
+    /// teardown stops the parked serving lifecycle — the advertisement — and
+    /// awaits it, so a published descriptor never outlives the ability to
+    /// answer at it (the same reason the host stops tor before its
+    /// listener). The P-scan then winds down and releases its clone of the
     /// engine arc, which is what makes the close path's `Arc::try_unwrap`
-    /// possible.
+    /// possible — the cadence driver holds only a `Weak`, so it was never
+    /// going to block the unwrap; awaiting its exit first is what makes the
+    /// serving stop deterministic rather than next-poll.
     pub async fn shutdown(self) {
-        if let Some(serving) = self.serving {
-            serving.shutdown().await;
+        if let Some(cadence) = self.cadence {
+            cadence.shutdown().await;
         }
         if let Some(pscan) = self.pscan {
             pscan.shutdown().await;
@@ -86,18 +96,19 @@ pub struct Tenant {
     /// Open Engine handle (FULL capability, SoloSigner).
     engine: Option<SharedEngine>,
     /// Embedder-held background tasks for the open wallet (WI-1 P-scan +
-    /// SH-2b-2 serving).
+    /// the engine cadence driver, which carries the SH-2b-2 serving handle).
     ///
-    /// A **staker** open/create starts both via `wrap_and_start_tasks` and
-    /// parks them here for the wallet's whole open lifetime; a non-staker
-    /// parks `OpenTasks::default()`. The P-scan holds its own clone of the
-    /// engine arc, so [`close_wallet`](crate::lifecycle::close_wallet) must
-    /// [`OpenTasks::shutdown`] this bundle (serving first, then the scan)
-    /// **before** `Arc::try_unwrap` — a live scan handle otherwise blocks
-    /// the unwrap and the close would fail-loud as "still in use." The
-    /// bundle is carried atomically with the engine through
-    /// [`take_open`](Self::take_open) / [`restore_open`](Self::restore_open)
-    /// so no lifecycle transition can strand one without the other.
+    /// Every open/create starts the cadence driver via
+    /// `wrap_and_start_tasks`; a staker additionally gets a P-scan. The
+    /// P-scan holds its own clone of the engine arc, so
+    /// [`close_wallet`](crate::lifecycle::close_wallet) must
+    /// [`OpenTasks::shutdown`] this bundle (cadence first — which stops the
+    /// parked serving lifecycle — then the scan) **before** `Arc::try_unwrap`
+    /// — a live scan handle otherwise blocks the unwrap and the close would
+    /// fail-loud as "still in use." The bundle is carried atomically with the
+    /// engine through [`take_open`](Self::take_open) /
+    /// [`restore_open`](Self::restore_open) so no lifecycle transition can
+    /// strand one without the other.
     tasks: OpenTasks,
     /// True while `create_wallet` / `open_wallet` is doing slow work
     /// (daemon connect, Argon2) *outside* the tenant mutex. Prevents a
@@ -159,10 +170,11 @@ impl Tenant {
     /// Install a freshly created / opened engine (already wrapped in its
     /// [`SharedEngine`] arc) and its open-span tasks as the open wallet.
     ///
-    /// The caller wraps the engine and starts the P-scan and serving tasks
-    /// *before* this call, so the arc-and-bundle land together and a staker's
-    /// scan and host are live the moment the wallet is reachable. Both
-    /// handles are `None` for a non-staker.
+    /// The caller wraps the engine (which starts the cadence driver) and
+    /// starts the P-scan and serving tasks *before* this call, so the
+    /// arc-and-bundle land together and a staker's scan and host are live the
+    /// moment the wallet is reachable. The P-scan handle is `None` for a
+    /// non-staker; the serving handle rides inside the cadence driver.
     ///
     /// # Panics
     ///
@@ -274,15 +286,18 @@ impl Tenant {
     /// What the parked serving host is currently obligated to serve, or
     /// `None` when no host is running (`COMPLETETREE_ACTIVATION.md` Q-3).
     ///
-    /// The embedder is the only layer that can answer this — the handle
-    /// lives here, not on the `Engine` — so `staking_info` /
+    /// Delegates to the cadence driver, which parks the serving handle
+    /// (`ENGINE_CADENCE_DRIVER.md` §3 leg 2) — so `staking_info` /
     /// `get_wallet_info` take it from the tenant and project it onto the
     /// wire. It is not a field of the engine's sealed-state view.
     ///
     /// A cheap snapshot read: it never waits on the serving task, so a
     /// status query cannot stall the thing that serves.
     pub(crate) fn serving_posture(&self) -> Option<ServingPosture> {
-        self.tasks.serving.as_ref().and_then(ServingHandle::posture)
+        self.tasks
+            .cadence
+            .as_ref()
+            .and_then(CadenceHandle::serving_posture)
     }
 }
 
@@ -293,8 +308,8 @@ impl std::fmt::Debug for Tenant {
             .field("engine", &self.engine.as_ref().map(|_| "<engine>"))
             .field("pscan", &self.tasks.pscan.as_ref().map(|_| "<pscan-task>"))
             .field(
-                "serving",
-                &self.tasks.serving.as_ref().map(|_| "<serving-task>"),
+                "cadence",
+                &self.tasks.cadence.as_ref().map(|_| "<cadence-task>"),
             )
             .field("opening", &self.opening)
             .field("closing", &self.closing)

@@ -432,7 +432,7 @@ the digest dominates per-call cost, so the workload is **not** a trivial
 pure-read despite the parameter set being build-time-constant. The
 count is height-independent. The method reads nothing from
 `ChainEconomicsSource`; the shim returns the snapshot's
-`money_supply_atomic` (`u64`) so the bench consumes an observable
+`emission_curve_asymptote_atomic` (`u64`) so the bench consumes an observable
 without surfacing the `pub(crate)` snapshot type, and an internal
 `black_box` around the snapshot prevents digest elision.
 

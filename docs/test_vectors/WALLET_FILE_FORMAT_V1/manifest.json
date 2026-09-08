@@ -1,15 +1,23 @@
 {
   "_comment": [
-    "Tier-3 Known Answer Test fixtures for WALLET_FILE_FORMAT_V1.",
-    "Each fixture is the output of seal_keys_file_with_entropy (or, for",
-    "state_for_full.hex, seal_state_file_with_entropy) called with the inputs",
-    "below. The fixtures are regenerated only when a deliberate, documented",
-    "format change lands; see `cargo test -p shekyl-crypto-pq wallet_envelope::",
-    "tests::kat_regenerate_fixtures -- --ignored`.",
+    "Self-pinned (tier-3) format vectors for WALLET_FILE_FORMAT_V1 — drift",
+    "tripwires per 50-testing.mdc's vector-oracle taxonomy, NOT Known Answer",
+    "Tests: their oracle is the sealing module itself. Each fixture is the",
+    "output of seal_keys_file_with_entropy (or, for state_for_full.hex,",
+    "seal_state_file_with_entropy) called with the inputs below.",
     "",
-    "Argon2id runs at m_log2=0x08 (256 KiB) here — KAT-only relaxation so the",
-    "cargo-test cycle stays fast. Production wallets always use DEFAULT_KDF_*",
-    "(m_log2=0x10, t=3, p=1)."
+    "Regeneration is a decision, not a command: the regenerator refuses to",
+    "run unless SHEKYL_PINNED_REGEN_DECISION cites the V3_WALLET_DECISION_LOG",
+    "entry authorizing the move. See",
+    "  SHEKYL_PINNED_REGEN_DECISION='YYYY-MM-DD <rationale>' \\",
+    "    cargo test -p shekyl-crypto-pq pinned_fixtures_regenerate -- --ignored",
+    "",
+    "Argon2id runs at m_log2=0x08 (256 KiB) here — fixture-only relaxation so",
+    "the cargo-test cycle stays fast. Production wallets always use",
+    "DEFAULT_KDF_* (m_log2=0x10, t=3, p=1).",
+    "",
+    "Last regenerated: 2026-09-07, 'composition-vector rebuild on real derived",
+    "address (KAT taxonomy PR)' — see V3_WALLET_DECISION_LOG.md 2026-09-07."
   ],
   "format_version": "0x01",
   "kdf": {
@@ -29,29 +37,17 @@
   "common_region1_inputs": {
     "creation_timestamp": 1700000000,
     "restore_height_hint": 2500000,
-    "expected_classical_address_hex": "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    "expected_classical_address_provenance": "DERIVED, not chosen: the 65-byte version||spend_pk||view_pk prefix of rederive_account(master_seed, Mainnet, Bip39).classical_address_bytes — the production derivation the engine open path runs. pinned_fixture_address_derives_from_fixture_seed re-checks this against the frozen bytes.",
+    "expected_classical_address_hex": "01c6ecf5b2ea5494961f464a1ba273c9e69c75b0e4b586d5878abdea9da86dd417158eb75745f7dab3887767301e5035dd48128c2fbc3b4a2b73fcb7ad500dea58"
   },
   "fixtures": {
     "full.hex": {
       "mode": "FULL (0x01)",
       "network": 0,
-      "seed_format": 0,
+      "seed_format": 1,
+      "seed_format_note": "0x01 = Bip39, the production-valid wire byte (pre-2026-09-07 fixtures sealed seed_format=0, which SeedFormat::from_u8 rejects — a wallet that could not exist)",
       "cap_content_description": "master_seed[64] with byte i set to 0x80 | (i & 0x7f)",
       "sealed_bytes": 288
-    },
-    "view_only.hex": {
-      "mode": "VIEW_ONLY (0x02)",
-      "network": 1,
-      "seed_format": 0,
-      "cap_content_description": "view_sk[32]=0x11.., ml_kem_dk[2400] with byte i = i & 0xff, spend_pk[32]=0x22..",
-      "sealed_bytes": 2688
-    },
-    "hardware_offload.hex": {
-      "mode": "HARDWARE_OFFLOAD (0x03)",
-      "network": 2,
-      "seed_format": 0,
-      "cap_content_description": "same as view_only + device_desc = \"ledger-nano-s:kat-serial-001\" (28 bytes)",
-      "sealed_bytes": 2718
     },
     "state_for_full.hex": {
       "companion_keys_file": "full.hex",

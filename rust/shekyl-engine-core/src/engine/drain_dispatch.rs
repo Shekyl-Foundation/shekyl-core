@@ -262,21 +262,21 @@ where
         // needs, and capture the wallet's own primary address (the drain
         // destination is engine-resolved, T-DS-3). A drain anchors off the
         // wallet's own synced tip (self-initiated, like a bond post).
-        let (daemon, stake, curve_tree, pending_write_lock, chain_tip, snapshot, primary) = {
+        let (daemon, stake, curve_tree, pending_gate, chain_tip, snapshot, primary) = {
             let g = self_arc.read().await;
             let stake = g.stake_handle().ok_or(DrainRequestError::NotStaker)?;
             (
                 g.daemon().clone(),
                 stake,
                 g.curve_tree.clone(),
-                g.pending_write_lock.clone(),
+                g.pending_gate.clone(),
                 g.ledger.synced_height(),
                 g.ledger.snapshot(),
                 g.primary_address(),
             )
         };
         let block_hash_at = move |h: u64| snapshot.block_hash_at(h);
-        let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
+        let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
         // Resolve the principal destination triple with the SAME birational map
         // the transfer path applies to any recipient's view key, so a drain

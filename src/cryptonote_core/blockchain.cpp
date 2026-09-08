@@ -4613,7 +4613,7 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
       tx_volume_avg,
       SHEKYL_TX_VOLUME_BASELINE,
       already_generated_coins,
-      MONEY_SUPPLY,
+      SHEKYL_EMISSION_CURVE_ASYMPTOTE,
       SHEKYL_BURN_BASE_RATE,
       SHEKYL_BURN_CAP);
   // `prev_cq = 0` is "no held value": the plain ceiling quantization.
@@ -6530,7 +6530,9 @@ leave:
   // FL-R12' (perpetual tail): the accumulator advances THROUGH the
   // emission-curve asymptote and does not saturate there — the inherited
   // Monero rationale that used to sit here ("MONEY_SUPPLY yields a subsidy
-  // of 0 under the base formula and therefore the minimum subsidy >0")
+  // of 0 under the base formula and therefore the minimum subsidy >0" —
+  // quoting the inherited text, whose constant this tree now calls
+  // SHEKYL_EMISSION_CURVE_ASYMPTOTE)
   // was true of the base formula and false of the capped composition it
   // predated (FL-V8's twins-that-were-not); under the signed ruling the
   // tail keeps accruing forever and `remaining` floors at zero on the read

@@ -91,7 +91,7 @@ existing `AtomicUnits` everywhere a raw `u64` *amount* persists or flows.
 | [`shekyl-curve-primitives` `Commitment.amount`](../../rust/shekyl-curve-primitives/src/lib.rs) | `amount: u64` | first-party (relocated from shekyl-oxide); edge accessor |
 | `shekyl-wire` transaction `fee` | `fee: u64` | the oxide `fcmp.rs` `ProofBase.fee` was deleted in the slice-1 wire extraction; the fee now lives on the genesis tx in `shekyl-wire` (see the `tx-builder wire.rs:26` row below) |
 | [`tx-builder wire.rs:26`](../../rust/shekyl-tx-builder/src/wire.rs) | `fee: u64` | |
-| economics [`burn.rs:27-29`](../../rust/shekyl-economics/src/burn.rs), [`params.rs:62`](../../rust/shekyl-economics/src/params.rs) `money_supply`, emission returns | reward/fee/supply | |
+| economics [`burn.rs:27-29`](../../rust/shekyl-economics/src/burn.rs), [`params.rs`](../../rust/shekyl-economics/src/params.rs) `EconomicParams::emission_curve_asymptote`, emission returns | reward/fee/supply | |
 | staking [`registry.rs:9`](../../rust/shekyl-consensus/src/registry.rs) `StakeEntry.amount` | | |
 
 ## 5. PR B — Secret-material hardening (Priority 1, security; `35-secure-memory.mdc`)

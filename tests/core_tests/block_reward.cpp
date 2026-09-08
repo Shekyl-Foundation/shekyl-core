@@ -270,7 +270,7 @@ bool gen_block_reward::check_block_rewards(cryptonote::core& /*c*/, size_t /*ev_
     // comparing them alone would move together under any reward-math
     // change and catch only a marshalling disagreement (PR #640 review).
     // These literals are derived from the frozen parameters and fail if
-    // the arithmetic moves: at genesis `curve(0) = MONEY_SUPPLY >> esf`
+    // the arithmetic moves: at genesis `curve(0) = SHEKYL_EMISSION_CURVE_ASYMPTOTE >> esf`
     // = 2 048 000 000 000, `tx_volume_avg = 0` pins `M_r` at its 0.8
     // rail, and the tail floor does not bind, so the paid pre-penalty
     // quantity is 1 638 400 000 000; the genesis emission share is 15%,

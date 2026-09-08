@@ -139,3 +139,98 @@ fn oversized_nonce_rejected_before_allocation_on_parse() {
     let err = tx_extra::parse(&blob).expect_err("oversized nonce length must be rejected");
     assert!(err.to_string().contains("nonce"), "{err}");
 }
+
+/// `0x0B` archival attestation. The C++ daemon reads this tag on a live
+/// consensus path (`blockchain.cpp`, `parse_archival_attestation_from_extra`
+/// deciding `headers_readable`), so the port must model it or the two parsers
+/// disagree about which coinbases exist.
+#[test]
+fn archival_attestation_field_round_trips() {
+    let blob = vec![0xA7u8; 96];
+    let fields = vec![
+        TxExtraField::PubKey([0x11; 32]),
+        TxExtraField::ArchivalAttestation(blob.clone()),
+    ];
+
+    let bytes = tx_extra::serialize(&fields).expect("serialize attestation extra");
+    assert_eq!(
+        bytes[33], 0x0B,
+        "the attestation tag byte follows the pubkey"
+    );
+
+    let parsed = tx_extra::parse(&bytes).expect("parse attestation extra");
+    assert_eq!(parsed, fields, "attestation extra must round-trip");
+    match &parsed[1] {
+        TxExtraField::ArchivalAttestation(b) => assert_eq!(*b, blob),
+        other => panic!("expected an attestation field, got {other:?}"),
+    }
+}
+
+/// A present-but-empty `0x0B` encodes as two bytes, not as the empty extra.
+/// That is a codec pin. The consensus reader's committed empty set is a
+/// successful parse with the tag *absent* (`attestation_reader_splits_absent_from_unreadable`);
+/// present-empty and absent both yield an empty blob at that API.
+#[test]
+fn empty_archival_attestation_is_distinct_from_an_absent_one() {
+    let with_empty = tx_extra::serialize(&[TxExtraField::ArchivalAttestation(Vec::new())])
+        .expect("serialize empty attestation");
+    let absent = tx_extra::serialize(&[]).expect("serialize empty extra");
+
+    assert_ne!(
+        with_empty, absent,
+        "a present-but-empty attestation must not encode as an absent one"
+    );
+    assert_eq!(
+        tx_extra::parse(&with_empty).expect("parse empty attestation"),
+        vec![TxExtraField::ArchivalAttestation(Vec::new())]
+    );
+}
+
+/// An attestation field must not disturb the per-output PQC shape rule, which
+/// counts only 0x06 and 0x07.
+#[test]
+fn attestation_does_not_disturb_the_pqc_shape_check() {
+    let n_out = 2usize;
+    let fields = vec![
+        TxExtraField::PubKey([0x11; 32]),
+        TxExtraField::PqcKemCiphertext(vec![0u8; HYBRID_KEM_CT_BYTES * n_out]),
+        TxExtraField::PqcLeafHashes(vec![0u8; PQC_LEAF_HASH_BYTES * n_out]),
+        TxExtraField::ArchivalAttestation(vec![0x5A; 8]),
+    ];
+    tx_extra::check_pqc_field_shape_of(&fields, n_out)
+        .expect("an attestation field is invisible to the 0x06/0x07 shape rule");
+}
+
+/// Cross-language grammar parity for `0x0B`: the same two literals the C++ leg
+/// asserts in `tests/unit_tests/archival_credit_wire.cpp`
+/// (`attestation_field_bytes_match_the_port`). The round-trip tests on each side
+/// prove each encoder is self-consistent, which two mutually wrong encoders
+/// would also satisfy; only a shared literal tests that they agree.
+#[test]
+fn attestation_field_bytes_match_the_daemon() {
+    let non_empty = tx_extra::serialize(&[TxExtraField::ArchivalAttestation(vec![1, 2, 3])])
+        .expect("serialize attestation");
+    assert_eq!(
+        non_empty,
+        vec![0x0B, 0x03, 0x01, 0x02, 0x03],
+        "the 0x0B encoding must match the daemon byte for byte"
+    );
+
+    let empty = tx_extra::serialize(&[TxExtraField::ArchivalAttestation(Vec::new())])
+        .expect("serialize empty attestation");
+    assert_eq!(
+        empty,
+        vec![0x0B, 0x00],
+        "a present-but-empty attestation is two bytes, not zero"
+    );
+
+    // Both literals must parse back to what the daemon wrote.
+    assert_eq!(
+        tx_extra::parse(&non_empty).expect("parse"),
+        vec![TxExtraField::ArchivalAttestation(vec![1, 2, 3])]
+    );
+    assert_eq!(
+        tx_extra::parse(&empty).expect("parse empty"),
+        vec![TxExtraField::ArchivalAttestation(Vec::new())]
+    );
+}

@@ -26,7 +26,7 @@
 //! this file implements them and adds nothing. Notably:
 //!
 //! - Posts are synthetic bytes seeded directly into `.wallet.pending` through
-//!   the engine-held `pending_write_lock` (the WI-2 two-writer discipline).
+//!   the engine-held `pending_gate` (the WI-2 two-writer discipline).
 //!   The receipt emit precedes the send (dispatch phase 3), so the receipt
 //!   instant is outcome-independent; the daemon's terminal rejection of the
 //!   synthetic bytes retires the record, which is what permits re-seeding
@@ -402,7 +402,7 @@ async fn one_run(
         let seed = wallet_seed(arm_tag, run, wallet);
         let (arc, tmp, _principal) =
             staker_wallet(daemon.rpc_port(), &seed, PSlot::from_raw(0)).await;
-        let write_lock = arc.read().await.pending_write_lock.clone();
+        let write_lock = arc.read().await.pending_gate.clone();
         let store = pending_post_store_for_engine(arc.clone(), write_lock);
         for slot in 0..PERSONAS_PER_WALLET {
             let pushed = try_seed(&store, arm_tag, run, wallet, slot, 0).await;

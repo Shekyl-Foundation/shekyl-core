@@ -30,11 +30,13 @@
 //! misclassified `has_pqc`, a miscounted auth segment — fails one language
 //! against the other instead of agreeing with itself.
 //!
-//! The **live-oracle** spend KAT (a daemon-accepted spend captured off a
-//! running node) remains deferred on its named blocker — the FCMP++ spend
-//! path has not yet produced a daemon-accepted transaction to capture
-//! (`docs/FOLLOWUPS.md`). This pin is the struct-derived half: it binds the
-//! two implementations to each other, not yet to a chain.
+//! The **live-oracle** spend KAT (`live_oracle_spend_v1.json`) is the other
+//! half of this file: bytes a running `shekyld` accepted and connected,
+//! captured by `e2e_fcmp_spend_accepted_by_daemon`. Note the distinction
+//! against the sibling comments in `fcmp_spend_e2e.rs` and
+//! `fcmp_spend_roundtrip.rs`, which say the **C++** spend path never produced
+//! one: that is still true, and is a different claim. The synthetic pin binds
+//! the two implementations to each other; the live pin binds both to a chain.
 
 mod common;
 use common::conforming_pqc_extra;
@@ -47,6 +49,13 @@ use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
 const PARITY_FIXTURE: &str = "tests/fixtures/pruned_tx_hash_parity_v1.json";
+
+/// The live-oracle sibling: daemon-accepted bytes. Deliberately a *separate*
+/// fixture from [`PARITY_FIXTURE`] — that one is hand-built, deterministic and
+/// reproducible with nothing but a checkout; this one requires a built daemon
+/// and a live run. Neither subsumes the other, and consolidating them would
+/// trade one property away for the other.
+const LIVE_ORACLE_FIXTURE: &str = "tests/fixtures/live_oracle_spend_v1.json";
 
 /// The pinned transaction's output count, which its `tx_extra` must match
 /// (CEN-I19: one `0x06` of `1120·n`, one `0x07` of `32·n`).
@@ -233,5 +242,94 @@ fn pruned_spend_identity_matches_the_pinned_oracle() {
         hex_str(&pruned.hash_with_supplied_prunable(digest)),
         tx_hash_hex,
         "pruned identity (supplied digest) diverged from the pinned txid"
+    );
+}
+
+/// The **live-oracle** half: bytes a running `shekyld` accepted and connected.
+///
+/// This is the property the sibling pin above cannot have. `build_tx` authors a
+/// transaction to a shape *we* believe consensus takes, and both languages then
+/// agree with us — which is worth having, and is exactly what fails silently if
+/// the belief is wrong. PR #630 is the precedent: the pinned bytes encoded a
+/// transaction with outputs and an empty `tx_extra`, a shape no builder can
+/// produce and admission rejects, so the pin fixed cross-language agreement on
+/// bytes the network would never carry.
+///
+/// These bytes carry a daemon's signature on that question. They were built by
+/// the production `Engine`, submitted to a real node, accepted by its consensus
+/// verify, and connected in a block — recorded, with the accepting daemon's own
+/// version string, by `e2e_fcmp_spend_accepted_by_daemon`.
+///
+/// The fixture records only the bytes and the txid. Every other identity is
+/// *derived* here and in the C++ leg by each language's production code: a
+/// fixture that also recorded the prunable digest could disagree with itself,
+/// and would pin a value the capturing run never independently checked.
+#[test]
+fn live_oracle_spend_identity_matches_the_accepted_bytes() {
+    let pin: Value = serde_json::from_str(
+        &std::fs::read_to_string(manifest(LIVE_ORACLE_FIXTURE)).expect("live-oracle fixture"),
+    )
+    .expect("live-oracle json");
+
+    let tx_hex = pin["tx_hex"].as_str().expect("tx_hex");
+    let tx_hash_hex = pin["tx_hash_hex"].as_str().expect("tx_hash_hex");
+
+    // Rule 47: assert the subject exists before asserting about it. An empty or
+    // truncated capture would otherwise parse-and-compare its way to a green.
+    let bytes = hex_bytes(tx_hex);
+    assert!(
+        bytes.len() > 1024,
+        "the captured spend is {} bytes, which is too small to be an FCMP++ \
+         spend — the fixture is truncated or was written by a failed capture",
+        bytes.len()
+    );
+    assert!(
+        !pin["accepted_by_daemon_version"]
+            .as_str()
+            .expect("accepted_by_daemon_version")
+            .is_empty(),
+        "the capture must name the daemon that accepted it"
+    );
+
+    // The daemon-accepted bytes parse through the production deserializer.
+    let tx = Transaction::from_bytes(&bytes).expect("daemon-accepted bytes must parse");
+
+    // Round-trip: re-serializing the parsed form reproduces them exactly. This
+    // is what breaks if the serializer drifts away from what the chain took.
+    assert_eq!(
+        hex_str(&tx.serialize()),
+        tx_hex,
+        "re-serializing the accepted spend changed its bytes"
+    );
+
+    // And the identity the daemon indexed it under.
+    assert_eq!(
+        hex_str(&tx.hash()),
+        tx_hash_hex,
+        "txid recomputed from the accepted bytes differs from the one the \
+         daemon accepted"
+    );
+
+    // The bound surface this file exists for: pruned identity with the digest
+    // supplied is the txid, now over bytes consensus admitted. Same
+    // recomputation as the synthetic sibling above and the C++ live leg
+    // (`get_pruned_transaction_hash`).
+    let pruned_form = {
+        let mut t = tx.clone();
+        let Ct::Fcmp { prunable, .. } = &mut t.ct else {
+            panic!("the captured spend must be an FCMP++ spend");
+        };
+        *prunable = None;
+        t.serialize()
+    };
+    assert!(
+        bytes.starts_with(&pruned_form),
+        "the pruned form must be a prefix of the full form"
+    );
+    let digest = keccak256(&bytes[pruned_form.len()..]);
+    assert_eq!(
+        hex_str(&tx.hash_with_supplied_prunable(digest)),
+        tx_hash_hex,
+        "pruned identity (supplied digest) diverged from the accepted txid"
     );
 }

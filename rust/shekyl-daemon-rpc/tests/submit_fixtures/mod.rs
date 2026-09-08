@@ -106,7 +106,12 @@ pub fn spend_tx_with_kis(key_images: &[[u8; 32]], fee: u64) -> Transaction {
                 })
                 .collect(),
             outputs,
-            extra: vec![0x06, 0xAA, 0xBB, 0xCC],
+            // Two outputs, so the PQC scan fields must both be present and
+            // correctly sized. This was `vec![0x06, 0xAA, 0xBB, 0xCC]`, a
+            // truncated varint that no parser ever accepted; it survived only
+            // while `validate_context_free_pruned` skipped the field-shape rule
+            // on an unparseable `extra`.
+            extra: conforming_pqc_extra(2),
         },
         ct: Ct::Fcmp {
             fee,

@@ -3846,6 +3846,7 @@ dependencies = [
  "helioselene",
  "hex",
  "hkdf",
+ "hmac",
  "postcard-schema",
  "proptest",
  "rand 0.8.6",

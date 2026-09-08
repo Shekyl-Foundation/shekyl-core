@@ -159,7 +159,7 @@ is ruled.
 | CEN-L6 | 4 | Every stored output carries an outPk commitment; amount-0 indexing | **S-OUT-KI** | Indexing choice has no record (recorded judgment disagreement) |
 | CEN-L13 | 4 | Corruption/IO guards abort rather than store inconsistent state | cross-surface | Sanity class — becomes the error taxonomy of the Rust store |
 | CEN-L14 | 4 | Five archival uniqueness rules have **no** DB constraint (flag-0 overwrites) | **S-ARCH** | Verify-side-only by design, or by omission? |
-| CEN-B3 | 4 | Hardfork voting inert; `HardFork::add` reject verdict **discarded** at the DB call site | S-CHAIN-W / P0c | DRS-P0c's `hf_versions` wart — same defect, two registers |
+| CEN-B3 | 4 | Hardfork voting inert; `HardFork::add` reject verdict **discarded** at the DB call site | S-CHAIN-W / P0c | Related machinery to DRS-W15 (tip-above `hf_versions` read-back), **not** the same defect — CEN-B3 is discarded `add` verdict + inert voting; W15 is rows not deleted on pop |
 | CEN-K3 | 4 | Alt-block duplicate rejected; DB belt `MDB_NODUPDATA` | **S-ALT** | Belt survives the engine change only if re-specified |
 | CEN-H5 | 1 | Input-variant whitelist (one live rule site + typed connect dispatch + DB backstop; the double-spend visitor site is **dead**) | S-CHAIN-W | ratified — port site 1 + the typed dispatch; the dead visitor is deletion residue, not a port target (§5.4.1 CEN-H5, corrected 2026-09-03) |
 | CEN-L7 | 1 | Archival connect-writers are fatal verify-backstops | **S-ARCH** | ratified; WS-2 journaled check-and-set |
@@ -561,7 +561,7 @@ plus its gate (`:4405–4415`).
 | CEN-I16 | **CHECKED-CONFORMANT** | W-PQ. `auth_version == 1`, `flags == 0`, `scheme_id ∈ {single, multisig}`, per-scheme key-length bounds — each rejects (`:175–223`) |
 | CEN-I17 | **CHECKED-CONFORMANT** | W-PQ. Signed payload binds prefix ‖ CtSig base ‖ keccak256(prunable) ‖ per-input PQC header ‖ **all** inputs' key hashes (`:62–158`), the cross-input bind included |
 | CEN-I18 | **CHECKED-CONFORMANT** | W-PQ. `shekyl_pqc_verify` rc-checked reject (`:230–243`). **Interaction verified, not assumed:** the gate carries `&& !is_archival_serve_credit_only` (`:4408`), so serve-credit txs (whose auths are empty by H20's rule) never reach the size gate that would reject them. The hybrid scheme's own adequacy is the signature-alignment round's subject, not this row's |
-| CEN-I19 | **UNREVIEWED** *(born 2026-09-06 with its implementation, PR #630; review at the merged sha owed)* | The rule and its implementation landed together (census §7 #19): admission adapter `cryptonote_format_utils.cpp:1000` over the daemon's own parse, called at `cryptonote_core.cpp:816` (relay + block, no `kept_by_block` gate) and `blockchain.cpp:1582` (coinbase); the rule itself in `shekyl-wire` `check_pqc_field_shape` via `shekyl_tx_extra_pqc_field_shape`; `blockchain_db.cpp:528` collector aborts instead of zero-filling. Red-first vectors observed accepted before the rule at all three gates; serve-credit must-accept control. A row born with its fix is UNREVIEWED by construction — the register records conformance only from a review at a merged sha. **REWRITE-NOTE:** the port applies the same `shekyl-wire` rule to its own parse — one home, identity with the daemon's verdict is the pass condition; the port's parser also rejects the three legacy tags (`0x03`, `0x0B`, `0xDE`) the C++ parser still accepts, which the merge-mining deletion (FOLLOWUPS) closes |
+| CEN-I19 | **UNREVIEWED** *(born 2026-09-06 with its implementation, PR #630; review at the merged sha owed)* | The rule and its implementation landed together (census §7 #19): admission adapter `cryptonote_format_utils.cpp:1000` over the daemon's own parse, called at `cryptonote_core.cpp:816` (relay + block, no `kept_by_block` gate) and `blockchain.cpp:1582` (coinbase); the rule itself in `shekyl-wire` `check_pqc_field_shape` via `shekyl_tx_extra_pqc_field_shape`; `blockchain_db.cpp:528` collector aborts instead of zero-filling. Red-first vectors observed accepted before the rule at all three gates; serve-credit must-accept control. A row born with its fix is UNREVIEWED by construction — the register records conformance only from a review at a merged sha. **REWRITE-NOTE:** the port applies the same `shekyl-wire` rule to its own parse — one home, identity with `check_pqc_field_shape` is the pass condition. Round 4 closed the tag-set divergence this note originally named (`0x03`/`0xDE` deleted from C++; `0x0B` modelled in `shekyl-wire`); an unparseable `extra` is now refused. The rewrite's pass condition is identity with that one rule, not with a second C++ parser |
 
 ##### P0f slice 8 — the small sections (§4.A/B/C/D/G/K/M, 22 rows) — **P0f row coverage complete**
 
@@ -637,6 +637,18 @@ more than a patch-in-place programme did.
 default becomes **RECORD-AND-SPECIFY** — a wart is characterised precisely
 enough that the Rust implementation gets it right, and fixed in C++ only where
 the defect blocks the C++ from serving as a *bucket-1/2* oracle in the interim.
+
+*Delivered 2026-09-08: of the four rows P0c disposed (`DRS-W12` through
+`DRS-W15`), only DRS-W15 could have triggered the exception, and it did
+not — on the register's state, not on a finding that the C++ is right.
+Evidence and Class live in the audit §9; they are not restated here. The
+clause worth keeping is the one the first application nearly lost: it is
+tempting to discharge this test by arguing the C++ is correct, and that is
+the expensive direction. **The exception's ground is the register, which is
+checkable, not a correctness intuition about inherited code, which is not.**
+Where both are available they should agree; where they disagree, the
+register is the one that was reviewed. It re-runs if R4 ratifies a
+conformance-checked row over post-reorg hardfork reconstruction.*
 Fixing C++ that is scheduled for deletion is the debt rule 20 and
 [`15-deletion-and-debt`](../../.cursor/rules/15-deletion-and-debt.mdc) exist to
 prevent. CEN-L11 was the test case: a live FOLLOWUPS row, a ratified spec, and a

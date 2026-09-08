@@ -33,7 +33,7 @@ use std::path::PathBuf;
 /// [`consensus_canonical::CANONICAL_FILES`]. A change to either file moves it
 /// and fails this build with both values and the question to answer; see the
 /// panic below.
-const PINNED_DIGEST: &str = "6e1f9125232c522c475ef83b77799e11de6e7fc6e1867c261c83be4268026ab8";
+const PINNED_DIGEST: &str = "fab6f63e71b9a0c806bb904343b04789a548d1f9c98a9d2847e1050bb01baf6d";
 
 fn main() {
     let manifest_dir =

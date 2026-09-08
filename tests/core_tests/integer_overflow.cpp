@@ -95,7 +95,7 @@ bool gen_uint_overflow_1::generate(std::vector<test_event_entry>& events) const
 
   // Problem 1. Miner tx output overflow
   MAKE_MINER_TX_MANUALLY(miner_tx_0, blk_0);
-  split_miner_tx_outs(miner_tx_0, MONEY_SUPPLY);
+  split_miner_tx_outs(miner_tx_0, SHEKYL_EMISSION_CURVE_ASYMPTOTE);
   block blk_1;
   if (!generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx_0))
     return false;
@@ -103,23 +103,23 @@ bool gen_uint_overflow_1::generate(std::vector<test_event_entry>& events) const
 
   // Problem 1. Miner tx outputs overflow
   MAKE_MINER_TX_MANUALLY(miner_tx_1, blk_1);
-  split_miner_tx_outs(miner_tx_1, MONEY_SUPPLY);
+  split_miner_tx_outs(miner_tx_1, SHEKYL_EMISSION_CURVE_ASYMPTOTE);
   block blk_2;
   if (!generator.construct_block_manually(blk_2, blk_1, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx_1))
     return false;
   events.push_back(blk_2);
 
   REWIND_BLOCKS(events, blk_2r, blk_2, miner_account);
-  MAKE_TX_LIST_START(events, txs_0, miner_account, bob_account, MONEY_SUPPLY, blk_2);
-  MAKE_TX_LIST(events, txs_0, miner_account, bob_account, MONEY_SUPPLY, blk_2);
+  MAKE_TX_LIST_START(events, txs_0, miner_account, bob_account, SHEKYL_EMISSION_CURVE_ASYMPTOTE, blk_2);
+  MAKE_TX_LIST(events, txs_0, miner_account, bob_account, SHEKYL_EMISSION_CURVE_ASYMPTOTE, blk_2);
   MAKE_NEXT_BLOCK_TX_LIST(events, blk_3, blk_2r, miner_account, txs_0);
   REWIND_BLOCKS(events, blk_3r, blk_3, miner_account);
 
   // Problem 2. total_fee overflow, block_reward overflow
   std::list<cryptonote::transaction> txs_1;
   // Create txs with huge fee
-  txs_1.push_back(construct_tx_with_fee(events, blk_3, bob_account, alice_account, MK_COINS(1), MONEY_SUPPLY - MK_COINS(1)));
-  txs_1.push_back(construct_tx_with_fee(events, blk_3, bob_account, alice_account, MK_COINS(1), MONEY_SUPPLY - MK_COINS(1)));
+  txs_1.push_back(construct_tx_with_fee(events, blk_3, bob_account, alice_account, MK_COINS(1), SHEKYL_EMISSION_CURVE_ASYMPTOTE - MK_COINS(1)));
+  txs_1.push_back(construct_tx_with_fee(events, blk_3, bob_account, alice_account, MK_COINS(1), SHEKYL_EMISSION_CURVE_ASYMPTOTE - MK_COINS(1)));
   MAKE_NEXT_BLOCK_TX_LIST(events, blk_4, blk_3r, miner_account, txs_1);
 
   return true;

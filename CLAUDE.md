@@ -73,6 +73,7 @@ Architecture & scope
 - [`19-validation-surface-discipline`](.cursor/rules/19-validation-surface-discipline.mdc) — bundle work by validation surface, not feature topic
 - [`21-reversion-clause-discipline`](.cursor/rules/21-reversion-clause-discipline.mdc) — reject-now-with-reopening-criteria over pre-provisioned flexibility
 - [`22-no-lazy-deferral`](.cursor/rules/22-no-lazy-deferral.mdc) — scoped work lands where scoped (always applies); deferral needs a named blocker, disclosed in the deferring commit
+- [`23-disposition-visibility`](.cursor/rules/23-disposition-visibility.mdc) — REJECTED / DEFERRED / STAGED / RESERVED each has a defined grep surface; zero code symbols unless staged; refused names stay in namespace contracts as structured statuses
 - [`60-no-monero-legacy`](.cursor/rules/60-no-monero-legacy.mdc) — v3-from-genesis, no Monero chain history; remove dead pre-genesis code
 - [`70-modular-consensus`](.cursor/rules/70-modular-consensus.mdc) — PoW consensus; staking is economic; no speculative consensus scaffolding
 - [`71-network-uniformity`](.cursor/rules/71-network-uniformity.mdc) — nettype selects data, never control flow, on the consensus surface; a behavioral divergence must be named, ratified, and loud

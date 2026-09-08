@@ -41,10 +41,10 @@ pub use escalation::{
 };
 pub use fee::{
     checked_corrected_fee_ladder, corrected_fee_ladder, fee_correction_quantized, hysteresis_step,
-    quantize_pow2_ceil, round_money_up_2, FeeLadder,
+    quantize_pow2_ceil, round_money_up_2, FeeLadder, EMISSION_CLAIM_FEE_FLOOR,
 };
 pub use params::{
     calc_stake_ratio, EconomicParams, EconomicParamsError, BLOCKS_PER_YEAR, CALIBRATION_GENERATION,
-    MONEY_SUPPLY, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    EMISSION_CURVE_ASYMPTOTE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 pub use release::calc_release_multiplier;

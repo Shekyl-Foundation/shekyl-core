@@ -1010,7 +1010,7 @@ fn block_reward_past_the_asymptote_pays_the_tail() {
 #[test]
 fn block_reward_marshals_the_signed_composition() {
     let p = shekyl_economics::EconomicParams::default();
-    let s = p.money_supply;
+    let s = p.emission_curve_asymptote;
     let tail = shekyl_economics::tail_subsidy_per_block(&p).unwrap();
     let mut reward = SENTINEL;
     let mut limit = SENTINEL;
@@ -1064,7 +1064,7 @@ fn advance_already_generated_passes_the_asymptote() {
     // FL-R12′: through the asymptote (perpetual tail keeps accruing);
     // the only saturation is the u64 rail, which keeps `remaining`
     // floored at zero rather than un-saturated by a wrap (FL-R14).
-    let s = shekyl_economics::params::MONEY_SUPPLY;
+    let s = shekyl_economics::params::EMISSION_CURVE_ASYMPTOTE;
     assert_eq!(shekyl_advance_already_generated(s, 1), s + 1);
     assert_eq!(
         shekyl_advance_already_generated(u64::MAX, u64::MAX),

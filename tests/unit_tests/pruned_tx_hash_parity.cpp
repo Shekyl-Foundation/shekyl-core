@@ -55,6 +55,16 @@
   "rust/shekyl-wire/tests/fixtures/pruned_tx_hash_parity_v1.json"
 #endif
 
+// The live-oracle sibling: bytes a running shekyld accepted under consensus
+// verify and then connected. Kept a separate fixture on purpose -- the pin
+// above is hand-built, deterministic and reproducible from a checkout alone,
+// while this one needs a built daemon and a live run. Neither subsumes the
+// other; do not consolidate them.
+#ifndef LIVE_ORACLE_SPEND_FIXTURE_PATH
+#define LIVE_ORACLE_SPEND_FIXTURE_PATH \
+  "rust/shekyl-wire/tests/fixtures/live_oracle_spend_v1.json"
+#endif
+
 using namespace cryptonote;
 
 namespace {
@@ -65,6 +75,35 @@ struct PrunedHashKat {
   std::string prunable_hash_hex;
   std::string tx_hash_hex;
 };
+
+// The live-oracle capture. Only the bytes and the txid are recorded; every
+// other identity is derived below by the production code, which is the point
+// -- a fixture that also carried the prunable digest could disagree with
+// itself.
+struct LiveOracleKat {
+  std::string tx_hex;
+  std::string tx_hash_hex;
+  std::string daemon_version;
+};
+
+LiveOracleKat load_live_oracle_kat()
+{
+  std::ifstream ifs(LIVE_ORACLE_SPEND_FIXTURE_PATH);
+  if (!ifs.good())
+    throw std::runtime_error(std::string("missing live-oracle spend fixture at ") + LIVE_ORACLE_SPEND_FIXTURE_PATH);
+  rapidjson::IStreamWrapper wrapper(ifs);
+  rapidjson::Document doc;
+  doc.ParseStream(wrapper);
+  if (doc.HasParseError() || !doc.HasMember("tx_hex") || !doc.HasMember("tx_hash_hex"))
+    throw std::runtime_error("invalid live-oracle spend fixture");
+  LiveOracleKat k{};
+  k.tx_hex = doc["tx_hex"].GetString();
+  k.tx_hash_hex = doc["tx_hash_hex"].GetString();
+  k.daemon_version = doc.HasMember("accepted_by_daemon_version")
+                         ? doc["accepted_by_daemon_version"].GetString()
+                         : "";
+  return k;
+}
 
 PrunedHashKat load_kat()
 {
@@ -215,4 +254,58 @@ TEST(pruned_tx_hash_parity, pruned_spend_identity_matches_the_rust_oracle)
   EXPECT_EQ(epee::string_tools::pod_to_hex(get_pruned_transaction_hash(pruned_parsed, prunable_hash)),
             k.tx_hash_hex)
       << "pruned identity from the pruned body diverged from the txid";
+}
+
+// The cross-language half of the live-oracle pin.
+//
+// The Rust leg re-serializes these bytes and recomputes the txid, which
+// catches serializer drift but only within one language. This leg is the
+// independent oracle: C++ parses the same daemon-accepted bytes with the
+// production entry point and derives the same identities with the production
+// hash functions. Agreement here means the two implementations agree about a
+// transaction the network actually took, rather than about one we authored.
+//
+// Note what this test does NOT do, unlike its sibling above: it never rebuilds
+// the transaction field by field. A real FCMP++ spend carries a membership
+// proof and PQC auths that C++ cannot construct, which is exactly why the
+// captured-bytes direction is the only one available -- and why the synthetic
+// pin, which can be rebuilt on both sides, remains worth keeping.
+TEST(pruned_tx_hash_parity, live_oracle_spend_identity_matches_the_accepted_bytes)
+{
+  const LiveOracleKat k = load_live_oracle_kat();
+
+  // Rule 47: assert the subject before asserting about it. A truncated or
+  // empty capture must fail here rather than parse-and-compare its way green.
+  ASSERT_GT(k.tx_hex.size(), 2048u)
+      << "the captured spend is too small to be an FCMP++ spend -- the fixture "
+         "is truncated or was written by a failed capture";
+  ASSERT_FALSE(k.daemon_version.empty())
+      << "the capture must name the daemon that accepted it";
+
+  blobdata blob;
+  ASSERT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(k.tx_hex, blob));
+
+  // The bytes a daemon accepted must parse through the production entry point.
+  transaction parsed;
+  ASSERT_TRUE(parse_and_validate_tx_from_blob(blob, parsed))
+      << "C++ cannot parse a transaction its own daemon accepted";
+
+  // The identity the daemon indexed it under, recomputed here.
+  EXPECT_EQ(epee::string_tools::pod_to_hex(get_transaction_hash(parsed)), k.tx_hash_hex)
+      << "txid recomputed in C++ differs from the one the daemon accepted";
+
+  // Re-serialization is byte-exact: the parse kept everything the chain carried.
+  blobdata reserialized;
+  ASSERT_TRUE(t_serializable_object_to_blob(parsed, reserialized));
+  EXPECT_EQ(epee::string_tools::buff_to_hex_nodelimer(reserialized), k.tx_hex)
+      << "C++ re-serialization changed the accepted spend's bytes";
+
+  // The pruned identity with the digest supplied is the txid -- the same bound
+  // surface the synthetic pin checks, now over bytes consensus admitted.
+  crypto::hash prunable_hash;
+  const blobdata_ref blob_ref(blob);
+  ASSERT_TRUE(calculate_transaction_prunable_hash(parsed, &blob_ref, prunable_hash));
+  EXPECT_EQ(epee::string_tools::pod_to_hex(get_pruned_transaction_hash(parsed, prunable_hash)),
+            k.tx_hash_hex)
+      << "pruned identity (supplied digest) diverged from the accepted txid";
 }

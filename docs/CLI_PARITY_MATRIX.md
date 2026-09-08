@@ -51,7 +51,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 1 | `account` | N/A | Out of scope | Deleted-by-design (rule 60): no account model in Shekyl. Parse-time refusal points at payment requests |
 | 2 | `address` | `address` | Covered | Single primary `ShekylAddress`; `address new` deleted — payment requests (`request new`) replace subaddress attribution |
 | 3 | `balance` | `balance` | Covered | Native `get_balance`; `--account` flag deleted |
-| 4 | `transfer` | `transfer` | Covered | Native build→confirm→submit/discard flow (`build_pending_tx`/`submit_pending_tx`/`discard_pending_tx`); `--subaddr-indices` deleted; `--do-not-relay` is Planned (row 26 workflow) |
+| 4 | `transfer` | `transfer` | Covered | Native build→confirm→submit/discard flow (`build_pending_tx`/`submit_pending_tx`/`discard_pending_tx`); `--subaddr-indices` deleted; `--do-not-relay` is **not offered** — it was step 1 of the Monero cold-signing workflow (rejected permanently, rows 26–27); parse-time refusal, and the build→confirm flow already shows the tx before broadcast |
 | 5 | `show_transfers` | `transfers` | Covered | Native `get_transfers` |
 | 6 | `show_transfer` | `show_transfer` | Covered | Native `get_transfer_by_txid` |
 | 7 | `sweep_all` | N/A | Out of scope | Deleted-by-design: no Engine sweep surface; FOLLOWUPS "`sweep_all`" row carries the reopening criterion (Engine-level `build_sweep_tx`, specced contract-first) |
@@ -74,8 +74,8 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 23 | `check_reserve_proof` | `check_reserve_proof` | Covered | Wallet-less verification with daemon spent-status reporting (WI-RPC-3) |
 | 24 | `sign` | `sign` | Covered | Native `sign_message` (PR-SM-2): the ratified nested hybrid (SLH-DSA-192s inner / spend-Schnorr outer, [`WALLET_MESSAGE_SIGNING.md`](design/WALLET_MESSAGE_SIGNING.md) §7). Multi-second by design (~4 s floor); the CLI prints the expectation before the call |
 | 25 | `verify` | `verify` | Covered | Native `verify_message` (PR-SM-2), **session-less** — works with no wallet open (SM-R-6). Signature pastes are kept out of readline history; `@path` reads a file so a mail-wrapped 21.7 KB line does not have to survive the REPL tokenizer. Live end to end since the fork-(ii) address layout landed (2026-08-15): every address carries the 48-byte signing anchor |
-| 26 | `sign_transfer` | RESERVED | Rejected (V3.0) | A4 (2026-08-06) descoped air-gapped cold bundles from V3.0: V3.0 ships cold *storage*, not cold *signing*. Not a pending gate — `export_unsigned`/`submit_signed` are REJECTED in [`wallet_rpc.yaml`](api/wallet_rpc.yaml). **Rule-21 reopen:** a concrete offline-signing workflow, landed as `UnsignedTxBundle`/`SignedTxBundle`, never as a wallet2-era binary format. See [`FOLLOWUPS.md`](FOLLOWUPS.md) A4 |
-| 27 | `submit_transfer` | RESERVED | Rejected (V3.0) | As row 26 |
+| 26 | `sign_transfer` | N/A | Rejected (permanent) | Cold signing is rejected **permanently** (decision log 2026-09-07, superseding the A4 post-genesis deferral): an FCMP++ membership witness needs the live curve tree, so the offline half cannot deliver the isolation the workflow claims. Cold *storage* is the seed phrase. Parse-time refusal in the CLI; `export_unsigned`/`submit_signed` stay `status: REJECTED` in [`wallet_rpc.yaml`](api/wallet_rpc.yaml)'s method registry so the names cannot be re-minted |
+| 27 | `submit_transfer` | N/A | Rejected (permanent) | As row 26 |
 | 28 | `password` | `password` | Covered | Native `change_password` flow, old-first |
 | 29 | `rescan_bc` | `rescan` | Covered | Native `rescan_blockchain` via `Engine::start_rescan` (Phase 4c). `hard` is accepted for wallet2 muscle memory and reported as equivalent — Shekyl has one rescan, which already rebuilds every scan-derived fact |
 | 30 | `refresh` | `refresh` | Covered | Native `refresh` |
@@ -93,7 +93,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 42 | `apropos` | N/A | Out of scope | Help search, low value |
 | 43 | `donate` | N/A | Out of scope | Monero donation address |
 | 44 | `encrypted_seed` | N/A | Out of scope | Encrypted seed export not needed with display.rs safety |
-| 45 | `export_outputs` | N/A | Out of scope | Removed by construction: the cold-coordination flow it served is descoped by A4, and FCMP++ membership proofs need no per-wallet output export |
+| 45 | `export_outputs` | N/A | Out of scope | Removed by construction: the cold-coordination flow it served is rejected permanently with cold signing (decision log 2026-09-07), and FCMP++ membership proofs need no per-wallet output export |
 | 46 | `export_transfers` | N/A | Out of scope | CSV export, low priority |
 | 47 | `freeze` | N/A | Out of scope | Removed by construction (rule 60): freezing exists to keep a poisoned decoy out of a ring. FCMP++ has no decoy selection, so the hazard has no referent |
 | 48 | `frozen` | N/A | Out of scope | As row 47 — nothing can be frozen |
@@ -111,7 +111,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 60 | `rescan_spent` | N/A | Out of scope | Spent output rescan; folds into the row-29 rescan surface when it lands |
 | 61 | `rpc_payment_info` | N/A | Out of scope | RPC payment, Monero feature removed |
 | 62 | `save_bc` | N/A | Out of scope | Blockchain save, daemon concern |
-| 63 | `save_watch_only` | N/A | Out of scope | Watch-only export, future follow-up |
+| 63 | `save_watch_only` | N/A | Rejected (permanent) | ViewOnly wallets are REJECTED (decision log 2026-09-07): FCMP++ is not a chain window, watching your own incoming is not a product, and view material cannot reconstruct the address (`msg_sign_pk` is seed-derived). Reserve proofs serve the auditor use case |
 | 64 | `scan_tx` | N/A | Out of scope | Single-tx scan, low priority |
 | 65 | `set` | N/A | Out of scope | Runtime settings, replaced by CLI flags |
 | 66 | `set_description` | N/A | Out of scope | Wallet description, trivial metadata |

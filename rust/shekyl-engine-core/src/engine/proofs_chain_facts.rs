@@ -246,7 +246,7 @@ pub(crate) fn on_chain_outputs_of(tx: &Transaction) -> Result<Vec<OnChainOutput>
     }
 
     let extra = Extra::read(&mut tx.prefix.extra.as_slice())
-        .expect("Extra::read on an in-memory slice is infallible by construction");
+        .map_err(|e| RpcError::InvalidNode(format!("transaction extra unparseable: {e}")))?;
     let kem_ct_blob = extra.pqc_kem_ciphertext();
 
     let mut out = Vec::with_capacity(n);

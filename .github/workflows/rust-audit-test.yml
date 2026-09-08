@@ -28,13 +28,7 @@ on:
     # and turn dev's test suite red for the next unrelated rust/** PR.
     # Order matters: the last matching pattern wins.
     branches: [main]
-    paths: &rust_paths
-      - '**'
-      - '!docs/**'
-      - '!**/README.md'
-      - 'docs/design/CRYPTO_DOMAIN_REGISTRY.tsv'
   pull_request:
-    paths: *rust_paths
 
 # Own concurrency group (distinct from build.yml's `build-<ref>`) so same-PR
 # reruns of the Rust gate supersede only each other, not the OS build run.
@@ -55,8 +49,66 @@ env:
     EOF
 
 jobs:
+  # See build.yml's `changes` job for why this is a job-level condition rather
+  # than a workflow `paths` filter: a path filter suppresses the WORKFLOW, so a
+  # docs-only PR gets no check at all and branch protection waits forever for
+  # `Rust: audit, test, determinism`. A skipped job still reports.
+  #
+  # The domain-registry carve-out that used to live in the `paths` list is
+  # preserved in the scope computation: docs/design/CRYPTO_DOMAIN_REGISTRY.tsv
+  # is a code input (shekyl-crypto-pq's tests/domain_registry.rs include_str!s
+  # it), so a TSV-only PR must still run this suite or a duplicate domain could
+  # merge and turn dev red for the next unrelated rust/** PR.
+  #
+  # Fails closed: an uncomputable file list yields `false` and the suite runs.
+  changes:
+    name: 'Change scope (rust)'
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        run: |
+          set -u
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          head="${{ github.sha }}"
+
+          files=""
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$head" 2>/dev/null || true)"
+          fi
+
+          if [ -z "$files" ]; then
+            echo "scope: no computable file list -- running the suite (fail-closed)"
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          docs_only=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              docs/design/CRYPTO_DOMAIN_REGISTRY.tsv) docs_only=false; break ;;
+              docs/*|*/README.md|README.md) ;;
+              *) docs_only=false; break ;;
+            esac
+          done <<< "$files"
+
+          echo "scope: docs_only=$docs_only"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   rust-audit-and-test:
     name: "Rust: audit, test, determinism"
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     container:
       image: ubuntu:24.04

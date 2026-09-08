@@ -203,14 +203,13 @@ pub const CAPABILITY_FULL: &str = "FULL";
 
 /// Map an Engine [`Capability`] to its OpenAPI `CapabilityMode` string.
 ///
-/// Single source of truth for the `WalletHandle.capability` response field and
-/// the `CapabilityForbids` (`-29005`) `error.data.capability` field, so the two
-/// never disagree when a new capability variant lands.
+/// Single source of truth for the `WalletHandle.capability` response
+/// field. `Full` is the only capability (rule 23); the match is kept so
+/// a ratified future capability extends it here rather than minting a
+/// second stringification site.
 pub fn capability_mode_str(cap: Capability) -> &'static str {
     match cap {
         Capability::Full => CAPABILITY_FULL,
-        Capability::ViewOnly => "VIEW_ONLY",
-        Capability::HardwareOffload => "HARDWARE_OFFLOAD",
     }
 }
 
@@ -219,7 +218,7 @@ pub fn capability_mode_str(cap: Capability) -> &'static str {
 pub struct WalletHandle {
     /// Wallet file stem within the served wallet directory.
     pub name: String,
-    /// Capability mode (`FULL` / `VIEW_ONLY` / `HARDWARE_OFFLOAD`).
+    /// Capability mode. Always `FULL` — the only capability (rule 23).
     pub capability: String,
     /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
     pub network: String,
@@ -518,7 +517,7 @@ pub struct TransferView {
 pub struct GetWalletInfoResult {
     /// Wallet file stem within the served wallet directory.
     pub name: String,
-    /// Capability mode (`FULL` / `VIEW_ONLY` / `HARDWARE_OFFLOAD`).
+    /// Capability mode. Always `FULL` — the only capability (rule 23).
     pub capability: String,
     /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
     pub network: String,

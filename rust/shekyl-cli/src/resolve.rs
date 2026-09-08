@@ -45,7 +45,6 @@ pub enum ResolvedCommand {
         dest: String,
         amount: u64,
         priority: Option<u32>,
-        do_not_relay: bool,
         no_confirm: bool,
     },
     Transfers,
@@ -176,18 +175,6 @@ pub enum ResolvedCommand {
         message: String,
     },
 
-    // -- Offline signing (RESERVED: cold-wallet workflow) --
-    DescribeTransfer {
-        unsigned_hex: String,
-    },
-    SignTransfer {
-        unsigned_hex: String,
-        file: Option<String>,
-    },
-    SubmitTransfer {
-        signed_hex: String,
-    },
-
     // -- Meta --
     Password,
     Rescan {
@@ -271,7 +258,6 @@ pub fn parse(input: &str) -> ResolvedCommand {
         "balance" => ResolvedCommand::Balance,
         "address" => ResolvedCommand::Address,
         "transfer" => {
-            let do_not_relay = args.contains(&"--do-not-relay");
             let no_confirm = args.contains(&"--no-confirm");
             let priority = match parse_flag::<u32>(args, "--priority") {
                 FlagValue::Absent => None,
@@ -291,7 +277,6 @@ pub fn parse(input: &str) -> ResolvedCommand {
                         dest: filtered[1].to_string(),
                         amount,
                         priority,
-                        do_not_relay,
                         no_confirm,
                     }
                 } else {
@@ -612,54 +597,6 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 None => diag("verify: need <address> <signature> <message>"),
             }
         }
-        "describe_transfer" => {
-            if let Some(hex) = args.first() {
-                ResolvedCommand::DescribeTransfer {
-                    unsigned_hex: hex.to_string(),
-                }
-            } else {
-                diag("describe_transfer: need <unsigned_hex>")
-            }
-        }
-        "sign_transfer" => {
-            let file = match parse_flag_str(args, "--file") {
-                FlagValue::Absent => None,
-                FlagValue::Set(f) => Some(f),
-                FlagValue::Invalid(_) => return diag("sign_transfer: --file expects a path"),
-            };
-            let filtered: Vec<&str> = args
-                .iter()
-                .filter(|a| !a.starts_with("--"))
-                .copied()
-                .collect();
-            if let Some(hex) = filtered.first() {
-                ResolvedCommand::SignTransfer {
-                    unsigned_hex: hex.to_string(),
-                    file,
-                }
-            } else if file.is_some() {
-                ResolvedCommand::SignTransfer {
-                    unsigned_hex: String::new(),
-                    file,
-                }
-            } else {
-                diag("sign_transfer: need <hex> or --file <path>")
-            }
-        }
-        "submit_transfer" => {
-            let filtered: Vec<&str> = args
-                .iter()
-                .filter(|a| !a.starts_with("--"))
-                .copied()
-                .collect();
-            if let Some(hex) = filtered.first() {
-                ResolvedCommand::SubmitTransfer {
-                    signed_hex: hex.to_string(),
-                }
-            } else {
-                diag("submit_transfer: need <signed_hex>")
-            }
-        }
         "password" => ResolvedCommand::Password,
         "rescan" => {
             let hard = args.first().copied() == Some("hard");
@@ -726,6 +663,14 @@ fn reject_removed_flags(args: &[&str]) -> Option<String> {
             "accounts were deleted; use payment requests (\"request new\") to \
              attribute incoming payments",
         ),
+        (
+            "--do-not-relay",
+            "not offered. It was step 1 of the Monero cold-signing workflow, \
+             which Shekyl rejects permanently (an FCMP++ witness needs the \
+             live chain). For fees use \"fee\"; transfer already shows the \
+             built transaction and waits for confirmation — decline to \
+             discard without broadcasting",
+        ),
     ];
     for arg in args {
         for (flag, reason) in REMOVED {
@@ -769,6 +714,13 @@ fn reject_removed_command(cmd: &str, args: &[&str]) -> Option<String> {
         "sweep_all" => Some(
             "sweep_all was removed: no native sweep surface exists yet \
              (see docs/FOLLOWUPS.md for the reopening criterion).",
+        ),
+        "describe_transfer" | "sign_transfer" | "submit_transfer" => Some(
+            "cold signing is not offered: an FCMP++ membership witness needs \
+             the live curve tree, so an offline signer cannot deliver the \
+             isolation the workflow claims. Rejected permanently \
+             (V3_WALLET_DECISION_LOG.md 2026-09-07). Cold storage is your \
+             seed phrase.",
         ),
         _ => None,
     };
@@ -896,11 +848,29 @@ mod tests {
         }
     }
 
+    /// `--do-not-relay` is not offered (cold signing rejected permanently,
+    /// decision log 2026-09-07): the flag is a parse-time refusal that says
+    /// "not offered", never a "not yet" pointing at a gate that will not
+    /// open. Same for the cold-signing command names.
     #[test]
-    fn test_transfer_do_not_relay() {
-        match parse("transfer --do-not-relay 1.0 skl1addr") {
-            ResolvedCommand::Transfer { do_not_relay, .. } => assert!(do_not_relay),
-            other => panic!("expected Transfer, got {other:?}"),
+    fn cold_signing_surface_is_refused_at_parse() {
+        for line in [
+            "transfer --do-not-relay 1.0 skl1addr",
+            "describe_transfer deadbeef",
+            "sign_transfer deadbeef",
+            "sign_transfer --file bundle.hex",
+            "submit_transfer deadbeef",
+        ] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(
+                        !message.to_lowercase().contains("not yet")
+                            && !message.to_lowercase().contains("forthcoming"),
+                        "{line:?}: refusal must not promise future availability: {message}"
+                    );
+                }
+                other => panic!("{line:?}: expected Diagnostic refusal, got {other:?}"),
+            }
         }
     }
 
@@ -1044,7 +1014,6 @@ mod tests {
             "make_uri --address=",
             "make_uri --label",
             "make_uri --amount",
-            "sign_transfer --file",
         ] {
             assert!(
                 matches!(parse(line), ResolvedCommand::Diagnostic { .. }),

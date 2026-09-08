@@ -812,7 +812,7 @@ unchanged across the 9-commit archival drift.
 | --- | --- | --- |
 | Cargo `multisig` on engine-core / rpc / ffi | `default = []` | both |
 | Production wallet-rpc / cli | do not enable `multisig` | both |
-| Envelope `CAPABILITY_RESERVED_MULTISIG` | refused | both |
+| Envelope capability byte `0x04` (RESERVED; the `CAPABILITY_RESERVED_MULTISIG` constant was deleted 2026-09-07 per rule 23 — the byte is reserved in `WALLET_FILE_FORMAT_V1.md` §2.3, refused as `UnknownCapabilityMode`) | refused | both |
 | `EngineSignerKind` / `SoloSigner` | marker only; **zero associated items**; `MultisigSigner` type **absent** | both |
 | **`multisig/{dkg,group,signing}.rs`** | **Option A FROST fossil** — **DELETE** (R1-F-3 disposition) | **closed as delete** |
 | `multisig/v31/` | equal-participants scaffold; no `construction.rs` / `transport/` | both |

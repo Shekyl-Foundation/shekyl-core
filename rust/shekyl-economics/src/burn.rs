@@ -47,7 +47,8 @@ pub struct BurnSplit {
 /// * `tx_volume` - Transaction count over the volume window
 /// * `tx_baseline` - Baseline transaction volume
 /// * `circulating_supply` - Currently circulating atomic units
-/// * `total_supply` - Total MONEY_SUPPLY in atomic units
+/// * `total_supply` - The emission curve's asymptote in atomic units
+///   (`EMISSION_CURVE_ASYMPTOTE`), the supply ratio's denominator
 /// * `burn_base_rate` - Base burn coefficient (fixed-point SCALE)
 /// * `burn_cap` - Maximum burn percentage (fixed-point SCALE)
 ///
@@ -100,7 +101,7 @@ pub fn calc_burn_pct_from_activity(
         tx_volume,
         tx_baseline,
         circulating_supply,
-        params.money_supply,
+        params.emission_curve_asymptote,
         params.burn_base_rate,
         params.burn_cap,
     )
@@ -278,7 +279,7 @@ mod tests {
     /// exactly the at-asymptote value, and must not keep climbing.
     #[test]
     fn supply_ratio_saturates_past_the_asymptote() {
-        let supply = crate::params::MONEY_SUPPLY;
+        let supply = crate::params::EMISSION_CURVE_ASYMPTOTE;
         let (baseline, rate, cap) = (50u64, 500_000u64, 900_000u64);
         // A volume well below the cap so the ratio, not the clamp, is
         // what the assertions can see: a clamped burn would mask drift.

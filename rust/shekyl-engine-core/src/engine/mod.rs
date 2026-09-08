@@ -41,9 +41,13 @@
 //!   at index 0. Exchanges that need stronger isolation use multiple wallet
 //!   files (separate keys are a strictly stronger boundary than shared keys).
 //! - **The `export_outputs` / `import_outputs` / `export_key_images` /
-//!   `import_key_images` four-call dance.** Air-gapped flows use two
-//!   typed bundle types (`UnsignedTxBundle`, `SignedTxBundle`) — see
-//!   Phase 2d.
+//!   `import_key_images` four-call dance — and cold signing itself.**
+//!   Air-gapped signing is REJECTED, permanently (decision log
+//!   2026-09-07: an FCMP++ witness needs the live curve tree, so the
+//!   "offline" half of a cold-signing flow cannot exist without
+//!   shipping chain state to the cold device — the isolation the flow
+//!   claims to buy is not delivered). Cold *storage* is the seed
+//!   phrase. No bundle types exist; do not add them.
 //! - **A god-object `Engine` with hundreds of public members.** Every
 //!   [`Engine`] member's mutability and locking discipline is explicit;
 //!   the type is *composition*, not *inheritance*. Staking product API is [`Engine::stake`] / [`stake_facade::StakeFacade`].
@@ -90,11 +94,9 @@
 //! lifecycle methods on `Engine<SoloSigner>`. [`Engine::create`] and
 //! [`Engine::open_full`] ship end-to-end against the
 //! [`shekyl_engine_file::WalletFile`] envelope and the
-//! [`shekyl_crypto_pq::account::AllKeysBlob`] re-derivation path;
-//! [`Engine::open_view_only`] and [`Engine::open_hardware_offload`]
-//! ship as signature stubs that return
-//! [`OpenError::CapabilityNotYetImplemented`](error::OpenError::CapabilityNotYetImplemented)
-//! pending the matching `shekyl-crypto-pq` constructors.
+//! [`shekyl_crypto_pq::account::AllKeysBlob`] re-derivation path.
+//! FULL is the only capability (rule 23; decision log 2026-09-07) —
+//! there are no non-FULL openers.
 //! [`Engine::change_password`] and [`Engine::close`] ship for every
 //! signer kind. The struct is composition over field type — every
 //! member's purpose, mutability discipline, and ownership are
@@ -208,10 +210,17 @@ pub(crate) mod bond_assembly;
 pub(crate) mod bond_orchestrator;
 /// SA-R-6 bond watch: shared `Input::BondPost` lift + merge sighting adoption.
 pub(crate) mod bond_watch;
+/// The engine cadence driver (`ENGINE_CADENCE_DRIVER.md`): the one
+/// engine-owned loop scheduling the non-interactive maintenance legs
+/// (submit lifecycle, serving liveness, per-epoch claim, terminal-reject
+/// prune/resubmit). Chain-progress tick base + wall-clock watchdog;
+/// `Weak` upgrade per tick so close is never blocked.
+pub(crate) mod cadence;
 /// PR-4's CB-3 dispatch seam (`EMISSION_CLAIM_BUILDER.md` §8): the Engine-side
 /// emission-claim **request path** — activate the claimant slot, assemble via
 /// `claim_orchestrator`, dispatch through the audited posture→submitter choke
-/// point. Scheduling policy stays external (the GF-4 seam).
+/// point. Scheduling policy is the cadence driver's epoch-claim leg
+/// (`ENGINE_CADENCE_DRIVER.md` §4).
 pub(crate) mod claim_dispatch;
 /// PR-3's Engine-side emission-claim orchestration (`EMISSION_CLAIM_BUILDER.md`
 /// §8): the fetch → designate → fee-sweep → path-assembly →
@@ -334,6 +343,9 @@ pub mod network;
 pub mod output_selector;
 pub mod payment_requests;
 pub mod pending;
+/// Pending-post family coordination: the seal write lock + the foreground
+/// gauge the epoch-claim leg yields to (`ENGINE_CADENCE_DRIVER.md` §3).
+pub(crate) mod pending_post_gate;
 pub(crate) mod principal_stake;
 /// WI-RPC-3 proof-generation bridge: the crypto bodies behind the
 /// [`key_actor::KeyActor`]'s inbound-tx-proof and reserve-proof messages.
@@ -388,8 +400,9 @@ pub mod staking_read;
 /// driver — the wallet-side actor that lifts the [`submit_watchdog`]
 /// kernel (projection → escape ladder → resubmit-same-bytes probe →
 /// outcome) and executes the F40 targeted re-scan with its R2
-/// fruitless-rescan breaker. Thin scheduler around audited kernel
-/// decisions; cadence is owned by the embedding runtime (`tick()`).
+/// fruitless-rescan breaker. Thin per-tick step around audited kernel
+/// decisions; cadence is owned by the engine cadence driver
+/// ([`cadence`] leg 1, `ENGINE_CADENCE_DRIVER.md`).
 pub(crate) mod submit_lifecycle;
 /// PR-4 (`docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3): the submit
 /// watchdog's pure decision kernel — F14-lock-keyed held tracking, the
@@ -528,20 +541,13 @@ use crate::engine::traits::{
 ///
 /// - [`Engine::create`] — fresh wallet (BIP-39 seed for mainnet/stagenet,
 ///   raw 32-byte seed for testnet/fakechain).
-/// - [`Engine::open_full`] — open an existing `Capability::Full`
-///   wallet with the user's password.
-/// - [`Engine::open_view_only`] — open an existing `Capability::ViewOnly`
-///   wallet (no spend material).
-/// - [`Engine::open_hardware_offload`] — open an existing
-///   `Capability::HardwareOffload` wallet (signing happens out-of-band).
+/// - [`Engine::open_full`] — open an existing wallet with the user's
+///   password. Every wallet is `Capability::Full` (rule 23); the
+///   envelope refuses any other capability byte at open.
 /// - [`Engine::change_password`] — rotate the user-supplied password
 ///   without rederiving the master seed.
 /// - [`Engine::close`] — flush state to disk and release the advisory
 ///   lock; refuses if any [`PendingTx`] is in flight.
-///
-/// All six methods land in the lifecycle commit; this commit defines
-/// the struct shape and the read-only accessor surface that those
-/// methods produce.
 ///
 /// # Locking discipline
 ///
@@ -737,12 +743,10 @@ pub struct Engine<
     network: Network,
 
     /// Cached from `file.capability()` for O(1) accessor speed. Same
-    /// stability argument as `network`. Used by the lifecycle
-    /// constructors to decide which `open_*` is appropriate (mismatched
-    /// capability surfaces as
-    /// [`OpenError::CapabilityMismatch`](error::OpenError::CapabilityMismatch))
-    /// and by call sites that gate spend operations on
-    /// [`Capability::can_spend_locally`].
+    /// stability argument as `network`. Always [`Capability::Full`] —
+    /// the only capability (rule 23) — kept as a typed field because it
+    /// is the parse-boundary proof that the envelope validated the
+    /// capability byte at open/create.
     capability: Capability,
 
     /// Single-flight slot for [`Engine::start_refresh`]. Held by the
@@ -766,18 +770,17 @@ pub struct Engine<
     /// rather than a third copy of the same primitive.
     open_slots: refresh_slot::OpenTaskSlots,
 
-    /// Per-wallet write lock over the `.wallet.pending` sibling seal (WI-3
-    /// §3.3 writer discipline). The pending seal legitimately has **two**
-    /// writers — the WI-2 assemble path (append) and the WI-3 dispatch driver
-    /// (transition/remove) — on two cadences; a shared async mutex around
-    /// load→modify→seal is what makes them safe against read-modify-seal
-    /// races. Held here (not inside the ephemeral dispatch driver) so both
-    /// writers serialize against **one** mutex per wallet: the driver clones
-    /// it into its [`PendingPostStore`](pscan::dispatch::PendingPostStore) at
-    /// spawn, and the assemble path takes the same clone. A bare `Arc<Mutex>`
-    /// (no back-reference to the engine), so — unlike the running task's
+    /// Per-wallet coordination gate for the pending-post family
+    /// ([`pending_post_gate::PendingPostGate`]): the write lock over the
+    /// `.wallet.pending` sibling seal (WI-3 §3.3 writer discipline — the
+    /// WI-2 assemble path and the WI-3 dispatch driver serialize their
+    /// load→modify→seal cycles on the one mutex per wallet) **plus** the
+    /// foreground-operation gauge the cadence driver's epoch-claim leg
+    /// yields to (`ENGINE_CADENCE_DRIVER.md` §3, "user work always wins").
+    /// Every store and facade takes a clone of this one `Arc`. No
+    /// back-reference to the engine, so — unlike the running task's
     /// engine-arc — it introduces no ownership cycle.
-    pending_write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    pending_gate: std::sync::Arc<pending_post_gate::PendingPostGate>,
 
     /// Producer-side [`RefreshEngine`] implementor.
     ///
@@ -1022,9 +1025,11 @@ impl<
         self.network
     }
 
-    /// Capability mode of this wallet (full / view-only /
-    /// hardware-offload). Cached from [`WalletFile`]'s region 1 at
-    /// construction; stable for the life of the open wallet.
+    /// Capability mode of this wallet — always [`Capability::Full`],
+    /// the only capability (rule 23; ViewOnly REJECTED,
+    /// hardware-offload DEFERRED with zero symbols). Cached from
+    /// [`WalletFile`]'s region 1 at construction; stable for the life
+    /// of the open wallet.
     pub fn capability(&self) -> Capability {
         self.capability
     }
@@ -1193,7 +1198,7 @@ impl<
             capability,
             refresh_slot,
             open_slots,
-            pending_write_lock,
+            pending_gate,
             refresh: _old,
             economics,
             stake,
@@ -1215,7 +1220,7 @@ impl<
             capability,
             refresh_slot,
             open_slots,
-            pending_write_lock,
+            pending_gate,
             refresh: std::sync::Arc::new(refresh),
             economics,
             stake,
@@ -1252,7 +1257,7 @@ impl<
             capability,
             refresh_slot,
             open_slots,
-            pending_write_lock,
+            pending_gate,
             refresh,
             economics,
             stake,
@@ -1274,7 +1279,7 @@ impl<
             capability,
             refresh_slot,
             open_slots,
-            pending_write_lock,
+            pending_gate,
             refresh,
             economics,
             stake,
@@ -1302,17 +1307,17 @@ impl<
     /// [`WatchdogHost`](submit_lifecycle::WatchdogHost)) and the daemon
     /// to the driver for the duration of the tick.
     ///
-    /// # Cadence is the embedding runtime's, not the Engine's (§5.3)
+    /// # Cadence is the engine cadence driver's (`ENGINE_CADENCE_DRIVER.md`)
     ///
-    /// "Cadence is role policy; termination is not." This method is the
-    /// **entry point**, not a scheduler — the owner of the `Engine`
-    /// (the wallet binary / RPC server; Stage 4: the actor runtime)
-    /// decides *when* to call it. The natural call site is after each
-    /// completed refresh cycle, since the held projection and
-    /// `synced_height` only move on refresh / ledger writes; it must
-    /// **not** be called while a merge write-lock is held, because the
-    /// tick issues daemon round-trips and holding the ledger lock across
-    /// them would block the merge it depends on.
+    /// This method is the **entry point**, not a scheduler. Its production
+    /// caller is the cadence driver's submit-lifecycle leg
+    /// ([`cadence`] leg 1), which fires it on observed chain advance —
+    /// §5.3's original "the embedding runtime decides when" posture is
+    /// overturned per the design doc §1 (premise refuted: no embedder ever
+    /// scheduled it). The one call-site constraint stands: it must **not**
+    /// be called while a merge write-lock is held, because the tick issues
+    /// daemon round-trips and holding the ledger lock across them would
+    /// block the merge it depends on.
     ///
     /// Available only when the pending-tx engine is the production
     /// [`LocalPendingTx`](local_pending_tx::LocalPendingTx) (the
