@@ -259,160 +259,18 @@ jobs:
         run: |
           ${{env.CCACHE_SETTINGS}}
           ${{env.BUILD_DEFAULT_LINUX}}
-      # The restricted-RPC gate's only production-path guard. It spawns the
-      # shekyld just built and puts real over-cap requests to a restricted
-      # listener, which is the one assertion that can see whether the C++
-      # dispatch bridge passes a connection context — the C++ unit tests
-      # cannot, by construction, and without this the privacy regression it
-      # guards could merge green.
-      #
-      # It runs here rather than in the test job because that job installs no
-      # Rust by design, and here the binary and the toolchain already coexist:
-      # no extra build, ~3 seconds. `--ignored` because the test is opted out
-      # of the ordinary Rust lane, which builds no daemon; SHEKYLD_BIN is how
-      # it finds one.
-      - name: live-daemon gates (restricted RPC + console in-process arm)
+      # Armed #[ignore]d regtest_e2e gates against the shekyld just built.
+      # Runs here rather than in the test job because that job installs no
+      # Rust by design, and here the binary and the toolchain already coexist.
+      # The north-star spend is 76-99 s; the other four are a few seconds.
+      - name: live-daemon gates
         if: matrix.pack_ctest
         # `shell: bash` like the CTest-artifact step below, and for the same
         # reason: the job's default shell in this container is dash, which
         # rejects `set -o pipefail` outright — the script dies on line 1
         # before running anything.
         shell: bash
-        run: |
-          set -eu
-          # `$PWD`, not `${{ github.workspace }}`: that expression is evaluated
-          # on the runner host and yields /home/runner/work/..., while this step
-          # executes inside the container, where the same tree is /__w/... A
-          # step starts in the workspace, so the relative path is the one that
-          # is right on both sides.
-          export SHEKYLD_BIN="$PWD/build/bin/shekyld"
-          test -x "$SHEKYLD_BIN" || { echo "FATAL: no shekyld at $SHEKYLD_BIN" >&2; exit 1; }
-          cd rust
-          # Redirected, not piped: a pipeline's status is the last command's, so
-          # `| tee` would swallow cargo's verdict. Read the log afterwards.
-          #
-          # The filter is the FULL test path — `--exact` matches
-          # `module::path::name`, so the bare function name selects nothing, and
-          # `cargo test` reports "0 passed" and exits 0 when a filter matches
-          # nothing. The count assertion is what refuses that green no-op
-          # (rule 47: a gate must assert its own subject exists).
-          # Run one at a time so each asserts its own "1 passed": the
-          # restricted gate through the FFI bridge, the caps the migrated
-          # handlers apply themselves, and the console's in-process arm —
-          # which RK-4c shipped broken because only the remote arm was ever
-          # exercised. The p2p console leg carries an extra job: it is what
-          # makes `print_net_stats`' bridged `/get_limit` call safe to keep
-          # until RK-8 migrates that route (§2.1.1).
-          #
-          # ARMED vs FAST-SET. This list is the ARMED set: a gate belongs here
-          # only once it has been OBSERVED FAILING for the reason it exists —
-          # a gate nobody has seen red is not evidence, and arming one that
-          # cannot fail is worse than leaving it dark, because it occupies the
-          # slot where coverage should be. Membership of the separate FAST SET
-          # (whatever runs before every push) is a COST question and is decided
-          # by measured seconds, not by whether a gate is trusted. The two are
-          # different memberships and must not be collapsed: a slow gate is
-          # excluded from the fast set with its number attached, never
-          # unarmed.
-          #
-          # FAST-SET EXCLUSIONS (armed here, too slow to run pre-push):
-          #   e2e_fcmp_spend_accepted_by_daemon — 76-99 s measured
-          #     2026-09-07 over four runs. It mines to reference-spendability,
-          #     builds an FCMP++ spend with the production Engine, and waits
-          #     for a live daemon to accept and connect it.
-          #
-          # `regtest_e2e.rs` holds 17 `#[ignore]` attributes and this list
-          # names 5, so 12 remain dark. They are not excluded — nobody has
-          # decided about them. Each needs its own red observation before it
-          # is added, which is why they are not being bulk-armed here.
-          # Enumerate what actually exists before asserting anything about it.
-          # `--list --ignored` is the tree's own answer; a grep over source
-          # counts `#[ignore]` written in doc comments too (21 lines, 17
-          # attributes) and would silently disagree with the runner.
-          cargo test -p shekyl-engine-core --lib -- --list --ignored > ignored.txt 2>&1
-          # `grep -c` exits 1 on zero matches, which `set -e` would turn into a
-          # bare abort with no message — and zero matches is exactly the case
-          # this must report, not die on (rule 47: assert your own subject).
-          # Checked FIRST: if the enumeration is empty every name below looks
-          # renamed, and the gate would blame five tests for one broken command.
-          regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' ignored.txt || true)
-          [ "${regtest_ignored:-0}" -gt 0 ] || {
-            echo "FATAL: enumerated no regtest_e2e ignored tests — the module moved or the enumeration broke" >&2
-            exit 1
-          }
-
-          # ARMED: every name below must still exist. `cargo test --exact` on a
-          # moved name exits 0 with "0 passed", so a rename would otherwise turn
-          # a gate off silently. (The per-test count assertion in the loop also
-          # catches this; asserting here names the cause instead of the symptom.)
-          #
-          # FAST-SET EXCLUSIONS: armed above, too slow to run before every push.
-          # Each carries its measured basis, not an impression:
-          #   e2e_fcmp_spend_accepted_by_daemon — 76-99 s over four runs,
-          #   2026-09-07.
-          # The armed set, declared once. The loop below iterates it and the
-          # undecided count is derived from it, so the two cannot drift — a
-          # hand-kept count beside a hand-kept list is a duplicate waiting to
-          # disagree.
-          ARMED="engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge
-          engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
-          engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm
-          engine::regtest_e2e::native_handlers_apply_their_own_request_caps
-          engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon"
-
-          for a in $ARMED; do
-            grep -qx "$a: test" ignored.txt || {
-              echo "FATAL: armed gate '$a' names no ignored test — it was renamed or deleted, and this gate is now off" >&2
-              exit 1
-            }
-          done
-
-          FAST_SET_EXCLUSIONS="engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon"
-
-          # Not an existence check: every exclusion is by construction armed, so
-          # the loop above already proved these names exist and a second
-          # existence test here could never fail on its own. What CAN go wrong
-          # is the relation — excluding something from the fast set that was
-          # never armed, which reads as a decision but is a no-op.
-          for x in $FAST_SET_EXCLUSIONS; do
-            printf '%s\n' $ARMED | grep -qx "$x" || {
-              echo "FATAL: fast-set exclusion '$x' is not an armed gate — excluding an unarmed test from the fast set decides nothing" >&2
-              exit 1
-            }
-          done
-
-          # THE DARK SET MAY NOT GROW SILENTLY. `regtest_e2e` carries 17
-          # `#[ignore]` attributes; 5 are armed below, leaving 12 on which
-          # nobody has decided. Adding a new `#[ignore]`d test without arming it
-          # or recording why raises this count and fails here, which forces the
-          # decision to be made rather than deferred by default. Lowering it (by
-          # arming a gate, which requires observing it red first) is a conscious
-          # edit of this baseline — visible in the diff, which is the bar.
-          UNDECIDED_BASELINE=12
-          undecided=$(( regtest_ignored - $(printf '%s\n' $ARMED | wc -l) ))
-          if [ "$undecided" -ne "$UNDECIDED_BASELINE" ]; then
-            echo "FATAL: $undecided regtest_e2e gates are neither armed nor decided, baseline says $UNDECIDED_BASELINE." >&2
-            echo "A new #[ignore]d test must be armed (observe it red first) or its baseline moved deliberately." >&2
-            exit 1
-          fi
-
-          for t in $ARMED
-          do
-            set +e
-            cargo test -p shekyl-engine-core --lib "$t" \
-              -- --ignored --exact --nocapture > gate.log 2>&1
-            status=$?
-            set -e
-            cat gate.log
-            if [ "$status" -ne 0 ]; then
-              echo "FATAL: $t failed" >&2
-              exit "$status"
-            fi
-            grep -qE '^test result: ok\. 1 passed' gate.log || {
-              echo "FATAL: $t selected no test — the filter or the name moved" >&2
-              exit 1
-            }
-          done
+        run: scripts/ci/run_live_daemon_gates.sh
 
       # Pack the CTest tree for the 24.04 test job. Same shape as
       # economics-c2a-prime.yml: Release defaults BUILD_SHARED_LIBS OFF
