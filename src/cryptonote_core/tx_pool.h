@@ -321,11 +321,17 @@ namespace cryptonote
      * @brief loads pool state (if any) from disk, and initializes pool
      *
      * @param max_txpool_weight the max weight in bytes
-     * @param mine_stem_txes whether to mine txes in stem relay mode
+     * @param mine_relayable_txes whether block templates admit every relayable
+     *   pool tx (relay method != none) rather than broadcast-visible ones only.
+     *   Set from `m_nettype == FAKECHAIN`: a single regtest node's own
+     *   submissions sit at `relay_method::local` under the Dandelion++ embargo
+     *   and would otherwise race the fluff timer into the template. Off on
+     *   every real network -- mining an unfluffed self-tx is an origin
+     *   fingerprint.
      *
      * @return true
      */
-    bool init(size_t max_txpool_weight = 0, bool mine_stem_txes = false);
+    bool init(size_t max_txpool_weight = 0, bool mine_relayable_txes = false);
 
     /**
      * @brief attempts to save the transaction pool state to disk
@@ -790,7 +796,7 @@ private:
 
     size_t m_txpool_max_weight;
     size_t m_txpool_weight;
-    bool m_mine_stem_txes;
+    bool m_mine_relayable_txes;
 
     mutable std::unordered_map<crypto::hash, std::tuple<bool, tx_verification_context, uint64_t, crypto::hash>> m_input_cache;
 

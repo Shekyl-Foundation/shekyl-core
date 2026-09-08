@@ -1784,16 +1784,17 @@ async fn pscan_until(
     }
 }
 
-/// Mine in `blocks_per_batch` batches until the tx pool drains — the
-/// locally-submitted tx's only route into a block on this offline daemon.
+/// Mine in `blocks_per_batch` batches until the tx pool drains.
 ///
 /// The submit path inserts at `relay_method::local` under the Dandelion++
-/// embargo, and the miner only includes broadcast-visible txs
-/// (`fill_block_template`'s `matches(relay_category::broadcasted)` gate); the
-/// stem cannot send here, so inclusion waits for the embargo to expire and
-/// fluff. Mining in batches rather than assuming one batch suffices. Pass
-/// `blocks_per_batch = 1` when the caller needs the tx's block to be the
-/// tip at return (the emission e2e's depth-1 pop leg pops exactly it).
+/// embargo. On FAKECHAIN the template admits every *relayable* pool tx
+/// (`fill_block_template`'s `m_mine_relayable_txes` opt-in), so a
+/// locally-submitted tx is includable immediately and the pool normally
+/// drains on the first batch; the loop stays as the fill-policy-agnostic
+/// shape (a tx skipped by a readiness check retries rather than failing the
+/// caller). Pass `blocks_per_batch = 1` when the caller needs the tx's block
+/// to be the tip at return (the emission e2e's depth-1 pop leg pops exactly
+/// it).
 async fn mine_until_pool_drains(
     daemon: &RegtestDaemon,
     principal: &str,
@@ -1812,8 +1813,9 @@ async fn mine_until_pool_drains(
             "{what} never left the pool (embargo/template gap?)"
         );
         daemon.generate_blocks(blocks_per_batch, principal).await;
-        // The Dandelion++ embargo is wall-clock, not block-height: pause
-        // between attempts rather than spinning the miner.
+        // A tx deferred by a wall-clock condition (not block height) would
+        // spin the miner without this pause; retries are not expected under
+        // the FAKECHAIN relayable-template opt-in, but stay cheap.
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
