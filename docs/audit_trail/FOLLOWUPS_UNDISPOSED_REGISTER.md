@@ -28,7 +28,9 @@ its owner's edit, not this register's.
 
 ## Measurements
 
-Against `docs/FOLLOWUPS.md` at the commit that closed the bold markers:
+Against `docs/FOLLOWUPS.md` as merged with `dev` at effb22eaa. Line numbers are
+re-anchored to that tree; the counts below are the population this branch
+repaired, which is what the register is a record of:
 
 - 350 entries total (`^- \*\*`); **198** had unclosed bold, now closed.
 - **119 are incomplete as written** and are listed below.
@@ -62,13 +64,13 @@ surface. The **Owning doc** column carries the path where the entry has one.
 
 | Line | Target | Owning doc | Entry as it stands |
 | ---: | --- | --- | --- |
-| 89 | pre-genesis | *undetermined* | TJ-7 (HIGH, sweep input) — sybil-per-shard has NO uniqueness constraint, |
-| 92 | pre-genesis | *undetermined* | TJ-8 (briefing constraint on the Round-2 re-pin) — do NOT credit the |
-| 98 | pre-genesis | *undetermined* | TJ price premise — NOT codeable, tracked here with its falsifiers as |
-| 101 | pre-genesis | *undetermined* | Superseded-section cross-reference sweep (docs hygiene, split out by the |
-| 104 | pre-genesis | *undetermined* | Live-pin index, independent of doc status (process-structural — added |
-| 125 | pre-genesis | *undetermined* | Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with |
-| 128 | pre-genesis | *undetermined* | `prev_block` block templates deleted (RESERVED at the RPC) — reopen has a |
+| 86 | pre-genesis | *undetermined* | TJ-7 (HIGH, sweep input) — sybil-per-shard has NO uniqueness constraint, |
+| 89 | pre-genesis | *undetermined* | TJ-8 (briefing constraint on the Round-2 re-pin) — do NOT credit the |
+| 95 | pre-genesis | *undetermined* | TJ price premise — NOT codeable, tracked here with its falsifiers as |
+| 98 | pre-genesis | *undetermined* | Superseded-section cross-reference sweep (docs hygiene, split out by the |
+| 101 | pre-genesis | *undetermined* | Live-pin index, independent of doc status (process-structural — added |
+| 122 | pre-genesis | *undetermined* | Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with |
+| 125 | pre-genesis | *undetermined* | `prev_block` block templates deleted (RESERVED at the RPC) — reopen has a |
 | 145 | pre-genesis | *undetermined* | GF-7 `stake_in` change-co-presence residual — shipped with a warning, |
 | 151 | pre-genesis | *undetermined* | Wallet thin-market entry disclosure — the §13.2 re-disposition's |
 | 169 | pre-genesis | `design/WINDOWS_WALLET_SUPPORT.md` | Rust wallet stack: no Windows support (blocks Windows wallet `WINDOWS_WALLET_SUPPORT.md` |
@@ -103,57 +105,57 @@ surface. The **Owning doc** column carries the path where the entry has one.
 | 374 | pre-genesis | *undetermined* | `shekyl-fcmp`: resolve `useless_conversion` clippy warnings in |
 | 377 | pre-genesis | *undetermined* | Full migration of remaining `SHEKYL_*` FFI constants to the |
 | 380 | pre-genesis | *undetermined* | `wallet_storage`: cover loaded-wallet save-as branches in |
-| 398 | pre-genesis | `https://github.com/Shekyl-Foundation/shekyl-core/pull/112` | Subaddress mechanism under PQC — dedicated design round (2026-05-31, #112 |
-| 407 | pre-genesis | *undetermined* | `tx_extra` `0x02` Nonce: shed from the genesis grammar — FA-10 is |
-| 413 | pre-genesis | `design/PHASE_2B_FSM_RETOOL.md` | Phase 2b planning session — stake state-machine shape (gate for `design/PHASE_2B_FSM_RETOOL.md` |
-| 419 | pre-genesis | `design/PHASE_2B_FSM_RETOOL.md` | Owned `AtomicUnits::mul_div_rem` — deferred (rule-21 reversion clause; spawned `design/PHASE_2B_FSM_RETOOL.md` |
-| 425 | pre-genesis | *undetermined* | JSON-RPC large-amount precision — string-amount serde at the RPC edge (spawned |
-| 434 | pre-genesis | *undetermined* | RPC boundary refinements — idle eviction, `engine_lock`, |
-| 437 | pre-genesis | *undetermined* | `Hybrid*` secret types: `Vec<u8>` for fixed-size scalars — |
-| 530 | pre-genesis | `./design/RANDOMX_V2_RUST.md` | RandomX v2 — Guix reproducible-build obligation pickup (trigger: `docs/design/RANDOMX_V2_RUST.md` |
-| 572 | pre-genesis | *undetermined* | Term hygiene: "rotation" is a §11.8 defect on a noun — rename to |
-| 632 | pre-genesis | *undetermined* | Retire the iai-callgrind→gungraun bench-flake bisect harness (spawned |
-| 662 | pre-genesis | *undetermined* | Relay: `on_relay_tx` and a missed submit nudge re-decide the zone after |
-| 665 | pre-genesis | *undetermined* | Wallet: stop holding a relay constant — ask the daemon whether a |
-| 677 | pre-genesis | *undetermined* | Relay: the `F'` region and §15's launch condition are one condition, and |
-| 689 | pre-genesis | *undetermined* | Relay: populate the 48-cell Pi verification surface, then consume it |
-| 846 | pre-genesis | *undetermined* | MSVC / Windows build-debt cluster (migrated from |
-| 849 | pre-genesis | *undetermined* | P-drain mechanism re-walk — CryptoNote holdover audit (rule 16; method note 5: |
-| 852 | pre-genesis | *undetermined* | `P`-lane fee uniformity — implementation rider (ratified 2026-07-19, |
-| 870 | pre-genesis | *undetermined* | 2d-2 SP-T0 — DQ-T0.4 circuit-isolation measurement has no CI binary source (BLOCKED, not |
-| 876 | pre-genesis | *undetermined* | M1 reward-gate C++ test-support surface — fold the corruption-injection seam off the |
-| 879 | pre-genesis | `design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` | Segment-freeze pipeline — design round required (opened by `ARCHIVAL_REWARD_GATE_M1.md` `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` |
-| 882 | pre-genesis | *undetermined* | M1 reward gate — pre-flight process BREACH (PF-1, recorded 2026-07-06; a breach, |
-| 885 | pre-genesis | `design/ARCHIVAL_BOND_2C_GF7_HOOKS.md` | 2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure `ARCHIVAL_BOND_2C_GF7_HOOKS.md` |
-| 888 | pre-genesis | *undetermined* | Wallet UX: thin-cover exposure disclosure at bond/claim time (registered 2026-07-19, |
-| 909 | pre-genesis | `completed/STAGE_1_PR_4_REFRESH_ENGINE.md` | `ReorgAmplificationDetector` consumer actor (Stage 1 PR 4 R5 `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` |
-| 912 | pre-genesis | `completed/STAGE_1_PR_4_REFRESH_ENGINE.md` | `PeerReputationActor` consumer actor (Stage 1 PR 4 R6 `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` |
-| 915 | pre-genesis | `completed/STAGE_1_PR_4_REFRESH_ENGINE.md` | `RecoveryActor` consumer actor (Stage 1 PR 4 R6 reframe; `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` |
-| 918 | pre-genesis | `completed/STAGE_1_PR_4_REFRESH_ENGINE.md` | `ViewTagAnomalyDetector` consumer actor (Stage 1 PR 4 `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` |
-| 927 | pre-genesis | `completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md` | `ReservationTTLActor` consumer actor (Stage 1 PR 5 R8 `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md` |
-| 930 | pre-genesis | `completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md` | `SubmitFailureAnalyzer` consumer actor (Stage 1 PR 5 R9 `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md` |
-| 933 | pre-genesis | `completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md` | `TimeoutResolverActor` consumer actor (Stage 1 PR 5 R9 `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md` |
-| 936 | pre-genesis | `completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md` | `ReservationAuditActor` consumer actor (Stage 1 PR 5 §5.0.2 `STAGE_1_PR_5_PENDING_TX_ENGINE.md` |
-| 942 | pre-genesis | `../.cursor/rules/21-reversion-clause-discipline.mdc` | Eager-discard-on-`SnapshotMerged` opt-in (Stage 1 PR 5 `21-reversion-clause-discipline.mdc` |
-| 948 | pre-genesis | `../.cursor/rules/21-reversion-clause-discipline.mdc` | `MempoolMonitorActor` consumer actor (Stage 1 PR 5 `21-reversion-clause-discipline.mdc` |
-| 951 | pre-genesis | `completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md` | `TxConfirmationTrackerActor` consumer actor (Stage 1 `STAGE_1_PR_5_PENDING_TX_ENGINE.md` |
-| 957 | pre-genesis | `../.cursor/rules/21-reversion-clause-discipline.mdc` | Build-cancel ergonomic refinement (Stage 1 PR 5 `21-reversion-clause-discipline.mdc` |
-| 999 | pre-genesis | *undetermined* | Stage 5 — `ArchivalEngine` native actor build (simulation- |
-| 1023 | pre-genesis | *undetermined* | Transport selection for the staker-archival path (gate 6 / |
-| 1026 | pre-genesis | *undetermined* | Soundness pass step 0: pin retrieval SLA per class (gate 4–6; |
-| 1044 | pre-genesis | *undetermined* | Archiver seeding-path transport relaxation (gate 6 / firewall; |
-| 1050 | pre-genesis | *undetermined* | L15 diversity under location-hiding (gate 4–6 / architecture; |
-| 1053 | pre-genesis | *undetermined* | Permanent fee-era backstop must be a trustless terminal subsidy, |
-| 1062 | pre-genesis | *undetermined* | Bootstrap APR overshoot is a purse-efficiency note, not a |
-| 1065 | pre-genesis | *undetermined* | Vanguard eligibility flag set is a provisional pin, unseated only by |
+| 395 | pre-genesis | `https://github.com/Shekyl-Foundation/shekyl-core/pull/112` | Subaddress mechanism under PQC — dedicated design round (2026-05-31, #112 |
+| 404 | pre-genesis | *undetermined* | `tx_extra` `0x02` Nonce: shed from the genesis grammar — FA-10 is |
+| 410 | pre-genesis | `design/PHASE_2B_FSM_RETOOL.md` | Phase 2b planning session — stake state-machine shape (gate for `design/PHASE_2B_FSM_RETOOL.md` |
+| 416 | pre-genesis | `design/PHASE_2B_FSM_RETOOL.md` | Owned `AtomicUnits::mul_div_rem` — deferred (rule-21 reversion clause; spawned `design/PHASE_2B_FSM_RETOOL.md` |
+| 422 | pre-genesis | *undetermined* | JSON-RPC large-amount precision — string-amount serde at the RPC edge (spawned |
+| 431 | pre-genesis | *undetermined* | RPC boundary refinements — idle eviction, `engine_lock`, |
+| 434 | pre-genesis | *undetermined* | `Hybrid*` secret types: `Vec<u8>` for fixed-size scalars — |
+| 521 | pre-genesis | `./design/RANDOMX_V2_RUST.md` | RandomX v2 — Guix reproducible-build obligation pickup (trigger: `docs/design/RANDOMX_V2_RUST.md` |
+| 563 | pre-genesis | *undetermined* | Term hygiene: "rotation" is a §11.8 defect on a noun — rename to |
+| 623 | pre-genesis | *undetermined* | Retire the iai-callgrind→gungraun bench-flake bisect harness (spawned |
+| 653 | pre-genesis | *undetermined* | Relay: `on_relay_tx` and a missed submit nudge re-decide the zone after |
+| 656 | pre-genesis | *undetermined* | Wallet: stop holding a relay constant — ask the daemon whether a |
+| 668 | pre-genesis | *undetermined* | Relay: the `F'` region and §15's launch condition are one condition, and |
+| 680 | pre-genesis | *undetermined* | Relay: populate the 48-cell Pi verification surface, then consume it |
+| 840 | pre-genesis | *undetermined* | MSVC / Windows build-debt cluster (migrated from |
+| 843 | pre-genesis | *undetermined* | P-drain mechanism re-walk — CryptoNote holdover audit (rule 16; method note 5: |
+| 846 | pre-genesis | *undetermined* | `P`-lane fee uniformity — implementation rider (ratified 2026-07-19, |
+| 864 | pre-genesis | *undetermined* | 2d-2 SP-T0 — DQ-T0.4 circuit-isolation measurement has no CI binary source (BLOCKED, not |
+| 870 | pre-genesis | *undetermined* | M1 reward-gate C++ test-support surface — fold the corruption-injection seam off the |
+| 873 | pre-genesis | `design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` | Segment-freeze pipeline — design round required (opened by `ARCHIVAL_REWARD_GATE_M1.md` `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` |
+| 876 | pre-genesis | *undetermined* | M1 reward gate — pre-flight process BREACH (PF-1, recorded 2026-07-06; a breach, |
+| 879 | pre-genesis | `design/ARCHIVAL_BOND_2C_GF7_HOOKS.md` | 2d-2 SP-T4a — GF-7 principal-timeline timing correlation is a GENESIS GATE (measure `ARCHIVAL_BOND_2C_GF7_HOOKS.md` |
+| 882 | pre-genesis | *undetermined* | Wallet UX: thin-cover exposure disclosure at bond/claim time (registered 2026-07-19, |
+| 903 | pre-genesis | `completed/STAGE_1_PR_4_REFRESH_ENGINE.md` | `ReorgAmplificationDetector` consumer actor (Stage 1 PR 4 R5 `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` |
+| 906 | pre-genesis | `completed/STAGE_1_PR_4_REFRESH_ENGINE.md` | `PeerReputationActor` consumer actor (Stage 1 PR 4 R6 `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` |
+| 909 | pre-genesis | `completed/STAGE_1_PR_4_REFRESH_ENGINE.md` | `RecoveryActor` consumer actor (Stage 1 PR 4 R6 reframe; `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` |
+| 912 | pre-genesis | `completed/STAGE_1_PR_4_REFRESH_ENGINE.md` | `ViewTagAnomalyDetector` consumer actor (Stage 1 PR 4 `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` |
+| 921 | pre-genesis | `completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md` | `ReservationTTLActor` consumer actor (Stage 1 PR 5 R8 `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md` |
+| 924 | pre-genesis | `completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md` | `SubmitFailureAnalyzer` consumer actor (Stage 1 PR 5 R9 `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md` |
+| 927 | pre-genesis | `completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md` | `TimeoutResolverActor` consumer actor (Stage 1 PR 5 R9 `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md` |
+| 930 | pre-genesis | `completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md` | `ReservationAuditActor` consumer actor (Stage 1 PR 5 §5.0.2 `STAGE_1_PR_5_PENDING_TX_ENGINE.md` |
+| 936 | pre-genesis | `../.cursor/rules/21-reversion-clause-discipline.mdc` | Eager-discard-on-`SnapshotMerged` opt-in (Stage 1 PR 5 `21-reversion-clause-discipline.mdc` |
+| 942 | pre-genesis | `../.cursor/rules/21-reversion-clause-discipline.mdc` | `MempoolMonitorActor` consumer actor (Stage 1 PR 5 `21-reversion-clause-discipline.mdc` |
+| 945 | pre-genesis | `completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md` | `TxConfirmationTrackerActor` consumer actor (Stage 1 `STAGE_1_PR_5_PENDING_TX_ENGINE.md` |
+| 951 | pre-genesis | `../.cursor/rules/21-reversion-clause-discipline.mdc` | Build-cancel ergonomic refinement (Stage 1 PR 5 `21-reversion-clause-discipline.mdc` |
+| 993 | pre-genesis | *undetermined* | Stage 5 — `ArchivalEngine` native actor build (simulation- |
+| 1017 | pre-genesis | *undetermined* | Transport selection for the staker-archival path (gate 6 / |
+| 1020 | pre-genesis | *undetermined* | Soundness pass step 0: pin retrieval SLA per class (gate 4–6; |
+| 1038 | pre-genesis | *undetermined* | Archiver seeding-path transport relaxation (gate 6 / firewall; |
+| 1044 | pre-genesis | *undetermined* | L15 diversity under location-hiding (gate 4–6 / architecture; |
+| 1047 | pre-genesis | *undetermined* | Permanent fee-era backstop must be a trustless terminal subsidy, |
+| 1056 | pre-genesis | *undetermined* | Bootstrap APR overshoot is a purse-efficiency note, not a |
+| 1059 | pre-genesis | *undetermined* | Vanguard eligibility flag set is a provisional pin, unseated only by |
 
 ## Section 2 — boundary set, read by hand
 
 | Line | Verdict | Target | Owning doc | Entry as it stands |
 | ---: | --- | --- | --- | --- |
-| 68 | reads complete | pre-genesis | *undetermined* | Release-asset manifest signing owed before the first non-RC release |
-| 83 | incomplete | pre-genesis | *undetermined* | TJ-2 — `CHALLENGE_RESPONSE_BLOCKS` is PINNED (2026-08-15); the freeze item |
-| 131 | incomplete | pre-genesis | *undetermined* | `sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide |
+| 65 | reads complete | pre-genesis | *undetermined* | Release-asset manifest signing owed before the first non-RC release |
+| 80 | incomplete | pre-genesis | *undetermined* | TJ-2 — `CHALLENGE_RESPONSE_BLOCKS` is PINNED (2026-08-15); the freeze item |
+| 128 | incomplete | pre-genesis | *undetermined* | `sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide |
 | 148 | reads complete | pre-genesis | *undetermined* | Workspace-wide `deny_unknown_fields` on the remaining wallet-RPC params |
 | 184 | incomplete | pre-genesis | *undetermined* | Phase 4b: `get_transfers` OUTGOING filter is a no-op until an outgoing |
 | 187 | incomplete | pre-genesis | *undetermined* | Phase 4b: build concurrency permit stays 1 — raising it is a rule-21 |
@@ -168,31 +170,31 @@ surface. The **Owning doc** column carries the path where the entry has one.
 | 332 | incomplete | pre-genesis | *undetermined* | Emission-path micro-efficiency cluster — address with C-1 wiring / the schema |
 | 347 | reads complete | pre-genesis | *undetermined* | Genesis ceremony tooling: `generate-genesis-address` CLI |
 | 371 | incomplete | pre-genesis | *undetermined* | `RecoveredWalletOutput.key_image`: promote to `Option<KeyImage>` |
-| 392 | incomplete | pre-genesis | *undetermined* | Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression |
-| 422 | incomplete | pre-genesis | *undetermined* | Consolidate hand-copied `10^9` / decimal-point constants onto the `shekyl-units` |
-| 473 | incomplete | pre-genesis | *undetermined* | Market-bond wallet entry — `first_stake`'s genesis posture cannot |
-| 476 | incomplete | pre-genesis | *undetermined* | Shard assignment for market staking — the `NoShardsAvailable` |
-| 506 | incomplete | pre-genesis | *undetermined* | Serve-credit decision-site flip: Rust becomes the primary decision |
-| 512 | reads complete | pre-genesis | *undetermined* | Remove or retain the orphaned `ActivityMetric.total_staked` observable |
-| 578 | incomplete | pre-genesis | *undetermined* | PQC Multisig : Option-D residue left standing after the F-6 |
-| 602 | incomplete | pre-genesis | *undetermined* | Resolution: FCMP++ historical-reference cutover via Stage 5 |
-| 659 | incomplete | pre-genesis | *undetermined* | Relay: the `t_core` arrival harness — the witness this path has never |
-| 668 | reads complete | pre-genesis | *undetermined* | Relay: the D9 below-floor observer (§18.4, ruled 2026-08-15). IMPLEMENTED |
-| 674 | incomplete | pre-genesis | *undetermined* | Relay: re-derive `fluff_return_ms` once, when a degree distribution |
-| 680 | incomplete | pre-genesis | *undetermined* | Fleet: arm readouts must record the per-sample series, not a pooled |
-| 683 | incomplete | pre-genesis | *undetermined* | Relay: `full_travel_probability`'s cross-check holds `fluff_return_ms` |
-| 686 | incomplete | pre-genesis | *undetermined* | Relay: `F'` may be per-POSTURE even though §89.2 correctly refused |
-| 759 | reads complete | pre-genesis | *undetermined* | Hardening-pass commit 8 follow-up: WalletPrefs round-trip |
-| 762 | incomplete | pre-genesis | *undetermined* | `tx_pool` / `blockchain_db` LMDB transactional wrapper — typed |
-| 789 | incomplete | pre-genesis | *undetermined* | The GUI dials its daemon with nothing said — and a dial that says |
-| 816 | reads complete | pre-genesis | *undetermined* | C++ JSON-RPC method-name rename: `wallet_*` → engine-shaped names |
-| 867 | incomplete | pre-genesis | *undetermined* | 2d-1 SP-3 — borrow the block in the dual extractor instead of cloning per bonded scanner |
-| 1035 | incomplete | pre-genesis | *undetermined* | `ARCHIVAL_BOND_FLOOR` numeric pin + genesis `bond_floor_atomic` |
-| 1041 | reads complete | pre-genesis | *undetermined* | Foundation genesis-enumeration — legal / regulatory disclosure |
-| 1047 | reads complete | pre-genesis | *undetermined* | L14 read-credit soundness: per-(holder, shard), never shard-global |
-| 1056 | incomplete | pre-genesis | *undetermined* | Age-stratify the foundation floor AND the terminal subsidy toward |
-| 1059 | incomplete | pre-genesis | *undetermined* | L12 floor-decay schedule should be coupled to the growth↔entry |
-| 1068 | incomplete | pre-genesis | *undetermined* | Validate `prev_id` before attestation verify on the alt-chain path |
+| 389 | incomplete | pre-genesis | *undetermined* | Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression |
+| 419 | incomplete | pre-genesis | *undetermined* | Consolidate hand-copied `10^9` / decimal-point constants onto the `shekyl-units` |
+| 470 | incomplete | pre-genesis | *undetermined* | Market-bond wallet entry — `first_stake`'s genesis posture cannot |
+| 473 | incomplete | pre-genesis | *undetermined* | Shard assignment for market staking — the `NoShardsAvailable` |
+| 500 | incomplete | pre-genesis | *undetermined* | Serve-credit decision-site flip: Rust becomes the primary decision |
+| 506 | reads complete | pre-genesis | *undetermined* | Remove or retain the orphaned `ActivityMetric.total_staked` observable |
+| 569 | incomplete | pre-genesis | *undetermined* | PQC Multisig : Option-D residue left standing after the F-6 |
+| 593 | incomplete | pre-genesis | *undetermined* | Resolution: FCMP++ historical-reference cutover via Stage 5 |
+| 650 | incomplete | pre-genesis | *undetermined* | Relay: the `t_core` arrival harness — the witness this path has never |
+| 659 | reads complete | pre-genesis | *undetermined* | Relay: the D9 below-floor observer (§18.4, ruled 2026-08-15). IMPLEMENTED |
+| 665 | incomplete | pre-genesis | *undetermined* | Relay: re-derive `fluff_return_ms` once, when a degree distribution |
+| 671 | incomplete | pre-genesis | *undetermined* | Fleet: arm readouts must record the per-sample series, not a pooled |
+| 674 | incomplete | pre-genesis | *undetermined* | Relay: `full_travel_probability`'s cross-check holds `fluff_return_ms` |
+| 677 | incomplete | pre-genesis | *undetermined* | Relay: `F'` may be per-POSTURE even though §89.2 correctly refused |
+| 753 | reads complete | pre-genesis | *undetermined* | Hardening-pass commit 8 follow-up: WalletPrefs round-trip |
+| 756 | incomplete | pre-genesis | *undetermined* | `tx_pool` / `blockchain_db` LMDB transactional wrapper — typed |
+| 783 | incomplete | pre-genesis | *undetermined* | The GUI dials its daemon with nothing said — and a dial that says |
+| 810 | reads complete | pre-genesis | *undetermined* | C++ JSON-RPC method-name rename: `wallet_*` → engine-shaped names |
+| 861 | incomplete | pre-genesis | *undetermined* | 2d-1 SP-3 — borrow the block in the dual extractor instead of cloning per bonded scanner |
+| 1029 | incomplete | pre-genesis | *undetermined* | `ARCHIVAL_BOND_FLOOR` numeric pin + genesis `bond_floor_atomic` |
+| 1035 | reads complete | pre-genesis | *undetermined* | Foundation genesis-enumeration — legal / regulatory disclosure |
+| 1041 | reads complete | pre-genesis | *undetermined* | L14 read-credit soundness: per-(holder, shard), never shard-global |
+| 1050 | incomplete | pre-genesis | *undetermined* | Age-stratify the foundation floor AND the terminal subsidy toward |
+| 1053 | incomplete | pre-genesis | *undetermined* | L12 floor-decay schedule should be coupled to the growth↔entry |
+| 1062 | incomplete | pre-genesis | *undetermined* | Validate `prev_id` before attestation verify on the alt-chain path |
 
 ## Section 3 — found by parity, after a narrower definition missed them
 
@@ -210,5 +212,5 @@ supplying it would be inventing content.
 
 | Line | Target | Owning doc | Entry as it stands |
 | ---: | --- | --- | --- |
-| 1029 | pre-genesis | *undetermined* | Foundation archiver key rotation (gate 4–6; pre-genesis).** **Closed |
-| 1038 | pre-genesis | *undetermined* | Archival data scope — sets A/B/C (gate 4–6; pre-genesis).** **Closed |
+| 1023 | pre-genesis | *undetermined* | Foundation archiver key rotation (gate 4–6; pre-genesis).** **Closed |
+| 1032 | pre-genesis | *undetermined* | Archival data scope — sets A/B/C (gate 4–6; pre-genesis).** **Closed |
