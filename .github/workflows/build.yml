@@ -9,13 +9,7 @@ on:
     # draft PR. The weekly Arch / MSYS2 matrix lives in
     # `.github/workflows/weekly-os.yml`.
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '**/README.md'
   pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - '**/README.md'
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
@@ -54,8 +48,77 @@ env:
     ccache --set-config=compression=true
 
 jobs:
+  # Change scope, computed once and consumed by every job below.
+  #
+  # WHY THIS EXISTS RATHER THAN A `paths-ignore` ON THE WORKFLOW. A path filter
+  # suppresses the WORKFLOW, so on a docs-only PR no check is created at all --
+  # and branch protection waits forever for a context nobody will report. That
+  # is a required check that CANNOT PASS: loud, but a hard deadlock. A job-level
+  # `if:` instead produces a check that reports "skipping", which protection
+  # accepts -- the same shape `codeql.yml`'s `analyze-cpp` / `analyze-python`
+  # already rely on for two other required contexts in this repo.
+  #
+  # No third-party action: `git diff` against the base does this, and a
+  # change-detection action would be a new supply-chain surface in CI (rule 17).
+  #
+  # FAILS CLOSED. If the file list cannot be computed for any reason, the output
+  # is `false` and every job runs. A wrong `true` silently skips the real matrix
+  # on a source change; a wrong `false` costs runner minutes. Only one of those
+  # merges broken code.
+  changes:
+    name: 'Change scope'
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        run: |
+          set -u
+          base=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          head="${{ github.sha }}"
+
+          # Any failure below leaves docs_only=false -> everything runs.
+          files=""
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$head" 2>/dev/null || true)"
+          fi
+
+          if [ -z "$files" ]; then
+            echo "scope: no computable file list -- running everything (fail-closed)"
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          docs_only=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            # The domain registry lives under docs/ but IS a code input:
+            # shekyl-crypto-pq's tests/domain_registry.rs include_str!s it, so a
+            # TSV-only change must still run the Rust suite. Carve-out preserved
+            # from rust-audit-test.yml's own `paths` list.
+            case "$f" in
+              docs/design/CRYPTO_DOMAIN_REGISTRY.tsv) docs_only=false; break ;;
+              docs/*|*/README.md|README.md) ;;
+              *) docs_only=false; break ;;
+            esac
+          done <<< "$files"
+
+          echo "scope: docs_only=$docs_only over $(printf '%s' "$files" | wc -l) changed file(s)"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   lint-rust-debug-macros:
     name: 'Lint: no debug macros in production Rust'
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -152,6 +215,8 @@ jobs:
 
   build-macos:
     name: 'macOS (brew)'
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: macOS-latest
     env:
       CCACHE_TEMPDIR: /tmp/.ccache-temp
@@ -204,6 +269,8 @@ jobs:
 
   build-ubuntu:
     name: ${{ matrix.name }}
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -373,7 +440,8 @@ jobs:
 
   test-ubuntu:
     name: "Ubuntu 24.04 (tests)"
-    needs: build-ubuntu
+    needs: [changes, build-ubuntu]
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     container:
       image: ubuntu:24.04
@@ -418,6 +486,8 @@ jobs:
 
   build-windows-msvc:
     name: 'Windows (MSVC, daemon)'
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v5
