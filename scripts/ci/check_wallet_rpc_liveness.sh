@@ -69,8 +69,34 @@ if [[ ${#STATUS[@]} -eq 0 ]]; then
 fi
 
 # ── Extract the dispatch arms ──────────────────────────────────────────────
+# The dispatcher is the single `match method {` in handlers.rs, terminated
+# by a catch-all arm (`other =>` or `_ =>`). The extraction is bounded and
+# fail-closed on both anchors: a missing/duplicated open anchor or a missing
+# catch-all fails the gate rather than silently scanning the rest of the
+# file, where an unrelated `"..." =>` would be read as a dispatch arm.
+open_count=$(grep -c 'match method {' "$HANDLERS" || true)
+if [[ $open_count -ne 1 ]]; then
+  echo "FAIL: expected exactly one 'match method {' in $HANDLERS, found $open_count."
+  echo "      The dispatcher shape moved; fix this extraction to follow it."
+  exit 1
+fi
+
+if ! DISPATCH=$(awk '
+  /match method \{/ { inm = 1 }
+  inm {
+    print
+    if ($0 ~ /^[[:space:]]*(other|_)[[:space:]]*=>/) { seen_end = 1; exit }
+  }
+  END { if (!seen_end) exit 3 }
+' "$HANDLERS"); then
+  echo "FAIL: dispatcher in $HANDLERS has no catch-all arm ('other =>' / '_ =>')."
+  echo "      The extraction cannot bound the match — failing closed rather"
+  echo "      than scanning past the dispatcher."
+  exit 1
+fi
+
 mapfile -t ARMS < <(
-  sed -n '/match method/,/^        _ =>/p' "$HANDLERS" \
+  printf '%s\n' "$DISPATCH" \
     | grep -oE '^\s*"[a-z0-9_]+" =>' \
     | grep -oE '[a-z0-9_]+'
 )
