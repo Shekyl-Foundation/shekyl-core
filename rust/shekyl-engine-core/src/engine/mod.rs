@@ -1015,9 +1015,11 @@ impl<
         self.network
     }
 
-    /// Capability mode of this wallet (full / view-only /
-    /// hardware-offload). Cached from [`WalletFile`]'s region 1 at
-    /// construction; stable for the life of the open wallet.
+    /// Capability mode of this wallet — always [`Capability::Full`],
+    /// the only capability (rule 23; ViewOnly REJECTED,
+    /// hardware-offload DEFERRED with zero symbols). Cached from
+    /// [`WalletFile`]'s region 1 at construction; stable for the life
+    /// of the open wallet.
     pub fn capability(&self) -> Capability {
         self.capability
     }
