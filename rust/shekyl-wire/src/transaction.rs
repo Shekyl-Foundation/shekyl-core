@@ -1592,8 +1592,8 @@ impl Transaction {
                 // `H(prunable)` when present, else the null hash. Both arms carry
                 // struct-derived cross-language hash parity (`pruned_tx_hash_parity`
                 // and `serve_credit_tx_parity`, each with a C++ leg asserting the
-                // same pin); parity against a daemon-captured blob stays deferred on
-                // the live spend path (`docs/FOLLOWUPS.md`).
+                // same pin); the live-oracle pin (`live_oracle_spend_v1.json`) binds
+                // both languages to a daemon-accepted spend.
                 // A supplied digest wins: it is the pruned case, where the
                 // section is absent and its hash is the caller's operand.
                 let h_prunable = match (supplied_prunable, prunable) {

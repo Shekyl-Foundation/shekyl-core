@@ -56,7 +56,22 @@
 # claim rotted. Counting such a path either way would make this number mean
 # "of what this checkout could see" and let it disagree with CI by environment
 # rather than by fact.
-dead-citations: 55
+#
+# Lowered 55 -> 54 on 3992b5a60 (this branch merged with dev), and the ground
+# matters more than the figure: NO ROT WAS REPAIRED. TRACK2_NORTHSTAR_SAL.md
+# moved from docs/design/ to docs/completed/ because the work it tracks landed
+# as PR #193, and its one dead citation went with it — out of the live corpus
+# and into a record, where a stale `path:line` is the historical claim this
+# ratchet deliberately does not count. The live number fell because the
+# document stopped being live.
+#
+# Worth passing to this gate's own lane rather than fixing here, since it would
+# change a measurement taken by a different instrument: the citation that left
+# is `rust/shekyl-oxide/.../shekyl-fcmp-proofs/src/sal/mod.rs:243-256`, an
+# ELIDED path written in prose. The `..` parts guard does not catch `...`, so
+# the token resolves to no file and counts as rot. It is not a claim about a
+# tree path at all, which is the same disposition that guard already encodes.
+dead-citations: 54
 
 # ── declares ──────────────────────────────────────────────────────────────────
 # Documents that have opted a leg in cannot quietly opt back out: dropping a
