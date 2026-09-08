@@ -758,14 +758,17 @@ convenience.
   the identities *today*. It is where a future "just log the onion address for
   debugging" would link them in one line that looks harmless. Separate sinks
   mean that line cannot do damage even if someone writes it.
-- **Managed-tor launch path — STILL OPEN.** If both sides can spawn a managed
-  tor, the launch *code* is shared while the *instances* must not be. Reuse
-  looks safe and is the most likely accidental route to one process serving
-  both. **This is the one decision that cannot be inferred from the posture
-  ruling:** PWD-E7 says the ephemeral posture *requires tor's control port*,
-  which is a requirement on what must exist, not a statement about who starts
-  it — a control port is equally available from a daemon-spawned tor and from an
-  operator-run one. See the note below.
+- **Managed-tor launch path — RULED: MANAGED.** Rick, 2026-09-08: *"yes,
+  managed - the daemon can spawn it's own TOR."* The launch **code** is
+  therefore shared between the two sides while the **instances** must not be,
+  which is the sharpest remaining crossover risk in this row: reuse looks safe,
+  and it is the most plausible route to one process serving both identities.
+  **The mitigation is structural, not procedural** — the launch path moves into
+  the neutral crate and takes the instance's identity (data directory, control
+  port, service key) as a *parameter*, so a caller cannot obtain the other
+  side's instance by reusing the function. Sharing the code cannot produce a
+  shared instance, and an attempt to would be a compile-time argument error
+  rather than a convention someone remembers to follow.
 
 #### The apparent contradiction with the accepted §7 residual, and why it is not one
 
@@ -815,26 +818,18 @@ become a second consumer of that ownership without making that sentence false.
 long-lived managed tor with vanguard pinning and a retry policy — the wallet's
 posture. Driving it from the daemon imports exactly the state this row forbids.
 
-**Owed before code:** whether the daemon's tor is *managed* (we spawn it) or
-*attached* (the operator runs it), which decides whether the launch path is
-shared at all.
+**All three ambiguous classes are now ruled; nothing in this row is owed before
+code.** The launch-path ruling is the one that changed what gets built:
 
-> **Why the posture ruling does not settle it.** PWD-E7 gives the ephemeral
-> posture as requiring **tor's control port**. That is a statement about what
-> must be reachable, not about who starts the process, and both answers satisfy
-> it. The two differ in what a default node asks of its operator:
->
-> - **Managed (daemon spawns):** the default posture works out of the box, which
->   is what "default" has to mean. Cost: the launch code is shared, and shared
->   launch code is the most plausible route to one process serving both.
-> - **Attached (operator runs tor):** no shared launch path, so the crossover
->   risk is zero by construction. Cost: every default-posture node needs an
->   operator to configure a control port first, which makes "ephemeral by
->   default" conditional on setup most operators will not do — and a default
->   nobody reaches is not a default.
->
-> **Recommended: managed, with the launch code lifted into the neutral crate and
-> the instance identity passed in as a parameter**, so sharing the *code* cannot
-> produce a shared *instance*. That keeps the default reachable while making the
-> failure mode a compile-time argument rather than a convention. It is a product
-> decision about what a default node requires of its operator, so it is Rick's.
+> **Managed.** The daemon spawns its own tor, so the default posture works
+> without the operator configuring a control port first — a default nobody
+> reaches is not a default. The cost accepted with it is that the launch code is
+> shared, and the mitigation for that cost is **structural**: the launch path
+> lives in the neutral crate and takes the instance's identity as a parameter,
+> so a caller cannot reach the other side's instance by reusing the function.
+> **The rule this row hands the implementation: no launch entry point may
+> default, infer, or discover which instance it is starting.** Every one of data
+> directory, control port and service key arrives from the caller. An
+> implementation that adds a convenience overload without them re-opens exactly
+> the crossover this row forbids, and the gate against it is that the overload
+> would not compile without inventing the values.
