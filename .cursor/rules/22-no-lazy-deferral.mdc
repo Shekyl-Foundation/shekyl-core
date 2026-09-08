@@ -103,7 +103,7 @@ itself, not a check on it.
 
 **If no falsifier can be written, that is the finding.** It means nobody knows
 what would unblock the item, which puts it closer to REJECTED-with-reasoning
-(`15-deletion-and-debt.mdc`) than to DEFERRED — a permanent rejection wearing a
+(`23-disposition-visibility.mdc`) than to DEFERRED — a permanent rejection wearing a
 conditional's clothes, which is the shape the section above already names.
 
 Note the asymmetry, because it is why this one hides: an unfalsifiable
@@ -144,12 +144,13 @@ rejection wearing a conditional's clothes.
 
 ## Interaction with existing rules
 
-- **`15-deletion-and-debt.mdc`** — its three dispositions
-  (REJECTED / DEFERRED / STAGED, each defined by its grep signature) decide
-  *which* disposition an item has; this rule decides what a DEFERRED one must
-  contain and disclose. An item that cannot name a blocker is not deferred at
-  all — it is undisposed, and that rule says so. Separately, "while we're
-  here" governs scope *additions*; this rule governs scope *sheddings*. Both move work
+- **`23-disposition-visibility.mdc`** — defines what each disposition leaves
+  visible; this rule decides what a DEFERRED one must contain and disclose. An
+  item that cannot name a blocker, or whose blocker carries no falsifier, is
+  not deferred at all — it is undisposed, sitting on the surface agents grep
+  to find deferred work.
+- **`15-deletion-and-debt.mdc`** — "while we're here" governs scope
+  *additions*; this rule governs scope *sheddings*. Both move work
   across the PR boundary without review; both are named so the review
   catches them.
 - **`21-reversion-clause-discipline.mdc`** — a legitimate deferral is

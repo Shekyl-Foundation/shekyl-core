@@ -6,7 +6,7 @@ another family's entry, no blocker is guessed, no disposition is assigned.
 
 ## Why this is not a typo list
 
-`15-deletion-and-debt.mdc` fixes three dispositions by their grep signature.
+`23-disposition-visibility.mdc` fixes four dispositions by their grep surface.
 DEFERRED requires exactly one FOLLOWUPS row **naming an external blocker**. An
 entry that stops mid-sentence cannot name one, so these are not deferrals at
 all: they are **undisposed items sitting on the surface an agent greps to find
