@@ -66,10 +66,8 @@ pub enum ExtraField {
     PqcLeafHashes(Vec<u8>),
 }
 
-fn decompress_key(bytes: [u8; 32]) -> io::Result<EdwardsPoint> {
-    CompressedPoint(bytes)
-        .decompress()
-        .ok_or_else(|| io::Error::other("tx_extra: invalid ed25519 point"))
+fn decompress_key(bytes: [u8; 32]) -> Option<EdwardsPoint> {
+    CompressedPoint(bytes).decompress()
 }
 
 impl ExtraField {
@@ -86,29 +84,36 @@ impl ExtraField {
         }
     }
 
-    /// Map a genesis wire field into the scan view. Returns `Ok(None)` for
-    /// genesis tags the scanner does not consume, so an attestation-bearing
-    /// coinbase still yields its `0x06`/`0x07` fields.
-    fn try_from_wire(field: TxExtraField) -> io::Result<Option<Self>> {
-        Ok(Some(match field {
-            TxExtraField::Padding(n) => ExtraField::Padding(n),
-            TxExtraField::PubKey(bytes) => ExtraField::PublicKey(decompress_key(bytes)?),
-            TxExtraField::Nonce(data) => ExtraField::Nonce(data),
+    /// Map a genesis wire field into the scan view. Returns `None` for
+    /// genesis tags the scanner does not consume, and for `0x01`/`0x04`
+    /// fields whose bytes are not a canonical Edwards point.
+    ///
+    /// Admission treats those 32-byte keys as opaque (`shekyl-wire`
+    /// `PubKey([u8; 32])`), so a consensus-valid extra can carry a
+    /// non-point. Failing the whole extra would drop a present `0x06`/`0x07`
+    /// and make curve-tree decode fall back to zero `h_pqc`. A bad `0x04`
+    /// is skipped as a field — dropping individual keys would shift later
+    /// per-output additional keys.
+    fn try_from_wire(field: TxExtraField) -> Option<Self> {
+        match field {
+            TxExtraField::Padding(n) => Some(ExtraField::Padding(n)),
+            TxExtraField::PubKey(bytes) => decompress_key(bytes).map(ExtraField::PublicKey),
+            TxExtraField::Nonce(data) => Some(ExtraField::Nonce(data)),
             TxExtraField::AdditionalPubKeys(keys) => {
                 let mut pts = Vec::with_capacity(keys.len());
                 for key in keys {
                     pts.push(decompress_key(key)?);
                 }
-                ExtraField::PublicKeys(pts)
+                Some(ExtraField::PublicKeys(pts))
             }
-            TxExtraField::PqcKemCiphertext(data) => ExtraField::PqcKemCiphertext(data),
-            TxExtraField::PqcLeafHashes(data) => ExtraField::PqcLeafHashes(data),
+            TxExtraField::PqcKemCiphertext(data) => Some(ExtraField::PqcKemCiphertext(data)),
+            TxExtraField::PqcLeafHashes(data) => Some(ExtraField::PqcLeafHashes(data)),
             TxExtraField::PqcOwnership(_)
             | TxExtraField::MultisigMigration(_)
             | TxExtraField::PqcViewTagHints(_)
             | TxExtraField::PqcSpendAuthPubkeys(_)
-            | TxExtraField::ArchivalAttestation(_) => return Ok(None),
-        }))
+            | TxExtraField::ArchivalAttestation(_) => None,
+        }
     }
 
     /// Write the ExtraField through the `shekyl-wire` codec.
@@ -302,14 +307,16 @@ impl Extra {
 
     /// Read an `Extra` through [`shekyl_wire::tx_extra::parse`]. An unknown
     /// or retired tag is an error — extras that cannot exist at admission
-    /// are not scanned as a partial field list.
+    /// are not scanned as a partial field list. A well-formed extra whose
+    /// `0x01`/`0x04` bytes are not Edwards points still yields its other
+    /// fields; those keys are simply absent from the scan view.
     pub fn read<R: BufRead>(r: &mut R) -> io::Result<Extra> {
         let mut buf = Vec::new();
         r.read_to_end(&mut buf)?;
         let parsed = tx_extra::parse(&buf)?;
         let mut fields = Vec::with_capacity(parsed.len());
         for field in parsed {
-            if let Some(mapped) = ExtraField::try_from_wire(field)? {
+            if let Some(mapped) = ExtraField::try_from_wire(field) {
                 fields.push(mapped);
             }
         }
@@ -381,6 +388,47 @@ mod pqc_leaf_hashes_tests {
             err.to_string().contains("unknown tag"),
             "0xDE must fail as unknown, got {err}"
         );
+    }
+
+    /// Admission treats `0x01` as opaque 32 bytes. A non-point must not fail
+    /// the extra: scan simply has no tx pubkey, and `0x06`/`0x07` still land.
+    #[test]
+    fn invalid_tx_pubkey_does_not_drop_pqc_fields() {
+        use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
+        let kem = vec![0xAA; HYBRID_KEM_CT_LEN];
+        let leaf = leaf_blob(32);
+        let wire = tx_extra::serialize(&[
+            TxExtraField::PubKey([0xFF; 32]),
+            TxExtraField::PqcKemCiphertext(kem.clone()),
+            TxExtraField::PqcLeafHashes(leaf.clone()),
+        ])
+        .expect("opaque-key extra serializes");
+        let parsed = Extra::read(&mut wire.as_slice()).expect("well-formed extra parses");
+        assert!(
+            parsed.keys().is_none(),
+            "a non-point 0x01 is absent from the scan view"
+        );
+        assert_eq!(parsed.pqc_kem_ciphertext(), Some(kem.as_slice()));
+        assert_eq!(parsed.pqc_leaf_hashes(), Some(leaf.as_slice()));
+    }
+
+    /// A mixed `0x04` list must not shift: one non-point drops the whole
+    /// additional-keys field, not later keys, and does not hide `0x07`.
+    #[test]
+    fn invalid_additional_pubkey_skips_the_field_not_the_extra() {
+        let leaf = leaf_blob(32);
+        let good = ED25519_BASEPOINT_POINT.compress().to_bytes();
+        let wire = tx_extra::serialize(&[
+            TxExtraField::AdditionalPubKeys(vec![good, [0xFF; 32]]),
+            TxExtraField::PqcLeafHashes(leaf.clone()),
+        ])
+        .expect("mixed additional-keys extra serializes");
+        let parsed = Extra::read(&mut wire.as_slice()).expect("well-formed extra parses");
+        assert!(
+            parsed.keys().is_none(),
+            "a 0x04 field with any non-point is skipped whole"
+        );
+        assert_eq!(parsed.pqc_leaf_hashes(), Some(leaf.as_slice()));
     }
 
     /// A genesis tag the scanner does not consume must not hide `0x06`/`0x07`.
