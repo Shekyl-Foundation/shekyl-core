@@ -130,6 +130,23 @@ for a in "${ARMED[@]}"; do
   done
 done
 
+# A name REPEATED inside one list is the same hole from the other side, and it
+# is the one the identity cannot see: the count below sums list LENGTHS, so a
+# duplicate inflates the total by one and a genuinely undecided gate balances
+# against it and stays dark. Confirmed by biting it — an extra ARMED line plus
+# one new #[ignore]d test passed every check and ran the loop.
+#
+# Rejected rather than de-duplicated. Silently collapsing the repeat would fix
+# the arithmetic and keep the defect: a duplicated ARMED entry also runs its
+# gate twice, and on this step that is minutes of CI spent re-proving one
+# result. The name is the thing to delete, so the message says so.
+repeated=$(printf '%s\n' "${ARMED[@]}" "${EXEMPT[@]}" | sort | uniq -d)
+[ -z "$repeated" ] || {
+  echo "FATAL: repeated in ARMED/EXEMPT: $(printf '%s' "$repeated" | tr '\n' ' ')" >&2
+  echo "A repeat inflates the accounting by one and lets an undecided gate balance against it; delete the duplicate line." >&2
+  exit 1
+}
+
 # THE DARK SET MAY NOT GROW SILENTLY, and the ratchet is now an identity
 # rather than a pinned number: every ignored test is either armed or exempt,
 # so the undecided set is EMPTY by construction.
@@ -138,6 +155,10 @@ done
 # `--list --ignored`, the right from the lists declared above — so this can
 # fail when they disagree. A baseline computed as `regtest_ignored - ARMED`
 # could not: its expected value would be written by the thing it audits.
+#
+# It sums list LENGTHS, which equals the number of distinct names only because
+# the repeat check above rejects duplicates. That check is load-bearing for
+# this arithmetic, not housekeeping.
 accounted=$(( ${#ARMED[@]} + ${#EXEMPT[@]} ))
 if [ "$regtest_ignored" -ne "$accounted" ]; then
   echo "FATAL: $regtest_ignored ignored regtest_e2e tests, but ${#ARMED[@]} armed + ${#EXEMPT[@]} exempt = $accounted." >&2
