@@ -637,6 +637,16 @@ more than a patch-in-place programme did.
 default becomes **RECORD-AND-SPECIFY** — a wart is characterised precisely
 enough that the Rust implementation gets it right, and fixed in C++ only where
 the defect blocks the C++ from serving as a *bucket-1/2* oracle in the interim.
+
+*Delivered 2026-09-08, and the narrow exception has now been exercised once:
+of the four rows P0c disposed (`DRS-W12` through `DRS-W15`), only
+`hf_versions` could have triggered it, and it did not — the tip-above
+read-back the wart depends on produces **correct** hardfork state after
+reorg, so the C++ remains a sound oracle over that table and there is
+nothing to unblock. The exception is narrower in practice than it reads:
+"the C++ is wrong here" is not enough; the defect must also break the
+oracle, and a wart whose shape is ugly but whose output is right does
+neither.*
 Fixing C++ that is scheduled for deletion is the debt rule 20 and
 [`15-deletion-and-debt`](../../.cursor/rules/15-deletion-and-debt.mdc) exist to
 prevent. CEN-L11 was the test case: a live FOLLOWUPS row, a ratified spec, and a

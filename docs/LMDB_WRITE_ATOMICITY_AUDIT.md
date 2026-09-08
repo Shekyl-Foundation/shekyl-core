@@ -1,7 +1,15 @@
 # LMDB Write Atomicity Audit
 
-**Date:** 2026-09-05 (DRS-P0b; supersedes the April 2026 audit in place)
-**Pin:** `dev` `2dba46537` — every claim below was verified against this tree
+**Date:** 2026-09-05 (DRS-P0b; supersedes the April 2026 audit in place);
+§9's register extended 2026-09-08 by **DRS-P0c** (rows DRS-W12 through DRS-W15)
+**Pin:** two, and each row states which it was verified against. **P0b rows
+(DRS-W1 through DRS-W11) and §§0–8, §10: `dev` `2dba46537`. P0c rows
+(DRS-W12 through DRS-W15): `dev` `14aa42074`.** Line citations are *records-was*
+against the pin they name, not against `HEAD`; they are expected to drift
+and must not be "corrected" to a later tree. Two eras are safe only while
+both are declared — an undeclared second era is what put three citations on
+code they did not describe (fixed 2026-09-08, and the reason this line now
+names shas per row-set rather than one).
 **Scope:** every `BlockchainLMDB` write path at the pin: block connect, block
 pop, the transaction pool, alt blocks, the three prunes, and the store
 lifecycle (`open()`, `reset()`, `migrate()`). One coverage row per `SHEKYL_LMDB_TABLES` entry. Counts here
@@ -635,11 +643,45 @@ on the unguarded set.
 | DRS-W9 | The connect-side burn pair (`add_block_burn` + `total_burned` increment, `blockchain.cpp:6425`–`:6437`) runs **after** the try whose catches set `m_batch_success = false`. A throw between the two unwinds to `add_new_block`'s outer catch, which sets only `bvc`, so `cleanup_handle_incoming_blocks` still calls `batch_stop()`: the block, its txs and the `block_burn` row commit **without** the aggregate — a partial commit of one logical unit, and the production entry for a too-LOW `total_burned` that DRS-W7 lacked | wart (**the most severe of this set, and still not S-graded**: no consensus arithmetic reads the scalar and no fund-safety consequence follows, and the window needs an LMDB-level write failure — but it can leave a node whose next slash revert trips the `:6362` FATAL underflow, a local halt, and it falsified a PASS this audit had published) | RECORD-AND-SPECIFY, converging with DRS-W6: the burn bookkeeping is core-layer on **both** connect and pop, so neither side inherits the funnel's failure semantics. In the Rust store both belong **inside** the funnel |
 | DRS-W10 | `open()`'s older-DB exit **commits before it refuses**: `txn.commit()` runs, then `migrate()` throws (`:1819`-ff), so the table creations and the `hf_starting_heights` drop persist on a store the binary just declined to open (§5b) | wart (no partial transaction and no unsound state — the refusal's remedy is delete-and-resync, so nothing survives to be inconsistent; recorded because the shape does not survive a store that *can* migrate) | RECORD-AND-SPECIFY: in the Rust store, an open that fails leaves the store as it found it — structural changes commit only on the path that succeeds |
 | DRS-W11 | `drop_hard_fork_info` (`:4675`) reuses `m_hf_starting_heights`, a handle every writable `open()` has already **closed** — LMDB's `del=1` deletes the database *and* closes the handle (`lmdb.h:1216`–`:1225`; `mdb.c:10970`–`:10973`). The first `mdb_drop` fails and the function throws before reaching the `hf_versions` drop, so the shipped `blockchain_import --drop-hard-fork` cannot do its job. Spec-derived consequence, not observed here: a closed handle's slot may be reused, so a stale member handle can come to name a different table (§5c) | wart (**loud, not silent** — the tool throws `DB_ERROR` rather than dropping the wrong thing, and it is the only other user of the member; graded on that, not on the aliasing path, which nothing in this tree reaches) | RECORD-AND-SPECIFY: in the Rust store, deleting a table **consumes** its handle, so a stale handle is unrepresentable rather than merely unused. Whether `--drop-hard-fork` should work at all is the census/R4 question, not this pass's |
-| — | `hf_versions` not cleaned on pop | carried | P0c wart row (owned there since April; not re-opened here) |
 | — | Dead schema-doc row: `properties` key `staker_pool_balance` + both accessors, zero occurrences in `src/` | doc defect | fixed in this PR (`LMDB_SCHEMA.md` row and the Staking-section pointer) |
+| DRS-W12 | **Fifteen** archival apply/revert hooks — fourteen plus `process_archival_segment_freezes_at_height` — are declared on `BlockchainDB` and defined out-of-line with empty `{}` bodies (`blockchain_db.cpp:1733`-ff), so a subclass that forgets one inherits a silent no-op. The contrast is deliberate and one file away: `get_archival_last_slash_epoch` (`:1799`) returns `UINT64_MAX` with a comment saying the sentinel "fails the release verify closed rather than open" — the same base class chooses fail-closed for a getter and silent-success for fifteen mutators | wart (**latent, and measured that way**: `BlockchainLMDB` overrides **15/15**, so no production hook is a no-op today. The exposure is the test doubles — `BaseTestDB` (`testdb.h:44`) and its subclasses, two of which exercise archival paths (`archival_bond_post_integration.cpp:100`, `archival_emission_connect.cpp:84`). A double that inherits rather than overrides observes nothing and still passes, which caps every test built on it) | RECORD-AND-SPECIFY: no default bodies on consensus hooks in the Rust store — the trait method is required, so "forgot to implement" is a compile error, not a passing test. **The C++ fix originally scheduled here (`= 0` plus explicit `BaseTestDB` stubs) is withdrawn** under the 2026-09-01 countermand; it is not deferred, and there is no blocker to name, because the row is closed by the rewrite rather than by the patch |
+| DRS-W13 | The curve-tree pop reconstructs each drained leaf's `TreePosition` arithmetically — `TreePosition tree_pos{leaf_count - drained_count + j}` (`blockchain_db.cpp:887`) — because the drain journal never recorded it: `drain_entry_t` (`:2512` in `blockchain_db.h`) carries `maturity`, `output` and the 128-byte `leaf`, and no position. The forward path *has* the value and drops it, assigning `tree_pos{tree_leaf_base + count}` at `db_lmdb.cpp:8678` and journalling without it | wart (**latent, correct today by invariant** — drain-to-tip plus contiguous leaves makes the arithmetic agree with what the drain assigned; it is not guesswork. Recorded because correctness rests on an invariant held in two functions rather than on the journal, which is the same species as the slash pre-image reconstruction bugs. Like W6/W9 the reconstruction sits at the **core layer**, in `BlockchainDB::pop_block`, not in the backend) | RECORD-AND-SPECIFY: the Rust store journals the position it assigned and the pop reads it back. A reversal must not recompute what the forward path already knew — zero reconstruction for pending keys |
+| DRS-W14 | Unbounded probe loops walk archival journal rows until first miss — `for (uint32_t seq = 0; ; ++seq)` at `db_lmdb.cpp:5443` and `:6286`, and the same shape with the counter declared above the loop at `:5411` — so the **reader** encodes an invariant the **writer** holds: that `seq` is dense with no gaps. Nothing enforces it; the writer's `seq++` (`:6062`) is the only reason it is true | wart (no unsound state today — the writers are dense — but the invariant is unwritten and split across two sites, so a future gap truncates a journal read silently rather than failing) | RECORD-AND-SPECIFY: the Rust store range-scans the key prefix rather than probing a counter, which makes gap-tolerance a property of the query instead of an assumption about the writer. Applies to the epoch-marker seq on the same footing |
+| DRS-W15 | `hf_versions` rows above the new tip are **not deleted on pop** — carried from the April audit, and the disposition is settled here. The row set is **load-bearing, not residue**: `HardFork::on_block_popped` (`hardfork.cpp:286`–`:302`) calls `db.get_hard_fork_version(height)` for every `height` in `[new_tip, old_tip)` — it reads rows *above* the tip to rebuild in-memory hardfork state, so deleting them on pop breaks reorg. There is no per-height delete on the pop path; the only deleter is the whole-table `drop_hard_fork_info`, which is tool-only and itself broken (DRS-W11) | wart (**shape, not defect** — the C++ produces correct hardfork state after reorg; what is wrong is that correctness depends on *not* cleaning up, stated nowhere) | RECORD-AND-SPECIFY. **The A3 narrow exception does not fire**: FIX-IN-CPP survives the countermand only where a defect blocks the C++ from serving as an interim oracle, and this one does not — the read-back is correct, so the C++ oracle is sound over `hf_versions`. That closes the envelope's "FIX **or** REPLICATE" disjunction on **REPLICATE**, and the April **Forbidden** clause carries forward verbatim as the binding constraint: classifying this **DIVERGE**, having the Rust store delete the row, and asserting the delete in a KAT *ships a hardfork-state regression after every reorg*. Which mechanism replaces it — replicate the tip-above rows, or journal hardfork state so no tip-above read is needed — is **census R4's**, which already owns the hardfork machinery (DRS-W5, DRS-W11) |
 
-No finding is S-graded; nothing here blocks DRS-0, and nothing here adds
-C++.
+**P0c — what these four rows are, and the pin they were read at.** Rows
+DRS-W12 through DRS-W15 are the **wart register** the P0c envelope calls for,
+verified against `dev` `14aa42074` (P0b's rows stay at `2dba46537`; see the
+header). Three come from the 2026-07-27 substrate findings, whose "Plan
+effect" column scheduled C++ patches — A-1, A-3 and A-5 in
+[`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)’s substrate-findings table; the fourth is
+the `hf_versions` row (R2-1) that had been carried in this table since
+April. **The countermand of 2026-09-01 inverted all four to
+RECORD-AND-SPECIFY**, and the A3 narrow exception was tested against the
+one row that could have triggered it (DRS-W15) and did not fire. No C++ is
+written, and none is owed: these rows close when the Rust store implements
+its half, not when someone patches the substrate.
+
+**Two figures inherited from the substrate findings were re-counted rather
+than copied.** A-1's "fourteen (plus segment-freeze process)" is right —
+fifteen hooks, all with empty `{}` bodies. A-3's expression is quoted in
+the tree verbatim. A-5's probe loops were located at three call sites, not
+assumed from the finding's prose.
+
+**The 129-dereference dominance analysis is declined, and this closes it.**
+§9's A-6 census above reports 129 `*m_write_txn` dereferences as an *upper
+bound* on the unguarded set and defers the dominance analysis to "the call
+graph, which is P0c's instrument". P0c declines it, on DRS-W3's own
+reasoning: the Rust store's write handle is possession-typed, so the
+precondition those 129 sites could violate is unrepresentable rather than
+merely unviolated, and an exact count of C++ sites is a measurement of a
+question the rewrite deletes. The upper bound stands as the recorded
+figure. This is a **closed** deferral, not a carried one — there is no
+blocker, and nothing downstream waits on the number.
+
+No finding is S-graded — re-checked over all fifteen rows, including the
+four added here (DRS-W12 was the candidate: 15/15 production overrides put
+it at latent). Nothing here blocks DRS-0, and nothing here adds C++.
 
 ## 10. Coverage matrix — every table, its writers, its audited path
 
