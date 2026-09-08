@@ -181,14 +181,26 @@ def strip_fences(text: str) -> str:
     written inside backticks by convention and would vanish if inline spans
     were stripped from the text the citation leg reads.
     """
-    out, fence = [], None          # fence = (char, length) while open
+    out, fence = [], None          # fence = (char, length, prefix) while open
     for raw in text.splitlines():
         # A block-quote prefix is a CONTAINER, not content: `> ```text` opens a
         # fence exactly as ```text does. Matching only after indentation left
         # blockquoted fences unrecognised, so a citation, range or numbered
         # example inside one was audited as a live claim. Four documents in
         # this corpus use the form.
-        line = re.sub(r"^(?:\s*>)+\s?", "", raw)
+        #
+        # The prefix is BOUND AT OPEN and a closer must carry the same one.
+        # Peeling it from every line — the first version of this — meant a
+        # literal `> ``` ` written INSIDE an unquoted fence read as a closer,
+        # ended the outer block early and exposed the example under it. That is
+        # the documenting-it-declares-it failure this function exists to
+        # prevent, reintroduced by the fix for the neighbouring container case.
+        pre = re.match(r"(?:\s*>)+\s?", raw)
+        prefix = pre.group(0) if pre else ""
+        line = raw[len(prefix):]
+        if fence is not None and prefix != fence[2]:
+            out.append("")             # content of the open fence, not a closer
+            continue
         # 0-3 spaces: at four the line is indented code, not a fence. `\s*`
         # let a deeply indented ``` inside a list item open a fence and blank
         # the remainder of the document.
@@ -205,7 +217,7 @@ def strip_fences(text: str) -> str:
                 if ch == "`" and "`" in tail:
                     out.append(raw)
                     continue
-                fence = (ch, n)
+                fence = (ch, n, prefix)
                 out.append("")
                 continue
             # CommonMark: a CLOSING fence carries its delimiter and nothing

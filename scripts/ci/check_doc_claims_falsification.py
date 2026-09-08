@@ -1030,6 +1030,11 @@ def main() -> None:
         # audited as a live claim.
         green("blockquoted fence hides its citation",
               doc=GOOD + "\n\n> Example:\n>\n> ```\n> see `src/gone.cpp:1`\n> ```\n"),
+        # A literal `> ``` ` written INSIDE an unquoted fence is content, not a
+        # closer. The first blockquote fix peeled the prefix from every line
+        # and ended the outer fence there, exposing the example beneath it.
+        green("quoted delimiter inside a fence is not a closer",
+              doc=GOOD + "\n\n```\n> ```\nsee `src/gone.cpp:1` still inside\n```\n"),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -1049,7 +1054,8 @@ def main() -> None:
                 "malformed fence opener does not swallow the document",
                 "mismatched span delimiters do not blank a declaration",
                 "bootstrap: base resolves but carries no baseline",
-                "blockquoted fence hides its citation"}
+                "blockquoted fence hides its citation",
+                "quoted delimiter inside a fence is not a closer"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"
