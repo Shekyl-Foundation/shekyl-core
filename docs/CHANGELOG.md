@@ -36,6 +36,36 @@
 
 ### Changed
 
+- **The daemon and the Rust port now admit the same `tx_extra` tag set, and an
+  unparseable `extra` is refused rather than skipped.** `shekyl-wire` had long
+  documented merge-mining (`0x03`) and "mysterious minergate" (`0xDE`) as
+  outside the Shekyl genesis grammar and rejected them, while the C++ parser
+  still accepted both. Two parsers disagreeing about which transactions exist
+  is the defect; both tags are now deleted from the C++ variant (rule 60),
+  along with the `add_aux_pow` RPC method that was `0x03`'s only producer, its
+  schema, dispatch entry and python client, and `merge_mining.{h,cpp}`. The
+  tag bytes stay retired in a comment so a future tag cannot reuse a meaning
+  older software would parse differently.
+
+  **`0x0B` was kept, and that is the finding.** The archival attestation tag
+  had been grouped with the other two as inherited dead code on a "no producer
+  found" basis. It has a live consensus reader deciding `headers_readable`
+  during attestation verification; what it lacks is a *producer*, which is an
+  unfinished feature, not legacy. Deleting it would have removed a consensus
+  reader. It is now modelled in `shekyl-wire` instead, and its missing
+  producer is filed on its own terms.
+
+  **What that unlocks.** With the tag sets equal,
+  `validate_context_free_pruned` no longer skips the CEN-I19 PQC field-shape
+  rule when `extra` fails to parse — a tolerance that existed only because
+  failing hard would once have refused transactions the daemon accepts. The
+  flip exposed a fixture that could never have existed: a two-output spend
+  whose `extra` was a truncated varint, which no parser accepted and which
+  survived only because the parse was conditional. The wallet scanner no
+  longer re-implements the tag grammar: `shekyl-scanner` parses `extra`
+  through `shekyl-wire`, so it cannot admit the retired tags or stop at a
+  genesis tag it does not consume.
+
 - **Wallet-envelope test vectors renamed by oracle tier; pinned vectors
   rebuilt on a real derived address.** Per the new `50-testing.mdc`
   vector-oracle rule (external / independent / self-pinned; only the

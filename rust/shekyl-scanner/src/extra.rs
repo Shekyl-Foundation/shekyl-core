@@ -4,11 +4,15 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Transaction extra field parsing with Shekyl extensions.
+//! Scan-side view of transaction `extra`.
 //!
-//! Extends the standard extra field with tags for:
-//! - 0x06: PQC KEM ciphertext (hybrid X25519 + ML-KEM-768)
-//! - 0x07: PQC leaf hash commitments (for FCMP++ binding)
+//! The genesis tag set and its codec live in [`shekyl_wire::tx_extra`]
+//! (`GENESIS_TX_WIRE_FORMAT.md` §9.6a). This module does not re-implement
+//! that grammar: [`Extra::read`] parses through `shekyl-wire` and keeps the
+//! fields the scanner needs (tx pubkeys, nonce, `0x06`/`0x07`). Genesis tags
+//! the scan path does not consume — including `0x0B` archival attestation —
+//! are skipped rather than treated as unknown. Retired inherited tags
+//! (`0x03`, `0xDE`) fail closed with the wire parser.
 
 use std::io::{self, BufRead, Write};
 
@@ -16,13 +20,13 @@ use zeroize::Zeroize;
 
 use curve25519_dalek::edwards::EdwardsPoint;
 
-use shekyl_curve_io::*;
+use shekyl_curve_io::CompressedPoint;
+use shekyl_wire::tx_extra::{self, TxExtraField};
 
 // PaymentId moved to `shekyl-engine-state`; re-exported here so `crate::extra::PaymentId`
 // and `use crate::extra::PaymentId` continue to resolve while the migration is in flight.
 pub use shekyl_engine_state::PaymentId;
 
-pub(crate) const MAX_TX_EXTRA_PADDING_COUNT: usize = 255;
 const MAX_TX_EXTRA_NONCE_SIZE: usize = 255;
 
 pub(crate) const ARBITRARY_DATA_MARKER: u8 = 127;
@@ -34,12 +38,18 @@ pub const MAX_ARBITRARY_DATA_SIZE: usize = MAX_TX_EXTRA_NONCE_SIZE - 1;
 pub const MAX_EXTRA_SIZE_BY_RELAY_RULE: usize = 1060;
 
 /// Shekyl tx_extra tag for hybrid KEM ciphertext (X25519 + ML-KEM-768).
-pub const TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT: u8 = 0x06;
+pub const TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT: u8 = tx_extra::TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT;
 
 /// Shekyl tx_extra tag for PQC leaf hash commitments.
-pub const TX_EXTRA_TAG_PQC_LEAF_HASHES: u8 = 0x07;
+pub const TX_EXTRA_TAG_PQC_LEAF_HASHES: u8 = tx_extra::TX_EXTRA_TAG_PQC_LEAF_HASHES;
 
 /// A field within the TX extra.
+///
+/// This is the scanner's typed view, not a second codec. Parse and serialize
+/// go through [`shekyl_wire::tx_extra`]. Variants that existed only to admit
+/// inherited merge-mining (`0x03`) and minergate (`0xDE`) are gone: those
+/// tags are not in the genesis grammar, and a wallet extra that could emit
+/// them would be refused at admission.
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize)]
 pub enum ExtraField {
     /// Padding (block of zeroes).
@@ -48,107 +58,73 @@ pub enum ExtraField {
     PublicKey(EdwardsPoint),
     /// Nonce field (used for payment IDs and arbitrary data).
     Nonce(Vec<u8>),
-    /// Merge-mining field.
-    MergeMining(u64, [u8; 32]),
     /// Additional per-output transaction keys.
     PublicKeys(Vec<EdwardsPoint>),
-    /// Minergate tag (closed-source, parsed for completeness).
-    MysteriousMinergate(Vec<u8>),
     /// PQC KEM ciphertext blob (Shekyl tag 0x06).
     PqcKemCiphertext(Vec<u8>),
     /// PQC leaf hash commitments (Shekyl tag 0x07).
     PqcLeafHashes(Vec<u8>),
 }
 
+fn decompress_key(bytes: [u8; 32]) -> Option<EdwardsPoint> {
+    CompressedPoint(bytes).decompress()
+}
+
 impl ExtraField {
-    /// Write the ExtraField.
-    pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+    fn to_wire(&self) -> TxExtraField {
         match self {
-            ExtraField::Padding(size) => {
-                w.write_all(&[0])?;
-                for _ in 1..*size {
-                    write_byte(&0u8, w)?;
-                }
-            }
-            ExtraField::PublicKey(key) => {
-                w.write_all(&[1])?;
-                w.write_all(&key.compress().to_bytes())?;
-            }
-            ExtraField::Nonce(data) => {
-                w.write_all(&[2])?;
-                write_vec(write_byte, data, w)?;
-            }
-            ExtraField::MergeMining(height, merkle) => {
-                w.write_all(&[3])?;
-                write_varint(height, w)?;
-                w.write_all(merkle)?;
-            }
-            ExtraField::PublicKeys(keys) => {
-                w.write_all(&[4])?;
-                write_vec(write_point, keys, w)?;
-            }
-            ExtraField::MysteriousMinergate(data) => {
-                w.write_all(&[0xDE])?;
-                write_vec(write_byte, data, w)?;
-            }
-            ExtraField::PqcKemCiphertext(data) => {
-                w.write_all(&[TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT])?;
-                write_vec(write_byte, data, w)?;
-            }
-            ExtraField::PqcLeafHashes(data) => {
-                w.write_all(&[TX_EXTRA_TAG_PQC_LEAF_HASHES])?;
-                write_vec(write_byte, data, w)?;
-            }
+            ExtraField::Padding(n) => TxExtraField::Padding(*n),
+            ExtraField::PublicKey(key) => TxExtraField::PubKey(key.compress().to_bytes()),
+            ExtraField::Nonce(data) => TxExtraField::Nonce(data.clone()),
+            ExtraField::PublicKeys(keys) => TxExtraField::AdditionalPubKeys(
+                keys.iter().map(|key| key.compress().to_bytes()).collect(),
+            ),
+            ExtraField::PqcKemCiphertext(data) => TxExtraField::PqcKemCiphertext(data.clone()),
+            ExtraField::PqcLeafHashes(data) => TxExtraField::PqcLeafHashes(data.clone()),
         }
-        Ok(())
+    }
+
+    /// Map a genesis wire field into the scan view. Returns `None` for
+    /// genesis tags the scanner does not consume, and for `0x01`/`0x04`
+    /// fields whose bytes are not a canonical Edwards point.
+    ///
+    /// Admission treats those 32-byte keys as opaque (`shekyl-wire`
+    /// `PubKey([u8; 32])`), so a consensus-valid extra can carry a
+    /// non-point. Failing the whole extra would drop a present `0x06`/`0x07`
+    /// and make curve-tree decode fall back to zero `h_pqc`. A bad `0x04`
+    /// is skipped as a field — dropping individual keys would shift later
+    /// per-output additional keys.
+    fn try_from_wire(field: TxExtraField) -> Option<Self> {
+        match field {
+            TxExtraField::Padding(n) => Some(ExtraField::Padding(n)),
+            TxExtraField::PubKey(bytes) => decompress_key(bytes).map(ExtraField::PublicKey),
+            TxExtraField::Nonce(data) => Some(ExtraField::Nonce(data)),
+            TxExtraField::AdditionalPubKeys(keys) => {
+                let mut pts = Vec::with_capacity(keys.len());
+                for key in keys {
+                    pts.push(decompress_key(key)?);
+                }
+                Some(ExtraField::PublicKeys(pts))
+            }
+            TxExtraField::PqcKemCiphertext(data) => Some(ExtraField::PqcKemCiphertext(data)),
+            TxExtraField::PqcLeafHashes(data) => Some(ExtraField::PqcLeafHashes(data)),
+            TxExtraField::PqcOwnership(_)
+            | TxExtraField::MultisigMigration(_)
+            | TxExtraField::PqcViewTagHints(_)
+            | TxExtraField::PqcSpendAuthPubkeys(_)
+            | TxExtraField::ArchivalAttestation(_) => None,
+        }
+    }
+
+    /// Write the ExtraField through the `shekyl-wire` codec.
+    pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        w.write_all(&self.serialize())
     }
 
     /// Serialize the ExtraField to a `Vec<u8>`.
     pub fn serialize(&self) -> Vec<u8> {
-        let mut res = Vec::with_capacity(1 + 8);
-        self.write(&mut res)
-            .expect("write failed but <Vec as io::Write> doesn't fail");
-        res
-    }
-
-    /// Read an ExtraField.
-    pub fn read<R: BufRead>(r: &mut R) -> io::Result<ExtraField> {
-        Ok(match read_byte(r)? {
-            0 => ExtraField::Padding({
-                let mut size: usize = 1;
-                loop {
-                    let buf = r.fill_buf()?;
-                    let mut n_consume = 0;
-                    for v in buf {
-                        if *v != 0u8 {
-                            Err(io::Error::other("non-zero value after padding"))?
-                        }
-                        n_consume += 1;
-                        size += 1;
-                        if size > MAX_TX_EXTRA_PADDING_COUNT {
-                            Err(io::Error::other("padding exceeded max count"))?
-                        }
-                    }
-                    if n_consume == 0 {
-                        break;
-                    }
-                    r.consume(n_consume);
-                }
-                size
-            }),
-            1 => ExtraField::PublicKey(read_point(r)?),
-            2 => ExtraField::Nonce(read_vec(read_byte, Some(MAX_TX_EXTRA_NONCE_SIZE), r)?),
-            3 => ExtraField::MergeMining(read_varint(r)?, read_bytes(r)?),
-            4 => ExtraField::PublicKeys(read_vec(read_point, None, r)?),
-            TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT => {
-                ExtraField::PqcKemCiphertext(read_vec(read_byte, None, r)?)
-            }
-            TX_EXTRA_TAG_PQC_LEAF_HASHES => {
-                ExtraField::PqcLeafHashes(read_vec(read_byte, None, r)?)
-            }
-            0xDE => ExtraField::MysteriousMinergate(read_vec(read_byte, None, r)?),
-            _ => Err(io::Error::other("unknown extra field"))?,
-        })
+        tx_extra::serialize(&[self.to_wire()])
+            .expect("scan ExtraField values are within shekyl-wire serialize caps")
     }
 }
 
@@ -195,14 +171,15 @@ impl Extra {
     }
 
     /// The arbitrary data within this extra.
+    ///
+    /// Walks the already-parsed nonce fields. Re-serializing and re-parsing a
+    /// truncated blob was inherited "parse what you can" behaviour; with
+    /// `shekyl-wire` as the codec a mid-field truncate is an error, not a
+    /// partial extra, and PQC extras routinely exceed the old 1060-byte
+    /// relay cap.
     pub fn arbitrary_data(&self) -> Vec<Vec<u8>> {
-        let serialized = self.serialize();
-        let bounded_extra =
-            Self::read(&mut &serialized[..serialized.len().min(MAX_EXTRA_SIZE_BY_RELAY_RULE)])
-                .expect("`Extra::read` only fails if the IO fails and `&[u8]` won't");
-
         let mut res = vec![];
-        for field in &bounded_extra.0 {
+        for field in &self.0 {
             if let ExtraField::Nonce(data) = field {
                 if data.first() == Some(&ARBITRARY_DATA_MARKER) {
                     res.push(data[1..].to_vec());
@@ -240,12 +217,11 @@ impl Extra {
     /// [`Extra::pqc_kem_ciphertext`] is first-match and every consumer
     /// slices output `o`'s ciphertext at `o * HYBRID_KEM_CT_LEN` within
     /// that one blob (`shekyl-scanner`'s scan path, the engine
-    /// proof-check path, `shekyl-wire::tx_extra::pqc_kem_per_output`,
-    /// and the C++ `wallet2` reader) — and the C++ writers
-    /// (`cryptonote_tx_utils.cpp` coinbase/genesis/transfer) emit the
-    /// same single concatenated field. This writer's pre-fix
-    /// one-field-per-output packing was the sole deviant and made
-    /// every output at vout ≥ 1 — including all change — silently
+    /// proof-check path, and `shekyl-wire::tx_extra::pqc_kem_per_output`)
+    /// — and the writers (`cryptonote_tx_utils.cpp` coinbase/genesis/transfer,
+    /// until those move) emit the same single concatenated field. This
+    /// writer's pre-fix one-field-per-output packing was the sole deviant
+    /// and made every output at vout ≥ 1 — including all change — silently
     /// unscannable (`FOLLOWUPS.md` "KEM-ciphertext extra packing
     /// mismatch", 2026-07-24).
     ///
@@ -319,31 +295,32 @@ impl Extra {
 
     /// Write the Extra.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        for field in &self.0 {
-            field.write(w)?;
-        }
-        Ok(())
+        w.write_all(&self.serialize())
     }
 
-    /// Serialize the Extra to a `Vec<u8>`.
+    /// Serialize the Extra to a `Vec<u8>` through the `shekyl-wire` codec.
     pub fn serialize(&self) -> Vec<u8> {
-        let mut buf = vec![];
-        self.write(&mut buf)
-            .expect("write failed but <Vec as io::Write> doesn't fail");
-        buf
+        let fields: Vec<TxExtraField> = self.0.iter().map(ExtraField::to_wire).collect();
+        tx_extra::serialize(&fields)
+            .expect("scan ExtraField values are within shekyl-wire serialize caps")
     }
 
-    /// Read an `Extra`.
-    #[allow(clippy::unnecessary_wraps)]
+    /// Read an `Extra` through [`shekyl_wire::tx_extra::parse`]. An unknown
+    /// or retired tag is an error — extras that cannot exist at admission
+    /// are not scanned as a partial field list. A well-formed extra whose
+    /// `0x01`/`0x04` bytes are not Edwards points still yields its other
+    /// fields; those keys are simply absent from the scan view.
     pub fn read<R: BufRead>(r: &mut R) -> io::Result<Extra> {
-        let mut res = Extra(vec![]);
-        while !r.fill_buf()?.is_empty() {
-            let Ok(field) = ExtraField::read(r) else {
-                break;
-            };
-            res.0.push(field);
+        let mut buf = Vec::new();
+        r.read_to_end(&mut buf)?;
+        let parsed = tx_extra::parse(&buf)?;
+        let mut fields = Vec::with_capacity(parsed.len());
+        for field in parsed {
+            if let Some(mapped) = ExtraField::try_from_wire(field) {
+                fields.push(mapped);
+            }
         }
-        Ok(res)
+        Ok(Extra(fields))
     }
 }
 
@@ -393,6 +370,91 @@ mod pqc_leaf_hashes_tests {
         let wire = extra.serialize();
         let parsed = Extra::read(&mut wire.as_slice()).unwrap();
         assert_eq!(parsed.pqc_leaf_hashes(), Some(first.as_slice()));
+    }
+
+    /// Retired inherited tags must fail closed. The previous ExtraField
+    /// grammar admitted `0x03`/`0xDE` and Extra::read stopped on unknown
+    /// rather than erroring, so a wallet extra could still carry tags
+    /// admission now rejects.
+    #[test]
+    fn retired_inherited_tags_fail_closed() {
+        let err = Extra::read(&mut [0x03, 0x21, 0x00].as_slice()).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown tag"),
+            "0x03 must fail as unknown, got {err}"
+        );
+        let err = Extra::read(&mut [0xDE, 0x00].as_slice()).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown tag"),
+            "0xDE must fail as unknown, got {err}"
+        );
+    }
+
+    /// Admission treats `0x01` as opaque 32 bytes. A non-point must not fail
+    /// the extra: scan simply has no tx pubkey, and `0x06`/`0x07` still land.
+    #[test]
+    fn invalid_tx_pubkey_does_not_drop_pqc_fields() {
+        use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
+        let kem = vec![0xAA; HYBRID_KEM_CT_LEN];
+        let leaf = leaf_blob(32);
+        let wire = tx_extra::serialize(&[
+            TxExtraField::PubKey([0xFF; 32]),
+            TxExtraField::PqcKemCiphertext(kem.clone()),
+            TxExtraField::PqcLeafHashes(leaf.clone()),
+        ])
+        .expect("opaque-key extra serializes");
+        let parsed = Extra::read(&mut wire.as_slice()).expect("well-formed extra parses");
+        assert!(
+            parsed.keys().is_none(),
+            "a non-point 0x01 is absent from the scan view"
+        );
+        assert_eq!(parsed.pqc_kem_ciphertext(), Some(kem.as_slice()));
+        assert_eq!(parsed.pqc_leaf_hashes(), Some(leaf.as_slice()));
+    }
+
+    /// A mixed `0x04` list must not shift: one non-point drops the whole
+    /// additional-keys field, not later keys, and does not hide `0x07`.
+    #[test]
+    fn invalid_additional_pubkey_skips_the_field_not_the_extra() {
+        let leaf = leaf_blob(32);
+        let good = ED25519_BASEPOINT_POINT.compress().to_bytes();
+        let wire = tx_extra::serialize(&[
+            TxExtraField::AdditionalPubKeys(vec![good, [0xFF; 32]]),
+            TxExtraField::PqcLeafHashes(leaf.clone()),
+        ])
+        .expect("mixed additional-keys extra serializes");
+        let parsed = Extra::read(&mut wire.as_slice()).expect("well-formed extra parses");
+        assert!(
+            parsed.keys().is_none(),
+            "a 0x04 field with any non-point is skipped whole"
+        );
+        assert_eq!(parsed.pqc_leaf_hashes(), Some(leaf.as_slice()));
+    }
+
+    /// A genesis tag the scanner does not consume must not hide `0x06`/`0x07`.
+    /// The inherited Extra::read stopped at the first unknown tag; `0x0B` is
+    /// in the grammar, so stopping would drop the PQC scan fields whenever
+    /// an attestation appears before them.
+    #[test]
+    fn attestation_does_not_hide_pqc_scan_fields() {
+        use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
+        let pk = ED25519_BASEPOINT_POINT.compress().to_bytes();
+        let kem = vec![0xAA; HYBRID_KEM_CT_LEN];
+        let leaf = leaf_blob(32);
+        let wire = tx_extra::serialize(&[
+            TxExtraField::ArchivalAttestation(vec![0xA7; 16]),
+            TxExtraField::PubKey(pk),
+            TxExtraField::PqcKemCiphertext(kem.clone()),
+            TxExtraField::PqcLeafHashes(leaf.clone()),
+        ])
+        .expect("genesis extra serializes");
+        let parsed = Extra::read(&mut wire.as_slice()).expect("attestation-bearing extra parses");
+        assert_eq!(parsed.pqc_kem_ciphertext(), Some(kem.as_slice()));
+        assert_eq!(parsed.pqc_leaf_hashes(), Some(leaf.as_slice()));
+        assert!(
+            parsed.keys().is_some(),
+            "tx pubkey after an attestation field must still be visible"
+        );
     }
 }
 
