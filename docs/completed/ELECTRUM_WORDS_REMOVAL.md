@@ -7,15 +7,22 @@ subsystem removal landed on `dev` as PR #55 (merge commit
 commit `5bd34f2a1`, 2026-05-19) folding §§4.7 / 4.8 / 4.10 fixes
 back before Phase 1 implementation began. Phase 1 (wallet2
 internal rewire + BIP-39 entropy persistence) landed on `dev` as
-PR #57 (merge commit `3c787df86`, 2026-05-19); Phases 2–6 (the
-pure-deletion phases plus the cross-repo cutover and the docs /
-CI-invariants pass) remain pending per
-[`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./ELECTRUM_WORDS_REMOVAL_PLAN.md).
+PR #57 (merge commit `3c787df86`, 2026-05-19). **UPDATE 2026-09-07
+(wallet-rewrite audit):** the "Phases 2–6 pending" claim this banner
+carried is stale — the Phase-5 wallet2 deletion (2026-08-19, #507)
+took the entire C++ wallet stack, and with it every consumer of the
+mnemonic library. What actually remains of the subsystem is
+`src/mnemonics/` alone (the `electrum-words` library plus the
+14 word-list headers), still compiled via `src/CMakeLists.txt` but
+with **zero includes outside its own directory** (verified:
+`git grep -l electrum-words.h src/` → only `src/mnemonics/`). The
+residual deletion — `src/mnemonics/` and its `add_subdirectory`
+line — is dead-code removal per `15-deletion-and-debt.mdc`, no
+longer a phased migration.
 Companion:
 [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./ELECTRUM_WORDS_REMOVAL_PLAN.md).
 The Phase 0 review cycle (target 4–6 rounds per
-`20-rust-vs-cpp-policy.mdc`) closed before deletion code lands;
-deletion code begins at Phase 2.
+`20-rust-vs-cpp-policy.mdc`) closed before deletion code landed.
 
 **Scope.** Shekyl genesis ships BIP39-only for wallet seed
 material. The inherited CryptoNote 25-word "Electrum-style"

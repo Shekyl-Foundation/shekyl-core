@@ -37,7 +37,6 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use tempfile::TempDir;
 
 use shekyl_address::Network;
-use shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN;
 use shekyl_crypto_pq::wallet_envelope::{
     CapabilityContent, KdfParams, EXPECTED_CLASSICAL_ADDRESS_BYTES,
 };
@@ -47,23 +46,19 @@ use shekyl_engine_state::WalletLedger;
 const BENCH_NETWORK: Network = Network::Testnet;
 const BENCH_PASSWORD: &[u8] = b"correct horse battery staple";
 
-/// Minimal fixture: `ViewOnly` capability with deterministic contents.
+/// Minimal fixture: `Full` capability with a deterministic master seed.
 /// The envelope does not interpret these bytes beyond length, so they
 /// are sufficient for measuring the framing + AEAD + Argon2id cost
 /// that `open_cold` actually exercises.
 struct Fixture {
-    view_sk: [u8; 32],
-    ml_kem_dk: [u8; ML_KEM_768_DK_LEN],
-    spend_pk: [u8; 32],
+    master_seed: [u8; 64],
     address: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
 }
 
 impl Fixture {
     fn new() -> Self {
         Self {
-            view_sk: [0x11; 32],
-            ml_kem_dk: [0x22; ML_KEM_768_DK_LEN],
-            spend_pk: [0x33; 32],
+            master_seed: [0x11; 64],
             address: {
                 let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
                 a[0] = 0x01;
@@ -73,10 +68,8 @@ impl Fixture {
     }
 
     fn capability(&self) -> CapabilityContent<'_> {
-        CapabilityContent::ViewOnly {
-            view_sk: &self.view_sk,
-            ml_kem_dk: &self.ml_kem_dk,
-            spend_pk: &self.spend_pk,
+        CapabilityContent::Full {
+            master_seed_64: &self.master_seed,
         }
     }
 }

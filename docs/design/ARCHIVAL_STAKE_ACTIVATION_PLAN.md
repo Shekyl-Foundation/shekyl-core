@@ -189,11 +189,13 @@ with the seed live**, in this order:
 - **Surface.** One arm in the flat `handlers::dispatch` match (`handlers.rs:24-52`); no
   `stake`/`bond` method exists today. It mirrors `send::build_pending_tx`: `require_open_engine`
   → engine call. **No wallet-rpc restricted-mode exists** (that mechanism is the *daemon* RPC,
-  `DAEMON_RPC_RUST.md:76-115`, a separate process); wallet-rpc gates fund-moving methods by
-  **`Capability::Full`** (`engine.capability()`, `mod.rs:943`; wallet-rpc opens FULL only,
-  `lifecycle.rs:143`). So `stake` is FULL-gated + an explicit `CapabilityForbids` (-29005) check,
-  **not** an allowlist. *(Round-0's "restricted-method list" pin is corrected here: the analog is
-  capability-gating, since wallet-rpc has no restricted map.)*
+  `DAEMON_RPC_RUST.md:76-115`, a separate process). *(Round-0's "restricted-method list" pin is
+  corrected here: wallet-rpc has no restricted map.)* **UPDATE 2026-09-07:** the capability-gate
+  half of this pin is void — capability collapsed to `Full`-only (rule 23; decision log
+  2026-09-07), the `CapabilityForbids` code `-29005` is RETIRED in `wallet_rpc.yaml`, and the
+  explicit gate this bullet prescribed was removed from `lifecycle.rs`. `stake` needs **no**
+  capability check: every open wallet is `Full` by construction (`from_envelope_byte` refuses
+  any other mode byte before an engine exists).
 - **Seed re-materialization = the reopen.** The method takes the **password** because first-stake
   needs the transient seed; it drives a credentialed (re)open carrying a first-stake intent, reusing
   the WI-1 `Tenant` lifecycle (close → open-with-intent). The reopen-friction removal is the V3.x

@@ -136,10 +136,10 @@ fn test_config() -> DispatchConfig {
     }
 }
 
-/// A fresh per-test pending-seal write lock (in production the `Engine`
-/// owns one per wallet and shares it with the WI-2 assemble path).
-fn test_lock() -> Arc<tokio::sync::Mutex<()>> {
-    Arc::new(tokio::sync::Mutex::new(()))
+/// A fresh per-test pending-post gate (in production the `Engine` owns one
+/// per wallet and shares it with the WI-2 assemble path).
+fn test_lock() -> Arc<crate::engine::pending_post_gate::PendingPostGate> {
+    crate::engine::pending_post_gate::PendingPostGate::new()
 }
 
 fn driver_with_posts(

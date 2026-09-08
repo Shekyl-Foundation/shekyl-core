@@ -50,9 +50,6 @@
 //! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
 //! [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`]: ../../../../../docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md
 
-use std::path::Path;
-
-use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_prefs::{PrefsHmacKey, WalletPrefs};
 use shekyl_engine_state::WalletLedger;
@@ -60,7 +57,6 @@ use shekyl_engine_state::WalletLedger;
 use crate::engine::error::PersistenceError;
 use crate::engine::lifecycle::Credentials;
 use crate::engine::sealing_keys::StateWrapKey;
-use crate::engine::Capability;
 
 /// On-disk wallet persistence: state flush, prefs flush, password
 /// rotation (§2.6).
@@ -92,64 +88,24 @@ use crate::engine::Capability;
 ///   `Arc`, not cloned. A forced `Clone` would imply two independent
 ///   owners of the same advisory lock, which the single-writer
 ///   discipline forbids.
+///
+/// # Read accessors were narrowed off this trait (2026-09-07, rule 15)
+///
+/// `base_path()` / `network()` / `capability()` sat here as
+/// `#[allow(dead_code)]` staging allows for a "Stage 4 / wallet-RPC
+/// surface" that landed **without them**: the wallet RPC reads
+/// [`Engine`](super::super::Engine)'s open-time cached getters
+/// (`Engine::network` / `Engine::capability`), and the serving-host
+/// start path (`stake_engine/serving/start.rs`) is implemented
+/// concretely over [`WalletFile`](shekyl_engine_file::WalletFile), so
+/// its `base_path()` call resolves to the **inherent** method, never
+/// trait dispatch. The staging condition expired; the accessors were
+/// deleted, leaving this trait as the pure durable-write surface its
+/// own doc describes. Reopen by re-adding an accessor **with its
+/// trait-dispatch caller in the same PR**.
 pub(crate) trait PersistenceEngine: Send + Sync + 'static {
     /// Save/rotate vocabulary — not [`OpenError`](super::super::OpenError).
     type Error: Into<PersistenceError> + Send;
-
-    /// Wallet cluster base path (the `.wallet` file path).
-    ///
-    /// # Cancellation
-    ///
-    /// Class **a** per §4: a synchronous read with no side effect.
-    /// Not awaitable; cancellation is not a concept on this method.
-    ///
-    /// # Idempotency
-    ///
-    /// **Yes** per §4: returns the path fixed at open/create.
-    /// Repeated calls observe the same value.
-    ///
-    /// # Panics
-    ///
-    /// Does not panic — the Stage 1 [`WalletFile`](shekyl_engine_file::WalletFile)
-    /// implementor returns a borrowed `&Path` field cached at open,
-    /// acquiring no lock.
-    #[allow(dead_code)] // Stage 4 / wallet-RPC surface; V3.0 Engine caches base_path at open.
-    fn base_path(&self) -> &Path;
-
-    /// Network this wallet is bound to.
-    ///
-    /// # Cancellation
-    ///
-    /// Class **a** per §4: a synchronous read with no side effect.
-    ///
-    /// # Idempotency
-    ///
-    /// **Yes** per §4: returns the network decoded once at
-    /// open/create.
-    ///
-    /// # Panics
-    ///
-    /// Does not panic — cached read; no lock acquisition.
-    #[allow(dead_code)] // Stage 4 / wallet-RPC surface; V3.0 Engine caches network at open.
-    fn network(&self) -> Network;
-
-    /// Capability profile of this wallet (`Full` / `ViewOnly` /
-    /// `HardwareOffload`).
-    ///
-    /// # Cancellation
-    ///
-    /// Class **a** per §4: a synchronous read with no side effect.
-    ///
-    /// # Idempotency
-    ///
-    /// **Yes** per §4: returns the capability decoded once at
-    /// open/create.
-    ///
-    /// # Panics
-    ///
-    /// Does not panic — cached read; no lock acquisition.
-    #[allow(dead_code)] // Stage 4 / wallet-RPC surface; V3.0 Engine caches capability at open.
-    fn capability(&self) -> Capability;
 
     /// Seal and atomically write `.wallet` for `ledger`.
     ///

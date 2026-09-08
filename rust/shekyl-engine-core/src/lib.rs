@@ -47,6 +47,10 @@ pub use shekyl_standoff::COVER_RUNG_ATOMIC;
 // can consume the one payment-URI codec without a direct `shekyl-address`
 // dependency — mirroring the `ShekylAddress` re-export in [`engine`].
 // Canonical definition stays in `shekyl-address`; do not wrap or redefine.
+/// The cadence driver's embedder surface (`ENGINE_CADENCE_DRIVER.md` §1):
+/// the handle the wrap point parks beside the pscan/serving handles.
+/// Same decomposition-ceiling rationale as `ServingHandle` above.
+pub use engine::cadence::CadenceHandle;
 /// SH-2b-2's embedder surface: the serving lifecycle handle and its start
 /// failures, re-exported beside `PScanHandle` for the same reason — the
 /// embedder parks the handle for the wallet's open lifetime and shuts it down

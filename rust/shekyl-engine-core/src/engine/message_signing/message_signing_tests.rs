@@ -200,20 +200,6 @@ async fn sign_message_round_trips_through_wallet_file() {
     wallet.close(&creds).expect("close");
 }
 
-/// Capability-gate mapping: the seed extractor's typed refusals become
-/// the workflow's ViewOnly / HardwareOffload errors.
-#[test]
-fn extract_error_maps_to_capability_refusals() {
-    assert_eq!(
-        map_extract_error(ExtractRederivationInputsError::ViewOnly),
-        SignMessageError::ViewOnly
-    );
-    assert_eq!(
-        map_extract_error(ExtractRederivationInputsError::HardwareOffload),
-        SignMessageError::HardwareOffload
-    );
-}
-
 /// A stopped key actor is terminal and gets its own variant, because it
 /// is the one key-engine failure whose user action differs: close and
 /// reopen, not retry (rule 82). Folding it into the rendered `Key`

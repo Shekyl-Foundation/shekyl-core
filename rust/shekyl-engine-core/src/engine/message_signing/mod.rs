@@ -59,7 +59,6 @@
 use shekyl_address::{BoundClassicalSegment, ShekylAddress};
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
 use shekyl_crypto_pq::message_signing::{self, MessageSigError};
-use shekyl_engine_file::secrets_transitional::ExtractRederivationInputsError;
 use shekyl_engine_file::WalletFile;
 
 use super::error::KeyEngineError;
@@ -90,15 +89,6 @@ pub(crate) struct MessageSignCtx<'a> {
 /// Refusals and failures of [`sign_message`] / [`Engine::sign_message`].
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SignMessageError {
-    /// View-only wallets hold no master seed — there is no signing
-    /// identity to derive (SM-R-3: the deleted view-tier is
-    /// structurally unbuildable, and this is where that surfaces).
-    #[error("view-only wallet cannot sign messages")]
-    ViewOnly,
-    /// Hardware-offload wallets sign elsewhere; the local envelope has
-    /// no seed to derive from.
-    #[error("hardware-offload wallet cannot sign messages locally")]
-    HardwareOffload,
     /// The key actor has stopped: terminal and non-retryable, because
     /// its key blob is already zeroized. Its own variant rather than a
     /// rendered string because it is the one key-engine failure with a
@@ -153,16 +143,6 @@ pub enum VerifyMessageError {
     Crypto(#[from] MessageSigError),
 }
 
-/// Map the wallet-file seed-extractor refusal into the workflow's typed
-/// errors. Pure so the capability gate is unit-testable without a full
-/// view-only open path (that open path is still NotYetImplemented).
-fn map_extract_error(e: ExtractRederivationInputsError) -> SignMessageError {
-    match e {
-        ExtractRederivationInputsError::ViewOnly => SignMessageError::ViewOnly,
-        ExtractRederivationInputsError::HardwareOffload => SignMessageError::HardwareOffload,
-    }
-}
-
 /// The `(network, seed_format)` pair the signing identity is scoped by —
 /// read from the same places wallet open reads them, so a message
 /// signature is derived under the identical scoping as every other key
@@ -200,8 +180,8 @@ fn bound_segment(ctx: &MessageSignCtx<'_>) -> Result<BoundClassicalSegment, Sign
 ///
 /// # Errors
 ///
-/// See [`SignMessageError`]: capability refusals, key-actor failures,
-/// crypto refusals, and wallet-state corruption.
+/// See [`SignMessageError`]: key-actor failures, crypto refusals, and
+/// wallet-state corruption.
 pub(crate) async fn sign_message(
     ctx: &MessageSignCtx<'_>,
     message: &[u8],
@@ -226,11 +206,9 @@ pub(crate) async fn sign_message(
         .expect("sign permit is never closed");
 
     // Transient seed borrow — the same envelope read the open path
-    // performs; FULL capability enforced by the extractor itself.
-    let inputs = ctx
-        .file
-        .extract_rederivation_inputs()
-        .map_err(map_extract_error)?;
+    // performs. Infallible: every wallet is FULL (rule 23), so the
+    // seed is always present and always 64 bytes.
+    let inputs = ctx.file.extract_rederivation_inputs();
 
     // CPU-bound multi-second work leaves the executor (module docs).
     // The seed moves into the blocking task and its `Zeroizing` drop

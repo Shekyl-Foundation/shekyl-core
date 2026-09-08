@@ -14,8 +14,6 @@ use super::{IoError, KeyError};
 /// Failures from
 /// [`Engine::create`](crate::engine::Engine) /
 /// [`Engine::open_full`](crate::engine::Engine) /
-/// [`Engine::open_view_only`](crate::engine::Engine) /
-/// [`Engine::open_hardware_offload`](crate::engine::Engine) /
 /// [`Engine::change_password`](crate::engine::Engine) /
 /// [`Engine::close`](crate::engine::Engine).
 ///
@@ -56,20 +54,6 @@ pub enum OpenError {
         expected: Network,
     },
 
-    /// The wallet file's capability byte is incompatible with the
-    /// requested constructor. For example: opening a `ViewOnly` wallet
-    /// via `open_full`.
-    ///
-    /// Returns the typed [`crate::engine::Capability`] read from the envelope so
-    /// the caller can branch on it without re-opening.
-    #[error(
-        "capability mismatch: wallet is {found:?}, but the requested operation needs another mode"
-    )]
-    CapabilityMismatch {
-        /// Capability declared by the wallet file's region 1.
-        found: crate::engine::Capability,
-    },
-
     /// `Engine::close` was called while at least one [`PendingTx`] was
     /// still in the reservation ledger. Caller must
     /// [`Engine::submit_pending_tx`](crate::engine::Engine::submit_pending_tx) or
@@ -89,22 +73,6 @@ pub enum OpenError {
     /// squeezed into open-shaped variants (PR 6 R10 / §2.6).
     #[error("persistence failure during close: {0}")]
     Persistence(#[from] PersistenceError),
-
-    /// **TRANSIENT — DELETE WHEN VIEW/HW BODIES LAND.**
-    ///
-    /// Tracked in `docs/FOLLOWUPS.md` § V3.0 → "View/HW lifecycle bodies".
-    /// Blocks on `shekyl-crypto-pq` ViewOnly / HardwareOffload
-    /// `AllKeysBlob` constructors. Once those land, this variant is
-    /// removed and the stub methods get real bodies.
-    ///
-    /// Do not introduce new use sites. The variant exists only so the
-    /// stub signatures can return a typed error rather than
-    /// `unimplemented!()`.
-    #[error("capability {capability:?} is not yet implemented in this build")]
-    CapabilityNotYetImplemented {
-        /// Capability the stub method represents.
-        capability: crate::engine::Capability,
-    },
 
     /// **Conformance build only (S6).** The StakeEngine's session RNG self-cert
     /// failed at spawn: the OS CSPRNG graded non-conformant for the entry-gap

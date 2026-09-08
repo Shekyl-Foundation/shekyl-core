@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Staking rewards now claim automatically.** The engine runs a cadence
+  driver (`ENGINE_CADENCE_DRIVER.md`) that submits the emission-claim
+  transaction once each reward epoch settles — no manual step, and the
+  `claim`/`claim_rewards` RPC methods remain REJECTED in the wallet-RPC
+  contract. Rewards below the compiled-in fee floor
+  (`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`) are held and aggregated
+  until they cover the fee; anything still unclaimed at its claim-window
+  floor is evaluated once and forfeited loudly (operator alarm). A
+  background claim never contends with a user-initiated send: the claim
+  leg yields whenever user work holds the pending lock.
+- **Stuck-transaction watchdog and serving liveness run unattended.**
+  The same cadence driver fires the submit-lifecycle escape ladder on
+  chain progress (a pending transaction can no longer stall forever just
+  because no RPC poll arrived), re-arms hidden-service serving whenever
+  the obligation exists and the task is not live (covers both
+  failed-at-open and died-later), and raises a `ChainProgress` operator
+  alarm when the observed tip stops advancing — worded to cover both
+  "chain stalled" and "your daemon is unreachable."
+
+- **Wallet RPC liveness gate (`ci/wallet-rpc-liveness`).** Sibling of the
+  daemon's `ci/rpc-route-liveness`: `wallet_rpc.yaml`'s
+  `x-shekyl-method-registry` is now CI-enforced in both directions —
+  every SPECIFIED method has a dispatch arm and a production consumer
+  outside the server crate; every REJECTED/RESERVED method has no arm;
+  every arm has a registry row. The reverse direction is what turns
+  "`claim` stays REJECTED in the contract" from a note into an
+  invariant: a handler added while the registry still says refused now
+  fails CI instead of shipping. Grep-cheap (no toolchain), fails closed
+  on empty extraction (rule 47).
+
 ### Changed
 
 - **The daemon and the Rust port now admit the same `tx_extra` tag set, and an
@@ -33,6 +65,42 @@
   longer re-implements the tag grammar: `shekyl-scanner` parses `extra`
   through `shekyl-wire`, so it cannot admit the retired tags or stop at a
   genesis tag it does not consume.
+
+- **Wallet-envelope test vectors renamed by oracle tier; pinned vectors
+  rebuilt on a real derived address.** Per the new `50-testing.mdc`
+  vector-oracle rule (external / independent / self-pinned; only the
+  first two are KATs), the `WALLET_FILE_FORMAT_V1` sealed fixtures are
+  now named as the self-pinned drift tripwires they are, their
+  regenerator refuses to run without a decision-log citation
+  (`SHEKYL_PINNED_REGEN_DECISION`), and the published vectors under
+  `docs/test_vectors/WALLET_FILE_FORMAT_V1/` were regenerated so
+  `expected_classical_address` derives from the sealed seed and
+  `seed_format` is a production-valid wire byte. A true tier-2 KAT for
+  the §2.6 wrap-key derivation (raw HMAC per RFC 5869 against the
+  spec's byte-exact labels) lands alongside. Wire format unchanged.
+  (Decision log 2026-09-07.)
+
+- **Wallet capability collapsed to `FULL`-only; cold signing rejected
+  permanently.** The `ViewOnly` capability is REJECTED (no product use
+  case; FCMP++ has no view-key chain scan) and `HardwareOffload` is
+  DEFERRED with zero code symbols (the v1 layout was a guess against no
+  real device; the future layout will be designed against one). The
+  wallet envelope now seals and opens mode byte `0x01` only — bytes
+  `0x02`/`0x03` are RETIRED and `0x04` RESERVED in
+  `WALLET_FILE_FORMAT_V1.md` §2.3, all refused fail-closed as
+  `UnknownCapabilityMode` (new splice-tamper tests pin the refusal).
+  Cold signing (`export_unsigned` / `submit_signed` air-gap flow) is
+  rejected permanently, superseding the A4 post-genesis deferral: an
+  FCMP++ witness needs the live curve tree, so the offline half cannot
+  deliver the isolation it claims; cold storage is the seed phrase.
+  API deltas: wallet-RPC error `-29005` (`CAPABILITY_FORBIDS`) is
+  RETIRED — unreachable with one capability, the numeric code is never
+  reused; `wallet_rpc.yaml` gains a machine-readable
+  `x-shekyl-method-registry` (SPECIFIED / RESERVED / REJECTED per
+  method) and `x-shekyl-error-ranges`; the `capability` field on wallet
+  handle responses always reads `"FULL"`. Envelope wire format for
+  existing `FULL` wallets is unchanged. (Decision log 2026-09-07; rule
+  `23-disposition-visibility`.)
 
 - **Peerlist trust is earned in-process: nothing restored from disk is
   trusted, and `--add-peer` is a candidate rather than a trusted peer.**
@@ -296,6 +364,48 @@
   the FCMP++ spend builder.
 
 ### Added
+
+- **A documentation claim audit, and the measurement that argued for it.**
+  PR #633 took thirteen review rounds. The first nine were reactive — a
+  reviewer found an instance, it was fixed, the next round found another of
+  the same class — and from round ten the author ran a mechanical claim check
+  before each push. That pass caught three defects no reviewer had filed (a
+  matrix row routed to a section that did not exist, a register that jumped
+  W-3 to W-6, a stated writer count gone stale), and the rounds after it found
+  only what it could not see. `scripts/ci/check_doc_claims.py` makes that
+  check a gate: a document **declares** which invariants it means to hold
+  (`<!-- claim-audit: series DRS-W -->` and five siblings) and the gate checks
+  exactly those. Declared rather than inferred, because the first cut inferred
+  them corpus-wide and reported **991 findings against a clean tree** — a gate
+  that unusable is convention theatre pointing the other way. Every extraction
+  distinguishes checked-and-passed from found-nothing-to-check and fails on the
+  second, and the pass line states the limit in its own output: it checks
+  numeric and structural claims against source, **not rationales** — four
+  premises refuted by review the same week would all have passed it green.
+  Its 81 failure paths and 24 negative controls are falsified by a committed,
+  runnable matrix (`check_doc_claims_falsification.py`) that builds a synthetic
+  corpus in a temp tree rather than mutating the repo, and which **measures
+  its own completeness**: every one of the gate's discrepancy, non-coverage and
+  refusal sites must be executed by some case, or the matrix fails. That sweep
+  found seven unexercised sites on its first run — including the wrong-commit
+  submodule branch, which no case reached at all. A ratchet in
+  `docs/ci/doc-claims-baseline.txt` holds live dead-citation debt monotone
+  downward and stops a document silently un-declaring a leg, because opt-in
+  without a ratchet is adoption theatre. Both legs assert against the **base
+  revision**: the figure otherwise travels in the same commit as the change it
+  constrains, so one edit could add rot and lift the bar to match, and the
+  registry records the full declaration (`series:DRS-W`, not `series`) so a
+  document holding two of one kind cannot drop either unnoticed — and the
+  registry line is itself base-checked, since dropping a declaration and
+  deleting the token recording it passes every single-tree check. A citation into a submodule that is
+  **not checked out** aborts the run and names the init command rather than
+  counting as rot: absence of the file is first evidence the *subject* is
+  absent, which is the misattribution the link gate makes in that same state.
+  First adopted by the P0b atomicity audit, where it immediately caught a live
+  defect: `V4_DESIGN_NOTES.md` still restated the finding range with its old
+  upper bound after the register had grown past it. It then caught one in
+  itself — the ratchet's own baseline had been measured in a worktree with a
+  submodule absent, and CI went red on the first push.
 
 - **DRS-P0b — the atomicity audit covers the store that exists.** The
   April 2026 `LMDB_WRITE_ATOMICITY_AUDIT.md` was a PASS doing work it was

@@ -66,7 +66,6 @@
 use std::path::{Path, PathBuf};
 
 use shekyl_address::Network;
-use shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN;
 use shekyl_crypto_pq::wallet_envelope::{
     seal_state_file, CapabilityContent, KdfParams, WalletEnvelopeError,
     EXPECTED_CLASSICAL_ADDRESS_BYTES,
@@ -123,23 +122,19 @@ const TEST_NETWORK: Network = Network::Testnet;
 // ---------------------------------------------------------------------------
 
 /// Bundle of deterministic-but-arbitrary bytes needed to build a
-/// [`CapabilityContent::ViewOnly`] keys file. VIEW_ONLY is chosen over
-/// FULL because (a) the envelope does not interpret the content, (b) a
-/// `master_seed_64` buffer would otherwise risk accidentally
-/// constituting a valid seed.
+/// [`CapabilityContent::Full`] keys file (the only capability, rule 23).
+/// The envelope does not interpret the content beyond its length; the
+/// repeated-byte "seed" is obviously synthetic and never leaves the
+/// tempdir.
 struct Fixture {
-    view_sk: [u8; 32],
-    ml_kem_dk: [u8; ML_KEM_768_DK_LEN],
-    spend_pk: [u8; 32],
+    master_seed: [u8; 64],
     address: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
 }
 
 impl Fixture {
     fn new() -> Self {
         Self {
-            view_sk: [0x11; 32],
-            ml_kem_dk: [0x22; ML_KEM_768_DK_LEN],
-            spend_pk: [0x33; 32],
+            master_seed: [0x11; 64],
             address: {
                 let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
                 a[0] = 0x01; // classical address version byte
@@ -149,10 +144,8 @@ impl Fixture {
     }
 
     fn capability(&self) -> CapabilityContent<'_> {
-        CapabilityContent::ViewOnly {
-            view_sk: &self.view_sk,
-            ml_kem_dk: &self.ml_kem_dk,
-            spend_pk: &self.spend_pk,
+        CapabilityContent::Full {
+            master_seed_64: &self.master_seed,
         }
     }
 
