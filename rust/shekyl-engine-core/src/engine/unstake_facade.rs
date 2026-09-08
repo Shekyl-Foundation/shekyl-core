@@ -102,6 +102,7 @@ use super::drain_orchestrator::{
 use super::emission_source::EmissionSourceError;
 use super::fee_policy::FeeEstimatorError;
 use super::pending::TxHash;
+use super::pending_post_gate::{ForegroundSession, UserPendingPost};
 use super::prpc::LocalNodeRpc;
 use super::signer::EngineSignerKind;
 use super::stake_engine::StakeEngineError;
@@ -670,7 +671,7 @@ where
         // this user-initiated exit — its drains and the terminal unbond —
         // on the foreground gauge, so the cadence driver's epoch-claim leg
         // yields rather than racing it to the funding set.
-        let _foreground = gate.begin_foreground();
+        let _foreground = ForegroundSession::enter(UserPendingPost::Unstake, &gate);
         let evidence = read_exit_evidence(&engine)
             .await
             .map_err(|e| UnstakeError::Engine {
@@ -742,7 +743,7 @@ where
         // not inside `submit_drain`: the shared seam may later serve
         // background callers (the leg-4 prune/resubmit body), which must not
         // read as foreground.
-        let _foreground = gate.begin_foreground();
+        let _foreground = ForegroundSession::enter(UserPendingPost::CollectUnstaked, &gate);
         let evidence =
             read_exit_evidence(&engine)
                 .await

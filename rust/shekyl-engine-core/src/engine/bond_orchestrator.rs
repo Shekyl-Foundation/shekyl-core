@@ -35,6 +35,7 @@ use super::bond_assembly::{
 };
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::fee_policy::{CeilingViolation, FeeEstimatorError, ValidatedFeeEstimates};
+use super::pending_post_gate::{ForegroundSession, UserPendingPost};
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::dispatch::PendingPostStore;
 use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
@@ -870,7 +871,7 @@ where
         // this user-initiated first-stake on the foreground gauge for its
         // whole assemble→seal span, so the cadence driver's epoch-claim leg
         // yields rather than racing it to the funding set.
-        let _foreground = pending_gate.begin_foreground();
+        let _foreground = ForegroundSession::enter(UserPendingPost::FirstStake, &pending_gate);
         let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
         // Idempotency / W2 split (§5.1 + §5.7 W2) — every guard is

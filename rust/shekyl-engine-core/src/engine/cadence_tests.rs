@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Unit tests for the engine cadence driver (`engine/cadence.rs`).
+//! Unit tests for the engine cadence driver (`engine/cadence/`).
 //!
 //! Wired as a `#[path]` child of `cadence::tests`, so `use super::*`
 //! resolves into the driver module and private items stay testable;
@@ -549,37 +549,40 @@ async fn serving_liveness_leg_starts_and_restarts_a_dead_serving_task() {
 /// everything else is one.
 #[test]
 fn claim_classify_maps_the_refusal_taxonomy() {
-    use super::super::claim_dispatch::EmissionClaimRequestError as E;
+    use super::super::claim_dispatch::{ClaimTickOutcome, EmissionClaimRequestError as E};
     use super::super::claim_orchestrator::ClaimOrchestrationError as O;
     use super::super::emission_claim::EmissionClaimError as C;
     use super::super::stake_engine::StakeEngineError as SE;
 
     assert!(matches!(
-        classify_claim(&E::ClaimPending),
-        ClaimOutcome::Yield
+        E::ClaimPending.tick_outcome(),
+        ClaimTickOutcome::Yield
     ));
     assert!(matches!(
-        classify_claim(&E::InputRaced),
-        ClaimOutcome::Yield
+        E::InputRaced.tick_outcome(),
+        ClaimTickOutcome::Yield
     ));
     assert!(matches!(
-        classify_claim(&E::ForegroundHold),
-        ClaimOutcome::Yield
+        E::ForegroundHold.tick_outcome(),
+        ClaimTickOutcome::Yield
     ));
     assert!(matches!(
-        classify_claim(&E::Claim(O::Stake(SE::EmissionClaim(C::NoClaimableEpochs)))),
-        ClaimOutcome::Idle
+        E::Claim(O::Stake(SE::EmissionClaim(C::NoClaimableEpochs))).tick_outcome(),
+        ClaimTickOutcome::Idle
     ));
     let deferred = E::Claim(O::Stake(SE::EmissionClaim(C::ValueDeferred {
         value_deferred: vec![(7, 100), (8, 200)],
         total_reward: 300,
         fee_floor: 1_000,
     })));
-    match classify_claim(&deferred) {
-        ClaimOutcome::Deferred(held) => assert_eq!(held, vec![(7, 100), (8, 200)]),
+    match deferred.tick_outcome() {
+        ClaimTickOutcome::Deferred(held) => assert_eq!(held, vec![(7, 100), (8, 200)]),
         _ => panic!("ValueDeferred must classify as Deferred"),
     }
-    assert!(matches!(classify_claim(&E::NotStaker), ClaimOutcome::Fault));
+    assert!(matches!(
+        E::NotStaker.tick_outcome(),
+        ClaimTickOutcome::Fault
+    ));
 }
 
 /// §4 evaluate-and-forfeit: a completed evaluation forfeits a
@@ -725,7 +728,10 @@ async fn claim_leg_yields_while_user_work_is_in_flight() {
 
     // User work in flight (a drain/unstake/first-stake somewhere in its
     // assemble→seal span): the leg must yield without evaluating.
-    let user_op = pending_gate.begin_foreground();
+    let user_op = super::super::pending_post_gate::ForegroundSession::enter(
+        super::super::pending_post_gate::UserPendingPost::DrainToPrincipal,
+        &pending_gate,
+    );
     leg.fire(tip).await;
     {
         let s = state.lock().expect("state");

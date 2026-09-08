@@ -180,12 +180,56 @@ pub(crate) enum EmissionClaimRequestError {
     Submit(#[from] BroadcastSubmitError),
 }
 
+/// How the cadence claim tick should treat one dispatch-seam refusal.
+///
+/// Classification lives on the seam that owns the error taxonomy so the
+/// scheduler never unwraps `Claim(Stake(EmissionClaim(...)))` itself. A
+/// new wrap layer that is not named here is [`ClaimTickOutcome::Fault`] —
+/// fail-closed, the alarm streak, never a silent yield.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClaimTickOutcome {
+    /// Policy hold (§4): the set is underwater; carry it.
+    Deferred(Vec<(u64, u64)>),
+    /// Nothing claimable — the idle state, not a fault.
+    Idle,
+    /// Not this tick, and not a fault: a live claim is already in flight
+    /// (`ClaimPending`), user work won an input race (`InputRaced`), or
+    /// the foreground gauge was raised at seal (`ForegroundHold`).
+    Yield,
+    /// A real refusal (transport, state read, assembly, dispatch).
+    Fault,
+}
+
+/// Outcome of the locked seal attempt. Yielding to foreground is a
+/// distinct decision from any [`SealAdmission`] — not `Option::None`.
+enum ClaimSealAttempt {
+    YieldToForeground,
+    Decided(SealAdmission),
+}
+
 impl EmissionClaimRequestError {
     /// A fail-closed sealed-state read refusal, context named.
     fn state(context: &'static str, detail: impl std::fmt::Display) -> Self {
         Self::State {
             context,
             detail: detail.to_string(),
+        }
+    }
+
+    /// Map this refusal onto the claim tick's branches.
+    pub(crate) fn tick_outcome(&self) -> ClaimTickOutcome {
+        use super::claim_orchestrator::ClaimOrchestrationError as O;
+        use super::emission_claim::EmissionClaimError as C;
+        use super::stake_engine::StakeEngineError as SE;
+        match self {
+            Self::ClaimPending | Self::InputRaced | Self::ForegroundHold => ClaimTickOutcome::Yield,
+            Self::Claim(O::Stake(SE::EmissionClaim(C::NoClaimableEpochs))) => {
+                ClaimTickOutcome::Idle
+            }
+            Self::Claim(O::Stake(SE::EmissionClaim(C::ValueDeferred {
+                value_deferred, ..
+            }))) => ClaimTickOutcome::Deferred(value_deferred.clone()),
+            _ => ClaimTickOutcome::Fault,
         }
     }
 }
@@ -332,7 +376,7 @@ where
             fee_gindexes: assembled.fee_gindexes.clone(),
             state: PendingPostState::Pending,
         };
-        let admission = store
+        let attempt = store
             .mutate(move |block| {
                 // §3 "user work always wins", the authoritative half: this
                 // closure runs under the pending write lock, which totally
@@ -343,7 +387,7 @@ where
                 // reservations and selects around them. Either way the user
                 // never sees `InputRaced` caused by a background claim.
                 if pending_gate.foreground_in_flight() {
-                    return (false, None);
+                    return (false, ClaimSealAttempt::YieldToForeground);
                 }
                 // One locked decision, shared with the bond-post and drain
                 // seams: persona dedup first (remedy: wait), then cross-kind
@@ -356,19 +400,24 @@ where
                 // re-derive the outcome from a push bool whose refusal arm the
                 // decision above has already ruled out.
                 let admission = block.seal_claim(sealed, dispatch_tip, snapshot_generation);
-                (admission == SealAdmission::Admit, Some(admission))
+                (
+                    admission == SealAdmission::Admit,
+                    ClaimSealAttempt::Decided(admission),
+                )
             })
             .await
             .map_err(|e| EmissionClaimRequestError::state("pending-claim seal", e))?;
-        match admission {
-            Some(SealAdmission::Admit) => {}
-            None => return Err(EmissionClaimRequestError::ForegroundHold),
-            Some(SealAdmission::PersonaLive) => {
+        match attempt {
+            ClaimSealAttempt::Decided(SealAdmission::Admit) => {}
+            ClaimSealAttempt::YieldToForeground => {
+                return Err(EmissionClaimRequestError::ForegroundHold)
+            }
+            ClaimSealAttempt::Decided(SealAdmission::PersonaLive) => {
                 return Err(EmissionClaimRequestError::ClaimPending)
             }
             // Same remedy — retry against a fresh snapshot — so both map to the
             // one retryable refusal, whose message names every cause.
-            Some(SealAdmission::InputRaced | SealAdmission::Stale) => {
+            ClaimSealAttempt::Decided(SealAdmission::InputRaced | SealAdmission::Stale) => {
                 return Err(EmissionClaimRequestError::InputRaced)
             }
         }

@@ -51,6 +51,7 @@ use super::drain_orchestrator::DrainIntent;
 use super::drain_orchestrator::{DrainError, DrainOrchestrationError};
 use super::fee_policy::FeeEstimatorError;
 use super::pending::TxHash;
+use super::pending_post_gate::{ForegroundSession, UserPendingPost};
 use super::pscan::start::pending_post_store_for_engine;
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
@@ -306,7 +307,8 @@ where
         // this user-initiated drain on the foreground gauge for its whole
         // assemble→seal span, so the cadence driver's epoch-claim leg yields
         // rather than racing it to the funding set.
-        let _foreground = pending_gate.begin_foreground();
+        let _foreground =
+            ForegroundSession::enter(UserPendingPost::DrainToPrincipal, &pending_gate);
 
         // Resolve the LIVE active persona from the actor's own state — the
         // type-level restriction: no caller-supplied slot exists to disagree

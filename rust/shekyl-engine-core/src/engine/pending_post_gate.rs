@@ -12,19 +12,18 @@
 //!    here, exactly as the bare `Arc<Mutex<()>>` it replaces did. The
 //!    [`PendingPostStore`](super::pscan::dispatch::PendingPostStore) is the
 //!    sole consumer of the lock; nothing else takes it.
-//! 2. **The foreground gauge** (`ENGINE_CADENCE_DRIVER.md` §3, "user work
-//!    always wins"): user-initiated pending-post operations — drain, unstake,
-//!    collect-unstaked, first-stake — register themselves for their whole
-//!    assemble→seal span
-//!    via [`PendingPostGate::begin_foreground`]. The cadence driver's
-//!    epoch-claim leg reads the gauge twice: a cheap pre-assembly skip, and
-//!    the authoritative check **inside** its seal's critical section. Because
-//!    snapshot reads and seals all serialize on the write lock above, that
-//!    in-seal check gives the ruling exactly: a foreground operation that has
-//!    begun before the leg seals forces the leg to yield; one that begins
-//!    after the leg's seal reads the post-seal reservation set and selects
-//!    around it. Neither direction can surface `InputRaced` to the user from
-//!    a background claim.
+//! 2. **The foreground session** (`ENGINE_CADENCE_DRIVER.md` §3, "user work
+//!    always wins"): user-initiated pending-post operations — the closed
+//!    set [`UserPendingPost`] — register themselves for their whole
+//!    assemble→seal span via [`ForegroundSession::enter`]. The cadence
+//!    driver's epoch-claim leg reads the gauge twice: a cheap pre-assembly
+//!    skip, and the authoritative check **inside** its seal's critical
+//!    section. Because snapshot reads and seals all serialize on the write
+//!    lock above, that in-seal check gives the ruling exactly: a foreground
+//!    operation that has begun before the leg seals forces the leg to yield;
+//!    one that begins after the leg's seal reads the post-seal reservation
+//!    set and selects around it. Neither direction can surface `InputRaced`
+//!    to the user from a background claim.
 //!
 //! The gauge is deliberately **not** consulted by the WI-3 bond dispatch
 //! driver: its send schedule is decorrelation-pinned (privacy over
@@ -37,6 +36,21 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+
+/// Closed set of user-initiated pending-post operations. The yield rule
+/// is this set: a background claim yields while any of these is in flight.
+///
+/// Adding a fifth user pending-post facade is adding a variant here **and**
+/// calling [`ForegroundSession::enter`] at that facade. A variant with no
+/// call site fails `dead_code`; a facade that skips `enter` never raises
+/// the gauge — and `enter` is the only constructor that does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UserPendingPost {
+    DrainToPrincipal,
+    Unstake,
+    CollectUnstaked,
+    FirstStake,
+}
 
 /// Per-wallet coordination for the pending-post family: the seal write lock
 /// plus the foreground-operation gauge. See the module docs for both roles.
@@ -63,18 +77,6 @@ impl PendingPostGate {
         self.write_lock.lock().await
     }
 
-    /// Register a user-initiated pending-post operation for the lifetime of
-    /// the returned guard. Callers hold the guard across their whole
-    /// assemble→seal span, not just the seal — the point is to make the
-    /// assembly (which does not hold the write lock) visible to the
-    /// epoch-claim leg's yield rule.
-    pub(crate) fn begin_foreground(self: &Arc<Self>) -> ForegroundPostOp {
-        self.foreground_ops.fetch_add(1, Ordering::AcqRel);
-        ForegroundPostOp {
-            gate: Arc::clone(self),
-        }
-    }
-
     /// Whether any user-initiated pending-post operation is in flight.
     /// Advisory outside the write lock; authoritative inside it (seals
     /// serialize on the lock, so a check within a seal's critical section
@@ -84,15 +86,35 @@ impl PendingPostGate {
     }
 }
 
-/// RAII registration of one foreground pending-post operation
-/// ([`PendingPostGate::begin_foreground`]). Dropping it (any exit path,
-/// including error returns and panics) deregisters the operation.
-pub(crate) struct ForegroundPostOp {
+/// RAII registration of one [`UserPendingPost`] on the foreground gauge.
+/// Dropping it (any exit path, including error returns and panics)
+/// deregisters the operation.
+#[must_use = "dropping this ends the foreground yield-rule registration"]
+pub(crate) struct ForegroundSession {
     gate: Arc<PendingPostGate>,
+    kind: UserPendingPost,
 }
 
-impl Drop for ForegroundPostOp {
+impl ForegroundSession {
+    /// Register `kind` on `gate` for the lifetime of the returned session.
+    /// Callers hold the session across their whole assemble→seal span, not
+    /// just the seal — the point is to make the assembly (which does not
+    /// hold the write lock) visible to the epoch-claim leg's yield rule.
+    ///
+    /// This is the only constructor that raises the gauge.
+    pub(crate) fn enter(kind: UserPendingPost, gate: &Arc<PendingPostGate>) -> Self {
+        tracing::trace!(?kind, "foreground pending-post registered");
+        gate.foreground_ops.fetch_add(1, Ordering::AcqRel);
+        Self {
+            gate: Arc::clone(gate),
+            kind,
+        }
+    }
+}
+
+impl Drop for ForegroundSession {
     fn drop(&mut self) {
+        tracing::trace!(kind = ?self.kind, "foreground pending-post released");
         self.gate.foreground_ops.fetch_sub(1, Ordering::AcqRel);
     }
 }
@@ -102,16 +124,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gauge_tracks_guard_lifetimes_including_nesting() {
+    fn gauge_tracks_session_lifetimes_including_nesting() {
         let gate = PendingPostGate::new();
         assert!(!gate.foreground_in_flight(), "fresh gate reads idle");
 
-        let outer = gate.begin_foreground();
+        let outer = ForegroundSession::enter(UserPendingPost::DrainToPrincipal, &gate);
         assert!(gate.foreground_in_flight());
 
         // A second concurrent user operation nests; the gauge stays raised
         // until BOTH end (a count, not a flag).
-        let inner = gate.begin_foreground();
+        let inner = ForegroundSession::enter(UserPendingPost::Unstake, &gate);
         drop(outer);
         assert!(
             gate.foreground_in_flight(),
@@ -125,11 +147,11 @@ mod tests {
     }
 
     #[test]
-    fn guard_deregisters_on_unwind() {
+    fn session_deregisters_on_unwind() {
         let gate = PendingPostGate::new();
         let gate_for_panic = Arc::clone(&gate);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            let _fg = gate_for_panic.begin_foreground();
+            let _fg = ForegroundSession::enter(UserPendingPost::FirstStake, &gate_for_panic);
             panic!("assembly failed mid-flight");
         }));
         assert!(result.is_err());
@@ -139,51 +161,48 @@ mod tests {
         );
     }
 
-    /// Textual tripwire: every user-initiated pending-post facade registers
-    /// on the foreground gauge (`ENGINE_CADENCE_DRIVER.md` §3, "user work
-    /// always wins"). The gauge only means what it says if the enumerated
-    /// set is complete — a facade that skips registration silently re-opens
-    /// the background-claim-races-user-work window (the PR-648 Bugbot
-    /// finding on `collect_unstaked` was exactly this omission). Each pin
-    /// asserts `begin_foreground` appears inside the named function's body,
-    /// bounded at the next `async fn`, so a registration in a *sibling*
-    /// function cannot satisfy a missing one here.
+    /// Exhaustiveness: every [`UserPendingPost`] variant has an
+    /// [`ForegroundSession::enter`] site in its facade. Adding a variant
+    /// without updating this match is a compile error; a match arm whose
+    /// needle is missing from the named file is the yield-rule hole
+    /// (a facade that never registers).
     #[test]
-    fn every_user_pending_post_facade_registers_on_the_gauge() {
-        let pins: [(&str, &str, &str); 4] = [
+    fn each_variant_has_an_enter_site() {
+        let pins = [
             (
+                UserPendingPost::DrainToPrincipal,
                 "drain_facade.rs",
                 include_str!("drain_facade.rs"),
-                "pub async fn drain_to_principal",
             ),
             (
+                UserPendingPost::Unstake,
                 "unstake_facade.rs",
                 include_str!("unstake_facade.rs"),
-                "pub async fn unstake",
             ),
             (
+                UserPendingPost::CollectUnstaked,
                 "unstake_facade.rs",
                 include_str!("unstake_facade.rs"),
-                "pub async fn collect_unstaked",
             ),
             (
+                UserPendingPost::FirstStake,
                 "bond_orchestrator.rs",
                 include_str!("bond_orchestrator.rs"),
-                "pub async fn first_stake",
             ),
         ];
-        for (file, source, decl) in pins {
-            let start = source.find(decl).unwrap_or_else(|| {
-                panic!("{file}: `{decl}` not found — the facade moved; move this pin with it")
-            });
-            let body = &source[start..];
-            let end = body[decl.len()..]
-                .find("async fn ")
-                .map(|i| decl.len() + i)
-                .unwrap_or(body.len());
+        for (kind, file, source) in pins {
+            let token = match kind {
+                UserPendingPost::DrainToPrincipal => "UserPendingPost::DrainToPrincipal",
+                UserPendingPost::Unstake => "UserPendingPost::Unstake",
+                UserPendingPost::CollectUnstaked => "UserPendingPost::CollectUnstaked",
+                UserPendingPost::FirstStake => "UserPendingPost::FirstStake",
+            };
+            // Variant path only: rustfmt may wrap the `enter(` call. The
+            // path is unique to this registration (docs use the type name,
+            // not the variant).
             assert!(
-                body[..end].contains(".begin_foreground()"),
-                "{file}: `{decl}` does not register on the foreground gauge — \
+                source.contains(token) && source.contains("ForegroundSession::enter"),
+                "{file}: `{token}` has no ForegroundSession::enter site — \
                  the cadence claim leg will race this user operation \
                  (ENGINE_CADENCE_DRIVER.md §3)"
             );

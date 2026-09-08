@@ -9,7 +9,7 @@ Ruling of record: `.cursor/plans/wallet_rewrite_audit_cbf7c720.plan.md`
 record for the driver's leg semantics (rule 05: specification first) —
 code comments cite its §3/§4 by section. Index row:
 `IMPLEMENTATION_INDEX.md` §5. Implementation:
-`rust/shekyl-engine-core/src/engine/cadence.rs`.
+`rust/shekyl-engine-core/src/engine/cadence/` (scheduler in `mod.rs`; legs in `submit.rs` / `serving.rs` / `claim.rs`).
 
 ---
 
@@ -224,8 +224,9 @@ The delivered mechanism (amended in-PR from the try-lock probe first
 drafted here, which could only observe another writer's brief seal
 window, never an assembly): user-initiated pending-post operations
 register on the engine gate's **foreground gauge**
-(`PendingPostGate::begin_foreground`, RAII) for their whole
-assemble→seal span. The leg reads the gauge twice — a cheap
+(`ForegroundSession::enter(UserPendingPost, …)`, RAII; the closed
+set `UserPendingPost` is the yield-rule's user-intent surface) for
+their whole assemble→seal span. The leg reads the gauge twice — a cheap
 pre-assembly skip, and the authoritative check **inside** its seal's
 critical section (`EmissionClaimRequestError::ForegroundHold`,
 classified as a yield). Because every snapshot read and every seal
@@ -512,7 +513,8 @@ are out of scope here; a FOLLOWUPS row already tracks promoting them.
   (`claim_leg_yields_while_user_work_is_in_flight`), plus the
   in-seal ordering pin (the dispatch seam's tripwire: the
   foreground-gauge check precedes `seal_claim` inside the locked
-  mutation) and `ForegroundHold` → yield in the classify test. A
+  mutation) and `ForegroundHold` → yield via
+  `EmissionClaimRequestError::tick_outcome`. A
   background claim must never fail a foreground staking operation.
 - Wrap-point test: `into_shared` spawns the driver; dropping the
   handle cancels the task; engine close is not blocked by the driver
@@ -530,7 +532,7 @@ Item 6's text is retained as written for the record.
 
 1. `shekyl-operator-alarm`: chain-progress + epoch-claim conditions
    (§5's named surface).
-2. Driver skeleton in `engine/cadence.rs`: loop, tip poll, watchdog,
+2. Driver skeleton in `engine/cadence/`: loop, tip poll, watchdog,
    leg registry, isolation, `CadenceHandle`; leg 4 empty slot with
    FOLLOWUPS citation and the §7 registered-and-invoked test.
 3. `Engine::into_shared`; wallet-rpc `wrap_and_start_tasks` adopts;
