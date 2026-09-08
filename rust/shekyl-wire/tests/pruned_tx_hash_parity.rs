@@ -30,16 +30,13 @@
 //! misclassified `has_pqc`, a miscounted auth segment — fails one language
 //! against the other instead of agreeing with itself.
 //!
-//! The **live-oracle** spend KAT (a daemon-accepted spend captured off a
-//! running node) is deferred on the capture, not on a builder. The blocker
-//! this comment used to name — "the FCMP++ spend path has not yet produced a
-//! daemon-accepted transaction to capture" — was unqualified and false:
-//! `e2e_fcmp_spend_accepted_by_daemon` has produced exactly that since
-//! PR #193 (2026-06-27). Note the distinction against the sibling comments in
-//! `fcmp_spend_e2e.rs` and `fcmp_spend_roundtrip.rs`, which say the **C++**
-//! spend path never produced one: that is still true, and is a different
-//! claim. This pin remains the struct-derived half — it binds the two
-//! implementations to each other, not yet to a chain (`docs/FOLLOWUPS.md`).
+//! The **live-oracle** spend KAT (`live_oracle_spend_v1.json`) is the other
+//! half of this file: bytes a running `shekyld` accepted and connected,
+//! captured by `e2e_fcmp_spend_accepted_by_daemon`. Note the distinction
+//! against the sibling comments in `fcmp_spend_e2e.rs` and
+//! `fcmp_spend_roundtrip.rs`, which say the **C++** spend path never produced
+//! one: that is still true, and is a different claim. The synthetic pin binds
+//! the two implementations to each other; the live pin binds both to a chain.
 
 mod common;
 use common::conforming_pqc_extra;
@@ -311,5 +308,28 @@ fn live_oracle_spend_identity_matches_the_accepted_bytes() {
         tx_hash_hex,
         "txid recomputed from the accepted bytes differs from the one the \
          daemon accepted"
+    );
+
+    // The bound surface this file exists for: pruned identity with the digest
+    // supplied is the txid, now over bytes consensus admitted. Same
+    // recomputation as the synthetic sibling above and the C++ live leg
+    // (`get_pruned_transaction_hash`).
+    let pruned_form = {
+        let mut t = tx.clone();
+        let Ct::Fcmp { prunable, .. } = &mut t.ct else {
+            panic!("the captured spend must be an FCMP++ spend");
+        };
+        *prunable = None;
+        t.serialize()
+    };
+    assert!(
+        bytes.starts_with(&pruned_form),
+        "the pruned form must be a prefix of the full form"
+    );
+    let digest = keccak256(&bytes[pruned_form.len()..]);
+    assert_eq!(
+        hex_str(&tx.hash_with_supplied_prunable(digest)),
+        tx_hash_hex,
+        "pruned identity (supplied digest) diverged from the accepted txid"
     );
 }

@@ -323,9 +323,9 @@ fn synthetic_spend_hash_preimage_is_pinned() {
     // Regression guard for the 4-part FCMP++ spend hash (§11):
     //   keccak256( H(prefix) ‖ H(base) ‖ H(varint(N)·pqc_auths) ‖ H(prunable) ).
     // Cross-language parity for this arm is pinned struct-derived in
-    // `pruned_tx_hash_parity.rs` (C++ leg: `pruned_tx_hash_parity.cpp`); a
-    // DAEMON-captured oracle is still deferred on the live spend path
-    // (`docs/FOLLOWUPS.md`). This additionally pins the *preimage structure*
+    // `pruned_tx_hash_parity.rs` (C++ leg: `pruned_tx_hash_parity.cpp`); the
+    // daemon-captured sibling is `live_oracle_spend_identity_matches_the_accepted_bytes`
+    // in the same files. This additionally pins the *preimage structure*
     // against accidental drift — most importantly the leading varint(N) count
     // prefix on the pqc_auths component, which the C++ oracle emits because the
     // hash uses the generic std::vector serializer (begin_array(cnt) ->
