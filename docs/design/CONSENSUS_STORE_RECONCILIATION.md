@@ -159,7 +159,7 @@ is ruled.
 | CEN-L6 | 4 | Every stored output carries an outPk commitment; amount-0 indexing | **S-OUT-KI** | Indexing choice has no record (recorded judgment disagreement) |
 | CEN-L13 | 4 | Corruption/IO guards abort rather than store inconsistent state | cross-surface | Sanity class — becomes the error taxonomy of the Rust store |
 | CEN-L14 | 4 | Five archival uniqueness rules have **no** DB constraint (flag-0 overwrites) | **S-ARCH** | Verify-side-only by design, or by omission? |
-| CEN-B3 | 4 | Hardfork voting inert; `HardFork::add` reject verdict **discarded** at the DB call site | S-CHAIN-W / P0c | DRS-P0c's `hf_versions` wart — same defect, two registers |
+| CEN-B3 | 4 | Hardfork voting inert; `HardFork::add` reject verdict **discarded** at the DB call site | S-CHAIN-W / P0c | Related machinery to DRS-W15 (tip-above `hf_versions` read-back), **not** the same defect — CEN-B3 is discarded `add` verdict + inert voting; W15 is rows not deleted on pop |
 | CEN-K3 | 4 | Alt-block duplicate rejected; DB belt `MDB_NODUPDATA` | **S-ALT** | Belt survives the engine change only if re-specified |
 | CEN-H5 | 1 | Input-variant whitelist (one live rule site + typed connect dispatch + DB backstop; the double-spend visitor site is **dead**) | S-CHAIN-W | ratified — port site 1 + the typed dispatch; the dead visitor is deletion residue, not a port target (§5.4.1 CEN-H5, corrected 2026-09-03) |
 | CEN-L7 | 1 | Archival connect-writers are fatal verify-backstops | **S-ARCH** | ratified; WS-2 journaled check-and-set |
@@ -638,25 +638,17 @@ default becomes **RECORD-AND-SPECIFY** — a wart is characterised precisely
 enough that the Rust implementation gets it right, and fixed in C++ only where
 the defect blocks the C++ from serving as a *bucket-1/2* oracle in the interim.
 
-*Delivered 2026-09-08, and the narrow exception has now been exercised once:
-of the four rows P0c disposed (`DRS-W12` through `DRS-W15`), only
-`hf_versions` could have triggered it, and it did not — but on the
-register's state, not on a finding that the C++ is right. The exception
-needs a **ratified, conformance-checked** row for the defect to block, and
-none covers post-reorg hardfork reconstruction: CEN-B3 is the only census
-row over that machinery and sits at **bucket 4**, deliberately held for the
-R4 round. With nothing ratified, the exception has no subject. It re-runs
-if R4 ratifies one.*
-
-*The clause worth keeping is the one the first application nearly lost. It
-is tempting to discharge this test by arguing the C++ is correct, and that
-is the expensive direction: P0c's first draft graded `hf_versions` "shape,
-not defect" on the strength of having verified only that the rows are
-**read** — load-bearing, which is a different claim from correct, and one
-the July round had explicitly left undecided. **The exception's ground is
-the register, which is checkable, not a correctness intuition about
-inherited code, which is not.** Where both are available they should agree;
-where they disagree, the register is the one that was reviewed.*
+*Delivered 2026-09-08: of the four rows P0c disposed (`DRS-W12` through
+`DRS-W15`), only DRS-W15 could have triggered the exception, and it did
+not — on the register's state, not on a finding that the C++ is right.
+Evidence and Class live in the audit §9; they are not restated here. The
+clause worth keeping is the one the first application nearly lost: it is
+tempting to discharge this test by arguing the C++ is correct, and that is
+the expensive direction. **The exception's ground is the register, which is
+checkable, not a correctness intuition about inherited code, which is not.**
+Where both are available they should agree; where they disagree, the
+register is the one that was reviewed. It re-runs if R4 ratifies a
+conformance-checked row over post-reorg hardfork reconstruction.*
 Fixing C++ that is scheduled for deletion is the debt rule 20 and
 [`15-deletion-and-debt`](../../.cursor/rules/15-deletion-and-debt.mdc) exist to
 prevent. CEN-L11 was the test case: a live FOLLOWUPS row, a ratified spec, and a

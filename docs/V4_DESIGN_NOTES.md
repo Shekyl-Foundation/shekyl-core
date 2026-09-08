@@ -18,10 +18,8 @@ completes. The re-census half of that condition is **cleared**: DRS-P0a
 reconciled `LMDB_SCHEMA.md` (2026-09-05) and DRS-P0b rewrote
 `LMDB_WRITE_ATOMICITY_AUDIT.md` (2026-09-05); both are gate-pinned to the
 `SHEKYL_LMDB_TABLES` macro and graded RECONCILED in the DRS oracles table.
-**DRS-P0c** closed the wart register on 2026-09-08, extending P0b's rows to
-DRS-W15: the three 2026-07-27 substrate findings that still scheduled C++
-patches (A-1, A-3, A-5) and the `hf_versions` pop row carried since April,
-all four inverted to RECORD-AND-SPECIFY by the 2026-09-01 countermand. What
+**DRS-P0c** closed the wart register on 2026-09-08 (DRS-W1…DRS-W15; evidence
+in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9). What
 remains is **P0d** (digest v0).
 
 The historical text below is retained so the V4 deferral rationale (especially
