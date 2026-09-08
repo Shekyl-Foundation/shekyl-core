@@ -1,8 +1,11 @@
 # VC — Client-side version and constants validation
 
-**Status:** OPEN — design round 2: **the four rulings of §6 are RULED
-(2026-09-06, relayed through the steering lane; provenance is the relay, not
-an in-channel signature — see §7).** `VC-1` is built in the PR that lands
+**Status:** OPEN — design round 2, **review round 1 run 2026-09-07 (§8):
+seven findings, `VC-R1`…`VC-R7`. Two of them (`VC-R2`, `VC-R3`) contest
+dispositions recorded as ruled and need Rick; the other five are applied.**
+The four rulings of §6 are recorded RULED (2026-09-06, relayed through the
+steering lane; **provenance is the relay, not an in-channel signature** — if
+those are not Rick's words, §6 is not closed and `VC-1` rests on nothing). `VC-1` is built in the PR that lands
 this document, widened to both integer authorities under `config/` per
 ruling 5 (`VC-D12`). **`VC-2`, `VC-3` and `VC-4` are authorised for alpha.8,
 folded into one PR** (ruling 2), and are not started; that PR's first
@@ -387,10 +390,13 @@ alternative outright; the coupling argument below (tying the handshake to
 RK-5c's bridged leg) was the weaker one. **Corollary for `VC-4`:** the
 genesis axis rides a *second* call (`on_get_block_hash([0])`, §2), so the
 tuple is atomic across three axes and the genesis hash is checked beside it.
-That is acceptable because block 0's hash cannot change under a running
-daemon — it is the one value a restart or reconfiguration cannot move
-without the daemon being a different chain, which the other three axes then
-also report. Stated so the exception is seen to be reasoned, not missed.
+That was argued acceptable because block 0's hash cannot change under a
+running daemon. **`VC-R2` (§8) finds that argument answers the wrong
+question** — the atomicity concern is not whether the *value* can move
+between calls but whether the *answerer* can change, which a restart or a
+proxy fronting two nodes does. The finding proposes carrying the genesis
+hash as a fourth `get_version` field, which makes all four axes one snapshot
+and deletes the exception. **Open, needs Rick** (§8).
 
 As proposed: `GetVersionResponse` gains
 
@@ -399,8 +405,12 @@ consensus_constants_digest: String   // 64 lowercase hex chars, §3.3
 nettype: DaemonNetwork               // "mainnet" | "testnet" | "stagenet" | "fakechain"
 ```
 
-and `CORE_RPC_VERSION` takes the next minor. **At the anchor that is 3.28.
-Read `dev` at the moment `VC-2` is written, not at the moment it branched** —
+and `CORE_RPC_VERSION` takes the next free minor. **3.28 was free at this
+document's anchor and is NOT free now** — `dev` carries 3.28 with a fifth
+`get_version` oracle vector (`VC-R1`, §8), landed by another lane while this
+document sat unmerged. The number is therefore stated nowhere in this
+document as a value to use. **Read `dev` at the moment `VC-2` is written, not
+at the moment it branched** —
 3.26 was claimed by two branches on one day and git merged the line clean.
 The whole-chain delta test now catches a taken number, but only at merge.
 
@@ -464,7 +474,8 @@ must be able to fail.
 
 `shekyld <command>` from a second process posts to an address that may be a
 different binary. Before rendering any natively-served command, the console
-calls `get_version` and compares all three axes. On mismatch it prints the
+calls `get_version` and compares every axis of §2 — **four since `VC-D12`;
+this sentence said "all three" until `VC-R7` caught it** (§8). On mismatch it prints the
 axis, both values and (for the wire axis) which side is older, and exits
 non-zero without rendering the command. The one exemption is **`version`
 itself**: its job is to show the operator what they are talking to, so it
@@ -506,6 +517,23 @@ fact.
 Refusing at open closes both with one check and gives the operator the
 message at the moment they can act on it.
 
+**The residual, named (`VC-R4`, §8).** "There is no arm where proceeding is
+better than stopping" (§1) is true of this engine *because it has no offline
+open path* — every `open_*` takes a `DaemonClient` by value
+(`lifecycle/open.rs:185`, `:339`, `:358`), so a wallet already cannot be
+opened without a daemon and refusing at open takes nothing away that exists.
+That is an accident of the current API, not a property of the axes: on the
+**wire** axis a mismatch means the two binaries cannot converse reliably, not
+that the chain differs, and a user whose node upgraded first is locked out of
+their own wallet entirely — no cached history, no export — until one side
+moves. The own-node default ([`docs/DAEMON_RPC_RUST.md`](../DAEMON_RPC_RUST.md))
+bounds it:
+both binaries normally ship together, so the skew is the operator's own
+rebuild rather than a remote's choice. **Reopen** if an offline open path is
+ever built: the wire axis should then refuse daemon *operations* while
+letting the file open, and the uniformity claim must be re-derived rather
+than inherited.
+
 **When it runs.** At open, and whenever the engine constructs or replaces its
 daemon client. **Rejected for this round:** a periodic re-handshake during a
 long session, to catch a daemon swapped underneath a running wallet. Reopen
@@ -546,6 +574,17 @@ the fakechain arm is not a consensus-surface divergence — it is a test and
 developer harness lever, named, typed, defaulted off, and loud in the CLI's
 `--help`.
 
+**`VC-R3` (§8) contests the operator-facing half of this**, not the typed
+policy. A `fakechain` daemon takes mainnet's configuration
+(`cryptonote_config.h:562`), so it shares mainnet's genesis hash *and* its
+constants digest; the network axis is the only one that can tell the two
+apart. A shipped `--allow-fakechain-daemon` is therefore a switch that
+disables the sole axis separating a regtest chain from mainnet, and a
+mainnet wallet run behind it scans a fake chain with real addresses — the
+lock-5 failure this round exists to close, re-enabled by a flag. The harness
+needs `Accept`; no operator task has been named that needs it. **Open, needs
+Rick** (§8).
+
 ### 3.7 `VC-D7` — genesis behaviour: a claimed property, with the constraint it imposes
 
 Pre-genesis the constants file moves and the digest moves with it; a client
@@ -553,9 +592,20 @@ built before the move refuses a daemon built after it, names the axis, and
 the developer rebuilds. That is the intended behaviour and it is how the
 mechanism gets exercised before it matters.
 
-At genesis the file freezes and the same comparison becomes an assertion of
-**rules identity**: every client and daemon that agree on the digest were
-built from the same consensus constants. Together with the network axis
+At genesis the files freeze and the same comparison becomes an assertion of
+**digested-authority identity**: every client and daemon that agree were
+built from the same `config/` integer authorities. **It is not "rules
+identity", and `VC-R6` (§8) corrects that overclaim.** Consensus-affecting
+values live outside those files today by the authority's own admission — its
+`_comment_daa` records that the LWMA-1 bias `99/200`, the solvetime clamp and
+the min-L floor "deliberately do NOT live here", as literals in `lwma1.rs` —
+and `C2-R2` §8 is queued to migrate the weight and fee constants *in* from
+`cryptonote_config.h`, which is only a migration because they are outside
+today. A daemon built from identical JSON and a patched literal passes this
+axis. **The claim the design may make is the one the digest can carry**;
+rules identity becomes available only when the constants a rule depends on
+are all inside the digested set, and that is a named precondition rather
+than a property to assume. Together with the network axis
 (§2), that is chain identity, and it is **claimed as a property** of this
 design, not left as an accident. Any post-genesis edit to the file produces
 a digest no genesis-built client accepts, which is correct: an edit to the
@@ -833,8 +883,12 @@ opened with, recreated.
    detector not freeze; `VC-1` widens first and the `FL-R12′` rename
    re-pins; the two-year-convention grade).
 
-The banner moves to round 2. What remains open is implementation
-(`VC-2`…`VC-4`) and the one grade in §3.12 (iii) that belongs to FA-6.
+The banner moves to round 2. **Review round 1 (§8) then found two of these
+rulings load-bearing in ways their reasons do not cover** — `VC-R2` against
+ruling 1's atomicity ground, `VC-R3` against ruling 3's operator flag — and
+both are open for Rick alongside the provenance question above. What remains
+open otherwise is implementation (`VC-2`…`VC-4`); the §3.12 (iii) grade that
+belonged to FA-6 is written.
 
 ---
 
@@ -852,3 +906,184 @@ The banner moves to round 2. What remains open is implementation
 | 2026-09-05 | **The digest's file set is a ruling, not an assumption (`VC-D12`).** The steering lane, correcting its own relay that the fee-ladder bundle would trip the new sentinel (it touches `economics_params.json`, a different file), exposed that nothing pins that file: `shekyl-economics`'s Blake2b digest is a fixture-lineage instrument covering 11 of its 18 keys and deliberately so. Proposed: one digest over both integer authorities, per-file sections, canonical form `v2`; a key rename moves it on purpose; `genesis_recipients.*` excluded because the genesis hash already commits to them (reopen if no client compares that either). Not built ahead of Rick's ruling — deciding what a "consensus constant" is for this project is his, and the one-file form is narrower than the surface rather than wrong. §6 gains ruling 5. |
 | 2026-09-05 | **The genesis-recipients exclusion rested on a check nobody performs; the genesis hash becomes the fourth axis.** `VC-D12`'s first draft excluded `genesis_recipients.*.json` from the digest because "the genesis block hash already commits to them", with "reopen if no client compares it by `VC-4`" as the criterion. The steering lane checked: the criterion is a present fact — no Rust genesis-hash pin, no client comparison, only the daemon's own `GENESIS_TX`/`GENESIS_NONCE` in `cryptonote_config.h`. Verified here rather than relayed. Third stated-commitment-without-enforcing-site found today, and this one was this document's own. Disposition restated: the files stay out of the digest (per-network, non-integer), and the comparison joins `VC-4` as the fourth axis over the existing native `on_get_block_hash` — no wire change. `FAKECHAIN` shares mainnet's genesis, so `nettype` remains the regtest discriminator and the operator-readable value. **The convergence is the point:** the lock-5 wrong-chain case is undefended on network *and* genesis simultaneously; the tuple is the enforcing site for both. |
 | 2026-09-05 | **A second false docstring, found by the steering lane's independent check of §0.2.** `engine/error/mod.rs:41` lists `OpenError::NetworkMismatch` as "wallet file says network N, daemon client says network M" under "variant names locked in by the plan" — and the variant's fields are `{ wallet, expected }`, with no daemon-reported value anywhere in the comparison. Recorded with `daemon.rs:169` in §0.2; `VC-4` fixes both in the same PR as the check. The lock finding now leads the package to Rick: not a new capability for alpha.8, but a defence the plan committed to and the wallet has shipped without. |
+
+---
+
+## 8. Review round 1 (2026-09-07) — `VC-R1`…`VC-R7`
+
+Run at Rick's instruction, against this document and `VC-1` as built, on
+`dev` `262c06ba9` + this branch, with `dev` re-read at `49b82b6df`. The round
+was asked for because §6's rulings arrived as a **relay** rather than
+in-channel, and because a document can be ruled without ever being attacked.
+Two findings contest dispositions recorded as ruled; five are applied here.
+
+| # | Finding | State |
+| --- | --- | --- |
+| `VC-R1` | The minor version this design reserved is already taken | **Applied** (§3.5) |
+| `VC-R2` | The atomicity ruling and the genesis axis contradict each other | **Open — needs Rick** |
+| `VC-R3` | The fakechain operator flag disables the only axis that sees regtest | **Open — needs Rick** |
+| `VC-R4` | "No arm where proceeding is better" is inherited from the API, not derived | **Applied** (§3.6.3) |
+| `VC-R5` | The pin could not tell a developer what to re-pin to | **Applied** (code) |
+| `VC-R6` | The genesis claim overstates what the digest attests | **Applied** (§3.7) |
+| `VC-R7` | The console arm still counted three axes | **Applied** (§3.6.2) |
+
+### `VC-R1` — 3.28 is gone, and this document is the reason to check
+
+§3.5 said "at the anchor that is 3.28". `dev` now carries
+`CORE_RPC_VERSION_MINOR = 28` and a `get_version_synced_v5.json` at
+`196636`, landed by another lane while this document sat unmerged. The
+document that warns "read `dev` at the moment `VC-2` is written, not at the
+moment it branched" had itself gone stale on exactly that axis, in eight
+days. **Applied:** §3.5 no longer names a number to use; it records that
+3.28 was free at the anchor, is not free now, and that the value is read at
+write time. The chain-delta test remains the mechanism that catches a
+double-claim, and it caught nothing here because this branch never wrote the
+constant — which is the correct outcome and worth saying, because "the test
+did not fire" is not evidence the hazard did not occur.
+
+### `VC-R2` — the atomicity argument, taken seriously, indicts the genesis axis
+
+**The finding.** Ruling 1 put the tuple on one call because "two calls can
+straddle a restart or a reconfiguration and return axes from different
+states, so the client validates a tuple that never simultaneously existed."
+That reasoning rejected reading `nettype` from `get_info`. But `VC-D12` then
+put the **genesis** axis on a second call (`on_get_block_hash([0])`), and
+§3.5's corollary defended it on the ground that block 0's hash cannot change
+under a running daemon.
+
+That defends the wrong proposition. The hazard is not that the *value*
+changes between calls; it is that the *answerer* does. A daemon restarted
+between the two calls can come back a different binary on a different chain;
+a proxy or load balancer in front of two nodes can answer them from
+different ones — and the RT posture explicitly supports a remote
+`--daemon-address`, which is where such a middlebox lives. In either case
+the client pairs `get_version` from daemon A with block 0 from daemon B and
+accepts a tuple that never simultaneously existed, which is verbatim the
+failure ruling 1 rejected. The corollary is a *narrower* claim wearing the
+same words as the ruling.
+
+**Proposed disposition (needs Rick).** Carry the genesis hash as a fourth
+`get_version` field. It is a fixed 32 bytes the daemon already holds
+(`GENESIS_TX` / `GENESIS_NONCE` per network, `cryptonote_config.h:368`,
+`:500`, `:511`), it rides a wire change that is already happening in `VC-2`,
+and it makes all four axes one reply, one snapshot, no skew. The exception
+then does not need defending because it does not exist. The cost is one more
+field and one more `chain_facts` value; the alternative is keeping a
+documented hole in the property ruling 1 was granted for.
+
+### `VC-R3` — the fakechain flag disables the only axis that can see regtest
+
+**The finding.** `FAKECHAIN` returns mainnet's configuration
+(`cryptonote_config.h:562`). A `shekyld --regtest` daemon therefore reports
+mainnet's genesis hash and, being the same build, mainnet's constants digest
+and wire version. Three of the four axes are blind to it by construction;
+**`nettype` is the only axis that distinguishes a regtest chain from
+mainnet.** Ruling 3 provides for `FakechainPolicy::Accept` to be set by "the
+harness or a named operator flag", and §3.6.4 proposes shipping
+`--allow-fakechain-daemon`.
+
+A shipped flag that turns off that one axis is a switch that lets a mainnet
+wallet scan a fake chain with real addresses, reporting balances that are
+not the user's — the lock-5 failure mode this round exists to close, restored
+by a command-line option. Rule 21's standing observation applies with force:
+a mode that exists gets used, and this one is a single flag between an
+operator and a wrong-chain wallet.
+
+**Proposed disposition (needs Rick).** Keep the typed policy; **reject the
+operator-facing flag now**, with the reopening criterion being a *named*
+operator task that requires it. `FakechainPolicy::Accept` stays reachable
+only from the regtest harness (`regtest_e2e.rs`) and from tests, so the
+affordance exists exactly where its need is demonstrated. This narrows
+ruling 3 rather than contradicting it: its stated reason — the
+`SEEDHASH_EPOCH` shape, armed explicitly and refused by default — is better
+served by an affordance with no operator surface at all than by one guarded
+by a flag's default.
+
+### `VC-R4` — the uniformity claim is inherited, not derived
+
+§1 asserts "there is no arm where proceeding is better than stopping". That
+is true of this engine only because no offline open path exists: every
+`open_*` takes a `DaemonClient` by value, so refusing at open removes nothing
+a user has today. But the axes are not alike. Rules, network and genesis
+mismatches mean *the data would be wrong*; a wire mismatch means *we cannot
+converse reliably*, and a user whose node upgraded first is locked out of
+their own wallet — history, export, backup — until one side moves.
+**Applied:** §3.6.3 now names the residual, records that the own-node default
+bounds it, and carries a reopening criterion tied to an offline open path.
+The claim is no longer stated as a property of the axes when it is a property
+of the API.
+
+### `VC-R5` — the pin could not tell a developer what to re-pin to
+
+**Observed, not reasoned.** `VC-1` shipped the live-file pin as
+`const _: () = assert!(str_eq(CONSENSUS_CONSTANTS_DIGEST, "…"))`. Tripping it
+deliberately produced:
+
+```
+error[E0080]: evaluation panicked: config/consensus_constants.json changed: its
+canonical-form digest no longer matches the pinned value. Review the consensus
+implications …, then re-pin here.
+```
+
+— an instruction to re-pin, with no value to re-pin **to**. A const-eval
+panic takes a literal message and cannot format the computed digest, and the
+failing assert makes the crate uncompilable, so the test that *would* print
+both values cannot run either. The developer's only routes were reading a
+generated file under `target/` or recomputing the digest by hand. A gate
+whose remedy is not mechanically available is a gate people work around.
+
+**Applied.** The pin moved into `build.rs`, where a panic formats. Verified
+by tripping it again (`shekyl_tx_volume_window` 720 → 721, then restored):
+
+```
+the consensus-constant authorities changed: their canonical-form digest is now
+    0c18687ad33708748bf9886f62a876df156e9477a47f49710dfb849b85318940
+but this build pins
+    6e1f9125232c522c475ef83b77799e11de6e7fc6e1867c261c83be4268026ab8
+Re-pin `PINNED_DIGEST` in rust/shekyl-rpc-types/build.rs to the first value, and
+answer the question the pin exists to force …
+```
+
+Build-time enforcement is unchanged — the same edit still fails the same
+build — and the re-pin is now a copy. **The Decision-14 convention does not
+transfer unexamined:** those sentinels pin small numbers a human can read in
+the message (`DAA_TARGET_SECONDS diverged from 120`); a 64-character digest
+is a value the message must *supply*, not merely name. `VC-1` adopted the
+shape of the convention without checking that its reason survived the change
+of subject.
+
+### `VC-R6` — the digest attests the authorities, not the rules
+
+§3.7 claimed that at genesis the comparison becomes an assertion of "rules
+identity: every client and daemon that agree on the digest were built from
+the same consensus constants". The digested set is two `config/` files, and
+consensus-affecting values live outside them **by the authority's own
+statement**: `_comment_daa` records that the LWMA-1 bias `99/200`, the
+solvetime clamp and the min-L floor "deliberately do NOT live here" but as
+literals in `lwma1.rs`. `C2-R2` §8 is queued to migrate the weight and fee
+constants in from `cryptonote_config.h` — which is only a migration because
+they are outside today. A daemon built from identical JSON and one patched
+literal passes this axis while running different rules.
+
+**Applied:** §3.7 now claims digested-authority identity, which is what the
+mechanism can carry, and names full rules identity as available only once the
+constants a rule depends on are all inside the digested set. That is a
+precondition to be met, not a property to assume. **Same shape as the round's
+founding finding** — a document asserting a check that the code does not
+perform — here in this document's own claimed-property section.
+
+### `VC-R7` — the console arm still counted three axes
+
+§3.6.2 said the remote console "compares all three axes" after `VC-D12` made
+them four; §3.6.3 had been updated and §3.6.2 had not. **Applied.** The
+instance is small and the class is not: it is a rule fixed where it was
+reported, which the parent slice recorded four times across four rounds.
+
+### What the round did not find
+
+No finding against the canonicalisation rules (§3.3), the one-definition
+two-readers layout, the choice to compute the digest in `shekyl-rpc-types`
+(`VC-D4`), the rejection of the local-console check (`VC-D6`), or `VC-1`'s
+tests, whose reds were observed under mutation before they were trusted.
+Recorded because "the round found nothing there" is a different statement
+from "the round did not look there".

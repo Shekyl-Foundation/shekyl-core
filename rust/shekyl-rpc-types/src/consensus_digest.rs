@@ -23,45 +23,22 @@ use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/consensus_constants_digest.rs"));
 
-/// `const`-evaluable `&str` equality, for the sentinel below (`str`'s
-/// `PartialEq` is not `const`).
-const fn str_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut i = 0;
-    while i < a.len() {
-        if a[i] != b[i] {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
-// The live-file sentinel (VC-D3, VC-D12): a change to `config/consensus_constants.json`
-// or `config/economics_params.json` is a reviewed change to this line, in the convention of the Decision-14
-// `const _: () = assert!(...)` pins in `shekyl-daemon-rpc/src/lib.rs` — except
-// that this one covers every constant in the file rather than the ones someone
-// thought to pin. Re-pinning is the review: does a different value of what
-// moved make a different chain? If yes, then once VC-2…VC-4 land, every client
-// built before this change will refuse every daemon built after it (VC-D7) —
-// the mechanism working. If no, the constant does not belong in that file
-// (§3.7's membership rule). A change detector, not a freeze: values a file
-// marks provisional (the D2 escalation numbers, under a GF-7 freeze ceremony)
-// move it too, and the re-pin is how the ceremony shows, not a gate against
-// it. Nothing compares the digest yet (module doc).
-const _: () = assert!(
-    str_eq(
-        CONSENSUS_CONSTANTS_DIGEST,
-        "6e1f9125232c522c475ef83b77799e11de6e7fc6e1867c261c83be4268026ab8"
-    ),
-    "config/consensus_constants.json or config/economics_params.json changed: the canonical-form digest no longer matches \
-     the pinned value. Review the consensus implications (CLIENT_VERSION_CONSTANTS_VALIDATION.md \
-     §3.7), then re-pin here. Once VC-2…VC-4 land, every client built before this change will \
-     refuse every daemon built after it."
-);
+// The live-file pin lives in `build.rs`, not here (VC-R5, review round 1):
+// a `const _: () = assert!(...)` in this file cannot put the *computed*
+// digest in its message — const-eval panics take a literal — and it makes
+// the crate uncompilable, so the test that would print the new value cannot
+// run either. A developer who tripped it was told to re-pin and given no
+// value to re-pin to. The build script compares and panics with both values
+// and the file to edit, which keeps the build-time enforcement the
+// Decision-14 sentinels have and makes the re-pin mechanical. The question
+// the pin exists to force is unchanged (VC-D3, VC-D12): does a different
+// value of what moved make a different chain? If yes, then once VC-2…VC-4
+// land, every client built before the change refuses every daemon built
+// after it (VC-D7) — the mechanism working. If no, the constant does not
+// belong in that file (§3.7's membership rule). A change detector, not a
+// freeze: values a file marks provisional (the D2 escalation numbers, under
+// a GF-7 freeze ceremony) move it too, and the re-pin is how the ceremony
+// shows rather than a gate against it.
 
 /// The network a daemon reports it runs, as `get_version.nettype` will carry
 /// it (`VC-2`) and as `/get_info.nettype` carries it today.

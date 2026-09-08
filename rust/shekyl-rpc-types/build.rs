@@ -29,6 +29,12 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+/// The reviewed digest of the canonical form of the files in
+/// [`consensus_canonical::CANONICAL_FILES`]. A change to either file moves it
+/// and fails this build with both values and the question to answer; see the
+/// panic below.
+const PINNED_DIGEST: &str = "6e1f9125232c522c475ef83b77799e11de6e7fc6e1867c261c83be4268026ab8";
+
 fn main() {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
@@ -65,6 +71,30 @@ fn main() {
         .collect();
     let canonical = consensus_canonical::canonical_form(&pairs).unwrap_or_else(|e| panic!("{e}"));
     let digest = consensus_canonical::digest_hex(&canonical);
+
+    // The live-file pin (VC-D3, VC-D12). It lives here rather than as a
+    // `const _: () = assert!(...)` beside the constant, because a const-eval
+    // panic takes a literal message: it can say the digest moved but cannot
+    // say what it moved *to*, and it makes the crate uncompilable, so the
+    // test that would print the new value cannot run either. Observed in
+    // review round 1 (VC-R5) — a developer who tripped it was told to re-pin
+    // and given nothing to re-pin to. A build-script panic formats, so the
+    // enforcement is the same and the re-pin is mechanical.
+    if digest != PINNED_DIGEST {
+        panic!(
+            "the consensus-constant authorities changed: their canonical-form digest is now\n\
+             \x20   {digest}\n\
+             but this build pins\n\
+             \x20   {PINNED_DIGEST}\n\
+             Re-pin `PINNED_DIGEST` in rust/shekyl-rpc-types/build.rs to the first value, and\n\
+             answer the question the pin exists to force\n\
+             (docs/design/CLIENT_VERSION_CONSTANTS_VALIDATION.md §3.7): does a different value\n\
+             of what moved make a different chain? If yes, this is a consensus change and every\n\
+             client built before it will refuse every daemon built after it once VC-2..VC-4 land.\n\
+             If no, the constant does not belong in {files:?}.",
+            files = consensus_canonical::CANONICAL_FILES
+        );
+    }
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let out_file = out_dir.join("consensus_constants_digest.rs");
