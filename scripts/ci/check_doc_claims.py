@@ -181,26 +181,30 @@ def strip_fences(text: str) -> str:
     written inside backticks by convention and would vanish if inline spans
     were stripped from the text the citation leg reads.
     """
-    out, fence = [], None          # fence = (char, length, prefix) while open
+    out, fence = [], None       # fence = (char, length, quote depth) while open
     for raw in text.splitlines():
-        # A block-quote prefix is a CONTAINER, not content: `> ```text` opens a
-        # fence exactly as ```text does. Matching only after indentation left
-        # blockquoted fences unrecognised, so a citation, range or numbered
-        # example inside one was audited as a live claim. Four documents in
-        # this corpus use the form.
+        # The block-quote container is a DEPTH, not a string. Comparing raw
+        # prefixes made `>` and `> ` different containers, so a closer written
+        # either way never closed its fence; and nothing ended a fence when its
+        # container did, so an unclosed `> ```text` blanked the rest of the
+        # document. Both blanked declarations SILENTLY — the document simply
+        # stopped being audited with nothing to say so, which is the direction
+        # no other check here can see.
         #
-        # The prefix is BOUND AT OPEN and a closer must carry the same one.
-        # Peeling it from every line — the first version of this — meant a
-        # literal `> ``` ` written INSIDE an unquoted fence read as a closer,
-        # ended the outer block early and exposed the example under it. That is
-        # the documenting-it-declares-it failure this function exists to
-        # prevent, reintroduced by the fix for the neighbouring container case.
+        # Depth settles all four container shapes with one rule: equal depth is
+        # the same container, greater depth is content nested inside it, and
+        # LESS depth means the container closed and takes any open fence with
+        # it. CommonMark models block quotes exactly this way.
         pre = re.match(r"(?:\s*>)+\s?", raw)
         prefix = pre.group(0) if pre else ""
+        depth = prefix.count(">")
         line = raw[len(prefix):]
-        if fence is not None and prefix != fence[2]:
-            out.append("")             # content of the open fence, not a closer
-            continue
+        if fence is not None:
+            if depth < fence[2]:
+                fence = None              # the container ended; so does the fence
+            elif depth > fence[2]:
+                out.append("")            # nested deeper: still fence content
+                continue
         # 0-3 spaces: at four the line is indented code, not a fence. `\s*`
         # let a deeply indented ``` inside a list item open a fence and blank
         # the remainder of the document.
@@ -211,19 +215,14 @@ def strip_fences(text: str) -> str:
                 # CommonMark forbids a backtick in the info string of a
                 # BACKTICK fence, so ```lang`x is not a fence at all. Opening
                 # one anyway blanked everything to EOF or the next fence and
-                # silently swallowed any declaration in between — a parser bug
-                # that HIDES declarations rather than manufacturing them, which
-                # is the direction nothing else here would catch.
+                # silently swallowed any declaration in between.
                 if ch == "`" and "`" in tail:
                     out.append(raw)
                     continue
-                fence = (ch, n, prefix)
+                fence = (ch, n, depth)
                 out.append("")
                 continue
-            # CommonMark: a CLOSING fence carries its delimiter and nothing
-            # else. Accepting a trailing info string as a close let ```python
-            # inside a block end it early and expose the examples below it as
-            # real declarations.
+            # A CLOSING fence carries its delimiter and nothing else.
             if ch == fence[0] and n >= fence[1] and not tail.strip():
                 fence = None
                 out.append("")

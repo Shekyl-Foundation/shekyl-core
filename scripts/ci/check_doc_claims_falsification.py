@@ -103,7 +103,12 @@ ANCESTRY = ("~", "^", "..", "@{")
 # gate's own `rev-parse --verify {ref}^{{commit}}` is exactly this, so a bare
 # "does it contain ^" test would have reported the gate unsafe the moment the
 # scan could see it — a guard whose first act on gaining sight is a false red.
-PEEL = re.compile(r"\^\{[^}]*\}")
+# ONLY the type peels. `^{}` and `^{commit}` dereference the object already
+# named and a shallow clone answers them; `^{/text}` SEARCHES REACHABLE HISTORY
+# and a one-commit fetch cannot. A `[^}]*` exemption covered both, so the
+# broadest of the two would have been waved through by the guard written to
+# catch exactly that kind of read.
+PEEL = re.compile(r"\^\{(?:commit|tree|blob|tag|object)?\}")
 
 # The placeholder for a substituted f-string part must contain NO brace: an
 # earlier `{…}` had the very shape PEEL strips, so `f"{ref}^{sub}"` rendered as
@@ -216,6 +221,9 @@ DEPTH_PROBES = [
     ("single-quoted argv", "subprocess.run(['git', 'blame', 'f'])",         True),
     ("multiline argv",     'subprocess.run([\n    "git",\n    "log",\n])', True),
     ("type peel",          'git("rev-parse", "--verify", f"{ref}^{{commit}}")', False),
+    ("bare type peel",     'git("rev-parse", f"{ref}^{{}}")',                    False),
+    # `^{/text}` is a HISTORY SEARCH wearing peel syntax
+    ("commit-message search", 'git("show", f"{ref}^{{/fix}}")',                  True),
     ("plain f-string rev", 'git("show", f"{ref}:docs/x")',                  False),
 ]
 
@@ -1035,6 +1043,16 @@ def main() -> None:
         # and ended the outer fence there, exposing the example beneath it.
         green("quoted delimiter inside a fence is not a closer",
               doc=GOOD + "\n\n```\n> ```\nsee `src/gone.cpp:1` still inside\n```\n"),
+        # container DEPTH, not prefix text: `>` and `> ` are one container, and
+        # a fence dies with the quote that held it. Both bugs blanked the rest
+        # of the document SILENTLY, so both controls assert that a declaration
+        # written AFTER the block is still found.
+        green("quoted fence closes despite a differing prefix",
+              doc=GOOD.replace("See §2 for the table.",
+                               "> ```\n> in\n>```\n\nSee §2 for the table.")),
+        green("quoted fence ends when its container does",
+              doc=GOOD.replace("See §2 for the table.",
+                               "> ```text\n> example\n\nSee §2 for the table.")),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -1055,7 +1073,9 @@ def main() -> None:
                 "mismatched span delimiters do not blank a declaration",
                 "bootstrap: base resolves but carries no baseline",
                 "blockquoted fence hides its citation",
-                "quoted delimiter inside a fence is not a closer"}
+                "quoted delimiter inside a fence is not a closer",
+                "quoted fence closes despite a differing prefix",
+                "quoted fence ends when its container does"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"
