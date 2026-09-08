@@ -110,6 +110,19 @@ pub(super) struct GenerateBlocksResp {
     blocks: Vec<String>,
 }
 
+/// `get_block` result: the transaction list of one connected block.
+///
+/// `tx_hashes` names the block's *non-coinbase* transactions, so a block
+/// carrying only its miner tx deserializes to an empty vec. That is precisely
+/// the "a block connected, but without the transaction we submitted" state,
+/// which no other observable on this harness can see: `generateblocks`
+/// reports success for it, and the pool is empty either way.
+#[derive(Deserialize, Debug)]
+pub(super) struct GetBlockResp {
+    #[serde(default)]
+    tx_hashes: Vec<String>,
+}
+
 impl RegtestDaemon {
     /// Resolve the daemon binary from `SHEKYLD_BIN`. Panics with a clear message
     /// if unset — these tests are `#[ignore]`d and only run when explicitly
@@ -332,6 +345,21 @@ impl RegtestDaemon {
             .await
             .expect("get_info")
             .tx_pool_size
+    }
+
+    /// Non-coinbase transaction hashes carried by the block named by `hash`
+    /// (lowercase hex, as `generateblocks` returns them).
+    ///
+    /// Keyed by hash rather than by height on purpose: `generateblocks` hands
+    /// back the hashes of the blocks it actually connected, so this asks about
+    /// *that* block instead of re-deriving its index from a chain height that
+    /// counts blocks (tip index = `height() - 1`) and would be one off.
+    pub(super) async fn block_tx_hashes(&self, hash: &str) -> Vec<String> {
+        self.rpc
+            .json_rpc_call::<GetBlockResp>("get_block", Some(json!({ "hash": hash })))
+            .await
+            .expect("get_block")
+            .tx_hashes
     }
 
     /// Cumulative `total_burned` — the destroyed half of the §9.5 fee
@@ -919,18 +947,68 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
 
     // Submit to the live daemon. Ok == the daemon's consensus verify ACCEPTED the spend
     // (FCMP++ proof + PQC auths + CT balance + wire format). This is the §1.1 proof.
-    let tx_hash = {
+    let outcome = {
         let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the FCMP++ spend (consensus verify)")
     };
-    eprintln!("daemon accepted spend: {tx_hash:?}");
+    // Specifically a FRESH accept. `AlreadyInPool` / `AlreadyInChain` also
+    // return `Ok`, and either would mean this run proved nothing about the
+    // bytes it just built — the daemon would be reporting on something it
+    // already had.
+    let accepted = match &outcome {
+        super::pending::SubmitOutcome::Accepted { hash } => hash.to_string(),
+        other => panic!("the daemon must freshly accept the FCMP++ spend, got {other:?}"),
+    };
+    eprintln!("daemon accepted spend: {accepted}");
 
-    // Block-accept: mine one block; the spend must confirm (separate verify path).
-    daemon.generate_blocks(1, &address).await;
+    // Block-accept: mine one block; the spend must confirm (the connect-path
+    // verify, which is a different code path from the pool admission above).
+    //
+    // Three observables, three assertions. `generate_blocks` only `.expect`s
+    // that the *RPC* succeeded, so on its own it cannot tell a block that
+    // carried the spend from a block that excluded it at template time, nor
+    // from no block at all — both of which are real failures of this leg.
+    //
+    // The order is load-bearing. Height is checked first so that "no block
+    // appeared" fails here and stops; inclusion is checked second so that "a
+    // block appeared without the spend" is reported as exactly that. Checking
+    // inclusion first would report a missing spend for both faults, which is
+    // one assertion wearing two names.
+    let before = daemon.height().await;
+    let mined = daemon.generate_blocks(1, &address).await;
     let after = daemon.height().await;
-    eprintln!("mined confirming block; height now {after}");
+
+    assert_eq!(
+        mined.blocks.len(),
+        1,
+        "generateblocks must report the one block it connected, got {:?}",
+        mined.blocks
+    );
+    assert_eq!(
+        after,
+        before + 1,
+        "the chain must advance by exactly one block ({before} -> {after})"
+    );
+
+    let carried = daemon.block_tx_hashes(&mined.blocks[0]).await;
+    assert!(
+        carried.iter().any(|h| h.eq_ignore_ascii_case(&accepted)),
+        "the accepted spend {accepted} must be carried by the block that \
+         connected at height {after}; that block carries {carried:?}"
+    );
+
+    // Corroborating, never sufficient: the pool also empties when a transaction
+    // is *dropped*, so this distinguishes nothing on its own. It earns its place
+    // next to the inclusion assertion above, not instead of it.
+    assert_eq!(
+        daemon.tx_pool_size().await,
+        0,
+        "the mined spend must leave the pool"
+    );
+
+    eprintln!("spend confirmed in the block that connected at height {after}");
 }
 
 /// Mainnet [`EngineCreateParams`](super::lifecycle::EngineCreateParams) for the
