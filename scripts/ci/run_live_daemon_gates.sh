@@ -19,9 +19,15 @@
 # (21 lines, 17 attributes) and would silently disagree with the runner.
 #
 # The accounting is the load-bearing ratchet: every ignored test is either
-# ARMED or EXEMPT, so the undecided set is empty by construction. Adding a
-# new `#[ignore]`d test without deciding it raises the runner's count and
-# fails here; deleting one lowers it and also fails.
+# ARMED or EXEMPT, so the undecided set is empty by construction.
+#
+# The work splits, and the split is deliberate. The per-name existence checks
+# catch a gate RENAMED OR DELETED -- naming it, and saying the gate is now
+# off. The identity catches one ADDED that nobody decided. Because every
+# ignored test is named by one of the lists, a deletion always trips a name
+# check BEFORE the arithmetic, so the identity fires in the "too many"
+# direction only and its message is written for that case. Verified by
+# biting it: deleting an armed gate reports the name, not a count mismatch.
 #
 # All of them run per-PR. There is deliberately no second membership
 # splitting them by cost: these gates ARE the money and privacy surface, so
