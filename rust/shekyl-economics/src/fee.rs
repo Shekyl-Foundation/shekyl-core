@@ -207,6 +207,40 @@ pub fn hysteresis_step(c_scaled: u64, prev_cq_scaled: u64) -> u64 {
     }
 }
 
+/// Wallet-side emission-claim **value floor**, in atomic units
+/// (`ENGINE_CADENCE_DRIVER.md` §4): the engine cadence driver's claim leg
+/// holds settled epochs until Σreward across the held set clears this
+/// floor — claiming rewards worth less than the sweep fee they cost
+/// converts a zero into a negative.
+///
+/// **Derivation (rule 75).** The floor summarizes the economy rung's price
+/// for one claim-tx envelope at the genesis anchor: economy
+/// (`C_q·R·w_ref/Mfw²`) = 70 000 atomic per weight byte at the uncongested
+/// genesis state (`R` = 2 100 SKL, `Mfw` = 300 000, `C_q` = 1 — the same
+/// anchor the genesis-condition ladder test below pins via
+/// `Fh = 14 000 000`), times the claim envelope
+/// (`EMISSION_NON_CLAIMS_RESERVE_BYTES` 48 KiB + a ~2 KiB single-row vin
+/// allowance ≈ 51 200 B) ≈ 3.584 SKL — rounded up to 3.6 SKL so the floor
+/// errs toward holding one more epoch, never toward claiming at a loss.
+///
+/// **Bounds.** [1 SKL, 15 SKL] is safe today: below invites negative-value
+/// claims under congestion (`C_q > 1` scales the real fee above the
+/// anchor); above defers claims the fee arithmetic already justifies
+/// (deferral is bounded by the claim window — the leg
+/// evaluates-and-forfeits at the window floor rather than forcing). The
+/// anchor decays with the base reward, so the safe band shifts down over
+/// the emission curve; revisit when `R` has decayed materially. That
+/// retune is a wallet release, deliberately **not** consensus: freezing a
+/// wallet fee-policy threshold into `config/consensus_constants.json`
+/// would cost a consensus retune to adjust while buying nothing.
+///
+/// **A compiled-in constant, deliberately** (anti-fingerprint): a
+/// per-wallet knob or config value would partition the anonymity set by
+/// fee policy — rule 00 §2, privacy is never a setting. Uniform across
+/// wallets, the inclusion decision it drives carries no per-wallet signal
+/// beyond the (accepted, recorded) fee-policy bucketing itself.
+pub const EMISSION_CLAIM_FEE_FLOOR: u64 = 3_600_000_000;
+
 /// The three priced rungs. The RK-5 wire shape is a derived view
 /// ([`Self::as_slots`]): slot 2 mirrors `standard` so the vector length
 /// does not change before the RPC cutover. Named fields mean the bridge

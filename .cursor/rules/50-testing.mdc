@@ -116,6 +116,37 @@ the test passes but verifies nothing. Surface this with property tests
 sampling unfamiliar values, FFI tests calling the production path, or review
 by someone who didn't write the code.
 
+## Every vector declares its oracle; only external or independent ones are KATs
+
+A pinned test vector is a claim about *who vouches for the value*. Three
+oracle tiers, in descending strength:
+
+1. **External** — the value was produced or accepted by an independent
+   implementation (a NIST vector, a published wordlist hash, a live daemon
+   accepting a transaction). May be called a KAT.
+2. **Independent** — the value is re-derived inside the test from normative
+   spec text through a code path that does not share the implementation
+   under test (e.g., raw HMAC per RFC 5869 checked against the module's
+   HKDF wrapper). May be called a KAT.
+3. **Self-pinned** — the value was produced by the module under test and
+   frozen. This is a **drift tripwire**: it catches unintentional change,
+   but if the module was wrong on the day the value was pinned, the vector
+   is wrong with it. It is not a KAT and must not carry the name.
+
+Every pinned vector's declaration site states its tier. The name is part of
+the declaration: `kat_*` / `KAT_*` names are reserved for tiers 1–2;
+self-pinned vectors use `pinned_*` / a name that says tripwire, not oracle.
+The motivating instance is `hkdf_golden_outputs_kat_profile`
+(`wallet_envelope.rs`): a self-pinned R1/R2 pair wearing the KAT name, which
+read as spec-level assurance it never had.
+
+**Regenerating a self-pinned vector is a decision, not a command.** A
+regenerator test that rewrites fixture files on request is a one-command
+silencer for a failing tripwire. Regenerators refuse to run unless the
+invocation cites the decision-log entry that authorizes the regeneration
+(see `pinned_fixtures_regenerate` in `wallet_envelope.rs` for the armed
+shape), and the decision-log entry names what moved and why.
+
 ## Test names describe properties, not implementations
 
 - `test_amount_zero_round_trip` — good (names the invariant)

@@ -335,7 +335,7 @@ where
 }
 
 /// Construct an independent [`PendingPostStore`] over the engine's pending
-/// seal + the shared `pending_write_lock` (WI-2 F-1).
+/// seal + the shared `pending_gate` (WI-2 F-1).
 ///
 /// Mirrors the `start_pscan_with` construction (`WalletFilePendingSealStore`
 /// plus lock clone into [`PendingPostStore::new`]) so the assemble path
@@ -346,7 +346,7 @@ where
 #[allow(clippy::type_complexity)]
 pub(crate) fn pending_post_store_for_engine<S, D, L, E, R, P>(
     engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
-    write_lock: Arc<tokio::sync::Mutex<()>>,
+    gate: Arc<crate::engine::pending_post_gate::PendingPostGate>,
 ) -> PendingPostStore<WalletFilePendingSealStore<S, D, L, E, R, P>>
 where
     S: EngineSignerKind + Send + Sync + 'static,
@@ -357,7 +357,7 @@ where
     P: PendingTxEngine,
     Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
 {
-    PendingPostStore::new(WalletFilePendingSealStore { engine }, write_lock)
+    PendingPostStore::new(WalletFilePendingSealStore { engine }, gate)
 }
 
 /// Load the sealed [`PScanState`] for assemble (funding records), reusing the
@@ -669,7 +669,7 @@ where
         // Brief read borrow: clone the spawn inputs + claim the single-flight slot.
         // Stake is checked first so a non-staker never claims-then-releases; the
         // slot guard is RAII, so any error below releases it on the early return.
-        let (daemon, stake, pending_write_lock, slot_guard) = {
+        let (daemon, stake, pending_gate, slot_guard) = {
             let g = self_arc.read().await;
             let stake = match g.stake_handle() {
                 Some(stake) => stake,
@@ -693,7 +693,7 @@ where
             (
                 g.daemon().clone(),
                 stake,
-                g.pending_write_lock.clone(),
+                g.pending_gate.clone(),
                 slot_guard,
             )
         };
@@ -752,8 +752,7 @@ where
             None => (dispatch_config, None),
         };
 
-        let dispatch =
-            DispatchDriver::new(pending_seal, broadcast, dispatch_config, pending_write_lock);
+        let dispatch = DispatchDriver::new(pending_seal, broadcast, dispatch_config, pending_gate);
         #[cfg(all(test, feature = "gf7-hooks"))]
         let dispatch = match sealing_observer {
             Some(observer) => {

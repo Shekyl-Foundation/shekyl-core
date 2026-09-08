@@ -102,6 +102,7 @@ use super::drain_orchestrator::{
 use super::emission_source::EmissionSourceError;
 use super::fee_policy::FeeEstimatorError;
 use super::pending::TxHash;
+use super::pending_post_gate::{ForegroundSession, UserPendingPost};
 use super::prpc::LocalNodeRpc;
 use super::signer::EngineSignerKind;
 use super::stake_engine::StakeEngineError;
@@ -659,9 +660,18 @@ where
         // `stake_handle().ok_or(NotStaker)` rests on (lifted, not restated),
         // and the drain façade rejects a non-staker before reading evidence
         // for the same reason.
-        if !engine.read().await.has_stake_engine() {
-            return Err(UnstakeError::NotStaker);
-        }
+        let gate = {
+            let g = engine.read().await;
+            if !g.has_stake_engine() {
+                return Err(UnstakeError::NotStaker);
+            }
+            g.pending_gate.clone()
+        };
+        // User work always wins (`ENGINE_CADENCE_DRIVER.md` §3): register
+        // this user-initiated exit — its drains and the terminal unbond —
+        // on the foreground gauge, so the cadence driver's epoch-claim leg
+        // yields rather than racing it to the funding set.
+        let _foreground = ForegroundSession::enter(UserPendingPost::Unstake, &gate);
         let evidence = read_exit_evidence(&engine)
             .await
             .map_err(|e| UnstakeError::Engine {
@@ -718,9 +728,22 @@ where
         // empty snapshot otherwise resolves to `NoExitToCollect` (-29523) and
         // the seam's shared `NotStaker` (-29513) never lands. Same lifted
         // `has_stake_engine` predicate `submit_drain`'s NotStaker rests on.
-        if !engine.read().await.has_stake_engine() {
-            return Err(CollectUnstakedError::NotStaker);
-        }
+        let gate = {
+            let g = engine.read().await;
+            if !g.has_stake_engine() {
+                return Err(CollectUnstakedError::NotStaker);
+            }
+            g.pending_gate.clone()
+        };
+        // User-initiated foreground post: register on the gauge for the whole
+        // pass (evidence read through every sweep's seal), so the cadence
+        // driver's claim leg yields instead of racing the sweep for the same
+        // persona funding set (ENGINE_CADENCE_DRIVER.md §3 — "user work
+        // always wins"). Registration lives here at the user-intent boundary,
+        // not inside `submit_drain`: the shared seam may later serve
+        // background callers (the leg-4 prune/resubmit body), which must not
+        // read as foreground.
+        let _foreground = ForegroundSession::enter(UserPendingPost::CollectUnstaked, &gate);
         let evidence =
             read_exit_evidence(&engine)
                 .await

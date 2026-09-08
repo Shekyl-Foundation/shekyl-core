@@ -144,11 +144,14 @@ pub enum ServingPosture {
 
 /// A running serving lifecycle: the cancel token plus the task's join handle.
 ///
-/// Deliberately the same shape as `PScanHandle` — the embedder parks it for the
-/// wallet's open lifetime and shuts it down on close. The token fires on both
-/// [`cancel`](Self::cancel) and `Drop`, so a dropped handle winds the host down
-/// (stopping tor before the listener) rather than leaking a published onion
-/// pointing at a dead port.
+/// Deliberately the same shape as `PScanHandle`. The handle parks with the
+/// **engine cadence driver** (`ENGINE_CADENCE_DRIVER.md` §3 leg 2): the
+/// embedder makes the first start and hands the handle over via
+/// `CadenceHandle::adopt_serving`, the driver's serving-liveness leg owns
+/// restart when the task dies, and the driver's teardown owns the ordered
+/// shutdown. The token fires on both [`cancel`](Self::cancel) and `Drop`, so a
+/// dropped handle winds the host down (stopping tor before the listener)
+/// rather than leaking a published onion pointing at a dead port.
 pub struct ServingHandle {
     cancel_token: CancellationToken,
     join: Option<JoinHandle<()>>,
@@ -192,6 +195,18 @@ impl ServingHandle {
     #[must_use]
     pub fn posture(&self) -> Option<ServingPosture> {
         *self.posture.borrow()
+    }
+
+    /// Whether the serving task is still running.
+    ///
+    /// Read off the posture channel: the sender lives inside the task's
+    /// reporters and drops on **any** exit — clean teardown, cancellation, a
+    /// failed start, a panic — so a closed channel is a dead task, with no
+    /// separate liveness bit that could drift from reality. This is the
+    /// liveness half of the cadence driver's serving-liveness predicate
+    /// (`ENGINE_CADENCE_DRIVER.md` §3 leg 2).
+    pub(crate) fn is_live(&self) -> bool {
+        self.posture.has_changed().is_ok()
     }
 
     /// Fire the cancel token. Idempotent. The task observes it at its next
@@ -498,14 +513,18 @@ fn count(members: usize) -> u32 {
 
 /// Start the host, reporting whichever condition prevented it.
 ///
-/// **One attempt, deliberately.** `PersonaServingHost::start` consumes its
-/// inputs by value — the `TorServiceConfig` carries an `EventSink` and the
-/// wallet-private data-dir path — so a retry would have to rebuild them, and
-/// this task is not the thing that knows how. A failed start therefore ends the
-/// serving lifecycle for this session with the reason on the board, and the
-/// remedy is a wallet reopen. Stated rather than hidden behind a loop that
-/// could not work: the alternative is a retry that silently rebuilds a
-/// *different* config from the one the wallet was opened with.
+/// **One attempt per start call, deliberately.** `PersonaServingHost::start`
+/// consumes its inputs by value — the `TorServiceConfig` carries an `EventSink`
+/// and the wallet-private data-dir path — so a retry *here* would have to
+/// rebuild them, and this task is not the thing that knows how: a loop in this
+/// function could only silently rebuild a *different* config from the one the
+/// wallet was opened with. A failed start therefore ends this task with the
+/// reason on the board. Retry **across** calls belongs to the cadence driver's
+/// serving-liveness leg (`ENGINE_CADENCE_DRIVER.md` §3 leg 2), which observes
+/// the dead task and makes a fresh `start_serving_if_staker` attempt per chain
+/// advance — the one site that does know how to rebuild the inputs. The
+/// wallet-reopen remedy this ruling once named is retired by that leg; the
+/// one-attempt-per-call shape it ruled stays.
 async fn start_host<P>(
     tor: TorServiceConfig,
     serving: PersonaServing,

@@ -1,0 +1,52 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Wallet RPC liveness gate — sibling of rpc-route-liveness.yml (RK).
+#
+# `docs/api/wallet_rpc.yaml`'s `x-shekyl-method-registry` is the status of
+# record for the wallet RPC namespace (rule 23). This gate holds the code
+# to it in both directions: SPECIFIED methods have a dispatch arm and a
+# production consumer; REJECTED/RESERVED methods have no arm; every arm
+# has a registry row. The second direction is what turns "claim stays
+# REJECTED in the YAML" from a note into an invariant — without it,
+# nothing stops a future PR from adding the handler while the contract
+# still says refused.
+#
+# Triggered on the contract, the server crate, and the consumers: deleting
+# a consumer is exactly how a SPECIFIED method goes dead, and it is silent.
+#
+# Cheap by construction (grep + shell, no toolchain), so it runs on every
+# touch of the surface it guards without competing for build minutes.
+
+name: ci/wallet-rpc-liveness
+
+on:
+  pull_request:
+    paths: &paths
+      - "docs/api/wallet_rpc.yaml"
+      - "rust/shekyl-wallet-rpc/**"
+      - "rust/shekyl-cli/**"
+      - "utils/python-rpc/**"
+      - "scripts/ci/check_wallet_rpc_liveness.sh"
+      - ".github/workflows/wallet-rpc-liveness.yml"
+  push:
+    branches: [dev]
+    paths: *paths
+
+concurrency:
+  group: wallet-rpc-liveness-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  wallet-rpc-liveness:
+    name: "wallet RPC: registry and dispatch agree in both directions"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: check wallet RPC liveness
+        run: ./scripts/ci/check_wallet_rpc_liveness.sh

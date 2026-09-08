@@ -2,7 +2,75 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Staking rewards now claim automatically.** The engine runs a cadence
+  driver (`ENGINE_CADENCE_DRIVER.md`) that submits the emission-claim
+  transaction once each reward epoch settles — no manual step, and the
+  `claim`/`claim_rewards` RPC methods remain REJECTED in the wallet-RPC
+  contract. Rewards below the compiled-in fee floor
+  (`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`) are held and aggregated
+  until they cover the fee; anything still unclaimed at its claim-window
+  floor is evaluated once and forfeited loudly (operator alarm). A
+  background claim never contends with a user-initiated send: the claim
+  leg yields whenever user work holds the pending lock.
+- **Stuck-transaction watchdog and serving liveness run unattended.**
+  The same cadence driver fires the submit-lifecycle escape ladder on
+  chain progress (a pending transaction can no longer stall forever just
+  because no RPC poll arrived), re-arms hidden-service serving whenever
+  the obligation exists and the task is not live (covers both
+  failed-at-open and died-later), and raises a `ChainProgress` operator
+  alarm when the observed tip stops advancing — worded to cover both
+  "chain stalled" and "your daemon is unreachable."
+
+- **Wallet RPC liveness gate (`ci/wallet-rpc-liveness`).** Sibling of the
+  daemon's `ci/rpc-route-liveness`: `wallet_rpc.yaml`'s
+  `x-shekyl-method-registry` is now CI-enforced in both directions —
+  every SPECIFIED method has a dispatch arm and a production consumer
+  outside the server crate; every REJECTED/RESERVED method has no arm;
+  every arm has a registry row. The reverse direction is what turns
+  "`claim` stays REJECTED in the contract" from a note into an
+  invariant: a handler added while the registry still says refused now
+  fails CI instead of shipping. Grep-cheap (no toolchain), fails closed
+  on empty extraction (rule 47).
+
 ### Changed
+
+- **Wallet-envelope test vectors renamed by oracle tier; pinned vectors
+  rebuilt on a real derived address.** Per the new `50-testing.mdc`
+  vector-oracle rule (external / independent / self-pinned; only the
+  first two are KATs), the `WALLET_FILE_FORMAT_V1` sealed fixtures are
+  now named as the self-pinned drift tripwires they are, their
+  regenerator refuses to run without a decision-log citation
+  (`SHEKYL_PINNED_REGEN_DECISION`), and the published vectors under
+  `docs/test_vectors/WALLET_FILE_FORMAT_V1/` were regenerated so
+  `expected_classical_address` derives from the sealed seed and
+  `seed_format` is a production-valid wire byte. A true tier-2 KAT for
+  the §2.6 wrap-key derivation (raw HMAC per RFC 5869 against the
+  spec's byte-exact labels) lands alongside. Wire format unchanged.
+  (Decision log 2026-09-07.)
+
+- **Wallet capability collapsed to `FULL`-only; cold signing rejected
+  permanently.** The `ViewOnly` capability is REJECTED (no product use
+  case; FCMP++ has no view-key chain scan) and `HardwareOffload` is
+  DEFERRED with zero code symbols (the v1 layout was a guess against no
+  real device; the future layout will be designed against one). The
+  wallet envelope now seals and opens mode byte `0x01` only — bytes
+  `0x02`/`0x03` are RETIRED and `0x04` RESERVED in
+  `WALLET_FILE_FORMAT_V1.md` §2.3, all refused fail-closed as
+  `UnknownCapabilityMode` (new splice-tamper tests pin the refusal).
+  Cold signing (`export_unsigned` / `submit_signed` air-gap flow) is
+  rejected permanently, superseding the A4 post-genesis deferral: an
+  FCMP++ witness needs the live curve tree, so the offline half cannot
+  deliver the isolation it claims; cold storage is the seed phrase.
+  API deltas: wallet-RPC error `-29005` (`CAPABILITY_FORBIDS`) is
+  RETIRED — unreachable with one capability, the numeric code is never
+  reused; `wallet_rpc.yaml` gains a machine-readable
+  `x-shekyl-method-registry` (SPECIFIED / RESERVED / REJECTED per
+  method) and `x-shekyl-error-ranges`; the `capability` field on wallet
+  handle responses always reads `"FULL"`. Envelope wire format for
+  existing `FULL` wallets is unchanged. (Decision log 2026-09-07; rule
+  `23-disposition-visibility`.)
 
 - **Peerlist trust is earned in-process: nothing restored from disk is
   trusted, and `--add-peer` is a candidate rather than a trusted peer.**

@@ -23,8 +23,7 @@ use crate::engine::stake_engine::PSlot;
 use crate::engine::{Capability, DaemonClient, Engine, SoloSigner};
 
 use super::support::{
-    extract_failure_detail, is_default_overrides, map_wallet_file_error, network_to_derivation,
-    rederivation_failure_detail,
+    is_default_overrides, map_wallet_file_error, network_to_derivation, rederivation_failure_detail,
 };
 use super::{CapabilityInput, Credentials, EngineCreateParams, FirstStakeIntent, OpenedEngine};
 
@@ -40,10 +39,8 @@ impl Engine<SoloSigner> {
     ///
     /// # Capability
     ///
-    /// V3.0 ships only the FULL variant of [`CapabilityInput`].
-    /// View-only and hardware-offload creation paths are deferred to
-    /// the follow-up that lands the corresponding `AllKeysBlob`
-    /// constructors in `shekyl-crypto-pq`.
+    /// [`CapabilityInput`] has only the FULL arm — the only capability
+    /// (rule 23; decision log 2026-09-07).
     ///
     /// # Errors
     ///
@@ -176,9 +173,9 @@ impl Engine<SoloSigner> {
     ///   the password.
     /// - [`OpenError::NetworkMismatch`] when the wallet file declares
     ///   a different network from `network`.
-    /// - [`OpenError::CapabilityMismatch`] when the wallet file
-    ///   declares a non-FULL capability.
-    /// - [`OpenError::Io`] for any other wallet-file failure.
+    /// - [`OpenError::Io`] for any other wallet-file failure — including
+    ///   a file bearing a non-FULL capability byte, which the envelope
+    ///   layer refuses at open (FULL is the only capability, rule 23).
     /// - [`OpenError::Key`] for re-derivation failures including the
     ///   public-bytes cross-check against the envelope's
     ///   `expected_classical_address`.
@@ -231,24 +228,18 @@ impl Engine<SoloSigner> {
             WalletFile::open(base_path, credentials.password(), network, overrides)
                 .map_err(|e| map_wallet_file_error(e, network))?;
 
-        // Capability gating: FULL only.
+        // Capability is FULL by construction: the envelope refuses any
+        // other byte at open, and `WalletFile::capability()` is the typed
+        // proof. Read it through the accessor so the parse boundary stays
+        // exercised.
         let capability = file.capability();
-        if capability != Capability::Full {
-            return Err(OpenError::CapabilityMismatch { found: capability });
-        }
+        debug_assert_eq!(capability, Capability::Full);
 
         // Pull the master seed out of the FULL-mode envelope and
         // re-derive every key. This is the load-bearing step: the
         // re-derived bytes must match the AAD-committed
         // `expected_classical_address` or we refuse loudly.
-        let inputs = file.extract_rederivation_inputs().map_err(|e| {
-            // Defensive: capability was already gated to FULL, so
-            // this branch is unreachable in practice. Treat any
-            // refusal as a key failure rather than panicking.
-            OpenError::Key(KeyError::Primitive {
-                detail: extract_failure_detail(&e),
-            })
-        })?;
+        let inputs = file.extract_rederivation_inputs();
 
         let seed_format = SeedFormat::from_u8(file.opened_keys().seed_format)
             .ok_or(OpenError::Key(KeyError::UnsupportedDerivationPair))?;
@@ -326,44 +317,6 @@ impl Engine<SoloSigner> {
                 wallet,
                 from_height,
             },
-        })
-    }
-
-    /// Open an existing view-only wallet.
-    ///
-    /// **Stub.** Returns
-    /// [`OpenError::CapabilityNotYetImplemented`] until the
-    /// `shekyl-crypto-pq` view-only `AllKeysBlob` constructor lands.
-    /// The signature is locked here so call-site code is forward-
-    /// compatible.
-    pub fn open_view_only(
-        _base_path: &Path,
-        _credentials: &Credentials<'_>,
-        _network: Network,
-        _daemon: DaemonClient,
-        _overrides: SafetyOverrides,
-    ) -> Result<OpenedEngine<SoloSigner>, OpenError> {
-        Err(OpenError::CapabilityNotYetImplemented {
-            capability: Capability::ViewOnly,
-        })
-    }
-
-    /// Open an existing hardware-offload wallet.
-    ///
-    /// **Stub.** Returns
-    /// [`OpenError::CapabilityNotYetImplemented`] until the
-    /// `shekyl-crypto-pq` hardware-offload `AllKeysBlob` constructor
-    /// lands. The signature is locked here so call-site code is
-    /// forward-compatible.
-    pub fn open_hardware_offload(
-        _base_path: &Path,
-        _credentials: &Credentials<'_>,
-        _network: Network,
-        _daemon: DaemonClient,
-        _overrides: SafetyOverrides,
-    ) -> Result<OpenedEngine<SoloSigner>, OpenError> {
-        Err(OpenError::CapabilityNotYetImplemented {
-            capability: Capability::HardwareOffload,
         })
     }
 }

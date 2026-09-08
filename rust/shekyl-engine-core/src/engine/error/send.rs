@@ -55,10 +55,12 @@ pub enum SendError {
     #[error("daemon IO failure: {0}")]
     Io(#[from] IoError),
 
-    /// Spend-key material was not available to sign. This is the path
-    /// taken when a `Engine<SoloSigner>` is asked to send but the
-    /// capability is `ViewOnly`, or when an `HardwareOffload` wallet
-    /// receives a build call without an out-of-band approval.
+    /// Spend-key material or spend-state preconditions were not
+    /// available to sign: signer unavailable, wallet state missing the
+    /// fields signing needs (key image, output handle, source
+    /// ciphertext), or the curve tree not yet covering the outputs.
+    /// Every wallet is `Capability::Full` (rule 23), so this is never a
+    /// capability refusal.
     #[error("wallet cannot sign: {reason}")]
     CannotSign {
         /// Human-readable reason as named at the call site.

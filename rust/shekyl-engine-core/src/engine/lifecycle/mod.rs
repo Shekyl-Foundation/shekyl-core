@@ -8,27 +8,21 @@
 //! Split by workflow so the former `lifecycle.rs` god-file is gone:
 //!
 //! - [`types`] — credentials, create params, open outcome
-//! - [`open`] — [`Engine::create`] / [`Engine::open_full`] and the
-//!   capability stubs
+//! - [`open`] — [`Engine::create`] / [`Engine::open_full`]
 //! - [`assemble`] — the single field-assembly + SP-R0 reconcile
 //! - [`session`] — [`Engine::change_password`] / [`Engine::close`]
 //! - [`support`] — network mapping, error translation, persistence drive
 //!
-//! This module implements the six methods that produce, mutate, and
+//! This module implements the four methods that produce, mutate, and
 //! consume a `Engine<S>` handle: [`Engine::create`], [`Engine::open_full`],
-//! [`Engine::open_view_only`], [`Engine::open_hardware_offload`],
 //! [`Engine::change_password`], and [`Engine::close`].
 //!
-//! # V3.0 capability scope
+//! # Capability scope
 //!
-//! Cross-cutting decision γ (recorded in `docs/V3_WALLET_DECISION_LOG.md`)
-//! locks scope: only [`Engine::open_full`] and [`Engine::create`] ship with
-//! end-to-end bodies. The two non-FULL openers carry the locked
-//! signatures so call-site code is forward-compatible, and they return
-//! [`OpenError::CapabilityNotYetImplemented`] until the
-//! `shekyl-crypto-pq` view-only / hardware-offload `AllKeysBlob`
-//! constructors land. That variant is transient — its declaration in
-//! [`super::error`] names the deletion target.
+//! FULL is the only capability (rule 23; decision log 2026-09-07:
+//! ViewOnly is REJECTED, hardware-offload is DEFERRED with zero code).
+//! There are no non-FULL openers; the envelope refuses any non-FULL
+//! capability byte at open.
 //!
 //! # Synchronous IO
 //!

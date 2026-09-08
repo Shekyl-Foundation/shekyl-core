@@ -12,9 +12,11 @@
 //! explicit claim intent in, one assembled claim dispatched through the
 //! audited posture→submitter choke point
 //! ([`BroadcastSubmitter::for_posture`] → [`submit_bound`]) out. Scheduling
-//! policy — which epochs, when, batched how — stays external (the GF-4
-//! seam grades cadence jointly with amount + holdings stratum; this method
-//! fires once per caller intent, never on a loop of its own).
+//! policy — which epochs, when, batched how — lives in the cadence
+//! driver's epoch-claim leg (`ENGINE_CADENCE_DRIVER.md` §4: uniform
+//! schedule, value-conditional inclusion; the GF-4 grading-scheduler
+//! premise was refuted, not rescheduled). This method still fires once
+//! per caller intent, never on a loop of its own — the leg is the caller.
 //!
 //! Mirrors [`Engine::assemble_bond_post`](super::bond_orchestrator)'s shape:
 //! a self-arc method that clones its actor handles under one brief read
@@ -83,10 +85,9 @@ use super::Engine;
 /// facts plus the network verdict. Secrets never cross the boundary — the
 /// contained [`PBoundBytes`](super::bond_assembly::PBoundBytes) redacts its
 /// own `Debug`.
-// Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the receipt's
-// production reader is the RPC stake entry (rule-21, same retirement condition
-// as `assemble_bond_post`'s allow); the PR-4 regtest e2e is the test consumer.
-#[allow(dead_code)]
+///
+/// The production reader is the cadence driver's epoch-claim leg, which
+/// logs the claimed epochs and submit verdict.
 #[derive(Debug)]
 pub(crate) struct EmissionClaimReceipt {
     /// The dispatched claim exactly as assembled (bytes, fee reservation,
@@ -154,6 +155,20 @@ pub(crate) enum EmissionClaimRequestError {
          holds one, or a reservation was released mid-assembly; retry"
     )]
     InputRaced,
+    /// A user-initiated pending-post operation (drain / unstake /
+    /// collect-unstaked / first-stake) was in flight at this claim's seal
+    /// instant, so the claim
+    /// refused to seal (`ENGINE_CADENCE_DRIVER.md` §3: user work always
+    /// wins; the background leg yields). Checked **inside** the seal's
+    /// critical section — the write lock totally orders it against every
+    /// foreground registration, so a user operation begun before this seal
+    /// always sees the refusal, never `InputRaced` from a background claim.
+    /// The remedy is the same as any yield: re-evaluate next tick.
+    #[error(
+        "a user-initiated staking operation is in flight; the background \
+         claim yields and re-evaluates next tick"
+    )]
+    ForegroundHold,
     /// The claim pipeline refused (fetch, anchor, designation, sweep, path
     /// assembly, or the actor's assembly itself).
     #[error(transparent)]
@@ -165,12 +180,56 @@ pub(crate) enum EmissionClaimRequestError {
     Submit(#[from] BroadcastSubmitError),
 }
 
+/// How the cadence claim tick should treat one dispatch-seam refusal.
+///
+/// Classification lives on the seam that owns the error taxonomy so the
+/// scheduler never unwraps `Claim(Stake(EmissionClaim(...)))` itself. A
+/// new wrap layer that is not named here is [`ClaimTickOutcome::Fault`] —
+/// fail-closed, the alarm streak, never a silent yield.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClaimTickOutcome {
+    /// Policy hold (§4): the set is underwater; carry it.
+    Deferred(Vec<(u64, u64)>),
+    /// Nothing claimable — the idle state, not a fault.
+    Idle,
+    /// Not this tick, and not a fault: a live claim is already in flight
+    /// (`ClaimPending`), user work won an input race (`InputRaced`), or
+    /// the foreground gauge was raised at seal (`ForegroundHold`).
+    Yield,
+    /// A real refusal (transport, state read, assembly, dispatch).
+    Fault,
+}
+
+/// Outcome of the locked seal attempt. Yielding to foreground is a
+/// distinct decision from any [`SealAdmission`] — not `Option::None`.
+enum ClaimSealAttempt {
+    YieldToForeground,
+    Decided(SealAdmission),
+}
+
 impl EmissionClaimRequestError {
     /// A fail-closed sealed-state read refusal, context named.
     fn state(context: &'static str, detail: impl std::fmt::Display) -> Self {
         Self::State {
             context,
             detail: detail.to_string(),
+        }
+    }
+
+    /// Map this refusal onto the claim tick's branches.
+    pub(crate) fn tick_outcome(&self) -> ClaimTickOutcome {
+        use super::claim_orchestrator::ClaimOrchestrationError as O;
+        use super::emission_claim::EmissionClaimError as C;
+        use super::stake_engine::StakeEngineError as SE;
+        match self {
+            Self::ClaimPending | Self::InputRaced | Self::ForegroundHold => ClaimTickOutcome::Yield,
+            Self::Claim(O::Stake(SE::EmissionClaim(C::NoClaimableEpochs))) => {
+                ClaimTickOutcome::Idle
+            }
+            Self::Claim(O::Stake(SE::EmissionClaim(C::ValueDeferred {
+                value_deferred, ..
+            }))) => ClaimTickOutcome::Deferred(value_deferred.clone()),
+            _ => ClaimTickOutcome::Fault,
         }
     }
 }
@@ -197,11 +256,10 @@ where
     /// compile-blocked on a production [`SpentRecordsDurablyPruned`] mint
     /// (SP-R0), exactly as the bond path; tests pass
     /// [`SpentRecordsDurablyPruned::for_test`].
-    // Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): the
-    // production caller is the RPC stake entry — the same rule-21 retirement
-    // condition `assemble_bond_post` carries; the PR-4 regtest e2e (this
-    // PR's commit 8) is the test consumer.
-    #[allow(dead_code)]
+    ///
+    /// The production caller is the cadence driver's epoch-claim leg
+    /// (`ENGINE_CADENCE_DRIVER.md` §3 leg 3) — the `claim` RPC method
+    /// stays REJECTED per `WALLET_RPC_METHODS.md`.
     pub(crate) async fn submit_emission_claim<T: PersonaIsolatedTransport>(
         self_arc: Arc<RwLock<Self>>,
         claim_rpc: &T,
@@ -211,7 +269,7 @@ where
     ) -> Result<EmissionClaimReceipt, EmissionClaimRequestError> {
         // Brief read: clone the actor handles + the ledger snapshot the
         // pipeline needs (same discipline as assemble_bond_post).
-        let (daemon, stake, curve_tree, pending_write_lock, snapshot) = {
+        let (daemon, stake, curve_tree, pending_gate, snapshot) = {
             let g = self_arc.read().await;
             let stake = g
                 .stake_handle()
@@ -220,12 +278,12 @@ where
                 g.daemon().clone(),
                 stake,
                 g.curve_tree.clone(),
-                g.pending_write_lock.clone(),
+                g.pending_gate.clone(),
                 g.ledger.snapshot(),
             )
         };
         let block_hash_at = move |h: u64| snapshot.block_hash_at(h);
-        let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
+        let store = pending_post_store_for_engine(self_arc.clone(), pending_gate.clone());
 
         // Three independent reads, joined: the claimant identity (a pure
         // actor projection — module docs; never a caller-supplied id that
@@ -292,6 +350,10 @@ where
                 reserved,
                 p_canonical_id,
                 fee: fee.to_raw(),
+                // The production floor (`ENGINE_CADENCE_DRIVER.md` §4):
+                // every production claim rides this choke point, so the
+                // constant is named exactly once.
+                fee_floor: shekyl_economics::EMISSION_CLAIM_FEE_FLOOR,
             },
             block_hash_at,
         )
@@ -314,8 +376,19 @@ where
             fee_gindexes: assembled.fee_gindexes.clone(),
             state: PendingPostState::Pending,
         };
-        let admission = store
+        let attempt = store
             .mutate(move |block| {
+                // §3 "user work always wins", the authoritative half: this
+                // closure runs under the pending write lock, which totally
+                // orders it against every foreground registration and every
+                // foreground snapshot read. A user-initiated staking
+                // operation begun before this instant forces the claim to
+                // yield here; one begun after reads the sealed claim's
+                // reservations and selects around them. Either way the user
+                // never sees `InputRaced` caused by a background claim.
+                if pending_gate.foreground_in_flight() {
+                    return (false, ClaimSealAttempt::YieldToForeground);
+                }
                 // One locked decision, shared with the bond-post and drain
                 // seams: persona dedup first (remedy: wait), then cross-kind
                 // gindex overlap (remedy: retry). Order matters because two
@@ -327,16 +400,24 @@ where
                 // re-derive the outcome from a push bool whose refusal arm the
                 // decision above has already ruled out.
                 let admission = block.seal_claim(sealed, dispatch_tip, snapshot_generation);
-                (admission == SealAdmission::Admit, admission)
+                (
+                    admission == SealAdmission::Admit,
+                    ClaimSealAttempt::Decided(admission),
+                )
             })
             .await
             .map_err(|e| EmissionClaimRequestError::state("pending-claim seal", e))?;
-        match admission {
-            SealAdmission::Admit => {}
-            SealAdmission::PersonaLive => return Err(EmissionClaimRequestError::ClaimPending),
+        match attempt {
+            ClaimSealAttempt::Decided(SealAdmission::Admit) => {}
+            ClaimSealAttempt::YieldToForeground => {
+                return Err(EmissionClaimRequestError::ForegroundHold)
+            }
+            ClaimSealAttempt::Decided(SealAdmission::PersonaLive) => {
+                return Err(EmissionClaimRequestError::ClaimPending)
+            }
             // Same remedy — retry against a fresh snapshot — so both map to the
             // one retryable refusal, whose message names every cause.
-            SealAdmission::InputRaced | SealAdmission::Stale => {
+            ClaimSealAttempt::Decided(SealAdmission::InputRaced | SealAdmission::Stale) => {
                 return Err(EmissionClaimRequestError::InputRaced)
             }
         }
@@ -374,7 +455,11 @@ mod tests {
     /// 3. persist-before-dispatch: the pending-claim seal (`seal_claim`)
     ///    textually precedes the network send — the invariant is exercised
     ///    at runtime by the store, but the ordering pin catches a refactor
-    ///    that moves the seal after the submit.
+    ///    that moves the seal after the submit;
+    /// 4. user work always wins (`ENGINE_CADENCE_DRIVER.md` §3): the
+    ///    foreground-gauge check sits **before** the seal inside the same
+    ///    locked mutation — the pin catches a refactor that drops the check
+    ///    or moves it outside the critical section's textual span.
     #[test]
     fn seam_routes_through_the_pipeline_and_the_submit_choke_point() {
         let seam = include_str!("claim_dispatch.rs")
@@ -422,6 +507,18 @@ mod tests {
         assert!(
             seal_at < submit_at,
             "the pending-claim seal must precede the network send"
+        );
+
+        // User-work-always-wins pin: the foreground check runs inside the
+        // locked seal mutation, before `seal_claim`. `rfind` selects the
+        // closure's call site rather than a doc-comment mention above.
+        let foreground_check = concat!("foreground_in_", "flight()");
+        let check_at = seam
+            .rfind(foreground_check)
+            .expect("the seal mutation must consult the foreground gauge");
+        assert!(
+            check_at < seal_at,
+            "the foreground-gauge check must precede the pending-claim seal"
         );
     }
 }

@@ -1,9 +1,7 @@
 ---
 description: Usability-first design principles for end-user-facing Shekyl interfaces.
 globs:
-  - src/wallet/**
   - rust/shekyl-cli/**
-  - src/wallet_rpc_server/**
   - rust/shekyl-wallet*/**
   - shekyl-gui-wallet/**
 ---

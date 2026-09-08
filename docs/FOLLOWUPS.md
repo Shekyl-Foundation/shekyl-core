@@ -131,7 +131,10 @@ Default. Lands before genesis if it should exist at launch.
 - **`sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide
   - Target: pre-genesis
 
-- **Drain/claim/unbond dispatch driver — terminal-reject prune + byte-identical resubmit remain (confirmation-observe landed 2026-08-27, #572; the unbond lane joined the residue with #601, which landed the SEAM-side release for a definite first-send refusal — `RejectedTerminal` on the one send the seam itself makes — leaving exactly the driver legs the other two lanes carry: crash-window/ambiguous resubmit, and the driver-side prune for records a future resubmit path re-sends).**
+- **Forfeited-claim record does not survive a wallet restart.** The cadence driver's evaluate-and-forfeit (`ENGINE_CADENCE_DRIVER.md` §4) raises `ClaimForfeited` as a session-lifetime alarm; nothing re-detects the forfeit after a restart, so it is the `AlarmLifetime::LatchedRederived` reopening criterion's named third-class candidate — durable acknowledgment state the channel deliberately does not have yet.
+  - Target: pre-genesis
+
+- **Drain/claim/unbond dispatch driver — terminal-reject prune + byte-identical resubmit remain (confirmation-observe landed 2026-08-27, #572; the unbond lane joined the residue with #601, which landed the SEAM-side release for a definite first-send refusal — `RejectedTerminal` on the one send the seam itself makes — leaving exactly the driver legs the other two lanes carry: crash-window/ambiguous resubmit, and the driver-side prune for records a future resubmit path re-sends).** UPDATE 2026-09-07: the landing site now exists — the cadence driver (`ENGINE_CADENCE_DRIVER.md` §3 leg 4, `engine/cadence/` `TerminalRejectSlot`) registers and invokes an empty leg-4 slot each tick, wiring-proven by test; the residue is exactly the slot's body (prune + resubmit, landed together per the security note below). The per-epoch claim leg itself landed live in the same PR.
   - **PR-C made this residue USER-VISIBLE (2026-09-03):** `unstake` is reachable, and an ambiguous/held exit now surfaces as `-29522 UNSTAKE_FATE_UNKNOWN` (seal held funds-safe, lane shut, stall alarm in the operator log) with **no recovery verb** — the honest rendering of this unbuilt driver, stated in the contract rather than hidden. The prune half remains a SECURITY item (below); never land resubmit alone.
   - The prune is a **security** item, not only hygiene (raised 2026-08-31, PR-A): a terminal `DoubleSpendConflict` on an Unbond is terminal on *remedy*, not on impossibility — a partial slash then a compensating `Rebond` can restore the balance these bytes bind (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1, UB2 note). The retained copy is the replay channel, and pruning it is what closes it; the reference age window is the only other bound.
   - Target: pre-genesis
@@ -302,7 +305,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11
   - Target: pre-genesis
 
-- **`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` dedup (CT-1).** Target: PHASE_2B / [`config/consensus_constants.json`](../config/consensus_constants.json)
+- **`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` dedup (CT-1).** Lands with PHASE_2B, in [`config/consensus_constants.json`](../config/consensus_constants.json)
   - Target: pre-genesis
 
 - **Gate-6 synchronized-exit wargame round (swan-2/W8, 2026-06-11).** A black [`design/F1_TA3_TA7_LIFETIME_WINDOW.md`](./design/F1_TA3_TA7_LIFETIME_WINDOW.md)
@@ -384,9 +387,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **`kameo` dependency pin and MSRV alignment before Stage 2 cuts.**
-  - Target: pre-genesis
-
-- **View/HW lifecycle bodies in `shekyl-wallet-core`.**
   - Target: pre-genesis
 
 - **Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression
@@ -480,9 +480,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **The wallet-RPC server parses every request into a `serde_json::Value`**
-  - Target: pre-genesis
-
-- **Emission-claim retire/resubmit driver legs** (surfaced 2026-07-12
   - Target: pre-genesis
 
 - **Q11 balance-exclusion KAT — blob-boundary invariant arm** [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md)
@@ -1091,7 +1088,7 @@ Default. Lands before genesis if it should exist at launch.
 
 Exceptional deferral with a named blocker. This list stays tiny.
 
-- **A4 cold signing (`UnsignedTxBundle` / `SignedTxBundle`).** Genesis ships cold *storage* (seed custody), not cold *signing*. Named blocker: verified display on the offline device and the envelope-sealed bundle are unstarted product work; a half-form is worse than none.
+- **Hardware-offload wallet capability.** Signing offload to a hardware device, as a wallet capability. Named blocker: no vendor ships firmware that signs hybrid ML-DSA-65 + Ed25519 over FCMP++ witnesses. Zero code exists by design (rule 23 DEFERRED): the v1 envelope layout will be designed against a real device, not guessed in advance. Unused v1 capability bytes are RESERVED in [`WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) without naming this feature.
   - Target: post-genesis
 
 - **PQC multisig hardware-wallet integration / BIP-39 derivation parity.** Named blocker: vendor SDK availability and outreach; `HARDWARE_WALLETS.md` authoring is the prerequisite.

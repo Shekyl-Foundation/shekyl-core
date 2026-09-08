@@ -101,6 +101,35 @@ fn lifetime_classification_is_pinned_per_variant() {
         AlarmLifetime::Episode,
         "freeing space ends it; nothing outlives the fullness",
     );
+    assert_eq!(
+        OperatorAlarm::ChainProgressStalled {
+            last_height: 100,
+            stalled_for_secs: 1_800,
+        }
+        .lifetime(),
+        AlarmLifetime::Episode,
+        "the tip advancing ends the stall outright",
+    );
+    assert_eq!(
+        OperatorAlarm::EpochUnclaimed {
+            oldest_epoch: 41,
+            outstanding_epochs: 3,
+        }
+        .lifetime(),
+        AlarmLifetime::Episode,
+        "a claim confirming ends the backlog; it re-derives every tick",
+    );
+    assert_eq!(
+        OperatorAlarm::ClaimForfeited {
+            epoch: 17,
+            forfeited_atomic: 250,
+        }
+        .lifetime(),
+        AlarmLifetime::Episode,
+        "Episode because the producer never clears it in-session; NOT \
+         LatchedRederived because nothing re-detects a forfeit after \
+         restart — the durable-record third class is the FOLLOWUPS row",
+    );
 }
 
 /// The serving conditions are one condition row, not four — an operator

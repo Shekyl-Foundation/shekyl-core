@@ -82,8 +82,8 @@ pub(crate) struct ReserveProofOutput {
 /// Actor request for a reserve proof: "this wallet controls the named
 /// unspent outputs". The actor re-derives per-output proof secrets from
 /// view material and signs with the **spend** secret
-/// ([`reserve_proof::generate_reserve_proof`]) — the FULL-capability gate
-/// is enforced by the engine delegator before the request is built.
+/// ([`reserve_proof::generate_reserve_proof`]). Every wallet is FULL
+/// (rule 23), so the spend secret is always present.
 pub(crate) struct ReserveProofRequest {
     /// Canonical address bytes the proof binds to.
     pub address_bytes: Vec<u8>,

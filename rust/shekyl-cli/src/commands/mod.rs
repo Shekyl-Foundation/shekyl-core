@@ -128,20 +128,7 @@ Meta:
   engine_info                         Wallet summary (height, balance, address)
   version                             Show CLI and wallet-RPC versions
   help                                Show this help
-  exit / quit                         Exit shekyl-cli
-
-Not yet available (the RPC surface is designed but has not landed; see
-docs/FOLLOWUPS.md): the offline cold-signing workflow
-(describe/sign/submit_transfer, transfer --do-not-relay).";
-
-/// RESERVED-surface refusal: the command is part of the target set, but the
-/// wallet-RPC method that would back it has not landed. Names the gate so
-/// the user (and the FOLLOWUPS reader) can tell it apart from a deletion.
-fn reserved(cmd: &str, gate: &str) {
-    eprintln!(
-        "{cmd}: not available yet — gated on {gate} (docs/FOLLOWUPS.md, WI-RPC-2b deferrals)."
-    );
-}
+  exit / quit                         Exit shekyl-cli";
 
 pub fn repl(
     rpc: RpcSession,
@@ -213,17 +200,9 @@ pub fn repl(
                         dest,
                         amount,
                         priority,
-                        do_not_relay,
                         no_confirm,
                     } => {
-                        if do_not_relay {
-                            reserved(
-                                "transfer --do-not-relay",
-                                "the offline cold-signing workflow",
-                            );
-                        } else {
-                            transfers::cmd_transfer(&rpc, amount, &dest, priority, no_confirm);
-                        }
+                        transfers::cmd_transfer(&rpc, amount, &dest, priority, no_confirm);
                     }
                     ResolvedCommand::Transfers => transfers::cmd_transfers(&rpc),
                     ResolvedCommand::ShowTransfer { txid } => {
@@ -328,13 +307,6 @@ pub fn repl(
                         message,
                     } => {
                         signing::cmd_verify(&rpc, &address, &signature, &message);
-                    }
-
-                    // Offline signing (RESERVED)
-                    ResolvedCommand::DescribeTransfer { .. }
-                    | ResolvedCommand::SignTransfer { .. }
-                    | ResolvedCommand::SubmitTransfer { .. } => {
-                        reserved(first_token, "the offline cold-signing workflow");
                     }
 
                     // Meta
