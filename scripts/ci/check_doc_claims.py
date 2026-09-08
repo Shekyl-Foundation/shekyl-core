@@ -189,110 +189,101 @@ def decl_token(kind: str, arg: str | None) -> str:
 
 
 def strip_code(text: str) -> str:
-    """Blank out fenced and inline code, preserving line numbers.
+    """Block stripping plus inline code spans, preserving line numbers.
 
-    Handles both fence characters and arbitrary delimiter lengths, because
-    CommonMark does: `~~~` opens a fence and a double-backtick span is a span.
-    A marker surviving either would opt a document into checks it never asked
-    for, and into the registry that then refuses to let it opt back out.
-
-    Documenting the marker syntax must not opt a document in. This gate's own
-    README section and CHANGELOG entry show the markers as examples, and the
-    first version read them as declarations — so the documentation of a check
-    became a subject of it. Newlines are preserved so every reported line
-    number still points where a reader would look.
+    Documenting the marker syntax must not opt a document in, and a structural
+    example written in backticks must not read as structure. The citation leg
+    deliberately does NOT use this — it reads strip_fences(), because a
+    citation is written inside the very spans this blanks.
     """
-    return strip_comments(_blank_spans(strip_fences(text)))
-
-
-def strip_comments(text: str) -> str:
-    """Blank ordinary HTML comments, preserving declarations and line numbers.
-
-    Commented-out markdown is DISABLED markdown, and it was still feeding every
-    structural leg: register rows left inside `<!-- ... -->` satisfied `series`
-    after the rendered register was deleted — a vacuous green built out of text
-    no reader can see. Declarations are themselves HTML comments, so they are
-    the one form preserved.
-    """
-    def repl(m):
-        body = m.group(0)
-        return body if DECL_SITE.search(body) else "\n" * body.count("\n")
-    # `\Z` as an alternative terminator: CommonMark treats an unclosed
-    # `<!--` as running to end of document, and requiring `-->` left every
-    # commented-out row after one visible to the structural legs.
-    return re.sub(r"<!--.*?(?:-->|\Z)", repl, text, flags=re.S)
+    return _blank_spans(strip_fences(text))
 
 
 def strip_fences(text: str) -> str:
-    """Blank fenced blocks only, preserving line numbers and inline code.
+    """Blank fenced code AND html comments in ONE pass, keeping line numbers.
 
-    Separate from strip_code because the two callers need different things: a
-    DECLARATION must not be readable inside any code form, while a CITATION is
-    written inside backticks by convention and would vanish if inline spans
-    were stripped from the text the citation leg reads.
+    They cannot be separate passes, because there is no correct order between
+    them. Comments first lets a `<!--` written inside a code block eat real
+    content past the block's end. Fences first lets an unmatched ``` inside a
+    disabled comment open a fence — observed on a three-line document, where it
+    blanked the declaration after it and the opted-in document vanished from
+    the audit with nothing reported. A scanner that carries both states answers
+    the question once instead of twice, and the ordering question disappears.
+
+    Inline code spans are NOT blanked here: a citation is written inside
+    backticks, so the citation leg reads this output while the structural legs
+    read strip_code(), which adds the span pass on top.
     """
-    out, fence = [], None       # fence = (char, length, quote depth) while open
+    out, fence, in_comment = [], None, False
     for raw in text.splitlines():
-        # The block-quote container is a DEPTH, not a string. Comparing raw
-        # prefixes made `>` and `> ` different containers, so a closer written
-        # either way never closed its fence; and nothing ended a fence when its
-        # container did, so an unclosed `> ```text` blanked the rest of the
-        # document. Both blanked declarations SILENTLY — the document simply
-        # stopped being audited with nothing to say so, which is the direction
-        # no other check here can see.
-        #
-        # Depth settles all four container shapes with one rule: equal depth is
-        # the same container, greater depth is content nested inside it, and
-        # LESS depth means the container closed and takes any open fence with
-        # it. CommonMark models block quotes exactly this way.
+        if in_comment:
+            out.append("")
+            if "-->" in raw:
+                in_comment = False
+            continue
+
         pre = re.match(r"(?:\s*>)+\s?", raw)
         prefix = pre.group(0) if pre else ""
         depth = prefix.count(">")
         line = raw[len(prefix):]
+
         if fence is not None:
+            # The block-quote container is a DEPTH, not a string: equal depth
+            # is the same container, deeper is content nested in it, and less
+            # means the container closed and takes the fence with it.
             if depth < fence[2]:
-                fence = None              # the container ended; so does the fence
+                fence = None
             elif depth > fence[2]:
-                out.append("")            # nested deeper: still fence content
+                out.append("")
                 continue
-        # 0-3 spaces: at four the line is indented code, not a fence. `\s*`
-        # let a deeply indented ``` inside a list item open a fence and blank
-        # the remainder of the document.
-        m = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", line)
+            else:
+                m = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", line)
+                # A CLOSING fence carries its delimiter and nothing else.
+                if (m and m.group(1)[0] == fence[0]
+                        and len(m.group(1)) >= fence[1] and not m.group(2).strip()):
+                    fence = None
+                out.append("")
+                continue
+
+        # A declaration is itself an HTML comment, so it is the one form kept.
+        # An UNTERMINATED one is kept too — markers() must see it to report it
+        # — while still opening a comment for the lines that follow.
+        if DECL_SITE.match(raw):
+            out.append(raw)
+            if "-->" not in raw:
+                in_comment = True
+            continue
+
+        # complete inline comments vanish; an unterminated one blanks the rest
+        # of the line and continues to the next.
+        line_no_comments = re.sub(r"<!--.*?-->", "", raw)
+        if "<!--" in line_no_comments:
+            line_no_comments = line_no_comments[:line_no_comments.index("<!--")]
+            in_comment = True
+
+        body = line_no_comments[len(prefix):] if line_no_comments.startswith(prefix) \
+            else line_no_comments
+        m = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", body)
         if m:
             ch, n, tail = m.group(1)[0], len(m.group(1)), m.group(2)
-            if fence is None:
-                # CommonMark forbids a backtick in the info string of a
-                # BACKTICK fence, so ```lang`x is not a fence at all. Opening
-                # one anyway blanked everything to EOF or the next fence and
-                # silently swallowed any declaration in between.
-                if ch == "`" and "`" in tail:
-                    out.append(raw)
-                    continue
+            # CommonMark forbids a backtick in the info string of a BACKTICK
+            # fence, so ```lang`x is not a fence at all.
+            if not (ch == "`" and "`" in tail):
                 fence = (ch, n, depth)
                 out.append("")
                 continue
-            # A CLOSING fence carries its delimiter and nothing else.
-            if ch == fence[0] and n >= fence[1] and not tail.strip():
-                fence = None
-                out.append("")
-                continue
-        out.append("" if fence is not None else raw)
+        out.append(line_no_comments)
     return "\n".join(out)
 
 
 def _blank_spans(text: str) -> str:
     """Blank inline code spans, INCLUDING those that cross line breaks.
 
-    CommonMark code spans may span lines, and a per-line pass leaves a marker
-    written inside one visible. Newlines inside a span are preserved so every
-    reported line number still points where a reader would look.
+    Exact-length delimiter runs on both sides: `(`+)(.+?)\1` let a two-backtick
+    span close on the first two of a three-backtick run, blanking through it and
+    dropping any declaration between. Newlines inside a span are preserved so
+    every reported line number still points where a reader would look.
     """
-    # Exact-length runs on both sides. `(`+)(.+?)\1` let a two-backtick span
-    # "close" on the first two of a three-backtick run, blanking through it and
-    # dropping any declaration in between. The lookarounds require the opening
-    # run to be whole and the closing run to be neither preceded nor followed
-    # by another backtick, which is CommonMark's rule.
     return re.sub(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)",
                   lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S)
 
@@ -453,6 +444,11 @@ def _numbered_runs(text: str) -> list[list[tuple[int, int]]]:
         qpre = re.match(r"(?:\s*>)+\s?", raw)
         qdepth = qpre.group(0).count(">") if qpre else 0
         line = raw[len(qpre.group(0)):] if qpre else raw
+        # Leaving a quote CLOSES the runs that lived in it. Keying by depth
+        # isolated a quoted list from an unquoted one but never ended it, so a
+        # later quoted list resumed the earlier one: two valid quoted lists
+        # separated by ordinary text merged into [1, 2, 1, 2] and failed.
+        close(lambda d, q=qdepth: d[0] > q)
         m = re.match(r"^([ \t]*)(\d+)\. ", line)
         if m:
             # Keyed by (quote depth, indent). Peeling the prefix and keying on
@@ -982,7 +978,7 @@ def main() -> None:
     # written inside backticks, and a citation inside `<!-- -->` is disabled
     # markdown like any other. Blanking comments only inside strip_code() left
     # the citation leg and the ratchet reading commented-out cites as live.
-    fenced = {p: strip_comments(strip_fences(text)) for p, text in corpus}
+    fenced = {p: strip_fences(text) for p, text in corpus}
     coded = {p: strip_code(text) for p, text in corpus}          # everything else
     corpus_fenced = [(p, fenced[p]) for p, _ in corpus]         # range restatements
 

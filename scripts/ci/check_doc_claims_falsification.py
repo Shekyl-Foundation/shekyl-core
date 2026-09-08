@@ -1119,6 +1119,18 @@ def main() -> None:
         green("quoted list does not merge with the list above",
               doc=GOOD.replace("1. one\n2. two\n3. three",
                                "1. one\n2. two\n3. three\n\n> 1. a\n> 2. b")),
+        # a comment holding an unmatched ``` must not open a fence and blank
+        # the declaration after it — that made an opted-in document vanish
+        green("comment holding a fence delimiter eats nothing",
+              doc=GOOD.replace("See §2 for the table.",
+                               "<!--\n```\ndisabled\n-->\n\nSee §2 for the table.")),
+        # ...and the inverse: a comment opener inside a fence stays inside it
+        green("comment opener inside a fence eats nothing past it",
+              doc=GOOD + "\n\n```\n<!-- not a comment out here\n```\n\nAfter.\n"),
+        # leaving a quote closes the runs that lived in it
+        green("two separated quoted lists are two runs",
+              doc=GOOD.replace("1. one\n2. two\n3. three",
+                               "> 1. a\n> 2. b\n\ntext\n\n> 1. c\n> 2. d")),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -1144,7 +1156,10 @@ def main() -> None:
                 "quoted fence ends when its container does",
                 "commented-out citation is not a citation",
                 "quoted and list-item markers are examples",
-                "quoted list does not merge with the list above"}
+                "quoted list does not merge with the list above",
+                "comment holding a fence delimiter eats nothing",
+                "comment opener inside a fence eats nothing past it",
+                "two separated quoted lists are two runs"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"
