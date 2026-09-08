@@ -9,13 +9,7 @@ on:
     # draft PR. The weekly Arch / MSYS2 matrix lives in
     # `.github/workflows/weekly-os.yml`.
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '**/README.md'
   pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - '**/README.md'
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
@@ -54,8 +48,77 @@ env:
     ccache --set-config=compression=true
 
 jobs:
+  # Change scope, computed once and consumed by every job below.
+  #
+  # WHY THIS EXISTS RATHER THAN A `paths-ignore` ON THE WORKFLOW. A path filter
+  # suppresses the WORKFLOW, so on a docs-only PR no check is created at all --
+  # and branch protection waits forever for a context nobody will report. That
+  # is a required check that CANNOT PASS: loud, but a hard deadlock. A job-level
+  # `if:` instead produces a check that reports "skipping", which protection
+  # accepts -- the same shape `codeql.yml`'s `analyze-cpp` / `analyze-python`
+  # already rely on for two other required contexts in this repo.
+  #
+  # No third-party action: `git diff` against the base does this, and a
+  # change-detection action would be a new supply-chain surface in CI (rule 17).
+  #
+  # FAILS CLOSED. If the file list cannot be computed for any reason, the output
+  # is `false` and every job runs. A wrong `true` silently skips the real matrix
+  # on a source change; a wrong `false` costs runner minutes. Only one of those
+  # merges broken code.
+  changes:
+    name: 'Change scope'
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        run: |
+          set -u
+          base=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          head="${{ github.sha }}"
+
+          # Any failure below leaves docs_only=false -> everything runs.
+          files=""
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$head" 2>/dev/null || true)"
+          fi
+
+          if [ -z "$files" ]; then
+            echo "scope: no computable file list -- running everything (fail-closed)"
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          docs_only=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            # The domain registry lives under docs/ but IS a code input:
+            # shekyl-crypto-pq's tests/domain_registry.rs include_str!s it, so a
+            # TSV-only change must still run the Rust suite. Carve-out preserved
+            # from rust-audit-test.yml's own `paths` list.
+            case "$f" in
+              docs/design/CRYPTO_DOMAIN_REGISTRY.tsv) docs_only=false; break ;;
+              docs/*|*/README.md|README.md) ;;
+              *) docs_only=false; break ;;
+            esac
+          done <<< "$files"
+
+          echo "scope: docs_only=$docs_only over $(printf '%s' "$files" | wc -l) changed file(s)"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   lint-rust-debug-macros:
     name: 'Lint: no debug macros in production Rust'
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -152,6 +215,8 @@ jobs:
 
   build-macos:
     name: 'macOS (brew)'
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: macOS-latest
     env:
       CCACHE_TEMPDIR: /tmp/.ccache-temp
@@ -204,6 +269,18 @@ jobs:
 
   build-ubuntu:
     name: ${{ matrix.name }}
+    needs: changes
+    # NO JOB-LEVEL `if:` HERE, deliberately, and it is not an oversight.
+    #
+    # `Ubuntu 22.04` and `Ubuntu 24.04` are required contexts and they come from
+    # `${{ matrix.name }}`. A job-level `if:` is evaluated BEFORE the matrix
+    # expands, so a skipped job has no `matrix.name` to interpolate and cannot
+    # emit checks under those names — protection would keep waiting, which is
+    # the very deadlock this workflow change exists to remove. The other jobs
+    # here carry literal names and gate at the job level safely; this one must
+    # run so the legs exist, and gates its WORK at the step level instead.
+    #
+    # Cost on a docs-only PR: two runner allocations that finish in seconds.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -227,17 +304,23 @@ jobs:
         CCACHE_DIR: ~/.ccache
     steps:
       - name: set apt conf
+        if: needs.changes.outputs.docs_only != 'true'
         run: ${{env.APT_SET_CONF}}
       - name: update apt
+        if: needs.changes.outputs.docs_only != 'true'
         run: apt update
       - name: install build dependencies
+        if: needs.changes.outputs.docs_only != 'true'
         run: ${{env.APT_INSTALL_LINUX}}
       - name: configure git
+        if: needs.changes.outputs.docs_only != 'true'
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           submodules: recursive
       - name: install Rust
+        if: needs.changes.outputs.docs_only != 'true'
         # Composite action (.github/actions/install-rust): the one
         # hardened download-then-run recipe, installing the
         # rust-toolchain.toml pin + components up front so the daemon
@@ -248,12 +331,15 @@ jobs:
         # the runner until the repo is checked out.
         uses: ./.github/actions/install-rust
       - uses: actions/cache@v5
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           path: ~/.ccache
           key: ccache-${{ matrix.container }}-build-${{ github.sha }}
           restore-keys: ccache-${{ matrix.container }}-build-
       - uses: ./.github/actions/set-make-job-count
+        if: needs.changes.outputs.docs_only != 'true'
       - name: build
+        if: needs.changes.outputs.docs_only != 'true'
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
         run: |
@@ -264,7 +350,7 @@ jobs:
       # Rust by design, and here the binary and the toolchain already coexist.
       # The north-star spend is 76-99 s; the other four are a few seconds.
       - name: live-daemon gates
-        if: matrix.pack_ctest
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         # `shell: bash` like the CTest-artifact step below, and for the same
         # reason: the job's default shell in this container is dash, which
         # rejects `set -o pipefail` outright — the script dies on line 1
@@ -283,12 +369,12 @@ jobs:
       # on both sides. tests/data/ is repo-tracked — the test job reads
       # it from checkout, not this tarball.
       - name: Pack CTest tree
-        if: matrix.pack_ctest
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         run: |
           tar --exclude='**/CMakeFiles' --exclude='**/*.o' --exclude='**/*.a' \
             -czf ubuntu-24.04-ctest.tar.gz build/
       - name: Verify CTest artifact
-        if: matrix.pack_ctest
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -312,7 +398,7 @@ jobs:
           fi
           echo "OK: artifact contains CTestTestfile.cmake and excludes CMakeFiles/*.o/*.a"
       - uses: actions/upload-artifact@v4
-        if: matrix.pack_ctest
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         with:
           name: ubuntu-24.04-ctest
           path: ubuntu-24.04-ctest.tar.gz
@@ -320,7 +406,8 @@ jobs:
 
   test-ubuntu:
     name: "Ubuntu 24.04 (tests)"
-    needs: build-ubuntu
+    needs: [changes, build-ubuntu]
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     container:
       image: ubuntu:24.04
@@ -365,6 +452,8 @@ jobs:
 
   build-windows-msvc:
     name: 'Windows (MSVC, daemon)'
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v5
