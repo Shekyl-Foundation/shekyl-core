@@ -49,31 +49,36 @@ INDEX = os.path.join(ROOT, "docs", "design", "IMPLEMENTATION_INDEX.md")
 # Both patterns are only ever tested against the line DIRECTLY BELOW a header:
 # the delimiter row is positional, so a body row holding bare dashes is
 # content, not a new table.
-DELIM_CELL_LOOSE_RE = re.compile(r"^:?-+:?$")
 DELIM_CELL_STRICT_RE = re.compile(r"^:?-{3,}:?$")
 
 
-def looks_like_delimiter(line: str) -> bool:
-    """Would-be delimiter row: ANY cell that is dash-shaped makes this a
-    candidate.
+def has_pipe(line: str) -> bool:
+    """True when the line carries an unescaped `|` — the weakest possible
+    evidence that it participates in a table, and deliberately so.
 
-    Recognition is deliberately weaker than validity. A row is a *candidate*
-    delimiter as soon as one cell looks like `---`; whether every cell is
-    well-formed is then decided by the strict check, which reports each bad
-    sibling by name. Tying recognition to all cells being well-formed is what
-    made the two previous versions wrong: `| --- | |` and `| --- | --x |` each
-    failed to match, so the header, the delimiter and every body row beneath
-    went unexamined, and the file's other tables kept the global counters
-    nonzero so the rule-47 subject assertion never fired. The gate would exit 0
-    having silently skipped the one broken table — the dangerous direction.
-
-    A loud false positive is the acceptable trade here, and it is nearly
-    unreachable in practice: the positional parse CONSUMES the body of every
-    recognised table, so a body row holding a `---` cell is never offered to
-    this function. Only a table that is already malformed reaches it.
+    Recognition must be STRICTLY WEAKER than validity. Four successive
+    versions of this gate tied the two together — requiring every delimiter
+    cell to be well formed, then all-or-empty, then at least one well formed —
+    and each one let a malformed table escape checking entirely, because a
+    table had to be well formed before it qualified to be examined for being
+    well formed. Recognition asks only "might this be a table?"; every
+    judgement about whether it IS one belongs to the checks below, which
+    report rather than skip.
     """
-    cells = split_cells(line.strip())
-    return any(DELIM_CELL_LOOSE_RE.match(c.strip()) for c in cells)
+    i = 0
+    while i < len(line):
+        if line[i] == "\\":
+            run = 0
+            while i + run < len(line) and line[i + run] == "\\":
+                run += 1
+            i += run
+            if run % 2 and i < len(line) and line[i] == "|":
+                i += 1  # escaped pipe, not a delimiter
+            continue
+        if line[i] == "|":
+            return True
+        i += 1
+    return False
 
 
 def split_cells(line: str) -> list[str]:
@@ -135,13 +140,33 @@ def main() -> int:
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()
-        if not (stripped.startswith("|")
-                and i + 1 < len(lines)
-                and looks_like_delimiter(lines[i + 1])):
+        nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        # RECOGNITION IS MAXIMAL: any pipe-bearing line directly beneath another
+        # is a header/delimiter candidate. Every narrower rule tried here left a
+        # hole — all-typo cells, empty cells, thin cells, a header without its
+        # leading pipe — and each hole SKIPPED a table, which the other tables
+        # then hid by keeping the counters nonzero. Nothing about a would-be
+        # table may depend on that table being well formed.
+        #
+        # This cannot produce a spurious table in practice: a run of pipe lines
+        # with no valid delimiter is not rendered as a table by GFM at all, it
+        # is rendered as paragraph text — which is the invisible-content defect
+        # this gate exists to report. Flagging it is the correct answer, not a
+        # false positive.
+        if not (has_pipe(stripped) and has_pipe(nxt)):
             i += 1
             continue
 
         tables += 1
+        for ln, text, what in ((i + 1, stripped, "header"),
+                               (i + 2, nxt, "delimiter row")):
+            if not text.startswith("|"):
+                # GFM allows the leading pipe to be omitted; this file does not.
+                # Reported rather than skipped, so the house-style check cannot
+                # be made unreachable by the very syntax it forbids.
+                problems.append(
+                    (ln, f"{what} does not start with '|' — the index writes "
+                         f"tables with a leading delimiter: {text[:60]}…"))
         want = len(split_cells(stripped))
         delim_cells = split_cells(lines[i + 1].strip())
         delim = len(delim_cells)
@@ -163,17 +188,15 @@ def main() -> int:
         j = i + 2
         while j < len(lines):
             body = lines[j].strip()
-            if not body or "|" not in body:
+            if not body or not has_pipe(body):
                 break
             if not body.startswith("|"):
                 # GFM permits omitting the leading pipe; this file does not.
-                # Fail loudly rather than treating it as the end of the table,
-                # which would skip the row and hide the very defect we check.
+                # Reported, then STILL CHECKED — breaking here would skip the
+                # row and hide the very defect this gate looks for.
                 problems.append(
                     (j + 1, f"row does not start with '|' — the index writes "
                             f"tables with a leading delimiter: {body[:60]}…"))
-                j += 1
-                continue
             n = len(split_cells(body))
             rows_checked += 1
             if n != want:
