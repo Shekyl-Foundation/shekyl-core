@@ -1611,10 +1611,12 @@ TEST(node_server, handshake_nonce_fires_once_and_only_within_its_zone)
        "could replay it";
 
   // THE ERASE LEG — independent of the insert ordering the sibling test
-  // pins. Both exits are checked, because a single-exit test passes while
-  // the other path leaks, and each is checked by COUNT as well as by
-  // detection: a set that still holds the value is a leak whether or not
-  // anything would still match it.
+  // pins. Both erase IMPLEMENTATIONS are checked, because a single-exit test
+  // passes while the other path leaks, and each is checked by COUNT as well
+  // as by detection: a set that still holds the value is a leak whether or
+  // not anything would still match it. Implementations, not exit paths: this
+  // calls each erase directly and never runs a handshake attempt, which is
+  // the boundary restated at the end of this test.
   //
   // The two exits do NOT carry the same guarantee, and saying they do is the
   // conflation P2P_2_ENDPOINT_ROUND.md §5c corrects:
