@@ -742,6 +742,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Re-derive initial-sync verification cost at the Pi-4 floor now that C2-R1a has deleted `PER_BLOCK_CHECKPOINT`.** `DAEMON_RELAY_PRIVACY.md` §74.2 concluded *"the 11-day figure is the worst case"* because the checkpoint skip rescued historical blocks; `fast_check` and `m_blocks_hash_check` no longer occur in `blockchain.cpp`, so the un-checkpointed case is now the only case. Blocker: the replacement figure needs a measurement, not an argument. Rule 76 — [`DAEMON_RELAY_PRIVACY.md`](design/DAEMON_RELAY_PRIVACY.md)
   - Target: pre-genesis
 
+- **Measure address volatility for ephemeral-per-boot onion endpoints (PWD-E8), then rule the acceptable dead fraction.** Half is already derived from shipped constants: a gossiped overlay address sits in a saturated peer's gray list for `D = P2P_LOCAL_GRAY_PEERLIST_LIMIT × 60 s ≈ 3.5 days` before anything dials it, because `gray_peerlist_housekeeping` draws **one random gray entry per zone per 60 s** from a 5000-entry pool. The owed input is `T`, the mean uptime between restarts of a default-posture node; the dead-on-probe fraction is `1 − e^(−D/T)`, which is ~39 % at weekly restarts. **Not blocked** — the Q12-D6a rig produces `T`. Do **not** discharge it by shortening `D` (that trades a measured quantity for unmeasured overlay dial volume, and PWD-B1's rate limits have no derived parameters), and do **not** infer an acceptable aggregate from the clean per-case failure — that inference is what makes this degrade quietly. `D` moves with the gray cap and the housekeeping cadence, so changing either re-opens this. — [`P2P_2_ENDPOINT_ROUND.md`](design/P2P_2_ENDPOINT_ROUND.md) PWD-E8, PWD-E7
+  - Target: pre-genesis
+
 - **Run the `ρ`/`g_max` sub-round (Q-10) deferred by PWD-I4.** **Its inputs changed 2026-09-06: the anchor mechanism is deleted, so the `k ≤ 1` anchor-backed-connection cap this sub-round was to derive against no longer exists — there are no anchor-backed connections at all.** Selection is otherwise unchanged and the distinction still matters for this derivation: `connections_maker` remains **white-first up to the `P2P_DEFAULT_WHITELIST_CONNECTIONS_PERCENT` (70 %) target, then gray for the remainder**. Only the anchor-reserved share disappeared — the two-class white/gray ordering did not collapse into a single pool. Blocker: it must derive against the *settled* white/gray behaviour, so it follows the p2p tree changes rather than preceding them — the "fixed anchor behaviour" this once waited on no longer exists to be fixed; reopening criterion and the §12.10/§7 reconciliation it must carry are in the owning doc — [`SHEKYL_P2P_PROTOCOL.md`](design/SHEKYL_P2P_PROTOCOL.md) PWD-I4, PWD-I5
   - Target: pre-genesis
 
@@ -1066,6 +1069,21 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Validate `prev_id` before attestation verify on the alt-chain path
+  - Target: pre-genesis
+
+- **Restore the §7 hysteresis band to the served fee correction** — the daemon serves the plain pow2 ceiling (`prev_cq = 0`); blocked on the grid-anchored previous value, which is its own round. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §8 FL-R3 (ruling, blocker, two binding constraints).
+  - Target: pre-genesis
+
+- **Size and wire FL-R19's relay-floor clamp margin** — blocked on the construction-to-broadcast gap distribution, which is wallet instrumentation and not this lane's to measure. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §8 FL-R19 (pre-registered sizing criterion; margin must be fixed and deterministic).
+  - Target: pre-genesis
+
+- **Disclose the fee-tier privacy trade in the wallet/CLI tier picker** — rule-81 obligation created by FL-R17's signature; carrier is the engine tier-mapping change. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §7.
+  - Target: pre-genesis
+
+- **Give the storage layer a cheap per-block transaction count** — `Blockchain::get_tx_volume_avg` walks a 720-block window and `get_block_from_height` loads and parses each full block blob to read `tx_hashes.size()`; #640 memoized the repeat case but a cold call still parses 720 blocks. Owned by the storage lane: [DAEMON_REDB_STORE.md](design/DAEMON_REDB_STORE.md).
+  - Target: pre-genesis
+
+- **Measure boundary-cell occupancy** — how much chain *time* is spent near a pow2 boundary, as against how many swept cells oscillate. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §9 FL-D8 (why it is owed, and when it comes due).
   - Target: pre-genesis
 
 

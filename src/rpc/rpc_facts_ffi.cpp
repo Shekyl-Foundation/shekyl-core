@@ -175,9 +175,11 @@ int fee_estimate(cryptonote::Blockchain& bc, uint64_t grace_blocks,
       bc.get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, fees);
       out->quantization_mask = cryptonote::Blockchain::get_fee_quantization_mask();
     }
-    // The estimator resizes to exactly four tiers (Fl, Fn, Fm, Fh). That
-    // four-ness lives in one function and nothing else asserted it, so a
-    // derivation that returned three would have produced a silently wrong
+    // The estimator resizes to exactly four SLOTS, carrying three priced
+    // tiers: slot 2 is the RK-5 bridge and mirrors slot 1 (standard) until
+    // the RPC cutover, so four is a wire shape rather than four rates.
+    // That four-ness lives in one function and nothing else asserted it, so
+    // a derivation that returned three would have produced a silently wrong
     // "base fee" downstream. Checked here instead.
     if (fees.size() != 4)
     {

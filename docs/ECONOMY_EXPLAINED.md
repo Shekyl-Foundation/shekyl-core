@@ -15,9 +15,17 @@
 
 ## The big picture
 
-Shekyl has one fixed supply — 4,294,967,296 coins (2³²) — and four interacting
-control loops that decide *who* receives newly released coins, *how fast* they
-release, and *how many fees get destroyed*. None of the loops needs governance
+Shekyl's gross issuance follows a curve asymptotic to 4,294,967,296 coins
+(2³²) plus a perpetual tail of 0.6 coins per block (≈0.0037%/year at the
+asymptote) — and because the fee burn permanently destroys coins, **net
+supply falls in any block where burned fees exceed new issuance, and
+rises otherwise**. That condition is a real one, not a formality: the
+burn scales with the circulating fraction, so early in the chain's life
+it is near zero while issuance is at its largest, and net supply grows
+even on a busy chain. The burn overtakes issuance only as the curve
+flattens and usage matures. Four interacting control loops decide *who*
+receives newly released coins, *how fast* they release, and *how many fees
+get destroyed*. None of the loops needs governance
 or manual tuning; each reads an on-chain quantity (transaction volume,
 emitted-supply fraction, staked fraction, archival work claims) and adjusts
 automatically. The design goals — low burn, fair split between miners and
@@ -32,10 +40,15 @@ simulation confirmed numerically.
 
 ## Loop 1 — The emission curve (the PoW backbone)
 
-Every block releases `(remaining_supply >> 21)` atomic units, floored at a
-perpetual tail of 0.6 coins/block (0.3 coins/minute × 2-minute blocks). At
-genesis that's **2,048 coins per block**; the curve decays smoothly as supply
-empties:
+Every block pays `max(M_r · (remaining >> 21), TAIL) · penalty`, where
+`TAIL` is the perpetual 0.6 coins/block (0.3 coins/minute × 2-minute
+blocks), `M_r` is Loop 2's release multiplier applied to the *curve* (the
+floor is never modulated — a paced floor would pay least exactly when fees
+are lowest), and the block-weight penalty applies to the *paid* amount
+(so oversizing a block always costs, tail era included). `remaining`
+floors at zero: past the curve's asymptote the tail simply continues. At
+genesis the curve pays **2,048 coins per block**; it decays smoothly as
+the asymptote approaches (neutral trajectory, `M_r = 1`):
 
 | Year | Avg block reward | Supply emitted | Net inflation |
 |---|---|---|---|
@@ -45,9 +58,12 @@ empties:
 | 20 | ~147 | 92.8% | 1.04% |
 | 29 | ~48 | 97.7% | 0.31% |
 
-(Sim output against the consensus integer math, not estimates.) By year 30 the
-chain is effectively in its fee era, with the 0.6-coin tail preventing the
-"zero subsidy" security cliff forever.
+(Neutral-trajectory sim output against the consensus integer math, not
+estimates.) By year 30 the chain is effectively in its fee era, with the
+0.6-coin tail preventing the "zero subsidy" security cliff forever — the
+tail is perpetual by construction: there is no supply cutoff, only the
+asymptote the curve approaches, and the burn is what bounds net supply in
+practice.
 
 ## Loop 2 — The release multiplier (demand-responsive pacing)
 
@@ -62,9 +78,12 @@ averaged over a 720-block (~1 day) window.
 - Baseline activity (50 tx): **1.0** → 1,000 coins.
 - Busy chain (80 tx): 80/50 = **1.6, clamped to 1.3** → 1,300 coins.
 
-This never creates coins — it only re-times the same fixed supply. When the
-economy is hot, coins release faster to meet demand; when it's cold, release
-slows and scarcity supports the price. It is the supply-side half of the
+This does not change the curve's asymptote — it re-times release along it.
+(It is not "a fixed supply" in the strict sense: the perpetual tail keeps
+issuing past the asymptote forever, and the multiplier paces the curve, not
+the tail — FL-R12′ floors the paid reward at the tail, so a dormant chain
+still issues.) When the economy is hot, coins release faster to meet demand;
+when it's cold, release slows and scarcity supports the price. It is the supply-side half of the
 regulator.
 
 ## Loop 3 — The adaptive burn (demand-responsive fee destruction)
