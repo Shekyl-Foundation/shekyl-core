@@ -23,7 +23,7 @@ use shekyl_crypto_pq::bip39::{mnemonic_from_entropy, SHEKYL_BIP39_ENTROPY_BYTES}
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
     CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network, OpenedEngine,
-    SoloSigner, StakeFacade, StakePosture,
+    ServingStartError, SoloSigner, StakeFacade, StakePosture,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
@@ -641,21 +641,25 @@ pub(crate) async fn make_daemon(daemon: &DaemonEndpoint) -> Result<DaemonClient,
 /// [`Engine::into_shared`], which spawns the cadence driver as a structural
 /// consequence of the wrap (`ENGINE_CADENCE_DRIVER.md` §1) — and, for a
 /// staker, spawn the driving P-scan and serving tasks: the **sole production
-/// call site** for [`StakeFacade::start_pscan_if_staker`] and
-/// [`StakeFacade::start_serving_if_staker`]. Returns the arc plus the embedder-held
-/// [`OpenTasks`] (P-scan/serving `None` for a non-staker; cadence always
-/// `Some`), which the tenant parks for the wallet's open lifetime and
-/// [`close_wallet`] shuts down (serving first).
+/// call site** for [`StakeFacade::start_pscan_if_staker`] and the open-time
+/// call to [`StakeFacade::start_serving_if_staker`] (the driver's
+/// serving-liveness leg owns every later attempt). Returns the arc plus the
+/// embedder-held [`OpenTasks`] (P-scan `None` for a non-staker; cadence
+/// always `Some`, carrying the parked serving handle), which the tenant
+/// parks for the wallet's open lifetime and [`close_wallet`] shuts down
+/// (cadence — and with it serving — first).
 ///
 /// A staker whose sealed P-scan state cannot load, or whose serving path
 /// cannot be configured, fails **closed** here: a staker must not open into
 /// a state where its firewall scan is dark or its holdings are not served
-/// (`00-mission` priority 2 — privacy is not a degraded mode).
+/// (`00-mission` priority 2 — privacy is not a degraded mode). The one
+/// non-fatal serving error is `AlreadyRunning`: the driver's first tick can
+/// legitimately win the start race, and one live host is the goal either way.
 async fn wrap_and_start_tasks(
     engine: Engine<SoloSigner>,
     daemon_address: &str,
 ) -> Result<(SharedEngine, OpenTasks), WalletRpcError> {
-    let (shared, cadence) = engine.into_shared();
+    let (shared, cadence) = engine.into_shared(daemon_address);
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -676,15 +680,22 @@ async fn wrap_and_start_tasks(
         }
     };
 
-    // SH-2b-2: the serving lifecycle, spawned beside the P-scan and parked with
-    // it. Fail-closed for the same reason (`00-mission` priority 2, and §9.6
-    // item 4): a staker that cannot serve accrues misses toward a slash, and
-    // the operator cannot see it happening — so a staker whose serving path
-    // will not configure does not open. The task itself does not publish
-    // immediately; it waits the gate-6 §10.9 launch standoff first, precisely
-    // so the onion does not reanimate in lockstep with this open.
-    let serving = match StakeFacade::start_serving_if_staker(shared.clone(), daemon_address).await {
-        Ok(handle) => handle,
+    // SH-2b-2: the serving lifecycle, started here at open and parked with
+    // the cadence driver, whose serving-liveness leg owns restart from then
+    // on (`ENGINE_CADENCE_DRIVER.md` §3 leg 2). Fail-closed for the same
+    // reason (`00-mission` priority 2, and §9.6 item 4): a staker that cannot
+    // serve accrues misses toward a slash, and the operator cannot see it
+    // happening — so a staker whose serving path will not configure does not
+    // open. The task itself does not publish immediately; it waits the gate-6
+    // §10.9 launch standoff first, precisely so the onion does not reanimate
+    // in lockstep with this open.
+    match StakeFacade::start_serving_if_staker(shared.clone(), daemon_address).await {
+        Ok(Some(handle)) => cadence.adopt_serving(handle),
+        // `Ok(None)`: not a serving persona. `AlreadyRunning`: the driver's
+        // first tick fired before this call and won the start race; the
+        // handle is already parked in the driver's slot. Benign — one live
+        // host is the goal, whoever started it.
+        Ok(None) | Err(ServingStartError::AlreadyRunning) => {}
         Err(e) => {
             // The P-scan is already spawned at this point, so the aborted open
             // must take it down *and await it* before returning. `Drop` alone
@@ -694,7 +705,6 @@ async fn wrap_and_start_tasks(
             // every other layer is concerned, never happened.
             OpenTasks {
                 pscan,
-                serving: None,
                 cadence: Some(cadence),
             }
             .shutdown()
@@ -706,12 +716,11 @@ async fn wrap_and_start_tasks(
             );
             return Err(e.into());
         }
-    };
+    }
     Ok((
         shared,
         OpenTasks {
             pscan,
-            serving,
             cadence: Some(cadence),
         },
     ))
@@ -1105,29 +1114,32 @@ async fn reopen_with_first_stake_intent(
     // wallet stays open with the actor resident and NO parked scan — the
     // exact state the `stake` entry's `has_pscan` check routes back through
     // this reopen, so a retry re-attempts the scan instead of spinning dark.
-    let (shared, cadence) = engine.into_shared();
+    let (shared, cadence) = engine.into_shared(&endpoint.address);
     match Engine::start_pscan(shared.clone()).await {
         Ok(handle) => {
             // The scan is the fail-closed one on this path (above); serving is
             // best-effort here because a serving failure must not block the
-            // stake the operator is in the middle of. It re-arms on the next
-            // open like any other.
-            let serving = StakeFacade::start_serving_if_staker(shared.clone(), &endpoint.address)
-                .await
-                .unwrap_or_else(|e| {
+            // stake the operator is in the middle of. The driver's
+            // serving-liveness leg re-attempts it on the next chain advance
+            // (`ENGINE_CADENCE_DRIVER.md` §3 leg 2).
+            match StakeFacade::start_serving_if_staker(shared.clone(), &endpoint.address).await {
+                Ok(Some(h)) => cadence.adopt_serving(h),
+                // `None`: not a serving persona. `AlreadyRunning`: the
+                // driver's leg won the start race and parked the handle.
+                Ok(None) | Err(ServingStartError::AlreadyRunning) => {}
+                Err(e) => {
                     tracing::warn!(
                         error = %e,
                         "first-stake intent reopen: the serving host did not start; the \
-                         next open re-attempts it"
+                         cadence driver re-attempts it on the next chain advance"
                     );
-                    None
-                });
+                }
+            }
             tenants.lock().await.tenant.set_open(
                 name,
                 shared.clone(),
                 OpenTasks {
                     pscan: Some(handle),
-                    serving,
                     cadence: Some(cadence),
                 },
             );
@@ -1171,7 +1183,7 @@ async fn reopen_with_first_stake_intent(
 /// that one is infallible: the driver polls its way to health rather than
 /// failing to start.
 async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks {
-    let cadence = Some(Engine::start_cadence(shared));
+    let cadence = Engine::start_cadence(shared, daemon_address);
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -1187,24 +1199,28 @@ async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks
     // Re-arming serving is *not* fail-closed here, unlike at open. The wallet
     // is already open and staying open — refusing would leave it in a state
     // with no close path — so this degrades with a warning exactly as the
-    // P-scan re-arm above does. A fresh standoff is drawn either way, so the
-    // re-armed host does not republish in lockstep with the failed close.
-    let serving = match StakeFacade::start_serving_if_staker(shared.clone(), daemon_address).await {
-        Ok(handle) => handle,
+    // P-scan re-arm above does, and the driver's serving-liveness leg
+    // re-attempts on the next chain advance. A fresh standoff is drawn either
+    // way, so the re-armed host does not republish in lockstep with the
+    // failed close.
+    match StakeFacade::start_serving_if_staker(shared.clone(), daemon_address).await {
+        Ok(Some(handle)) => cadence.adopt_serving(handle),
+        // `None`: not a serving persona. `AlreadyRunning`: the freshly
+        // re-armed driver's first tick won the start race and parked the
+        // handle itself.
+        Ok(None) | Err(ServingStartError::AlreadyRunning) => {}
         Err(e) => {
             tracing::warn!(
                 error = %e,
                 "failed to re-arm the serving host while restoring an open wallet after a \
-                 non-completing close; the wallet stays open but this persona is not \
-                 serving until the next close/reopen"
+                 non-completing close; the wallet stays open and the cadence driver \
+                 re-attempts serving on the next chain advance"
             );
-            None
         }
-    };
+    }
     OpenTasks {
         pscan,
-        serving,
-        cadence,
+        cadence: Some(cadence),
     }
 }
 

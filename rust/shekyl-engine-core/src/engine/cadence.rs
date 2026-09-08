@@ -49,8 +49,11 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use shekyl_engine_file::WalletFile;
+
 use super::pscan::cadence::{FixedRateSchedule, ScanSchedule};
 use super::signer::EngineSignerKind;
+use super::stake_engine::serving::{ServingHandle, ServingPosture, ServingStartError};
 use super::submit_lifecycle::WatchdogHost;
 use super::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
@@ -127,7 +130,26 @@ pub(crate) trait CadenceLeg: Send + 'static {
 
     /// One fire at the given observed tip height.
     fn fire(&mut self, tip: u64) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+    /// Wind down anything the leg owns. Awaited by the loop after it exits
+    /// (cancellation or [`TipPoll::EngineGone`]), so it completes before the
+    /// embedder's [`CadenceHandle::shutdown`] returns. Runs for parked legs
+    /// too: a panicked leg must not leak what it holds. Most legs own
+    /// nothing; the serving-liveness leg shuts down the [`ServingHandle`] it
+    /// parks, which is what keeps "stop advertising before the P-scan stops"
+    /// an order the embedder's shutdown sequence still controls (§3 leg 2).
+    fn teardown(self: Box<Self>) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        Box::pin(async {})
+    }
 }
+
+/// The one serving handle the driver parks (§3 leg 2: "restart makes the
+/// driver the natural owner of the current handle"). Shared between the
+/// serving-liveness leg (liveness reads, reap, restart writes), the
+/// [`CadenceHandle`] (posture reads, open-time adoption), and the leg's
+/// teardown. A `std` mutex, deliberately: every access is a brief
+/// lock-inspect-release, and no `.await` ever runs under the guard.
+pub(crate) type ServingSlot = Arc<std::sync::Mutex<Option<ServingHandle>>>;
 
 /// The weak grip on the shared engine that every leg (and the tip poll)
 /// holds — upgrade per fire, never a strong clone, so close is never
@@ -194,6 +216,127 @@ where
     }
 }
 
+/// Leg 2 (`ENGINE_CADENCE_DRIVER.md` §3 leg 2): serving liveness. The
+/// predicate — **"a serving obligation exists AND the serving task is not
+/// live"** — is evaluated every fire; when it holds, the leg makes one
+/// [`Engine::start_serving_if_staker`] attempt. Self-arming: no unregister,
+/// no session state, so one condition covers both the start that failed and
+/// the serving that started and later died (a Tor drop, a task panic, a
+/// lost descriptor). One attempt per chain-progress tick is the natural
+/// backoff (≥ block cadence), so a broken Tor config gets no retry storm.
+///
+/// The *obligation* half of the predicate lives inside
+/// `start_serving_if_staker` itself — a non-staker and an idle staker
+/// return `Ok(None)` without claiming the serving slot — so the leg's own
+/// check is only *liveness*: a parked handle whose task still runs
+/// ([`ServingHandle::is_live`]) is a no-op fire.
+///
+/// [`ServingStartError::AlreadyRunning`] is a no-op, not a failure. The
+/// engine's serving slot guard is the single-flight arbiter between this
+/// leg and the embedder's own start (open, restore); the production
+/// schedule's first tick is immediate, so the race is real: losing it means
+/// the other starter won or is mid-start, and its handle reaches this
+/// driver via [`CadenceHandle::adopt_serving`].
+struct ServingLivenessLeg<S, D, L, E, R, P>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+{
+    engine: WeakEngine<S, D, L, E, R, P, WalletFile>,
+    /// The daemon address serving derives its shard set over — threaded from
+    /// the embedder at driver start (`into_shared` / `start_cadence`), the
+    /// same "the endpoint is the caller's" shape `start_serving_if_staker`
+    /// itself documents.
+    daemon_address: String,
+    slot: ServingSlot,
+}
+
+impl<S, D, L, E, R, P> CadenceLeg for ServingLivenessLeg<S, D, L, E, R, P>
+where
+    S: EngineSignerKind + Send + Sync + 'static,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync + 'static,
+{
+    fn name(&self) -> &'static str {
+        "serving-liveness"
+    }
+
+    fn park_condition(&self) -> Option<AlarmCondition> {
+        // Each serving lifecycle carries its own alarm board on its handle
+        // (`ServingHandle::alarms`); the driver has no condition to park.
+        None
+    }
+
+    fn fire(&mut self, _tip: u64) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        let weak = Weak::clone(&self.engine);
+        let address = self.daemon_address.clone();
+        let slot = Arc::clone(&self.slot);
+        Box::pin(async move {
+            // Liveness under a brief lock: a live task is the no-op fire; a
+            // dead one is taken out for reaping. The `.await`s below run
+            // with the guard released.
+            let dead = {
+                let mut held = slot.lock().expect("serving slot lock");
+                match held.as_ref() {
+                    Some(handle) if handle.is_live() => return,
+                    Some(_) => held.take(),
+                    None => None,
+                }
+            };
+            if let Some(dead) = dead {
+                // The task has already exited; this observes the exit (and
+                // with it the engine slot guard's release) deterministically
+                // before the restart below re-claims it.
+                dead.shutdown().await;
+            }
+            let Some(engine) = weak.upgrade() else {
+                return;
+            };
+            match Engine::start_serving_if_staker(engine, &address).await {
+                Ok(Some(handle)) => {
+                    *slot.lock().expect("serving slot lock") = Some(handle);
+                }
+                // `Ok(None)`: no obligation — a non-staker, or a staker with
+                // no active persona; the predicate simply does not hold this
+                // tick. `AlreadyRunning`: the embedder's own start is in
+                // flight or won; its handle arrives via `adopt_serving`.
+                Ok(None) | Err(ServingStartError::AlreadyRunning) => {}
+                Err(e) => {
+                    // Named rather than silent (rule 82); the leg retries on
+                    // the next chain advance, and repeated failure alarms
+                    // through the serving lifecycle's own board once a task
+                    // does start and then faults.
+                    tracing::warn!(
+                        error = %e,
+                        "serving-liveness leg: start attempt failed; \
+                         retrying on the next chain advance"
+                    );
+                }
+            }
+        })
+    }
+
+    fn teardown(self: Box<Self>) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        Box::pin(async move {
+            let handle = self.slot.lock().expect("serving slot lock").take();
+            if let Some(handle) = handle {
+                // Awaited: the host stops tor before its listener, and this
+                // completing is what lets the embedder's shutdown sequence
+                // stop the P-scan only after the advertisement is gone.
+                handle.shutdown().await;
+            }
+        })
+    }
+}
+
 /// Leg 4's registered slot (`ENGINE_CADENCE_DRIVER.md` §3 leg 4): the
 /// terminal-reject prune / byte-identical resubmit body is unbuilt —
 /// `docs/FOLLOWUPS.md` "Drain/claim/unbond dispatch driver —
@@ -232,6 +375,7 @@ pub struct CadenceHandle {
     // for `.await` without moving a field out of a `Drop` type.
     join: Option<JoinHandle<()>>,
     alarms: Arc<OperatorAlarms>,
+    serving: ServingSlot,
 }
 
 impl CadenceHandle {
@@ -247,15 +391,47 @@ impl CadenceHandle {
         Arc::clone(&self.alarms)
     }
 
+    /// Park an embedder-started serving lifecycle with the driver
+    /// (`ENGINE_CADENCE_DRIVER.md` §3 leg 2). The embedder still makes the
+    /// first start — wallet-rpc's open stays fail-closed — and then hands
+    /// the handle here, so the serving-liveness leg owns restart and the
+    /// driver's teardown owns the ordered shutdown.
+    ///
+    /// Cannot collide with a leg-started handle: the engine's serving slot
+    /// guard is single-flight, so at most one live handle exists to park. A
+    /// dead handle already parked is simply replaced (its token has fired or
+    /// fires on drop; the task is gone either way).
+    pub fn adopt_serving(&self, handle: ServingHandle) {
+        *self.serving.lock().expect("serving slot lock") = Some(handle);
+    }
+
+    /// What the parked serving lifecycle is serving right now, or `None`
+    /// when no host is parked — or the parked host has died, in which case
+    /// the serving-liveness leg restarts it on the next chain advance and
+    /// "not serving" is exactly the truth in the interim.
+    ///
+    /// A cheap snapshot read (brief lock, watch-channel `borrow`): a status
+    /// query can never stall the thing that serves.
+    #[must_use]
+    pub fn serving_posture(&self) -> Option<ServingPosture> {
+        self.serving
+            .lock()
+            .expect("serving slot lock")
+            .as_ref()
+            .and_then(ServingHandle::posture)
+    }
+
     /// Fire the cancel token. Idempotent. The task observes it at the next
     /// poll (or mid-`select!`) and exits after any in-flight leg completes.
     pub fn cancel(&self) {
         self.cancel_token.cancel();
     }
 
-    /// Cancel and await the task's exit: deterministically observes that the
-    /// loop has stopped before returning — the step that makes a subsequent
-    /// `Arc::try_unwrap` → `Engine::close` possible.
+    /// Cancel and await the task's exit — including the legs' teardown, so
+    /// any serving lifecycle the driver parks is fully stopped (tor before
+    /// listener, awaited) before this returns. Deterministically observing
+    /// the stop is the step that makes a subsequent `Arc::try_unwrap` →
+    /// `Engine::close` possible.
     pub async fn shutdown(mut self) {
         self.cancel_token.cancel();
         if let Some(join) = self.join.take() {
@@ -294,6 +470,7 @@ pub(crate) fn spawn_cadence_loop<Sched, TipFn, TipFut>(
     poll_tip: TipFn,
     legs: Vec<Box<dyn CadenceLeg>>,
     stall_horizon: Duration,
+    serving: ServingSlot,
 ) -> CadenceHandle
 where
     Sched: ScanSchedule,
@@ -314,6 +491,7 @@ where
         cancel_token,
         join: Some(join),
         alarms,
+        serving,
     }
 }
 
@@ -321,24 +499,36 @@ where
 /// assemble — leg 1 releases reservations before leg 3 snapshots the
 /// funding set; leg 4's prune is retire-class and precedes leg 3 too).
 ///
-/// Grows with the implementation commits: leg 2 (serving liveness) and
-/// leg 3 (per-epoch claim) register here as they land. Today: leg 1
-/// (submit lifecycle) and the leg-4 slot.
-pub(crate) fn production_legs<S, D, L, E, R, P, F>(
-    engine: WeakEngine<S, D, L, E, R, P, F>,
+/// Grows with the implementation commits: leg 3 (per-epoch claim)
+/// registers here as it lands, after the leg-4 slot. Today: leg 1 (submit
+/// lifecycle), leg 2 (serving liveness), and the leg-4 slot.
+///
+/// `WalletFile`-specialized because leg 2's construction site
+/// (`start_serving_if_staker`) is; `daemon_address` and the shared
+/// `serving` slot are leg 2's (see [`ServingLivenessLeg`]).
+pub(crate) fn production_legs<S, D, L, E, R, P>(
+    engine: WeakEngine<S, D, L, E, R, P, WalletFile>,
+    daemon_address: &str,
+    serving: &ServingSlot,
 ) -> Vec<Box<dyn CadenceLeg>>
 where
-    S: EngineSignerKind,
+    S: EngineSignerKind + Send + Sync + 'static,
     D: DaemonEngine,
     L: LedgerEngine,
     E: EconomicsEngine,
     R: RefreshEngine,
     P: PendingTxEngine + WatchdogHost,
-    F: PersistenceEngine,
-    Engine<S, D, L, E, R, P, F>: Send + Sync + 'static,
+    Engine<S, D, L, E, R, P, WalletFile>: Send + Sync + 'static,
 {
     vec![
-        Box::new(SubmitLifecycleLeg { engine }),
+        Box::new(SubmitLifecycleLeg {
+            engine: Weak::clone(&engine),
+        }),
+        Box::new(ServingLivenessLeg {
+            engine,
+            daemon_address: daemon_address.to_owned(),
+            slot: Arc::clone(serving),
+        }),
         Box::new(TerminalRejectSlot),
     ]
 }
@@ -352,15 +542,14 @@ pub(crate) fn production_schedule() -> FixedRateSchedule {
 // `pub` `Engine` (see the `#[allow(private_bounds)]` on the struct itself); every
 // engine impl that restates them carries the same allow.
 #[allow(private_bounds)]
-impl<S, D, L, E, R, P, F> Engine<S, D, L, E, R, P, F>
+impl<S, D, L, E, R, P> Engine<S, D, L, E, R, P, WalletFile>
 where
-    S: EngineSignerKind,
+    S: EngineSignerKind + Send + Sync + 'static,
     D: DaemonEngine,
     L: LedgerEngine,
     E: EconomicsEngine,
     R: RefreshEngine,
     P: PendingTxEngine + WatchdogHost,
-    F: PersistenceEngine,
     Self: Send + Sync + 'static,
 {
     /// Wrap an opened engine in its shared arc **and start the cadence
@@ -377,6 +566,11 @@ where
     /// `Arc::try_unwrap` so the exit is deterministic rather than
     /// next-poll.
     ///
+    /// `daemon_address` is the serving-liveness leg's (§3 leg 2): serving
+    /// derives its shard set over the caller's daemon endpoint, and the
+    /// address lives with the embedder rather than on the `Engine` — the
+    /// same shape `start_serving_if_staker` itself documents.
+    ///
     /// # Panics
     ///
     /// Requires an ambient tokio runtime, because it spawns the driver task.
@@ -384,13 +578,13 @@ where
     /// spawns the key-engine actor — but it is asserted here **by name** so
     /// a non-runtime embedder fails with the named requirement instead of a
     /// bare `tokio::spawn` panic (§1 "Runtime context").
-    pub fn into_shared(self) -> (Arc<RwLock<Self>>, CadenceHandle) {
+    pub fn into_shared(self, daemon_address: &str) -> (Arc<RwLock<Self>>, CadenceHandle) {
         drop(tokio::runtime::Handle::try_current().expect(
             "Engine::into_shared spawns the cadence driver task and must be \
              called from within a tokio runtime (ENGINE_CADENCE_DRIVER.md §1)",
         ));
         let shared = Arc::new(RwLock::new(self));
-        let handle = Self::start_cadence(&shared);
+        let handle = Self::start_cadence(&shared, daemon_address);
         (shared, handle)
     }
 
@@ -405,8 +599,9 @@ where
     /// # Panics
     ///
     /// Same runtime requirement as [`into_shared`](Self::into_shared).
-    pub fn start_cadence(self_arc: &Arc<RwLock<Self>>) -> CadenceHandle {
-        let legs = production_legs(Arc::downgrade(self_arc));
+    pub fn start_cadence(self_arc: &Arc<RwLock<Self>>, daemon_address: &str) -> CadenceHandle {
+        let serving = ServingSlot::default();
+        let legs = production_legs(Arc::downgrade(self_arc), daemon_address, &serving);
         let weak = Arc::downgrade(self_arc);
         let poll = move || {
             let weak = weak.clone();
@@ -426,7 +621,13 @@ where
                 }
             }
         };
-        spawn_cadence_loop(production_schedule(), poll, legs, CHAIN_STALL_HORIZON)
+        spawn_cadence_loop(
+            production_schedule(),
+            poll,
+            legs,
+            CHAIN_STALL_HORIZON,
+            serving,
+        )
     }
 }
 
@@ -496,6 +697,17 @@ async fn run_cadence_loop<Sched, TipFn, TipFut>(
                 // known-stale view is the failure the tick base prevents.
             }
         }
+    }
+
+    // The loop has exited (cancellation or engine-gone): wind down anything
+    // the legs own, awaited, before the task ends — which is before
+    // [`CadenceHandle::shutdown`] returns. The serving-liveness leg's
+    // teardown stops the parked serving lifecycle here, so the embedder's
+    // shutdown sequence (cadence first, then P-scan) preserves
+    // stop-advertising-before-stop-scanning. Parked legs tear down too: a
+    // panicked leg must not leak the handle it holds.
+    for slot in slots {
+        slot.leg.teardown().await;
     }
 }
 
@@ -630,7 +842,13 @@ mod tests {
         legs: Vec<Box<dyn CadenceLeg>>,
         stall_horizon: Duration,
     ) -> CadenceHandle {
-        spawn_cadence_loop(EagerSchedule, scripted(polls), legs, stall_horizon)
+        spawn_cadence_loop(
+            EagerSchedule,
+            scripted(polls),
+            legs,
+            stall_horizon,
+            ServingSlot::default(),
+        )
     }
 
     #[tokio::test]
@@ -666,6 +884,7 @@ mod tests {
             scripted(polls),
             vec![RecordingLeg::recording("leg", &log)],
             Duration::from_secs(120),
+            ServingSlot::default(),
         );
         let alarms = handle.alarms();
         let mut handle = handle;
@@ -703,6 +922,7 @@ mod tests {
             ]),
             Vec::new(),
             Duration::from_secs(120),
+            ServingSlot::default(),
         );
         let alarms = handle.alarms();
         let mut handle = handle;
@@ -799,15 +1019,16 @@ mod tests {
         // is registration and invocation, not tick effect.
         let dead: Weak<RwLock<Engine<super::super::signer::SoloSigner>>> = Weak::new();
         let log = Arc::new(Mutex::new(Vec::new()));
-        let legs: Vec<Box<dyn CadenceLeg>> = production_legs(dead)
-            .into_iter()
-            .map(|inner| {
-                Box::new(Witness {
-                    inner,
-                    log: Arc::clone(&log),
-                }) as Box<dyn CadenceLeg>
-            })
-            .collect();
+        let legs: Vec<Box<dyn CadenceLeg>> =
+            production_legs(dead, "http://127.0.0.1:1", &ServingSlot::default())
+                .into_iter()
+                .map(|inner| {
+                    Box::new(Witness {
+                        inner,
+                        log: Arc::clone(&log),
+                    }) as Box<dyn CadenceLeg>
+                })
+                .collect();
         let handle = drive(
             vec![TipPoll::Height(1), TipPoll::Height(2)],
             legs,
@@ -816,7 +1037,7 @@ mod tests {
         let mut handle = handle;
         handle.join.take().expect("join").await.expect("loop exit");
         let fired = log.lock().expect("log").clone();
-        for leg in ["submit-lifecycle", "terminal-reject"] {
+        for leg in ["submit-lifecycle", "serving-liveness", "terminal-reject"] {
             assert!(
                 fired.contains(&(leg, 1)) && fired.contains(&(leg, 2)),
                 "{leg} must be registered and invoked on every advance, got {fired:?}"
@@ -824,8 +1045,12 @@ mod tests {
         }
         // Fire order is the §3 retire-before-assemble registration order.
         assert_eq!(
-            fired[..2],
-            [("submit-lifecycle", 1), ("terminal-reject", 1)],
+            fired[..3],
+            [
+                ("submit-lifecycle", 1),
+                ("serving-liveness", 1),
+                ("terminal-reject", 1)
+            ],
             "registration order must be preserved per tick"
         );
     }
@@ -846,6 +1071,7 @@ mod tests {
             || std::future::ready(TipPoll::Unavailable),
             Vec::new(),
             CHAIN_STALL_HORIZON,
+            ServingSlot::default(),
         );
         let cancel_probe = handle.cancel_token.clone();
         drop(handle);
@@ -859,7 +1085,177 @@ mod tests {
             || std::future::ready(TipPoll::Unavailable),
             Vec::new(),
             CHAIN_STALL_HORIZON,
+            ServingSlot::default(),
         );
         handle.shutdown().await;
+    }
+
+    /// A leg whose only job is proving [`CadenceLeg::teardown`] runs.
+    struct TeardownProbe {
+        log: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl CadenceLeg for TeardownProbe {
+        fn name(&self) -> &'static str {
+            "teardown-probe"
+        }
+
+        fn park_condition(&self) -> Option<AlarmCondition> {
+            None
+        }
+
+        fn fire(&mut self, _tip: u64) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+            Box::pin(async {})
+        }
+
+        fn teardown(self: Box<Self>) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+            Box::pin(async move {
+                self.log.lock().expect("probe log").push("torn-down");
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn leg_teardown_runs_before_shutdown_returns() {
+        // Cancellation path: shutdown must observe the teardown, not race it.
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let handle = spawn_cadence_loop(
+            EagerSchedule,
+            || std::future::ready(TipPoll::Unavailable),
+            vec![Box::new(TeardownProbe {
+                log: Arc::clone(&log),
+            }) as Box<dyn CadenceLeg>],
+            CHAIN_STALL_HORIZON,
+            ServingSlot::default(),
+        );
+        handle.shutdown().await;
+        assert_eq!(*log.lock().expect("probe log"), vec!["torn-down"]);
+    }
+
+    #[tokio::test]
+    async fn leg_teardown_runs_on_engine_gone_too() {
+        // The close path that never calls shutdown: the failed upgrade exits
+        // the loop, and anything a leg holds must still wind down.
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut handle = drive(
+            vec![TipPoll::EngineGone],
+            vec![Box::new(TeardownProbe {
+                log: Arc::clone(&log),
+            }) as Box<dyn CadenceLeg>],
+            CHAIN_STALL_HORIZON,
+        );
+        handle.join.take().expect("join").await.expect("loop exit");
+        assert_eq!(*log.lock().expect("probe log"), vec!["torn-down"]);
+    }
+
+    /// A schedule the test steps by hand: one tick per `send`, pending
+    /// forever once the sender drops (the loop then ends via cancel or
+    /// engine-gone). This is what lets a test interleave its own actions —
+    /// killing the serving task — between ticks deterministically.
+    struct StepSchedule(tokio::sync::mpsc::UnboundedReceiver<()>);
+
+    impl ScanSchedule for StepSchedule {
+        fn next_tick(&mut self) -> impl Future<Output = ()> + Send {
+            let recv = self.0.recv();
+            async move {
+                if recv.await.is_none() {
+                    std::future::pending::<()>().await;
+                }
+            }
+        }
+    }
+
+    /// Poll `probe` until it returns true or the budget runs out. The
+    /// serving task's exit and the leg's restart are both asynchronous to
+    /// the test; this is the bounded wait that observes them.
+    async fn eventually(mut probe: impl FnMut() -> bool, what: &str) {
+        for _ in 0..500 {
+            if probe() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("timed out waiting for: {what}");
+    }
+
+    /// Leg 2 end-to-end (`ENGINE_CADENCE_DRIVER.md` §3 leg 2, §7): against a
+    /// real staker engine, the serving-liveness leg starts the host when the
+    /// slot is empty, no-ops while it is live, and — the fire-once fix —
+    /// restarts it after the running task dies mid-session.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn serving_liveness_leg_starts_and_restarts_a_dead_serving_task() {
+        let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 11);
+        crate::engine::test_support::activate_persona(&engine, 3).await;
+        let arc = Arc::new(RwLock::new(engine));
+
+        let slot = ServingSlot::default();
+        let legs = production_legs(Arc::downgrade(&arc), "http://127.0.0.1:1", &slot);
+        let (tick, rx) = tokio::sync::mpsc::unbounded_channel();
+        let heights = std::sync::atomic::AtomicU64::new(0);
+        let handle = spawn_cadence_loop(
+            StepSchedule(rx),
+            move || {
+                let h = heights.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                std::future::ready(TipPoll::Height(h))
+            },
+            legs,
+            CHAIN_STALL_HORIZON,
+            Arc::clone(&slot),
+        );
+
+        // Tick 1: the slot is empty, the predicate holds, the leg starts
+        // the host.
+        tick.send(()).expect("loop alive");
+        eventually(
+            || {
+                slot.lock()
+                    .expect("slot")
+                    .as_ref()
+                    .is_some_and(ServingHandle::is_live)
+            },
+            "leg 2 to start the serving host from an empty slot",
+        )
+        .await;
+
+        // Kill the running task in place (a panic/Tor-drop stand-in),
+        // leaving the dead handle parked — the died-later case the
+        // unregister design could not recover.
+        slot.lock()
+            .expect("slot")
+            .as_ref()
+            .expect("parked handle")
+            .cancel();
+        eventually(
+            || {
+                slot.lock()
+                    .expect("slot")
+                    .as_ref()
+                    .is_some_and(|h| !h.is_live())
+            },
+            "the cancelled serving task to read dead",
+        )
+        .await;
+
+        // Tick 2: the predicate holds again (obligation exists, task not
+        // live); the leg reaps the dead handle and starts a fresh host.
+        tick.send(()).expect("loop alive");
+        eventually(
+            || {
+                slot.lock()
+                    .expect("slot")
+                    .as_ref()
+                    .is_some_and(ServingHandle::is_live)
+            },
+            "leg 2 to reap the dead handle and restart the host",
+        )
+        .await;
+
+        // Shutdown tears the restarted host down via the leg's teardown and
+        // releases the engine's serving slot guard.
+        handle.shutdown().await;
+        assert!(
+            !arc.read().await.open_slots.serving.is_claimed(),
+            "driver shutdown must wind the serving task down and release its slot"
+        );
     }
 }
