@@ -569,6 +569,49 @@ blocking current PR.
 
 ---
 
+## Review-round denominator (VC round 1/2, 2026-09-07)
+
+**A review round records what it did not find, separately from where it
+did not look.** "The round found nothing there" is evidence; "the round did
+not look there" is not, and a round that reports only its findings makes the
+two indistinguishable to every later reader — including the reader deciding
+whether a surface still needs review.
+
+This is `47-gate-subject-assertion.mdc`'s absence-of-signal rule applied to
+review itself, and `19-validation-surface-discipline.mdc`'s denominator
+applied to a round rather than to a test bundle. A findings list is a
+numerator; without its denominator, a clean surface and an unexamined one
+read identically.
+
+**Practice.** Close every round with a short "what this round did not find"
+paragraph naming the surfaces examined that yielded nothing. Name surfaces,
+not reassurances: "no finding against the canonicalisation rules, the
+one-definition-two-readers layout, or the tests, whose reds were observed
+under mutation" is a denominator; "everything else looks fine" is not. A
+surface nobody examined is named in the *next* round's scope, not in this
+one's clean list.
+
+**Two corollaries the originating round paid for.**
+
+1. **A good fix can hide the next question.** `VC-R2` closed a visible
+   two-call hole in a handshake; doing so removed the thing that would have
+   prompted "and what about the session?", so the mechanism then *looked*
+   complete (`VC-R8`). When a round closes a hole, ask what the hole was
+   making visible.
+2. **A relayed ruling is not a signature, and a round run on relayed rulings
+   says so in its banner.** The originating document recorded four
+   dispositions as RULED from a relay quoting the decision authority; the
+   provenance is part of the disposition, because if the words were never
+   said the section is not closed.
+
+**Anti-pattern.** A round that ends at its findings table, leaving a later
+reader unable to tell a reviewed-clean surface from an unvisited one.
+
+**Precedent.** `docs/design/CLIENT_VERSION_CONSTANTS_VALIDATION.md` §8, §9
+(`VC-R1`…`VC-R10`).
+
+---
+
 ## Recurrence protection
 
 These disciplines compound per `16-architectural-inheritance.mdc`
@@ -608,5 +651,7 @@ this section is the audit trail.
 - `docs/design/RANDOMX_V2_PHASE2C_AUDIT.md` — pre-flight trail.
 - `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` — R1-D3 (post-promotion
   audit-against-actual-code example).
+- `docs/design/CLIENT_VERSION_CONSTANTS_VALIDATION.md` — §8/§9 review
+  rounds; source of the review-round-denominator discipline above.
 - Landed via `chore/sub-pr-design-discipline` (closes
   `docs/FOLLOWUPS.md` V3.0 discipline-promotion item).
