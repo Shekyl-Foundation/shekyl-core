@@ -621,54 +621,215 @@ depending on whose address it is. Every mechanism added under this row must
 answer *does this let anything conclude that two observations involve the same
 party?* — and if yes, stop.
 
-### PWD-E8 — address volatility: the measurement owed before PWD-E7 is built
+### PWD-E8 — address volatility: the measurement PWD-E7 must ship **before** it can exist
 
-**OPEN — and it is derivable in half, which is why it is a measurement and not
-a guess.** Rick named it as the one place ephemeral-by-default could fail
-quietly: every default node re-addresses on restart, so gossiped overlay
-addresses have a shelf life. Each dead address is handled *cleanly* — a failed
-dial, aged out of gray — but a high enough dead fraction degrades overlay peer
-discovery while no individual case misbehaves.
+**DEFERRED, with a real external blocker and a falsifier chain.** An earlier
+revision of this row had the dependency **backwards** — it read "the measurement
+owed before PWD-E7 is built". Rick, 2026-09-08: *"we need to stress the fleet to
+get an actual read on T, so we need working code before we can come up with a
+REAL T rather than conjecture."*
 
-**The half that is derivable now, from shipped constants.** A gossiped address
-enters **gray**. On a saturated node the only prober is
-`gray_peerlist_housekeeping`, which draws **one random gray entry per zone per
-60 s** (`net_node.h:631`) from a pool capped at
-`P2P_LOCAL_GRAY_PEERLIST_LIMIT = 5000`. A uniform random draw with replacement
-gives an expected wait of `N` cycles for any specific entry:
+**`T` is the mean uptime between restarts of real nodes.** It cannot be derived,
+assumed, or read off a constant. Without E7 shipped there is no fleet running
+the thing whose volatility `T` describes, so **the measurement has no subject**.
+Building E7 first is not a convenience justified by "the mechanism is identical
+either way" — it is the only order that can produce `T` at all.
 
-> `D = N × 60 s = 5000 × 60 s ≈ **3.5 days**` — the mean time a gossiped overlay
-> address sits in a saturated peer's gray list before anything dials it.
+#### The half that IS derived, and may be stated as such
 
-**The half that must be measured: `T`, the mean uptime between restarts of a
-default-posture node.** The dead fraction at probe time is then
-`1 − e^(−D/T)`:
+A gossiped overlay address enters **gray**. On a saturated node the only prober
+is `gray_peerlist_housekeeping`, which draws **one random gray entry per zone
+per 60 s** (`net_node.h:631`) from a pool capped at
+`P2P_LOCAL_GRAY_PEERLIST_LIMIT = 5000`. A uniform draw with replacement gives an
+expected wait of `N` cycles for any specific entry:
 
-| `T` (mean uptime) | dead on probe |
+> `D = N × 60 s = 5000 × 60 s ≈ **3.5 days**` — derived from shipped constants,
+> and statable as derived. It moves with the gray cap and the cadence, so
+> changing either re-opens this row.
+
+#### The half that is CONJECTURE until the fleet reports
+
+The dead-on-probe fraction is `1 − e^(−D/T)`. **`T` is unmeasured, so every
+number below is conjecture in Rick's own word — not a property of this network,
+and not merely "conditional".**
+
+| **assumed** `T` | model output **if `T` were that** |
 |---|---|
 | 30 days | ~11 % |
-| 14 days | ~22 % |
 | 7 days | ~39 % |
-| 3.5 days | ~63 % |
 | 1 day | ~97 % |
 
-**So the ruling threshold is a statement about `D/T`, not about either alone**,
-and the shape of the answer is already visible: at weekly restarts nearly two
-in five gossiped overlay addresses are dead before they are tried, and the
-degradation is in *pool quality*, not in any single dial.
+> **Quotation rule.** These may appear only in the form *"assuming `T` = 7 days,
+> the model gives ~39 %"* — never as a property, and **never in a summary line
+> where the assumption can be dropped in a restatement.** A figure that loses its
+> qualifier reads as measured, which is worse than no figure.
 
-**Three things this round must not do**, each of which would look like progress:
+#### The falsifier is a CHAIN, and every link is named
 
-- **Do not shorten `D` by probing gray harder.** That trades one measured
-  quantity for unmeasured dial volume on an overlay, and PWD-B1's rate limiting
-  has no derived parameters yet.
-- **Do not conclude "clean per-case failure ⇒ acceptable aggregate."** That is
-  the exact inference Rick flagged; it is what makes this failure quiet.
-- **Do not read `D` as fixed.** It is `N × 60 s` — it moves with the gray cap
-  and the housekeeping cadence, so any change to either re-opens this row.
+"Blocked on `T`" alone would leave a reader thinking a rig run produces it. It
+does not: **Q12-D6a is the instrument, not the source.** The source is nodes
+restarting in the wild under load.
 
-**Measurement rig: Q12-D6a**, which already exists for fleet peer-discovery
-observations. `T` is the new input it must carry.
+> **E7 ships → nodes run it → the fleet is stressed → `T` is measured under
+> those conditions → the threshold becomes Rick's.**
 
-**Blocker: none.** `D` is derived above; `T` needs fleet data the rig can
-produce; the threshold is Rick's to rule once both are in hand.
+Each link is a real precondition: no ship, no fleet; no fleet, no restarts; no
+stress, no admissible `T`; no `T`, no threshold.
+
+#### What makes a `T` admissible — stated because this is where the number goes wrong
+
+Restart behaviour **under load** is the thing being measured, and **a quiet fleet
+reports a `T` that flatters the design**. An inadmissible `T` that gets quoted is
+worse than no `T`, because it reads as measured. A `T` is admissible only with:
+
+- **Duration** — long enough to observe restarts, not a brief run whose window
+  is shorter than the restart interval it is trying to estimate.
+- **Stressor** — the fleet under load, since load is what causes the restarts
+  (OOM, operator intervention, upgrade cycles) that `T` is about.
+- **Heterogeneity** — not a homogeneous set of well-behaved nodes. A fleet of
+  identical healthy hosts measures the operator's discipline, not the network's.
+
+Any `T` reported without all three is not the `T` this model needs, and the row
+should reject it rather than absorb it.
+
+#### Blocker (rule 22)
+
+**Named external blocker: `T` cannot exist until E7 ships and a stressed,
+heterogeneous fleet runs long enough to observe restarts.** Zero symbols; one
+FOLLOWUPS row; lifts exactly when the chain above completes. The acceptable
+threshold is **Rick's** to rule once `T` is in hand — it is a judgement about
+whether overlay *discovery* converges, not about whether individual dials
+succeed.
+
+**Three non-fixes, named so they cannot look like progress:**
+
+- **Do not shorten `D` by probing gray harder** — trades a measured quantity for
+  unmeasured overlay dial volume, and PWD-B1's rate limiting has no derived
+  parameters yet.
+- **Do not infer an acceptable aggregate from the clean per-case failure** —
+  that inference is exactly what makes this degrade quietly.
+- **Do not substitute a convenient `T`.** An assumed value that survives one
+  restatement becomes a measured one.
+
+### PWD-E9 — PWD-E7's isolation boundary: what "the daemon gets its own path" forbids
+
+**RULED by Rick (relayed 2026-09-08):** *"the daemon needs it's own path we DO NOT
+want crossover between the daemon and archival-serving P."* The second clause is
+the binding one — this is an **isolation requirement between two identities that
+must not be linkable**, not a crate-layout preference.
+
+#### Sharing code is not crossover. Sharing state is.
+
+Reusing the control-protocol client, the `AddOnion` request type and the reply
+evaluator is **library reuse**; duplicating them would be the deliberate-duplicate
+error this program has ruled against repeatedly. What must not be shared is
+anything that lets an observer, or a compromised component, place the daemon's
+P2P onion and the archival-serving persona's onion **on the same host**.
+
+#### The enumeration — a reviewer checks the diff against this table
+
+| Shared-resource class | Shared? | Why |
+|---|---|---|
+| tor **process / instance** | **NO** | the root of every linkage below; one process is one guard set, one descriptor-publishing identity, one crash domain |
+| **control connection** + authed session | **NO** | a single authenticated session that can `ADD_ONION` both services is a component that, once compromised, links them by construction |
+| **supervisor** and its state | **NO** | `TorService` holds cross-incarnation state; a supervisor that knows both is a join |
+| **vanguard / guard set** | **NO** | `vanguard_rotation` is explicitly *"supervisor-scoped state that outlives Tor incarnations"* — persisted and authoritative. Two services under one supervisor share the guard topology **by construction**, not by accident |
+| **circuits**, SOCKS isolation credentials | **NO** | follows from the process split; per-`P` `IsolateSOCKSAuth` isolates within an instance, not across identity domains |
+| **onion identity / service key** | **NO** | trivially — different services |
+| **data directory** | **NO** | holds the control cookie and tor state; a shared directory re-links what the process split severed |
+| control **cookie / auth file** | **NO** | consequence of the data directory and the control connection |
+| control-protocol **client code** (types, parser, `AddOnion`, reply evaluation) | **YES** | library. No runtime state crosses; duplicating it is the ruled-against error |
+| tor **binary discovery + hash pin** | **YES, as policy** | a verification *rule*, not a runtime handle. Both sides should verify the same binary against the same pin; that shares a decision, not a session |
+| **listening ports** | **NO**, and must not collide | not shared state, but two instances need disjoint control/SOCKS ports — an allocation constraint the build must make explicit rather than discover |
+
+**Two of the three ambiguous classes are now RULED (Rick, 2026-09-08); the
+third remains open.** They were named rather than decided quietly because an
+ambiguous class settled silently is how crossover arrives later as a
+convenience.
+
+- **Operator config file — SEPARATE FILES.** One `shekyl.conf` naming both tors
+  would be a shared *file* and not shared runtime state, so nothing links the
+  identities at runtime. It is nevertheless the single place an operator can
+  mis-wire both onto one instance, and that failure would present as a config
+  typo rather than a design breach. The convenience is small; the failure is
+  exactly the crossover this row forbids.
+- **Log sinks — SEPARATE SINKS.** Both sides already treat control-channel data
+  as a forensic surface that must not be logged, so a shared sink does not link
+  the identities *today*. It is where a future "just log the onion address for
+  debugging" would link them in one line that looks harmless. Separate sinks
+  mean that line cannot do damage even if someone writes it.
+- **Managed-tor launch path — RULED: MANAGED.** Rick, 2026-09-08: *"yes,
+  managed - the daemon can spawn it's own TOR."* The launch **code** is
+  therefore shared between the two sides while the **instances** must not be,
+  which is the sharpest remaining crossover risk in this row: reuse looks safe,
+  and it is the most plausible route to one process serving both identities.
+  **The mitigation is structural, not procedural** — the launch path moves into
+  the neutral crate and takes the instance's identity (data directory, control
+  port, service key) as a *parameter*, so a caller cannot obtain the other
+  side's instance by reusing the function. Sharing the code cannot produce a
+  shared instance, and an attempt to would be a compile-time argument error
+  rather than a convention someone remembers to follow.
+
+#### The apparent contradiction with the accepted §7 residual, and why it is not one
+
+A reviewer will find this and should find the answer here first.
+`ARCHIVAL_BOND_2D2_SP_T0_TOR.md` and `..._TRANSPORT_PLAN.md` record a **ratified
+residual**: `P` and the principal share one guard set, and the docs say
+explicitly **"do not split instances to 'fix' it"** — because a non-default
+config is itself a fingerprint to a guard observer, a weaker adversary than the
+correlator a shared guard exposes.
+
+**That ruling is about splitting ONE application's identities across two
+instances. This ruling is about TWO applications not sharing one.** They are
+different operations and the §7 reasoning does not transfer:
+
+- The wallet's `P` and principal are both **wallet** identities inside one trust
+  domain, and the residual was priced within it.
+- The daemon's P2P onion is a **different domain**. Placing it on the wallet's
+  tor would extend an accepted intra-wallet residual to a pairing nobody priced.
+- Two applications each running their own tor is not a non-default config; it is
+  two programs each doing the ordinary thing.
+
+**And there is an asymmetry that makes the crossover strictly worse than the
+residual it resembles.** Under PWD-E7 the daemon's onion is **ephemeral** — it
+re-addresses every boot — while the serving persona's is **durable**. On one
+instance, a guard observer watches a durable identity share its guard set with a
+service that re-addresses repeatedly, which is a **repeated** correlation
+opportunity against the durable identity. The §7 residual has no such generator:
+both wallet identities are durable. So the accepted-residual argument does not
+merely fail to transfer — it points the other way.
+
+#### Crate shape (rule 25), proposed
+
+The test the peer named is the right one: **neither crate's docs should have to
+describe the other's posture.** `shekyl-tor` today opens *"Wallet-owned Tor
+integration for the 2d-2 archival firewall (SP-T0)"*, so the daemon cannot
+become a second consumer of that ownership without making that sentence false.
+
+- **Lift** the protocol layer — control client, `AddOnion`/reply types, reply
+  evaluation, binary verification — into a crate **neither side owns**.
+- **`shekyl-tor` keeps the wallet supervisor**: vanguard rotation, serving
+  posture, SP-T0 policy. Its doc sentence stays true.
+- **A new daemon-side crate owns the ephemeral posture**: mint, publish, read the
+  `ServiceID`, tear down on shutdown. No vanguard state, because an ephemeral
+  address has no tenure to protect.
+
+**Not proposed: the daemon driving `TorService`.** It is a supervisor for a
+long-lived managed tor with vanguard pinning and a retry policy — the wallet's
+posture. Driving it from the daemon imports exactly the state this row forbids.
+
+**All three ambiguous classes are now ruled; nothing in this row is owed before
+code.** The launch-path ruling is the one that changed what gets built:
+
+> **Managed.** The daemon spawns its own tor, so the default posture works
+> without the operator configuring a control port first — a default nobody
+> reaches is not a default. The cost accepted with it is that the launch code is
+> shared, and the mitigation for that cost is **structural**: the launch path
+> lives in the neutral crate and takes the instance's identity as a parameter,
+> so a caller cannot reach the other side's instance by reusing the function.
+> **The rule this row hands the implementation: no launch entry point may
+> default, infer, or discover which instance it is starting.** Every one of data
+> directory, control port and service key arrives from the caller. An
+> implementation that adds a convenience overload without them re-opens exactly
+> the crossover this row forbids, and the gate against it is that the overload
+> would not compile without inventing the values.
