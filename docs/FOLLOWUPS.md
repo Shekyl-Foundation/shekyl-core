@@ -131,6 +131,14 @@ Default. Lands before genesis if it should exist at launch.
 - **`sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide
   - Target: pre-genesis
 
+- **Forfeited-claim record does not survive a wallet restart.** The cadence
+  driver's evaluate-and-forfeit (`ENGINE_CADENCE_DRIVER.md` §4) raises
+  `ClaimForfeited` as a session-lifetime alarm; nothing re-detects the forfeit
+  after a restart, so it is the `AlarmLifetime::LatchedRederived` reopening
+  criterion's named third-class candidate — durable acknowledgment state the
+  channel deliberately does not have yet.
+  - Target: pre-genesis
+
 - **Drain/claim/unbond dispatch driver — terminal-reject prune + byte-identical resubmit remain (confirmation-observe landed 2026-08-27, #572; the unbond lane joined the residue with #601, which landed the SEAM-side release for a definite first-send refusal — `RejectedTerminal` on the one send the seam itself makes — leaving exactly the driver legs the other two lanes carry: crash-window/ambiguous resubmit, and the driver-side prune for records a future resubmit path re-sends).**
   - **PR-C made this residue USER-VISIBLE (2026-09-03):** `unstake` is reachable, and an ambiguous/held exit now surfaces as `-29522 UNSTAKE_FATE_UNKNOWN` (seal held funds-safe, lane shut, stall alarm in the operator log) with **no recovery verb** — the honest rendering of this unbuilt driver, stated in the contract rather than hidden. The prune half remains a SECURITY item (below); never land resubmit alone.
   - The prune is a **security** item, not only hygiene (raised 2026-08-31, PR-A): a terminal `DoubleSpendConflict` on an Unbond is terminal on *remedy*, not on impossibility — a partial slash then a compensating `Rebond` can restore the balance these bytes bind (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1, UB2 note). The retained copy is the replay channel, and pruning it is what closes it; the reference age window is the only other bound.

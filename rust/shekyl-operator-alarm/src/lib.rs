@@ -83,6 +83,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cadence;
 pub mod disk;
 pub mod serve_set;
 pub mod tor_posture;
@@ -124,6 +125,34 @@ pub enum AlarmCondition {
     /// do, and applies to a market archiver exactly as much as to a
     /// foundation node (`COMPLETETREE_ACTIVATION.md` Q-2).
     ServingDiskHeadroom,
+    /// Whether the wallet's view of the chain is advancing.
+    ///
+    /// The cadence driver's tick base is chain progress
+    /// (`ENGINE_CADENCE_DRIVER.md` §2): legs fire only when the observed tip
+    /// advances, so a stalled chain view silences every leg at once. That
+    /// silence must be observable — a chain-progress tick that goes quiet and
+    /// a healthy wallet with nothing to do read identically without this row.
+    /// Applies to every wallet, staker or not: the submit-lifecycle leg runs
+    /// for all of them.
+    ChainProgress,
+    /// Whether settlement epochs this staker earned in are being claimed.
+    ///
+    /// The claim leg fires per epoch close and may legitimately no-op
+    /// (value-defer holds epochs below the fee floor — that is policy, not a
+    /// fault). This condition carries the *fault* readings: a sealed claim
+    /// that is not confirming, or epochs accumulating past the point the
+    /// policy says they should have fired.
+    EpochClaim,
+    /// Whether claimable value has been forfeited — held epochs that reached
+    /// the claim-window floor still underwater and were let expire
+    /// (`ENGINE_CADENCE_DRIVER.md` §4, evaluate-and-forfeit).
+    ///
+    /// Its own condition rather than an [`Self::EpochClaim`] reading because
+    /// the two coexist: a forfeit on epoch `E` is a standing fact while a
+    /// later epoch's claim is pending, and one condition row holds at most
+    /// one live alarm — folding them would make the newer reading overwrite
+    /// the record of lost value.
+    ClaimForfeiture,
 }
 
 /// Whether a condition's tripwire can currently fire.
@@ -189,6 +218,12 @@ pub enum DisarmedReason {
     /// [`Self::TransportStopped`]: that one is the tor supervisor's
     /// channel closing; this one is the serving lifecycle itself.
     NotServing,
+    /// The cadence-driver leg observing this condition panicked and was
+    /// parked for the session (`ENGINE_CADENCE_DRIVER.md` §3 leg isolation:
+    /// a panicking leg must not stop the others, and a parked leg must not
+    /// read as a healthy one). The remedy is a wallet reopen after the
+    /// panic's cause is understood.
+    DriverLegParked,
 }
 
 /// How a raised alarm's **observable** behaves once the condition is raised.
@@ -358,6 +393,41 @@ pub enum OperatorAlarm {
         /// Members whose leaf bytes were already gone at the last pin.
         members: u32,
     },
+    /// The observed daemon tip has not advanced past the cadence driver's
+    /// wall-clock watchdog horizon. Every driver leg is silent while this
+    /// stands — deliberately, since firing against a known-stale view is the
+    /// failure the chain-progress tick base exists to prevent
+    /// (`ENGINE_CADENCE_DRIVER.md` §2; an eclipsed staker auto-claiming
+    /// against an attacker's chain view is the named hazard). The remedy is
+    /// daemon-side: connectivity, sync, or the daemon process itself.
+    ChainProgressStalled {
+        /// The last tip height the driver observed.
+        last_height: u64,
+        /// How long ago it observed it, in seconds.
+        stalled_for_secs: u64,
+    },
+    /// A settlement epoch this staker earned in remains unclaimed past the
+    /// point the claim policy says it should have fired — a sealed claim not
+    /// confirming, or the leg failing pre-seal across consecutive ticks.
+    /// Value-deferred epochs (held below the fee floor by policy) do **not**
+    /// raise this; deferral is a decision, not a fault.
+    EpochUnclaimed {
+        /// The oldest epoch outstanding.
+        oldest_epoch: u64,
+        /// How many settled epochs are outstanding in total.
+        outstanding_epochs: u64,
+    },
+    /// Held epochs reached the claim-window floor still underwater and were
+    /// let expire (`ENGINE_CADENCE_DRIVER.md` §4 evaluate-and-forfeit:
+    /// forcing a claim whose fee exceeds its value converts a zero into a
+    /// negative). The value is gone; this alarm is the operator's record of
+    /// it for the session.
+    ClaimForfeited {
+        /// The newest forfeited epoch.
+        epoch: u64,
+        /// Total value forfeited this session, in atomic units.
+        forfeited_atomic: u64,
+    },
 }
 
 impl OperatorAlarm {
@@ -396,7 +466,21 @@ impl OperatorAlarm {
             | Self::ServeSetRolledBack { .. }
             // Freeing space ends it outright, and the next probe says so —
             // there is no evidence that outlives the condition here.
-            | Self::ServingDiskLow { .. } => AlarmLifetime::Episode,
+            | Self::ServingDiskLow { .. }
+            // The tip advancing ends the stall; a claim confirming ends the
+            // backlog. Both re-derive trivially on the next tick.
+            | Self::ChainProgressStalled { .. }
+            | Self::EpochUnclaimed { .. }
+            // Episode because the producer never clears it inside a session —
+            // the alarm stands on its own condition row until close, which is
+            // the strongest record this channel can hold. NOT
+            // `LatchedRederived`: nothing re-detects a forfeit after a
+            // restart (the expired epoch's claim window is gone and no
+            // durable record is written), so per that variant's reopening
+            // criterion this is the named third-class candidate — durable
+            // acknowledgment state, tracked in `docs/FOLLOWUPS.md`
+            // ("Forfeited-claim record does not survive a wallet restart").
+            | Self::ClaimForfeited { .. } => AlarmLifetime::Episode,
         }
     }
 
@@ -415,6 +499,9 @@ impl OperatorAlarm {
             | Self::ServeSetRolledBack { .. }
             | Self::ServeSetBytesPruned { .. } => AlarmCondition::ServeSetIntegrity,
             Self::ServingDiskLow { .. } => AlarmCondition::ServingDiskHeadroom,
+            Self::ChainProgressStalled { .. } => AlarmCondition::ChainProgress,
+            Self::EpochUnclaimed { .. } => AlarmCondition::EpochClaim,
+            Self::ClaimForfeited { .. } => AlarmCondition::ClaimForfeiture,
         }
     }
 }
