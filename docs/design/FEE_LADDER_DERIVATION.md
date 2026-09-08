@@ -195,6 +195,43 @@ under the registered traffic model (§1.8).
   is quantized (registered remedy: powers of 2, i.e. `C` snapped to
   `2^round(log2 C)`) before entering the formula, and dwell is re-measured.
   If it still fails, the failure is surfaced in §8.
+**Post-registration note (rounds 14–15): (a)'s STATED RATIONALE is
+refuted, and the replacement rationale is thinner than round 14 first
+claimed.** §4.5b establishes that a
+posted fee value's cohort is not the anonymity quantity this criterion
+assumed: construction time is already public at finer resolution via
+`reference_block`, and `C_q` is deterministic from public state, so the
+fee is redundant with the block carrying it. **The dwell figure is
+therefore NOT protecting the cohort of a conforming transaction.** Round 14 proposed *stale-quote self-marking* as the
+replacement subject. **Round 15 retracts that too**: `check_fee` is a
+floor, not an equality (§4.5b), so a stale quote that still clears the
+floor is accepted and invisible, and a fee differing from its including
+block's rate is the ordinary case rather than a mark. The only real
+observable is **implementation divergence** — a fee outside the small
+set of `C_q` values spanning the construction window — and dwell's
+relationship to it **points the wrong way**: fewer rate changes mean
+fewer occasions on which a divergent implementation can betray itself.
+That is a benefit to a broken wallet, and only derivatively to its
+users; a privacy system should fix divergent implementations, not
+lengthen the interval that hides them.
+
+**So FL-C4a is NOT retained as an anonymity criterion.** What survives
+is non-anonymity and should be named as such: served-value churn is a
+**quantization-quality and user-predictability** property — a fee quote
+that changes every 3–6 blocks is a bad quote, independent of who is
+watching. Every decision the criterion drove still stands on that
+ground (raw `C` fails it hardest; quantization passes), which is why
+nothing downstream moves — but the criterion should no longer be cited
+as protecting a transaction's cohort, and any future round that leans
+on it for anonymity is leaning on a refuted premise. The registered
+text above is not rewritten (it is committed history); this note is the
+disclosure. **The tautology hazard that would have arisen under
+FL-R18 (c) does not arise under (a)**, since no mechanism enforces the
+property — but the concern is kept on record: had (c) shipped, this
+gate would have displayed green forever, and any future proposal to
+*enforce* dwell inherits the obligation to replace this subject with a
+check on the mechanism (restart-inclusive floor application).
+
 - **(b) Usage-share floor.** Any rung with predicted usage share < 5% under
   §1.8 must be **deleted or explicitly ruled an emergency lane** whose users
   accept being marked (a §8 row either way). A rung nobody uses is pure
@@ -318,6 +355,13 @@ by FL-R17.
 ## §2 Verification findings (pre-model; each anchored)
 
 ### FL-V1 — Validation uses the modulated reward; the estimate does not — premise (2) STANDS
+
+> **DISCHARGED at #640 (§4.6).** The divergence this section records is
+> closed: with FL-R12′ in the tree both sides agree at exhaustion. What
+> follows is the evidence the ruling was made on, in the tense it was
+> found in — it cites `shekyl_apply_release_multiplier` and the
+> supply-headroom cap, both of which #640 deleted. Read it as the record,
+> not as a description of the current call graph.
 
 - Block validation (`validate_miner_transaction`,
   `blockchain.cpp:1789`) calls the **six-argument** `get_block_reward` with
@@ -737,7 +781,7 @@ stationary tail and structurally cannot fail for ≤ 2 posted values.
 **swept at round 11 over every registered age at its projected (coupled)
 supply state** — `{0, 1, 4, 12, 30}` years; earlier revisions measured
 the single age-4 state, and age moves `C` relative to every pow2
-boundary (200 runs total); **at round 12 the traces EVOLVE chain state per block**
+boundary (**240 runs total** — six modes × eight scenarios × five ages; the figure read 200 until the rate-limited mode joined the dwell sweep at round 13 and the count was not re-derived, corrected here from the run); **at round 12 the traces EVOLVE chain state per block**
 (`already_generated` advances by the shipped paid emission; height, σ,
 supply and reward all drift — §1.8's quasi-static claim is confirmed by
 measurement, not assumed); "current" is the churn baseline, so the table
@@ -779,14 +823,39 @@ scenario passes the ramp's own registered bar (min in-ramp run 1 457 ≥
 60; the round-12 gate correction measures each scenario kind against
 ITS registered statistic) while flickering identically in its
 stationary tail — the stationary rows carry the verdict. FL-C4a verdict:
-`C` enters the formula only as `C_q` (ceiling, behind the §7
-hysteresis). Residual, re-measured on the evolved traces: boundary-
+`C` enters the formula only as `C_q` (ceiling; the §7 hysteresis was
+behind it when this verdict was taken and is no longer on the served
+path — FL-R3. The verdict does not turn on the band: the ceiling clears
+the dwell gate with it or without it, 446 and 464 blocks). Residual,
+re-measured on the evolved traces: boundary-
 parked states still 2-cycle on the un-hysteretic map, and at the
 high-elasticity corner a residual oscillation SURVIVES the hysteresis
 band — measured, bounded, and surfaced as **FL-R18** (§4.5, §8), not
-smoothed over.
+smoothed over. **Round 14 re-reads this section's own premise:** the
+cohort arithmetic above assumes the fee is the only time signal, and it
+is not — `reference_block` is public and finer-grained (§4.5b) — so the
+residual is accepted as bounded and the criterion is re-grounded — at
+round 15, on quantization quality and predictability rather than on any
+anonymity property at all (§1.4 note). The dwell numbers stand; what
+changes is what they are evidence FOR.
 
 ### §4.5 Feedback (FL-C7) — measured on the SERVED map (re-run at round 3; swept over the reachable interior at round 11)
+
+> **Which map is "served", and a temporary gap.** This section is written
+> about the pow2 ceiling *behind the §7 hysteresis band*, and round 17
+> RULED that this is the map the daemon serves (**FL-R3**, §8). The
+> measurements below are the design's and stand as ratified.
+>
+> The shipped daemon does not yet meet them: #640 review cycle 5 found
+> the band unreachable on the served path — `blockchain.cpp` passes
+> `prev_cq = 0` — and restoring it needs a grid-anchored previous value,
+> which is a design change coming back as its own round. So until that
+> lands, the daemon serves the un-hysteretic ceiling: dwell is
+> unaffected (464-block minimum median against the banded 446, bar 240)
+> and the rejection race moves three cells, but the FL-C7 residual is
+> 1 161 worst tail transitions rather than 24. Read "the served map"
+> below as the RULED map; FL-R3 carries the gap and its two binding
+> constraints.
 
 An earlier revision measured this criterion on the raw-`C` ladder with the
 demand fixed point pinned at baseline — a map the §5.2 proposal does not
@@ -822,8 +891,7 @@ frozen-state traces it converged every cell.
 counter (one tail transition = a secular boundary crossing, the system
 tracking real state change; ≥ 2 = oscillation):
 
-- **154 cells: secular single crossings** (70 ceiling, 70 hysteresis,
-  14 raw) — σ-decay pushes `C` across a boundary once; the served value
+- **230 cells: secular single crossings** — σ-decay pushes `C` across a boundary once; the served value
   steps once and holds. Pass.
 - **Plain ceiling: 20 oscillating cells** at full `C_q` amplitude,
   worst 1 177 transitions in the 3 000-block tail — the round-11
@@ -841,13 +909,226 @@ tracking real state change; ≥ 2 = oscillation):
   Under-one-step drift fills most of its remaining cells.
 
 FL-C7: **pass on the CONSTRUCTED map for every state except the
-boundary-parked high-elasticity corner, which is SURFACED as FL-R18
+boundary-parked high-elasticity corner, which was SURFACED as FL-R18
 (§8) per §1.7's own chain** — "if still divergent, surface in §8; do
 not ship a smoothed number whose stability is unproven." The §7
 hysteresis requirement remains **load-bearing** (necessary: without it
 the map fails broadly) but is measured as **not sufficient at that
-corner**. (The instrument answers *stability*, not equilibrium
+corner**. **This is precisely the sentence FL-R3 now cashes out:** the
+requirement is load-bearing on FL-C7 and the daemon does not meet it,
+because the served path has no deterministic previous value to band
+against. **FL-R18 accepts that residual as bounded (round 14)**,
+after the mechanism proposed to close it was measured and rejected on
+its own terms (§4.5a) and the harm it was to prevent was refuted
+(§4.5b). The deadband/limit-cycle asymmetry still holds — a deadband
+cannot suppress a gain-≥2 feedback cycle — which is why no wider band
+is adopted either. Note for anyone
+re-reading `D = 50` as an odd corner: it is the volume at which
+`M_r = 1.0` by construction (`ratio = v/tx_volume_baseline`,
+baseline 50), i.e. the neutral point the release curve is calibrated
+around — a quiet mature chain sits at or near it, which is why the
+corner was not accepted as bounded. (The instrument answers *stability*, not equilibrium
 location — each cell's fixed point is at its own `D` by construction.)
+
+### §4.5a FL-R18's `N`, measured (round 13)
+
+The ruling requires `N` to come from the trace set. Candidates are the
+figures the register already contains — the ramp bar (60), the
+stationary dwell gate (240), the volume window (720) — plus midpoints.
+Swept over the same reachable interior, counting cells that oscillate
+beyond the registered one-rounding-step bar:
+
+| `N` (blocks) | oscillating cells | worst tail transitions |
+| --- | --- | --- |
+| (band only, no floor) | 14 | 24 |
+| 60 | 18 | 19 |
+| 120 | 36 | 16 |
+| 240 | 56 | 14 |
+| 480 | 71 | 8 |
+| 720 | 102 | 5 |
+
+**Read the two columns against each other — they move in opposite
+directions, and that is the finding.** The residual cycle's period is
+**125–429 blocks** (measured), so `N = 60` cannot bind on it at all and
+changes nothing. Above that the floor binds and the flip RATE falls as
+designed (24 → 14 → 5 transitions), but the cell COUNT rises, because a
+dwell floor is a DELAY in a feedback loop and delay is destabilising:
+holding the served value stale lets demand wander further before the
+fee corrects, which pushes previously-converging cells into the same
+slow cycle. One representative cell (age 30, `M = 3·Zm`, ε = 3,
+`D = 50`), band-only → `N = 240` → `N = 500`:
+
+| | transitions | fee range | `v_avg` range |
+| --- | --- | --- | --- |
+| band only | 24 | 1 400 ↔ 2 800 | 49–53 |
+| `N = 240` | 8 | 1 400 ↔ 2 800 | 43–53 |
+| `N = 500` | 6 | 1 400 ↔ 2 800 | 24–53 |
+
+Frequency improves, **amplitude does not** (one `C_q` step throughout),
+and the volume excursion widens monotonically.
+
+*(Round 14: (c) is WITHDRAWN and no `N` ships — this section is kept
+because it is the reproducible evidence for why, and because the
+delay-destabilises result outlives the disposition. Read below as "the
+best `N` available, and still not good enough.")*
+
+**Best candidate `N` = 240 blocks**, i.e. the FL-C4a stationary gate itself:
+the property the gate used to *check* becomes the property the
+mechanism *enforces*, which is the whole ground of the (c) ruling. At
+240 the representative cell's inter-flip dwell moves from ≈ 125 blocks
+(under the gate) to ≈ 375 (over it), and every open-loop dwell scenario
+still passes its registered gate (min median 342, min in-ramp 274).
+
+**What (c) does NOT do, stated plainly rather than smoothed:** it does
+not close FL-C7. The residual cells still cycle at one `C_q` step of
+amplitude, which exceeds C7's "≤ one fee-rounding step", and at
+`N = 240` MORE cells exhibit that slow cycle (56) than exhibited the
+fast one (14). The trade (c) actually makes is **fast
+anonymity-harmful oscillation → slow anonymity-safe oscillation, at
+the cost of breadth and of a wider volume excursion.** That is a good
+trade on the ruling's own reasoning — dwell is the anonymity property
+and it is now structural — but it is a *different* outcome from "the
+14 cells close", which is what the ruling's instruction anticipated.
+**Recorded for the countersignature: this trade is a fact the ruling
+was made without, and if it changes the answer the row reopens.**
+
+### §4.5b The rejection race, measured (round 14) — and the anonymity premise, refuted
+
+FL-R18 was surfaced on an anonymity premise: that a fee value flipping
+faster than 240 blocks shrinks the cohort a transaction hides in. **That
+premise was examined at source and does not hold.** Two legs, both
+verified in this tree rather than argued:
+
+1. **Construction time is already public, at finer resolution than the
+   fee.** A transaction carries `reference_block: [u8; 32]` **in the
+   clear** on the wire (`shekyl-wire` `transaction.rs`, written
+   unconditionally), and the daemon's acceptance window is
+   `FCMP_REFERENCE_BLOCK_MIN_AGE = 5` to `MAX_AGE = 100`
+   (`shekyl-daemon-rpc`). An observer maps hash → height for free, so
+   build time is exposed to within that window — against a fee flip
+   whose resolution is 125–429 blocks. **The fee's timing signal is
+   dominated, not merely weakened.** The cohort arithmetic in §4.4
+   inverts with it: that section's "~10⁶ txs per stable fee value"
+   assumes the fee is the ONLY time signal, and the reference-block
+   cohort (one block's transactions, or a few thousand across the
+   admissible window) is *smaller*.
+2. **The fee is redundant with the block that carries it.** `C_q` is a
+   deterministic function of public chain state, so every conforming
+   wallet at a height computes the same value — a fact this document
+   already asserted in its own W3 wargame row while §4.4 built a gate on
+   its opposite. An observer reading a transaction in a block derives
+   the schedule's rate from the block itself; the fee field partitions
+   transactions exactly the way the blocks already partition them.
+   **Redundant data leaks nothing.**
+
+**The residual, corrected at round 15 — and the first statement of it
+was wrong.** Round 14 wrote that a transaction whose fee "does not match
+the schedule" self-marks, naming staleness as the cause. That does not
+distinguish anything, because **`check_fee` is a FLOOR, not an
+equality**: `if (fee < needed_fee - needed_fee/50) reject`
+(`blockchain.cpp`). A fee differing from the rate of the block that
+includes it is the ORDINARY case — every transaction that waits across
+a rate change lands that way and is accepted, as does anyone who
+deliberately overpays. Stale wallet and honest-but-delayed wallet are
+indistinguishable, and neither is marked.
+
+**What can actually be compared is the fee against the transaction's own
+`reference_block`** — both travel in the clear, and `C_q` at a height is
+public and deterministic. But the comparison is not equality either, and
+the reason is structural: a conforming wallet fetches its estimate from
+`get_dynamic_base_fee_estimate`, which computes at the **tip**
+(`m_db->height()`), while it anchors at `tip − REF_ANCHOR_AGE` with
+`REF_ANCHOR_AGE = FCMP_REFERENCE_BLOCK_MIN_AGE + 1 = 6`. **Fee and
+reference height are six blocks apart by construction**, so requiring
+`fee == C_q(reference_height)` would mark conforming wallets — precisely
+those built in the six blocks after a rate change.
+
+The honest observable is therefore set membership: is the fee in
+`{ C_q(h) : h across the plausible construction window }`? Because the
+served value changes rarely, that set holds one or two values. **A
+wallet posting a value outside it has revealed an IMPLEMENTATION
+DIVERGENCE — it computes the ladder differently — not staleness**, since
+a stale wallet whose quote still matches some height in the window is
+invisible, and one whose quote is older than any change is caught only
+if a change happened at all. **The residual is implementation
+divergence, and it is small.**
+
+**What survives the refutation** is not anonymity but two plain harms:
+the quote-then-broadcast **rejection race**, and user-facing
+unpredictability. The race is the one with teeth, so it was measured.
+
+**Measurement.** Along every trace, the SERVED economy rung — the
+ladder's floor rung clamped up to the relay floor at quote time (§5.2) —
+is compared against the floor at admission `L` blocks later, applying
+`check_fee`'s 2% buffer. Lags are stated: **1** (built and broadcast
+inside a block), **3** ≈ 6 min (FCMP++ proving at the rule-76 device
+floor, human confirmation, Dandelion++ stem embargo), **25** ≈ 50 min (a
+signing session left open), and **100** — the protocol's own ceiling,
+`FCMP_REFERENCE_BLOCK_MAX_AGE`, past which no conforming transaction can
+be submitted at all.
+
+**Refusals: 0 of 72 000 000 quotes, at every lag, across the swept
+interior and at the oscillating cells alike — and that zero proves
+nothing.** It is structural: these traces hold the median fixed, and
+with a fixed median the relay floor is monotonically NON-INCREASING
+(reward decay only shrinks `R`), while the clamp puts every quote at or
+above the floor it was issued against. A refusal was impossible by
+construction, so the count is an artifact of the model, not evidence
+about the chain.
+
+**What actually governs the race is the MARGIN a quote carries over its
+floor**, and that is measurable here. A quote survives a median
+contraction of factor `f` exactly when `f² ≤ (served/floor)·(100/98)`:
+
+| served map | median margin | 5th pct | cells < 2% headroom | contraction survived at worst |
+| --- | --- | --- | --- | --- |
+| **ceiling `C_q`, no band — THE SERVED MAP** | **2.10×** | **1.00×** | **25 / 800** | **1.010×** |
+| ceiling + §7 band (NOT served — see FL-R3) | 2.10× | 1.00× | 22 / 800 | 1.010× |
+| raw `C` (rejected) | 1.29× | 1.00× | 165 / 800 | 1.010× |
+| + dwell floor `N = 240` (withdrawn) | — | — | 27 / 800 | 1.010× |
+| + dwell floor `N = 720` (withdrawn) | — | — | 39 / 800 | 1.010× |
+
+*(Re-measured against the SHIPPED owner at the implementing PR, #640.
+The instrument had been scaling already-truncated rungs while
+`corrected_fee_ladder` divides once with `C_q` in the numerator, so
+these figures previously described an arithmetic nothing serves — 51 /
+49 / 181 / 52 / 64. The instrument now calls the owner, so that drift
+cannot recur; every conclusion below is unchanged and the exposure is
+smaller.)*
+
+So in **3.1% of served-map states (25 of 800) the clamp is live with
+under 2% headroom**, and there a median contraction of just **1%**
+inside the quote window refuses the transaction. The thin states are not
+spread across the grid: **23 of the 25 sit at the widest median (50·Zm)
+and 16 at the oldest age**, the degenerate regime where the ladder rung and the
+floor both collapse toward the 1-atomic minimum and the 5% gap between
+them vanishes into integer truncation. **This also corrects §5.4's "the
+clamp is never live on the reachable grid":** measured on the
+drift-honest interior it is live in that regime.
+
+**The finding that decides FL-R18: the race is DISPOSITION-INDEPENDENT**,
+and the measurement says so directly. Every quantized served map lands
+in the same narrow band — **25 thin cells without the §7 band, which is
+what the daemon serves**, 22 with it (so the band is neutral on the
+race, marginally favourable, and its removal from the served path costs
+three cells), and
+27 / 33 / 39 with a dwell floor of `N` = 240 / 480 / 720. The exposure
+does not track the disposition; it tracks the degenerate large-median
+regime that every map shares. A dwell floor makes it modestly worse
+rather than better, so the race gives **no reason to prefer (c) over
+(a)** — it argues weakly the other way — and it does not hold FL-R18
+open.
+It is a real exposure in its own right and was minted as **FL-R19**
+rather than buried inside a row it does not belong to — **ruled (b) at
+round 16**: clamp with a fixed margin above the unbuffered floor. Its
+threat is a **liveness** one with **no adversary**: the short-term
+median contracts between construction and broadcast, the floor rises
+above the quoted fee, and the relay refuses. Three conjuncts must hold
+— the gap spans at least one block (the median cannot move inside a
+block interval), the short-term median is the binding term (the quiet
+chain), and the state is thin-margin — and the consequence is a
+refused broadcast recoverable by re-quoting: no fund loss, no
+disclosure.
 
 ### §4.6 Degenerate pins (FL-C8)
 
@@ -868,12 +1149,21 @@ location — each cell's fixed point is at its own `D` by construction.)
   at all.** *(Measured against pre-implementation code; FL-R12′ SIGNED at
   round 8 and FL-D1 closed — the authorized implementation retires this
   state: the reward floor is permanent and these exhaustion rows are the
-  defect record the implementing KATs close.)* The corrected estimate at
-  least stops quoting fees from a reward that no longer exists. This pin
-  also refutes the user-facing
+  defect record the implementing KATs close. At the time of measurement
+  the corrected estimate at least stopped quoting fees from a reward that
+  no longer existed, and this pin is what refuted the user-facing
   "perpetual tail" claims — escalated separately as **FL-V7** with its own
   decision row (FL-R12′), because a false monetary-policy promise and a
-  missing governance mechanism need different owners and different urgency.
+  missing governance mechanism needed different owners and different
+  urgency.)*
+
+  **DISCHARGED at the implementing PR (#640).** With FL-R12′ in the tree
+  the instrument reports `val_reward_at_exhaustion = 600 000 000`, equal
+  to the estimate side: FL-V1's terminal divergence is CLOSED, and every
+  sentence above — the `[0, 0, 0, 0]` ladder, the collapsed relay floor,
+  the reward that "no longer exists", the refuted tail promise — is the
+  historical defect record, not current behaviour. It is kept because it
+  is the evidence the ruling was made on.
 
 ### §4.7 Anchored candidate-set reduction (FL-C9; measured at round 5, re-labeled at round 6)
 
@@ -925,12 +1215,12 @@ Readings, as corrected at round 6:
 | FL-C1 continuous | **rejected** — never triggered: discrete ladders satisfy the registered set; the exception clause stays unfired | §4.3 |
 | FL-C2 coverage | met by floor + `2R/M` top; **surge arm fails C2(b)** → fixed in §5.2 | §4.3 |
 | FL-C3 spacing ≤ 10× | **conflict with C4b** — registered outcome, resolved on the record in §5.3 | §4.3 |
-| FL-C4a dwell | raw `C` fails; **the adopted ceiling behind the §7 hysteresis passes the 240-block gate in every scenario at every registered age on drift-honest traces** (round 12: min median 446, min in-ramp 274; secular reward-decay steps ~1 per 10–20 k blocks are shared by every mode incl. current). **The registered nearest rule FAILS at age 12 under drift** (median 2–3 blocks — per-block flicker at the √2 midpoint), a second independent ground for the ceiling | §4.4 |
+| FL-C4a dwell | raw `C` fails; **the adopted ceiling passes the 240-block gate in every scenario at every registered age on drift-honest traces, with or without the §7 band** (round 12 behind the band: min median 446, min in-ramp 274; #640 un-banded — which is what the daemon now serves, FL-R3: min median **464**, so this criterion is insensitive to the band's removal; secular reward-decay steps ~1 per 10–20 k blocks are shared by every mode incl. current). **The registered nearest rule FAILS at age 12 under drift** (median 2–3 blocks — per-block flicker at the √2 midpoint), a second independent ground for the ceiling. **Rounds 14–15: the criterion's anonymity rationale is REFUTED and NOT replaced by another anonymity one** — a conforming transaction's fee is redundant with the block carrying it, construction time is already public via `reference_block`, and round 14's fallback (stale-quote self-marking) was itself retracted at round 15 because `check_fee` is a floor, not an equality. What survives is **quantization quality and user predictability**, on which every decision this criterion drove still holds (§1.4 note, §4.5b) | §4.4, §4.5b |
 | FL-C4b usage floor | `Fm` at **0% measured production usage** (FL-V3) → **delete** (emergency-lane branch examined and rejected: an emergency lane nobody was using marks the first user who ever touches it) | §5.3 |
 | FL-C4c count | **3** | §5.3 |
 | FL-C5 static vs state | **state-computed** (19× ≫ r) | §4.1 |
 | FL-C6 relay floor | **clamp** (option i), floor re-derivation deferred to CEN-M3's round | §5.4 |
-| FL-C7 feedback | **pass on the CONSTRUCTED map except one corner, SURFACED as FL-R18** (round 12, drift-honest traces): un-hysteretic map oscillates at 20 cells (worst 1 177 transitions); the §7 hysteresis (load-bearing, necessary) damps to 14 residual oscillating cells at the boundary-parked high-elasticity corner (`D = 50`, ε ≥ 2; one `C_q`-step amplitude, worst inter-flip dwell ≈ 125 blocks) — per §1.7's chain the residual goes to §8, not into a smoothed number | §4.5, §8 FL-R18 |
+| FL-C7 feedback | **pass on the CONSTRUCTED map except one corner, which FL-R18 ACCEPTS AS BOUNDED** (measured round 12 on drift-honest traces; premise refuted and re-dispositioned round 14): un-hysteretic map oscillates at 20 cells (worst 1 177 transitions on the round-12 instrument; 1 161 re-measured at #640 against the shipped owner); the §7 hysteresis (load-bearing, necessary) damps to 14 residual oscillating cells at the boundary-parked high-elasticity corner (`D = 50` — the release curve's own neutral point, not an odd corner; ε ≥ 2; one `C_q`-step amplitude, worst inter-flip dwell ≈ 125 blocks). Per §1.7's chain the residual went to §8 rather than into a smoothed number, and §8 disposes it: the assumed anonymity harm was examined and **refuted** (§4.5b), and the mechanism briefly ruled to close it was measured to make the loop *worse* (§4.5a). The residual is a slow, one-`C_q`-step cycle at the baseline attractor, on record rather than papered over. **NOT reopened — the figures here stand as ratified.** #640 review cycle 5 removed the band from the SERVED path and round 17 ruled it restored (FL-R3), so the banded figures in this row remain the design's and the criterion's disposition is unchanged. What is temporarily true of the shipped daemon is the un-hysteretic arm — worst tail transitions 1 161 rather than 24 — and that is an implementation gap with a named owner, not a re-disposition of FL-C7 | §4.5, §4.5a, §4.5b, §8 FL-R18, §8 FL-R3 |
 | FL-C8 degenerates | pinned (incl. the tail-reward penalty via the KAT-pinned entry point, round 11); exhaustion-era governance was deferred as FL-D1 and **CLOSED AS ANSWERED at round 8** (perpetual tail; penalty after the floor) | §4.6, §9 |
 | FL-C9 anchored candidate-set reduction (post-registration, round 5; re-labeled round 6) | measured: minority-rung reduction ×10–×20 once per anchored tx; single state-computed rate ×1.0 — **rung-count ruling REOPENED as FL-R17** | §4.7, W7-revised |
 
@@ -961,6 +1251,25 @@ construction**: the served economy rung is clamped at the very value
 `check_fee` prices from, so a conforming wallet's quote can only err
 toward acceptance, never dead-letter (the round-8 rider, satisfied as an
 identity).
+
+**This clamp is LOAD-BEARING, and round 14 measured how thin its
+margin is.** It is what makes the acceptance direction an identity at
+quote time, and §4.5b shows it is **live in 3.1% of served-map states**,
+concentrated in the widest-median regime — not "never live on the
+reachable grid" as §5.4 recorded from the round-3 single-state grid. In
+those states the served rung sits AT the floor with ~1% of headroom, so a 1% contraction of the median between
+quote and broadcast refuses the transaction (**FL-R19**). **FL-R19
+rules (b): the clamp gains a fixed margin above the unbuffered floor**,
+sized per the criterion pre-registered in that row — and the margin
+**must be a fixed deterministic multiplier, never randomized and never
+per-wallet**, because a quote that stops being derivable from public
+chain state manufactures precisely the fingerprint FL-R18 established
+does not otherwise exist. Two further consequences for anyone editing
+this seam: the clamp may not be "simplified out" as a redundant belt —
+it is the acceptance identity itself — and any future proposal that
+holds a served value stale (a minimum-dwell floor, a cache, a batched
+estimate) must re-measure that margin first, because staleness spends
+exactly the headroom this measurement shows is already thin.
 
 `relay_floor` is the **unbuffered** `check_fee` operand (`0.95·R·w_ref/M²`,
 the `blockchain.h:682` seam) — clamping to the post-2%-buffer acceptance
@@ -1093,7 +1402,7 @@ registered 50/40/10 remains the pre-signature reference.
 | --- | --- | --- | --- | --- | --- |
 | W1 | Miner who ignores the ladder and mines only the penalty-free zone | Refuses all expansion regardless of fees | Individually rational whenever `C > 1` (fees at the served ladder genuinely don't cover cost — measured 5.6–12.9× short in congestion): congestion persists *because* the ladder lies | Forgoes real profit: corrected rungs actually clear the miner's cost, so a refusing miner cedes fee income to competitors; expansion market functions | The ladder is an offer curve; no defence needed beyond pricing it honestly |
 | W2 | User pays the top rung, gets no expansion | Buys priority during mature-chain congestion | **Real and measured**: top rung offers as little as 8% of the miner's cost; rational miners take queue-jumping money and never expand; the product sold does not exist | Top rung = exact marginal cost of full expansion in every state incl. surge (§5.2); a rational miner expands | Residual: collusive non-expansion cartel is a mining-cartel question (out of scope, unchanged by this round) |
-| W3 | Fee-fingerprint adversary (links txs / identifies wallet software by fee values) | Reads the public fee field | 4 static-formula values; but any wallet deviating from daemon values is marked (unchanged) | 3 values; `C_q` is a deterministic function of public chain state, so all conforming wallets at a height agree; measured dwell with the served (hysteresis-constructed) `C_q` on drift-honest traces (round 12): stationary scenarios post at most the shared secular reward-decay step (~1 per 10–20 k blocks, common to every mode incl. today's ladder); minimum median dwell 446 blocks, min in-ramp 274 (gate: 240) — cohorts ~10⁶ txs/rung-value in quiet states, worst-case ~1.4–5.5 × 10⁴ inside an old-age ramp window, vs ~150–300 for raw `C`, whose alphabet is only 2–3 values but flickers every 3–6 blocks | Raw `C` was the hazard and is rejected by FL-C4a; custom-fee users remain self-marked (pre-existing, out of scope) |
+| W3 | Fee-fingerprint adversary (links txs / identifies wallet software by fee values) — **round 14: this row's own determinism observation is what refutes §4.4's cohort premise (§4.5b). Round 15 narrows the residual further: `check_fee` is a floor, so a mismatched fee is ordinary and unmarked; the only real observable is a fee outside the `C_q` set spanning the construction window, i.e. IMPLEMENTATION DIVERGENCE** | Reads the public fee field | 4 static-formula values; but any wallet deviating from daemon values is marked (unchanged) | 3 values; `C_q` is a deterministic function of public chain state, so all conforming wallets at a height agree; measured dwell on drift-honest traces (round 12 behind the band; #640 for the un-banded map the daemon actually serves, FL-R3): stationary scenarios post at most the shared secular reward-decay step (~1 per 10–20 k blocks, common to every mode incl. today's ladder); minimum median dwell **464 blocks served** (446 banded), min in-ramp 274 (gate: 240) — the band's removal does not weaken this row — cohorts ~10⁶ txs/rung-value in quiet states, worst-case ~1.4–5.5 × 10⁴ inside an old-age ramp window, vs ~150–300 for raw `C`, whose alphabet is only 2–3 values but flickers every 3–6 blocks | Raw `C` was the hazard and is rejected by FL-C4a; custom-fee users remain self-marked (pre-existing, out of scope) |
 | W4 | `tx_volume` manipulator (moves `b` and `M_r`) | Self-trades to raise `tx_volume_avg` | Same lever exists and *worsens* mispricing (raises `M_r` 1.3× while ladder ignores it) | Manipulation is at least priced consistently: raising `v` raises `C_q` for everyone including the adversary; pow2 plateaus mean small manipulations usually move nothing | Cost: burn share of every spam fee is destroyed; young chain (`b≈0`) self-mining spam is near-free — but that is the release-multiplier's own emission surface (economics lane, unchanged by this round); the ladder correction adds no new profit path for it |
 | W5 | Exhaustion-era spammer (post-mining-era, `R = 0`) | Expands every block to the 2× cap for free | Estimate quotes fees from a reward that no longer exists ([20,80,320,4000] vs true [0,0,0,0]); penalty prices nothing; growth governed only by the 1.7×/window clamp and a 1-atomic floor | RESOLVED at round 8: FL-R12′'s signed composition (`paid = max(M_r·curve, TAIL)·penalty(x)`) keeps the penalty biting at the tail permanently — expansion to the cap costs the full `TAIL` at `x = 1` | ~~FL-D1~~ closed as answered (§9) |
 | W6 | Quiet-chain wallet (honest) | Pays served economy rung | Overpays ~1.2–1.5×, or — if the ladder were naively corrected without FL-C6 — bounces off the relay floor entirely (three of six states) | Clamp guarantees relayability; overpayment bounded at measured 1.5× worst case until CEN-M3 re-derives the floor | FL-D2 |
@@ -1109,9 +1418,9 @@ registered 50/40/10 remains the pre-signature reference.
 | `CORE_RPC_VERSION` | minor bump with the vector change | Yes | with the row above |
 | `shekyl-engine-core` `fee_policy.rs` mapping | 0/1/3 → 0/1/2 | No | with the vector change |
 | `shekyl-rpc-client` | unify to the engine mapping; **delete** the dead `[1, 5, 25, 1000]` fallback ladder (`lib.rs:471-486`, impossible daemon shape, rule 60) | No | fallback deletion any time; mapping with the vector change |
-| `fee_policy.rs` absolute cap | `Fh` moves ⇒ the KAT-pinned 14 000 000 genesis-condition cap is re-derived as the swept maximum of the **served** (`C_q`) top rung over the reachable young-chain grid — measured: young-congested serves 25 000 000; the genesis-congested bound is 28 000 000 (`C_q = 2` reachable at genesis for `v ≥ 65`, i.e. 2× the 13 653 333 unrounded genesis `Fh`, daemon-rounded); exact value pinned by KAT in the implementing PR | No | with the daemon value change |
+| `fee_policy.rs` absolute cap | **DONE at #640, and NOT as this row instructed — do not pin a swept maximum here.** The row's plan was to re-derive the cap as the swept maximum of the served top rung over the reachable young-chain grid (young-congested 25 000 000; genesis-congested 28 000 000). That framing was measured and found wrong in the expensive direction: it locates the peak at genesis, where the operand reward peaks, missing that `C_q` GROWS with age while `R` decays slowly, so the product peaks in the interior — the 28 000 000 bound sits BELOW honest daemon quotes from ≈ year 3 and would refuse correct snapshots. The cap shipped as a **structural bound** (220 000 000, every factor at its own extreme) with the sweep kept only as a floor under its adequacy. See FL-R9 | No | **cleared at #640** |
 | `check_fee` / `get_dynamic_base_fee` | **unchanged** this round (clamp absorbs the collision); re-derivation is CEN-M3's | — | FL-D2 |
-| Hysteresis construction requirement | implementation must not flicker at a pow2 boundary: enter a new `C_q` step only when `C` crosses the boundary by a margin. **Measured (rounds 11–12): LOAD-BEARING and NOT SUFFICIENT alone** — without it the served map oscillates broadly (20 cells, worst 1 177 transitions on drift-honest traces); with the 3% band the residual is 14 boundary-parked high-elasticity cells (7–24 transitions, one `C_q` step), which FL-R18 owns as an open decision. The mechanism is the implementing branch's `fee_correction_quantized`; the §4.4 gates and the §4.5 transition classification are the acceptance instrument | No | implementing PR (built on `feat/fee-ladder-impl-1`; the instrument's transliterated copy retires at that merge); residual: FL-R18 |
+| Hysteresis construction requirement | implementation must not flicker at a pow2 boundary: enter a new `C_q` step only when `C` crosses the boundary by a margin. **Measured (rounds 11–12): LOAD-BEARING and NOT SUFFICIENT alone** — without it the map oscillates broadly (20 cells, worst 1 177 transitions on drift-honest traces at round 12; 1 161 re-measured at #640 against the shipped owner — and since #640 that un-banded map is the one SERVED, FL-R3); with the 3% band the residual is 14 boundary-parked high-elasticity cells (7–24 transitions, one `C_q` step), which **FL-R18 accepts as bounded at round 14**: the band stays as built (it is what damps boundary noise ~50×), and **nothing is composed on top of it** — the minimum-dwell floor briefly ruled at round 13 is withdrawn on two independent grounds: the anonymity harm it was to prevent does not exist (§4.5b), and it was measured to destabilise the loop it was meant to calm (§4.5a). The mechanism therefore remains exactly the implementing branch's `fee_correction_quantized` as already built — **no rework** *(Implementation note added after this row was written: #640 review cycle 5 took the band OFF the served path. Round 17 ruled it back ON — FL-R3 — so "no rework" still holds for the MECHANISM, which is unchanged and stays; what is owed is the served-path restoration under FL-R3's two constraints, on the time-grid branch. The measurements in this row are of the banded map and stand.)* | No | implementing PR (built on `feat/fee-ladder-impl-1`; the instrument's transliterated copy retires at that merge) |
 | Wallet/CLI tier-picker disclosure (rule-81 obligation **created by FL-R17's signature**, flagged at steering) | Three tiers put a privacy cost behind a user-facing choice (×1.25 default / ×6.7 / ×20 operative divisors, §4.7) — a user selecting "priority" cannot be expected to price a candidate-set divisor, so the surface must disclose the trade in terms a non-protocol user can act on, or the choice is uninformed by construction. Copy is owned by the wallet/GUI lane (rules 80/81/82), **not this round** — handed off via the round record; the engine mapping change is the natural carrier | No | with the engine tier-mapping change; owner: wallet/GUI surfaces |
 
 ## §8 Ratification table — FL-R12′/FL-R17 SIGNED, FL-R14 RULED (per-row provenance); census overlap per §0.1
@@ -1134,16 +1443,16 @@ ride each row.
 | --- | --- | --- | --- |
 | FL-R1 | The ladder derives from the validation-path miner economics. **Operand per the ADOPTED round-8 amendment (whole-scalar form)**: the estimate prices against the M_r-neutral total operand `max(curve(remaining), TAIL)` with the WHOLE volume-dependent scalar quantized — `C_q = Q_ceil((1−σ)·M_r/(1−b))`, unchanged from the round's adopted design. The drafted split (`R_eff` carrying raw `M_r`, only `C′` snapped) was measured and REJECTED: `Q(C′)·M_r ≠ Q(C′·M_r)` — identical in algebra, not in quantization — and it re-created the FL-C4a dwell failure (4-block cohorts at baseline), flipped the FL-C6 clamp live at genesis-quiet, and broke launch continuity at quiet-mature. **BUILT** | adopt — **built** | ⚖ (F14b-adjacent) |
 | FL-R2 | Rung values are state-computed daemon-side each estimate | adopt | |
-| FL-R3 | The correction enters only pow2-quantized (ceiling) and hysteresis-guarded; per the adopted round-8 amendment the quantized quantity is the WHOLE scalar `C = (1−σ)·M_r/(1−b)` — exactly the round's measured design. Hysteresis implemented Rust-side (`fee_correction_quantized`, 3% band, previous-`C_q` memory daemon-side). **BUILT** | adopt — **built** | |
+| FL-R3 | The correction enters only pow2-quantized (ceiling) and hysteresis-guarded; per the adopted round-8 amendment the quantized quantity is the WHOLE scalar `C = (1−σ)·M_r/(1−b)` — exactly the round's measured design. Hysteresis implemented Rust-side (`fee_correction_quantized`, 3% band). **RULED at review round 17: the hysteresis STAYS, and FL-R3 closes by RESTORING it to the production path** — not by persisting `C_q` as chain state, and not by retiring the band. *(Maintainer, in-channel and relayed 2026-09-07. A relayed ruling, not an in-tree signature — no approving review or maintainer commit carries it — and this row says so rather than letting a relay read as a signature.)* **The ground, as ruled, and it is the banded map's own figures:** the worst inter-flip dwell is ≈ 125 blocks, which at this tree's 120 s target (`BLOCKS_PER_YEAR` = 262 800) is **4.2 hours**, so a 2× move roughly every four hours in a minority of states, and a **4.0 %** chance that a re-quote changes across a ten-minute window. Against the baseline users actually live with — Bitcoin and Ethereum estimates can move several-fold *within one block* under congestion, which is why those wallets present low/medium/high and the number is understood to be soft — that is stabler, and it sits below the threshold at which anyone forms an expectation there is something to violate. So "barely moves" is accurate, the residual needs no mechanism, and the disposition is to serve the band rather than to argue the band away. **TWO BINDING CONSTRAINTS ON THE RESTORATION, both from findings already on this record:** **(1) the band must remain a PURE FUNCTION OF CHAIN STATE.** Whatever unblocks the production caller may not introduce per-node held state. Derivability is the property FL-R18 closed on and the whole reason a conforming wallet's fee leaks nothing; a restoration that quietly acquires state does not restore this row, it repeals FL-R18. Named here so the fix cannot acquire state while nobody is watching. **(2) SINGLE OWNER.** The band's arithmetic lives in one place and the instrument transliterates nothing — this cycle's own finding, where the sim's copied band had silently lost the owner's `MIN_REPRESENTABLE_C` floor, so a measurement was being taken on a mechanism that was not the shipped one. It binds whatever caller gets wired up. **WHERE THAT LEAVES THE WORK, stated against constraint (1) rather than around it: the blocker IS that the band needs history.** `C_q(h) = f(C(h), C_q(h−1))` is a recurrence, and the two attempts that failed each failed on this: a daemon-local remembered value made the served rate track the process's query history, and the previous block's UNSEEDED snap is a one-step approximation, not the recurrence, and inverts the result. By the ruling's own terms that puts the restoration on the **time-grid** branch — a band whose "previous" is taken from a grid-aligned anchor rather than from unbounded history (a fold over a fixed window from a grid height, or a seed at an epoch boundary), which is a pure function of chain state and bounded to evaluate, at the cost of extra evaluations per query. **That is a design change, so it comes back as a round; it is not smuggled in as an implementation detail here.** **Until it lands the daemon serves the un-banded ceiling. That is a temporary implementation state, NOT a design regression:** FL-C7's ratified figures are the banded ones and stand as ratified, the FL-C4a dwell gate is insensitive to the band either way (446 banded, 464 un-banded, bar 240), and §4.5b's rejection-race exposure moves by three cells (22 → 25). | **RULED — hysteresis STAYS; ceiling served today, band restoration owed as the time-grid round** | adopt — **built; served-path restoration owed, constraints (1) and (2) binding** | ruled in-channel at review round 17 |
 | FL-R4 | Rung count = 3; `Fm` deleted; FL-C3-vs-C4b conflict resolved for privacy per §5.3 | ~~adopt~~ ~~CONTESTED round 5~~ **RESOLVED: confirmed by FL-R17's signature (three tiers), round 7** | reopened round 5; resolved round 7 |
 | FL-R5 | Top rung = `C_q·2·R/Mfw` unconditional (surge discount removed; operand per the adopted amendment). **BUILT** (`corrected_fee_ladder`; heritage surge case 22 000 → 67 000, pinned) | adopt — **built** | |
 | FL-R6 | `fees[0]` clamped to the unbuffered relay floor (`blockchain.h:682` seam) | adopt | ⚖ CEN-M3 |
 | FL-R7 | Wire shape (vector 3), `CORE_RPC_VERSION`, both client mappings | adopt **post-RK-5**; bridge = duplicate `fees[2]=fees[1]` | |
 | FL-R8 | Dead rpc-client fallback ladder deleted | adopt | |
-| FL-R9 | Wallet absolute cap re-derived as the swept maximum of the *served* (`C_q`) top rung over the reachable young-chain grid — instrument anchors: 25 000 000 measured at young-congested, 28 000 000 genesis-congested bound — pinned by KAT in the implementing PR | adopt | |
-| FL-R10 | FL-V1 recorded as a standing defect independent of this ladder (estimate/validation reward divergence, terminal form §4.6) | record | ⚖ (F14b evidence) |
+| FL-R9 | Wallet absolute cap. **Re-derived AGAIN in the implementing PR (#640), because the young-chain framing below was wrong in the expensive direction:** it located the era maximum at genesis, where the operand reward peaks, missing that `C_q` GROWS with age (σ decays, burn rises) while `R` decays slowly — so the product peaks in the interior. The swept peak is **91 000 000 at ≈ year 7 on the NEUTRAL accumulation, and 98 000 000 at ≈ year 8 once the release rails are swept as accumulation extremes** — a chain dormant at `M_r = 0.8` and then busy carries more `remaining`, hence a larger `R`, at the same height. **Neither figure is the reachable maximum, and this row must not be read as naming one:** arbitrary volume paths are uncountable, so the sweep bounds the cap's adequacy from below rather than proving its tightness. (An earlier revision of this row called the 91 000 000 neutral walk "the reachable maximum" — the same overclaim, one level down, that the structural bound exists to avoid.) The 28 000 000 genesis-congested bound this row originally adopted sat **below honest daemon quotes from ≈ year 3**, i.e. it would have refused correct snapshots. The cap is now a **structural bound** with every factor at its own extreme (σ ⇒ 0, `M_r` = release_max, `b` = burn_cap ⇒ `C_q` ≤ 16; `R` ≤ `base_block_reward(0)`; `Mfw` ≥ `Zm`) = **220 000 000**, deliberately loose against the reachable peak because refusing an honest quote dead-letters the wallet while a loose cap only weakens a sanity check. Original framing, retained as the record of the error: *swept maximum of the served top rung over the reachable young-chain grid — anchors 25 000 000 young-congested, 28 000 000 genesis-congested* | adopt — **re-derived as a bound at #640** | |
+| FL-R10 | FL-V1 recorded as a defect independent of this ladder (estimate/validation reward divergence, terminal form §4.6). **No longer standing: DISCHARGED at #640** — with FL-R12′ in the tree both sides agree at exhaustion (`val_reward_at_exhaustion = 600 000 000`), so §4.6's record is the historical evidence, not current behaviour | record — **closed at #640** | ⚖ (F14b evidence) |
 | FL-R11 | The G6b fossil-flag punt is discharged **for the fee constants only**: this round derives the ladder *given* the 300 000-byte zone; the zone value itself and the 1.7×/×50 clamps remain underived | record | ⚖ CEN-G6b |
-| FL-R12′ | **Terminal emission-state ruling — SIGNED at review round 8 (maintainer, in-channel, with the composition given verbatim).** Direction: perpetual tail (accepted round 4; the round-4 dormancy rationale stands). **Signed composition: `paid = max(M_r·curve(remaining), TAIL) · penalty(x)`** — `remaining` floored at zero (non-saturating accumulator; reuses the cap function's own saturating-sub lesson), `cap_reward_to_remaining_supply` retired, one owner, no flag path (discharges FL-V9). The three operators, each placed on the record: **(1) Floor on the paid emission, not the base** — the release multiplier exists to pace a *finite remaining* toward demand; under a perpetual tail there is nothing to defer, so `M_r` at the tail would only make the perpetual inflation rate wobble with activity, and wobble the wrong way for a security floor (paying least when fees are lowest); `max(M_r·curve, TAIL)` gives it no object. **(2) Penalty AFTER the floor** — the operator the F-1 draft was silent on, and the one that decides whether block-size governance survives the ruling: floor-last (`max(M_r·curve·(1−x²), TAIL)`) would kill the penalty at the tail *permanently* (W5 realized, forever, since no post-tail era exists); the signed order keeps expansion costing the full `TAIL` at `x = 1`. **Ordering rule, generalized: floors belong to emission; penalties apply to the paid quantity.** (3) The floor is on the **pre-split total**, not the miner's share (`σ(t)` ≈ 0.1% by year 65 — immaterial to the number, material to which quantity 0.6 describes). **Ladder operand consequence:** the estimate prices against `R_eff = max(M_r·curve, TAIL)` and the correction drops `M_r` (`C′ = (1−σ)/(1−b)`) so multiplier and floor are not double-counted — algebraically identical to the prior `C·R` wherever the floor does not bind, and it kills the `[0,0,0]`-ladder-at-exhaustion defect (the V1 class re-created by the unamended draft). FL-R1/R3/R5 operands updated; oracle re-oriented (FL-V10). FL-D1 **closed as answered** — the ruling abolishes the era D1 deferred to, and the signed order penalizes the tail like any other reward. **Build authorization: YES from the maintainer, upon this record.** **ROUND-8 AMENDMENT (estimate side) ADOPTED in the maintainer's words**: the signature governs the payer, not the row consuming the operand; quantize the whole volume-dependent scalar; "bounded cost against structural regression is the right selector, and it isn't close." Rider satisfied by construction (§5.2). **BUILT on `feat/fee-ladder-impl-1`** (the round-9 atomic bundle, a follow-up PR to this document — none of it is in this PR): one owner `paid_block_reward` (Rust) + marshal-only C++, no flag path, cap retired, accumulator through the asymptote, FL-R14 build assertion, FL-R16a error arm removed (estimator + relay dead-letters closed), FL-R16b/c, FL-R15 rename executed, oracle graduated green | **SIGNED — composition as above; BUILT** | signed in-channel at review round 8 |
+| FL-R12′ | **Terminal emission-state ruling — SIGNED at review round 8 (maintainer, in-channel, with the composition given verbatim).** Direction: perpetual tail (accepted round 4; the round-4 dormancy rationale stands). **Signed composition: `paid = max(M_r·curve(remaining), TAIL) · penalty(x)`** — `remaining` floored at zero (non-saturating accumulator; reuses the cap function's own saturating-sub lesson), `cap_reward_to_remaining_supply` retired, one owner, no flag path (discharges FL-V9). The three operators, each placed on the record: **(1) Floor on the paid emission, not the base** — the release multiplier exists to pace a *finite remaining* toward demand; under a perpetual tail there is nothing to defer, so `M_r` at the tail would only make the perpetual inflation rate wobble with activity, and wobble the wrong way for a security floor (paying least when fees are lowest); `max(M_r·curve, TAIL)` gives it no object. **(2) Penalty AFTER the floor** — the operator the F-1 draft was silent on, and the one that decides whether block-size governance survives the ruling: floor-last (`max(M_r·curve·(1−x²), TAIL)`) would kill the penalty at the tail *permanently* (W5 realized, forever, since no post-tail era exists); the signed order keeps expansion costing the full `TAIL` at `x = 1`. **Ordering rule, generalized: floors belong to emission; penalties apply to the paid quantity.** (3) The floor is on the **pre-split total**, not the miner's share (`σ(t)` ≈ 0.1% by year 65 — immaterial to the number, material to which quantity 0.6 describes). **Ladder operand consequence:** the estimate prices against `R_eff = max(M_r·curve, TAIL)` and the correction drops `M_r` (`C′ = (1−σ)/(1−b)`) so multiplier and floor are not double-counted — algebraically identical to the prior `C·R` wherever the floor does not bind, and it kills the `[0,0,0]`-ladder-at-exhaustion defect (the V1 class re-created by the unamended draft). FL-R1/R3/R5 operands updated; oracle re-oriented (FL-V10). FL-D1 **closed as answered** — the ruling abolishes the era D1 deferred to, and the signed order penalizes the tail like any other reward. **Build authorization: YES from the maintainer, upon this record.** **ROUND-8 AMENDMENT (estimate side) ADOPTED in the maintainer's words**: the signature governs the payer, not the row consuming the operand; quantize the whole volume-dependent scalar; "bounded cost against structural regression is the right selector, and it isn't close." Rider satisfied by construction (§5.2). **BUILT on `feat/fee-ladder-impl-1`** (the round-9 atomic bundle, a follow-up PR to this document — none of it is in this PR): one owner `paid_block_reward` (Rust) + marshal-only C++, no flag path, cap retired, accumulator through the asymptote, FL-R14 build assertion, FL-R16a error arm removed (estimator + relay dead-letters closed), FL-R16c, oracle graduated green — **FL-R15 (rename) and FL-R16b (the `ActivityMetric` cap guard) are NOT in this bundle**, both riding the follow-up mechanical rename PR, FL-R16b by its own ratified row | **SIGNED — composition as above; BUILT** | signed in-channel at review round 8 |
 | FL-R13 | **Fee-floor basis (FL-V11)**: whether the anti-spam floor stays reward-proportional (`Fl ∝ R`, decaying 3 413× to the permanent tail floor of 20·`C_q` atomic/byte) or moves to an absolute/recalibrated basis. New derivation scope with its own pre-registered criteria — not resolved by §5.2, which inherits the decay by construction. **FL-R12′ SIGNED at round 8 retires the genesis-blocking escalation**: the reward-proportional floor now has a permanent nonzero terminal value instead of reaching 0, so this is a calibration round (is 20·`C_q`/byte the right permanent floor for a chain whose stakers store what it admits?), not a security-budget-existence question | **decision required — own round, criteria first; non-blocking (gate satisfied by the FL-R12′ signature; reverts to genesis-blocking if the direction reverses to the cap)** | minted at review round 2; recalibrated at review round 4 |
 | FL-R14 | **Persisted accumulator width — RULED (b) by the maintainer at review round 4, in-channel: keep `u64` persisted.** Rationale as ruled: the binding bound is not the LMDB column but the genesis-frozen **64-bit range-proof width** (`shekyl-bulletproofs` `prove_plus`, commitments in `[0, 2⁶⁴)`) — a `u128` accumulator cannot help a chain whose outputs cannot provably exceed 2⁶⁴ atomic; it would be a check that can't be the first to fail. Build obligation: encode the ≈ 89 750-year bound as a **build-time assertion** over `(tail × blocks_per_year)` with the range-proof width named as the reason, so a re-parameterization (bigger tail, fewer decimals) fails loudly. Documented failure mode the assertion guards: accumulator wrap **un-saturating `remaining`** (wrapped small `ag` → huge `remaining` → curve reward resumes) | **RULED (b)** | ruled in-channel at review round 4 |
 | FL-R15 | **Rename sweep (FL-R12′ implementation obligation):** `money_supply` → asymptote-class name reaches `config/economics_params.json`, the codegen, engine-core consumers, the census rows, and every doc naming it — each hit classified asserts-is / records-was / describes-a-closed-hazard before editing (census + CHANGELOG hits are legitimately records-was). **Method note (reusable):** a name sweep finds `MONEY_SUPPLY`; only a *jobs enumeration* — emission input, burn-ratio denominator, activity invariant, headroom operand — reveals that two of the four jobs are **assertions that the cap holds**; that enumeration is what surfaced FL-R16, and it is the instrument, not the name list | **record — binds the implementing PR** | minted at the FL-R12′ direction; guard dispositions re-minted FL-R16a/b/c at review round 4 **Sequencing with the constants digest (2026-09-06, `CLIENT_VERSION_CONSTANTS_VALIDATION.md` §3.12 (ii)):** `config/economics_params.json` is now digested into `shekyl-rpc-types::CONSENSUS_CONSTANTS_DIGEST` with a compile-time pin; the `money_supply` rename moves that digest even at an unchanged value, because the key is part of the binding. VC-1 widened first; this rename's PR re-pins (the one-line literal in `rust/shekyl-rpc-types/src/consensus_digest.rs`, the value printed by the crate's `the_build_used_these_rules_on_the_live_files` test). Expected red, not a broken build. |
@@ -1152,7 +1461,8 @@ ride each row.
 | FL-R16b | **`ActivityMetric::new` cap guard (`activity.rs:124`): non-blocking API cleanup.** False under the accepted direction, but fixture-test-only today — remove with the rename sweep, not on the build's critical path | **record** | minted at review round 4 |
 | FL-R16c | **Burn-ratio semantics past the asymptote:** `calc_burn_pct`'s `supply_ratio` (`burn.rs:76-78`) is unsaturated — exceeds 1.0 after exhaustion, drifting the burn toward `burn_cap` (≈ 0.0037%/yr issuance scale, negligible but unnamed). Disposition: saturate at `SCALE`, one line. And the sweep must not walk past the pre-existing definitional bug: `circulating_supply = already_generated_coins` (`blockchain.cpp:1787`, `:2074`) is **gross emission ignoring burn** | **record — binds the implementing PR** | minted at review round 4 |
 | FL-R17 | **Rung count — SIGNED (a): THREE TIERS. Maintainer, in-channel, review round 7** ("sign it as three tier"). Rationale as signed: (i) **no privacy argument applies to the default case** — the default bucket is the majority set and its users bear no meaningful reduction (defaulted model: the standard bucket at ×1.25, §4.7); (ii) **the non-default case does not significantly degrade privacy** — a smaller set is still, arguably, much *larger* than Monero RingCT's ring-16, the de facto standard. (iii) The ruling's interpretive frame, in the maintainer's words: the privacy cost of a tier is *a bounded per-transaction candidate-set reduction for anchored attacks, with no linkage primitive to amplify it under FCMP++ — the kind of cost a proportionality judgment handles, not the kind the priority order was written for*. This frame *reconciles* rather than contradicts the stake-quorum rejection (the hierarchy's canonical privacy-wins ruling): there the cost was **structural and unbounded** — a per-persona uptime log growing without ceiling — so the lexicographic ordering applied; here it is **bounded, once per anchored transaction**, so proportionality applies. Same hierarchy, two instruments, selected by whether the cost is bounded — read together, the two rulings are one position. The round's supporting arithmetic for (ii): a priority transaction's anchored candidate set is `W/20` for an anchor window of `W` transactions, above ring-16 for any anchor looser than `W = 320` txs — at baseline volume, any anchor wider than ≈ 6.4 blocks (~13 minutes); tighter time-windows come with higher volume, which scales the set back up. Tier contracts and the default are §5.5. **Candidate (b) REJECTED; rule-21 reopeners as set by the maintainer at round 7, superseding the round's drafted three:** (r1) **FL-C4b's already-registered mechanism** — any rung whose measured mainnet usage share falls below 5% over a window is deleted or explicitly ruled an emergency lane; it needs no new row, and it is what retires priority if "many people use it" proves wrong; (r2) **any transaction-format or spend-proof change that introduces an on-chain way to relate two transactions** — the no-linkage-primitive premise is what makes the cost bounded, so its loss reopens the fee-tier disposition itself. *Method note (steering, round 7): r2 is anchored to the premise the argument rests on, not to a magnitude the argument produced — a threshold reopener invites argument about whether the number was crossed; a premise reopener either holds or does not, checkable by reading the format. Tie reopeners to assumptions, not magnitudes.* The median-dynamics gate lapses for this decision; W8 re-homed to FL-D7 | **SIGNED (a) — three tiers** | signed in-channel at review round 7 |
-| FL-R18 | **Residual boundary-parked oscillation under demand feedback — SURFACED per §1.7's chain (round 12), decision required.** On drift-honest traces the §7 hysteresis band (3%, necessary and load-bearing) does not close 14 interior cells: baseline-parked boundary states (`D = 50`) with demand elasticity ≥ 2 (≥ 1 at age 30, `M = 3·Zm`) oscillate at one `C_q` step, 7–24 transitions per 3 000-block tail, worst inter-flip dwell ≈ 125 blocks — under the FL-C4a 240-block gate. Mechanism: the band absorbs boundary noise, not gain-≥2 feedback (a fee step moves volume 4–8×, `C` ~20%). Candidate dispositions for ratification, NONE adopted here: (a) accept as bounded (one step amplitude; requires an elasticity-≥2 population parked at baseline volume, and the anonymity cost is only at those states); (b) widen/asymmetrize the band (costs responsiveness everywhere to serve a corner); (c) rate-limit served `C_q` changes (a minimum-dwell floor on the served value — turns the FL-C4a gate into a mechanism); (d) revisit FL-D6's smoothing pool as *smoothing* (its declined-as-floor status untouched) **What this row binds: the implementing (bundle) PR consumes its disposition** — (b)/(c) change the built `fee_correction_quantized` mechanism, (a)/(d) leave it; this design record carries the measurement either way | **decision required — UNSIGNED** | minted at review round 12, on the drift-honest re-measurement; instrument: the §4.5 transition classification under the registered one-rounding-step bar |
+| FL-R18 | **The anonymity premise this row rests on was examined and found EMPTY. There is no harm here for a mechanism to fix, and (a) — accept as bounded — is what remains, not an option chosen over others on cost.** *(Provenance, stated precisely per round 4's standing rule for this table: **COUNTERSIGNED on (a) in-channel and relayed** through the umbrella lane, 2026-09-06. That is a relayed countersignature, not an in-tree one — no approving review or maintainer commit carries it — and the row says so rather than letting a relay read as a signature.)* **The premise:** a served fee flipping faster than 240 blocks was assumed to shrink the cohort a transaction hides in — the ground on which this row was surfaced (round 12) and briefly ruled (c), a minimum-dwell floor (round 13). **The refutation, both legs verified in this tree (§4.5b):** (1) `reference_block` travels **in the clear** on the wire with an admissible age of 5–100 blocks, exposing construction time far more finely than a 125–429-block fee flip — and making the reference-block cohort *smaller* than the fee cohort §4.4 set out to protect; (2) `C_q` is a deterministic function of public chain state, so every conforming wallet at a height posts the same rate and the fee is **redundant with the block that carries it** — a fact this document already asserted in its own W3 row while §4.4 built a gate on its opposite. **Redundant data leaks nothing, so there is nothing to protect and nothing to fix.** The maintainer's own statement of the finding, which is the row: *`C_q` is deterministic from public chain state, so every conforming wallet in a window computes the same value and an observer derives it from the block regardless; the fee is redundant with what the block already discloses.* **What survives is not anonymity:** the quote-then-broadcast rejection race (measured, §4.5b — and **disposition-independent**: every quantized served map lands within 22–39 thin-margin cells of 800, the §7 band being neutral and a dwell floor modestly worse; minted as **FL-R19**), and plain user-facing unpredictability. **Consequently the mechanisms are moot, not out-competed:** (b) a wider band, (c) the dwell floor, and (d) FL-D6 smoothing were each proposed to close a harm that does not exist. **(c) additionally fails on its own terms**, and that measurement stands whatever the premise did: no candidate `N` closes the cells, because a dwell floor is a DELAY in a feedback loop and delay destabilises — flip rate falls while oscillating-cell count RISES 14 → 101 (§4.5a). **Nothing ships and no rework reaches the bundle**; `fee_correction_quantized` is unchanged. *(Post-countersignature implementation note: the crate function is indeed unchanged, and #640 review cycle 5 removed the band from the SERVED path. Round 17 RULED that the band stays and is restored — see FL-R3 — so this clause stands as written about the mechanism, and the served-path gap is an implementation item with a named owner, not a reopening of this row.)* **Kept, because they are findings independent of the disposition:** FL-C4a's re-grounding — itself corrected at round 15, and now **not an anonymity criterion at all** (§1.4 note) — and the estimate clamp's measured role (§5.2). **How this happened, on the record rather than smoothed:** four layers of threat model were built on the premise without anyone asking what the leak was | **(a) COUNTERSIGNED — the premise is refuted, so nothing remains to mechanise (relayed countersignature; see provenance)** | surfaced round 12; ruled (c) round 13; premise refuted round 14; residual corrected round 15 |
+| FL-R19 | **Quote-to-broadcast rejection race — RULED (b): clamp the served economy rung with a fixed margin above the unbuffered relay floor.** *(Countersigned in-channel and relayed 2026-09-06; a relayed countersignature, not an in-tree one.)* **The threat, stated properly — ADVERSARY: NONE.** This is a **liveness** failure, not a disclosure: nothing leaks, nobody is watching. *Event:* the short-term median contracts between construction and broadcast, raising the relay floor above the already-quoted fee, and the relay refuses the transaction. **Three conjuncts must all hold:** (i) the construction-to-broadcast gap spans **at least one block** — the median cannot move inside a block interval; (ii) the **short-term median is the binding term** (below the long-term effective median), i.e. the quiet-chain case; and (iii) the state sits in the thin-margin band — **25 of 800 swept served-map cells**, concentrated at the widest median and oldest age (§4.5b; the ruling quoted 22, the banded map, before #640 removed the band from the served path — 154 before the round-16 instrument correction and 49 before #640 re-measured against the shipped owner). *Consequence:* a refused broadcast, recoverable by re-quoting — **no fund loss, no disclosure.** **Why (b) and not the others:** **(d) re-quote at broadcast is REFUTED, not merely unchosen** — `rv.txnFee` is an **operand of `shekyl_verify_ct_balance`** (`src/fcmp/ct_semantics.cpp`, both the standard site and the bond-post variant), so the fee closes the commitment sum and re-quoting means **re-constructing and re-signing**. For a hot interactive wallet that is a no-op dressed as a fix (construction and broadcast are seconds apart and the median cannot move in that window); for the flows that ARE exposed — offline signing, hardware confirmation, batched or scheduled sends — re-signing at broadcast is precisely the expensive round trip the failure would have cost anyway. **It helps the population that does not need it and cannot help the one that does.** **(c) re-deriving the relay floor with the ladder stays open, but NOT HERE**: legitimate to want at the cutover (CEN-M3 / FL-D2), and it must not be justified by this race. **(a) accept** is what (b) improves on at negligible cost. **BINDING IMPLEMENTATION CONSTRAINT, not advice: the margin MUST be a fixed deterministic multiplier — never randomized, never per-wallet.** A per-wallet or randomized margin makes the quote no longer derivable from chain state and manufactures exactly the fingerprint FL-R18 established does not otherwise exist. **Why it is cheap:** it binds only where the clamp binds, so the **775 of 800 cells above the thin band pay nothing** (the ruling quoted ~646 at 1.29×, derived from figures that have since been re-measured three times; against the shipped owner and the shipped no-band served map the median margin is 2.10× and 25 cells are thin); the overpay is bounded and small in absolute terms on a low-fee chain; and determinism is preserved by the constraint above. **SIZING — the acceptance criterion is PRE-REGISTERED here, before the numbers exist: choose the margin to cover the plausible median contraction over the p95 construction-to-broadcast gap for the OFFLINE-SIGNING flow.** And the instrument is named, including what it is NOT: the refusal RATE cannot size this — these traces are structurally blind to it and that blindness is the finding, not a zero (§4.5b). The quantity that can see it is the **construction-to-broadcast gap distribution across real wallet flows**, which is wallet instrumentation rather than chain simulation and therefore **not this lane's measurement to take**. If that distribution turns out sub-block for essentially every flow, **the margin may be nominal** | **RULED (b) — margin fixed and deterministic; sizing criterion pre-registered, gap distribution owed by the wallet lane** | minted round 14; ruled round 16 |
 
 Signatures are recorded per-row with their provenance (in-channel, review
 rounds 4–8); this line remains for any wholesale countersign the
@@ -1169,6 +1479,7 @@ maintainer chooses to add: ________________
 | FL-D5 | Fee-floor basis derivation (FL-V11 / FL-R13) — whether `Fl ∝ R` survives a 3 413× reward decay as the anti-spam floor, on a chain where stakers store what the floor admits | Its own pre-registered round: criteria must be committed before the floor model is chosen | Open on its own merits (FL-R12′ signature satisfied): the floor's long-run role is the *permanent tail-era floor* and the genesis-blocking escalation is retired; the round opens as FL-R13's calibration |
 | FL-D6 | Fee-variance smoothing pool (declined as a floor at the FL-R12′ direction; may still earn a place as *smoothing*, never as the security floor) | Post-genesis per the accepted direction — no pre-genesis blocker exists once the tail is the floor | Design reopens **before tail onset** (by height ≈ 60·`BLOCKS_PER_YEAR`, five years ahead of the ≈ year-65 tail entry), or **early** if over any rolling 90-day mainnet window the 10th-percentile day's miner fee income falls below 25% of the window median (the dormancy signal the declined pool was meant to paper over) |
 | FL-D7 | W8: miner fee-rank ordering leak — block position reveals fee rank under any multi-rate ladder, and FL-R17's three-tier signature keeps it live | Under a ladder a miner has a *legitimate* reason to order by fee, so inclusion order cannot be made a checkable rule without breaking the fee market — the constraint W8 identified is only available under uniform rates | (a) any FL-R17 reopener fires (single-rate reconsidered ⇒ the checkable rule becomes available); (b) the relay/P2P-3 round takes inclusion-ordering scope and finds a ladder-compatible mitigation (e.g. intra-block shuffle of same-rate transactions, which three tiers still permit within each tier) |
+| FL-D8 | **Boundary-cell OCCUPANCY: what fraction of chain TIME is spent in the cells where `C` sits near a pow2 boundary.** A measurement deferral, not a design one — nothing is being postponed except taking a number. Every disposition that has turned on flicker argued it from **cell count** — how many of the 800 swept cells oscillate — and cell count is a property of the SWEEP GRID, not of the chain: it says how much of the parameter space flickers, never how often anyone is standing there. Three dispositions have now rested on that unknown (FL-C4a's dwell gate, FL-C7's residual, FL-R18's acceptance of it as bounded) and FL-R3's restoration is the fourth. The quantity is occupancy-weighted flicker: over drift-honest traces, the fraction of blocks whose `C` lies within the band region, and the flip rate weighted by it | Not owed by any current disposition. FL-R3 is ruled on the band's own record and does not wait for this; the round-16/17 figures were sufficient for every decision taken. It is registered because the unknown has been load-bearing four times and the argument gets re-run from scratch each time | **Due the next time a disposition turns on flicker** — any reopening of FL-C4a, FL-C7, FL-R18 or FL-R3, or any proposal to change the quantization rule, the band margin, or the served map. The point of the row is that the fifth occasion reaches for a number instead of an argument. Instrument: the existing drift-honest traces already evolve the state needed; this is an added statistic, not a new model |
 
 ---
 

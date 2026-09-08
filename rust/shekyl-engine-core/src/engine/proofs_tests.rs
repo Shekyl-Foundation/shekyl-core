@@ -433,13 +433,19 @@ mod check_workflows {
         // One concatenated hybrid KEM blob (x25519 ‖ ml_kem per
         // output, vout order) in a single 0x06 extra field — the
         // layout `on_chain_outputs_of` slices at the scanner's
-        // offsets.
+        // offsets — plus the 0x07 leaf hashes the same transaction must
+        // carry (CEN-I19: one field of each, 1120·n and 32·n). The KEM
+        // payloads are the real per-output ciphertexts this test needs;
+        // the leaf hashes are filler, since nothing here reads them.
         let mut kem_blob = Vec::new();
+        let mut leaf_blob = Vec::new();
         for od in &outputs {
             kem_blob.extend_from_slice(&od.kem_ciphertext_x25519);
             kem_blob.extend_from_slice(&od.kem_ciphertext_ml_kem);
+            leaf_blob.extend_from_slice(&[0x7bu8; 32]);
         }
-        let extra = ExtraField::PqcKemCiphertext(kem_blob).serialize();
+        let mut extra = ExtraField::PqcKemCiphertext(kem_blob).serialize();
+        extra.extend_from_slice(&ExtraField::PqcLeafHashes(leaf_blob).serialize());
 
         let tx = Transaction {
             prefix: TxPrefix {

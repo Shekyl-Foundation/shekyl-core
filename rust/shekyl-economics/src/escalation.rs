@@ -14,7 +14,7 @@
 //!
 //! 1. Monotone in `n`
 //! 2. Floor at today's share (strict improvement, never a redistribution)
-//! 3. Asymptote strictly below [`SCALE`](crate::params::SCALE) (deflation survives)
+//! 3. Asymptote strictly below [`crate::params::SCALE`] (deflation survives)
 //! 4. Banded piecewise-linear integer fixed-point ([`shekyl_units::banded_pl`])
 //! 5. Pure map of `n` — no EMA, rate-limiter, or per-block state
 //!

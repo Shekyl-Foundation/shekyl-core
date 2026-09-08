@@ -2,7 +2,182 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Peerlist trust is earned in-process: nothing restored from disk is
+  trusted, and `--add-peer` is a candidate rather than a trusted peer.**
+  White-list membership now means exactly *"this process dialled it and it
+  answered"*. On startup every persisted address is loaded as a **gray**
+  candidate and earns white by a successful outbound dial; `--add-peer`
+  entries enter gray for the same reason, having never been dialled.
+
+  **Why it is security-relevant.** A persisted white list made white mean *a
+  file asserts that some earlier process verified something*. White entries
+  are dialled in preference to gray **and are the only ones gossiped onward**,
+  so a supplied or stale datadir — a pre-synced download, a restored backup, a
+  container volume, a shared mount — made a node both a preferential dialler
+  of, and an amplifier for, whatever the file contained. Encrypting the store
+  would not have fixed this: encryption is a privacy mechanism for the peer
+  graph, and verification is what supplies trust.
+
+  **Operator-visible effects.** A wrong or unreachable `--add-peer` address is
+  **no longer gossiped to other nodes** — gray entries are never disclosed, so
+  a typo stops propagating immediately instead of being handed to every peer
+  that syncs with you. Its **removal is eventual, not immediate**: a failed
+  refill dial only records the address in the recently-failed cache, and
+  eviction waits for the periodic housekeeping probe to draw that entry (one
+  random gray peer per zone per cycle) and fail. A bad address can therefore
+  survive many failed dials and restarts; what changes is that it no longer
+  spreads, and no longer occupies a preferentially-dialled slot. Seed contact is
+  keyed on holding **no candidate at all** rather than no trusted one, so a
+  restarting node dials its stored pool instead of visiting a seed first. The
+  first start after upgrading is a cold-ish start: the persisted store's
+  version is bumped, so the previous file is dropped whole.
+
+  **One capacity change, stated because it is not obvious.** White and gray
+  had separate caps (1000 + 5000). One trust class means one cap, so a node
+  saturating both now persists up to `P2P_LOCAL_GRAY_PEERLIST_LIMIT` rather
+  than the sum; the entries dropped are the least recently seen.
+
+- **Block reward: one Rust owner, and the composition the FL round signed
+  (FL-R12′).** The paid reward is now
+  `max(M_r · curve(remaining), TAIL) · penalty(x)`, computed by
+  `shekyl-economics::paid_block_reward`; C++ marshals to it and computes
+  nothing. The ordering is the consensus-visible part: the release
+  multiplier applies to the **curve** and the tail floors the result (at a
+  perpetual tail there is nothing to pace, and a multiplied floor would pay
+  least exactly when fees are lowest), while the weight penalty applies to
+  the **paid quantity, after the floor** (composed before it, the penalty
+  would be dead at the tail permanently, and there is no post-tail era).
+
+- **The supply cap is retired and the accumulator runs through the
+  asymptote.** `already_generated_coins` no longer saturates at the
+  emission-curve asymptote — a past-asymptote state is a legitimate
+  perpetual-tail state rather than an error — which closes the divergence
+  where the estimator and the relay floor dead-lettered at exhaustion. The
+  persisted width stays `u64` (FL-R14), guarded by a build-time assertion
+  on the ≈89,750-year headroom.
+
+- **Fee ladder: three tiers, state-computed (FL-R17).** The daemon serves
+  `economy` / `standard` / `priority` from
+  `shekyl-economics::corrected_fee_ladder`, scaled by the whole
+  volume-dependent correction `C_q = Q_ceil((1−σ)·M_r/(1−b))` on the
+  M_r-neutral operand. The `Fh` main arm is unconditional (the inherited
+  surge discount is gone), and the served economy rung is clamped up to the
+  relay floor so a conforming wallet's quote can only err toward
+  acceptance. **Wire shape is unchanged** — the vector still carries four
+  slots, with slot 2 mirroring `standard` as a bridge until the RPC
+  cutover.
+
+- **The served correction carries no daemon-local state.** It is the plain
+  pow2 ceiling snap of the correction at the queried height, so every node
+  derives the same rate there; a restarted and a long-running daemon
+  cannot quote differently. The pow2-boundary hysteresis the design round
+  ruled is built and tested in `shekyl-economics` but is **not on the
+  served path yet**: a remembered value makes the rate depend on the
+  process's query history, and a one-step seed from the previous block
+  inverts it. FL-R3 rules that the band stays and is restored, via a
+  grid-anchored previous value that keeps it derivable from chain state;
+  that shape is a design change and lands in its own round. Until then
+  the served correction is the plain snap.
+
+- **Wallet fee-rate ceiling raised to a structural bound.**
+  `absolute_fee_rate_cap()` is now derived with every factor at its own
+  extreme (220,000,000 atomic/weight) instead of at the genesis point. The
+  previous 28,000,000 value sat **below honest daemon quotes** from about
+  year 3 and would have refused correct snapshots. The swept peaks are
+  91,000,000 at ≈ year 7 on the neutral accumulation and 98,000,000 at
+  ≈ year 8 on a dormant-then-busy trajectory — history matters, because a
+  slower-emitting past leaves a larger `R` at the same height. **Neither
+  is the reachable maximum**: arbitrary volume paths are uncountable, so
+  the sweep is a floor under the bound's adequacy, not a proof of
+  tightness. That is why the cap is structural rather than swept.
+
+### API
+
+- **`shekyl_block_reward` takes `tx_volume_avg`**, and the release
+  multiplier composes inside the one owner rather than being applied by the
+  caller; `shekyl_apply_release_multiplier` and
+  `shekyl_cap_reward_to_remaining_supply` are gone. New exports
+  `shekyl_fee_correction_quantized` and `shekyl_corrected_fee_ladder` carry
+  the ladder. `shekyl_corrected_fee_ladder` returns `0` on success, `-1`
+  for a null out-pointer, and `-2` for scalars the rungs cannot form in
+  128 bits — no chain state reaches the last one; it exists so a corrupt
+  caller gets a status instead of an abort across the ABI (rule 40).
+  `shekyl_fee_correction_quantized` is total.
+  `Blockchain::get_dynamic_base_fee_estimate_2021_scaling`
+  gains a `c_q` parameter.
+
+### Removed
+
+- **The anchor peerlist mechanism is deleted whole** — the persisted anchor
+  section, `anchor_peerlist_entry`, its container and manager methods, the
+  anchor dial arm, and `P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT`.
+
+  Anchors existed only to carry peers across a restart, and peerlist trust no
+  longer crosses that boundary. Within a session the mechanism could not
+  produce a connection at all: an entry was in the anchor set only while an
+  outbound connection to it was open, and the dial path skipped every entry it
+  already had a connection to. It also under-delivered against its own
+  constant — the whole persisted set was drained and destroyed to buy at most
+  one connection.
+
+  **Consequence for operators:** the anchor exemption in the
+  sync-slot drop logic went with the mechanism. `should_drop_connection` still
+  refuses to drop a peer that is not striped, one carrying the stripe we need
+  next, one usable for pruned-block sync, or one holding the next unpruned
+  block — what was removed is the *unconditional* exemption an anchor
+  connection had, not connection protection in general.
+
+- **`--hide-my-port` is gone, as an option and as a capability; whether this
+  node advertises a port is now derived.** The flag expressed something the
+  node can determine for itself, and its default meant a reachability
+  downgrade required no conscious act. `get_local_node_data` now announces the
+  listening (or `--p2p-external-port`) port only where a peer could actually
+  reach us on it: the zone must support the back-ping that verifies the claim,
+  and we must accept inbound connections at all. **This also fixes a
+  divergence** — `check_incoming_connections` has always asked the second
+  question, while the announcement site asked only whether the flag was set, so
+  a node run with `--in-peers 0` announced a port that refuses every connection
+  it attracts. Operators wanting no inbound use `--in-peers 0`, which now
+  suppresses the announcement by derivation; operators wanting no p2p
+  participation at all should not run a daemon. The flag never did anything on
+  Tor or I2P, where `m_can_pingback` is false by construction. NAT'd ports are
+  handled naturally by the revised p2p rather than by an operator flag.
+
+- **PWD-B8: a p2p timer that was never driven, and two lineage-dead wire
+  structs.** `m_bad_peer_checker` (`once_a_time_seconds<43>`) had exactly one
+  occurrence tree-wide — its own declaration — and `on_idle` never called it;
+  its orphaned `m_bad_peer_check_lock` goes with it. `connection_entry_base`
+  and its `connection_entry` typedef had **zero** references anywhere, and
+  `network_address_old` only two, both in the debug size printer. Nothing
+  observable changes, because none of it was reachable; the value is that a
+  cadence constant no code reads no longer reads as a cadence to anyone
+  auditing the file.
+
+
 ### Fixed
+
+- **Consensus: the `tx_extra` PQC fields have a shape rule, and the storage
+  fail-open that hid its absence is gone (CEN-I19, S1).** A transaction whose
+  `0x07` leaf-hash field was missing, short, long or unparsable was accepted at
+  connect and the DB zero-filled `h_pqc` for the uncovered outputs — a leaf
+  whose post-quantum binding was to nothing (unspendable) and a leaf set a
+  faithful port would not have stored; the `0x06` KEM-ciphertext field had the
+  same gap, leaving a recipient unable to ever see or spend the payment. Ruled
+  by Rick 2026-09-05: with `n = vout.size()`, exactly one `0x06` of `1120·n`
+  bytes and exactly one `0x07` of `32·n` when `n > 0`, neither when `n == 0`
+  (serve-credit transactions), and duplicates are rejected because first-match
+  parsing let the same bytes mean two things. The rule lives in `shekyl-wire`
+  and reaches the daemon through `shekyl_tx_extra_pqc_field_shape`; the C++
+  adapter runs in `check_tx_semantic` (relay and block, no `kept_by_block`
+  exemption) and `prevalidate_miner_transaction`; the DB collector aborts on the
+  same shape instead of zero-filling. Red-first: every vector observed accepted
+  at all three gates before the rule. `GENESIS_TX_WIRE_FORMAT.md` §9.6a had
+  both lines wrong in mirrored ways (`0x06` "per output"; `0x07` "not
+  self-describing") — corrected under refuted-not-superseded with the
+  serializer lines that refute them. Every producer already emits both fields
+  at the full length, genesis included, so no conforming transaction changes.
 
 - **Consensus: the block header's `curve_tree_root` is now checked at
   admission against the tip root, before the block is added (CEN-B5, S1).**
@@ -91,6 +266,110 @@
   the FCMP++ spend builder.
 
 ### Added
+
+- **DRS-P0b — the atomicity audit covers the store that exists.** The
+  April 2026 `LMDB_WRITE_ATOMICITY_AUDIT.md` was a PASS doing work it was
+  never entitled to do: 22 of the 49 declared tables post-dated it (49 declared, 48 at runtime — DRS-W5), while its
+  covered subjects included the dead claim-era staking paths and two dead
+  tables. Rewritten in place at `dev 2dba46537` over every write path —
+  connect, pop, txpool (re-censused: 14 `LockedTXN` constructions / 13
+  commits, the read-snapshot `get_transaction_info` recorded as the
+  deliberate baseline; the April D++ fix verified alive and intact), alt
+  blocks, **three** prune shapes — one atomic and two deliberately
+  checkpointed (archival retention rides the block's transaction with its
+  receipt written before the destruction it authorises; `prune_tx_data`
+  commits per ≤256-height batch **with its resumption anchor in the same
+  transaction**; `prune_worker` commits and reopens every 4096 deletions) —
+  and the store lifecycle — `open()` (one transaction, three exits, one of
+  which commits before it refuses: DRS-W10), `reset()` (enumeration wipe —
+  its stale FOLLOWUPS row closed) and `migrate()` (zero writes by design). The §10 coverage matrix is
+  gate-pinned to `SHEKYL_LMDB_TABLES` (DRS §9.1 leg 3 now live; eight new
+  failure paths observed red). The in-code-only conventions are
+  transcribed for the Rust store: A-2 height bases with the F-B5b
+  convert-don't-unify rationale verbatim, A-4's load-bearing revert
+  partial order, A-6's guard census (22× `std::runtime_error` vs 2×
+  `DB_ERROR_TXN_START` for one precondition). Findings DRS-W1…DRS-W11 recorded —
+  none S-graded, no C++ touched — including `txs` (zero write or read
+  sites; inherited-dead candidate) and `hf_starting_heights` (deleted at
+  every writable `open()`, structurally absent at runtime), and the post-pop
+  burn pair living outside the pop funnel — which `blockchain_import
+  --pop-blocks` reaches today by popping straight through the DB — and
+  **DRS-W9**, the connect side of the same architectural fact: the burn
+  pair also runs after the try whose catches set `m_batch_success`, so an
+  LMDB write failure between the row and its aggregate commits the block
+  and the row without the total. That one falsified a PASS this audit had
+  published, and it is the production entry that regrades DRS-W7 from
+  unreachable to live. The dead
+  `staker_pool_balance` properties row left the schema doc, and the
+  workflow carrying the schema gates is renamed `docs-gates.yml` for what
+  it does (Rick's #624 boundary: P0b's item, no other lane's).
+
+- **Shard-visual: ruling B's assigned residue CLOSED (2026-09-06), and
+  the single-algorithm fallback RETIRED.** Three items the spec handed
+  to ruling B by name and B never closed, ruled together: `time_density`
+  is **kept** (admitted, deliberately dormant — the paragraph is what
+  makes it deliberate rather than an oversight); the post-rewire
+  aesthetics are **accepted as they stand**; and the single-algorithm
+  palette is **retired** with a rule-21 reopening criterion, because
+  both of its trigger conditions resolved (continuity was ruled the
+  wrong property, and the floor budget was ruled in candidate.v1's
+  favour). Also closes the *Final algorithm palette* open question and
+  points the stale *Algorithm versioning* entry at the ruling that
+  already settled its privacy half.
+
+  One reported aesthetics finding was **withdrawn under measurement**:
+  the claim that distinguishability collapses at the 128px product size
+  does not survive — pairwise full-image RGB-RMS is min 42.0 / median
+  53.5 at 128px against min 42.9 / median 57.8 at 512px, so
+  distinguishability is size-independent. It was an impression of a
+  thumbnail strip, not a property of the renders, and the withdrawal is
+  recorded rather than the finding.
+
+- **Shard-visual performance targets AMENDED (2026-09-06), and the
+  amendment changes what they assert.** **RATIFIED.** *Authority: the
+  ruling reached this work relayed, and was then confirmed by Rick
+  directly to steering on 2026-09-06 ("Shard visual B is ratified") —
+  confirmed in-channel rather than by an artifact in the tree, which is
+  where the record stands.* The ruling: the floor scores are
+  acceptable, so of budget / candidate / floor device the **budget
+  gives**. New targets, stated as *median on the floor device, warm,
+  otherwise idle* — the quantity `examples/budget_matrix.rs` actually
+  emits: 128px 350 ms, 256px 800 ms, 512px 4 s, 1024px 25 s (2× the
+  corpus-worst floor median; the originals are struck through in
+  place, refuted not superseded). Two things recorded with them:
+  (1) the originals named **no statistic and no device state**, so
+  they were never falsifiable — an unfalsifiable threshold generates
+  no failures, which is why they survived unexamined; (2) the
+  replacements are **regression bounds, not fitness bounds** — at 2×
+  the measured worst nothing the implementation does can breach them,
+  and presenting them in the old voice would ship a check that cannot
+  fail. Enforced by named trigger (any renderer / compositor /
+  entropy-draw change obliges a floor re-run; `docs/FOLLOWUPS.md`)
+  plus a new CI gate `shard-visual-x86-smoke`, whose **pass** line
+  carries its own disclaimer because a green checkmark otherwise
+  reads as "performance is fine" and cannot bound the Pi 4 floor.
+
+- **Shard-visual ruling B (measurement half): goldens, KATs, avalanche,
+  floor budget matrix — executed 2026-09-06.** Designated-reference
+  goldens committed once (the run is recorded by the generator inside
+  `tests/goldens/recipes.json` → `_reference_run`, not restated in
+  prose where it would drift; x86_64, release, and the toolchain
+  `rust/rust-toolchain.toml` pins; never regenerated by consuming
+  tests); full-recipe KATs for
+  all nine fixtures on both implementations (shekyl-dev pins a copy of
+  the same artifact); two-limb avalanche on the pixel axis (sweep min
+  RMS 34.165 ≥ floor 20). Floor-device results (skl-pi, Pi 4, thermal
+  bracket 50.6–59.4 °C at stock 1800 MHz): raster parity measured
+  **RMS = 0.000000 on all nine fixtures at 128px** (bit-identical to
+  the x86 goldens — recorded as measured, does not reopen the
+  bit-exactness retraction; 256/512/1024px parity is unmeasured, since
+  goldens exist at the one size); budget matrix **36/36 cells over
+  budget** (1.3×–6.2×; full per-fixture table committed under
+  `docs/benchmarks/`),
+  falsifying candidate.v1's fitness on the stated minimum device at
+  every tier — ruling owed among budget / candidate / floor device
+  (spec *Measurements of record*). Thresholds θ = 2.0 and floor ≥ 20
+  untouched throughout.
 
 - **Shard-visual ruling B (spec half): the layered determinism bar,
   pre-registered thresholds, and the sensitivity correction.** Ratified

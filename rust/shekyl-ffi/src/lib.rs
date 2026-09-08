@@ -86,6 +86,12 @@ pub mod pow_randomx_ffi;
 // Test-generator surface; the daemon does not call it.
 pub mod curve_tree_replica_ffi;
 
+// tx_extra PQC field shape rule (GENESIS_TX_WIRE_FORMAT.md §9.6a, CEN-I19):
+// exactly one 0x06 of 1120·n and one 0x07 of 32·n bytes when a transaction
+// has n > 0 outputs, neither when n == 0. The rule lives in shekyl-wire; the
+// daemon's admission path hands over its own parse's field lengths.
+pub mod tx_extra_ffi;
+
 // Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
 pub mod archival_ffi;
 // D3/R3 bond-admission viability (kept separate so archival_ffi does not keep

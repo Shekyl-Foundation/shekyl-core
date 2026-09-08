@@ -14,8 +14,14 @@
 #include <cstring>
 #include <stdexcept>
 
+#include <sstream>
+#include <string>
+#include <typeinfo>
 #include "crypto/crypto.h"
 #include "cryptonote_basic/cryptonote_basic.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
+#include "cryptonote_basic/tx_extra.h"
+#include "serialization/binary_archive.h"
 
 namespace shekyl_test_fixtures
 {
@@ -37,6 +43,55 @@ inline crypto::public_key basepoint_multiple(unsigned n)
   return pk;
 }
 
+inline std::string serialize_tx_extra_field(const cryptonote::tx_extra_field& f)
+{
+  std::ostringstream oss;
+  binary_archive<true> oar(oss);
+  cryptonote::tx_extra_field v = f;
+  if (!::do_serialize(oar, v))
+    throw std::runtime_error("serialize_tx_extra_field failed");
+  return oss.str();
+}
+
+/// Append a 0x06 KEM-ciphertext field of `bytes` bytes (arbitrary payload).
+inline void append_pqc_kem_field(cryptonote::transaction& tx, size_t bytes)
+{
+  cryptonote::tx_extra_pqc_kem_ciphertext f;
+  f.blob.assign(bytes, '\x6a');
+  const std::string b = serialize_tx_extra_field(f);
+  tx.extra.insert(tx.extra.end(), b.begin(), b.end());
+}
+
+/// Append a 0x07 leaf-hash field of `bytes` bytes (arbitrary payload).
+inline void append_pqc_leaf_field(cryptonote::transaction& tx, size_t bytes)
+{
+  cryptonote::tx_extra_pqc_leaf_hashes f;
+  f.blob.assign(bytes, '\x7b');
+  const std::string b = serialize_tx_extra_field(f);
+  tx.extra.insert(tx.extra.end(), b.begin(), b.end());
+}
+
+/// The conforming shape for `tx.vout.size()` outputs: one field of each — and
+/// NEITHER field when there are no outputs. A zero-output transaction that
+/// carries an empty 0x06 and an empty 0x07 is not "conforming with zero
+/// bytes"; CEN-I19 forbids the fields entirely there, so a helper that
+/// appended them would quietly manufacture a fixture the rule rejects.
+inline void append_pqc_fields(cryptonote::transaction& tx)
+{
+  const size_t n = tx.vout.size();
+  if (n == 0)
+    return;
+  append_pqc_kem_field(tx, cryptonote::HYBRID_KEM_CT_BYTES * n);
+  append_pqc_leaf_field(tx, cryptonote::PQC_LEAF_HASH_BYTES * n);
+}
+
+/// Strip both PQC fields (the pre-rule shape every red-first vector starts from).
+inline void strip_pqc_fields(cryptonote::transaction& tx)
+{
+  cryptonote::remove_field_from_tx_extra(tx.extra, typeid(cryptonote::tx_extra_pqc_kem_ciphertext));
+  cryptonote::remove_field_from_tx_extra(tx.extra, typeid(cryptonote::tx_extra_pqc_leaf_hashes));
+}
+
 inline cryptonote::transaction make_pqc_spend()
 {
   cryptonote::transaction tx{};
@@ -45,7 +100,13 @@ inline cryptonote::transaction make_pqc_spend()
 
   cryptonote::txin_to_key txin{};
   txin.amount = 0;
-  std::memset(&txin.k_image, 0xBB, sizeof(txin.k_image));
+  // A prime-order, non-identity key image: core::check_tx_semantic's domain
+  // check (check_tx_inputs_keyimages_domain) rejects anything else, and this
+  // fixture now also drives the admission path (tx_extra_pqc_field_shape.cpp),
+  // not only the DB below it. A byte pattern here made every admission-level
+  // vector look "rejected" for the wrong reason.
+  const crypto::public_key ki_pt = basepoint_multiple(7);
+  std::memcpy(&txin.k_image, &ki_pt, sizeof(txin.k_image));
   tx.vin.push_back(txin); // FCMP++ carries no ring members, so key_offsets stay empty
 
   cryptonote::tx_out txout{};
@@ -94,6 +155,13 @@ inline cryptonote::transaction make_pqc_spend()
   auth.hybrid_public_key.assign(64, 0x71);
   auth.hybrid_signature.assign(96, 0x72);
   tx.pqc_auths.push_back(auth);
+
+  // The per-output PQC fields every transaction with outputs must carry
+  // (GENESIS_TX_WIRE_FORMAT.md §9.6a, CEN-I19): one 0x06 of 1120 bytes and
+  // one 0x07 of 32 bytes per output. The shape rule looks at counts and
+  // lengths only, so the payloads are arbitrary; without them the DB
+  // collector aborts (it used to zero-fill h_pqc silently).
+  append_pqc_fields(tx);
 
   return tx;
 }

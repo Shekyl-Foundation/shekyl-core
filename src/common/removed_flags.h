@@ -47,14 +47,25 @@
 
 namespace shekyl { namespace cli {
 
-// If `ex` names a flag shekyld no longer registers — the V3.1 daemonizer
-// flags (--detach, --pidfile, --install-service, --uninstall-service,
-// --start-service, --stop-service, --run-as-service), shekyld's inbound
-// RPC TLS/auth flags (--rpc-login, --rpc-ssl and the --rpc-ssl-* set), the
-// transitional --no-rust-rpc, the bootstrap-daemon forward
-// (--bootstrap-daemon-address / -login / -proxy), or --public-node —
-// write a migration message to stderr appropriate to that flag's removal
-// reason, then return true. Caller should exit nonzero.
+// If `ex` names a flag shekyld no longer registers, write a migration message
+// to stderr appropriate to that flag's removal reason, then return true.
+// Caller should exit nonzero.
+//
+// THE AUTHORITATIVE LIST IS `REMOVED_FLAGS` IN removed_flags.cpp, and it is
+// deliberately not restated here. This comment used to enumerate the
+// recognized flags; by the time a fourth family was added it had silently
+// fallen three behind — the bind-confirmation and rpc-ignore-ipv4 removals
+// were absent, and so was the one being added. A hand-maintained copy of a
+// list that lives in the same component drifts, and a stale copy claiming to
+// be exhaustive is worse than no copy: a caller trusts it and concludes a
+// flag is still live. Read the array; it is thirty lines away and cannot be
+// wrong.
+//
+// The families it covers, as orientation rather than as a contract: the V3.1
+// daemonizer flags, shekyld's inbound RPC TLS/auth surface, the transitional
+// epee HTTP fallback, the bootstrap-daemon forward, --public-node, binds that
+// are now refused outright, the tolerated-v4-bind-failure flag, and flags
+// whose value the node now derives for itself.
 //
 // Otherwise returns false — caller should re-throw / print the normal
 // parse error.

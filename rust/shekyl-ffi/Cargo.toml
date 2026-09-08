@@ -63,6 +63,11 @@ shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 # store (DRS), which needs it anyway; ruled by Rick 2026-09-05 over a
 # C++-LMDB generator oracle that the store rewrite would have deleted.
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# tx_extra PQC field shape rule (`tx_extra_ffi.rs`, GENESIS_TX_WIRE_FORMAT.md
+# §9.6a, CEN-I19): the rule lives in shekyl-wire so the daemon's admission
+# path and the Rust port apply one implementation. Promoted from
+# dev-dependency (GAP-7 bench fixtures) to a runtime dependency here.
+shekyl-wire = { path = "../shekyl-wire" }
 # Single-Rust-image contract: every binary links exactly one Rust archive,
 # and that archive must carry the `shekyl_log_*` exports plus the one
 # `tracing-core` GLOBAL_DISPATCH that this crate graph's `tracing::*`

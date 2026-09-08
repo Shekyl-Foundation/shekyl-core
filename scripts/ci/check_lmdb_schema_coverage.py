@@ -43,6 +43,7 @@
 # match — the schema doc's own "Total: 41" drifted silently for exactly the
 # want of such a pin.
 
+import collections
 import pathlib
 import re
 import sys
@@ -51,11 +52,23 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "src" / "blockchain_db" / "lmdb" / "db_lmdb.cpp"
 DOC = ROOT / "docs" / "LMDB_SCHEMA.md"
 DRS = ROOT / "docs" / "design" / "DAEMON_REDB_STORE.md"
+AUDIT = ROOT / "docs" / "LMDB_WRITE_ATOMICITY_AUDIT.md"
 
 # Subject assertion floor: the list held 49 names when this gate was written.
 # A parse yielding fewer than this is a broken parse (or a mass table
 # deletion, which deserves a deliberate edit here either way).
 MIN_TABLES = 40
+
+
+def duplicates(names: list[str]) -> list[str]:
+    """Names appearing more than once, sorted.
+
+    Every leg below asks this question, so it is asked in one place: a
+    per-name `list.count()` inside a comprehension is quadratic and, more to
+    the point, invites the next leg to copy the wrong shape.
+    """
+    counts = collections.Counter(names)
+    return sorted(name for name, n in counts.items() if n > 1)
 
 
 def parse_table_list(text: str) -> list[str]:
@@ -78,9 +91,17 @@ def main() -> None:
     if "blocks" not in tables:
         sys.exit("FAIL: sentinel table 'blocks' missing from the parsed list "
                  "— the parse is not reading the real macro")
-    if len(set(tables)) != len(tables):
-        dupes = sorted({t for t in tables if tables.count(t) > 1})
+    dupes = duplicates(tables)
+    if dupes:
         sys.exit(f"FAIL: duplicate names in SHEKYL_LMDB_TABLES: {dupes}")
+
+    # The DECLARED table set, computed once: every leg below compares against
+    # it in both directions. Declared, not runtime — a writable open() drops
+    # `hf_starting_heights` (LMDB_WRITE_ATOMICITY_AUDIT.md, DRS-W5), so the
+    # running store holds one fewer. This gate cannot see that difference by
+    # construction, since both sides of every comparison it makes derive from
+    # this same macro; naming the set precisely is the least it can do.
+    table_set = set(tables)
 
     doc = DOC.read_text(encoding="utf-8")
 
@@ -103,7 +124,7 @@ def main() -> None:
     # property row names a table absent from the list documents a table that
     # does not exist (found live: `staker_accrual` / `staker_claims` kept
     # their sections after the claim-era wire deletion removed the tables).
-    ghosts = sorted(documented - set(tables))
+    ghosts = sorted(documented - table_set)
     if ghosts:
         errors.append(
             "these tables have sections in docs/LMDB_SCHEMA.md but are NOT "
@@ -122,19 +143,20 @@ def main() -> None:
                  f"headings from docs/LMDB_SCHEMA.md (floor {MIN_TABLES}, "
                  "sentinel 'blocks') — the heading parse is not reading the "
                  "real doc")
-    dup_headings = sorted({h for h in headings if headings.count(h) > 1})
+    heading_set = set(headings)
+    dup_headings = duplicates(headings)
     if dup_headings:
         errors.append(
             "these tables have MORE THAN ONE '### `name`' section heading in "
             "docs/LMDB_SCHEMA.md (two sections claiming one table — invisible "
             "to the property-row legs):\n  " + "\n  ".join(dup_headings))
-    unheaded = [t for t in tables if t not in set(headings)]
+    unheaded = [t for t in tables if t not in heading_set]
     if unheaded:
         errors.append(
             "these tables have an 'LMDB name' property row but no '### "
             "`name`' section heading in docs/LMDB_SCHEMA.md (or neither):\n  "
             + "\n  ".join(unheaded))
-    stranded = sorted(set(headings) - set(tables))
+    stranded = sorted(heading_set - table_set)
     if stranded:
         errors.append(
             "these '### `name`' section headings in docs/LMDB_SCHEMA.md name "
@@ -164,14 +186,14 @@ def main() -> None:
                       f"db_lmdb.cpp defines VERSION {code_v.group(1)}")
 
     # Registry leg. The P0a reconciliation registry in the DRS design doc
-    # claims one row per live table; that claim gets the same pin the schema
+    # claims one row per DECLARED table; that claim gets the same pin the schema
     # doc has, or it drifts the same way the schema doc's "Total: 41" did.
     # Subject assertion first (rule 47): the registry section itself must
     # exist and parse to a plausible row set before its content is compared.
     # Subject failures here still flush any errors already accumulated by
     # the earlier legs — a missing registry must not mask a heading defect
     # (the workflow runs these legs under one process, so masking would be
-    # exactly the one-defect-hides-another failure doc-links.yml avoids
+    # exactly the one-defect-hides-another failure docs-gates.yml avoids
     # between scripts).
     def _fail(msg: str) -> None:
         sys.exit("FAIL: " + msg + ("" if not errors else
@@ -199,17 +221,18 @@ def main() -> None:
         _fail(f"parsed only {len(reg_rows)} table rows from the P0a "
               f"reconciliation registry (floor {MIN_TABLES}, sentinel "
               "'blocks') — the registry parse is not reading real rows")
-    reg_dupes = sorted({t for t in reg_rows if reg_rows.count(t) > 1})
+    reg_set = set(reg_rows)
+    reg_dupes = duplicates(reg_rows)
     if reg_dupes:
         errors.append("duplicate rows in the P0a reconciliation registry "
                       "(DAEMON_REDB_STORE.md):\n  " + "\n  ".join(reg_dupes))
-    reg_missing = [t for t in tables if t not in set(reg_rows)]
+    reg_missing = [t for t in tables if t not in reg_set]
     if reg_missing:
         errors.append(
             "these tables exist in SHEKYL_LMDB_TABLES but have no row in the "
             "P0a reconciliation registry (DAEMON_REDB_STORE.md):\n  "
             + "\n  ".join(reg_missing))
-    reg_ghosts = sorted(set(reg_rows) - set(tables))
+    reg_ghosts = sorted(reg_set - table_set)
     if reg_ghosts:
         errors.append(
             "these P0a reconciliation registry rows name tables absent from "
@@ -225,13 +248,63 @@ def main() -> None:
                       f"{reg_count.group(1)} rows; SHEKYL_LMDB_TABLES has "
                       f"{len(tables)} tables")
 
+    # Audit leg (P0b, 2026-09-05). The atomicity audit's §10 coverage matrix
+    # claims one row per DECLARED table — the DRS §9.1 leg-3 pin ("every MDB_dbi
+    # in the audit"), stated at the table-name layer the macro owns. Same
+    # subject-assertion and non-masking discipline as the registry leg.
+    try:
+        audit = AUDIT.read_text(encoding="utf-8")
+    except OSError as e:
+        _fail(f"cannot read docs/LMDB_WRITE_ATOMICITY_AUDIT.md ({e}) — the "
+              "coverage matrix this gate pins is unreadable")
+    mat_m = re.search(
+        r"^## 10\. Coverage matrix\b.*?(?=^## |\Z)", audit,
+        re.MULTILINE | re.DOTALL)
+    if not mat_m:
+        _fail("'## 10. Coverage matrix' section not found in "
+              "docs/LMDB_WRITE_ATOMICITY_AUDIT.md — the audit no longer "
+              "carries the per-table matrix this gate pins")
+    mat_rows = re.findall(r"^\| `([a-z0-9_]+)` \|", mat_m.group(0),
+                          re.MULTILINE)
+    if len(mat_rows) < MIN_TABLES or "blocks" not in mat_rows:
+        _fail(f"parsed only {len(mat_rows)} table rows from the audit "
+              f"coverage matrix (floor {MIN_TABLES}, sentinel 'blocks') — "
+              "the matrix parse is not reading real rows")
+    mat_set = set(mat_rows)
+    mat_dupes = duplicates(mat_rows)
+    if mat_dupes:
+        errors.append("duplicate rows in the audit coverage matrix "
+                      "(LMDB_WRITE_ATOMICITY_AUDIT.md §10):\n  "
+                      + "\n  ".join(mat_dupes))
+    mat_missing = [t for t in tables if t not in mat_set]
+    if mat_missing:
+        errors.append(
+            "these tables exist in SHEKYL_LMDB_TABLES but have no row in the "
+            "audit coverage matrix (LMDB_WRITE_ATOMICITY_AUDIT.md §10):\n  "
+            + "\n  ".join(mat_missing))
+    mat_ghosts = sorted(mat_set - table_set)
+    if mat_ghosts:
+        errors.append(
+            "these audit coverage matrix rows name tables absent from "
+            "SHEKYL_LMDB_TABLES (deleted table, surviving row?):\n  "
+            + "\n  ".join(mat_ghosts))
+    mat_count = re.search(r"\*\*(\d+) rows\*\*", mat_m.group(0))
+    if not mat_count:
+        errors.append("the audit coverage matrix's '**N rows**' count line "
+                      "is missing — the row-count claim this gate checks no "
+                      "longer exists")
+    elif int(mat_count.group(1)) != len(tables):
+        errors.append(f"the audit coverage matrix claims "
+                      f"{mat_count.group(1)} rows; SHEKYL_LMDB_TABLES has "
+                      f"{len(tables)} tables")
+
     if errors:
         sys.exit("FAIL: the LMDB schema surface is out of step with the live "
                  "table list:\n" + "\n".join(errors))
 
     print(f"OK: all {len(tables)} LMDB tables documented (property rows and "
-          "headings), reconciliation registry matches, stated totals and "
-          "DB-version header match the code")
+          "headings), reconciliation registry and atomicity-audit matrix "
+          "match, stated totals and DB-version header match the code")
 
 
 if __name__ == "__main__":

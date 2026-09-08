@@ -9,8 +9,14 @@ blast radius across both programs' binding decisions.
 **re-verified at `bf317111f`** (PR #592, C2-R3) and again at **`4b9807c5e`**
 (PR #596, C2-R1) — the census has been re-bucketed twice under this document.
 C1 close recorded 87 / 14 / 2 / 68; C2-R3 promoted CEN-C2/C3 to bucket 2
-(87 / 16 / 2 / 66); C2-R1 then moved three more rows to bucket 3, so the live
-split is **86 / 25 / 5 / 55** (total still 171) — C2-R1b promoted nine bucket-4 rows into bucket 2 on 2026-09-03, which is why the register's 102-row denominator is now a dated snapshot rather than the live set. The **18-row store-enforced set and its 7 / 1 / 10
+(87 / 16 / 2 / 66); C2-R1 then moved three more rows to bucket 3, giving
+**86 / 25 / 5 / 55** over 171 rows **as of `4b9807c5e`** — a dated split, not a
+running one. It has moved twice since (C2-R1b's nine promotions and C2-R1c's
+ten on 2026-09-03/04, then CEN-I19 minted 2026-09-06), which is also why the
+register's 102-row denominator is a dated snapshot rather than the live set.
+**Every current figure is re-derived from the census's own row column, never
+carried forward from this paragraph** — the commands are in
+[`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §3. The **18-row store-enforced set and its 7 / 1 / 10
 bucket split are unchanged** (re-derived mechanically at the later sha); every
 aggregate below is stated in whichever denominator it belongs to.
 
@@ -71,7 +77,7 @@ ruling cites evidence rather than sentiment:
 | **§6 finding 2** | The **unlock_time triple-divergence**: one field that is consensus-legal (CEN-H16), relay-illegal (CEN-M5), and semantically inert (CEN-L12), with no single owner. |
 | **§6 finding 5** | The **reorg acceptance design has no examined-decision record anywhere** — steering searched the decision log, `docs/design`, and `docs/completed`. |
 | **§6 finding 8** | FAKECHAIN/regtest levers are **compiled into consensus paths** (CEN-I2, CEN-B5, CEN-D7, CEN-D3). |
-| **§6 finding 11** | **70 of 171 rows carried open questions at C1 close** (**69** live after C2-R3 and C2-R1: 5 bucket-3 + 64 bucket-4); most of the inherited consensus surface has no specification other than its own source. |
+| **§6 finding 11** | **70 of 171 rows carried open questions at C1 close** (**69** as of C2-R1's close: 5 bucket-3 + 64 bucket-4 — a dated count, not a running one; the bucket-4 figure has moved since and is re-derived from the census's own row column, never from this line); most of the inherited consensus surface has no specification other than its own source. |
 
 The counterweight the census also records (Survey A O-4) stands and is not
 disturbed: the bucket-1/2 surfaces — DAA, economics KATs, FCMP++/PQC, archival
@@ -362,7 +368,7 @@ closed.
 | **UNREVIEWED** | no conformance check on record — **the default** | **regression only** |
 
 **DRS-P0f row coverage is COMPLETE OVER THE 2026-09-02 SET** (slices 1–8, all at the
-shas pinned per slice): the **102** bucket-1/2 rows that existed when P0f ran have a recorded disposition. **That denominator has since grown:** C2-R1b promoted **nine** rows into bucket 2 on 2026-09-03 and C2-R1c **ten** more on 2026-09-04 (nine promotions plus the CEN-K1 → K1a/K1b split), so the current bucket-1/2 set is **121** (counted from the census bucket column) and those nineteen carry no conformance record — **UNREVIEWED by default**, which is CSR-3a's own set-growth obligation firing for the first time. Disposition of the 102 — **100 CHECKED-CONFORMANT**, **1 DIVERGENT** (CEN-B5, the
+shas pinned per slice): the **102** bucket-1/2 rows that existed when P0f ran have a recorded disposition. **That denominator has since grown:** C2-R1b promoted **nine** rows into bucket 2 on 2026-09-03 and C2-R1c **ten** more on 2026-09-04 (nine promotions plus the CEN-K1 → K1a/K1b split), and CEN-I19 was minted into bucket 1 on 2026-09-06 with its implementation, so the current bucket-1/2 set is **122** (counted from the census bucket column) and those twenty carry no conformance record — **UNREVIEWED by default**, which is CSR-3a's own set-growth obligation firing for the first time. Disposition of the 102 — **100 CHECKED-CONFORMANT**, **1 DIVERGENT** (CEN-B5, the
 rule-71 FAKECHAIN skip, which census R9 owns),
 **1 failed closed to UNREVIEWED**
 (CEN-L8, whose settlement clause names an unwired writer; CEN-I12 failed closed the same way until its anchor source was reconciled — re-reviewed and promoted 2026-09-05). UNREVIEWED remains
@@ -382,7 +388,7 @@ cannot produce a conformance verdict.
 
 **The register lists REVIEWED rows only, in either outcome.** Absence from it is
 not an entry and not a claim — it *is* the UNREVIEWED state, which keeps the
-table finite (it never has to enumerate 171 rows) while keeping the default
+table finite (it never has to enumerate the whole row set) while keeping the default
 closed.
 
 **Every entry pins the sha it was reviewed at.** A conformance claim is a claim
@@ -555,6 +561,7 @@ plus its gate (`:4405–4415`).
 | CEN-I16 | **CHECKED-CONFORMANT** | W-PQ. `auth_version == 1`, `flags == 0`, `scheme_id ∈ {single, multisig}`, per-scheme key-length bounds — each rejects (`:175–223`) |
 | CEN-I17 | **CHECKED-CONFORMANT** | W-PQ. Signed payload binds prefix ‖ CtSig base ‖ keccak256(prunable) ‖ per-input PQC header ‖ **all** inputs' key hashes (`:62–158`), the cross-input bind included |
 | CEN-I18 | **CHECKED-CONFORMANT** | W-PQ. `shekyl_pqc_verify` rc-checked reject (`:230–243`). **Interaction verified, not assumed:** the gate carries `&& !is_archival_serve_credit_only` (`:4408`), so serve-credit txs (whose auths are empty by H20's rule) never reach the size gate that would reject them. The hybrid scheme's own adequacy is the signature-alignment round's subject, not this row's |
+| CEN-I19 | **UNREVIEWED** *(born 2026-09-06 with its implementation, PR #630; review at the merged sha owed)* | The rule and its implementation landed together (census §7 #19): admission adapter `cryptonote_format_utils.cpp:1000` over the daemon's own parse, called at `cryptonote_core.cpp:816` (relay + block, no `kept_by_block` gate) and `blockchain.cpp:1582` (coinbase); the rule itself in `shekyl-wire` `check_pqc_field_shape` via `shekyl_tx_extra_pqc_field_shape`; `blockchain_db.cpp:528` collector aborts instead of zero-filling. Red-first vectors observed accepted before the rule at all three gates; serve-credit must-accept control. A row born with its fix is UNREVIEWED by construction — the register records conformance only from a review at a merged sha. **REWRITE-NOTE:** the port applies the same `shekyl-wire` rule to its own parse — one home, identity with the daemon's verdict is the pass condition; the port's parser also rejects the three legacy tags (`0x03`, `0x0B`, `0xDE`) the C++ parser still accepts, which the merge-mining deletion (FOLLOWUPS) closes |
 
 ##### P0f slice 8 — the small sections (§4.A/B/C/D/G/K/M, 22 rows) — **P0f row coverage complete**
 

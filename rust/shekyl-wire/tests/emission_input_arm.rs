@@ -21,6 +21,9 @@
 //! `unknown_input_tag_still_kills_whole_tx_parse` proves the mechanism the fix
 //! removed for `0x04` still bites for a genuinely unknown tag (`0x05`).
 
+mod common;
+use common::conforming_pqc_extra;
+
 use shekyl_wire::transaction::{
     ARCHIVAL_EMISSION_VIN_MAX_BYTES, TAG_INPUT_ARCHIVAL_REWARD_EMISSION,
 };
@@ -83,7 +86,7 @@ fn emission_tx(inputs: Vec<Input>, outputs: Vec<Output>) -> Transaction {
             unlock_time: 0,
             inputs,
             outputs,
-            extra: vec![],
+            extra: conforming_pqc_extra(n_out),
         },
         ct: Ct::Fcmp {
             fee: 0,

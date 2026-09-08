@@ -130,7 +130,7 @@ fn coinbase_submission_rejects() {
                 key: [0x22; 32],
                 view_tag: 7,
             }],
-            extra: vec![],
+            extra: submit_fixtures::conforming_pqc_extra(1),
         },
         ct: Ct::Null(CtBase {
             enc_amounts: vec![[0u8; 9]],

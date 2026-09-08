@@ -36,6 +36,9 @@
 //! (`docs/FOLLOWUPS.md`). This pin is the struct-derived half: it binds the
 //! two implementations to each other, not yet to a chain.
 
+mod common;
+use common::conforming_pqc_extra;
+
 use std::path::PathBuf;
 
 use serde_json::Value;
@@ -44,6 +47,10 @@ use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
 const PARITY_FIXTURE: &str = "tests/fixtures/pruned_tx_hash_parity_v1.json";
+
+/// The pinned transaction's output count, which its `tx_extra` must match
+/// (CEN-I19: one `0x06` of `1120·n`, one `0x07` of `32·n`).
+const N_OUT: usize = 2;
 
 /// The compressed Ed25519 basepoint. `expand_transaction_1` multiplies each
 /// output commitment by `INV_EIGHT` on parse, which requires a decompressable
@@ -118,7 +125,7 @@ fn build_tx(with_prunable: bool) -> Transaction {
                     view_tag: 1,
                 },
             ],
-            extra: vec![],
+            extra: conforming_pqc_extra(N_OUT),
         },
         ct: Ct::Fcmp {
             fee: 0,

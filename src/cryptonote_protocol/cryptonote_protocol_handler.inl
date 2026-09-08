@@ -86,6 +86,28 @@
 
 namespace cryptonote
 {
+  /*!
+   * \brief Render a peer-supplied blob for a log line: digest and length, never content.
+   *
+   * A hex dump of a rejected blob is a remote-triggerable amplifier, and these
+   * blobs are bounded only by what the transport accepts. A block blob in
+   * `NOTIFY_RESPONSE_GET_OBJECTS` has no tighter bound than levin's
+   * post-handshake `LEVIN_DEFAULT_MAX_PACKET_SIZE` (100 MB), and hex doubles
+   * it, so one packet can write ~200 MB to an operator's disk -- and the peer
+   * is free to reconnect and repeat, because these paths deliberately do not
+   * score the drop (that is PWD-B7's tri-state, not this fix).
+   *
+   * A diagnostic needs to identify the blob and size it. It never needs the
+   * bytes: an operator who has the blob can already run `cn_deserialize`, and
+   * one who does not cannot obtain it from a log line either way. The digest
+   * is what makes two reports of "the same bad block" comparable.
+   */
+  inline std::string describe_peer_blob(const blobdata& blob)
+  {
+    return epee::string_tools::pod_to_hex(get_blob_hash(blob))
+      + " (" + std::to_string(blob.size()) + " bytes)";
+  }
+
   template <class CryptoHashContainer>
   inline bool make_block_connect_supplement_from_block_entry(
     const std::vector<cryptonote::tx_blob_entry>& tx_entries,
@@ -137,7 +159,7 @@ namespace cryptonote
       if (!parse_success)
       {
         MERROR("failed to parse and/or validate transaction: "
-          << epee::string_tools::buff_to_hex_nodelimer(tx_entry.blob)
+          << describe_peer_blob(tx_entry.blob)
         );
         return false;
       }
@@ -161,7 +183,7 @@ namespace cryptonote
     if (!cryptonote::parse_and_validate_block_from_blob(blk_entry.block, blk))
     {
       MERROR("sent bad block: failed to parse and/or validate block: "
-        << epee::string_tools::buff_to_hex_nodelimer(blk_entry.block)
+        << describe_peer_blob(blk_entry.block)
       );
       return false;
     }
@@ -171,14 +193,14 @@ namespace cryptonote
     if (blk_tx_hashes.size() != blk_entry.txs.size())
     {
       MERROR("sent bad block entry: number of hashes is not equal number of tx blobs: "
-        << epee::string_tools::buff_to_hex_nodelimer(blk_entry.block)
+        << describe_peer_blob(blk_entry.block)
       );
       return false;
     }
     else if (blk_tx_hashes.size() != blk.tx_hashes.size())
     {
       MERROR("sent bad block entry: there are duplicate tx hashes in parsed block: "
-        << epee::string_tools::buff_to_hex_nodelimer(blk_entry.block));
+        << describe_peer_blob(blk_entry.block));
       return false;
     }
 
@@ -324,7 +346,6 @@ namespace cryptonote
     double up_curr_sum = 0.0;
 
     ss << std::setw(30) << std::left << "Remote Host"
-      << std::setw(20) << "Peer id"
       << std::setw(20) << "Support Flags"      
       << std::setw(30) << "Recv/Sent (inactive,sec)"
       << std::setw(25) << "State"
@@ -335,14 +356,13 @@ namespace cryptonote
       << std::setw(13) << "Up(now)"
       << ENDL;
 
-    m_p2p->for_each_connection([&](const connection_context& cntxt, nodetool::peerid_type peer_id, uint32_t support_flags)
+    m_p2p->for_each_connection([&](const connection_context& cntxt, uint32_t support_flags)
     {
       bool local_ip = cntxt.m_remote_address.is_local();
       auto connection_time = time(NULL) - cntxt.m_started;
       ss << std::setw(30) << std::left << std::string(cntxt.m_is_income ? " [INC]":"[OUT]") +
         cntxt.m_remote_address.str()
-        << std::setw(20) << nodetool::peerid_to_string(peer_id)
-        << std::setw(20) << std::hex << support_flags
+                << std::setw(20) << std::hex << support_flags
         << std::setw(30) << std::to_string(cntxt.m_recv_cnt)+ "(" + std::to_string(time(NULL) - cntxt.m_last_recv) + ")" + "/" + std::to_string(cntxt.m_send_cnt) + "(" + std::to_string(time(NULL) - cntxt.m_last_send) + ")"
         << std::setw(25) << get_protocol_state_string(cntxt.m_state)
         << std::setw(20) << std::to_string(time(NULL) - cntxt.m_started)
@@ -547,7 +567,7 @@ namespace cryptonote
       LOG_ERROR_CCONTEXT
       (
         "sent wrong block: failed to parse and validate block: "
-        << epee::string_tools::buff_to_hex_nodelimer(arg.b.block)
+        << describe_peer_blob(arg.b.block)
         << ", dropping connection"
       );
 
@@ -578,7 +598,7 @@ namespace cryptonote
     if (blk_txids_set.size() != new_block.tx_hashes.size())
     {
       MERROR("sent bad block entry: there are duplicate tx hashes in parsed block: "
-        << epee::string_tools::buff_to_hex_nodelimer(arg.b.block));
+        << describe_peer_blob(arg.b.block));
       drop_connection(context, false, false);
       return 1;
     }
@@ -1092,15 +1112,15 @@ namespace cryptonote
       if(!parse_and_validate_block_from_blob(arg.blocks[i].block, b, block_hash))
       {
         LOG_ERROR_CCONTEXT("sent wrong block: failed to parse and validate block: "
-          << epee::string_tools::buff_to_hex_nodelimer(arg.blocks[i].block) << ", dropping connection");
+          << describe_peer_blob(arg.blocks[i].block) << ", dropping connection");
         drop_connection(context, false, false);
         ++m_sync_bad_spans_downloaded;
         return 1;
       }
       if (b.miner_tx.vin.size() != 1 || !std::holds_alternative<txin_gen>(b.miner_tx.vin.front()))
       {
-        LOG_ERROR_CCONTEXT("sent wrong block: block: miner tx does not have exactly one txin_gen input"
-          << epee::string_tools::buff_to_hex_nodelimer(arg.blocks[i].block) << ", dropping connection");
+        LOG_ERROR_CCONTEXT("sent wrong block: block: miner tx does not have exactly one txin_gen input: "
+          << describe_peer_blob(arg.blocks[i].block) << ", dropping connection");
         drop_connection(context, false, false);
         ++m_sync_bad_spans_downloaded;
         return 1;
@@ -1480,23 +1500,33 @@ namespace cryptonote
           if (!m_core.prepare_handle_incoming_blocks(blocks, pblocks))
           {
             LOG_ERROR_CCONTEXT("Failure in prepare_handle_incoming_blocks");
+            // Charged, deliberately -- see PWD-B7. It is tempting to treat a
+            // prepare failure as our own fault, because six of this call's
+            // `return false` sites are (`m_cancel`, and a thread-pool
+            // `!waiter.wait()`). But it returns false for about as many
+            // SENDER-attributable reasons: an unparseable block blob, an
+            // unparseable transaction, a duplicate transaction, a duplicate
+            // key image, an empty span.
+            //
+            // The boolean cannot say which fired, so a caller cannot honestly
+            // classify this failure at all -- and declining to charge would
+            // let a peer feed malformed spans forever, reconnecting each time
+            // with no score accumulating. That is the concrete argument for
+            // the typed tri-state verdict, which is owned by the P2P-3
+            // drop-rule item in FOLLOWUPS and belongs in Rust.
+            //
+            // The sweep is the charge. The id-drop below passes `add_fail`
+            // false so the origin is not billed twice for one failure, which
+            // is what the parse-failure sibling does; on an anonymity zone the
+            // question is moot, since `add_host_fail` refuses an address that
+            // names no host whoever calls it.
             drop_connections(span_origin);
             // The sweep is a no-op where the address names no host, so this
             // site drops the origin by id and clears its spans itself, exactly
             // as the two sites below already do. `flush_all_spans` is true
             // because this span is filled: until now only the sweep's own
             // `flush_spans(id, true)` erased it, and that is gone here.
-            //
-            // No host-fail score, matching the parse-failure sibling below:
-            // `prepare_handle_incoming_blocks` returns false for six OUR-STATE
-            // reasons (`blockchain.cpp` `m_cancel` at :7025, :7035, :7076,
-            // :7188; `!waiter.wait()` at :7021, :7172), so a failure here is
-            // not attributable to the sender and PWD-B7 forbids charging one.
-            // The drop itself stays: a bool cannot separate our cancellation
-            // from malformed input, and removing it would relax severing on
-            // one zone only. The typed verdict that fixes it properly is
-            // owned by the P2P-3 drop-rule item in FOLLOWUPS.
-            if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
+            if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
               drop_connection(context, false, true);
               return 1;
             }))
@@ -1531,7 +1561,7 @@ namespace cryptonote
             if (!make_full_block_connect_supplement_from_block_entry(block_entry, connect))
             {
                 drop_connections(span_origin);
-                if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
+                if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
                   LOG_ERROR_CCONTEXT("transaction parsing failed for 1 or more txs in NOTIFY_RESPONSE_GET_OBJECTS,"
                     "dropping connections");
                   drop_connection(context, false, true);
@@ -1565,7 +1595,7 @@ namespace cryptonote
             if(bvc.m_verifivation_failed)
             {
               drop_connections(span_origin);
-              if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
+              if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
                 LOG_PRINT_CCONTEXT_L1("Block verification failed, dropping connection");
                 drop_connection_with_score(context, bvc.m_bad_pow ? P2P_IP_FAILS_BEFORE_BLOCK : 1, true);
                 return 1;
@@ -1719,7 +1749,7 @@ skip:
   template<class t_core>
   void t_cryptonote_protocol_handler<t_core>::notify_new_stripe(cryptonote_connection_context& cntxt, uint32_t stripe)
   {
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool
+    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
     {
       if (cntxt.m_connection_id == context.m_connection_id)
         return true;
@@ -1751,7 +1781,7 @@ skip:
   bool t_cryptonote_protocol_handler<t_core>::kick_idle_peers()
   {
     MTRACE("Checking for idle peers...");
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool
+    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
     {
       if (context.m_state == cryptonote_connection_context::state_synchronizing && context.m_last_request_time != boost::date_time::not_a_date_time)
       {
@@ -1783,11 +1813,22 @@ skip:
 
     MTRACE("Checking for outgoing syncing peers...");
     std::unordered_map<epee::net_utils::zone, unsigned> n_syncing, n_synced;
-    std::unordered_map<epee::net_utils::zone, boost::uuids::uuid> last_synced_peer_id;
+    // NOT the most-recently-synced connection, despite what the inherited name
+    // said: this is assigned for every `state_normal` connection the scan
+    // visits, and that scan walks a `boost::unordered_map` keyed on random
+    // UUIDs, so what survives is whichever one hash order happened to put last.
+    // Arbitrary, and not stable between passes.
+    //
+    // Left arbitrary deliberately. Every candidate is already in `state_normal`,
+    // so there is no peer mid-work to spare and no ordering among them that
+    // would be better; imposing one would be invented policy. The name is what
+    // needed fixing -- it asserted a temporal property the code never provided,
+    // and it produced exactly that misreading in a design doc.
+    std::unordered_map<epee::net_utils::zone, boost::uuids::uuid> some_synced_connection;
     std::vector<epee::net_utils::zone> zones;
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool
+    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
     {
-      if (!peer_id || context.m_is_income) // only consider connected outgoing peers
+      if (!context.handshake_complete() || context.m_is_income) // only consider connected outgoing peers
         return true;
 
       const epee::net_utils::zone zone = context.m_remote_address.get_zone();
@@ -1795,7 +1836,7 @@ skip:
       {
         n_syncing[zone] = 0;
         n_synced[zone] = 0;
-        last_synced_peer_id[zone] = boost::uuids::nil_uuid();
+        some_synced_connection[zone] = boost::uuids::nil_uuid();
         zones.push_back(zone);
       }
 
@@ -1804,8 +1845,7 @@ skip:
       if (context.m_state == cryptonote_connection_context::state_normal)
       {
         ++n_synced[zone];
-        if (!context.m_anchor)
-          last_synced_peer_id[zone] = context.m_connection_id;
+        some_synced_connection[zone] = context.m_connection_id;
       }
       return true;
     });
@@ -1815,10 +1855,10 @@ skip:
       const unsigned int max_out_peers = get_max_out_peers(zone);
       MTRACE("[" << epee::net_utils::zone_to_string(zone) << "] " << n_syncing[zone] << " syncing, " << n_synced[zone] << " synced, " << max_out_peers << " max out peers");
 
-      // if we're at max out peers, and not enough are syncing, drop the last sync'd non-anchor
-      if (n_synced[zone] + n_syncing[zone] >= max_out_peers && n_syncing[zone] < P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT && last_synced_peer_id[zone] != boost::uuids::nil_uuid())
+      // if we're at max out peers, and not enough are syncing, drop one of the synced peers
+      if (n_synced[zone] + n_syncing[zone] >= max_out_peers && n_syncing[zone] < P2P_DEFAULT_SYNC_SEARCH_CONNECTIONS_COUNT && some_synced_connection[zone] != boost::uuids::nil_uuid())
       {
-        if (!m_p2p->for_connection(last_synced_peer_id[zone], [&](cryptonote_connection_context& ctx, nodetool::peerid_type peer_id, uint32_t f)->bool{
+        if (!m_p2p->for_connection(some_synced_connection[zone], [&](cryptonote_connection_context& ctx, uint32_t f)->bool{
           MINFO(ctx << "dropping synced peer, " << n_syncing[zone] << " syncing, " << n_synced[zone] << " synced, " << max_out_peers << " max out peers");
           drop_connection(ctx, false, false);
           return true;
@@ -1833,7 +1873,7 @@ skip:
   template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::check_standby_peers()
   {
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool
+    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
     {
       if (context.m_state == cryptonote_connection_context::state_standby)
       {
@@ -1912,7 +1952,7 @@ skip:
         if (standby && dt >= REQUEST_NEXT_SCHEDULED_SPAN_THRESHOLD_STANDBY && dl_speed > 0)
         {
           bool download = false;
-          if (m_p2p->for_connection(connection_id, [&](cryptonote_connection_context& ctx, nodetool::peerid_type peer_id, uint32_t f)->bool{
+          if (m_p2p->for_connection(connection_id, [&](cryptonote_connection_context& ctx, uint32_t f)->bool{
             const time_t nowt = time(NULL);
             const time_t time_since_last_recv = nowt - ctx.m_last_recv;
             const float last_activity = std::min((float)time_since_last_recv, dt/1e6f);
@@ -1965,11 +2005,6 @@ skip:
   template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::should_drop_connection(cryptonote_connection_context& context, uint32_t next_stripe)
   {
-    if (context.m_anchor)
-    {
-      MDEBUG(context << "This is an anchor peer, not dropping");
-      return false;
-    }
     if (context.m_pruning_seed == 0)
     {
       MDEBUG(context << "This peer is not striped, not dropping");
@@ -2002,7 +2037,7 @@ skip:
     if (next_stripe > 0)
     {
       unsigned int n_out_peers = 0, n_peers_on_next_stripe = 0;
-      m_p2p->for_each_connection([&](cryptonote_connection_context& ctx, nodetool::peerid_type peer_id, uint32_t support_flags)->bool{
+      m_p2p->for_each_connection([&](cryptonote_connection_context& ctx, uint32_t support_flags)->bool{
         if (!ctx.m_is_income)
           ++n_out_peers;
         if (ctx.m_state >= cryptonote_connection_context::state_synchronizing && tools::get_pruning_stripe(ctx.m_pruning_seed) == next_stripe)
@@ -2063,7 +2098,7 @@ skip:
   {
     // flush stale spans
     std::set<boost::uuids::uuid> live_connections;
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool{
+    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool{
       live_connections.insert(context.m_connection_id);
       return true;
     });
@@ -2504,7 +2539,7 @@ skip:
     val_expected = true;
     if (m_ask_for_txpool_complement.compare_exchange_strong(val_expected, false))
     {
-      m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool
+      m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool
       {
         if(context.m_state < cryptonote_connection_context::state_synchronizing)
         {
@@ -2527,7 +2562,7 @@ skip:
   size_t t_cryptonote_protocol_handler<t_core>::get_synchronizing_connections_count()
   {
     size_t count = 0;
-    m_p2p->for_each_connection([&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)->bool{
+    m_p2p->for_each_connection([&](cryptonote_connection_context& context, uint32_t support_flags)->bool{
       if(context.m_state == cryptonote_connection_context::state_synchronizing)
         ++count;
       return true;
@@ -2696,10 +2731,10 @@ skip:
   {
     // sort peers between fluffy ones and others
     std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> fluffyConnections;
-    m_p2p->for_each_connection([&exclude_context, &fluffyConnections](connection_context& context, nodetool::peerid_type peer_id, uint32_t support_flags)
+    m_p2p->for_each_connection([&exclude_context, &fluffyConnections](connection_context& context, uint32_t support_flags)
     {
-      // peer_id also filters out connections before handshake
-      if (peer_id && exclude_context.m_connection_id != context.m_connection_id && context.m_remote_address.get_zone() == epee::net_utils::zone::public_)
+      // handshake_complete() filters out connections before handshake
+      if (context.handshake_complete() && exclude_context.m_connection_id != context.m_connection_id && context.m_remote_address.get_zone() == epee::net_utils::zone::public_)
       {
         LOG_DEBUG_CC(context, "RELAYING FLUFFY BLOCK TO PEER");
         fluffyConnections.push_back({context.m_remote_address.get_zone(), context.m_connection_id});
@@ -2771,7 +2806,7 @@ skip:
   {
     std::stringstream ss;
     const boost::posix_time::ptime now = boost::posix_time::microsec_clock::universal_time();
-    m_p2p->for_each_connection([&](const connection_context &ctx, nodetool::peerid_type peer_id, uint32_t support_flags) {
+    m_p2p->for_each_connection([&](const connection_context &ctx, uint32_t support_flags) {
       const uint32_t stripe = tools::get_pruning_stripe(ctx.m_pruning_seed);
       char state_char = cryptonote::get_protocol_state_char(ctx.m_state);
       ss << stripe + state_char;
@@ -2799,7 +2834,7 @@ skip:
     // if we already have a few peers on this stripe, but none on next one, try next one
     unsigned int n_next = 0, n_subsequent = 0, n_others = 0;
     const uint32_t subsequent_pruning_stripe = 1 + next_pruning_stripe % (1<<CRYPTONOTE_PRUNING_LOG_STRIPES);
-    m_p2p->for_each_connection([&](const connection_context &context, nodetool::peerid_type peer_id, uint32_t support_flags) {
+    m_p2p->for_each_connection([&](const connection_context &context, uint32_t support_flags) {
       if (context.m_state >= cryptonote_connection_context::state_synchronizing)
       {
         if (context.m_pruning_seed == 0 || tools::get_pruning_stripe(context.m_pruning_seed) == next_pruning_stripe)
@@ -2832,7 +2867,7 @@ skip:
     if (target && target <= height)
       return false;
     size_t n_out_peers = 0;
-    m_p2p->for_each_connection([&](cryptonote_connection_context& ctx, nodetool::peerid_type peer_id, uint32_t support_flags)->bool{
+    m_p2p->for_each_connection([&](cryptonote_connection_context& ctx, uint32_t support_flags)->bool{
       if (!ctx.m_is_income && ctx.m_remote_address.get_zone() == zone)
         ++n_out_peers;
       return true;
@@ -2873,7 +2908,7 @@ skip:
   template<class t_core>
   void t_cryptonote_protocol_handler<t_core>::drop_connection(const boost::uuids::uuid& id)
   {
-    m_p2p->for_connection(id, [this](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
+    m_p2p->for_connection(id, [this](cryptonote_connection_context& context, uint32_t f)->bool{
       // This _could be_ outside of strand, so careful on actions
       drop_connection(context, true, false);
       return true;
@@ -2906,7 +2941,7 @@ skip:
     m_p2p->add_host_fail(address, 5);
 
     std::vector<boost::uuids::uuid> drop;
-    m_p2p->for_each_connection([&](const connection_context& cntxt, nodetool::peerid_type peer_id, uint32_t support_flags) {
+    m_p2p->for_each_connection([&](const connection_context& cntxt, uint32_t support_flags) {
       if (address.is_same_host(cntxt.m_remote_address))
         drop.push_back(cntxt.m_connection_id);
       return true;
@@ -2914,7 +2949,7 @@ skip:
     for (const boost::uuids::uuid &id: drop)
     {
       m_block_queue.flush_spans(id, true);
-      m_p2p->for_connection(id, [&](cryptonote_connection_context& context, nodetool::peerid_type peer_id, uint32_t f)->bool{
+      m_p2p->for_connection(id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
         // This _could be_ outside of strand, so careful on actions
         drop_connection(context, true, false);
         return true;
@@ -2926,7 +2961,7 @@ skip:
   void t_cryptonote_protocol_handler<t_core>::on_connection_close(cryptonote_connection_context &context)
   {
     uint64_t target = 0;
-    m_p2p->for_each_connection([&](const connection_context& cntxt, nodetool::peerid_type peer_id, uint32_t support_flags) {
+    m_p2p->for_each_connection([&](const connection_context& cntxt, uint32_t support_flags) {
       if (cntxt.m_state >= cryptonote_connection_context::state_synchronizing && cntxt.m_connection_id != context.m_connection_id)
         target = std::max(target, cntxt.m_remote_blockchain_height);
       return true;

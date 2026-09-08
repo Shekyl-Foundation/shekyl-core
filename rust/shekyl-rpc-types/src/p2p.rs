@@ -110,7 +110,6 @@ const fn is_false(b: &bool) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Peer {
-    pub id: u64,
     pub host: String,
     /// The ipv4 address with its four octets in **network** order — a
     /// **number**, unlike [`ConnectionInfo::ip`], which carries the same
@@ -219,8 +218,6 @@ pub struct ConnectionInfo {
     pub ip: String,
     /// A string too, and empty for every non-ipv4 arm.
     pub port: String,
-    /// The peer id as 16 lowercase hex characters.
-    pub peer_id: String,
     /// Bytes received, absolute.
     pub recv_count: u64,
     /// Seconds since the last receive, floored at the connection's age.

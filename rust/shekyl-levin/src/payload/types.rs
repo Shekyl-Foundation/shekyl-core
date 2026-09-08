@@ -14,14 +14,19 @@ use super::get;
 use super::PortableMap;
 
 /// `nodetool::basic_node_data` (`p2p_protocol_defs.h`).
+///
+/// There is deliberately no node identifier here (the PWD-I1 amendment,
+/// `SHEKYL_P2P_PROTOCOL.md`): the handshake announces WHERE — an address
+/// that absorbs the old `my_port` — never WHO.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BasicNodeData {
     /// `network_id` POD-as-blob (`boost::uuids::uuid`, 16 bytes).
     pub network_id: [u8; 16],
-    /// `peerid_type` (`uint64_t`).
-    pub peer_id: u64,
-    /// Advertised p2p port.
-    pub my_port: u32,
+    /// The announced address: port-only on the public zone (host zeroed —
+    /// the receiver never reads it, combining the port with the host it
+    /// observed on the socket), the zone self-address on serving anonymity
+    /// zones, the zone's unknown sentinel for dialer-only nodes.
+    pub address: NetworkAddress,
     /// `KV_SERIALIZE_OPT` default 0.
     pub support_flags: u32,
 }
@@ -30,8 +35,7 @@ impl PortableMap for BasicNodeData {
     fn to_section(&self) -> Result<Section, Error> {
         let mut section = Section::new();
         section.insert("network_id", Value::Bytes(self.network_id.to_vec()));
-        section.insert("peer_id", Value::UInt64(self.peer_id));
-        section.insert("my_port", Value::UInt32(self.my_port));
+        section.insert("address", Value::Object(self.address.to_section()?));
         get::insert_opt_u32(&mut section, "support_flags", self.support_flags, 0);
         Ok(section)
     }
@@ -39,8 +43,7 @@ impl PortableMap for BasicNodeData {
     fn from_section(section: &Section) -> Result<Self, Error> {
         Ok(Self {
             network_id: get::blob(section, "network_id")?,
-            peer_id: get::u64_val(section, "peer_id")?,
-            my_port: get::u32_val(section, "my_port")?,
+            address: NetworkAddress::from_section(get::object(section, "address")?)?,
             support_flags: get::opt_u32(section, "support_flags", 0)?,
         })
     }
@@ -105,8 +108,6 @@ impl PortableMap for CoreSyncData {
 pub struct PeerlistEntry {
     /// `network_address` union.
     pub adr: NetworkAddress,
-    /// Peer id.
-    pub id: u64,
     /// `KV_SERIALIZE_OPT` default 0.
     pub last_seen: i64,
     /// `KV_SERIALIZE_OPT` default 0.
@@ -117,7 +118,6 @@ impl PortableMap for PeerlistEntry {
     fn to_section(&self) -> Result<Section, Error> {
         let mut section = Section::new();
         section.insert("adr", Value::Object(self.adr.to_section()?));
-        section.insert("id", Value::UInt64(self.id));
         get::insert_opt_i64(&mut section, "last_seen", self.last_seen, 0);
         get::insert_opt_u32(&mut section, "pruning_seed", self.pruning_seed, 0);
         Ok(section)
@@ -126,7 +126,6 @@ impl PortableMap for PeerlistEntry {
     fn from_section(section: &Section) -> Result<Self, Error> {
         Ok(Self {
             adr: NetworkAddress::from_section(get::object(section, "adr")?)?,
-            id: get::u64_val(section, "id")?,
             last_seen: get::opt_i64(section, "last_seen", 0)?,
             pruning_seed: get::opt_u32(section, "pruning_seed", 0)?,
         })

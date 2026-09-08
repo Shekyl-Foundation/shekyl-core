@@ -500,7 +500,6 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     const BlockHeight bh{block_height_raw};
     std::vector<uint8_t> leaf_data;
     uint64_t new_output_count = 0;
-    static constexpr uint8_t zero_pqc[32] = {};
 
     // Capture output count BEFORE add_transaction calls above added this block's outputs.
     // add_transaction has already run by this point, so we subtract back.
@@ -509,15 +508,40 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
       this_block_output_count += tx_pair.first.vout.size();
     uint64_t next_output_seq = get_num_outputs(0) - this_block_output_count;
 
+    // CEN-I19: the store applies the SAME shape rule admission applies -- one
+    // rule, one implementation (`check_tx_extra_pqc_field_shape`, over
+    // shekyl-wire's `check_pqc_field_shape`), so any path reaching add_block
+    // without admission fails closed instead of storing a leaf the rule
+    // forbids. Re-deriving parts of the rule here is what went wrong before:
+    // this backstop returned early on a zero-output transaction (accepting
+    // 0x06/0x07 fields the rule forbids there), took the FIRST 0x07 (accepting
+    // duplicates, which the rule rejects because the bytes would otherwise
+    // admit two readings), and never examined 0x06 at all -- three ways to
+    // disagree with the rule it exists to back up.
+    //
+    // Before CEN-I19 this returned {} on a parse failure, an absent field or a
+    // length that was not a multiple of 32, and collect_outputs then zero-filled
+    // h_pqc for every output past the end of the blob: the fail-open that stored
+    // leaves whose post-quantum binding was to nothing, invisibly. Everything
+    // below is unreachable for an admitted transaction and aborts rather than
+    // falling back (CEN-L11 pattern).
     auto extract_leaf_hashes = [](const transaction& tx) -> std::vector<uint8_t> {
+      std::string why;
+      if (!check_tx_extra_pqc_field_shape(tx, why))
+        throw DB_ERROR(("curve-tree leaf: " + why + " at DB add for tx "
+          + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+          + " (validated at admission?)").c_str());
+      // Rule-conformant and leafless: no outputs, therefore no fields, no leaf.
+      if (tx.vout.empty())
+        return {};
       std::vector<tx_extra_field> fields;
       if (!parse_tx_extra(tx.extra, fields))
-        return {};
+        throw DB_ERROR("curve-tree leaf: tx_extra parses for the shape check but not here (bug)");
       tx_extra_pqc_leaf_hashes lh;
       if (!find_tx_extra_field_by_type(fields, lh))
-        return {};
-      if (lh.blob.size() % PQC_LEAF_HASH_BYTES != 0)
-        return {};
+        throw DB_ERROR("curve-tree leaf: the shape check accepted a tx whose 0x07 field is absent (bug)");
+      // Exactly one field of exactly 32 * vout.size() bytes, per the rule just
+      // applied -- so the first match IS the only match.
       return std::vector<uint8_t>(lh.blob.begin(), lh.blob.end());
     };
 
@@ -525,14 +549,12 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     // Each output is tracked by its global output index for exact reversal.
     auto collect_outputs = [&](const transaction& tx, bool is_miner) {
       const auto leaf_hash_blob = extract_leaf_hashes(tx);
-      const size_t num_leaf_hashes = leaf_hash_blob.size() / PQC_LEAF_HASH_BYTES;
 
       for (uint64_t i = 0; i < tx.vout.size(); ++i) {
         const OutputIndex this_output{next_output_seq++};
         const auto& vout = tx.vout[i];
-        const uint8_t* h_pqc = (i < num_leaf_hashes)
-            ? (leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES)
-            : zero_pqc;
+        // extract_leaf_hashes pinned the blob to exactly one hash per output.
+        const uint8_t* h_pqc = leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES;
 
         crypto::public_key output_key;
         uint64_t maturity_raw;

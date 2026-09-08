@@ -57,6 +57,9 @@
 //! is now a single on-wire FCMP++ spend layout; this test validates that serializer
 //! against real crypto-valued fields.
 
+mod common;
+use common::conforming_pqc_extra;
+
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT, edwards::CompressedEdwardsY, scalar::Scalar,
 };
@@ -561,7 +564,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
                     view_tag: change.view_tag_prefilter,
                 },
             ],
-            extra: Vec::new(),
+            extra: conforming_pqc_extra(2),
         },
         ct: Ct::Fcmp {
             fee,
@@ -637,7 +640,10 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
             Some(payment.view_tag_prefilter),
             Some(change.view_tag_prefilter),
         ],
-        tx_extra: Vec::new(),
+        // Same conforming 0x06/0x07 fields the hand-assembled tx above carries:
+        // the two encoders are asserted byte-identical, so both sides must build
+        // the transaction consensus would actually accept (CEN-I19).
+        tx_extra: conforming_pqc_extra(2),
         fee,
         enc_amounts: signed.enc_amounts.clone(),
         enc_labels: signed.enc_labels.clone(),

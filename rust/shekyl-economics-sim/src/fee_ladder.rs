@@ -30,9 +30,9 @@
 //! ladder transliteration (the round's *subject* — porting it faithfully is
 //! the point of the comparison column), `REF_TX_WEIGHT` (a C++ constant
 //! with no single Rust owner yet; `fee_policy.rs` carries the same pinned
-//! copy wallet-side), `GENESIS_NG_HEIGHT` (the hardfork table has no Rust
-//! owner), and [`HysteresisCq`] (the §7 construction, whose canonical
-//! owner lives on the implementing branch until it merges).
+//! copy wallet-side) and `GENESIS_NG_HEIGHT` (the hardfork table has no
+//! Rust owner). [`HysteresisCq`] was the third; it now calls
+//! `shekyl-economics::hysteresis_step` and that exception is discharged.
 //!
 //! I/O convention: this module renders; the binary target performs the
 //! writes (`main.rs --fee-ladder`), per the crate's stage2 precedent.
@@ -43,10 +43,11 @@ use std::collections::{BTreeSet, VecDeque};
 use serde::Serialize;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
-    apply_release_multiplier, base_block_reward, block_reward_with_penalty, calc_burn_pct,
-    calc_effective_emission_share, calc_release_multiplier, cap_reward_to_remaining_supply,
-    emission_speed_factor, projected_already_generated, tail_subsidy_per_block, EconomicParams,
-    BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
+    calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
+    effective_emission, emission_speed_factor, hysteresis_step, paid_block_reward,
+    projected_already_generated, tail_subsidy_per_block, EconomicParams, BLOCKS_PER_YEAR,
+    STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
@@ -83,6 +84,30 @@ const _: () = assert!(
 /// `σ` a whole decay step ahead of the validation path (PR #614 review):
 /// `(k·BLOCKS_PER_YEAR − 0)/BPY = k` but `(k·BPY − 1)/BPY = k − 1`.
 const GENESIS_NG_HEIGHT: u64 = 1;
+
+/// The minimum-dwell floor examined for FL-R18 (c) and **NOT ADOPTED**
+/// (round 14): the anonymity harm it was to prevent was refuted (§4.5b)
+/// and the floor was measured to destabilise the loop it was meant to
+/// calm (§4.5a). Kept as an instrument mode ONLY so that result stays
+/// reproducible from the branch — the same reason both pow2 snap rules
+/// are still modes. 240 blocks = the FL-C4a stationary gate, i.e. the
+/// best candidate the sweep found; nothing ships it.
+const FL_R18_MIN_DWELL_BLOCKS: u64 = 240;
+
+/// Quote-to-broadcast lags for the FL-R18 rejection-race measurement
+/// (§4.5b), in blocks at the 120 s target. STATED, not assumed:
+/// * **1** — the floor case: estimate fetched, transaction built and
+///   broadcast inside one block.
+/// * **3** (≈ 6 min) — the realistic case: FCMP++ proving at the rule-76
+///   device floor, a human confirmation step, and the Dandelion++ stem
+///   embargo before the transaction reaches a miner's pool.
+/// * **25** (≈ 50 min) — a signing session left open, or a wallet that
+///   quotes, waits on a second signer, then broadcasts.
+/// * **100** — the PROTOCOL's own ceiling, not a guess:
+///   `FCMP_REFERENCE_BLOCK_MAX_AGE` (100) is the oldest reference a
+///   proof may carry at admission, so no conforming transaction can be
+///   quoted more than 100 blocks before it is submitted.
+const RACE_LAGS: [u64; 4] = [1, 3, 25, 100];
 
 // ---------------------------------------------------------------------------
 // Correction factor
@@ -198,24 +223,31 @@ fn rounded(raw: [u64; 4]) -> [u64; 4] {
     raw.map(round_money_up_2)
 }
 
-/// Corrected ladder: `C` applied to each **already-truncated** rung, then
-/// daemon rounding — the SERVED order (`shekyl-economics`
-/// `corrected_fee_ladder` computes `scale(base·w_ref/(m·m))`: rung
-/// truncated first, `C_q` applied to the truncated value, one rounding at
-/// the end), which this instrument must mirror bit-for-bit (§1.9; F-3's
-/// instrument-blindness lesson). It is NOT the algebraic
-/// `⌊C·R·w/M²⌋`: truncating the rung first loses up to `C_q` atomic units
-/// pre-rounding (the fractional loss is amplified by the scalar), which
-/// the coarse 2-significant-digit rounding then may or may not absorb —
-/// at (10 SKL, `Mfw = 1.5 MB`, `C_q = 16`) served rounds to 210 where the
-/// algebraic form would round to 220 (PR #614 review; the pin below
-/// keeps a "fix" toward the algebraic form from silently diverging the
-/// instrument from the served path).
-fn corrected_ladder(raw: [u64; 4], c_scaled: u64) -> [u64; 4] {
-    raw.map(|f| {
-        let scaled = u128::from(f) * u128::from(c_scaled) / u128::from(SCALE);
-        round_money_up_2(u64::try_from(scaled).expect("corrected rung fits u64"))
-    })
+/// The SERVED ladder, from **the production owner itself** — no local
+/// re-derivation. `shekyl-economics::corrected_fee_ladder` computes
+/// `round2(base·w_ref·C_q / (Mfw²·SCALE))`: `C_q` in the NUMERATOR and a
+/// single division, so no intermediate truncation compounds.
+///
+/// This replaced a local mirror that scaled already-truncated ArticMine
+/// rungs (PR #640 review). The mirror had been documented as bit-exact
+/// with the served path and was pinned at 210 for
+/// (10 SKL, `Mfw = 1.5 MB`, `C_q = 16`) — but the shipped owner returns
+/// **220** there, because it divides once. The mirror was measuring a
+/// composition the daemon does not serve, which is precisely the
+/// drift-pair §1.9 forbids: call the canonical function, reimplement
+/// none of it. The legacy transliteration survives ONLY as the `Current`
+/// comparison column, where reproducing today's daemon bit-for-bit is
+/// the point.
+fn served_ladder(base_reward: u64, median: u64, c_q: u64) -> [u64; 4] {
+    corrected_fee_ladder(
+        base_reward,
+        median,
+        median,
+        FULL_REWARD_ZONE_V5,
+        REF_TX_WEIGHT,
+        c_q,
+    )
+    .as_slots()
 }
 
 /// The relay floor, transliterating `get_dynamic_base_fee`
@@ -466,8 +498,12 @@ fn rung_table(
     let raw = articmine_ladder_raw(st.base_reward, median, median);
     let floor = relay_floor(st.base_reward, median);
     let accept = floor - floor / 50;
-    let corrected = corrected_ladder(raw, corr.c_scaled);
-    let served = corrected_ladder(raw, quantize_c_pow2(corr.c_scaled, SnapRule::Ceiling));
+    let corrected = served_ladder(st.base_reward, median, corr.c_scaled);
+    let served = served_ladder(
+        st.base_reward,
+        median,
+        quantize_c_pow2(corr.c_scaled, SnapRule::Ceiling),
+    );
     RungTable {
         label,
         age_years,
@@ -575,43 +611,89 @@ enum LadderMode {
     CorrectedRaw,
     /// `C` snapped to a power of two first.
     Quantized(SnapRule),
-    /// The ceiling snap behind the §7 hysteresis construction — the map
-    /// the daemon actually serves once the implementing branch lands.
+    /// The ceiling snap behind the §7 hysteresis construction — the
+    /// RULED served map (FL-R3, round 17).
+    ///
+    /// The shipped daemon does not reach it yet: #640 review cycle 5
+    /// found the band unreachable on the served path, and restoring it
+    /// needs a grid-anchored previous value, which is its own round. So
+    /// this mode is the design's map and [`Self::Quantized`] with
+    /// [`SnapRule::Ceiling`] is what is served in the interim — measure
+    /// against this one when the question is what the ladder IS, and
+    /// against that one when it is what the daemon does today.
     QuantizedHysteresis,
+    /// The band plus a minimum-dwell floor of `n` blocks on the served
+    /// value — examined for FL-R18 (c) and NOT ADOPTED; swept over
+    /// candidate `n` to produce the evidence at §4.5a.
+    RateLimited(u64),
 }
 
-/// The §7 hysteresis construction, transliterated from the implementing
-/// branch's `shekyl-economics::fee_correction_quantized`
-/// (`feat/fee-ladder-impl-1`; 3% band, `HYSTERESIS_MARGIN_MILLI = 30`,
-/// band around the PREVIOUS step, `prev = 0` ⇒ no history). Declared
-/// exception #3 (with the transliteration and `REF_TX_WEIGHT`): the
-/// canonical owner does not exist on this branch yet, and §1.7's
-/// registered remedy requires measuring the CONSTRUCTED map — hysteresis
-/// on `C`, then re-test. At the impl-1 merge this copy must be replaced by
-/// the crate function or the §4.5 acceptance claim is about a different
-/// mechanism than the one shipped.
+/// The §7 hysteresis construction — the history, held so the sweep can
+/// walk a trace; the step itself is
+/// `shekyl-economics::hysteresis_step`.
+///
+/// **Declared exception #3 is DISCHARGED here.** This carried a
+/// transliterated copy of the band while the canonical owner lived only
+/// on the implementing branch, under a standing obligation to replace it
+/// at that merge "or the §4.5 acceptance claim is about a different
+/// mechanism than the one shipped". That obligation was live: the copy
+/// had already drifted, never picking up the owner's
+/// `MIN_REPRESENTABLE_C` floor. It now calls the owner, so the
+/// acceptance claim is about the shipped mechanism by construction
+/// rather than by inspection.
 struct HysteresisCq {
     prev: u64,
 }
 
 impl HysteresisCq {
     fn step(&mut self, c_raw: u64) -> u64 {
-        let cq = quantize_c_pow2(c_raw, SnapRule::Ceiling);
-        if self.prev == 0 || cq == self.prev {
-            self.prev = cq;
-            return cq;
+        self.prev = hysteresis_step(c_raw, self.prev);
+        self.prev
+    }
+}
+
+/// The mechanism examined for FL-R18 (c), **withdrawn at round 14**: a
+/// minimum-dwell floor on the served `C_q`, composed ON TOP of the band. The band damps boundary noise;
+/// it cannot suppress a limit cycle driven by gain-≥2 demand feedback,
+/// because a deadband only helps once it exceeds the loop's excursion
+/// (the ruling's ground for rejecting a wider band). The floor makes the
+/// FL-C4a dwell property structural: a served value that has changed
+/// cannot change again for `n` blocks.
+///
+/// `blocks_since_change` counts blocks since the last CHANGE. The implementing branch
+/// carries `(value, since_height)` instead — equivalent, and the reason
+/// FL-R18 condition 1 names restart survival: this counter is state that
+/// a restart can lose.
+struct RateLimitedCq {
+    band: HysteresisCq,
+    served: u64,
+    blocks_since_change: u64,
+    n: u64,
+}
+
+impl RateLimitedCq {
+    fn new(n: u64) -> Self {
+        Self {
+            band: HysteresisCq { prev: 0 },
+            served: 0,
+            blocks_since_change: 0,
+            n,
         }
-        const MARGIN_MILLI: u128 = 30;
-        let prev = u128::from(self.prev);
-        let c = u128::from(c_raw);
-        let upper = prev * (1000 + MARGIN_MILLI) / 1000;
-        let lower = (prev / 2) * (1000 - MARGIN_MILLI) / 1000;
-        if c > upper || c < lower {
-            self.prev = cq;
-            cq
-        } else {
-            self.prev
+    }
+
+    fn step(&mut self, c_raw: u64) -> u64 {
+        let want = self.band.step(c_raw);
+        if self.served == 0 {
+            self.served = want;
+            self.blocks_since_change = 0;
+            return self.served;
         }
+        self.blocks_since_change += 1;
+        if want != self.served && self.blocks_since_change >= self.n {
+            self.served = want;
+            self.blocks_since_change = 0;
+        }
+        self.served
     }
 }
 
@@ -626,6 +708,7 @@ impl LadderMode {
             LadderMode::QuantizedHysteresis => {
                 "corrected-quantized-pow2-ceil-hysteresis".to_owned()
             }
+            LadderMode::RateLimited(n) => format!("served-rate-limited-n{n}"),
         }
     }
 }
@@ -646,23 +729,25 @@ const DWELL_SCENARIOS: &[(&str, f64, f64, u64)] = &[
 ];
 
 /// Advance the traced chain state by one block: the SHIPPED paid emission
-/// at the trace's windowed volume (multiplier on the floored base, then
-/// the remaining-supply cap — the composition the measured tree pays; the
-/// FL-R12′ implementation changes the payer in its own PR, with
-/// first-order-identical drift). §1.8 requires the quasi-static claim to
+/// at the trace's windowed volume — FL-R12′'s composition, the multiplier
+/// on the CURVE and no remaining-supply cap, so the accumulator runs
+/// through the asymptote. §1.8 requires the quasi-static claim to
 /// be CONFIRMED, not assumed (PR #614 review): the traces now evolve
 /// `already_generated` and height per block, so any rung or `C_q`
 /// crossing that supply/σ drift can cause is measured rather than frozen
 /// out.
 fn advance_traced_state(ag: u64, v_avg: u64, params: &EconomicParams) -> u64 {
-    let base = base_block_reward(ag, params).expect("base along trace");
-    let m_r = calc_release_multiplier(
-        v_avg,
-        params.tx_volume_baseline,
-        params.release_min,
-        params.release_max,
-    );
-    ag + cap_reward_to_remaining_supply(apply_release_multiplier(base, m_r), ag, params)
+    // Since the FL-R12′ implementation landed, this calls THE OWNERS rather
+    // than modelling the composition: `effective_emission` is the paid
+    // pre-penalty quantity `max(M_r·curve, TAIL)` and
+    // `advance_already_generated` is the accumulator that runs THROUGH the
+    // asymptote. Both replace the retired `cap_reward_to_remaining_supply`
+    // this line used while the shipped tree still capped at remaining
+    // supply — the substitution the round-12 comment anticipated, made at
+    // the merge that introduced the owners (§1.9: call them, reimplement
+    // none of them).
+    let paid = effective_emission(ag, v_avg, params).expect("paid emission along trace");
+    advance_already_generated(ag, paid)
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -697,6 +782,10 @@ fn dwell_scenario(
 
     let mut ag = st.ag;
     let mut hyst = HysteresisCq { prev: 0 };
+    let mut rate_limited = match mode {
+        LadderMode::RateLimited(n) => RateLimitedCq::new(n),
+        _ => RateLimitedCq::new(1),
+    };
     // Per rung: (value, run_length, run_start_block) plus accumulators.
     let mut runs: [Vec<(u64, u64)>; 4] = [vec![], vec![], vec![], vec![]]; // (start, len)
     let mut values: [BTreeSet<u64>; 4] = Default::default();
@@ -721,16 +810,22 @@ fn dwell_scenario(
         let raw = articmine_ladder_raw(base, median, median);
         let fees = match mode {
             LadderMode::Current => rounded(raw),
-            LadderMode::CorrectedRaw => {
-                corrected_ladder(raw, correction_factor(v_avg, ag, height, params).c_scaled)
-            }
+            LadderMode::CorrectedRaw => served_ladder(
+                base,
+                median,
+                correction_factor(v_avg, ag, height, params).c_scaled,
+            ),
             LadderMode::Quantized(rule) => {
                 let c = correction_factor(v_avg, ag, height, params).c_scaled;
-                corrected_ladder(raw, quantize_c_pow2(c, rule))
+                served_ladder(base, median, quantize_c_pow2(c, rule))
             }
             LadderMode::QuantizedHysteresis => {
                 let c = correction_factor(v_avg, ag, height, params).c_scaled;
-                corrected_ladder(raw, hyst.step(c))
+                served_ladder(base, median, hyst.step(c))
+            }
+            LadderMode::RateLimited(_) => {
+                let c = correction_factor(v_avg, ag, height, params).c_scaled;
+                served_ladder(base, median, rate_limited.step(c))
             }
         };
         ag = advance_traced_state(ag, v_avg, params);
@@ -790,6 +885,23 @@ fn dwell_scenario(
 
 #[derive(Serialize)]
 pub struct FeedbackResult {
+    /// FL-R18 rejection-race (§4.5b): quotes issued along the trace, and
+    /// how many would be REFUSED at admission `RACE_LAGS[i]` blocks later
+    /// because the relay floor rose above the quoted (already
+    /// floor-clamped) economy rung. `check_fee`'s 2% buffer is applied,
+    /// so this counts real refusals, not near-misses.
+    pub race_quotes: u64,
+    pub race_refused: [u64; 4],
+    /// The race's REAL governing quantity (§4.5b). With the median held,
+    /// the relay floor is monotonically non-increasing (reward decay only
+    /// shrinks `R`), so `race_refused` is structurally zero and proves
+    /// nothing on its own. What decides a refusal is the MARGIN a quote
+    /// carries over the floor it was clamped against: `served/floor` in
+    /// thousandths, minimised over the trace. A quote survives a median
+    /// contraction of factor `f` iff `f² ≤ (served/floor)·(100/98)`, so
+    /// this margin converts directly into the median move the quote can
+    /// absorb — the exposure the fixed-median traces cannot show.
+    pub race_margin_min_milli: u64,
     /// Chain age and median of the swept state (§1.8 interior grid;
     /// PR #614 review — feedback was previously pinned to (age 4, zone)).
     pub age_years: u64,
@@ -839,27 +951,46 @@ fn feedback_scenario(
     mode: LadderMode,
     params: &EconomicParams,
 ) -> FeedbackResult {
-    let fee_at = |v_avg: u64, ag: u64, height: u64, hyst: &mut HysteresisCq| -> u64 {
+    // ONE per-block evaluation, returning everything the trace needs from
+    // it: the standard rung that drives the demand loop, and the SERVED
+    // economy rung (clamped up to the relay floor, §5.2) with the floor
+    // it was clamped against. The rejection race previously recomputed
+    // the economy rung from RAW `C`, which is not what any stateful mode
+    // serves — and it could not simply re-apply the band, because
+    // `HysteresisCq::step` and `RateLimitedCq::step` ADVANCE state and a
+    // second call per block would double-step them. Returning the served
+    // values from the single stepping site fixes both (PR #634 review,
+    // Bugbot + Copilot, same defect).
+    let step_at = |v_avg: u64,
+                   ag: u64,
+                   height: u64,
+                   hyst: &mut HysteresisCq,
+                   rl: &mut RateLimitedCq|
+     -> (u64, u64, u64) {
         let base = base_block_reward(ag, params).expect("base along trace");
-        let raw = articmine_ladder_raw(base, median, median);
         let c = correction_factor(v_avg, ag, height, params).c_scaled;
         let c = match mode {
             LadderMode::Quantized(rule) => quantize_c_pow2(c, rule),
             LadderMode::QuantizedHysteresis => hyst.step(c),
+            LadderMode::RateLimited(_) => rl.step(c),
             _ => c,
         };
-        corrected_ladder(raw, c)[1].max(1)
+        let ladder = served_ladder(base, median, c);
+        let floor_now = relay_floor(base, median);
+        (ladder[1].max(1), ladder[0].max(floor_now), floor_now)
     };
     // The reference fee is history-free and anchored at the trace's START
     // state — it defines the demand curve, so it must not move with the
     // loop; the loop's fee below evolves with the traced state (§1.8:
     // confirmed, not assumed) and carries the band's memory.
-    let f_ref = fee_at(
+    let f_ref = step_at(
         demand_scale,
         st.ag,
         st.height,
         &mut HysteresisCq { prev: 0 },
-    );
+        &mut RateLimitedCq::new(1),
+    )
+    .0;
 
     let eps = eps_milli as f64 / 1000.0;
     let blocks: u64 = 30_000;
@@ -875,14 +1006,25 @@ fn feedback_scenario(
     let mut fee_max = 0u64;
     let mut v_min = u64::MAX;
     let mut v_max = 0u64;
+    let mut served_economy: Vec<u64> = Vec::with_capacity(blocks as usize);
+    let mut floors: Vec<u64> = Vec::with_capacity(blocks as usize);
     let mut tail_fees = BTreeSet::new();
     let mut tail_transitions = 0u64;
     let mut last_tail_fee: Option<u64> = None;
     let mut hyst = HysteresisCq { prev: 0 };
+    let mut rl = match mode {
+        LadderMode::RateLimited(n) => RateLimitedCq::new(n),
+        _ => RateLimitedCq::new(1),
+    };
     let mut ag = st.ag;
     for t in 0..blocks {
         let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
-        let fee = fee_at(v_avg, ag, st.height + t, &mut hyst);
+        // FL-R18 rejection race: the served economy rung and its
+        // quote-time floor come from the SAME stepping call as the fee,
+        // so the margin is measured on the map the mode actually serves.
+        let (fee, economy, floor_now) = step_at(v_avg, ag, st.height + t, &mut hyst, &mut rl);
+        served_economy.push(economy);
+        floors.push(floor_now);
         ag = advance_traced_state(ag, v_avg, params);
         // The registered §1.7 model has NO saturation (PR #614 review: a
         // hidden 10 000 clamp is a capacity bound the register never
@@ -910,7 +1052,32 @@ fn feedback_scenario(
             last_tail_fee = Some(fee);
         }
     }
+    // Refused iff the quote misses `check_fee`'s acceptance bound at
+    // admission: accept requires `fee >= needed - needed/50`, i.e.
+    // `served * 100 >= floor_at_admission * 98`.
+    let mut race_refused = [0u64; 4];
+    for (i, &lag) in RACE_LAGS.iter().enumerate() {
+        let lag = lag as usize;
+        for h in 0..served_economy.len().saturating_sub(lag) {
+            if u128::from(served_economy[h]) * 100 < u128::from(floors[h + lag]) * 98 {
+                race_refused[i] += 1;
+            }
+        }
+    }
+
+    let race_margin_min_milli = served_economy
+        .iter()
+        .zip(floors.iter())
+        .map(|(&sv, &fl)| {
+            u64::try_from(u128::from(sv) * 1000 / u128::from(fl.max(1))).unwrap_or(u64::MAX)
+        })
+        .min()
+        .unwrap_or(0);
+
     FeedbackResult {
+        race_quotes: served_economy.len() as u64,
+        race_refused,
+        race_margin_min_milli,
         age_years: st.height / BLOCKS_PER_YEAR,
         median,
         elasticity_milli: eps_milli,
@@ -930,6 +1097,20 @@ fn feedback_scenario(
 // Degenerate pins (FL-C8)
 // ---------------------------------------------------------------------------
 
+/// One candidate `N` for FL-R18's minimum-dwell floor, with what it
+/// leaves oscillating on the swept interior.
+#[derive(Serialize)]
+pub struct NSweepPoint {
+    pub n: u64,
+    pub oscillating_cells: u64,
+    pub worst_tail_transitions: u64,
+    /// Cells whose served economy rung sits within 2% of the relay floor
+    /// (§4.5b's thin-margin measure) under this `N` — so the claim that a
+    /// dwell floor worsens the rejection race is MEASURED rather than
+    /// asserted (PR #634 review).
+    pub thin_margin_cells: u64,
+}
+
 #[derive(Serialize)]
 pub struct DegeneratePins {
     /// `b` reaches its cap on-grid: `(v=500, ratio=0.9)` → `burn_cap`.
@@ -938,15 +1119,20 @@ pub struct DegeneratePins {
     pub release_at_zero: u64,
     pub release_at_double_baseline: u64,
     /// Tail subsidy per block, and the supply headroom at tail entry
-    /// (`tail << esf`). The tail era is `2^esf` blocks by IDENTITY
-    /// (doc §FL-V7: `remaining/tail = 2^esf`), then the supply cap zeroes
-    /// the validation reward permanently.
+    /// (`tail << esf`). `tail_era_blocks` is `2^esf` by IDENTITY (doc
+    /// §FL-V7: `remaining/tail = 2^esf`) — but since FL-R12′ retired the
+    /// supply cap it is no longer an ERA BOUNDARY: the tail is perpetual
+    /// and the accumulator runs through the asymptote. It is now the
+    /// number of tail-rate blocks the headroom to the asymptote covers,
+    /// which is what makes the asymptote a landmark rather than an end.
     pub tail_subsidy_per_block: u64,
     pub headroom_at_tail_entry: u64,
     pub tail_era_blocks: u64,
-    /// At `already_generated == money_supply`: what the 5-arg estimate path
-    /// still believes the reward is (it has no supply cap) vs what
-    /// validation pays. FL-V1's divergence in its terminal form.
+    /// At `already_generated == money_supply`: the 5-arg estimate path's
+    /// pre-penalty curve value vs the paid quantity validation settles on.
+    /// FL-V1's divergence in its terminal form — since FL-R12′ that is a
+    /// gap between two nonzero rewards, not the estimate-vs-ZERO it was
+    /// while the supply cap stood.
     pub estimate_reward_at_exhaustion: u64,
     pub validation_reward_at_exhaustion: u64,
     /// The KAT-pinned penalty through the crate's block-reward entry point
@@ -959,7 +1145,7 @@ pub struct DegeneratePins {
     /// The ladder and relay floor computed from each at exhaustion.
     pub estimate_ladder_at_exhaustion: [u64; 4],
     pub validation_ladder_at_exhaustion: [u64; 4],
-    pub relay_floor_at_zero_reward: u64,
+    pub relay_floor_at_exhaustion: u64,
 }
 
 fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
@@ -968,7 +1154,18 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
     let tail = tail_subsidy_per_block(params).expect("tail subsidy");
     let s = params.money_supply;
     let est_reward = base_block_reward(s, params).expect("base at exhaustion");
-    let val_reward = cap_reward_to_remaining_supply(est_reward, s, params);
+    // FL-R12′ retired the supply cap, so validation no longer pays ZERO at
+    // the asymptote — it pays the perpetual tail through the one owner.
+    // §4.6's `[0,0,0,0]` ladder is the pre-implementation defect record.
+    let val_reward = paid_block_reward(
+        FULL_REWARD_ZONE_V5,
+        FULL_REWARD_ZONE_V5,
+        s,
+        FULL_REWARD_ZONE_V5,
+        params.tx_volume_baseline,
+        params,
+    )
+    .expect("paid reward at the asymptote is total");
     DegeneratePins {
         burn_at_cap: calc_burn_pct(
             500,
@@ -1014,7 +1211,7 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
             FULL_REWARD_ZONE_V5,
             FULL_REWARD_ZONE_V5,
         )),
-        relay_floor_at_zero_reward: relay_floor(val_reward, FULL_REWARD_ZONE_V5),
+        relay_floor_at_exhaustion: relay_floor(val_reward, FULL_REWARD_ZONE_V5),
     }
 }
 
@@ -1107,6 +1304,9 @@ pub struct FeeLadderReport {
     dwell: Vec<DwellResult>,
     feedback: Vec<FeedbackResult>,
     degenerate: DegeneratePins,
+    /// FL-R18's `N` measurement: oscillating cells remaining at each
+    /// candidate minimum-dwell floor (§4.5a).
+    n_sweep: Vec<NSweepPoint>,
     /// FL-C9 (§1 birth stamp: minted at maintainer direction, review
     /// round 5, after measurement began; re-labeled at round 6 to the
     /// anchored-attack candidate-set reduction).
@@ -1216,6 +1416,7 @@ pub fn report() -> FeeLadderReport {
             LadderMode::Quantized(SnapRule::Nearest),
             LadderMode::Quantized(SnapRule::Ceiling),
             LadderMode::QuantizedHysteresis,
+            LadderMode::RateLimited(FL_R18_MIN_DWELL_BLOCKS),
         ] {
             for &(label, m0, m1, median) in DWELL_SCENARIOS {
                 dwell.push(dwell_scenario(label, m0, m1, median, st, mode, &params));
@@ -1261,6 +1462,54 @@ pub fn report() -> FeeLadderReport {
         }
     }
 
+    // FL-R18 (c): MEASURE `N`. Candidates are the figures the register
+    // already contains — the ramp bar (60), the stationary dwell gate
+    // (240), and the volume window (720) — plus their midpoint; the
+    // ratified `N` is the smallest that closes every oscillating cell,
+    // with the next-smaller candidate's residual recorded so the margin
+    // is visible rather than asserted.
+    let mut n_sweep = Vec::new();
+    for n in [60u64, 120, 240, 480, 720] {
+        let mut oscillating = 0u64;
+        let mut worst_transitions = 0u64;
+        let mut thin_margin_cells = 0u64;
+        for &(_age, st) in &states {
+            let d_boundary = boundary_demand(st, &params);
+            for &median in &[zone, 3 * zone, 10 * zone, 50 * zone] {
+                for eps in [0u64, 500, 1000, 2000, 3000] {
+                    for demand_scale in [50u64, 100, d_boundary, 400] {
+                        for start in [demand_scale, 8 * demand_scale.min(1_250)] {
+                            let fb = feedback_scenario(
+                                eps,
+                                demand_scale,
+                                start,
+                                st,
+                                median,
+                                LadderMode::RateLimited(n),
+                                &params,
+                            );
+                            if fb.tail_transitions >= 2
+                                && fb.fee_tail_max > round_money_up_2(fb.fee_tail_min + 1)
+                            {
+                                oscillating += 1;
+                                worst_transitions = worst_transitions.max(fb.tail_transitions);
+                            }
+                            if fb.race_margin_min_milli < 1020 {
+                                thin_margin_cells += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        n_sweep.push(NSweepPoint {
+            n,
+            oscillating_cells: oscillating,
+            worst_tail_transitions: worst_transitions,
+            thin_margin_cells,
+        });
+    }
+
     let degenerate = degenerate_pins(&params);
 
     // FL-C9 under the registered traffic model and its §1.8 sensitivity
@@ -1286,6 +1535,7 @@ pub fn report() -> FeeLadderReport {
         feedback,
         degenerate,
         fee_signal_bits: fee_signal,
+        n_sweep,
     }
 }
 
@@ -1428,6 +1678,13 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             fs.ladder_bits_per_tx_milli
         );
     }
+    for p in &r.n_sweep {
+        let _ = writeln!(
+            out,
+            "fee-ladder: FL-R18 n={} oscillating_cells={} worst_transitions={} thin_margin_cells={}",
+            p.n, p.oscillating_cells, p.worst_tail_transitions, p.thin_margin_cells
+        );
+    }
     let _ = writeln!(
         out,
         "fee-ladder: degenerate tail_era_blocks={} est_reward_at_exhaustion={} val_reward_at_exhaustion={} penalty_at_tail_x_half={}",
@@ -1524,32 +1781,55 @@ mod tests {
         assert_eq!(quantize_c_pow2(5_600_000, SnapRule::Nearest), 4_000_000);
     }
 
-    /// The correction scales the ALREADY-TRUNCATED rung — the served order
-    /// (`shekyl-economics` `corrected_fee_ladder`), which the instrument
-    /// mirrors. Discriminating pin: at (10 SKL, `Mfw = 1.5 MB`) the raw
-    /// economy rung truncates to 13; with `C_q = 16` the served value is
-    /// `round2(13·16) = round2(208) = 210`. The REJECTED alternative —
-    /// `C_q` in the numerator, `⌊16·R·w/M²⌋ = 213 → 220` — would make the
-    /// instrument diverge from the path the daemon serves (PR #614
-    /// review): a change toward it must fail here, loudly, not retune the
-    /// measurements. (The `C_q = 2` heritage case does not discriminate:
-    /// 670 both ways.)
+    /// The served ladder is the OWNER's arithmetic, and this pins the
+    /// value the owner actually returns — which is not what this test
+    /// asserted before (PR #640 review).
+    ///
+    /// Round 14 pinned 210 here on the belief that production scaled an
+    /// already-truncated rung, and warned against "fixing" it toward the
+    /// numerator form. The shipped `corrected_fee_ladder` divides ONCE —
+    /// `round2(base·w_ref·C_q / (Mfw²·SCALE))` — so at
+    /// (10 SKL, `Mfw = 1.5 MB`, `C_q = 16`) it returns **220**. The old
+    /// pin was guarding the instrument against agreeing with the daemon.
+    /// The local mirror is gone; this asserts the owner directly, so the
+    /// two cannot diverge again.
     #[test]
-    fn correction_scales_the_truncated_rung_like_the_served_path() {
+    fn served_ladder_is_the_owners_arithmetic() {
         let coin: u64 = 1_000_000_000;
+        // The legacy transliteration still truncates its rung first —
+        // that is what today's daemon does, and it is why the Current
+        // column keeps it.
         let raw = articmine_ladder_raw(10 * coin, 1_500_000, 1_500_000);
         assert_eq!(raw[0], 13);
-        assert_eq!(corrected_ladder(raw, 16 * SCALE)[0], 210);
+
+        // The SERVED value at the same state: one division, no
+        // compounded truncation.
+        assert_eq!(served_ladder(10 * coin, 1_500_000, 16 * SCALE)[0], 220);
+
+        // And it is the owner's output verbatim, not a reproduction.
+        assert_eq!(
+            served_ladder(10 * coin, 1_500_000, 16 * SCALE),
+            corrected_fee_ladder(
+                10 * coin,
+                1_500_000,
+                1_500_000,
+                FULL_REWARD_ZONE_V5,
+                REF_TX_WEIGHT,
+                16 * SCALE
+            )
+            .as_slots()
+        );
     }
 
     /// [`HysteresisCq`] is LOAD-BEARING (§4.5: the un-hysteretic map fails
     /// FL-C7 at 18 reachable boundary cells; the 800-cell convergence
     /// result rests on this band), so its boundaries are pinned directly —
     /// a threshold or inequality drift must fail HERE, not silently
-    /// invalidate the §4.5 measurement (PR #614 review). Semantics mirror
-    /// impl-1's `fee_correction_quantized`: 3% margin, band around the
-    /// PREVIOUS step, escape is strictly-outside (`>` / `<`), `prev = 0`
-    /// means no history.
+    /// invalidate the §4.5 measurement (PR #614 review). Since #640 the
+    /// semantics are not mirrored but CALLED —
+    /// `shekyl-economics::hysteresis_step` — so this pins the owner's
+    /// boundaries: 3% margin, band around the PREVIOUS step, escape
+    /// strictly-outside (`>` / `<`), `prev = 0` means no history.
     #[test]
     fn hysteresis_band_boundaries_are_exact() {
         // Initialization: no history ⇒ the plain ceiling snap, stored.

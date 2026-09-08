@@ -315,7 +315,12 @@ Copilot's third pass: 9 open threads + 23 suppressed comments
     already-truncated rung, which is bit-exact with the SERVED
     arithmetic (`corrected_fee_ladder` truncates first; 210-vs-220 at
     10 SKL/1.5 MB/`C_q` = 16 discriminates, the `C_q` = 2 KAT does
-    not). The real defect was the comment's false one-atomic-unit
+    not). ***Correction (#640 review): the parenthetical was wrong about
+    the owner. `corrected_fee_ladder` divides ONCE, with `C_q` in the
+    numerator, so that case returns 220, not 210 — the round-14 pin was
+    guarding the instrument against agreeing with the daemon. The
+    instrument now calls the owner and the pin was re-taken; this line
+    is left as the round-11 disposition it was.*** The real defect was the comment's false one-atomic-unit
     bound (< `C_q` atomic pre-rounding is the true bound); a
     discriminating pin now fails any "fix" toward the algebraic form,
     falsifier observed.
@@ -493,6 +498,376 @@ already declared the Rust surface and now enumerates it in full.
   2 400 feedback cells is bit-identical without it** — the clamp never
   bound, and that is now a measured fact instead of an assumption.
 
+## Review round 13 (FL-R18 ruled, 2026-09-06)
+
+**FL-R18 RULED (c) — rate-limit served `C_q` — with two conditions.**
+*Provenance: ruled in-channel and relayed through the umbrella lane;
+**in-tree countersignature owed**, per review round 4's standing
+correction for this table.* The rejections carry more than the verdict:
+**(b)** rejected because a quantizer inside a gain-≥2 feedback loop
+limit-cycles *structurally* — a deadband only suppresses that once it
+exceeds the loop's excursion, which is why its price is "responsiveness
+everywhere"; its cheapness was the trap. **(a)** rejected on a question
+the framing never asked — is `D = 50` a corner or an ATTRACTOR?
+**Verified at source before recording:** `shekyl_tx_volume_baseline` =
+50 and `calc_release_multiplier` computes `ratio = v/baseline`, so
+`D = 50` is exactly where `M_r = 1.0` — the neutral point the release
+curve is calibrated around, which a quiet mature chain occupies by
+construction. **(d)** rejected as the wrong layer (FL-D6 smooths miner
+revenue variance; this oscillation is in the served quote).
+
+**`N` measured, not guessed (§4.5a), and the measurement found
+something the ruling was made without.** Sweeping `N ∈ {60, 120, 240,
+480, 720}`: the flip RATE falls as intended (24 → 5 transitions) while
+the oscillating-cell COUNT rises (14 → 101), because a dwell floor is
+a DELAY in a feedback loop and delay destabilises — the volume
+excursion widens monotonically (49–53 → 24–53 at one probe cell). The
+residual cycle's period is 125–429 blocks, so `N = 60` cannot bind at
+all. **Ratified `N` = 240** — the FL-C4a gate itself, so the property
+the gate checked becomes the property the mechanism enforces — at
+which the probe cell's inter-flip dwell moves from ≈ 125 blocks (under
+the gate) to ≈ 375 (over it) and every open-loop dwell scenario still
+passes (min median 342, min in-ramp 274).
+
+**Stated plainly rather than smoothed: (c) does not close FL-C7.** The
+residual cells still cycle at one `C_q` step, exceeding C7's
+"≤ one rounding step", and at `N = 240` more cells show the slow cycle
+(56) than showed the fast one (14). The trade (c) actually makes is
+*fast anonymity-harmful oscillation → slow anonymity-safe oscillation,
+at the cost of breadth and volume excursion* — good on the ruling's own
+reasoning (dwell is the anonymity property and it is now structural),
+but not the "14 cells close with margin" the instruction anticipated.
+**Flagged for the countersignature; if it changes the answer the row
+reopens.**
+
+Conditions recorded where they bind: **1** — FL-C4a's subject is
+replaced by a post-registration note at §1.4 (floor applied at every
+change, **restart-inclusive**, `N` equals the ratified figure), because
+a gate that survives as a tautology displays green forever; **2** — the
+estimate-side clamp is recorded at §5.2 as **licensing the hold**
+rather than belting the tail-floor edge, so it cannot later be
+simplified out from under (c); its red test (rising floor inside a held
+window, served stale-low, assert `served ≥ floor`) is owed by the
+implementing PR.
+
+**Sizing correction on the record:** the (b)/(c) cost estimates put to
+the maintainer were measured against the **held bundle**
+`feat/fee-ladder-impl-1` (`rust/shekyl-economics/src/fee.rs`, the FFI
+decl, the C++ marshal seam), **not against `dev`** — that file is not
+on `dev`, and the ruling was made with that disclosed.
+
+## Review round 14 (FL-R18's premise refuted; (a) indicated, 2026-09-06)
+
+**The anonymity premise under FL-R18 was examined and does not hold**,
+and both legs were verified in this tree before anything was recorded
+(§4.5b). (1) `reference_block: [u8; 32]` is written to the wire **in
+the clear** (`shekyl-wire` `transaction.rs`) with a daemon acceptance
+window of `MIN_AGE = 5` … `MAX_AGE = 100`
+(`shekyl-daemon-rpc`) — construction time is already public at finer
+resolution than a 125–429-block fee flip, and the reference-block
+cohort is *smaller* than the fee cohort §4.4 was protecting. (2) `C_q`
+is a deterministic function of public chain state, so every conforming
+wallet at a height posts the same rate and the fee is **redundant with
+the block carrying it** — a fact **this document already asserted in
+its own W3 row** while §4.4 built a gate on its opposite. Redundant
+data leaks nothing. The residual is the INVERSE case — a *non*-matching
+fee self-marks a wallet — which is a fingerprint, not a timing leak.
+
+**The one surviving harm with teeth was measured: the rejection race
+(§4.5b).** Lags stated and justified: 1 block; 3 (≈ 6 min: FCMP++
+proving at the rule-76 floor, human confirmation, Dandelion++ stem);
+25 (a signing session left open); and 100 — the protocol's own ceiling
+`FCMP_REFERENCE_BLOCK_MAX_AGE`, past which no conforming transaction
+can be submitted. **Refusals: 0 of 72 000 000 quotes at every lag,
+interior and oscillating cells alike — and that zero proves nothing.**
+It is structural: these traces hold the median fixed, and with a fixed
+median the floor is monotonically non-increasing while the clamp puts
+every quote at or above it, so a refusal was impossible by
+construction. Reporting the zero as the answer would have been a
+collapsed observable.
+
+**What actually governs the race is the MARGIN over the floor**, which
+IS measurable here: median 2.10×, but **49 of 800 served-map cells sit
+at the clamp with under 2% headroom**, where a **1% median contraction
+inside the quote window refuses the transaction**. The thin states are
+concentrated in the widest-median, oldest-age regime where rung and
+floor both collapse toward 1 atomic/byte. This also corrects §5.4's
+"the clamp is never live on the reachable grid" — measured on the
+drift-honest interior it is live there. *(Figures corrected at round
+16; the round-14 pass reported 1.29× / 154 cells from a defective
+instrument — see below.)*
+
+**That measurement decides FL-R18: the race is
+DISPOSITION-INDEPENDENT.** It is a property of clamping at quote time,
+present under every option; the band already worsens it (51 → 154 thin
+cells) and a dwell floor would worsen it further. It gives no reason to
+prefer (c) — it argues the other way — so it does not hold the row
+open. **FL-R18 takes (a), accept as bounded**, recorded as *examined
+and refuted* rather than quietly superseded, with the failure mode
+named on the record: four layers of threat model were built on the
+premise without anyone asking what the leak was. **(c) is withdrawn as
+a mechanism** (its §4.5a delay-destabilises measurement stands as the
+independent second reason, and the instrument mode is kept only so
+that result stays reproducible). **No rework lands in the bundle** —
+the built `fee_correction_quantized` is unchanged.
+
+**Minted: FL-R19** — the thin-margin exposure the race measurement
+found, with four candidate dispositions and none adopted. It is a real
+finding that belongs in its own row rather than buried in FL-R18.
+
+**Kept from the (c) round, independent of the disposition:** FL-C4a's
+subject problem — **re-grounded** rather than replaced, since without a
+mechanism there is no tautology: dwell bounds the *stale-quote
+self-marking rate*, not cohort size, and every decision the criterion
+drove survives that re-grounding (raw `C` still fails, hardest). And
+the estimate clamp's real role at §5.2, now carrying the measured
+margin and the warning that any future staleness spends exactly the
+headroom shown to be thin.
+
+*Provenance: relayed through the umbrella lane; **in-tree
+countersignature owed** on both FL-R18's (a) and FL-R19's minting.*
+
+## Review round 15 (maintainer, on PR #634): the residual was wrong, and the framing
+
+Two corrections, both taken; the first retracts something round 14
+asserted.
+
+- **The stated residual does not distinguish anything.** Round 14 wrote
+  that a fee "not matching the schedule" self-marks a stale wallet.
+  **`check_fee` is a FLOOR, not an equality** — verified at source:
+  `if (fee < needed_fee - needed_fee/50) reject` (`blockchain.cpp`) — so
+  a fee differing from the rate of its including block is the ORDINARY
+  case: any transaction that waits across a rate change lands that way
+  and is accepted, as does any deliberate overpayment. Stale wallet and
+  honest-but-delayed wallet are indistinguishable and neither is marked.
+  **Verified further, on the half this lane owns, and it sharpens the
+  correction:** the honest comparison is fee against the transaction's
+  own `reference_block`, but that is *not* an equality either —
+  `REF_ANCHOR_AGE = FCMP_REFERENCE_BLOCK_MIN_AGE + 1 = 6`, while the
+  wallet's estimate comes from `get_dynamic_base_fee_estimate`, which
+  computes at the **tip**. **Fee and reference height are six blocks
+  apart by construction**, so demanding `fee == C_q(reference_height)`
+  would mark conforming wallets built in the six blocks after a change.
+  The real observable is set membership in the one-or-two `C_q` values
+  spanning the construction window, and what it detects is
+  **IMPLEMENTATION DIVERGENCE, not staleness**.
+- **What that does to FL-C4a, said plainly rather than left to sit.**
+  Dwell's relationship to the surviving observable **points the wrong
+  way**: fewer rate changes mean fewer occasions for a divergent
+  implementation to betray itself — a benefit to a broken wallet, and
+  only derivatively to its users. **FL-C4a is therefore no longer an
+  anonymity criterion at all.** It is retained on
+  **quantization-quality and user-predictability** grounds (a quote that
+  moves every 3–6 blocks is a bad quote regardless of who is watching),
+  which carries every decision it drove — raw `C` fails hardest,
+  quantization passes — while removing the refuted justification. Round
+  14's re-grounding was thinner than it claimed; round 15 says how much.
+- **Framing (maintainer's explicit instruction): the row records the
+  PREMISE AS REFUTED, not the disposition as chosen.** FL-R18 is
+  restructured so the refutation *is* the row and the dispositions are
+  its consequence — the premise was examined and found empty, therefore
+  there is nothing for a mechanism to fix, therefore (a). (b)/(c)/(d)
+  are noted as mechanisms for a harm that does not exist rather than as
+  options out-competed on cost, with (c)'s delay-destabilises
+  measurement kept as the independent second reason since it stands
+  whatever the premise did. **(a) is not the cheap option; it is what
+  remains.**
+
+FL-R19 is untouched by both corrections and stands as minted, still
+unsigned. Nothing ships; no rework reaches the bundle.
+
+## Review round 17 (maintainer, relayed 2026-09-07): FL-R3 RULED — the band stays and is RESTORED
+
+Raised by #640 review cycle 6, which found by grepping callers rather
+than the flagged line that **no production caller passes a nonzero
+`prev_cq`**: the ratified §7 band was built, tested, and unreachable on
+the served path. The cycle put two options to the maintainer — persist
+`C_q` as chain state, or retire served hysteresis against FL-R19's clamp
+margin. **Both were declined, and the framing with them: it was a false
+pair.** The ruling is that hysteresis stays and FL-R3 closes by
+restoring it to the production path, which makes the structural blocker
+the work item rather than the reason to pick a loser.
+
+**The ground, as ruled.** The banded map's worst inter-flip dwell is
+≈ 125 blocks. At this tree's own constants — `BLOCKS_PER_YEAR` = 262 800,
+so a 120 s target — that is **4.2 hours**, and a ten-minute quote window
+carries a **4.0 %** chance the re-quote differs. (Both re-derived here
+from the constants rather than taken on relay.) Against what users
+actually live with — Bitcoin and Ethereum estimates can move several-fold
+*within one block* under congestion, which is why those wallets present
+low/medium/high and everyone treats the number as soft — that is
+*stabler*, and it sits below the level at which anyone forms an
+expectation there is something to violate. So "barely moves" is accurate,
+and the residual needs no mechanism; it needs the band it already has.
+
+**Two binding constraints, both lifted from findings already on this
+record rather than invented for the ruling:**
+
+1. **The band stays a PURE FUNCTION OF CHAIN STATE.** No per-node held
+   state. Derivability is the property FL-R18 closed on and the reason a
+   conforming wallet's fee leaks nothing — a restoration that quietly
+   acquires state repeals FL-R18 instead of restoring FL-R3. Named in the
+   row explicitly so the fix cannot pick up state while nobody is
+   watching.
+2. **Single owner.** The band's arithmetic lives in one place and the
+   instrument transliterates nothing — this cycle's own finding, where
+   the sim's copy had silently lost the owner's `MIN_REPRESENTABLE_C`
+   floor, so §4.5 was measuring a mechanism that was not the shipped one.
+
+**Where that leaves the work, stated against constraint 1 rather than
+around it.** The blocker *is* that the band needs history:
+`C_q(h) = f(C(h), C_q(h−1))` is a recurrence, and both failed attempts
+failed on exactly that — a remembered value tracked the process's query
+history, and the previous block's unseeded snap is a one-step
+approximation that inverts. By the ruling's own terms this is therefore
+the **time-grid** branch: a previous value taken from a grid-aligned
+anchor rather than unbounded history — a fold over a fixed window from a
+grid height, or a seed at an epoch boundary — which is bounded to
+evaluate and still derivable by every node. Its open questions (grid
+period, fold depth, reorg behaviour, per-query cost) are design
+questions, so **it comes back as its own round** and is not invented at
+the call site. Until it lands the daemon serves the un-banded ceiling —
+an implementation gap with an owner, not a design regression: FL-C7's
+ratified figures are the banded ones and stand, FL-C4a is insensitive to
+the band (446 banded, 464 un-banded, bar 240), and the rejection race
+moves three cells.
+
+**Also minted: FL-D8 — boundary-cell occupancy.** Banked at the
+maintainer's direction even though it gates nothing. Every disposition
+that has turned on flicker argued it from **cell count** — how many of
+the 800 swept cells oscillate — which is a property of the sweep grid and
+not of the chain: it says how much of the parameter space flickers, never
+how often anyone is standing there. FL-C4a, FL-C7 and FL-R18 each rested
+on that unknown and FL-R3 is the fourth. Registered as an owed
+measurement, due the next time a disposition turns on flicker, so the
+fifth occasion reaches for a number instead of an argument.
+
+*Provenance: relayed in-channel, 2026-09-07. A relayed ruling, not an
+in-tree signature — no approving review or maintainer commit carries it,
+and the rows say so.*
+
+## Review round 16 (PR #634 bots): the race instrument measured a map nothing serves
+
+**Bugbot and Copilot independently found the same High defect, and it
+was real.** The rejection-race block rebuilt its own `c_served` as
+`match mode { Quantized(rule) => quantize(...), _ => c_now }` — so for
+the **hysteresis** and **rate-limited** modes it used **raw `C`**, while
+`fee_at` on the same block had already applied the band. The margin
+figures for the served map were therefore computed on a map nothing
+serves. It could not be fixed by simply re-applying the band either:
+`HysteresisCq::step` and `RateLimitedCq::step` ADVANCE state, and a
+second call per block would double-step them — which is presumably why
+the shortcut was taken, and why substituting raw `C` was the worse of
+the two errors.
+
+**Fixed at the source of the inconsistency** (Copilot's suggested
+shape, and the right one): the per-block evaluation is now a single
+`step_at` returning the standard rung, the **served** economy rung, and
+the floor it was clamped against, from the one stepping site. Nothing
+can diverge because nothing recomputes.
+
+**The corrected numbers move, and one published claim was wrong:**
+
+| | round 14 (defective) | round 16 (corrected) |
+| --- | --- | --- |
+| served-map median margin | 1.29× | **2.10×** |
+| served-map thin cells | 154 / 800 | **49 / 800** |
+| thin-cell clustering | "`D = 50`, 114 of 154" | **48 of 49 at the widest median, 41 at the oldest age** |
+
+So **"the §7 band already worsens the race (51 → 154)" was an artifact
+of the defect** — the band is in fact neutral (51 → 49). That claim is
+retracted. And the companion claim that a dwell floor "would worsen it
+further" was unmeasured assertion; it is now **measured** by extending
+the `N` sweep: 49 → 52 → 60 → 64 at `N` = 240 / 480 / 720. True, but
+modest.
+
+**FL-R18's disposition does not change, and is better supported.** The
+race is disposition-independent — every quantized served map lands
+within 49–64 thin cells of 800, and the exposure tracks the degenerate
+large-median regime they all share rather than the mode. FL-R19 stands
+as minted with corrected figures. *(Re-measured again at #640 once the
+instrument called the shipped owner: the band is 22–39 across the same
+maps, not 49–64. The conclusion is unchanged — the spread is still
+narrow and still tracks the regime, not the mode — and §4.5b carries
+the current figures. This paragraph is left as the round-16 record.)*
+
+Also taken: `RateLimitedCq::held` renamed `blocks_since_change`
+(Copilot), which also reads straight across to the implementing
+branch's `(value, since_height)`.
+
+**The lesson, since this round has now hit it twice:** an instrument
+that recomputes a quantity the pipeline already produced will
+eventually recompute it differently. The dwell/feedback traces had the
+same shape of bug at round 12 (frozen state) and this one at round 14
+(re-derived `C`); both were caught by someone else reading the code,
+not by the measurement looking wrong — because a wrong-but-plausible
+number looks exactly like a right one.
+
+## Round 16b — both rows countersigned (2026-09-06)
+
+**FL-R18 countersigned on (a)**, with the framing instruction binding:
+the row records *the premise as refuted*, not the disposition as
+chosen. The maintainer's own statement of the finding, now in the row:
+`C_q` is deterministic from public chain state, so every conforming
+wallet in a window computes the same value and an observer derives it
+from the block regardless — **the fee is redundant with what the block
+already discloses.** (a) is what is left once that is written down.
+
+**FL-R19 ruled (b)** — clamp the served economy rung with a fixed
+margin above the unbuffered floor — **and the threat is now stated
+properly, which this round had not done**: *adversary NONE.* It is a
+**liveness** failure, not a disclosure, and it needs **three
+conjuncts**: the construction-to-broadcast gap spans at least one block
+(the median cannot move within a block interval); the short-term median
+is the binding term, i.e. the quiet-chain case; and the state is
+thin-margin (**49 of 800** — the figure the ruling quoted, 154, predates
+the round-16 instrument correction). Consequence: a refused broadcast,
+recoverable by re-quoting; no fund loss, no leak.
+
+**(d) is REFUTED, not merely unchosen, and verified at source before
+recording:** `rv.txnFee` is an **operand of `shekyl_verify_ct_balance`**
+(`src/fcmp/ct_semantics.cpp`, the standard site and the bond-post
+variant), so the fee closes the commitment sum and re-quoting at
+broadcast means re-constructing and **re-signing**. For a hot
+interactive wallet that is a no-op dressed as a fix; for the exposed
+flows — offline signing, hardware confirmation, batched or scheduled
+sends — it is exactly the expensive round trip the failure would have
+cost anyway. **It helps the population that does not need it and cannot
+help the one that does.** **(c)** re-deriving the relay floor stays open
+at the cutover (CEN-M3 / FL-D2) but **must not be justified by this
+race**.
+
+**Binding implementation constraint, written as a constraint and not as
+advice: the margin must be a FIXED DETERMINISTIC MULTIPLIER — never
+randomized, never per-wallet.** Otherwise the quote stops being
+derivable from chain state and manufactures exactly the fingerprint
+FL-R18 just established does not otherwise exist.
+
+**Sizing is pre-registered BEFORE the numbers exist**, and the
+instrument is named including what it is not: the refusal *rate* cannot
+size this — the traces are structurally blind to it and that blindness
+is the finding, not a zero. The quantity that can see it is the
+**construction-to-broadcast gap distribution across real wallet
+flows** — wallet instrumentation, not chain simulation, so **not this
+lane's measurement**. Criterion: cover the plausible median contraction
+over the **p95 gap for the offline-signing flow**; if that distribution
+is sub-block for essentially all flows, the margin may be nominal.
+
+**For the round log, at the maintainer's instruction:** the §5.4
+correction — "the clamp is never live on the reachable grid", against a
+measured population of cells sitting *at* the clamp — is **the third
+refuted claim today**, the same shape as Q2's doubling time and
+FL-R18's parked-baseline premise: *a statement about the world, living
+in a rationale, that no instrument had ever checked.* All three landed
+the same day, which is the argument for **reason-needs-an-instrument
+being a gate rather than a habit**.
+
+*Provenance: both countersignatures were given in-channel and relayed
+through the umbrella lane. Checked before recording: PR #634 carries no
+approving review — the three `radawson`-attributed review comments on it
+are this lane's own GraphQL replies, posted under that account. So these
+are relayed countersignatures, not in-tree ones, and the rows say so.*
+
 ## Build (authorized round 8; executed 2026-09-04 on `feat/fee-ladder-r12-impl`)
 
 The reward-path bundle, one validation surface, built Rust-first (rule
@@ -529,15 +904,20 @@ Bundle contents:
   held).
 - **FL-R16a first, as instructed:** the past-asymptote error arm is
   gone; both dead-letters closed (estimate path returns the tail via
-  totality; relay floor tail-derived instead of failure-arm 0). FL-R16b
-  (ActivityMetric guard) and FL-R16c (supply-ratio saturation +
-  the gross-emission note) landed with it. FL-R14's build-time
+  totality; relay floor tail-derived instead of failure-arm 0). FL-R16c
+  (supply-ratio saturation + the gross-emission note) landed with it.
+  **FL-R16b (the `ActivityMetric` cap guard) did NOT** — its ratified row
+  puts it on the follow-up rename PR, not the build's critical path; see
+  the FL-R15 note below, which excludes both. FL-R14's build-time
   assertion lives in `params.rs` (≥10 000-year headroom floor,
   range-proof width and wrap-un-saturation named).
 - **Estimate side (round-8 amendment as adopted):** `fee.rs` —
   `corrected_fee_ladder` (three tiers, `fees[2]` bridge, `Fh` main arm
   unconditional) + `fee_correction_quantized` (whole-scalar `C_q`,
-  exact-integer ceiling snap, 3% hysteresis band) + `round_money_up_2`
+  exact-integer ceiling snap, and the 3% hysteresis band — built and
+  tested, but **NOT on the served path**: the wrapper passes
+  `prev_cq = 0`, and FL-R3 carries the blocker and the owed ruling) +
+  `round_money_up_2`
   (first Rust production owner). C++ 4-arg = marshal; the 2-arg wrapper
   computes `C_q` inputs from the SAME sources validation uses and
   **clamps the served economy rung at `get_current_fee_per_byte()`** —
@@ -550,8 +930,14 @@ Bundle contents:
   boundaries. Heritage `scaling_2021` pins updated to the signed shape
   (`[340, 1400, 1400, 67000]`-class; the surge case's 22 000 → 67 000
   deliberately) + a `C_q = 2` case. Wallet cap re-derived (FL-R9):
-  14 000 000 → **28 000 000** (served sweep max), KAT re-pinned.
-- **FL-R15 rename executed:** `money_supply` →
+  14 000 000 → 28 000 000 (served sweep max) — **and re-derived AGAIN at
+  the implementing PR #640 to a 220 000 000 STRUCTURAL bound, because
+  28 000 000 sat below honest quotes from ≈ year 3**: the sweep had
+  located a product's maximum at one factor's maximum. KAT re-pinned
+  there.
+- **FL-R15 rename (NOT in the landed bundle — it is the follow-up
+  mechanical PR; this records the work as prepared, and #640 explicitly
+  excludes it along with FL-R16b):** `money_supply` →
   `emission_curve_asymptote` across the JSON authority, both codegen
   paths, the Rust field/const surface (incl. the engine snapshot field
   `emission_curve_asymptote_atomic` — no out-of-workspace consumer), and
@@ -736,19 +1122,24 @@ directly. Dispositions:
    rename) and follows the design PR's merge.**
 2. ~~FL-R17~~ — **SIGNED (a) three tiers at review round 7**, standard
    as default (§5.5); single-rate rejected with named reopeners.
-3. **FL-R18 — residual boundary-parked oscillation under demand
-   feedback (minted round 12): UNSIGNED, decision required.** Four
-   candidate dispositions on the row; the §4.5 transition
-   classification is the instrument.
-4. **FL-R13 / FL-D5** — fee-floor basis calibration round: its FL-R12′
+3. ~~FL-R18~~ — **(a) COUNTERSIGNED (relayed)**, because the premise is
+   refuted (rounds 14–15; residual corrected at 15 to implementation
+   divergence), (c) withdrawn, **no rework in the bundle**.
+4. ~~FL-R19~~ — **(b) RULED (relayed)**: fixed deterministic margin
+   above the unbuffered floor; (d) refuted at source, (c) open but not
+   here. **Owed to the wallet lane, not this one:** the
+   construction-to-broadcast gap distribution that sizes the margin
+   against the pre-registered criterion.
+5. **FL-R13 / FL-D5** — fee-floor basis calibration round: its FL-R12′
    gate is SATISFIED (signed round 8, amendment adopted), so the round is
    simply open — non-blocking (the perpetual-tail ruling retired the
    genesis-blocking escalation), scheduled on its own merits.
-5. **PRs** — the design PR is **this PR (#614)**; the implementation
-   follows as the round-9 split: `feat/fee-ladder-impl-1` (atomic
-   bundle, built and gated) then `-impl-2` (mechanical rename), each
-   opened after this document merges.
-6. Census-R2: **both resume conjuncts are SATISFIED** — FL-R12′ signed
+6. **PRs — SETTLED, no longer pending.** The design PR (#614) and the
+   FL-R18/FL-R19 ruling record (#634) are MERGED. The round-9 split is
+   under way: `feat/fee-ladder-impl-1` (atomic bundle, built and gated)
+   is open as **#640**; `-impl-2` (the mechanical FL-R15 rename, with
+   FL-R16b) follows it.
+7. Census-R2: **both resume conjuncts are SATISFIED** — FL-R12′ signed
    (round 8) and the red test extant (graduated green on impl-1). R2 can
    resume per its own criterion; the routing to the consensus lane
    (C2-R0 phase 2, which edits `CONSENSUS_RULE_CENSUS.md` §10) carries

@@ -451,6 +451,10 @@ fn build_fixture() -> SpendFixture {
     ];
 
     // ── Phase-1 proofs, bound to the real prefix ────────────────────────
+    // The signable hash covers `tx_extra`, so it must be computed over the SAME
+    // fields the encoder emits below — signing over one extra and encoding
+    // another makes the fixture's own proof unverifiable against its bytes
+    // (CEN-I19 surfaced exactly that: these fixtures encoded no extra at all).
     let tx_prefix_hash = tx_prefix_hash_from_parts(
         &[su.key_image],
         &[payment.output_key, change.output_key],
@@ -458,7 +462,7 @@ fn build_fixture() -> SpendFixture {
             Some(payment.view_tag_prefilter),
             Some(change.view_tag_prefilter),
         ],
-        &[],
+        &submit_fixtures::conforming_pqc_extra(2),
     );
     let signed = sign_transaction(
         tx_prefix_hash,
@@ -484,7 +488,8 @@ fn build_fixture() -> SpendFixture {
             Some(payment.view_tag_prefilter),
             Some(change.view_tag_prefilter),
         ],
-        tx_extra: Vec::new(),
+        // CEN-I19: the encoder must build the transaction consensus accepts.
+        tx_extra: submit_fixtures::conforming_pqc_extra(2),
         fee: FEE,
         enc_amounts: signed.enc_amounts.clone(),
         enc_labels: signed.enc_labels.clone(),
@@ -658,7 +663,7 @@ fn build_bond_fixture() -> BondFixture {
         &output_keys,
         &[0, 0],
         &view_tags,
-        &[],
+        &submit_fixtures::conforming_pqc_extra(2),
     )
     .expect("prefix hash with the bond input");
 
@@ -694,7 +699,8 @@ fn build_bond_fixture() -> BondFixture {
         output_keys: output_keys.to_vec(),
         output_amounts: vec![0, 0],
         view_tags: view_tags.to_vec(),
-        tx_extra: Vec::new(),
+        // CEN-I19: the encoder must build the transaction consensus accepts.
+        tx_extra: submit_fixtures::conforming_pqc_extra(2),
         fee: FEE,
         enc_amounts: signed.enc_amounts.clone(),
         enc_labels: signed.enc_labels.clone(),
@@ -1539,7 +1545,7 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
         &output_keys,
         &[0, 0],
         &view_tags,
-        &[],
+        &submit_fixtures::conforming_pqc_extra(2),
     )
     .expect("prefix hash with the unbond input");
 
@@ -1569,7 +1575,8 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
         output_keys: output_keys.to_vec(),
         output_amounts: vec![0, 0],
         view_tags: view_tags.to_vec(),
-        tx_extra: Vec::new(),
+        // CEN-I19: the encoder must build the transaction consensus accepts.
+        tx_extra: submit_fixtures::conforming_pqc_extra(2),
         fee: FEE,
         enc_amounts: signed.enc_amounts.clone(),
         enc_labels: signed.enc_labels.clone(),

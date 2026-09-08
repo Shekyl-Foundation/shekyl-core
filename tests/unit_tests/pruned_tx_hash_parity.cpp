@@ -48,6 +48,8 @@
 #include "serialization/binary_archive.h"
 #include "string_tools.h"
 
+#include "pqc_spend_fixture.h"
+
 #ifndef PRUNED_TX_HASH_PARITY_FIXTURE_PATH
 #define PRUNED_TX_HASH_PARITY_FIXTURE_PATH \
   "rust/shekyl-wire/tests/fixtures/pruned_tx_hash_parity_v1.json"
@@ -139,6 +141,15 @@ transaction build_kat_tx()
   auth.hybrid_signature.assign(config::PQC_HYBRID_SINGLE_SIG_LEN, 0);
   tx.pqc_auths.push_back(auth);
 
+  // CEN-I19: the pinned transaction carries the per-output PQC fields
+  // consensus requires — exactly one 0x06 of 1120*n and one 0x07 of 32*n, in
+  // that order, with the same filler bytes shekyl-wire's test helper uses
+  // (`conforming_pqc_extra`). This side and the Rust side each CONSTRUCT the
+  // transaction and the pin asserts their bytes are identical, so both must
+  // build the transaction the network would accept; before this rule the pin
+  // fixed agreement on a shape no builder can produce.
+  shekyl_test_fixtures::append_pqc_kem_field(tx, cryptonote::HYBRID_KEM_CT_BYTES * tx.vout.size());
+  shekyl_test_fixtures::append_pqc_leaf_field(tx, cryptonote::PQC_LEAF_HASH_BYTES * tx.vout.size());
   return tx;
 }
 

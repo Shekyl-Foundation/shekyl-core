@@ -37,6 +37,7 @@
 #include "cryptonote_core/tx_pool.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "blockchain_db/testdb.h"
+#include "shekyl/economics_params_generated.h"
 
 namespace
 {
@@ -90,32 +91,83 @@ TEST(fee_2021_scaling, wallet_fee_estimate)
   PREFIX_WINDOW(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
   std::vector<uint64_t> fees;
 
+  // FL round §5.2 shape (FL-R17 signed): three tiers, fees[2] mirrors
+  // fees[1] (RK-5 wire bridge), Fh main arm UNCONDITIONAL. C_q = SCALE is
+  // the neutral correction, so economy/standard keep the heritage values.
+
   // 10 SKL reward, Mnw=Mlw=ZONE_V5
   fees.clear();
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 300000, 300000, fees);
+  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 300000, 300000, SHEKYL_FIXED_POINT_SCALE, fees);
   ASSERT_EQ(fees.size(), 4);
   ASSERT_EQ(fees[0], 340u);
   ASSERT_EQ(fees[1], 1400u);
-  ASSERT_EQ(fees[2], 5400u);
+  ASSERT_EQ(fees[2], 1400u);
   ASSERT_EQ(fees[3], 67000u);
 
-  // 10 SKL reward, large Mnw
+  // 10 SKL reward, large Mnw. The heritage 22000 came from the surge
+  // discount; the unconditional main arm prices full expansion here too
+  // (FL-C2(b) — the one derived defect in the inherited shape).
   fees.clear();
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 15000000, 300000, fees);
+  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 15000000, 300000, SHEKYL_FIXED_POINT_SCALE, fees);
   ASSERT_EQ(fees.size(), 4);
   ASSERT_EQ(fees[0], 340u);
   ASSERT_EQ(fees[1], 1400u);
-  ASSERT_EQ(fees[2], 5400u);
-  ASSERT_EQ(fees[3], 22000u);
+  ASSERT_EQ(fees[2], 1400u);
+  ASSERT_EQ(fees[3], 67000u);
 
   // 10 SKL reward, Mnw=Mlw=1500000
   fees.clear();
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 1500000, 1500000, fees);
+  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 1500000, 1500000, SHEKYL_FIXED_POINT_SCALE, fees);
   ASSERT_EQ(fees.size(), 4);
   ASSERT_EQ(fees[0], 13u);
   ASSERT_EQ(fees[1], 53u);
-  ASSERT_EQ(fees[2], 1100u);
+  ASSERT_EQ(fees[2], 53u);
   ASSERT_EQ(fees[3], 14000u);
+
+  // C_q = 2 (one congestion step): every rung doubles pre-rounding.
+  fees.clear();
+  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 300000, 300000, 2 * SHEKYL_FIXED_POINT_SCALE, fees);
+  ASSERT_EQ(fees.size(), 4);
+  ASSERT_EQ(fees[0], 670u);
+  ASSERT_EQ(fees[1], 2700u);
+  ASSERT_EQ(fees[2], 2700u);
+  ASSERT_EQ(fees[3], 140000u);
+}
+
+TEST(fee_2021_scaling, state_computed_estimate_holds_the_acceptance_identity)
+{
+  // The 2-arg wrapper — the path wallets actually reach — computes its C_q
+  // inputs from chain state and then clamps the economy rung at the very
+  // value check_fee prices from (the FL-R12' round-8 rider as an
+  // identity: a conforming wallet's quote can only err toward
+  // acceptance). The 5-arg pins above bypass all of that, so this is the
+  // wrapper's own pin, written under the no-test-exists-means-write-the-
+  // test rule.
+  //
+  // ARMED DEPENDENCY (the identity is asserted; the clamp's ACTIVATION is
+  // not): activation is untested because no state this fixture can drive
+  // — and, per FL-C6's round-3 measurement, no reachable quiet state —
+  // puts the ladder's economy rung below the relay floor (C_q >= 1 and
+  // the equal-median constants sit 340:317). That is a claim that
+  // ANOTHER result holds, not that activation is impossible: the wrapper
+  // itself ships the clamp because the two pricing functions take
+  // DIFFERENT medians, so divergence is possible by construction, and in
+  // an unmeasured median-divergence state the clamp is load-bearing
+  // while this test still passes. Falsifier: any weakening or
+  // re-derivation of FL-C6 / the relay-floor basis (FL-R13/FL-D5's
+  // calibration round included) reopens this — whoever touches those
+  // owes this test an activation probe, not just a re-read.
+  PREFIX_WINDOW(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
+  std::vector<uint64_t> fees;
+  bc->get_dynamic_base_fee_estimate_2021_scaling(10, fees);
+  ASSERT_EQ(fees.size(), 4);
+  // The FL-R17 signed shape survives the state-computed path: the RK-5
+  // bridge slot mirrors standard, and the rungs ascend.
+  ASSERT_EQ(fees[2], fees[1]);
+  ASSERT_LE(fees[0], fees[1]);
+  ASSERT_LE(fees[1], fees[3]);
+  // The acceptance identity.
+  ASSERT_GE(fees[0], bc->get_current_fee_per_byte());
 }
 
 TEST(fee_2021_scaling, rounding)

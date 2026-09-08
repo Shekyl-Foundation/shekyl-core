@@ -158,7 +158,6 @@ namespace nodetool
     const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy = {"tx-proxy", "Send local txes through proxy: <network-type>,[socks5://[user:pass@]]<socks-ip:port>[,max_connections] i.e. \"tor,127.0.0.1:9050,100\""};
     const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound = {"anonymous-inbound", "<hidden-service-address>,<[bind-ip:]port>[,max_connections] i.e. \"x.onion,127.0.0.1:18083,100\""};
     const command_line::arg_descriptor<std::string> arg_ban_list = {"ban-list", "Specify ban list file, one IP address per line"};
-    const command_line::arg_descriptor<bool> arg_p2p_hide_my_port   =    {"hide-my-port", "Do not announce yourself as peerlist candidate", false, true};
     const command_line::arg_descriptor<bool> arg_no_sync = {"no-sync", "Don't synchronize the blockchain with other peers", false};
 
     const command_line::arg_descriptor<bool>        arg_no_igd  = {"no-igd", "Disable UPnP port mapping"};
@@ -362,7 +361,21 @@ namespace nodetool
         return inbounds;
     }
 
-    bool is_filtered_command(const epee::net_utils::network_address& address, int command)
+    std::optional<epee::net_utils::network_address> derive_advertised_endpoint(
+    const epee::net_utils::network_address& observed, const uint16_t advertised_port)
+  {
+    if (advertised_port == 0)
+      return std::nullopt; // not dialable
+    if (observed.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
+      return epee::net_utils::network_address{epee::net_utils::ipv4_network_address(
+        observed.as<epee::net_utils::ipv4_network_address>().ip(), advertised_port)};
+    if (observed.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
+      return epee::net_utils::network_address{epee::net_utils::ipv6_network_address(
+        observed.as<epee::net_utils::ipv6_network_address>().ip(), advertised_port)};
+    return std::nullopt;
+  }
+
+  bool is_filtered_command(const epee::net_utils::network_address& address, int command)
     {
         switch (command)
         {

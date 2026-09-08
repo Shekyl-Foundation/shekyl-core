@@ -77,7 +77,6 @@ for offset in $(seq 0 $((COUNT - 1))); do
     echo "rpc-bind-ip=127.0.0.1"
     echo "rpc-bind-port=$rpc"
     echo "no-igd=1"
-    echo "hide-my-port=1"
     if [ "$ROLE" = anon ]; then
       # 12 is F-8b's floor. Below it the daemon REFUSES to start rather than
       # clamping — confirmed by walking into it: "--tx-proxy outbound count 10

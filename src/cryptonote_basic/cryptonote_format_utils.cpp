@@ -28,6 +28,8 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+#include <algorithm>
+#include <sstream>
 #include <atomic>
 #include "common/string_util.h"
 #include "wipeable_string.h"
@@ -452,6 +454,27 @@ namespace cryptonote
     return r;
   }
   //---------------------------------------------------------------
+  // A malformed `tx_extra` is attacker-supplied, and since CEN-I19's shape
+  // check runs at admission it reaches this parser once per relayed
+  // transaction. Echoing the whole blob back into the log is therefore an
+  // amplification: MAX_TX_EXTRA_SIZE is 24576 bytes, so a hex dump is 48 KB of
+  // log per rejected transaction per peer, at a level that is on by default.
+  // Describe the blob instead — its length, where parsing stopped, and a
+  // bounded head sample, which is what a reader needs to recognise the shape —
+  // and leave the full bytes to whoever holds the transaction.
+  static std::string describe_tx_extra(const std::vector<uint8_t>& tx_extra, size_t failed_at)
+  {
+    static constexpr size_t SAMPLE_BYTES = 32;
+    const size_t n = std::min(SAMPLE_BYTES, tx_extra.size());
+    std::ostringstream oss;
+    oss << tx_extra.size() << " bytes, stopped at offset " << failed_at << ", first " << n
+        << " bytes: " << string_tools::buff_to_hex_nodelimer(
+             std::string(reinterpret_cast<const char*>(tx_extra.data()), n));
+    if (n < tx_extra.size())
+      oss << "…";
+    return oss.str();
+  }
+  //---------------------------------------------------------------
   bool parse_tx_extra(const std::vector<uint8_t>& tx_extra, std::vector<tx_extra_field>& tx_extra_fields)
   {
     tx_extra_fields.clear();
@@ -465,10 +488,10 @@ namespace cryptonote
     {
       tx_extra_field field;
       bool r = ::do_serialize(ar, field);
-      CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to deserialize extra field. extra = " << string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size())));
+      CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
       tx_extra_fields.push_back(field);
     } while (!ar.eof());
-    CHECK_AND_NO_ASSERT_MES_L1(::serialization::check_stream_state(ar), false, "failed to deserialize extra field. extra = " << string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size())));
+    CHECK_AND_NO_ASSERT_MES_L1(::serialization::check_stream_state(ar), false, "failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
 
     return true;
   }
@@ -507,7 +530,7 @@ namespace cryptonote
       bool r = ::do_serialize(ar, field);
       if (!r)
       {
-        MWARNING("failed to deserialize extra field. extra = " << string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size())));
+        MWARNING("failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
         if (!allow_partial)
           return false;
         break;
@@ -517,7 +540,7 @@ namespace cryptonote
     } while (!ar.eof());
     if (!::serialization::check_stream_state(ar))
     {
-      MWARNING("failed to deserialize extra field. extra = " << string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size())));
+      MWARNING("failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
       if (!allow_partial)
         return false;
     }
@@ -650,11 +673,11 @@ namespace cryptonote
     {
       tx_extra_field field;
       bool r = ::do_serialize(ar, field);
-      CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to deserialize extra field. extra = " << string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size())));
+      CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
       if (std::visit([&type](const auto& x) -> bool { return typeid(x) != type; }, field))
         ::do_serialize(newar, field);
     } while (!ar.eof());
-    CHECK_AND_NO_ASSERT_MES_L1(::serialization::check_stream_state(ar), false, "failed to deserialize extra field. extra = " << string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size())));
+    CHECK_AND_NO_ASSERT_MES_L1(::serialization::check_stream_state(ar), false, "failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
     tx_extra.clear();
     std::string s = oss.str();
     tx_extra.reserve(s.size());
@@ -973,6 +996,39 @@ namespace cryptonote
     }
   }
   //---------------------------------------------------------------
+  //---------------------------------------------------------------
+  bool check_tx_extra_pqc_field_shape(const transaction& tx, std::string& reason)
+  {
+    std::vector<tx_extra_field> fields;
+    if (!parse_tx_extra(tx.extra, fields))
+    {
+      reason = "tx_extra does not parse; the PQC field shape cannot be established";
+      return false;
+    }
+    std::vector<size_t> kem_lens, leaf_lens;
+    for (const tx_extra_field& f : fields)
+    {
+      if (const auto* kem = std::get_if<tx_extra_pqc_kem_ciphertext>(&f))
+        kem_lens.push_back(kem->blob.size());
+      else if (const auto* leaf = std::get_if<tx_extra_pqc_leaf_hashes>(&f))
+        leaf_lens.push_back(leaf->blob.size());
+    }
+    // The rule's verdict AND its sentence come from shekyl-wire: the daemon
+    // logs what the rule says rather than re-deriving a second wording from
+    // the code, which would be two formatters to keep in step forever.
+    char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
+    const int32_t rc = shekyl_tx_extra_pqc_field_shape(tx.vout.size(),
+      kem_lens.empty() ? nullptr : kem_lens.data(), kem_lens.size(),
+      leaf_lens.empty() ? nullptr : leaf_lens.data(), leaf_lens.size(),
+      msg, sizeof(msg));
+    if (rc == SHEKYL_TX_EXTRA_PQC_SHAPE_OK)
+      return true;
+    msg[sizeof(msg) - 1] = '\0';
+    reason = msg[0] != '\0'
+      ? std::string(msg)
+      : ("tx_extra PQC field shape check failed with code " + std::to_string(rc));
+    return false;
+  }
   //---------------------------------------------------------------
   bool check_output_types(const transaction& tx, const uint8_t hf_version)
   {
