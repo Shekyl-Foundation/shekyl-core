@@ -1065,6 +1065,40 @@ split): producers and callers in one PR is the standing rule, and a
 `get_version` field with no consumer would be the very finding this round
 opened with, recreated.
 
+### `VC-2`'s pre-flight, pre-registered (rule 26)
+
+Rule 26 puts a pre-flight pass between design closure and production code.
+`VC-2`'s scope is registered here, before it starts, because both items below
+are ones a clean local run does not catch.
+
+**1. The version constant is read, not carried.** `VC-2`'s first act on its
+own tree is reading `CORE_RPC_VERSION_MINOR` from `dev` — not taking a number
+from this document, a commit message, or a conversation. `chain.rs:59-70`
+records what happened the last time two branches each wrote that line
+honestly and git merged them character-for-character, and the whole-chain
+delta test catches a taken number only **at merge**, which is late. The
+protective sequencing is therefore: merge this PR, cut `VC-2` from the merge
+commit, read the constant as the first act on that tree. It was 28 on `dev`
+at `38dfb8485`, and that sentence has a shelf life measured in hours, which
+is the reason it is written as a procedure rather than as a value.
+
+**2. The POD widening is the part where a green local suite proves little.**
+The chain-facts POD gains `nettype` and the genesis-hash bytes. It has layout
+twins and a round-trip pin, so `_test_fill` / `_rust_fill` and the seeded
+field indices move with it, and the **offset pins are re-derived, never
+edited** — an edited pin agrees with whatever the code now does, which is the
+one thing a pin must not do.
+
+**The evidence that counts is cross-language, and the reason is worth
+stating.** The failure mode is an ABI disagreement between two halves that
+were **both built from the same tree**, so a Rust-only test and a C++-only
+test can each pass while the boundary is wrong: each half is self-consistent
+with its own idea of the layout. What discriminates is a value written by one
+half and read by the other through the real export, plus offsets re-derived
+from both sides and compared. `VC-2`'s pre-flight runs that before its
+handler code, and records the result in this section rather than in a commit
+message.
+
 ---
 
 ## 5. Rejected alternatives, in one place
