@@ -31,10 +31,15 @@
 //! against the other instead of agreeing with itself.
 //!
 //! The **live-oracle** spend KAT (a daemon-accepted spend captured off a
-//! running node) remains deferred on its named blocker — the FCMP++ spend
-//! path has not yet produced a daemon-accepted transaction to capture
-//! (`docs/FOLLOWUPS.md`). This pin is the struct-derived half: it binds the
-//! two implementations to each other, not yet to a chain.
+//! running node) is deferred on the capture, not on a builder. The blocker
+//! this comment used to name — "the FCMP++ spend path has not yet produced a
+//! daemon-accepted transaction to capture" — was unqualified and false:
+//! `e2e_fcmp_spend_accepted_by_daemon` has produced exactly that since
+//! PR #193 (2026-06-27). Note the distinction against the sibling comments in
+//! `fcmp_spend_e2e.rs` and `fcmp_spend_roundtrip.rs`, which say the **C++**
+//! spend path never produced one: that is still true, and is a different
+//! claim. This pin remains the struct-derived half — it binds the two
+//! implementations to each other, not yet to a chain (`docs/FOLLOWUPS.md`).
 
 mod common;
 use common::conforming_pqc_extra;

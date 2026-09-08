@@ -31,9 +31,17 @@
 //! multi-layer-tree spend and self-validates every field against the consensus
 //! verifier (`shekyl_fcmp::proof::verify`, CT balance, and the
 //! Bulletproof+) before round-tripping it through this serializer. There is no
-//! C++ spend oracle to capture: the daemon FCMP++ spend path never produced a
-//! daemon-accepted transaction, so the authoritative oracle is the Rust
-//! verifier itself, not a captured blob (see that test's module docs).
+//! **C++** spend oracle to capture — that path never produced a daemon-accepted
+//! transaction, and capturing its output would enshrine broken logic — so the
+//! authoritative oracle for *these vectors* is the Rust verifier itself.
+//!
+//! That reasoning is about the C++ path and remains correct; it does **not**
+//! mean no daemon-accepted spend exists. One has since PR #193 (2026-06-27):
+//! `e2e_fcmp_spend_accepted_by_daemon` builds a spend with the production
+//! `Engine` and a live `shekyld` accepts it. A live-oracle KAT captured from
+//! that run binds the serializer to a chain rather than only to the Rust
+//! verifier, which is a strictly stronger pin than this module currently
+//! carries (see that test's module docs and `docs/FOLLOWUPS.md`).
 //!
 //! ## Tag values
 //!
