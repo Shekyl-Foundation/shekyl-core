@@ -398,8 +398,14 @@ pub enum OperatorAlarm {
     /// stands — deliberately, since firing against a known-stale view is the
     /// failure the chain-progress tick base exists to prevent
     /// (`ENGINE_CADENCE_DRIVER.md` §2; an eclipsed staker auto-claiming
-    /// against an attacker's chain view is the named hazard). The remedy is
-    /// daemon-side: connectivity, sync, or the daemon process itself.
+    /// against an attacker's chain view is the named hazard).
+    ///
+    /// **Renderers name both candidate causes** (rule 82): this alarm cannot
+    /// distinguish "the chain stalled" from "this wallet's daemon is
+    /// unreachable or behind" — and the second is the far more likely one.
+    /// Lead with the actionable check: the daemon process, its connectivity,
+    /// and its sync state; a genuinely stalled chain is confirmable against
+    /// any other node.
     ChainProgressStalled {
         /// The last tip height the driver observed.
         last_height: u64,

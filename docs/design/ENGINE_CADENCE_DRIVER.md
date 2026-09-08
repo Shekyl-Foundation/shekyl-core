@@ -70,6 +70,21 @@ Refresh itself stays embedder-driven and on-demand. The driver does
 not subsume `start_refresh`, pscan, or the serving task; it is the
 **scheduler for the entry points that have none**.
 
+### Why a spawned task, not a tick method (the shape is forced)
+
+The first question a reviewer of the overturned policy asks is why
+the engine now owns a *task* instead of exposing a tick the embedder
+calls — so the answer is recorded. Exposing a tick **is** the refuted
+premise restated: `run_submit_lifecycle_tick` is exactly that shape,
+and it has zero callers. The other non-task shape — a pure `advance()`
+hung off an existing host loop — has no host: there is no push tip
+signal (the tip is polled), pscan runs only for stakers while leg 1
+must run for every wallet, and refresh is on-demand. No production
+loop exists that every wallet already runs, so the driver brings its
+own: a spawned task, `Weak` upgrade per tick, `CadenceHandle` per
+§"Ownership and close". The conclusion is forced by the survey
+findings, not preferred.
+
 ### Ownership and close
 
 WI-1's embedder-held-handles rule exists so `Arc::try_unwrap → close`
@@ -107,6 +122,19 @@ which covers the CLI). The GUI's `EngineSession` (separate repo)
 adopts on its next engine-core bump; until then it compiles against
 the old crate version, not a silent no-driver build.
 
+**Runtime context (decided here, not discovered in commit review):**
+`into_shared` is sync and spawns, so it requires an ambient tokio
+runtime. That is not a new constraint — `Engine` construction already
+spawns the key-engine and curve-tree actors, so every call site that
+holds an `Engine` to wrap is already inside a runtime. The
+implementation still asserts it by name:
+`tokio::runtime::Handle::try_current()` with an `expect` message that
+names `into_shared` and the requirement, so a non-runtime embedder
+fails with the named reason instead of a bare `tokio::spawn` panic.
+Rejected shapes: `async fn` (nothing is awaited; it would infect sync
+wrap sites for no benefit) and a `runtime::Handle` parameter
+(pre-provisioning; ambient context is the crate-wide convention).
+
 If making `into_shared` the *only* Arc mint proves too invasive for
 one PR (test embedders construct raw Arcs pervasively), the fallback
 is `into_shared` + a `#[cfg(not(test))]`-deprecated raw path — but the
@@ -141,7 +169,13 @@ The submit leg's escape horizon (`DAEMON_RE_RELAY_CUTOFF_SECONDS`,
 converted to ~540 blocks for intuition only) is measured against
 observed chain progress, not a free-running timer — the existing
 `WatchdogConfig::from_block_target` block-denominated conversion
-already has this shape and is kept.
+already has this shape and is kept. A consequence worth stating
+before a reviewer flags it: **the submit watchdog goes quiet exactly
+when the chain does.** That is correct, not the watchdog sleeping
+through its own failure mode — its horizons are progress-denominated,
+so nothing accrues against a held tx while nothing advances, and the
+stall itself is surfaced by the `ChainProgress` alarm rather than by
+legs firing against a stale view.
 
 **Tip source.** The driver reads the same daemon the engine holds
 (`self.daemon`), not a persona-isolated transport: the tick base is
@@ -167,6 +201,20 @@ assemblies; **ordering is the discipline, the generation check is the
 gate that can fail** (rule 47) — the implementation keeps the
 `SealAdmission::Stale` path testable, not vestigial.
 
+**User work always wins; the claim leg yields.** The generation gate
+answers only one direction of the race — the leg's assembly going
+stale. The other direction is worse: leg 3's snapshot-await-seal span
+racing a user-initiated build/submit, where a background claim that
+wins fails a foreground send with a staleness error the user did
+nothing to cause — a user-visible failure mode that does not exist
+today and must not be introduced by a maintenance driver. The ruling
+is asymmetric: the leg **skips its fire for the tick** when user
+build/submit work is in flight (try-acquire on the shared pending
+write lock; never queue against it), and `SealAdmission::Stale` is a
+normal outcome only on the leg's side. A background action never
+fails a foreground one. Tested in §7 as the mirror of the generation
+test.
+
 **Leg isolation: shared tick, not shared failure state.** A leg in
 backoff, or one that returns an error, or one that panics
 (`catch_unwind` at the leg boundary, panic → that leg parks with an
@@ -180,24 +228,43 @@ Calls `run_submit_lifecycle_tick` (F40 targeted re-scan + escape
 ladder over every held tx, resubmit-same-bytes, release on
 confirmed-absent). Runs for **every wallet**, staker or not — this is
 why the driver cannot ride pscan's end-of-sweep (pscan starts only
-for stakers). `signal_mempool_evicted` stays a
-mempool-monitor-shaped surface and is **not** this leg's job; the
+for stakers). `signal_mempool_evicted` is **not** this leg's job —
+its consumer of record is the Stage-4 `MempoolMonitorActor` (§6); the
 escape ladder's terminal probe already handles confirmed-absent.
 
-### Leg 2 — serving first-publish (bootstrap: run-once-until-success)
+### Leg 2 — serving liveness (predicate, every tick)
 
-For staker wallets whose serving obligation exists but whose serving
-task is not yet live (start failed at open, or Tor came up late): the
-leg retries `start_serving_if_staker` each tick until one attempt
-succeeds, then **unregisters itself** for the session. Two failure
-modes bracketed out: collapsing this into every-tick produces a retry
-storm against a broken Tor config; keeping today's one-shot means
-fire-once-and-never-recover with a wallet reopen as the remedy.
-Run-once-until-success is the middle: one attempt per chain-progress
-tick (natural backoff ≥ block cadence), alarm via the existing serving
-alarm surface on repeated failure, silent unregister on success. The
-one-attempt ruling inside `task.rs` (`§`"One attempt, deliberately")
-is **amended, not deleted**: one attempt per start call stays; the
+For staker wallets, the leg's predicate is **"a serving obligation
+exists AND the serving task is not live,"** evaluated every tick; when
+it holds, the leg makes one `start_serving_if_staker` attempt. The
+predicate is self-arming — no unregister, no session state — and one
+condition covers both the start that failed and the serving that
+started and later **died** (Tor drops, the task panics, the host loses
+its descriptor). An earlier draft had the leg retry until first
+success and then unregister for the session; that recovers only the
+failed start and reintroduces fire-once one level up — after a single
+success the leg is gone, and a died-later serving is back to
+wallet-reopen as the remedy, the exact failure this driver replaces.
+The predicate shape also makes the leg identical in kind to the
+others (evaluate every tick, may no-op), which keeps the registry
+uniform.
+
+Liveness is read from the serving task's posture channel
+(`ServingHandle::posture`): a dropped sender is a dead task. Restart
+makes the driver the natural owner of the *current* handle, so the
+`ServingHandle` parks with the driver rather than in
+`OpenTasks`; embedder shutdown order becomes cadence (which tears
+down any serving it holds, awaited, before exiting) → pscan,
+preserving today's serving-before-pscan property. wallet-rpc's
+fail-closed open is untouched: a staker whose serving path will not
+configure at open still does not open; the leg is the recovery for
+post-open death, not a relaxation of the open gate.
+
+One attempt per chain-progress tick gives natural backoff (≥ block
+cadence) with no retry storm against a broken Tor config; repeated
+failure alarms via the existing serving alarm surface. The
+one-attempt ruling inside `task.rs` (§"One attempt, deliberately") is
+**amended, not deleted**: one attempt per start call stays; the
 driver owns retry across calls.
 
 ### Leg 3 — per-epoch claim (every tick; may no-op)
@@ -233,8 +300,15 @@ Four comments defer claim scheduling to "the GF-4 seam"
 `stake_engine/claim.rs:56`, `stake_engine/handle.rs:319–320`; banner
 echo at `engine/mod.rs:216`). GF-4's grading concern (cadence graded
 jointly with amount and holdings stratum) resolved to **uniform,
-no-jitter, per-epoch** — a cadence identical across every wallet
-carries no per-wallet signal to grade. The comments are rewritten to
+no-jitter, per-epoch** — stated precisely, because the claim has two
+layers that must not be conflated. The **schedule** is uniform: every
+wallet evaluates at every settlement close, and "no jitter" means no
+deliberate randomized delay, not synchronized submission — actual
+submission spreads across each wallet's 60 s poll phase plus
+propagation, which is acceptable and mildly helpful. The **inclusion
+decision** is value-conditional and therefore weakly observable; that
+is the stated concession below, not part of the uniformity claim.
+The comments are rewritten to
 name this driver as the scheduler (rule 16's
 comment-that-outlived-its-architecture: the mechanism they defer to is
 now built, so reasoning *from* its absence is invalidated).
@@ -277,7 +351,11 @@ the assembly result.
   claimed epochs {E..E+k} in one transaction. This is a weak signal
   (it reveals fee-policy bucketing, which is uniform by construction)
   and is accepted; recorded here so it is a decision, not an
-  oversight.
+  oversight. One more expected behavior, stated so it is not read as
+  a violation of uniform-on-close: a wallet closed for months claims
+  its whole backlog on the first post-open tick that observes settled
+  epochs, not retroactively at each close. Harmless — a serving
+  persona's liveness is already public.
 
 ### Failure surfacing (rule 82)
 
@@ -292,14 +370,32 @@ the assembly result.
 
 ## 5. Alarms
 
-`shekyl-operator-alarm` gains one condition family (exact naming at
-implementation): `ChainProgress` (no observed tip advance past the
-watchdog horizon; clears on advance) and an epoch-claim arm
-(epoch-unclaimed-after-N / forfeited-underwater). Neither maps onto
-an existing condition — `ServeSetIntegrity` / `ServingDiskHeadroom` /
-`TransportLiveness` / `VanguardIntegrity` are all serving-side. WI-3's
-stall alarms (today `tracing::error` only) are out of scope here; a
-FOLLOWUPS row already tracks promoting them.
+Named here per rule 05 (landed as implementation commit 1, so this
+section and the crate cannot drift). `shekyl-operator-alarm` gains:
+
+- `AlarmCondition::ChainProgress` —
+  `OperatorAlarm::ChainProgressStalled { last_height,
+  stalled_for_secs }`; clears on the next observed advance. The alarm
+  cannot distinguish "the chain stalled" from "this wallet's daemon is
+  unreachable or behind," and the second is the more likely cause —
+  the variant doc instructs renderers to name **both** and the
+  daemon-side remedy first (rule 82: say what the operator can act
+  on).
+- `AlarmCondition::EpochClaim` — `OperatorAlarm::EpochUnclaimed
+  { oldest_epoch, outstanding_epochs }`; faults only — value-deferred
+  epochs are policy, not backlog, and do not raise it.
+- `AlarmCondition::ClaimForfeiture` — `OperatorAlarm::ClaimForfeited
+  { epoch, forfeited_atomic }`; its own condition so the forfeit
+  record coexists with a live claim backlog. `Episode` lifetime; its
+  non-durability across restart is a named FOLLOWUPS row
+  ("Forfeited-claim record does not survive a wallet restart",
+  pre-genesis).
+- `DisarmedReason::DriverLegParked` — §3's panic-parking rendering.
+
+None of these maps onto an existing condition — `ServeSetIntegrity` /
+`ServingDiskHeadroom` / `TransportLiveness` / `VanguardIntegrity` are
+all serving-side. WI-3's stall alarms (today `tracing::error` only)
+are out of scope here; a FOLLOWUPS row already tracks promoting them.
 
 ## 6. What this driver does not do
 
@@ -308,9 +404,16 @@ FOLLOWUPS row already tracks promoting them.
   WI-3 dispatch tick (bond-post due-check, reservation settle). The
   cadence driver does not duplicate WI-3's legs; they compose through
   the shared pending file + `pending_write_lock`, same as today.
-- **Mempool monitoring.** `signal_mempool_evicted` keeps its named
-  future consumer (a mempool monitor); the driver does not poll the
-  mempool.
+- **Mempool monitoring.** The driver does not poll the mempool.
+  `signal_mempool_evicted`'s consumer of record is the Stage-4
+  `MempoolMonitorActor`
+  (`docs/completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md` §5.6.10 G1;
+  FOLLOWUPS row "`MempoolMonitorActor` consumer actor", pre-genesis,
+  blocked on the Stage 4 actor migration) — cited concretely because
+  "a mempool monitor" without the citation is the R-1 shape this
+  workstream exists to close. The trait method's `V3.x` allow-comment
+  fossil is retagged to this record in this design round (rule 15:
+  `V3.x` is not a target).
 - **Unbond scheduling.** `unbond_dispatch` is a request path
   (immediate submit) and stays one.
 
@@ -320,13 +423,27 @@ FOLLOWUPS row already tracks promoting them.
   source: fires only on height advance; watchdog alarm on stall +
   clear on resume; leg order (retire before assemble) asserted via
   recording legs; leg isolation (a panicking leg parks, others fire).
+- Leg-4 slot: registered **and invoked** each tick (recording legs
+  prove invocation). An empty leg that no-ops is otherwise
+  indistinguishable from a leg never registered — the failure class
+  this workstream exists to close — so the body must land into proven
+  wiring.
 - Claim-leg policy tests on the armed `SHEKYL_SETTLEMENT_EPOCH_BLOCKS
   = 2` override: no-op tick, value-defer accumulation across closes,
   clear-the-floor fire, evaluate-and-forfeit at the window floor
-  (forfeit alarm carries the amount), no-jitter determinism.
+  (forfeit alarm carries the amount), and **policy determinism**: a
+  given tip + held set yields the same inclusion decision on every
+  wallet — the uniformity §4 actually claims. Timing is deliberately
+  not asserted; production spreads submission across poll phase, so a
+  "no-jitter timing" test would pin a property production does not
+  have.
 - Generation backstop: a test that retires a reservation between a
   claim leg's snapshot and seal and asserts `SealAdmission::Stale` —
   the gate must be able to fail (rule 47).
+- Its mirror (§3 "user work always wins"): a user build/submit in
+  flight across a claim-leg tick — assert the leg **skipped** and the
+  user path completed. A background claim must never fail a
+  foreground send.
 - Wrap-point test: `into_shared` spawns the driver; dropping the
   handle cancels the task; engine close is not blocked by the driver
   (`Weak` upgrade failure exits the loop).
@@ -334,18 +451,23 @@ FOLLOWUPS row already tracks promoting them.
 
 ## 8. Implementation checklist (one PR, ordered commits)
 
-1. `shekyl-operator-alarm`: chain-progress + epoch-claim conditions.
+1. `shekyl-operator-alarm`: chain-progress + epoch-claim conditions
+   (§5's named surface).
 2. Driver skeleton in `engine/cadence.rs`: loop, tip poll, watchdog,
    leg registry, isolation, `CadenceHandle`; leg 4 empty slot with
-   FOLLOWUPS citation.
-3. Leg 1 wiring (`run_submit_lifecycle_tick`); delete the
+   FOLLOWUPS citation and the §7 registered-and-invoked test.
+3. `Engine::into_shared`; wallet-rpc `wrap_and_start_tasks` adopts;
+   `OpenTasks` gains the cadence handle; shutdown order. Ordered
+   directly after the skeleton so every subsequent leg commit lands
+   into a driver production already starts — legs land observable,
+   not into wiring nothing exercises.
+4. Leg 1 wiring (`run_submit_lifecycle_tick`); delete the
    "cadence is the embedding runtime's" doc claim (premise refuted).
-4. Leg 2 bootstrap; amend the one-shot ruling text in `task.rs`.
-5. Value floor constant in `shekyl-economics`; value-defer in
-   assembly (`value_deferred` sibling); leg 3 + evaluate-and-forfeit;
-   un-GF-4 the four comments.
-6. `Engine::into_shared`; wallet-rpc `wrap_and_start_tasks` adopts;
-   `OpenTasks` gains the cadence handle; shutdown order.
+5. Leg 2 predicate; amend the one-shot ruling text in `task.rs`;
+   `ServingHandle` ownership moves `OpenTasks` → driver.
+6. Value floor constant in `shekyl-economics`; value-defer in
+   assembly (`value_deferred` sibling); leg 3 + evaluate-and-forfeit
+   + user-work-yield; un-GF-4 the four comments.
 7. Docs: this banner → implemented; index row; FOLLOWUPS (repair the
    truncated "Emission-claim retire/resubmit driver legs" title while
    editing); `USER_GUIDE.md` rewards sentence; CHANGELOG (user-visible:
