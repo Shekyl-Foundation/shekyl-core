@@ -144,7 +144,7 @@ pub(crate) struct EconomicsParametersSnapshot {
     pub emission_speed_factor: u8,
 
     /// Total coin supply ceiling in atomic units (`2^32 · 10^9`).
-    pub money_supply_atomic: u64,
+    pub emission_curve_asymptote_atomic: u64,
 
     /// Tail subsidy floor per minute in atomic units (300_000_000;
     /// the JSON authority, not the Monero-era `3 × 10¹¹` reference in

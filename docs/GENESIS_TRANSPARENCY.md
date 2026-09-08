@@ -49,6 +49,15 @@ COIN = 10^12                 // 12-decimal precision
 CRYPTONOTE_DISPLAY_DECIMAL_POINT = 12
 ```
 
+> **Naming note (FL-R15).** The constant names in the block above are the
+> ones the *original chain* shipped, and are recorded here as such. In the
+> Shekyl tree the first has since been renamed to
+> `SHEKYL_EMISSION_CURVE_ASYMPTOTE` (`emission_curve_asymptote` in
+> `config/economics_params.json`) — because under the perpetual tail it is
+> the emission curve's asymptote, not a supply ceiling. Grepping the tree
+> for `MONEY_SUPPLY` will find nothing; this section is history, not a
+> pointer to live code.
+
 In CryptoNote-family code, `MONEY_SUPPLY` is expressed in **atomic units**.
 With 12-decimal precision, the effective whole-coin supply ceiling was:
 

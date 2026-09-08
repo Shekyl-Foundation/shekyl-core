@@ -154,7 +154,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         burn_base_rate: sim.burn_base_rate,
         burn_cap: sim.burn_cap,
         staker_pool_share: sim.staker_pool_share,
-        money_supply: sim.money_supply,
+        emission_curve_asymptote: sim.emission_curve_asymptote,
         emission_speed_factor_per_minute: sim.emission_speed_factor_per_minute,
         final_subsidy_per_minute: sim.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,

@@ -26,7 +26,7 @@
 
 use serde::Serialize;
 
-use crate::params::MONEY_SUPPLY;
+use crate::params::EMISSION_CURVE_ASYMPTOTE;
 
 /// Structural-invariant failure from [`ActivityMetric::new`].
 ///
@@ -39,14 +39,14 @@ use crate::params::MONEY_SUPPLY;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ActivityInvariantViolation {
     /// `circulating_supply` exceeds the hard coin-supply ceiling
-    /// ([`MONEY_SUPPLY`]) — no chain state can have emitted more than
+    /// ([`EMISSION_CURVE_ASYMPTOTE`]) — no chain state can have emitted more than
     /// the total supply.
-    #[error("circulating_supply {circulating_supply} exceeds MONEY_SUPPLY {money_supply}")]
+    #[error("circulating_supply {circulating_supply} exceeds EMISSION_CURVE_ASYMPTOTE {emission_curve_asymptote}")]
     CirculatingExceedsSupply {
         /// The offending `circulating_supply`.
         circulating_supply: u64,
         /// The configured supply ceiling.
-        money_supply: u64,
+        emission_curve_asymptote: u64,
     },
 
     /// `total_staked` exceeds `circulating_supply` — more coin cannot be
@@ -121,10 +121,10 @@ impl ActivityMetric {
         total_staked: u128,
         as_of_height: u64,
     ) -> Result<Self, ActivityInvariantViolation> {
-        if circulating_supply > MONEY_SUPPLY {
+        if circulating_supply > EMISSION_CURVE_ASYMPTOTE {
             return Err(ActivityInvariantViolation::CirculatingExceedsSupply {
                 circulating_supply,
-                money_supply: MONEY_SUPPLY,
+                emission_curve_asymptote: EMISSION_CURVE_ASYMPTOTE,
             });
         }
         if total_staked > u128::from(circulating_supply) {
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn new_rejects_circulating_over_supply() {
-        let err = ActivityMetric::new(0, MONEY_SUPPLY + 1, 0, 10).unwrap_err();
+        let err = ActivityMetric::new(0, EMISSION_CURVE_ASYMPTOTE + 1, 0, 10).unwrap_err();
         assert!(matches!(
             err,
             ActivityInvariantViolation::CirculatingExceedsSupply { .. }

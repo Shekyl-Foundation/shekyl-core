@@ -66,7 +66,7 @@
 //! | 25     | 8     | `burn_base_rate`                   | u64 LE              |
 //! | 33     | 8     | `burn_cap`                         | u64 LE              |
 //! | 41     | 8     | `staker_pool_share`                | u64 LE              |
-//! | 49     | 8     | `money_supply`                     | u64 LE              |
+//! | 49     | 8     | `emission_curve_asymptote`                     | u64 LE              |
 //! | 57     | 8     | `emission_speed_factor_per_minute` | u64 LE              |
 //! | 65     | 8     | `final_subsidy_per_minute`         | u64 LE              |
 //! | 73     | 8     | `daa_target_seconds`               | u64 LE              |
@@ -121,7 +121,7 @@ fn canonical_preimage(params: &EconomicParams) -> [u8; DIGEST_PREIMAGE_LEN] {
     put(params.burn_base_rate);
     put(params.burn_cap);
     put(params.staker_pool_share);
-    put(params.money_supply);
+    put(params.emission_curve_asymptote);
     put(params.emission_speed_factor_per_minute);
     put(params.final_subsidy_per_minute);
     put(params.daa_target_seconds);
@@ -161,7 +161,7 @@ mod tests {
             burn_base_rate: 0x3132_3334_3536_3738,
             burn_cap: 0x4142_4344_4546_4748,
             staker_pool_share: 0x5152_5354_5556_5758,
-            money_supply: 0x6162_6364_6566_6768,
+            emission_curve_asymptote: 0x6162_6364_6566_6768,
             emission_speed_factor_per_minute: 0x7172_7374_7576_7778,
             final_subsidy_per_minute: 0x8182_8384_8586_8788,
             daa_target_seconds: 0x9192_9394_9596_9798,
