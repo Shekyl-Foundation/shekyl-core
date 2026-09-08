@@ -46,7 +46,7 @@ use shekyl_engine_core::engine::message_signing::{
 use crate::error::WalletRpcError;
 use crate::params::parse_required_object;
 use crate::tenant::{require_open_engine, TenantState};
-use crate::types::{capability_mode_str, SignMessageResult, Verified, VerifyMessageResult};
+use crate::types::{SignMessageResult, Verified, VerifyMessageResult};
 
 // ── Params (contract shapes) ─────────────────────────────────────────
 
@@ -79,12 +79,11 @@ pub(crate) async fn sign_message(
 
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
-    let capability = capability_mode_str(engine.capability());
 
     let signature = engine
         .sign_message(p.message.as_bytes())
         .await
-        .map_err(|e| map_sign_error(&e, capability))?;
+        .map_err(|e| map_sign_error(&e))?;
 
     serde_json::to_value(SignMessageResult { signature })
         .map_err(|e| WalletRpcError::InternalError(format!("serialize sign_message: {e}")))
@@ -178,17 +177,10 @@ fn map_sig_error(e: &MessageSigError) -> WalletRpcError {
 
 /// Map the Engine sign workflow's refusals onto the contract codes.
 ///
-/// Capability refusals reuse `-29005` with the open wallet's mode string
-/// (the proofs precedent); everything else is internal, with
-/// detail-bearing variants logged server-side and category-only on the
-/// wire (`message()` contract / rule 30).
-fn map_sign_error(e: &SignMessageError, capability: &str) -> WalletRpcError {
+/// Detail-bearing variants are logged server-side and category-only on
+/// the wire (`message()` contract / rule 30).
+fn map_sign_error(e: &SignMessageError) -> WalletRpcError {
     match e {
-        SignMessageError::ViewOnly | SignMessageError::HardwareOffload => {
-            WalletRpcError::CapabilityForbids {
-                capability: capability.to_owned(),
-            }
-        }
         // Terminal for the session, with its own user action (close and
         // reopen). Its own code, not `-32603`: the engine gave this
         // failure its own variant precisely because the remedy differs,
@@ -268,24 +260,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn capability_refusals_carry_the_open_mode() {
-        for e in [
-            SignMessageError::ViewOnly,
-            SignMessageError::HardwareOffload,
-        ] {
-            let err = map_sign_error(&e, "VIEW_ONLY");
-            assert_eq!(err.code(), WalletRpcErrorCode::CapabilityForbids);
-            assert_eq!(err.data().expect("data")["capability"], "VIEW_ONLY");
-        }
-    }
-
     /// The one sign failure with a different user action (close and
     /// reopen) keeps its own code on the wire — a client automating the
     /// remedy branches on `-29006`, never on English prose (rule 82).
     #[test]
     fn wallet_session_ended_gets_its_own_code() {
-        let err = map_sign_error(&SignMessageError::WalletSessionEnded, "FULL");
+        let err = map_sign_error(&SignMessageError::WalletSessionEnded);
         assert_eq!(err.code(), WalletRpcErrorCode::WalletSessionEnded);
         assert_eq!(err.code().as_i32(), -29006);
         assert!(
@@ -297,10 +277,9 @@ mod tests {
 
     #[test]
     fn sign_internal_failures_are_category_only() {
-        let err = map_sign_error(
-            &SignMessageError::Internal("/home/user/.shekyl/w.wallet: ENOSPC".into()),
-            "FULL",
-        );
+        let err = map_sign_error(&SignMessageError::Internal(
+            "/home/user/.shekyl/w.wallet: ENOSPC".into(),
+        ));
         assert_eq!(err.code(), WalletRpcErrorCode::InternalError);
         assert!(
             !err.message().contains("/home"),

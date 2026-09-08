@@ -1,9 +1,24 @@
 # Track-2 North Star — first daemon-accepted FCMP++ spend (SAL frontier)
 
-**Status:** Open — one localized fix from green. **Branch:** `feat/track2-northstar`
-(off `dev`, commit `23f853051`). **Parent:** [`TRACK2_REGTEST_PARITY.md`](TRACK2_REGTEST_PARITY.md).
-This is the executable brief for the remaining step; it can be handed to a fresh
-context. Read the "Bootstrap" section first.
+**Status: CLOSED — delivered 2026-06-27 by PR #193** (`1829a15d9e`, merging
+`feat/track2-northstar`). `e2e_fcmp_spend_accepted_by_daemon` builds a real
+FCMP++ spend with the production `Engine` and a live `shekyld` accepts it;
+re-verified green on 2026-09-07 against a daemon built from `fb06e1d2b`.
+**Parent:** [`TRACK2_REGTEST_PARITY.md`](../design/TRACK2_REGTEST_PARITY.md).
+
+> **This document is a record, not a brief.** Sections 3-6 and 10 below describe
+> a frontier that no longer exists and instructions for driving it green that
+> should not be followed; they are kept because the diagnosis they record is the
+> history of how the gate was closed. Nothing here is an open work item.
+>
+> **Why this banner matters more than the fix it announces.** For two and a half
+> months this file said *"Open — one localized fix from green"* about work that
+> had already merged, and four other surfaces read that banner rather than
+> [`CT5_SERIES_CLOSEOUT.md`](CT5_SERIES_CLOSEOUT.md), which recorded the same
+> work as delivered. Two `FOLLOWUPS.md` entries, a C++ test comment, and
+> `ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`'s build-gating clause all inherited a
+> blocker that did not exist — and one of them was gating another lane's start.
+> A status banner that outlives its merge does not sit still; it propagates.
 
 ---
 
@@ -138,9 +153,10 @@ guess.
 - Commit `23f853051` on `feat/track2-northstar` (async-API + retry fixes; its
   message documents this frontier).
 
-## 10. Start here
+## 10. Start here — *discharged*
 
-Re-run the north-star (§6), confirm it still fails at `OpenedInputTuple::open at
-input 0`, add the `(x, y, O)` dump for input 0, find which scanner-derived
-spend-key component fails `O = xG + yT`, fix the KeyEngine derivation, and drive it
-to a daemon-accepted spend.
+The instruction this section carried (re-run the north-star, confirm it still
+fails at `OpenedInputTuple::open at input 0`, fix the KeyEngine derivation, drive
+it to a daemon-accepted spend) was **carried out in PR #193**. It is retained to
+show what the closing step was, and must not be read as a next action: the gate
+it points at passes.

@@ -180,12 +180,9 @@ impl<
 
 /// Capability-bearing portion of the create-time parameters.
 ///
-/// V3.0 ships only the FULL variant. The view-only and
-/// hardware-offload constructors are deferred to a follow-up alongside
-/// the corresponding [`AllKeysBlob`] constructors in
-/// `shekyl-crypto-pq`; until they land, this enum has only the FULL
-/// arm and the lifecycle stubs return
-/// [`OpenError::CapabilityNotYetImplemented`].
+/// FULL is the only capability (rule 23; decision log 2026-09-07).
+/// The enum shape is kept because it is the create-side parse boundary
+/// a ratified future capability would join through.
 pub enum CapabilityInput<'a> {
     /// Spendable wallet. The wallet file persists the 64-byte master
     /// seed under the envelope; every open re-derives the spend / view

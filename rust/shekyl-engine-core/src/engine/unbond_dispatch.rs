@@ -358,20 +358,20 @@ where
         // Brief read: clone the actor handles + the ledger snapshot the
         // assembly needs (same discipline as submit_drain). The exit anchors
         // off the wallet's own synced tip, like a bond post.
-        let (daemon, stake, curve_tree, pending_write_lock, chain_tip, snapshot) = {
+        let (daemon, stake, curve_tree, pending_gate, chain_tip, snapshot) = {
             let g = self_arc.read().await;
             let stake = g.stake_handle().ok_or(UnbondRequestError::NotStaker)?;
             (
                 g.daemon().clone(),
                 stake,
                 g.curve_tree.clone(),
-                g.pending_write_lock.clone(),
+                g.pending_gate.clone(),
                 g.ledger.synced_height(),
                 g.ledger.snapshot(),
             )
         };
         let block_hash_at = move |h: u64| snapshot.block_hash_at(h);
-        let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
+        let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
         // Canonical P-lane floor fee — the shared single fee decision (doc
         // comment). BOTH halves stay typed through the `Fee` arm so the RPC

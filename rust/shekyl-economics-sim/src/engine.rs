@@ -1,10 +1,8 @@
 use serde::Serialize;
 use shekyl_economics::{
-    base_block_reward,
     burn::{calc_burn_pct_from_activity, compute_burn_split_at},
-    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
+    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
     params::{calc_stake_ratio, EconomicParams, SCALE},
-    release::apply_release_multiplier,
     split_block_emission, FrozenSegmentCount,
 };
 
@@ -115,7 +113,7 @@ pub struct ScenarioConfig {
 }
 
 pub struct SimParams {
-    pub money_supply: u64,
+    pub emission_curve_asymptote: u64,
     pub emission_speed_factor_per_minute: u64,
     pub final_subsidy_per_minute: u64,
     pub blocks_per_year: u64,
@@ -132,7 +130,7 @@ pub struct SimParams {
 impl Default for SimParams {
     fn default() -> Self {
         Self {
-            money_supply: 4_294_967_296_000_000_000,
+            emission_curve_asymptote: 4_294_967_296_000_000_000,
             emission_speed_factor_per_minute: 22,
             final_subsidy_per_minute: 300_000_000,
             blocks_per_year: 262_800,
@@ -161,7 +159,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         burn_base_rate: params.burn_base_rate,
         burn_cap: params.burn_cap,
         staker_pool_share: params.staker_pool_share,
-        money_supply: params.money_supply,
+        emission_curve_asymptote: params.emission_curve_asymptote,
         emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
         final_subsidy_per_minute: params.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
@@ -173,14 +171,14 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
     let total_blocks = params.blocks_per_year * config.sim_years;
 
     let mut already_generated: u128 =
-        (params.money_supply as f64 * config.initial_emitted_fraction) as u128;
+        (params.emission_curve_asymptote as f64 * config.initial_emitted_fraction) as u128;
     let mut total_burned: u128 = 0;
     let mut staker_emission_earned_year: u128 = 0;
     let mut staker_fee_earned_year: u128 = 0;
     let mut year_start_circulating: u128 = 0;
 
     let mut snapshots = Vec::new();
-    let money_supply = params.money_supply as u128;
+    let emission_curve_asymptote = params.emission_curve_asymptote as u128;
 
     for block in 0..total_blocks {
         let year = block / params.blocks_per_year;
@@ -192,11 +190,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             year_start_circulating = already_generated.saturating_sub(total_burned);
         }
 
-        let remaining = money_supply.saturating_sub(already_generated);
-        let base_reward =
-            base_block_reward(already_generated.min(u64::MAX as u128) as u64, &economic)
-                .expect("sim neutral trajectory stays within supply bounds");
-
+        let ag = already_generated.min(u64::MAX as u128) as u64;
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
         // Consensus burn-site circulating: prev-block `already_generated`
@@ -223,11 +217,8 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             params.release_max,
         );
 
-        let mut effective_reward = apply_release_multiplier(base_reward, multiplier);
-        let remaining_u64 = remaining.min(u64::MAX as u128) as u64;
-        if effective_reward > remaining_u64 {
-            effective_reward = remaining_u64;
-        }
+        let effective_reward = effective_emission(ag, tx_volume, &economic)
+            .expect("sim paid emission stays within the arithmetic domain");
 
         let emission_share = calc_effective_emission_share(
             block + config.genesis_height_offset,
@@ -257,7 +248,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 tx_volume,
                 params.tx_volume_baseline,
                 circulating,
-                params.money_supply,
+                params.emission_curve_asymptote,
                 params.burn_base_rate,
                 params.burn_cap,
             ),
@@ -270,10 +261,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         let fee_split =
             compute_burn_split_at(total_fees, burn_pct, FrozenSegmentCount::ZERO, &economic);
 
-        already_generated += effective_reward as u128;
-        if already_generated > money_supply {
-            already_generated = money_supply;
-        }
+        already_generated += u128::from(effective_reward);
         total_burned += fee_split.actually_destroyed as u128;
 
         staker_emission_earned_year += staker_emission as u128;
@@ -281,7 +269,8 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
         if block_in_year == params.blocks_per_year - 1 || block == total_blocks - 1 {
             let circ_now = already_generated.saturating_sub(total_burned) as f64 / COIN;
-            let supply_emitted_pct = already_generated as f64 / money_supply as f64 * 100.0;
+            let supply_emitted_pct =
+                already_generated as f64 / emission_curve_asymptote as f64 * 100.0;
 
             let avg_block_reward = effective_reward as f64 / COIN;
 
@@ -339,7 +328,8 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
     ScenarioResult {
         name: config.name.clone(),
         description: config.description.clone(),
-        final_supply_emitted_pct: already_generated as f64 / money_supply as f64 * 100.0,
+        final_supply_emitted_pct: already_generated as f64 / emission_curve_asymptote as f64
+            * 100.0,
         final_total_burned: total_burned as f64 / COIN,
         stuffing_profitable: None,
         years: snapshots,
@@ -435,7 +425,10 @@ mod tests {
                 .expect("economics_params.json must be valid JSON");
         let p = SimParams::default();
 
-        assert_eq!(p.money_supply, cfg_u64(&cfg, "money_supply"));
+        assert_eq!(
+            p.emission_curve_asymptote,
+            cfg_u64(&cfg, "emission_curve_asymptote")
+        );
         assert_eq!(
             p.emission_speed_factor_per_minute,
             cfg_u64(&cfg, "emission_speed_factor_per_minute")

@@ -85,9 +85,11 @@ where
     /// the serving start follows the same rule rather than inventing a
     /// mid-session activation hook.
     ///
-    /// The returned [`ServingHandle`] is **embedder-held** for the wallet's open
-    /// lifetime, exactly as `PScanHandle` is, and shutting it down is what
-    /// unpublishes the onion in the right order.
+    /// The returned [`ServingHandle`] parks with the **engine cadence driver**
+    /// (`CadenceHandle::adopt_serving`) for the wallet's open lifetime: the
+    /// driver's serving-liveness leg restarts a dead task on the next chain
+    /// advance (`ENGINE_CADENCE_DRIVER.md` §3 leg 2), and the driver's
+    /// teardown is what unpublishes the onion in the right order.
     ///
     /// # Posture-blind by design
     ///
@@ -129,7 +131,11 @@ where
     /// [`ServingStartError`] — see its variants. Every arm except
     /// [`AlreadyRunning`](ServingStartError::AlreadyRunning) is fail-closed at
     /// open: a staker that cannot serve accrues misses toward a slash, and the
-    /// operator cannot see it happening.
+    /// operator cannot see it happening. `AlreadyRunning` is benign at every
+    /// call site: the serving slot guard is the single-flight arbiter between
+    /// the embedder's open-time start and the cadence driver's
+    /// serving-liveness leg, and losing it means the other starter won — one
+    /// host is up either way.
     pub async fn start_serving_if_staker(
         self_arc: std::sync::Arc<tokio::sync::RwLock<Self>>,
         daemon_address: &str,

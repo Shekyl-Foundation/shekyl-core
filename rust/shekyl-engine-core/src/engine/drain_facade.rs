@@ -51,6 +51,7 @@ use super::drain_orchestrator::DrainIntent;
 use super::drain_orchestrator::{DrainError, DrainOrchestrationError};
 use super::fee_policy::FeeEstimatorError;
 use super::pending::TxHash;
+use super::pending_post_gate::{ForegroundSession, UserPendingPost};
 use super::pscan::start::pending_post_store_for_engine;
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
@@ -297,11 +298,17 @@ where
         // Brief read: the stake handle (refuse a non-staker before any I/O),
         // a daemon clone for the fee quote, and the pending-post write lock
         // for the advisory in-flight read below.
-        let (daemon, stake, pending_write_lock) = {
+        let (daemon, stake, pending_gate) = {
             let g = self_arc.read().await;
             let stake = g.stake_handle().ok_or(DrainToPrincipalError::NotStaker)?;
-            (g.daemon().clone(), stake, g.pending_write_lock.clone())
+            (g.daemon().clone(), stake, g.pending_gate.clone())
         };
+        // User work always wins (`ENGINE_CADENCE_DRIVER.md` §3): register
+        // this user-initiated drain on the foreground gauge for its whole
+        // assemble→seal span, so the cadence driver's epoch-claim leg yields
+        // rather than racing it to the funding set.
+        let _foreground =
+            ForegroundSession::enter(UserPendingPost::DrainToPrincipal, &pending_gate);
 
         // Resolve the LIVE active persona from the actor's own state — the
         // type-level restriction: no caller-supplied slot exists to disagree
@@ -331,7 +338,7 @@ where
                 context: "persona identity",
                 detail: e.to_string(),
             })?;
-        let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
+        let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
         let already = store
             .read(|block| block.has_live_drain_for(&p_canonical_id))
             .await
@@ -584,10 +591,7 @@ mod tests {
         // seam would (persona-keyed record; the reservation is the record).
         let (stake, write_lock) = {
             let g = engine.read().await;
-            (
-                g.stake_handle().expect("staker"),
-                g.pending_write_lock.clone(),
-            )
+            (g.stake_handle().expect("staker"), g.pending_gate.clone())
         };
         let persona = stake
             .persona_canonical_id(PSlot::from_raw(3))

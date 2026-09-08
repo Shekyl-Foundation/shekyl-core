@@ -2,7 +2,133 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Staking rewards now claim automatically.** The engine runs a cadence
+  driver (`ENGINE_CADENCE_DRIVER.md`) that submits the emission-claim
+  transaction once each reward epoch settles — no manual step, and the
+  `claim`/`claim_rewards` RPC methods remain REJECTED in the wallet-RPC
+  contract. Rewards below the compiled-in fee floor
+  (`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`) are held and aggregated
+  until they cover the fee; anything still unclaimed at its claim-window
+  floor is evaluated once and forfeited loudly (operator alarm). A
+  background claim never contends with a user-initiated send: the claim
+  leg yields whenever user work holds the pending lock.
+- **Stuck-transaction watchdog and serving liveness run unattended.**
+  The same cadence driver fires the submit-lifecycle escape ladder on
+  chain progress (a pending transaction can no longer stall forever just
+  because no RPC poll arrived), re-arms hidden-service serving whenever
+  the obligation exists and the task is not live (covers both
+  failed-at-open and died-later), and raises a `ChainProgress` operator
+  alarm when the observed tip stops advancing — worded to cover both
+  "chain stalled" and "your daemon is unreachable."
+
+- **Wallet RPC liveness gate (`ci/wallet-rpc-liveness`).** Sibling of the
+  daemon's `ci/rpc-route-liveness`: `wallet_rpc.yaml`'s
+  `x-shekyl-method-registry` is now CI-enforced in both directions —
+  every SPECIFIED method has a dispatch arm and a production consumer
+  outside the server crate; every REJECTED/RESERVED method has no arm;
+  every arm has a registry row. The reverse direction is what turns
+  "`claim` stays REJECTED in the contract" from a note into an
+  invariant: a handler added while the registry still says refused now
+  fails CI instead of shipping. Grep-cheap (no toolchain), fails closed
+  on empty extraction (rule 47).
+
 ### Changed
+
+- **The daemon and the Rust port now admit the same `tx_extra` tag set, and an
+  unparseable `extra` is refused rather than skipped.** `shekyl-wire` had long
+  documented merge-mining (`0x03`) and "mysterious minergate" (`0xDE`) as
+  outside the Shekyl genesis grammar and rejected them, while the C++ parser
+  still accepted both. Two parsers disagreeing about which transactions exist
+  is the defect; both tags are now deleted from the C++ variant (rule 60),
+  along with the `add_aux_pow` RPC method that was `0x03`'s only producer, its
+  schema, dispatch entry and python client, and `merge_mining.{h,cpp}`. The
+  tag bytes stay retired in a comment so a future tag cannot reuse a meaning
+  older software would parse differently.
+
+  **`0x0B` was kept, and that is the finding.** The archival attestation tag
+  had been grouped with the other two as inherited dead code on a "no producer
+  found" basis. It has a live consensus reader deciding `headers_readable`
+  during attestation verification; what it lacks is a *producer*, which is an
+  unfinished feature, not legacy. Deleting it would have removed a consensus
+  reader. It is now modelled in `shekyl-wire` instead, and its missing
+  producer is filed on its own terms.
+
+  **What that unlocks.** With the tag sets equal,
+  `validate_context_free_pruned` no longer skips the CEN-I19 PQC field-shape
+  rule when `extra` fails to parse — a tolerance that existed only because
+  failing hard would once have refused transactions the daemon accepts. The
+  flip exposed a fixture that could never have existed: a two-output spend
+  whose `extra` was a truncated varint, which no parser accepted and which
+  survived only because the parse was conditional. The wallet scanner no
+  longer re-implements the tag grammar: `shekyl-scanner` parses `extra`
+  through `shekyl-wire`, so it cannot admit the retired tags or stop at a
+  genesis tag it does not consume.
+
+- **Wallet-envelope test vectors renamed by oracle tier; pinned vectors
+  rebuilt on a real derived address.** Per the new `50-testing.mdc`
+  vector-oracle rule (external / independent / self-pinned; only the
+  first two are KATs), the `WALLET_FILE_FORMAT_V1` sealed fixtures are
+  now named as the self-pinned drift tripwires they are, their
+  regenerator refuses to run without a decision-log citation
+  (`SHEKYL_PINNED_REGEN_DECISION`), and the published vectors under
+  `docs/test_vectors/WALLET_FILE_FORMAT_V1/` were regenerated so
+  `expected_classical_address` derives from the sealed seed and
+  `seed_format` is a production-valid wire byte. A true tier-2 KAT for
+  the §2.6 wrap-key derivation (raw HMAC per RFC 5869 against the
+  spec's byte-exact labels) lands alongside. Wire format unchanged.
+  (Decision log 2026-09-07.)
+
+- **Wallet capability collapsed to `FULL`-only; cold signing rejected
+  permanently.** The `ViewOnly` capability is REJECTED (no product use
+  case; FCMP++ has no view-key chain scan) and `HardwareOffload` is
+  DEFERRED with zero code symbols (the v1 layout was a guess against no
+  real device; the future layout will be designed against one). The
+  wallet envelope now seals and opens mode byte `0x01` only — bytes
+  `0x02`/`0x03` are RETIRED and `0x04` RESERVED in
+  `WALLET_FILE_FORMAT_V1.md` §2.3, all refused fail-closed as
+  `UnknownCapabilityMode` (new splice-tamper tests pin the refusal).
+  Cold signing (`export_unsigned` / `submit_signed` air-gap flow) is
+  rejected permanently, superseding the A4 post-genesis deferral: an
+  FCMP++ witness needs the live curve tree, so the offline half cannot
+  deliver the isolation it claims; cold storage is the seed phrase.
+  API deltas: wallet-RPC error `-29005` (`CAPABILITY_FORBIDS`) is
+  RETIRED — unreachable with one capability, the numeric code is never
+  reused; `wallet_rpc.yaml` gains a machine-readable
+  `x-shekyl-method-registry` (SPECIFIED / RESERVED / REJECTED per
+  method) and `x-shekyl-error-ranges`; the `capability` field on wallet
+  handle responses always reads `"FULL"`. Envelope wire format for
+  existing `FULL` wallets is unchanged. (Decision log 2026-09-07; rule
+  `23-disposition-visibility`.)
+
+- **`money_supply` is now `emission_curve_asymptote` — the name says what the
+  number is (FL-R15).** Under the perpetual tail signed as FL-R12′, gross
+  issuance passes `2³² · 10⁹` and keeps going: the accumulator runs *through*
+  that value rather than stopping at it. The old name asserted a ceiling the
+  code no longer enforces, and that mismatch is what produced FL-R16 — two of
+  the constant's four jobs turned out to be *assertions that the cap holds*.
+
+  **What changed, for anyone reading a config or a header.** The
+  `config/economics_params.json` key is `emission_curve_asymptote`; the
+  generated C++ macro is `SHEKYL_EMISSION_CURVE_ASYMPTOTE` (rule 93 prefix,
+  replacing the inherited unprefixed `MONEY_SUPPLY`); the Rust surface is
+  `EconomicParams::emission_curve_asymptote` /
+  `params::EMISSION_CURVE_ASYMPTOTE`. **Behaviour is unchanged** — the value,
+  the emission arithmetic, and the parameter digest are all identical, and the
+  economics simulator's `--fee-ladder` and `--stage2` reports are byte-for-byte
+  the same across the rename.
+
+  **If you have an out-of-tree `economics_params.json`**, rename the key: the
+  build fails loudly on a missing key rather than defaulting.
+
+- **`ActivityMetric::new` no longer rejects a supply past the asymptote
+  (FL-R16b).** The constructor validated `circulating_supply ≤ MONEY_SUPPLY`
+  as a structural invariant. That invariant is false under the perpetual tail —
+  a chain state past the asymptote is legitimate, not impossible — so the check
+  and its `CirculatingExceedsSupply` discriminator are removed. The remaining
+  structural invariants (`total_staked ≤ circulating_supply`, zero-at-genesis)
+  are unchanged.
 
 - **Peerlist trust is earned in-process: nothing restored from disk is
   trusted, and `--add-peer` is a candidate rather than a trusted peer.**
@@ -38,6 +164,75 @@
   had separate caps (1000 + 5000). One trust class means one cap, so a node
   saturating both now persists up to `P2P_LOCAL_GRAY_PEERLIST_LIMIT` rather
   than the sum; the entries dropped are the least recently seen.
+
+- **Block reward: one Rust owner, and the composition the FL round signed
+  (FL-R12′).** The paid reward is now
+  `max(M_r · curve(remaining), TAIL) · penalty(x)`, computed by
+  `shekyl-economics::paid_block_reward`; C++ marshals to it and computes
+  nothing. The ordering is the consensus-visible part: the release
+  multiplier applies to the **curve** and the tail floors the result (at a
+  perpetual tail there is nothing to pace, and a multiplied floor would pay
+  least exactly when fees are lowest), while the weight penalty applies to
+  the **paid quantity, after the floor** (composed before it, the penalty
+  would be dead at the tail permanently, and there is no post-tail era).
+
+- **The supply cap is retired and the accumulator runs through the
+  asymptote.** `already_generated_coins` no longer saturates at the
+  emission-curve asymptote — a past-asymptote state is a legitimate
+  perpetual-tail state rather than an error — which closes the divergence
+  where the estimator and the relay floor dead-lettered at exhaustion. The
+  persisted width stays `u64` (FL-R14), guarded by a build-time assertion
+  on the ≈89,750-year headroom.
+
+- **Fee ladder: three tiers, state-computed (FL-R17).** The daemon serves
+  `economy` / `standard` / `priority` from
+  `shekyl-economics::corrected_fee_ladder`, scaled by the whole
+  volume-dependent correction `C_q = Q_ceil((1−σ)·M_r/(1−b))` on the
+  M_r-neutral operand. The `Fh` main arm is unconditional (the inherited
+  surge discount is gone), and the served economy rung is clamped up to the
+  relay floor so a conforming wallet's quote can only err toward
+  acceptance. **Wire shape is unchanged** — the vector still carries four
+  slots, with slot 2 mirroring `standard` as a bridge until the RPC
+  cutover.
+
+- **The served correction carries no daemon-local state.** It is the plain
+  pow2 ceiling snap of the correction at the queried height, so every node
+  derives the same rate there; a restarted and a long-running daemon
+  cannot quote differently. The pow2-boundary hysteresis the design round
+  ruled is built and tested in `shekyl-economics` but is **not on the
+  served path yet**: a remembered value makes the rate depend on the
+  process's query history, and a one-step seed from the previous block
+  inverts it. FL-R3 rules that the band stays and is restored, via a
+  grid-anchored previous value that keeps it derivable from chain state;
+  that shape is a design change and lands in its own round. Until then
+  the served correction is the plain snap.
+
+- **Wallet fee-rate ceiling raised to a structural bound.**
+  `absolute_fee_rate_cap()` is now derived with every factor at its own
+  extreme (220,000,000 atomic/weight) instead of at the genesis point. The
+  previous 28,000,000 value sat **below honest daemon quotes** from about
+  year 3 and would have refused correct snapshots. The swept peaks are
+  91,000,000 at ≈ year 7 on the neutral accumulation and 98,000,000 at
+  ≈ year 8 on a dormant-then-busy trajectory — history matters, because a
+  slower-emitting past leaves a larger `R` at the same height. **Neither
+  is the reachable maximum**: arbitrary volume paths are uncountable, so
+  the sweep is a floor under the bound's adequacy, not a proof of
+  tightness. That is why the cap is structural rather than swept.
+
+### API
+
+- **`shekyl_block_reward` takes `tx_volume_avg`**, and the release
+  multiplier composes inside the one owner rather than being applied by the
+  caller; `shekyl_apply_release_multiplier` and
+  `shekyl_cap_reward_to_remaining_supply` are gone. New exports
+  `shekyl_fee_correction_quantized` and `shekyl_corrected_fee_ladder` carry
+  the ladder. `shekyl_corrected_fee_ladder` returns `0` on success, `-1`
+  for a null out-pointer, and `-2` for scalars the rungs cannot form in
+  128 bits — no chain state reaches the last one; it exists so a corrupt
+  caller gets a status instead of an abort across the ABI (rule 40).
+  `shekyl_fee_correction_quantized` is total.
+  `Blockchain::get_dynamic_base_fee_estimate_2021_scaling`
+  gains a `c_q` parameter.
 
 ### Removed
 
@@ -197,6 +392,48 @@
   the FCMP++ spend builder.
 
 ### Added
+
+- **A documentation claim audit, and the measurement that argued for it.**
+  PR #633 took thirteen review rounds. The first nine were reactive — a
+  reviewer found an instance, it was fixed, the next round found another of
+  the same class — and from round ten the author ran a mechanical claim check
+  before each push. That pass caught three defects no reviewer had filed (a
+  matrix row routed to a section that did not exist, a register that jumped
+  W-3 to W-6, a stated writer count gone stale), and the rounds after it found
+  only what it could not see. `scripts/ci/check_doc_claims.py` makes that
+  check a gate: a document **declares** which invariants it means to hold
+  (`<!-- claim-audit: series DRS-W -->` and five siblings) and the gate checks
+  exactly those. Declared rather than inferred, because the first cut inferred
+  them corpus-wide and reported **991 findings against a clean tree** — a gate
+  that unusable is convention theatre pointing the other way. Every extraction
+  distinguishes checked-and-passed from found-nothing-to-check and fails on the
+  second, and the pass line states the limit in its own output: it checks
+  numeric and structural claims against source, **not rationales** — four
+  premises refuted by review the same week would all have passed it green.
+  Its 81 failure paths and 24 negative controls are falsified by a committed,
+  runnable matrix (`check_doc_claims_falsification.py`) that builds a synthetic
+  corpus in a temp tree rather than mutating the repo, and which **measures
+  its own completeness**: every one of the gate's discrepancy, non-coverage and
+  refusal sites must be executed by some case, or the matrix fails. That sweep
+  found seven unexercised sites on its first run — including the wrong-commit
+  submodule branch, which no case reached at all. A ratchet in
+  `docs/ci/doc-claims-baseline.txt` holds live dead-citation debt monotone
+  downward and stops a document silently un-declaring a leg, because opt-in
+  without a ratchet is adoption theatre. Both legs assert against the **base
+  revision**: the figure otherwise travels in the same commit as the change it
+  constrains, so one edit could add rot and lift the bar to match, and the
+  registry records the full declaration (`series:DRS-W`, not `series`) so a
+  document holding two of one kind cannot drop either unnoticed — and the
+  registry line is itself base-checked, since dropping a declaration and
+  deleting the token recording it passes every single-tree check. A citation into a submodule that is
+  **not checked out** aborts the run and names the init command rather than
+  counting as rot: absence of the file is first evidence the *subject* is
+  absent, which is the misattribution the link gate makes in that same state.
+  First adopted by the P0b atomicity audit, where it immediately caught a live
+  defect: `V4_DESIGN_NOTES.md` still restated the finding range with its old
+  upper bound after the register had grown past it. It then caught one in
+  itself — the ratchet's own baseline had been measured in a worktree with a
+  submodule absent, and CI went red on the first push.
 
 - **DRS-P0b — the atomicity audit covers the store that exists.** The
   April 2026 `LMDB_WRITE_ATOMICITY_AUDIT.md` was a PASS doing work it was

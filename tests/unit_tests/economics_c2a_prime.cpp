@@ -77,14 +77,11 @@ TEST(EconomicsC2aPrime, Layer1SubsidyWithReleaseCallPathMatchesFfiPrimitives) {
         1,
         SHEKYL_TX_VOLUME_BASELINE));
 
+    // FL-R12': the release multiplier composes INSIDE the one owner
+    // (shekyl_block_reward); at baseline volume it is exactly 1, so the
+    // M_r-neutral cross-check is the base primitive directly.
     const uint64_t rust_base = shekyl_base_block_reward(already_generated);
-    const uint64_t mult = shekyl_calc_release_multiplier(
-        SHEKYL_TX_VOLUME_BASELINE,
-        SHEKYL_TX_VOLUME_BASELINE,
-        SHEKYL_RELEASE_MIN,
-        SHEKYL_RELEASE_MAX);
-    const uint64_t rust_full = shekyl_apply_release_multiplier(rust_base, mult);
-    EXPECT_EQ(cpp_reward, rust_full) << "already_generated=" << already_generated;
+    EXPECT_EQ(cpp_reward, rust_base) << "already_generated=" << already_generated;
   }
 }
 
@@ -148,11 +145,6 @@ TEST(EconomicsC2aPrime, Layer1PerQuantityCallPathComposesSplitAndCoinbase) {
 TEST(EconomicsC2aPrime, Layer2FullEmissionAccumulationCallPathMatchesFfiPrimitive) {
   uint64_t ag_cpp = 0;
   uint64_t ag_rust = 0;
-  const uint64_t mult = shekyl_calc_release_multiplier(
-      SHEKYL_TX_VOLUME_BASELINE,
-      SHEKYL_TX_VOLUME_BASELINE,
-      SHEKYL_RELEASE_MIN,
-      SHEKYL_RELEASE_MAX);
 
   for (unsigned height = 0; height < 1000; ++height) {
     uint64_t q_sub = 0;
@@ -164,12 +156,14 @@ TEST(EconomicsC2aPrime, Layer2FullEmissionAccumulationCallPathMatchesFfiPrimitiv
         1,
         SHEKYL_TX_VOLUME_BASELINE));
 
-    const uint64_t rust_base = shekyl_base_block_reward(ag_rust);
-    const uint64_t q_rust = shekyl_apply_release_multiplier(rust_base, mult);
+    // FL-R12': multiplier inside the one owner; 1 at baseline.
+    const uint64_t q_rust = shekyl_base_block_reward(ag_rust);
     ASSERT_EQ(q_sub, q_rust);
 
-    ag_cpp = std::min<uint64_t>(MONEY_SUPPLY, ag_cpp + q_sub);
-    ag_rust = std::min<uint64_t>(MONEY_SUPPLY, ag_rust + q_rust);
+    // No asymptote clamp (FL-R12': the accumulator passes through it;
+    // these 1000 blocks never approach it anyway).
+    ag_cpp += q_sub;
+    ag_rust += q_rust;
   }
 
   EXPECT_EQ(ag_cpp, ag_rust);
@@ -187,8 +181,8 @@ TEST(EconomicsC2aPrime, Layer2MinerOnlyAccumulationDiffersFromFullEmission) {
     const shekyl::EmissionSplit split =
         shekyl::compute_emission_split(q_sub, height, 0);
 
-    ag_full = std::min<uint64_t>(MONEY_SUPPLY, ag_full + q_sub);
-    ag_miner = std::min<uint64_t>(MONEY_SUPPLY, ag_miner + split.miner_emission);
+    ag_full = std::min<uint64_t>(SHEKYL_EMISSION_CURVE_ASYMPTOTE, ag_full + q_sub);
+    ag_miner = std::min<uint64_t>(SHEKYL_EMISSION_CURVE_ASYMPTOTE, ag_miner + split.miner_emission);
   }
 
   EXPECT_LT(ag_miner, ag_full);
@@ -216,7 +210,7 @@ TEST(EconomicsC2aPrime, Layer2MinerOnlyAccumulationDiffersFromFullEmission) {
 //
 // DERIVATION (two independent sources, required to agree). The expected values
 // were computed in arbitrary-precision integer arithmetic from the documented
-// formula — base = max((MONEY_SUPPLY - ag) >> esf, tail) with esf = 21 and
+// formula — base = max((SHEKYL_EMISSION_CURVE_ASYMPTOTE - ag) >> esf, tail) with esf = 21 and
 // tail = 600000000 for the 120 s DAA target, then
 // reward = base * (2m - c) * c / m / m — and are asserted here against the
 // C++ implementation. They are NOT transcribed from C++ output: if the

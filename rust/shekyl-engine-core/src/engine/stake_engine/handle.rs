@@ -316,8 +316,9 @@ impl StakeEngineHandle {
 
     /// Assemble the full, broadcast-ready emission-claim transaction
     /// ([`AssembleEmissionClaim`]) — the emission sibling of the bond
-    /// assembly path. Return-bytes-only: broadcast timing is the GF-4
-    /// dispatch seam, outside this builder.
+    /// assembly path. Return-bytes-only: broadcast timing is the cadence
+    /// driver's epoch-claim leg (through the `claim_dispatch` seam),
+    /// outside this builder.
     pub(crate) async fn assemble_emission_claim(
         &self,
         msg: AssembleEmissionClaim,

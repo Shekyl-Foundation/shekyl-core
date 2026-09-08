@@ -53,9 +53,10 @@ use super::types::*;
 ///
 /// No [`PersistedBondTicket`](crate::engine::stake_persist::PersistedBondTicket) and
 /// no entry-seam plan: the claim consumes no funding-entry seam (the bond is
-/// already on-chain), and claim-broadcast timing is the GF-4 dispatch seam,
-/// deliberately outside this builder (same return-bytes-only posture as the
-/// bond path).
+/// already on-chain), and claim-broadcast timing belongs to the cadence
+/// driver's epoch-claim leg (through the `claim_dispatch` seam,
+/// `ENGINE_CADENCE_DRIVER.md` §4), deliberately outside this builder (same
+/// return-bytes-only posture as the bond path).
 ///
 /// Assembly order is forced by the F-C1c hash structure (verified at
 /// `blockchain.cpp:3857-3868`): fee inputs + vouts + extra → **signable
@@ -76,6 +77,14 @@ pub(crate) struct AssembleEmissionClaim {
     pub operands: ClaimOperands,
     /// The curve-tree reference context all paths were assembled against.
     pub tree_ctx: TreeContext,
+    /// The §4 value floor the assembly's Σreward must clear
+    /// (`ENGINE_CADENCE_DRIVER.md`): the sole production sender — the
+    /// claim orchestrator — passes
+    /// [`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`]; a message field
+    /// rather than a handler constant for the same reason
+    /// `assemble_claims` takes its size budget — so the gate is testable
+    /// at exact boundaries without scaling the differential fixtures.
+    pub fee_floor: u64,
 }
 
 /// Reply of [`AssembleEmissionClaim`]: the persona-bound wire bytes (minted
@@ -150,7 +159,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
                     "emission claim derivation: window epochs not selected"
                 );
             }
-            assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET)?
+            assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, msg.fee_floor)?
         };
         let total_reward = claims.total_reward;
 

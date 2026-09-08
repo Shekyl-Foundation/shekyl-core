@@ -188,17 +188,25 @@ pub struct HardForkInfoResponse {
 
 /// Which tier of the dynamic fee estimate a caller wants.
 ///
-/// The 2021 scaling derivation produces four tiers — Fl, Fn, Fm, Fh — and the
-/// wire has always carried them as a bare array, so the tier a caller meant
-/// lived in an index. Naming them is what stops `fees[3]` being reachable by
+/// The wire carries FOUR SLOTS but only THREE PRICED TIERS. FL-R17 signed
+/// three (economy / standard / priority) and RK-5 keeps the vector four
+/// wide until the RPC cutover, so slot 2 — [`FeeTier::Medium`], the old
+/// `Fm` — is a BRIDGE that mirrors [`FeeTier::Normal`]. It is not a
+/// distinct rate and must not be priced as one.
+///
+/// The slots were always a bare array, so the tier a caller meant lived in
+/// an index. Naming them is what stops `fees[3]` being reachable by
 /// position.
 ///
 /// These are the **derivation's** tiers, deliberately not the wallet's
 /// `FeePriority` (economy / standard / priority). Those are a UX policy that
 /// *maps onto* these — `economy = Low`, `standard = Normal`,
 /// `priority = High` — and collapsing the two vocabularies into one would bake
-/// a wallet policy into the daemon's wire contract. `Medium` currently has no
-/// consumer at all, which is only visible once the tiers have names.
+/// a wallet policy into the daemon's wire contract. That is a different
+/// collapse from the RK-5 bridge above: the bridge makes two SLOTS carry one
+/// rate on the wire, deliberately, so a wallet2-transliterated `Elevated`
+/// caller mapped to `Medium` pays the standard rate and stays inside the
+/// largest anonymity set rather than self-marking on a rung of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeeTier {
     Low,
@@ -209,11 +217,13 @@ pub enum FeeTier {
 
 /// The four fee tiers, in derivation order.
 ///
-/// A fixed array, so a reply carrying three tiers **fails to deserialize**
-/// rather than being read as a shorter answer. The four-ness lived in one
-/// C++ function (`get_dynamic_base_fee_estimate_2021_scaling`'s `resize(4)`)
-/// and nothing downstream asserted it; a derivation that returned three would
-/// otherwise have produced a silently wrong base fee.
+/// A fixed array of four SLOTS carrying three priced tiers (slot 2 is the
+/// RK-5 bridge, mirroring slot 1). Fixed, so a reply carrying three
+/// **fails to deserialize** rather than being read as a shorter answer.
+/// The four-ness lived in one C++ function
+/// (`get_dynamic_base_fee_estimate_2021_scaling`'s `resize(4)`) and nothing
+/// downstream asserted it; a derivation that returned three would otherwise
+/// have produced a silently wrong base fee.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct FeeTiers(pub [u64; 4]);

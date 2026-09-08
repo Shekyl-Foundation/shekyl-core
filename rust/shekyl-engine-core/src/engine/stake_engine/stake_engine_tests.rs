@@ -1363,6 +1363,12 @@ mod emission_claim_assembly {
                 handle: h,
                 operands,
                 tree_ctx,
+                // Value gate disabled: this differential's subject is the
+                // daemon-side wire re-derivation, not the §4 floor (the
+                // fixture-family rewards sit below the production floor by
+                // construction; the gate has its own boundary test in
+                // `emission_claim.rs`).
+                fee_floor: 0,
             })
             .await
             .expect("emission-claim assembly completes end-to-end");

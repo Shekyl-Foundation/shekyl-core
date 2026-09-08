@@ -1049,11 +1049,10 @@ impl WalletFile {
         self.network
     }
 
-    /// Capability profile of this wallet (`Full` / `ViewOnly` /
-    /// `HardwareOffload`). Decoded once at open/create time. Callers
-    /// driving UX should use [`Capability::can_spend_locally`] instead
-    /// of matching against `Capability::Full` directly, so future
-    /// capability variants do not silently disable the spend path.
+    /// Capability profile of this wallet. Always [`Capability::Full`] —
+    /// the only capability (rule 23; decision log 2026-09-07) — but
+    /// decoded through the typed parse boundary at open/create time so
+    /// "capability was validated" stays a type-level fact.
     pub fn capability(&self) -> Capability {
         self.capability
     }
@@ -1214,28 +1213,22 @@ fn is_cross_device_error(e: &io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN;
     use shekyl_engine_state::WalletLedger;
 
-    /// Build a reasonable `CreateParams`-input bundle. `view_sk`,
-    /// `ml_kem_dk`, `spend_pk` are arbitrary bytes: the envelope layer
-    /// does not interpret the capability content for VIEW_ONLY, so
-    /// this is sufficient for orchestrator-level tests. End-to-end
-    /// cryptographic correctness is covered by the envelope's own
-    /// tests.
+    /// Build a reasonable `CreateParams`-input bundle. `master_seed` is
+    /// arbitrary bytes: the envelope layer does not interpret the FULL
+    /// capability content beyond its length, so this is sufficient for
+    /// orchestrator-level tests. End-to-end cryptographic correctness
+    /// is covered by the envelope's own tests.
     struct Fixture {
-        view_sk: [u8; 32],
-        ml_kem_dk: [u8; ML_KEM_768_DK_LEN],
-        spend_pk: [u8; 32],
+        master_seed: [u8; 64],
         address: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
     }
 
     impl Fixture {
         fn new() -> Self {
             Self {
-                view_sk: [0x11; 32],
-                ml_kem_dk: [0x22; ML_KEM_768_DK_LEN],
-                spend_pk: [0x33; 32],
+                master_seed: [0x11; 64],
                 address: {
                     let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
                     a[0] = 0x01; // version byte
@@ -1245,10 +1238,8 @@ mod tests {
         }
 
         fn capability(&self) -> CapabilityContent<'_> {
-            CapabilityContent::ViewOnly {
-                view_sk: &self.view_sk,
-                ml_kem_dk: &self.ml_kem_dk,
-                spend_pk: &self.spend_pk,
+            CapabilityContent::Full {
+                master_seed_64: &self.master_seed,
             }
         }
 
@@ -1984,13 +1975,11 @@ mod tests {
         }
     }
 
-    /// 2i-errors / capability dispatch: a `ViewOnly` wallet (the
-    /// default fixture) must expose `Capability::ViewOnly` via the
-    /// accessor, and `can_spend_locally()` must return `false`. This
-    /// pins the contract that the FFI "should I show a send button?"
-    /// predicate relies on.
+    /// Capability accessor contract: a freshly created wallet exposes
+    /// `Capability::Full` (the only capability, rule 23) through the
+    /// typed accessor, alongside the other decoded-once metadata.
     #[test]
-    fn handle_exposes_view_only_capability_and_network() {
+    fn handle_exposes_capability_and_network() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("x.wallet");
         let fx = Fixture::new();
@@ -2001,25 +1990,11 @@ mod tests {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
             WalletFile::create(&params).expect("create")
         };
-        assert_eq!(handle.capability(), Capability::ViewOnly);
-        assert!(!handle.capability().can_spend_locally());
+        assert_eq!(handle.capability(), Capability::Full);
         assert_eq!(handle.network(), TEST_NETWORK);
         assert_eq!(handle.creation_timestamp(), 0x6000_0000);
         assert_eq!(handle.restore_height_hint(), 0);
         assert_eq!(handle.expected_classical_address()[0], 0x01);
-    }
-
-    /// Capability dispatch entry point: `can_spend_locally` must be
-    /// the single source of truth for "is this wallet allowed to
-    /// produce a signature on-device?" Future capability variants
-    /// (multisig quorum, offload devices, hardware signers) must
-    /// extend this predicate instead of forcing every call site to
-    /// pattern-match raw variants.
-    #[test]
-    fn can_spend_locally_is_the_dispatch_predicate() {
-        assert!(Capability::Full.can_spend_locally());
-        assert!(!Capability::ViewOnly.can_spend_locally());
-        assert!(!Capability::HardwareOffload.can_spend_locally());
     }
 
     /// 2k.2 contract: when `open` receives `SafetyOverrides::none()`

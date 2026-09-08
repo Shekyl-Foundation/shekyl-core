@@ -37,6 +37,7 @@ use shekyl_standoff::draw::bounded_uniform;
 use shekyl_types::{BlockHeight, PCanonicalId};
 use tokio_util::sync::CancellationToken;
 
+use crate::engine::pending_post_gate::PendingPostGate;
 use crate::engine::stake_timing::OsRngGapAdapter;
 
 #[cfg(feature = "gf7-hooks")]
@@ -87,26 +88,26 @@ pub(crate) trait PendingSealStore: Send + Sync + 'static {
 /// lock, because unlike the pscan seal this one legitimately has two
 /// writers.)
 ///
-/// **The lock is per-wallet, not per-instance.** It is injected as a shared
-/// [`Arc`] owned by the `Engine` (`pending_write_lock`), so the driver's
+/// **The lock is per-wallet, not per-instance.** It is injected as the
+/// engine-owned [`PendingPostGate`] (`pending_gate`), so the driver's
 /// store and the future WI-2 assemble path — which construct *independent*
 /// stateless [`PendingSealStore`] adapters over the same `.wallet.pending`
 /// file — still serialize against **one** mutex. Creating the lock inside
 /// `new` would give each writer its own, which is precisely the lost-update
 /// this discipline exists to forbid (assemble's append and the driver's
 /// transition both load, then the last save wins). Requiring the caller to
-/// pass the engine-held lock makes "one mutex per wallet" a construction
+/// pass the engine-held gate makes "one mutex per wallet" a construction
 /// invariant, not a convention.
 pub(crate) struct PendingPostStore<S> {
     seal: S,
-    write_lock: Arc<tokio::sync::Mutex<()>>,
+    gate: Arc<PendingPostGate>,
 }
 
 impl<S: PendingSealStore> PendingPostStore<S> {
     /// Wrap the sealed-block store in the locked write path, sharing the
-    /// engine-held `write_lock` (see the type docs: one mutex per wallet).
-    pub(crate) fn new(seal: S, write_lock: Arc<tokio::sync::Mutex<()>>) -> Self {
-        Self { seal, write_lock }
+    /// engine-held gate (see the type docs: one mutex per wallet).
+    pub(crate) fn new(seal: S, gate: Arc<PendingPostGate>) -> Self {
+        Self { seal, gate }
     }
 
     /// Read the current block under the lock (a serialized snapshot; no
@@ -116,7 +117,7 @@ impl<S: PendingSealStore> PendingPostStore<S> {
         &self,
         f: impl FnOnce(&PendingPostBlock) -> R,
     ) -> Result<R, S::Error> {
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.gate.lock().await;
         let block = self
             .seal
             .load()
@@ -135,7 +136,7 @@ impl<S: PendingSealStore> PendingPostStore<S> {
         &self,
         f: impl FnOnce(&mut PendingPostBlock) -> (bool, R),
     ) -> Result<R, S::Error> {
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.gate.lock().await;
         let mut block = self
             .seal
             .load()
@@ -435,17 +436,17 @@ pub(crate) struct DispatchDriver<S, T> {
 
 impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
     /// Build the driver over the sealed-block store and the broadcast seam.
-    /// `write_lock` is the engine-held, per-wallet pending-seal mutex (see
+    /// `gate` is the engine-held, per-wallet pending-post gate (see
     /// [`PendingPostStore`]): the driver's store and the WI-2 assemble path
-    /// share this one lock so their two write cadences cannot race.
+    /// share its one lock so their two write cadences cannot race.
     pub(crate) fn new(
         seal: S,
         broadcast: T,
         config: DispatchConfig,
-        write_lock: Arc<tokio::sync::Mutex<()>>,
+        gate: Arc<PendingPostGate>,
     ) -> Self {
         Self {
-            store: PendingPostStore::new(seal, write_lock),
+            store: PendingPostStore::new(seal, gate),
             broadcast,
             config,
             held_this_session: BTreeSet::new(),
@@ -469,7 +470,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
 
     /// The driver's locked write path (§3.3 writer discipline). The WI-2
     /// assemble path does **not** have to route through this exact handle:
-    /// its store shares the same engine-held `pending_write_lock`, so an
+    /// its store shares the same engine-held `pending_gate`, so an
     /// independently-constructed `PendingPostStore` over `.wallet.pending`
     /// already serializes against the driver's writes (see
     /// [`PendingPostStore`]). This accessor is kept for the in-task read of

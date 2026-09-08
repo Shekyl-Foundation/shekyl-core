@@ -44,6 +44,8 @@ use serde::Deserialize;
 use serde_json::json;
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_transport::HttpRpc;
+use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse};
+use shekyl_types::TxHash;
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 /// `cargo test` runs tests in parallel; spawning multiple daemons concurrently
@@ -92,6 +94,9 @@ struct GetInfoResp {
     /// `mine_until_pool_empty`).
     #[serde(default)]
     tx_pool_size: u64,
+    /// Daemon version string — provenance for the live-oracle spend capture.
+    #[serde(default)]
+    version: String,
     /// Cumulative destroyed atomic units — `compute_fee_burn`'s
     /// `actually_destroyed` term only (`blockchain.cpp` feeds it
     /// `block_burn_amount` and rolls it back on pop). The sibling
@@ -324,6 +329,19 @@ impl RegtestDaemon {
             .height
     }
 
+    /// The accepting daemon's own version string (`get_info.version`).
+    ///
+    /// Recorded into the live-oracle capture as provenance: a chain-attested
+    /// fixture is only as meaningful as the identity of the node that attested
+    /// it, and this crate's version is not that identity.
+    pub(super) async fn version(&self) -> String {
+        self.rpc
+            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .await
+            .expect("get_info")
+            .version
+    }
+
     /// Transactions currently in the daemon's pool — the drain loop's
     /// condition and the pop legs' return-to-pool observable.
     pub(super) async fn tx_pool_size(&self) -> u64 {
@@ -332,6 +350,37 @@ impl RegtestDaemon {
             .await
             .expect("get_info")
             .tx_pool_size
+    }
+
+    /// Non-coinbase transaction hashes carried by the block named by `hash`
+    /// (lowercase hex, as `generateblocks` returns them).
+    ///
+    /// Keyed by hash rather than by height on purpose: `generateblocks` hands
+    /// back the hashes of the blocks it actually connected, so this asks about
+    /// *that* block instead of re-deriving its index from a chain height that
+    /// counts blocks (tip index = `height() - 1`) and would be one off.
+    ///
+    /// Uses the production [`GetBlockResponse`] — the same type
+    /// `block_fetch` already deserializes — so a renamed `tx_hashes` field
+    /// fails here the same way it fails the wallet, instead of defaulting to
+    /// an empty vec and looking like "a block connected without the spend".
+    pub(super) async fn block_tx_hashes(&self, hash: &str) -> Vec<shekyl_rpc_types::HashHex> {
+        let res: GetBlockResponse = self
+            .rpc
+            .json_rpc_call(
+                "get_block",
+                Some(
+                    serde_json::to_value(GetBlockRequest {
+                        hash: hash.to_owned(),
+                        height: 0,
+                        fill_pow_hash: false,
+                    })
+                    .expect("encode get_block request"),
+                ),
+            )
+            .await
+            .expect("get_block");
+        res.tx_hashes
     }
 
     /// Cumulative `total_burned` — the destroyed half of the §9.5 fee
@@ -446,6 +495,112 @@ impl Drop for RegtestDaemon {
         drop(self.child.wait());
         drop(std::fs::remove_dir_all(&self.data_dir));
     }
+}
+
+/// A fresh accept, not `AlreadyInPool` / `AlreadyInChain`. Those also return
+/// `Ok`, and either would mean this run proved nothing about the bytes it
+/// just built — the daemon would be reporting on something it already had.
+fn require_fresh_accept(outcome: super::pending::SubmitOutcome, what: &str) -> TxHash {
+    match outcome {
+        super::pending::SubmitOutcome::Accepted { hash } => hash,
+        other => panic!("the daemon must freshly accept {what}, got {other:?}"),
+    }
+}
+
+/// Mine one block and assert that block carries `txid`.
+///
+/// Three observables, three assertions. `generate_blocks` only `.expect`s
+/// that the *RPC* succeeded, so on its own it cannot tell a block that
+/// carried the spend from a block that excluded it at template time, nor
+/// from no block at all.
+///
+/// The order is load-bearing. Height is checked first so that "no block
+/// appeared" fails here and stops; inclusion is checked second so that "a
+/// block appeared without the spend" is reported as exactly that. Checking
+/// inclusion first would report a missing spend for both faults, which is
+/// one assertion wearing two names.
+///
+/// The pool check is corroborating, never sufficient: the pool also empties
+/// when a transaction is *dropped*, so this distinguishes nothing on its
+/// own.
+async fn assert_tx_confirmed(daemon: &RegtestDaemon, address: &str, txid: TxHash) -> u64 {
+    let before = daemon.height().await;
+    let mined = daemon.generate_blocks(1, address).await;
+    let after = daemon.height().await;
+
+    assert_eq!(
+        mined.blocks.len(),
+        1,
+        "generateblocks must report the one block it connected, got {:?}",
+        mined.blocks
+    );
+    assert_eq!(
+        after,
+        before + 1,
+        "the chain must advance by exactly one block ({before} -> {after})"
+    );
+
+    let carried = daemon.block_tx_hashes(&mined.blocks[0]).await;
+    assert!(
+        carried.iter().any(|h| h.as_bytes() == txid.as_bytes()),
+        "the accepted spend {txid} must be carried by the block that \
+         connected at height {after}; that block carries {carried:?}"
+    );
+
+    assert_eq!(
+        daemon.tx_pool_size().await,
+        0,
+        "the mined spend must leave the pool"
+    );
+
+    eprintln!("spend confirmed in the block that connected at height {after}");
+    after
+}
+
+/// Opt-in live-oracle capture. Ordinary runs of the north-star gate assert
+/// without rewriting a committed fixture; set `SHEKYL_CAPTURE_SPEND_KAT` to
+/// regenerate `shekyl-wire`'s `live_oracle_spend_v1.json`.
+///
+/// Only the bytes and the txid are recorded. Every other identity in the
+/// parity legs (the prunable digest, the `serialize_base` framing) is
+/// *derived* from these bytes by each language's production code —
+/// recording them here as well would let a fixture disagree with itself,
+/// and would pin values this test never independently checked.
+async fn maybe_capture_live_oracle(
+    daemon: &RegtestDaemon,
+    tx_bytes: &[u8],
+    txid: TxHash,
+    connected_at_height: u64,
+) {
+    if std::env::var_os("SHEKYL_CAPTURE_SPEND_KAT").is_none() {
+        return;
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../shekyl-wire/tests/fixtures/live_oracle_spend_v1.json");
+    let json = serde_json::json!({
+        "description":
+            "Live-oracle FCMP++/PQC spend KAT: the exact bytes a running shekyld \
+             accepted (consensus verify) and then connected in a block. Sibling to \
+             pruned_tx_hash_parity_v1.json, which is hand-built, deterministic and \
+             daemon-free and binds Rust to C++; this one binds both to a chain. \
+             Neither subsumes the other — do not consolidate them. Regenerate with \
+             SHEKYL_CAPTURE_SPEND_KAT=1 and SHEKYLD_BIN set, running \
+             engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon --ignored.",
+        "format_version": 1,
+        // The daemon's own version string, read from the node that accepted
+        // these bytes — not this crate's version, which says nothing about
+        // the binary that did the accepting.
+        "accepted_by_daemon_version": daemon.version().await,
+        "connected_at_height": connected_at_height,
+        "tx_hash_hex": txid.to_string(),
+        "tx_hex": hex::encode(tx_bytes),
+    });
+    std::fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string_pretty(&json).unwrap()),
+    )
+    .expect("write live-oracle spend fixture");
+    eprintln!("captured live-oracle spend KAT -> {}", path.display());
 }
 
 /// Mine `n` blocks to `address` over `rpc` (FAKECHAIN-gated `generateblocks`),
@@ -786,13 +941,15 @@ async fn e2e_refresh_scans_coinbase_balance() {
 /// against the C++ daemon (no other test crosses the wallet→daemon spend boundary).
 ///
 /// NORTH STAR (gated) — committed as the acceptance gate for the end-to-end
-/// wallet→daemon spend. The two migrations it once waited on have both landed: (1)
+/// wallet→daemon spend: open (from disk, via an explicit close → `open_full`) →
+/// refresh → build → submit → confirm, so the arc starts where every production
+/// spend session starts. The two migrations it once waited on have both landed: (1)
 /// the §8 step-4 scanner block-parsing migration onto the daemon-KAT'd `shekyl-wire`
 /// parser, and (2) the tx-builder→`shekyl-wire` spend-format migration (the
 /// `shekyl-oxide` serializers that originally diverged are dissolved). It remains
 /// `#[ignore]`d on the live-daemon harness (`SHEKYLD_BIN` + a running regtest
-/// daemon), which CI does not provide; run with a built daemon to exercise the full
-/// wallet→daemon spend boundary.
+/// daemon). CI provides that binary in the live-daemon gates step and runs this
+/// test there; a local run still needs `SHEKYLD_BIN`.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 north-star spend gate; needs SHEKYLD_BIN + a running regtest daemon (the scanner/tx-builder shekyl-wire migrations have landed)"]
 async fn e2e_fcmp_spend_accepted_by_daemon() {
@@ -804,34 +961,29 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
 
     let daemon = RegtestDaemon::start().await;
 
-    // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree test).
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc");
-    let tmp = tempfile::tempdir().expect("wallet tempdir");
-    let wallet_path = tmp.path().join("wallet");
+    // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree
+    // test), close it, and reopen from disk — the same shape as `staker_wallet`. The
+    // arc this gate carries is open → refresh → build → submit → confirm: a spend from
+    // the still-in-memory created engine would skip the open path (envelope decrypt,
+    // ledger load, scan-state restore) that every production spend session starts from.
     let seed = [0x33u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend");
-    let params = super::lifecycle::EngineCreateParams {
-        base_path: &wallet_path,
-        credentials: &creds,
-        network: shekyl_address::Network::Mainnet,
-        capability: super::lifecycle::CapabilityInput::Full {
-            master_seed_64: &seed,
-            seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
-        },
-        creation_timestamp: 0,
-        restore_height_hint: 0,
-        kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
-            m_log2: 0x08,
-            t: 1,
-            p: 1,
-        },
-        overrides: shekyl_engine_file::SafetyOverrides::none(),
-        prefs: shekyl_engine_prefs::WalletPrefs::default(),
-    };
-    let wallet =
-        Engine::<SoloSigner>::create(params, DaemonClient::new(rpc)).expect("create wallet");
+    let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend").await;
+    let wallet_path = tmp.path().join("wallet");
+    created.close(&creds).expect("close created wallet");
+
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+        .await
+        .expect("wallet rpc (reopen)");
+    let wallet = Engine::<SoloSigner>::open_full(
+        &wallet_path,
+        &creds,
+        shekyl_address::Network::Mainnet,
+        DaemonClient::new(rpc),
+        shekyl_engine_file::SafetyOverrides::none(),
+    )
+    .expect("reopen wallet from disk")
+    .into_wallet();
     let address = wallet.primary_address().encode().expect("encode address");
 
     // Fund: mine in batches past coinbase maturity + tree drain so an output is spendable.
@@ -919,18 +1071,17 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
 
     // Submit to the live daemon. Ok == the daemon's consensus verify ACCEPTED the spend
     // (FCMP++ proof + PQC auths + CT balance + wire format). This is the §1.1 proof.
-    let tx_hash = {
+    let outcome = {
         let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the FCMP++ spend (consensus verify)")
     };
-    eprintln!("daemon accepted spend: {tx_hash:?}");
+    let accepted = require_fresh_accept(outcome, "the FCMP++ spend");
+    eprintln!("daemon accepted spend: {accepted}");
 
-    // Block-accept: mine one block; the spend must confirm (separate verify path).
-    daemon.generate_blocks(1, &address).await;
-    let after = daemon.height().await;
-    eprintln!("mined confirming block; height now {after}");
+    let after = assert_tx_confirmed(&daemon, &address, accepted).await;
+    maybe_capture_live_oracle(&daemon, &pending.tx_bytes, accepted, after).await;
 }
 
 /// Mainnet [`EngineCreateParams`](super::lifecycle::EngineCreateParams) for the
@@ -1144,14 +1295,15 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
         pending.tx_bytes.len()
     );
 
-    let tx_hash = {
+    let outcome = {
         let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the FCMP++ spend over a depth-3 tree (consensus verify)")
     };
-    eprintln!("daemon accepted depth-{tree_depth} spend: {tx_hash:?}");
-    daemon.generate_blocks(1, &address).await;
+    let accepted = require_fresh_accept(outcome, "the FCMP++ spend over a depth-3 tree");
+    eprintln!("daemon accepted depth-{tree_depth} spend: {accepted}");
+    assert_tx_confirmed(&daemon, &address, accepted).await;
 }
 
 /// Trim (reorg) self-consistency: popping the chain back to an earlier height must
@@ -1629,16 +1781,17 @@ async fn pscan_until(
     }
 }
 
-/// Mine in `blocks_per_batch` batches until the tx pool drains — the
-/// locally-submitted tx's only route into a block on this offline daemon.
+/// Mine in `blocks_per_batch` batches until the tx pool drains.
 ///
 /// The submit path inserts at `relay_method::local` under the Dandelion++
-/// embargo, and the miner only includes broadcast-visible txs
-/// (`fill_block_template`'s `matches(relay_category::broadcasted)` gate); the
-/// stem cannot send here, so inclusion waits for the embargo to expire and
-/// fluff. Mining in batches rather than assuming one batch suffices. Pass
-/// `blocks_per_batch = 1` when the caller needs the tx's block to be the
-/// tip at return (the emission e2e's depth-1 pop leg pops exactly it).
+/// embargo. On FAKECHAIN the template admits every *relayable* pool tx
+/// (`fill_block_template`'s `m_mine_relayable_txes` opt-in), so a
+/// locally-submitted tx is includable immediately and the pool normally
+/// drains on the first batch; the loop stays as the fill-policy-agnostic
+/// shape (a tx skipped by a readiness check retries rather than failing the
+/// caller). Pass `blocks_per_batch = 1` when the caller needs the tx's block
+/// to be the tip at return (the emission e2e's depth-1 pop leg pops exactly
+/// it).
 async fn mine_until_pool_drains(
     daemon: &RegtestDaemon,
     principal: &str,
@@ -1657,8 +1810,9 @@ async fn mine_until_pool_drains(
             "{what} never left the pool (embargo/template gap?)"
         );
         daemon.generate_blocks(blocks_per_batch, principal).await;
-        // The Dandelion++ embargo is wall-clock, not block-height: pause
-        // between attempts rather than spinning the miner.
+        // A tx deferred by a wall-clock condition (not block height) would
+        // spin the miner without this pause; retries are not expected under
+        // the FAKECHAIN relayable-template opt-in, but stay cheap.
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
@@ -1969,8 +2123,8 @@ async fn stake_persona_to_confirmed_bond(
     // comes due (see the module docs for why the driver's decorrelation
     // timing is deliberately not exercised here).
     let post = {
-        let pending_write_lock = { arc.read().await.pending_write_lock.clone() };
-        let store = pending_post_store_for_engine(arc.clone(), pending_write_lock);
+        let pending_gate = { arc.read().await.pending_gate.clone() };
+        let store = pending_post_store_for_engine(arc.clone(), pending_gate);
         store
             .read(|block| block.posts().first().cloned())
             .await

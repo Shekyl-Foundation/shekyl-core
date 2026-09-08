@@ -38,6 +38,11 @@ on:
       - "scripts/ci/check_doc_fossils.py"
       - "scripts/ci/check_followups_targets.py"
       - "scripts/ci/check_index_prefix_uniqueness.py"
+      - "scripts/ci/check_index_table_shape.py"
+      # Both index gates import their row splitter from here, so a change to it
+      # changes what they see — a gate that cannot see its subject change is
+      # not a gate (rule 47).
+      - "scripts/ci/_gfm_table.py"
       - "scripts/ci/check_no_claim_era_spec.py"
       - "scripts/ci/check_landed_rows_stamped.py"
       - ".cursor/rules/**"
@@ -134,6 +139,16 @@ jobs:
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_index_prefix_uniqueness.py
+
+      - name: Run index table-shape check
+        # GFM drops a surplus cell and blanks a missing one, so a malformed row
+        # says one thing in source and another on the page — 5,455 characters
+        # across three rows were registered and never rendered, and the
+        # invisible half went stale because nobody could see it.
+        # File-wide, not registry-scoped, and escape-aware (`\|` is literal).
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_index_table_shape.py
 
       - name: Run claim-era basename check
         # docs/design/ must not grow CONFIDENTIAL_STAKING.md or a

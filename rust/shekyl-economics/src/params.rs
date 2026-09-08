@@ -6,11 +6,18 @@ include!(concat!(env!("OUT_DIR"), "/params_generated.rs"));
 
 pub const SCALE: u64 = GENERATED_SCALE;
 
-/// Total coin supply ceiling in atomic units (`money_supply` from
-/// `config/economics_params.json`). Exposed for structural-invariant
-/// validation in [`crate::activity::ActivityMetric::new`]
-/// (`circulating_supply ≤ MONEY_SUPPLY`).
-pub const MONEY_SUPPLY: u64 = GENERATED_MONEY_SUPPLY;
+/// The emission curve's asymptote in atomic units
+/// (`emission_curve_asymptote` from `config/economics_params.json`) — the
+/// value `curve = (asymptote − already_generated) >> esf` decays toward,
+/// and the denominator of the burn's supply ratio.
+///
+/// It is **not** a supply ceiling and must not be used as one: under the
+/// perpetual tail (FL-R12′) the accumulator runs through it and keeps
+/// growing, which is why FL-R16b removed the
+/// `circulating_supply ≤ asymptote` check this constant used to serve.
+/// The one bound that *is* asserted against it lives below — the FL-R14
+/// build assertion, on the `u64` headroom above it.
+pub const EMISSION_CURVE_ASYMPTOTE: u64 = GENERATED_EMISSION_CURVE_ASYMPTOTE;
 
 /// Rolling `tx_volume_avg` window in blocks (`shekyl_tx_volume_window`
 /// from `config/economics_params.json`; mirrors C++
@@ -19,6 +26,41 @@ pub const MONEY_SUPPLY: u64 = GENERATED_MONEY_SUPPLY;
 /// build-generated value consensus uses instead of hand-copying the
 /// provisional-until-testnet JSON number.
 pub const TX_VOLUME_WINDOW: u64 = GENERATED_TX_VOLUME_WINDOW;
+
+/// FL-R14 (ruled (b), review round 4): the accumulator stays `u64`
+/// persisted, because the binding bound is the genesis-frozen 64-bit
+/// range-proof width (`shekyl-bulletproofs` `prove_plus`, commitments in
+/// `[0, 2⁶⁴)`) — a wider accumulator cannot help a chain whose outputs
+/// cannot provably exceed 2⁶⁴ atomic. What this assertion actually guards
+/// is accumulator WRAP un-saturating `remaining` (a wrapped small
+/// accumulator would read as huge headroom and resume curve-scale
+/// rewards): under the perpetual tail (FL-R12′) the accumulator grows by
+/// `tail` per block forever, and the headroom above the emission-curve
+/// asymptote must last geological time. Re-parameterizing the tail, the
+/// block time, or the decimal scale so that it does not fails this build.
+const _: () = {
+    // The per-block tail below divides the target by 60. A target that is
+    // not a whole number of minutes would TRUNCATE, understating the tail
+    // and therefore OVERSTATING the headroom years this block asserts —
+    // the assertion would keep passing while the property it proves
+    // weakened (PR #640 review). `emission_speed_factor` carries the same
+    // invariant as a `debug_assert`, which release builds strip; this one
+    // is const-evaluated and cannot be.
+    assert!(
+        GENERATED_DAA_TARGET_SECONDS.is_multiple_of(60),
+        "DAA target must be a whole number of minutes, or the tail-per-block division truncates and the FL-R14 headroom proof below is weakened"
+    );
+    const TAIL_PER_BLOCK: u64 =
+        GENERATED_FINAL_SUBSIDY_PER_MINUTE * (GENERATED_DAA_TARGET_SECONDS / 60);
+    const TAIL_PER_YEAR: u64 = TAIL_PER_BLOCK * GENERATED_BLOCKS_PER_YEAR;
+    const HEADROOM: u64 = u64::MAX - GENERATED_EMISSION_CURVE_ASYMPTOTE;
+    // ≈ 89,750 years at canonical parameters; 10,000 is the loud floor.
+    assert!(
+        HEADROOM / TAIL_PER_YEAR >= 10_000,
+        "u64 accumulator headroom under the perpetual tail dropped below \
+         10,000 years - revisit FL-R14 (persisted width) before shipping"
+    );
+};
 
 /// Base staker emission share in fixed-point [`SCALE`] units
 /// (`shekyl_staker_emission_share`; `150_000` = 15%). This is the
@@ -72,7 +114,7 @@ pub const CALIBRATION_GENERATION: u32 = 0;
 /// (or [`EconomicParams::try_escalation`]), which is the typed door for apply.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EconomicParamsError {
-    /// Escalation shape (§6.1) rejected by [`EscalationParams::try_new`].
+    /// Escalation shape (§6.1) rejected by [`EscalationParams::try_new`](crate::escalation::EscalationParams::try_new).
     #[error(transparent)]
     Escalation(#[from] crate::escalation::EscalationShapeError),
 }
@@ -92,7 +134,7 @@ struct EconomicParamsWire {
     burn_base_rate: u64,
     burn_cap: u64,
     staker_pool_share: u64,
-    money_supply: u64,
+    emission_curve_asymptote: u64,
     emission_speed_factor_per_minute: u64,
     final_subsidy_per_minute: u64,
     daa_target_seconds: u64,
@@ -111,7 +153,7 @@ impl TryFrom<EconomicParamsWire> for EconomicParams {
             burn_base_rate: w.burn_base_rate,
             burn_cap: w.burn_cap,
             staker_pool_share: w.staker_pool_share,
-            money_supply: w.money_supply,
+            emission_curve_asymptote: w.emission_curve_asymptote,
             emission_speed_factor_per_minute: w.emission_speed_factor_per_minute,
             final_subsidy_per_minute: w.final_subsidy_per_minute,
             daa_target_seconds: w.daa_target_seconds,
@@ -132,7 +174,7 @@ pub struct EconomicParams {
     pub burn_base_rate: u64,
     pub burn_cap: u64,
     pub staker_pool_share: u64,
-    pub money_supply: u64,
+    pub emission_curve_asymptote: u64,
     pub emission_speed_factor_per_minute: u64,
     pub final_subsidy_per_minute: u64,
     pub daa_target_seconds: u64,
@@ -154,7 +196,7 @@ impl Default for EconomicParams {
             burn_base_rate: GENERATED_BURN_BASE_RATE,
             burn_cap: GENERATED_BURN_CAP,
             staker_pool_share: GENERATED_STAKER_POOL_SHARE,
-            money_supply: GENERATED_MONEY_SUPPLY,
+            emission_curve_asymptote: GENERATED_EMISSION_CURVE_ASYMPTOTE,
             emission_speed_factor_per_minute: GENERATED_EMISSION_SPEED_FACTOR_PER_MINUTE,
             final_subsidy_per_minute: GENERATED_FINAL_SUBSIDY_PER_MINUTE,
             daa_target_seconds: GENERATED_DAA_TARGET_SECONDS,
@@ -305,7 +347,7 @@ mod escalation_param_tests {
         format!(
             r#"{{"release_min":1,"release_max":2,"tx_volume_baseline":3,
                 "burn_base_rate":4,"burn_cap":5,"staker_pool_share":{floor},
-                "money_supply":7,"emission_speed_factor_per_minute":8,
+                "emission_curve_asymptote":7,"emission_speed_factor_per_minute":8,
                 "final_subsidy_per_minute":9,"daa_target_seconds":10,
                 "escalation_knee_n":100000,"escalation_asymptote_share":{asymptote}}}"#
         )

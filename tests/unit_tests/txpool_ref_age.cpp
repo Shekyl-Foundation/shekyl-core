@@ -486,10 +486,13 @@ TEST(txpool_ref_age, template_seed_refused_for_too_recent_reference)
 // that consumer line to presence semantics would leave these tests green.
 // The wiring regression — an invalid-proof tx in the pool with
 // fcmp_verified = 0 must fail the BLOCK — needs a connectable FCMP++ block
-// whose tx is valid in every layer except the membership proof, which is
-// the same named blocker as the FOLLOWUPS "live-oracle spend-hash KAT"
-// item (no daemon-accepted FCMP++ spend builder yet). FOLLOWUPS carries
-// the regression obligation against that blocker.
+// whose tx is valid in every layer except the membership proof. This
+// comment used to name "no daemon-accepted FCMP++ spend builder yet" as
+// the blocker; that was never checked and stopped being true on
+// 2026-06-27, when PR #193 landed a production-Engine spend a live
+// daemon accepts. The remaining blocker is whether the FCMP++ prover
+// errors on an inconsistent witness or emits a proof that fails
+// verification — see docs/FOLLOWUPS.md, which carries the obligation.
 // ─────────────────────────────────────────────────────────────────────────
 
 namespace

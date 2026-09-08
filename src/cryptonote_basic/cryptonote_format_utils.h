@@ -89,7 +89,6 @@ namespace cryptonote
   inline std::vector<crypto::public_key> get_additional_tx_pub_keys_from_extra(const std::vector<uint8_t>&) { return {}; }
   inline std::vector<crypto::public_key> get_additional_tx_pub_keys_from_extra(const transaction_prefix&) { return {}; }
   bool add_extra_nonce_to_tx_extra(std::vector<uint8_t>& tx_extra, const blobdata& extra_nonce);
-  bool add_mm_merkle_root_to_tx_extra(std::vector<uint8_t>& tx_extra, const crypto::hash& mm_merkle_root, size_t mm_merkle_tree_depth);
   bool add_archival_attestation_to_tx_extra(std::vector<uint8_t>& tx_extra, const std::string& attestation_blob);
   // parse_* convention (same bool as parse_tx_extra): false ONLY on a tx_extra
   // parse failure (headers UNREADABLE); a successful parse with no attestation

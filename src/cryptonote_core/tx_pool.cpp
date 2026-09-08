@@ -208,7 +208,7 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   //---------------------------------------------------------------------------------
-  tx_memory_pool::tx_memory_pool(Blockchain& bchs): m_blockchain(bchs), m_cookie(0), m_txpool_max_weight(DEFAULT_TXPOOL_MAX_WEIGHT), m_txpool_weight(0), m_mine_stem_txes(false), m_next_check(std::time(nullptr))
+  tx_memory_pool::tx_memory_pool(Blockchain& bchs): m_blockchain(bchs), m_cookie(0), m_txpool_max_weight(DEFAULT_TXPOOL_MAX_WEIGHT), m_txpool_weight(0), m_mine_relayable_txes(false), m_next_check(std::time(nullptr))
   {
     // class code expects unsigned values throughout
     if (m_next_check < time_t(0))
@@ -2082,13 +2082,28 @@ namespace cryptonote
       }
       LOG_PRINT_L2("Considering " << sorted_it->second << ", weight " << meta.weight << ", current block weight " << total_weight << "/" << max_total_weight << ", current coinbase " << print_money(best_coinbase) << ", relay method " << (unsigned)meta.get_relay_method());
 
-      // Broadcast-visible only, plus the operator's opt-in for own stems.
-      // This site asked the deleted `relay_category::legacy`, which also
-      // admitted `relay_method::none` -- mining a transaction whose whole
-      // meaning is "do not put this on the network". Unreachable in practice
-      // (nothing production-writes `none`), wrong on its face, and the reason
-      // the category went rather than being renamed.
-      if (!meta.matches(relay_category::broadcasted) && !(m_mine_stem_txes && meta.get_relay_method() == relay_method::stem))
+      // Broadcast-visible only, plus the FAKECHAIN opt-in for anything
+      // relayable. The opt-in (m_mine_relayable_txes, set from
+      // `m_nettype == FAKECHAIN` at init) exists so a single regtest node
+      // deterministically mines its own submissions: a typed-submit tx sits at
+      // `relay_method::local` under the Dandelion++ embargo
+      // (DAEMON_SUBMIT_VERDICT.md §5.2), so gating the template on
+      // `broadcasted` alone makes inclusion race the embargo/fluff timer --
+      // the e2e wallet gate caught exactly that flake. On mainnet the flag is
+      // off and embargoed own-txs stay out of own templates (mining an
+      // unfluffed self-tx is an origin fingerprint). The earlier shape of the
+      // opt-in admitted only `relay_method::stem` -- a peer's stem being
+      // relayed through us, which a peerless regtest node never holds -- and
+      // missed `local`, the only pre-broadcast method regtest produces.
+      //
+      // `relayable` (method != none) is the widest correct set: this site once
+      // asked the deleted `relay_category::legacy`, which also admitted
+      // `relay_method::none` -- mining a transaction whose whole meaning is
+      // "do not put this on the network". Unreachable in practice (nothing
+      // production-writes `none`), wrong on its face, and the reason the
+      // category went rather than being renamed. `relayable` keeps `none`
+      // excluded under the opt-in too.
+      if (!meta.matches(relay_category::broadcasted) && !(m_mine_relayable_txes && meta.matches(relay_category::relayable)))
       {
         LOG_PRINT_L2("  tx relay method is " << (unsigned)meta.get_relay_method());
         continue;
@@ -2336,7 +2351,7 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   //---------------------------------------------------------------------------------
-  bool tx_memory_pool::init(size_t max_txpool_weight, bool mine_stem_txes)
+  bool tx_memory_pool::init(size_t max_txpool_weight, bool mine_relayable_txes)
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
@@ -2394,7 +2409,7 @@ namespace cryptonote
       lock.commit();
     }
 
-    m_mine_stem_txes = mine_stem_txes;
+    m_mine_relayable_txes = mine_relayable_txes;
     m_cookie = 0;
 
     // Ignore deserialization error

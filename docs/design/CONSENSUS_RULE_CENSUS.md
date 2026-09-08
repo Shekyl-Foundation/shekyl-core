@@ -256,7 +256,7 @@ verdict crates it crossed into.
 | `shekyl-pow-randomx` (hash, seed epoch) | CEN-D2, D3 | **Yes** (`seed_epoch.rs` read) | [`RANDOMX_V2_RUST.md`](RANDOMX_V2_RUST.md) :393, :790–823; [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md) |
 | `shekyl-archival-retention` (bond, serve-credit, admission, emission, settlement) | CEN-J*, L7–L10 | **Partially** (CEN read bond_post, serve_credit_decisions, admission, failure_window, emission verify; RC did not cross) | gate-2 / [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) / E3 / [`ARCHIVAL_RESPONSE_FORMAT.md`](ARCHIVAL_RESPONSE_FORMAT.md) / [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) |
 | `shekyl-ct-balance` | CEN-H17, H18 | **Yes** (single-sourced with the builder) | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §2.3 |
-| `shekyl_tx_extra_pqc_field_shape` (over `shekyl-wire`'s `check_pqc_field_shape`) | CEN-I19 | **Yes** (the rule is `check_one` over the two field-length lists; every arm has a KAT, and the daemon logs the error type's own `Display` across the boundary rather than re-formatting it). The daemon parses `tx_extra` with its OWN parser and passes only field lengths — the Rust parser rejects three tags C++ accepts (`0x03`/`0x0B`/`0xDE`), so it is not the admission parser until those are deleted (rule 60, FOLLOWUPS) | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §9.6a |
+| `shekyl_tx_extra_pqc_field_shape` (over `shekyl-wire`'s `check_pqc_field_shape`) | CEN-I19 | **Yes** (the rule is `check_one` over the two field-length lists; every arm has a KAT, and the daemon logs the error type's own `Display` across the boundary rather than re-formatting it). Round 4 closed the tag-set divergence (`0x03`/`0xDE` deleted from the C++ variant; `0x0B` modelled in `shekyl-wire`), so both parsers admit the same genesis set and `validate_context_free_pruned` refuses an unparseable `extra` outright. The daemon still feeds field lengths from its own parse — one rule, two adapters — until the C++ parser is the one that goes away | [`GENESIS_TX_WIRE_FORMAT.md`](GENESIS_TX_WIRE_FORMAT.md) §9.6a |
 
 The rewrite consumes this table as its oracle-scope map: where the interior
 is not enumerated, the named spec — not the C++ or the FFI behavior — is
@@ -349,7 +349,7 @@ split.
 | CEN-E2 | An alternative block at or below the last checkpoint preceding the current height is refused (`is_alternative_block_allowed`) | 2233; src/checkpoints/checkpoints.cpp:137 | C | 2 | ratified | **RULED C2-R1b (ratified 2026-09-03)** — [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) §4b | Q2 (**existence HELD for C2-R0**; semantics ratified *while the mechanism exists*): the alt-height floor stands as the checkpoint arm's admission fence; prior: RC-135 merged |
 | CEN-E3 | **Removed (C2-R1a, ratified 2026-09-02, executed same PR).** Was: compiled-in per-block hash list (`m_blocks_hash_check`, `PER_BLOCK_CHECKPOINT=1` by default) — inside its range a block's id had to equal the compiled hash, and PoW, pool-supplement NIC and per-tx input checks were **skipped** (`fast_check`); pruned-block weights came from the same table | deleted (mechanism, loader, p2p expansion, `--fast-block-sync`, `src/blocks/`, generator) | C | 3 | — | [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) §3 (ruling, wargame, reopening criterion — DRP §74.2's "unmade shipping decision" is made: not shipped) | RC-15 ⇒ merged. Every arm was unreachable with the shipped zero-byte data; mainnet's loader pin was stale-impossible; testnet/stagenet loaded unverified — rule 71's defining instance |
 | CEN-E4 | **Removed (C2-R1a, ratified 2026-09-02, executed same PR).** Was: `check_tx_inputs` (pool wrapper) returned success unchecked when `kept_by_block` and the chain was below the hash-check size | deleted (same selector as CEN-E3's table; arm unreachable with the shipped empty table) | C | 3 | — | [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) §3 | RC-96 ⇒ merged |
-| CEN-E5 | Loading a checkpoint JSON file can add checkpoints at runtime (`--enforce-dns-checkpointing`-era mechanism reduced to file load) — operator-supplied consensus pins | src/checkpoints/checkpoints.cpp:195–229; `update_checkpoints` 6699 | C | 2 | ratified | **RULED C2-R1b (ratified 2026-09-03)** — [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) §4b | Q2a/Q2b (**existence HELD for C2-R0**; ratified *while the mechanism exists*): wired UNIFORMLY on all public networks (both nettype guards deleted — rule 71); JSON-internal conflict fail-stops with named output; chain-conflict rollback is `saturating_sub(pt.first, 2)` and bounded by Q1c's watermark; the unpopulatable difficulty-points twin and the weekly full-chain recompute are deleted (Q2c) |
+| CEN-E5 | Loading a checkpoint JSON file can add checkpoints at runtime (`--enforce-dns-checkpointing`-era mechanism reduced to file load) — operator-supplied consensus pins | src/checkpoints/checkpoints.cpp:174–208; src/cryptonote_core/blockchain.cpp:6762–6780 | C | 2 | ratified | **RULED C2-R1b (ratified 2026-09-03)** — [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) §4b | Q2a/Q2b (**existence HELD for C2-R0**; ratified *while the mechanism exists*): wired UNIFORMLY on all public networks (both nettype guards deleted — rule 71); JSON-internal conflict fail-stops with named output; chain-conflict rollback is `saturating_sub(pt.first, 2)` and bounded by Q1c's watermark; the unpopulatable difficulty-points twin and the weekly full-chain recompute are deleted (Q2c) |
 
 ### 4.F Miner transaction (structure and emission)
 
@@ -973,11 +973,12 @@ input, not fixes.
     formatter that had promised to say the same thing). Called from
     `check_tx_semantic` and `prevalidate_miner_transaction`. Admission was
     deliberately NOT routed through the Rust parser: it lacks three legacy
-    tags the C++ parser knows (`0x03` merge-mining, still emitted by the
-    inherited block-template RPC merge-mining path, `core_rpc_server.cpp:896-902`;
-    `0x0B`; `0xDE`), so that route would have tightened consensus beyond the
-    two sentences — the merge-mining path is a rule-60 deletion candidate,
-    FOLLOWUPS. The DB collector's three fallback arms and the zero-fill are
+    tags the C++ parser knows (`0x03` merge-mining, then still emitted by
+    the inherited `add_aux_pow` RPC method; `0x0B`; `0xDE`), so that route
+    would have tightened consensus beyond the two sentences — the merge-mining
+    path is a rule-60 deletion candidate, FOLLOWUPS. *(Round 4 resolved all
+    three; see below. The emitter was named here as the block-template path,
+    which was wrong: it was `on_add_aux_pow`.)* The DB collector's three fallback arms and the zero-fill are
     `DB_ERROR` aborts (CEN-L11 pattern). **Red-first, observed:** at
     `core::check_tx_semantic` — duplicate `0x07`, duplicate `0x06`, `0x07` at
     `32·(n±1)`, `0x06` at `1120·(n±1)`, both absent with `n = 1` — seven of
@@ -991,12 +992,11 @@ input, not fixes.
     RPC submit and engine block-fetch paths — still accepted missing,
     duplicate and wrong-length fields while this entry claimed one rule
     governed both: a correct mechanism with no consumer, not a missing one.
-    It is now called there, applied whenever `extra` parses (this parser
-    rejects `0x03`/`0x0B`/`0xDE`, which the C++ one accepts, so rejecting on a
-    parse failure would refuse transactions the daemon accepts — a divergence
-    in the reject direction; those three tags have no live producer but
-    merge-mining's template path, FOLLOWUPS/rule 60, and deleting them makes
-    this unconditional). (b) The DB backstop re-derived parts of the rule
+    It is now called there, at the time applied only whenever `extra` parsed
+    (this parser rejected `0x03`/`0x0B`/`0xDE`, which the C++ one accepted, so
+    rejecting on a parse failure would have refused transactions the daemon
+    accepts — a divergence in the reject direction; deleting them was named as
+    what would make it unconditional, which round 4 did). (b) The DB backstop re-derived parts of the rule
     instead of applying it and disagreed three ways — a zero-output early
     return that accepted forbidden fields, first-match on `0x07` that accepted
     duplicates, and no `0x06` check at all; it now calls the same shared
@@ -1014,6 +1014,28 @@ input, not fixes.
     rejects pins agreement about nothing that can happen. C++ recomputes both
     hashes over the regenerated bytes rather than trusting the recorded ones,
     so the pin's property is unchanged.
+
+    **Round 4 closed the parser divergence itself.** The three tags round 3
+    named as the reason the check could not be unconditional are resolved:
+    `0x03` and `0xDE` are deleted from the C++ variant (rule 60 — the `0x03`
+    producer was `on_add_aux_pow`, an RPC method with no C++ caller and no
+    functional-test coverage, deleted whole with its schema, dispatch entry,
+    python client and `merge_mining.{h,cpp}`), and `0x0B` is modelled in
+    `shekyl-wire` rather than deleted. **`0x0B` was the finding:** FOLLOWUPS
+    had grouped it with the other two on a "no producer found" basis, but it
+    has a live consensus reader — `parse_archival_attestation_from_extra`
+    deciding `headers_readable` in `blockchain.cpp` — and what it lacks is a
+    *producer*, an unfinished feature rather than inherited dead code. Deleting
+    it would have removed a consensus reader. With the tag sets now equal,
+    `validate_context_free_pruned` refuses an unparseable `extra` outright.
+    **Red-first, observed:** both rejection vectors parsed before the C++
+    deletion and fail after (the merge-mining vector was corrected after first
+    passing for the wrong reason — written without its body's length prefix it
+    failed on trailing garbage, not on the tag); the unconditional flip has a
+    falsifier that goes red if the tolerance is restored, and a positive limb
+    asserting an attestation-bearing spend still validates. The flip exposed
+    one more fixture that could never exist: a two-output spend whose `extra`
+    was a truncated varint, tolerated only because the parse was conditional.
 
     Register: born UNREVIEWED with its implementation; review at the merged
     sha owed. Live bucket-1/2 set 122.

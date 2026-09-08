@@ -298,14 +298,9 @@ tells the wallet to skip scanning blocks before that height, which is much
 faster. If you don't know the exact height, use `--restore-date 2026-03-15`
 to estimate it.
 
-### Restoring from keys
-
-For advanced recovery, you can restore from individual keys:
-
-- **From spend key:** `--generate-from-spend-key /path/to/wallet`
-- **From view key:** `--generate-from-view-key /path/to/wallet` (creates a
-  view-only wallet)
-- **From both keys + address:** `--generate-from-keys /path/to/wallet`
+The seed words are the only restore path: every wallet key (spend, view,
+message-signing, ML-KEM) derives from the master seed, so there is no
+separate restore-from-keys flow and no view-only wallet variant.
 
 ### Opening an existing wallet
 
@@ -348,8 +343,7 @@ Shekyl uses a segmented **Bech32m** address format with three parts:
 3. **PQC-B segment** (`skpq2...`) -- contains the rest of the ML-KEM-768 key
 
 The full address is approximately 2,030 characters. When sharing addresses,
-use copy-paste or URIs. The classical segment alone is sufficient for
-view-only scanning and display purposes.
+use copy-paste or URIs.
 
 To see your address inside the wallet:
 
@@ -438,13 +432,14 @@ confirmation):
 [wallet]: set priority <0|1|2|3|4>
 ```
 
-**Offline signing** (air-gapped):
-
-```
-[wallet]: transfer --do-not-relay <address> <amount>
-[wallet]: sign_transfer
-[wallet]: submit_transfer
-```
+**There is no offline ("air-gapped") signing workflow, by design.** An
+FCMP++ membership proof needs the live curve tree, so an offline signer
+cannot deliver the isolation such a workflow claims — the "cold" half
+would still need current chain data to build a valid transaction. Cold
+*storage* is the seed phrase on paper; a machine that signs is online.
+Every `transfer` shows the built transaction (destination, amount, fee)
+and waits for your confirmation before broadcasting — decline it and
+nothing leaves the wallet.
 
 ### Sweep commands
 
@@ -522,8 +517,17 @@ timing and funding footguns that matter for your privacy.
   reward budget is divided among stakers in proportion to *capped* verified
   serve-work, so a larger position does not buy a proportionally larger share.
 - **Rewards arrive automatically.** They are paid through the loud
-  reward-emission leg (public amounts) and received to a firewalled pseudonym
-  — there is no manual "claim" step and no separate claim transaction.
+  reward-emission leg (public amounts) and received to a firewalled pseudonym.
+  There is no manual "claim" step: the open wallet submits the claim
+  transaction itself once each reward epoch settles. Very small rewards are
+  held until enough accumulate to be worth the network fee, and a wallet that
+  was closed for a while claims its backlog shortly after you reopen it.
+  Automatic claiming currently requires the wallet's daemon to be on the same
+  machine (a loopback address). If your wallet points at a remote daemon —
+  even one you run yourself — rewards are not claimed automatically yet; they
+  are held, and the wallet raises an operator alarm rather than claiming over
+  the remote connection. Remote-daemon claiming arrives with remote-daemon
+  support as a whole.
 - **Principal stays liquid.** You can release collateral by unbonding, subject
   to a release cooldown. There is no fixed lock height to wait out.
 
@@ -954,33 +958,17 @@ stored.
 
 **Write your seed on paper. Store it offline. Never share it.**
 
-### Key export
+### No secret export, no view-only wallets
 
-| Command | Description |
-|---------|-------------|
-| `viewkey` | Display your secret and public view keys |
-| `spendkey` | Display your secret and public spend keys |
-| `restore_height` | Display the wallet's creation height |
-
-### View-only wallets
-
-A view-only wallet can monitor incoming transactions but cannot spend. To
-create one:
-
-```
-[wallet]: save_watch_only
-```
-
-To track outgoing transactions in a view-only wallet, periodically export
-key images from your full wallet and import them:
-
-```
-# On the full wallet:
-[wallet]: export_key_images /path/to/key_images
-
-# On the view-only wallet:
-[wallet]: import_key_images /path/to/key_images
-```
+The wallet deliberately has **no secret-egress surface**: there are no
+`viewkey` / `spendkey` display commands, no key-image export, and no
+view-only ("watch-only") wallet variant. Your seed backup is shown exactly
+once, at create/restore time — everything else derives from it. Under
+FCMP++ a view key is not a chain-scanning credential the way it was in
+CryptoNote-era coins, so a view-only wallet would not deliver the
+third-party-auditor use case; balance disclosure to a third party is
+served by reserve proofs (`get_reserve_proof` / `check_reserve_proof`)
+with scoped, cryptographic disclosure instead of a standing credential.
 
 ### Changing your password
 
@@ -1191,7 +1179,7 @@ Behavior changes to be aware of when upgrading:
 | **Emission** | The schedule by which new SKL is created. The total supply is mathematically capped. |
 | **FCMP++ membership proof** | A zero-knowledge proof that the spent output exists in the full UTXO set without revealing which one. The anonymity set is every output on the blockchain. |
 | **Hybrid signature** | Two signatures on every transaction: Ed25519 (classical) and ML-DSA-65 (quantum-resistant). |
-| **Key images** | Cryptographic markers that prevent double-spending. Exported from full wallets to track spends in view-only wallets. |
+| **Key images** | Cryptographic markers that prevent double-spending. Derived and tracked internally by the wallet; there is no export surface. |
 | **KDF rounds** | Key derivation function iterations; higher values make wallet password brute-forcing harder. |
 | **Mnemonic seed** | The 24 BIP-39 words that fully restore your wallet (plus your passphrase, if you opted in to one). Treat as a master password you can never change. |
 | **ML-DSA-65** | A quantum-resistant signature algorithm standardized by NIST (FIPS 204). |
@@ -1202,8 +1190,6 @@ Behavior changes to be aware of when upgrading:
 | **Staking** | Locking SKL for a period to earn yield from the emission pool. |
 | **Stealth address** | A one-time address generated for each transaction so only sender and receiver know the destination. |
 | **Payment request** | A merchant invoice record (amount, label, expiry) tied to your primary address — replaces per-sender subaddress rotation. |
-| **View-only wallet** | A wallet that can see incoming transactions but cannot spend. Created with `save_watch_only`. |
-
 ---
 
 ## Getting Help

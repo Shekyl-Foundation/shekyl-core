@@ -171,13 +171,14 @@ The clean serializer and the first gate-(c) cut **landed** — PR #168
   (key-image domain, output-key / commitment-mask validity) and chain-state checks stay
   deferred — see the `Transaction::validate` doc for the full mirrored/deferred split.
 
+**Landed residual:**
+- **Live FCMP++ spend KAT** — `live_oracle_spend_v1.json` is the daemon-accepted
+  spend captured by `e2e_fcmp_spend_accepted_by_daemon`; both language legs in
+  `pruned_tx_hash_parity.rs` / `.cpp` derive the identities independently. The
+  C++↔shekyl-wire spend serialization + PQC signing-preimage layout is pinned in
+  [`FCMP_SPEND_SIGNING_PREIMAGE.md`](FCMP_SPEND_SIGNING_PREIMAGE.md).
+
 **Still open** — this doc stays Round-1 *spec-grounded, ratification pending*:
-- **Live FCMP++ spend KAT** — blocked on the daemon spend path; quarantined on
-  `feat/shekyl-wire-spend-kat`. Spends are synthetic-validated until it lands. The
-  C++↔shekyl-wire spend serialization + PQC signing-preimage layout (and the four
-  ways the current shekyl-oxide-based tx-builder encoder diverges from the daemon) is
-  pinned in [`FCMP_SPEND_SIGNING_PREIMAGE.md`](FCMP_SPEND_SIGNING_PREIMAGE.md); the
-  live oracle here is its end-to-end residual.
 - **Gate-(c) §5 items 1 / 3 / 4** — dead-arm type-removal shed; `txin_fcmp` reshape
   (drop `key_offsets`); decompose removal / single-output coinbase.
 - **§8 step 4** — the ~58-consumer migration off `shekyl-oxide` block/tx. *(Scanner /
@@ -770,6 +771,7 @@ pre-renumber tags until recapture.)*
 **9.6a `tx_extra` PQC fields** (inside `extra` of §9.4 — genesis-pinned internal structure, not opaque; FA-6 / POST_QUANTUM_CRYPTOGRAPHY / CT2 §3.1):
 - **`0x06` KEM ciphertext** — ~~**per output**: `varint(len) · x25519_eph[32] · ML-KEM-768 ct[1088]` (≈1120 B each)~~ **Refuted 2026-09-05** (ruled by Rick; refuted, not superseded — the struck sentence stays as the record of what the spec claimed): both implementations emit and read **one field per transaction** — C++ `construct_miner_tx` / `construct_tx_with_tx_key` build a single `tx_extra_pqc_kem_ciphertext` reserving `n_outputs · HYBRID_KEM_CT_BYTES` (`src/cryptonote_core/cryptonote_tx_utils.cpp:197`, `:498`); Rust reads one blob (`rust/shekyl-wire/src/tx_extra.rs:222`, `read_blob`) that `pqc_kem_per_output` splits. **Corrected — per tx:** `varint(len) · (x25519_eph[32] · ML-KEM-768 ct[1088]) × n_outputs` in vout order, self-describing on the wire, and **consensus requires** `len == 1120·n_outputs` (n from `vout`): exactly one field when `n > 0`, none when `n == 0` (CEN-I19; a short or missing field leaves the recipient unable to ever see or spend the payment, which a relay-only rule would still let a miner commit).
 - **`0x07` PQC leaf hashes** — **per tx**: `h_pqc[32] × n_outputs` concatenated in vout order (`h_pqc = Blake2b(pqc_pk)`); ~~**not self-describing** — consensus parses `32·n_outputs` (n from `vout`)~~ **Refuted 2026-09-05** (ruled by Rick; refuted, not superseded): both serializers length-prefix the field — C++ `FIELD(blob)` on `std::string` writes `varint(size)` then the bytes and reads under a `remaining_bytes()` bound (`src/serialization/string.h:36-40`); Rust `read_blob` (`rust/shekyl-wire/src/tx_extra.rs:224-225`). **Corrected:** `varint(len) · h_pqc[32] × n_outputs`, self-describing on the wire, and **consensus requires** `len == 32·n_outputs`: exactly one field when `n > 0`, none when `n == 0` (CEN-I19; the field is the fourth scalar of every leaf these outputs become, so a short or missing field used to be zero-filled into the tree). Feeds the curve-tree leaf `{O.x, I.x, C.x, h_pqc}`.
+- **Genesis tag set** (2026-09-07) — `extra` admits exactly `0x00` padding, `0x01` tx pubkey, `0x02` nonce, `0x04` additional pubkeys, `0x05` PQC ownership, `0x06`/`0x07` above, `0x08` multisig migration, `0x09` PQC view-tag hints, `0x0A` PQC spend-auth pubkeys, `0x0B` archival attestation. The C++ variant and `shekyl-wire` now admit the **same set**, which is what lets `validate_context_free_pruned` refuse an unparseable `extra` outright rather than skipping the shape rule. The inherited `0x03` merge-mining and `0xDE` minergate tags are **deleted** (rule 60); their byte values stay retired so a future tag cannot reuse a meaning older software would parse differently. An unknown tag makes the whole blob unparseable — `tx_extra` has no generic skip.
 **9.7 Ct** — `ct_type(1)` then:
 - `Null` (coinbase, 1 output): `enc_amounts[1×9] · enc_labels[1×9] · outPk[1×32]`
 - `Fcmp` (spend): `V(fee) · referenceBlock[32] · enc_amounts[nout×9] · enc_labels[nout×9] · outPk[nout×32] · PqcAuths · Prunable`
