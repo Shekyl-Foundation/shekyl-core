@@ -642,9 +642,17 @@ gives an expected wait of `N` cycles for any specific entry:
 
 **The half that must be measured: `T`, the mean uptime between restarts of a
 default-posture node.** The dead fraction at probe time is then
-`1 − e^(−D/T)`:
+`1 − e^(−D/T)`.
 
-| `T` (mean uptime) | dead on probe |
+> **Every figure below is CONDITIONAL ON AN ASSUMED `T` and none of them is an
+> established property of this network.** `T` has not been measured. The row is
+> a sensitivity table showing what the answer depends on — it is not a result,
+> and no document, comment or PR body may quote one of these numbers as a
+> property, or assert that ephemeral addressing is sound at scale, until the
+> rig supplies `T`. `D` is the only derived quantity here; it comes from shipped
+> constants and may be stated as derived.
+
+| **assumed** `T` (mean uptime) | dead on probe **if `T` were that** |
 |---|---|
 | 30 days | ~11 % |
 | 14 days | ~22 % |
@@ -670,5 +678,113 @@ degradation is in *pool quality*, not in any single dial.
 **Measurement rig: Q12-D6a**, which already exists for fleet peer-discovery
 observations. `T` is the new input it must carry.
 
-**Blocker: none.** `D` is derived above; `T` needs fleet data the rig can
-produce; the threshold is Rick's to rule once both are in hand.
+**Blocked on `T`, with the falsifier named** — a blocked entry states the check
+that closes it, or it parks work and fires no event:
+
+> **Falsify by running the Q12-D6a fleet artifact to produce `T`**, the mean
+> uptime between restarts of a default-posture node. `D` is already derived
+> (`N × 60 s` from the shipped gray cap and housekeeping cadence). With both in
+> hand the dead fraction is arithmetic, and **the acceptable threshold is
+> Rick's to rule** — it is a judgement about whether overlay *discovery*
+> converges, not about whether individual dials succeed.
+
+Nothing else blocks it: no design decision waits on another, and the rig
+exists.
+
+
+### PWD-E9 — PWD-E7's isolation boundary: what "the daemon gets its own path" forbids
+
+**RULED by Rick (relayed 2026-09-08):** *"the daemon needs it's own path we DO NOT
+want crossover between the daemon and archival-serving P."* The second clause is
+the binding one — this is an **isolation requirement between two identities that
+must not be linkable**, not a crate-layout preference.
+
+#### Sharing code is not crossover. Sharing state is.
+
+Reusing the control-protocol client, the `AddOnion` request type and the reply
+evaluator is **library reuse**; duplicating them would be the deliberate-duplicate
+error this program has ruled against repeatedly. What must not be shared is
+anything that lets an observer, or a compromised component, place the daemon's
+P2P onion and the archival-serving persona's onion **on the same host**.
+
+#### The enumeration — a reviewer checks the diff against this table
+
+| Shared-resource class | Shared? | Why |
+|---|---|---|
+| tor **process / instance** | **NO** | the root of every linkage below; one process is one guard set, one descriptor-publishing identity, one crash domain |
+| **control connection** + authed session | **NO** | a single authenticated session that can `ADD_ONION` both services is a component that, once compromised, links them by construction |
+| **supervisor** and its state | **NO** | `TorService` holds cross-incarnation state; a supervisor that knows both is a join |
+| **vanguard / guard set** | **NO** | `vanguard_rotation` is explicitly *"supervisor-scoped state that outlives Tor incarnations"* — persisted and authoritative. Two services under one supervisor share the guard topology **by construction**, not by accident |
+| **circuits**, SOCKS isolation credentials | **NO** | follows from the process split; per-`P` `IsolateSOCKSAuth` isolates within an instance, not across identity domains |
+| **onion identity / service key** | **NO** | trivially — different services |
+| **data directory** | **NO** | holds the control cookie and tor state; a shared directory re-links what the process split severed |
+| control **cookie / auth file** | **NO** | consequence of the data directory and the control connection |
+| control-protocol **client code** (types, parser, `AddOnion`, reply evaluation) | **YES** | library. No runtime state crosses; duplicating it is the ruled-against error |
+| tor **binary discovery + hash pin** | **YES, as policy** | a verification *rule*, not a runtime handle. Both sides should verify the same binary against the same pin; that shares a decision, not a session |
+| **listening ports** | **NO**, and must not collide | not shared state, but two instances need disjoint control/SOCKS ports — an allocation constraint the build must make explicit rather than discover |
+
+**Three classes are genuinely ambiguous and are named rather than decided
+quietly, because an ambiguous class decided silently is how crossover arrives
+later as a convenience:**
+
+- **Operator config file.** One `shekyl.conf` naming both tors is a shared *file*
+  but not shared runtime state. It is also the single place an operator can
+  mis-wire them onto one instance. Undecided.
+- **Log sinks.** Both sides treat control-channel data as a forensic surface that
+  must not be logged. A shared sink does not link the identities by itself, but
+  it is where a future "just log the address" would link them. Undecided.
+- **Managed-tor launch path.** If both sides can spawn a managed tor, the launch
+  code is shared while the *instances* must not be. Reuse looks safe and is the
+  most likely accidental route to one process serving both. Undecided.
+
+#### The apparent contradiction with the accepted §7 residual, and why it is not one
+
+A reviewer will find this and should find the answer here first.
+`ARCHIVAL_BOND_2D2_SP_T0_TOR.md` and `..._TRANSPORT_PLAN.md` record a **ratified
+residual**: `P` and the principal share one guard set, and the docs say
+explicitly **"do not split instances to 'fix' it"** — because a non-default
+config is itself a fingerprint to a guard observer, a weaker adversary than the
+correlator a shared guard exposes.
+
+**That ruling is about splitting ONE application's identities across two
+instances. This ruling is about TWO applications not sharing one.** They are
+different operations and the §7 reasoning does not transfer:
+
+- The wallet's `P` and principal are both **wallet** identities inside one trust
+  domain, and the residual was priced within it.
+- The daemon's P2P onion is a **different domain**. Placing it on the wallet's
+  tor would extend an accepted intra-wallet residual to a pairing nobody priced.
+- Two applications each running their own tor is not a non-default config; it is
+  two programs each doing the ordinary thing.
+
+**And there is an asymmetry that makes the crossover strictly worse than the
+residual it resembles.** Under PWD-E7 the daemon's onion is **ephemeral** — it
+re-addresses every boot — while the serving persona's is **durable**. On one
+instance, a guard observer watches a durable identity share its guard set with a
+service that re-addresses repeatedly, which is a **repeated** correlation
+opportunity against the durable identity. The §7 residual has no such generator:
+both wallet identities are durable. So the accepted-residual argument does not
+merely fail to transfer — it points the other way.
+
+#### Crate shape (rule 25), proposed
+
+The test the peer named is the right one: **neither crate's docs should have to
+describe the other's posture.** `shekyl-tor` today opens *"Wallet-owned Tor
+integration for the 2d-2 archival firewall (SP-T0)"*, so the daemon cannot
+become a second consumer of that ownership without making that sentence false.
+
+- **Lift** the protocol layer — control client, `AddOnion`/reply types, reply
+  evaluation, binary verification — into a crate **neither side owns**.
+- **`shekyl-tor` keeps the wallet supervisor**: vanguard rotation, serving
+  posture, SP-T0 policy. Its doc sentence stays true.
+- **A new daemon-side crate owns the ephemeral posture**: mint, publish, read the
+  `ServiceID`, tear down on shutdown. No vanguard state, because an ephemeral
+  address has no tenure to protect.
+
+**Not proposed: the daemon driving `TorService`.** It is a supervisor for a
+long-lived managed tor with vanguard pinning and a retry policy — the wallet's
+posture. Driving it from the daemon imports exactly the state this row forbids.
+
+**Owed before code, and not decidable here:** the three ambiguous classes above,
+and whether the daemon's tor is *managed* (we spawn it) or *attached* (operator
+runs it) — which decides whether the launch path is shared at all.
