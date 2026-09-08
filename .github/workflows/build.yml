@@ -304,27 +304,22 @@ jobs:
           # makes `print_net_stats`' bridged `/get_limit` call safe to keep
           # until RK-8 migrates that route (§2.1.1).
           #
-          # ARMED vs FAST-SET. This list is the ARMED set: a gate belongs here
-          # only once it has been OBSERVED FAILING for the reason it exists —
-          # a gate nobody has seen red is not evidence, and arming one that
-          # cannot fail is worse than leaving it dark, because it occupies the
-          # slot where coverage should be. Membership of the separate FAST SET
-          # (whatever runs before every push) is a COST question and is decided
-          # by measured seconds, not by whether a gate is trusted. The two are
-          # different memberships and must not be collapsed: a slow gate is
-          # excluded from the fast set with its number attached, never
+          # ARMED vs COST. This list is the ARMED set: a gate belongs here only
+          # once it has been OBSERVED FAILING for the reason it exists -- a gate
+          # nobody has seen red is not evidence, and arming one that cannot fail
+          # is worse than leaving it dark, because it occupies the slot where
+          # coverage should be (arming is not trusting). Whether an armed gate
+          # runs in a given loop is a SEPARATE COST question, decided by the
+          # PER_PR / NIGHTLY tiers below on measured seconds and money/privacy
+          # criticality -- never by whether a gate is trusted. The two
+          # memberships must not be collapsed: a slow gate is tiered, never
           # unarmed.
           #
-          # FAST-SET EXCLUSIONS (armed here, too slow to run pre-push):
-          #   e2e_fcmp_spend_accepted_by_daemon — 76-99 s measured
-          #     2026-09-07 over four runs. It mines to reference-spendability,
-          #     builds an FCMP++ spend with the production Engine, and waits
-          #     for a live daemon to accept and connect it.
-          #
-          # `regtest_e2e.rs` holds 17 `#[ignore]` attributes and this list
-          # names 5, so 12 remain dark. They are not excluded — nobody has
-          # decided about them. Each needs its own red observation before it
-          # is added, which is why they are not being bulk-armed here.
+          # `regtest_e2e.rs` holds 17 `#[ignore]` attributes; this PR arms 16 and
+          # exempts 1 (the regenerator), so the DARK SET IS ZERO -- every ignored
+          # test is a decision, none left "nobody decided". The accounted-identity
+          # below enforces it. Per-gate red evidence, seconds, and tier reasons
+          # are in the PR body.
           # Enumerate what actually exists before asserting anything about it.
           # `--list --ignored` is the tree's own answer; a grep over source
           # counts `#[ignore]` written in doc comments too (21 lines, 17
@@ -346,19 +341,27 @@ jobs:
           # a gate off silently. (The per-test count assertion in the loop also
           # catches this; asserting here names the cause instead of the symptom.)
           #
-          # FAST-SET EXCLUSIONS: armed above, too slow to run before every push.
-          # Each carries its measured basis, not an impression:
-          #   e2e_fcmp_spend_accepted_by_daemon — 76-99 s over four runs,
-          #   2026-09-07.
-          # The armed set, declared once. The loop below iterates it and the
-          # undecided count is derived from it, so the two cannot drift — a
-          # hand-kept count beside a hand-kept list is a duplicate waiting to
+          # The armed set, declared once. The per-PR loop below iterates a tier
+          # derived from ARMED, and the armed/exempt/undecided/tier counts are all
+          # derived from these lists, so the lists and the counts cannot drift --
+          # a hand-kept count beside a hand-kept list is a duplicate waiting to
           # disagree.
           ARMED="engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge
           engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
           engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm
           engine::regtest_e2e::native_handlers_apply_their_own_request_caps
-          engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon"
+          engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon
+          engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
+          engine::regtest_e2e::regtest_daemon_spawns_and_mines_to_wallet_address
+          engine::regtest_e2e::e2e_unbond_accepted_and_connected
+          engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
+          engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
+          engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
+          engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
+          engine::regtest_e2e::e2e_get_curve_tree_path_returns_valid_path
+          engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
+          engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
+          engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open"
 
           for a in $ARMED; do
             grep -qx "$a: test" ignored.txt || {
@@ -367,36 +370,88 @@ jobs:
             }
           done
 
-          FAST_SET_EXCLUSIONS="engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon"
+          # EXEMPT: a #[ignore]d test with NO verification job to fail at.
+          # NOT for slow gates ("too slow for per-PR" is a NIGHTLY tier decision
+          # below) and NOT for flaky ones ("flaky" is a defect). Exactly one:
+          #   generate_ct2_tier_b_fixture -- a REGENERATOR that mines the CT-2
+          #     Tier-B scenarios and WRITES ct2_tier_b.json. Its "assertions" are
+          #     decorative; arming it into a verification loop is a category error
+          #     (no property to observe red). Declared so the exemption is a
+          #     decision, not implied by absence.
+          EXEMPT="engine::regtest_e2e::generate_ct2_tier_b_fixture"
 
-          # Not an existence check: every exclusion is by construction armed, so
-          # the loop above already proved these names exist and a second
-          # existence test here could never fail on its own. What CAN go wrong
-          # is the relation — excluding something from the fast set that was
-          # never armed, which reads as a decision but is a no-op.
-          for x in $FAST_SET_EXCLUSIONS; do
-            printf '%s\n' $ARMED | grep -qx "$x" || {
-              echo "FATAL: fast-set exclusion '$x' is not an armed gate — excluding an unarmed test from the fast set decides nothing" >&2
+          for e in $EXEMPT; do
+            grep -qx "$e: test" ignored.txt || {
+              echo "FATAL: exempt entry '$e' names no ignored test -- a stale exemption reads as a decision and covers nothing" >&2
               exit 1
             }
           done
 
-          # THE DARK SET MAY NOT GROW SILENTLY. `regtest_e2e` carries 17
-          # `#[ignore]` attributes; 5 are armed below, leaving 12 on which
-          # nobody has decided. Adding a new `#[ignore]`d test without arming it
-          # or recording why raises this count and fails here, which forces the
-          # decision to be made rather than deferred by default. Lowering it (by
-          # arming a gate, which requires observing it red first) is a conscious
-          # edit of this baseline — visible in the diff, which is the bar.
-          UNDECIDED_BASELINE=12
-          undecided=$(( regtest_ignored - $(printf '%s\n' $ARMED | wc -l) ))
-          if [ "$undecided" -ne "$UNDECIDED_BASELINE" ]; then
-            echo "FATAL: $undecided regtest_e2e gates are neither armed nor decided, baseline says $UNDECIDED_BASELINE." >&2
-            echo "A new #[ignore]d test must be armed (observe it red first) or its baseline moved deliberately." >&2
+          # ARMED and EXEMPT are DISJOINT. Catches a future edit that arms the
+          # regenerator (or adds a real gate to EXEMPT) without removing the other
+          # entry -- both lists then disagree while the count still balances.
+          for a in $ARMED; do
+            printf '%s\n' $EXEMPT | grep -qx "$a" && {
+              echo "FATAL: '$a' is in BOTH armed and exempt -- a gate is one or the other, never both" >&2
+              exit 1
+            }
+          done
+
+          # ACCOUNTED IN FULL: every ignored regtest_e2e test is armed or exempt,
+          # so THE DARK SET IS ZERO. (Was 12 undecided at the north-star PR; this
+          # PR arms the 10 clean gates + the depth-3 repair and exempts the
+          # regenerator.) A new #[ignore]d test raises regtest_ignored and fails
+          # here -- forcing arm-it (observe red first) or exempt-it (no
+          # verification job), deliberately, rather than defaulting to dark.
+          # undecided==0 is strictly stronger than a nonzero baseline: no
+          # arithmetic coincidence hides a new gate behind a decided one.
+          armed_n=$(printf '%s\n' $ARMED | wc -l)
+          exempt_n=$(printf '%s\n' $EXEMPT | wc -l)
+          accounted=$(( armed_n + exempt_n ))
+          if [ "$accounted" -ne "$regtest_ignored" ]; then
+            echo "FATAL: $regtest_ignored ignored regtest_e2e tests, but $armed_n armed + $exempt_n exempt = $accounted." >&2
+            echo "A new #[ignore]d test must be armed (observe it red first) or exempted (no verification job)." >&2
             exit 1
           fi
 
-          for t in $ARMED
+          # TIERS (Rick's ruling: fast OR critical => per-PR; neither => nightly).
+          # CRITICAL = guards money/privacy correctness (consensus divergence,
+          # fund loss/visibility, privacy loss); cost-irrelevant in both
+          # directions. FAST = <= ~20 s measured; cheap enough its cost needs no
+          # arguing. Under this definition every armed gate is fast or critical,
+          # so NIGHTLY IS EMPTY and all 16 run per-PR (~46 min, absorbed by
+          # concurrent workflows already on the critical path -- per-gate seconds
+          # and reasons are in the PR body).
+          #
+          # A pre-push LOCAL fast set is a DISTINCT axis from this CI cadence,
+          # with no consumer today (the loop below runs the per-PR tier). If
+          # someone builds a pre-push loop it returns WITH that consumer, not as a
+          # list waiting for one. (This subsumes the old fast-set
+          # forward-marker into the ruled cost axis.)
+          PER_PR="$ARMED"
+          NIGHTLY=""
+
+          # Every armed gate in EXACTLY ONE tier: not zero (armed-but-never-runs
+          # is the silent drain), not two (an accounting bug reading as
+          # intentional). NIGHTLY has no runner yet; the moment it gains a member
+          # it needs both a nightly workflow AND a human failure route, and
+          # nightly.yml today has neither (no if:failure, no issue filing).
+          per_pr_n=$( [ -n "$PER_PR" ] && printf '%s\n' $PER_PR | wc -l || echo 0 )
+          nightly_n=$( [ -n "$NIGHTLY" ] && printf '%s\n' $NIGHTLY | wc -l || echo 0 )
+          if [ "$(( per_pr_n + nightly_n ))" -ne "$armed_n" ]; then
+            echo "FATAL: $armed_n armed but $per_pr_n per-PR + $nightly_n nightly -- every armed gate is in exactly one tier" >&2
+            exit 1
+          fi
+          for a in $ARMED; do
+            in1=$(printf '%s\n' $PER_PR | grep -qx "$a" && echo 1 || echo 0)
+            in2=$( [ -n "$NIGHTLY" ] && printf '%s\n' $NIGHTLY | grep -qx "$a" && echo 1 || echo 0)
+            if [ "$(( in1 + in2 ))" -ne 1 ]; then
+              echo "FATAL: armed gate '$a' is in $(( in1 + in2 )) tiers, must be exactly 1" >&2
+              exit 1
+            fi
+          done
+
+          for t in $PER_PR
           do
             set +e
             cargo test -p shekyl-engine-core --lib "$t" \

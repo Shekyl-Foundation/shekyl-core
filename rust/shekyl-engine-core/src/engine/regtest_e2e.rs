@@ -1281,14 +1281,61 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
         pending.tx_bytes.len()
     );
 
-    let tx_hash = {
+    let outcome = {
         let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the FCMP++ spend over a depth-3 tree (consensus verify)")
     };
-    eprintln!("daemon accepted depth-{tree_depth} spend: {tx_hash:?}");
-    daemon.generate_blocks(1, &address).await;
+    // Specifically a FRESH accept: AlreadyInPool / AlreadyInChain also return
+    // Ok, and either would mean this run proved nothing about the bytes it just
+    // built over the depth-3 tree — the daemon reporting on something it had.
+    let accepted = match &outcome {
+        super::pending::SubmitOutcome::Accepted { hash } => hash.to_string(),
+        other => panic!("the daemon must freshly accept the depth-3 spend, got {other:?}"),
+    };
+    eprintln!("daemon accepted depth-{tree_depth} spend: {accepted}");
+
+    // Block-accept: mine one block; the spend must connect (the connect-path
+    // verify, a different code path from the pool admission above). Three
+    // observables, three assertions, and the order is load-bearing: height is
+    // checked first so "no block appeared" fails here and stops; inclusion is
+    // checked second so "a block appeared without the spend" is reported as
+    // exactly that, not as a missing spend. Sibling to
+    // e2e_fcmp_spend_accepted_by_daemon, which bit this same block first.
+    let before = daemon.height().await;
+    let mined = daemon.generate_blocks(1, &address).await;
+    let after = daemon.height().await;
+
+    assert_eq!(
+        mined.blocks.len(),
+        1,
+        "generateblocks must report the one block it connected, got {:?}",
+        mined.blocks
+    );
+    assert_eq!(
+        after,
+        before + 1,
+        "the chain must advance by exactly one block ({before} -> {after})"
+    );
+
+    let carried = daemon.block_tx_hashes(&mined.blocks[0]).await;
+    assert!(
+        carried.iter().any(|h| h.eq_ignore_ascii_case(&accepted)),
+        "the accepted depth-3 spend {accepted} must be carried by the block that \
+         connected at height {after}; that block carries {carried:?}"
+    );
+
+    // Corroborating, never sufficient: the pool also empties on a DROP, so this
+    // distinguishes nothing on its own — it earns its place beside the
+    // inclusion assertion, not instead of it.
+    assert_eq!(
+        daemon.tx_pool_size().await,
+        0,
+        "the mined depth-3 spend must leave the pool"
+    );
+
+    eprintln!("depth-3 spend confirmed in the block that connected at height {after}");
 }
 
 /// Trim (reorg) self-consistency: popping the chain back to an earlier height must
@@ -2337,9 +2384,22 @@ async fn e2e_emission_claim_accepted_and_applied() {
     use shekyl_units::AtomicUnits;
 
     const SLOT: u32 = 0;
-    /// Settlement-epoch size under the lever: large enough that the whole
-    /// confirmed-bond substrate (~300 blocks) fits inside epoch 0 (pinning
-    /// the join epoch), small enough that mining epoch 1 closed is cheap.
+    /// Settlement-epoch size UNDER THE TEST LEVER — not the production
+    /// `SETTLEMENT_EPOCH_BLOCKS`. Large enough that the confirmed-bond substrate
+    /// fits inside epoch 0 (pinning the join epoch), small enough that mining
+    /// epoch 1 closed is affordable.
+    ///
+    /// DO NOT LOWER THIS AS A "FREE" CI KNOB. The reward assertion below is
+    /// PARAMETRIC in SEB: a smaller SEB computes a different expected reward and
+    /// asserts it correctly, so the test still PASSES — but below the floor
+    /// `confirmed_tip_height + 16` the substrate spills into epoch 1, the join
+    /// epoch changes, and this gate silently stops testing the accrual boundary
+    /// it is named for. Measured 2026-09-08: confirmed_tip_height = 109, floor
+    /// = 125, current = 512, so 387 blocks of margin (~3x the floor). The margin
+    /// exists because the substrate size varies per run and the headroom is what
+    /// keeps it reliably inside epoch 0 — it is a measured lever, not slack. Kept
+    /// at 512 because the ~18-min cost is absorbed by concurrent CI (PR B), and a
+    /// flaky critical gate is worse than a slow one.
     const SEB: u64 = 512;
     const SHARD_ID: u64 = 0;
     /// The claimed epoch. The bond joins in epoch 0 and the onset stagger
