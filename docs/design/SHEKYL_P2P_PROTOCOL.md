@@ -6,7 +6,7 @@ ratification; clusters B and A not yet drafted.** Produced by the P2P-2
 design round dispatched on
 [`P2P_2_DISPATCH_BRIEF.md`](P2P_2_DISPATCH_BRIEF.md). Ratification is Rick's,
 **per cluster**, on the relay-round convention; the umbrella chat reviews each
-package first. **Nothing here is implemented — implementation is P2P-3.**
+package first. **Implementation status: PARTIAL, and P2P-3 was never opened.** This document said "nothing here is implemented" until 2026-09-08, while at least eight merged PRs had already built parts of the round. [§0.5](#05-implementation-status--per-decision) carries a per-decision status with its evidence; read it before assuming any row is unbuilt, and before assuming any row is built.
 
 **Pinned:** `dev` @ `47bfa66c33000249b1402a4bb104ae20ab68b757`
 (`git ls-remote origin dev`, 2026-09-01). Papers corpus at `shekyl-dev`
@@ -42,6 +42,120 @@ ruled — it is a deferral with extra words**:
    Pi-4 floor exceeds X" passes; "reopen if this turns out wrong" does not.
 
 ---
+
+## 0.5 Implementation status — per decision
+
+**Swept 2026-09-08 against `dev` `2f02cd3bc`.** Until that date this document
+claimed nothing in it was implemented. That was false: **eight merged PRs had
+already built parts of the round**, one of them (#629) naming a PWD id in its
+own branch. P2P-3, the round nominated to carry implementation, **has never
+been opened** — the work landed through ordinary lanes instead, and no
+document reconciled the two.
+
+**How a verdict was reached.** PWD ids appear nowhere in code, so nothing here
+was grepped by identifier. For each decision the question asked was *what would
+have to be true of the tree if this were built* — a deleted symbol absent, a
+new field present, a cap at a given value, a handler taking a given branch —
+and that consequence was searched for. Evidence is a PR number or a
+`file:line`, never an impression. Where the consequence could not be
+established the row says so rather than guessing.
+
+**Two ways this sweep's instrument misled, recorded so the next one is not
+misled the same way.** A guessed symbol produced a false negative:
+`m_idle_peer_kicker` is a *live* timer and was never PWD-B8's subject, which
+was `m_bad_peer_checker`. And for deletion-shaped decisions a surviving grep
+hit is usually a **comment recording the deletion** — `peer_id` and `anchor`
+both still match, and both matches are evidence the deletion *happened*.
+Read the hit before scoring it.
+
+**The `alpha.8?` column is a PROPOSAL, not a ruling.** Required-for-alpha.8 is
+Rick's call against his goal, in his words, that *"alpha.8 runs the new p2p"*.
+He has already ruled that PWD-T1's handshake is not a blocker: *"that doesn't
+necessarily include NoiseNN, so that is fine if not implemented for alpha.8."*
+The proposal below reads that ruling as covering the whole transport cluster,
+and otherwise proposes as required only those decisions that **change the wire
+or the peer-acceptance rules** — because a release that half-migrates the wire
+is worse than one that does not migrate it. Hardening that does not change what
+bytes cross the link is proposed as not-required.
+
+| id | status | evidence | alpha.8? (proposed) |
+|---|---|---|---|
+| **T1** handshake `Noise_NNhfs…` | NOT IMPLEMENTED | zero hits tree-wide for `Noise_NN`, `NNhfs`, `ChaChaPoly`, `BLAKE2s` | **No** — Rick ruled |
+| **T2** PW-3 retired, no padding band | NOT IMPLEMENTED | no padding band present or pinned | No — transport cluster |
+| **T3** BOLT-8 rekeying | NOT IMPLEMENTED | no rekey in a transport context (hits are engine-prefs / ledger) | No — transport cluster |
+| **T4** `e1` / `ekem1` normative | NOT IMPLEMENTED | zero hits for `ekem1` | No — transport cluster |
+| **T5** 8-byte prefix stays | **NO BUILD REQUIRED** | rules the status quo; prefix present in `contrib/epee/include/net/levin_base.h` | n/a |
+| **T6** packet limits derived | NOT IMPLEMENTED | still the inherited `LEVIN_INITIAL/DEFAULT_MAX_PACKET_SIZE` | No — transport cluster |
+| **T7** compression survives | **NO BUILD REQUIRED** | rules the status quo; `COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1` present at `rust/shekyl-levin/src/compress.rs:25,32` | n/a |
+| **T8** Shekyl mints its own KATs | NOT IMPLEMENTED | no handshake KATs; nothing to pin until T1 exists | No — follows T1 |
+| **B1** rate limiting adopted | NOT IMPLEMENTED | the decision names four unguarded invoke handlers; all four still unguarded | **Propose No** — hardening, does not change the wire |
+| **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | **Propose No** — hardening |
+| **B3** per-command caps | NOT IMPLEMENTED | cap table still **12** arms (`cryptonote_basic/connection_context.cpp`); ruled to reach 11 | **Propose Yes** — caps gate what the wire accepts |
+| **B3a** unknown input rejected at ingress | NOT IMPLEMENTED | no ingress rejection site; the codec's byte-exact round-trip of unknown bits is present but is PWC-A6's requirement, not this one | **Propose Yes** — ingress policy |
+| **B4** places B3a's ingress check | NOT IMPLEMENTED | B4's stated remaining work is the check's *placement*; no such site exists | **Propose Yes** — with B3a |
+| **B5** — | **NEVER RULED** | appears exactly once tree-wide, in `P2P_2_DISPATCH_BRIEF.md`; dispatched and never dispositioned | **Rick — a hole, not a status** |
+| **B6** one block path | NOT IMPLEMENTED | `NOTIFY_NEW_BLOCK` and `NOTIFY_NEW_FLUFFY_BLOCK` both live (11 references) | **Propose Yes** — removes a wire command |
+| **B7** drop only when attributable | **PARTIAL** | #628 withdrew a wrong score-removal and recorded that the site needs a typed verdict; the typed verdict is still owed | **Propose Yes** — the remainder |
+| **B8** delete the undriven timer | **IMPLEMENTED** | #629 deleted `m_bad_peer_checker`, `network_address_old`, `connection_entry_base` | done |
+| **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **Propose Yes** for the mechanism; the number follows I4 |
+| **B10** delete the back-ping | NOT IMPLEMENTED | `COMMAND_PING` still in `src/p2p/p2p_protocol_defs.h` | **Propose Yes** — removes a wire command |
+| **B11** `sanitize_peerlist` port-0 | **DEFERRED** | named blocker: tor port-0 semantics disputed (`tor_address::unknown()` is port 0) | No — blocked |
+| **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/zone/mod.rs:864` | **Propose No** — hardening, but see note |
+| **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `p2p_protocol_defs.h:119` records the deletion | done |
+| **I2** peerlist acceptance restricted | **IMPLEMENTED** | #637 | done |
+| **I3** tenure by address, never serialized | **SUPERSEDED** | its mechanism *was* the anchor list, deleted by #637 (`net_peerlist.cpp:82`, `p2p_protocol_defs.h:76`); body retained as records-was | n/a |
+| **I4** `ρ` / `g_max` | **DEFERRED** | deferred to its own round with the blocker named; parameter ownership unresolved | No — blocked |
+| **I5** Q-10 write-back obligation | **BLOCKED** | discharge gated on I4 | No — blocked |
+| **I6** Shi et al. sub-attacks closed | **N/A** | verification row: closed by rules ruled in I2, no separate artifact | n/a |
+| **A1** archival submission path | **NOT RULED** | a question in the dispatch brief with no ruling in this deliverable; the census narrowed it to a falsifiable claim | **Rick — unruled** |
+| **E1** node determines its own endpoint | NOT IMPLEMENTED | no endpoint-determination mechanism in `src/p2p/` or `shekyl-levin` | **Propose Yes** — job 1 has no basis without it |
+| **E2** what verifies a candidate endpoint | NOT IMPLEMENTED | no dial-back, no hairpin, no verification site | **Propose Yes** — with E1 |
+| **E3** self-dial avoidance | **RULED ELSEWHERE** | not open in this round; substance ruled in the deliverable at `:639` | n/a |
+| **E4** cross-port duplicate avoidance | **RULED ELSEWHERE** | as E3 | n/a |
+| **E5** is §4 discharged by PWD-I1? | **IMPLEMENTED** | discharged: `peerlist_entry_base` carries `adr` + `last_seen` and no `id` (`p2p_protocol_defs.h:58-59`) | done |
+| **E6** `--p2p-external-port` | **IMPLEMENTED** | present in `src/p2p/net_node.cpp` / `net_node.h` | done |
+| **E7** overlay endpoint, two postures | NOT IMPLEMENTED | daemon side unbuilt; blocked on three questions with Rick | **Propose No** — overlay is post-alpha.8 |
+| **E8** address volatility measurement | **DEFERRED** | external blocker: the fleet measurement is owed from the Q12-D6a rig | No — blocked |
+| **E9** E7's isolation boundary | RULED, NOT IMPLEMENTED | ruled by Rick 2026-09-08; the daemon-side path it constrains does not exist yet | No — follows E7 |
+
+**Counts, tallied from the rows above by script rather than by reading — the
+first draft of this paragraph had three of them wrong.** 37 decisions, which is
+exactly the set of PWD ids present across the round documents and the index:
+
+| | |
+|---|---|
+| IMPLEMENTED | 5 |
+| PARTIAL | 2 |
+| NOT IMPLEMENTED | 17, plus 1 ruled-but-not-implemented (E9) = **18 ruled and unbuilt** |
+| NO BUILD REQUIRED | 2 |
+| DEFERRED | 3 |
+| BLOCKED on another row | 1 |
+| RULED ELSEWHERE | 2 |
+| SUPERSEDED | 1 |
+| verification-only | 1 |
+| never ruled / not ruled | 2 (B5, A1) |
+
+**18 of 37 are ruled and unbuilt.** Eight of those eighteen are the transport
+cluster, which Rick has ruled out of alpha.8.
+
+**What this says about "alpha.8 runs the new p2p".** The identity cluster is
+substantially built and the transport cluster is entirely unbuilt, which is the
+right way round given Rick's ruling. The gap that matters is **cluster B's wire
+surface**: B3, B3a, B4, B6 and B10 all change what the wire accepts or removes
+a command from it, and none has landed. A release that ships the new
+`basic_node_data` and the new peerlist rules while still carrying
+`COMMAND_PING` and two block paths is running a half-migrated wire.
+
+**Note on B12.** Proposed not-required because it does not change the wire, but
+it is an unbounded release of accumulated transactions to a peer, and "not
+required for alpha.8" is not the same as "safe to ship indefinitely". Flagged
+rather than filed.
+
+**Two findings that are not statuses.** PWD-B5 was dispatched and never
+dispositioned — it exists in the brief and nowhere else. PWD-B3's own text
+states the inherited cap table has **13** arms; the tree has **12**, so one arm
+left since this document's pin and the derivation above it has not noticed.
+Neither is an implementation gap; both are round residue.
 
 ## 1. Invariants — requirements in, not subjects
 
