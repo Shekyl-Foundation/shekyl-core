@@ -156,7 +156,8 @@ pub(crate) enum EmissionClaimRequestError {
     )]
     InputRaced,
     /// A user-initiated pending-post operation (drain / unstake /
-    /// first-stake) was in flight at this claim's seal instant, so the claim
+    /// collect-unstaked / first-stake) was in flight at this claim's seal
+    /// instant, so the claim
     /// refused to seal (`ENGINE_CADENCE_DRIVER.md` §3: user work always
     /// wins; the background leg yields). Checked **inside** the seal's
     /// critical section — the write lock totally orders it against every

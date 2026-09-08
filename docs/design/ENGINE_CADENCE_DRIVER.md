@@ -209,7 +209,8 @@ gate that can fail** (rule 47) — the implementation keeps the
 answers only one direction of the race — the leg's assembly going
 stale. The other direction is worse: leg 3's snapshot-await-seal span
 racing a user-initiated pending-post operation (drain, unstake,
-first-stake — the operations that share the persona funding pool),
+collect-unstaked, first-stake — the operations that share the persona
+funding pool),
 where a background claim that seals first fails the foreground
 operation with an `InputRaced` the user did nothing to cause — a
 user-visible failure mode that does not exist today and must not be

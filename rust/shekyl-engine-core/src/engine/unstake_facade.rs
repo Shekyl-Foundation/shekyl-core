@@ -727,9 +727,22 @@ where
         // empty snapshot otherwise resolves to `NoExitToCollect` (-29523) and
         // the seam's shared `NotStaker` (-29513) never lands. Same lifted
         // `has_stake_engine` predicate `submit_drain`'s NotStaker rests on.
-        if !engine.read().await.has_stake_engine() {
-            return Err(CollectUnstakedError::NotStaker);
-        }
+        let gate = {
+            let g = engine.read().await;
+            if !g.has_stake_engine() {
+                return Err(CollectUnstakedError::NotStaker);
+            }
+            g.pending_gate.clone()
+        };
+        // User-initiated foreground post: register on the gauge for the whole
+        // pass (evidence read through every sweep's seal), so the cadence
+        // driver's claim leg yields instead of racing the sweep for the same
+        // persona funding set (ENGINE_CADENCE_DRIVER.md §3 — "user work
+        // always wins"). Registration lives here at the user-intent boundary,
+        // not inside `submit_drain`: the shared seam may later serve
+        // background callers (the leg-4 prune/resubmit body), which must not
+        // read as foreground.
+        let _foreground = gate.begin_foreground();
         let evidence =
             read_exit_evidence(&engine)
                 .await

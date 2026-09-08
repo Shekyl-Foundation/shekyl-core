@@ -455,7 +455,8 @@ enum ClaimOutcome {
 ///    observations at all (the board reads "not watched", honestly); an
 ///    idle staker has no claimant to sign as.
 /// 3. **User work always wins (§3):** user-initiated pending-post
-///    operations (drain / unstake / first-stake) hold the engine gate's
+///    operations (drain / unstake / collect-unstaked / first-stake) hold
+///    the engine gate's
 ///    foreground gauge across their whole assemble→seal span. The leg reads
 ///    it twice — here, as a cheap pre-assembly skip, and authoritatively
 ///    inside the dispatch seam's seal critical section
@@ -644,7 +645,8 @@ where
 
             // §3: user work always wins. A raised foreground gauge means a
             // user-initiated pending-post operation (drain / unstake /
-            // first-stake) is somewhere in its assemble→seal span; yield the
+            // collect-unstaked / first-stake) is somewhere in its
+            // assemble→seal span; yield the
             // whole tick before spending any work. This pre-assembly read is
             // the cheap skip — the authoritative check runs inside the
             // dispatch seam's seal critical section (`ForegroundHold`), where

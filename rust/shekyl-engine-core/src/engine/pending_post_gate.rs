@@ -14,7 +14,8 @@
 //!    sole consumer of the lock; nothing else takes it.
 //! 2. **The foreground gauge** (`ENGINE_CADENCE_DRIVER.md` §3, "user work
 //!    always wins"): user-initiated pending-post operations — drain, unstake,
-//!    first-stake — register themselves for their whole assemble→seal span
+//!    collect-unstaked, first-stake — register themselves for their whole
+//!    assemble→seal span
 //!    via [`PendingPostGate::begin_foreground`]. The cadence driver's
 //!    epoch-claim leg reads the gauge twice: a cheap pre-assembly skip, and
 //!    the authoritative check **inside** its seal's critical section. Because
@@ -136,5 +137,56 @@ mod tests {
             !gate.foreground_in_flight(),
             "a panicking foreground op must not wedge the claim leg forever"
         );
+    }
+
+    /// Textual tripwire: every user-initiated pending-post facade registers
+    /// on the foreground gauge (`ENGINE_CADENCE_DRIVER.md` §3, "user work
+    /// always wins"). The gauge only means what it says if the enumerated
+    /// set is complete — a facade that skips registration silently re-opens
+    /// the background-claim-races-user-work window (the PR-648 Bugbot
+    /// finding on `collect_unstaked` was exactly this omission). Each pin
+    /// asserts `begin_foreground` appears inside the named function's body,
+    /// bounded at the next `async fn`, so a registration in a *sibling*
+    /// function cannot satisfy a missing one here.
+    #[test]
+    fn every_user_pending_post_facade_registers_on_the_gauge() {
+        let pins: [(&str, &str, &str); 4] = [
+            (
+                "drain_facade.rs",
+                include_str!("drain_facade.rs"),
+                "pub async fn drain_to_principal",
+            ),
+            (
+                "unstake_facade.rs",
+                include_str!("unstake_facade.rs"),
+                "pub async fn unstake",
+            ),
+            (
+                "unstake_facade.rs",
+                include_str!("unstake_facade.rs"),
+                "pub async fn collect_unstaked",
+            ),
+            (
+                "bond_orchestrator.rs",
+                include_str!("bond_orchestrator.rs"),
+                "pub async fn first_stake",
+            ),
+        ];
+        for (file, source, decl) in pins {
+            let start = source.find(decl).unwrap_or_else(|| {
+                panic!("{file}: `{decl}` not found — the facade moved; move this pin with it")
+            });
+            let body = &source[start..];
+            let end = body[decl.len()..]
+                .find("async fn ")
+                .map(|i| decl.len() + i)
+                .unwrap_or(body.len());
+            assert!(
+                body[..end].contains(".begin_foreground()"),
+                "{file}: `{decl}` does not register on the foreground gauge — \
+                 the cadence claim leg will race this user operation \
+                 (ENGINE_CADENCE_DRIVER.md §3)"
+            );
+        }
     }
 }
