@@ -941,7 +941,9 @@ async fn e2e_refresh_scans_coinbase_balance() {
 /// against the C++ daemon (no other test crosses the wallet→daemon spend boundary).
 ///
 /// NORTH STAR (gated) — committed as the acceptance gate for the end-to-end
-/// wallet→daemon spend. The two migrations it once waited on have both landed: (1)
+/// wallet→daemon spend: open (from disk, via an explicit close → `open_full`) →
+/// refresh → build → submit → confirm, so the arc starts where every production
+/// spend session starts. The two migrations it once waited on have both landed: (1)
 /// the §8 step-4 scanner block-parsing migration onto the daemon-KAT'd `shekyl-wire`
 /// parser, and (2) the tx-builder→`shekyl-wire` spend-format migration (the
 /// `shekyl-oxide` serializers that originally diverged are dissolved). It remains
@@ -959,34 +961,29 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
 
     let daemon = RegtestDaemon::start().await;
 
-    // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree test).
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc");
-    let tmp = tempfile::tempdir().expect("wallet tempdir");
-    let wallet_path = tmp.path().join("wallet");
+    // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree
+    // test), close it, and reopen from disk — the same shape as `staker_wallet`. The
+    // arc this gate carries is open → refresh → build → submit → confirm: a spend from
+    // the still-in-memory created engine would skip the open path (envelope decrypt,
+    // ledger load, scan-state restore) that every production spend session starts from.
     let seed = [0x33u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend");
-    let params = super::lifecycle::EngineCreateParams {
-        base_path: &wallet_path,
-        credentials: &creds,
-        network: shekyl_address::Network::Mainnet,
-        capability: super::lifecycle::CapabilityInput::Full {
-            master_seed_64: &seed,
-            seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
-        },
-        creation_timestamp: 0,
-        restore_height_hint: 0,
-        kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
-            m_log2: 0x08,
-            t: 1,
-            p: 1,
-        },
-        overrides: shekyl_engine_file::SafetyOverrides::none(),
-        prefs: shekyl_engine_prefs::WalletPrefs::default(),
-    };
-    let wallet =
-        Engine::<SoloSigner>::create(params, DaemonClient::new(rpc)).expect("create wallet");
+    let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend").await;
+    let wallet_path = tmp.path().join("wallet");
+    created.close(&creds).expect("close created wallet");
+
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+        .await
+        .expect("wallet rpc (reopen)");
+    let wallet = Engine::<SoloSigner>::open_full(
+        &wallet_path,
+        &creds,
+        shekyl_address::Network::Mainnet,
+        DaemonClient::new(rpc),
+        shekyl_engine_file::SafetyOverrides::none(),
+    )
+    .expect("reopen wallet from disk")
+    .into_wallet();
     let address = wallet.primary_address().encode().expect("encode address");
 
     // Fund: mine in batches past coinbase maturity + tree drain so an output is spendable.
