@@ -22,7 +22,7 @@ Drift labels:
 
 ## Core Economy Model
 
-1. **Constants source of truth (`money_supply`, `coin`, decimal point, burn/release/staking params)**
+1. **Constants source of truth (`emission_curve_asymptote`, `coin`, decimal point, burn/release/staking params)**
    - Docs intent: canonical economics constants define testnet economics behavior.
    - Code: generated from `config/economics_params.json` into build-time headers (`src/cryptonote_config.h` includes generated params).
    - Status: `implemented`

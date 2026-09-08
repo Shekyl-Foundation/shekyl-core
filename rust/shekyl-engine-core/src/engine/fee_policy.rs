@@ -613,7 +613,7 @@ mod tests {
                             v,
                             p.tx_volume_baseline,
                             ag,
-                            p.money_supply,
+                            p.emission_curve_asymptote,
                             p.burn_base_rate,
                             p.burn_cap,
                         );

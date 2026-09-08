@@ -268,7 +268,7 @@ namespace cryptonote
     // burn input (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md F-D).
     res.burn_pct = shekyl_calc_burn_pct(
         tx_vol_avg, SHEKYL_TX_VOLUME_BASELINE,
-        already_generated, MONEY_SUPPLY,
+        already_generated, SHEKYL_EMISSION_CURVE_ASYMPTOTE,
         SHEKYL_BURN_BASE_RATE, SHEKYL_BURN_CAP);
     res.total_burned = m_core.get_blockchain_storage().get_db().get_total_burned();
 
@@ -277,7 +277,7 @@ namespace cryptonote
     res.staker_emission_share_effective = shekyl_calc_emission_share(
         res.height, genesis_ng_height, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY, SHEKYL_BLOCKS_PER_YEAR);
 
-    double emission_pct = (double)already_generated / (double)MONEY_SUPPLY;
+    double emission_pct = (double)already_generated / (double)SHEKYL_EMISSION_CURVE_ASYMPTOTE;
     if (emission_pct < 0.30)
       res.emission_era = "Founding";
     else if (emission_pct < 0.60)

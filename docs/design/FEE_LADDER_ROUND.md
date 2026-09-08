@@ -1,7 +1,14 @@
 # FL Round Record — Fee Ladder Derivation
 
 **Status:** OPEN — design round RULED. §8 is signed (FL-R12′ / FL-R17;
-FL-R14 ruled). Implementation is in flight on `feat/fee-ladder-impl-1`.
+FL-R14 ruled). The round-9 implementation bundle **merged as PR #640**
+(`fb06e1d2b`); the follow-up mechanical sweep (FL-R15 rename + FL-R16b)
+is in flight on `feat/fee-ladder-impl-2`. What keeps the round OPEN is
+the residue queued in [`FOLLOWUPS.md`](../FOLLOWUPS.md) — each row a
+one-liner pointing at its owning §-row, which carries the named blocker.
+FL-R3 (restoring the hysteresis band to the served path, which needs the
+time-grid shape and returns as its own round) is the one with a
+consensus-surface consequence.
 All substance lives in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md);
 this file is the thin round-state record only (rule 95 — one owner per
 claim, no restatement). Consensus behavior changes live in the
@@ -1136,9 +1143,10 @@ directly. Dispositions:
    genesis-blocking escalation), scheduled on its own merits.
 6. **PRs — SETTLED, no longer pending.** The design PR (#614) and the
    FL-R18/FL-R19 ruling record (#634) are MERGED. The round-9 split is
-   under way: `feat/fee-ladder-impl-1` (atomic bundle, built and gated)
-   is open as **#640**; `-impl-2` (the mechanical FL-R15 rename, with
-   FL-R16b) follows it.
+   complete on the first leg: `feat/fee-ladder-impl-1` (atomic bundle,
+   built and gated) **MERGED as #640 at `fb06e1d2b`**; `-impl-2` (the
+   mechanical FL-R15 rename, with FL-R16b) is in flight on
+   `feat/fee-ladder-impl-2`.
 7. Census-R2: **both resume conjuncts are SATISFIED** — FL-R12′ signed
    (round 8) and the red test extant (graduated green on impl-1). R2 can
    resume per its own criterion; the routing to the consensus lane

@@ -93,7 +93,11 @@ Shekyl monetary policy should satisfy six constraints at once:
 
 Historical constants from the original chain configuration:
 
-- `MONEY_SUPPLY = 2^32` (semantically the emission curve's asymptote, not a hard supply — gross issuance passes it under the perpetual tail, FL-R12′; the constant's rename follows in the FL-R15 sweep)
+- `MONEY_SUPPLY = 2^32` (the inherited name; semantically the emission curve's
+  asymptote, not a hard supply — gross issuance passes it under the perpetual
+  tail, FL-R12′. FL-R15 renamed it to `SHEKYL_EMISSION_CURVE_ASYMPTOTE` in the
+  Shekyl tree, so the name in this historical row names the original
+  chain's constant, not one this codebase declares.)
 - `COIN = 10^12`
 - `CRYPTONOTE_DISPLAY_DECIMAL_POINT = 12`
 - `FINAL_SUBSIDY_PER_MINUTE = 3 * 10^11` atomic units (**historical Monero
@@ -106,7 +110,9 @@ units (0.3 SHEKYL/min) per the parameter tables below and
 `config/economics_params.json`. The `3 × 10¹¹` figure above is inherited Monero
 baseline prose; do not use it for fixtures, KATs, or `EconomicsParametersSnapshot`.
 
-In Cryptonote-family code, `MONEY_SUPPLY` is interpreted in **atomic units**, not whole coins. Therefore:
+In Cryptonote-family code, the inherited `MONEY_SUPPLY` — the constant this
+tree renamed above — is interpreted in **atomic units**, not whole coins.
+Therefore:
 
 - The **historical** 12-decimal interpretation of those constants yielded
   `2^32 / 10^12 = 0.004294967296` SHEKYL — not economically meaningful, and
@@ -118,7 +124,7 @@ Reward logic is **Rust-owned**, in `shekyl-economics::emission`.
 `src/cryptonote_basic/cryptonote_basic_impl.cpp` is a marshal-only shim
 that computes nothing (#640):
 
-- `curve = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor`, saturating at zero
+- `curve = (SHEKYL_EMISSION_CURVE_ASYMPTOTE - already_generated_coins) >> emission_speed_factor`, saturating at zero
 - the paid reward is the FL-R12′ signed composition `max(M_r·curve, TAIL)·penalty(x)` — the release multiplier applies to the **curve**, the tail floors the modulated result, and the weight penalty applies **last**, to the paid quantity
 - so the tail is a floor on the composition, **not** a clamp staged onto `base_reward`: multiplying an already-floored reward is the shape FL-R12′ retired, because at a perpetual tail there is nothing left to pace and a multiplied floor pays least exactly when fees are lowest
 - there is no remaining-supply cap; the accumulator runs *through* the curve's asymptote, which is a landmark rather than an end
@@ -139,8 +145,8 @@ which carry no duration tier.
 
 If the target is `2^32` **whole coins**, then with atomic accounting:
 
-- `MONEY_SUPPLY_ATOMIC = 2^32 * 10^decimals`
-- Must satisfy `MONEY_SUPPLY_ATOMIC <= 2^64 - 1`
+- `SHEKYL_EMISSION_CURVE_ASYMPTOTE = 2^32 * 10^decimals`
+- Must satisfy `SHEKYL_EMISSION_CURVE_ASYMPTOTE <= 2^64 - 1`
 
 For `2^32` whole supply, the maximum safe decimal precision under `uint64_t` is:
 
@@ -168,7 +174,7 @@ So `2^32` whole + 12 decimals is not representable in `uint64_t`.
 
 ### `uint64_t` safety verification
 
-- `MONEY_SUPPLY_ATOMIC = 2^32 * 10^9 = 4,294,967,296,000,000,000`
+- `SHEKYL_EMISSION_CURVE_ASYMPTOTE = 2^32 * 10^9 = 4,294,967,296,000,000,000`
 - `uint64_t max = 18,446,744,073,709,551,615`
 - Headroom factor: ~4.3x
 - Sufficient for all intermediate arithmetic including reward calculations
@@ -188,7 +194,7 @@ Transaction volume controls how quickly the CryptoNote emission curve releases c
 The paid block reward composes as (FL-R12′, signed):
 
 ```
-curve = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor
+curve = (SHEKYL_EMISSION_CURVE_ASYMPTOTE - already_generated_coins) >> emission_speed_factor
                                           // saturating at zero past the asymptote
 paid  = max(release_multiplier * curve, TAIL) * weight_penalty
 ```

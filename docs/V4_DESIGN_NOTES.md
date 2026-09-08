@@ -18,8 +18,9 @@ completes. The re-census half of that condition is **cleared**: DRS-P0a
 reconciled `LMDB_SCHEMA.md` (2026-09-05) and DRS-P0b rewrote
 `LMDB_WRITE_ATOMICITY_AUDIT.md` (2026-09-05); both are gate-pinned to the
 `SHEKYL_LMDB_TABLES` macro and graded RECONCILED in the DRS oracles table.
-What remains is **P0c** (the wart register, seeded by P0b's DRS-W1…DRS-W11)
-and **P0d** (digest v0).
+**DRS-P0c** closed the wart register on 2026-09-08 (DRS-W1…DRS-W15; evidence
+in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9). What
+remains is **P0d** (digest v0).
 
 The historical text below is retained so the V4 deferral rationale (especially
 **no split writers on one LMDB env**) is not lost — those constraints still

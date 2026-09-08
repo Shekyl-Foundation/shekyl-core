@@ -181,8 +181,8 @@ TEST(EconomicsC2aPrime, Layer2MinerOnlyAccumulationDiffersFromFullEmission) {
     const shekyl::EmissionSplit split =
         shekyl::compute_emission_split(q_sub, height, 0);
 
-    ag_full = std::min<uint64_t>(MONEY_SUPPLY, ag_full + q_sub);
-    ag_miner = std::min<uint64_t>(MONEY_SUPPLY, ag_miner + split.miner_emission);
+    ag_full = std::min<uint64_t>(SHEKYL_EMISSION_CURVE_ASYMPTOTE, ag_full + q_sub);
+    ag_miner = std::min<uint64_t>(SHEKYL_EMISSION_CURVE_ASYMPTOTE, ag_miner + split.miner_emission);
   }
 
   EXPECT_LT(ag_miner, ag_full);
@@ -210,7 +210,7 @@ TEST(EconomicsC2aPrime, Layer2MinerOnlyAccumulationDiffersFromFullEmission) {
 //
 // DERIVATION (two independent sources, required to agree). The expected values
 // were computed in arbitrary-precision integer arithmetic from the documented
-// formula — base = max((MONEY_SUPPLY - ag) >> esf, tail) with esf = 21 and
+// formula — base = max((SHEKYL_EMISSION_CURVE_ASYMPTOTE - ag) >> esf, tail) with esf = 21 and
 // tail = 600000000 for the 120 s DAA target, then
 // reward = base * (2m - c) * c / m / m — and are asserted here against the
 // C++ implementation. They are NOT transcribed from C++ output: if the

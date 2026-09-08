@@ -111,6 +111,15 @@ jobs:
           run_one "Workflow files parse and are well-formed" \
             python3 scripts/ci/check_workflows_parse.py
 
+          # A job-level `if:` is evaluated before the matrix expands, so a
+          # skipped matrix job cannot emit its per-leg check names. When those
+          # names are required contexts, that is a required check that CANNOT
+          # PASS — the deadlock #653 fixed. Rides here for the same reason the
+          # workflow-validity check does: no path filter, so it sees every
+          # workflow edit.
+          run_one "Matrix jobs are not gated at the job level" \
+            python3 scripts/ci/check_matrix_job_gating.py
+
           run_one "SA-3b: domain-registry" \
             scripts/ci/domain_registry_gate.sh
           run_one "Consensus-invariants" \

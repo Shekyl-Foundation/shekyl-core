@@ -144,7 +144,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         burn_base_rate: params.burn_base_rate,
         burn_cap: params.burn_cap,
         staker_pool_share: params.staker_pool_share,
-        money_supply: params.money_supply,
+        emission_curve_asymptote: params.emission_curve_asymptote,
         emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
         final_subsidy_per_minute: params.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
@@ -154,7 +154,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
     };
 
     let mut already_generated: u128 =
-        (params.money_supply as f64 * scenario.initial_emitted_fraction) as u128;
+        (params.emission_curve_asymptote as f64 * scenario.initial_emitted_fraction) as u128;
     let mut total_burned: u128 = 0;
 
     let total_blocks = params.blocks_per_year * scenario.sim_years;
@@ -237,7 +237,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
             tx_volume,
             params.tx_volume_baseline,
             circulating,
-            params.money_supply,
+            params.emission_curve_asymptote,
             params.burn_base_rate,
             params.burn_cap,
         );
