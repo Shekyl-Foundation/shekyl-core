@@ -47,7 +47,8 @@ pub struct BurnSplit {
 /// * `tx_volume` - Transaction count over the volume window
 /// * `tx_baseline` - Baseline transaction volume
 /// * `circulating_supply` - Currently circulating atomic units
-/// * `total_supply` - Total EMISSION_CURVE_ASYMPTOTE in atomic units
+/// * `total_supply` - The emission curve's asymptote in atomic units
+///   (`EMISSION_CURVE_ASYMPTOTE`), the supply ratio's denominator
 /// * `burn_base_rate` - Base burn coefficient (fixed-point SCALE)
 /// * `burn_cap` - Maximum burn percentage (fixed-point SCALE)
 ///

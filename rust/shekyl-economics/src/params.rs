@@ -6,10 +6,17 @@ include!(concat!(env!("OUT_DIR"), "/params_generated.rs"));
 
 pub const SCALE: u64 = GENERATED_SCALE;
 
-/// Total coin supply ceiling in atomic units (`emission_curve_asymptote` from
-/// `config/economics_params.json`). Exposed for structural-invariant
-/// validation in [`crate::activity::ActivityMetric::new`]
-/// (`circulating_supply ≤ EMISSION_CURVE_ASYMPTOTE`).
+/// The emission curve's asymptote in atomic units
+/// (`emission_curve_asymptote` from `config/economics_params.json`) — the
+/// value `curve = (asymptote − already_generated) >> esf` decays toward,
+/// and the denominator of the burn's supply ratio.
+///
+/// It is **not** a supply ceiling and must not be used as one: under the
+/// perpetual tail (FL-R12′) the accumulator runs through it and keeps
+/// growing, which is why FL-R16b removed the
+/// `circulating_supply ≤ asymptote` check this constant used to serve.
+/// The one bound that *is* asserted against it lives below — the FL-R14
+/// build assertion, on the `u64` headroom above it.
 pub const EMISSION_CURVE_ASYMPTOTE: u64 = GENERATED_EMISSION_CURVE_ASYMPTOTE;
 
 /// Rolling `tx_volume_avg` window in blocks (`shekyl_tx_volume_window`

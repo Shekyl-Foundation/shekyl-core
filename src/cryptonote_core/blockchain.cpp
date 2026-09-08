@@ -6529,8 +6529,10 @@ leave:
   cumulative_difficulty = current_diffic;
   // FL-R12' (perpetual tail): the accumulator advances THROUGH the
   // emission-curve asymptote and does not saturate there — the inherited
-  // Monero rationale that used to sit here ("SHEKYL_EMISSION_CURVE_ASYMPTOTE yields a subsidy
-  // of 0 under the base formula and therefore the minimum subsidy >0")
+  // Monero rationale that used to sit here ("MONEY_SUPPLY yields a subsidy
+  // of 0 under the base formula and therefore the minimum subsidy >0" —
+  // quoting the inherited text, whose constant this tree now calls
+  // SHEKYL_EMISSION_CURVE_ASYMPTOTE)
   // was true of the base formula and false of the capped composition it
   // predated (FL-V8's twins-that-were-not); under the signed ruling the
   // tail keeps accruing forever and `remaining` floors at zero on the read
