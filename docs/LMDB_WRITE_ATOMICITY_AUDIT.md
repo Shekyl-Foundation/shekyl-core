@@ -15,6 +15,14 @@ transaction with no partial-commit risk — and record, for the redb store's
 specification, every convention this layer keeps only in code (DRS-P0b
 transcriptions A-2 / A-4 / A-6, and the §6.6 read-after-write edge set).
 
+<!-- claim-audit: series DRS-W -->
+<!-- claim-audit: series R -->
+<!-- claim-audit: range DRS-W -->
+<!-- claim-audit: sections -->
+<!-- claim-audit: numbered -->
+<!-- claim-audit: counts -->
+<!-- claim-audit: citations -->
+
 Findings are **recorded, never fixed here** (P0c RECORD-AND-SPECIFY,
 countermand 2026-09-01): a defect in this layer becomes a wart row for the
 Rust store unless it is S-graded, which stops the lane and goes to Rick.
