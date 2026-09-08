@@ -591,6 +591,17 @@ under mutation" is a denominator; "everything else looks fine" is not. A
 surface nobody examined is named in the *next* round's scope, not in this
 one's clean list.
 
+**A figure carries its scope and its unit, or it is not a denominator.**
+The same discipline at the level of a single number: "five `serde(default)`
+sites" is not a claim until it says *five in which file, counted as what*.
+The originating round produced three correct and different answers for one
+question — 3 attribute sites on the struct the work touches, 11 in its
+module, 44 across the crate — beside an existing audit figure of "27
+fields", which is a different **unit** and not comparable to any of them.
+A bare count invites exactly the arithmetic nobody should be doing. State
+the scope and the unit in the same breath as the number, and prefer the
+scope that governs the claim being made.
+
 **Two corollaries the originating round paid for.**
 
 1. **A good fix can hide the next question.** `VC-R2` closed a visible

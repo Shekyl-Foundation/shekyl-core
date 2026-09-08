@@ -931,12 +931,23 @@ makes *before* it trusts anything, so on the remote arm all four axes are
 attacker-controlled bytes. Comparison is safe; **parsing is where the risk
 lives**, and this crate already carries the hazard in two shapes:
 
-- `#[serde(default)]` — **eleven** attribute sites in `chain.rs` (`:242`,
-  `:250`, `:271`, `:273`, `:275`, `:296`, `:317`, `:319`, `:351`, `:355`,
-  `:359`), and the module's own doc at `:30` says it outright: "**This is
-  not a fix for silent defaults.** `#[serde(default)]` still lets an
-  *omitted* field become its zero value." An omitted axis compared against a
-  zero value is a mismatch reported as agreement.
+- `#[serde(default)]` — **three figures, each scoped, because a bare count
+  here is the defect this document keeps finding.** Field-level attribute
+  sites, on this tree: **3** on `GetVersionResponse` itself
+  (`chain.rs:351`, `:355`, `:359`), **11** in `chain.rs`, **44** across the
+  crate's reply modules (`transactions.rs` 15, `chain.rs` 11, `headers.rs`
+  10, `p2p.rs` 8). No struct-level `#[serde(default)]` exists, so every one
+  is a single field. The open FOLLOWUPS item's "27 fields across those two
+  modules" is a different **unit** — fields the audit judged defaultable,
+  not attributes — and the two figures are not comparable without saying so.
+  The module's own doc at `:30` states the consequence: "**This is not a fix
+  for silent defaults.** `#[serde(default)]` still lets an *omitted* field
+  become its zero value." An omitted axis compared against a zero value is a
+  mismatch reported as agreement.
+
+  **Which figure governs which claim:** the 3 are why `VC-D14` is a
+  per-field rule rather than a struct-wide sweep; the 44 are why the hazard
+  is called a property of this crate rather than of one struct.
 - `#[serde(other)]` — `lib.rs:217`, documented at `:38` as fail-safe for
   `RejectCause`, where an unknown cause collapsing to `Unrecognized` is the
   *safe* direction. On `nettype` the same attribute would be the unsafe
