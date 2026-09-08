@@ -659,9 +659,18 @@ where
         // `stake_handle().ok_or(NotStaker)` rests on (lifted, not restated),
         // and the drain façade rejects a non-staker before reading evidence
         // for the same reason.
-        if !engine.read().await.has_stake_engine() {
-            return Err(UnstakeError::NotStaker);
-        }
+        let gate = {
+            let g = engine.read().await;
+            if !g.has_stake_engine() {
+                return Err(UnstakeError::NotStaker);
+            }
+            g.pending_gate.clone()
+        };
+        // User work always wins (`ENGINE_CADENCE_DRIVER.md` §3): register
+        // this user-initiated exit — its drains and the terminal unbond —
+        // on the foreground gauge, so the cadence driver's epoch-claim leg
+        // yields rather than racing it to the funding set.
+        let _foreground = gate.begin_foreground();
         let evidence = read_exit_evidence(&engine)
             .await
             .map_err(|e| UnstakeError::Engine {

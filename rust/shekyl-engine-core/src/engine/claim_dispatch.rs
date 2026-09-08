@@ -155,6 +155,19 @@ pub(crate) enum EmissionClaimRequestError {
          holds one, or a reservation was released mid-assembly; retry"
     )]
     InputRaced,
+    /// A user-initiated pending-post operation (drain / unstake /
+    /// first-stake) was in flight at this claim's seal instant, so the claim
+    /// refused to seal (`ENGINE_CADENCE_DRIVER.md` §3: user work always
+    /// wins; the background leg yields). Checked **inside** the seal's
+    /// critical section — the write lock totally orders it against every
+    /// foreground registration, so a user operation begun before this seal
+    /// always sees the refusal, never `InputRaced` from a background claim.
+    /// The remedy is the same as any yield: re-evaluate next tick.
+    #[error(
+        "a user-initiated staking operation is in flight; the background \
+         claim yields and re-evaluates next tick"
+    )]
+    ForegroundHold,
     /// The claim pipeline refused (fetch, anchor, designation, sweep, path
     /// assembly, or the actor's assembly itself).
     #[error(transparent)]
@@ -211,7 +224,7 @@ where
     ) -> Result<EmissionClaimReceipt, EmissionClaimRequestError> {
         // Brief read: clone the actor handles + the ledger snapshot the
         // pipeline needs (same discipline as assemble_bond_post).
-        let (daemon, stake, curve_tree, pending_write_lock, snapshot) = {
+        let (daemon, stake, curve_tree, pending_gate, snapshot) = {
             let g = self_arc.read().await;
             let stake = g
                 .stake_handle()
@@ -220,12 +233,12 @@ where
                 g.daemon().clone(),
                 stake,
                 g.curve_tree.clone(),
-                g.pending_write_lock.clone(),
+                g.pending_gate.clone(),
                 g.ledger.snapshot(),
             )
         };
         let block_hash_at = move |h: u64| snapshot.block_hash_at(h);
-        let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
+        let store = pending_post_store_for_engine(self_arc.clone(), pending_gate.clone());
 
         // Three independent reads, joined: the claimant identity (a pure
         // actor projection — module docs; never a caller-supplied id that
@@ -320,6 +333,17 @@ where
         };
         let admission = store
             .mutate(move |block| {
+                // §3 "user work always wins", the authoritative half: this
+                // closure runs under the pending write lock, which totally
+                // orders it against every foreground registration and every
+                // foreground snapshot read. A user-initiated staking
+                // operation begun before this instant forces the claim to
+                // yield here; one begun after reads the sealed claim's
+                // reservations and selects around them. Either way the user
+                // never sees `InputRaced` caused by a background claim.
+                if pending_gate.foreground_in_flight() {
+                    return (false, None);
+                }
                 // One locked decision, shared with the bond-post and drain
                 // seams: persona dedup first (remedy: wait), then cross-kind
                 // gindex overlap (remedy: retry). Order matters because two
@@ -331,16 +355,19 @@ where
                 // re-derive the outcome from a push bool whose refusal arm the
                 // decision above has already ruled out.
                 let admission = block.seal_claim(sealed, dispatch_tip, snapshot_generation);
-                (admission == SealAdmission::Admit, admission)
+                (admission == SealAdmission::Admit, Some(admission))
             })
             .await
             .map_err(|e| EmissionClaimRequestError::state("pending-claim seal", e))?;
         match admission {
-            SealAdmission::Admit => {}
-            SealAdmission::PersonaLive => return Err(EmissionClaimRequestError::ClaimPending),
+            Some(SealAdmission::Admit) => {}
+            None => return Err(EmissionClaimRequestError::ForegroundHold),
+            Some(SealAdmission::PersonaLive) => {
+                return Err(EmissionClaimRequestError::ClaimPending)
+            }
             // Same remedy — retry against a fresh snapshot — so both map to the
             // one retryable refusal, whose message names every cause.
-            SealAdmission::InputRaced | SealAdmission::Stale => {
+            Some(SealAdmission::InputRaced | SealAdmission::Stale) => {
                 return Err(EmissionClaimRequestError::InputRaced)
             }
         }
@@ -378,7 +405,11 @@ mod tests {
     /// 3. persist-before-dispatch: the pending-claim seal (`seal_claim`)
     ///    textually precedes the network send — the invariant is exercised
     ///    at runtime by the store, but the ordering pin catches a refactor
-    ///    that moves the seal after the submit.
+    ///    that moves the seal after the submit;
+    /// 4. user work always wins (`ENGINE_CADENCE_DRIVER.md` §3): the
+    ///    foreground-gauge check sits **before** the seal inside the same
+    ///    locked mutation — the pin catches a refactor that drops the check
+    ///    or moves it outside the critical section's textual span.
     #[test]
     fn seam_routes_through_the_pipeline_and_the_submit_choke_point() {
         let seam = include_str!("claim_dispatch.rs")
@@ -426,6 +457,18 @@ mod tests {
         assert!(
             seal_at < submit_at,
             "the pending-claim seal must precede the network send"
+        );
+
+        // User-work-always-wins pin: the foreground check runs inside the
+        // locked seal mutation, before `seal_claim`. `rfind` selects the
+        // closure's call site rather than a doc-comment mention above.
+        let foreground_check = concat!("foreground_in_", "flight()");
+        let check_at = seam
+            .rfind(foreground_check)
+            .expect("the seal mutation must consult the foreground gauge");
+        assert!(
+            check_at < seal_at,
+            "the foreground-gauge check must precede the pending-claim seal"
         );
     }
 }

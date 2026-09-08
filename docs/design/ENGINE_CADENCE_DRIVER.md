@@ -208,16 +208,38 @@ gate that can fail** (rule 47) — the implementation keeps the
 **User work always wins; the claim leg yields.** The generation gate
 answers only one direction of the race — the leg's assembly going
 stale. The other direction is worse: leg 3's snapshot-await-seal span
-racing a user-initiated build/submit, where a background claim that
-wins fails a foreground send with a staleness error the user did
-nothing to cause — a user-visible failure mode that does not exist
-today and must not be introduced by a maintenance driver. The ruling
-is asymmetric: the leg **skips its fire for the tick** when user
-build/submit work is in flight (try-acquire on the shared pending
-write lock; never queue against it), and `SealAdmission::Stale` is a
-normal outcome only on the leg's side. A background action never
-fails a foreground one. Tested in §7 as the mirror of the generation
-test.
+racing a user-initiated pending-post operation (drain, unstake,
+first-stake — the operations that share the persona funding pool),
+where a background claim that seals first fails the foreground
+operation with an `InputRaced` the user did nothing to cause — a
+user-visible failure mode that does not exist today and must not be
+introduced by a maintenance driver. *(Ordinary transfers are
+structurally outside this race: `build_pending_tx` funds from the
+wallet ledger under `output_locks`, a pool disjoint from the persona
+funding gindexes claims reserve — there is nothing for a claim to
+take from a send.)*
+
+The delivered mechanism (amended in-PR from the try-lock probe first
+drafted here, which could only observe another writer's brief seal
+window, never an assembly): user-initiated pending-post operations
+register on the engine gate's **foreground gauge**
+(`PendingPostGate::begin_foreground`, RAII) for their whole
+assemble→seal span. The leg reads the gauge twice — a cheap
+pre-assembly skip, and the authoritative check **inside** its seal's
+critical section (`EmissionClaimRequestError::ForegroundHold`,
+classified as a yield). Because every snapshot read and every seal
+serializes on the same pending write lock, the in-seal check totally
+orders against foreground registrations: a user operation begun
+before the leg seals forces the leg to yield; one begun after reads
+the post-seal reservation set and selects around it. Either way the
+user never sees `InputRaced` from a background claim, and
+`SealAdmission::Stale` stays a normal outcome only on the leg's
+side. A background action never fails a foreground one. The WI-3
+bond dispatch driver is deliberately **not** on this gauge: its send
+schedule is decorrelation-pinned, and letting wallet activity move a
+send would let foreground behavior modulate the decorrelation offset
+(privacy over convenience, rule 00 priority 2). Tested in §7 as the
+mirror of the generation test.
 
 **Leg isolation: shared tick, not shared failure state.** A leg in
 backoff, or one that returns an error, or one that panics
@@ -281,6 +303,26 @@ flow and no driver-local "regtest ticks fast" skip. The test
 affordance is the existing **armed** override
 `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` (PR-C's composed-arc walk uses
 `= 2`), which the driver inherits by calling the same helper.
+
+**Amendment (in-PR): emission claims currently require a loopback
+daemon.** The leg's claim-source fetch is persona-attributable, so it
+rides a `PersonaIsolatedTransport`; the only production
+implementation is `LocalNodeRpc` (the ① `Local` posture), which
+refuses non-loopback addresses by construction. Consequence: a wallet
+configured against a remote daemon **does not auto-claim** — the leg
+warns with the named requirement and the fault streak raises the
+`EpochUnclaimed` alarm; rewards hold (they are not forfeited unless
+the claim window expires unclaimed, per §4). This is a posture gap,
+not a threat ruling: a remote daemon inside the operator's own
+network perimeter is an acceptable posture — what the transport
+discipline defends against is a daemon *controlled by someone else* —
+but the per-`P` remote posture (`OwnRemote` → `PTorClient`) is STAGED
+behind the 2d-2 remote/untrusted-daemon reopen, and this leg must not
+grow its own second transport ahead of that reopen. The claim leg is
+recorded as a named consumer on the `P` transport row in
+`IMPLEMENTATION_INDEX.md`: whoever lands remote-daemon support moves
+this leg with it. `USER_GUIDE.md` carries the operator-facing
+qualifier.
 
 ### Leg 4 — terminal-reject prune / byte-identical resubmit (slot registered now, body unimplemented)
 
@@ -463,10 +505,14 @@ are out of scope here; a FOLLOWUPS row already tracks promoting them.
 - Generation backstop: a test that retires a reservation between a
   claim leg's snapshot and seal and asserts `SealAdmission::Stale` —
   the gate must be able to fail (rule 47).
-- Its mirror (§3 "user work always wins"): a user build/submit in
-  flight across a claim-leg tick — assert the leg **skipped** and the
-  user path completed. A background claim must never fail a
-  foreground send.
+- Its mirror (§3 "user work always wins"): a foreground registration
+  held across a claim-leg tick — assert the leg **skipped** and
+  recorded neither an evaluation nor a fault
+  (`claim_leg_yields_while_user_work_is_in_flight`), plus the
+  in-seal ordering pin (the dispatch seam's tripwire: the
+  foreground-gauge check precedes `seal_claim` inside the locked
+  mutation) and `ForegroundHold` → yield in the classify test. A
+  background claim must never fail a foreground staking operation.
 - Wrap-point test: `into_shared` spawns the driver; dropping the
   handle cancels the task; engine close is not blocked by the driver
   (`Weak` upgrade failure exits the loop).

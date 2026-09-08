@@ -512,7 +512,7 @@ where
         let p_slot = handle.p_slot();
 
         // Brief read: clone the spawn inputs the assemble path needs.
-        let (daemon, stake, curve_tree, pending_write_lock, chain_tip, tip_hash_at) = {
+        let (daemon, stake, curve_tree, pending_gate, chain_tip, tip_hash_at) = {
             let g = self_arc.read().await;
             let stake = g
                 .stake_handle()
@@ -524,14 +524,14 @@ where
                 g.daemon().clone(),
                 stake,
                 g.curve_tree.clone(),
-                g.pending_write_lock.clone(),
+                g.pending_gate.clone(),
                 chain_tip,
                 tip_hash_at,
             )
         };
 
         // F-1: independent store over the cloned lock (no Engine-held store).
-        let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
+        let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
         // §3.3 / §3.5: one live post per persona. This early read is an
         // optimistic fast-fail only — it keys on `p_slot` (the sole identity
@@ -837,7 +837,7 @@ where
         posture: StakePosture,
     ) -> Result<FirstStakeOutcome, FirstStakeError> {
         let slot = PSlot::from_raw(slot);
-        let (daemon, stake, curve_tree, pending_write_lock, chain_tip, tip_hash_at, staking) = {
+        let (daemon, stake, curve_tree, pending_gate, chain_tip, tip_hash_at, staking) = {
             let g = self_arc.read().await;
             let stake = match g.stake_handle() {
                 Some(stake) => stake,
@@ -860,13 +860,18 @@ where
                 g.daemon().clone(),
                 stake,
                 g.curve_tree.clone(),
-                g.pending_write_lock.clone(),
+                g.pending_gate.clone(),
                 chain_tip,
                 tip_hash_at,
                 staking,
             )
         };
-        let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
+        // User work always wins (`ENGINE_CADENCE_DRIVER.md` §3): register
+        // this user-initiated first-stake on the foreground gauge for its
+        // whole assemble→seal span, so the cadence driver's epoch-claim leg
+        // yields rather than racing it to the funding set.
+        let _foreground = pending_gate.begin_foreground();
+        let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
         // Idempotency / W2 split (§5.1 + §5.7 W2) — every guard is
         // **wallet-level**, keyed on the wallet's own recorded state rather

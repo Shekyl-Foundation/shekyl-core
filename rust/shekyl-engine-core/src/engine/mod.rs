@@ -343,6 +343,9 @@ pub mod network;
 pub mod output_selector;
 pub mod payment_requests;
 pub mod pending;
+/// Pending-post family coordination: the seal write lock + the foreground
+/// gauge the epoch-claim leg yields to (`ENGINE_CADENCE_DRIVER.md` §3).
+pub(crate) mod pending_post_gate;
 pub(crate) mod principal_stake;
 /// WI-RPC-3 proof-generation bridge: the crypto bodies behind the
 /// [`key_actor::KeyActor`]'s inbound-tx-proof and reserve-proof messages.
@@ -767,18 +770,17 @@ pub struct Engine<
     /// rather than a third copy of the same primitive.
     open_slots: refresh_slot::OpenTaskSlots,
 
-    /// Per-wallet write lock over the `.wallet.pending` sibling seal (WI-3
-    /// §3.3 writer discipline). The pending seal legitimately has **two**
-    /// writers — the WI-2 assemble path (append) and the WI-3 dispatch driver
-    /// (transition/remove) — on two cadences; a shared async mutex around
-    /// load→modify→seal is what makes them safe against read-modify-seal
-    /// races. Held here (not inside the ephemeral dispatch driver) so both
-    /// writers serialize against **one** mutex per wallet: the driver clones
-    /// it into its [`PendingPostStore`](pscan::dispatch::PendingPostStore) at
-    /// spawn, and the assemble path takes the same clone. A bare `Arc<Mutex>`
-    /// (no back-reference to the engine), so — unlike the running task's
+    /// Per-wallet coordination gate for the pending-post family
+    /// ([`pending_post_gate::PendingPostGate`]): the write lock over the
+    /// `.wallet.pending` sibling seal (WI-3 §3.3 writer discipline — the
+    /// WI-2 assemble path and the WI-3 dispatch driver serialize their
+    /// load→modify→seal cycles on the one mutex per wallet) **plus** the
+    /// foreground-operation gauge the cadence driver's epoch-claim leg
+    /// yields to (`ENGINE_CADENCE_DRIVER.md` §3, "user work always wins").
+    /// Every store and facade takes a clone of this one `Arc`. No
+    /// back-reference to the engine, so — unlike the running task's
     /// engine-arc — it introduces no ownership cycle.
-    pending_write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    pending_gate: std::sync::Arc<pending_post_gate::PendingPostGate>,
 
     /// Producer-side [`RefreshEngine`] implementor.
     ///
@@ -1196,7 +1198,7 @@ impl<
             capability,
             refresh_slot,
             open_slots,
-            pending_write_lock,
+            pending_gate,
             refresh: _old,
             economics,
             stake,
@@ -1218,7 +1220,7 @@ impl<
             capability,
             refresh_slot,
             open_slots,
-            pending_write_lock,
+            pending_gate,
             refresh: std::sync::Arc::new(refresh),
             economics,
             stake,
@@ -1255,7 +1257,7 @@ impl<
             capability,
             refresh_slot,
             open_slots,
-            pending_write_lock,
+            pending_gate,
             refresh,
             economics,
             stake,
@@ -1277,7 +1279,7 @@ impl<
             capability,
             refresh_slot,
             open_slots,
-            pending_write_lock,
+            pending_gate,
             refresh,
             economics,
             stake,
