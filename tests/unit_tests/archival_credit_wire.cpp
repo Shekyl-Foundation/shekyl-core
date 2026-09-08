@@ -273,13 +273,14 @@ TEST(archival_credit_wire, attestation_field_bytes_match_the_port)
   ASSERT_EQ(extra, expected)
       << "the 0x0B encoding must match shekyl-wire's byte for byte";
 
-  // Empty blob: a PRESENT tag with a zero length, which the reader treats as the
-  // committed empty set and must not encode as an absent tag.
+  // Empty blob: a present tag with a zero-length payload encodes as two bytes.
+  // That is a codec fact, not the reader's committed-empty-set — which is a
+  // successful parse with the tag absent (see
+  // attestation_reader_splits_absent_from_unreadable). Present-empty and absent
+  // both yield an empty blob at that API; they differ only on the wire.
   std::vector<uint8_t> empty_extra;
   ASSERT_TRUE(cryptonote::add_archival_attestation_to_tx_extra(empty_extra, std::string()));
   const std::vector<uint8_t> expected_empty{0x0B, 0x00};
   ASSERT_EQ(empty_extra, expected_empty)
       << "a present-but-empty attestation is two bytes, not zero";
-  ASSERT_FALSE(empty_extra.empty())
-      << "the committed empty set must be distinguishable from an absent tag";
 }

@@ -1816,14 +1816,9 @@ impl Transaction {
         // through the same [`check_pqc_field_shape_of`]; enforcing it here is
         // what makes that one rule, rather than one rule and a claim.
         //
-        // An unparseable `extra` is refused outright. This was once conditional,
-        // because this parser rejected three tags the C++ one accepted (`0x03`
-        // merge-mining, `0x0B` archival attestation, `0xDE` minergate) and
-        // failing hard would have refused transactions the daemon accepts — a
-        // divergence in the reject direction. All three are resolved: `0x03` and
-        // `0xDE` are deleted from the C++ variant (rule 60) and `0x0B` is
-        // modelled here, so the two parsers admit the same tag set and it is the
-        // tolerance, not the strictness, that would now diverge.
+        // An unparseable `extra` is refused. This crate owns the genesis tag
+        // set; skipping the shape check on parse failure would diverge from
+        // admission.
         let fields = parse_tx_extra(&self.prefix.extra).map_err(io::Error::other)?;
         check_pqc_field_shape_of(&fields, n_out).map_err(io::Error::other)?;
         let size = self.serialized_len();

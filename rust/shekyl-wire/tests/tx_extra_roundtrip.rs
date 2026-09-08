@@ -166,8 +166,10 @@ fn archival_attestation_field_round_trips() {
     }
 }
 
-/// The empty attestation blob is meaningful: C++ treats a present tag with an
-/// empty blob as the committed empty set, distinct from an absent tag.
+/// A present-but-empty `0x0B` encodes as two bytes, not as the empty extra.
+/// That is a codec pin. The consensus reader's committed empty set is a
+/// successful parse with the tag *absent* (`attestation_reader_splits_absent_from_unreadable`);
+/// present-empty and absent both yield an empty blob at that API.
 #[test]
 fn empty_archival_attestation_is_distinct_from_an_absent_one() {
     let with_empty = tx_extra::serialize(&[TxExtraField::ArchivalAttestation(Vec::new())])

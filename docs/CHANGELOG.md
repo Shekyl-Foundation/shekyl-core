@@ -29,7 +29,10 @@
   failing hard would once have refused transactions the daemon accepts. The
   flip exposed a fixture that could never have existed: a two-output spend
   whose `extra` was a truncated varint, which no parser accepted and which
-  survived only because the parse was conditional.
+  survived only because the parse was conditional. The wallet scanner no
+  longer re-implements the tag grammar: `shekyl-scanner` parses `extra`
+  through `shekyl-wire`, so it cannot admit the retired tags or stop at a
+  genesis tag it does not consume.
 
 - **Peerlist trust is earned in-process: nothing restored from disk is
   trusted, and `--add-peer` is a candidate rather than a trusted peer.**

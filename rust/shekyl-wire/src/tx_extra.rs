@@ -12,15 +12,15 @@
 //! PQC scan fields — `0x06` hybrid KEM ciphertexts (`x25519 ‖ ML-KEM-768` per
 //! output) and `0x07` leaf hashes (`h_pqc` per output).
 //!
-//! This parses the **Shekyl genesis `tx_extra` tag set** — a deliberate subset of
-//! `src/cryptonote_basic/tx_extra.h`. Tag grammars match that header: most tags are
-//! `tag · V(len) · blob` (`FIELD(std::string)`); `0x01` is a bare 32-byte key; `0x04`
-//! is `V(count) · count×32`; `0x05` is `V(count) · count×{u8,u8,[32]}`; `0x00` padding
+//! This crate owns the **Shekyl genesis `tx_extra` tag set**
+//! (`GENESIS_TX_WIRE_FORMAT.md` §9.6a). Tag grammars: most tags are
+//! `tag · V(len) · blob`; `0x01` is a bare 32-byte key; `0x04` is
+//! `V(count) · count×32`; `0x05` is `V(count) · count×{u8,u8,[32]}`; `0x00` padding
 //! is a run of zero bytes (≤ `TX_EXTRA_PADDING_MAX_COUNT`). Inherited Monero tags that
 //! are **not** part of the genesis grammar — merge-mining (`0x03`) and the "mysterious
-//! minergate" (`0xDE`) — are deliberately **rejected** (shed, per the
-//! `60-no-monero-legacy` rule). They are no longer in the C++ variant either, so the two
-//! parsers now admit the same tag set.
+//! minergate" (`0xDE`) — are **rejected** (rule 60). The byte values stay retired.
+//! The C++ variant is an adapter that must admit this same set until that parser
+//! is deleted.
 
 use std::io::{self, Read, Write};
 
@@ -49,9 +49,10 @@ pub const TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS: u8 = 0x09;
 /// `0x0A` — PQC spend-auth pubkeys blob.
 pub const TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS: u8 = 0x0A;
 
-/// `0x0B` — archival attestation blob. The C++ daemon reads this on a live
-/// consensus path, so the port models it; a present tag with an empty blob is
-/// the committed empty set and is distinct from an absent tag.
+/// `0x0B` — archival attestation blob. A present tag with an empty payload
+/// encodes as two bytes (`0x0B 0x00`), not as an absent extra. The consensus
+/// reader's committed empty set is a successful parse with the tag **absent**;
+/// present-empty and absent both yield an empty blob at that API.
 pub const TX_EXTRA_TAG_ARCHIVAL_ATTESTATION: u8 = 0x0B;
 
 /// X25519 ciphertext bytes per output (`tx_extra.h`).
