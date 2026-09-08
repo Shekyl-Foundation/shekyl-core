@@ -96,8 +96,8 @@ Historical constants from the original chain configuration:
 - `MONEY_SUPPLY = 2^32` (the inherited name; semantically the emission curve's
   asymptote, not a hard supply — gross issuance passes it under the perpetual
   tail, FL-R12′. FL-R15 renamed it to `SHEKYL_EMISSION_CURVE_ASYMPTOTE` in the
-  Shekyl tree, so the name in this historical row no longer appears in the
-  code; every asserting-is reference below uses the new one.)
+  Shekyl tree, so the name in this historical row names the original
+  chain's constant, not one this codebase declares.)
 - `COIN = 10^12`
 - `CRYPTONOTE_DISPLAY_DECIMAL_POINT = 12`
 - `FINAL_SUBSIDY_PER_MINUTE = 3 * 10^11` atomic units (**historical Monero
@@ -110,7 +110,9 @@ units (0.3 SHEKYL/min) per the parameter tables below and
 `config/economics_params.json`. The `3 × 10¹¹` figure above is inherited Monero
 baseline prose; do not use it for fixtures, KATs, or `EconomicsParametersSnapshot`.
 
-In Cryptonote-family code, `MONEY_SUPPLY` is interpreted in **atomic units**, not whole coins. Therefore:
+In Cryptonote-family code, the inherited `MONEY_SUPPLY` — the constant this
+tree renamed above — is interpreted in **atomic units**, not whole coins.
+Therefore:
 
 - The **historical** 12-decimal interpretation of those constants yielded
   `2^32 / 10^12 = 0.004294967296` SHEKYL — not economically meaningful, and
