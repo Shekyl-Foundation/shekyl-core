@@ -122,25 +122,29 @@ DECL = re.compile(r"<!--\s*claim-audit:\s*([a-z]+)"
 # the adoption floor stayed satisfied by another document — the same vacuous
 # pass this matcher exists to prevent, reached by leaving the marker unfinished
 # instead of misspelling it.
-# A marker is found ANYWHERE on a top-level line, not only at its start. The
-# anchored version could not see a second marker on the same line at all, so
-# `<!-- claim-audit: sections --><!-- claim-audit: Citations -->` reported
-# neither the malformed second nor the missing declaration, and two VALID
-# adjacent markers registered only the first — the silent opt-out this scan
-# exists to prevent, reached by putting two markers on one line.
+# A DECLARATION IS A STANDALONE MARKER ON ITS OWN TOP-LEVEL LINE. Nothing else
+# is one, and the strictness is deliberate rather than lazy.
 #
-# The 0-3 space rule stays, but it now qualifies the LINE: four or more spaces
-# is a CommonMark indented code block, and a marker there is an example.
-TOP_LEVEL = re.compile(r"^ {0,3}\S")
-MARKER = re.compile(r"<!--\s*claim-audit:.*?(?:-->|$)")
+# The previous version scanned for markers anywhere on any non-indented line,
+# and that immediately opted documents in from block quotes and list items —
+# the documenting-it-declares-it failure the scan was rewritten to prevent,
+# reintroduced by the rewrite. Before that it was anchored and could not see a
+# second marker on a line at all. Each attempt at more precision opened a hole
+# somewhere else, so this is the opposite move: one shape, checked exactly.
+#
+# Every declaration in this corpus is already written this way. Anything that
+# MEANS to be a declaration and is not this shape — a typo, an unterminated
+# marker, a marker spanning lines, two on one line — is REPORTED rather than
+# silently ignored, which is what keeps the strictness honest. A marker inside
+# a quote or a list is an example and is left alone.
+DECL_SITE = re.compile(r"^ {0,3}<!--\s*claim-audit:")
 
 
 def markers(text: str):
-    """(line number, marker text) for every claim-audit marker at top level."""
+    """(line number, stripped line) for every line that means to declare."""
     for i, line in enumerate(text.splitlines(), 1):
-        if TOP_LEVEL.match(line):
-            for m in MARKER.finditer(line):
-                yield i, m.group(0)
+        if DECL_SITE.match(line):
+            yield i, line.strip()
 
 
 KINDS = {"series", "range", "sections", "numbered", "citations", "counts"}
@@ -212,8 +216,11 @@ def strip_comments(text: str) -> str:
     """
     def repl(m):
         body = m.group(0)
-        return body if MARKER.search(body) else "\n" * body.count("\n")
-    return re.sub(r"<!--.*?-->", repl, text, flags=re.S)
+        return body if DECL_SITE.search(body) else "\n" * body.count("\n")
+    # `\Z` as an alternative terminator: CommonMark treats an unclosed
+    # `<!--` as running to end of document, and requiring `-->` left every
+    # commented-out row after one visible to the structural legs.
+    return re.sub(r"<!--.*?(?:-->|\Z)", repl, text, flags=re.S)
 
 
 def strip_fences(text: str) -> str:
@@ -443,15 +450,21 @@ def _numbered_runs(text: str) -> list[list[tuple[int, int]]]:
         # corpus uses them (docs/WALLET_PREFS.md:77-83 is a 1./2./3. list inside
         # a quote) — so the leg promised to check numbered lists while a whole
         # container class was invisible to it.
-        line = re.sub(r"^(?:\s*>)+\s?", "", raw)
+        qpre = re.match(r"(?:\s*>)+\s?", raw)
+        qdepth = qpre.group(0).count(">") if qpre else 0
+        line = raw[len(qpre.group(0)):] if qpre else raw
         m = re.match(r"^([ \t]*)(\d+)\. ", line)
         if m:
-            ind, num = len(m.group(1).expandtabs()), int(m.group(2))
-            close(lambda d, ind=ind: d > ind)      # children end at their parent
+            # Keyed by (quote depth, indent). Peeling the prefix and keying on
+            # the leftover indent alone merged a quoted list with an unquoted
+            # one at the same indent, so `1, 2` followed by `> 3, 4` passed as
+            # one run and two independently valid lists failed as one.
+            ind, num = (qdepth, len(m.group(1).expandtabs())), int(m.group(2))
+            close(lambda d, ind=ind: d[0] == ind[0] and d[1] > ind[1])
             runs.setdefault(ind, []).append((i, num))
         elif line.strip():
-            ind = len(line[: len(line) - len(line.lstrip())].expandtabs())
-            close(lambda d, ind=ind: ind <= d)
+            ind = (qdepth, len(line[: len(line) - len(line.lstrip())].expandtabs()))
+            close(lambda d, ind=ind: d[0] == ind[0] and ind[1] <= d[1])
     close(lambda d: True)
     return sorted(out, key=lambda r: r[0][0])
 

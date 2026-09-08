@@ -175,9 +175,16 @@ def unsafe_git_calls() -> list[str]:
     """
     found = []
     for node in ast.walk(ast.parse(GATE.read_text(encoding="utf-8"))):
-        if not isinstance(node, ast.Call) or not node.args:
+        if not isinstance(node, ast.Call):
             continue
-        f, a0 = node.func, node.args[0]
+        # `subprocess.run(args=[...])` is a valid launch with NO positional
+        # argument, so keying on node.args skipped it entirely and a history
+        # walk written that way passed the guard while it reported safe.
+        kw = next((k.value for k in node.keywords if k.arg == "args"), None)
+        argv = node.args[0] if node.args else kw
+        if argv is None:
+            continue
+        f, a0 = node.func, argv
         # SUBJECT ASSERTION for the scanner itself. It reads two shapes: an
         # inline argv list and the local git() helper. A third — `cmd = [...]`
         # then `subprocess.run(cmd)` — was invisible, so an unsafe history walk
@@ -242,6 +249,7 @@ DEPTH_PROBES = [
     ("commit-message search", 'git("show", f"{ref}^{{/fix}}")',                  True),
     # argv the scanner cannot read is itself unsafe: it could be anything
     ("variable argv",      'cmd = ["git", "log"]; subprocess.run(cmd)',          True),
+    ("keyword argv",       'subprocess.run(args=["git", "log"])',                 True),
     ("plain f-string rev", 'git("show", f"{ref}:docs/x")',                  False),
 ]
 
@@ -1089,14 +1097,28 @@ def main() -> None:
              "numbered list runs",
              doc=GOOD.replace("1. one\n2. two\n3. three",
                               "> 1. one\n> 3. two\n> 4. three")),
-        # two VALID markers on one line must BOTH register
-        green("same line: two valid markers both register",
-              doc=GOOD.replace("<!-- claim-audit: sections -->\n<!-- claim-audit: numbered -->",
-                               "<!-- claim-audit: sections --><!-- claim-audit: numbered -->"),
-              expect="numbered"),
+
         # a citation inside an HTML comment is not a citation
         green("commented-out citation is not a citation",
               doc=GOOD + "\n\n<!--\nsee `src/gone.cpp:1` here\n-->\n"),
+        # one declaration per line. Two on a line is REPORTED rather than
+        # silently half-registered, which is the contract the corpus already
+        # follows and the only shape this scan now accepts.
+        case("same line: two valid markers is malformed",
+             "malformed claim-audit marker",
+             doc=GOOD.replace("<!-- claim-audit: sections -->\n<!-- claim-audit: numbered -->",
+                              "<!-- claim-audit: sections --><!-- claim-audit: numbered -->")),
+        case("unterminated comment hides register rows",
+             "the subject this declaration names is missing",
+             doc=GOOD.replace("| XX-W1 | a |", "<!--\n| XX-W1 | a |")),
+        # a marker inside a quote or a list item is an EXAMPLE, not a declaration
+        green("quoted and list-item markers are examples",
+              doc=GOOD + "\n\n> <!-- claim-audit: series ZZ-Q -->\n\n"
+                         "- <!-- claim-audit: range ZZ-Q -->\n"),
+        # a quoted list is its own run, not a continuation of the one above it
+        green("quoted list does not merge with the list above",
+              doc=GOOD.replace("1. one\n2. two\n3. three",
+                               "1. one\n2. two\n3. three\n\n> 1. a\n> 2. b")),
         case("ratchet: baseline file missing", "has no baseline",
              corpus=lambda t: (t / "docs" / "ci" / "doc-claims-baseline.txt").unlink()),
     ]
@@ -1120,8 +1142,9 @@ def main() -> None:
                 "quoted delimiter inside a fence is not a closer",
                 "quoted fence closes despite a differing prefix",
                 "quoted fence ends when its container does",
-                "same line: two valid markers both register",
-                "commented-out citation is not a citation"}
+                "commented-out citation is not a citation",
+                "quoted and list-item markers are examples",
+                "quoted list does not merge with the list above"}
     print(f"{'CASE':<44} {'AS EXPECTED':<12} message")
     for name, ok, msg in cases:
         kind = "green" if name in controls else "red"
