@@ -31,9 +31,10 @@
 #                        still holds the prefix its successors want; without it
 #                        the tool could only approve a split after that split
 #                        had landed. A cell that matches no §2 row is refused
-#                        rather than ignored. (A candidate byte-identical to a
-#                        registered row is also excluded — that is the same row
-#                        re-stated, and it cannot collide with itself.)
+#                        rather than ignored. --replace is the ONLY way to
+#                        exclude a row: passing a registered cell as a CANDIDATE
+#                        proposes adding it a second time, which is a duplicate
+#                        the gate rejects, so it is reported as a collision.
 #
 # Exit: 0 admissible; 1 collapse (branch (b)) OR registry collision (rename or
 # --replace); 2 the question could not be asked at all.
@@ -43,6 +44,12 @@ from __future__ import annotations
 import os
 import re
 import sys
+
+# The shared helper sits beside this script; do not depend on the caller's
+# sys.path, which differs between `python3 scripts/ci/x.py` and an import.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from _gfm_table import split_cells
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 INDEX = os.path.join(ROOT, "docs", "design", "IMPLEMENTATION_INDEX.md")
@@ -90,7 +97,10 @@ def registry_rows() -> list[str] | None:
             break
         if not in_table or not line.startswith("|"):
             continue
-        cols = [c.strip() for c in line.strip().strip("|").split("|")]
+        # Escape-aware, shared with the shape gate: a naive split on every
+        # pipe truncates a Family cell containing `\|` and reads the wrong
+        # prefix out of it.
+        cols = [c.strip() for c in split_cells(line.strip())]
         if not cols:
             continue
         if cols[0] in {"", "---"} or set(cols[0]) <= {"-", ":"}:
@@ -133,9 +143,7 @@ def report_candidates(cells: list[str], replaced: list[str] | None = None) -> in
     # Compare against the REGISTERED families too, not just against each
     # other. Candidates that are distinct among themselves can still collide
     # with a family already in §2, and reporting only the pairwise answer
-    # would contradict what CI then enforces. Rows whose Family cell is
-    # byte-identical to a candidate are excluded: those are the rows being
-    # replaced by this proposal, and a row cannot collide with itself.
+    # would contradict what CI then enforces.
     rows = registry_rows()
     if rows is None:
         print("index prefixes: IMPLEMENTATION_INDEX.md is missing",
@@ -149,9 +157,11 @@ def report_candidates(cells: list[str], replaced: list[str] | None = None) -> in
               "check candidates against a registry that was never read",
               file=sys.stderr)
         return 2
-    # A row is excluded when it is being REMOVED by this proposal — named
-    # explicitly with --replace — or when it is byte-identical to a candidate,
-    # which is the same row re-stated and cannot collide with itself.
+    # ONLY --replace excludes a registry row. Treating a byte-identical
+    # candidate as a replacement was wrong in both directions: it approved
+    # `--prefix '**OLD-A1**' '**NEW-B1**'`, which proposes ADDING a row that
+    # already exists — a duplicate CI rejects — and it let a replacement stay
+    # implicit, which §6 requires to be stated.
     removing = set(replaced or ())
     unknown = [r for r in removing if r not in rows]
     if unknown:
@@ -162,13 +172,34 @@ def report_candidates(cells: list[str], replaced: list[str] | None = None) -> in
               "registry holds it, or the exclusion silently does nothing",
               file=sys.stderr)
         return 2
+    # VALIDATE THE REGISTRY BEFORE ANSWERING ABOUT CANDIDATES. Skipping an
+    # unparseable row, or letting setdefault swallow a duplicate registered
+    # prefix, would let this mode return DISTINCT/0 against a registry on which
+    # CI mode returns 1 or 2 — the precise drift this command promises cannot
+    # happen. A broken registry means the question cannot be answered yet.
     registered: dict[str, str] = {}
+    registry_bad = False
     for row in rows:
-        if row in cells or row in removing:
+        if row in removing:
             continue
         pref = family_prefix(row)
-        if pref:
-            registered.setdefault(pref, row)
+        if not pref:
+            print(f"index prefixes: registered row {row!r} has no parseable "
+                  f"prefix — the registry itself does not pass the gate",
+                  file=sys.stderr)
+            registry_bad = True
+            continue
+        if pref in registered and registered[pref] != row:
+            print(f"index prefixes: registered prefix {pref!r} is already held "
+                  f"by {registered[pref]!r}, and {row!r} claims it too — the "
+                  f"registry itself does not pass the gate", file=sys.stderr)
+            registry_bad = True
+        registered.setdefault(pref, row)
+    if registry_bad:
+        print("index prefixes: fix §2 first; a candidate verdict against a "
+              "registry that CI rejects would not be CI's answer",
+              file=sys.stderr)
+        return 2
     seen: dict[str, str] = {}
     collisions = []
     registry_hits: list[tuple[str, str, str]] = []
@@ -236,9 +267,10 @@ def report_candidates(cells: list[str], replaced: list[str] | None = None) -> in
                   f"{row!r}, so candidate {cand!r} cannot take it")
         print("COLLIDES WITH THE REGISTRY — the candidates are distinct among "
               "themselves, but one wants a prefix another family already "
-              "holds. Rename it, or, if this proposal REPLACES that row, pass "
-              "the row's exact Family cell as one of the candidates so it is "
-              "excluded as the row being replaced.")
+              "holds. Either rename the candidate, or, if this proposal "
+              "REMOVES that row, name it after --replace, quoted exactly as "
+              "§2 holds it. Do NOT pass it as another candidate: that proposes "
+              "adding it a second time and manufactures a pairwise collision.")
         return 1
     # Invariant worth stating out loud: branch (a) is available only when the
     # candidates and the prefixes they claim are in one-to-one correspondence.

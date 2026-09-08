@@ -28,16 +28,28 @@ import os
 import re
 import sys
 
+# The shared helper sits beside this script; do not depend on the caller's
+# sys.path, which differs between `python3 scripts/ci/x.py` and an import.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from _gfm_table import has_pipe, split_cells
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 INDEX = os.path.join(ROOT, "docs", "design", "IMPLEMENTATION_INDEX.md")
 
 # RECOGNITION IS SEPARATE FROM VALIDITY, and deliberately far weaker.
 #
-# A header/delimiter pair is RECOGNISED when a pipe-bearing line is followed by
-# ANY non-blank line. Nothing is asked about the second line's content. That is
-# the whole test — it asks "might these two lines be trying to be a table?",
-# never "are they a valid one". Validity is decided afterwards by the strict
-# cell check and the width check, which REPORT.
+# A header/delimiter pair is RECOGNISED when a line is TABLE SYNTAX — this file
+# writes every table row with a leading `|` — and is followed by a non-blank
+# line, OR when a pipe-bearing line is followed by a delimiter-SHAPED one, which
+# is how a header that dropped its leading pipe is still caught. Nothing is
+# asked about the delimiter's content. Validity is decided afterwards by the
+# strict cell check and the width check, which REPORT.
+#
+# Prose containing an inline `a | b`, and shell pipelines inside fenced code,
+# are ordinary Markdown that GFM renders correctly. A shape gate that rejected
+# them would fail on valid documents — a worse outcome than the hole it closes —
+# so fenced blocks are skipped and a leading `|` is the discriminator.
 #
 # The separation is the entire design, arrived at the hard way: SIX earlier
 # versions tied recognition to some degree of validity — every cell well
@@ -61,72 +73,22 @@ INDEX = os.path.join(ROOT, "docs", "design", "IMPLEMENTATION_INDEX.md")
 # setext heading where a bare `---` follows a pipe row — which is precisely the
 # invisible-content defect this gate exists to report.
 DELIM_CELL_STRICT_RE = re.compile(r"^:?-{3,}:?$")
+# A line that is nothing but pipes, dashes, colons and space: the shape of a
+# delimiter row, however mangled. Used ONLY to recognise a header that dropped
+# its leading pipe, never to judge validity.
+DELIMITERISH_RE = re.compile(r"^[-:|\s]*-[-:|\s]*$")
 
 
-def has_pipe(line: str) -> bool:
-    """True when the line carries an unescaped `|`.
+def is_table_syntax(line: str) -> bool:
+    """A line this file writes as part of a table: it starts with `|`.
 
-    Used to identify a candidate HEADER and to tell a table row from the blank
-    line that ends a table. It is deliberately NOT asked of the delimiter —
-    see the recognition note at the top of the file: the delimiter is whatever
-    line sits directly beneath the header, and its content is judged only by
-    the checks that report.
+    Prose containing an inline `a | b`, and shell pipelines inside fenced
+    code, are ordinary Markdown that GFM renders correctly — a shape gate that
+    rejected them would fail on valid documents, which is a worse outcome than
+    the hole it would close. House style puts a leading pipe on every table
+    row, so that is the discriminator.
     """
-    i = 0
-    while i < len(line):
-        if line[i] == "\\":
-            run = 0
-            while i + run < len(line) and line[i + run] == "\\":
-                run += 1
-            i += run
-            if run % 2 and i < len(line) and line[i] == "|":
-                i += 1  # escaped pipe, not a delimiter
-            continue
-        if line[i] == "|":
-            return True
-        i += 1
-    return False
-
-
-def split_cells(line: str) -> list[str]:
-    """Split a GFM table row on unescaped pipes; backticks do NOT protect.
-
-    Escaping depends on the PARITY of the backslash run before the pipe:
-    `\\|` is a literal pipe, but `\\\\|` is an escaped backslash followed by a
-    live cell delimiter. Treating any preceding backslash as an escape would
-    let a surplus cell slip past.
-    """
-    cells: list[str] = []
-    cur: list[str] = []
-    i = 0
-    while i < len(line):
-        ch = line[i]
-        if ch == "\\":
-            run = 0
-            while i + run < len(line) and line[i + run] == "\\":
-                run += 1
-            cur.append("\\" * (run // 2))
-            i += run
-            if run % 2 and i < len(line) and line[i] == "|":
-                cur.append("|")  # odd run: this pipe is escaped
-                i += 1
-            elif run % 2:
-                cur.append("\\")
-            continue
-        if ch == "|":
-            cells.append("".join(cur))
-            cur = []
-            i += 1
-            continue
-        cur.append(ch)
-        i += 1
-    cells.append("".join(cur))
-    # A leading and/or trailing delimiter produces an empty edge cell.
-    if cells and not cells[0].strip():
-        cells = cells[1:]
-    if cells and not cells[-1].strip():
-        cells = cells[:-1]
-    return cells
+    return line.strip().startswith("|")
 
 
 def main() -> int:
@@ -147,17 +109,29 @@ def main() -> int:
     # delimiter pattern anywhere instead would let a body row of bare dashes
     # silently restart the column count from whatever preceded it.
     i = 0
+    fenced = False
     while i < len(lines):
         stripped = lines[i].strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            # A fenced block is verbatim: a shell pipeline inside one is not a
+            # table, and treating it as a malformed one would fail the gate on
+            # a correct document.
+            fenced = not fenced
+            i += 1
+            continue
+        if fenced:
+            i += 1
+            continue
         nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
-        # See the recognition note at the top of the file. Recognition is now
-        # PURELY POSITIONAL: a pipe-bearing line followed by any non-blank line
-        # opens a candidate table. Nothing is asked about the delimiter's
-        # CONTENT, because every content test tried here — all cells dashed,
-        # all-or-empty, one dashed, any pipe, whole line dashy — excused some
-        # malformed delimiter from examination, and the excused table then
-        # vanished behind the other tables' counters.
-        if not (stripped and has_pipe(stripped) and nxt):
+        # See the recognition note at the top of the file. Table syntax plus a
+        # non-blank successor, or a pipe line above a delimiter-shaped one.
+        # Nothing is asked about the delimiter's CONTENT: every content test
+        # tried here — all cells dashed, all-or-empty, one dashed, any pipe,
+        # whole line dashy — excused some malformed delimiter from examination,
+        # and the excused table then vanished behind the other tables'
+        # counters.
+        if not (stripped and nxt and has_pipe(stripped)
+                and (is_table_syntax(stripped) or DELIMITERISH_RE.match(nxt))):
             i += 1
             continue
 
@@ -240,15 +214,27 @@ def main() -> int:
     # would be a gate that fails on correct markdown. A malformed block whose
     # header and delimiter both lost their pipes is still caught here, through
     # whichever of its rows kept one.
+    in_fence = False
     for n, line in enumerate(lines):
         text = line.strip()
-        if not text or n in consumed:
+        if text.startswith("```") or text.startswith("~~~"):
+            in_fence = not in_fence
             continue
-        if has_pipe(text):
+        if in_fence or not text or n in consumed:
+            continue
+        if is_table_syntax(text):
             problems.append(
                 (n + 1, f"line carries table syntax but belongs to no table — "
                         f"a header, delimiter or row that GFM will not render "
                         f"as part of one: {text[:60]}…"))
+
+    if fenced:
+        # An unterminated fence swallows every line after it. That is a silent
+        # skip wearing a plausible disguise — the run reports on a prefix of
+        # the file while looking like a clean pass over all of it.
+        print("index shape: an unterminated code fence leaves the rest of the "
+              "file unread — close the fence", file=sys.stderr)
+        return 2
 
     if tables == 0 or rows_checked == 0:
         print("index shape: no parseable tables in the index — subject missing",

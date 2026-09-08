@@ -39,6 +39,10 @@ on:
       - "scripts/ci/check_followups_targets.py"
       - "scripts/ci/check_index_prefix_uniqueness.py"
       - "scripts/ci/check_index_table_shape.py"
+      # Both index gates import their row splitter from here, so a change to it
+      # changes what they see — a gate that cannot see its subject change is
+      # not a gate (rule 47).
+      - "scripts/ci/_gfm_table.py"
       - "scripts/ci/check_no_claim_era_spec.py"
       - "scripts/ci/check_landed_rows_stamped.py"
       - ".cursor/rules/**"
