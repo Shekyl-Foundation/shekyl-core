@@ -396,8 +396,9 @@ pub mod staking_read;
 /// driver — the wallet-side actor that lifts the [`submit_watchdog`]
 /// kernel (projection → escape ladder → resubmit-same-bytes probe →
 /// outcome) and executes the F40 targeted re-scan with its R2
-/// fruitless-rescan breaker. Thin scheduler around audited kernel
-/// decisions; cadence is owned by the embedding runtime (`tick()`).
+/// fruitless-rescan breaker. Thin per-tick step around audited kernel
+/// decisions; cadence is owned by the engine cadence driver
+/// ([`cadence`] leg 1, `ENGINE_CADENCE_DRIVER.md`).
 pub(crate) mod submit_lifecycle;
 /// PR-4 (`docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3): the submit
 /// watchdog's pure decision kernel — F14-lock-keyed held tracking, the
@@ -1303,17 +1304,17 @@ impl<
     /// [`WatchdogHost`](submit_lifecycle::WatchdogHost)) and the daemon
     /// to the driver for the duration of the tick.
     ///
-    /// # Cadence is the embedding runtime's, not the Engine's (§5.3)
+    /// # Cadence is the engine cadence driver's (`ENGINE_CADENCE_DRIVER.md`)
     ///
-    /// "Cadence is role policy; termination is not." This method is the
-    /// **entry point**, not a scheduler — the owner of the `Engine`
-    /// (the wallet binary / RPC server; Stage 4: the actor runtime)
-    /// decides *when* to call it. The natural call site is after each
-    /// completed refresh cycle, since the held projection and
-    /// `synced_height` only move on refresh / ledger writes; it must
-    /// **not** be called while a merge write-lock is held, because the
-    /// tick issues daemon round-trips and holding the ledger lock across
-    /// them would block the merge it depends on.
+    /// This method is the **entry point**, not a scheduler. Its production
+    /// caller is the cadence driver's submit-lifecycle leg
+    /// ([`cadence`] leg 1), which fires it on observed chain advance —
+    /// §5.3's original "the embedding runtime decides when" posture is
+    /// overturned per the design doc §1 (premise refuted: no embedder ever
+    /// scheduled it). The one call-site constraint stands: it must **not**
+    /// be called while a merge write-lock is held, because the tick issues
+    /// daemon round-trips and holding the ledger lock across them would
+    /// block the merge it depends on.
     ///
     /// Available only when the pending-tx engine is the production
     /// [`LocalPendingTx`](local_pending_tx::LocalPendingTx) (the

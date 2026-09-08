@@ -17,14 +17,17 @@
 //! release), and executes the F40 targeted re-scan with its R2
 //! fruitless-rescan breaker.
 //!
-//! # Cadence is role policy; termination is not (§5.3)
+//! # Cadence is the engine cadence driver's (`ENGINE_CADENCE_DRIVER.md`)
 //!
 //! The driver exposes [`SubmitLifecycleDriver::tick`]; **scheduling is
-//! owned by the embedding runtime.** Staking and plain wallets need not
-//! share periodicity. The natural production call site is after each
-//! completed refresh cycle — the held projection and `synced_height`
-//! only move on refresh / ledger writes — but the driver is a plain
-//! struct with an `async fn`, testable without timers.
+//! owned by the engine cadence driver** ([`cadence`](super::cadence)
+//! leg 1), which fires one tick per observed chain advance — the right
+//! base, since the held projection and `synced_height` only move with
+//! the chain. §5.3's original "scheduling is the embedding runtime's"
+//! posture is overturned per the design doc §1: no embedder ever
+//! scheduled the tick, and it sat with zero production callers. The
+//! driver itself stays a plain struct with an `async fn`, testable
+//! without timers.
 //!
 //! # State vs. handles: persistent overlays, per-tick host/daemon
 //!

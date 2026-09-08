@@ -40,7 +40,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use shekyl_operator_alarm::cadence::{apply_chain_progress, ChainProgressObservation};
@@ -51,6 +51,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::pscan::cadence::{FixedRateSchedule, ScanSchedule};
 use super::signer::EngineSignerKind;
+use super::submit_lifecycle::WatchdogHost;
 use super::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
 };
@@ -126,6 +127,71 @@ pub(crate) trait CadenceLeg: Send + 'static {
 
     /// One fire at the given observed tip height.
     fn fire(&mut self, tip: u64) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+}
+
+/// The weak grip on the shared engine that every leg (and the tip poll)
+/// holds — upgrade per fire, never a strong clone, so close is never
+/// blocked (§1 "Ownership and close").
+type WeakEngine<S, D, L, E, R, P, F> = Weak<RwLock<Engine<S, D, L, E, R, P, F>>>;
+
+/// Leg 1 (`ENGINE_CADENCE_DRIVER.md` §3 leg 1): the submit lifecycle —
+/// one [`Engine::run_submit_lifecycle_tick`] per chain advance. The tick
+/// is the `DAEMON_SUBMIT_VERDICT.md` §5.3 driver step (F40 targeted
+/// re-scan + escape ladder over every held tx); this leg is its
+/// **production caller** — the scheduler §5.3 deferred to "the embedding
+/// runtime" and no embedder ever built (design doc §0, the motivating
+/// zero-caller month).
+///
+/// Holds the driver's `Weak`; a failed upgrade is a quiet no-op (the
+/// wallet is closing and the loop is about to observe the same via
+/// [`TipPoll::EngineGone`]). The engine **read** lock is held across the
+/// tick's daemon round-trips — same discipline as every RPC handler; the
+/// §5.3 constraint is only that no merge *write* lock is held, and the
+/// driver's own overlay state has its own mutex precisely so the tick
+/// never takes one (see `Engine::submit_driver`).
+struct SubmitLifecycleLeg<S, D, L, E, R, P, F>
+where
+    S: EngineSignerKind,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine + WatchdogHost,
+    F: PersistenceEngine,
+{
+    engine: WeakEngine<S, D, L, E, R, P, F>,
+}
+
+impl<S, D, L, E, R, P, F> CadenceLeg for SubmitLifecycleLeg<S, D, L, E, R, P, F>
+where
+    S: EngineSignerKind,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine + WatchdogHost,
+    F: PersistenceEngine,
+    Engine<S, D, L, E, R, P, F>: Send + Sync + 'static,
+{
+    fn name(&self) -> &'static str {
+        "submit-lifecycle"
+    }
+
+    fn park_condition(&self) -> Option<AlarmCondition> {
+        // The tick raises its own per-tx alarms through the watchdog host's
+        // diagnostic sink; the driver has no condition to park for it.
+        None
+    }
+
+    fn fire(&mut self, _tip: u64) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        let weak = Weak::clone(&self.engine);
+        Box::pin(async move {
+            let Some(engine) = weak.upgrade() else {
+                return;
+            };
+            engine.read().await.run_submit_lifecycle_tick().await;
+        })
+    }
 }
 
 /// Leg 4's registered slot (`ENGINE_CADENCE_DRIVER.md` §3 leg 4): the
@@ -255,11 +321,26 @@ where
 /// assemble — leg 1 releases reservations before leg 3 snapshots the
 /// funding set; leg 4's prune is retire-class and precedes leg 3 too).
 ///
-/// Grows with the implementation commits: leg 1 (submit lifecycle),
-/// leg 2 (serving liveness), leg 3 (per-epoch claim) register here as
-/// they land. Today: the leg-4 slot only.
-pub(crate) fn production_legs() -> Vec<Box<dyn CadenceLeg>> {
-    vec![Box::new(TerminalRejectSlot)]
+/// Grows with the implementation commits: leg 2 (serving liveness) and
+/// leg 3 (per-epoch claim) register here as they land. Today: leg 1
+/// (submit lifecycle) and the leg-4 slot.
+pub(crate) fn production_legs<S, D, L, E, R, P, F>(
+    engine: WeakEngine<S, D, L, E, R, P, F>,
+) -> Vec<Box<dyn CadenceLeg>>
+where
+    S: EngineSignerKind,
+    D: DaemonEngine,
+    L: LedgerEngine,
+    E: EconomicsEngine,
+    R: RefreshEngine,
+    P: PendingTxEngine + WatchdogHost,
+    F: PersistenceEngine,
+    Engine<S, D, L, E, R, P, F>: Send + Sync + 'static,
+{
+    vec![
+        Box::new(SubmitLifecycleLeg { engine }),
+        Box::new(TerminalRejectSlot),
+    ]
 }
 
 /// Convenience for production spawns: the default fixed-rate poll.
@@ -278,7 +359,7 @@ where
     L: LedgerEngine,
     E: EconomicsEngine,
     R: RefreshEngine,
-    P: PendingTxEngine,
+    P: PendingTxEngine + WatchdogHost,
     F: PersistenceEngine,
     Self: Send + Sync + 'static,
 {
@@ -325,6 +406,7 @@ where
     ///
     /// Same runtime requirement as [`into_shared`](Self::into_shared).
     pub fn start_cadence(self_arc: &Arc<RwLock<Self>>) -> CadenceHandle {
+        let legs = production_legs(Arc::downgrade(self_arc));
         let weak = Arc::downgrade(self_arc);
         let poll = move || {
             let weak = weak.clone();
@@ -344,12 +426,7 @@ where
                 }
             }
         };
-        spawn_cadence_loop(
-            production_schedule(),
-            poll,
-            production_legs(),
-            CHAIN_STALL_HORIZON,
-        )
+        spawn_cadence_loop(production_schedule(), poll, legs, CHAIN_STALL_HORIZON)
     }
 }
 
@@ -713,12 +790,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_reject_slot_is_registered_and_invoked_each_tick() {
+    async fn production_legs_are_registered_and_invoked_each_tick() {
         // Against the real production registry, wrapped in witnesses: an
         // empty leg that no-ops must stay distinguishable from a leg never
-        // registered (ENGINE_CADENCE_DRIVER.md §7).
+        // registered (ENGINE_CADENCE_DRIVER.md §7). A dead `Weak` stands in
+        // for the engine — the submit-lifecycle leg's upgrade fails and it
+        // no-ops, which is exactly the closing-wallet path; the assertion
+        // is registration and invocation, not tick effect.
+        let dead: Weak<RwLock<Engine<super::super::signer::SoloSigner>>> = Weak::new();
         let log = Arc::new(Mutex::new(Vec::new()));
-        let legs: Vec<Box<dyn CadenceLeg>> = production_legs()
+        let legs: Vec<Box<dyn CadenceLeg>> = production_legs(dead)
             .into_iter()
             .map(|inner| {
                 Box::new(Witness {
@@ -735,9 +816,17 @@ mod tests {
         let mut handle = handle;
         handle.join.take().expect("join").await.expect("loop exit");
         let fired = log.lock().expect("log").clone();
-        assert!(
-            fired.contains(&("terminal-reject", 1)) && fired.contains(&("terminal-reject", 2)),
-            "the leg-4 slot must be registered and invoked on every advance, got {fired:?}"
+        for leg in ["submit-lifecycle", "terminal-reject"] {
+            assert!(
+                fired.contains(&(leg, 1)) && fired.contains(&(leg, 2)),
+                "{leg} must be registered and invoked on every advance, got {fired:?}"
+            );
+        }
+        // Fire order is the §3 retire-before-assemble registration order.
+        assert_eq!(
+            fired[..2],
+            [("submit-lifecycle", 1), ("terminal-reject", 1)],
+            "registration order must be preserved per tick"
         );
     }
 
