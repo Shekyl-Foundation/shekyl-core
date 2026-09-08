@@ -149,7 +149,7 @@ fn correction_factor(v: u64, circulating: u64, height: u64, params: &EconomicPar
         v,
         params.tx_volume_baseline,
         circulating,
-        params.money_supply,
+        params.emission_curve_asymptote,
         params.burn_base_rate,
         params.burn_cap,
     );
@@ -508,7 +508,7 @@ fn rung_table(
         label,
         age_years,
         supply_ratio_millionths: u64::try_from(
-            u128::from(st.ag) * u128::from(SCALE) / u128::from(params.money_supply),
+            u128::from(st.ag) * u128::from(SCALE) / u128::from(params.emission_curve_asymptote),
         )
         .expect("ratio fits"),
         tx_volume_avg: v,
@@ -1128,7 +1128,7 @@ pub struct DegeneratePins {
     pub tail_subsidy_per_block: u64,
     pub headroom_at_tail_entry: u64,
     pub tail_era_blocks: u64,
-    /// At `already_generated == money_supply`: the 5-arg estimate path's
+    /// At `already_generated == emission_curve_asymptote`: the 5-arg estimate path's
     /// pre-penalty curve value vs the paid quantity validation settles on.
     /// FL-V1's divergence in its terminal form — since FL-R12′ that is a
     /// gap between two nonzero rewards, not the estimate-vs-ZERO it was
@@ -1149,10 +1149,10 @@ pub struct DegeneratePins {
 }
 
 fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
-    let ratio_09 = params.money_supply / 10 * 9;
+    let ratio_09 = params.emission_curve_asymptote / 10 * 9;
     let esf = emission_speed_factor(params);
     let tail = tail_subsidy_per_block(params).expect("tail subsidy");
-    let s = params.money_supply;
+    let s = params.emission_curve_asymptote;
     let est_reward = base_block_reward(s, params).expect("base at exhaustion");
     // FL-R12′ retired the supply cap, so validation no longer pays ZERO at
     // the asymptote — it pays the perpetual tail through the one owner.
@@ -1335,7 +1335,8 @@ pub fn report() -> FeeLadderReport {
     let mut c_surface = Vec::new();
     let (mut c_min, mut c_max) = (u64::MAX, 0u64);
     for &(age, st) in &states {
-        let proj_ratio = u128::from(st.ag) * u128::from(SCALE) / u128::from(params.money_supply);
+        let proj_ratio =
+            u128::from(st.ag) * u128::from(SCALE) / u128::from(params.emission_curve_asymptote);
         for &ratio in &ratios {
             // §1.8 reachability: the release multiplier bounds the real
             // trajectory within [0.8, 1.3]× of the neutral one.
@@ -1343,7 +1344,7 @@ pub fn report() -> FeeLadderReport {
             let hi = (proj_ratio * 13 / 10).min(u128::from(SCALE));
             let reachable = u128::from(ratio) >= lo && u128::from(ratio) <= hi;
             let circ = u64::try_from(
-                u128::from(params.money_supply) * u128::from(ratio) / u128::from(SCALE),
+                u128::from(params.emission_curve_asymptote) * u128::from(ratio) / u128::from(SCALE),
             )
             .expect("circ fits");
             for &v in &volumes {

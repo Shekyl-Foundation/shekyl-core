@@ -75,7 +75,7 @@ inline BurnResult compute_fee_burn(
         tx_volume,
         SHEKYL_TX_VOLUME_BASELINE,
         circulating_supply,
-        MONEY_SUPPLY,
+        SHEKYL_EMISSION_CURVE_ASYMPTOTE,
         SHEKYL_BURN_BASE_RATE,
         SHEKYL_BURN_CAP);
 

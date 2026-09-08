@@ -102,6 +102,34 @@
   existing `FULL` wallets is unchanged. (Decision log 2026-09-07; rule
   `23-disposition-visibility`.)
 
+- **`money_supply` is now `emission_curve_asymptote` — the name says what the
+  number is (FL-R15).** Under the perpetual tail signed as FL-R12′, gross
+  issuance passes `2³² · 10⁹` and keeps going: the accumulator runs *through*
+  that value rather than stopping at it. The old name asserted a ceiling the
+  code no longer enforces, and that mismatch is what produced FL-R16 — two of
+  the constant's four jobs turned out to be *assertions that the cap holds*.
+
+  **What changed, for anyone reading a config or a header.** The
+  `config/economics_params.json` key is `emission_curve_asymptote`; the
+  generated C++ macro is `SHEKYL_EMISSION_CURVE_ASYMPTOTE` (rule 93 prefix,
+  replacing the inherited unprefixed `MONEY_SUPPLY`); the Rust surface is
+  `EconomicParams::emission_curve_asymptote` /
+  `params::EMISSION_CURVE_ASYMPTOTE`. **Behaviour is unchanged** — the value,
+  the emission arithmetic, and the parameter digest are all identical, and the
+  economics simulator's `--fee-ladder` and `--stage2` reports are byte-for-byte
+  the same across the rename.
+
+  **If you have an out-of-tree `economics_params.json`**, rename the key: the
+  build fails loudly on a missing key rather than defaulting.
+
+- **`ActivityMetric::new` no longer rejects a supply past the asymptote
+  (FL-R16b).** The constructor validated `circulating_supply ≤ MONEY_SUPPLY`
+  as a structural invariant. That invariant is false under the perpetual tail —
+  a chain state past the asymptote is legitimate, not impossible — so the check
+  and its `CirculatingExceedsSupply` discriminator are removed. The remaining
+  structural invariants (`total_staked ≤ circulating_supply`, zero-at-genesis)
+  are unchanged.
+
 - **Peerlist trust is earned in-process: nothing restored from disk is
   trusted, and `--add-peer` is a candidate rather than a trusted peer.**
   White-list membership now means exactly *"this process dialled it and it

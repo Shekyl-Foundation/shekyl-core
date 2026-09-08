@@ -113,7 +113,7 @@ pub struct ScenarioConfig {
 }
 
 pub struct SimParams {
-    pub money_supply: u64,
+    pub emission_curve_asymptote: u64,
     pub emission_speed_factor_per_minute: u64,
     pub final_subsidy_per_minute: u64,
     pub blocks_per_year: u64,
@@ -130,7 +130,7 @@ pub struct SimParams {
 impl Default for SimParams {
     fn default() -> Self {
         Self {
-            money_supply: 4_294_967_296_000_000_000,
+            emission_curve_asymptote: 4_294_967_296_000_000_000,
             emission_speed_factor_per_minute: 22,
             final_subsidy_per_minute: 300_000_000,
             blocks_per_year: 262_800,
@@ -159,7 +159,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         burn_base_rate: params.burn_base_rate,
         burn_cap: params.burn_cap,
         staker_pool_share: params.staker_pool_share,
-        money_supply: params.money_supply,
+        emission_curve_asymptote: params.emission_curve_asymptote,
         emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
         final_subsidy_per_minute: params.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
@@ -171,14 +171,14 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
     let total_blocks = params.blocks_per_year * config.sim_years;
 
     let mut already_generated: u128 =
-        (params.money_supply as f64 * config.initial_emitted_fraction) as u128;
+        (params.emission_curve_asymptote as f64 * config.initial_emitted_fraction) as u128;
     let mut total_burned: u128 = 0;
     let mut staker_emission_earned_year: u128 = 0;
     let mut staker_fee_earned_year: u128 = 0;
     let mut year_start_circulating: u128 = 0;
 
     let mut snapshots = Vec::new();
-    let money_supply = params.money_supply as u128;
+    let emission_curve_asymptote = params.emission_curve_asymptote as u128;
 
     for block in 0..total_blocks {
         let year = block / params.blocks_per_year;
@@ -248,7 +248,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 tx_volume,
                 params.tx_volume_baseline,
                 circulating,
-                params.money_supply,
+                params.emission_curve_asymptote,
                 params.burn_base_rate,
                 params.burn_cap,
             ),
@@ -269,7 +269,8 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
         if block_in_year == params.blocks_per_year - 1 || block == total_blocks - 1 {
             let circ_now = already_generated.saturating_sub(total_burned) as f64 / COIN;
-            let supply_emitted_pct = already_generated as f64 / money_supply as f64 * 100.0;
+            let supply_emitted_pct =
+                already_generated as f64 / emission_curve_asymptote as f64 * 100.0;
 
             let avg_block_reward = effective_reward as f64 / COIN;
 
@@ -327,7 +328,8 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
     ScenarioResult {
         name: config.name.clone(),
         description: config.description.clone(),
-        final_supply_emitted_pct: already_generated as f64 / money_supply as f64 * 100.0,
+        final_supply_emitted_pct: already_generated as f64 / emission_curve_asymptote as f64
+            * 100.0,
         final_total_burned: total_burned as f64 / COIN,
         stuffing_profitable: None,
         years: snapshots,
@@ -423,7 +425,10 @@ mod tests {
                 .expect("economics_params.json must be valid JSON");
         let p = SimParams::default();
 
-        assert_eq!(p.money_supply, cfg_u64(&cfg, "money_supply"));
+        assert_eq!(
+            p.emission_curve_asymptote,
+            cfg_u64(&cfg, "emission_curve_asymptote")
+        );
         assert_eq!(
             p.emission_speed_factor_per_minute,
             cfg_u64(&cfg, "emission_speed_factor_per_minute")

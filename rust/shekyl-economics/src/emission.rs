@@ -60,7 +60,10 @@ pub fn tail_subsidy_per_block(params: &EconomicParams) -> Result<u64, EmissionEr
 /// floor at exhaustion).
 #[inline]
 fn curve_emission(already_generated_coins: u64, params: &EconomicParams) -> u64 {
-    params.money_supply.saturating_sub(already_generated_coins) >> emission_speed_factor(params)
+    params
+        .emission_curve_asymptote
+        .saturating_sub(already_generated_coins)
+        >> emission_speed_factor(params)
 }
 
 /// The M_r-neutral emission view: `max(curve, TAIL)` (0h).
@@ -200,7 +203,7 @@ pub fn projected_already_generated(
             // tail floor every remaining block adds exactly `tail`.
             //
             // This is not tidying a loop that would have finished. The
-            // `ag >= money_supply` early return that FL-R12′ retired with
+            // `ag >= emission_curve_asymptote` early return that FL-R12′ retired with
             // the supply cap was ALSO what bounded this walk: removing the
             // defect removed a load-bearing side effect. Without this arm
             // a large `height` spends ~23.6 billion iterations — the
@@ -312,7 +315,7 @@ mod tests {
         p.emission_speed_factor_per_minute = (p.daa_target_seconds / 60) + 3;
         let esf = emission_speed_factor(&p);
         let tail = tail_subsidy_per_block(&p).expect("tail");
-        p.money_supply = (tail << esf) * 4;
+        p.emission_curve_asymptote = (tail << esf) * 4;
 
         let naive = |height: u64| -> u64 {
             let mut ag = 0u64;
@@ -361,7 +364,7 @@ mod tests {
     fn base_block_reward_tail_floor() {
         let p = EconomicParams::default();
         let tail = p.final_subsidy_per_minute * (p.daa_target_seconds / 60);
-        let near_max = p.money_supply - ((2 << 20) + 1);
+        let near_max = p.emission_curve_asymptote - ((2 << 20) + 1);
         assert_eq!(base_block_reward(near_max, &p).unwrap(), tail);
     }
 
@@ -402,7 +405,7 @@ mod tests {
 
         let p = EconomicParams::default();
         let tail = tail_subsidy_per_block(&p).unwrap();
-        let s = p.money_supply;
+        let s = p.emission_curve_asymptote;
         let zone = 300_000;
         let dormancy_v = 0; // pins the release multiplier at its 0.8 rail
 
@@ -531,7 +534,7 @@ mod tests {
     fn c2a_prime_layer1_base_reward_grid_matches_spec() {
         // Layer-1 leg B (STAGE_1_PR_7 §5.8) — Q_subsidy spec confirmation. The
         // oracle is an INDEPENDENT closed-form re-derivation of the 0h curve
-        // `max((money_supply - ag) >> esf, tail)`, NOT a call to
+        // `max((emission_curve_asymptote - ag) >> esf, tail)`, NOT a call to
         // `base_block_reward`. A shift/floor regression in the production curve
         // diverges from this oracle, so the assertion is non-tautological.
         let p = EconomicParams::default();
@@ -541,11 +544,11 @@ mod tests {
             0_u64,
             2_048_000_000_000,
             2_756_434_948_434_199_641,
-            p.money_supply - ((2 << 20) + 1), // tail-floor regime
+            p.emission_curve_asymptote - ((2 << 20) + 1), // tail-floor regime
         ];
         for ag in grid {
             let reward = base_block_reward(ag, &p).unwrap();
-            let spec = core::cmp::max((p.money_supply - ag) >> esf, tail);
+            let spec = core::cmp::max((p.emission_curve_asymptote - ag) >> esf, tail);
             assert_eq!(
                 reward, spec,
                 "Q_subsidy diverges from closed-form spec at ag={ag}"
@@ -580,7 +583,7 @@ mod tests {
             0_u64,
             2_048_000_000_000,
             2_756_434_948_434_199_641,
-            p.money_supply,
+            p.emission_curve_asymptote,
         ];
         let height_grid = [
             1_u64,
@@ -950,12 +953,12 @@ mod tests {
         assert_eq!(advance_already_generated(0, 100), 100);
         // Through the asymptote, not clamped to it.
         assert_eq!(
-            advance_already_generated(p.money_supply, 1),
-            p.money_supply + 1
+            advance_already_generated(p.emission_curve_asymptote, 1),
+            p.emission_curve_asymptote + 1
         );
         assert_eq!(
-            advance_already_generated(p.money_supply - 1, 50),
-            p.money_supply + 49
+            advance_already_generated(p.emission_curve_asymptote - 1, 50),
+            p.emission_curve_asymptote + 49
         );
         // The only saturation is the u64 rail.
         assert_eq!(advance_already_generated(u64::MAX, u64::MAX), u64::MAX);
