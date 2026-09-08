@@ -303,11 +303,34 @@ jobs:
           # exercised. The p2p console leg carries an extra job: it is what
           # makes `print_net_stats`' bridged `/get_limit` call safe to keep
           # until RK-8 migrates that route (§2.1.1).
+          #
+          # ARMED vs FAST-SET. This list is the ARMED set: a gate belongs here
+          # only once it has been OBSERVED FAILING for the reason it exists —
+          # a gate nobody has seen red is not evidence, and arming one that
+          # cannot fail is worse than leaving it dark, because it occupies the
+          # slot where coverage should be. Membership of the separate FAST SET
+          # (whatever runs before every push) is a COST question and is decided
+          # by measured seconds, not by whether a gate is trusted. The two are
+          # different memberships and must not be collapsed: a slow gate is
+          # excluded from the fast set with its number attached, never
+          # unarmed.
+          #
+          # FAST-SET EXCLUSIONS (armed here, too slow to run pre-push):
+          #   e2e_fcmp_spend_accepted_by_daemon — 76-99 s measured
+          #     2026-09-07 over four runs. It mines to reference-spendability,
+          #     builds an FCMP++ spend with the production Engine, and waits
+          #     for a live daemon to accept and connect it.
+          #
+          # `regtest_e2e.rs` holds 17 `#[ignore]` attributes and this list
+          # names 5, so 12 remain dark. They are not excluded — nobody has
+          # decided about them. Each needs its own red observation before it
+          # is added, which is why they are not being bulk-armed here.
           for t in \
             engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge \
             engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm \
             engine::regtest_e2e::ported_p2p_console_commands_answer_on_the_in_process_arm \
-            engine::regtest_e2e::native_handlers_apply_their_own_request_caps
+            engine::regtest_e2e::native_handlers_apply_their_own_request_caps \
+            engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon
           do
             set +e
             cargo test -p shekyl-engine-core --lib "$t" \
