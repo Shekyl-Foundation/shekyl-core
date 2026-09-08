@@ -522,6 +522,12 @@ timing and funding footguns that matter for your privacy.
   transaction itself once each reward epoch settles. Very small rewards are
   held until enough accumulate to be worth the network fee, and a wallet that
   was closed for a while claims its backlog shortly after you reopen it.
+  Automatic claiming currently requires the wallet's daemon to be on the same
+  machine (a loopback address). If your wallet points at a remote daemon —
+  even one you run yourself — rewards are not claimed automatically yet; they
+  are held, and the wallet raises an operator alarm rather than claiming over
+  the remote connection. Remote-daemon claiming arrives with remote-daemon
+  support as a whole.
 - **Principal stays liquid.** You can release collateral by unbonding, subject
   to a release cooldown. There is no fixed lock height to wait out.
 
