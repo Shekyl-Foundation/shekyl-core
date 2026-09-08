@@ -139,6 +139,7 @@ def main() -> int:
     problems: list[tuple[int, str]] = []
     tables = 0
     rows_checked = 0
+    consumed: set[int] = set()
 
     # Positional parse. A table is a header line, the delimiter line directly
     # beneath it, then body rows until a BLANK line — every table in this file
@@ -161,6 +162,8 @@ def main() -> int:
             continue
 
         tables += 1
+        consumed.add(i)
+        consumed.add(i + 1)
         for ln, text, what in ((i + 1, stripped, "header"),
                                (i + 2, nxt, "delimiter row")):
             if not text.startswith("|"):
@@ -202,6 +205,7 @@ def main() -> int:
                     (j + 1, f"row inside a table carries no '|' — tables are "
                             f"blank-separated, so this is a malformed row "
                             f"rather than the end of the table: {body[:60]}…"))
+                consumed.add(j)
                 rows_checked += 1
                 j += 1
                 continue
@@ -212,6 +216,7 @@ def main() -> int:
                 problems.append(
                     (j + 1, f"row does not start with '|' — the index writes "
                             f"tables with a leading delimiter: {body[:60]}…"))
+            consumed.add(j)
             n = len(split_cells(body))
             rows_checked += 1
             if n != want:
@@ -223,6 +228,28 @@ def main() -> int:
             j += 1
         i = j
 
+    # CLOSING INVARIANT: every pipe-bearing line belongs to some table.
+    # Recognition needs a header AND a following line, so a malformed block
+    # whose header lost its pipes, or a lone row at end-of-file, is consumed by
+    # nothing and would otherwise vanish while the other tables kept the
+    # counters green. Counting what was NOT accounted for closes that by
+    # construction rather than by another recognition case.
+    #
+    # Only PIPE-BEARING lines are swept. A bare `---` is a thematic break in
+    # this file, used as a section separator eight times, and flagging those
+    # would be a gate that fails on correct markdown. A malformed block whose
+    # header and delimiter both lost their pipes is still caught here, through
+    # whichever of its rows kept one.
+    for n, line in enumerate(lines):
+        text = line.strip()
+        if not text or n in consumed:
+            continue
+        if has_pipe(text):
+            problems.append(
+                (n + 1, f"line carries table syntax but belongs to no table — "
+                        f"a header, delimiter or row that GFM will not render "
+                        f"as part of one: {text[:60]}…"))
+
     if tables == 0 or rows_checked == 0:
         print("index shape: no parseable tables in the index — subject missing",
               file=sys.stderr)
@@ -231,8 +258,9 @@ def main() -> int:
     if problems:
         for ln, detail in problems:
             print(f"index shape: line {ln} {detail}")
-        print(f"\n{len(problems)} malformed table row(s). GFM renders neither a "
-              f"surplus cell nor a missing one; escape a literal pipe as \\|.",
+        print(f"\n{len(problems)} malformed table row(s). GFM DROPS a surplus "
+              f"cell and renders a missing trailing one as BLANK — either way the "
+              f"source and the page disagree. Escape a literal pipe as \\|.",
               file=sys.stderr)
         return 1
 

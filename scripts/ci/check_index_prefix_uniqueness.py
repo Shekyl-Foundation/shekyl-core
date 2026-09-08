@@ -25,9 +25,18 @@
 #                        asks for and the answer CI enforces cannot drift apart.
 #                        Two cells minimum — one candidate cannot collide with
 #                        anything, so a green verdict on it would assert nothing.
-#                        A candidate whose Family cell exactly matches a §2 row
-#                        excludes that row, which is how a proposal that REPLACES
-#                        a row is distinguished from one that adds beside it.
+#   … --replace CELL…    Family cells of rows the proposal REMOVES, excluded
+#                        from the registry comparison. Required whenever a
+#                        family is being SPLIT, because the row being replaced
+#                        still holds the prefix its successors want; without it
+#                        the tool could only approve a split after that split
+#                        had landed. A cell that matches no §2 row is refused
+#                        rather than ignored. (A candidate byte-identical to a
+#                        registered row is also excluded — that is the same row
+#                        re-stated, and it cannot collide with itself.)
+#
+# Exit: 0 admissible; 1 collapse (branch (b)) OR registry collision (rename or
+# --replace); 2 the question could not be asked at all.
 
 from __future__ import annotations
 
@@ -92,10 +101,27 @@ def registry_rows() -> list[str] | None:
     return rows
 
 
-def report_candidates(cells: list[str]) -> int:
+def report_candidates(cells: list[str], replaced: list[str] | None = None) -> int:
     """Rule 94 §6: print what each proposed Family cell parses to, and whether
-    the set stays distinct. Exit 0 when distinct (branch (a) is available),
-    1 when two candidates collapse to one prefix (branch (b) is required)."""
+    the shape is admissible.
+
+    `replaced` names Family cells of rows the proposal REMOVES. Without it the
+    tool cannot answer its own motivating question: before the PWD split, the
+    combined row's cell began `PWD-T1…` and so held `PWD-T`, which every
+    proposed cluster cell then collided with — while passing that old cell as a
+    candidate instead manufactured a pairwise `PWD-T` collision. Either way the
+    answer was wrong until the split had already landed, which is exactly when
+    nobody needs to ask. A removed row is a different thing from a proposed one
+    and now says so.
+
+    Exit codes, all three of which callers act on differently:
+      0  distinct among themselves AND clear of the registry — §6 branch (a)
+      1  candidates collapse into one prefix — §6 branch (b), do not split
+      1  candidates are distinct but one wants a prefix another family holds —
+         rename it, or name that row with `--replace`
+      2  the question could not be asked: fewer than two candidates, an
+         unparseable cell, or no registry to check against
+    """
     if len(cells) < 2:
         # Rule 47: a single candidate cannot exercise the collision check, so
         # a green verdict on one cell asserts nothing. The question this mode
@@ -123,9 +149,22 @@ def report_candidates(cells: list[str]) -> int:
               "check candidates against a registry that was never read",
               file=sys.stderr)
         return 2
+    # A row is excluded when it is being REMOVED by this proposal — named
+    # explicitly with --replace — or when it is byte-identical to a candidate,
+    # which is the same row re-stated and cannot collide with itself.
+    removing = set(replaced or ())
+    unknown = [r for r in removing if r not in rows]
+    if unknown:
+        for r in unknown:
+            print(f"index prefixes: --replace {r!r} matches no §2 row",
+                  file=sys.stderr)
+        print("index prefixes: a replaced row must be quoted EXACTLY as the "
+              "registry holds it, or the exclusion silently does nothing",
+              file=sys.stderr)
+        return 2
     registered: dict[str, str] = {}
     for row in rows:
-        if row in cells:
+        if row in cells or row in removing:
             continue
         pref = family_prefix(row)
         if pref:
@@ -167,13 +206,27 @@ def report_candidates(cells: list[str]) -> int:
             else:
                 print(f"\nindex prefixes: {pref!r} is claimed by both {a!r} "
                       f"and {b!r}")
-        for pref, row in dict((p, r) for p, _, r in registry_hits).items():
+        # Only a registry hit on a prefix the candidates COLLAPSE INTO is
+        # explained by the split. A hit on any other prefix is an unrelated
+        # family this proposal would tread on, and calling that "not a second
+        # fault" would bury a real error under a correct one.
+        collapsed = {p for p, _, _ in collisions}
+        expected = {p: r for p, _, r in registry_hits if p in collapsed}
+        unrelated = [(p, c, r) for p, c, r in registry_hits if p not in collapsed]
+        for pref, row in expected.items():
             print(f"index prefixes: (and {pref!r} is already registered by "
                   f"{row!r} — consistent with this being that family's own "
                   f"split, not a second fault)")
+        for pref, cand, row in unrelated:
+            print(f"index prefixes: SEPARATELY, {pref!r} is registered by "
+                  f"{row!r}, so candidate {cand!r} collides with an unrelated "
+                  f"family — this one needs a rename or a --replace")
         print("COLLIDE — rule 94 §6 branch (b): keep one row and put per-lane "
               "status in the owning doc. Do NOT widen the grammar to separate "
               "them; that costs the check its power to catch a real duplicate.")
+        if unrelated:
+            print("…and fix the unrelated registry collision above as well; "
+                  "branch (b) does not excuse it.")
         return 1
     # Only once the candidates are distinct among themselves does a registry
     # hit mean what it says: this shape wants a prefix another family holds.
@@ -199,10 +252,14 @@ def report_candidates(cells: list[str]) -> int:
 def main() -> int:
     argv = sys.argv[1:]
     if argv and argv[0] == "--prefix":
-        return report_candidates(argv[1:])
+        rest = argv[1:]
+        if "--replace" in rest:
+            cut = rest.index("--replace")
+            return report_candidates(rest[:cut], rest[cut + 1:])
+        return report_candidates(rest)
     if argv:
-        print(f"usage: {os.path.basename(__file__)} [--prefix CELL ...]",
-              file=sys.stderr)
+        print(f"usage: {os.path.basename(__file__)} "
+              f"[--prefix CELL CELL… [--replace CELL…]]", file=sys.stderr)
         return 2
     rows = registry_rows()
     if rows is None:

@@ -106,14 +106,25 @@ the same PR.
    Family cells to the same script CI gates with:
 
    ```bash
-   python3 scripts/ci/check_index_prefix_uniqueness.py --prefix \
-     '**PWD-T1…PWD-T8**' '**PWD-B1…PWD-B12**' '**PWD-I1…PWD-I6**'
+   python3 scripts/ci/check_index_prefix_uniqueness.py \
+     --prefix '**XX-A1…XX-A9**' '**XX-B1…XX-B9**' \
+     --replace '<the row being split, quoted exactly as §2 holds it>'
    ```
 
-   It prints the prefix each cell parses to and exits **0 when they
-   stay distinct** (branch (a) is available) or **1 when two collapse**
-   (branch (b) is required). It is the gate's own parser, so the answer
-   here and the answer CI enforces cannot drift apart.
+   `--replace` is not optional when splitting: the row you are
+   replacing still holds the prefix its successors want, so without it
+   the tool can only approve a split **after** that split has landed.
+   Quote the removed row's Family cell byte-exactly — a cell matching
+   no §2 row is refused rather than silently ignored.
+
+   Exit **0** — distinct among themselves and clear of the registry,
+   branch (a) is available. Exit **1** — either the candidates collapse
+   into one prefix (branch (b); do not split) or they are distinct but
+   one wants a prefix another family holds (rename it, or name that row
+   with `--replace`); the output says which. Exit **2** — the question
+   could not be asked. It is the gate's own parser reading the gate's
+   own registry, so the answer here and the answer CI enforces cannot
+   drift apart.
 
    - **(a) One row per lane-owned sub-family**, when the sub-families
      parse to distinct prefixes. `PWD-T`/`PWD-B`/`PWD-I`/`PWD-A`/
