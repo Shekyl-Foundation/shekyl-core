@@ -210,6 +210,15 @@ pub(crate) mod bond_assembly;
 pub(crate) mod bond_orchestrator;
 /// SA-R-6 bond watch: shared `Input::BondPost` lift + merge sighting adoption.
 pub(crate) mod bond_watch;
+/// The engine cadence driver (`ENGINE_CADENCE_DRIVER.md`): the one
+/// engine-owned loop scheduling the non-interactive maintenance legs
+/// (submit lifecycle, serving liveness, per-epoch claim, terminal-reject
+/// prune/resubmit). Chain-progress tick base + wall-clock watchdog;
+/// `Weak` upgrade per tick so close is never blocked.
+// Production caller is `Engine::into_shared` — the next commit of this PR
+// (ENGINE_CADENCE_DRIVER.md §8 commit 3); the allow comes off with it.
+#[allow(dead_code)]
+pub(crate) mod cadence;
 /// PR-4's CB-3 dispatch seam (`EMISSION_CLAIM_BUILDER.md` §8): the Engine-side
 /// emission-claim **request path** — activate the claimant slot, assemble via
 /// `claim_orchestrator`, dispatch through the audited posture→submitter choke
