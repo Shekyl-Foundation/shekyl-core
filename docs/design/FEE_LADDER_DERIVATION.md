@@ -1536,12 +1536,16 @@ commit in this branch's history; that ordering is the register.
   banded 446, un-banded 464) is insensitive to the band either way. A
   grid that *lowers* dwell below the bar fails regardless of what it does
   for boundary flicker.
-- **C10-3 — a per-query cost budget is a gate, not a note.** The
-  restoration must not make a fee quote cost more block parses than the
-  un-banded path does today (one `get_tx_volume_avg`, memoized). Any
-  shape exceeding that budget is BLOCKED on the storage-lane per-block tx
-  count (§10.4), and the FL-R3 row must name that blocker rather than
-  implying it (rule 22).
+- **C10-3 — a per-query cost budget is a gate, and it is measured on the
+  COLD path.** The restoration must not make a fee quote cost more block
+  parses than the un-banded path does today (one `get_tx_volume_avg`).
+  **The budget is met by the cold, from-`h₀` computation alone; no memo
+  may be counted toward it** — see §10.6 for why counting one would
+  reintroduce exactly the property round 17 rejected. This is what makes
+  the single-scan shape mandatory rather than merely preferable. Any
+  shape exceeding the budget on the cold path is BLOCKED on the
+  storage-lane per-block tx count (§10.4), and the FL-R3 row must name
+  that blocker rather than implying it (rule 22).
 - **C10-4 — the grid period `P` is selected from measurement, not
   taste.** `P` is chosen from the §10.4 cost table together with FL-D8's
   boundary-cell occupancy. Neither alone is sufficient: cost bounds `P`
@@ -1618,6 +1622,14 @@ the contiguous range `(h₀ − 720, h]` — scanned **once**, with the rolling
 means and the fold computed from one pass. That requires a different
 shape at the boundary than "call the FFI per height" (§10.7).
 
+**Two substrate facts checked rather than assumed.**
+`get_block_already_generated_coins(height)` is a per-block LMDB field,
+not a walk, so the other per-height input to `C` does not enter the cost
+table. And the FFI already carries an array-marshal shape to inherit
+(`shekyl_tree_hash(const uint8_t* ptr, size_t count, uint8_t* out)`),
+so §10.7's single call mints no new boundary convention and inherits
+that shape's rule-40 discipline.
+
 **Named blocker, per rule 22.** If the single-scan shape cannot meet
 C10-3's budget, FL-R3's restoration is BLOCKED on the storage-lane cheap
 per-block tx count already queued in FOLLOWUPS — which this round would
@@ -1648,13 +1660,26 @@ makes it *"a memoization of a pure function of chain state and NOT
 daemon-local held state — every node at the same tip returns the same
 value, and a reorg changes the top hash so the entry simply misses."*
 
-The fold may be memoized the same way, and may be advanced incrementally
-as blocks arrive, **provided the cold from-`h₀` path exists and is what
-the memo is verified against** — the memo must be an optimization of a
-computation that is defined without it. The rejected
+The fold may be memoized the same way — keyed on chain state, verified
+against a cold from-`h₀` path that is defined without it. The rejected
 `m_fee_correction_cq` was keyed on *nothing*: there was no cold path it
-approximated. Stating the difference explicitly is required, or this
-round reads as reintroducing what round 17 ruled out.
+approximated.
+
+**But a memo cannot be counted toward C10-3's budget, and an earlier
+draft of this section was wrong to imply it could.** The tempting shape —
+advance the fold incrementally as blocks arrive — needs the fold state at
+`h−1` under the previous tip, which the node only holds if it was
+*queried* at `h−1`. Restart, a gap between queries, or a reorg all miss,
+and the miss recomputes from `h₀`. So the amortized cost is **a property
+of the query pattern, not of chain state** — which is the very axis the
+ruling rejected `m_fee_correction_cq` on. A design whose cost argument
+rests on that amortization has smuggled the rejected property back in
+through the performance argument instead of the correctness one, where it
+is harder to see.
+
+Hence: the memo may save recomputation, never the cold path's cost, and
+**C10-3 is measured cold**. The purity distinction survives; the cost
+argument has to stand on the single-scan shape by itself.
 
 ### §10.7 Single owner across the FFI
 
@@ -1686,8 +1711,25 @@ quote, and the memo misses because `top_hash` changed. Recorded because
 - Per `P` candidate: worst boundary-cell transition count and parked-cell
   count (against C10-1), dwell (against C10-2), and evaluation depth
   distribution (against C10-3).
-- **FL-D8 folds into this round's instrument.** Boundary-cell occupancy —
-  how much chain *time* sits near a pow2 boundary, as against how many
-  swept cells oscillate — is the input C10-4 needs to choose `P`, and it
-  has been load-bearing in four dispositions while remaining unmeasured.
-  Its FOLLOWUPS row is repointed here rather than left standing alone.
+- **FL-D8 folds into this round's instrument, and its definition is
+  pre-registered here** — otherwise the instrument returns a number and
+  the round decides afterwards what it meant, which is the one criterion
+  that picks `P`. D8 measures, over **the same drift-honest trace
+  ensemble the round already sweeps** (the dwell grid's runs and the
+  feedback grid's cells, unchanged so the figures compose with FL-C7's):
+
+  - **"near a boundary" = the band's own flicker zone.** A height is near
+    iff its raw `C` lies within `HYSTERESIS_MARGIN_MILLI` (3%) of a pow2
+    boundary. The band exists to damp exactly that zone, so the band's
+    own margin is the non-arbitrary definition of it.
+  - **Two statistics, because the round's question is a comparison of
+    two:** *occupancy* — the fraction of block-heights whose `C` is near —
+    and *expected residence per visit* — how many consecutive blocks a
+    visit lasts. Occupancy is the "how much chain time" half; residence
+    is what says whether a grid of period `P` would span a typical visit
+    or chop it.
+  - **Reading, pre-registered:** `P` must exceed the expected residence,
+    or the grid re-samples inside a single visit and the boundary
+    behaviour survives the grid. Occupancy then says how much of the
+    chain's life that case governs — i.e. whether the residual is worth
+    the cold-path cost C10-3 budgets.
