@@ -34,18 +34,19 @@ INDEX = os.path.join(ROOT, "docs", "design", "IMPLEMENTATION_INDEX.md")
 # RECOGNITION IS SEPARATE FROM VALIDITY, and deliberately far weaker.
 #
 # A header/delimiter pair is RECOGNISED when a pipe-bearing line is followed by
-# a line that either bears a pipe or is made only of dashes, colons and spaces.
-# That is the whole test — it asks "might these two lines be trying to be a
-# table?", never "are they a valid one". Validity is decided afterwards by the
-# strict cell check and the width check, which REPORT.
+# ANY non-blank line. Nothing is asked about the second line's content. That is
+# the whole test — it asks "might these two lines be trying to be a table?",
+# never "are they a valid one". Validity is decided afterwards by the strict
+# cell check and the width check, which REPORT.
 #
-# The separation is the entire design, arrived at the hard way: five earlier
+# The separation is the entire design, arrived at the hard way: SIX earlier
 # versions tied recognition to some degree of validity — every cell well
-# formed, then all-or-empty, then one well formed, then any pipe — and each one
-# let a malformed table escape unexamined, because a table had to be well
-# formed before it qualified to be examined for being well formed. Every hole
-# was also invisible, since the file's other tables kept the subject counters
-# nonzero and the gate exited 0.
+# formed, then all-or-empty, then one well formed, then any pipe, then a wholly
+# dashy line — and each one let a malformed table escape unexamined, because a
+# table had to be well formed before it qualified to be examined for being well
+# formed. Every hole was also invisible, since the file's other tables kept the
+# subject counters nonzero and the gate exited 0. Any content test admits
+# another typo; only a positional one admits none.
 #
 # The strict cell form requires three or more hyphens. The GFM spec is
 # genuinely ambiguous — it says only "cells whose only content are hyphens",
@@ -60,21 +61,16 @@ INDEX = os.path.join(ROOT, "docs", "design", "IMPLEMENTATION_INDEX.md")
 # setext heading where a bare `---` follows a pipe row — which is precisely the
 # invisible-content defect this gate exists to report.
 DELIM_CELL_STRICT_RE = re.compile(r"^:?-{3,}:?$")
-DASHY_LINE_RE = re.compile(r"^[-:\s]+$")
 
 
 def has_pipe(line: str) -> bool:
-    """True when the line carries an unescaped `|` — the weakest possible
-    evidence that it participates in a table, and deliberately so.
+    """True when the line carries an unescaped `|`.
 
-    Recognition must be STRICTLY WEAKER than validity. Four successive
-    versions of this gate tied the two together — requiring every delimiter
-    cell to be well formed, then all-or-empty, then at least one well formed —
-    and each one let a malformed table escape checking entirely, because a
-    table had to be well formed before it qualified to be examined for being
-    well formed. Recognition asks only "might this be a table?"; every
-    judgement about whether it IS one belongs to the checks below, which
-    report rather than skip.
+    Used to identify a candidate HEADER and to tell a table row from the blank
+    line that ends a table. It is deliberately NOT asked of the delimiter —
+    see the recognition note at the top of the file: the delimiter is whatever
+    line sits directly beneath the header, and its content is judged only by
+    the checks that report.
     """
     i = 0
     while i < len(line):
@@ -145,19 +141,22 @@ def main() -> int:
     rows_checked = 0
 
     # Positional parse. A table is a header line, the delimiter line directly
-    # beneath it, then body rows until a blank or pipe-free line. Scanning for
-    # the delimiter pattern anywhere instead would let a body row of bare
-    # dashes silently restart the column count from whatever preceded it.
+    # beneath it, then body rows until a BLANK line — every table in this file
+    # is blank-separated, so nothing short of a blank ends one. Scanning for a
+    # delimiter pattern anywhere instead would let a body row of bare dashes
+    # silently restart the column count from whatever preceded it.
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()
         nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
-        # See the recognition note at the top of the file. A delimiter that has
-        # lost its pipes entirely (`--- ---`) is still a would-be delimiter, so
-        # a dash/colon/space-only line qualifies as well; without that arm the
-        # block is skipped and the other tables hide it.
-        if not (stripped and has_pipe(stripped)
-                and nxt and (has_pipe(nxt) or DASHY_LINE_RE.match(nxt))):
+        # See the recognition note at the top of the file. Recognition is now
+        # PURELY POSITIONAL: a pipe-bearing line followed by any non-blank line
+        # opens a candidate table. Nothing is asked about the delimiter's
+        # CONTENT, because every content test tried here — all cells dashed,
+        # all-or-empty, one dashed, any pipe, whole line dashy — excused some
+        # malformed delimiter from examination, and the excused table then
+        # vanished behind the other tables' counters.
+        if not (stripped and has_pipe(stripped) and nxt):
             i += 1
             continue
 
@@ -192,8 +191,20 @@ def main() -> int:
         j = i + 2
         while j < len(lines):
             body = lines[j].strip()
-            if not body or not has_pipe(body):
-                break
+            if not body:
+                break  # every table in this file is blank-separated
+            if not has_pipe(body):
+                # A row that has lost every pipe ends nothing: treating it as
+                # the table's end would skip it and any row after it. Tables
+                # here are separated by blank lines, so a non-blank pipe-free
+                # line inside one is a malformed row, not a boundary.
+                problems.append(
+                    (j + 1, f"row inside a table carries no '|' — tables are "
+                            f"blank-separated, so this is a malformed row "
+                            f"rather than the end of the table: {body[:60]}…"))
+                rows_checked += 1
+                j += 1
+                continue
             if not body.startswith("|"):
                 # GFM permits omitting the leading pipe; this file does not.
                 # Reported, then STILL CHECKED — breaking here would skip the

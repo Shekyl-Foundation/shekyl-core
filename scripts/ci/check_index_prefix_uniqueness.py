@@ -15,13 +15,19 @@
 #
 # Two modes:
 #   (no args)            gate the registered §2 table, as CI runs it.
-#   --prefix CELL [...]  print the prefix each candidate Family cell parses to
-#                        and whether they collide. Rule 94 §6 requires this
-#                        before splitting one row into per-sub-family rows:
-#                        prefixes that stay distinct take branch (a), prefixes
-#                        that collapse take branch (b). The grammar has exactly
-#                        one implementation, so the answer the rule asks for and
-#                        the answer CI enforces can never drift apart.
+#   --prefix CELL CELL…  print the prefix each candidate Family cell parses to,
+#                        and whether they collide EITHER with each other OR with
+#                        a family already registered in §2. Rule 94 §6 requires
+#                        this before splitting one row into per-sub-family rows:
+#                        distinct prefixes take branch (a), collapsing ones take
+#                        branch (b). Both the grammar and the registry are read
+#                        by the same code the gate uses, so the answer the rule
+#                        asks for and the answer CI enforces cannot drift apart.
+#                        Two cells minimum — one candidate cannot collide with
+#                        anything, so a green verdict on it would assert nothing.
+#                        A candidate whose Family cell exactly matches a §2 row
+#                        excludes that row, which is how a proposal that REPLACES
+#                        a row is distinguished from one that adds beside it.
 
 from __future__ import annotations
 
@@ -54,16 +60,68 @@ def family_prefix(cell: str) -> str | None:
     return pref
 
 
+def registry_rows() -> list[str] | None:
+    """Every §2 Family cell, or None when the index is missing.
+
+    One reader for both modes: the gate and the `--prefix` precheck must see
+    the same registry, or the precheck's verdict would be about a table that
+    only it believes in.
+    """
+    if not os.path.isfile(INDEX):
+        return None
+    with open(INDEX, encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    rows: list[str] = []
+    in_table = False
+    for line in text.splitlines():
+        if line.startswith("## 2."):
+            in_table = True
+            continue
+        if in_table and line.startswith("## "):
+            break
+        if not in_table or not line.startswith("|"):
+            continue
+        cols = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not cols:
+            continue
+        if cols[0] in {"", "---"} or set(cols[0]) <= {"-", ":"}:
+            continue
+        if "Identifier" in cols[0] or cols[0].lower().startswith("family"):
+            continue
+        rows.append(cols[0])
+    return rows
+
+
 def report_candidates(cells: list[str]) -> int:
     """Rule 94 §6: print what each proposed Family cell parses to, and whether
     the set stays distinct. Exit 0 when distinct (branch (a) is available),
     1 when two candidates collapse to one prefix (branch (b) is required)."""
-    if not cells:
-        print("index prefixes: --prefix needs at least one Family cell",
-              file=sys.stderr)
+    if len(cells) < 2:
+        # Rule 47: a single candidate cannot exercise the collision check, so
+        # a green verdict on one cell asserts nothing. The question this mode
+        # answers — may one row become several? — needs at least two rows.
+        print("index prefixes: --prefix needs at least TWO Family cells; one "
+              "candidate cannot collide with anything and would report a "
+              "vacuous pass", file=sys.stderr)
         return 2
+    # Compare against the REGISTERED families too, not just against each
+    # other. Candidates that are distinct among themselves can still collide
+    # with a family already in §2, and reporting only the pairwise answer
+    # would contradict what CI then enforces. Rows whose Family cell is
+    # byte-identical to a candidate are excluded: those are the rows being
+    # replaced by this proposal, and a row cannot collide with itself.
+    rows = registry_rows()
+    registered: dict[str, str] = {}
+    if rows:
+        for row in rows:
+            if row in cells:
+                continue
+            pref = family_prefix(row)
+            if pref:
+                registered.setdefault(pref, row)
     seen: dict[str, str] = {}
     collisions = []
+    registry_hits: list[tuple[str, str, str]] = []
     width = max(len(c) for c in cells)
     for cell in cells:
         pref = family_prefix(cell)
@@ -81,6 +139,18 @@ def report_candidates(cells: list[str]) -> int:
             collisions.append((pref, seen[pref], cell))
         else:
             seen[pref] = cell
+        if pref in registered:
+            registry_hits.append((pref, cell, registered[pref]))
+    if registry_hits:
+        for pref, cand, row in registry_hits:
+            print(f"\nindex prefixes: {pref!r} is ALREADY REGISTERED in §2 by "
+                  f"{row!r}, so candidate {cand!r} cannot take it")
+        print("COLLIDES WITH THE REGISTRY — this shape cannot be added as "
+              "proposed, whatever the candidates do among themselves. Rename "
+              "the family, or, if this proposal REPLACES that row, pass the "
+              "row's exact Family cell as one of the candidates so it is "
+              "excluded as the row being replaced.")
+        return 1
     if collisions:
         for pref, a, b in collisions:
             if a == b:
@@ -96,8 +166,9 @@ def report_candidates(cells: list[str]) -> int:
     # Invariant worth stating out loud: branch (a) is available only when the
     # candidates and the prefixes they claim are in one-to-one correspondence.
     assert len(seen) == len(cells)
-    print(f"\nDISTINCT ({len(cells)} candidates -> {len(seen)} prefixes) — "
-          f"rule 94 §6 branch (a): one row per sub-family is available.")
+    print(f"\nDISTINCT ({len(cells)} candidates -> {len(seen)} prefixes, and "
+          f"none collide with the {len(registered)} other families registered in "
+          f"§2) — rule 94 §6 branch (a): one row per sub-family is available.")
     return 0
 
 
@@ -109,31 +180,10 @@ def main() -> int:
         print(f"usage: {os.path.basename(__file__)} [--prefix CELL ...]",
               file=sys.stderr)
         return 2
-    if not os.path.isfile(INDEX):
+    rows = registry_rows()
+    if rows is None:
         print("index prefixes: IMPLEMENTATION_INDEX.md is missing", file=sys.stderr)
         return 2
-    with open(INDEX, encoding="utf-8", errors="replace") as fh:
-        text = fh.read()
-    rows = []
-    in_table = False
-    for line in text.splitlines():
-        if line.startswith("## 2."):
-            in_table = True
-            continue
-        if in_table and line.startswith("## "):
-            break
-        if not in_table:
-            continue
-        if not line.startswith("|"):
-            continue
-        cols = [c.strip() for c in line.strip().strip("|").split("|")]
-        if not cols:
-            continue
-        if cols[0] in {"", "---"} or set(cols[0]) <= {"-", ":"}:
-            continue
-        if "Identifier" in cols[0] or cols[0].lower().startswith("family"):
-            continue
-        rows.append(cols[0])
     if len(rows) < 2:
         print("index prefixes: §2 family table missing or too small",
               file=sys.stderr)

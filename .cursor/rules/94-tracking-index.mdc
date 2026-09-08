@@ -137,8 +137,12 @@ the same PR.
    on each other's rulings. It separates who may *write* a status
    cell, nothing more.
 
-7. **A row that does not render does not exist.** A registry row's
-   cell count must match its table's header. GFM splits cells on
+7. **A row that does not render does not exist.** **Every** row of
+   **every** table in the index must match its own table's header —
+   not just the §2 registry. The defect that prompted this rule
+   appeared in the two-column *documents* table as well, so a rule
+   scoped to registry rows would exempt one of the cases it exists to
+   catch, and the gate is file-wide for the same reason. GFM splits cells on
    unescaped pipes *before* inline parsing — a pipe inside a code
    span still splits, and only `\|` is literal — then silently drops
    any surplus cell and blanks any missing one. Content past the
