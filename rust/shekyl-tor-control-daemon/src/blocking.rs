@@ -59,13 +59,6 @@ pub struct BlockingDaemonTorConfig {
     /// This instance's `DataDirectory` — daemon-owned, per-boot, never the
     /// wallet's (PWD-E9). Created if absent.
     pub data_dir: PathBuf,
-    /// The port peers dial on the onion (the overlay's advertised port).
-    pub virtual_port: u16,
-    /// The loopback port the daemon's anon-zone listener binds; the onion
-    /// forwards to `127.0.0.1:local_port`.
-    pub local_port: u16,
-    /// `MaxStreams=<n>` for the published service.
-    pub max_streams: u16,
     /// How long tor gets to reach bootstrap 100% before start fails.
     pub bootstrap_deadline: Duration,
     /// Bound on each post-bootstrap control round-trip.
@@ -73,9 +66,10 @@ pub struct BlockingDaemonTorConfig {
 }
 
 /// Why [`BlockingDaemonTor::start`] failed. The posture on any of these is
-/// ruled by PWD-E7's seam table: **no address ⇒ no overlay inbound; the node
-/// is outbound-only on that zone** — the caller logs loudly and continues,
-/// it does not abort the daemon.
+/// ruled by PWD-E7's seam table: a start failure means **no tor and no zone
+/// this boot** — the caller logs loudly and continues, it does not abort the
+/// daemon. (A [`BlockingDaemonTor::publish`] failure is the softer degrade:
+/// tor and its SOCKS proxy stay up, the zone stays outbound-only.)
 #[derive(Debug)]
 pub enum BlockingStartError {
     /// No pinned tor binary — not found, or found and failing the SP-T0c
@@ -122,10 +116,12 @@ pub struct BlockingDaemonTor {
 }
 
 impl BlockingDaemonTor {
-    /// Verify the binary, build the runtime, and run the full
-    /// [`DaemonTorControl::start`] sequence, blocking until the onion is
-    /// published (or the failure is terminal). Expect this to take tens of
-    /// seconds on a cold tor bootstrap.
+    /// Verify the binary, build the runtime, and run the
+    /// [`DaemonTorControl::start`] sequence (spawn → bootstrap → SOCKS
+    /// discovery), blocking until tor is up (or the failure is terminal).
+    /// Expect this to take tens of seconds on a cold tor bootstrap. The onion
+    /// publishes separately via [`Self::publish`], after the caller has bound
+    /// its inbound listener.
     pub fn start(config: BlockingDaemonTorConfig) -> Result<Self, BlockingStartError> {
         let tor_binary = match &config.tor_binary_override {
             Some(path) => binary::discover_and_verify_at(path),
@@ -143,9 +139,6 @@ impl BlockingDaemonTor {
         let daemon_config = DaemonTorConfig {
             tor_binary,
             data_dir: config.data_dir,
-            virtual_port: config.virtual_port,
-            local_target: SocketAddr::from(([127, 0, 0, 1], config.local_port)),
-            max_streams: config.max_streams,
             bootstrap_deadline: config.bootstrap_deadline,
             reply_deadline: config.reply_deadline,
         };
@@ -155,10 +148,24 @@ impl BlockingDaemonTor {
         Ok(Self { runtime, control })
     }
 
-    /// The published v3 service id (56 base32 chars, no `.onion` suffix).
-    #[must_use]
-    pub fn service_id(&self) -> &ServiceId {
-        self.control.service_id()
+    /// Mint-and-publish the per-boot onion: `virtual_port` (what peers dial)
+    /// forwarding to `127.0.0.1:local_port` (the caller's already-bound
+    /// inbound listener), with `MaxStreams=max_streams`. Returns the published
+    /// v3 service id (56 base32 chars, no `.onion` suffix).
+    ///
+    /// A failure leaves tor and its SOCKS proxy up — the caller's ruled
+    /// degrade is outbound-only on the zone, not teardown.
+    pub fn publish(
+        &self,
+        virtual_port: u16,
+        local_port: u16,
+        max_streams: u16,
+    ) -> Result<ServiceId, DaemonTorStartError> {
+        self.runtime.block_on(self.control.publish(
+            virtual_port,
+            SocketAddr::from(([127, 0, 0, 1], local_port)),
+            max_streams,
+        ))
     }
 
     /// The managed tor's SOCKS listener — the zone's outbound proxy address.
@@ -203,9 +210,6 @@ mod tests {
         let config = |dir: &std::path::Path| BlockingDaemonTorConfig {
             tor_binary_override: Some(path.clone()),
             data_dir: dir.to_path_buf(),
-            virtual_port: 11021,
-            local_port: 41021,
-            max_streams: 64,
             bootstrap_deadline: Duration::from_secs(300),
             reply_deadline: Duration::from_secs(30),
         };
@@ -222,8 +226,11 @@ mod tests {
             Err(other) => panic!("start failed: {other}"),
         };
         assert!(started.is_alive());
-        assert_eq!(started.service_id().as_str().len(), 56);
         assert!(started.socks_addr().ip().is_loopback());
+        let service_id = started
+            .publish(11021, 41021, 64)
+            .expect("publish after start");
+        assert_eq!(service_id.as_str().len(), 56);
         let exit = started.shutdown();
         assert!(exit.is_some(), "graceful shutdown must observe a real reap");
     }

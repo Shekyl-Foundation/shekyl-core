@@ -13,13 +13,16 @@
 //! process because the daemon has one P2P overlay — a second `start` without
 //! a `shutdown` is refused, not stacked.
 //!
-//! The C++ zone configuration is init-time static, so `start` is a blocking
-//! call on the init path (tens of seconds on a cold tor bootstrap: the pin
-//! gate, the spawn, bootstrap 100%, SOCKS discovery and the publish all
-//! complete before it returns). Failure is a return code plus an error
-//! message in the caller's buffer; per PWD-E7's seam table the caller logs
-//! loudly and continues outbound-only — no address, no overlay inbound, and
-//! the daemon does not abort.
+//! The C++ zone configuration is init-time static, so both calls block on
+//! the init path. The seam is split where the caller's degrade postures
+//! split: `start` (pin gate, spawn, bootstrap 100%, SOCKS discovery — tens
+//! of seconds on a cold bootstrap) runs *before* the daemon commits any zone
+//! state, so its failure means no tor and no zone this boot; `publish`
+//! (`ADD_ONION` against the live tor) runs *after* the caller has bound its
+//! loopback inbound listener — on an OS-assigned port, which is why the
+//! target port cannot be a `start` parameter — and its failure leaves tor
+//! up, degrading the zone to outbound-only. Per PWD-E7's seam table the
+//! caller logs loudly and continues either way; the daemon does not abort.
 
 use std::ffi::{c_char, c_int, CStr};
 use std::path::PathBuf;
@@ -128,23 +131,24 @@ pub unsafe extern "C" fn shekyl_daemon_tor_probe(
     }
 }
 
-/// Start the daemon's ephemeral Tor posture: verify the binary (SP-T0c),
-/// spawn a managed tor with `data_dir` as its `DataDirectory`, bootstrap,
-/// publish a fresh v3 onion (key minted in memory, `Flags=DiscardPK`)
-/// forwarding `virtual_port` → `127.0.0.1:local_port`, and return the
-/// addresses. Blocks until published or failed (bound:
-/// `bootstrap_timeout_secs` plus small constants).
+/// Start the daemon's managed Tor: verify the binary (SP-T0c), spawn it with
+/// `data_dir` as its `DataDirectory`, bootstrap to 100%, and return its SOCKS
+/// listener. No onion is published yet — that is `shekyl_daemon_tor_publish`,
+/// called after the daemon has bound its loopback inbound listener (on an
+/// OS-assigned port; a port guessed before binding could already be taken).
+/// Blocks until bootstrapped or failed (bound: `bootstrap_timeout_secs` plus
+/// small constants).
 ///
 /// Outputs (all NUL-terminated):
-/// - `out_service_id` (≥ 57 bytes): the 56-char service id, no `.onion`.
 /// - `out_socks_addr` (≥ 48 bytes): the managed tor's SOCKS listener
 ///   (`ip:port`) — the zone's outbound proxy.
 /// - `out_error` (recommend ≥ 256 bytes): failure detail for the log line.
 ///
 /// Returns 0 on success; 1 if an instance is already running (refused, not
 /// stacked); 2 on argument errors (null/non-UTF-8 where required); 3 when
-/// the start sequence failed (binary, spawn, bootstrap, publish — detail in
-/// `out_error`; the spawned incarnation was torn down before return).
+/// the start sequence failed (binary, spawn, bootstrap — detail in
+/// `out_error`; the spawned incarnation was torn down before return, so a
+/// failed start commits the caller to nothing).
 ///
 /// # Safety
 ///
@@ -154,12 +158,7 @@ pub unsafe extern "C" fn shekyl_daemon_tor_probe(
 pub unsafe extern "C" fn shekyl_daemon_tor_start(
     tor_binary_path: *const c_char,
     data_dir: *const c_char,
-    virtual_port: u16,
-    local_port: u16,
-    max_streams: u16,
     bootstrap_timeout_secs: u32,
-    out_service_id: *mut c_char,
-    out_service_id_len: usize,
     out_socks_addr: *mut c_char,
     out_socks_addr_len: usize,
     out_error: *mut c_char,
@@ -187,7 +186,7 @@ pub unsafe extern "C" fn shekyl_daemon_tor_start(
         };
         (binary, dir)
     };
-    if out_service_id.is_null() || out_socks_addr.is_null() {
+    if out_socks_addr.is_null() {
         // SAFETY: `write_c_string` checks its own pointer.
         unsafe { write_c_string("output buffers are required", out_error, out_error_len) };
         return 2;
@@ -209,9 +208,6 @@ pub unsafe extern "C" fn shekyl_daemon_tor_start(
     let started = BlockingDaemonTor::start(BlockingDaemonTorConfig {
         tor_binary_override: binary_override,
         data_dir,
-        virtual_port,
-        local_port,
-        max_streams,
         bootstrap_deadline: Duration::from_secs(u64::from(bootstrap_timeout_secs)),
         reply_deadline: REPLY_DEADLINE,
     });
@@ -220,17 +216,74 @@ pub unsafe extern "C" fn shekyl_daemon_tor_start(
             // SAFETY: caller contract for the output buffers.
             unsafe {
                 write_c_string(
-                    instance.service_id().as_str(),
-                    out_service_id,
-                    out_service_id_len,
-                );
-                write_c_string(
                     &instance.socks_addr().to_string(),
                     out_socks_addr,
                     out_socks_addr_len,
                 );
             }
             *slot = Some(instance);
+            0
+        }
+        Err(err) => {
+            // SAFETY: caller contract for `out_error`.
+            unsafe { write_c_string(&err.to_string(), out_error, out_error_len) };
+            3
+        }
+    }
+}
+
+/// Publish the per-boot v3 onion on the running managed tor (key minted in
+/// memory, `Flags=DiscardPK`), forwarding `virtual_port` (what peers dial) to
+/// `127.0.0.1:local_port` (the daemon's already-bound inbound listener), with
+/// `MaxStreams=max_streams` per rendezvous circuit.
+///
+/// Outputs (NUL-terminated):
+/// - `out_service_id` (≥ 57 bytes): the 56-char service id, no `.onion`.
+/// - `out_error` (recommend ≥ 256 bytes): failure detail for the log line.
+///
+/// Returns 0 on success; 1 if no instance is running (`start` first); 2 on
+/// argument errors; 3 when the publish failed (detail in `out_error`). A
+/// publish failure leaves tor running — the ruled degrade is outbound-only
+/// on the zone, so the caller keeps the SOCKS proxy and serves no overlay
+/// inbound this boot (or calls `shekyl_daemon_tor_shutdown` if it prefers
+/// no posture at all).
+///
+/// # Safety
+///
+/// Output buffers must be writable for the stated lengths.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_daemon_tor_publish(
+    virtual_port: u16,
+    local_port: u16,
+    max_streams: u16,
+    out_service_id: *mut c_char,
+    out_service_id_len: usize,
+    out_error: *mut c_char,
+    out_error_len: usize,
+) -> c_int {
+    if out_service_id.is_null() {
+        // SAFETY: `write_c_string` checks its own pointer.
+        unsafe { write_c_string("output buffers are required", out_error, out_error_len) };
+        return 2;
+    }
+
+    let slot = DAEMON_TOR.lock().expect("daemon tor mutex poisoned");
+    let Some(instance) = slot.as_ref() else {
+        // SAFETY: caller contract for `out_error`.
+        unsafe {
+            write_c_string(
+                "no ephemeral tor is running (start first)",
+                out_error,
+                out_error_len,
+            );
+        }
+        return 1;
+    };
+
+    match instance.publish(virtual_port, local_port, max_streams) {
+        Ok(service_id) => {
+            // SAFETY: caller contract for `out_service_id`.
+            unsafe { write_c_string(service_id.as_str(), out_service_id, out_service_id_len) };
             0
         }
         Err(err) => {
@@ -291,19 +344,13 @@ mod tests {
     #[test]
     fn start_refuses_null_required_args() {
         let mut err = [0 as c_char; 128];
-        let mut sid = [0 as c_char; 64];
         let mut socks = [0 as c_char; 64];
         // Null data_dir → 2, error text says which argument.
         let rc = unsafe {
             shekyl_daemon_tor_start(
                 std::ptr::null(),
                 std::ptr::null(),
-                11021,
-                11022,
-                64,
                 1,
-                sid.as_mut_ptr(),
-                sid.len(),
                 socks.as_mut_ptr(),
                 socks.len(),
                 err.as_mut_ptr(),
@@ -313,6 +360,26 @@ mod tests {
         assert_eq!(rc, 2);
         let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
         assert!(msg.contains("data_dir"), "got: {msg}");
+    }
+
+    #[test]
+    fn publish_without_start_is_refused() {
+        let mut err = [0 as c_char; 128];
+        let mut sid = [0 as c_char; 64];
+        let rc = unsafe {
+            shekyl_daemon_tor_publish(
+                11021,
+                11022,
+                8,
+                sid.as_mut_ptr(),
+                sid.len(),
+                err.as_mut_ptr(),
+                err.len(),
+            )
+        };
+        assert_eq!(rc, 1);
+        let msg = unsafe { CStr::from_ptr(err.as_ptr()) }.to_str().unwrap();
+        assert!(msg.contains("start first"), "got: {msg}");
     }
 
     #[test]

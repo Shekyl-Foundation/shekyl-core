@@ -843,27 +843,6 @@ namespace nodetool
       return;
     }
 
-    // Local forward target: loopback at public P2P port + 1. Disjoint from
-    // every other listener by construction (two daemons on one host already
-    // need distinct public ports, so the +1s stay distinct too).
-    uint16_t public_port = 0;
-    const network_zone& public_zone = m_network_zones.at(epee::net_utils::zone::public_);
-    if (!epee::string_tools::get_xtype_from_string(public_port, public_zone.m_port) || public_port >= 65535)
-    {
-      MWARNING("Cannot derive an ephemeral-tor forward port from public P2P port '" << public_zone.m_port
-          << "'; overlay inbound disabled for this boot");
-      return;
-    }
-    const uint16_t local_port = public_port + 1;
-
-    // The advertised (virtual) port is the network's default P2P port: every
-    // ephemeral node advertising the same port is the uniform posture --
-    // nothing about the port distinguishes one node from another (rule 71).
-    const uint16_t virtual_port =
-        m_nettype == cryptonote::TESTNET ? ::config::testnet::P2P_DEFAULT_PORT :
-        m_nettype == cryptonote::STAGENET ? ::config::stagenet::P2P_DEFAULT_PORT :
-        ::config::P2P_DEFAULT_PORT;
-
     // The managed tor's DataDirectory: daemon-owned, under the daemon's own
     // config folder -- never shared with a wallet's tor (PWD-E9: sharing a
     // data directory shares guard state and the instance itself). Nothing
@@ -886,46 +865,69 @@ namespace nodetool
     // first-boot consensus fetches still fit.
     constexpr uint32_t EPHEMERAL_TOR_BOOTSTRAP_TIMEOUT_SECS = 300;
 
-    char service_id[64] = {0};
+    // Phase 1 -- bootstrap the managed tor. Commits nothing: a failure here
+    // returns with NO tor zone in the map, which is the ruled "posture simply
+    // unavailable" degrade -- and the only correct one, because send_txs's
+    // anonymity-zone selection fails CLOSED (an existing anonymity zone is
+    // chosen for originated transactions even when it cannot send, by design,
+    // per the §30.5 comment there). A zone whose tor never came up would
+    // therefore blackhole originated transactions; no zone means the node
+    // behaves as the ordinary clearnet node it was before this posture.
     char socks_addr[64] = {0};
     char error_msg[512] = {0};
-    const int rc = shekyl_daemon_tor_start(
-        nullptr, data_dir.c_str(), virtual_port, local_port,
-        EPHEMERAL_TOR_MAX_STREAMS, EPHEMERAL_TOR_BOOTSTRAP_TIMEOUT_SECS,
-        service_id, sizeof (service_id), socks_addr, sizeof (socks_addr),
-        error_msg, sizeof (error_msg));
+    int rc = shekyl_daemon_tor_start(
+        nullptr, data_dir.c_str(), EPHEMERAL_TOR_BOOTSTRAP_TIMEOUT_SECS,
+        socks_addr, sizeof (socks_addr), error_msg, sizeof (error_msg));
     if (rc != 0)
     {
       MERROR("Ephemeral tor start failed (" << error_msg
-          << "); continuing without overlay inbound this boot (outbound-only on the tor zone per PWD-E7)");
+          << "); continuing without the tor zone this boot");
       return;
     }
-
-    // Both parses below are of strings the Rust side just produced from typed
-    // values, so a failure is a seam bug, not an input condition -- torn down
-    // loudly rather than left running unconsumed.
-    const auto our_address = net::tor_address::make(std::string{service_id} + ".onion", virtual_port);
+    // The SOCKS string was just produced by the Rust side from a typed
+    // SocketAddr, so a parse failure is a seam bug, not an input condition --
+    // torn down loudly rather than left running unconsumed.
     const auto proxy_endpoint = net::socks::endpoint::get(std::string{socks_addr});
-    if (!our_address || !proxy_endpoint)
+    if (!proxy_endpoint)
     {
-      MERROR("Ephemeral tor returned an unparseable "
-          << (!our_address ? "service id" : "SOCKS address")
-          << " (service_id='" << service_id << "', socks='" << socks_addr << "'); tearing it down");
+      MERROR("Ephemeral tor returned an unparseable SOCKS address ('" << socks_addr << "'); tearing it down");
       shekyl_daemon_tor_shutdown();
       return;
     }
 
-    // Wire the zone exactly as the operator postures do: --tx-proxy's shape
-    // for outbound (socks_connect through the managed tor's listener),
-    // --anonymous-inbound's shape for inbound (loopback bind the onion
-    // forwards to, our_address for the handshake advertisement).
+    // Phase 2 -- the zone and its loopback inbound listener, bound HERE on an
+    // OS-assigned port (port 0). A fixed derived port could already be taken
+    // (another daemon, any local service), and the shared bind loop below in
+    // init() aborts the whole boot on a bind failure -- installing tor must
+    // never turn into a daemon abort. Binding ourselves also means the onion
+    // can be published at the port the OS actually granted. m_bind_ip stays
+    // empty so the shared loop skips this already-bound server (handler and
+    // invoke timeout are still applied there; they iterate every zone).
     const bool pad_txs = command_line::get_arg(vm, arg_pad_transactions);
     network_zone& zone = add_zone(epee::net_utils::zone::tor);
+    zone.m_net_server.set_connection_filter(this);
+    zone.m_net_server.set_connection_limit(this);
+    if (!zone.m_net_server.init_server("0", "127.0.0.1", "", "", false, true,
+        epee::net_utils::ssl_support_t::e_ssl_support_disabled))
+    {
+      // Loopback port 0 refused = the host cannot open listening sockets at
+      // all; the public zone's bind will fail identically moments later and
+      // abort init there (so the zone left behind here never runs). Tear tor
+      // down so nothing outlives that abort.
+      MERROR("Cannot bind the ephemeral tor forward listener on 127.0.0.1 (OS-assigned port); tearing tor down");
+      shekyl_daemon_tor_shutdown();
+      return;
+    }
+    const uint16_t local_port = static_cast<uint16_t>(zone.m_net_server.get_binded_port());
+
+    // Outbound configuration -- --tx-proxy's shape (socks_connect through the
+    // managed tor's listener). Deliberately done BEFORE the publish: if the
+    // publish fails, the tor is still up and its SOCKS proxy still works, so
+    // the ruled degrade (PWD-E7 seam table) is OUTBOUND-ONLY on the zone --
+    // relay and originated sends keep working through tor; only the overlay
+    // inbound is gone for the boot.
     zone.m_connect = &socks_connect;
     zone.m_proxy_address = *proxy_endpoint;
-    zone.m_bind_ip = "127.0.0.1";
-    zone.m_port = std::to_string(local_port);
-    zone.m_our_address = *our_address;
     zone.m_net_server.set_default_remote(net::tor_address::unknown());
     // -1 = the zone defaults, as when the operator omits the counts: the
     // F-8b-floored outbound default, unbounded inbound (per-circuit streams
@@ -936,6 +938,43 @@ namespace nodetool
     zone.m_notifier = cryptonote::levin::notify{
       zone.m_net_server.get_io_context(), zone.m_net_server.get_config_shared(), epee::net_utils::zone::tor, pad_txs, m_payload_handler.get_core()
     };
+    // The liveness sweep (check_ephemeral_tor_liveness) watches from here.
+    m_ephemeral_tor_alive = true;
+
+    // Phase 3 -- publish the onion at the port the OS granted. The advertised
+    // (virtual) port is the network's default P2P port: every ephemeral node
+    // advertising the same port is the uniform posture -- nothing about the
+    // port distinguishes one node from another (rule 71).
+    const uint16_t virtual_port =
+        m_nettype == cryptonote::TESTNET ? ::config::testnet::P2P_DEFAULT_PORT :
+        m_nettype == cryptonote::STAGENET ? ::config::stagenet::P2P_DEFAULT_PORT :
+        ::config::P2P_DEFAULT_PORT;
+    char service_id[64] = {0};
+    rc = shekyl_daemon_tor_publish(
+        virtual_port, local_port, EPHEMERAL_TOR_MAX_STREAMS,
+        service_id, sizeof (service_id), error_msg, sizeof (error_msg));
+    if (rc != 0)
+    {
+      MWARNING("Ephemeral onion publish failed (" << error_msg
+          << "); the tor zone stays outbound-only this boot (no overlay inbound; PWD-E7 ruled degrade)");
+      return;
+    }
+    const auto our_address = net::tor_address::make(std::string{service_id} + ".onion", virtual_port);
+    if (!our_address)
+    {
+      // Produced by the Rust side from a typed ServiceId -- a seam bug. Same
+      // outbound-only degrade as a publish failure: without m_our_address the
+      // zone announces nothing, and tearing tor down instead would leave a
+      // zone whose fail-closed selection blackholes originated transactions.
+      MERROR("Ephemeral tor returned an unparseable service id ('" << service_id
+          << "'); the tor zone stays outbound-only this boot");
+      return;
+    }
+    // Inbound advertisement -- --anonymous-inbound's shape: the onion forwards
+    // to the loopback listener bound above; our_address is what handshakes
+    // announce.
+    zone.m_our_address = *our_address;
+    m_ephemeral_tor_service_id = service_id;
 
     MLOG_GREEN(el::Level::Info, "Ephemeral overlay inbound published: " << service_id << ".onion:" << virtual_port
         << " -> 127.0.0.1:" << local_port << " (new address every boot; SOCKS " << socks_addr << ")");
@@ -985,6 +1024,20 @@ namespace nodetool
     // failure inside degrades to no-overlay-inbound rather than failing init.
     add_ephemeral_tor_zone(vm);
 
+    // Every failure below exits through a CHECK_AND_ASSERT_MES return, after
+    // which the daemon shuts down without ever reaching deinit() -- which is
+    // where the managed tor is normally torn down. Tear it down on those
+    // paths too, deterministically, rather than leaning on process-exit
+    // reaping (TAKEOWNERSHIP is the backstop for crashes, not the mechanism
+    // for orderly failures). Disarmed on init's success returns; a no-op when
+    // the posture never engaged (shutdown on a never-started tor does
+    // nothing).
+    struct ephemeral_tor_init_guard
+    {
+      bool armed = true;
+      ~ephemeral_tor_init_guard() { if (armed) shekyl_daemon_tor_shutdown(); }
+    } ephemeral_tor_guard;
+
     res = init_config();
     CHECK_AND_ASSERT_MES(res, false, "Failed to init config.");
 
@@ -1022,7 +1075,10 @@ namespace nodetool
 
     // from here onwards, it's online stuff
     if (m_offline)
+    {
+      ephemeral_tor_guard.armed = false;
       return res;
+    }
 
     //try to bind
     m_ssl_support = epee::net_utils::ssl_support_t::e_ssl_support_disabled;
@@ -1069,6 +1125,7 @@ namespace nodetool
       }
     }
 
+    ephemeral_tor_guard.armed = false;
     return res;
   }
   //-----------------------------------------------------------------------------------
@@ -2184,6 +2241,28 @@ namespace nodetool
     m_gray_peerlist_housekeeping_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::gray_peerlist_housekeeping, this));
     m_peerlist_store_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::store_config, this));
     m_incoming_connections_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::check_incoming_connections, this));
+    m_ephemeral_tor_liveness_interval.do_call(boost::bind(&node_server<t_payload_net_handler>::check_ephemeral_tor_liveness, this));
+    return true;
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::check_ephemeral_tor_liveness()
+  {
+    // Only watches the managed ephemeral posture; operator-provisioned tor
+    // (--tx-proxy / --anonymous-inbound) is the operator's own process to
+    // supervise. Armed once at a successful shekyl_daemon_tor_start; the
+    // flag clears on the death edge so the loss is logged exactly once.
+    if (!m_ephemeral_tor_alive)
+      return true;
+    if (shekyl_daemon_tor_is_alive())
+      return true;
+    m_ephemeral_tor_alive = false;
+    MERROR("The managed ephemeral tor died; overlay posture is gone for this boot (ruled: no respawn -- restart mints a fresh address). "
+        << (m_ephemeral_tor_service_id.empty()
+              ? std::string{"No onion was published, so only tor-zone outbound is lost"}
+              : m_ephemeral_tor_service_id + ".onion is now unreachable")
+        << ". Originated transactions stay FAIL-CLOSED on the tor zone (never diverted to clearnet), so transaction"
+           " sending from this node is broken until the daemon restarts (or restarts with --no-ephemeral-tor for clearnet-only)");
     return true;
   }
   //-----------------------------------------------------------------------------------

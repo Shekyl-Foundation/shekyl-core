@@ -538,6 +538,12 @@ namespace nodetool
     //! inbound (ruled: never aborts the daemon). Called from init() after
     //! m_config_folder is final and before zone iteration begins.
     void add_ephemeral_tor_zone(const boost::program_options::variables_map& vm);
+    //! Idle-loop sweep for the ephemeral posture: on the alive->dead edge of
+    //! the managed tor, log ONCE that overlay inbound is gone for this boot
+    //! and that originated transactions now fail closed on the tor zone
+    //! (anonymity-zone selection deliberately never falls back to clearnet).
+    //! Per PWD-E7 there is no respawn; restart mints a new address.
+    bool check_ephemeral_tor_liveness();
     bool idle_worker();
     bool handle_remote_peerlist(const std::vector<peerlist_entry>& peerlist, const epee::net_utils::connection_context_base& context);
     bool get_local_node_data(epee::net_utils::zone zone_type, basic_node_data& node_data, const network_zone& zone) const;
@@ -638,6 +644,14 @@ namespace nodetool
     epee::math_helper::once_a_time_seconds<60*30, false> m_peerlist_store_interval;
     epee::math_helper::once_a_time_seconds<60> m_gray_peerlist_housekeeping_interval;
     epee::math_helper::once_a_time_seconds<3600, false> m_incoming_connections_interval;
+    epee::math_helper::once_a_time_seconds<60> m_ephemeral_tor_liveness_interval;
+    //! True while this boot's managed ephemeral tor is believed alive (set at
+    //! a successful start in add_ephemeral_tor_zone; cleared by the liveness
+    //! sweep on the death edge so the loss is logged exactly once).
+    bool m_ephemeral_tor_alive = false;
+    //! The published per-boot service id (56 base32 chars, no ".onion") --
+    //! empty when the posture is inactive or degraded to outbound-only.
+    std::string m_ephemeral_tor_service_id;
 
     std::list<epee::net_utils::network_address>   m_priority_peers;
     std::vector<epee::net_utils::network_address> m_exclusive_peers;
