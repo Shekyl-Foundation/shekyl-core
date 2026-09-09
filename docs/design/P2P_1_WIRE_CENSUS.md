@@ -761,21 +761,31 @@ The substantive result is the **bucket-1 + bucket-2 share: 11 of 57, 19 %.**
 > re-derived by COUNTING the rows, not by adjusting the previous numbers** —
 > the first count read 55 because it split cells on every `|`, including the
 > escaped `\|` inside two code spans (PWC-B5, PWC-D9); the rows were correct
-> and the instrument was not. **The downstream completion gate does NOT
-> move, and the reason is that it counts a different thing.**
-> `IMPLEMENTATION_INDEX.md`'s PWD- row gates on "the census's 46 bucket-4
-> rows". That 46 is the census-time WORK LIST, not a live count of this
-> table: the P2P-2 round accounts for it as 31 dispositioned + 15 remaining
-> (A7, B1, B2, B4, B5, B6, B7, C1, C5, C6, C8, E11, E13, E14, F4), and both
-> PWC-E7 and PWC-E8 are already inside the 31 — dispositioned in the cluster-B
-> third sub-round, attributed to PWD-B7. **Class and disposition are separate
-> axes**, and the round states the principle itself: a deferred row is still
-> dispositioned. So re-classing a row changes its bucket here without changing
-> what that gate has left to do.
+> and the instrument was not. **The downstream completion gate now states a
+> figure this table no longer produces, and that is OPEN rather than settled.**
+> `IMPLEMENTATION_INDEX.md`'s PWD- row gates on "a disposition for each of the
+> census's **46** bucket-4 rows, sum-checked". A reader counting bucket 4 here
+> now gets **44**.
 >
-> **A reader counting this table will now get 44 and the gate still says 46;
-> that is correct rather than stale**, and it is written down because the
-> next person to notice the gap will otherwise "repair" one of the two.
+> **What is established:** both rows are already *dispositioned* — Ruled,
+> attributed to PWD-B7, in the cluster-B third sub-round table
+> ([`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md), the PWC-E7 and PWC-E8
+> rows), inside the round's 31 of 46, with 15 remaining (A7, B1, B2, B4, B5,
+> B6, B7, C1, C5, C6, C8, E11, E13, E14, F4). Ratifying a row does not
+> un-disposition it, and the round states the principle itself: *a deferred
+> row is still dispositioned.*
+>
+> **What is NOT established** is whether the gate's 46 is scoped to
+> *disposition* or to *bucket membership*. Those are different questions and
+> only the first has an answer. The likely reconciliation is that the 46 is the
+> round's HISTORICAL SCOPE — the rows it set out to disposition — while this
+> table is a LIVE count, so both numbers are right in their own frame and
+> neither is stale. **That reading is proposed, not ratified**, and it belongs
+> to whoever owns the P2P-2 status accounting rather than to this census.
+>
+> It is written here because two numbers that disagree with no note between
+> them is precisely the state in which someone "repairs" whichever they found
+> second.
 Set against the consensus census's 101 of 171 (59 %) at the same bar, that is
 the census's one real finding about the surface as a whole — **the p2p wire is
 the least-examined surface in the tree**, and the gap is concentrated in
