@@ -759,7 +759,7 @@ struct ArchivalEmissionClaimRevertValue {
 
 // ─── ArchivalBondUnbondLogKey / ArchivalBondUnbondRevertValue ──────────────
 //
-// Per-block journal for the Unbond connect's record pre-image (gate-4 §3.5
+// Per-block journal for the Release connect's record pre-image (gate-4 §3.5
 // connect step 1 / §5 pop twin). Same BE(height)||BE(seq) idiom as the slash
 // and emission-claim logs — one reorg mechanism, many tables. The vin carries
 // the POST-connect state (§3.5 debit-path pin), so the pre-release holdings
@@ -772,7 +772,7 @@ using ArchivalBondUnbondLogKey = ArchivalSlashLogKey;
 
 struct ArchivalBondUnbondRevertValue {
     // v2 (HoldingsUpdate record v6) appends the per-shard add-epoch array,
-    // index-parallel to pre_shard_ids under the same shard count, so the Unbond
+    // index-parallel to pre_shard_ids under the same shard count, so the Release
     // pop restores `shard_add_epochs` exactly. v1 stored ids only. v1 is
     // rejected at decode per the pre-genesis posture: no migration, reset.
     static constexpr uint8_t kVersion = 2;
@@ -785,13 +785,13 @@ struct ArchivalBondUnbondRevertValue {
 
     uint8_t p_id[32]{};
     /// `bonded_total_atomic` before the release (== the connect's bond_debit;
-    /// never 0 — a zero-balance record fails Unbond verify and connect alike).
+    /// never 0 — a zero-balance record fails Release verify and connect alike).
     uint64_t pre_bonded_total = 0;
     uint8_t pre_holdings_kind = 0;
     std::vector<uint64_t> pre_shard_ids;
     /// v2: the pre-release add-epochs, index-parallel to `pre_shard_ids` under
     /// the same shard count (single-count coupling; a length desync cannot
-    /// round-trip). Restored alongside the ids on Unbond pop.
+    /// round-trip). Restored alongside the ids on Release pop.
     std::vector<uint64_t> pre_shard_add_epochs;
     /// `bad_intervals` before the clean interval-close was appended, as
     /// flattened (start_epoch, end_exclusive) pairs.
@@ -878,16 +878,16 @@ struct ArchivalBondUnbondRevertValue {
 //
 // Per-block journal for the HoldingsUpdate connect's record pre-image (gate-4
 // §4.4; the add/drop grace-tail path). Same BE(height)||BE(seq) idiom as the
-// slash, emission-claim, and Unbond logs — one reorg mechanism, many tables.
+// slash, emission-claim, and Release logs — one reorg mechanism, many tables.
 //
 // A HoldingsUpdate stays `Bonded` (no Exited transition, no clean interval-close
 // — grace-tail returns the FLOOR via the bond_debit source term), so it cannot
-// share the Unbond journal / pop path (whose fold validates Exited + trailing
-// clean close). The connect mutates a strict subset of Unbond's fields —
+// share the Release journal / pop path (whose fold validates Exited + trailing
+// clean close). The connect mutates a strict subset of Release's fields —
 // `bonded_total`, `held_shard_ids`, `shard_add_epochs` — and leaves
 // `holdings_kind` (stays ShardSetCompact) and `bad_intervals` untouched, so the
-// pre-image here is smaller than the Unbond value by exactly those two
-// never-mutated fields (honest minimal journal, not the Unbond superset reused).
+// pre-image here is smaller than the Release value by exactly those two
+// never-mutated fields (honest minimal journal, not the Release superset reused).
 
 using ArchivalBondHoldingsUpdateLogKey = ArchivalSlashLogKey;
 
@@ -978,7 +978,7 @@ struct ArchivalBondHoldingsUpdateRevertValue {
 // re-opens exactly that entry to MAX (belt: the start must match and the entry
 // must currently be closed). pre_bonded_total == 0 is LEGAL here — a
 // terminal-slash reinstatement starts from a zero-balance record (unlike the
-// Unbond/HoldingsUpdate journals, whose zero pre-image is unreachable).
+// Release/HoldingsUpdate journals, whose zero pre-image is unreachable).
 
 using ArchivalBondRebondLogKey = ArchivalSlashLogKey;
 
@@ -1126,14 +1126,14 @@ struct ArchivalBondValue {
     static constexpr size_t kMaxPubkeyLen = 2048;
     static constexpr size_t kMaxHoldings = 4096;
     /// Interval-log entry cap. GENESIS-FROZEN CONSENSUS CONSTANT, not a codec
-    /// tunable: Unbond verify rejects a record at this cap (the connect's
+    /// tunable: Release verify rejects a record at this cap (the connect's
     /// clean interval-close could not append — `IntervalLogFull`,
     /// `shekyl-archival-retention::bond_post`), so tx validity depends on the
     /// value. The Rust twin is `bond_connect::MAX_BOND_BAD_INTERVALS`; the
     /// static_assert below pins the pair against silent drift.
     static constexpr size_t kMaxBadIntervals = 256;
     static_assert(kMaxBadIntervals == 256,
-        "kMaxBadIntervals is genesis-frozen (Unbond verify's IntervalLogFull "
+        "kMaxBadIntervals is genesis-frozen (Release verify's IntervalLogFull "
         "belt keys on it); a change is a hard fork and must move "
         "shekyl-archival-retention::bond_connect::MAX_BOND_BAD_INTERVALS in "
         "lockstep");
@@ -1152,11 +1152,11 @@ struct ArchivalBondValue {
     // Carries TWO entry kinds — do not assume every entry is a slash:
     //   - bad-standing interval: start < end (a slash opens with
     //     end_exclusive = UINT64_MAX; Rebond closes it in place), and
-    //   - the Unbond clean interval-close: ZERO-LENGTH start == end — a pure
-    //     exit marker recording the unbond settlement epoch. Its empty range
+    //   - the Release clean interval-close: ZERO-LENGTH start == end — a pure
+    //     exit marker recording the release settlement epoch. Its empty range
     //     excludes no epoch from good_through by construction, and the codec
     //     deliberately carries start == end (KAT:
-    //     archival_substrate_lmdb.unbond_clean_close_marker_round_trips).
+    //     archival_substrate_lmdb.release_clean_close_marker_round_trips).
     //     Never add a "valid interval is non-empty" assertion here.
     struct BadInterval {
         uint64_t start_epoch = 0;
@@ -1166,7 +1166,7 @@ struct ArchivalBondValue {
     std::vector<uint8_t> hybrid_pubkey;
     /// GF-1 debit authorizer (gate-4 §4.1 / gate-6 §9.6): committed once at
     /// JoinMarket connect from the vin's §9.11 field, immutable for the
-    /// record's life. Every later `bond_debit` (Unbond, HoldingsUpdate-drop)
+    /// record's life. Every later `bond_debit` (Release, HoldingsUpdate-drop)
     /// verifies its pqc auth against THIS copy — never the identity key.
     /// The codec bounds it like `hybrid_pubkey` (≤ kMaxPubkeyLen); the exact
     /// canonical-length requirement is the writers'/verify's (every record is
@@ -1188,7 +1188,7 @@ struct ArchivalBondValue {
     /// throws on a length mismatch; `decode` reads `holdings_count` entries into
     /// each), so a length desync is unrepresentable in the persisted form. In
     /// memory the coupling is call-site discipline: every mutation site
-    /// (`put_archival_bond_record`, slash apply/revert, Unbond and HoldingsUpdate
+    /// (`put_archival_bond_record`, slash apply/revert, Release and HoldingsUpdate
     /// connect/pop) adds or removes the matching index in both arrays — there is
     /// no accessor that enforces it, and the `encode` throw is the backstop.
     std::vector<uint64_t> shard_add_epochs;
@@ -1449,10 +1449,10 @@ static_assert(ArchivalEmissionClaimRevertValue::kMaxClaimedEpochs
         == ArchivalBondValue::kMaxClaimedEpochs,
     "emission-claim journal cap must mirror ArchivalBondValue::kMaxClaimedEpochs");
 static_assert(ArchivalBondUnbondRevertValue::kMaxHoldings == ArchivalBondValue::kMaxHoldings,
-    "unbond journal holdings cap must mirror ArchivalBondValue::kMaxHoldings");
+    "release journal holdings cap must mirror ArchivalBondValue::kMaxHoldings");
 static_assert(ArchivalBondUnbondRevertValue::kMaxBadIntervals
         == ArchivalBondValue::kMaxBadIntervals,
-    "unbond journal interval cap must mirror ArchivalBondValue::kMaxBadIntervals");
+    "release journal interval cap must mirror ArchivalBondValue::kMaxBadIntervals");
 static_assert(ArchivalBondHoldingsUpdateRevertValue::kMaxHoldings
         == ArchivalBondValue::kMaxHoldings,
     "holdings-update journal holdings cap must mirror ArchivalBondValue::kMaxHoldings");

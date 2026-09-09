@@ -232,7 +232,7 @@ fn raise_adopts_a_lookahead_present_missing_from_the_hint() {
     assert_eq!(
         st.bonded_slots,
         vec![0, 1],
-        "slot 1 is back in the derive-forward set — its bond can still be unbonded"
+        "slot 1 is back in the derive-forward set — its bond can still be released"
     );
     assert!(st.staking_enabled);
     assert_eq!(st.p_slot, 2, "cursor lifted to one past the observed bond");
@@ -593,7 +593,7 @@ async fn corrupt_pscan_seal_degrades_the_gc_and_still_opens() {
 /// The persist→reopen seam wires Model D end to end: a fresh wallet is a
 /// non-staker (no actor), and after a bond record is persisted, reopen
 /// spawns the `StakeEngine` over exactly `{bonded} ∪ {cursor ..= cursor+k}`
-/// — the bonded slot held for unbonding, the lookahead window held for
+/// — the bonded slot held for releasing, the lookahead window held for
 /// in-session rotation, and nothing outside it.
 #[tokio::test(flavor = "multi_thread")]
 async fn staker_reopen_spawns_stake_engine_over_bonded_union_lookahead() {
@@ -637,7 +637,7 @@ async fn staker_reopen_spawns_stake_engine_over_bonded_union_lookahead() {
         .as_ref()
         .expect("a staker reopen spawns a StakeEngine");
 
-    // The bonded slot is held — reachable for unbonding after the seed is gone.
+    // The bonded slot is held — reachable for releasing after the seed is gone.
     stake
         .mint_handle(PSlot::from_raw(3))
         .await
@@ -668,6 +668,6 @@ async fn staker_reopen_spawns_stake_engine_over_bonded_union_lookahead() {
             stake.mint_handle(PSlot::from_raw(2)).await,
             Err(StakeEngineError::LookaheadExhausted { .. })
         ),
-        "an unbonded slot below the cursor must not be held"
+        "a released slot below the cursor must not be held"
     );
 }

@@ -202,9 +202,9 @@ impl From<DrainSelectError> for DrainError {
 }
 
 /// Witness that a persona's **terminal exit is already public on-chain**:
-/// its confirmed `Unbond` sits in the sealed P-scan state's
-/// [`pending_unbonds`](PScanState::pending_unbonds) — the same authoritative
-/// "no future `Unbond` is owed" signal the dispatch seam's reserve exemption
+/// its confirmed `Release` sits in the sealed P-scan state's
+/// [`pending_releases`](PScanState::pending_releases) — the same authoritative
+/// "no future `Release` is owed" signal the dispatch seam's reserve exemption
 /// reads.
 ///
 /// Private field + the one fallible constructor, so a
@@ -221,12 +221,12 @@ pub(crate) struct TerminalExitObserved {
 }
 
 impl TerminalExitObserved {
-    /// Mint the witness iff `p_canonical_id`'s terminal `Unbond` has been
+    /// Mint the witness iff `p_canonical_id`'s terminal `Release` has been
     /// observed confirmed on-chain. `None` for a live persona — the caller
     /// has no sweep to request.
     pub(crate) fn for_persona(pscan: &PScanState, p_canonical_id: PCanonicalId) -> Option<Self> {
         pscan
-            .pending_unbonds()
+            .pending_releases()
             .contains_key(&p_canonical_id)
             .then_some(Self { p_canonical_id })
     }
@@ -473,7 +473,7 @@ pub(crate) enum DrainOrchestrationError {
     },
     /// The drain would spend a **live** persona's pool below the exit-fee
     /// reserve ([`EXIT_FEE_RESERVE_ATOMIC`]) — draining it there strands the
-    /// future terminal `Unbond` (`ARCHIVAL_DRAIN_SEND_FD2.md` DS-4,
+    /// future terminal `Release` (`ARCHIVAL_DRAIN_SEND_FD2.md` DS-4,
     /// `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2). Lower the payment, or retire the
     /// persona first (a post-retirement sweep has no reserve). Scalar-free: it
     /// names neither the payment nor the pool magnitude.
@@ -561,13 +561,13 @@ pub(crate) struct DrainCtx<'a> {
     pub intent: DrainIntent,
     /// The fee the drain tx must fund from its swept `P` inputs.
     pub fee: u64,
-    /// Whether the persona is **retired** (its terminal `Unbond` has
+    /// Whether the persona is **retired** (its terminal `Release` has
     /// confirmed). A live persona is a mid-life constructor and must retain the
     /// exit-fee reserve ([`EXIT_FEE_RESERVE_ATOMIC`], DS-4); a retired persona
-    /// has no future `Unbond`, so the reserve is moot and a drain-all may sweep
+    /// has no future `Release`, so the reserve is moot and a drain-all may sweep
     /// the pool to zero. Resolved engine-side by the dispatch seam from
-    /// [`PScanState::pending_unbonds`](shekyl_engine_state::pscan_state::PScanState::pending_unbonds)
-    /// — the authoritative "no future `Unbond` owed" signal — deliberately not
+    /// [`PScanState::pending_releases`](shekyl_engine_state::pscan_state::PScanState::pending_releases)
+    /// — the authoritative "no future `Release` owed" signal — deliberately not
     /// `retired_records`, which is funded-gated and omits a persona throughout
     /// the very drain-all that empties its slot (see `submit_drain` for the
     /// reserve deadlock this avoids).
@@ -622,9 +622,9 @@ pub(crate) struct OrchestratedDrain {
 /// in `P`'s pool (`ARCHIVAL_DRAIN_SEND_FD2.md` DS-4).
 ///
 /// A **live** persona is a mid-life constructor: it retains one
-/// pessimistically-priced `Unbond` fee ([`EXIT_FEE_RESERVE_ATOMIC`]) so the
-/// terminal `Unbond` stays fundable. A **retired** persona has no future
-/// `Unbond`, so the reserve is `0` and a drain-all may take the pool to zero.
+/// pessimistically-priced `Release` fee ([`EXIT_FEE_RESERVE_ATOMIC`]) so the
+/// terminal `Release` stays fundable. A **retired** persona has no future
+/// `Release`, so the reserve is `0` and a drain-all may take the pool to zero.
 fn exit_reserve_atomic(retired: bool) -> u64 {
     if retired {
         0
@@ -794,7 +794,7 @@ pub(crate) async fn orchestrate_drain(
 
             // DS-4 exit-reserve enforcement (before selection): a **live**
             // persona must leave `EXIT_FEE_RESERVE_ATOMIC` in the pool so its
-            // terminal `Unbond` stays fundable; a **retired** persona
+            // terminal `Release` stays fundable; a **retired** persona
             // reserves nothing and may sweep to zero. A reserve breach (the
             // payment would eat into the reserve) is distinct from plain
             // unaffordability (`plan_drain`'s `Unaffordable`), so it

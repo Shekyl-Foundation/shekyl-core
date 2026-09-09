@@ -69,7 +69,7 @@ pub const CT_TYPE_NULL: u8 = 0x00;
 pub const CT_TYPE_FCMP: u8 = 0x01;
 /// `txin_archival_serve_credit_response` tag (gate-2, non-spending).
 pub const TAG_INPUT_SERVE_CREDIT: u8 = 0x02;
-/// `txin_archival_bond_post` tag (gate-4). JoinMarket (credit) and Unbond
+/// `txin_archival_bond_post` tag (gate-4). JoinMarket (credit) and Release
 /// (debit) are the wallet-constructible archival kinds; Rebond and
 /// HoldingsUpdate have verify arms and no producer yet.
 pub const TAG_INPUT_BOND_POST: u8 = 0x03;
@@ -335,7 +335,7 @@ pub enum Input {
         /// Complete Rust canonical encoding of the kept half (tag included).
         canonical_bytes: Vec<u8>,
     },
-    /// Archival bond-post (dense tag `0x03`, gate-4). JoinMarket and Unbond
+    /// Archival bond-post (dense tag `0x03`, gate-4). JoinMarket and Release
     /// are wallet-constructible; the kind byte is `BondPostKind`.
     BondPost(Box<BondPost>),
     /// Archival reward-emission (dense tag `0x04`, C-1) — the complete Rust
@@ -596,7 +596,7 @@ fn check_serve_credit_pruned_blob(bytes: &[u8]) -> io::Result<()> {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BondPostKind {
     /// JoinMarket post (`post_kind` `0x00`) — carries `bond_spend_pk`, the
-    /// GF-1 debit authorizer (§9.11). The credit path; Unbond is `Other(2)`.
+    /// GF-1 debit authorizer (§9.11). The credit path; Release is `Other(2)`.
     JoinMarket {
         /// The GF-1 debit authorizer hybrid public key.
         bond_spend_pk: Vec<u8>,

@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! **PR-P4 slice 3 — the retire walk.** The judge that has to run before
-//! anything makes the `Unbond` exit reachable.
+//! anything makes the `Release` exit reachable.
 //!
 //! # What this walk judges
 //!
@@ -143,14 +143,14 @@ fn spawn_walk_actor() -> (StakeEngineHandle, PCanonicalId) {
     (handle, id)
 }
 
-/// The settled epoch at which `unbond_epoch = 0` has fallen out of the claim
+/// The settled epoch at which `release_epoch = 0` has fallen out of the claim
 /// window — the eligibility the witness constructor tests.
 fn expired_settled() -> SettlementEpoch {
     SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1)
 }
 
-/// A settled epoch at which `unbond_epoch = 0` is still claimable, so
-/// `from_confirmed_unbond` refuses to build a witness at all.
+/// A settled epoch at which `release_epoch = 0` is still claimable, so
+/// `from_confirmed_release` refuses to build a witness at all.
 fn unexpired_settled() -> SettlementEpoch {
     SettlementEpoch::from_raw(0)
 }
@@ -177,7 +177,7 @@ fn assert_walk_precondition(accrual: &PScanAccrual, id: &PCanonicalId) {
          the fixture must be built fresh (see the module header)"
     );
     assert!(
-        accrual.pending_unbonds().contains_key(id),
+        accrual.pending_releases().contains_key(id),
         "walk precondition: no pending retire trigger for the subject, so no \
          retire can fire and the walk would judge nothing"
     );
@@ -253,7 +253,7 @@ async fn a_retired_persona_is_gone_from_the_actor() {
         "the subject must be held before the walk retires it"
     );
 
-    let witness = RetirementWitness::from_confirmed_unbond(
+    let witness = RetirementWitness::from_confirmed_release(
         id,
         SettlementEpoch::from_raw(0),
         expired_settled(),
@@ -282,7 +282,7 @@ async fn a_retired_persona_is_gone_from_the_actor() {
 
 /// **Negative control for the wipe: a persona still INSIDE the claim window.**
 ///
-/// The confirmation path is not removed here — `from_confirmed_unbond` is still
+/// The confirmation path is not removed here — `from_confirmed_release` is still
 /// the constructor, and only `settled_epoch` moves. What the control varies is
 /// **claim-window expiry**, which is the predicate that decides eligibility:
 /// `epoch_is_claim_expired` says epoch 0 is still claimable at settled 0, so no
@@ -292,11 +292,11 @@ async fn a_retired_persona_is_gone_from_the_actor() {
 async fn a_persona_inside_the_claim_window_yields_no_witness_and_stays_readable() {
     let (stake, id) = spawn_walk_actor();
 
-    // The predicate IS the guard: `from_confirmed_unbond` refuses to construct a
+    // The predicate IS the guard: `from_confirmed_release` refuses to construct a
     // witness while the persona can still claim, so the unsafe state is
     // unreachable rather than checked.
     assert!(
-        RetirementWitness::from_confirmed_unbond(
+        RetirementWitness::from_confirmed_release(
             id,
             SettlementEpoch::from_raw(0),
             unexpired_settled()
@@ -327,7 +327,7 @@ async fn the_second_retire_is_the_no_op_a_stale_fixture_would_hide() {
     let (stake, id) = spawn_walk_actor();
 
     let witness = || {
-        RetirementWitness::from_confirmed_unbond(
+        RetirementWitness::from_confirmed_release(
             id,
             SettlementEpoch::from_raw(0),
             expired_settled(),
@@ -385,7 +385,7 @@ async fn the_funded_gate_refuses_and_the_unfunded_case_proceeds() {
     let (stake, id) = spawn_walk_actor();
 
     let funded = std::sync::Arc::new(FundedSlots::from_slots([subject_slot]));
-    let witness = RetirementWitness::from_confirmed_unbond(
+    let witness = RetirementWitness::from_confirmed_release(
         id,
         SettlementEpoch::from_raw(0),
         expired_settled(),
@@ -408,7 +408,7 @@ async fn the_funded_gate_refuses_and_the_unfunded_case_proceeds() {
 
     // --- Arm B: same fixture, unfunded → proceeds ---
     let (stake_b, id_b) = spawn_walk_actor();
-    let witness_b = RetirementWitness::from_confirmed_unbond(
+    let witness_b = RetirementWitness::from_confirmed_release(
         id_b,
         SettlementEpoch::from_raw(0),
         expired_settled(),
@@ -667,7 +667,7 @@ async fn a_crash_after_the_seal_leaves_the_trigger_durable_and_the_retire_re_fir
         .expect("the seal landed");
     assert!(
         PScanAccrual::from_state(&sealed)
-            .pending_unbonds()
+            .pending_releases()
             .contains_key(&id),
         "and the trigger that justifies the wipe IS durable — that is the \
          ordering: seal first, act second"

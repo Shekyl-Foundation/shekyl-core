@@ -1620,13 +1620,13 @@ namespace cryptonote
       /// Strictly increasing; mirrors
       /// `ClaimantBondRecord::claimed_settlement_epochs`.
       std::vector<uint64_t> claimed_settlement_epochs;
-      // ── Part A, exit operands (the `Unbond` preconditions) ───────────
-      /// The record's current bonded balance. `verify_unbond_bond_post`
-      /// checks it first (`RecordMissing` / `NothingToUnbond`) and requires
+      // ── Part A, exit operands (the `Release` preconditions) ───────────
+      /// The record's current bonded balance. `verify_release_bond_post`
+      /// checks it first (`RecordMissing` / `NothingToRelease`) and requires
       /// the vin's `bond_debit` to equal it exactly, so a producer cannot
       /// even name a full exit without this value.
       uint64_t bonded_total_atomic;
-      /// The record's interval-log length — `verify_unbond_bond_post`'s
+      /// The record's interval-log length — `verify_release_bond_post`'s
       /// `record_bad_interval_count` operand, the sixth and last of its
       /// record facts.
       ///

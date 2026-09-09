@@ -351,7 +351,7 @@ pub enum OperatorAlarm {
     /// **The operator's commitment, surfaced before it is spent** (Q-2):
     /// the archival obligation grows without bound and nothing in the
     /// wallet can shrink it, so the only useful moment to say so is while
-    /// there is still room to act — add a disk, or unbond. An `Episode`,
+    /// there is still room to act — add a disk, or release. An `Episode`,
     /// because freeing space genuinely ends the condition; nothing is
     /// latched, and the next probe that reads healthy clears it.
     ///

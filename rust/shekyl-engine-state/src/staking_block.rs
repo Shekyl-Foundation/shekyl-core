@@ -24,7 +24,7 @@
 //!   reconstruct the "derive-forward" set — `{live-bonded slots} ∪
 //!   {current ..= current+k}` — after a reopen so a persona that was
 //!   rotated past but still holds a bond stays reachable for
-//!   unbonding. See "Why a hint, not a source of truth" below.
+//!   releasing. See "Why a hint, not a source of truth" below.
 //! * `persona_id_cache` — the bond watch's **probe-id cache**: public
 //!   persona canonical ids for the probe window, derived once while the
 //!   seed is transiently in scope at open and cached so every later open

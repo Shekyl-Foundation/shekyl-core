@@ -174,7 +174,7 @@ pub(crate) struct EpochInflowDelta {
 
 /// A matched archival bond-post (public) — the cleartext half of the dual
 /// extractor, for SP-6 reconcile. Carries the height and post-kind byte so a
-/// later reconcile pass can act on lifecycle posts (e.g. `Unbond`) without a
+/// later reconcile pass can act on lifecycle posts (e.g. `Release`) without a
 /// re-scan.
 ///
 /// `Debug` is **redacted**: the `(p_canonical_id, height, post_kind)` tuple is a row of
@@ -1132,24 +1132,24 @@ mod tests {
         );
     }
 
-    /// The Unbond-detection seam (2d-1 DQ8): the extractor carries the wire kind
-    /// byte unchanged, and that byte equals the consensus `Unbond` discriminant the
-    /// task's `record_unbonds` matches on. Pins the cross-crate byte equivalence
-    /// (`shekyl-wire` `Other(b)` ↔ `archival_retention::BondPostKind::Unbond`)
+    /// The Release-detection seam (2d-1 DQ8): the extractor carries the wire kind
+    /// byte unchanged, and that byte equals the consensus `Release` discriminant the
+    /// task's `record_releases` matches on. Pins the cross-crate byte equivalence
+    /// (`shekyl-wire` `Other(b)` ↔ `archival_retention::BondPostKind::Release`)
     /// end-to-end so it cannot drift before the wire format freezes — the seam was
     /// otherwise only covered by tests that hand-set `post_kind`.
     #[test]
-    fn extractor_carries_the_consensus_unbond_byte() {
-        let unbond_byte = shekyl_archival_retention::BondPostKind::Unbond as u8;
-        assert_eq!(unbond_byte, 2, "genesis-frozen Unbond discriminant");
+    fn extractor_carries_the_consensus_release_byte() {
+        let release_byte = shekyl_archival_retention::BondPostKind::Release as u8;
+        assert_eq!(release_byte, 2, "genesis-frozen Release discriminant");
 
         let mine = persona(0);
         let mut block = build_typical_case_scannable_block(1);
         let tx = block.transactions.get_mut(0).expect("a non-miner tx");
-        // An Unbond bond-post: the consensus Unbond byte on the wire as `Other(b)`
+        // A Release bond-post: the consensus Release byte on the wire as `Other(b)`
         // (genesis wire is JoinMarket-only, so this models the post-genesis form).
         let mut post = bond_post_for(&mine);
-        post.kind = BondPostKind::Other(unbond_byte);
+        post.kind = BondPostKind::Other(release_byte);
         tx.prefix.inputs.push(Input::BondPost(Box::new(post)));
 
         let scanner = guaranteed_scanner_for_persona(&mine).expect("scanner");
@@ -1166,8 +1166,8 @@ mod tests {
 
         assert_eq!(res.bond_post_matches.len(), 1);
         assert_eq!(
-            res.bond_post_matches[0].post_kind, unbond_byte,
-            "the extractor carries the wire kind byte unchanged through to record_unbonds"
+            res.bond_post_matches[0].post_kind, release_byte,
+            "the extractor carries the wire kind byte unchanged through to record_releases"
         );
     }
 

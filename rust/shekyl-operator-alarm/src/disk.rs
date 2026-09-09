@@ -17,7 +17,7 @@
 //! The serve-set conditions answer "does what the chain obligates match what
 //! the store retains", and the store answers both halves. This one is about
 //! the volume underneath the store: the wallet cannot fix it, the remedy is
-//! a bigger disk or an Unbond, and it applies to every serving posture —
+//! a bigger disk or a Release, and it applies to every serving posture —
 //! a market archiver that fills its volume fails challenges exactly as a
 //! foundation node does. Folding it into `ServeSetIntegrity` would have an
 //! operator reading "your serve-set is broken" for a full disk.

@@ -131,7 +131,7 @@ impl ServingConfig {
 /// as "not serving" rather than as either posture.
 ///
 /// **Do not reconstruct this from the store's prune-disabled flag.** That
-/// flag is one-way and survives Unbond (Q-5's named residue), so a former
+/// flag is one-way and survives Release (Q-5's named residue), so a former
 /// foundation node would report `FoundationCompleteTree` forever — a
 /// retention fact misread as a posture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -627,7 +627,7 @@ mod lifecycle_tests {
     use crate::engine::refresh::RefreshSlot;
 
     /// A pinner over a real (empty) store. An empty serve-set is a legitimate
-    /// production state — an unbonded persona reports exactly this — so the
+    /// production state — a released persona reports exactly this — so the
     /// lifecycle can be driven end to end without fabricating segments.
     struct EmptySetPinner {
         store: Arc<LeafStore>,

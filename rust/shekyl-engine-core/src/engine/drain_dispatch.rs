@@ -231,7 +231,7 @@ where
     /// own principal (vout 0), and the residual (`swept − payment − fee`)
     /// returns to `P` as change on a partial drain. `TerminalSweep`: the
     /// payment is the pipeline's own `Σ selected − fee` (zero change), legal
-    /// only for a terminally-unbonded persona — this seam's basis resolution
+    /// only for a terminally-released persona — this seam's basis resolution
     /// of `retired` is the AUTHORITATIVE check (the witness inside the
     /// intent is the boundary's, minted from an earlier read; a divergence
     /// refuses in the pipeline rather than trusting the token), and the
@@ -322,19 +322,19 @@ where
             .as_ref()
             .map(|s| s.funding_outputs())
             .unwrap_or(&[]);
-        // Exempt from the exit-fee reserve once the persona's terminal `Unbond`
-        // has confirmed — i.e. it lives in `pending_unbonds`, the authoritative
-        // "no future Unbond is owed" signal. `retired_records()` is the WRONG
+        // Exempt from the exit-fee reserve once the persona's terminal `Release`
+        // has confirmed — i.e. it lives in `pending_releases`, the authoritative
+        // "no future Release is owed" signal. `retired_records()` is the WRONG
         // source here: retirement is funded-gated (`retire_persona` only writes
-        // a retired record once the slot holds no funding), so a just-unbonded
+        // a retired record once the slot holds no funding), so a just-released
         // persona is absent from it throughout the very drain-all that would
         // empty the slot. Reading it would keep the reserve pinned on an
-        // unbonded persona, refusing the sweep to zero (`ReserveBreached`) and
+        // released persona, refusing the sweep to zero (`ReserveBreached`) and
         // deadlocking the funded-gated retirement — the pool can never fully
         // drain, so the persona can never retire (DS-4 post-retirement sweep).
         let retired = pscan_state
             .as_ref()
-            .is_some_and(|s| s.pending_unbonds().contains_key(&p_canonical_id));
+            .is_some_and(|s| s.pending_releases().contains_key(&p_canonical_id));
         let snapshot_generation = basis.generation();
         let reserved = basis.reserved();
 

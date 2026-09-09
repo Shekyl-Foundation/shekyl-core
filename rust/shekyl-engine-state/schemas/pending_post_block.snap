@@ -729,12 +729,12 @@
         }
       },
       {
-        "name": "unbonds",
+        "name": "releases",
         "ty": {
           "name": "Vec<T>",
           "ty": {
             "Seq": {
-              "name": "PendingUnbond",
+              "name": "PendingRelease",
               "ty": {
                 "Struct": [
                   {

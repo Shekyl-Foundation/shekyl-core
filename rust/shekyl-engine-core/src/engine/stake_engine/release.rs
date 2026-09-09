@@ -3,10 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `AssembleUnbond` — the terminal full exit's producer-side preconditions.
+//! `AssembleRelease` — the terminal full exit's producer-side preconditions.
 //!
-//! `verify_unbond_bond_post`'s rejection arms are two categories, and this
-//! module owns the half [`build_unbond_vin`] cannot.
+//! `verify_release_bond_post`'s rejection arms are two categories, and this
+//! module owns the half [`build_release_vin`] cannot.
 //!
 //! The builder fixes the five fields a producer controls. The remaining arms —
 //! `RecordMissing`, `IntervalLogFull`, `CooldownNotElapsed`,
@@ -28,7 +28,7 @@
 
 use kameo::message::{Context, Message};
 
-use shekyl_archival_bond_builder::{build_unbond_vin, verify_debit_funding};
+use shekyl_archival_bond_builder::{build_release_vin, verify_debit_funding};
 use shekyl_archival_retention::bond_connect::MAX_BOND_BAD_INTERVALS;
 
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
@@ -75,7 +75,7 @@ use super::types::*;
 /// absent field is a decode error — and these types carry that guarantee the
 /// rest of the way.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct UnbondRecordState {
+pub(crate) struct ReleaseRecordState {
     /// The persona these facts describe — checked against the handle's own
     /// derived id before anything is built for it.
     p_id: PCanonicalId,
@@ -91,7 +91,7 @@ pub(crate) struct UnbondRecordState {
     current_settlement_epoch: u64,
 }
 
-impl UnbondRecordState {
+impl ReleaseRecordState {
     /// Build from one [`ClaimSourceFor`] — the only production constructor.
     ///
     /// **Takes no `p_id` argument on purpose.** An earlier revision accepted the
@@ -124,7 +124,7 @@ impl UnbondRecordState {
         self.p_id
     }
 
-    /// The exit's `bond_debit` by contract — `verify_unbond_bond_post` requires
+    /// The exit's `bond_debit` by contract — `verify_release_bond_post` requires
     /// the vin's debit to equal this exactly.
     pub(crate) fn bonded_total_atomic(&self) -> u64 {
         self.bonded_total_atomic
@@ -135,28 +135,28 @@ impl UnbondRecordState {
     /// Mirrors the verify arm's record-state checks in the same order, using the
     /// same predicates, so a refusal here and a rejection there cannot disagree
     /// about *why*.
-    pub(crate) fn ensure_exit_ready(&self) -> Result<(), UnbondNotReady> {
-        // FIRST, because it is first at the verifier: `NothingToUnbond` is
+    pub(crate) fn ensure_exit_ready(&self) -> Result<(), ReleaseNotReady> {
+        // FIRST, because it is first at the verifier: `NothingToRelease` is
         // checked before the interval log, the cooldown, or the watermark
-        // (`verify_unbond_bond_post` step 3). An earlier revision left this to
-        // `build_unbond_vin` on the grounds that the builder consumes the
+        // (`verify_release_bond_post` step 3). An earlier revision left this to
+        // `build_release_vin` on the grounds that the builder consumes the
         // operand — true, and it does still check it as its own constructor
         // invariant. But deferring it here reordered the *reasons*: a
         // zero-balance record with a full interval log was refused as
-        // `IntervalLogFull` while the chain would have said `NothingToUnbond`.
+        // `IntervalLogFull` while the chain would have said `NothingToRelease`.
         // The whole point of running consensus's own predicates in consensus's
         // own order is that a wallet refusal and a chain rejection cannot
         // disagree about why, so the operand this struct already holds is
         // tested here too. The two checks cannot diverge: same field, same
         // comparison, no derivation between them.
         if self.bonded_total_atomic == 0 {
-            return Err(UnbondNotReady::NothingToUnbond);
+            return Err(ReleaseNotReady::NothingToRelease);
         }
 
         // The connect must append a clean interval-close; a full log makes the
         // tx unconnectable, so verify rejects it too. Same bound, one constant.
         if self.bad_interval_count >= MAX_BOND_BAD_INTERVALS {
-            return Err(UnbondNotReady::IntervalLogFull {
+            return Err(ReleaseNotReady::IntervalLogFull {
                 count: self.bad_interval_count,
                 max: MAX_BOND_BAD_INTERVALS,
             });
@@ -173,14 +173,14 @@ impl UnbondRecordState {
         // restate what consensus does with `None`.
         let anchor = self.last_served.as_verify_operand();
         if !release_cooldown_elapsed(anchor, self.current_settlement_epoch) {
-            return Err(UnbondNotReady::CooldownNotElapsed {
+            return Err(ReleaseNotReady::CooldownNotElapsed {
                 last_served: self.last_served,
                 current_settlement_epoch: self.current_settlement_epoch,
             });
         }
 
         if !slashes_settled_through(self.last_settled_slash.as_verify_operand(), anchor) {
-            return Err(UnbondNotReady::SlashSettlementPending {
+            return Err(ReleaseNotReady::SlashSettlementPending {
                 last_served: self.last_served,
                 watermark: self.last_settled_slash,
             });
@@ -190,20 +190,20 @@ impl UnbondRecordState {
     }
 }
 
-/// Assemble the **full, wire-encoded** `Unbond` exit transaction inside the
+/// Assemble the **full, wire-encoded** `Release` exit transaction inside the
 /// actor — the debit-side twin of `AssembleBond` (gate-4 §3.5).
 ///
 /// The exit lane is REACHABLE as of PR-C: native `/submit_transaction`
-/// admits an `Unbond` (2026-08-29, `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1;
+/// admits a `Release` (2026-08-29, `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1;
 /// this producer is the construction leg that fired that reopening
-/// criterion), the dispatch seam ([`Engine::submit_unbond`]) exists, and
+/// criterion), the dispatch seam ([`Engine::submit_release`]) exists, and
 /// `StakeFacade::unstake` drives it from wallet-RPC and the CLI. What
 /// protects the irreversible path now is no longer unreachability but the
 /// checks on the path itself — this handler's `ensure_exit_ready` refusal
 /// (consensus's own predicates), the engine-side persona resolution, and
 /// the CLI-side confirmation (`unstake_facade` module docs).
 ///
-/// [`Engine::submit_unbond`]: crate::engine::Engine::submit_unbond
+/// [`Engine::submit_release`]: crate::engine::Engine::submit_release
 ///
 /// The exit carries no ticket and draws no entry-gap offset. That seam exists
 /// to place a *bond post* at a random remove from the private funding intent
@@ -214,11 +214,11 @@ impl UnbondRecordState {
 /// **Reachable as of PR-C** through `StakeFacade::unstake` (wallet-RPC
 /// `unstake` shipped; `docs/api/wallet_rpc.yaml` records the gate's lift
 /// and the shipped-vs-RESERVED reconciliation).
-pub(crate) struct AssembleUnbond {
+pub(crate) struct AssembleRelease {
     /// Operation-scoped capability proving the slot is currently held.
     pub handle: PersonaHandle,
     /// The record facts, from one claim-source read view.
-    pub record: UnbondRecordState,
+    pub record: ReleaseRecordState,
     /// The selected funding inputs with their assembled membership paths —
     /// public identity + public tree data only; spend secrets are re-derived
     /// inside the handler (rule 36).
@@ -239,26 +239,26 @@ pub(crate) struct AssembleUnbond {
     pub fee: u64,
 }
 
-/// Reply of [`AssembleUnbond`]: the persona-bound wire bytes minted at the
+/// Reply of [`AssembleRelease`]: the persona-bound wire bytes minted at the
 /// single P-1 site, plus the spent funding records' gindexes for the caller's
 /// reservation record. Secrets never cross the boundary.
 ///
-/// No placement offset, unlike `AssembledBondPost` — see [`AssembleUnbond`] for
+/// No placement offset, unlike `AssembledBondPost` — see [`AssembleRelease`] for
 /// why the exit draws none.
 #[derive(Debug)]
-pub(crate) struct AssembledUnbondPost {
+pub(crate) struct AssembledReleasePost {
     /// The fully-signed, wire-encoded exit transaction, persona-bound.
     pub bound_tx: PBoundBytes,
     /// The spent funding records' gindexes — the reservation set.
     pub funding_gindexes: Vec<shekyl_types::GlobalOutputIndex>,
 }
 
-impl Message<AssembleUnbond> for StakeEngine {
-    type Reply = Result<AssembledUnbondPost, StakeEngineError>;
+impl Message<AssembleRelease> for StakeEngine {
+    type Reply = Result<AssembledReleasePost, StakeEngineError>;
 
     async fn handle(
         &mut self,
-        msg: AssembleUnbond,
+        msg: AssembleRelease,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         // ── Step 1: handle validation. No ticket, no entry-gap draw. ──────
@@ -288,7 +288,7 @@ impl Message<AssembleUnbond> for StakeEngine {
         //
         // `a_record_read_for_another_persona_is_refused_at_the_actor` drives
         // this through the actor and goes red if the comparison is deleted. A
-        // unit test on `UnbondRecordState` cannot cover it: the id it would
+        // unit test on `ReleaseRecordState` cannot cover it: the id it would
         // check is the one the test itself supplied, so the refusal has to be
         // observed where the two independent values actually meet.
         let handle_p_id = persona_canonical_id(keys)
@@ -306,7 +306,7 @@ impl Message<AssembleUnbond> for StakeEngine {
         // source of the post: it feeds the debit term, the wire prefix input
         // (step 9), and the balance check — so the prefix and the post cannot
         // diverge by construction.
-        let built = build_unbond_vin(keys.bond_post_keys(), msg.record.bonded_total_atomic())
+        let built = build_release_vin(keys.bond_post_keys(), msg.record.bonded_total_atomic())
             .map_err(StakeEngineError::BondBuild)?;
         let hybrid_pk_bytes = built.vin().hybrid_public_key.clone();
         let persona = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
@@ -346,7 +346,7 @@ impl Message<AssembleUnbond> for StakeEngine {
         // `vout.size() < 2` rejects), as the credit path splits its change.
         //
         // These outputs return to P's OWN base address — never the principal.
-        // `unbond()` is post **plus a decorrelated drain** precisely so
+        // `release()` is post **plus a decorrelated drain** precisely so
         // returning collateral never draws the P↔principal edge on-chain, and
         // so the retire path's funded gate stays meaningful: wiping the slot
         // while these outputs are unspent would strand them.
@@ -419,7 +419,7 @@ impl Message<AssembleUnbond> for StakeEngine {
         )
         .await?;
 
-        Ok(AssembledUnbondPost {
+        Ok(AssembledReleasePost {
             bound_tx: assembled.bound_tx,
             funding_gindexes: assembled.funding_gindexes,
         })
@@ -427,5 +427,5 @@ impl Message<AssembleUnbond> for StakeEngine {
 }
 
 #[cfg(test)]
-#[path = "unbond_tests.rs"]
+#[path = "release_tests.rs"]
 mod tests;

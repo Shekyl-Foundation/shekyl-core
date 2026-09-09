@@ -3,18 +3,18 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `build_unbond_vin` against the consensus verifier, which is its **only**
+//! `build_release_vin` against the consensus verifier, which is its **only**
 //! oracle.
 //!
 //! Staking is greenfield — there is no prior implementation to agree with, so a
 //! test that restated the verifier's rules would be checking a guess against a
 //! paraphrase of the same guess. Every assertion here therefore calls
-//! `verify_unbond_bond_post` itself. The dependency is one-directional and stays
+//! `verify_release_bond_post` itself. The dependency is one-directional and stays
 //! that way: the wallet conforms to consensus, never the reverse, because that
 //! side is genesis-frozen and this one is not.
 //!
 //! **Scope, stated because the verifier's rejection arms are not one category.**
-//! Five arms are *producer-controlled* — the fields `build_unbond_vin` computes
+//! Five arms are *producer-controlled* — the fields `build_release_vin` computes
 //! — and each is covered below by mutating that one field on an otherwise-valid
 //! vin and asserting the specific arm. That is mutation-testing the producer:
 //! it proves the field is load-bearing rather than incidentally correct.
@@ -23,7 +23,7 @@
 //! `CooldownNotElapsed`, `SlashSettlementPending`, `RecordMissing`. Driving
 //! those here would test the verifier, which consensus already covers. What is
 //! worth testing on them is the **caller's precondition check** — that
-//! `AssembleUnbond` refuses to assemble against a record that is not ready
+//! `AssembleRelease` refuses to assemble against a record that is not ready
 //! instead of producing something the daemon will reject — and those tests live
 //! with that handler, not here.
 //!
@@ -38,10 +38,10 @@
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT as G, scalar::Scalar};
 use shekyl_archival_bond_builder::{
-    build_unbond_vin, verify_debit_funding, BondBuildError, UnbondVin,
+    build_release_vin, verify_debit_funding, BondBuildError, ReleaseVin,
 };
 use shekyl_archival_retention::{
-    bond_floor, verify_bond_post_ct_balance, verify_unbond_bond_post, ArchivalBondPostVin,
+    bond_floor, verify_bond_post_ct_balance, verify_release_bond_post, ArchivalBondPostVin,
     BondPostError, BondPostKind, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
@@ -52,8 +52,8 @@ use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 /// The record's current bonded balance — the exit's `bond_debit` by contract.
 const BONDED: u64 = 3 * 750_000_000;
 
-/// The witness, as `build_unbond_vin` returns it.
-fn built() -> UnbondVin {
+/// The witness, as `build_release_vin` returns it.
+fn built() -> ReleaseVin {
     let keys = derive_archival_p_keys(
         &[0x5B; MASTER_SEED_BYTES],
         DerivationNetwork::Fakechain,
@@ -61,7 +61,7 @@ fn built() -> UnbondVin {
         0,
     )
     .expect("derive archival P keys");
-    build_unbond_vin(keys.bond_post_keys(), BONDED).expect("build Unbond vin")
+    build_release_vin(keys.bond_post_keys(), BONDED).expect("build Release vin")
 }
 
 /// The same post as a bare vin, for the mutation tests: they deliberately
@@ -73,7 +73,7 @@ fn vin() -> ArchivalBondPostVin {
 /// Verify with record state that is ready in every respect the producer does
 /// not control, so a failure can only be the vin.
 fn verify(v: &ArchivalBondPostVin) -> Result<(), BondPostError> {
-    verify_unbond_bond_post(
+    verify_release_bond_post(
         v,
         Some(BONDED),
         0,
@@ -87,7 +87,7 @@ fn verify(v: &ArchivalBondPostVin) -> Result<(), BondPostError> {
 }
 
 #[test]
-fn a_built_unbond_vin_verifies_against_consensus() {
+fn a_built_release_vin_verifies_against_consensus() {
     verify(&vin()).expect("the producer's output must satisfy the verifier");
 }
 
@@ -99,7 +99,7 @@ fn a_built_unbond_vin_verifies_against_consensus() {
 #[test]
 fn never_served_is_a_legitimate_exit_not_a_refusal() {
     let v = vin();
-    verify_unbond_bond_post(&v, Some(BONDED), 0, None, None, 0)
+    verify_release_bond_post(&v, Some(BONDED), 0, None, None, 0)
         .expect("a record that never served can exit immediately");
 }
 
@@ -109,7 +109,7 @@ fn never_served_is_a_legitimate_exit_not_a_refusal() {
 fn post_kind_is_load_bearing() {
     let mut v = vin();
     v.post_kind = BondPostKind::JoinMarket;
-    assert!(matches!(verify(&v), Err(BondPostError::PostKindNotUnbond)));
+    assert!(matches!(verify(&v), Err(BondPostError::PostKindNotRelease)));
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn bond_credit_must_be_zero_on_a_debit_path() {
     v.bond_credit = 1;
     assert!(matches!(
         verify(&v),
-        Err(BondPostError::UnbondCreditNonzero)
+        Err(BondPostError::ReleaseCreditNonzero)
     ));
 }
 
@@ -138,15 +138,15 @@ fn holdings_must_be_empty_not_merely_floor_zero() {
     assert_ne!(bond_floor(&v.holdings), 0);
     assert!(matches!(
         verify(&v),
-        Err(BondPostError::UnbondFloorMismatch)
+        Err(BondPostError::ReleaseFloorMismatch)
     ));
 }
 
 #[test]
 fn a_non_zero_post_connect_total_is_not_a_full_exit() {
-    // Reaching `NotFullUnbond` needs a vin that SURVIVES floor equality with a
+    // Reaching `NotFullRelease` needs a vin that SURVIVES floor equality with a
     // non-zero total, which an empty descriptor cannot provide: floor(∅) == 0,
-    // so any non-zero total is `UnbondFloorMismatch` and the guard this test is
+    // so any non-zero total is `ReleaseFloorMismatch` and the guard this test is
     // named for never runs. Give the post a real descriptor and set the total
     // to that descriptor's own floor — equality then holds, and the only thing
     // left to object to is that the exit is partial.
@@ -163,7 +163,7 @@ fn a_non_zero_post_connect_total_is_not_a_full_exit() {
     v.bonded_total_atomic = floor;
 
     assert!(
-        matches!(verify(&v), Err(BondPostError::NotFullUnbond)),
+        matches!(verify(&v), Err(BondPostError::NotFullRelease)),
         "got {:?}",
         verify(&v)
     );
@@ -184,7 +184,7 @@ fn the_debit_must_be_the_whole_balance() {
 /// assembled and rejected by the daemon. An exit that fails at the wallet fails
 /// loudly to the person who asked for it.
 #[test]
-fn nothing_to_unbond_is_refused_at_assembly_not_at_the_chain() {
+fn nothing_to_release_is_refused_at_assembly_not_at_the_chain() {
     let keys = derive_archival_p_keys(
         &[0x5B; MASTER_SEED_BYTES],
         DerivationNetwork::Fakechain,
@@ -193,16 +193,16 @@ fn nothing_to_unbond_is_refused_at_assembly_not_at_the_chain() {
     )
     .expect("derive archival P keys");
     assert!(matches!(
-        build_unbond_vin(keys.bond_post_keys(), 0),
-        Err(BondBuildError::NothingToUnbond)
+        build_release_vin(keys.bond_post_keys(), 0),
+        Err(BondBuildError::NothingToRelease)
     ));
 }
 
-/// `bond_spend_pk` is JoinMarket-coupled on the wire; carrying one on an Unbond
+/// `bond_spend_pk` is JoinMarket-coupled on the wire; carrying one on a Release
 /// is rejected by the codec before the semantic verifier is reached. The
 /// producer emits an empty vector, and this pins that it stays empty.
 #[test]
-fn an_unbond_carries_no_bond_spend_pk() {
+fn an_release_carries_no_bond_spend_pk() {
     assert!(vin().bond_spend_pk.is_empty());
 }
 
@@ -236,7 +236,7 @@ fn the_debit_rule_agrees_with_the_consensus_commitment_rule() {
     // txin_to_key funding input"), a rule owned by
     // `shekyl_archival_retention::bond_post::bond_post_funding_floor_met` and
     // still decided in C++ at the daemon's single enforcement site. The
-    // producer calls that predicate: `AssembleUnbond` refuses an empty funding
+    // producer calls that predicate: `AssembleRelease` refuses an empty funding
     // vector by name — `FundingInputsRequired`, asserted by
     // `an_exit_with_no_funding_inputs_is_refused_by_name` — before it does any
     // funding arithmetic, so no such transaction is ever offered to a node.

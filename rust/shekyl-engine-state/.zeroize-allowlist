@@ -98,7 +98,7 @@ rust/shekyl-engine-state/src/pscan_cursor.rs|frontier_hash: [u8; 32]
 
 # ── pscan_state.rs ────────────────────────────────────────────────────
 #
-# `PScanState::pending_unbonds` keys on the `PCanonicalId` newtype
+# `PScanState::pending_releases` keys on the `PCanonicalId` newtype
 # (shekyl-types), not a raw `[u8; 32]`, so the grep no longer flags it and
 # it needs no entry — the same outcome the `TxHash` / `KeyImage` newtype
 # sweeps had.

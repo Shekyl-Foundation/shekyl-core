@@ -53,6 +53,20 @@
   named blockers (fee-bump, wallet-decryption MFA, network-filesystem
   wallets), and the delivered DRS-P0a–P0c legs trimmed out of the DRS-P0
   row, leaving P0d as the open blocker. Process-only; no code change.
+- **Internal "Unbond" vocabulary renamed to "Release."** The terminal
+  bond exit is now called Release everywhere the code and living docs
+  speak about it (matching `RELEASE_COOLDOWN_EPOCHS`), across Rust
+  (`PendingRelease`, `submit_release`, `stake_engine/release.rs`), the
+  C++ submit path, CI scripts, and design docs. Nothing user-visible or
+  on-wire changed: the `BondPostKind` wire discriminant stays `2`, and
+  the user surface stays `unstake` / `collect_unstaked`. The wallet-file
+  schemas that carried renamed field names bumped versions
+  (`PENDING_POST_VERSION` and `PSCAN_STATE_VERSION` 9 → 10; pre-genesis,
+  no migration). The LMDB journal name `archival_bond_unbond_log` and
+  its direct C++ carriers are deliberately excluded — carried by the DRS
+  redb port per the `docs/FOLLOWUPS.md` entry. Historical records
+  (decision log, reconciliation registry, this changelog's released
+  entries) keep the old name as the record of what was.
 
 - **The daemon and the Rust port now admit the same `tx_extra` tag set, and an
   unparseable `extra` is refused rather than skipped.** `shekyl-wire` had long
