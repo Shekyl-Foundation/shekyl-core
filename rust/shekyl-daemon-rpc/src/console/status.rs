@@ -5,7 +5,7 @@
 
 //! `show_status` and `hard_fork_info`.
 
-use super::info::{daa_target_seconds, fetch_get_info};
+use super::info::fetch_get_info;
 use super::{native_json_rpc, require_ok, wide_difficulty_value, Source};
 use crate::chain_facts::FfiChainFacts;
 use crate::ctl_client;
@@ -240,7 +240,7 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
     // `queried_version` here would invert the whole point.
     let fork = fetch_hard_fork_info(src, None)?;
     let mining = fetch_mining_status(src)?;
-    let (target, target_warning) = daa_target_seconds(info.target);
+    let target = crate::consensus::DAA_TARGET_SECONDS;
 
     let net_height = info.target_height.max(info.height);
     let network = if info.testnet {
@@ -265,8 +265,8 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
         MiningReadout::Ready(_) => "not mining".to_owned(),
     };
     // Network hash rate as difficulty per target second. `checked_div` for
-    // the same reason as everywhere else in this file: `target` is a number
-    // the daemon sent.
+    // the same reason as everywhere else in this file: `T` is genesis-frozen
+    // and generated; a zero would be a build defect, not a daemon value.
     let net_hash = wide_difficulty_value(&info.wide_difficulty)
         .and_then(|d| d.checked_div(u128::from(target)))
         .map_or_else(|| "unknown".to_owned(), mining_speed);
@@ -292,8 +292,5 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
             uptime % 60
         ));
     }
-    Ok(match target_warning {
-        Some(warning) => format!("{warning}\n{line}"),
-        None => line,
-    })
+    Ok(line)
 }

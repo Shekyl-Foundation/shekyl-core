@@ -5,7 +5,7 @@
 
 //! `alt_chain_info`.
 
-use super::info::{daa_target_seconds, fetch_get_info};
+use super::info::fetch_get_info;
 use super::{
     ffi_json_rpc_result, human_readable_timespan, json_rpc_result, native_json_rpc, require_ok,
     trimmed, wide_difficulty_decimal, Source,
@@ -157,7 +157,6 @@ pub(super) fn alt_chain_info(
     now: u64,
 ) -> Result<String, String> {
     let info = fetch_get_info(src)?;
-    let (target, target_warning) = daa_target_seconds(info.target);
     let mut chains = fetch_alt_chains(src)?;
     // The alt chain's first block. Saturating: an alt chain longer than our
     // own height is not something this console gets to be surprised by.
@@ -167,9 +166,6 @@ pub(super) fn alt_chain_info(
         |c: &AltChainProvisional| info.height.saturating_sub(start_of(c)).saturating_sub(1);
 
     if tip.is_empty() {
-        // The listing form derives nothing from T, so a disagreement is not
-        // reported there — a warning attached to output it cannot affect
-        // would train its reader to ignore the one that matters.
         chains.sort_by_key(|c| c.height);
         let shown: Vec<&AltChainProvisional> = chains
             .iter()
@@ -213,7 +209,7 @@ pub(super) fn alt_chain_info(
         ));
     }
     let start_height = start_of(chain);
-    let mut out: Vec<String> = target_warning.into_iter().collect();
+    let mut out: Vec<String> = Vec::new();
     out.extend([
         format!("Found alternate chain with tip {tip}"),
         format!(
@@ -259,6 +255,7 @@ pub(super) fn alt_chain_info(
                     .to_owned(),
             );
         } else {
+            let target = crate::consensus::DAA_TARGET_SECONDS;
             #[expect(
                 clippy::cast_precision_loss,
                 reason = "a percentage for a human, from a block count and a timespan"

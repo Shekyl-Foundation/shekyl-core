@@ -48,15 +48,6 @@ use crate::ctl_client;
 pub(super) struct GetInfoReplyProvisional {
     pub(super) status: shekyl_rpc_types::RpcStatus,
     pub(super) height: u64,
-    /// The DAA's target block time, as **this daemon** reports it.
-    ///
-    /// **Not the authority.** `T` is genesis-frozen and single-sourced
-    /// through `config/consensus_constants.json`, which generates both the
-    /// C++ `shekyl/consensus_constants_generated.h` and this crate's
-    /// [`crate::consensus::DAA_TARGET_SECONDS`]. The console renders from the
-    /// generated value; this field exists so a disagreement can be *reported*
-    /// rather than silently rendered from — see [`daa_target_seconds`].
-    pub(super) target: u64,
     pub(super) wide_difficulty: String,
     pub(super) wide_cumulative_difficulty: String,
     pub(super) target_height: u64,
@@ -93,43 +84,5 @@ pub(super) fn fetch_get_info(src: &Source) -> Result<GetInfoReplyProvisional, St
         Ok(reply)
     } else {
         Err(reply.status.0)
-    }
-}
-
-/// The DAA target this console renders with, and what to do when the daemon
-/// disagrees.
-///
-/// **The authority is the generated constant, never the reply.** `T` is
-/// genesis-frozen: `config/consensus_constants.json` generates the C++ header
-/// and this crate's constant from one source, so a value arriving over the
-/// wire is a second source for something that has exactly one — and on the
-/// remote arm it is a second source supplied by a daemon that could report
-/// anything.
-///
-/// The reported value is not ignored, though. If it differs, the interesting
-/// fact is the *disagreement*: a daemon running a different `T` is running
-/// different consensus rules, which is a different chain, not a display
-/// difference. So this returns the authority plus a warning to print, and the
-/// caller renders the warning beside its numbers rather than quietly using
-/// one value or the other.
-///
-/// This is a narrow, local check. The general instrument — a version
-/// handshake at connect, and a digest over the whole constants file so a
-/// constant nobody thought to compare is still covered — is a separate round;
-/// it is not built here, and this comment is not a claim that it is.
-pub(super) fn daa_target_seconds(reported: u64) -> (u64, Option<String>) {
-    let authority = crate::consensus::DAA_TARGET_SECONDS;
-    if reported == authority {
-        (authority, None)
-    } else {
-        (
-            authority,
-            Some(format!(
-                "WARNING: this daemon reports a block target of {reported}s, but this \
-                 build's consensus constants say {authority}s. Those are different \
-                 consensus rules, so this is very likely a different chain or a \
-                 mismatched binary. Figures below use {authority}s."
-            )),
-        )
     }
 }

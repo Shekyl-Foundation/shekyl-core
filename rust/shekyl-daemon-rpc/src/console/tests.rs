@@ -5,7 +5,6 @@
 
 use super::alt_chain::headers_in_correspondence;
 use super::blockchain::{median, version_tally};
-use super::info::daa_target_seconds;
 use super::status::{fork_extra_info, mining_speed, sync_percentage};
 use super::*;
 use crate::ctl_client;
@@ -2057,35 +2056,16 @@ fn hard_fork_info_labels_line_one_with_the_version_it_counted() {
     );
 }
 
-/// T comes from the generated authority, and a daemon that disagrees is
-/// reported rather than believed.
+/// After VC-D11 the T warning is gone: the digest handshake is the instrument,
+/// and figures still use the generated authority rather than the wire.
 ///
 /// The C++ read `ires.target` and computed from it. That is one source
 /// too many for a genesis-frozen constant that
 /// `config/consensus_constants.json` already single-sources into both
-/// languages — and on the remote arm the extra source is a daemon that
-/// can report anything. The reply is still read, because a disagreement
-/// means different consensus rules, i.e. a different chain, which is
-/// worth saying out loud.
+/// languages. The reply may still carry `target` (unknown fields are
+/// ignored); this console does not read it.
 #[test]
-fn the_daa_target_comes_from_the_build_not_the_wire() {
-    let authority = crate::consensus::DAA_TARGET_SECONDS;
-    assert_eq!(
-        daa_target_seconds(authority),
-        (authority, None),
-        "agreement is silent"
-    );
-    let (used, warning) = daa_target_seconds(authority.saturating_add(1));
-    assert_eq!(used, authority, "the authority wins, never the wire");
-    let warning = warning.expect("a disagreement must be reported");
-    assert!(warning.contains("different chain"), "{warning}");
-    assert!(warning.contains(&format!("{authority}s")), "{warning}");
-}
-
-/// A daemon reporting a foreign T gets the warning printed above the
-/// figures, and the figures are still computed with the build's T.
-#[test]
-fn a_foreign_target_warns_and_does_not_change_the_arithmetic() {
+fn a_foreign_target_does_not_warn_and_does_not_change_the_arithmetic() {
     let mut info: serde_json::Value = serde_json::from_str(&info_reply(10)).unwrap();
     // The fixture already carries the real T; make this daemon claim 60.
     info["target"] = serde_json::json!(60);
@@ -2096,24 +2076,17 @@ fn a_foreign_target_warns_and_does_not_change_the_arithmetic() {
     ]);
     let (code, out) = run(&["status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
-    assert!(out.contains("WARNING:"), "{out}");
-    assert!(out.contains("reports a block target of 60s"), "{out}");
+    assert!(!out.contains("WARNING:"), "{out}");
     // net hash = 123456 / 120 = 1028 -> 1.03 kH/s, the build's T. Under
     // the daemon's 60 it would be 2057 -> 2.06 kH/s.
     assert!(out.contains("net hash 1.03 kH/s"), "{out}");
     assert!(!out.contains("2.06 kH/s"), "{out}");
 }
 
-/// The warning appears only where T actually changes a number.
-///
-/// `alt_chain_info`'s listing form derives nothing from T, so it stays
-/// silent even against a daemon reporting a foreign one — the inverse
-/// direction of the test above, and the reason it exists: a warning
-/// attached to output it cannot affect is how a reader learns to skip
-/// the one that matters. The tip form, which computes a hash-rate share,
-/// does warn.
+/// The listing form uses no T; the tip form still computes the share from
+/// the build's T even when the daemon reports a foreign one.
 #[test]
-fn the_target_warning_appears_only_where_t_changes_a_number() {
+fn the_alt_chain_share_uses_the_build_t() {
     let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
     info["target"] = serde_json::json!(60);
     let chains = alt_chains_reply(&serde_json::json!([one_alt_chain(9, 90, 2, &[8, 9], 7)]));
@@ -2140,7 +2113,7 @@ fn the_target_warning_appears_only_where_t_changes_a_number() {
     ]);
     let (code, detail) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{detail}");
-    assert!(detail.contains("WARNING:"), "{detail}");
+    assert!(!detail.contains("WARNING:"), "{detail}");
     // And the share is computed with the build's T, not the daemon's 60:
     // 100 * 120 * 2 / 360 = 66.666667, where 60 would give 33.333333.
     assert!(
