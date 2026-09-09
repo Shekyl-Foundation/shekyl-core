@@ -1,6 +1,6 @@
 # Engine composition: making it less of a monolith
 
-**Status:** LIVING CONTRACT. Last verified 2026-09-09 (refresh / local_keys inline-test extraction — the last god-file test suites moved to `#[path]` siblings; `refresh.rs` FILE ceiling 4256 → 1707, `local_keys.rs` baseline retired). Landing inventory: [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
+**Status:** LIVING CONTRACT. Last verified 2026-09-09 (refresh module tree + local_keys test split — `refresh.rs` FILE baseline retired into `engine/refresh/{mod,types,handle,task,driver}.rs`; `local_keys.rs` baseline retired). Landing inventory: [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
 
 | Field | Value |
 |-------|--------|
@@ -19,7 +19,7 @@ It is not “you forgot modules.” Looking at the tree:
 | 7 Stage‑1 traits | Composition root with **7 type params + ~15 fields** |
 | `KeyActor` / `CurveTreeActor` | **Inherent API surface** for almost every user action |
 | Local* implementors | **Cross-domain orchestration** (refresh ↔ merge ↔ pending ↔ submit ↔ stake ↔ pscan) |
-| File / prefs / units crates | **God-files**: `local_pending_tx` ~5.4k, `stake_engine` ~4.6k, `refresh` ~4.3k, `lifecycle` ~2.6k |
+| File / prefs / units crates | **Remaining FILE-baselined modules** (over `NEW_FILE_CAP` 1200): `pscan/scan_step` ~1.9k, `transfer/engine` ~1.8k, `engine/mod` ~1.4k, `local_refresh` ~1.3k, `backing_set` ~1.3k. Carved: `local_pending_tx`, `stake_engine`, `lifecycle`, `refresh`, `local_keys`, `merge`. |
 
 So modularization moved **implementation** out; **identity, wiring, and workflow ownership** stayed on `Engine`. That is normal at Stage 1–2. The next step is not “`Engine<8,9,10 params>`” — it is **stop treating Engine as the place workflows live**.
 
@@ -357,5 +357,5 @@ That is the same architecture already halfway in — finished, instead of “sev
 | | |
 |--|--|
 | **Location** | `shekyl-core/docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md` |
-| **Status** | LIVING CONTRACT (transfer extract + ownership pin + StakeFacade + crate-wide `METHODS_CEILING` + refresh/local_keys test split; last verified 2026-09-09) |
+| **Status** | LIVING CONTRACT (transfer extract + ownership pin + StakeFacade + crate-wide `METHODS_CEILING` + refresh module tree + local_keys test split; last verified 2026-09-09) |
 | **Follow-up** | Optional: `TransferCtx` / `TransferFacade` / `ScanFacade` when product needs them; `StakeWorkflow` rename |

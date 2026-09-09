@@ -17,13 +17,14 @@
 //! exercised separately against the unreachable [`DaemonClient`] to
 //! confirm daemon-IO errors map through correctly.
 //!
-//! Wired as a `#[path]` child of `engine/refresh.rs`, so `use super::*`
+//! Wired as a `#[path]` child of `engine/refresh/mod.rs`, so `use super::*`
 //! and `super::` paths resolve into the refresh module and private items
 //! stay testable; the sibling file exists so the decomposition ratchet
 //! counts the workflow file, not its test suite (the
 //! `local_refresh_tests.rs` pattern).
 
 use std::cell::RefCell;
+use std::num::NonZeroU32;
 use std::sync::{Mutex, OnceLock};
 
 use shekyl_rpc_transport::HttpRpc;
@@ -38,7 +39,8 @@ use crate::scan::ScanResult;
 use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
 use shekyl_engine_state::{BlockchainTip, LedgerBlock, ReorgBlocks};
 
-use super::{derive_snapshot_id, summarize, LedgerSnapshot, RefreshReorgEvent, SnapshotId};
+use super::{derive_snapshot_id, summarize, LedgerSnapshot, RefreshReorgEvent};
+use crate::engine::pending::SnapshotId;
 
 // ── Test fixtures ──────────────────────────────────────────
 
@@ -490,7 +492,7 @@ fn summarize_records_every_field() {
     ];
     result.reorg_rewind = Some(crate::scan::ReorgRewind { fork_height: 5 });
 
-    let summary = summarize(&result, 4);
+    let summary = summarize(&result, NonZeroU32::new(4).expect("fixture attempt"));
 
     assert_eq!(summary.processed_height_range, 5..8);
     assert_eq!(summary.blocks_processed, 3);

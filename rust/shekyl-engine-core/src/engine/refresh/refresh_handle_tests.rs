@@ -16,7 +16,7 @@
 //! `start_refresh`, idempotent cancel, `mem::forget` leak
 //! semantics) live in commit 5. Integration coverage for the
 //! real producer through `Engine::start_refresh` lives in
-//! `start_refresh_integration_tests` below, which carries
+//! `start_refresh_integration_tests` (sibling suite), which carries
 //! both fixture flavours: an unreachable-`DaemonClient`
 //! flavour for handle-shape invariants and daemon-IO error
 //! mapping, and a `TestDaemon`-driven hybrid flavour
@@ -24,14 +24,13 @@
 //! `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.3) that exercises
 //! the producer end-to-end against synthetic chain state.
 //!
-//! Wired as a `#[path]` child of `engine/refresh.rs`, so `use super::*`
+//! Wired as a `#[path]` child of `engine/refresh/mod.rs`, so `use super::*`
 //! and `super::` paths resolve into the refresh module and private items
 //! stay testable; the sibling file exists so the decomposition ratchet
 //! counts the workflow file, not its test suite (the
 //! `local_refresh_tests.rs` pattern).
-use super::{
-    RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshSummary,
-};
+use super::{RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshSummary};
+use crate::engine::RefreshError;
 use tokio_util::sync::CancellationToken;
 
 /// Test-fixture return shape for [`handle_with`]: the

@@ -18,7 +18,7 @@
 //!   any chain state.
 //! - **Hybrid scenarios** wire a [`TestDaemon`] in place of the
 //!   real `DaemonClient` via
-//!   [`Engine::replace_daemon`](super::Engine::replace_daemon),
+//!   [`Engine::replace_daemon`](crate::engine::Engine::replace_daemon),
 //!   per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.3 hybrid-
 //!   construction discipline. These tests exercise
 //!   `start_refresh` end-to-end against synthetic chain state;
@@ -38,7 +38,7 @@
 //! master-seed input is independent of the daemon seed by
 //! design; mixing them would model a non-existent leak channel.)
 //!
-//! Wired as a `#[path]` child of `engine/refresh.rs`, so `use super::*`
+//! Wired as a `#[path]` child of `engine/refresh/mod.rs`, so `use super::*`
 //! and `super::` paths resolve into the refresh module and private items
 //! stay testable; the sibling file exists so the decomposition ratchet
 //! counts the workflow file, not its test suite (the
@@ -1302,7 +1302,7 @@ async fn hybrid_refresh_engine_orchestrator_cancellation_retries() {
 /// (`curve_tree_decode`) consume, sourced here so the three KATs cannot
 /// drift.
 const CT2_TIER_A_FIXTURE: &str =
-    include_str!("../../../shekyl-curve-tree/tests/fixtures/ct2_tier_a.json");
+    include_str!("../../../../shekyl-curve-tree/tests/fixtures/ct2_tier_a.json");
 
 fn ct2_hex_vec(s: &str) -> Vec<u8> {
     assert!(s.len().is_multiple_of(2), "odd-length hex: {s}");
