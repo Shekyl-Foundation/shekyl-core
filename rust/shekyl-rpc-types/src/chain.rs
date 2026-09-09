@@ -36,55 +36,25 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::consensus_digest::DaemonNetwork;
 use crate::hash::HashHex;
 
 /// `CORE_RPC_VERSION_MAJOR` — moved here from
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.28: the peer identifier leaves every readout
-/// (PWD-I1 amendment — no identifier on the wire): `get_connections` /
-/// `sync_info` connections drop `peer_id`, and `get_peer_list` entries drop
-/// `id`. A removed member is a wire change, so it bumps this; the deltas are
-/// pinned against new `_v2` sibling vectors (derived, not recaptured — the
-/// C++ oracle for these methods is gone since RK-5a); the `_v1` captures
-/// stay frozen per the vectors' README.
-/// 3.27: three of the header methods change shape
-/// (RK-5b). `get_block_header_by_hash` answers **per element** — a
-/// `block_headers` array of `{hash, block_header?}` slots rather than a bare
-/// header array — and drops the singular `hash` request field, whose only
-/// effect beside `hashes` was to slip one request past the restricted cap;
-/// `hard_fork_info` reports `queried_version` and `active_version` in place
-/// of one `version` that meant whichever the request had implied; and
-/// `get_fee_estimate` drops the `fee` scalar, which the handler set to
-/// `fees[0]` (`core_rpc_server.cpp`, `on_get_base_fee_estimate`) and so
-/// carried no information the tiers did not. A changed member is a wire
-/// change, so it bumps this; the deltas are pinned test-by-test against the
-/// captured `_v1` vectors in `rust/shekyl-rpc-types/tests/vectors/rpc/`.
-/// **RK-5b drafted this as 3.26 and took 3.27 on merge**: `following_degraded`
-/// landed on `dev` first and claimed 26 while this branch was in flight, and
-/// the two edits agreed *character for character* on the constant's own line,
-/// so git merged it silently — the conflict appeared only in the prose above
-/// it. A number that two independent changes can both write is not protected
-/// by the fact that changing it is deliberate.
-/// 3.26: `get_info` gains `following_degraded`
-/// (C2-R1b F-1(a): sticky watermark-refusal flag; migrates into RK-5c's
-/// node-state hub). 3.25: `get_transactions` drops `txs_as_hex` and
-/// `txs_as_json` — the handler filled them "in case an old wallet asks" and
-/// the old wallet is `src/wallet/`, deleted, so they duplicated
-/// `txs[i].as_hex` / `.as_json` for a reader that does not exist (rule 60).
-/// A removed member is a wire change, so it bumps this. 3.24: `/get_transaction_pool_hashes.bin`
-/// retired — the `.bin` sibling of a route that is called, with no caller of
-/// its own; found by `ci/rpc-route-liveness` on its first run and disposed of
-/// on the predicate RK-4x already ruled. 3.23: `/get_blocks.bin` (+ `/getblocks.bin`) and
-/// `/get_hashes.bin` (+ `/gethashes.bin`) retired — wallet2's batch sync,
-/// with no caller left after `src/wallet/` was deleted (RK-4x). Retiring a
-/// served route is a wire change, so it bumps this. 3.22: `untrusted` dropped from every response,
-/// `get_info` bootstrap fields dropped, `set_bootstrap_daemon` /
-/// `get_public_nodes` deleted, advertised `rpc_port` / `rpc_credits_per_hash`
-/// dropped from the peer readouts (PR #533). A wire change bumps this and is
-/// recorded in the design doc; the KV cutover itself never does.
-pub const CORE_RPC_VERSION_MINOR: u32 = 28;
+/// `CORE_RPC_VERSION_MINOR`. 3.29: `get_version` gains the three identity-
+/// tuple fields — `consensus_constants_digest`, `nettype`, `genesis_hash`
+/// (`CLIENT_VERSION_CONSTANTS_VALIDATION.md` `VC-2`). 3.28 was the peer
+/// identifier leaving every readout; 3.27 RK-5b's three header-method shape
+/// changes; 3.26 `get_info.following_degraded`; 3.25 the RK-4c removals.
+///
+/// **Read from `dev` at the moment this line is written, never carried
+/// forward from a plan.** `chain.rs:59-70` records two branches taking 3.26
+/// honestly and git merging them character-for-character, because `= 25` →
+/// `= 26` is textually identical whoever writes it. This value was read on
+/// the tree cut from PR #658's merge.
+pub const CORE_RPC_VERSION_MINOR: u32 = 29;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -358,6 +328,40 @@ pub struct GetVersionResponse {
     /// (`KV_SERIALIZE_OPT(hard_forks, {})`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hard_forks: Vec<HardForkEntry>,
+
+    // The three identity-tuple fields (VC-2). Each is MANDATORY and strict:
+    // no `default`, no `Option`, no catch-all variant (VC-D14). `get_version`
+    // is the call a client makes *before* it trusts anything, so on a remote
+    // arm these are attacker-controlled bytes and an omitted field silently
+    // becoming a zero value would turn "these disagree" into "these agree" —
+    // the one outcome the identity check exists to prevent. The three
+    // `KV_SERIALIZE_OPT` fields above keep their defaults because the C++
+    // side genuinely omits them and the oracle vectors depend on it; the rule
+    // is per-field on the tuple, not a sweep of the struct.
+    /// Digest of the daemon's consensus-constant authorities
+    /// ([`crate::CONSENSUS_CONSTANTS_DIGEST`]) — the **rules** axis.
+    ///
+    /// [`HashHex`] rather than `String` (`VC-R16`): it is a SHA-256, so 32
+    /// bytes rendered as 64 hex characters, and the type refuses any other
+    /// length or a non-hex character at the deserializer, accepts either
+    /// case, and re-emits lowercase. A `String` would false-mismatch on an
+    /// uppercase rendering of the same bytes and would admit "not a digest
+    /// at all" as a legal value.
+    pub consensus_constants_digest: HashHex,
+    /// The network this daemon runs — the **network** axis.
+    ///
+    /// An unrecognised value is a deserialization error, never a default: a
+    /// daemon reporting a network this build does not know is a daemon this
+    /// build cannot vouch for.
+    pub nettype: DaemonNetwork,
+    /// Hash of block 0 — the **genesis** axis.
+    ///
+    /// Carried here rather than read from `on_get_block_hash([0])`
+    /// (`VC-R2`): two calls can straddle a restart or a proxy fronting two
+    /// nodes, so a client would pair a version from one daemon with a
+    /// genesis from another and accept a tuple that never simultaneously
+    /// existed. One reply, one snapshot.
+    pub genesis_hash: HashHex,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
@@ -371,8 +375,9 @@ mod tests {
 
     #[test]
     fn core_rpc_version_packs_like_the_cpp_macro() {
-        // MAKE_CORE_RPC_VERSION(3, 28) == 0x0003_001C == 196636 (3.28: the
-        // peer identifier leaves every readout, PWD-I1; 3.27 was RK-5b's
+        // MAKE_CORE_RPC_VERSION(3, 29) == 0x0003_001D == 196637 (3.29:
+        // `get_version` gains the three identity-tuple fields, VC-2; 3.28
+        // the peer identifier leaving every readout, PWD-I1; 3.27 RK-5b's
         // three header-method shape changes; 3.26
         // `get_info.following_degraded`, C2-R1b F-1(a); 3.25 the RK-4c
         // `txs_as_hex`/`txs_as_json` removal). Captured vectors are never
@@ -388,10 +393,10 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_636);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 28);
+        assert_eq!(CORE_RPC_VERSION, 196_637);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 29);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 28);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 29);
     }
 
     #[test]
