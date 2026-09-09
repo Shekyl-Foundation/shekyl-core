@@ -530,6 +530,14 @@ namespace nodetool
     bool handle_command_line(
         const boost::program_options::variables_map& vm
       );
+    //! PWD-E7 default posture: spawn a managed pinned tor, publish an
+    //! ephemeral per-boot onion, and wire the tor zone (inbound bind +
+    //! outbound SOCKS). Yields (no-op) when the operator configured the tor
+    //! zone themselves, opted out, is offline, or no pinned tor binary is
+    //! installed; a start failure logs loudly and continues without overlay
+    //! inbound (ruled: never aborts the daemon). Called from init() after
+    //! m_config_folder is final and before zone iteration begins.
+    void add_ephemeral_tor_zone(const boost::program_options::variables_map& vm);
     bool idle_worker();
     bool handle_remote_peerlist(const std::vector<peerlist_entry>& peerlist, const epee::net_utils::connection_context_base& context);
     bool get_local_node_data(epee::net_utils::zone zone_type, basic_node_data& node_data, const network_zone& zone) const;
@@ -687,6 +695,7 @@ namespace nodetool
     extern const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_seed_node;
     extern const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy;
     extern const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound;
+    extern const command_line::arg_descriptor<bool> arg_no_ephemeral_tor;
     extern const command_line::arg_descriptor<std::string> arg_ban_list;
     extern const command_line::arg_descriptor<bool> arg_no_sync;
 

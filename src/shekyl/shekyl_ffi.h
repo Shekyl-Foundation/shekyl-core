@@ -3719,6 +3719,60 @@ int32_t shekyl_levin_fragmented_notify(size_t noise_size, uint32_t command,
                                        const uint8_t* payload, size_t payload_len,
                                        ShekylBuffer* out);
 
+// ---------------------------------------------------------------------------
+// Daemon ephemeral Tor inbound -- PWD-E7 (docs/design/P2P_2_ENDPOINT_ROUND.md)
+// ---------------------------------------------------------------------------
+// The DEFAULT overlay-endpoint posture: the daemon spawns a managed, pinned
+// tor, mints a v3 onion key IN MEMORY, publishes with ADD_ONION Flags=
+// DiscardPK, and uses the returned ServiceID as its per-boot overlay inbound
+// address. Nothing is persisted; a restart mints a new key and a new address.
+// The operator-provisioned stable posture (--anonymous-inbound + torrc) is a
+// different privacy posture, not a different custody of the same thing, and
+// configuring it makes the ephemeral posture yield. All of the posture logic
+// lives in rust/shekyl-tor-control-daemon; these exports are marshaling.
+
+//! Probe the tor-binary discovery-and-pin gate (SP-T0c) without spawning:
+//! the default-on posture's log-tone decision. `tor_binary_path` null/empty
+//! runs the standard order (SHEKYL_TOR_BINARY env -> beside the executable ->
+//! PATH). Returns 0 = pinned tor available (out_detail = its path); 1 = no
+//! candidate at all (calm skip; out_detail untouched); 2 = candidate found
+//! but unusable -- pin mismatch (a distro tor can never hash-match the pinned
+//! Expert Bundle), unpinned target, unreadable -- diagnostic in out_detail
+//! (recommend >= 256 bytes); 3 = argument error. Advisory only: start re-runs
+//! the gate, so a binary swapped between probe and start cannot bypass it.
+int shekyl_daemon_tor_probe(const char* tor_binary_path,
+                            char* out_detail, size_t out_detail_len);
+
+//! Start the ephemeral posture: verify the binary, spawn a managed tor with
+//! `data_dir` as its DataDirectory, bootstrap to 100%, publish a fresh v3
+//! onion forwarding virtual_port -> 127.0.0.1:local_port, and return the
+//! addresses. BLOCKS for the whole sequence (tens of seconds on a cold
+//! bootstrap; bound by bootstrap_timeout_secs plus small constants).
+//! Outputs are NUL-terminated: out_service_id (>= 57 bytes; 56-char service
+//! id, no ".onion"), out_socks_addr (>= 48 bytes; the managed tor's SOCKS
+//! "ip:port" -- the zone's outbound proxy), out_error (>= 256 bytes
+//! recommended). Returns 0 = published; 1 = already running (refused, not
+//! stacked); 2 = argument error; 3 = start failed (binary/spawn/bootstrap/
+//! publish -- detail in out_error; the incarnation was torn down before
+//! return). On failure the ruled posture is: log loudly, continue with no
+//! overlay inbound (outbound-only on that zone) -- do not abort the daemon.
+int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir,
+                            uint16_t virtual_port, uint16_t local_port,
+                            uint16_t max_streams, uint32_t bootstrap_timeout_secs,
+                            char* out_service_id, size_t out_service_id_len,
+                            char* out_socks_addr, size_t out_socks_addr_len,
+                            char* out_error, size_t out_error_len);
+
+//! Is the ephemeral tor still up? false when never started, already shut
+//! down, or died. Per PWD-E7 there is no respawn: a death means the overlay
+//! inbound posture is gone for this boot; the caller logs and continues.
+bool shekyl_daemon_tor_is_alive(void);
+
+//! Bounded teardown of the ephemeral posture (DEL_ONION, SIGTERM -> wait ->
+//! SIGKILL, reap). Idempotent: true when an instance was running and is now
+//! down, false when there was nothing to stop.
+bool shekyl_daemon_tor_shutdown(void);
+
 } // extern "C"
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and

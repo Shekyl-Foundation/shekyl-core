@@ -24,7 +24,10 @@ shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 # The start sequence: tokio for the bootstrap-gate timers and teardown bounds;
 # kameo for the control actor handle it drives. Both are the workspace's
 # established actor stack (shekyl-engine-core, shekyl-tor-control-wallet).
-tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "process", "fs"] }
+# `rt-multi-thread` is the blocking facade's requirement, not the actor's: the
+# FFI consumer has no async context, so the facade owns a one-worker runtime
+# that keeps the exit watcher polled between calls (see blocking.rs).
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "rt-multi-thread", "macros", "process", "fs"] }
 kameo = { workspace = true }
 # OS CSPRNG for the per-boot hs-id seed mint — the same source the wallet's
 # vanguard rotation draws from.

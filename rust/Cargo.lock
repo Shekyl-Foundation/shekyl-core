@@ -4239,6 +4239,7 @@ dependencies = [
  "shekyl-proofs",
  "shekyl-relay",
  "shekyl-relay-privacy",
+ "shekyl-tor-control-daemon",
  "shekyl-tx-builder",
  "shekyl-units",
  "shekyl-wire",

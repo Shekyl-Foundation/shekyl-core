@@ -41,9 +41,14 @@
 //!   Reopen when the consumer can take a dynamic SOCKS address (the PWD-E7
 //!   piece 3 wiring is the named re-evaluation site).
 
+pub mod blocking;
 pub mod ephemeral;
 
+pub use blocking::{probe_binary, BlockingDaemonTor, BlockingDaemonTorConfig, BlockingStartError};
 pub use ephemeral::{DaemonTorConfig, DaemonTorControl, DaemonTorStartError};
+// Re-exported so the FFI crate's probe/start seam names one crate (this one)
+// rather than reaching around it to the client for the error type alone.
+pub use shekyl_tor_control_client::binary::TorBinaryError;
 
 #[cfg(test)]
 mod test_support;
