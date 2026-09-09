@@ -240,37 +240,27 @@ p2p encryption lands (§0).
 **both** transports: a /24 gives 256 free hosts on `public_` as surely as a
 keypair gives one on tor. So the cap **bounds honest duplicates and nothing
 adversarial, in any zone**. Stated only as an overlay limitation, the row reads
-as clearnet-effective and overlay-limited — which is exactly the framing the
-§3.1c correction retired.
+as clearnet-effective and overlay-limited — which is exactly the framing this
+concession retires (the overlay carve-out). Recorded on the §1 ladder in
+[`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) as of 2026-09-09.
 
-> **Question routed to the deliverable, not asserted here — and re-posed
-> 2026-09-06 after reading the passage properly.**
+> **Question routed to the deliverable, not asserted here — DISCHARGED
+> 2026-09-09.**
 >
-> [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) `:142-150` is a **three-tier
-> ladder** — *worst: verify a claim; better: replace it with your own
-> observation; best: bind it into the transcript* — and the same-host cap
-> appears as the **worked example of tier two**, not as a claim about its
-> adversarial strength. As that example it is **correct**: nothing is claimed,
-> so nothing can be forged.
+> [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) §1's three-tier ladder —
+> *worst: verify a claim; better: replace it with your own observation; best:
+> bind it into the transcript* — carries the same-host cap as the **worked
+> example of tier two**, not as a claim about its adversarial strength. As that
+> example it is **correct**: nothing is claimed, so nothing can be forged.
 >
-> **So the line needs no correction. What is missing is a fourth statement the
-> ladder does not make:** tier two closes the **forgery** surface and is silent
+> **The line needed no correction. What was missing was a fourth statement the
+> ladder did not make:** tier two closes the **forgery** surface and is silent
 > on the **multiplication** surface. An observed property can still be cheap to
 > produce — a /24 gives 256 hosts, a keypair gives one onion — so "nothing to
-> spoof" and "adversarially binding" are **independent**. This is why `-43`
-> could stop leaning on the justification without the line being wrong: they
-> needed a property the ladder does not supply.
->
-> **The risk is that the ladder reads as a completeness ordering.** A reader
-> reaching tier two concludes they have arrived somewhere adequate, and tier
-> three is stronger against a *different* problem.
->
-> **The answerable question, therefore, is about the framework and not about
-> any adopted option:** *does the ladder need a note that tier two is silent on
-> cost-to-multiply — that a tier-two mechanism can be correct and still bound
-> nothing an adversary cares about?* Posed as "is the cap's justification
-> adequate?" it invites a defence of a line that is not wrong. Still that
-> document's owner's call.
+> spoof" and "adversarially binding" are **independent**. Written into the
+> ladder on 2026-09-09, immediately after the three rungs. The risk named
+> here — that the ladder reads as a completeness ordering — is why the note
+> sits on the framework, not on the cap.
 
 ## 5b. The decision tables
 
@@ -375,10 +365,17 @@ address, not replaced by it.
 | (b) Accept the duplicate; drop the check with `peer_id` | — | an outbound slot spent on a peer already connected inbound; a stem edge may go to a node already observing us inbound | a measurement showing the duplicate rate is negligible |
 | (c) Re-derive identity from the new address field | **reintroduces a minted value in a control decision** | — | — (rejected on its face) |
 
-**Proposed: (a).** `has_too_many_connections` (`:3115-3136`) already computes
-the predicate; it is a sibling-site wiring, not new mechanism. Its overlay
-limitation is not a regression — `peer_id` was a shared constant there
-(PWD-I2), so the check never fired on those zones either.
+**Proposed: (a)** as a *direction* — host-keyed duplicate avoidance, no minted
+value — and that is what shipped. The first draft's *wiring* was reuse of
+`has_too_many_connections` from the dial side; `-43` built a dedicated
+outbound helper instead (`outbound_connection_takes_host` /
+`has_outbound_connection_to_host`): outbound-only, host-keyed, every zone.
+The first draft's overlay concession ("does nothing on overlay zones — no host
+to compare"; "overlay limitation is not a regression") is the framing the §5
+concession retired. That no-op is a fact about the inbound cap (PWC-E11,
+`net_node.inl:3029` returns false off `public_`), not about job 2. The
+concession cell on (a) in the table above is records-was of the first draft;
+do not cite it as current.
 
 ### PWD-E5 — is §4 discharged by PWD-I1?
 
