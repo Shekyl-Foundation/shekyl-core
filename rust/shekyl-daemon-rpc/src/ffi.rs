@@ -309,6 +309,29 @@ pub const SHEKYL_RPC_FACTS_ERR_INCONSISTENT: i32 = -4;
 /// Twin of `shekyl_rpc_chain_tip_facts`. Layout pinned both directions by
 /// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via
 /// `shekyl_rpc_chain_tip_facts_rust_{fill,check}`.
+/// Twin of `shekyl_rpc_identity_facts` (VC-2): what this daemon **is**, as
+/// opposed to what its chain tip looks like right now.
+///
+/// Its own POD rather than two more fields on [`ChainTipFactsFfi`]
+/// (`VC-R17`): `nettype` and the genesis hash are fixed at daemon start and
+/// per network, while the tip changes every block, and five of the tip POD's
+/// six callers want a tip. Splitting also keeps the tip POD's layout twins,
+/// seeded fill indices and size pin exactly where they were.
+///
+/// The rules digest is not carried here — it is compiled into this image
+/// from `config/`, so the handler reads `CONSENSUS_CONSTANTS_DIGEST` and
+/// never asks C++ for it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdentityFactsFfi {
+    /// `cryptonote::network_type`: MAINNET=0, TESTNET=1, STAGENET=2,
+    /// FAKECHAIN=3.
+    pub nettype: u8,
+    pub reserved: [u8; 7],
+    /// Block 0's id.
+    pub genesis_hash: [u8; 32],
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChainTipFactsFfi {
@@ -738,6 +761,7 @@ extern "C" {
         out: *mut FeeEstimateFactsFfi,
     ) -> i32;
     /// The grace-blocks ceiling the estimator asserts on. Handle-free.
+    pub fn shekyl_rpc_identity(h: *mut CoreRpcHandle, out: *mut IdentityFactsFfi) -> i32;
     pub fn shekyl_rpc_fee_grace_blocks_max() -> u64;
     pub fn shekyl_rpc_net_stats(h: *mut CoreRpcHandle, out: *mut NetStatsFactsFfi) -> i32;
     /// Fills a C++-owned view of the live p2p connections plus the single
@@ -1091,6 +1115,13 @@ mod unit_test_link_stubs {
     pub extern "C" fn shekyl_rpc_chain_tip(
         _h: *mut CoreRpcHandle,
         _out: *mut ChainTipFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_identity(
+        _h: *mut CoreRpcHandle,
+        _out: *mut IdentityFactsFfi,
     ) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
     }

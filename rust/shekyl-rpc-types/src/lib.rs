@@ -83,7 +83,9 @@ pub use chain::{
     CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION,
     CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR,
 };
-pub use consensus_digest::{DaemonNetwork, CONSENSUS_CONSTANTS_DIGEST};
+pub use consensus_digest::{
+    DaemonNetwork, CONSENSUS_CONSTANTS_DIGEST, CONSENSUS_CONSTANTS_DIGEST_HASH,
+};
 pub use hash::{HashHex, HashHexError};
 pub use headers::{
     BlockHeaderSlot, FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,

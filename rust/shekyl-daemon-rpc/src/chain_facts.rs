@@ -24,6 +24,22 @@ use shekyl_types::{BlockHash, BlockHeight, TxHash};
 use crate::core::{ConnectionsSnapshot, CoreRpc, PeerFacts, SyncSpansSnapshot};
 use crate::ffi;
 
+/// What this daemon **is**: the two identity facts a client checks at
+/// connect that are not tip facts (VC-2).
+///
+/// Separate from [`ChainTip`] because these are process-lifetime constants —
+/// `nettype` is fixed at daemon start, the genesis hash per network — while
+/// the tip changes every block, and five of `chain_tip`'s six callers want a
+/// tip (`VC-R17`). The rules digest is not here: it is compiled into this
+/// image from `config/`, so the handler reads its own constant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonIdentity {
+    /// The network this daemon runs.
+    pub nettype: shekyl_rpc_types::DaemonNetwork,
+    /// Hash of block 0.
+    pub genesis_hash: BlockHash,
+}
+
 /// What the chain tip looks like right now, plus the one build fact
 /// (`release_build`) that rides the same POD because `get_version` reports
 /// it and C++'s build system is its only owner.
@@ -163,6 +179,9 @@ impl FactsFault {
 /// a program that is not yet scoped.
 pub trait ChainFacts: Send + Sync {
     fn chain_tip(&self) -> Result<ChainTip, FactsFault>;
+    /// The daemon's identity facts (`nettype`, genesis hash). Constant for
+    /// the process's life, so a caller may read it once per connection.
+    fn identity(&self) -> Result<DaemonIdentity, FactsFault>;
     fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault>;
     /// The block hash at `height`, with the tip as of the same read.
     /// Absence is data ([`BlockHashAt::hash`] is `None`), not a fault.
@@ -400,6 +419,25 @@ impl P2pFacts for FfiP2pFacts {
 }
 
 impl ChainFacts for FfiChainFacts {
+    fn identity(&self) -> Result<DaemonIdentity, FactsFault> {
+        let pod = self.core.identity().map_err(FactsFault::from_code)?;
+        // An unknown discriminant is a fault, never a default: a daemon
+        // reporting a network this build does not know is a daemon this
+        // build cannot vouch for (VC-D14), and the identity axis is the one
+        // place a silent fallback would read as agreement.
+        let nettype = match pod.nettype {
+            0 => shekyl_rpc_types::DaemonNetwork::Mainnet,
+            1 => shekyl_rpc_types::DaemonNetwork::Testnet,
+            2 => shekyl_rpc_types::DaemonNetwork::Stagenet,
+            3 => shekyl_rpc_types::DaemonNetwork::Fakechain,
+            _ => return Err(FactsFault::Inconsistent),
+        };
+        Ok(DaemonIdentity {
+            nettype,
+            genesis_hash: BlockHash::from_bytes(pod.genesis_hash),
+        })
+    }
+
     fn chain_tip(&self) -> Result<ChainTip, FactsFault> {
         let pod = self.core.chain_tip().map_err(FactsFault::from_code)?;
         Ok(ChainTip {
