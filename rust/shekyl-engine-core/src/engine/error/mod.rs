@@ -38,8 +38,9 @@
 //!
 //! # Variant names locked in by the plan
 //!
-//! - [`OpenError::NetworkMismatch`] — wallet file says network N, daemon
-//!   client says network M.
+//! - [`OpenError::NetworkMismatch`] — wallet file says network N, the
+//!   caller's `expected` parameter says network M. The daemon side of
+//!   lock 5 is [`DaemonClient::verifying`](crate::engine::DaemonClient::verifying).
 //! - [`RefreshError::ConcurrentMutation`] — `apply_scan_result`'s
 //!   `start_height` does not match the wallet's current `synced_height`
 //!   (a second refresh raced ahead, or the caller mutated the wallet

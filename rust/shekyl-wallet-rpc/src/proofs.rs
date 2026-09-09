@@ -156,7 +156,7 @@ pub(crate) async fn check_tx_proof(
     // Wallet-less: only the tenant's network / daemon binding is read.
     let (network, endpoint) = network_and_daemon(tenants).await;
     let address = decode_proof_address(&p.address, network)?;
-    let daemon = make_daemon(&endpoint).await?;
+    let daemon = make_daemon(&endpoint, network).await?;
 
     let checked = proofs::check_tx_proof(&daemon, txid, &address, &p.message, &p.proof)
         .await
@@ -206,7 +206,7 @@ pub(crate) async fn check_reserve_proof(
 
     let (network, endpoint) = network_and_daemon(tenants).await;
     let address = decode_proof_address(&p.address, network)?;
-    let daemon = make_daemon(&endpoint).await?;
+    let daemon = make_daemon(&endpoint, network).await?;
 
     let checked = proofs::check_reserve_proof(&daemon, &address, &p.message, &p.proof)
         .await

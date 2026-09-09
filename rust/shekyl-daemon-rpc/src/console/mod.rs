@@ -29,6 +29,7 @@ use crate::ctl_client;
 
 mod alt_chain;
 mod blockchain;
+mod identity;
 mod info;
 mod status;
 #[cfg(test)]
@@ -54,7 +55,21 @@ enum Source {
     /// Inside the daemon: the live core.
     Live(Arc<CoreRpc>),
     /// A second process: the daemon's RPC address.
-    Remote { address: String, timeout: Duration },
+    Remote {
+        address: String,
+        timeout: Duration,
+        /// This process's network, for the identity handshake.
+        nettype: u8,
+        /// The handshake verdict, computed on the **first** request to this
+        /// daemon and reused for the rest of the command.
+        ///
+        /// Placed here rather than before dispatch so an unrecognised
+        /// command still refuses as unknown without opening a socket: a typo
+        /// must not produce a connection error. It is also the honest
+        /// meaning of the check — "before the first request to this daemon"
+        /// — rather than "before the console does anything".
+        checked: std::sync::OnceLock<Result<(), String>>,
+    },
 }
 
 /// Decode a REST reply body: the success type, else the daemon's error
@@ -208,7 +223,10 @@ fn print_block(
 /// Unwrap a JSON-RPC 2.0 envelope: the `result`, or the `error`'s message as
 /// the operator's reason. A daemon that refused says why; a body that is
 /// neither is a malformed reply.
-fn json_rpc_result<T: serde::de::DeserializeOwned>(body: &[u8], method: &str) -> Result<T, String> {
+pub(super) fn json_rpc_result<T: serde::de::DeserializeOwned>(
+    body: &[u8],
+    method: &str,
+) -> Result<T, String> {
     let envelope: serde_json::Value = serde_json::from_slice(body).map_err(|_| {
         format!(
             "malformed {method} reply: {}",
@@ -247,7 +265,7 @@ where
 {
     match src {
         Source::Live(core) => live(core).map_err(|e| format!("{e:?}")),
-        Source::Remote { address, timeout } => {
+        Source::Remote { .. } => {
             let body = serde_json::to_vec(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": "0",
@@ -255,8 +273,7 @@ where
                 "params": request,
             }))
             .map_err(|e| format!("cannot encode the request: {e}"))?;
-            let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw = src.post_remote("/json_rpc", body)?;
             json_rpc_result::<Res>(&raw, method)
         }
     }
@@ -311,9 +328,8 @@ fn print_height(src: &Source) -> Result<String, String> {
             let facts = FfiChainFacts::new(core.clone());
             crate::methods::get_height(&facts).map_err(|e| format!("{e:?}"))?
         }
-        Source::Remote { address, timeout } => {
-            let body = ctl_client::post_blocking(address, "/get_height", b"{}".to_vec(), *timeout)
-                .map_err(|(_, reason)| reason)?;
+        Source::Remote { .. } => {
+            let body = src.post_remote("/get_height", b"{}".to_vec())?;
             decode_reply::<GetHeightResponse>(&body, "get_height")?
         }
     };
@@ -521,10 +537,9 @@ fn is_key_image_spent(src: &Source, args: &[String]) -> Result<String, String> {
                 spent_status,
             }
         }
-        Source::Remote { address, timeout } => {
+        Source::Remote { .. } => {
             let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-            let raw = ctl_client::post_blocking(address, "/is_key_image_spent", body, *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw = src.post_remote("/is_key_image_spent", body)?;
             // Through `decode_reply`, as `print_height` does: a native handler
             // reports failure as a `RestErrorEnvelope`, and a success-only
             // decode turns the server's stated reason into "malformed reply".
@@ -588,10 +603,9 @@ fn fetch_transactions(
             )
             .map_err(|f| format!("could not decode {} to json ({})", f.txid, f.code))
         }
-        Source::Remote { address, timeout } => {
+        Source::Remote { .. } => {
             let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
-            let raw = ctl_client::post_blocking(address, "/get_transactions", body, *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw = src.post_remote("/get_transactions", body)?;
             // See the `is_key_image_spent` arm: a native handler's failure is a
             // `RestErrorEnvelope`, so decoding success-only reports "malformed"
             // over the reason the server actually gave.
@@ -623,6 +637,7 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
     rpc_server_ptr: *mut c_void,
     address: *const c_char,
     timeout_secs: u64,
+    nettype: u8,
     out_ptr: *mut *mut u8,
     out_len: *mut usize,
 ) -> i32 {
@@ -658,11 +673,21 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
             Some(address) => Source::Remote {
                 address,
                 timeout: Duration::from_secs(timeout_secs),
+                nettype,
+                checked: std::sync::OnceLock::new(),
             },
             None => return SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR,
         }
     };
 
+    // The identity handshake, before anything is rendered (VC-3). Remote arm
+    // only: the live arm renders from this process, so every axis would
+    // compare a value to itself and the check could not fail (VC-D6).
+    //
+    // §3.6.2's exemption for a `version` command has **no subject in this
+    // table today** — `version` is still rendered by C++ and moves here with
+    // RK-C. Written as a note rather than an unreachable match arm: a branch
+    // no input can reach is the shape this round keeps finding.
     let result = match args[0].as_str() {
         "print_height" => print_height(&source),
         "print_block_by_hash" | "print_block_by_height" => {
@@ -886,10 +911,9 @@ fn fetch_peer_list(
             let facts = crate::chain_facts::FfiP2pFacts::new(core.clone());
             crate::methods::get_peer_list(&request, &facts).map_err(|e| format!("{e:?}"))?
         }
-        Source::Remote { address, timeout } => {
+        Source::Remote { .. } => {
             let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-            let raw = ctl_client::post_blocking(address, "/get_peer_list", body, *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw = src.post_remote("/get_peer_list", body)?;
             decode_reply::<shekyl_rpc_types::GetPeerListResponse>(&raw, "get_peer_list")?
         }
     };
@@ -1137,14 +1161,11 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
                 .map_err(|e| format!("malformed get_limit reply: {e}"))?;
             (stats, limits)
         }
-        Source::Remote { address, timeout } => {
-            let raw =
-                ctl_client::post_blocking(address, "/get_net_stats", b"{}".to_vec(), *timeout)
-                    .map_err(|(_, reason)| reason)?;
+        Source::Remote { .. } => {
+            let raw = src.post_remote("/get_net_stats", b"{}".to_vec())?;
             let stats =
                 decode_reply::<shekyl_rpc_types::GetNetStatsResponse>(&raw, "get_net_stats")?;
-            let raw = ctl_client::post_blocking(address, "/get_limit", b"{}".to_vec(), *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw = src.post_remote("/get_limit", b"{}".to_vec())?;
             let limits: GetLimitReplyProvisional = serde_json::from_slice(&raw)
                 .map_err(|e| format!("malformed get_limit reply: {e}"))?;
             (stats, limits)
