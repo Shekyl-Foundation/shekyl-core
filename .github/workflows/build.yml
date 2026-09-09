@@ -348,7 +348,12 @@ jobs:
       # Armed #[ignore]d regtest_e2e gates against the shekyld just built.
       # Runs here rather than in the test job because that job installs no
       # Rust by design, and here the binary and the toolchain already coexist.
-      # The north-star spend is 76-99 s; the other four are a few seconds.
+      #
+      # ~46 min for the 16 armed gates (sum of local measurements; a runner is
+      # slower). No timeout-minutes is set anywhere in this workflow, so the
+      # job takes GitHub's 6 h default and this fits with room. It is not on
+      # the critical path either: depends.yml (74-113 min) and randomx
+      # (90 min) already run longer, concurrently.
       - name: live-daemon gates
         if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         # `shell: bash` like the CTest-artifact step below, and for the same
