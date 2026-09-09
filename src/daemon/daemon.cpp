@@ -329,8 +329,13 @@ bool Daemon::run(bool interactive)
     if (interactive && !mp_internals->rpcs.empty())
     {
       // The first two ctor args are unused when the third is false.
+      // The interactive console renders from the live core in this process,
+      // so its identity handshake is skipped entirely (every axis would
+      // compare a value to itself). The nettype is passed for signature
+      // uniformity and read by nothing on this arm.
       rpc_commands.reset(new daemonize::t_command_server(
         0, 0,
+        mp_internals->core.get_nettype(),
         false,
         mp_internals->rpcs.front().server.get()));
       rpc_commands->start_handling(std::bind(&Daemon::stop_p2p, this));

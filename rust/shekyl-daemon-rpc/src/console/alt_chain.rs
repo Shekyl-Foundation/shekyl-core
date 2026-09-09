@@ -46,7 +46,10 @@ fn fetch_alt_chains(src: &Source) -> Result<Vec<AltChainProvisional>, String> {
                 .ok_or_else(|| "no reply from get_alternate_chains".to_owned())?;
             ffi_json_rpc_result(&raw, "get_alternate_chains")?
         }
-        Source::Remote { address, timeout } => {
+        Source::Remote {
+            address, timeout, ..
+        } => {
+            src.ensure_identity()?;
             let body = serde_json::to_vec(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": "0",

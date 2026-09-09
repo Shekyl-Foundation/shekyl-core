@@ -53,11 +53,15 @@ private:
   tools::t_rpc_client* m_rpc_client;
   cryptonote::core_rpc_server* m_rpc_server;
   bool m_is_rpc;
+  // This process's network, for the VC-2 identity handshake. See
+  // command_server.h for why the network axis is the load-bearing one here.
+  cryptonote::network_type m_nettype;
 
 public:
   t_rpc_command_executor(
       uint32_t ip
     , uint16_t port
+    , cryptonote::network_type nettype
     , bool is_rpc = true
     , cryptonote::core_rpc_server* rpc_server = NULL
     );

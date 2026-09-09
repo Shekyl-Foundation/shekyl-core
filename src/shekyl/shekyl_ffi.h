@@ -1522,12 +1522,16 @@ void shekyl_daemon_ctl_free(uint8_t* ptr, size_t len);
 ///   else NULL. Exactly one of the two is set.
 /// out_ptr / out_len: on OK the text to print, on ERR_REQUEST the reason;
 ///   release with shekyl_daemon_ctl_free.
+// `nettype` is the CALLING process's network (cryptonote::network_type), for
+// the VC-2 identity handshake on the remote arm. Read by nothing on the live
+// arm, where every axis would compare a value to itself.
 int32_t shekyl_daemon_console_run(
     const char* const* argv,
     size_t argc,
     void* rpc_server_ptr,
     const char* address,
     uint64_t timeout_secs,
+    uint8_t nettype,
     uint8_t** out_ptr,
     size_t* out_len);
 

@@ -79,7 +79,10 @@ pub(super) fn fetch_get_info(src: &Source) -> Result<GetInfoReplyProvisional, St
                 .ok_or_else(|| "no reply from /get_info".to_owned())?;
             serde_json::from_str(&raw)
         }
-        Source::Remote { address, timeout } => {
+        Source::Remote {
+            address, timeout, ..
+        } => {
+            src.ensure_identity()?;
             let raw = ctl_client::post_blocking(address, "/get_info", b"{}".to_vec(), *timeout)
                 .map_err(|(_, reason)| reason)?;
             serde_json::from_slice(&raw)

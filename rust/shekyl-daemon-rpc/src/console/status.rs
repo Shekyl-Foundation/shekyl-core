@@ -52,7 +52,10 @@ fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
         Source::Live(core) => core
             .json_endpoint("/mining_status", "{}")
             .ok_or_else(|| "no reply from /mining_status".to_owned())?,
-        Source::Remote { address, timeout } => {
+        Source::Remote {
+            address, timeout, ..
+        } => {
+            src.ensure_identity()?;
             match ctl_client::post_blocking(address, "/mining_status", b"{}".to_vec(), *timeout) {
                 // **An empty body is the route declining to exist.** The
                 // control transport does not surface the HTTP status — its
