@@ -48,11 +48,13 @@ on:
     # 2026-07-30 census found 178 dead links, "most introduced by ordinary
     # file moves".
     #
-    # And the filter was a list of the subjects of ten checks, which had to be
-    # maintained as those checks grew. It already carried a warning that
-    # pruning it "silently unwires that gate" (P0a, 2026-09-05). A list that
-    # must not drift, next to gates that keep acquiring subjects, is a standing
-    # liability. Deleting it deletes the drift.
+    # And the filter was a hand-maintained list of the subjects of the eleven
+    # checks below, which had to grow as those checks grew. It already carried
+    # a warning that pruning it "silently unwires that gate" (P0a,
+    # 2026-09-05); while this change was open, #658 added an eleventh check
+    # and five more path entries to feed it, which is the drift, observed. A
+    # list that must not drift, next to gates that keep acquiring subjects, is
+    # a standing liability. Deleting it deletes the drift.
     #
     # Cost of always running: ~25 s (five consecutive runs: 24/25/25/26 s and
     # one 3m31s outlier), on a job already bounded at 10 minutes.
@@ -138,6 +140,17 @@ jobs:
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_index_table_shape.py
+
+      - name: Run consensus-digest independent oracle
+        # Re-implements the canonical form (CLIENT_VERSION_CONSTANTS_VALIDATION.md
+        # §3.3) in Python and compares to build.rs's PINNED_DIGEST. The build
+        # script and the crate's tests share one Rust canonicaliser; the KAT's
+        # frozen literals catch a drift only while they are not moved in the
+        # same edit. Recomputing from the rules every run leaves no literal to
+        # move. VC-R18. Instance of 47-gate-subject-assertion.mdc: it fails if
+        # PINNED_DIGEST is renamed or absent rather than passing over nothing.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_consensus_digest_oracle.py
 
       - name: Run claim-era basename check
         # docs/design/ must not grow CONFIDENTIAL_STAKING.md or a
