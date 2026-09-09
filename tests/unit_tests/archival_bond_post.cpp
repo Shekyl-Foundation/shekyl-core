@@ -124,9 +124,9 @@ TEST(archival_bond_post, vin_serializer_enforces_bond_spend_pk_coupling)
     EXPECT_FALSE(::do_serialize(oar, vin_truncated_key));
   }
   {
-    txin_v vin_unbond_with_key = [] {
+    txin_v vin_release_with_key = [] {
       txin_archival_bond_post b = make_join_market_vin();
-      b.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+      b.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
       b.holdings.shard_ids.clear();
       b.bonded_total_atomic = 0;
       b.bond_credit = 0;
@@ -135,13 +135,13 @@ TEST(archival_bond_post, vin_serializer_enforces_bond_spend_pk_coupling)
     }();
     std::ostringstream oss;
     binary_archive<true> oar(oss);
-    EXPECT_FALSE(::do_serialize(oar, vin_unbond_with_key));
+    EXPECT_FALSE(::do_serialize(oar, vin_release_with_key));
   }
   {
-    // The same Unbond vin without the key serializes and round-trips key-less.
-    txin_v vin_unbond = [] {
+    // The same Release vin without the key serializes and round-trips key-less.
+    txin_v vin_release = [] {
       txin_archival_bond_post b = make_join_market_vin();
-      b.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+      b.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
       b.bond_spend_pk.clear();
       b.holdings.shard_ids.clear();
       b.bonded_total_atomic = 0;
@@ -151,7 +151,7 @@ TEST(archival_bond_post, vin_serializer_enforces_bond_spend_pk_coupling)
     }();
     std::ostringstream oss;
     binary_archive<true> oar(oss);
-    ASSERT_TRUE(::do_serialize(oar, vin_unbond));
+    ASSERT_TRUE(::do_serialize(oar, vin_release));
     const std::string wire = oss.str();
     txin_v decoded;
     binary_archive<false> iar({reinterpret_cast<const uint8_t*>(wire.data()), wire.size()});
@@ -195,15 +195,15 @@ TEST(archival_bond_post, boost_serializer_enforces_bond_spend_pk_coupling)
     EXPECT_THROW(boost_round_trip(truncated_key), boost::archive::archive_exception);
   }
   {
-    txin_archival_bond_post unbond_with_key = make_join_market_vin();
-    unbond_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
-    EXPECT_THROW(boost_round_trip(unbond_with_key), boost::archive::archive_exception);
+    txin_archival_bond_post release_with_key = make_join_market_vin();
+    release_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
+    EXPECT_THROW(boost_round_trip(release_with_key), boost::archive::archive_exception);
   }
   {
-    txin_archival_bond_post unbond = make_join_market_vin();
-    unbond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
-    unbond.bond_spend_pk.clear();
-    EXPECT_TRUE(boost_round_trip(unbond).bond_spend_pk.empty());
+    txin_archival_bond_post release = make_join_market_vin();
+    release.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
+    release.bond_spend_pk.clear();
+    EXPECT_TRUE(boost_round_trip(release).bond_spend_pk.empty());
   }
 }
 
@@ -240,9 +240,9 @@ TEST(archival_bond_post, json_codec_enforces_bond_spend_pk_coupling)
     EXPECT_THROW(to_json(truncated_key), cryptonote::json::WRONG_TYPE);
   }
   {
-    txin_archival_bond_post unbond_with_key = make_join_market_vin();
-    unbond_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
-    EXPECT_THROW(to_json(unbond_with_key), cryptonote::json::WRONG_TYPE);
+    txin_archival_bond_post release_with_key = make_join_market_vin();
+    release_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
+    EXPECT_THROW(to_json(release_with_key), cryptonote::json::WRONG_TYPE);
   }
 }
 

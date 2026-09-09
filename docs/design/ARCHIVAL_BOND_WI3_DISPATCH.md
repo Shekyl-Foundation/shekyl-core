@@ -67,7 +67,7 @@ posture-aware `PBlockSource` and external-spend reconcile (2d-2).
 | `submit_bound` panics on persona mismatch; `②→PerP` routing is by type (`BroadcastPosture`), never the principal submitter | `transaction_submitter.rs` §3.1 |
 | F31: an in-pool byte-identical resubmit is an idempotent status query; escalation beyond it is the alarm rung | `submit_watchdog.rs` |
 | F40: `AlreadyInChain { height }` places the awaiting-lock, never releases early — no selectable-input window | `transaction_submitter.rs`, `local_pending_tx.rs` §2.5 |
-| The dual extractor already emits `BondPostMatch { height, p_canonical_id, post_kind }` for every scanned bond post, reorg-deep by the sweep horizon | `pscan/scan_step.rs`, `task.rs` `record_unbonds` |
+| The dual extractor already emits `BondPostMatch { height, p_canonical_id, post_kind }` for every scanned bond post, reorg-deep by the sweep horizon | `pscan/scan_step.rs`, `task.rs` `record_releases` |
 | The entry-gap draw decorrelates bond-post↔funding **ordering only** — not the principal lifecycle, not `P`'s other broadcasts (the D1 finding) | `stake_engine.rs` GF-7 scope note; `GF7_HOOKS` §1 |
 | Sim-synthesized `BondPostDispatched` is interim; the live emission is this driver's, and WI-4's seal re-runs against it | `GF7_HOOKS` §5.1 constraint 5 |
 

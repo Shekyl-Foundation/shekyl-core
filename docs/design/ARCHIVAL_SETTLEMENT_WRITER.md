@@ -495,7 +495,7 @@ guessed at:
 
 | Kind of data | Revert shape | Example |
 |---|---|---|
-| **Received** evidence, unreproducible on a losing branch | pre-image **journal**, restored on pop | `archival_attestation_witness` + its alt twin; the unbond / holdings / rebond journals |
+| **Received** evidence, unreproducible on a losing branch | pre-image **journal**, restored on pop | `archival_attestation_witness` + its alt twin; the release / holdings / rebond journals |
 | **Derived** from final chain state | **delete**, recompute on re-connect | `revert_archival_epoch_close_at_height` drops `r_market`, `sigma_work`, `budget` |
 
 A settlement row is the second kind — it is a fold over evidence that is

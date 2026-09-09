@@ -201,10 +201,10 @@ pub(crate) struct PScanAccrual {
     /// Per settlement-epoch accumulated confirmed funding.
     accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
     /// Confirmed-but-retire-pending personas ([`PCanonicalId`] → confirmed
-    /// `Unbond` epoch). The durable record that survives restart and re-triggers
+    /// `Release` epoch). The durable record that survives restart and re-triggers
     /// the DQ8 retire — kept until SP-6 durably removes the persona (see
-    /// [`PScanState::pending_unbonds`]).
-    pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
+    /// [`PScanState::pending_releases`]).
+    pending_releases: BTreeMap<PCanonicalId, SettlementEpoch>,
     /// Matched bond-posts accumulated across the scan — the **matches half** of the
     /// SP-6 reconcile evidence (`p_canonical_id` ∈ `P`'s personas), durable via
     /// [`PScanState::bond_post_matches`]. The most privacy-sensitive field here — a row
@@ -257,7 +257,7 @@ impl std::fmt::Debug for PScanAccrual {
             .field("frontier_hash", &self.frontier_hash)
             .field("covered", &self.covered)
             .field("accruals", &self.accruals)
-            .field("pending_unbonds", &self.pending_unbonds)
+            .field("pending_releases", &self.pending_releases)
             .field("bond_post_matches", &"<redacted persona-history>")
             .field("funding_outputs", &"<redacted funding-history>")
             .field("spent_pruned_total", &self.spent_pruned_total)
@@ -269,7 +269,7 @@ impl std::fmt::Debug for PScanAccrual {
 }
 
 impl PScanAccrual {
-    /// A fresh accrual at genesis — pre-scan, no funding, no pending unbonds, an empty
+    /// A fresh accrual at genesis — pre-scan, no funding, no pending releases, an empty
     /// covered range, no matches.
     pub(crate) fn genesis() -> Self {
         Self {
@@ -277,7 +277,7 @@ impl PScanAccrual {
             frontier_hash: [0u8; 32],
             covered: VerifiedRange::genesis_empty(),
             accruals: BTreeMap::new(),
-            pending_unbonds: BTreeMap::new(),
+            pending_releases: BTreeMap::new(),
             bond_post_matches: Vec::new(),
             funding_outputs: Vec::new(),
             spent_pruned_total: 0,
@@ -288,7 +288,7 @@ impl PScanAccrual {
     }
 
     /// Resume from a loaded [`PScanState`] (crash recovery): the sealed frontier,
-    /// the already-accumulated accruals, the pending unbonds (which re-trigger the
+    /// the already-accumulated accruals, the pending releases (which re-trigger the
     /// retire), and the accumulated bond-post matches (the reconcile evidence). The
     /// task re-scans from [`next_height`](Self::next_height).
     ///
@@ -303,7 +303,7 @@ impl PScanAccrual {
             frontier_hash: state.cursor().frontier_hash(),
             covered: VerifiedRange::reconstruct_from_sealed_frontier(state.synced_height()),
             accruals: state.accruals().clone(),
-            pending_unbonds: state.pending_unbonds().clone(),
+            pending_releases: state.pending_releases().clone(),
             bond_post_matches: state
                 .bond_post_matches()
                 .iter()
@@ -468,26 +468,26 @@ impl PScanAccrual {
         })
     }
 
-    /// Record a confirmed `Unbond` for a persona (2d-1 DQ8) — `p_canonical_id` →
+    /// Record a confirmed `Release` for a persona (2d-1 DQ8) — `p_canonical_id` →
     /// the settlement epoch it was confirmed in. Idempotent: re-seeing the same
-    /// Unbond keeps the recorded epoch (a persona unbonds once; the block is never
+    /// Release keeps the recorded epoch (a persona releases once; the block is never
     /// re-scanned). Kept until SP-6 durably removes the persona — never dropped on
-    /// retire, since this is the sole durable "known-unbonded" record.
-    pub(crate) fn record_unbond(
+    /// retire, since this is the sole durable "known-released" record.
+    pub(crate) fn record_release(
         &mut self,
         p_canonical_id: PCanonicalId,
-        unbond_epoch: SettlementEpoch,
+        release_epoch: SettlementEpoch,
     ) {
-        self.pending_unbonds
+        self.pending_releases
             .entry(p_canonical_id)
-            .or_insert(unbond_epoch);
+            .or_insert(release_epoch);
     }
 
     /// The confirmed-but-retire-pending personas — the task iterates these and
     /// builds a `RetirementWitness` per entry (the witness's claim-window check is
     /// the eligibility gate; entries that aren't yet expired yield no witness).
-    pub(crate) fn pending_unbonds(&self) -> &BTreeMap<PCanonicalId, SettlementEpoch> {
-        &self.pending_unbonds
+    pub(crate) fn pending_releases(&self) -> &BTreeMap<PCanonicalId, SettlementEpoch> {
+        &self.pending_releases
     }
 
     /// The latest **finalized settled** settlement epoch — the epoch *before* the
@@ -502,7 +502,7 @@ impl PScanAccrual {
     }
 
     /// Snapshot to the persisted [`PScanState`] for sealing — cursor + accruals +
-    /// pending unbonds + bond-post matches as one atomic unit (the write half of the
+    /// pending releases + bond-post matches as one atomic unit (the write half of the
     /// SP-2 discipline). The matches convert to their state-shaped twin
     /// [`BondPostRecord`] at this seam (rule 18); `covered` is not serialized — it is
     /// `[0, synced_height)` and `from_state` reconstructs it from the sealed frontier.
@@ -510,7 +510,7 @@ impl PScanAccrual {
         PScanState::new(
             PScanCursor::at(self.synced_height, self.frontier_hash),
             self.accruals.clone(),
-            self.pending_unbonds.clone(),
+            self.pending_releases.clone(),
             self.bond_post_matches
                 .iter()
                 .map(|m| BondPostRecord {
@@ -548,11 +548,11 @@ impl PScanAccrual {
 
     /// SP-R0 **arm #2** — the atomic retire-time prune (the 2D2 §15 pin:
     /// *"in the same atomic step"*). Drops the persona's `bond_post_matches`
-    /// rows and `pending_unbonds` entry and appends the
+    /// rows and `pending_releases` entry and appends the
     /// [`RetiredPersonaRecord`] — one in-memory mutation, persisted by the next
     /// seal's one atomic write (the same coupling that makes accumulation
     /// idempotent makes the prune crash-safe: either the whole retire lands or
-    /// the durable `pending_unbonds` trigger survives and the retire re-fires).
+    /// the durable `pending_releases` trigger survives and the retire re-fires).
     ///
     /// This is the bound on the unbounded growth of `bond_post_matches` —
     /// `P`'s persona-activity history, the most privacy-sensitive structure
@@ -575,7 +575,7 @@ impl PScanAccrual {
         &mut self,
         id: PCanonicalId,
         slot: shekyl_types::PSlot,
-        unbond_epoch: SettlementEpoch,
+        release_epoch: SettlementEpoch,
         retired_epoch: SettlementEpoch,
     ) -> bool {
         if self.retired.contains(&id) {
@@ -587,26 +587,26 @@ impl PScanAccrual {
         );
         self.bond_post_matches.retain(|m| m.p_canonical_id != id);
         self.funding_outputs.retain(|f| f.p_slot != slot);
-        self.pending_unbonds.remove(&id);
+        self.pending_releases.remove(&id);
         self.retired.push(RetiredPersonaRecord {
             p_slot: slot,
             p_canonical_id: id,
-            unbond_epoch,
+            release_epoch,
             retired_epoch,
         });
         self.retired_pruned_total += 1;
         true
     }
 
-    /// Test-only pending-unbond seeder (the production writer is
-    /// `record_unbonds` in the scan task, fed by real `Unbond` matches).
+    /// Test-only pending-release seeder (the production writer is
+    /// `record_releases` in the scan task, fed by real `Release` matches).
     #[cfg(test)]
-    pub(crate) fn record_pending_unbond_for_test(
+    pub(crate) fn record_pending_release_for_test(
         &mut self,
         id: PCanonicalId,
         epoch: SettlementEpoch,
     ) {
-        self.pending_unbonds.insert(id, epoch);
+        self.pending_releases.insert(id, epoch);
     }
 
     /// The accumulated bond-post matches (the reconcile-evidence rows) —

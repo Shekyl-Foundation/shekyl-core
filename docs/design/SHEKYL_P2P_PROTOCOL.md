@@ -68,17 +68,51 @@ hit is usually a **comment recording the deletion** — `peer_id` and `anchor`
 both still match, and both matches are evidence the deletion *happened*.
 Read the hit before scoring it.
 
-**The `alpha.8?` column is a PROPOSAL, not a ruling.** Required-for-alpha.8 is
-Rick's call against his goal, in his words, that *"alpha.8 runs the new p2p"*.
-He has already ruled that PWD-T1's handshake is not a blocker: *"that doesn't
-necessarily include NoiseNN, so that is fine if not implemented for alpha.8."*
-The proposal below reads that ruling as covering the whole transport cluster,
-and otherwise proposes as required only those decisions that **change the wire
-or the peer-acceptance rules** — because a release that half-migrates the wire
-is worse than one that does not migrate it. Hardening that does not change what
-bytes cross the link is proposed as not-required.
+**The `alpha.8?` column records RICK'S RULINGS, made 2026-09-08 against this
+table when it carried proposals.** Six decisions are required; three that were
+proposed as required were deferred, each with a reason recorded in its row.
 
-| id | status | evidence | alpha.8? (proposed) |
+**The governing argument, because it is what decides future rows.** A testnet
+run puts nodes on a wire, and **every command removed or newly gated afterwards
+is a second wire change against nodes already speaking the first**. That cost
+is paid by the people we most want testing. So the question for any new row is
+not "is this important" but "does deferring it force a second migration on
+people who already ran the first".
+
+Rick's goal is that *"alpha.8 runs the new p2p"*. He ruled PWD-T1's handshake
+out of scope — *"that doesn't necessarily include NoiseNN, so that is fine if
+not implemented for alpha.8"* — and that ruling covers the whole transport
+cluster.
+
+**Required (6):** B6 and B10, each removing a wire command — *"the clearest
+cases; do them before nodes exist, not after"*. B3, B3a and B4 **as one unit**,
+because caps and ingress rejection gate what the wire accepts, which is wire
+shape even though no command changes, and **B4 is the placement for B3a** — so
+splitting them ships a check with nowhere to live. And **B7's remainder**, the
+typed verdict: *"leaving a half-corrected drop path through a testnet is how
+the sync-arm defect survived, and this is the same surface."*
+
+**Deferred to alpha.9 (3), and the reasons matter more than the verdicts.**
+
+- **B9** — this row was split against the proposal, and the distinction is the
+  reusable part. The **mechanism** is already merged (#643); what is
+  outstanding is a **number** informed by the deferred PWD-I4. *A number is not
+  a wire change* — it is a constant that moves in alpha.9 at no compatibility
+  cost. Ship the mechanism with its current conservative value and treat that
+  value as **provisional pending I4**.
+- **E1, E2** — not wire shape: they change what a node *claims*, using fields
+  that already exist. They are also the largest of the nine by a distance, with
+  no mechanism at all in `src/p2p/` or `shekyl-levin`, and *"rushing a dial-back
+  mechanism into a release is how you get the ping-back-as-DoS-amplifier
+  problem."* Until they land, **a node's advertised port stays
+  operator-configured — a known, documented and testnet-acceptable state**, not
+  an oversight.
+
+*Records-was: the proposals this sweep put to Rick were B3, B3a, B4, B6, B7,
+B9, B10, E1 and E2 — nine. The three he deferred are the three above; the
+mechanism-versus-number split on B9 is his, not the sweep's.*
+
+| id | status | evidence | alpha.8? (ruled) |
 |---|---|---|---|
 | **T1** handshake `Noise_NNhfs…` | NOT IMPLEMENTED | zero hits tree-wide for `Noise_NN`, `NNhfs`, `ChaChaPoly`, `BLAKE2s` | **No** — Rick ruled |
 | **T2** PW-3 retired, no padding band | NOT IMPLEMENTED | no padding band present or pinned | No — transport cluster |
@@ -88,33 +122,33 @@ bytes cross the link is proposed as not-required.
 | **T6** packet limits derived | NOT IMPLEMENTED | still the inherited `LEVIN_INITIAL/DEFAULT_MAX_PACKET_SIZE` | No — transport cluster |
 | **T7** compression survives | **NO BUILD REQUIRED** | rules the status quo; `COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1` present at `rust/shekyl-levin/src/compress.rs:25,32` | n/a |
 | **T8** Shekyl mints its own KATs | NOT IMPLEMENTED | no handshake KATs; nothing to pin until T1 exists | No — follows T1 |
-| **B1** rate limiting adopted | NOT IMPLEMENTED | the decision names four unguarded invoke handlers; all four still unguarded | **Propose No** — hardening, does not change the wire |
-| **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | **Propose No** — hardening |
-| **B3** per-command caps | NOT IMPLEMENTED | cap table still **12** arms (`cryptonote_basic/connection_context.cpp`); ruled to reach 11 | **Propose Yes** — caps gate what the wire accepts |
-| **B3a** unknown input rejected at ingress | NOT IMPLEMENTED | no ingress rejection site; the codec's byte-exact round-trip of unknown bits is present but is PWC-A6's requirement, not this one | **Propose Yes** — ingress policy |
-| **B4** places B3a's ingress check | NOT IMPLEMENTED | B4's stated remaining work is the check's *placement*; no such site exists | **Propose Yes** — with B3a |
-| **B5** — | **NEVER RULED** | appears exactly once tree-wide, in `P2P_2_DISPATCH_BRIEF.md`; dispatched and never dispositioned | **Rick — a hole, not a status** |
-| **B6** one block path | NOT IMPLEMENTED | `NOTIFY_NEW_BLOCK` and `NOTIFY_NEW_FLUFFY_BLOCK` both live (11 references) | **Propose Yes** — removes a wire command |
-| **B7** drop only when attributable | **PARTIAL** | #628 withdrew a wrong score-removal and recorded that the site needs a typed verdict; the typed verdict is still owed | **Propose Yes** — the remainder |
+| **B1** rate limiting adopted | NOT IMPLEMENTED | the decision names four unguarded invoke handlers; all four still unguarded | No — hardening; does not change the wire |
+| **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
+| **B3** per-command caps | NOT IMPLEMENTED | cap table still **12** arms (`cryptonote_basic/connection_context.cpp`); ruled to reach 11 | **YES** — with B3a and B4, as one unit |
+| **B3a** unknown input rejected at ingress | NOT IMPLEMENTED | no ingress rejection site; the codec's byte-exact round-trip of unknown bits is present but is PWC-A6's requirement, not this one | **YES** — with B3 and B4, as one unit |
+| **B4** places B3a's ingress check | NOT IMPLEMENTED | B4's stated remaining work is the check's *placement*; no such site exists | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
+| **B5** — | **NEVER RULED** | appears exactly once tree-wide, in `P2P_2_DISPATCH_BRIEF.md`; dispatched and never dispositioned | n/a — unruled decision, not a status |
+| **B6** one block path | NOT IMPLEMENTED | `NOTIFY_NEW_BLOCK` and `NOTIFY_NEW_FLUFFY_BLOCK` both live (11 references) | **YES** — removes a wire command; "do them before nodes exist, not after" |
+| **B7** drop only when attributable | **PARTIAL** | #628 withdrew a wrong score-removal and recorded that the site needs a typed verdict; the typed verdict is still owed | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
 | **B8** delete the undriven timer | **IMPLEMENTED** | #629 deleted `m_bad_peer_checker`, `network_address_old`, `connection_entry_base` | done |
-| **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **Propose Yes** for the mechanism; the number follows I4 |
-| **B10** delete the back-ping | NOT IMPLEMENTED | `COMMAND_PING` still in `src/p2p/p2p_protocol_defs.h` | **Propose Yes** — removes a wire command |
+| **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
+| **B10** delete the back-ping | NOT IMPLEMENTED | `COMMAND_PING` still in `src/p2p/p2p_protocol_defs.h` | **YES** — removes a wire command; "do them before nodes exist, not after" |
 | **B11** `sanitize_peerlist` port-0 | **DEFERRED** | named blocker: tor port-0 semantics disputed (`tor_address::unknown()` is port 0) | No — blocked |
-| **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/zone/mod.rs:864` | **Propose No** — hardening, but see note |
+| **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/zone/mod.rs:864` | No — hardening; but see the note below |
 | **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `p2p_protocol_defs.h:119` records the deletion | done |
 | **I2** peerlist acceptance restricted | **IMPLEMENTED** | #637 | done |
 | **I3** tenure by address, never serialized | **SUPERSEDED** | its mechanism *was* the anchor list, deleted by #637 (`net_peerlist.cpp:82`, `p2p_protocol_defs.h:76`); body retained as records-was | n/a |
 | **I4** `ρ` / `g_max` | **DEFERRED** | deferred to its own round with the blocker named; parameter ownership unresolved | No — blocked |
 | **I5** Q-10 write-back obligation | **BLOCKED** | discharge gated on I4 | No — blocked |
 | **I6** Shi et al. sub-attacks closed | **N/A** | verification row: closed by rules ruled in I2, no separate artifact | n/a |
-| **A1** archival submission path | **NOT RULED** | a question in the dispatch brief with no ruling in this deliverable; the census narrowed it to a falsifiable claim | **Rick — unruled** |
-| **E1** node determines its own endpoint | NOT IMPLEMENTED | no endpoint-determination mechanism in `src/p2p/` or `shekyl-levin` | **Propose Yes** — job 1 has no basis without it |
-| **E2** what verifies a candidate endpoint | NOT IMPLEMENTED | no dial-back, no hairpin, no verification site | **Propose Yes** — with E1 |
+| **A1** archival submission path | **NOT RULED** | a question in the dispatch brief with no ruling in this deliverable; the census narrowed it to a falsifiable claim | n/a — unruled decision, not a status |
+| **E1** node determines its own endpoint | NOT IMPLEMENTED | no endpoint-determination mechanism in `src/p2p/` or `shekyl-levin` | **NO — deferred to alpha.9.** Changes what a node *claims* using existing fields, not wire shape; largest of the nine, with no mechanism at all. Until it lands the advertised port stays operator-configured — a known, documented, testnet-acceptable state. *(Sweep proposed Yes.)* |
+| **E2** what verifies a candidate endpoint | NOT IMPLEMENTED | no dial-back, no hairpin, no verification site | **NO — deferred to alpha.9** with E1: *"rushing a dial-back mechanism into a release is how you get the ping-back-as-DoS-amplifier problem."* *(Sweep proposed Yes.)* |
 | **E3** self-dial avoidance | **RULED ELSEWHERE** | not open in this round; substance ruled in the deliverable at `:639` | n/a |
 | **E4** cross-port duplicate avoidance | **RULED ELSEWHERE** | as E3 | n/a |
 | **E5** is §4 discharged by PWD-I1? | **IMPLEMENTED** | discharged: `peerlist_entry_base` carries `adr` + `last_seen` and no `id` (`p2p_protocol_defs.h:58-59`) | done |
 | **E6** `--p2p-external-port` | **IMPLEMENTED** | present in `src/p2p/net_node.cpp` / `net_node.h` | done |
-| **E7** overlay endpoint, two postures | NOT IMPLEMENTED | daemon side unbuilt; blocked on three questions with Rick | **Propose No** — overlay is post-alpha.8 |
+| **E7** overlay endpoint, two postures | NOT IMPLEMENTED | daemon side unbuilt; blocked on three questions with Rick | No — overlay is post-alpha.8 |
 | **E8** address volatility measurement | **DEFERRED** | external blocker: the fleet measurement is owed from the Q12-D6a rig | No — blocked |
 | **E9** E7's isolation boundary | RULED, NOT IMPLEMENTED | ruled by Rick 2026-09-08; the daemon-side path it constrains does not exist yet | No — follows E7 |
 
@@ -146,7 +180,7 @@ a command from it, and none has landed. A release that ships the new
 `basic_node_data` and the new peerlist rules while still carrying
 `COMMAND_PING` and two block paths is running a half-migrated wire.
 
-**Note on B12.** Proposed not-required because it does not change the wire, but
+**Note on B12.** Ruled not-required because it does not change the wire, but
 it is an unbounded release of accumulated transactions to a peer, and "not
 required for alpha.8" is not the same as "safe to ship indefinitely". Flagged
 rather than filed.
@@ -270,6 +304,17 @@ the attack right is not evidence of having answered it.**
   handshake hash instead, a wrong network **fails to decrypt on the side that
   receives an authenticated field**. The check is not passed — it is
   *unnecessary*.
+
+**Tier two closes the forgery surface and is silent on the multiplication
+surface (2026-09-09 — the statement PWD-E4 routed here).** The same-host-cap
+example is correct as a tier-two instance: nothing is claimed, so nothing can
+be forged. An observed property can still be cheap to produce — `is_same_host`
+for ipv4 is exact IP equality (`net_utils_base.h:83`), so a /24 supplies 256
+free hosts on `public_` as surely as a keypair supplies one onion on `tor`.
+"Nothing to spoof" and "adversarially binding" are independent. The cap is a
+correct observation and still bounds honest duplicates, not an adversary, in
+any zone (PWD-E4). Stating it as overlay-limited is the framing that would
+re-derive it as a sybil bound for clearnet.
 
 > **The rung is directional, and PWD-T1 pays for saying so.** A binding only
 > removes the check on the side that verifies something authenticated under it.

@@ -127,7 +127,7 @@ fn retire_persona_prunes_atomically_and_round_trips() {
     acc.ingest(&r1, &VerifiedBatch::for_test(0, 10, [0x01; 32]))
         .expect("ingest");
     // seed the pending trigger the retire consumes
-    acc.record_pending_unbond_for_test(id, SettlementEpoch::from_raw(0));
+    acc.record_pending_release_for_test(id, SettlementEpoch::from_raw(0));
 
     // Retire `id` at a DRAINED slot (slot 5 holds no funding) — the
     // funded-gate invariant the caller upholds.
@@ -152,7 +152,7 @@ fn retire_persona_prunes_atomically_and_round_trips() {
         1,
         "a live slot's funding is untouched by another slot's retire"
     );
-    assert!(!acc.pending_unbonds().contains_key(&id));
+    assert!(!acc.pending_releases().contains_key(&id));
     assert_eq!(acc.retired_records().len(), 1);
     assert_eq!(acc.retired_pruned_total(), 1);
 
@@ -170,7 +170,7 @@ fn retire_persona_prunes_atomically_and_round_trips() {
     // Round-trips the seal.
     let back = PScanAccrual::from_state(&acc.to_state());
     assert_eq!(back.retired_records(), acc.retired_records());
-    assert!(!back.pending_unbonds().contains_key(&id));
+    assert!(!back.pending_releases().contains_key(&id));
 }
 
 fn epoch(e: u64) -> SettlementEpoch {
@@ -489,12 +489,12 @@ fn to_state_then_from_state_round_trips() {
         &VerifiedBatch::for_test(0, 10, [0x42; 32]),
     )
     .expect("ingest");
-    acc.record_unbond(PCanonicalId::from_bytes([0x11; 32]), epoch(0));
+    acc.record_release(PCanonicalId::from_bytes([0x11; 32]), epoch(0));
     assert_eq!(acc.frontier_hash(), [0x42; 32]);
     let back = PScanAccrual::from_state(&acc.to_state());
     assert_eq!(
         back, acc,
-        "the in-memory accrual (incl. frontier hash + pending unbonds) mirrors the persisted state"
+        "the in-memory accrual (incl. frontier hash + pending releases) mirrors the persisted state"
     );
     assert_eq!(
         back.frontier_hash(),
@@ -573,15 +573,15 @@ fn settled_epoch_excludes_the_in_progress_frontier_epoch() {
 }
 
 #[test]
-fn record_unbond_is_idempotent_and_durable() {
+fn record_release_is_idempotent_and_durable() {
     let id = PCanonicalId::from_bytes([0xAB; 32]);
     let mut acc = PScanAccrual::genesis();
-    acc.record_unbond(id, epoch(5));
+    acc.record_release(id, epoch(5));
     // Re-seeing the same persona keeps the first recorded epoch.
-    acc.record_unbond(id, epoch(9));
-    assert_eq!(acc.pending_unbonds().get(&id), Some(&epoch(5)));
+    acc.record_release(id, epoch(9));
+    assert_eq!(acc.pending_releases().get(&id), Some(&epoch(5)));
 
     // It survives a seal + reload (the durable retire-trigger).
     let back = PScanAccrual::from_state(&acc.to_state());
-    assert_eq!(back.pending_unbonds().get(&id), Some(&epoch(5)));
+    assert_eq!(back.pending_releases().get(&id), Some(&epoch(5)));
 }

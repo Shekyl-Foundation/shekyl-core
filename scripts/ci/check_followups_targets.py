@@ -9,8 +9,21 @@
 # `Target: pre-genesis` or `Target: post-genesis` or `Target: V4`.
 # V3.1 / V3.2 / V3.x are not targets.
 #
+# It also checks that every entry closes the bold it opens. An entry with an
+# ODD number of `**` has emphasis it never terminates, which renders as literal
+# asterisks. Parity, not "fewer than two": an entry whose first bold closes and
+# whose second does not has three, and a `< 2` test passes it. Two such entries
+# existed and were missed that way (150e23466).
+#
 # Instance of 47-gate-subject-assertion.mdc: a missing FOLLOWUPS.md, or a
 # file with no Target: lines at all, is a missing subject.
+#
+# FALSIFICATION STATUS, stated because uniformity is otherwise assumed: only
+# the unclosed-bold leg has a harness (`--selftest`, exercising both directions
+# plus a legitimate-multiple-bold negative control). The Target-token leg, the
+# banned-V3.x sweeps over docs/ and .cursor/rules/, and the subject assertions
+# have NO harness. A reader seeing one falsified leg must not conclude the file
+# is uniformly falsified — it is not.
 
 from __future__ import annotations
 
@@ -22,6 +35,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 FOLLOWUPS = os.path.join(ROOT, "docs", "FOLLOWUPS.md")
 ALLOWED = {"pre-genesis", "post-genesis", "V4"}
 ITEM_RE = re.compile(r"^- ")
+ENTRY_RE = re.compile(r"^- \*\*")
 TARGET_RE = re.compile(r"^\s*-\s*Target:\s*(\S+)")
 BANNED_TARGET = re.compile(
     r"Target:\s*V3\.(?:1|2|x|1\.x|1\+)", re.I
@@ -29,6 +43,11 @@ BANNED_TARGET = re.compile(
 REQUIRED_HEADERS = ("## Pre-genesis", "## Post-genesis", "## V4")
 # Historical records may still mention old Target: tokens.
 SKIP_V3X_DIRS = ("docs/completed", "docs/CHANGELOG.md", "docs/V3_WALLET_DECISION_LOG.md")
+
+
+def _opens_unclosed_bold(line: str) -> bool:
+    """True iff a FOLLOWUPS entry line has an odd number of `**` markers."""
+    return bool(ENTRY_RE.match(line)) and line.count("**") % 2 == 1
 
 
 def main() -> int:
@@ -69,6 +88,12 @@ def main() -> int:
             bad.append(
                 f"docs/FOLLOWUPS.md:{rel_line}: Target: {tgt!r} "
                 f"not in {sorted(ALLOWED)}"
+            )
+    for n, line in enumerate(lines, start=1):
+        if _opens_unclosed_bold(line):
+            bad.append(
+                f"docs/FOLLOWUPS.md:{n}: entry opens bold it never closes "
+                f"({line.count('**')} '**' markers, odd)"
             )
     text = "".join(lines)
     for m in BANNED_TARGET.finditer(text):
@@ -115,5 +140,38 @@ def main() -> int:
     return 0
 
 
+def _selftest() -> int:
+    """Falsify the unclosed-bold leg: it must fire, and must stay silent.
+
+    Both directions plus a negative control, because a check that cannot fail
+    and a check that fires on valid input are the same defect wearing
+    different signs.
+    """
+    cases = [
+        ("unclosed, one marker", "- **opens and never closes\n", True),
+        ("unclosed, second bold", "- **closed.** **Closed\n", True),
+        ("well formed", "- **title** body\n", False),
+        ("legitimate multiple bold", "- **title** and **more** bold\n", False),
+        ("not an entry", "- plain bullet with no bold\n", False),
+        ("continuation line", "  - Target: pre-genesis\n", False),
+    ]
+    failures = []
+    for name, line, must_fire in cases:
+        fired = _opens_unclosed_bold(line)
+        if fired != must_fire:
+            failures.append(
+                f"selftest: {name!r} expected fire={must_fire}, got {fired}"
+            )
+    if failures:
+        for f in failures:
+            print(f, file=sys.stderr)
+        return 1
+    print(f"followups selftest: unclosed-bold leg, {len(cases)} cases, "
+          f"both directions exercised")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        sys.exit(_selftest())
     sys.exit(main())

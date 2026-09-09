@@ -74,6 +74,10 @@ remain in a historical protocol *title*.
 
 Resolved items are **removed**. Git history is the archive.
 
+How many rows an item gets — zero, exactly one, or none-but-symbols — is the
+disposition question, and `23-disposition-visibility.mdc` owns it. This section owns
+only what a row looks like once the disposition says there is one.
+
 ## CHANGELOG scope
 
 `docs/CHANGELOG.md` records user-visible, consensus, API, or

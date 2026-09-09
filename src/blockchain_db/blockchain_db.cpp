@@ -315,9 +315,9 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
           throw std::runtime_error("FATAL: total_bonded_atomic overflow on bond credit");
         set_total_bonded_atomic(bonded_total + bond.bond_credit);
       }
-      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Unbond))
+      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Release))
       {
-        // Unbond connect (gate-4 §4.3 "On confirm"): the single writer
+        // Release connect (gate-4 §4.3 "On confirm"): the single writer
         // journals the record pre-image, applies the Rust fold's write set
         // (Exited record + clean interval-close + counter debit, with the
         // per-post live-counter threading inside), and FATALs on any fold
@@ -356,7 +356,7 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
       else
       {
         throw std::runtime_error(
-          "FATAL: bond-post connect supports JoinMarket, Unbond, HoldingsUpdate, and Rebond only");
+          "FATAL: bond-post connect supports JoinMarket, Release, HoldingsUpdate, and Rebond only");
       }
     }
     else if (std::holds_alternative<txin_archival_reward_emission>(tx_input))
@@ -763,11 +763,11 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // the journal to N + 1 would shift the connect-side settled-epoch operand
   // off verify's at every epoch boundary.
   revert_archival_emission_claims_at_height(removed_block_height - 1);
-  // Unbond pre-image restore (gate-4 §3.5/§5): same journal-key convention
+  // Release pre-image restore (gate-4 §3.5/§5): same journal-key convention
   // as the emission claims (block index N = removed_block_height - 1), and
   // AFTER the slash revert above as a defensive ordering belt. Nothing can
   // actually trail the clean close (ratified 2026-07-12): slashability ends
-  // at the Unbond connect — the scheduler only challenges currently held
+  // at the Release connect — the scheduler only challenges currently held
   // shards and an Exited record holds none — so the pop fold's trailing
   // clean-close check holds unconditionally; a future violation surfaces
   // there as MISSING_CLEAN_CLOSE, loud. The restored fields (bonded_total,
@@ -948,7 +948,7 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash, uint64_t bloc
     {
       const auto& bond = std::get<txin_archival_bond_post>(tx_input);
       // Only JoinMarket pops here (vin-driven: the record is deleted whole).
-      // Unbond, HoldingsUpdate, and Rebond pop via the height-keyed pre-image
+      // Release, HoldingsUpdate, and Rebond pop via the height-keyed pre-image
       // journals in pop_block — the vin carries the post-connect state, so it
       // cannot drive the restore.
       if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))

@@ -354,7 +354,7 @@ async fn the_onion_credential_matches_the_pinned_derivation() {
             shekyl_crypto_pq::account::SeedFormat::Bip39,
             slot,
         );
-        let oracle = shekyl_tor::onion_identity::OnionIdentity::from_hs_id_seed(&seed);
+        let oracle = shekyl_tor_control_wallet::service::OnionIdentity::from_hs_id_seed(&seed);
 
         assert_eq!(
             minted.service_id(),
@@ -439,7 +439,7 @@ async fn activation_replaces_active_persona() {
 }
 
 // Typed contract #4 — activation wipes the retired *ephemeral* persona: after
-// moving away from an unbonded slot, that slot is no longer held, so a
+// moving away from a released slot, that slot is no longer held, so a
 // subsequent mint is `LookaheadExhausted`.
 #[tokio::test]
 async fn activation_wipes_ephemeral_retired() {
@@ -468,7 +468,7 @@ async fn activation_wipes_ephemeral_retired() {
 }
 
 // Typed contract #4 — activation keeps a retired *bonded* persona resident:
-// unbonding it later stays reachable, so it can be re-activated after a
+// releasing it later stays reachable, so it can be re-activated after a
 // activation that passed over it.
 #[tokio::test]
 async fn activation_keeps_bonded_retired() {
@@ -986,13 +986,13 @@ async fn actor_is_responsive_after_a_scan_step() {
 #[test]
 fn retirement_witness_fires_one_epoch_after_the_claim_window_closes() {
     let id = canonical_id(0);
-    let unbond = SettlementEpoch::from_raw(10);
+    let release = SettlementEpoch::from_raw(10);
     // settled = U + W: U is exactly the oldest claimable epoch → still claimable
     // → must NOT retire.
     assert!(
-        RetirementWitness::from_confirmed_unbond(
+        RetirementWitness::from_confirmed_release(
             id,
-            unbond,
+            release,
             SettlementEpoch::from_raw(10 + MAX_CLAIM_AGE_W),
         )
         .is_none(),
@@ -1000,9 +1000,9 @@ fn retirement_witness_fires_one_epoch_after_the_claim_window_closes() {
     );
     // settled = U + W + 1: U has dropped below the window floor → retire.
     assert!(
-        RetirementWitness::from_confirmed_unbond(
+        RetirementWitness::from_confirmed_release(
             id,
-            unbond,
+            release,
             SettlementEpoch::from_raw(10 + MAX_CLAIM_AGE_W + 1),
         )
         .is_some(),
@@ -1015,7 +1015,7 @@ fn retirement_witness_fires_one_epoch_after_the_claim_window_closes() {
 #[tokio::test]
 async fn retire_wipes_a_terminal_persona_and_is_idempotent() {
     let handle = spawn_over(&[0], &[0], None); // persona 0 bonded, not active
-    let witness = RetirementWitness::from_confirmed_unbond(
+    let witness = RetirementWitness::from_confirmed_release(
         canonical_id(0),
         SettlementEpoch::from_raw(0),
         SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
@@ -1033,7 +1033,7 @@ async fn retire_wipes_a_terminal_persona_and_is_idempotent() {
     );
 
     // Gone now → a fresh witness for the same persona is a no-op.
-    let again = RetirementWitness::from_confirmed_unbond(
+    let again = RetirementWitness::from_confirmed_release(
         canonical_id(0),
         SettlementEpoch::from_raw(0),
         SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
@@ -1057,7 +1057,7 @@ async fn retire_wipes_a_terminal_persona_and_is_idempotent() {
 async fn retire_defers_a_funded_persona_then_wipes_once_drained() {
     let handle = spawn_over(&[0], &[0], None); // persona 0 bonded, not active
     let witness = || {
-        RetirementWitness::from_confirmed_unbond(
+        RetirementWitness::from_confirmed_release(
             canonical_id(0),
             SettlementEpoch::from_raw(0),
             SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
@@ -1096,7 +1096,7 @@ async fn retire_defers_a_funded_persona_then_wipes_once_drained() {
 #[tokio::test]
 async fn retire_skips_the_active_persona() {
     let handle = spawn_over(&[0], &[0], Some(0)); // persona 0 bonded AND active
-    let witness = RetirementWitness::from_confirmed_unbond(
+    let witness = RetirementWitness::from_confirmed_release(
         canonical_id(0),
         SettlementEpoch::from_raw(0),
         SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
@@ -1119,7 +1119,7 @@ async fn retire_skips_the_active_persona() {
 async fn retire_an_unheld_persona_is_notheld() {
     let handle = spawn_over(&[0], &[0], None); // we hold persona 0
                                                // A witness for persona 1 (not held).
-    let witness = RetirementWitness::from_confirmed_unbond(
+    let witness = RetirementWitness::from_confirmed_release(
         canonical_id(1),
         SettlementEpoch::from_raw(0),
         SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),

@@ -3,9 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Unit tests for the Unbond bond-post producer (`engine/stake_engine/unbond.rs`).
+//! Unit tests for the Release bond-post producer (`engine/stake_engine/release.rs`).
 //!
-//! Wired as a `#[path]` child of `unbond::tests`, so `use super::*` resolves
+//! Wired as a `#[path]` child of `release::tests`, so `use super::*` resolves
 //! into the producer module and private items stay testable; the sibling file
 //! exists so the decomposition ratchet counts the production module, not its
 //! test suite (the `stake_engine_tests.rs` / `proofs_tests.rs` pattern).
@@ -28,12 +28,12 @@ use super::super::test_fixtures::{constructed_record, derive_bundle, spawn_over}
 use super::*;
 
 /// The record-state arms are tested here as PRECONDITIONS, not as verifier
-/// behaviour. Driving `verify_unbond_bond_post` into `CooldownNotElapsed`
+/// behaviour. Driving `verify_release_bond_post` into `CooldownNotElapsed`
 /// would test consensus, which already covers itself; what is worth
 /// asserting on this side is that the producer refuses first, so the
 /// failure reaches the user at the wallet instead of at the chain.
-fn ready() -> UnbondRecordState {
-    UnbondRecordState {
+fn ready() -> ReleaseRecordState {
+    ReleaseRecordState {
         p_id: PCanonicalId::from_bytes([7u8; 32]),
         bonded_total_atomic: 3 * 750_000_000,
         bad_interval_count: 0,
@@ -59,7 +59,7 @@ fn a_full_interval_log_is_refused_with_its_bound() {
     r.bad_interval_count = MAX_BOND_BAD_INTERVALS;
     assert_eq!(
         r.ensure_exit_ready(),
-        Err(UnbondNotReady::IntervalLogFull {
+        Err(ReleaseNotReady::IntervalLogFull {
             count: MAX_BOND_BAD_INTERVALS,
             max: MAX_BOND_BAD_INTERVALS,
         })
@@ -69,12 +69,12 @@ fn a_full_interval_log_is_refused_with_its_bound() {
 /// The refusal ORDER is consensus's, not a convenient one — on the exact
 /// state where the two orders disagree.
 ///
-/// `verify_unbond_bond_post` checks `NothingToUnbond` (step 3) before
+/// `verify_release_bond_post` checks `NothingToRelease` (step 3) before
 /// `IntervalLogFull` (step 9). A record that is both zero-balance and
 /// interval-log-full satisfies both conditions, so it is the only input
 /// that can tell which order this function actually runs. Leaving the
 /// zero-balance check to the builder made this state report
-/// `IntervalLogFull` while the chain would say `NothingToUnbond` — a wallet
+/// `IntervalLogFull` while the chain would say `NothingToRelease` — a wallet
 /// and a chain disagreeing about why an irreversible operation was refused.
 ///
 /// The single-condition cases are asserted alongside, so a fix that
@@ -86,7 +86,7 @@ fn the_refusal_order_is_the_verifiers_where_two_conditions_both_hold() {
     r.bad_interval_count = MAX_BOND_BAD_INTERVALS;
     assert_eq!(
         r.ensure_exit_ready(),
-        Err(UnbondNotReady::NothingToUnbond),
+        Err(ReleaseNotReady::NothingToRelease),
         "both conditions hold; the verifier names the balance first"
     );
 
@@ -96,13 +96,13 @@ fn the_refusal_order_is_the_verifiers_where_two_conditions_both_hold() {
     only_zero.bonded_total_atomic = 0;
     assert_eq!(
         only_zero.ensure_exit_ready(),
-        Err(UnbondNotReady::NothingToUnbond)
+        Err(ReleaseNotReady::NothingToRelease)
     );
     let mut only_full = ready();
     only_full.bad_interval_count = MAX_BOND_BAD_INTERVALS;
     assert_eq!(
         only_full.ensure_exit_ready(),
-        Err(UnbondNotReady::IntervalLogFull {
+        Err(ReleaseNotReady::IntervalLogFull {
             count: MAX_BOND_BAD_INTERVALS,
             max: MAX_BOND_BAD_INTERVALS,
         })
@@ -209,9 +209,9 @@ async fn a_record_read_for_another_persona_is_refused_at_the_actor() {
     let theirs = ClaimSourceFor::for_test(stranger, ready_source());
     let handle = stake.mint_handle(p_slot).await.expect("mint a handle");
     let err = stake
-        .assemble_unbond(AssembleUnbond {
+        .assemble_release(AssembleRelease {
             handle,
-            record: UnbondRecordState::from_claim_source(&theirs).expect("bond record"),
+            record: ReleaseRecordState::from_claim_source(&theirs).expect("bond record"),
             funding,
             tree_ctx: tree_ctx.clone(),
             fee: EXIT_FEE,
@@ -233,9 +233,9 @@ async fn a_record_read_for_another_persona_is_refused_at_the_actor() {
     let handle = stake.mint_handle(p_slot).await.expect("mint a handle");
     let (funding, _) = exit_funding(slot);
     let post = stake
-        .assemble_unbond(AssembleUnbond {
+        .assemble_release(AssembleRelease {
             handle,
-            record: UnbondRecordState::from_claim_source(&ours).expect("bond record"),
+            record: ReleaseRecordState::from_claim_source(&ours).expect("bond record"),
             funding,
             tree_ctx,
             fee: EXIT_FEE,
@@ -289,14 +289,14 @@ async fn an_exit_with_no_funding_inputs_is_refused_by_name() {
         .persona_canonical_id(p_slot)
         .await
         .expect("project this persona's canonical id");
-    let record = UnbondRecordState {
+    let record = ReleaseRecordState {
         p_id: mine,
         ..ready()
     };
 
     let handle = stake.mint_handle(p_slot).await.expect("mint a handle");
     let err = stake
-        .assemble_unbond(AssembleUnbond {
+        .assemble_release(AssembleRelease {
             handle,
             record,
             funding: vec![],
@@ -316,8 +316,8 @@ async fn an_exit_with_no_funding_inputs_is_refused_by_name() {
 
 /// **The exit authorizes under `bond_spend_pk` — never the identity key.**
 ///
-/// This is the one place an `Unbond` diverges from every credit post. The
-/// daemon walk (`e2e_unbond_accepted_and_connected`) now drives the pin
+/// This is the one place a `Release` diverges from every credit post. The
+/// daemon walk (`e2e_release_accepted_and_connected`) now drives the pin
 /// end-to-end over real RPC, but it is `#[ignore]`d and daemon-gated, so
 /// this KAT stays the assertion every `cargo test` run makes. `archival_debit_auth_pin`
 /// (`src/cryptonote_core/blockchain.cpp`) rejects a debit whose `pqc_auths`
@@ -370,9 +370,9 @@ async fn the_exit_authorizes_under_bond_spend_pk_never_the_identity_key() {
     );
     let handle = stake.mint_handle(p_slot).await.expect("mint a handle");
     let post = stake
-        .assemble_unbond(AssembleUnbond {
+        .assemble_release(AssembleRelease {
             handle,
-            record: UnbondRecordState::from_claim_source(&ours).expect("bond record"),
+            record: ReleaseRecordState::from_claim_source(&ours).expect("bond record"),
             funding,
             tree_ctx,
             fee: EXIT_FEE,
@@ -481,8 +481,8 @@ fn the_record_carries_the_persona_it_was_read_for() {
         epochs: vec![],
     };
     let fetched = ClaimSourceFor::for_test(want, source);
-    let state =
-        UnbondRecordState::from_claim_source(&fetched).expect("the response carries a bond record");
+    let state = ReleaseRecordState::from_claim_source(&fetched)
+        .expect("the response carries a bond record");
     assert_eq!(state.p_id(), want);
     assert_ne!(state.p_id(), PCanonicalId::from_bytes([0x5A; 32]));
     // Every fact came from this one response, including the settled epoch
@@ -503,7 +503,7 @@ fn a_response_without_a_bond_record_yields_no_state() {
         epochs: vec![],
     };
     let fetched = ClaimSourceFor::for_test(PCanonicalId::from_bytes([1; 32]), source);
-    assert!(UnbondRecordState::from_claim_source(&fetched).is_none());
+    assert!(ReleaseRecordState::from_claim_source(&fetched).is_none());
 }
 
 /// Epoch 0 is a real settlement epoch, and this is the refusal that proves
@@ -534,7 +534,7 @@ fn a_record_served_at_epoch_zero_is_refused_by_its_own_anchor() {
         .expect_err("a record inside its cooldown must be refused");
     assert_eq!(
         err,
-        UnbondNotReady::CooldownNotElapsed {
+        ReleaseNotReady::CooldownNotElapsed {
             last_served: ServeAnchor::ServedAt(0),
             current_settlement_epoch: 0,
         }
@@ -560,7 +560,7 @@ fn the_cooldown_boundary_is_refused_below_and_allowed_at() {
     r.current_settlement_epoch = boundary - 1;
     assert_eq!(
         r.ensure_exit_ready(),
-        Err(UnbondNotReady::CooldownNotElapsed {
+        Err(ReleaseNotReady::CooldownNotElapsed {
             last_served: ServeAnchor::ServedAt(4),
             current_settlement_epoch: boundary - 1,
         })
@@ -584,7 +584,7 @@ fn slash_settlement_is_checked_even_when_the_cooldown_has_elapsed() {
     ));
     assert_eq!(
         r.ensure_exit_ready(),
-        Err(UnbondNotReady::SlashSettlementPending {
+        Err(ReleaseNotReady::SlashSettlementPending {
             last_served: ServeAnchor::ServedAt(4),
             watermark: SlashWatermark::SettledThrough(3),
         })
@@ -601,7 +601,7 @@ fn an_unsettled_scheduler_refuses_a_served_record() {
     r.last_settled_slash = SlashWatermark::NothingSettled;
     assert_eq!(
         r.ensure_exit_ready(),
-        Err(UnbondNotReady::SlashSettlementPending {
+        Err(ReleaseNotReady::SlashSettlementPending {
             last_served: ServeAnchor::ServedAt(4),
             watermark: SlashWatermark::NothingSettled,
         })

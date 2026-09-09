@@ -34,7 +34,7 @@ use crate::consensus_state::BadInterval;
 /// that would append past it can never persist; verify enforces the same bound
 /// (`BondPostError::IntervalLogFull`) so such a tx never reaches connect.
 ///
-/// **Genesis-frozen consensus constant** (P2B-8 Q3 posture): because Unbond
+/// **Genesis-frozen consensus constant** (P2B-8 Q3 posture): because Release
 /// verify rejects on it, tx validity depends on the value — a change is a
 /// hard fork, not a codec retune.
 pub const MAX_BOND_BAD_INTERVALS: usize = 256;
@@ -48,7 +48,7 @@ const _: () = assert!(
 );
 
 /// The clean interval-close (gate-4 §4.3 F3): a **zero-length** interval
-/// `[E, E)` appended to the record's interval log at `Unbond` connect.
+/// `[E, E)` appended to the record's interval log at `Release` connect.
 ///
 /// `good_through` skips it for every epoch (`end_exclusive != u64::MAX` and
 /// `E < end_exclusive` is false at `E == start_epoch`), so backlog emission
@@ -57,10 +57,10 @@ const _: () = assert!(
 /// `p_slot`-burn step. Contrast: a slash writes an **open** bad interval
 /// `[E_slash, u64::MAX)`.
 #[must_use]
-pub fn clean_interval_close(unbond_settlement_epoch: u64) -> BadInterval {
+pub fn clean_interval_close(release_settlement_epoch: u64) -> BadInterval {
     BadInterval {
-        start_epoch: unbond_settlement_epoch,
-        end_exclusive: unbond_settlement_epoch,
+        start_epoch: release_settlement_epoch,
+        end_exclusive: release_settlement_epoch,
     }
 }
 
@@ -107,14 +107,14 @@ pub fn slash_open_interval_to_append(
 }
 
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
-pub enum UnbondConnectError {
-    /// `bond_debit` is zero — nothing to release (verify's `NothingToUnbond`
+pub enum ReleaseConnectError {
+    /// `bond_debit` is zero — nothing to release (verify's `NothingToRelease`
     /// / `DebitNotFullBalance` should have rejected the tx).
-    #[error("Unbond connect with zero bond_debit")]
+    #[error("Release connect with zero bond_debit")]
     DebitZero,
     /// `bond_debit` does not equal the record's current `bonded_total` —
     /// verify ran against different record state than connect sees.
-    #[error("Unbond bond_debit does not equal the record's current bonded_total")]
+    #[error("Release bond_debit does not equal the record's current bonded_total")]
     DebitNotRecordTotal,
     /// The record's maintained invariant `bonded_total == bond_floor(holdings)`
     /// (gate-4 §3.2) does not hold — record corruption, not a tx fault.
@@ -122,7 +122,7 @@ pub enum UnbondConnectError {
     RecordFloorInvariantBroken,
     /// `total_bonded_atomic` would underflow — the global counter disagrees
     /// with the per-record balance it aggregates (§4.5 audit scalar).
-    #[error("total_bonded_atomic underflow on Unbond debit")]
+    #[error("total_bonded_atomic underflow on Release debit")]
     TotalBondedUnderflow,
     /// The interval log is at `MAX_BOND_BAD_INTERVALS`; the clean close cannot
     /// append. Verify's `IntervalLogFull` arm forecloses this at tx admission.
@@ -130,7 +130,7 @@ pub enum UnbondConnectError {
     IntervalLogFull,
 }
 
-/// The full `Unbond` connect effect (gate-4 §4.3 "On confirm").
+/// The full `Release` connect effect (gate-4 §4.3 "On confirm").
 ///
 /// The C++ connect arm writes **exactly** these fields: the record becomes
 /// `post_bonded_total` / `post_holdings` with `interval_close` appended to its
@@ -140,18 +140,18 @@ pub enum UnbondConnectError {
 /// (`verify_bond_post_ct_balance`), not written by the connect; it is exposed
 /// so tests pin the §4.3 identity `refund == debit == bond_floor(current)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnbondConnect {
+pub struct ReleaseConnect {
     /// Always `0` — full release (§4.3 step "zero `bonded_total_atomic`").
     pub post_bonded_total: u64,
     /// Always the canonical empty set (`ShardSetCompact`, no shards) — the
     /// same exit shape the slash-to-zero path writes.
     pub post_holdings: HoldingsDescriptor,
-    /// The clean interval-close to append (F3): `[E_unbond, E_unbond)`.
+    /// The clean interval-close to append (F3): `[E_release, E_release)`.
     pub interval_close: BadInterval,
     /// `total_bonded_atomic − bond_debit` (§4.5 release row).
     ///
     /// **Absolute post-value — thread it per post.** The caller must read the
-    /// live counter immediately before *each* fold (`get → unbond_connect →
+    /// live counter immediately before *each* fold (`get → release_connect →
     /// set`, the JoinMarket arm's inline `get → set(get + credit)` shape,
     /// `blockchain_db.cpp`). A dispatch that hoists one counter read out of a
     /// multi-bond-post block and applies each fold's absolute would compute
@@ -163,7 +163,7 @@ pub struct UnbondConnect {
     pub refund_atomic: u64,
 }
 
-/// Fold the `Unbond` connect (gate-4 §4.3): given the record's **current**
+/// Fold the `Release` connect (gate-4 §4.3): given the record's **current**
 /// state, the vin's `bond_debit`, and the connecting block's settlement epoch,
 /// produce the post-connect record state, the interval-log append, and the
 /// `total_bonded_atomic` movement.
@@ -174,51 +174,51 @@ pub struct UnbondConnect {
 /// `record_bad_interval_count` is the record's interval-log length *before*
 /// the append. The record **persists** (state `Exited`) for backlog claims
 /// until `W` lapses — deletion / `p_slot` burn is a later, separate step.
-pub fn unbond_connect(
+pub fn release_connect(
     record_bonded_total: u64,
     record_holdings_kind: HoldingsKind,
     record_held_shard_count: usize,
     record_bad_interval_count: usize,
     vin_bond_debit: u64,
     total_bonded_atomic: u64,
-    unbond_settlement_epoch: u64,
-) -> Result<UnbondConnect, UnbondConnectError> {
+    release_settlement_epoch: u64,
+) -> Result<ReleaseConnect, ReleaseConnectError> {
     if vin_bond_debit == 0 {
-        return Err(UnbondConnectError::DebitZero);
+        return Err(ReleaseConnectError::DebitZero);
     }
     if vin_bond_debit != record_bonded_total {
-        return Err(UnbondConnectError::DebitNotRecordTotal);
+        return Err(ReleaseConnectError::DebitNotRecordTotal);
     }
     // §3.2 maintained invariant on the record being released — a mismatch is
     // record corruption the release must not paper over.
     if bond_floor_of(record_holdings_kind, record_held_shard_count) != record_bonded_total {
-        return Err(UnbondConnectError::RecordFloorInvariantBroken);
+        return Err(ReleaseConnectError::RecordFloorInvariantBroken);
     }
     if record_bad_interval_count >= MAX_BOND_BAD_INTERVALS {
-        return Err(UnbondConnectError::IntervalLogFull);
+        return Err(ReleaseConnectError::IntervalLogFull);
     }
     let new_total_bonded_atomic = total_bonded_atomic
         .checked_sub(vin_bond_debit)
-        .ok_or(UnbondConnectError::TotalBondedUnderflow)?;
+        .ok_or(ReleaseConnectError::TotalBondedUnderflow)?;
 
-    Ok(UnbondConnect {
+    Ok(ReleaseConnect {
         post_bonded_total: 0,
         post_holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::empty(),
         },
-        interval_close: clean_interval_close(unbond_settlement_epoch),
+        interval_close: clean_interval_close(release_settlement_epoch),
         new_total_bonded_atomic,
         refund_atomic: vin_bond_debit,
     })
 }
 
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
-pub enum UnbondPopError {
-    /// The record is not in the `Unbond` post-connect state (`bonded_total`
+pub enum ReleasePopError {
+    /// The record is not in the `Release` post-connect state (`bonded_total`
     /// nonzero or holdings non-empty) — the journal row does not describe the
     /// tip's record; the pop would revert something else's write.
-    #[error("record is not in the Unbond post-connect (Exited) state")]
+    #[error("record is not in the Release post-connect (Exited) state")]
     RecordNotExited,
     /// The record's trailing interval-log entry is not this connect's clean
     /// interval-close — journal/log desync.
@@ -229,11 +229,11 @@ pub enum UnbondPopError {
     #[error("journaled pre-image bonded_total is zero")]
     PreImageEmpty,
     /// Re-crediting `total_bonded_atomic` would overflow.
-    #[error("total_bonded_atomic overflow on Unbond pop re-credit")]
+    #[error("total_bonded_atomic overflow on Release pop re-credit")]
     TotalBondedOverflow,
 }
 
-/// Fold the `Unbond` pop twin (gate-4 §5): validate the tip record is the
+/// Fold the `Release` pop twin (gate-4 §5): validate the tip record is the
 /// connect's product, then re-credit `total_bonded_atomic` with the journaled
 /// pre-image balance. Returns the restored `total_bonded_atomic`.
 ///
@@ -244,7 +244,7 @@ pub enum UnbondPopError {
 /// checks that make a desynced journal loud instead of silently corrupting.
 ///
 /// **Trailing-entry invariant (ratified 2026-07-12, maintainer):** slashability
-/// ends at the `Unbond` connect — the slash scheduler only examines currently
+/// ends at the `Release` connect — the slash scheduler only examines currently
 /// held shards and an `Exited` record holds none, so nothing ever appends after
 /// the clean close and the refund is never clawed back. (The release verify
 /// guarantees every epoch through the last-served anchor settled *before* the
@@ -254,27 +254,27 @@ pub enum UnbondPopError {
 /// same-block slash on a *different* record is routine — and any future change
 /// that let an interval land after a clean close would surface here as
 /// `MissingCleanClose`: loud, not silent.
-pub fn unbond_pop(
+pub fn release_pop(
     current_record_bonded_total: u64,
     current_record_held_shard_count: usize,
     trailing_interval: Option<BadInterval>,
-    unbond_settlement_epoch: u64,
+    release_settlement_epoch: u64,
     journal_pre_bonded_total: u64,
     total_bonded_atomic: u64,
-) -> Result<u64, UnbondPopError> {
+) -> Result<u64, ReleasePopError> {
     if current_record_bonded_total != 0 || current_record_held_shard_count != 0 {
-        return Err(UnbondPopError::RecordNotExited);
+        return Err(ReleasePopError::RecordNotExited);
     }
     match trailing_interval {
-        Some(iv) if is_clean_interval_close(&iv, unbond_settlement_epoch) => {}
-        _ => return Err(UnbondPopError::MissingCleanClose),
+        Some(iv) if is_clean_interval_close(&iv, release_settlement_epoch) => {}
+        _ => return Err(ReleasePopError::MissingCleanClose),
     }
     if journal_pre_bonded_total == 0 {
-        return Err(UnbondPopError::PreImageEmpty);
+        return Err(ReleasePopError::PreImageEmpty);
     }
     total_bonded_atomic
         .checked_add(journal_pre_bonded_total)
-        .ok_or(UnbondPopError::TotalBondedOverflow)
+        .ok_or(ReleasePopError::TotalBondedOverflow)
 }
 
 // ── HoldingsUpdate add / drop connect + pop (gate-4 §4.4 grace-tail) ─────────
@@ -289,7 +289,7 @@ pub enum HoldingsUpdateConnectError {
     #[error("HoldingsUpdate-drop post is not current holdings minus exactly one shard")]
     NotSingleDrop,
     /// Drop would empty the shard set — verify's `HoldingsUpdateDropLastShard`.
-    #[error("HoldingsUpdate-drop would leave no shards (use Unbond)")]
+    #[error("HoldingsUpdate-drop would leave no shards (use Release)")]
     DropLastShard,
     /// The record's `bonded_total == bond_floor(holdings)` invariant (§3.2)
     /// does not hold — record corruption, not a tx fault.
@@ -314,7 +314,7 @@ pub enum HoldingsUpdateConnectError {
 /// the index-parallel `shard_add_epochs` — the carried-over shards keep their
 /// existing add-epoch, and `added_shard_id` takes `add_settlement_epoch` (the
 /// connecting block's settlement epoch, `E_add`). The counter movement is the
-/// absolute post-value, threaded per post (the `UnbondConnect` note).
+/// absolute post-value, threaded per post (the `ReleaseConnect` note).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoldingsUpdateAddConnect {
     pub added_shard_id: u64,
@@ -494,7 +494,7 @@ pub enum RebondConnectError {
 /// `bad_intervals[closed_interval_index].end_exclusive = interval_end_exclusive`
 /// (`E_rebond + 1`, Pin 3 — standing resumes at `E_rebond + 1`; the partial rebond
 /// epoch is forfeited in both directions). The counter movement is the absolute
-/// post-value, threaded per post (the `UnbondConnect` note). No interval is
+/// post-value, threaded per post (the `ReleaseConnect` note). No interval is
 /// appended and none removed — post-connect `bad_intervals.len()` is unchanged,
 /// which is what the verify-side `≤ 254` headroom (Pin 6) budgeted for.
 #[derive(Debug, Clone, PartialEq, Eq)]

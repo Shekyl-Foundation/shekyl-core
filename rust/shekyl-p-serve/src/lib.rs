@@ -24,7 +24,7 @@
 //! | Slice | Surface | This crate |
 //! |----|---------|------------|
 //! | **PR-A (here)** | Loopback serve + store serving read | owns |
-//! | **PR-B** | `TorService` `ADD_ONION` / `DEL_ONION` + derived-bundle custody (§7.2(iii)) | no surface here |
+//! | **PR-B** | `WalletTorControl` `ADD_ONION` / `DEL_ONION` + derived-bundle custody (§7.2(iii)) | no surface here |
 //! | **VG-1…VG-3** | Native full-vanguards path selection | no surface here |
 //! | **SH-1** | The composition: endpoint + onion + record-derived serve-set, one lifetime | consumer of [`PServeEndpoint::addr`] + [`StoreShardProvider`] |
 //!
@@ -75,7 +75,7 @@
 //! # Privacy invariants (carried from the SP-T3 spike as tests, not memories)
 //!
 //! - loopback-only bind, enforced at bind and again at the `ADD_ONION`
-//!   target (`shekyl_tor`'s `OnionPort::loopback`, on the host side);
+//!   target (`shekyl_tor_control_wallet`'s `OnionPort::loopback`, on the host side);
 //! - two personas served from one wallet are byte-identical at the header
 //!   level ([`serve::RESPONSE_HEADER_NAMES`] is the complete set);
 //! - every **complete-head** non-servable outcome — wrong path, wrong

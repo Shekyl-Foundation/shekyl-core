@@ -73,11 +73,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use kameo::error::SendError;
 use tokio::sync::oneshot;
 
-use crate::control::consensus::{parse_ns_all, ConsensusRelay, ConsensusView};
-use crate::control::vanguards::{
+use shekyl_tor_control_client::control::consensus::{parse_ns_all, ConsensusRelay, ConsensusView};
+use shekyl_tor_control_client::control::vanguards::{
     HsLayerPins, RelayFingerprint, NUM_LAYER2_GUARDS, NUM_LAYER3_GUARDS,
 };
-use crate::control::{Command, ControlError, TorControl};
+use shekyl_tor_control_client::control::{Command, ControlError, TorControlClient};
 
 /// L2 lifetime bounds (spec): uniform over [30, 60] days.
 const L2_LIFETIME_MIN: Duration = Duration::from_secs(30 * 86_400);
@@ -117,7 +117,7 @@ pub enum VanguardsMode {
 ///
 /// Mintable only by the confirmed-`SETCONF` path inside [`VanguardManager`].
 /// This is the crate's established sealed-witness pattern
-/// ([`VerifiedTorBinary`](crate::binary::VerifiedTorBinary)): the guarantee
+/// ([`VerifiedTorBinary`](shekyl_tor_control_client::binary::VerifiedTorBinary)): the guarantee
 /// is structural rather than a convention the serving daemon must remember.
 ///
 /// **It carries the actor it was confirmed on, and publication consumes it.**
@@ -132,7 +132,7 @@ pub enum VanguardsMode {
 ///
 /// **No test bypass exists yet, on purpose.** The obvious sibling would be a
 /// loud `unchecked_for_test` mirroring
-/// [`VerifiedTorBinary`](crate::binary::VerifiedTorBinary)'s, and one should
+/// [`VerifiedTorBinary`](shekyl_tor_control_client::binary::VerifiedTorBinary)'s, and one should
 /// land the day a test drives `crate::onion_service::publish_onion`
 /// directly. Today no test does — the supervisor path mints the witness for
 /// real — so adding the escape hatch now would put an unused hole in a
@@ -142,16 +142,16 @@ pub enum VanguardsMode {
 pub struct VanguardsActive {
     /// The control actor the pins were confirmed on. Publication rides this
     /// actor, so it cannot target an incarnation that never pinned.
-    actor: kameo::actor::ActorRef<TorControl>,
+    actor: kameo::actor::ActorRef<TorControlClient>,
 }
 
 impl VanguardsActive {
-    fn confirmed(actor: kameo::actor::ActorRef<TorControl>) -> Self {
+    fn confirmed(actor: kameo::actor::ActorRef<TorControlClient>) -> Self {
         Self { actor }
     }
 
     /// The actor this witness authorizes publication on.
-    pub(crate) fn actor(&self) -> &kameo::actor::ActorRef<TorControl> {
+    pub(crate) fn actor(&self) -> &kameo::actor::ActorRef<TorControlClient> {
         &self.actor
     }
 }
@@ -917,7 +917,7 @@ fn uniform_between(
 // ── Manager (supervisor-facing orchestration) ──────────────────────────────
 
 /// Supervisor-scoped owner of vanguard mode, in-memory rotation state, and
-/// the on-disk path. Constructed once per [`crate::service::TorService`] and
+/// the on-disk path. Constructed once per [`crate::service::WalletTorControl`] and
 /// passed into every incarnation — never re-created on restart.
 pub struct VanguardManager {
     mode: VanguardsMode,
@@ -996,7 +996,7 @@ impl VanguardManager {
     /// unfillable set.
     pub async fn establish(
         &mut self,
-        actor: &kameo::actor::ActorRef<TorControl>,
+        actor: &kameo::actor::ActorRef<TorControlClient>,
         reply_deadline: Duration,
         shutdown: &mut oneshot::Receiver<()>,
     ) -> Result<Option<VanguardsActive>, VanguardsAbort> {
@@ -1023,7 +1023,7 @@ impl VanguardManager {
     /// [`VanguardsWarning`] instead of tearing a working tor down.
     pub async fn reconcile(
         &mut self,
-        actor: &kameo::actor::ActorRef<TorControl>,
+        actor: &kameo::actor::ActorRef<TorControlClient>,
         reply_deadline: Duration,
         shutdown: &mut oneshot::Receiver<()>,
     ) -> Result<(), VanguardsAbort> {
@@ -1059,7 +1059,7 @@ impl VanguardManager {
     /// the other way round.
     async fn pin_set(
         &mut self,
-        actor: &kameo::actor::ActorRef<TorControl>,
+        actor: &kameo::actor::ActorRef<TorControlClient>,
         reply_deadline: Duration,
         shutdown: &mut oneshot::Receiver<()>,
     ) -> Result<VanguardsActive, VanguardsAbort> {
@@ -1120,7 +1120,7 @@ impl VanguardManager {
 
 /// Fetch the consensus over the control port (`GETINFO ns/all`).
 async fn fetch_consensus(
-    actor: &kameo::actor::ActorRef<TorControl>,
+    actor: &kameo::actor::ActorRef<TorControlClient>,
     reply_deadline: Duration,
     shutdown: &mut oneshot::Receiver<()>,
 ) -> Result<ConsensusView, VanguardsAbort> {
@@ -1159,7 +1159,7 @@ async fn fetch_consensus(
 
 /// Apply `state`'s pins with one `SETCONF`; mint the witness only on `250`.
 async fn apply_pins(
-    actor: &kameo::actor::ActorRef<TorControl>,
+    actor: &kameo::actor::ActorRef<TorControlClient>,
     state: &RotationState,
     reply_deadline: Duration,
     shutdown: &mut oneshot::Receiver<()>,

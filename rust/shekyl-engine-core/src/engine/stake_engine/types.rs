@@ -41,7 +41,7 @@ pub(crate) use shekyl_types::PSlot;
 ///
 /// `k` is the one tuning knob of Model D. The derive-forward set at open is
 /// `{persisted bonded slots} ∪ {cursor ..= cursor + k}`: the bonded slots are
-/// reachable for unbonding, and the `k`-slot window covers activations that
+/// reachable for releasing, and the `k`-slot window covers activations that
 /// happen *during* the session without re-acquiring the seed. Activation is
 /// sequential (`i → i+1`), so a window of `k` future slots covers `k` in-session
 /// activations before the lookahead is exhausted and the wallet must be reopened
@@ -92,7 +92,7 @@ const _: () = assert!(
 ///
 /// This is **typed contract #4** ([`ARCHIVAL_BOND_CONSTRUCTION.md`] §10.2):
 /// activation-wipe must wipe only personas with *no* live bond, because a
-/// retired-but-bonded persona's `bond_spend` key is needed to unbond it later
+/// retired-but-bonded persona's `bond_spend` key is needed to release it later
 /// and — under Model D, with the seed gone after `assemble()` — a wiped persona
 /// is unreachable for the wallet's life. Rather than guard that with a runtime
 /// check, the wipe path ([`wipe_ephemeral`]) accepts only an [`EphemeralPersona`]
@@ -106,7 +106,7 @@ const _: () = assert!(
 /// [`ARCHIVAL_BOND_CONSTRUCTION.md`]: ../../../../../docs/design/ARCHIVAL_BOND_CONSTRUCTION.md
 pub(crate) enum HeldPersona {
     /// Carries at least one live bond (`consumer_held` or posted). Never wiped
-    /// while bonded — its `bond_spend` key must stay reachable to unbond.
+    /// while bonded — its `bond_spend` key must stay reachable to release.
     Bonded(BondedPersona),
     /// A pre-derived lookahead persona with no live bond. The *only* variant
     /// the activation-wipe path accepts.
@@ -149,7 +149,7 @@ pub(crate) fn wipe_ephemeral(persona: EphemeralPersona) {
 /// Takes a [`BondedPersona`] by value. It is the *only* path that wipes a bonded
 /// persona, and it is reached only through the witness-gated retire handler
 /// ([`RetireBondedPersona`]) — so a bonded persona is wiped **only** on
-/// positively-confirmed terminal evidence (`Unbond` + `W`-lapse + finality-deep),
+/// positively-confirmed terminal evidence (`Release` + `W`-lapse + finality-deep),
 /// never on absence. The bundle's per-field `ZeroizeOnDrop` runs at the drop.
 pub(crate) fn wipe_bonded(persona: BondedPersona) {
     drop(persona);
@@ -165,17 +165,17 @@ pub(crate) fn wipe_bonded(persona: BondedPersona) {
 /// [`PersonaHandle`] evidence-typestate pattern. The discipline is the same
 /// positive-confirmation, never-absence rule as SP-6's GC and SP-7's
 /// `AbsentVerified`: a *wrong* retire wipes a still-live persona's `bond_spend`
-/// key → can't unbond → **stuck funds**, the exact mirror of a wrongful GC, which
+/// key → can't release → **stuck funds**, the exact mirror of a wrongful GC, which
 /// the conservative predicate guards against.
 pub(crate) struct RetirementWitness {
     /// The cleartext canonical id of the persona to retire (from its confirmed
-    /// `Unbond` bond-post). The actor matches it against the bonded union.
+    /// `Release` bond-post). The actor matches it against the bonded union.
     pub(crate) p_canonical_id: PCanonicalId,
 }
 
 impl RetirementWitness {
     /// Build a witness **iff** the persona is retire-eligible: a *confirmed*
-    /// `Unbond` whose **last creditable epoch has fallen out of the consensus
+    /// `Release` whose **last creditable epoch has fallen out of the consensus
     /// claim window**. Returns `None` otherwise — never retire a persona that can
     /// still claim, which would wipe its `bond_spend` key while live reward
     /// collateral remains (stuck funds).
@@ -187,11 +187,11 @@ impl RetirementWitness {
     /// epoch can't be used by accident (`settled_epoch` is a *finalized* epoch).
     ///
     /// `e_last` is the persona's last creditable epoch; the scan passes the
-    /// **conservative** `e_last = unbond_epoch` (a late retire only wastes a little
+    /// **conservative** `e_last = release_epoch` (a late retire only wastes a little
     /// scan work, an early one is stuck funds, so round toward later). **Finality**
     /// is guaranteed upstream — the scan surfaces bond-posts only from behind the
-    /// cursor's reorg horizon, so a witnessed `Unbond` is already finality-deep.
-    pub(crate) fn from_confirmed_unbond(
+    /// cursor's reorg horizon, so a witnessed `Release` is already finality-deep.
+    pub(crate) fn from_confirmed_release(
         p_canonical_id: PCanonicalId,
         e_last: SettlementEpoch,
         settled_epoch: SettlementEpoch,
@@ -364,21 +364,21 @@ impl PersonaIdentity {
 
 /// Why a bonded record cannot exit yet.
 ///
-/// One variant per record-state arm of `verify_unbond_bond_post`, carrying the
+/// One variant per record-state arm of `verify_release_bond_post`, carrying the
 /// operands the condition turned on — so a refusal can tell the user *when* it
 /// lifts, not merely that it applies. Every predicate behind these is
 /// consensus's own function, called rather than restated.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub(crate) enum UnbondNotReady {
+pub(crate) enum ReleaseNotReady {
     /// The record has no bonded balance, so there is nothing to exit.
     ///
-    /// First, because it is first at the verifier (`verify_unbond_bond_post`
-    /// checks it before the interval log). `build_unbond_vin` refuses the same
+    /// First, because it is first at the verifier (`verify_release_bond_post`
+    /// checks it before the interval log). `build_release_vin` refuses the same
     /// state as its own constructor invariant; this arm exists so the *reason*
     /// a caller is given matches the reason the chain would give, which a
     /// later-firing check would not.
-    #[error("the record has no bonded balance; there is nothing to unbond")]
-    NothingToUnbond,
+    #[error("the record has no bonded balance; there is nothing to release")]
+    NothingToRelease,
 
     /// The record's interval log is at `MAX_BOND_BAD_INTERVALS`, so the
     /// connect's clean interval-close could not append. Verify rejects this for
@@ -420,7 +420,7 @@ pub(crate) enum UnbondNotReady {
     /// The slash scheduler has not settled every epoch through the anchor.
     ///
     /// Distinct from the cooldown, and not implied by it: the cooldown alone
-    /// leaves a one-block connect-ordering race open, because an `Unbond` in the
+    /// leaves a one-block connect-ordering race open, because a `Release` in the
     /// first block past the anchor's slash deadline connects *before* that
     /// block's slash fold. `watermark` is [`SlashWatermark::NothingSettled`]
     /// when nothing has settled at all — the fail-closed reading, and the one
@@ -521,20 +521,20 @@ pub(crate) enum StakeEngineError {
     /// The record cannot support a full exit yet — a **producer-side refusal**,
     /// not a construction failure.
     ///
-    /// These are the `verify_unbond_bond_post` arms no vin construction can
+    /// These are the `verify_release_bond_post` arms no vin construction can
     /// satisfy, so the alternative to refusing is assembling a well-formed post
     /// the daemon then rejects. On the exit path that alternative is worse than
-    /// it sounds: the confirmation of an `Unbond` is what fires the irreversible
+    /// it sounds: the confirmation of a `Release` is what fires the irreversible
     /// persona-key wipe, so a wallet that reports success and fails at the chain
     /// has misled the user about an operation they cannot take back. The cause
     /// is named so the wallet can say which condition, and when it lifts.
     #[error("record is not ready to exit: {0}")]
-    UnbondNotReady(#[from] UnbondNotReady),
+    ReleaseNotReady(#[from] ReleaseNotReady),
 
     /// The record facts describe a different persona than the handle does.
     ///
     /// A handle proves its slot is held; it says nothing about *whose* record
-    /// was read. The two arrive as independent values, so an `Unbond` that
+    /// was read. The two arrive as independent values, so a `Release` that
     /// paired one persona's balance and cooldown anchors with another's keys
     /// would answer readiness from the wrong record and then build a post for
     /// the right one. Not a user-facing condition — it is a caller bug, and the

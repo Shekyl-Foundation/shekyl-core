@@ -34,7 +34,7 @@ pub const MAX_HOLDINGS_SHARDS: usize = 4096;
 pub enum BondPostKind {
     JoinMarket = 0,
     Rebond = 1,
-    Unbond = 2,
+    Release = 2,
     HoldingsUpdate = 3,
 }
 
@@ -43,7 +43,7 @@ impl BondPostKind {
         match v {
             0 => Ok(Self::JoinMarket),
             1 => Ok(Self::Rebond),
-            2 => Ok(Self::Unbond),
+            2 => Ok(Self::Release),
             3 => Ok(Self::HoldingsUpdate),
             _ => Err(WireError::InvalidPostKind(v)),
         }
@@ -84,7 +84,7 @@ impl HoldingsKind {
     }
 }
 
-/// The gather the Unbond cooldown-anchor fold consumes, decided by
+/// The gather the Release cooldown-anchor fold consumes, decided by
 /// [`HoldingsKind::last_served_scan`].
 ///
 /// C++ marshals this discriminant and calls the matching DB accessor; it does
@@ -169,7 +169,7 @@ impl ShardSet {
         Ok(Self(ids))
     }
 
-    /// The empty set (`CompleteTree` carries none; the `Unbond` exit shape). The
+    /// The empty set (`CompleteTree` carries none; the `Release` exit shape). The
     /// empty set is trivially bounded and duplicate-free.
     #[must_use]
     pub const fn empty() -> Self {
@@ -621,7 +621,7 @@ mod tests {
         // silently dropped otherwise — the coupling means the wire has no
         // place for it).
         let mut vin = base.clone();
-        vin.post_kind = BondPostKind::Unbond;
+        vin.post_kind = BondPostKind::Release;
         vin.holdings.shard_ids = ShardSet::empty();
         vin.bonded_total_atomic = 0;
         vin.bond_credit = 0;

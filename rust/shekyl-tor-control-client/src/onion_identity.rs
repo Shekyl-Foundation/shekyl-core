@@ -3,13 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The persona's v3 onion identity: expand a **derived** 32-byte HS-identity
+//! v3 onion identity encoding: expand a **derived** 32-byte HS-identity
 //! seed into tor's `ED25519-V3` key blob, and compute the `.onion` address
-//! that key implies.
+//! that key implies. The caller supplies the seed; this crate does not know
+//! whether it is archival-P's durable identity or the daemon's ephemeral one.
 //!
 //! Relocated from the SP-T3 spike's `onion_key.rs` (its own SPIKE-F-4 note:
 //! *"That is transport surface, not key derivation — in production it belongs
-//! in `shekyl-tor`"*). What lives here is **encoding only**: RFC 8032 §5.1.5
+//! in `shekyl-tor-control-wallet`"*). What lives here is **encoding only**: RFC 8032 §5.1.5
 //! seed expansion (`SHA-512` + clamp) and the rend-spec-v3 §6 address
 //! construction. The seed itself comes from
 //! `shekyl_crypto_pq::archival_p::derive_p_hs_id_seed` — the GF-9 serving
@@ -27,7 +28,7 @@
 //! 2. **Serving config takes an [`OnionIdentity`], never a seed.** The seed
 //!    is consumed at expansion time and dies with the call; the value that
 //!    crosses into the supervisor is this identity (expanded key + address).
-//!    See [`crate::onion_service::OnionServiceSpec`].
+//!    See `shekyl-tor-control-wallet`'s `onion_service::OnionServiceSpec` (wallet-owned).
 //!
 //! Holding `master_seed` — or holding the derived seed and inviting the
 //! convenient "just pass the seed" wiring — is one edit away from also
@@ -92,7 +93,7 @@ const ONION_CHECKSUM_PREFIX: &[u8] = b".onion checksum";
 ///
 /// Same secret posture as [`OnionKey`]: holding these expanded bytes *is*
 /// the persona on the network. Accidental copies are not free; the type is
-/// moved into [`crate::onion_service::OnionServiceSpec`] and remints keys by
+/// moved into `shekyl-tor-control-wallet`'s `onion_service::OnionServiceSpec` and remints keys by
 /// reference. Shared ownership, if ever needed, must be an explicit
 /// `Arc<OnionIdentity>` at the call site.
 pub struct OnionIdentity {

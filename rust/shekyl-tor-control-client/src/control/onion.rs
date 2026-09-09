@@ -36,12 +36,12 @@
 //! # `Detach` is not a flag this crate can express
 //!
 //! Tor's `Flags=Detach` keeps a hidden service running after the control
-//! connection that created it closes. For a bonded archival persona that is a
-//! **privacy defect, not a convenience**: a detached onion outlives the wallet
-//! process and keeps advertising the persona's `.onion` — publishing descriptors
-//! that say "this persona is online" — after the wallet is gone and can no longer
-//! serve a byte. The persona's liveness signal would then be a lie told by an
-//! orphan.
+//! connection that created it closes. That is a **privacy defect, not a
+//! convenience**: a detached onion outlives the process that published it and
+//! keeps advertising the `.onion` — publishing descriptors that say the
+//! service is online — after nothing is left to serve a byte. The liveness
+//! signal would then be a lie told by an orphan. This is why the flag is
+//! absent for every caller, wallet or daemon.
 //!
 //! So `Detach` is not an [`OnionFlags`] variant that callers are asked to avoid;
 //! it is **absent from the type**, and [`AddOnion`]'s `to_wire_line` can only render
@@ -50,7 +50,7 @@
 //!
 //! # Secrets
 //!
-//! [`OnionKey`] is secret key material — whoever holds it *is* the persona on the
+//! [`OnionKey`] is secret key material — whoever holds it *is* the onion on the
 //! network — so it is `ZeroizeOnDrop`, has a redacting `Debug`, and is not
 //! `Clone` (rules 35/36). Its base64 rendering is produced into a
 //! [`Zeroizing<String>`] so the encoded copy is wiped too; the only place that
@@ -76,8 +76,8 @@ pub const SERVICE_ID_CHARS: usize = 56;
 
 /// A v3 onion-service secret key in tor's `ED25519-V3` wire form.
 ///
-/// **This is the persona's network identity.** Holding these bytes is sufficient
-/// to impersonate the persona's onion service, so the type carries the full
+/// **This is a v3 onion network identity.** Holding these bytes is sufficient
+/// to impersonate the service, so the type carries the full
 /// secret posture: `ZeroizeOnDrop`, redacting `Debug`, no `Clone`, no
 /// `PartialEq` against arbitrary bytes, and no accessor that hands out the raw
 /// array. The only way the bytes leave this type is
@@ -659,7 +659,7 @@ mod tests {
                 .to_wire_line();
             assert!(
                 !line.to_ascii_lowercase().contains("detach"),
-                "a detached onion outlives the wallet and keeps advertising the persona: {}",
+                "a detached onion outlives the publisher and keeps advertising the service: {}",
                 line.as_str()
             );
         }

@@ -100,7 +100,7 @@ pub(crate) fn match_watch<'a>(
 /// so the two consumers agree on the post-kind byte as the module docs
 /// require. A sighting *adopts* the slot as live-bonded; only the
 /// bond-establishing kind is evidence of that. A future non-establishing
-/// kind (unbond/close) observed here must not re-adopt a slot whose bond
+/// kind (release/close) observed here must not re-adopt a slot whose bond
 /// that very post says is gone — the P-scan would refuse to corroborate and
 /// the sighting bridge would wedge.
 pub(crate) fn sightings_in<'a>(

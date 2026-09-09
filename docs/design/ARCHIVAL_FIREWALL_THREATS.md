@@ -125,7 +125,7 @@ efficacy (with patience) · residual · disposition.** Findings are `TM-#`.
   exclusivity** (personas that are never simultaneously active — the rotation
   itself implies a hand-off pattern), **shard-selection** similarity (do `P`'s
   personas serve overlapping or patterned shard sets?), **claim-batching rhythm**
-  (§A3), and the **`W`-tail lifecycle shape** (every persona unbonds and then
+  (§A3), and the **`W`-tail lifecycle shape** (every persona releases and then
   claims for ~`W` epochs — a recognizable signature). If any of these clusters
   `P`'s personas, the attacker reconstructs `P`'s full footprint *before*
   attempting the principal link.
@@ -457,7 +457,7 @@ lens for **every** future firewall round, not just `TM-1`.
    question; the answer simply wasn't applied until now. *(Correction 2026-07-19, PR
    #337: "the design rotates personas sequentially (`stake_engine`: never two active
    personas)" overstates the enforced property — the engine enforces one active key
-   bundle, supports concurrently-bonded personas for unbond reachability, and has no
+   bundle, supports concurrently-bonded personas for release reachability, and has no
    rotation scheduler; the foreclosure rests on single-persona operation + `1/R`
    economics + disclosure. Full note: `ARCHIVAL_TM1_CLUSTERING.md` correction block;
    WI-4 §19.10.)*

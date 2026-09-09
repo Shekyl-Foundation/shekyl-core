@@ -224,7 +224,7 @@ impl EpochCache {
 ///    production grew a post-slash cooldown gate in the connect; the probe is
 ///    kept so such a gate moves this floor automatically.
 ///
-/// (`release_cooldown.rs` is the VOLUNTARY-EXIT gate — `Unbond` /
+/// (`release_cooldown.rs` is the VOLUNTARY-EXIT gate — `Release` /
 /// `HoldingsUpdate`-drop, gate-4 §4.3/§4.4 — and is not on the slash path;
 /// verified at source 2026-07-29. Nothing bounds WHEN a `Rebond` may happen —
 /// the interval stays open indefinitely; there is no rebond deadline.)

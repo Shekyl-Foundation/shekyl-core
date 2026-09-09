@@ -4,13 +4,13 @@
 // BSD-3-Clause
 
 //! The `P`-lane **exit-fee reserve** — the spend-time floor every mid-life
-//! `P` constructor leaves in the pool so the terminal `Unbond` stays fundable.
+//! `P` constructor leaves in the pool so the terminal `Release` stays fundable.
 //!
 //! `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2 rule 2: mid-life constructors (claim
 //! fee inputs, both `HoldingsUpdate` directions, `Rebond`, and — from
 //! `ARCHIVAL_DRAIN_SEND_FD2.md` DS-4 — a partial drain from a **live**
 //! persona) never spend the pool below [`EXIT_FEE_RESERVE_ATOMIC`]. A
-//! post-retirement sweep has no future `Unbond`, so the reserve is moot and a
+//! post-retirement sweep has no future `Release`, so the reserve is moot and a
 //! drain-all may take the pool to zero (the live/retired branch is the
 //! consumer's, e.g. the drain selector's — this module owns only the floor).
 //!
@@ -25,10 +25,10 @@ use crate::cover::COVER_RUNG_ATOMIC;
 /// The exit-fee reserve in atomic units (1 SKL = 1_000_000_000 atomic).
 ///
 /// **Pinned: `0.05 SKL = 50_000_000 atomic`** — one pessimistically-priced
-/// `Unbond` fee. Derivation (`ARCHIVAL_DRAIN_SEND_FD2.md` DS-4,
+/// `Release` fee. Derivation (`ARCHIVAL_DRAIN_SEND_FD2.md` DS-4,
 /// `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2):
 ///
-/// - **Worst-case `Unbond` weight.** An `Unbond` spends the typed `P` pool
+/// - **Worst-case `Release` weight.** A `Release` spends the typed `P` pool
 ///   (cover + earnings) and pays out; bound by `MAX_INPUTS = 8` inputs, two
 ///   outputs, `MAX_TREE_DEPTH = 24`. The dominant term is the FCMP++ proof
 ///   (`FCMP_PROOF_SIZE_KAT[8][24] = 33_600` bytes); with the per-input
@@ -61,11 +61,11 @@ use crate::cover::COVER_RUNG_ATOMIC;
 /// user top-up at funding time shrinks the corner further), and the
 /// below-reserve corner (until earnings accrue or a top-up) strands nothing —
 /// a cover-only pool has no earnings worth draining, the reserve releases at
-/// retirement, and a terminal `Unbond` over a destitute pool is funded by the
+/// retirement, and a terminal `Release` over a destitute pool is funded by the
 /// §7.2 zero-fee-input claim escape. **Raising** it strands more value on live
 /// personas (recoverable: it releases at retirement) and grows the
 /// blocked-fresh-drain fraction proportionally (`reserve/RUNG`). **Lowering**
-/// it risks an underfunded terminal `Unbond` under a fee spike — mitigated,
+/// it risks an underfunded terminal `Release` under a fee spike — mitigated,
 /// not fatal, by the same §7.2 destitute-corner escape.
 pub const EXIT_FEE_RESERVE_ATOMIC: u64 = 50_000_000;
 

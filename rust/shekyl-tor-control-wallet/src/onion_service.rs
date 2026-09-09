@@ -13,11 +13,11 @@
 //! - [`OnionPublishError`] / `publish_onion` (crate-private — the supervisor
 //!   is the only legitimate publisher) — drive `ADD_ONION` on a live
 //!   control actor, map control faults, and surface protocol verdicts from
-//!   [`crate::control::onion::evaluate_add_onion_reply`].
+//!   [`shekyl_tor_control_client::control::onion::evaluate_add_onion_reply`].
 //!
-//! The pure reply→verdict decision lives in [`crate::control::onion`] (it is
+//! The pure reply→verdict decision lives in [`shekyl_tor_control_client::control::onion`] (it is
 //! control-protocol knowledge, next to
-//! [`parse_service_id`](crate::control::onion::parse_service_id)). The supervisor
+//! [`parse_service_id`](shekyl_tor_control_client::control::onion::parse_service_id)). The supervisor
 //! loop in [`crate::service`] only asks *when* to publish and how a failure
 //! classifies into the retry/degrade policy.
 
@@ -27,13 +27,13 @@ use std::time::Duration;
 use kameo::error::SendError;
 use tokio::sync::oneshot;
 
-use crate::control::onion::{
+use crate::vanguard_rotation::VanguardsActive;
+use shekyl_tor_control_client::control::onion::{
     evaluate_add_onion_reply, AddOnion, AddOnionReplyError, OnionFlags, OnionPort, OnionPow,
     ServiceId,
 };
-use crate::control::{Command, ControlError};
-use crate::onion_identity::OnionIdentity;
-use crate::vanguard_rotation::VanguardsActive;
+use shekyl_tor_control_client::control::{Command, ControlError};
+use shekyl_tor_control_client::onion_identity::OnionIdentity;
 
 /// Why publishing the configured onion service failed.
 ///
@@ -109,14 +109,14 @@ pub enum OnionPublishAbort {
 /// thing, publishing this onion), derived once in the wallet context. A
 /// serving config that cannot hold a seed cannot hold `master_seed`, so the
 /// cold/hot bond-authority separation (§7.2(iii)) is structural here rather
-/// than a wiring convention. See [`crate::onion_identity::OnionIdentity`].
+/// than a wiring convention. See [`shekyl_tor_control_client::onion_identity::OnionIdentity`].
 ///
 /// **One `Option` on the supervisor config, not a `Vec`, deliberately:** one
 /// persona on the wire per wallet is the Model D co-activation rule, and the
 /// SP-T3 spike priced multi-persona co-serving as a forbidden layout. A
 /// service instance that can hold at most one onion makes that layout
 /// unrepresentable; a second persona is a second wallet process with its own
-/// `TorService` (and its own guard identity).
+/// `WalletTorControl` (and its own guard identity).
 pub struct OnionServiceSpec {
     /// The wallet-derived serving identity (expanded key + address); the
     /// supervisor mints a one-shot `OnionKey` from it per incarnation.
@@ -272,8 +272,8 @@ pub(crate) async fn publish_onion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control::onion::evaluate_add_onion_reply;
-    use crate::control::ReplyFramer;
+    use shekyl_tor_control_client::control::onion::evaluate_add_onion_reply;
+    use shekyl_tor_control_client::control::ReplyFramer;
 
     fn identity_and_id() -> (OnionIdentity, ServiceId) {
         let identity = OnionIdentity::from_hs_id_seed(&[0x24u8; 32]);
@@ -281,7 +281,7 @@ mod tests {
         (identity, id)
     }
 
-    fn reply_from(payload: &str) -> crate::control::ControlReply {
+    fn reply_from(payload: &str) -> shekyl_tor_control_client::control::ControlReply {
         let mut framer = ReplyFramer::new();
         framer.push_bytes(format!("250-{payload}\r\n250 OK\r\n").as_bytes());
         framer

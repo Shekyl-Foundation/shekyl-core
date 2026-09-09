@@ -3,11 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Assemble this wallet's [`TorServiceConfig`].
+//! Assemble this wallet's [`WalletTorControlConfig`].
 //!
 //! # Four rulings, recorded here because this is where they are visible
 //!
-//! `TorServiceConfig` has public fields, which makes it look like a settings
+//! `WalletTorControlConfig` has public fields, which makes it look like a settings
 //! struct. It is not, and the organizing principle is that **every knob is a
 //! fingerprint** — DQ-T0.7's argument about data-directory rotation (deviation
 //! from defaults is itself a signature) generalizes to the whole surface. So the
@@ -51,7 +51,7 @@
 //! them from separate machines. Written down so it is a stated recommendation
 //! rather than a discovered surprise.
 
-use shekyl_tor::service::TorServiceConfig;
+use shekyl_tor_control_wallet::service::WalletTorControlConfig;
 
 /// Why a staker could not be given a Tor configuration.
 ///
@@ -113,7 +113,7 @@ impl std::error::Error for TorConfigError {
     }
 }
 
-/// Assemble this wallet's [`TorServiceConfig`].
+/// Assemble this wallet's [`WalletTorControlConfig`].
 ///
 /// # Errors
 ///
@@ -122,23 +122,23 @@ impl std::error::Error for TorConfigError {
 pub(crate) fn tor_service_config(
     wallet_state_path: &std::path::Path,
     device: &shekyl_engine_prefs::DevicePrefs,
-) -> Result<TorServiceConfig, TorConfigError> {
+) -> Result<WalletTorControlConfig, TorConfigError> {
     let data_dir = shekyl_engine_file::paths::tor_data_dir_from(wallet_state_path);
     establish_data_dir(&data_dir)?;
 
-    Ok(TorServiceConfig {
+    Ok(WalletTorControlConfig {
         binary: binary_source(&device.tor_binary_path),
         data_dir,
         // Nothing subscribes to tor's async events in production: no call site
         // issues `SETEVENTS`, so the sink receives nothing at all. Named rather
         // than left as an anonymous dropped receiver.
-        events: shekyl_tor::control::EventSink::unsubscribed(),
+        events: shekyl_tor_control_wallet::service::EventSink::unsubscribed(),
         // Ruling 3: taken, not exposed.
-        policy: shekyl_tor::service::SupervisorPolicy::default(),
+        policy: shekyl_tor_control_wallet::service::SupervisorPolicy::default(),
         disable_network: false,
         // Ruling 4: overwritten by `PersonaServingHost::start`, which is the
         // sole author. Passing `Client` asserts we are not the one choosing.
-        posture: shekyl_tor::service::ServingPosture::Client,
+        posture: shekyl_tor_control_wallet::service::ServingPosture::Client,
     })
 }
 
@@ -152,8 +152,8 @@ pub(crate) fn tor_service_config(
 /// wallet break it; treating it silently would hide a genuine operator typo.
 /// Warn-once-and-fall-back is the same shape the FAKECHAIN settlement-epoch
 /// lever uses for an ignored setting.
-fn binary_source(override_path: &str) -> shekyl_tor::service::TorBinarySource {
-    use shekyl_tor::service::TorBinarySource;
+fn binary_source(override_path: &str) -> shekyl_tor_control_wallet::service::TorBinarySource {
+    use shekyl_tor_control_wallet::service::TorBinarySource;
     if override_path.is_empty() {
         return TorBinarySource::Discover;
     }
@@ -227,7 +227,7 @@ fn establish_data_dir(path: &std::path::Path) -> Result<(), TorConfigError> {
 mod tests {
     use super::*;
     use shekyl_engine_prefs::DevicePrefs;
-    use shekyl_tor::service::TorBinarySource;
+    use shekyl_tor_control_wallet::service::TorBinarySource;
 
     fn device(tor_binary_path: &str) -> DevicePrefs {
         DevicePrefs {
@@ -293,7 +293,7 @@ mod tests {
         // `SupervisorPolicy` is deliberately not `PartialEq` (it is a config,
         // not a value), so the assertion compares the fields whose *timing* is
         // observable — which is the property the ruling is about.
-        let default = shekyl_tor::service::SupervisorPolicy::default();
+        let default = shekyl_tor_control_wallet::service::SupervisorPolicy::default();
         assert_eq!(cfg.policy.backoff_base, default.backoff_base);
         assert_eq!(cfg.policy.backoff_cap, default.backoff_cap);
         assert_eq!(cfg.policy.degrade_after, default.degrade_after);
@@ -313,7 +313,7 @@ mod tests {
         std::fs::create_dir(&dir).expect("mkdir");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).expect("chmod");
 
-        // `TorServiceConfig` is not `Debug` (it holds an `EventSink`, a
+        // `WalletTorControlConfig` is not `Debug` (it holds an `EventSink`, a
         // forensic surface), so match rather than `expect_err`.
         match tor_service_config(&wallet, &device("")) {
             Err(TorConfigError::DataDirTooPermissive { mode, .. }) => {

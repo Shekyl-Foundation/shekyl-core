@@ -395,6 +395,9 @@ pub mod transfer;
 pub mod unstake_facade;
 // WI-RPC-1: read-only staked-balance/staked-output aggregation over the
 // authoritative sealed pscan/pending records, for the wallet-RPC surface.
+/// The `submit_release` dispatch seam (PR-P4): seal a `PendingRelease`, then
+/// the persona-transport choke point; driven by `StakeFacade::unstake` (PR-C).
+pub(crate) mod release_dispatch;
 pub mod staking_read;
 /// `docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3: the submit lifecycle
 /// driver — the wallet-side actor that lifts the [`submit_watchdog`]
@@ -427,9 +430,6 @@ pub(crate) mod tx_counts;
 pub(crate) mod tx_fee_model;
 #[cfg(test)]
 mod tx_weight_kat;
-/// The `submit_unbond` dispatch seam (PR-P4): seal a `PendingUnbond`, then
-/// the persona-transport choke point; driven by `StakeFacade::unstake` (PR-C).
-pub(crate) mod unbond_dispatch;
 pub mod view_material;
 
 pub use capability::Capability;

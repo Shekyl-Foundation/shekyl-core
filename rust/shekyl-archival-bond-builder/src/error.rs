@@ -8,7 +8,7 @@
 use thiserror::Error;
 
 /// Errors raised while constructing an archival bond-post vin (JoinMarket
-/// credit or Unbond debit).
+/// credit or Release debit).
 #[derive(Debug, Error)]
 pub enum BondBuildError {
     /// `bond_floor(holdings)` was zero — structurally invalid holdings (empty
@@ -41,15 +41,15 @@ pub enum BondBuildError {
         fee: u64,
     },
 
-    /// A full `Unbond` was requested against a record with nothing bonded.
+    /// A full `Release` was requested against a record with nothing bonded.
     ///
     /// Refused **here**, at assembly, rather than assembled and rejected by the
-    /// daemon (`BondPostError::NothingToUnbond`). On this path the difference
+    /// daemon (`BondPostError::NothingToRelease`). On this path the difference
     /// matters: an exit that fails at the wallet fails loudly to the person who
     /// asked for it, while one that fails at the chain fails opaquely after a
     /// broadcast.
-    #[error("nothing to unbond: the record's bonded total is zero")]
-    NothingToUnbond,
+    #[error("nothing to release: the record's bonded total is zero")]
+    NothingToRelease,
 
     /// The P identity hybrid public key could not be serialized to its
     /// canonical wire bytes.

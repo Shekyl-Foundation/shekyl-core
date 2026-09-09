@@ -12,7 +12,7 @@
 # drain. That predicate lives in `shekyl-archival-retention::debit_auth_pin`
 # and is reached from C++ only through `shekyl_archival_debit_auth_pin`.
 #
-# The selector is `bond_debit > 0`, NOT the post kind: consumers are Unbond
+# The selector is `bond_debit > 0`, NOT the post kind: consumers are Release
 # and the DROP arm of HoldingsUpdate. Rebond and HoldingsUpdate-add are
 # credit paths (bond_debit == 0) authorized by the IDENTITY key, so this gate
 # must not be read as prescribing the record-key pin for them.
@@ -61,7 +61,7 @@ fi
 # gone the per-tx verify below is unconditional at block connect, so the
 # belt's job is covered by the primary; CEN-G8 retired):
 #
-#   blockchain.cpp   "Unbond"                 per-tx debit verify
+#   blockchain.cpp   "Release"                 per-tx debit verify
 #   blockchain.cpp   "HoldingsUpdate-drop"    per-tx debit verify
 #   daemon_submit_ffi.cpp                     the submit gather's work gate
 #
@@ -114,8 +114,8 @@ require_call() {
 }
 
 require_call src/cryptonote_core/blockchain.cpp \
-  'archival_debit_auth_pin\(record, auth_pubkey, "Unbond"\)' \
-  "per-tx Unbond verify"
+  'archival_debit_auth_pin\(record, auth_pubkey, "Release"\)' \
+  "per-tx Release verify"
 require_call src/cryptonote_core/blockchain.cpp \
   'archival_debit_auth_pin\(record, auth_pubkey, "HoldingsUpdate-drop"\)' \
   "per-tx HoldingsUpdate-drop verify"

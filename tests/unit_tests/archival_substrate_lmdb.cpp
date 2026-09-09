@@ -181,7 +181,7 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
   EXPECT_EQ(db.archival_bond_join_epoch(p_id), std::numeric_limits<uint64_t>::max());
 }
 
-// The Unbond clean interval-close (gate-4 §4.3 F3) is a ZERO-LENGTH interval
+// The Release clean interval-close (gate-4 §4.3 F3) is a ZERO-LENGTH interval
 // [E, E) appended to the interval log. Its safety has two halves: the verdict
 // half (good_through-inert) is KAT'd in Rust (bond_connect.rs); this pins the
 // storage half — the v4 codec, the production LMDB writer/reader, and the
@@ -189,12 +189,12 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
 // no validity path rejects the empty interval. A natural-looking "a valid
 // interval is non-empty" assertion added to any of them would fail here
 // loudly instead of stranding every exited record as undecodable.
-TEST(archival_substrate_lmdb, unbond_clean_close_marker_round_trips)
+TEST(archival_substrate_lmdb, release_clean_close_marker_round_trips)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
 
-  // The Exited record shape the Unbond connect writes: zero total,
+  // The Exited record shape the Release connect writes: zero total,
   // compact-and-empty holdings, the clean close [12, 12) trailing the log —
   // here after an open slash interval (the capital-flight case), so the
   // marker round-trips next to a real bad interval.
@@ -3275,9 +3275,9 @@ TEST(archival_substrate_lmdb, bond_post_connect_pop_roundtrip_through_real_block
   EXPECT_EQ(db.get_total_bonded_atomic(), 0u);
 }
 
-TEST(archival_substrate_lmdb, unbond_revert_value_round_trips)
+TEST(archival_substrate_lmdb, release_revert_value_round_trips)
 {
-  // Direct codec round-trip for the Unbond record pre-image journal value:
+  // Direct codec round-trip for the Release record pre-image journal value:
   // encode → decode reproduces every field (including a zero-length clean
   // close among the pre-image intervals), and an empty pre-image (bonded 0)
   // is rejected on both sides — connect can never journal it.
@@ -3355,13 +3355,13 @@ TEST(archival_substrate_lmdb, all_last_served_hop_scan_over_p_prefix)
   EXPECT_EQ(per_shard, anchors);
 }
 
-// The Unbond connect/pop twin through the REAL block path (gate-4 §4.3/§5):
+// The Release connect/pop twin through the REAL block path (gate-4 §4.3/§5):
 // add_block drives the vin dispatch → apply_archival_unbond (pre-image
 // journal, Rust fold write set, per-post counter threading), pop_block drives
 // revert_archival_unbonds_at_height (pop fold consistency checks + pre-image
 // restore). Asserts the Exited shape, the clean interval-close appended AFTER
 // the seeded closed interval, the counter debit, and the byte-exact restore.
-TEST(archival_substrate_lmdb, unbond_connect_pop_roundtrip_through_real_block_path)
+TEST(archival_substrate_lmdb, release_connect_pop_roundtrip_through_real_block_path)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
@@ -3371,7 +3371,7 @@ TEST(archival_substrate_lmdb, unbond_connect_pop_roundtrip_through_real_block_pa
 
   append_minimal_blocks(db, kSeb + 3);
 
-  // Seed the bonded record the Unbond releases: two shards, a prior CLOSED
+  // Seed the bonded record the Release releases: two shards, a prior CLOSED
   // bad interval (proves the journal restores the interval log, not just
   // pops one entry), and a global counter larger than the record's balance
   // (proves decrement, not zeroing).
@@ -3390,13 +3390,13 @@ TEST(archival_substrate_lmdb, unbond_connect_pop_roundtrip_through_real_block_pa
     shekyl_archival_settlement_epoch_at_height(connect_height);
   ASSERT_GT(expected_epoch, 0u);
 
-  // The Unbond vin carries the POST-connect state (§3.5 debit-path pin).
+  // The Release vin carries the POST-connect state (§3.5 debit-path pin).
   transaction tx{};
   tx.version = 2;
   txin_archival_bond_post vin{};
   vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
   vin.p_canonical_id = p_id;
-  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
   vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
   vin.holdings.shard_ids = {};
   vin.bonded_total_atomic = 0;
@@ -3439,14 +3439,14 @@ TEST(archival_substrate_lmdb, unbond_connect_pop_roundtrip_through_real_block_pa
   EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded);
 }
 
-// Two different-P Unbonds in ONE block: the counter-threading obligation
+// Two different-P Releases in ONE block: the counter-threading obligation
 // armed (gate-4 §3.5). The fold returns the new total as an ABSOLUTE value,
 // so a dispatch that hoisted one counter read per block would compute both
 // debits from the same block-start total and lose one; the per-post
 // get→fold→set threading inside apply_archival_unbond must land both. (The
 // per-P uniqueness pass does not cover this case — different-P posts in one
 // block are legitimate.)
-TEST(archival_substrate_lmdb, unbond_two_p_one_block_threads_the_counter)
+TEST(archival_substrate_lmdb, release_two_p_one_block_threads_the_counter)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
@@ -3470,13 +3470,13 @@ TEST(archival_substrate_lmdb, unbond_two_p_one_block_threads_the_counter)
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
-  auto unbond_tx = [](const crypto::hash& p_id, uint64_t debit, uint8_t fill) {
+  auto release_tx = [](const crypto::hash& p_id, uint64_t debit, uint8_t fill) {
     transaction tx{};
     tx.version = 2;
     txin_archival_bond_post vin{};
     vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, fill);
     vin.p_canonical_id = p_id;
-    vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+    vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
     vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
     vin.bonded_total_atomic = 0;
     vin.bond_credit = 0;
@@ -3484,8 +3484,8 @@ TEST(archival_substrate_lmdb, unbond_two_p_one_block_threads_the_counter)
     tx.vin.push_back(vin);
     return tx;
   };
-  const transaction tx_a = unbond_tx(p_a, bonded_a, 0x11);
-  const transaction tx_b = unbond_tx(p_b, bonded_b, 0x22);
+  const transaction tx_a = release_tx(p_a, bonded_a, 0x11);
+  const transaction tx_b = release_tx(p_b, bonded_b, 0x22);
 
   connect_block_with_txs(db, {tx_a, tx_b});
   fixture.db.batch_stop();
@@ -3760,7 +3760,7 @@ TEST(archival_substrate_lmdb, same_epoch_slashes_coalesce_one_open_interval)
 // Direct codec round-trip for the Rebond record pre-image journal value
 // (gate-4 §3.4; P2B-9): encode → decode reproduces every field.
 // pre_bonded_total == 0 is LEGAL here (terminal-slash reinstatement) — unlike
-// the Unbond/HoldingsUpdate journals; only the per-shard array length desync
+// the Release/HoldingsUpdate journals; only the per-shard array length desync
 // rejects at encode.
 TEST(archival_substrate_lmdb, rebond_revert_value_round_trips)
 {

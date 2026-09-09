@@ -203,11 +203,11 @@ impl World {
         for f in self.inflight[a].iter_mut() {
             *f = 0;
         }
-        // L18: clear release-cooldown escrow. Exit is a full slash/clean-unbond event,
+        // L18: clear release-cooldown escrow. Exit is a full slash/clean-release event,
         // not a voluntary mid-life drop; the actor's capital state resets, and a
         // re-entrant starts fresh (no carried freeze). Clearing here prevents a stale
         // escrow from double-freezing capital on the exit→re-entry path (the clean
-        // `Unbond` already requires the cooldown to have elapsed as a precondition —
+        // `Release` already requires the cooldown to have elapsed as a precondition —
         // gate-4 §3.2/§4.3 — so re-entering capital is not still cooling).
         self.cooling[a].clear();
     }
@@ -366,7 +366,7 @@ impl World {
         // identically 0 and the willing-and-able-but-frozen state cannot exist. Without this
         // guard the `frozen_capital(a) + 1e-9 >= bond_rate` conjunct would be trivially true
         // at `bond_rate <= 0` (any non-negative frozen total clears a non-positive floor),
-        // reporting spurious causal freeze-harm in the unbonded arms where no freeze occurs.
+        // reporting spurious causal freeze-harm in the released arms where no freeze occurs.
         if bond_rate <= 0.0 {
             return false;
         }
