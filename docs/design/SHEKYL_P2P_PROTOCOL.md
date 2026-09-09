@@ -3568,7 +3568,7 @@ rather than inheriting whatever the default happens to be.
 > peer**, the exact outcome the rule forbids. The ruling stands; the
 > mechanism does not satisfy it.
 >
-> **Implementation action — LANDED (P2P-3, `feat/pwd-b7-attributable-drop`).**
+> **Implementation action — LANDED (P2P-3).**
 > All three sites below now key on the typed verdict; `bool m_no_drop_offense`
 > is gone from the tree. The type and the rule live in
 > `rust/shekyl-peer-policy`, reached through `shekyl_drop_verdict_severs` /
