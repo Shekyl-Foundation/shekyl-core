@@ -125,6 +125,11 @@ jobs:
 
       - name: install apt deps
         run: |
+          # See grep-gates.yml: the runner's google-chrome.list is not
+          # this job's subject and has failed apt-get update on a hash
+          # mismatch before any benchmark ran (PR #671, 2026-09-09).
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.list.save
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             valgrind build-essential pkg-config libssl-dev python3 jq
@@ -335,6 +340,8 @@ jobs:
 
       - name: install apt deps
         run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.list.save
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libssl-dev
@@ -413,6 +420,11 @@ jobs:
 
       - name: install apt deps
         run: |
+          # See grep-gates.yml: the runner's google-chrome.list is not
+          # this job's subject and has failed apt-get update on a hash
+          # mismatch before any benchmark ran (PR #671, 2026-09-09).
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.list.save
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             valgrind build-essential pkg-config libssl-dev python3 jq
