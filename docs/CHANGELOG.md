@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Wallet and daemon console refuse a daemon that is not this build.**
+  On first request they compare the four-axis identity tuple in
+  `get_version` (wire version, consensus-constants digest, network, genesis)
+  against this binary's compiled values and refuse a mismatch in operator
+  language. `CORE_RPC_VERSION` 3.28 → **3.29**. The genesis axis ships
+  unarmed pending its per-network block-0 KAT. A daemon reporting a foreign
+  DAA target no longer produces a console warning: the digest handshake
+  is the instrument, and figures still use the generated `T`.
 - **Every ignored regtest e2e test now has a CI disposition.** The
   live-daemon gate loop (`scripts/ci/run_live_daemon_gates.sh`) arms all
   fourteen fast wallet/staking/curve-tree e2e gates per PR, runs the two
