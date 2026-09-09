@@ -1,6 +1,6 @@
 # Engine composition: making it less of a monolith
 
-**Status:** LIVING CONTRACT. Last verified 2026-09-03 (StakeFacade product door + crate-wide `METHODS_CEILING` count freeze). Landing inventory: [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
+**Status:** LIVING CONTRACT. Last verified 2026-09-09 (refresh / local_keys inline-test extraction — the last god-file test suites moved to `#[path]` siblings; `refresh.rs` FILE ceiling 4256 → 1707, `local_keys.rs` baseline retired). Landing inventory: [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
 
 | Field | Value |
 |-------|--------|
@@ -357,5 +357,5 @@ That is the same architecture already halfway in — finished, instead of “sev
 | | |
 |--|--|
 | **Location** | `shekyl-core/docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md` |
-| **Status** | LIVING CONTRACT (transfer extract + ownership pin + StakeFacade + crate-wide `METHODS_CEILING`; last verified 2026-09-03) |
+| **Status** | LIVING CONTRACT (transfer extract + ownership pin + StakeFacade + crate-wide `METHODS_CEILING` + refresh/local_keys test split; last verified 2026-09-09) |
 | **Follow-up** | Optional: `TransferCtx` / `TransferFacade` / `ScanFacade` when product needs them; `StakeWorkflow` rename |
