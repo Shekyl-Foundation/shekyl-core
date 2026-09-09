@@ -1,10 +1,14 @@
 # LMDB Write Atomicity Audit
 
 **Date:** 2026-09-05 (DRS-P0b; supersedes the April 2026 audit in place);
-§9's register extended 2026-09-08 by **DRS-P0c** (rows DRS-W12 through DRS-W15)
-**Pin:** two, and each row states which it was verified against. **P0b rows
+§9's register extended 2026-09-08 by **DRS-P0c** (rows DRS-W12 through DRS-W15);
+DRS-W12 and DRS-W15 regraded 2026-09-09
+**Pin:** three, and each row states which it was verified against. **P0b rows
 (DRS-W1 through DRS-W11) and §§0–8, §10: `dev` `2dba46537`. P0c rows
-(DRS-W12 through DRS-W15): `dev` `14aa42074`.** Line citations are *records-was*
+(DRS-W12 through DRS-W15) as first written: `dev` `14aa42074`. The 2026-09-09
+regrade evidence in the DRS-W12 and DRS-W15 subsections — the `hardfork.cpp`
+and `blockchain.cpp` call-graph and window-length citations: `dev`
+`3497b8a78`.** Line citations are *records-was*
 against the pin they name, not against `HEAD`; they are expected to drift
 and must not be "corrected" to a later tree. Two eras are safe only while
 both are declared — an undeclared second era is what put three citations on
@@ -650,7 +654,7 @@ the figure was left as a bound; it is no longer a live deferral.)*
 | DRS-W12 | Fifteen archival apply/revert hooks on `BlockchainDB` have empty `{}` bodies, so a subclass that forgets one inherits a silent no-op | wart (latent: production 15/15; exposure is test doubles — evidence below) | RECORD-AND-SPECIFY: no default bodies on consensus hooks in the Rust store. C++ `= 0` patch **withdrawn**, not deferred |
 | DRS-W13 | Curve-tree pop reconstructs `TreePosition` as `leaf_count - drained_count + j` because the drain journal never recorded it | wart (latent, correct today by invariant — evidence below) | RECORD-AND-SPECIFY: journal the assigned position; pop reads it back |
 | DRS-W14 | Unbounded probe loops walk archival journal rows until first miss, so the reader holds the writer's density invariant | wart (no unsound state today — evidence below) | RECORD-AND-SPECIFY: range-scan the key prefix; gap-tolerance is a property of the query |
-| DRS-W15 | `hf_versions` rows above the new tip are not deleted on pop; the rows are **read** on reorg | wart (load-bearing read-back established; rebuilt-window correctness **undetermined** — evidence below) | RECORD-AND-SPECIFY. Forbidden: DIVERGE-by-delete. Correctness of the rebuilt window, and which mechanism replaces the read-back, are R4's — in that order |
+| DRS-W15 | `hf_versions` rows above the new tip are not deleted on pop, and **one** site reads them (`hardfork.cpp:300`, the file's only above-tip read) | wart (**regraded 2026-09-09**: the read-back is load-bearing *only for the incremental vote window*, and that window is discarded by two of four pop callers and wrong for the other two. It diverges from the authoritative rebuild on two axes — **contents**, masked by the inert table, and **length**, one entry per pop below `window_size` and observable today. No consensus effect: `threshold` is 0) | RECORD-AND-SPECIFY. Forbidden: DIVERGE-by-delete — **conditional**: the obligation survives into Rust only if R4 keeps an incremental window. Drop it and the clause retires, leaving `hf_versions` deletable on pop |
 
 **P0c — what these four rows are, and the pin they were read at.** Rows
 DRS-W12 through DRS-W15 are the **wart register** the P0c envelope calls for,
@@ -698,7 +702,7 @@ open" — the same base class chooses fail-closed for a getter and
 silent-success for fifteen mutators.
 
 `BlockchainLMDB` overrides **15/15**, so no production hook is a no-op today.
-The exposure is the test doubles, and it is **realized, not hypothetical** —
+The exposure is the test doubles, and it is **latent** —
 measured at `14aa42074`: `BaseTestDB` (`src/blockchain_db/testdb.h:44`)
 overrides **0 of 15**, so every double built on it inherits fifteen silent
 no-ops. Of the two that exercise archival paths,
@@ -707,11 +711,24 @@ no-ops. Of the two that exercise archival paths,
 **none**, and `EmissionConnectDB`
 (`tests/unit_tests/archival_emission_connect.cpp:84`) overrides **exactly
 one** — `apply_archival_emission_claim`, the hook it means to observe — and
-inherits the other fourteen. That is the collapsed observable in its
-clearest form: such a double can only see the call it already thought to
-look for, and any other hook the path under test invokes is
-indistinguishable from one never called. The tests pass either way, which
-caps what every test built on them can establish.
+inherits the other fourteen.
+
+**Latent, and the distinction is the point.** What is measured is the
+*capability*: such a double can only see the call it already thought to
+look for, and any other hook the path under test invoked would be
+indistinguishable from one never called. What is **not** established — and
+what an earlier revision of this row asserted by writing "realized, not
+hypothetical" — is that any test today is actually blinded. None is: the
+archival apply/revert semantics are covered against the real
+`BlockchainLMDB` in `tests/unit_tests/archival_substrate_lmdb.cpp`, every
+`BaseTestDB`-derived double that calls `add_block` overrides it (so it
+never reaches `BlockchainDB`'s dispatch), and `EmissionConnectDB`'s
+emission fixtures only trigger the one hook it does override. The `{}`
+bodies did not hide a defect; they removed the compiler's ability to notice
+if one ever arrived. Recorded this way because inferring the consequence
+from the capability is the error this register has now made twice — the
+other is DRS-W15's superseded "load-bearing, therefore Rust must keep the
+rows".
 
 The C++ fix originally scheduled here (`= 0` plus explicit `BaseTestDB`
 stubs) is **withdrawn** under the 2026-09-01 countermand; it is not deferred,
@@ -761,36 +778,99 @@ writer. Applies to the epoch-marker seq on the same footing.
 
 ### DRS-W15 — `hf_versions` read-back on pop
 
-`hf_versions` rows above the new tip are **not deleted on pop**. The row set
-is **load-bearing, not residue**: `HardFork::on_block_popped`
-(`src/cryptonote_basic/hardfork.cpp:286`–`:309`) calls
-`db.get_hard_fork_version(height)` for every `height` in
-`[new_tip, old_tip)` — it reads rows *above* the tip to rebuild in-memory
-hardfork state, so deleting them on pop breaks reorg. There is no
-per-height delete on the pop path; the only deleter is the whole-table
-`drop_hard_fork_info`, which is tool-only and itself broken (DRS-W11).
+`hf_versions` rows above the new tip are **not deleted on pop**, and exactly
+one site reads them: `db.get_hard_fork_version(height)` at
+`src/cryptonote_basic/hardfork.cpp:300`, inside `HardFork::on_block_popped`
+(`:286`–`:309`). It is the file's **only** above-tip read — the other three
+reads are at or below the tip (`:214` in `reorganize_from_block_height` at
+the new tip block, `:266` in `rescan_from_block_height` at
+`db.height() - 1`, `:357` the public accessor). **The whole redb obligation
+descends from that one line**, so the row's grade has to be about it and not
+about the table in general.
 
-**That is all this pass established.** The rows are read, so deleting them
-breaks a read; whether the state *rebuilt* from them is correct is
-**undetermined**. The July round's own class was "decide correct semantics"
-and nothing since decided it, so no grade here may assume the answer.
+**What the read-back is worth, per caller.** `pop_block_from_blockchain`
+(`src/cryptonote_core/blockchain.cpp:814`) is the only caller of
+`on_block_popped`, always with a literal `1` (`:846`), so the loop runs once
+and the multi-block arm is dead. It has four callers of its own:
 
-The open question, recorded and not answered: the loop drops the newest
-version off the window and pushes the **popped** block's version onto the
-oldest end (`versions.pop_back()` then
-`versions.push_front(get_hard_fork_version(height))` for `height` *above*
-the new tip), so whether the post-pop window equals the one block-by-block
-connection would have built at the new tip is unverified. CEN-B3 records a
-*second*, differently-shaped rebuild from `split_height` after a reorg:
-`m_hardfork->reorganize_from_chain_height(split_height)` at
-`src/cryptonote_core/blockchain.cpp:1385` (this pin). The census cites the
-same call at `:1494` against its own pin (`8ba1aae3d`); that address is
-records-was there and must not be copied onto this pin. Consensus-relevant,
-since the hardfork version selects validation rules.
+| pop caller | authoritative rebuild after? | incremental result |
+| --- | --- | --- |
+| `switch_to_alternative_blockchain` (`:1308`) | yes — `:1385` | **discarded** |
+| `rollback_blockchain_switching` (`:1237`) | yes — `:1242` | **discarded** |
+| `pop_blocks` (`:782`, operator/RPC batch) | **no** | retained, and wrong |
+| `handle_block_to_main_chain` unwind (`:6599`) | **no** | retained, and wrong |
 
-**Class:** RECORD-AND-SPECIFY. Forbidden: DIVERGE-by-delete. Correctness of
-the rebuilt window, and which mechanism replaces the read-back, are R4's —
-in that order.
+**No caller both relies on the incremental result and gets a correct one.**
+The two paths where hardfork state actually matters are reorgs, and both
+recompute the window from scratch microseconds later; the two that keep it
+keep a wrong answer. That is inheritance from upstream, not a design.
+
+**Two independent divergences from the authoritative rebuild**, and only one
+of them is masked:
+
+1. **Contents — masked today.** `on_block_popped` pops the newest *vote*
+   off the back (`versions.pop_back()`, correct) and pushes
+   `get_hard_fork_version(h)` onto the **oldest** end for the block just
+   popped. Wrong block, wrong end, wrong quantity: `add()` stores
+   `heights[current_fork_index].version` via `set_hard_fork_version` but
+   pushes `get_effective_version(voting_version)` into the deque
+   (front-oldest / back-newest: eviction `pop_front` at `:149`, append `push_back` at `:153`) — the asymmetry CEN-B3
+   records. The block that *should* re-enter the window never does. This is
+   invisible under the shipped table: `get_effective_version` clamps to
+   `heights.back().version` (`:102`–`:104`) and `do_check` requires
+   `voting_version >= heights[current_fork_index].version` (`:112`), and
+   with a single `{1, 1, 0, …}` entry both bounds are `1`, so every accepted
+   block contributes `1`. Observing it needs a **synthetic multi-version
+   fixture**, as `tests/unit_tests/hardfork.cpp`'s reorganize tests build.
+2. **Length — not masked, observable now.** `on_block_popped` is
+   size-preserving (one `pop_back`, one `push_front`, net zero).
+   `reorganize_from_block_height` is not: `rescan_height` (`:213`) plus the
+   fill loop (`:218`) produce exactly `min(height + 1, window_size)`
+   entries. Below `window_size` the incremental window is therefore **one
+   entry too long per pop**, and `last_versions` miscounts with it.
+   `DEFAULT_WINDOW_SIZE` is `10080` (`hardfork.h:51`), so every pre-genesis
+   chain and every plausible fixture sits under it. Because no rebuild
+   follows `pop_blocks` or the `:6599` unwind, *k* consecutive pops leave
+   the deque *k* entries long, re-converging only once the chain passes
+   `10080` and `add()`'s eviction clamps it.
+
+**No consensus effect today**: `heights[0].threshold` is `0`, so
+`get_voted_fork_index`'s `accumulated_votes >= threshold` is vacuous. The
+state divergence is real and present regardless.
+
+The unsigned-underflow shape in the loop bound
+(`height >= new_chain_height` with `--height`) is **guarded, not open** —
+`pop_block_from_blockchain` asserts `m_db->height() > 1` at `:825`, so
+`new_chain_height` is never `0`. Checked rather than recorded as a finding.
+
+**Class:** RECORD-AND-SPECIFY. **Forbidden: DIVERGE-by-delete — but the
+clause is conditional, and this is the regrade.** The earlier wording
+("load-bearing, not residue … deleting them on pop breaks reorg") had it
+backwards: on the reorg callers a delete breaks nothing, because the
+rebuild reads block data rather than the table. The rows are load-bearing
+**only for the incremental window**, and the incremental window is
+redundant on two callers and incorrect on the other two. So the honest
+statement is not "the rows are read, therefore Rust must keep them" — it is
+that **the read-back obligation survives into Rust only if R4 keeps an
+incremental window at all.** If R4 drops it in favour of the shape already
+in the tree, the Forbidden clause **retires** and `hf_versions` becomes
+deletable-on-pop, which is the schema one would design from scratch.
+
+**The shape that fits is already here.** Callers 1 and 2 do it by hand: pop
+in a loop, rebuild once at the end. The window is a derived cache of the
+last *N* votes, so the correct primitive is **invalidate-on-pop, rebuild
+once when the pop sequence ends** — O(window) per batch instead of O(1)×*k*
+plus a wrong answer. Note why the obvious patch is wrong: calling the
+rebuild *from* `on_block_popped` would make `pop_blocks(k)` perform *k*
+rebuilds of up to `10080` block reads each. `pop_blocks` and the `:6599`
+unwind simply never got the treatment the reorg paths did.
+
+**What is undetermined** is not whether the two paths differ — they do, and
+the length axis is measurable today without a fixture. It is the *intended*
+semantics: the July round's class was "decide correct semantics" and
+nothing has decided it. This row does not upgrade the divergence to a
+defect, because "wrong" presumes the rescan is the intended reference, and
+that is R4's to rule.
 
 The A3 narrow exception does not fire — on the register's current state, not
 on a correctness finding. FIX-IN-CPP survives the countermand only where a
@@ -804,15 +884,28 @@ row.** The April **Forbidden** clause is the binding constraint: classifying
 this **DIVERGE**, having the Rust store delete the row, and asserting the
 delete in a KAT *ships a hardfork-state regression after every reorg*.
 
-Both open questions route to census R4, which already owns this machinery
-(DRS-W5, DRS-W11, CEN-B3): first *whether the current reconstruction is
-correct*, which is the July round's undecided "correct semantics" question
-and a precondition for the Rust spec; then which mechanism replaces it —
-keep the tip-above rows, or journal hardfork state so no tip-above read is
-needed. Specifying the replacement before the first is answered would port
-an unverified behaviour. The envelope's "FIX or REPLICATE" disjunction is
-answered by not fixing in C++ and not diverging by delete; it is **not** a
-commitment to match the unverified reconstruction algorithm.
+**Citation warning for anyone quoting CEN-B3 here.** The census cites the
+reorg rebuild at `blockchain.cpp:1494` against *its own* pin (`8ba1aae3d`).
+That address is records-was there and must not be copied onto this pin: at
+this pin `:1494` is an unrelated alt-window plan loop, and the call is
+`m_hardfork->reorganize_from_chain_height(split_height)` at `:1385`. A
+borrowed citation inherits the lender's pin.
+
+The question routed to census R4 — which already owns this machinery
+(DRS-W5, DRS-W11, CEN-B3) — is therefore **one question, not two**, and it
+is prior to both of the ones this row carried before: *does the Rust store
+keep an incremental vote window at all?* Everything else follows from it.
+Keep one, and the intended semantics must be decided (the July "correct
+semantics" question) and the tip-above read-back specified with it. Drop it
+in favour of invalidate-and-rebuild-once, and there is no above-tip read,
+no Forbidden clause, and `hf_versions` is deletable on pop. Vacuousness
+today is exactly what makes that decision cheap to take **now** rather than
+after the table stops being inert.
+
+The envelope's "FIX or REPLICATE" disjunction is answered by not fixing in
+C++ and not diverging by delete *while the question is open*; it is **not**
+a commitment to match the reconstruction algorithm, which this row now
+records as divergent from the authoritative rebuild on two axes.
 
 ## 10. Coverage matrix — every table, its writers, its audited path
 

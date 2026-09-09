@@ -641,7 +641,7 @@ named exclusion. **No silent sampling.**
 
 | Field | Content |
 | --- | --- |
-| Evidence | **Writers:** `set_hard_fork_version` on connect. **Readers on pop:** `HardFork::on_block_popped` (`hardfork.cpp:286–302`) calls `db.get_hard_fork_version(height)` for `height` in `[new_tip, old_tip)`. **No delete** on `BlockchainDB` API. Stale rows are **load-bearing** for in-memory hardfork reconstruction after reorg — **not** cosmetic residue. Stale audit “Low (cosmetic)” is **false**. |
+| Evidence | **Writers:** `set_hard_fork_version` on connect. **Readers on pop:** `HardFork::on_block_popped` (`hardfork.cpp:286–302`) calls `db.get_hard_fork_version(height)` for `height` in `[new_tip, old_tip)`. **No delete** on `BlockchainDB` API. Stale rows are **load-bearing** for in-memory hardfork reconstruction after reorg — **not** cosmetic residue. Stale audit “Low (cosmetic)” is **false**. **CORRECTED 2026-09-09 (DRS-W15 regrade):** the July reading above is right that the rows are read and wrong about *where it matters* — “after reorg” is precisely the case where it does **not**, because both reorg callers follow the pop with `reorganize_from_chain_height`, which rebuilds the window from **block data** and discards the incremental result. The read-back is load-bearing only for the incremental window, which is retained by just two callers (`pop_blocks`, and `handle_block_to_main_chain`'s unwind) and is wrong on both — one deque entry too long per pop below `window_size` (10080). The function extends to `:309`, not `:302`. See the audit's DRS-W15 subsection. |
 | Class | **RECORD-AND-SPECIFY** — settled 2026-09-08 as **DRS-W15** (evidence in the audit §9, not restated here). Forbidden: DIVERGE-by-delete. Correctness of the rebuilt window, and which mechanism replaces the read-back, are R4's — in that order. The A3 narrow exception does not fire (no ratified, conformance-checked row; CEN-B3 is bucket 4) and re-runs if R4 ratifies one. The **Forbidden** clause below is unchanged and binding. |
 | Forbidden | Classifying **DIVERGE** + “Rust deletes row” + KAT asserts delete — **ships a hardfork-state regression** after every reorg. |
 
@@ -954,7 +954,7 @@ All **Accept** as previously recorded; residual fixes in Round-2 below.
 | ID | Finding | Disposition |
 | --- | --- | --- |
 | **Self** | Seven missing tables, not six; `archival_emission_claim_log` confirmed 0 schema hits | **Accept** — inventory updated |
-| **R2-1** | `hf_versions` DIVERGE was a bug; load-bearing pop read-back | **Accept** — evidence = call-graph. Settled 2026-09-08 as **DRS-W15**: RECORD-AND-SPECIFY; Forbidden: DIVERGE-by-delete; correctness and mechanism to R4, in that order |
+| **R2-1** | `hf_versions` DIVERGE was a bug; load-bearing pop read-back | **Accept** — evidence = call-graph. Settled 2026-09-08 as **DRS-W15**, **regraded 2026-09-09**: RECORD-AND-SPECIFY; Forbidden: DIVERGE-by-delete but **conditional** on R4 keeping an incremental vote window. “Load-bearing” holds only for that window, which two of four pop callers discard and the other two retain incorrectly. R4 answers **one prior question** — keep an incremental window at all? — not two sequenced ones |
 | **R2-2** | FIX-IN-CPP-FIRST default class | **Accept** — §6.4 |
 | **R2-3** | 46/46 not 46/47 | **Accept** — defn vs calls |
 | **R2-4** | D1 rationale still used marshal tax | **Accept** — rule 40 only |
