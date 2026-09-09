@@ -4239,6 +4239,7 @@ dependencies = [
  "shekyl-proofs",
  "shekyl-relay",
  "shekyl-relay-privacy",
+ "shekyl-tor-control-daemon",
  "shekyl-tx-builder",
  "shekyl-units",
  "shekyl-wire",
@@ -4585,6 +4586,18 @@ dependencies = [
  "libc",
  "sha2",
  "sha3",
+ "tempfile",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-tor-control-daemon"
+version = "3.1.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "kameo",
+ "shekyl-tor-control-client",
  "tempfile",
  "tokio",
  "zeroize",

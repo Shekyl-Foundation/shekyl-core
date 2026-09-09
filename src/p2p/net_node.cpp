@@ -156,7 +156,13 @@ namespace nodetool
                                                                                                   " If this option is given the options add-priority-node and seed-node are ignored"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_seed_node   = {"seed-node", "Connect to a node to retrieve peer addresses, and disconnect"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy = {"tx-proxy", "Send local txes through proxy: <network-type>,[socks5://[user:pass@]]<socks-ip:port>[,max_connections] i.e. \"tor,127.0.0.1:9050,100\""};
-    const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound = {"anonymous-inbound", "<hidden-service-address>,<[bind-ip:]port>[,max_connections] i.e. \"x.onion,127.0.0.1:18083,100\""};
+    // PWD-E7 (P2P_2_ENDPOINT_ROUND.md): the durable-address warning is stated
+    // wherever this flag is documented, because the failure mode is quiet --
+    // this flag is not a custody preference; taking it is opting into a
+    // durable address. The default posture (no flag) is an ephemeral per-boot
+    // onion the daemon publishes itself; see arg_no_ephemeral_tor below.
+    const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound = {"anonymous-inbound", "<hidden-service-address>,<[bind-ip:]port>[,max_connections] i.e. \"x.onion,127.0.0.1:18083,100\". This opts into a STABLE, DURABLE onion address (for seeds and deliberately-persistent infrastructure); without it the daemon publishes an ephemeral per-boot address that identifies nothing across restarts"};
+    const command_line::arg_descriptor<bool> arg_no_ephemeral_tor = {"no-ephemeral-tor", "Disable the default ephemeral-per-boot Tor inbound posture (PWD-E7). Without this flag the daemon spawns a managed pinned tor when one is installed, mints a v3 onion key in memory, and serves overlay inbound on a fresh address each boot; configuring --anonymous-inbound or --tx-proxy for tor also makes the ephemeral posture yield", false};
     const command_line::arg_descriptor<std::string> arg_ban_list = {"ban-list", "Specify ban list file, one IP address per line"};
     const command_line::arg_descriptor<bool> arg_no_sync = {"no-sync", "Don't synchronize the blockchain with other peers", false};
 

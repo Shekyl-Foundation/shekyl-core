@@ -41,7 +41,8 @@
 //! calling process itself, so the residual is narrow — but it is a boundary, not zero.
 //! Load-bearing consequence: the production binary must live in a
 //! caller-controlled, non-world-writable directory (the beside-the-executable
-//! install layout gives this; the `PATH` fallback is the *widest* window and is
+//! install layout gives this, and the `/opt/shekyl` system-staging tier is
+//! root-owned by convention; the `PATH` fallback is the *widest* window and is
 //! a bring-your-own-tor / dev convenience, not the intended production path).
 //! Reopening criterion (rule 21): if the threat model ever includes a local
 //! attacker with in-window write access to the tor directory, close the window
@@ -76,6 +77,11 @@ pub const TOR_SIGNING_KEY_FPR: &str = "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290"
 pub struct TorPin {
     /// Tor Expert Bundle version the binary was extracted from.
     pub bundle_version: &'static str,
+    /// The Expert Bundle's target label for this build target (the suffix of
+    /// the upstream tarball name, e.g. `linux-x86_64`). Provenance like the
+    /// versions, plus one runtime use: composing the version-exact
+    /// system-staging candidate `/opt/shekyl/<bundle_version>-<target>/tor`.
+    pub bundle_target: &'static str,
     /// The `tor` version inside that bundle.
     pub tor_version: &'static str,
     /// SHA-256 of the extracted `tor` binary for the current target.
@@ -90,6 +96,7 @@ pub struct TorPin {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const CURRENT_PIN: Option<TorPin> = Some(TorPin {
     bundle_version: "15.0.19",
+    bundle_target: "linux-x86_64",
     tor_version: "0.4.9.11",
     // Re-pinned 2026-08-06 to the then-current stable bundle, via the
     // RELEASE_CHECKLIST "Bundled Tor pin" procedure (download → GPG-verify →
@@ -118,6 +125,38 @@ const CURRENT_PIN: Option<TorPin> = None;
 const TOR_EXE_NAME: &str = "tor.exe";
 #[cfg(not(windows))]
 const TOR_EXE_NAME: &str = "tor";
+
+/// The system staging directory for the pinned Tor Expert Bundle:
+/// `/opt/shekyl/<bundle_version>-<bundle_target>/tor`. A root-owned system
+/// install location for hosts provisioned without the beside-the-executable
+/// layout (lab rigs, system packages). The candidate is **version-exact** —
+/// composed from [`CURRENT_PIN`]'s own labels, never globbed or
+/// latest-resolved — so a staged newer bundle is simply not found rather than
+/// found-and-refused, and the TOCTOU window is narrower than the `PATH`
+/// fallback (root-owned directory vs. anything on the search path). Unix-only;
+/// there is no `/opt` convention to stage on Windows.
+#[cfg(unix)]
+const WELL_KNOWN_TOR_DIR: &str = "/opt/shekyl";
+
+/// Compose the version-exact system-staging candidate for `pin`, or `None`
+/// where no staging convention exists for the platform.
+// The wrap is cfg-dependent, not unnecessary: the non-unix arm returns `None`.
+#[allow(clippy::unnecessary_wraps)]
+fn well_known_candidate(pin: &TorPin) -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        Some(
+            Path::new(WELL_KNOWN_TOR_DIR)
+                .join(format!("{}-{}", pin.bundle_version, pin.bundle_target))
+                .join(TOR_EXE_NAME),
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pin;
+        None
+    }
+}
 
 /// A tor binary path that **passed the hash-pin gate** — the only currency
 /// `ManagedTor::tor_binary` accepts. The field is private and the only
@@ -168,8 +207,8 @@ pub enum TorBinaryError {
     /// or launched here. (Attach to an externally-run tor instead, or pin this
     /// target.)
     Unpinned,
-    /// No `tor` binary was found via the override / beside-the-executable / `PATH`
-    /// search.
+    /// No `tor` binary was found via the override / beside-the-executable /
+    /// system-staging (`/opt/shekyl`) / `PATH` search.
     NotFound,
     /// The candidate exists but is not a regular file (a directory, FIFO, or
     /// device) — refused before it is opened, so a FIFO cannot hang discovery.
@@ -219,18 +258,35 @@ impl std::fmt::Display for TorBinaryError {
             ),
             Self::NotFound => write!(
                 f,
-                "no tor binary found (set SHEKYL_TOR_BINARY, install beside the executable, or add to PATH)"
+                "no tor binary found (set SHEKYL_TOR_BINARY, install beside the executable, \
+                 stage the pinned bundle under /opt/shekyl/<version>-<target>/, or add to PATH)"
             ),
             Self::NotAFile(p) => {
-                write!(f, "tor binary candidate is not a regular file: {}", p.display())
+                write!(
+                    f,
+                    "tor binary candidate is not a regular file: {}",
+                    p.display()
+                )
             }
             Self::NotExecutable(p) => {
-                write!(f, "tor binary is not executable (lost exec bit?): {}", p.display())
+                write!(
+                    f,
+                    "tor binary is not executable (lost exec bit?): {}",
+                    p.display()
+                )
             }
             Self::Io { path, kind } => {
-                write!(f, "could not read tor binary for verification ({kind}): {}", path.display())
+                write!(
+                    f,
+                    "could not read tor binary for verification ({kind}): {}",
+                    path.display()
+                )
             }
-            Self::HashMismatch { path, expected, actual } => {
+            Self::HashMismatch {
+                path,
+                expected,
+                actual,
+            } => {
                 write!(
                     f,
                     "tor binary does not match the pinned Expert Bundle build (a system tor or \
@@ -258,7 +314,11 @@ impl std::error::Error for TorBinaryError {}
 ///   2. a `tor` next to the running executable (the bundled install
 ///      layout — the intended production path; note `std::env::current_exe` is
 ///      best-effort by its own docs, and if it errors this tier is skipped),
-///   3. `tor` on `PATH` (bring-your-own-tor / dev convenience — the widest
+///   3. the system staging path `/opt/shekyl/<bundle_version>-<target>/tor`
+///      (version-exact, composed from the pin's own labels — a system-package /
+///      provisioned-host location, root-owned so narrower than `PATH`;
+///      Unix-only),
+///   4. `tor` on `PATH` (bring-your-own-tor / dev convenience — the widest
 ///      TOCTOU surface, see the module doc's scope boundary).
 ///
 /// There is deliberately **no fall-through on a verification failure**: one
@@ -281,9 +341,11 @@ pub fn discover_and_verify() -> Result<VerifiedTorBinary, TorBinaryError> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let well_known = well_known_candidate(&pin);
     let path = candidate_from(
         std::env::var_os("SHEKYL_TOR_BINARY"),
         exe_dir.as_deref(),
+        well_known.as_deref(),
         std::env::var_os("PATH"),
     )
     .ok_or(TorBinaryError::NotFound)?;
@@ -307,12 +369,16 @@ pub fn discover_and_verify_at(path: &Path) -> Result<VerifiedTorBinary, TorBinar
 /// Precedence: a non-empty override wins unconditionally (an explicit choice is
 /// never bypassed by a fall-through — even if the file does not exist, so a typo
 /// surfaces as *its* error, not a silent fallback); else a binary beside the
-/// executable if present; else the first **launchable** (regular, executable) `tor`
-/// on `PATH` — matching the shell's own lookup, so a mode-0644 stray cannot
-/// shadow the tor that `exec` would actually run.
+/// executable if present; else the version-exact system-staging candidate if
+/// present (like the beside tier, presence is `is_file()` — a staged
+/// non-executable file surfaces as *its* `NotExecutable` error rather than
+/// silently deferring to `PATH`); else the first **launchable** (regular,
+/// executable) `tor` on `PATH` — matching the shell's own lookup, so a
+/// mode-0644 stray cannot shadow the tor that `exec` would actually run.
 fn candidate_from(
     override_var: Option<OsString>,
     exe_dir: Option<&Path>,
+    well_known: Option<&Path>,
     path_var: Option<OsString>,
 ) -> Option<PathBuf> {
     if let Some(p) = override_var {
@@ -326,6 +392,11 @@ fn candidate_from(
     if let Some(beside) = exe_dir.map(|dir| dir.join(TOR_EXE_NAME)) {
         if beside.is_file() {
             return Some(beside);
+        }
+    }
+    if let Some(wk) = well_known {
+        if wk.is_file() {
+            return Some(wk.to_path_buf());
         }
     }
     let path = path_var?;
@@ -514,6 +585,7 @@ mod tests {
             Some(OsString::from("/explicit/override/tor")),
             Some(dir.path()),
             None,
+            None,
         );
         // The override is returned verbatim — even though it does not exist —
         // so a typo surfaces as *its* error, never a silent fallback.
@@ -525,7 +597,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let beside = dir.path().join(TOR_EXE_NAME);
         write_executable(&beside, b"beside");
-        let chosen = candidate_from(Some(OsString::new()), Some(dir.path()), None);
+        let chosen = candidate_from(Some(OsString::new()), Some(dir.path()), None, None);
         assert_eq!(chosen, Some(beside));
     }
 
@@ -537,7 +609,7 @@ mod tests {
         let path_dir = tempfile::tempdir().unwrap();
         write_executable(&path_dir.path().join(TOR_EXE_NAME), b"on-path");
         let path_var = std::env::join_paths([path_dir.path()]).unwrap();
-        let chosen = candidate_from(None, Some(beside_dir.path()), Some(path_var));
+        let chosen = candidate_from(None, Some(beside_dir.path()), None, Some(path_var));
         assert_eq!(chosen, Some(beside));
     }
 
@@ -548,7 +620,7 @@ mod tests {
         let on_path = path_dir.path().join(TOR_EXE_NAME);
         write_executable(&on_path, b"on-path");
         let path_var = std::env::join_paths([path_dir.path()]).unwrap();
-        let chosen = candidate_from(None, Some(empty_dir.path()), Some(path_var));
+        let chosen = candidate_from(None, Some(empty_dir.path()), None, Some(path_var));
         assert_eq!(chosen, Some(on_path));
     }
 
@@ -563,8 +635,56 @@ mod tests {
         let exec = second.path().join(TOR_EXE_NAME);
         write_executable(&exec, b"exec");
         let path_var = std::env::join_paths([first.path(), second.path()]).unwrap();
-        let chosen = candidate_from(None, None, Some(path_var));
+        let chosen = candidate_from(None, None, None, Some(path_var));
         assert_eq!(chosen, Some(exec));
+    }
+
+    /// The system-staging tier sits between beside-the-executable and `PATH`:
+    /// preferred over a `PATH` hit, displaced by a beside binary.
+    #[test]
+    fn candidate_well_known_beats_path_and_yields_to_beside() {
+        let wk_dir = tempfile::tempdir().unwrap();
+        let wk = wk_dir.path().join(TOR_EXE_NAME);
+        write_executable(&wk, b"staged");
+        let path_dir = tempfile::tempdir().unwrap();
+        write_executable(&path_dir.path().join(TOR_EXE_NAME), b"on-path");
+        let path_var = std::env::join_paths([path_dir.path()]).unwrap();
+
+        // No beside binary: the staged candidate wins over PATH.
+        let empty_beside = tempfile::tempdir().unwrap();
+        let chosen = candidate_from(
+            None,
+            Some(empty_beside.path()),
+            Some(&wk),
+            Some(path_var.clone()),
+        );
+        assert_eq!(chosen, Some(wk.clone()));
+
+        // A beside binary displaces it.
+        let beside_dir = tempfile::tempdir().unwrap();
+        let beside = beside_dir.path().join(TOR_EXE_NAME);
+        write_executable(&beside, b"beside");
+        let chosen = candidate_from(None, Some(beside_dir.path()), Some(&wk), Some(path_var));
+        assert_eq!(chosen, Some(beside));
+    }
+
+    /// The staging candidate is version-exact, composed from the pin's own
+    /// labels — the layout contract with provisioning (`/opt/shekyl/
+    /// <bundle_version>-<bundle_target>/tor`), pinned here so a layout drift
+    /// fails a test instead of silently never matching a staged bundle.
+    #[cfg(unix)]
+    #[test]
+    fn well_known_candidate_is_version_exact_from_the_pin() {
+        let pin = TorPin {
+            bundle_version: "15.0.19",
+            bundle_target: "linux-x86_64",
+            tor_version: "0.4.9.11",
+            sha256: [0u8; 32],
+        };
+        assert_eq!(
+            well_known_candidate(&pin),
+            Some(PathBuf::from("/opt/shekyl/15.0.19-linux-x86_64/tor"))
+        );
     }
 
     #[test]
@@ -572,7 +692,7 @@ mod tests {
         let empty = tempfile::tempdir().unwrap();
         let path_var = std::env::join_paths([empty.path()]).unwrap();
         assert_eq!(
-            candidate_from(None, Some(empty.path()), Some(path_var)),
+            candidate_from(None, Some(empty.path()), None, Some(path_var)),
             None
         );
     }
