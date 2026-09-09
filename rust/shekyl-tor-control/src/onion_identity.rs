@@ -27,7 +27,7 @@
 //! 2. **Serving config takes an [`OnionIdentity`], never a seed.** The seed
 //!    is consumed at expansion time and dies with the call; the value that
 //!    crosses into the supervisor is this identity (expanded key + address).
-//!    See [`crate::onion_service::OnionServiceSpec`].
+//!    See `shekyl-tor`'s `onion_service::OnionServiceSpec` (wallet-owned).
 //!
 //! Holding `master_seed` — or holding the derived seed and inviting the
 //! convenient "just pass the seed" wiring — is one edit away from also
@@ -92,7 +92,7 @@ const ONION_CHECKSUM_PREFIX: &[u8] = b".onion checksum";
 ///
 /// Same secret posture as [`OnionKey`]: holding these expanded bytes *is*
 /// the persona on the network. Accidental copies are not free; the type is
-/// moved into [`crate::onion_service::OnionServiceSpec`] and remints keys by
+/// moved into `shekyl-tor`'s `onion_service::OnionServiceSpec` and remints keys by
 /// reference. Shared ownership, if ever needed, must be an explicit
 /// `Arc<OnionIdentity>` at the call site.
 pub struct OnionIdentity {

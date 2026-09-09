@@ -10,11 +10,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use shekyl_p_serve::{PServeEndpoint, StoreShardProvider};
-use shekyl_tor::control::ServiceId;
-use shekyl_tor::onion_identity::OnionIdentity;
 use shekyl_tor::service::{
     OnionServiceSpec, ServingPosture, TorPosture, TorService, TorServiceConfig,
 };
+use shekyl_tor_control::control::ServiceId;
+use shekyl_tor_control::onion_identity::OnionIdentity;
 use tokio::sync::watch;
 
 use crate::serve_set::{PinError, PinnedServeSet, ServeSetPinner, Staleness, StalenessBound};

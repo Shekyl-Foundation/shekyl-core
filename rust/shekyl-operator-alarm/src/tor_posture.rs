@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn every_service_failure_maps_to_its_own_cause() {
-        use shekyl_tor::control::ControlError;
+        use shekyl_tor_control::control::ControlError;
         let failures = [
             ServiceFailure::NoSocksListener,
             ServiceFailure::BootstrapTimeout,

@@ -37,7 +37,7 @@ use std::time::Duration;
 
 use shekyl_sp_t3_spike::fixture::ShardFixture;
 use shekyl_sp_t3_spike::harness::Apparatus;
-use shekyl_tor::control::onion::OnionPow;
+use shekyl_tor_control::control::onion::OnionPow;
 
 fn env_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key).map(PathBuf::from)

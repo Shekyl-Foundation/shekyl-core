@@ -67,7 +67,7 @@
 //! re-raise every tick, it is simpler" edit reintroduces the leak this
 //! paragraph forbids.
 //!
-//! # What the tor control [`EventSink`](shekyl_tor::control::EventSink) is not
+//! # What the tor control [`EventSink`](shekyl_tor_control::control::EventSink) is not
 //!
 //! It is **not** this channel's input, and an earlier plan to make it one
 //! rested on a premise the code refutes: no production call site issues
@@ -76,7 +76,7 @@
 //! raw, deliberately forensic surface — "parse it, never log it" — not an
 //! alarm vocabulary.) The wallet's honest production value for
 //! `TorServiceConfig::events` is
-//! [`EventSink::unsubscribed`](shekyl_tor::control::EventSink::unsubscribed),
+//! [`EventSink::unsubscribed`](shekyl_tor_control::control::EventSink::unsubscribed),
 //! which names that fact at the construction site; the alarm input is the
 //! posture watch, which is where the supervisor's liveness policy actually
 //! publishes.

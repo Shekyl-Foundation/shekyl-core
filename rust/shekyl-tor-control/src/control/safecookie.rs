@@ -123,7 +123,7 @@ fn auth_hmac(
 ///
 /// ```
 /// // Legitimate route: a real verify is the sole path to a client hash.
-/// use shekyl_tor::control::{verify_server_hash, ControlCookie, ServerVerified};
+/// use shekyl_tor_control::control::{verify_server_hash, ControlCookie, ServerVerified};
 /// let cookie = ControlCookie::new([0u8; 32]);
 /// let verified: Option<ServerVerified<'_>> =
 ///     verify_server_hash(&cookie, &[1u8; 32], &[2u8; 32], &[3u8; 32]);
@@ -134,7 +134,7 @@ fn auth_hmac(
 ///
 /// ```compile_fail
 /// // Forge attempt: private fields, no constructor ⇒ uninstantiable from outside.
-/// use shekyl_tor::control::ServerVerified;
+/// use shekyl_tor_control::control::ServerVerified;
 /// let _ = ServerVerified { cookie: todo!(), client_nonce: [0u8; 32], server_nonce: [0u8; 32] };
 /// ```
 ///

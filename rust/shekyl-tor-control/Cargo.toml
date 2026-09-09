@@ -1,0 +1,49 @@
+[package]
+name = "shekyl-tor-control"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tor control-protocol client, binary verification and onion identity — owned by neither the wallet nor the daemon"
+publish = false
+
+# The SP-T0c pin gate's test bypass, `VerifiedTorBinary::unchecked_for_test`.
+#
+# The gate is structural: `VerifiedTorBinary` has a private field and exactly
+# two producers, both of which hash the candidate. Lifecycle tests that inject
+# an arbitrary (unpinned) tor need to forge that witness, and before the
+# protocol layer moved into this crate they could, because they were in the
+# same crate and `#[cfg(test)]` covered them. A crate boundary does not carry
+# `cfg(test)`, so the bypass needs a name a consumer can enable.
+#
+# **Dev-dependency edges only** — enforced by `scripts/ci/check_test_only_features.py`,
+# not by convention. Under `resolver = "2"` (the workspace pins it) dev-dep
+# features unify only when dev-dep targets are being built, and the release
+# path never builds test targets (`cmake/BuildRust.cmake` invokes no
+# `--all-targets`/`--tests`), so a shipped binary cannot contain this arm.
+[features]
+unpinned-tor-for-tests = []
+
+[dependencies]
+hmac = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"] }
+sha3 = { version = "0.10", default-features = false }
+hex-literal = "1"
+zeroize = { version = "1", default-features = false, features = ["alloc", "derive"] }
+
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "process", "fs"] }
+kameo = { workspace = true }
+futures-core = "0.3"
+getrandom = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros"] }
+
+[lints]
+workspace = true

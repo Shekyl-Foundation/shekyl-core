@@ -194,7 +194,8 @@ impl std::error::Error for ControlError {}
 /// **Consequence for consumers:** because the supervisor retains a sender clone
 /// across restarts, the events receiver does *not* observe all-senders-dropped
 /// when an incarnation dies — a supervised consumer must detect incarnation death
-/// via the [`service::TorService`](crate::service::TorService) posture watch, not
+/// via `shekyl-tor`'s `service::TorService` posture watch (a wallet-owned
+/// consumer of this crate; not linked, see the crate docs on the boundary), not
 /// via `recv() == None` (which is correct only for a directly-spawned, sole-sender
 /// actor).
 #[derive(Clone)]
@@ -440,7 +441,8 @@ pub struct ManagedTor {
     /// `binary::discover_and_verify_at`, so a spawn path *cannot* skip verification:
     /// the gate is enforced by this type, not by convention (the same structural
     /// posture as `disable_network` below). Tests inject an unpinned tor via the
-    /// loudly-named `VerifiedTorBinary::unchecked_for_test`.
+    /// loudly-named `VerifiedTorBinary::unchecked_for_test` (this crate's own
+    /// tests, or a dev-dependency edge enabling `unpinned-tor-for-tests`).
     pub tor_binary: VerifiedTorBinary,
     /// Wallet-private `DataDirectory` — **persistent across wallet sessions**
     /// (DQ-T0.7, decided): the dir carries tor's entry-guard identity (`state`),

@@ -1429,7 +1429,7 @@ than repealing it:
    serving daemon existing at all.
 3. **The Tor inbound half — premise corrected against source
    (2026-08-11):** the `ADD_ONION`/`DEL_ONION` surface is BUILT
-   (`shekyl-tor/src/control/onion.rs`, SP-T3 — typed-parts wire
+   (`shekyl-tor-control/src/control/onion.rs`, SP-T3 — typed-parts wire
    assembly, `Detach` unrepresentable, `PoWDefensesEnabled`/queue-rate
    params in place) and the SP-T3 spike harness already drives the full
    inbound path end-to-end with `shekyl-p-transport`'s read-side twin.

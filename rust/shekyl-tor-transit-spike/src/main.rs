@@ -59,10 +59,12 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kameo::actor::{ActorRef, Spawn as _};
-use shekyl_tor::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow};
-use shekyl_tor::control::{BootstrapReadiness, BootstrapState, Command, EventSink, TorControl};
-use shekyl_tor::control::{ManagedTor, SocksPort, TorControlConfig, TorLaunch};
-use shekyl_tor::onion_identity::OnionIdentity;
+use shekyl_tor_control::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow};
+use shekyl_tor_control::control::{
+    BootstrapReadiness, BootstrapState, Command, EventSink, TorControl,
+};
+use shekyl_tor_control::control::{ManagedTor, SocksPort, TorControlConfig, TorLaunch};
+use shekyl_tor_control::onion_identity::OnionIdentity;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -197,7 +199,7 @@ async fn bring_up(
     let started = Instant::now();
     let socks_port = free_port().map_err(|e| format!("[{label}] free port: {e}"))?;
     let (readiness, mut ready_rx) = BootstrapReadiness::new();
-    let verified = shekyl_tor::binary::discover_and_verify_at(binary)
+    let verified = shekyl_tor_control::binary::discover_and_verify_at(binary)
         .map_err(|e| format!("[{label}] tor binary: {e}"))?;
     eprintln!("  [{label}] spawning tor, socks={socks_port}");
     let control = TorControl::spawn(TorControlConfig {
@@ -409,7 +411,7 @@ async fn run(
     if reply.status() != 250 {
         return Err(format!("ADD_ONION status {}", reply.status()));
     }
-    let service_id = shekyl_tor::control::onion::parse_service_id(reply.lines())
+    let service_id = shekyl_tor_control::control::onion::parse_service_id(reply.lines())
         .ok_or("ADD_ONION returned no ServiceID")?;
     let host = format!("{}.onion", service_id.as_str());
 

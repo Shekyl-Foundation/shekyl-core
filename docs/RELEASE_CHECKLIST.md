@@ -99,7 +99,7 @@ further changes to the interface.
   - [ ] RPC consumer regression testing for larger transactions
 - [ ] CLI reproducible builds validated
 - [ ] Rust/PQC reproducible build inputs documented
-- [ ] **Bundled Tor pin current** (2d-2 archival firewall, SP-T0c — `rust/shekyl-tor/src/binary.rs`)
+- [ ] **Bundled Tor pin current** (2d-2 archival firewall, SP-T0c — `rust/shekyl-tor-control/src/binary.rs`)
   - The wallet's *managed* tor launch is hash-pin gated (`binary.rs` mints the `VerifiedTorBinary` witness a launch requires); a stale or unverified pin is a mission-#1 (security-precondition) gap, so this is a **recurring** duty, not a one-time step.
   - [ ] Watch <https://www.torproject.org/download/tor/> for a new **stable Tor Expert Bundle** or a security advisory since the recorded pin.
   - [ ] Ensure the signing key is in your keyring (fresh machine): `gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org`, then confirm the primary fingerprint is `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (`TOR_SIGNING_KEY_FPR` in `binary.rs`).

@@ -28,10 +28,10 @@ use shekyl_p_host::{
     HostError, PersonaServing, PersonaServingHost, PinError, PinReport, PinnedServeSet,
     ReportedSet, ServeObligation, ServeSetPinner, Staleness, StalenessBound,
 };
-use shekyl_tor::onion_identity::OnionIdentity;
 use shekyl_tor::service::{
     ServingPosture, SupervisorPolicy, TorBinarySource, TorPosture, TorServiceConfig,
 };
+use shekyl_tor_control::onion_identity::OnionIdentity;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -231,7 +231,7 @@ fn churning_tor(dir: &tempfile::TempDir) -> TorServiceConfig {
     TorServiceConfig {
         binary: TorBinarySource::At(bogus),
         data_dir: dir.path().join("data"),
-        events: shekyl_tor::control::EventSink::new(tx),
+        events: shekyl_tor_control::control::EventSink::new(tx),
         policy: SupervisorPolicy {
             backoff_base: Duration::from_millis(5),
             backoff_cap: Duration::from_millis(20),

@@ -12,7 +12,7 @@
 //! label, frozen under `ARCHIVAL_P_DERIVE_V1`); the **v3-onion encoding** — RFC
 //! 8032 seed expansion to tor's `ED25519-V3` blob and the rend-spec-v3 §6
 //! `.onion` address construction — has now followed it into production, as
-//! [`shekyl_tor::onion_identity::OnionIdentity`], its rightful home alongside
+//! [`shekyl_tor_control::onion_identity::OnionIdentity`], its rightful home alongside
 //! the rest of the control-port machinery (the 2d-2 SP-T3 serving path
 //! consumes it).
 //!
@@ -29,7 +29,7 @@
 
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
 use shekyl_crypto_pq::archival_p::derive_p_hs_id_seed;
-use shekyl_tor::onion_identity::OnionIdentity;
+use shekyl_tor_control::onion_identity::OnionIdentity;
 use shekyl_types::PSlot;
 
 /// Derive persona `p_slot`'s onion identity from a wallet master seed under an

@@ -16,7 +16,9 @@
 //!
 //! `ureq` (the SOCKS HTTP client SP-T1 already uses) cannot speak the control
 //! protocol — it is a separate, line-based text protocol over a TCP socket — so
-//! SP-T0 carries a **roll-our-own minimal control client** ([`control`], SP-T0a).
+//! SP-T0 carries a **roll-our-own minimal control client**
+//! ([`shekyl_tor_control::control`], SP-T0a — in its own crate since the daemon
+//! needs the same protocol against a Tor instance this one must never share).
 //! That decision is grounded in a rule-17 source-check: the maintained option
 //! (`tor-interface`/Gosling) abstracts away the two raw capabilities this design
 //! rests on (the raw SOCKS port and raw `STREAM`/CircID), so it is read as a
@@ -26,33 +28,32 @@
 //! is a forensic surface (like the SOCKS username) whose data — circuit IDs, our
 //! own targets — **must not be logged**.
 //!
-//! [`binary`] (SP-T0c) is the launch-trust half: it discovers the wallet's
-//! `tor` binary and verifies it against a hash pin, minting the
-//! [`binary::VerifiedTorBinary`] witness a managed launch requires — the
+//! [`shekyl_tor_control::binary`] (SP-T0c) is the launch-trust half: it
+//! discovers the wallet's `tor` binary and verifies it against a hash pin,
+//! minting the [`VerifiedTorBinary`](shekyl_tor_control::binary::VerifiedTorBinary)
+//! witness a managed launch requires — the
 //! firewall rests on *our* tor, so trusting the binary is a mission-#1
 //! precondition. (Shipping the binary itself is the installer/packaging job,
 //! not this crate's.)
 //!
 //! [`service`] (DQ-T0.6, design §3c) is the liveness half: the `TorService`
 //! supervisor keeps a managed tor alive across crashes — re-running the
-//! [`binary`] gate on **every** spawn, publishing one long-lived
+//! [`binary`](shekyl_tor_control::binary) gate on **every** spawn, publishing one long-lived
 //! `watch<TorPosture>` (the SOCKS endpoint is data on that channel), and never
 //! giving up: sustained failure alarms loudly (`Degraded`) while retries
 //! continue, because for a bonded archival staker an unattended node that
 //! *stopped* retrying is a guaranteed sliding-window slash.
 
-//! [`onion_identity`] is the serving-identity encoding: it expands a
-//! **derived** 32-byte GF-9 HS-identity seed into tor's `ED25519-V3` blob
-//! and the `.onion` address it implies. The seed dies at expansion; the
-//! value that reaches the supervisor is an [`onion_identity::OnionIdentity`].
+//! [`shekyl_tor_control::onion_identity`] is the serving-identity encoding: it
+//! expands a **derived** 32-byte GF-9 HS-identity seed into tor's `ED25519-V3`
+//! blob and the `.onion` address it implies. The seed dies at expansion; the
+//! value that reaches the supervisor is an
+//! [`OnionIdentity`](shekyl_tor_control::onion_identity::OnionIdentity).
 //! [`onion_service`] is the publish config and per-incarnation `ADD_ONION`
 //! orchestration — [`onion_service::OnionServiceSpec`] takes that identity
 //! (never a seed), so the §7.2(iii) custody boundary is the type system,
 //! not a convention.
 
-pub mod binary;
-pub mod control;
-pub mod onion_identity;
 pub mod onion_service;
 pub mod service;
 pub mod vanguard_rotation;

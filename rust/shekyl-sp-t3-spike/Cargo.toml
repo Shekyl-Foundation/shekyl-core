@@ -22,6 +22,7 @@ shekyl-p-serve = { path = "../shekyl-p-serve" }
 tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "time", "macros", "sync"] }
 # The onion surface (D1) and the managed-tor lifecycle the measurement rides.
 shekyl-tor = { path = "../shekyl-tor" }
+shekyl-tor-control = { path = "../shekyl-tor-control" }
 # The harness holds the control actor's `ActorRef` to issue ADD_ONION; kameo is
 # the workspace's actor stack, already pinned there.
 kameo = { workspace = true }

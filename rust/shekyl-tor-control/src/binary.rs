@@ -28,8 +28,9 @@
 //! and `ManagedTor::tor_binary` accepts nothing else — a spawn path cannot skip
 //! verification because it cannot obtain the type without it (the same
 //! make-bad-states-unrepresentable shape as SP-T0a's `ServerVerified`). The one
-//! bypass is the loudly-named, `#[cfg(test)]`-only
-//! `VerifiedTorBinary::unchecked_for_test`.
+//! bypass is the loudly-named `VerifiedTorBinary::unchecked_for_test`, compiled
+//! only under this crate's own tests or the `unpinned-tor-for-tests` feature,
+//! which may be enabled on dev-dependency edges only.
 //!
 //! **Scope boundary — what the pin does and does not defend (read before
 //! extending):** the pin defends against *at-rest* tampering — a bad download, a
@@ -142,8 +143,16 @@ impl VerifiedTorBinary {
     /// **Test-only bypass** of the hash gate, for lifecycle tests that inject an
     /// arbitrary (unpinned) tor — e.g. SP-T0b-2's offline child. Deliberately
     /// loud and greppable: every use is a declared exception to the gate.
-    #[cfg(test)]
-    pub(crate) fn unchecked_for_test(path: PathBuf) -> Self {
+    ///
+    /// `pub` under a feature rather than `#[cfg(test)]`-private because the
+    /// supervisor that needs it ([`shekyl-tor`]'s `TorBinarySource`) is now a
+    /// different crate, and `cfg(test)` does not cross a crate boundary. The
+    /// feature may be enabled on **dev-dependency edges only**; that is a CI
+    /// gate (`scripts/ci/check_test_only_features.py`) reading `cargo metadata`,
+    /// not a convention. See the manifest comment for why a shipped binary
+    /// cannot reach this arm.
+    #[cfg(any(test, feature = "unpinned-tor-for-tests"))]
+    pub fn unchecked_for_test(path: PathBuf) -> Self {
         Self(path)
     }
 }

@@ -217,7 +217,7 @@ Developers** key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (signing subkey
 hash — a version bump re-verifies the new bundle's signature against the same fingerprint, then records
 the new binary hash. The **runtime gate is the extracted binary's** SHA256
 `660a8c54d0c9341f85f0a7f827b6bde640e7db14dfde44d3856979d4ee6d16fb` (a bare binary carries no signature),
-recorded in `rust/shekyl-tor/src/binary.rs::CURRENT_PIN` — and it is **unchanged across this bump**:
+recorded in `rust/shekyl-tor-control/src/binary.rs::CURRENT_PIN` — and it is **unchanged across this bump**:
 15.0.17 and 15.0.19 both ship Tor `0.4.9.11` and the extracted binary is byte identical, so two stable
 bundle releases moved the label and not the gate. That is this paragraph's own claim observed in
 practice — the bundle version and the binary digest are independent facts, and reading a stale label as

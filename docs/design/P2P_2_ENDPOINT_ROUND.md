@@ -776,6 +776,37 @@ convenience.
   shared instance, and an attempt to would be a compile-time argument error
   rather than a convention someone remembers to follow.
 
+#### Build state — the neutral crate exists
+
+The two `YES` rows and the MANAGED ruling's mitigation all name one thing: a
+crate that belongs to neither side. It is **`rust/shekyl-tor-control`**, and the
+control protocol (`control/`), the binary hash-pin gate (`binary.rs`) and the v3
+onion identity encoding (`onion_identity.rs`) were lifted into it out of
+`shekyl-tor` — a move with no behaviour change, so that nothing is built on the
+old shape and then migrated.
+
+`shekyl-tor` keeps exactly what the table marks **NO**: the `TorService`
+supervisor and its cross-incarnation state, the vanguard rotation state machine
+and the `VanguardsActive` witness, and the persona publish orchestration. It
+depends on the new crate and does **not** re-export it, so a consumer that wants
+the protocol names the neutral crate rather than reaching it through the wallet's
+supervisor.
+
+The isolation requirement is carried in the crate's own module doc rather than
+left to this document: *no entry point here may default, infer, or discover which
+Tor instance it is talking to.* That is the compile-time form of the MANAGED
+mitigation above — every instance-identifying input is a parameter, so reusing a
+function cannot yield the other side's instance.
+
+One visibility change was forced by the move and is worth a reviewer's eye: the
+SP-T0c pin gate's test bypass (`VerifiedTorBinary::unchecked_for_test`) was
+`#[cfg(test)]`-private, and `cfg(test)` does not cross a crate boundary. It is now
+`pub` behind the `unpinned-tor-for-tests` feature, which
+`scripts/ci/check_test_only_features.py` holds to dev-dependency edges only. The
+production gate is unchanged and is now *stronger*: `VerifiedTorBinary`'s field was
+already private, and the type is now behind a crate wall as well, so the supervisor
+cannot forge one even by accident.
+
 #### The apparent contradiction with the accepted §7 residual, and why it is not one
 
 A reviewer will find this and should find the answer here first.

@@ -13,11 +13,11 @@
 //! - [`OnionPublishError`] / `publish_onion` (crate-private — the supervisor
 //!   is the only legitimate publisher) — drive `ADD_ONION` on a live
 //!   control actor, map control faults, and surface protocol verdicts from
-//!   [`crate::control::onion::evaluate_add_onion_reply`].
+//!   [`shekyl_tor_control::control::onion::evaluate_add_onion_reply`].
 //!
-//! The pure reply→verdict decision lives in [`crate::control::onion`] (it is
+//! The pure reply→verdict decision lives in [`shekyl_tor_control::control::onion`] (it is
 //! control-protocol knowledge, next to
-//! [`parse_service_id`](crate::control::onion::parse_service_id)). The supervisor
+//! [`parse_service_id`](shekyl_tor_control::control::onion::parse_service_id)). The supervisor
 //! loop in [`crate::service`] only asks *when* to publish and how a failure
 //! classifies into the retry/degrade policy.
 
@@ -27,13 +27,13 @@ use std::time::Duration;
 use kameo::error::SendError;
 use tokio::sync::oneshot;
 
-use crate::control::onion::{
+use crate::vanguard_rotation::VanguardsActive;
+use shekyl_tor_control::control::onion::{
     evaluate_add_onion_reply, AddOnion, AddOnionReplyError, OnionFlags, OnionPort, OnionPow,
     ServiceId,
 };
-use crate::control::{Command, ControlError};
-use crate::onion_identity::OnionIdentity;
-use crate::vanguard_rotation::VanguardsActive;
+use shekyl_tor_control::control::{Command, ControlError};
+use shekyl_tor_control::onion_identity::OnionIdentity;
 
 /// Why publishing the configured onion service failed.
 ///
@@ -109,7 +109,7 @@ pub enum OnionPublishAbort {
 /// thing, publishing this onion), derived once in the wallet context. A
 /// serving config that cannot hold a seed cannot hold `master_seed`, so the
 /// cold/hot bond-authority separation (§7.2(iii)) is structural here rather
-/// than a wiring convention. See [`crate::onion_identity::OnionIdentity`].
+/// than a wiring convention. See [`shekyl_tor_control::onion_identity::OnionIdentity`].
 ///
 /// **One `Option` on the supervisor config, not a `Vec`, deliberately:** one
 /// persona on the wire per wallet is the Model D co-activation rule, and the
@@ -272,8 +272,8 @@ pub(crate) async fn publish_onion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control::onion::evaluate_add_onion_reply;
-    use crate::control::ReplyFramer;
+    use shekyl_tor_control::control::onion::evaluate_add_onion_reply;
+    use shekyl_tor_control::control::ReplyFramer;
 
     fn identity_and_id() -> (OnionIdentity, ServiceId) {
         let identity = OnionIdentity::from_hs_id_seed(&[0x24u8; 32]);
@@ -281,13 +281,56 @@ mod tests {
         (identity, id)
     }
 
-    fn reply_from(payload: &str) -> crate::control::ControlReply {
+    fn reply_from(payload: &str) -> shekyl_tor_control::control::ControlReply {
         let mut framer = ReplyFramer::new();
         framer.push_bytes(format!("250-{payload}\r\n250 OK\r\n").as_bytes());
         framer
             .next_reply()
             .expect("well-formed")
             .expect("one reply")
+    }
+
+    /// The publish path's own type, across the crate boundary the protocol
+    /// lift introduced: an [`OnionServiceSpec`] built here derives its address
+    /// through `shekyl-tor-control`'s [`OnionIdentity`], and the verdict that
+    /// gates publication is computed there too. A copy of either side left
+    /// behind by the move, or a `ServiceId` that split into two types across
+    /// it, fails this — the two crates must agree on one value.
+    ///
+    /// What this deliberately does **not** observe is the `ADD_ONION` request.
+    /// The rendered line embeds the expanded key, so `to_wire_line` is
+    /// `pub(super)` and [`OnionKey`](shekyl_tor_control::control::onion::OnionKey)
+    /// redacts (rules 35/36): the request side is unobservable from a consumer
+    /// by design, and its rendering is tested control-side. The live
+    /// `ADD_ONION` round trip is `onion_is_republished_on_every_incarnation`,
+    /// behind a real tor binary.
+    #[test]
+    fn the_published_address_is_judged_against_the_spec_the_supervisor_holds() {
+        let target = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind loopback target")
+            .local_addr()
+            .expect("local addr");
+        let (identity, id) = identity_and_id();
+        let spec = OnionServiceSpec::new(identity, 80, target, 8).expect("loopback spec");
+        assert_eq!(spec.service_id(), &id);
+
+        // Tor reports the spec's own address: publication proceeds.
+        let reply = reply_from(&format!("ServiceID={}", spec.service_id().as_str()));
+        assert_eq!(evaluate_add_onion_reply(&reply, spec.service_id()), Ok(()));
+
+        // Tor reports some other service: fail-stop, rather than advertise an
+        // address no witness can reach.
+        let other = OnionIdentity::from_hs_id_seed(&[0x99u8; 32])
+            .service_id()
+            .clone();
+        let reply = reply_from(&format!("ServiceID={}", other.as_str()));
+        assert_eq!(
+            evaluate_add_onion_reply(&reply, spec.service_id()),
+            Err(AddOnionReplyError::ServiceIdMismatch {
+                expected: spec.service_id().clone(),
+                published: other,
+            })
+        );
     }
 
     #[test]

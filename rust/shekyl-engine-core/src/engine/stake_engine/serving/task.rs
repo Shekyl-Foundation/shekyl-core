@@ -622,7 +622,7 @@ mod lifecycle_tests {
     use shekyl_curve_tree::{BlockHeight, LeafStore, ServingReader};
     use shekyl_operator_alarm::{AlarmCondition, Arming, ConditionState, DisarmedReason};
     use shekyl_p_host::PinReport as HostPinReport;
-    use shekyl_tor::onion_identity::OnionIdentity;
+    use shekyl_tor_control::onion_identity::OnionIdentity;
 
     use crate::engine::refresh::RefreshSlot;
 
@@ -666,7 +666,7 @@ mod lifecycle_tests {
         TorServiceConfig {
             binary: shekyl_tor::service::TorBinarySource::At(bogus),
             data_dir: dir.path().join("data"),
-            events: shekyl_tor::control::EventSink::unsubscribed(),
+            events: shekyl_tor_control::control::EventSink::unsubscribed(),
             policy: shekyl_tor::service::SupervisorPolicy::default(),
             disable_network: true,
             posture: shekyl_tor::service::ServingPosture::Client,

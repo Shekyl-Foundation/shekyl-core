@@ -17,6 +17,7 @@ default-run = "shekyl-tor-transit-spike"
 # round trip with application handling in the path — the two things §94.5
 # amended the estimator away from.
 shekyl-tor = { path = "../shekyl-tor" }
+shekyl-tor-control = { path = "../shekyl-tor-control" }
 # The control actor's `ActorRef` issues ADD_ONION; kameo is the workspace stack.
 kameo = { workspace = true }
 tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "time", "macros", "sync"] }

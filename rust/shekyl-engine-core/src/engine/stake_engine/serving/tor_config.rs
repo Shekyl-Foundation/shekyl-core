@@ -132,7 +132,7 @@ pub(crate) fn tor_service_config(
         // Nothing subscribes to tor's async events in production: no call site
         // issues `SETEVENTS`, so the sink receives nothing at all. Named rather
         // than left as an anonymous dropped receiver.
-        events: shekyl_tor::control::EventSink::unsubscribed(),
+        events: shekyl_tor_control::control::EventSink::unsubscribed(),
         // Ruling 3: taken, not exposed.
         policy: shekyl_tor::service::SupervisorPolicy::default(),
         disable_network: false,

@@ -29,7 +29,7 @@
 //! touches the four fields directly except to build the one `Observations` the
 //! verdict reads, keeping this seam intact.
 
-use shekyl_tor::control::CircId;
+use shekyl_tor_control::control::CircId;
 
 /// The four attach-time circuit IDs of the serialized measurement, each confirmed
 /// present (the harness only builds this after capturing all four). All four dials
@@ -170,7 +170,7 @@ mod live {
     use kameo::actor::Spawn;
     use kameo::error::SendError;
     use shekyl_p_transport::derive_socks_user;
-    use shekyl_tor::control::{
+    use shekyl_tor_control::control::{
         parse_stream_event, BootstrapReadiness, BootstrapState, CircId, Command, ControlError,
         ControlReply, EventSink, TorControl, TorControlConfig, TorLaunch,
     };

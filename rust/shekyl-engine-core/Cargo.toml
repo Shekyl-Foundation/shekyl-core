@@ -86,6 +86,7 @@ shekyl-p-transport = { path = "../shekyl-p-transport" }
 # value (`onion_identity.rs` custody note, §7.2(iii)) — so the expansion has to
 # happen on this side of the boundary, which puts the type here. SH-2b-1.
 shekyl-tor = { path = "../shekyl-tor" }
+shekyl-tor-control = { path = "../shekyl-tor-control" }
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }

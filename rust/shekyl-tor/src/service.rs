@@ -54,14 +54,14 @@ use kameo::actor::Spawn;
 use kameo::error::SendError;
 use tokio::sync::{oneshot, watch};
 
-use crate::binary::{self, TorBinaryError, VerifiedTorBinary};
-use crate::control::framing::ControlReply;
-use crate::control::{
+use crate::onion_service::{publish_onion, OnionPublishAbort};
+use crate::vanguard_rotation::{VanguardManager, VanguardsAbort};
+use shekyl_tor_control::binary::{self, TorBinaryError, VerifiedTorBinary};
+use shekyl_tor_control::control::framing::ControlReply;
+use shekyl_tor_control::control::{
     BootstrapReadiness, BootstrapState, Command, ControlError, EventSink, ManagedTor, SocksPort,
     TorControl, TorControlConfig, TorExit, TorLaunch,
 };
-use crate::onion_service::{publish_onion, OnionPublishAbort};
-use crate::vanguard_rotation::{VanguardManager, VanguardsAbort};
 
 // Config/error types live next to their owners; re-exported here so a
 // `TorServiceConfig` consumer names them beside the supervisor types.
@@ -351,7 +351,11 @@ pub enum TorBinarySource {
     /// `binary::discover_and_verify_at`, hash-gated.
     At(PathBuf),
     /// **Test-only bypass** of the gate (lifecycle tests injecting an arbitrary
-    /// tor). Loud and greppable, like `VerifiedTorBinary::unchecked_for_test`.
+    /// tor). Loud and greppable, like `VerifiedTorBinary::unchecked_for_test`,
+    /// which this arm calls — reachable here only because the dev-dependency
+    /// edge on `shekyl-tor-control` enables `unpinned-tor-for-tests`. The arm
+    /// itself stays `#[cfg(test)]`: the feature makes the forge *nameable*
+    /// across the crate wall, it does not put this variant in a normal build.
     #[cfg(test)]
     UncheckedForTest(PathBuf),
 }
@@ -1029,7 +1033,8 @@ mod tests {
             .expect("bind loopback target")
             .local_addr()
             .expect("local addr");
-        let identity = crate::onion_identity::OnionIdentity::from_hs_id_seed(&[0x5cu8; 32]);
+        let identity =
+            shekyl_tor_control::onion_identity::OnionIdentity::from_hs_id_seed(&[0x5cu8; 32]);
         let spec = OnionServiceSpec::new(identity, 80, target, 8).expect("loopback spec");
         assert_eq!(
             ServingPosture::Serving(spec).vanguards(),
@@ -1106,7 +1111,7 @@ mod tests {
     // the KAT covers the actual ingress shape, mirroring the bootstrap KATs) ---
 
     fn reply_from(payload: &str) -> ControlReply {
-        let mut framer = crate::control::ReplyFramer::new();
+        let mut framer = shekyl_tor_control::control::ReplyFramer::new();
         framer.push_bytes(format!("250-{payload}\r\n250 OK\r\n").as_bytes());
         framer
             .next_reply()
@@ -1398,7 +1403,8 @@ mod live_tests {
             .expect("bind loopback target")
             .local_addr()
             .expect("local addr");
-        let identity = crate::onion_identity::OnionIdentity::from_hs_id_seed(&[0x5cu8; 32]);
+        let identity =
+            shekyl_tor_control::onion_identity::OnionIdentity::from_hs_id_seed(&[0x5cu8; 32]);
         // The address the persona advertises is known before spawn (the caller
         // holds it from the spec), so witnesses can be told where to connect
         // without waiting on any posture.

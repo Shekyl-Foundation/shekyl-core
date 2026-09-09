@@ -372,7 +372,7 @@ jobs:
         # job in build.yml, where its docs exist.
         run: >-
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
-          -p shekyl-tor -p shekyl-p-serve -p shekyl-p-host
+          -p shekyl-tor -p shekyl-tor-control -p shekyl-p-serve -p shekyl-p-host
           -p shekyl-operator-alarm -p shekyl-economics
       - name: build shekyl-fcmp crate
         working-directory: rust

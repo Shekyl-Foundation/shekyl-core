@@ -37,9 +37,11 @@ use std::time::{Duration, Instant};
 use kameo::actor::Spawn as _;
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
 use shekyl_p_transport::{PTorClient, PTransportError, RequestErrorKind, TorSocksEndpoint};
-use shekyl_tor::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId};
-use shekyl_tor::control::{BootstrapReadiness, BootstrapState, Command, EventSink, TorControl};
-use shekyl_tor::control::{ManagedTor, SocksPort, TorControlConfig, TorLaunch};
+use shekyl_tor_control::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId};
+use shekyl_tor_control::control::{
+    BootstrapReadiness, BootstrapState, Command, EventSink, TorControl,
+};
+use shekyl_tor_control::control::{ManagedTor, SocksPort, TorControlConfig, TorLaunch};
 use shekyl_types::{PCanonicalId, PSlot};
 
 use shekyl_p_serve::{PServeEndpoint, ShardBody, ROUTE_PREFIX};
@@ -263,7 +265,7 @@ impl Apparatus {
         let socks_port = free_port();
         let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
-        let verified = shekyl_tor::binary::discover_and_verify_at(&tor_binary)
+        let verified = shekyl_tor_control::binary::discover_and_verify_at(&tor_binary)
             .map_err(|e| ApparatusError::Control(e.to_string()))?;
         let control = TorControl::spawn(TorControlConfig {
             launch: TorLaunch::Managed(ManagedTor {
@@ -335,7 +337,7 @@ impl Apparatus {
             if reply.status() != 250 {
                 return Err(ApparatusError::AddOnion(reply.status()));
             }
-            let published = shekyl_tor::control::onion::parse_service_id(reply.lines())
+            let published = shekyl_tor_control::control::onion::parse_service_id(reply.lines())
                 .ok_or(ApparatusError::NoServiceId)?;
             // The address tor published must be the address the derivation
             // predicted — otherwise the client leg would dial a service that
