@@ -503,6 +503,59 @@ pub unsafe extern "C" fn shekyl_rpc_net_stats_facts_rust_check(
 // Seed-derived per-field values are deliberately truncated into the narrow
 // fields — the point is to exercise every byte of the layout (F26).
 #[allow(clippy::cast_possible_truncation)]
+fn identity_facts_filled(seed: u64) -> crate::ffi::IdentityFactsFfi {
+    let mut genesis_hash = [0u8; 32];
+    let word = submit_facts_field_value(seed, 1);
+    for (i, byte) in genesis_hash.iter_mut().enumerate() {
+        *byte = (word >> ((i % 8) * 8)) as u8;
+    }
+    crate::ffi::IdentityFactsFfi {
+        nettype: submit_facts_field_value(seed, 0) as u8,
+        reserved: [0; 7],
+        genesis_hash,
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_identity_facts` (layout twin, VC-2).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_identity_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_identity_facts_rust_fill(
+    out: *mut crate::ffi::IdentityFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(identity_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_identity_facts`: 0 iff every field matches
+/// the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_identity_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_identity_facts_rust_check(
+    facts: *const crate::ffi::IdentityFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == identity_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
+// Seed-derived per-field values are deliberately truncated into the narrow
+// fields — the point is to exercise every byte of the layout (F26).
+#[allow(clippy::cast_possible_truncation)]
 fn chain_tip_facts_filled(seed: u64) -> crate::ffi::ChainTipFactsFfi {
     let mut top_hash = [0u8; 32];
     let word = submit_facts_field_value(seed, 1);

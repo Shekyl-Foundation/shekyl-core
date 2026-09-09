@@ -42,6 +42,25 @@ typedef struct shekyl_rpc_chain_tip_facts {
 
 int shekyl_rpc_chain_tip(core_rpc_handle* h, shekyl_rpc_chain_tip_facts* out);
 
+// Daemon identity: what this process IS, as opposed to what its chain tip
+// looks like right now (VC-2). Deliberately its own POD rather than two more
+// fields on `shekyl_rpc_chain_tip_facts` (VC-R17): `nettype` and the genesis
+// hash are fixed at startup and per network, five of the tip POD's six
+// callers want a tip and not identity, and widening the tip would move its
+// layout twins, its seeded fill indices and its size pin for every one of
+// them. The precedent is the narrow exports below
+// (`shekyl_rpc_fee_grace_blocks_max`, `shekyl_rpc_peerlist_limits`).
+//
+// The rules digest is NOT here: it is compiled into the Rust image from
+// `config/`, so the handler reads its own constant and never asks C++ for it.
+typedef struct shekyl_rpc_identity_facts {
+    uint8_t  nettype;           // cryptonote::network_type (MAINNET=0 .. FAKECHAIN=3)
+    uint8_t  reserved[7];
+    uint8_t  genesis_hash[32];  // block 0's id
+} shekyl_rpc_identity_facts;
+
+int shekyl_rpc_identity(core_rpc_handle* h, shekyl_rpc_identity_facts* out);
+
 // One row of the hard-fork schedule.
 typedef struct shekyl_rpc_hardfork_entry {
     uint8_t  version;
@@ -537,6 +556,8 @@ uint32_t shekyl_rpc_span_pruning_seed(uint64_t start_block_height);
 // Note also what they do NOT pin: `found` is field 23 to a seeded filler, so
 // the pair fixes where the byte lives, never *when* it should be zero. A
 // conditional has no input here to be conditional on. Layout, not behaviour.
+void shekyl_rpc_identity_facts_test_fill(shekyl_rpc_identity_facts* out, uint64_t seed);
+int shekyl_rpc_identity_facts_test_check(const shekyl_rpc_identity_facts* facts, uint64_t seed);
 void shekyl_rpc_chain_tip_facts_test_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_test_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
 void shekyl_rpc_hardfork_entry_test_fill(shekyl_rpc_hardfork_entry* out, uint64_t seed);

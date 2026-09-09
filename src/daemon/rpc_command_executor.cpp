@@ -102,6 +102,10 @@ bool t_rpc_command_executor::run_rust_console(const std::vector<std::string>& ar
     m_is_rpc ? nullptr : static_cast<void*>(m_rpc_server),
     m_is_rpc ? m_rpc_client->address().c_str() : nullptr,
     tools::t_rpc_client::timeout_secs(),
+    // This process's network, for the identity handshake on the remote arm
+    // (VC-2). Ignored on the live arm, where every axis would compare a value
+    // to itself.
+    static_cast<uint8_t>(m_nettype),
     &out_ptr, &out_len);
   // A null/zero pair is the export's empty buffer; never hand a null pointer
   // to std::string's range constructor, even with a zero count.
@@ -121,6 +125,7 @@ bool t_rpc_command_executor::run_rust_console(const std::vector<std::string>& ar
 t_rpc_command_executor::t_rpc_command_executor(
     uint32_t ip
   , uint16_t port
+  , cryptonote::network_type nettype
   , bool is_rpc
   , cryptonote::core_rpc_server* rpc_server
   )
@@ -139,6 +144,7 @@ t_rpc_command_executor::t_rpc_command_executor(
   }
 
   m_is_rpc = is_rpc;
+  m_nettype = nettype;
 }
 
 t_rpc_command_executor::~t_rpc_command_executor()

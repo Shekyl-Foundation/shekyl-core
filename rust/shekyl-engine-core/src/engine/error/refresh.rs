@@ -90,26 +90,25 @@ pub enum RefreshError {
     ///
     /// # Why this is its own variant
     ///
-    /// The two retry-loop call sites in
-    /// `Engine::refresh` and `run_refresh_task` currently fall back on
-    /// `MalformedScanResult` when the loop body exits without observing
-    /// a `ConcurrentMutation`, with the comment *"falling through with
-    /// `None` would mean the loop body itself is broken."* That case
-    /// is structurally distinct from a scanner-produced contract
-    /// violation: it is an orchestrator-side state-machine failure,
-    /// not a producer-side defect. Routing both through
-    /// `MalformedScanResult` would conflate "the scanner emitted a
-    /// `ScanResult` whose internal shape disagrees with itself" with
-    /// "the engine's retry loop reached an unreachable branch";
-    /// downstream consumers (telemetry; future peer-reputation
-    /// actors; future user-facing error surface) need different
-    /// responses for the two cases. The variant separation is
-    /// correctness-preserving, not stylistic.
+    /// Orchestrator-side "this branch should be unreachable" is
+    /// structurally distinct from a scanner-produced contract
+    /// violation (`MalformedScanResult`) and from snapshot-race
+    /// exhaustion (`ConcurrentMutation`). The merge-retry loops
+    /// (`Engine::refresh_with`, `run_refresh_task`) no longer
+    /// construct this variant: the merge-retry budget type makes a
+    /// fall-through-with-no-race unrepresentable, so budget
+    /// exhaustion always carries the `ConcurrentMutation` that spent
+    /// it. Remaining call sites are true unreachable-by-construction
+    /// paths (today: [`crate::engine::RefreshHandle::join`] when the
+    /// producer drops the completion oneshot without delivery).
     ///
-    /// Routing through `ConcurrentMutation` is also wrong: that
-    /// variant carries the snapshot-disagreement pair (`wallet`,
-    /// `result`) the caller uses to decide whether to retry. An
-    /// unreached-invariant case has no such pair to report.
+    /// Routing those through `MalformedScanResult` would conflate
+    /// "the scanner emitted a `ScanResult` whose internal shape
+    /// disagrees with itself" with "the engine's control flow reached
+    /// an unreachable branch". Routing through `ConcurrentMutation`
+    /// is also wrong: that variant carries the snapshot-disagreement
+    /// pair (`wallet`, `result`) the caller uses to decide whether to
+    /// retry, and an unreached-invariant case has no such pair.
     ///
     /// # Field
     ///
@@ -127,15 +126,12 @@ pub enum RefreshError {
     ///
     /// # Lifecycle
     ///
-    /// The variant is added in PR 4 C3 ahead of any call-site
-    /// migration. PR 4 C5 migrates the two retry-loop call sites
-    /// (the `MalformedScanResult { reason: "..." }` fallbacks in
-    /// `run_refresh_task` and `Engine::refresh`) over to
-    /// `InternalInvariantViolation`, preserving the existing
-    /// `&'static str` content as the `context` value at each site.
-    /// Future orchestrator-internal "this branch should be
-    /// unreachable" paths route here categorically rather than
-    /// re-litigating where they belong.
+    /// Added in PR 4 C3; C5 migrated the retry-loop fallbacks onto
+    /// this variant. The merge-retry loops have since dropped the
+    /// fallback (the race that exhausts the budget is always in
+    /// hand). Future orchestrator-internal "this branch should be
+    /// unreachable" paths still route here rather than re-litigating
+    /// where they belong.
     ///
     /// See `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §4 Phase 0c
     /// ("Why `InternalInvariantViolation` is its own variant, not

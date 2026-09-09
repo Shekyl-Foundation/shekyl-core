@@ -5,7 +5,7 @@
 
 //! `print_blockchain_info` and `print_blockchain_dynamic_stats`.
 
-use super::info::{daa_target_seconds, fetch_get_info};
+use super::info::fetch_get_info;
 use super::{
     human_readable_timestamp, native_json_rpc, require_ok, trimmed, wide_difficulty_decimal,
     wide_difficulty_value, Source,
@@ -169,9 +169,8 @@ pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Resu
     // read the scalar, so it reads tier 0.
     let dynamic_fee =
         AtomicUnits::from_raw(fees.fees.get(shekyl_rpc_types::FeeTier::Low)).to_skl_string();
-    let (target, target_warning) = daa_target_seconds(info.target);
+    let target = crate::consensus::DAA_TARGET_SECONDS;
     let mut out = Vec::new();
-    out.extend(target_warning);
     out.push(format!(
         "Height: {}, diff {}, cum. diff {}, target {target} sec, dyn fee {dynamic_fee}/byte",
         info.height,

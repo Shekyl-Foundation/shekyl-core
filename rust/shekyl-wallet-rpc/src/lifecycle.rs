@@ -22,8 +22,9 @@ use shekyl_crypto_pq::account::{
 use shekyl_crypto_pq::bip39::{mnemonic_from_entropy, SHEKYL_BIP39_ENTROPY_BYTES};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
-    CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, Network, OpenedEngine,
-    ServingStartError, SoloSigner, StakeFacade, StakePosture,
+    CapabilityInput, Credentials, DaemonClient, DaemonExpectation, Engine, EngineCreateParams,
+    FakechainPolicy, Network, OpenedEngine, ServingStartError, SoloSigner, StakeFacade,
+    StakePosture,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
@@ -155,7 +156,7 @@ async fn create_wallet_engine(
     password: Zeroizing<Vec<u8>>,
     kdf: KdfParams,
 ) -> Result<(Engine<SoloSigner>, SeedBackup), WalletRpcError> {
-    let daemon = make_daemon(daemon).await?;
+    let daemon = make_daemon(daemon, network).await?;
     let creds = Credentials::password_only(password.as_slice());
 
     let (master_seed, seed_format, backup) = generate_seed_material(network)?;
@@ -282,7 +283,7 @@ async fn restore_wallet_engine(
     restore_height: u32,
     kdf: KdfParams,
 ) -> Result<Engine<SoloSigner>, WalletRpcError> {
-    let daemon = make_daemon(daemon).await?;
+    let daemon = make_daemon(daemon, network).await?;
     let creds = Credentials::password_only(password.as_slice());
 
     // Seed format is network-governed, mirroring generate_seed_material on the
@@ -403,7 +404,7 @@ async fn open_wallet_engine(
     daemon: &DaemonEndpoint,
     password: Zeroizing<Vec<u8>>,
 ) -> Result<(Engine<SoloSigner>, Option<i64>), WalletRpcError> {
-    let daemon = make_daemon(daemon).await?;
+    let daemon = make_daemon(daemon, network).await?;
     let creds = Credentials::password_only(password.as_slice());
 
     let opened = tokio::task::block_in_place(|| {
@@ -620,7 +621,10 @@ fn validate_wallet_name(name: &str) -> Result<(), WalletRpcError> {
 /// the wallet-less proof-check handlers (`proofs.rs`), which dial the
 /// verifier's daemon without any open wallet — through the same endpoint
 /// (address + proxy), so a proof check never bypasses the proxy posture.
-pub(crate) async fn make_daemon(daemon: &DaemonEndpoint) -> Result<DaemonClient, WalletRpcError> {
+pub(crate) async fn make_daemon(
+    daemon: &DaemonEndpoint,
+    network: Network,
+) -> Result<DaemonClient, WalletRpcError> {
     // SOCKS5h when a proxy is set: the daemon's block scan then resolves the
     // node hostname *at the proxy*, never leaking it to the local resolver.
     let rpc = HttpRpc::with_proxy(daemon.address.clone(), daemon.proxy.clone())
@@ -634,7 +638,17 @@ pub(crate) async fn make_daemon(daemon: &DaemonEndpoint) -> Result<DaemonClient,
             tracing::warn!(error = %e, "daemon transport construction failed");
             WalletRpcError::DaemonUnreachable
         })?;
-    Ok(DaemonClient::new(rpc))
+    // Identity-verifying (VC-4): the daemon must prove it is this network's,
+    // running this build's rules and RPC contract, before the first request.
+    // `Refuse` on fakechain is the shipped value and there is no flag to
+    // change it (VC-R3).
+    Ok(DaemonClient::verifying(
+        rpc,
+        DaemonExpectation {
+            network,
+            fakechain: FakechainPolicy::Refuse,
+        },
+    ))
 }
 
 /// Wrap a freshly opened / created engine in its shared arc — via
@@ -1037,7 +1051,7 @@ async fn reopen_with_first_stake_intent(
         other => WalletRpcError::InternalError(format!("stake: password verification: {other}")),
     })?;
     // Connect-then-close: a daemon refusal also lands pre-close.
-    let daemon = make_daemon(&endpoint).await?;
+    let daemon = make_daemon(&endpoint, network).await?;
 
     // Close via the shared choreography (identical restore-on-failure
     // semantics as `close_wallet`), name-bound so a concurrently swapped

@@ -5,13 +5,12 @@
 
 //! `alt_chain_info`.
 
-use super::info::{daa_target_seconds, fetch_get_info};
+use super::info::fetch_get_info;
 use super::{
     ffi_json_rpc_result, human_readable_timespan, json_rpc_result, native_json_rpc, require_ok,
     trimmed, wide_difficulty_decimal, Source,
 };
 use crate::chain_facts::FfiChainFacts;
-use crate::ctl_client;
 
 /// One entry of the `get_alternate_chains` reply.
 ///
@@ -46,15 +45,14 @@ fn fetch_alt_chains(src: &Source) -> Result<Vec<AltChainProvisional>, String> {
                 .ok_or_else(|| "no reply from get_alternate_chains".to_owned())?;
             ffi_json_rpc_result(&raw, "get_alternate_chains")?
         }
-        Source::Remote { address, timeout } => {
+        Source::Remote { .. } => {
             let body = serde_json::to_vec(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": "0",
                 "method": "get_alternate_chains",
             }))
             .map_err(|e| format!("cannot encode the request: {e}"))?;
-            let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw = src.post_remote("/json_rpc", body)?;
             json_rpc_result::<AltChainsReplyProvisional>(&raw, "get_alternate_chains")?
         }
     };
@@ -154,7 +152,6 @@ pub(super) fn alt_chain_info(
     now: u64,
 ) -> Result<String, String> {
     let info = fetch_get_info(src)?;
-    let (target, target_warning) = daa_target_seconds(info.target);
     let mut chains = fetch_alt_chains(src)?;
     // The alt chain's first block. Saturating: an alt chain longer than our
     // own height is not something this console gets to be surprised by.
@@ -164,9 +161,6 @@ pub(super) fn alt_chain_info(
         |c: &AltChainProvisional| info.height.saturating_sub(start_of(c)).saturating_sub(1);
 
     if tip.is_empty() {
-        // The listing form derives nothing from T, so a disagreement is not
-        // reported there — a warning attached to output it cannot affect
-        // would train its reader to ignore the one that matters.
         chains.sort_by_key(|c| c.height);
         let shown: Vec<&AltChainProvisional> = chains
             .iter()
@@ -210,7 +204,7 @@ pub(super) fn alt_chain_info(
         ));
     }
     let start_height = start_of(chain);
-    let mut out: Vec<String> = target_warning.into_iter().collect();
+    let mut out: Vec<String> = Vec::new();
     out.extend([
         format!("Found alternate chain with tip {tip}"),
         format!(
@@ -256,6 +250,7 @@ pub(super) fn alt_chain_info(
                     .to_owned(),
             );
         } else {
+            let target = crate::consensus::DAA_TARGET_SECONDS;
             #[expect(
                 clippy::cast_precision_loss,
                 reason = "a percentage for a human, from a block count and a timespan"
