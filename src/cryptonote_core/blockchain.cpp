@@ -3618,6 +3618,11 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       {
         MERROR_VER("Archival bond-post key image already spent");
         tvc.m_double_spend = true;
+        // OUR chain, and reorg-dependent: a key image spent in our view can be
+        // unspent in the sender's. Not attributable, so this must not sever --
+        // and the fold keeps this precise reading when add_tx's coarser
+        // "wrong inputs" classification lands on top (PWD-B7).
+        tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
         return false;
       }
     }
@@ -3642,6 +3647,11 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       {
         MERROR_VER("Archival emission fee-input key image already spent");
         tvc.m_double_spend = true;
+        // OUR chain, and reorg-dependent: a key image spent in our view can be
+        // unspent in the sender's. Not attributable, so this must not sever --
+        // and the fold keeps this precise reading when add_tx's coarser
+        // "wrong inputs" classification lands on top (PWD-B7).
+        tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
         return false;
       }
     }
@@ -3667,6 +3677,11 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       {
         MERROR_VER("Key image already spent in blockchain: " << epee::string_tools::pod_to_hex(in_to_key.k_image));
         tvc.m_double_spend = true;
+        // OUR chain, and reorg-dependent: a key image spent in our view can be
+        // unspent in the sender's. Not attributable, so this must not sever --
+        // and the fold keeps this precise reading when add_tx's coarser
+        // "wrong inputs" classification lands on top (PWD-B7).
+        tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
         return false;
       }
     }
@@ -7050,9 +7065,21 @@ void Blockchain::output_scan_worker(const uint64_t amount, const std::vector<uin
 //    vs [k_image, output_keys] (m_scan_table). This is faster because it takes advantage of bulk queries
 //    and is threaded if possible. The table (m_scan_table) will be used later when querying output
 //    keys.
-bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks)
+bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks, uint8_t &drop_verdict)
 {
   MTRACE("Blockchain::" << __func__);
+  // PWD-B7. This call returns one `false` for fifteen distinct conditions in
+  // three classes -- our own cancellation, the sender's malformed input, and
+  // our own broken invariants -- and its p2p caller severs and charges the
+  // span's origin. A boolean cannot say which fired, so the caller could not
+  // classify the failure at all: charge, and our own shutdown punishes an
+  // honest peer; decline, and a peer feeding malformed spans is never priced.
+  // Neither the sever nor the score is separable without this.
+  //
+  // Every failure below classifies itself exactly once and returns
+  // immediately, so these are plain assignments -- there is no second
+  // classification here for the fold to reconcile.
+  drop_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
   TIME_MEASURE_START(prepare);
   bool stop_batch;
   uint64_t bytes = 0;
@@ -7077,7 +7104,11 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   CRITICAL_REGION_LOCAL1(m_blockchain_lock);
 
   if(blocks_entry.size() == 0)
+  {
+    // An empty span is the sender's: we asked for blocks and got none.
+    drop_verdict = SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM;
     return false;
+  }
 
   for (const auto &entry : blocks_entry)
   {
@@ -7133,7 +7164,11 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
         crypto::hash block_hash;
 
         if (!parse_and_validate_block_from_blob(it->block, block, block_hash))
+        {
+          // Bytes that are not a block. Context-free and universal.
+          drop_verdict = SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM;
           return false;
+        }
 
         // check first block and skip all blocks if its not chained properly
         if (blockidx == 0)
@@ -7158,7 +7193,11 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
       crypto::hash block_hash;
 
       if (!parse_and_validate_block_from_blob(it->block, block, block_hash))
+      {
+        // As above, for the remainder batch.
+        drop_verdict = SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM;
         return false;
+      }
 
       if (have_block(block_hash))
         blocks_exist = true;
@@ -7186,11 +7225,20 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
       }
 
       if (!waiter.wait())
+      {
+        // A longhash worker threw. Ours, and a bug -- log it loudly, and do
+        // not charge the peer whose span happened to be in flight.
+        drop_verdict = SHEKYL_DROP_VERDICT_INTERNAL_FAILURE;
         return false;
+      }
       m_prepare_height = 0;
 
       if (m_cancel)
+      {
+         // Our own shutdown or cancellation. Routine, and not the sender's.
+         drop_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
          return false;
+      }
 
       for (const auto & map : maps)
       {
@@ -7200,7 +7248,10 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   }
 
   if (m_cancel)
+  {
+    drop_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
     return false;
+  }
 
   if (blocks_exist)
   {
@@ -7229,10 +7280,16 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   std::map<uint64_t, std::vector<output_data_t>> tx_map;
   std::vector<std::pair<cryptonote::transaction, crypto::hash>> txes(total_txs);
 
-#define SCAN_TABLE_QUIT(m) \
+// Takes the verdict as an argument rather than assuming one: this single
+// `return false` serves six conditions across two classes -- three describing
+// the sender's input, three describing an invariant of ours -- and it is
+// exactly that conflation that made the failure unclassifiable from outside.
+// Two censuses of this function undercounted it for the same reason (PWD-B7).
+#define SCAN_TABLE_QUIT(m, verdict) \
         do { \
             MERROR_VER(m) ;\
             m_scan_table.clear(); \
+            drop_verdict = (verdict); \
             return false; \
         } while(0); \
 
@@ -7241,23 +7298,26 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   for (const auto &entry : blocks_entry)
   {
     if (m_cancel)
+    {
+      drop_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
       return false;
+    }
 
     for (const auto &tx_blob : entry.txs)
     {
       if (tx_index >= txes.size())
-        SCAN_TABLE_QUIT("tx_index is out of sync");
+        SCAN_TABLE_QUIT("tx_index is out of sync", SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
       transaction &tx = txes[tx_index].first;
       crypto::hash &tx_prefix_hash = txes[tx_index].second;
       ++tx_index;
 
       if (!parse_and_validate_tx_base_from_blob(tx_blob.blob, tx))
-        SCAN_TABLE_QUIT("Could not parse tx from incoming blocks.");
+        SCAN_TABLE_QUIT("Could not parse tx from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
       cryptonote::get_transaction_prefix_hash(tx, tx_prefix_hash);
 
       auto its = m_scan_table.find(tx_prefix_hash);
       if (its != m_scan_table.end())
-        SCAN_TABLE_QUIT("Duplicate tx found from incoming blocks.");
+        SCAN_TABLE_QUIT("Duplicate tx found from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
 
       m_scan_table.emplace(tx_prefix_hash, std::unordered_map<crypto::key_image, std::vector<output_data_t>>());
       its = m_scan_table.find(tx_prefix_hash);
@@ -7277,7 +7337,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
         // check for duplicate
         auto it = its->second.find(in_to_key.k_image);
         if (it != its->second.end())
-          SCAN_TABLE_QUIT("Duplicate key_image found from incoming blocks.");
+          SCAN_TABLE_QUIT("Duplicate key_image found from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
 
         amounts.push_back(in_to_key.amount);
       }
@@ -7337,7 +7397,11 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
       tpool.submit(&waiter, boost::bind(&Blockchain::output_scan_worker, this, amount, std::cref(offset_map[amount]), std::ref(tx_map[amount])), true);
     }
     if (!waiter.wait())
+    {
+      // An output-scan worker threw. Ours, as above.
+      drop_verdict = SHEKYL_DROP_VERDICT_INTERNAL_FAILURE;
       return false;
+    }
   }
   else
   {
@@ -7353,19 +7417,22 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   for (const auto &entry : blocks_entry)
   {
     if (m_cancel)
+    {
+      drop_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
       return false;
+    }
 
     for (size_t i = 0; i < entry.txs.size(); ++i)
     {
       if (tx_index >= txes.size())
-        SCAN_TABLE_QUIT("tx_index is out of sync");
+        SCAN_TABLE_QUIT("tx_index is out of sync", SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
       const transaction &tx = txes[tx_index].first;
       const crypto::hash &tx_prefix_hash = txes[tx_index].second;
       ++tx_index;
 
       auto its = m_scan_table.find(tx_prefix_hash);
       if (its == m_scan_table.end())
-        SCAN_TABLE_QUIT("Tx not found on scan table from incoming blocks.");
+        SCAN_TABLE_QUIT("Tx not found on scan table from incoming blocks.", SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
 
       // Same archival-vin skip as the collection walks above.
       for (const auto &txin : tx.vin)

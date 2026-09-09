@@ -237,6 +237,11 @@ namespace cryptonote
     {
       LOG_PRINT_L1("transaction " << id << " failed non-input consensus rule checks");
       tvc.m_verifivation_failed = true; // should already be set, but just in case
+      // Attributable: every arm behind this call -- blob size, tx version
+      // bounds, weight limit, check_tx_semantic, check_tx_outputs -- is a
+      // consensus rule keyed on hf_version. Universal, and it describes the
+      // transaction rather than us, so the sender chose to send it (PWD-B7).
+      tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
       return false;
     }
 
@@ -254,7 +259,7 @@ namespace cryptonote
     {
       tvc.m_verifivation_failed = true;
       tvc.m_fee_too_low = true;
-      tvc.m_no_drop_offense = true;
+      tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
       return false;
     }
 
@@ -264,7 +269,7 @@ namespace cryptonote
       LOG_PRINT_L1("transaction tx-extra is too big: " << tx_extra_size << " bytes, the limit is: " << MAX_TX_EXTRA_SIZE);
       tvc.m_verifivation_failed = true;
       tvc.m_tx_extra_too_big = true;
-      tvc.m_no_drop_offense = true;
+      tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
       return false;
     }
 
@@ -273,7 +278,7 @@ namespace cryptonote
       LOG_PRINT_L1("transaction unlock time is not zero: " << tx.unlock_time);
       tvc.m_verifivation_failed = true;
       tvc.m_nonzero_unlock_time = true;
-      tvc.m_no_drop_offense = true;
+      tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
       return false;
     }
 
@@ -288,7 +293,7 @@ namespace cryptonote
         LOG_PRINT_L1("Transaction with id= "<< id << " used already spent key images");
         tvc.m_verifivation_failed = true;
         tvc.m_double_spend = true;
-        tvc.m_no_drop_offense = true;
+        tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
         return false;
       }
     }
@@ -335,7 +340,12 @@ namespace cryptonote
           CRITICAL_REGION_LOCAL1(m_blockchain);
           LockedTXN lock(m_blockchain.get_db());
           if (!insert_key_images(tx, id, tx_relay))
+          {
+            // Our pool bookkeeping broke -- insert_key_images' own message
+            // says "internal error". The sender is not answerable (PWD-B7).
+            tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
             return false;
+          }
 
           m_blockchain.add_txpool_tx(id, blob, meta);
           add_tx_to_transient_lists(id, fee / (double)(tx_weight ? tx_weight : 1), receive_time);
@@ -344,6 +354,9 @@ namespace cryptonote
         catch (const std::exception &e)
         {
           MERROR("Error adding transaction to txpool: " << e.what());
+          // We threw. Severing the peer for it is the exact outcome PWD-B7
+          // forbids -- our storage failing must not partition us.
+          tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
           return false;
         }
         tvc.m_verifivation_impossible = true;
@@ -353,6 +366,13 @@ namespace cryptonote
         LOG_PRINT_L1("tx used wrong inputs, rejected");
         tvc.m_verifivation_failed = true;
         tvc.m_invalid_input = true;
+        // Attributable by default: check_tx_inputs rejects malformed rings,
+        // bad proofs and unsupported input shapes, all universal and all
+        // describing the transaction. Its double-spend arms are NOT ours to
+        // punish and classify themselves as POLICY_OR_STATE before returning;
+        // combine() keeps that precise reading rather than letting this
+        // coarser one overwrite it (PWD-B7).
+        tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
         return false;
       }
     }else
@@ -494,7 +514,11 @@ namespace cryptonote
           }
 
           if (!insert_key_images(tx, id, tx_relay))
+          {
+            // As above: our bookkeeping, not the sender's transaction.
+            tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
             return false;
+          }
 
           m_blockchain.remove_txpool_tx(id);
           m_blockchain.add_txpool_tx(id, blob, meta);
@@ -506,6 +530,8 @@ namespace cryptonote
       catch (const std::exception &e)
       {
         MERROR("internal error: error adding transaction to txpool: " << e.what());
+        // As above: our own throw, and the message says so.
+        tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
         return false;
       }
 

@@ -38,6 +38,7 @@
 #include "unit_tests_utils.h"
 #include "net/tor_address.h"
 #include <condition_variable>
+#include "shekyl/shekyl_ffi.h"
 
 #define MAKE_IPV4_ADDRESS(a,b,c,d) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),0}
 #define MAKE_IPV4_ADDRESS_PORT(a,b,c,d,e) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),e}
@@ -84,7 +85,17 @@ public:
   // Defaults to the previous hardcoded `true`, so existing tests are
   // unaffected.
   bool prepare_handle_incoming_blocks_result = true;
-  bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry>  &blocks_entry, std::vector<cryptonote::block> &blocks) { return prepare_handle_incoming_blocks_result; }
+  // WHY the configured failure happened. The real call sets this on every
+  // false return (PWD-B7); the default is the attributable one, so a test that
+  // only sets `prepare_handle_incoming_blocks_result = false` still drives the
+  // severing arm it drove before the verdict existed.
+  uint8_t prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM;
+  bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry>  &blocks_entry, std::vector<cryptonote::block> &blocks, uint8_t &drop_verdict)
+  {
+    drop_verdict = prepare_handle_incoming_blocks_result ? uint8_t(SHEKYL_DROP_VERDICT_UNCLASSIFIED)
+                                                         : prepare_handle_incoming_blocks_verdict;
+    return prepare_handle_incoming_blocks_result;
+  }
   bool cleanup_handle_incoming_blocks(bool force_sync = false) { return true; }
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return true; }
   bool update_checkpoints(const bool skip_dns = false) { return true; }
@@ -2368,6 +2379,114 @@ TEST(block_sync_span_lifecycle, prepare_failure_charges_the_origin_it_disconnect
     << "the sweep must charge (an unchargeable failure is one a peer can "
        "repeat forever) and nothing may charge a second time for it";
   EXPECT_FALSE(endpoint.dropped.empty()) << "but the origin is still disconnected";
+}
+
+// The other half of the same site, and the reason PWD-B7 made the verdict a
+// TYPE. A prepare failure that describes OUR OWN broken invariant --
+// `tx_index is out of sync`, a tx missing from our own scan table, a worker
+// that threw -- must neither disconnect the span's origin nor charge it. Under
+// the boolean this was indistinguishable from a malformed span, so our own bug
+// severed and billed an honest peer.
+//
+// Three assertions, because removing a punishment is not the whole change:
+// the drop is gone, the charge is gone, AND the span still leaves the queue.
+// That last one is the limb that matters most. `drop_connection` flushed the
+// span as a SIDE EFFECT; now that we do not drop, nothing else would clear it,
+// `get_next_span` would hand the same failed span back forever, and sync would
+// stall on our own bug instead of recovering from it. The severing being
+// removed WAS the recovery -- so the recovery is now explicit and asserted.
+//
+// Clearnet origin, because the endpoint refuses to score a non-host address
+// and could not observe an absent charge on an anonymity zone.
+TEST(block_sync_span_lifecycle, prepare_failure_on_our_own_invariant_neither_drops_nor_charges)
+{
+  test_core pr_core;
+  pr_core.prepare_handle_incoming_blocks_result = false;
+  pr_core.prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_INTERNAL_FAILURE;
+  pr_core.blocks_we_have.push_back(crypto::null_hash);
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  const boost::uuids::uuid origin = fixed_uuid(5);
+  endpoint.add(origin, ip);
+
+  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
+  queue.add_blocks(1, {one_block()}, origin, ip, 1.0f, 1);
+  ASSERT_EQ(1u, queue.get_num_filled_spans());
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
+
+  EXPECT_TRUE(endpoint.dropped.empty())
+    << "our own broken invariant must not disconnect the peer that happened "
+       "to be feeding us when it broke";
+  unsigned total = 0;
+  for (const auto &f : endpoint.host_fails)
+    total += f.second;
+  EXPECT_EQ(0u, total) << "and it must not be charged for our bug either";
+  EXPECT_EQ(0u, queue.get_num_filled_spans())
+    << "but the span must STILL leave the queue -- the drop used to flush it "
+       "as a side effect, and removing the drop must not remove the recovery";
+}
+
+// Our own cancellation, which is the routine member of the same class: a
+// shutdown or a cancelled sync is not a defect and not the sender's, so it is
+// neither loud nor chargeable. Separated from the test above because the two
+// take different arms of the verdict and only agree on the outcome.
+TEST(block_sync_span_lifecycle, prepare_failure_on_our_own_cancellation_neither_drops_nor_charges)
+{
+  test_core pr_core;
+  pr_core.prepare_handle_incoming_blocks_result = false;
+  pr_core.prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
+  pr_core.blocks_we_have.push_back(crypto::null_hash);
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  const boost::uuids::uuid origin = fixed_uuid(5);
+  endpoint.add(origin, ip);
+
+  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
+  queue.add_blocks(1, {one_block()}, origin, ip, 1.0f, 1);
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
+
+  EXPECT_TRUE(endpoint.dropped.empty());
+  unsigned total = 0;
+  for (const auto &f : endpoint.host_fails)
+    total += f.second;
+  EXPECT_EQ(0u, total);
+  EXPECT_EQ(0u, queue.get_num_filled_spans());
+}
+
+// And the guard on the whole design: an UNCLASSIFIED failure -- the value a
+// `return false` added later carries until someone classifies it -- takes the
+// safe arm. This is what "the type is the gate" buys; without it a new
+// condition inherits whatever the default happens to be, which is exactly how
+// our own storage errors ended up severing peers.
+TEST(block_sync_span_lifecycle, an_unclassified_prepare_failure_does_not_drop)
+{
+  test_core pr_core;
+  pr_core.prepare_handle_incoming_blocks_result = false;
+  pr_core.prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
+  pr_core.blocks_we_have.push_back(crypto::null_hash);
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  const boost::uuids::uuid origin = fixed_uuid(5);
+  endpoint.add(origin, ip);
+
+  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
+  queue.add_blocks(1, {one_block()}, origin, ip, 1.0f, 1);
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
+
+  EXPECT_TRUE(endpoint.dropped.empty());
+  EXPECT_EQ(0u, queue.get_num_filled_spans());
 }
 
 // The endpoint advertisement is DERIVED: no dedicated flag decides it, so the

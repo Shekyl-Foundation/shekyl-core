@@ -45,6 +45,7 @@
 #include "serialization/json_utils.h" // dump_json()
 #include "include_base_utils.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "shekyl/shekyl_ffi.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "bcutil"
@@ -132,7 +133,10 @@ int check_flush(cryptonote::core &core, std::vector<block_complete_entry> &block
     return 0;
 
   std::vector<block> pblocks;
-  if (!core.prepare_handle_incoming_blocks(blocks, pblocks))
+  // Imported from a block file: nothing arrived over a transport, so there is
+  // no peer to attribute a failure to (PWD-B7).
+  uint8_t unattributable_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
+  if (!core.prepare_handle_incoming_blocks(blocks, pblocks, unattributable_verdict))
   {
     MERROR("Failed to prepare to add blocks");
     return 1;

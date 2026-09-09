@@ -30,6 +30,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "cryptonote_protocol/enums.h"
 
 namespace cryptonote
@@ -42,12 +44,25 @@ namespace cryptonote
     static_assert(unsigned(relay_method::none) == 0, "default m_relay initialization is not to relay_method::none");
 
     relay_method m_relay; // gives indication on how tx should be relayed (if at all)
-    bool m_verifivation_failed; //bad tx, tx should not enter mempool and connection should be dropped unless m_no_drop_offense
-    // Do not add to mempool, do not relay, but also do not punish the peer for sending or drop
-    // connections to them. Used for low fees, tx_extra too big, "relay-only rules". Not to be
-    // confused with breaking soft fork rules, because tx could be later added to the chain if mined
-    // because it does not violate consensus rules.
-    bool m_no_drop_offense;
+    bool m_verifivation_failed; //bad tx, tx should not enter mempool. Whether the connection is ALSO dropped is m_drop_verdict's question, not this flag's
+    // Why this rejection happened, in the only terms a drop decision may consult
+    // (PWD-B7, docs/design/SHEKYL_P2P_PROTOCOL.md). One of the
+    // SHEKYL_DROP_VERDICT_* values from shekyl/shekyl_ffi.h.
+    //
+    // This replaced a `bool m_no_drop_offense` whose ABSENCE meant "droppable".
+    // Absence did not identify malformed input -- it identified everything
+    // outside a four-entry carve-out list, and that set included OUR OWN
+    // failures, so a tripped pool invariant or a storage exception severed an
+    // innocent peer. The zero value here means nothing classified the
+    // rejection, and it does NOT sever: a failure path added later is safe
+    // until someone affirmatively says it describes the sender's input.
+    //
+    // Write it through shekyl_drop_verdict_combine() so a coarse
+    // classification cannot overwrite a precise one; read it only through
+    // shekyl_drop_verdict_severs() / shekyl_drop_verdict_is_internal_failure().
+    // The initialiser is here rather than left to each `tvc{}` because a byte
+    // that reads as garbage would otherwise be one value away from severing.
+    uint8_t m_drop_verdict = 0 /* SHEKYL_DROP_VERDICT_UNCLASSIFIED */;
     bool m_verifivation_impossible; //the transaction is related with an alternative blockchain
     bool m_added_to_pool; 
     bool m_double_spend;

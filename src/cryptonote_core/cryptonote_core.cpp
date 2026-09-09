@@ -54,6 +54,7 @@ using namespace epee;
 #include "hardforks/hardforks.h"
 #include "tx_verification_utils.h"
 #include "version.h"
+#include "shekyl/shekyl_ffi.h"
 
 #include <boost/filesystem.hpp>
 
@@ -730,6 +731,9 @@ namespace cryptonote
       LOG_PRINT_L1("WRONG TRANSACTION BLOB, too big size " << tx_blob.size() << ", rejected");
       tvc.m_verifivation_failed = true;
       tvc.m_too_big = true;
+      // The blob's own length against a shipped bound -- describes the input,
+      // and every node holds the same bound (PWD-B7).
+      tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
       return false;
     }
 
@@ -739,6 +743,9 @@ namespace cryptonote
     {
       LOG_PRINT_L1("Incoming transactions failed to parse, rejected");
       tvc.m_verifivation_failed = true;
+      // Bytes that are not a transaction. The most attributable rejection
+      // there is: context-free, universal, and the sender chose to send them.
+      tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
       return false;
     }
 
@@ -1239,7 +1246,10 @@ namespace cryptonote
       return false;
     }
     std::vector<block> pblocks;
-    if (!prepare_handle_incoming_blocks(blocks, pblocks))
+    // We mined this block ourselves: there is no connection behind it, so an
+    // offense classification has nothing to classify (PWD-B7).
+    uint8_t unattributable_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
+    if (!prepare_handle_incoming_blocks(blocks, pblocks, unattributable_verdict))
     {
       MERROR("Block found, but failed to prepare to add");
       m_miner.resume();
@@ -1317,10 +1327,10 @@ namespace cryptonote
     return m_blockchain_storage.add_new_block(b, bvc, connect);
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks)
+  bool core::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks, uint8_t &drop_verdict)
   {
     m_incoming_tx_lock.lock();
-    if (!m_blockchain_storage.prepare_handle_incoming_blocks(blocks_entry, blocks))
+    if (!m_blockchain_storage.prepare_handle_incoming_blocks(blocks_entry, blocks, drop_verdict))
     {
       cleanup_handle_incoming_blocks(false);
       return false;
