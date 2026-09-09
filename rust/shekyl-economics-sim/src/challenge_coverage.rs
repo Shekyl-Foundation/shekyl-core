@@ -369,7 +369,7 @@ mod tests {
     /// this one, same D and budget) — so the assertion is the honest range
     /// plus the exact symmetry draw-conservation forces, not a point.
     #[test]
-    #[ignore]
+    #[ignore = "full-scale ~1M-draw reproduction of the ARCHIVAL_CHALLENGE_MECHANISM.md §7.1/§8 figures; run with --ignored (release)"]
     fn full_scale_maturity_reproduces_doc_figures() {
         let d: u32 = 324_000;
         let band = run_epoch(d, 3 * d as u64, true, 1);

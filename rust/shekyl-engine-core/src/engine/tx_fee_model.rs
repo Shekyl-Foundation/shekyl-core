@@ -184,7 +184,7 @@ mod tests {
     use shekyl_tx_weight::fcmp_proof_size;
 
     #[test]
-    #[ignore]
+    #[ignore = "diagnostic printer for measured depth-1 FCMP proof sizes; not a gate — run with --ignored --nocapture"]
     fn kat_print_depth1_fcmp_sizes() {
         for n_in in 1..=8usize {
             let measured = crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, 1)

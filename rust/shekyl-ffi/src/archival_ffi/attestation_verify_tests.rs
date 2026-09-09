@@ -643,7 +643,7 @@ fn pass_ids_feeds_step2_coverage() {
 /// re-paste only if the genesis-frozen wire format changes:
 ///   cargo test -p shekyl-ffi emit_attestation_verify_kat -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "vector emitter for the C++ cross-language KAT; asserts nothing — run with --ignored --nocapture to regenerate"]
 fn emit_attestation_verify_kat() {
     fn hex(b: &[u8]) -> String {
         b.iter().map(|x| format!("{x:02x}")).collect()

@@ -1,0 +1,145 @@
+name: nightly/live-daemon-slow-gates
+
+# The GATE_LANE=slow half of scripts/ci/run_live_daemon_gates.sh: the two
+# consensus e2e gates too heavy for the per-PR lane in build.yml (depth-3
+# FCMP++ spend ~13 min + emission claim ~19 min, measured 2026-09-08 local
+# Release). They are armed gates, not optional smoke — a red here is a
+# consensus regression and blocks release the same as a per-PR red.
+#
+# Build recipe mirrors build.yml's ubuntu:24.04 job (the one that runs the
+# per-PR lane): same container, same apt set, same BUILD_DEFAULT_LINUX, so
+# the shekyld under test here is the same shape the per-PR gates run against.
+#
+# A red here is PUSHED at a human, not left to be noticed: the on-failure
+# step opens (or comments on) a tracking issue. That route is the named
+# criterion under which PR #660's rejection of a cost tier reverts — a
+# nightly tier without it "joins a silence" (run_live_daemon_gates.sh header).
+# Removing the notification step voids the split; the slow pair then moves
+# back to the per-PR ARMED list.
+
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # For the on-failure notification step: a red must reach a human.
+  issues: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl clang libclang-dev'
+  APT_SET_CONF: |
+    tee -a /etc/apt/apt.conf.d/80-custom << EOF
+    Acquire::Retries "3";
+    Acquire::http::Timeout "120";
+    Acquire::ftp::Timeout "120";
+    EOF
+  CCACHE_SETTINGS: |
+    ccache --max-size=150M
+    ccache --set-config=compression=true
+
+jobs:
+  slow-gates:
+    # Scheduled workflows execute from the default branch (main); the branch
+    # matrix makes each run cover both active branches, the nightly.yml
+    # house pattern. workflow_dispatch with ref=dev exercises a newer config
+    # before it lands on main.
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, dev]
+    container:
+      image: ubuntu:24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        CCACHE_TEMPDIR: /tmp/.ccache-temp
+        CCACHE_DIR: ~/.ccache
+    steps:
+      - name: set apt conf
+        run: ${{env.APT_SET_CONF}}
+      - name: update apt
+        run: apt update
+      - name: install build dependencies
+        run: ${{env.APT_INSTALL_LINUX}}
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.branch }}
+          submodules: recursive
+      - name: install Rust
+        # Composite action (.github/actions/install-rust) — see build.yml
+        # for why it must come after checkout and before the daemon build.
+        uses: ./.github/actions/install-rust
+      - uses: actions/cache@v5
+        with:
+          path: ~/.ccache
+          key: ccache-nightly-slow-${{ matrix.branch }}-${{ github.sha }}
+          restore-keys: |
+            ccache-nightly-slow-${{ matrix.branch }}-
+            ccache-ubuntu:24.04-build-
+      - uses: ./.github/actions/set-make-job-count
+      - name: build
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
+        run: |
+          ${{env.CCACHE_SETTINGS}}
+          ${{env.BUILD_DEFAULT_LINUX}}
+      - name: slow live-daemon gates
+        # `shell: bash` for the same reason as build.yml's per-PR step: the
+        # container default is dash, which rejects `set -o pipefail`.
+        shell: bash
+        env:
+          GATE_LANE: slow
+        run: scripts/ci/run_live_daemon_gates.sh
+      - name: notify on red
+        # The visibility route that justifies this lane's existence (header
+        # comment): a slow-gate red opens a tracking issue, or comments on
+        # the open one so repeats thread instead of piling up.
+        #
+        # github-script rather than `gh`: this job runs inside the
+        # ubuntu:24.04 container, which does not ship the GitHub CLI, and
+        # installing it would add GitHub's apt repo to the build image for
+        # one failure path. JS actions already run in this container
+        # (checkout/cache above) because the runner injects its own node.
+        if: failure()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const title = `nightly slow live-daemon gates RED (${{ matrix.branch }})`;
+            const body = [
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              'Branch: ${{ matrix.branch }}',
+              'The GATE_LANE=slow consensus gates (depth-3 FCMP++ spend / emission claim) failed.',
+              'A red here is a consensus regression and blocks release the same as a per-PR red.',
+            ].join('\n');
+            // Exact-title match over open issues, not text search: the search
+            // API's in:title is a substring match and lags on freshly created
+            // issues, which would fork the thread on back-to-back nightly reds.
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = open.find((i) => !i.pull_request && i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+            }

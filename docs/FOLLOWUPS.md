@@ -14,6 +14,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **Cross-cutting lock 5's daemon-network verification never landed, and a docstring says it did.** `WALLET_REWRITE_PLAN.md` :216 requires the daemon's network "verified via `get_info` before any wallet operation"; the landed `OpenError::NetworkMismatch` compares the wallet file to the caller's `expected` and never asks the daemon, `engine/daemon.rs:169` and `engine/error/mod.rs:41` both claim the daemon is compared (the variant's fields, `{ wallet, expected }`, have no daemon-reported value), and no Rust client reads `get_info.nettype` (the regtest e2e suite opens `Mainnet` wallets against `fakechain` daemons and passes). The fix is slice VC-4 of the version-and-constants round; the docstring correction rides with it (owner: [`CLIENT_VERSION_CONSTANTS_VALIDATION.md`](design/CLIENT_VERSION_CONSTANTS_VALIDATION.md) §0.2).
+  - Target: pre-genesis
+
 - **Delete or justify `tx_extra` 0x0A (`PQC_SPEND_AUTH_PUBKEYS`) — it has no producer.** Found at the C2-R2 signing round (Rick, verified at source): declared (`src/cryptonote_basic/tx_extra.h:48`, `rust/shekyl-wire/src/tx_extra.rs:50`), parsed (`tx_extra.rs:233`), picked (`src/cryptonote_basic/cryptonote_format_utils.cpp:540`) — and nothing anywhere constructs the field; the only write arm is the codec's generic `write_blob` branch. A parse surface with no producer is rule-15 debt and a fuzzing surface for free. Rule 15: delete at the port, or record the future producer that justifies it. — [`CONSENSUS_C2_R2_WEIGHT_FEES.md`](completed/CONSENSUS_C2_R2_WEIGHT_FEES.md) Q10
   - Target: pre-genesis
 
@@ -104,7 +107,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Daemon chain store (`DRS-*`) — gap-close pass landed in design.** SoT: [`docs/design/DAEMON_REDB_STORE.md`](./design/DAEMON_REDB_STORE.md)
   - Target: pre-genesis
 
-- **DRS-P0 multi-PR — blocks DRS-0.** **P0a** schema+CI — **DELIVERED 2026-09-05** (49-row reconciliation registry + heading/registry gate legs; see the P0a registry in [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)); **P0b** atomicity+journals+transcriptions — **DELIVERED 2026-09-05** ([`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) rewritten in place, §10 matrix gate-pinned, A-2/A-4/A-6 transcribed, DRS-W1…DRS-W15 recorded — DRS-W1 through DRS-W11 by P0b, DRS-W12 through DRS-W15 by P0c); **P0c** wart register — **DELIVERED 2026-09-08** (audit §9; four rows RECORD-AND-SPECIFY, no C++ written); **P0d**
+- **DRS-P0d — Digest v0, the last DRS-P0 leg that blocks DRS-0.** P0a (schema+CI), P0b (atomicity+journals+transcriptions) and P0c (wart register) are DELIVERED (2026-09-05 / -05 / -08 — git history holds the delivery detail this row used to carry); P0d builds the logical-state digest v0 (core chain + spent keys + curve root minimum; must expand archival journals before S-ARCH / DRS-E), and inherits P0b's remaining RAW-edge read-set tracing. P0e may trail with named exclusions; P0f gates E2's correctness arm, not DRS-0. Owner: [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) §7 P0 table.
   - Target: pre-genesis
 
 - **`txs` is a zero-write, zero-read LMDB table (P0b DRS-W4).** Handle's only occurrence is its `open()`; inherited-dead deletion candidate — C++ + schema-version change, census/DRS lane owns ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
@@ -120,9 +123,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with**
-  - Target: pre-genesis
-
-- **`prev_block` block templates deleted (RESERVED at the RPC) — reopen has a**
   - Target: pre-genesis
 
 - **`sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide**
@@ -167,9 +167,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Rust wallet stack: no Windows support (blocks Windows wallet [`WINDOWS_WALLET_SUPPORT.md`](design/WINDOWS_WALLET_SUPPORT.md)**
-  - Target: pre-genesis
-
-- **Hardware-device C++ surface: B2 LANDED 2026-08-18 — deleted**
   - Target: pre-genesis
 
 - **Daemon RPC: restricted-method dual-list single-source** (added
@@ -296,9 +293,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Anonymized (Tor/I2P) routing for non-forward segment fetch (CT Round 0 [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md)**
   - Target: pre-genesis
 
-- **Shard serving on `P`: zstd compression REJECTED by measurement**
-  - Target: pre-genesis
-
 - **Single-dispatcher nm gate: extend beyond `shekyld` (2026-06-11**
   - Target: pre-genesis
 
@@ -351,9 +345,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Stage 1 trait-extraction chain — closeout audit (2026-05-29, [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)**
-  - Target: pre-genesis
-
-- **`KeyEngine` inline orchestrator integration — rejected for Stage 1; [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)**
   - Target: pre-genesis
 
 - **Post-2g adversarial-corpus methodology + implementation [`docs/completed/RANDOMX_V2_PHASE2H_PLAN.md`](./completed/RANDOMX_V2_PHASE2H_PLAN.md)**
@@ -413,9 +404,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Stage 3 — `StakeEngine` native actor build.** Build the Phase
   - Target: pre-genesis
 
-- **Owned `AtomicUnits::mul_div_rem` — deferred (rule-21 reversion clause; spawned [`design/PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md)**
-  - Target: pre-genesis
-
 - **Consolidate hand-copied `10^9` / decimal-point constants onto the `shekyl-units`**
   - Target: pre-genesis
 
@@ -464,9 +452,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Serve-credit C++ consensus decisions — Rust equivalence audit + [`REWARD_EMISSION_E3_GATING_ROUND.md`](./completed/REWARD_EMISSION_E3_GATING_ROUND.md)**
   - Target: pre-genesis
 
-- **Emission regtest end-to-end — the E4/E5 gate** (surfaced 2026-07-09, [`REWARD_EMISSION_E3_GATING_ROUND.md`](./completed/REWARD_EMISSION_E3_GATING_ROUND.md)
-  - Target: pre-genesis
-
 - **Market-bond wallet entry — `first_stake`'s genesis posture cannot**
   - Target: pre-genesis
 
@@ -482,16 +467,10 @@ Default. Lands before genesis if it should exist at launch.
 - **Q11 balance-exclusion KAT — blob-boundary invariant arm** [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md)
   - Target: pre-genesis
 
-- **Daemon Rust submit engine: bond-post + emission submit batteries — [`EMISSION_CLAIM_BUILDER.md`](./design/EMISSION_CLAIM_BUILDER.md)**
-  - Target: pre-genesis
-
 - **Single-sig address decode enforces the Bech32m variant** [`rust/shekyl-address/src/address.rs`](../rust/shekyl-address/src/address.rs)
   - Target: pre-genesis
 
 - **Credit-wire cutover has two preconditions the Phase-2 verify cannot satisfy [`cryptonote_core.cpp`](../src/cryptonote_core/cryptonote_core.cpp)**
-  - Target: pre-genesis
-
-- **Round-2 stressnet: re-pin archival `m`/`n`** (surfaced 2026-07-25
   - Target: pre-genesis
 
 - **Raw-import archival/burn bookkeeping parity** (surfaced 2026-07-09,
@@ -602,9 +581,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Expose FCMP++ verification cache stats via daemon RPC (stressnet F14).**
   - Target: pre-genesis
 
-- **MFA / hardware-token integration for wallet file decryption.**
-  - Target: pre-genesis
-
 - **Rust replacements for chaingen-deleted validation invariants.**
   - Target: pre-genesis
 
@@ -654,9 +630,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Wallet: stop holding a relay constant — ask the daemon whether a**
-  - Target: pre-genesis
-
-- **Relay: the D9 below-floor observer (§18.4, ruled 2026-08-15). IMPLEMENTED**
   - Target: pre-genesis
 
 - **Relay: the zone-route decision family moves to Rust** (in flight,
@@ -742,8 +715,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Decide `sanitize_peerlist`'s port-0 handling, where the IPv4-only rule collides with `tor_address::unknown()` being port 0.** Blocker: the tor port-0 semantics are disputed (named by #587, not invented here). PWC-D9 — [`P2P_2_DISPATCH_BRIEF.md`](design/P2P_2_DISPATCH_BRIEF.md) PWD-B11
   - Target: pre-genesis
 
-- ~~**p2p lane, one composable change: delete the back-ping and `COMMAND_PING`, insert the inbound peer directly into `gray` after handshake, and bound gray occupancy per host.**~~ **DONE — PR #643** (`p2p/basic-node-data-address`): all three land together as the row required, on top of the store bump it names as the prerequisite. The per-host gray bound is enforced in `append_with_peer_gray` itself (and in `append_operator_candidate`), so it covers the gossip path the row notes was always unbounded, not only the new handshake writer. PWD-I4 still derives against the fixed composition.
-
 - **Daemon PQC phase-1 payload assembly duplicates [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)**
   - Target: pre-genesis
 
@@ -768,12 +739,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Workspace clippy `-D warnings` cleanup.** Surfaced by the Phase 0
   - Target: pre-genesis
 
-- **`shekyl_difficulty_lwma1_next` FFI shim allocates `Vec<u128>` per [#52](https://github.com/Shekyl-Foundation/shekyl-core/pull/52)**
-  - Target: pre-genesis
-
-- **C++ bridge `lwma1_next_difficulty` helper allocates two heap [`src/cryptonote_core/blockchain.cpp`](../src/cryptonote_core/blockchain.cpp)**
-  - Target: pre-genesis
-
 - **RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path and [`external/CMakeLists.txt`](../external/CMakeLists.txt)**
   - Target: pre-genesis
 
@@ -789,13 +754,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Legacy spend-graph analysis utilities (`ancestry`/`depth`/`usage`): audit against FCMP++, then delete** (`prune-known-spent-data` audited and deleted — its eligible set is empty on an amount-0 CT chain) [`EXECUTABLES.md`](EXECUTABLES.md)
   - Target: pre-genesis
 
-- **P-scan pruned-fetch bandwidth option over Tor (rejected at ).** The
-  - Target: pre-genesis
-
 - **`atomic_write_file` power-loss crash-injection tests.** PR 6 cites
-  - Target: pre-genesis
-
-- **Wallet on network filesystems (NFS / SMB).** Advisory lock + atomic
   - Target: pre-genesis
 
 - **Wallet file metadata obfuscation (PR 6 §5.12 F5–F6).** File size and mtime
@@ -817,15 +776,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Stack-trace hook: re-route `ST_LOG` back through the logging subsystem once the FFI boundary is safe mid-throw ().**
-  - Target: pre-genesis
-
-- **`shekyl-cli` offline signing uses hex blobs on the command line.**
-  - Target: pre-genesis
-
-- **`shekyl-cli` key image export uses JSON-RPC format, not C++ binary.** [.cursor/rules/60-no-monero-legacy.mdc]( ../.cursor/rules/60-no-monero-legacy.mdc)
-  - Target: pre-genesis
-
-- **Test code `wallet_tools.cpp` still uses mixin/decoy infrastructure.**
   - Target: pre-genesis
 
 - **`removed_flags` shim sunset.**
@@ -900,85 +850,10 @@ Default. Lands before genesis if it should exist at launch.
 - **2d-2 SP-T3 — inbound onion serving-side hardening (the implementation threat model).** The onion [`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md`](design/ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md)
   - Target: pre-genesis
 
-- **`ReorgAmplificationDetector` consumer actor (Stage 1 PR 4 R5 [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)**
-  - Target: pre-genesis
-
-- **`PeerReputationActor` consumer actor (Stage 1 PR 4 R6 [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)**
-  - Target: pre-genesis
-
-- **`RecoveryActor` consumer actor (Stage 1 PR 4 R6 reframe; [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)**
-  - Target: pre-genesis
-
-- **`ViewTagAnomalyDetector` consumer actor (Stage 1 PR 4 [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)**
-  - Target: pre-genesis
-
-- **Diagnostic-stream specification document [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)**
-  - Target: pre-genesis
-
-- **`RefreshEngine` (c) split-producer/recoverer view-material [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)**
-  - Target: pre-genesis
-
-- **`ReservationTTLActor` consumer actor (Stage 1 PR 5 R8 [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)**
-  - Target: pre-genesis
-
-- **`SubmitFailureAnalyzer` consumer actor (Stage 1 PR 5 R9 [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)**
-  - Target: pre-genesis
-
-- **`TimeoutResolverActor` consumer actor (Stage 1 PR 5 R9 [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)**
-  - Target: pre-genesis
-
-- **`ReservationAuditActor` consumer actor (Stage 1 PR 5 §5.0.2 [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)**
-  - Target: pre-genesis
-
-- **Cancel-during-`in_flight` ergonomic alternative [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)**
-  - Target: pre-genesis
-
-- **Eager-discard-on-`SnapshotMerged` opt-in (Stage 1 PR 5 [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)**
-  - Target: pre-genesis
-
-- **Optional inverse-index seam under `PendingTxActor`'s [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)**
-  - Target: pre-genesis
-
-- **`MempoolMonitorActor` consumer actor (Stage 1 PR 5 [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)**
-  - Target: pre-genesis
-
-- **`TxConfirmationTrackerActor` consumer actor (Stage 1 [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)**
-  - Target: pre-genesis
-
-- **Transaction replacement / fee-bump (RBF/CPFP-equivalent) [`00-mission.mdc`](../.cursor/rules/00-mission.mdc)**
-  - Target: pre-genesis
-
-- **Build-cancel ergonomic refinement (Stage 1 PR 5 [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)**
-  - Target: pre-genesis
-
 - **Wallet-locked-during-`in_flight` coordination [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)**
   - Target: pre-genesis
 
 - **`LedgerEngine` candidate-fetch maturity-filter [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)**
-  - Target: pre-genesis
-
-- **HW-wallet integration as a `Signer`-impl substitution [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)**
-  - Target: pre-genesis
-
-- **Output-selection alternatives under `OutputSelector` trait [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)**
-  - Target: pre-genesis
-
-- **Submission-strategy actors under [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)**
-  - Target: pre-genesis
-
-- **Wallet-side fee estimator (`WalletSideEstimator`) under [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)**
-  - Target: pre-genesis
-
-- **Diagnostic-event encrypted-persistence — conditional [`00-mission.mdc`](../.cursor/rules/00-mission.mdc)**
-  - Target: pre-genesis
-
-- **Diagnostic-stream consumer-actor PR `diagnostic_consumer_discipline` [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)**
-  - Target: pre-genesis
-
-- **Diagnostic-stream specification document — projection- [`STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)**
-  - Target: pre-genesis
-
-- **Sync refresh wrapper generalization over `L: LedgerEngine`.** [`docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md`](completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
   - Target: pre-genesis
 
 - **`run_refresh_task` holds the engine read-guard across [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)**
@@ -1018,18 +893,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Soundness pass step 0: pin retrieval SLA per class (gate 4–6;**
-  - Target: pre-genesis
-
-- **Foundation archiver key rotation (gate 4–6; pre-genesis).** **Closed**
-  - Target: pre-genesis
-
-- **Foundation bond posture (gate 4–6; pre-genesis).** **Closed (spec).**
-  - Target: pre-genesis
-
-- **`ARCHIVAL_BOND_FLOOR` numeric pin + genesis `bond_floor_atomic`**
-  - Target: pre-genesis
-
-- **Archival data scope — sets A/B/C (gate 4–6; pre-genesis).** **Closed**
   - Target: pre-genesis
 
 - **Foundation genesis-enumeration — legal / regulatory disclosure**
@@ -1095,6 +958,15 @@ Exceptional deferral with a named blocker. This list stays tiny.
   - Target: post-genesis
 
 - **Horizontal scaling via stateless actor pools / signed actor-patch over staker P2P.** Named blocker: no production load or staker P2P distribution surface at genesis; not a lattice/V4 item.
+  - Target: post-genesis
+
+- **Transaction replacement / fee-bump (RBF/CPFP-equivalent).** Named blocker: fee-bump only matters under fee competition, and genesis launches on the adaptive floor with empty mempools; the submit lifecycle already keeps a stuck transaction funds-safe (terminal-reject prune/resubmit is the cadence driver's leg 4). Reopen on observed stuck-transaction incidence on the live network.
+  - Target: post-genesis
+
+- **MFA / hardware-token integration for wallet file decryption.** Named blocker: same vendor/device class as the hardware-offload deferral above — no token decision exists to design against, and the wallet file already ships Argon2 passphrase encryption at genesis.
+  - Target: post-genesis
+
+- **Wallet on network filesystems (NFS / SMB): advisory lock + atomic-rename semantics.** Named blocker: lock and rename guarantees are filesystem-implementation-specific and need real deployments to test against; no pre-genesis user has network-filesystem wallet state to protect.
   - Target: post-genesis
 
 ## V4
