@@ -29,37 +29,33 @@ name: ci/docs-gates
 on:
   pull_request:
     branches: [dev]
-    paths:
-      - "docs/**"
-      - "scripts/ci/check_doc_links.py"
-      - "scripts/ci/check_doc_headings.py"
-      - "scripts/ci/check_lmdb_schema_coverage.py"
-      - "scripts/ci/check_doc_status_banners.py"
-      - "scripts/ci/check_doc_fossils.py"
-      - "scripts/ci/check_followups_targets.py"
-      - "scripts/ci/check_index_prefix_uniqueness.py"
-      - "scripts/ci/check_index_table_shape.py"
-      # Both index gates import their row splitter from here, so a change to it
-      # changes what they see — a gate that cannot see its subject change is
-      # not a gate (rule 47).
-      - "scripts/ci/_gfm_table.py"
-      - "scripts/ci/check_no_claim_era_spec.py"
-      - "scripts/ci/check_landed_rows_stamped.py"
-      - ".cursor/rules/**"
-      # The schema-coverage gate reads the table list and VERSION out of
-      # db_lmdb.cpp, so a source-only table/version change must start this
-      # workflow — that drift arriving with no docs edit is exactly the
-      # case the gate exists to catch (rule 47: a gate that cannot see its
-      # subject change is not a gate).
-      #
-      # NOTE (P0a, 2026-09-05): this workflow is not only link checking —
-      # check_lmdb_schema_coverage.py's subjects ride the paths above:
-      # docs/LMDB_SCHEMA.md and docs/design/DAEMON_REDB_STORE.md (the P0a
-      # reconciliation registry) via "docs/**", and the X-macro via the
-      # db_lmdb.cpp entry below. Pruning or narrowing these paths in a
-      # link-checker restructure silently unwires that gate.
-      - "src/blockchain_db/lmdb/db_lmdb.cpp"
-      - ".github/workflows/docs-gates.yml"
+    # NO `paths:` FILTER, DELIBERATELY. This job's name is a REQUIRED status
+    # context on dev, and a required context that never reports is not a
+    # skipped check — it is "Expected — waiting for status to be reported",
+    # forever. A path filter therefore deadlocks every PR it excludes, with no
+    # red anywhere to explain it. PR #660 (two files, neither under docs/) sat
+    # blocked on exactly this and had to be force-merged because the failure
+    # mode is silence. This is the mirror of #653, which fixed
+    # `paths-ignore: docs/**` stranding docs-only PRs and left this direction
+    # standing.
+    #
+    # Filtering was also wrong on the merits, independently of the deadlock.
+    # Every check below is WHOLE-TREE, not diff-scoped: they validate the state
+    # of the tree, not what a PR touched. check_doc_links.py resolves links
+    # from docs/ INTO source files, so an ordinary code-only file move breaks
+    # docs and — under a `docs/**` filter — could not start the gate that
+    # exists to catch it. That is the rot this workflow was written for; the
+    # 2026-07-30 census found 178 dead links, "most introduced by ordinary
+    # file moves".
+    #
+    # And the filter was a list of the subjects of ten checks, which had to be
+    # maintained as those checks grew. It already carried a warning that
+    # pruning it "silently unwires that gate" (P0a, 2026-09-05). A list that
+    # must not drift, next to gates that keep acquiring subjects, is a standing
+    # liability. Deleting it deletes the drift.
+    #
+    # Cost of always running: ~25 s (five consecutive runs: 24/25/25/26 s and
+    # one 3m31s outlier), on a job already bounded at 10 minutes.
 
 concurrency:
   group: docs-gates-${{ github.ref }}
