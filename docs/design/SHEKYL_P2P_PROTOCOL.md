@@ -305,6 +305,17 @@ the attack right is not evidence of having answered it.**
   receives an authenticated field**. The check is not passed — it is
   *unnecessary*.
 
+**Tier two closes the forgery surface and is silent on the multiplication
+surface (2026-09-09 — the statement PWD-E4 routed here).** The same-host-cap
+example is correct as a tier-two instance: nothing is claimed, so nothing can
+be forged. An observed property can still be cheap to produce — `is_same_host`
+for ipv4 is exact IP equality (`net_utils_base.h:83`), so a /24 supplies 256
+free hosts on `public_` as surely as a keypair supplies one onion on `tor`.
+"Nothing to spoof" and "adversarially binding" are independent. The cap is a
+correct observation and still bounds honest duplicates, not an adversary, in
+any zone (PWD-E4). Stating it as overlay-limited is the framing that would
+re-derive it as a sybil bound for clearnet.
+
 > **The rung is directional, and PWD-T1 pays for saying so.** A binding only
 > removes the check on the side that verifies something authenticated under it.
 > In `NN` that is the initiator alone: message 1 carries no keyed field, so the

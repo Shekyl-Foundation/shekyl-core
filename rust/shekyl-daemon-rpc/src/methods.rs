@@ -116,6 +116,12 @@ pub fn get_height(facts: &dyn ChainFacts) -> Result<GetHeightResponse, RpcFault>
 /// raw target says.
 pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFault> {
     let tip = facts.chain_tip()?;
+    // The identity axes. Two FFI reads inside one handler still produce one
+    // RPC reply from one snapshot — ruling 1's hazard is that the *answerer*
+    // changes between calls, which a restart or a proxy does and an
+    // in-process read cannot (VC-R17). Both facts are process-lifetime
+    // constants besides.
+    let identity = facts.identity()?;
     let hard_forks = facts
         .hardforks()?
         .into_iter()
@@ -135,6 +141,12 @@ pub fn get_version(facts: &dyn ChainFacts) -> Result<GetVersionResponse, RpcFaul
             tip.target_height.to_raw()
         },
         hard_forks,
+        // The rules axis is this build's own constant, read here rather than
+        // fetched over FFI: it is compiled from `config/` into this image, so
+        // asking C++ for it would give one value two sources.
+        consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
+        nettype: identity.nettype,
+        genesis_hash: shekyl_rpc_types::HashHex::from_bytes(identity.genesis_hash.to_bytes()),
     })
 }
 
@@ -1336,8 +1348,8 @@ pub fn sync_info(chain: &dyn ChainFacts, p2p: &dyn P2pFacts) -> Result<SyncInfoR
 pub(crate) mod tests {
     use super::*;
     use crate::chain_facts::{
-        BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts, ChainTip, FeeEstimate,
-        HardFork, HardForkInfo, NetStats,
+        BlockAt, BlockFacts, BlockHashAt, BlockHeaderAt, BlockHeaderFacts, ChainTip,
+        DaemonIdentity, FeeEstimate, HardFork, HardForkInfo, NetStats,
     };
     use crate::core::{ConnectionsSnapshot, SyncSpansSnapshot};
     use serde_json::json;
@@ -1397,11 +1409,23 @@ pub(crate) mod tests {
         pub tip_growth_remaining: AtomicU64,
         /// Blocks the fake chain has grown so far, added to `hash_chain_height`.
         pub tip_grown: AtomicU64,
+        /// The identity facts, or a fault. `None` means "the default
+        /// mainnet identity", so the many tests that do not care about the
+        /// tuple need not construct one.
+        pub identity: Option<Result<DaemonIdentity, FactsFault>>,
     }
 
     impl ChainFacts for FakeFacts {
         fn chain_tip(&self) -> Result<ChainTip, FactsFault> {
             self.tip.clone()
+        }
+        fn identity(&self) -> Result<DaemonIdentity, FactsFault> {
+            self.identity.clone().unwrap_or_else(|| {
+                Ok(DaemonIdentity {
+                    nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+                    genesis_hash: shekyl_types::BlockHash::from_bytes([0x11; 32]),
+                })
+            })
         }
         fn hardforks(&self) -> Result<Vec<HardFork>, FactsFault> {
             self.forks.clone()
@@ -1605,6 +1629,7 @@ pub(crate) mod tests {
             header_reads: AtomicU64::new(0),
             tip_growth_remaining: AtomicU64::new(0),
             tip_grown: AtomicU64::new(0),
+            identity: None,
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
@@ -1855,13 +1880,44 @@ pub(crate) mod tests {
         // the_version_at_every_link` is what keeps the whole chain honest —
         // it replaced a test that pinned only the newest pair, which is
         // exactly what let this branch and `dev` both write 196634.
+        // `_v6` adds the identity tuple (VC-2). Two of its three fields are
+        // **moving values a captured vector must not chase**, for the same
+        // reason `version` is: the digest moves whenever `config/` moves, and
+        // the genesis hash is per network. A vector carrying either live value
+        // would have to be re-minted on every constants edit. So the vector
+        // holds obviously-synthetic fixtures, this test compares every other
+        // field against it, and each moving field is asserted against its own
+        // source — the digest against the compiled constant, the genesis and
+        // nettype against what the facts layer handed up.
         let out = get_version(&facts(true, 999_999)).unwrap();
         assert_eq!(out.target_height, 0);
-        let ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        let oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v5.json"
+        assert_eq!(
+            out.consensus_constants_digest,
+            shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
+            "the reply must carry this build's own digest, not a stored one"
+        );
+        assert_eq!(out.nettype, shekyl_rpc_types::DaemonNetwork::Mainnet);
+        assert_eq!(
+            out.genesis_hash,
+            shekyl_rpc_types::HashHex::from_bytes([0x11; 32]),
+            "the genesis hash must come from the facts layer, unaltered"
+        );
+
+        let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
+        let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v6.json"
         ))
         .unwrap();
+        for moving in ["consensus_constants_digest", "genesis_hash"] {
+            assert!(
+                ours.as_object_mut().unwrap().remove(moving).is_some(),
+                "{moving} must be present before it is excluded"
+            );
+            assert!(
+                oracle.as_object_mut().unwrap().remove(moving).is_some(),
+                "the vector must carry {moving}"
+            );
+        }
         assert_eq!(ours, oracle);
     }
 
@@ -1884,6 +1940,7 @@ pub(crate) mod tests {
             header_reads: AtomicU64::new(0),
             tip_growth_remaining: AtomicU64::new(0),
             tip_grown: AtomicU64::new(0),
+            identity: None,
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),

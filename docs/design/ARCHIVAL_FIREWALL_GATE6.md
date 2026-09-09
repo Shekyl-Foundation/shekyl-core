@@ -38,7 +38,7 @@
   against the F-D4 sentinel — `draw_exit_gap`, F-D6-derived anchor; sealing owed at Phase 7.7),
   **F-D5** → ~~§14.4~~ *(dangling — re-pointed 2026-07-17 to the §12.7-chartered disposition
   round)*, **F-D6** anti-drift (**DONE 2026-07-16**, §12.7). GF-10 (R3) folds into
-  the joint grade. The rebond/unbond FSM blocker is discharged (landed PR #303/#307).
+  the joint grade. The rebond/release FSM blocker is discharged (landed PR #303/#307).
   **UPDATE 2026-07-16 (R4 decision round — §12.9, RATIFIED at review-at-source):** the F-D4 §15.5
   hand-forward is **answered**:
   the exit seam **re-homes** to the principal↔user crossing (WI-4 §18.13; both halves reduce —
@@ -247,7 +247,7 @@ dispositions from the 2026-07-16 re-walk below are marked inline:*
 - ~~Terminal unstake = **decorrelated drain** `P`→principal — not a lump sweep that
   ties reward history to a single principal output cluster in one block.~~ *(RETIRED as
   phantom — F-W10, §12.9 decision 2; see GF-4 status below.)*
-- **Unbond refund** ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.4): ~~release
+- **Release refund** ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §2.4): ~~release
   creates a P-attributed output at public `bond_floor` amount; mixes in the FCMP++ set like
   any output — same decorrelated-drain discipline as reward receipts (amount is public;
   spend anonymity is tree membership).~~ *(HALF-PHANTOM, corrected — the tx is
@@ -272,7 +272,7 @@ same sitting, instead of waiting to be caught one at a time:
   ([`ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md`](../completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md) §16.1).
   **Re-anchored, not retired** — the bullet survives because its mechanism never needed
   the graph.
-- **Unbond refund: HALF-PHANTOM — the factual phrasing is the visible-graph intuition
+- **Release refund: HALF-PHANTOM — the factual phrasing is the visible-graph intuition
   written down, and the discipline tail retires with F-W10.** "Release creates a
   P-attributed **output** at public `bond_floor` amount" is wrong at the output layer:
   the *transaction* is `P`-attributed and the *debit amount* is public, but the refund
@@ -284,7 +284,7 @@ same sitting, instead of waiting to be caught one at a time:
   that names an output an observer could track presupposes the graph that would let
   them track it. The tail — "same decorrelated-drain discipline as reward receipts" —
   cites the discipline F-W10 retired and **retires with it**. What survives is what the
-  wire actually emits: the `Unbond` post itself, `P`-side public by design, an exit
+  wire actually emits: the `Release` post itself, `P`-side public by design, an exit
   event with no principal-side referent (F-D4 §16.1 lifecycle table). No wallet output
   rule is owed here either.
 
@@ -412,7 +412,7 @@ on-chain anchor ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)). Off-chain 
   backing-output rotation"). No backing output is shared between personas (each is scanned under one
   `P`'s view key). `P_canonical_id` is **unchanged** — the only point here: key the instance on it,
   never on an output.
-- **Pseudonym "rotation" is unlink-and-relink, and it *correlates*.** Retire `P_old` (`Unbond` +
+- **Pseudonym "rotation" is unlink-and-relink, and it *correlates*.** Retire `P_old` (`Release` +
   drain) + create `P_new` (fresh `JoinMarket`): two independent lifecycle ops, **no bond migration**
   (S-5, §10.12). It provides **correlation, not decorrelation** (T-A1 portfolio re-linkage), which
   is exactly why **long-lived `P` is the committed architecture** (S-5). `p_slot` (§9.2) derives a
@@ -479,18 +479,18 @@ carried; R2 the same).
 | **1** | HKDF/`P_id` wire + crypto layer hooks | **Closed (2026-06-13)** — §9 GF-1 dual-key verifier contract resolved; GF-2 dual-scan enforcement made architectural; reviewer sign-off (§9.8). **Carry discharged (2026-07-11 reconciliation):** `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152; `archival_p.rs` + `kat_archival_p_derive_v1.rs`, eight §9.3 labels incl. `bond_spend_*` and the GF-9 `hs_id` label (SPIKE-F-4) verified at source). C-1 emission vin ML-DSA equality check **landed** (#277). §7 checklist reconciled to landed state. |
 | **2** | Network + transport (L16 → production shape) | **Closed (2026-07-11) — §10; closure disposition §10.13.** Rendezvous path specified; seeding relaxation bounded. **Entry gates (all dispositioned):** challenge-response Levin class → anonymity-routable set (GF-3, §10.4); pre-join backing-presentation transport (GF-5, §10.5); ~~Arti HS-hosting capability confirmed, at-source pin carried (GF-12, §10.3)~~ **— RETIRED 2026-08-03 (maintainer ruling): Arti is not the path; the Tor Expert Bundle is consumed as an external hash-pinned process, so the at-source Arti pin has no consumer**; `P`-tx wire-size fingerprint characterization + dummy/fragmentation policy (GF-6, §10.6); HS key lifecycle `p_slot`-bound + seed-derived (GF-9, §10.7). **Exit dispositions (§10.11, passes 1–4):** bonded-verifier challenges, broadcast announce, `P`↔principal circuit/guard isolation (§10.9), pure-rendezvous + I2P-closed. **Carries (§10.13, rule-21):** at-source Arti pin → transport PR; dummy/frag tuned ratio → testnet; ~~GF-9 HS-id HKDF label → §9.3 amendment (armed: not yet in derivation; dot-vs-hyphen format flag)~~ **— LANDED 2026-08-05 (SPIKE-F-4): `shekyl-archival-p-hs-id-ed25519-v1` in the §9.3 table + KAT**; announce↔anchor + cadence timing → R3. Transport code partial-landed (2d-2: SP-T1 #204/#209, SP-T4a #254 — inert). |
 | **3** | Timing + rotation + `W` / epoch-length joint pin | **Designed + adversarial pass run (2026-07-11) — §11; closes on the R4/GF-4 joint grade (§11.7).** **GF-10** pinned as *mechanism + structural window* (uniform-independent claim-broadcast-height draw via audited `bounded_uniform`; floor = `h_close + reorg_depth(720)`, ceiling = `(E_oldest+W)·SEB − submit_guard`; a-priori `S_min ≥ SEB`); **numeric width routed to R4/GF-4 CB-3 joint grade** (not standalone — per-axis error avoided). Draw + scheduler **unbuilt** (verified) → pinned pre-code, M1-armed. Rotation leg ratified (T-A1 timeline non-channel; network leg §10.7/§10.9); R2 timing hand-forwards resolved (announce↔anchor = entry standoff; emission-cadence = GF-10). Adversarial pass (§11.8) found no break — four findings folded as re-pins, one retraction (max-age misread). Two frame/pass assumptions overturned at source (epoch-crossing §11.4; max-age semantics §11.8). UPDATE 2026-07-16 (§12.9 decision 3): the R4 joint grade **dissolved by axis attrition** — GF-10's width now grades **standalone** against the §11.5 pre-committed advantage claim (mechanism-class, method note 3); R3 closes when that grade runs. |
-| **4** | Output + bond-funding hygiene (**recurring** — rebond/unbond at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built; verdict ⛔ WITHDRAWN in full 2026-07-23** (was: graded PROVISIONAL-PASS, `r = 1.86`, local-daemon — the entry-seam channel graded was never on the chain; the instrument is fail-closed (`GF7_FAIL_CLOSED`) and the surviving entry-seam channel is GF4b-2's funding-input count; WI-4 §13.1 banner) (standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) sealing form: first PASS withdrawn 2026-07-18 (§19.9.1), hardened re-run graded PASS 2026-07-19 (§19.9.2), seal-input status withdrawn same day on scope review (WI-4 §19.10 — premise design-foreclosed; instrument retained as dispersal tripwire)) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the rebond/unbond FSM landed (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Rebond`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. UPDATE 2026-07-16: derivation committed + reviewed (rounds 1–3, sentinel + frozen rule); **`draw_exit_gap` BUILT** against the sentinel with the F-D6 anchor derived (`release_cooldown_anchor_height`) — F-W5 `N_t` re-derivation, sweep, and Phase 7.7 seal remain. UPDATE 2026-07-16 (later): round-4 premise audit RATIFIED deletion-with-tripwire (F-D4 §15.4 — the timing channel's observable is phantom, F-W7/F-W8; the seal obligation is removed, the sentinel never shipped a value); F-W9 bounded the repetition premise (F-D4 §16). **R4 decision round run + RATIFIED (§12.9):** exit seam **re-homed** to the principal↔user crossing (WI-4 §18.13); joint grade **dissolved by four-axis attrition** (ratification added the fourth row: **F-W10 — output-count phantom**, the drain is not an identifiable transaction under FCMP++; §2.4's CryptoNote-lineage pin retired, method note 5); §16.4 funding default **accepted** (F-D2-class); deletion PR scoped (`exit.rs` wholesale; F-D6 + consensus predicate out of scope). Re-formed close: F-D1 + F-D2 (incl. funding default) + deletion PR + F-D5 §14.4 disposition. UPDATE 2026-07-17: the **deletion PR landed** at decision 5's scope — close condition (iii) satisfied; remaining: F-D1, F-D2 (incl. funding default), F-D5 §14.4 disposition. UPDATE 2026-07-17 (later): **F-D5's "→ §14.4" was dangling** (WI-4 §14.4 is the closed partition arm, no economics agenda) — close condition (iv) re-worded by dated amendment (§12.9): the **F-D5 disposition round** (charter at §12.7) runs a **structural-derivation attempt first** (grid width from reward-curve structure, X-3-shaped, mechanism-class) — width derives ⇒ grid ships at genesis + S-2 grades the residual; width doesn't ⇒ **no grid at genesis** (genesis-frozen consequence named, pass-4 banding rejection reconciled); the lifetime-aggregate band registers as an R5 S-2 ledger row either way. UPDATE 2026-07-17 (same day): **the F-D5 disposition round RAN — width does not derive, NO GRID at genesis** (harm survives F-D1 — the grid targeted §18.12's drain-all floor — but the derivation fails at three source-anchored population entry points: `r_market` inside `scarcity_milli`, the `budget(E)/Σwork(E)` value spacing, and reachable-collision ≠ delivered cover; the grid's cost side is derivable, its benefit side is not; §12.7 OUTCOME). Close condition (iv) **discharged**; R4 open on **F-D1 + F-D2 only**. UPDATE 2026-07-17 (later): **F-D1 BUILT** (`drain_orchestrator`/`drain_amount`/`drain_select`; (a)+strip; M1 arm proven-to-bite then armed as `fd1_arm_*` tests; §12.3 build note) and **F-D2 core-side surface LANDED** (aggregate-only `DrainBalance`/`drain_balance`, scalar-only `plan_drain`; §12.4 build note) — `plan_drain` lands as a correctly-carved planner with **no data source and no consumer yet**. **F-D2's remaining half is NOT a pending UI default and NOT gated on RPC** (the GUI links the engine in-process, not via a wallet-RPC server): it is a whole **unbuilt `P`-value-out (drain-send) subsystem** in `shekyl-gui-wallet` — a `P`-scan data source feeding the planner + a drain tx assemble→sign→broadcast path + the round-number/random-split default (incl. the §16.4 funding default; §12.4 reconciliation amendment 2026-07-19) on top (§12.4 build note). **R4 open on that subsystem.** |
+| **4** | Output + bond-funding hygiene (**recurring** — rebond/release at genesis) | **Drafted (2026-07-11) — §12, the drain-event firewall.** **GF-7 (funding-in) built; verdict ⛔ WITHDRAWN in full 2026-07-23** (was: graded PROVISIONAL-PASS, `r = 1.86`, local-daemon — the entry-seam channel graded was never on the chain; the instrument is fail-closed (`GF7_FAIL_CLOSED`) and the surviving entry-seam channel is GF4b-2's funding-input count; WI-4 §13.1 banner) (standoff #255, WI-4, §14.4 partition arm RATIFIED #291, leg-(b) sealing form: first PASS withdrawn 2026-07-18 (§19.9.1), hardened re-run graded PASS 2026-07-19 (§19.9.2), seal-input status withdrawn same day on scope review (WI-4 §19.10 — premise design-foreclosed; instrument retained as dispersal tripwire)) — not an open design question. **GF-4 (value-out) drafted:** the drain is one event, three co-triggered channels graded jointly (§12.1). **F-D1** drain-amount taint-carve — complete pre-code pin ((a)+strip; strip `{lineage,epoch,height}` + aggregate-scalar amount stage; §12.3); **F-D2** UI-default (§12.4); **F-D3/F-D4** one-sided cooldown-anchored exit standoff — **FSM gate FIRED 2026-07-15** (§12.5–12.6; `bond_post.rs:369`/`:627`); **F-D5** quantization → §14.4; **F-D6** anti-drift derive-don't-hardcode (§12.7). GF-10 (R3) folds into the joint grade. UPDATE 2026-07-15: both former blockers discharged — the rebond/release FSM landed (PR #303 `HoldingsUpdate`/`Release` + Pin-4/Pin-5 closure 2026-07-14; PR #307 `Rebond`) and the age-stratified sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). F-D3/F-D4 open for build: F-D4 a-priori window derivation first (committed before any sweep runs, §12.6), then `draw_exit_gap` (§12.5) with the F-D6 derived anchor. UPDATE 2026-07-16: derivation committed + reviewed (rounds 1–3, sentinel + frozen rule); **`draw_exit_gap` BUILT** against the sentinel with the F-D6 anchor derived (`release_cooldown_anchor_height`) — F-W5 `N_t` re-derivation, sweep, and Phase 7.7 seal remain. UPDATE 2026-07-16 (later): round-4 premise audit RATIFIED deletion-with-tripwire (F-D4 §15.4 — the timing channel's observable is phantom, F-W7/F-W8; the seal obligation is removed, the sentinel never shipped a value); F-W9 bounded the repetition premise (F-D4 §16). **R4 decision round run + RATIFIED (§12.9):** exit seam **re-homed** to the principal↔user crossing (WI-4 §18.13); joint grade **dissolved by four-axis attrition** (ratification added the fourth row: **F-W10 — output-count phantom**, the drain is not an identifiable transaction under FCMP++; §2.4's CryptoNote-lineage pin retired, method note 5); §16.4 funding default **accepted** (F-D2-class); deletion PR scoped (`exit.rs` wholesale; F-D6 + consensus predicate out of scope). Re-formed close: F-D1 + F-D2 (incl. funding default) + deletion PR + F-D5 §14.4 disposition. UPDATE 2026-07-17: the **deletion PR landed** at decision 5's scope — close condition (iii) satisfied; remaining: F-D1, F-D2 (incl. funding default), F-D5 §14.4 disposition. UPDATE 2026-07-17 (later): **F-D5's "→ §14.4" was dangling** (WI-4 §14.4 is the closed partition arm, no economics agenda) — close condition (iv) re-worded by dated amendment (§12.9): the **F-D5 disposition round** (charter at §12.7) runs a **structural-derivation attempt first** (grid width from reward-curve structure, X-3-shaped, mechanism-class) — width derives ⇒ grid ships at genesis + S-2 grades the residual; width doesn't ⇒ **no grid at genesis** (genesis-frozen consequence named, pass-4 banding rejection reconciled); the lifetime-aggregate band registers as an R5 S-2 ledger row either way. UPDATE 2026-07-17 (same day): **the F-D5 disposition round RAN — width does not derive, NO GRID at genesis** (harm survives F-D1 — the grid targeted §18.12's drain-all floor — but the derivation fails at three source-anchored population entry points: `r_market` inside `scarcity_milli`, the `budget(E)/Σwork(E)` value spacing, and reachable-collision ≠ delivered cover; the grid's cost side is derivable, its benefit side is not; §12.7 OUTCOME). Close condition (iv) **discharged**; R4 open on **F-D1 + F-D2 only**. UPDATE 2026-07-17 (later): **F-D1 BUILT** (`drain_orchestrator`/`drain_amount`/`drain_select`; (a)+strip; M1 arm proven-to-bite then armed as `fd1_arm_*` tests; §12.3 build note) and **F-D2 core-side surface LANDED** (aggregate-only `DrainBalance`/`drain_balance`, scalar-only `plan_drain`; §12.4 build note) — `plan_drain` lands as a correctly-carved planner with **no data source and no consumer yet**. **F-D2's remaining half is NOT a pending UI default and NOT gated on RPC** (the GUI links the engine in-process, not via a wallet-RPC server): it is a whole **unbuilt `P`-value-out (drain-send) subsystem** in `shekyl-gui-wallet` — a `P`-scan data source feeding the planner + a drain tx assemble→sign→broadcast path + the round-number/random-split default (incl. the §16.4 funding default; §12.4 reconciliation amendment 2026-07-19) on top (§12.4 build note). **R4 open on that subsystem.** |
 | **5** | Cross-layer adversarial pass | **Planned.** Soundness-depth sign-off for Stage 3. Build the S-2 fused exposure ledger (first) + the S-3 exit/value-seam adversary sim (§10.12), then sign off. **Registered S-2 ledger rows so far:** the lifetime-aggregate (drain-all) band at the §18.13 crossing (from the F-D5 disposition round, 2026-07-17 — per-observer, off-chain, graded against measured post-genesis exposure; §12.7 OUTCOME); R5 also inherits F-W9's finite domain and the §16.3 re-formed cross-persona job (linking-key search, pre-registered as code). |
 
 **Parallel (not gated on gate-6 closure):** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
 schema implementation; PHASE_2B §3–§7 FSM retool off rebased §2.4.
 
-**Round-2 scope expansion — rebond/unbond at genesis (R-1/R-2/R-3).** Bond is consensus-tracked
+**Round-2 scope expansion — rebond/release at genesis (R-1/R-2/R-3).** Bond is consensus-tracked
 balance under a gate-4 conservation law, not a UTXO; every balance change is a consensus
 transition, so completing the bond FSM post-genesis is a **hard fork**. Genesis already carries
-`JoinMarket` / `Rebond`-after-slash / full `Unbond` + a release cooldown
+`JoinMarket` / `Rebond`-after-slash / full `Release` + a release cooldown
 (`RELEASE_COOLDOWN_EPOCHS = 2 < W`) and a `bond_duration(age)` retention horizon; **voluntary
-partial-unbond (`HoldingsUpdate`, gate-4 §4.4) is promoted to genesis scope (V3.0, decided
+partial-release (`HoldingsUpdate`, gate-4 §4.4) is promoted to genesis scope (V3.0, decided
 2026-06-15)** — add-shard covers the voluntary holdings-*increase* / top-up direction (the §9.6
 "no dedicated wire" gap is closed by the add-shard credit path). Pinning the
 **full** lifecycle at genesis (the gate-4 / FSM-retool call) turns three **one-time** firewall
@@ -504,9 +504,9 @@ redundancy-floor re-derivation is already a reopen criterion against (a) the **i
 and (b) a **+1 deep-tail replica margin** (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md` tail-margin; sim
 §L12). Because real bond mobility under cooldown + duration is **lower than the sim's myopic
 per-epoch acquire/drop** exactly on the **deep tail where the +1 margin lives**, R-3 adds (c): a
-**sim bond-mobility model reconciled to the rebond/unbond FSM's frictions.** (c) cannot be
+**sim bond-mobility model reconciled to the rebond/release FSM's frictions.** (c) cannot be
 computed until the FSM (the now-genesis-scoped lifecycle, promoted 2026-06-15) is pinned — so the
-**rebond/unbond FSM is a pre-genesis-seal dependency for the sim reconciliation, not merely a
+**rebond/release FSM is a pre-genesis-seal dependency for the sim reconciliation, not merely a
 consensus deliverable.**
 **The reconciliation must be age-stratified, not a re-tuned flat scalar.** The sim's "flat
 seating cost" is a uniform scalar standing in for a friction (cooldown, partial-slash, lockup,
@@ -518,7 +518,7 @@ age-stratified,"** not "add the frictions" — a re-tuned flat cost will *look* 
 shipping an optimistic sealed floor on top of the very +1 margin it is meant to protect.
 
 *(UPDATE 2026-07-15 — this dependency chain is discharged end-to-end: the FSM frictions were pinned
-(P2B-7) and landed as enforced consensus (PR #303 `HoldingsUpdate`/`Unbond` + Pin-4/Pin-5 closure;
+(P2B-7) and landed as enforced consensus (PR #303 `HoldingsUpdate`/`Release` + Pin-4/Pin-5 closure;
 PR #307 `Rebond`), and the age-stratified reconciliation (c) is DONE, seal cleared —
 `STAKER_ARCHIVAL_SIM.md` §L18, adversarially confirmed to clear the "age-stratified, not a re-tuned
 flat scalar" bar 2026-07-12. The paragraph above stands as the reasoning record.)*
@@ -730,7 +730,7 @@ inside `hybrid_sign_sk` signs bond-record / emission-identity material, not indi
 
 **`bond_spend_pk` is the GF-1 bond-debit authorizer (distinct from identity).** Derived under
 the §9.3 `shekyl-archival-p-bond-spend-*` labels, it is committed into the `ArchivalBondRecord`
-at `JoinMarket` (gate-4 §4.1) and signs the bond vin on **debit** paths (`Unbond`,
+at `JoinMarket` (gate-4 §4.1) and signs the bond vin on **debit** paths (`Release`,
 `HoldingsUpdate` drop). It exists so that authorizing a *value-out* never requires the identity
 key, keeping `hybrid_bond_id`'s compromise surface "reveals nothing spendable." Same
 not-persisted-at-rest discipline as the other secrets: `bond_spend_sk` re-derives from
@@ -779,18 +779,18 @@ checks each against a different key.
 | `P` tx type | Account `hybrid_sign_pk` role | Per-input `pqc_auths.hybrid_public_key` | Verifier |
 |-------------|-------------------------------|------------------------------------------|----------|
 | **bond-post, collateral-in** (gate 4 `txin_archival_bond_post`: `JoinMarket` / `Rebond` / **top-up**) | `P_pubkey` **identity** — creates/keys the bond record by `P_canonical_id` | **per-output** (funding inputs; key image present) | create/lookup `ArchivalBondRecord`; funding inputs via standard key-image path; `bond_credit` term-rigidity + floor-equality ([`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.5) |
-| **bond-post, collateral-out** (gate 4 `txin_archival_bond_post`: full **`Unbond`** / **`HoldingsUpdate`** partial-unbond) | `P_pubkey` **identity** on the bond vin — record lookup + mutation keying (**never** the debit authorizer) | **single bond vin** authorizes the `bond_debit` against the record's committed **`bond_spend_pk`** (dedicated debit key, §9.3 labels; gate-4 §3.5 step 5 + §4.1). **GF-1-carve RESOLVED (2026-06-16):** gate-4 §3.5 step 5 re-worded to verify debit paths against `bond_spend_pk`, not `P_pubkey` — identity stays identity-only, bond-debit authority compromise-isolated. `bond_debit == bonded_total` (full) or partial; **P-attributed refund output(s)** | §3.5 verify order; bond-debit auth = committed `bond_spend_pk` (resolved at gate-4 source before the verifier lands) |
+| **bond-post, collateral-out** (gate 4 `txin_archival_bond_post`: full **`Release`** / **`HoldingsUpdate`** partial-release) | `P_pubkey` **identity** on the bond vin — record lookup + mutation keying (**never** the debit authorizer) | **single bond vin** authorizes the `bond_debit` against the record's committed **`bond_spend_pk`** (dedicated debit key, §9.3 labels; gate-4 §3.5 step 5 + §4.1). **GF-1-carve RESOLVED (2026-06-16):** gate-4 §3.5 step 5 re-worded to verify debit paths against `bond_spend_pk`, not `P_pubkey` — identity stays identity-only, bond-debit authority compromise-isolated. `bond_debit == bonded_total` (full) or partial; **P-attributed refund output(s)** | §3.5 verify order; bond-debit auth = committed `bond_spend_pk` (resolved at gate-4 source before the verifier lands) |
 | **reward emission** ([`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §5.3) | `P_pubkey` **identity** on the emission vin — bond lookup + dedup keying | **backing inputs:** ML-DSA verifies against the **`pqc_pk` committed in the *same proven leaf, at the same input index*** — the membership proof commits `H(pqc_pk)` as an in-circuit extra leaf scalar (`with_extra_scalars`, index-bound), and the vin recomputes `H(pqc_pk)` from the supplied key and demands equality with **that** leaf's committed scalar ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7), **no key image**. **fee inputs** (`txin_to_key`): **per-output**, key image present | §7.1 emission order; backing auth is membership-only + the vin-layer ML-DSA equality check (**C-1 carried dependency, §9.8 — DISCHARGED #277**, landed at `emission_verify.rs::emission_vin_verify_auth`); fee inputs standard |
 | **ordinary transfer / terminal drain / reward-output spend** | **none on wire** | **per-output**, key image present | standard FCMP++ path — **no `P`-typing** |
 
-**Bond-post is the recurring self-identifying class (Round-2 scope; rebond/unbond at genesis).**
+**Bond-post is the recurring self-identifying class (Round-2 scope; rebond/release at genesis).**
 All four bond mutations are one `txin_archival_bond_post` discriminated by `post_kind`
-(`0=JoinMarket, 1=Rebond, 2=Unbond, 3=HoldingsUpdate` — [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)
-§3.2). Genesis already carries `JoinMarket`, `Rebond`-after-slash, and full `Unbond`;
-**voluntary partial-unbond (`HoldingsUpdate`) is promoted to genesis scope (V3.0, decided
+(`0=JoinMarket, 1=Rebond, 2=Release, 3=HoldingsUpdate` — [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md)
+§3.2). Genesis already carries `JoinMarket`, `Rebond`-after-slash, and full `Release`;
+**voluntary partial-release (`HoldingsUpdate`) is promoted to genesis scope (V3.0, decided
 2026-06-15)** (gate-4 §3.2 / §4.4 G4-6), with the add-shard credit path covering the voluntary
 holdings-*increase* / top-up direction. The **full** lifecycle ships at genesis (create /
-rebond-topup / partial-unbond / full-unbond) — so completing the consensus FSM later is not a
+rebond-topup / partial-release / full-release) — so completing the consensus FSM later is not a
 hard fork. **That promotion is a gate-4 / FSM-retool call** (recorded here, not executed in this
 doc); its Gate-6 consequence is that the previously **one-time** firewall
 events become **recurring** (§6 Round-2 scope note: GF-7 funding-linkage, GF-4 decorrelated
@@ -836,8 +836,8 @@ binds `tx_prefix_hash`), which is sufficient. Gate-4 §3.5 step 5 was re-worded 
 paths against `bond_spend_pk` and credit paths against `P_pubkey`; the key is committed at
 `JoinMarket` and bound into the sig-preimage (gate-4 §3.4.1 / §4.1).
 **Declined (recorded, per `21-reversion-clause-discipline.mdc`):** a *receipt-UTXO* custody model
-— mint a non-transferable receipt at bond-post, unbond by spending it on the standard per-output +
-key-image path (replay protection for free, partial-unbond = receipt split, value-movement leg
+— mint a non-transferable receipt at bond-post, release by spending it on the standard per-output +
+key-image path (replay protection for free, partial-release = receipt split, value-movement leg
 **byte-indistinguishable**). It is attractive but **reopens the Round-1-sealed §3.2 consensus-balance
 custody model** and unwinds the implemented `bond_credit`/`bond_debit` RCT verifier — a
 custody-architecture reversal, not the minimal GF-1 fix. **Reopen criterion:** revisit only if a
@@ -1231,7 +1231,7 @@ identity. Two failure modes:
   **`shekyl-archival-p-hs-id-ed25519-v1`** (`ARCHIVAL_P_HS_ID_INFO`, `L=32`, `derive_p_hs_id_seed`)
   — normalized to the hyphen convention from this section's original dotted proposal
   (`shekyl.archival.p.hs_id.v1`) per the §10.13 carry — injected via `ADD_ONION ED25519-V3`
-  (`shekyl-tor`'s control port) rather than tor-autogenerated. *(The §10.3 Arti
+  (`shekyl-tor-control-wallet`'s control port) rather than tor-autogenerated. *(The §10.3 Arti
   `launch_onion_service_with_hsid` key-injection shape is retired with GF-12, 2026-08-03; the
   C-tor Expert Bundle takes the expanded blob over the same control command.)* **Why:** the `.onion`
   becomes **deterministic + seed-recoverable** (survives device loss; fits wallet recovery) and
@@ -1355,9 +1355,9 @@ with the principal-linkage gap still open under a different name.
       co-activation discipline** — `StakeEngine` does not co-launch `P`'s HS with principal sync).
       Operational residual named. **Enforcement mechanism (Arti config vs. policy) carried** to the
       transport PR (§10.13). Extended to **key locality** by S-6 (§10.12).
-- [x] **Rebond/unbond recurring-surface** — §6 R4 re-scope acknowledged: GF-4 (drain output-count)
-      and GF-7 (bond-funding separation) carried as **recurring** (partial-unbond / rebond-topup),
-      not one-time; the **rebond/unbond FSM (promoted to genesis / V3.0, 2026-06-15)** named as the
+- [x] **Rebond/release recurring-surface** — §6 R4 re-scope acknowledged: GF-4 (drain output-count)
+      and GF-7 (bond-funding separation) carried as **recurring** (partial-release / rebond-topup),
+      not one-time; the **rebond/release FSM (promoted to genesis / V3.0, 2026-06-15)** named as the
       **pre-genesis-seal dependency** for the R-3 sim bond-mobility reconciliation.
 
 **Legend:** `[x]` disposition discharged; `[~]` disposition discharged but an implementation/freeze
@@ -1412,7 +1412,7 @@ carry rides it (GF-9 label). No box is `[ ]` at close.
   gate-4 §3.5 step 5 / §4.1 / §3.4.1). The account `P_pubkey` never authorizes a value-out;
   identity-only invariant preserved. Custody model (§3.2) not reopened; the receipt-UTXO
   alternative was declined and given a reopen criterion (§9.6).
-- **Rebond/unbond FSM** — `HoldingsUpdate` promoted V3.1→genesis (V3.0, decided 2026-06-15); the
+- **Rebond/release FSM** — `HoldingsUpdate` promoted V3.1→genesis (V3.0, decided 2026-06-15); the
   add-shard credit path covers top-up (gate-4 §4.4 / FSM retool); **blocks the R-3 sim
   reconciliation and thus the genesis seal** (§6 scope note); the reconciliation must be
   **age-stratified, not a re-tuned flat cost**.
@@ -1420,7 +1420,7 @@ carry rides it (GF-9 label). No box is `[ ]` at close.
 **Critical path out of Round 2 (these two, not the transport tuning):** (1) the GF-1-carve
 resolves at gate-4 source — **done 2026-06-16** (dedicated `bond_spend_pk`; gate-4 §3.5 step 5 /
 §4.1 / §3.4.1), so the bond-post verifier can now be built against a named debit key; and
-(2) the rebond/unbond FSM promotion gates the R-3 age-stratified sim reconciliation, which gates
+(2) the rebond/release FSM promotion gates the R-3 age-stratified sim reconciliation, which gates
 the genesis seal. The transport-tuning carries (§10.4(b), §10.6, §10.9) correctly defer to testnet
 replay.
 
@@ -1544,7 +1544,7 @@ and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.
   relies on ("the bond-post follows a recent principal spend"; "find the funding spend just before
   the bond"). Feasible because the announce is membership-only backing over *principal outputs* that
   exist pre-bond — `P` proves it *could* back before it *does* — with the bonded-verifier gate
-  bounding the unbonded-announcer DoS/sybil angle. **Sim question, sharpened past "smooth vs surge":**
+  bounding the released-announcer DoS/sybil angle. **Sim question, sharpened past "smooth vs surge":**
   (a) **candidate-set sizing, not window width** — the metric is *candidate principal-spends-per-window
   for the targeted principal*; a window wide in wall-clock but containing one suspect spend gives zero
   cover. (b) **the worst case is a low-activity principal** (funds one bond, rarely spends): set-enlargement
@@ -1613,7 +1613,7 @@ and misdirected; hiding the principal-linkage is trilemma-free and load-bearing.
   whose *difference* is triangular/zero-peaked and clusters the events (a conformance trap the test
   vector must reject, since the draw is unenforceable). The **600 is per-seam**: the ±600 symmetric
   envelope is the **entry** seam (announce↔bond, inversion-eligible, 1200-block search width); the
-  **exit** seam (terminal drain + recurring partial-unbond) is a *separate, one-sided* standoff (no
+  **exit** seam (terminal drain + recurring partial-release) is a *separate, one-sided* standoff (no
   inversion — collateral isn't spendable before the 20_000-block release cooldown) whose latency is
   measured **from cooldown expiry** (it breaks the deterministic fixed-offset cooldown tell), so
   symmetric entry/exit = two independent 600-block draws, each free on its own seam — state the exit
@@ -1704,7 +1704,7 @@ disposition is not coverage of its implementation.
 
 - **To R3 (§11):** announce↔anchor timing gap (§10.5) and emission-cadence timing (§10.6) — the
   *timing* of the transport events R2 pinned the *shape* of.
-- **To R4 (§6):** GF-4/GF-7 recurring surfaces under the genesis rebond/unbond FSM; the exit-seam
+- **To R4 (§6):** GF-4/GF-7 recurring surfaces under the genesis rebond/release FSM; the exit-seam
   standoff (FOLLOWUPS 2b).
 - **To R5 (§10.12):** the S-2 fused exposure ledger and S-3 exit/value-seam adversary sim.
 
@@ -1927,7 +1927,7 @@ timing hand-forwards (§11.6).
   grade dissolved by axis attrition — the width now grades standalone against the same §11.5
   pre-committed claim; the reopen clause carries over with "joint grade" read as "single-axis
   grade."**
-- **Extension to bond ops** — GF-10 reused for partial-unbond / rebond-topup claim timing in R4 (§6);
+- **Extension to bond ops** — GF-10 reused for partial-release / rebond-topup claim timing in R4 (§6);
   the mechanism is pinned so the extension is mechanical.
 - **Build** — the `ClaimJitterGap` draw + the claim scheduler/dispatch seam (CB-3) are unbuilt. Land
   the draw the M1 way: a CI grep that the claim scheduler routes through `bounded_uniform` with no
@@ -2105,7 +2105,7 @@ discipline — were re-walked immediately rather than left for the sixth and sev
 instances to surface adversarially. Verdicts recorded at §2.4: rewards→stealth-outputs
 **holds, re-anchored** (its real mechanism is §2.1 key/scan-boundary independence,
 creation-side and substrate-independent; the graph-side half of its old justification
-is by-construction under FCMP++); the Unbond-refund bullet is **half-phantom** (the
+is by-construction under FCMP++); the Release-refund bullet is **half-phantom** (the
 "P-attributed output at public amount" phrasing named an output no observer can
 identify — the refund is ordinary hidden vouts against a public `bond_debit` source
 term, T-2's structural-unrepresentability; the "same decorrelated-drain discipline"
@@ -2250,11 +2250,11 @@ block-span archival derived state survives before prune **sweep** … audit/swee
 ([`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1/§4) — it governs **data pruning**,
 not collateral spendability. An earlier reviewer note that retention "dominates the exit anchor" is
 **withdrawn** on that read. The spendability chain: collateral is a **consensus balance** (not a
-UTXO); `Unbond` fires after the release cooldown (grace after last serve) and returns the balance
+UTXO); `Release` fires after the release cooldown (grace after last serve) and returns the balance
 via the `bond_debit` source term. *(Superseded detail, noted 2026-07-19: the earlier
 "mints a `P`-attributed refund output at public `bond_floor`" wording is corrected by
 [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §3.4/§4.3 (2026-07-16): **no identifiable
-refund output exists on the wire** — the Unbond *event* names `P` and the released amount is
+refund output exists on the wire** — the Release *event* names `P` and the released amount is
 publicly derivable, but the refund enters as ordinary hidden vouts CT-balanced against the
 public `bond_debit` term.)* The refund value then matures like any output. The deterministic tell F-D3 breaks is that this
 earliest-spend moment is **cooldown-pinned**.
@@ -2427,7 +2427,7 @@ The build lands only the piece that lives in `shekyl-core`:
 
 ### 12.5 F-D3 — exit-seam standoff mechanism (one-sided, cooldown-anchored; gate FIRED 2026-07-15)
 
-The exit seam's dominant adversary is **correlated mass-unbonding** (§18.1): a market event fires
+The exit seam's dominant adversary is **correlated mass-releasing** (§18.1): a market event fires
 correlated drains, and the linkage is the **co-trigger**, not the amount — so F-D1 is inert against
 it; the defense is an independent per-`P` exit-timing draw, exactly the entry finding's "shared
 trigger is catastrophic, `16→1.01`."
@@ -2437,11 +2437,11 @@ trigger is catastrophic, `16→1.01`."
   there is no "which came first" to draw (the one-sidedness is *forced by the cooldown*, which is also
   why the entry double-jitter trap does not apply here — §11.3/§11.8). Typed `ExitGap`, mirroring
   `NetworkGap`.
-- **Anchored at the cooldown-pinned earliest-spend height** — `Unbond`-height-derived
+- **Anchored at the cooldown-pinned earliest-spend height** — `Release`-height-derived
   `+ RELEASE_COOLDOWN_EPOCHS × SEB` (F-D6: **derived, never hardcoded `20_000`**). The draw adds a
   random one-sided latency *after* that point, breaking the deterministic fixed-offset cooldown tell.
-- **Per-event independent**, applied to **both terminal drain and recurring partial-unbond
-  (`HoldingsUpdate`)** — each its own draw (the shared-trigger lesson; correlated unbonding is the
+- **Per-event independent**, applied to **both terminal drain and recurring partial-release
+  (`HoldingsUpdate`)** — each its own draw (the shared-trigger lesson; correlated releasing is the
   adversary).
 - Wallet self-test conformance (the anchor is consumer-side/off-chain, consensus-unenforceable),
   integer golden vector on the aarch64 lane — the `draw_entry_gap` discipline.
@@ -2449,8 +2449,8 @@ trigger is catastrophic, `16→1.01`."
   build/measurement when a verify path reads `RELEASE_COOLDOWN_EPOCHS` as a spendability gate") is
   met at source: `release_cooldown_elapsed` is **enforced consensus** with two verify consumers —
   `bond_post.rs:369` (`HoldingsUpdate`-drop, per-shard last-served anchor) and `bond_post.rs:627`
-  (`Unbond`, whole-record anchor) — landed with the rebond/unbond FSM (PR #303 `HoldingsUpdate` +
-  `Unbond` verify/connect/pop and the Pin-4/Pin-5 closure, 2026-07-14; PR #307 `Rebond`). The
+  (`Release`, whole-record anchor) — landed with the rebond/release FSM (PR #303 `HoldingsUpdate` +
+  `Release` verify/connect/pop and the Pin-4/Pin-5 closure, 2026-07-14; PR #307 `Rebond`). The
   deterministic cooldown tell this standoff exists to break is now real; F-D3 is **open for build
   and measurement**.
 - **Per-event independence armed with its own negative control (pinned at activation, 2026-07-15).**
@@ -2498,13 +2498,13 @@ trigger is catastrophic, `16→1.01`."
 ### 12.6 F-D4 — a-priori exit window (activation FIRED with F-D3, 2026-07-15)
 
 The exit window **cannot borrow the entry `600`**. That number was derived rate-driven against the
-**background funding-spend rate**; the exit seam's driving rate is the **correlated-unbond /
+**background funding-spend rate**; the exit seam's driving rate is the **correlated-release /
 market-event rate** (§18.1), which is worse and different. A **separate a-priori window derivation**
 from a stated adversary-advantage claim is required, **committed before any exit sweep runs**
 (GF7_HOOKS §5.1: threshold before grading; a failed sweep is a redesign signal, never a move-the-bar).
 The exit draw is one-sided (600-block search width, not the entry's 1200), so the thin-regime
 **gap-toward-max** bias matters more (§10.12). This is the exit-seam analogue of the entry `1.86` and
-the sealing-path measurement WI-4 §18.1 flags as owed. **Couples to L17:** the correlated-unbond model
+the sealing-path measurement WI-4 §18.1 flags as owed. **Couples to L17:** the correlated-release model
 is exactly the L17 synchronized-exit wargame (does `RELEASE_COOLDOWN = 2` **smear** the cohort or
 merely **delay** it; is a release-cooldown *queue* needed — [`FOLLOWUPS.md`](../FOLLOWUPS.md)
 swan-2/W8), so F-D4's rate model and the L17 wargame are one obligation. **Activation:** the F-D3 FSM
@@ -2854,11 +2854,11 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   the grade dissolves by four-axis attrition** (exit-timing phantom F-W7; amount
   structural-armed; holdings public; output-count phantom F-W10); GF-10 grades standalone
   and the correlated-trigger obligation relocates to the crossing as an S-2 row.
-- **Pre-seal blocker — DISCHARGED 2026-07-15:** the rebond/unbond FSM (genesis-scoped, 2026-06-15)
+- **Pre-seal blocker — DISCHARGED 2026-07-15:** the rebond/release FSM (genesis-scoped, 2026-06-15)
   gated F-D3/F-D4 activation *and* the age-stratified sim bond-mobility reconciliation (§6 scope
   note). Both halves are done: the FSM frictions were pinned
   ([`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-7, all pins closed — Pin-4/Pin-5 at
-  PR #303 2026-07-14) and landed as enforced consensus (`HoldingsUpdate`/`Unbond` #303, `Rebond`
+  PR #303 2026-07-14) and landed as enforced consensus (`HoldingsUpdate`/`Release` #303, `Rebond`
   #307), and the sim reconciliation is DONE, seal cleared (`STAKER_ARCHIVAL_SIM.md` §L18). The exit
   seam is measurable.
 - **Closes when:** F-D1/F-D2 land with their arms; F-D5 is dispositioned in §14.4; and the
@@ -2901,10 +2901,10 @@ crossing? Walked with F-W9 in hand:
 - *Timing half.* The on-chain `P`↔principal exit-timing channel does not exist — F-W7
   found the principal-side observable phantom, and the F-W9 enumeration counts **zero
   observable exits on either branch** (voluntary refund CT-hidden in-tx; terminal slash
-  emits no transaction). What the chain shows is the `P`-side `Unbond` post — a public,
+  emits no transaction). What the chain shows is the `P`-side `Release` post — a public,
   `P`-attributed *event with no principal-side counterpart to correlate against*. Exit
   timing's only live harm surface is a counterparty's own books (deposit arrival vs the
-  public unbond/claim record) — T-4, §18.13's seam.
+  public release/claim record) — T-4, §18.13's seam.
 - *Amount half.* Closed on-chain by construction (CT at first spend — WI-4 §18.11; the
   refund is the in-tx `bond_debit` source term). F-D1's forbidden read — the reward-subsum
   match — realizes **only at a counterparty**, and WI-4 §18.13 already files drain subsums
@@ -2952,7 +2952,7 @@ needs a seam with an observer and a rate; the re-homed seam's observer is off-ch
 its instrument is a **ledger**. Running a rate model over counterparty arrival mixing
 would be an economics measurement a testnet cannot produce (§11.8 method note 3 refuses
 it pre-genesis). The correlated-trigger obligation (§18.10 R-4 + CB-3) does not dissolve
-with it — it **relocates**: on-chain, a mass-unbond cohort is a set of public `P`-side
+with it — it **relocates**: on-chain, a mass-release cohort is a set of public `P`-side
 events with no principal side to link to; at the crossing, cohort-arrival compression is
 an S-2 row (the counterparty sees the cohort; its books are the linking key — F-D4
 §16.3's surviving surface (b)).
@@ -3165,13 +3165,13 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   PHASE_2B-§2.4 carries sitting in the same §2.4 paragraph: **rewards→stealth-outputs
   holds, re-anchored** (real mechanism is §2.1 key/scan-boundary independence,
   creation-side; the graph-side justification half is by-construction);
-  **Unbond-refund is half-phantom** (the "P-attributed output at public amount"
+  **Release-refund is half-phantom** (the "P-attributed output at public amount"
   phrasing named an output no observer can identify — the refund is ordinary hidden
   vouts against a public `bond_debit` source term, F-D4 T-2's
   structural-unrepresentability — and the "same decorrelated-drain discipline" tail
   retires with F-W10). §2.1's transfer-leg pin scoped: "timing/output still leak" now
   reads entry-leg-only. `design/PHASE_2B_FSM_RETOOL.md` §2.4 tx-leg rows and the
-  §7 Unbond-refund threat row corrected at source. No new F-W tokens minted — both
+  §7 Release-refund threat row corrected at source. No new F-W tokens minted — both
   verdicts are dispositions of existing pin prose under an adopted method note, not
   blocking findings.
 
@@ -3450,8 +3450,8 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
 - **2026-07-15 (F-D3/F-D4 activation FIRED — fossil sweep):** The §12.5 rule-21 activation
   criterion ("a verify path reads `RELEASE_COOLDOWN_EPOCHS` as a spendability gate") fired at
   source: `release_cooldown_elapsed` is enforced consensus with two verify consumers —
-  `bond_post.rs:369` (`HoldingsUpdate`-drop, per-shard last-served anchor) and `:627` (`Unbond`,
-  whole-record anchor) — landed with the rebond/unbond FSM (PR #303 `HoldingsUpdate`/`Unbond` +
+  `bond_post.rs:369` (`HoldingsUpdate`-drop, per-shard last-served anchor) and `:627` (`Release`,
+  whole-record anchor) — landed with the rebond/release FSM (PR #303 `HoldingsUpdate`/`Release` +
   the P2B-7 Pin-4/Pin-5 closure, 2026-07-14; PR #307 `Rebond`; #309 ShardSet newtype). Statuses
   swept: header summary, §6 R4 cell + scope-note discharge, §12 status header, §12.1 channel
   table, §12.5/§12.6 headings + gate/activation blocks, §12.7 F-D6 (named const half done —
@@ -3481,8 +3481,8 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   (aggregate-only balance, no reward-derived pre-fill; largely structural by inheritance from F-D1).
   **F-D3/F-D4** (§12.5–12.6) — one-sided (`draw_exit_gap`, no inversion — forced by the cooldown),
   cooldown-expiry-anchored exit standoff + a-priori window that cannot borrow the entry `600`
-  (correlated-unbond rate; L17-coupled); **FSM-gated** (the cooldown is committed-but-unenforced —
-  no `verify_unbond_release` consumer). **F-D5** quantization → §14.4; **F-D6** anti-drift (derive
+  (correlated-release rate; L17-coupled); **FSM-gated** (the cooldown is committed-but-unenforced —
+  no `verify_release_release` consumer). **F-D5** quantization → §14.4; **F-D6** anti-drift (derive
   `RELEASE_COOLDOWN_EPOCHS × SEB`, never hardcode `20_000`). GF-10 (R3) folds into the joint grade.
   §6 R4 cell + status header updated. Docs-only.
 - **2026-07-11 (R3 adversarial pass — findings folded, one retraction):** Ran the adversarial pass
@@ -3559,9 +3559,9 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   §4.1 record, §8 checklist). Docs-only here. Closes the §10.11 critical-path item (1).
 - **2026-06-15 (`HoldingsUpdate` promoted to genesis scope):** Resolved R-1's open
   V3.1→genesis call: the full bond lifecycle (`JoinMarket / Rebond / HoldingsUpdate /
-  Unbond`) ships at **V3.0** (gate-4 §4.4 revision 2026-06-15). Rationale: bond balance is
+  Release`) ships at **V3.0** (gate-4 §4.4 revision 2026-06-15). Rationale: bond balance is
   consensus-state-machine state, so mid-life shard adjustment added post-genesis is a hard
-  fork; and without it the only way to add/shed one shard is `Unbond` + re-`JoinMarket`,
+  fork; and without it the only way to add/shed one shard is `Release` + re-`JoinMarket`,
   tearing down a working multi-shard operation to swap one slot — operationally untenable.
   The add-shard credit path covers the top-up direction (closes the §9.6 "no dedicated wire"
   gap). All bond-lifecycle verify/connect logic is **Rust-native** (`shekyl-archival-retention`),
@@ -3615,7 +3615,7 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   pin from circuits to keys. Recorded three sim scenarios (variable announce↔funding standoff;
   randomized 0–9-block entry incl. `P`-before-bond; **implicit accumulator emission** — deterministic
   Σwork credit with no broadcast claim deletes GF-6/GF-10 by folding them into GF-4, vs. literal
-  per-block pay which *sharpens* the unbond cessation edge). Prioritization: ledger → adversary sim
+  per-block pay which *sharpens* the release cessation edge). Prioritization: ledger → adversary sim
   → longevity question, all pre-seal. Docs-only; the ledger/sim/model calls live in their home docs.
 - **2026-06-13 (Round 2 adversarial pass 2):** Two sharpenings on the pass-1 landings. **GF-1-carve
   is asymmetric, not a balanced fork:** gate-4 §3.5 step 5's existing wording ("`P` hybrid
@@ -3628,7 +3628,7 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   key committed in the record (own HKDF label + KAT, domain-separated; non-replay from
   `bond_debit ≤ bonded_total` + tx-height/input binding, no key image). Recorded a *receipt-UTXO*
   custody direction (non-transferable receipt spent on the standard per-output+key-image path —
-  replay-free, partial-unbond = receipt split, value-leg byte-indistinguishable) as a gate-4 call,
+  replay-free, partial-release = receipt split, value-leg byte-indistinguishable) as a gate-4 call,
   not a prescription. Concrete action pinned: **re-word gate-4 §3.5 step 5 to name the key** before
   the verifier lands. **R-3 reconciliation must be age-stratified, not a re-tuned flat scalar:** the
   "flat seating cost" stands in for a friction that is worst on the deep tail, so recalibrating it
@@ -3636,12 +3636,12 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   "model friction age-stratified." Added a **critical-path-out-of-Round-2** note to §10.11 (the
   GF-1-carve wording fix + the FSM→age-stratified-reconciliation→seal chain; transport tuning
   defers to testnet). Docs-only.
-- **2026-06-13 (Round 2 adversarial pass 1):** Worked the §10 forks + the rebond/unbond scope
+- **2026-06-13 (Round 2 adversarial pass 1):** Worked the §10 forks + the rebond/release scope
   question, **verifying the load-bearing claims at source** before landing (per the Round-1
   C-1/C-2 verify-don't-infer discipline). **R-1 (reframed at source):** the bond FSM already
-  carries `JoinMarket` / `Rebond`-after-slash / full `Unbond` + release cooldown
+  carries `JoinMarket` / `Rebond`-after-slash / full `Release` + release cooldown
   (`RELEASE_COOLDOWN_EPOCHS = 2 < W`) + `bond_duration(age)` horizon at genesis; **voluntary
-  partial-unbond is `HoldingsUpdate` (`post_kind=3`), specified but flagged "V3.1 wire"**
+  partial-release is `HoldingsUpdate` (`post_kind=3`), specified but flagged "V3.1 wire"**
   (`ARCHIVAL_BOND_GATE4.md` §3.2/§4.4) — so R-1 is a **V3.1→genesis promotion** (+ top-up wire),
   a gate-4/FSM-retool call recorded here. **R-2:** §9.6 bond-post row split into collateral-in
   (inherits the contract) / collateral-out, with the **GF-1-carve open question** named (does the
@@ -3652,7 +3652,7 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   (`STAKER_ARCHIVAL_SIM.md` §steady-state #6); seal carry is integer + **+1 deep-tail margin**
   (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`); since `bond_duration` peaks on the deep tail where the
   margin lives, the FSM-friction reconciliation (c) compounds the tail-margin finding → the
-  **rebond/unbond FSM is a pre-genesis-seal dependency** for the R-3 sim reconciliation (§6 scope
+  **rebond/release FSM is a pre-genesis-seal dependency** for the R-3 sim reconciliation (§6 scope
   note). **§10 fork dispositions:** §10.4 bonded-verifier-only + restricted-discovery (condition
   (b) sharpened — L14 oversight *volume* is challenge≡retrieval / population-independent; the
   real check is challenger *liveness* vs L14b `m`-of-`n`); §10.5 announce → broadcast (event-

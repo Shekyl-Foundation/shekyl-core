@@ -49,7 +49,7 @@ this round.
   the concrete `simple-request`/hyper impl.
 - **The circuit:** `PTorClient` (`shekyl-p-transport`, SP-T1) — a `ureq::Agent` bound to `P`'s
   per-`P` SOCKS username; `for_persona(...)` / `agent()`. The SOCKS endpoint comes from SP-T0's
-  `TorService` (`current_socks()` → `TorSocksEndpoint`).
+  `WalletTorControl` (`current_socks()` → `TorSocksEndpoint`).
 - **Consumers:** none yet — SP-T2 is the first real `BlockSource` consumer; the SP-5 scan loop is
   where the posture→impl selection lands.
 
@@ -408,7 +408,7 @@ place a slice could reintroduce what the round just closed; they are build-bindi
      call is not a cancellation point — on scan cancel / wallet close / `ctx.stop()` it runs to
      completion or its own timeout. So `PRpc` **must** set explicit, short-ish `ureq` connect+read
      timeouts (a stalled/building Tor circuit can hang a read far longer than a direct dial), and the
-     design accepts that in-flight fetches *drain* on shutdown. This couples to `TorService` teardown
+     design accepts that in-flight fetches *drain* on shutdown. This couples to `WalletTorControl` teardown
      ordering: the blocking fetches must drain **before or independently of** the control-connection
      teardown, or a fetch outlives the Tor it is fetching through — a shutdown-ordering constraint the
      selector/lifecycle slice owns.

@@ -103,7 +103,7 @@ enum {
 //                                      height, read under the same lock scope as the
 //                                      membership fact so the pair cannot be racy)
 //   offset 96: bond_record_bonded_total (u64; valid iff bond_record_probed AND the probe
-//                                      kind was _UNBOND -- the debit arm's Phase-D
+//                                      kind was _RELEASE -- the debit arm's Phase-D
 //                                      predicate, because an exit preserves the row)
 //
 // Key-image conflicts travel beside the struct as a plain uint8_t array
@@ -127,13 +127,13 @@ typedef struct shekyl_submit_facts_ffi {
     uint64_t chain_height;
     uint64_t in_chain_height;
     // The probed record's bonded total, valid iff bond_record_probed AND the
-    // probe kind was _UNBOND. Appended (offset 96) so no existing offset
+    // probe kind was _RELEASE. Appended (offset 96) so no existing offset
     // moves.
     //
     // WHY PRESENCE IS NOT ENOUGH: apply_archival_unbond does a WHOLE-RECORD
     // write, so an exited persona keeps its row with bonded_total_atomic == 0
     // and get_archival_bond_hybrid_pubkey still reports it present. A
-    // competing Unbond connecting during Phase C therefore leaves
+    // competing Release connecting during Phase C therefore leaves
     // bond_record_exists == 1, and a re-check keyed on presence can never
     // observe the exit. The balance is what moves; the row does not.
     //
@@ -198,20 +198,20 @@ const shekyl_submit_emission_facts_ffi* shekyl_submit_emission_facts_view(
 
 void shekyl_submit_emission_facts_free(shekyl_submit_emission_facts_handle* h);
 
-// ── §8.7.1.1 Unbond fact marshal (rows UB2/UB3/UB4/UB6/UB7) ─────────────────
+// ── §8.7.1.1 Release fact marshal (rows UB2/UB3/UB4/UB6/UB7) ─────────────────
 //
 // Which archival-bond question the probe asks. The two bond-post arms ask
 // OPPOSITE questions of the same table: JoinMarket wants the record ABSENT
-// (row BP3, one bit) and Unbond wants it PRESENT with its contents as verify
+// (row BP3, one bit) and Release wants it PRESENT with its contents as verify
 // operands. One id plus a discriminant, mirroring the Rust `BondProbe` enum,
 // so the two sides cannot disagree about which probe ran.
 #define SHEKYL_SUBMIT_BOND_PROBE_JOIN   0
-#define SHEKYL_SUBMIT_BOND_PROBE_UNBOND 1
+#define SHEKYL_SUBMIT_BOND_PROBE_RELEASE 1
 
 // The debited record's verify operands. Variable-size (the committed
 // bond_spend_pk and the per-shard last-served slice), so like the emission
 // bundle it travels beside the fixed POD as a C++-owned handle.
-typedef struct shekyl_submit_unbond_record_ffi {
+typedef struct shekyl_submit_release_record_ffi {
     uint64_t bonded_total_atomic;
     size_t   bad_interval_count;
     // The record's COMMITTED debit authorizer, exactly as stored (may be
@@ -238,30 +238,30 @@ typedef struct shekyl_submit_unbond_record_ffi {
     // already-known txid, a failed debit pin, a zero balance, a balance the
     // vin's bond_debit no longer matches, or a full bad-interval log. The
     // authoritative list is the work-gate invariant on
-    // fill_unbond_facts_locked; do not restate it here, and do not read this
+    // fill_release_facts_locked; do not restate it here, and do not read this
     // byte as "the pin failed" (which it did mean, one revision ago).
     uint8_t  last_served_scan_skipped;
     const uint64_t* per_shard_last_served;
     size_t   per_shard_last_served_len;
-} shekyl_submit_unbond_record_ffi;
+} shekyl_submit_release_record_ffi;
 
-typedef struct shekyl_submit_unbond_facts_ffi {
+typedef struct shekyl_submit_release_facts_ffi {
     uint8_t record_present;
-    shekyl_submit_unbond_record_ffi record; // valid iff record_present
+    shekyl_submit_release_record_ffi record; // valid iff record_present
     // The slash scheduler's watermark AS STORED. u64::MAX ("nothing settled
     // yet") is NOT normalised here -- Rust owns that normalisation, in one
     // place, exactly as the block path's FFI wrapper does.
     uint64_t last_settled_slash_epoch;
-} shekyl_submit_unbond_facts_ffi;
+} shekyl_submit_release_facts_ffi;
 
 // Opaque owner of every buffer the view above points into.
-typedef struct shekyl_submit_unbond_facts_handle shekyl_submit_unbond_facts_handle;
+typedef struct shekyl_submit_release_facts_handle shekyl_submit_release_facts_handle;
 
 // The handle's view (never NULL for a live handle; pointers valid until free).
-const shekyl_submit_unbond_facts_ffi* shekyl_submit_unbond_facts_view(
-    const shekyl_submit_unbond_facts_handle* h);
+const shekyl_submit_release_facts_ffi* shekyl_submit_release_facts_view(
+    const shekyl_submit_release_facts_handle* h);
 
-void shekyl_submit_unbond_facts_free(shekyl_submit_unbond_facts_handle* h);
+void shekyl_submit_release_facts_free(shekyl_submit_release_facts_handle* h);
 
 // Shim 1 (§4.1): Phase-B POD fact snapshot under one short pool→blockchain
 // lock scope (§4.4 order), reads only.
@@ -279,29 +279,29 @@ void shekyl_submit_unbond_facts_free(shekyl_submit_unbond_facts_handle* h);
 // At Phase D, however, only the CREDIT arm races on presence. An exit
 // preserves the row (see bond_record_bonded_total), so the debit arm's race
 // predicate is the balance; presence there only separates "no row" from "row
-// with nothing bonded". bond_probe_kind selects what is gathered ON TOP: _UNBOND
-// additionally marshals the record's CONTENTS into *out_unbond (a handle the
-// caller must free; NULL when no unbond probe ran), which only the debit
+// with nothing bonded". bond_probe_kind selects what is gathered ON TOP: _RELEASE
+// additionally marshals the record's CONTENTS into *out_release (a handle the
+// caller must free; NULL when no release probe ran), which only the debit
 // arm's Phase-C battery needs. _JOIN gathers nothing extra.
 //
-// Presence therefore arrives twice for an _UNBOND probe -- as the POD bit and
+// Presence therefore arrives twice for an _RELEASE probe -- as the POD bit and
 // as bundle->record_present -- from two DB reads under one lock scope. They
 // cannot legitimately disagree, and the Rust shim refuses the pair if they
-// do rather than verifying an Unbond against half a record.
+// do rather than verifying a Release against half a record.
 //
-// An _UNBOND probe also requires bond_auth_pubkey (the bond slot's
+// An _RELEASE probe also requires bond_auth_pubkey (the bond slot's
 // pqc_auths key, from the same blob as the probe id). It gates the EXPENSIVE
 // half of the gather: the per-shard last-served scan is two LMDB seeks per
 // served shard, run while the pool and blockchain locks are held. The block
 // path already performs the cheap key pin before its cursor scans; this
 // mirrors that ordering.
 //
-// An _UNBOND probe also carries bond_debit, the vin's fixed debit term. UB9
+// An _RELEASE probe also carries bond_debit, the vin's fixed debit term. UB9
 // requires it to equal the record's whole balance, so a mismatch cannot verify
 // whatever the scan returns -- the gather skips the scan on that ground, which
-// is what stops a broadcast-then-invalidated Unbond being replayed for the
+// is what stops a broadcast-then-invalidated Release being replayed for the
 // scan forever (it is neither in-pool nor in-chain, so the identity skip never
-// fires for it). See the invariant on fill_unbond_facts_locked.
+// fires for it). See the invariant on fill_release_facts_locked.
 //
 // It does NOT keep an unauthenticated caller out on its own -- both compared
 // keys are public. Possession is proved earlier, by the Rust engine's UB0
@@ -315,7 +315,7 @@ void shekyl_submit_unbond_facts_free(shekyl_submit_unbond_facts_handle* h);
 // and issues the actual refusal, so a divergence here can only cause less
 // work, never a different answer.
 //
-// An _UNBOND probe REQUIRES a non-NULL out_unbond -- INTERNAL_FAULT
+// An _RELEASE probe REQUIRES a non-NULL out_release -- INTERNAL_FAULT
 // otherwise. The debit battery cannot run on the presence bit alone
 // (UB3/UB5/UB7/UB9 all read the record's contents), so a dropped bundle is
 // an incoherent call, not a cheaper probe. This is deliberately NOT the
@@ -341,7 +341,7 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
     const uint8_t* emission_p_canonical_id,
     const uint64_t* emission_epochs, size_t n_emission_epochs,
     shekyl_submit_emission_facts_handle** out_emission,
-    shekyl_submit_unbond_facts_handle** out_unbond,
+    shekyl_submit_release_facts_handle** out_release,
     shekyl_submit_facts_ffi* out_facts,
     uint8_t* out_ki_conflicts);
 
@@ -420,7 +420,7 @@ int snapshot_facts(cryptonote::tx_memory_pool& pool, cryptonote::Blockchain& bc,
     const uint8_t* emission_p_canonical_id,
     const uint64_t* emission_epochs, size_t n_emission_epochs,
     shekyl_submit_emission_facts_handle** out_emission,
-    shekyl_submit_unbond_facts_handle** out_unbond,
+    shekyl_submit_release_facts_handle** out_release,
     shekyl_submit_facts_ffi* out_facts,
     uint8_t* out_ki_conflicts) noexcept;
 

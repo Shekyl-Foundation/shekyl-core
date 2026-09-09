@@ -167,6 +167,13 @@ jobs:
             exit 1
           fi
           echo "Cargo path portability guard passed."
+      # Reads `cargo metadata`, so it lives here — after install-rust — not in
+      # grep-gates.yml. That job's own header says it does not need a Rust
+      # toolchain; wiring a cargo-metadata gate there works only because the
+      # GitHub-hosted image happens to ship cargo, the same "image has it,
+      # container does not" class this job already paid for with clang.
+      - name: test-only features stay on dev-dependency edges
+        run: python3 scripts/ci/check_test_only_features.py
       - name: verify x86_64 architecture
         run: |
           ARCH=$(uname -m)
@@ -354,7 +361,7 @@ jobs:
 
       - name: rustdoc -D warnings (persona serving path)
         working-directory: rust
-        # These crates' docs carry load-bearing security contracts (shekyl-tor's
+        # These crates' docs carry load-bearing security contracts (shekyl-tor-control-wallet's
         # trust gate, §3c supervisor posture and pin-time/runtime split;
         # shekyl-p-serve's wire-indistinguishability invariants; shekyl-p-host's
         # custody boundary and endpoint-lifetime invariant), and reviews here
@@ -372,7 +379,7 @@ jobs:
         # job in build.yml, where its docs exist.
         run: >-
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
-          -p shekyl-tor -p shekyl-p-serve -p shekyl-p-host
+          -p shekyl-tor-control-wallet -p shekyl-tor-control-client -p shekyl-p-serve -p shekyl-p-host
           -p shekyl-operator-alarm -p shekyl-economics
       - name: build shekyl-fcmp crate
         working-directory: rust

@@ -15,6 +15,8 @@
 #include "rpc/rpc_facts_ffi.h"
 
 extern "C" {
+void shekyl_rpc_identity_facts_rust_fill(shekyl_rpc_identity_facts* out, uint64_t seed);
+int shekyl_rpc_identity_facts_rust_check(const shekyl_rpc_identity_facts* facts, uint64_t seed);
 void shekyl_rpc_chain_tip_facts_rust_fill(shekyl_rpc_chain_tip_facts* out, uint64_t seed);
 int shekyl_rpc_chain_tip_facts_rust_check(const shekyl_rpc_chain_tip_facts* facts, uint64_t seed);
 void shekyl_rpc_hardfork_entry_rust_fill(shekyl_rpc_hardfork_entry* out, uint64_t seed);
@@ -53,6 +55,31 @@ TEST(rpc_facts_ffi_roundtrip, rust_writes_cpp_reads)
     shekyl_rpc_chain_tip_facts facts;
     shekyl_rpc_chain_tip_facts_rust_fill(&facts, seed);
     EXPECT_EQ(0, shekyl_rpc_chain_tip_facts_test_check(&facts, seed)) << "seed " << seed;
+  }
+}
+
+// The identity POD (VC-2). The evidence that discriminates an ABI
+// disagreement is a value written by one half and read by the other: a
+// Rust-only test and a C++-only test can each pass while the boundary is
+// wrong, because each half is self-consistent with its own idea of the
+// layout.
+TEST(rpc_facts_ffi_roundtrip, identity_cpp_writes_rust_reads)
+{
+  for (const uint64_t seed : seeds)
+  {
+    shekyl_rpc_identity_facts facts;
+    shekyl_rpc_identity_facts_test_fill(&facts, seed);
+    EXPECT_EQ(0, shekyl_rpc_identity_facts_rust_check(&facts, seed)) << "seed " << seed;
+  }
+}
+
+TEST(rpc_facts_ffi_roundtrip, identity_rust_writes_cpp_reads)
+{
+  for (const uint64_t seed : seeds)
+  {
+    shekyl_rpc_identity_facts facts;
+    shekyl_rpc_identity_facts_rust_fill(&facts, seed);
+    EXPECT_EQ(0, shekyl_rpc_identity_facts_test_check(&facts, seed)) << "seed " << seed;
   }
 }
 
@@ -179,6 +206,13 @@ TEST(rpc_facts_ffi_roundtrip, fee_estimate_facts_rust_writes_cpp_reads)
 TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
 {
   static_assert(sizeof(shekyl_rpc_chain_tip_facts) == 56, "chain-tip facts POD changed size");
+  // VC-2's identity POD. 1 + 7 reserved + 32 = 40, and the offsets are pinned
+  // rather than inferred: 8 is where the hash starts once the byte is padded
+  // out, and an editor who removed `reserved` would keep the size and move
+  // the field.
+  static_assert(sizeof(shekyl_rpc_identity_facts) == 40, "identity facts POD changed size");
+  static_assert(offsetof(shekyl_rpc_identity_facts, nettype) == 0, "nettype offset");
+  static_assert(offsetof(shekyl_rpc_identity_facts, genesis_hash) == 8, "genesis_hash offset");
   static_assert(sizeof(shekyl_rpc_hardfork_entry) == 16, "hardfork entry POD changed size");
   static_assert(sizeof(shekyl_rpc_block_hash_facts) == 48, "block-hash facts POD changed size");
   static_assert(sizeof(shekyl_rpc_block_header_facts) == 304, "block-header facts POD changed size");

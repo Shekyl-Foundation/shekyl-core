@@ -189,7 +189,7 @@ pub const ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO: &[u8] = b"shekyl-archival-p-bond-sp
 /// §10.13 carry — the dotted form is outside §9.3's hyphen-convention
 /// non-prefix-free safety family. Consumer: the serving path expands this seed to
 /// tor's `ED25519-V3` expanded-private key and hands it to tor via `ADD_ONION`
-/// (`shekyl-tor`'s `control::onion`); `crypto-pq` owns only the seed. That
+/// (`shekyl-tor-control-client`'s `control::onion`); `crypto-pq` owns only the seed. That
 /// production path is **forthcoming** (2d-2 SP-T3); today only the disposable
 /// SP-T3 spike exercises it.
 pub const ARCHIVAL_P_HS_ID_INFO: &[u8] = b"shekyl-archival-p-hs-id-ed25519-v1";
@@ -538,7 +538,7 @@ pub struct ArchivalPKeys {
     /// [`derive_p_hs_id_seed`].
     ///
     /// **The seed, deliberately — not the expanded key.** RFC 8032 expansion
-    /// to tor's `ED25519-V3` blob is `shekyl-tor`'s format and it already owns
+    /// to tor's `ED25519-V3` blob is `shekyl-tor-control-client`'s format and it already owns
     /// that step (`OnionIdentity::from_hs_id_seed`), so the 32-byte seed is the
     /// correct boundary object: it keeps this crate ignorant of Tor's key
     /// encoding, and keeps the expansion in exactly one place rather than two
@@ -668,7 +668,7 @@ pub fn derive_archival_p_keys(
     let ml_dsa_seed = derive_p_ml_dsa_seed(master_seed, net, fmt, p_slot);
     let (hybrid_sign_pk, hybrid_sign_sk) = build_hybrid(&account_sign_seed, &ml_dsa_seed)?;
 
-    // --- GF-9 serving-side onion identity seed (expanded by shekyl-tor) ---
+    // --- GF-9 serving-side onion identity seed (expanded by shekyl-tor-control-client) ---
     let hs_id_seed = derive_p_hs_id_seed(master_seed, net, fmt, p_slot);
 
     // --- GF-1 bond-debit authorizer hybrid (seed consumers) ---

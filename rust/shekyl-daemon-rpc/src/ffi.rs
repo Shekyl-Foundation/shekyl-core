@@ -95,9 +95,9 @@ pub struct SubmitFactsFfi {
     /// zeroed otherwise.
     pub in_chain_height: u64,
     /// The probed record's bonded total; valid iff `bond_record_probed` and
-    /// the probe was [`SHEKYL_SUBMIT_BOND_PROBE_UNBOND`].
+    /// the probe was [`SHEKYL_SUBMIT_BOND_PROBE_RELEASE`].
     ///
-    /// Presence does not move when a persona exits — `apply_archival_unbond`
+    /// Presence does not move when a persona exits — `apply_archival_release`
     /// rewrites the row with a zero bonded total rather than deleting it — so
     /// the debit arm's Phase-D re-check reads the balance instead.
     pub bond_record_bonded_total: u64,
@@ -234,20 +234,20 @@ pub struct SubmitEmissionFactsHandle {
     _opaque: [u8; 0],
 }
 
-// ── §8.7.1.1 Unbond fact marshal (rows UB2/UB3/UB4/UB6/UB7) ────────────────
-// Mirrors of `daemon_submit_ffi.h`'s Unbond PODs.
+// ── §8.7.1.1 Release fact marshal (rows UB2/UB3/UB4/UB6/UB7) ────────────────
+// Mirrors of `daemon_submit_ffi.h`'s Release PODs.
 
 /// Which archival-bond question the Phase-B probe asks
 /// (`SHEKYL_SUBMIT_BOND_PROBE_JOIN`): the record must be **absent**.
 pub const SHEKYL_SUBMIT_BOND_PROBE_JOIN: u8 = 0;
-/// (`SHEKYL_SUBMIT_BOND_PROBE_UNBOND`): the record must be **present**, and
+/// (`SHEKYL_SUBMIT_BOND_PROBE_RELEASE`): the record must be **present**, and
 /// its contents are verify operands.
-pub const SHEKYL_SUBMIT_BOND_PROBE_UNBOND: u8 = 1;
+pub const SHEKYL_SUBMIT_BOND_PROBE_RELEASE: u8 = 1;
 
-/// `shekyl_submit_unbond_record_ffi`.
+/// `shekyl_submit_release_record_ffi`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct SubmitUnbondRecordFfi {
+pub struct SubmitReleaseRecordFfi {
     pub bonded_total_atomic: u64,
     pub bad_interval_count: usize,
     pub bond_spend_pk: *const u8,
@@ -267,27 +267,27 @@ pub struct SubmitUnbondRecordFfi {
     /// txid, a failed debit pin, a zero balance, a balance the vin's
     /// `bond_debit` no longer matches, or a full bad-interval log. Inferring
     /// "the pin failed" from this byte was true of an earlier revision and is
-    /// not true now; the reasons are listed on `fill_unbond_facts_locked`,
+    /// not true now; the reasons are listed on `fill_release_facts_locked`,
     /// which owns them.
     pub last_served_scan_skipped: u8,
     pub per_shard_last_served: *const u64,
     pub per_shard_last_served_len: usize,
 }
 
-/// `shekyl_submit_unbond_facts_ffi`.
+/// `shekyl_submit_release_facts_ffi`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct SubmitUnbondFactsFfi {
+pub struct SubmitReleaseFactsFfi {
     pub record_present: u8,
-    pub record: SubmitUnbondRecordFfi,
+    pub record: SubmitReleaseRecordFfi,
     /// The slash watermark **as stored**; `u64::MAX` is the "nothing settled
     /// yet" sentinel, normalised once in `ffi_shim`.
     pub last_settled_slash_epoch: u64,
 }
 
-/// Opaque C++-owned buffer holder (`shekyl_submit_unbond_facts_handle`).
+/// Opaque C++-owned buffer holder (`shekyl_submit_release_facts_handle`).
 #[repr(C)]
-pub struct SubmitUnbondFactsHandle {
+pub struct SubmitReleaseFactsHandle {
     _opaque: [u8; 0],
 }
 
@@ -305,6 +305,29 @@ pub const SHEKYL_RPC_FACTS_ERR_INTERNAL: i32 = -3;
 /// The store reported a height it cannot produce the block for — a
 /// data-integrity fault of this daemon, distinct from a read that threw.
 pub const SHEKYL_RPC_FACTS_ERR_INCONSISTENT: i32 = -4;
+
+/// Twin of `shekyl_rpc_identity_facts` (VC-2): what this daemon **is**, as
+/// opposed to what its chain tip looks like right now.
+///
+/// Its own POD rather than two more fields on [`ChainTipFactsFfi`]
+/// (`VC-R17`): `nettype` and the genesis hash are fixed at daemon start and
+/// per network, while the tip changes every block, and five of the tip POD's
+/// six callers want a tip. Splitting also keeps the tip POD's layout twins,
+/// seeded fill indices and size pin exactly where they were.
+///
+/// The rules digest is not carried here — it is compiled into this image
+/// from `config/`, so the handler reads `CONSENSUS_CONSTANTS_DIGEST` and
+/// never asks C++ for it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdentityFactsFfi {
+    /// `cryptonote::network_type`: MAINNET=0, TESTNET=1, STAGENET=2,
+    /// FAKECHAIN=3.
+    pub nettype: u8,
+    pub reserved: [u8; 7],
+    /// Block 0's id.
+    pub genesis_hash: [u8; 32],
+}
 
 /// Twin of `shekyl_rpc_chain_tip_facts`. Layout pinned both directions by
 /// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via
@@ -738,6 +761,7 @@ extern "C" {
         out: *mut FeeEstimateFactsFfi,
     ) -> i32;
     /// The grace-blocks ceiling the estimator asserts on. Handle-free.
+    pub fn shekyl_rpc_identity(h: *mut CoreRpcHandle, out: *mut IdentityFactsFfi) -> i32;
     pub fn shekyl_rpc_fee_grace_blocks_max() -> u64;
     pub fn shekyl_rpc_net_stats(h: *mut CoreRpcHandle, out: *mut NetStatsFactsFfi) -> i32;
     /// Fills a C++-owned view of the live p2p connections plus the single
@@ -921,7 +945,7 @@ extern "C" {
         emission_epochs: *const u64,
         n_emission_epochs: usize,
         out_emission: *mut *mut SubmitEmissionFactsHandle,
-        out_unbond: *mut *mut SubmitUnbondFactsHandle,
+        out_release: *mut *mut SubmitReleaseFactsHandle,
         out_facts: *mut SubmitFactsFfi,
         out_ki_conflicts: *mut u8,
     ) -> i32;
@@ -932,11 +956,11 @@ extern "C" {
 
     pub fn shekyl_submit_emission_facts_free(h: *mut SubmitEmissionFactsHandle);
 
-    pub fn shekyl_submit_unbond_facts_view(
-        h: *const SubmitUnbondFactsHandle,
-    ) -> *const SubmitUnbondFactsFfi;
+    pub fn shekyl_submit_release_facts_view(
+        h: *const SubmitReleaseFactsHandle,
+    ) -> *const SubmitReleaseFactsFfi;
 
-    pub fn shekyl_submit_unbond_facts_free(h: *mut SubmitUnbondFactsHandle);
+    pub fn shekyl_submit_release_facts_free(h: *mut SubmitReleaseFactsHandle);
 
     #[allow(clippy::too_many_arguments)]
     pub fn shekyl_submit_commit_tx(
@@ -1091,6 +1115,13 @@ mod unit_test_link_stubs {
     pub extern "C" fn shekyl_rpc_chain_tip(
         _h: *mut CoreRpcHandle,
         _out: *mut ChainTipFactsFfi,
+    ) -> i32 {
+        SHEKYL_RPC_FACTS_ERR_NULL
+    }
+    #[no_mangle]
+    pub extern "C" fn shekyl_rpc_identity(
+        _h: *mut CoreRpcHandle,
+        _out: *mut IdentityFactsFfi,
     ) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
     }

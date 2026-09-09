@@ -40,10 +40,11 @@ namespace daemonize {
 t_command_parser_executor::t_command_parser_executor(
     uint32_t ip
   , uint16_t port
+  , cryptonote::network_type nettype
   , bool is_rpc
   , cryptonote::core_rpc_server* rpc_server
   )
-  : m_executor(ip, port, is_rpc, rpc_server)
+  : m_executor(ip, port, nettype, is_rpc, rpc_server)
 {}
 
 bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& args)

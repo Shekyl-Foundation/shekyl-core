@@ -431,7 +431,7 @@ come from §5.4.
 was recorded here as one, and it does not survive its own algebra.
 
 The argument ran: storage is cheap, so once a shard is fetched, discarding it is
-irrational; `held(P,E)` changes only by bond/unbond so the same shards recur
+irrational; `held(P,E)` changes only by bond/release so the same shards recur
 every epoch; therefore the rational free-rider converges on holding, and the
 attacker *category* dissolves. The failure is that **"keep after fetch is
 rational" and "free-riding is unprofitable" are the same inequality**:
@@ -1104,7 +1104,7 @@ exists to prevent.)*
   after which the helper answers every challenge forever. A one-time cost
   unlocking unlimited commitment generation is §5.7a inverted (the free-rider
   must pay *perpetually*, not once). Second-order, and worth keeping: sharing
-  `k_P` lets the helper impersonate `P` outright — collect its rewards, unbond
+  `k_P` lets the helper impersonate `P` outright — collect its rewards, release
   it — so the free-rider only shares with infrastructure it controls (at which
   point the helper *is* `P`'s storage and this is **honest archiving across two
   machines**) or with a trusted third party carrying the bond (a real,

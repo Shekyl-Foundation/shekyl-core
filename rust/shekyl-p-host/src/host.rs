@@ -10,10 +10,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use shekyl_p_serve::{PServeEndpoint, StoreShardProvider};
-use shekyl_tor::control::ServiceId;
-use shekyl_tor::onion_identity::OnionIdentity;
-use shekyl_tor::service::{
-    OnionServiceSpec, ServingPosture, TorPosture, TorService, TorServiceConfig,
+use shekyl_tor_control_wallet::service::{
+    OnionIdentity, OnionServiceSpec, ServiceId, ServingPosture, TorPosture, WalletTorControl,
+    WalletTorControlConfig,
 };
 use tokio::sync::watch;
 
@@ -91,7 +90,7 @@ impl std::error::Error for HostError {
 /// this type removes:
 ///
 /// - **The endpoint is bound exactly once, and the host owns it for its
-///   whole life.** `TorService` republishes the onion on *every*
+///   whole life.** `WalletTorControl` republishes the onion on *every*
 ///   incarnation's `Ready` from the [`OnionServiceSpec`] in its config — the
 ///   same loopback target every time. A rebind (`:0` picks a fresh ephemeral
 ///   port) under an unchanged spec would leave the onion mapped to a dead
@@ -134,7 +133,7 @@ impl std::error::Error for HostError {
 pub struct PersonaServingHost<P: ServeSetPinner> {
     /// Bound once in [`Self::start`]; never rebound. See the type doc.
     endpoint: PServeEndpoint,
-    tor: TorService,
+    tor: WalletTorControl,
     service_id: ServiceId,
     /// The one pinner this host will ever use. Held rather than taken per
     /// call so the store the pins land in cannot change between the initial
@@ -217,7 +216,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
     /// [`HostError::NonLoopbackTarget`] if the bound address is refused as
     /// an onion target.
     pub async fn start(
-        mut tor: TorServiceConfig,
+        mut tor: WalletTorControlConfig,
         serving: PersonaServing,
         pinner: P,
     ) -> Result<Self, HostError> {
@@ -247,7 +246,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         let service_id = spec.service_id().clone();
 
         tor.posture = ServingPosture::Serving(spec);
-        let tor = TorService::spawn(tor);
+        let tor = WalletTorControl::spawn(tor);
 
         Ok(Self {
             endpoint,
@@ -424,7 +423,7 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
 
     /// Stop serving: tear the onion down first, then the listener.
     ///
-    /// **That order is the point.** `TorService::shutdown` awaits the
+    /// **That order is the point.** `WalletTorControl::shutdown` awaits the
     /// current incarnation's child being reaped, and the actor's `on_stop`
     /// has already `DEL_ONION`'d what it published — so by the time this
     /// returns, no descriptor points at the loopback port. Dropping the

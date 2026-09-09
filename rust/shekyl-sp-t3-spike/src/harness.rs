@@ -37,9 +37,15 @@ use std::time::{Duration, Instant};
 use kameo::actor::Spawn as _;
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
 use shekyl_p_transport::{PTorClient, PTransportError, RequestErrorKind, TorSocksEndpoint};
-use shekyl_tor::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId};
-use shekyl_tor::control::{BootstrapReadiness, BootstrapState, Command, EventSink, TorControl};
-use shekyl_tor::control::{ManagedTor, SocksPort, TorControlConfig, TorLaunch};
+use shekyl_tor_control_client::control::onion::{
+    AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId,
+};
+use shekyl_tor_control_client::control::{
+    BootstrapReadiness, BootstrapState, Command, EventSink, TorControlClient,
+};
+use shekyl_tor_control_client::control::{
+    ManagedTor, SocksPort, TorControlClientConfig, TorLaunch,
+};
 use shekyl_types::{PCanonicalId, PSlot};
 
 use shekyl_p_serve::{PServeEndpoint, ShardBody, ROUTE_PREFIX};
@@ -113,7 +119,7 @@ impl Persona {
 
 /// A running measurement apparatus: a managed tor plus its published personas.
 pub struct Apparatus {
-    control: kameo::actor::ActorRef<TorControl>,
+    control: kameo::actor::ActorRef<TorControlClient>,
     socks: TorSocksEndpoint,
     /// The published personas, in slot order.
     pub personas: Vec<Persona>,
@@ -263,9 +269,9 @@ impl Apparatus {
         let socks_port = free_port();
         let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
-        let verified = shekyl_tor::binary::discover_and_verify_at(&tor_binary)
+        let verified = shekyl_tor_control_client::binary::discover_and_verify_at(&tor_binary)
             .map_err(|e| ApparatusError::Control(e.to_string()))?;
-        let control = TorControl::spawn(TorControlConfig {
+        let control = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Managed(ManagedTor {
                 tor_binary: verified,
                 data_dir,
@@ -335,8 +341,9 @@ impl Apparatus {
             if reply.status() != 250 {
                 return Err(ApparatusError::AddOnion(reply.status()));
             }
-            let published = shekyl_tor::control::onion::parse_service_id(reply.lines())
-                .ok_or(ApparatusError::NoServiceId)?;
+            let published =
+                shekyl_tor_control_client::control::onion::parse_service_id(reply.lines())
+                    .ok_or(ApparatusError::NoServiceId)?;
             // The address tor published must be the address the derivation
             // predicted — otherwise the client leg would dial a service that
             // exists but is not this persona's, and every fetch would fail for a

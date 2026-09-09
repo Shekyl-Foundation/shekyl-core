@@ -1069,7 +1069,7 @@ impl RefreshEngine for LocalRefresh {
 }
 
 // ============================================================================
-// Inner helpers (mirror engine/refresh.rs free helpers; kept local
+// Inner helpers (mirror engine/refresh/ free helpers; kept local
 // to bound the C4 diff to a single new file. C5 collapses these
 // when the legacy free `produce_scan_result` is deleted.)
 // ============================================================================

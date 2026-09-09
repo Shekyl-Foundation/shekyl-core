@@ -4,6 +4,18 @@
 
 ### Added
 
+- **Wallet and daemon console refuse a daemon that is not this build.**
+  On first request they compare the four-axis identity tuple in
+  `get_version` (wire version, consensus-constants digest, network, genesis)
+  against this binary's compiled values and refuse a mismatch in operator
+  language. Comparison is one function in `shekyl-rpc-types`; a down or
+  not-ready daemon is not cached as a contract mismatch. `CORE_RPC_VERSION`
+  3.28 → **3.29**. The genesis axis compares the daemon's block-0 id to this
+  build's per-network pin (`GENESIS_ALLOCATIONS.md` / `mining_parity`); a
+  remint of genesis updates the pin in the same change. A daemon reporting a
+  foreign DAA target no longer produces a
+  console warning: the digest handshake is the instrument, and figures still
+  use the generated `T`.
 - **Every ignored regtest e2e test now has a CI disposition.** The
   live-daemon gate loop (`scripts/ci/run_live_daemon_gates.sh`) arms all
   fourteen fast wallet/staking/curve-tree e2e gates per PR, runs the two
@@ -53,6 +65,20 @@
   named blockers (fee-bump, wallet-decryption MFA, network-filesystem
   wallets), and the delivered DRS-P0a–P0c legs trimmed out of the DRS-P0
   row, leaving P0d as the open blocker. Process-only; no code change.
+- **Internal "Unbond" vocabulary renamed to "Release."** The terminal
+  bond exit is now called Release everywhere the code and living docs
+  speak about it (matching `RELEASE_COOLDOWN_EPOCHS`), across Rust
+  (`PendingRelease`, `submit_release`, `stake_engine/release.rs`), the
+  C++ submit path, CI scripts, and design docs. Nothing user-visible or
+  on-wire changed: the `BondPostKind` wire discriminant stays `2`, and
+  the user surface stays `unstake` / `collect_unstaked`. The wallet-file
+  schemas that carried renamed field names bumped versions
+  (`PENDING_POST_VERSION` and `PSCAN_STATE_VERSION` 9 → 10; pre-genesis,
+  no migration). The LMDB journal name `archival_bond_unbond_log` and
+  its direct C++ carriers are deliberately excluded — carried by the DRS
+  redb port per the `docs/FOLLOWUPS.md` entry. Historical records
+  (decision log, reconciliation registry, this changelog's released
+  entries) keep the old name as the record of what was.
 
 - **The daemon and the Rust port now admit the same `tx_extra` tag set, and an
   unparseable `extra` is refused rather than skipped.** `shekyl-wire` had long

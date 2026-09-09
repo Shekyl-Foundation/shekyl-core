@@ -1659,7 +1659,7 @@ target inherently:
 2. **Per-epoch re-scoring voids admission gaming** — the killer. Depress `r`,
    admit, restore `r`: the position then scores **zero at every subsequent close**.
    All value flows through per-epoch scoring, which admission timing cannot touch.
-   The attacker has paid unbond/exit costs, forgone rewards, and bond churn to
+   The attacker has paid release/exit costs, forgone rewards, and bond churn to
    acquire **a registered zero**. The gain is not small; it is **structurally nil**.
 3. **Prize pinned to ≈ 0.** The gate sits *at* the zero-work cliff, so the only
    contested positions are worth ~one milli per epoch. **Consequence — keep
@@ -1675,7 +1675,7 @@ target inherently:
    (`H−1`)** — the same discipline as the `frozen_segment_count` frontier-read and
    the M3-1 drift ruling — so intra-block ordering is irrelevant and every
    validator computes an identical verdict. (Bonding right after a *genuine* mass
-   unbond is not manipulation; that is reading true state, and the admitted
+   release is not manipulation; that is reading true state, and the admitted
    position really is viable at that state.)
 6. **Validator-cheap.** One pass over the holding: at most `MAX_HOLDINGS_SHARDS`
    (4 096) `mul_div_floor` operations — the same per-bond work epoch-close already

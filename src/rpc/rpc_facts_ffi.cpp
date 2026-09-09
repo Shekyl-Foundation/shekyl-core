@@ -1115,6 +1115,39 @@ extern "C" {
 // logged and becomes SHEKYL_RPC_FACTS_ERR_INTERNAL, never an unwind across
 // the C ABI into Rust (which would abort the daemon). Same discipline as
 // daemon_submit_ffi.cpp's shims.
+// Daemon identity (VC-2). Its own export rather than two more fields on the
+// chain-tip POD: these are process-lifetime constants, and the tip POD's
+// other five callers want a tip (VC-R17).
+int shekyl_rpc_identity(core_rpc_handle* h, shekyl_rpc_identity_facts* out)
+{
+  if (!h || !h->rpc || !out)
+    return SHEKYL_RPC_FACTS_ERR_NULL;
+  try
+  {
+    cryptonote::core& core = h->rpc->get_core();
+    std::memset(out, 0, sizeof(*out));
+    out->nettype = static_cast<uint8_t>(core.get_nettype());
+    // Block 0's id. `get_block_id_by_height` returns null_hash for a height
+    // the store does not have, which for height 0 means the chain is not
+    // loaded -- reported as NOT_READY rather than handed over as 32 zero
+    // bytes, because a client comparing against a pinned genesis would read
+    // all-zero as a mismatch and blame the wrong thing.
+    const crypto::hash genesis =
+      core.get_blockchain_storage().get_block_id_by_height(0);
+    if (genesis == crypto::null_hash)
+      return SHEKYL_RPC_FACTS_ERR_NOT_READY;
+    std::memcpy(out->genesis_hash, genesis.data, sizeof(out->genesis_hash));
+    return SHEKYL_RPC_FACTS_OK;
+  }
+  catch (const std::exception& e)
+  {
+    MERROR("identity facts: exception: " << e.what());
+    if (out)
+      std::memset(out, 0, sizeof(*out));
+    return SHEKYL_RPC_FACTS_ERR_INTERNAL;
+  }
+}
+
 int shekyl_rpc_chain_tip(core_rpc_handle* h, shekyl_rpc_chain_tip_facts* out)
 {
   if (!h || !h->rpc || !out)
@@ -1689,6 +1722,25 @@ int shekyl_rpc_net_stats_facts_test_check(const shekyl_rpc_net_stats_facts* fact
     return -1;
   shekyl_rpc_net_stats_facts expected;
   shekyl_rpc_net_stats_facts_test_fill(&expected, seed);
+  return std::memcmp(facts, &expected, sizeof(expected)) == 0 ? 0 : -1;
+}
+
+void shekyl_rpc_identity_facts_test_fill(shekyl_rpc_identity_facts* out, uint64_t seed)
+{
+  if (!out)
+    return;
+  std::memset(out, 0, sizeof(*out));
+  out->nettype = static_cast<uint8_t>(field_value(seed, 0));
+  for (size_t i = 0; i < sizeof(out->genesis_hash); ++i)
+    out->genesis_hash[i] = static_cast<uint8_t>(field_value(seed, 1) >> ((i % 8) * 8));
+}
+
+int shekyl_rpc_identity_facts_test_check(const shekyl_rpc_identity_facts* facts, uint64_t seed)
+{
+  if (!facts)
+    return -1;
+  shekyl_rpc_identity_facts expected;
+  shekyl_rpc_identity_facts_test_fill(&expected, seed);
   return std::memcmp(facts, &expected, sizeof(expected)) == 0 ? 0 : -1;
 }
 

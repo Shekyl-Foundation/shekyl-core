@@ -96,7 +96,8 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #   e2e_staker_bond_post_accepted_and_applied — historical red: the PR-4a
 #     daemon-gap tripwire pinned the unimplemented-arm Malformed refusal.
 #   e2e_drain_wire_shape_matches_a_real_transfer — sabotage 2026-09-08.
-#   e2e_unbond_accepted_and_connected — sabotage 2026-09-08.
+#   e2e_release_accepted_and_connected — sabotage 2026-09-08 (as
+#     e2e_unbond_accepted_and_connected, pre Unbond→Release rename).
 #   e2e_unstake_collect_retire_composed_arc — sabotage 2026-09-08.
 #   e2e_arm3_phantom_slot_collected_at_open — sabotage 2026-09-08.
 #   e2e_fcmp_spend_over_depth3_tree (slow) — historical red: CurveTreeIngest
@@ -114,7 +115,7 @@ ARMED=(
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
   engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
   engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
-  engine::regtest_e2e::e2e_unbond_accepted_and_connected
+  engine::regtest_e2e::e2e_release_accepted_and_connected
   engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
 )

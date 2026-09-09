@@ -448,7 +448,7 @@ async fn confirmation_retires_bytes_and_reservation_in_one_seal() {
 /// each reserving one funding output.
 fn driver_with_reservations() -> (TestDriver, std::sync::Arc<MemStore>) {
     use shekyl_engine_state::pending_post_block::{
-        PendingDrain, PendingEmissionClaim, PendingUnbond, SealAdmission,
+        PendingDrain, PendingEmissionClaim, PendingRelease, SealAdmission,
     };
     let mut block = PendingPostBlock::empty();
     let g = block.generation();
@@ -480,8 +480,8 @@ fn driver_with_reservations() -> (TestDriver, std::sync::Arc<MemStore>) {
         SealAdmission::Admit
     );
     assert_eq!(
-        block.seal_unbond(
-            PendingUnbond {
+        block.seal_release(
+            PendingRelease {
                 persona: persona(3),
                 tx_bytes: vec![0xEB; 8],
                 funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(33)],
@@ -546,7 +546,7 @@ async fn a_bond_post_confirmation_never_retires_a_reservation_observed_record() 
         "a bond-post confirmation is not this drain's settlement"
     );
     assert!(
-        block.has_live_unbond_for(&persona(3)),
+        block.has_live_release_for(&persona(3)),
         "a bond-post confirmation is not this exit's settlement"
     );
 }
@@ -560,7 +560,7 @@ async fn a_bond_post_confirmation_never_retires_a_reservation_observed_record() 
 /// claims are engine-automated: the persona simply stopped claiming, with no
 /// user action to correlate the silence against.
 #[tokio::test]
-async fn a_settled_reservation_retires_the_claim_the_drain_and_the_unbond() {
+async fn a_settled_reservation_retires_the_claim_the_drain_and_the_release() {
     let (mut driver, store) = driver_with_reservations();
 
     // Neither reservation remains in the accrual's live funding set: both
@@ -592,7 +592,7 @@ async fn a_settled_reservation_retires_the_claim_the_drain_and_the_unbond() {
         "drain lane reopened"
     );
     assert!(
-        !block.has_live_unbond_for(&persona(3)),
+        !block.has_live_release_for(&persona(3)),
         "one-live-exit lane reopened"
     );
     assert!(
@@ -611,9 +611,9 @@ async fn a_settled_reservation_retires_the_claim_the_drain_and_the_unbond() {
 /// the case an operator most needs to see. Collapsing the key makes this
 /// test red.
 #[tokio::test]
-async fn a_stalled_claim_drain_and_unbond_on_one_persona_all_alarm() {
+async fn a_stalled_claim_drain_and_release_on_one_persona_all_alarm() {
     use shekyl_engine_state::pending_post_block::{
-        PendingDrain, PendingEmissionClaim, PendingUnbond, SealAdmission,
+        PendingDrain, PendingEmissionClaim, PendingRelease, SealAdmission,
     };
     let p = persona(1);
     let mut block = PendingPostBlock::empty();
@@ -649,8 +649,8 @@ async fn a_stalled_claim_drain_and_unbond_on_one_persona_all_alarm() {
         SealAdmission::Admit
     );
     assert_eq!(
-        block.seal_unbond(
-            PendingUnbond {
+        block.seal_release(
+            PendingRelease {
                 persona: p,
                 tx_bytes: vec![0xEB; 8],
                 funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(33)],
@@ -702,7 +702,7 @@ async fn a_stalled_claim_drain_and_unbond_on_one_persona_all_alarm() {
     assert!(
         driver
             .alarmed_reservations
-            .contains(&(ReservationKind::Unbond, p)),
+            .contains(&(ReservationKind::Release, p)),
         "the stalled exit must alarm too — the kind-keyed marker covers the fourth kind"
     );
 
@@ -716,7 +716,7 @@ async fn a_stalled_claim_drain_and_unbond_on_one_persona_all_alarm() {
     assert!(
         block.has_live_claim_for(&p)
             && block.has_live_drain_for(&p)
-            && block.has_live_unbond_for(&p)
+            && block.has_live_release_for(&p)
     );
 }
 
@@ -732,9 +732,9 @@ async fn a_stalled_claim_drain_and_unbond_on_one_persona_all_alarm() {
 ///
 /// Restoring the both-keys clear turns this red.
 #[tokio::test]
-async fn settling_a_claim_leaves_still_stuck_drain_and_unbond_alarms_marked() {
+async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
     use shekyl_engine_state::pending_post_block::{
-        PendingDrain, PendingEmissionClaim, PendingUnbond, SealAdmission,
+        PendingDrain, PendingEmissionClaim, PendingRelease, SealAdmission,
     };
     let p = persona(1);
     let mut block = PendingPostBlock::empty();
@@ -770,8 +770,8 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_unbond_alarms_marked() {
         SealAdmission::Admit
     );
     assert_eq!(
-        block.seal_unbond(
-            PendingUnbond {
+        block.seal_release(
+            PendingRelease {
                 persona: p,
                 tx_bytes: vec![0xEB; 8],
                 funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(33)],
@@ -811,7 +811,7 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_unbond_alarms_marked() {
     for kind in [
         ReservationKind::Claim,
         ReservationKind::Drain,
-        ReservationKind::Unbond,
+        ReservationKind::Release,
     ] {
         assert!(driver.alarmed_reservations.contains(&(kind, p)));
     }
@@ -841,7 +841,7 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_unbond_alarms_marked() {
         .expect("sealed");
     assert!(!block.has_live_claim_for(&p), "the claim settled");
     assert!(block.has_live_drain_for(&p), "the drain is still stuck");
-    assert!(block.has_live_unbond_for(&p), "the exit is still stuck");
+    assert!(block.has_live_release_for(&p), "the exit is still stuck");
 
     assert!(
         !driver
@@ -859,7 +859,7 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_unbond_alarms_marked() {
     assert!(
         driver
             .alarmed_reservations
-            .contains(&(ReservationKind::Unbond, p)),
+            .contains(&(ReservationKind::Release, p)),
         "the still-stuck exit stays marked too — the clear is per (kind, persona)"
     );
 
@@ -882,7 +882,7 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_unbond_alarms_marked() {
     assert!(
         !driver
             .alarmed_reservations
-            .contains(&(ReservationKind::Unbond, p)),
+            .contains(&(ReservationKind::Release, p)),
         "the settled exit's marker is cleared"
     );
     assert!(
@@ -912,7 +912,7 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_unbond_alarms_marked() {
 /// writer count at the time) with one shared decision,
 /// `PendingPostBlock::classify_seal`, reached only through the `seal_*`
 /// methods that also perform the insert — `seal_post` / `seal_claim` /
-/// `seal_drain`, joined by `seal_unbond` when PR #601 added the fourth
+/// `seal_drain`, joined by `seal_release` when PR #601 added the fourth
 /// writer — so the ordering and the overlap rule exist once and cannot
 /// drift, and a seam cannot classify without sealing or seal without
 /// classifying. This list below is the writer roster: a fifth seam
@@ -946,9 +946,9 @@ fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
             ".seal_post(",
         ),
         (
-            "unbond_dispatch.rs",
-            include_str!("../unbond_dispatch.rs"),
-            ".seal_unbond(",
+            "release_dispatch.rs",
+            include_str!("../release_dispatch.rs"),
+            ".seal_release(",
         ),
     ] {
         let production = src
@@ -978,11 +978,11 @@ fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
             ".push_post(",
             ".push_claim(",
             ".push_drain(",
-            // No `push_unbond` insert primitive exists even under
+            // No `push_release` insert primitive exists even under
             // `cfg(test)`; the needle stands so that MINTING one and
             // reaching for it here is caught by the same gate that guards
             // the other three, not discovered at the next review.
-            ".push_unbond(",
+            ".push_release(",
         ] {
             assert!(
                 !code.contains(bare),

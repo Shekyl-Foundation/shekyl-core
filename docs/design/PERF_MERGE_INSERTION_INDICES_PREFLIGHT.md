@@ -358,8 +358,12 @@ only diff is the iteration domain.
 - `shekyl-scanner/README.md:85` — public docs example.
 - `shekyl-engine-core/src/scan.rs:26, 27, 115, 123, 147` — module
   docs.
-- `shekyl-engine-core/src/engine/refresh.rs:9, 128, 3018` — refresh
-  module docs and decision-log citations.
+- `shekyl-engine-core/src/engine/refresh/mod.rs:27` — refresh
+  module docs (the merge entry point).
+- `shekyl-engine-core/src/engine/refresh/types.rs:42` — snapshot
+  field-set docs citing `apply_scan_result_to_state`.
+- `shekyl-engine-core/src/engine/refresh/task.rs:384` — producer
+  task docs naming `populate_engine_handle_fields`.
 - `shekyl-engine-core/src/engine/local_ledger.rs:20, 33` — module
   docs.
 - `shekyl-engine-core/src/engine/test_support.rs:31, 611, 626, 657,

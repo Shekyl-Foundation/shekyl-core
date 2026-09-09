@@ -5,7 +5,7 @@
 
 //! The **public** exit façade (PR-C): the composed `unstake` verb, discharged
 //! across two named actions on [`StakeFacade`] —
-//! [`StakeFacade::unstake`] (the irreversible `Unbond` **post**) and
+//! [`StakeFacade::unstake`] (the irreversible `Release` **post**) and
 //! [`StakeFacade::collect_unstaked`] (the **terminal sweep** of the released
 //! collateral to principal).
 //!
@@ -21,7 +21,7 @@
 //! rotates while bonded — `emission_source.rs`), so the fallback is a trap,
 //! not an edge. Two verbs, each refusing outside its own state, cannot
 //! mis-select the irreversible step. The frozen §2 method surface
-//! (`PRINCIPAL_STAKE_LIFECYCLE.md`) keeps `unbond()` and `drain()` as
+//! (`PRINCIPAL_STAKE_LIFECYCLE.md`) keeps `release()` and `drain()` as
 //! separate signatures for the same reason.
 //!
 //! ## The wire never names a slot
@@ -29,16 +29,16 @@
 //! Both verbs resolve their persona engine-side (the `first_stake`
 //! precedent: the user never names a slot). `unstake` picks the **first
 //! eligible live-bonded slot** — the [`live_bonded_personas`] set (confirmed
-//! JoinMarket bond, not pending-unbond, not retired), minus any persona
+//! JoinMarket bond, not pending-release, not retired), minus any persona
 //! whose exit is already sealed in flight, intersected with the persisted
 //! slot↔id cache, lowest slot first; a multi-bonded wallet exits
 //! one persona per invocation. `collect_unstaked` picks the first slot
 //! whose persona has an **observed confirmed exit**
-//! ([`PScanState::pending_unbonds`]). Neither verb copies
+//! ([`PScanState::pending_releases`]). Neither verb copies
 //! `drain_to_principal`'s active-persona resolution: the persona being
 //! exited or collected is routinely *not* the active one, and an
 //! active-only verb would strand every rotated-away persona's collateral
-//! (the `submit_unbond` slot rationale, one level up).
+//! (the `submit_release` slot rationale, one level up).
 //!
 //! ## The finding this façade discharges
 //!
@@ -104,13 +104,13 @@ use super::fee_policy::FeeEstimatorError;
 use super::pending::TxHash;
 use super::pending_post_gate::{ForegroundSession, UserPendingPost};
 use super::prpc::LocalNodeRpc;
+use super::release_dispatch::ReleaseRequestError;
 use super::signer::EngineSignerKind;
 use super::stake_engine::StakeEngineError;
 use super::stake_facade::StakeFacade;
 use super::staking_read::live_bonded_personas;
 use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
 use super::transaction_submitter::{BroadcastSubmitError, SubmitSuccess, SubmitterError};
-use super::unbond_dispatch::UnbondRequestError;
 use super::{Engine, LocalLedger, StakingReadError};
 
 /// The record fetch (and only the fetch) rides the loopback exit transport;
@@ -141,7 +141,7 @@ pub enum UnstakeOutcome {
 /// Why [`StakeFacade::unstake`] refused, flattened for the `pub` boundary
 /// (the [`DrainToPrincipalError`](super::drain_facade::DrainToPrincipalError)
 /// shape). Arms are cut by remedy (rule 82); renderings follow the exit
-/// path's bond-parity posture (`unbond_dispatch` module docs): the exit
+/// path's bond-parity posture (`release_dispatch` module docs): the exit
 /// never draws the P→principal edge, so its refusals may name `P`-side
 /// operands to the `P`-side caller.
 #[derive(Debug, thiserror::Error)]
@@ -174,7 +174,7 @@ pub enum UnstakeError {
     /// The record refuses to exit **yet** — consensus's own readiness
     /// predicates (cooldown, slash-settlement watermark, interval log).
     /// `detail` is the predicate's own rendering, which carries the operands
-    /// that say when the refusal lifts (the `UnbondNotReady` arms,
+    /// that say when the refusal lifts (the `ReleaseNotReady` arms,
     /// `stake_engine/types.rs`) — one remedy class (wait), so one arm
     /// (rule 82).
     #[error("the exit is not ready: {detail}")]
@@ -472,7 +472,7 @@ fn resolve_unstake_target(evidence: &ExitEvidence) -> Result<UnstakeTarget, &'st
     let sealing: BTreeSet<PCanonicalId> = evidence
         .pending
         .as_ref()
-        .map(|p| p.unbonds().iter().map(|u| u.persona).collect())
+        .map(|p| p.releases().iter().map(|u| u.persona).collect())
         .unwrap_or_default();
     let candidates: BTreeSet<PCanonicalId> = live
         .iter()
@@ -496,8 +496,8 @@ fn resolve_unstake_target(evidence: &ExitEvidence) -> Result<UnstakeTarget, &'st
     let sealed_exit = evidence
         .pending
         .as_ref()
-        .is_some_and(|p| !p.unbonds().is_empty());
-    if !pscan.pending_unbonds().is_empty() || sealed_exit {
+        .is_some_and(|p| !p.releases().is_empty());
+    if !pscan.pending_releases().is_empty() || sealed_exit {
         return Ok(UnstakeTarget::ExitInProgress);
     }
     let pending_post = evidence
@@ -525,7 +525,7 @@ enum CollectTarget {
 
 /// Resolve what `collect_unstaked` should do from the sealed evidence.
 ///
-/// Exited personas come from [`PScanState::pending_unbonds`] (the observed
+/// Exited personas come from [`PScanState::pending_releases`] (the observed
 /// on-chain exits); the same fail-closed index rule as
 /// [`resolve_unstake_target`] applies. "Pool is nonempty" reads the
 /// persisted per-slot funding rows — spendability (maturity, reservations)
@@ -537,7 +537,7 @@ fn resolve_collect_target(
     let Some(pscan) = evidence.pscan.as_ref() else {
         return Ok(CollectTarget::NoExit);
     };
-    let exited = pscan.pending_unbonds();
+    let exited = pscan.pending_releases();
     if exited.is_empty() {
         return Ok(CollectTarget::NoExit);
     }
@@ -592,7 +592,7 @@ fn other_exited_pools_remain(evidence: &ExitEvidence, swept: PSlot) -> bool {
     let Some(pscan) = evidence.pscan.as_ref() else {
         return false;
     };
-    let exited = pscan.pending_unbonds();
+    let exited = pscan.pending_releases();
     evidence
         .id_by_slot
         .iter()
@@ -634,7 +634,7 @@ where
     P: PendingTxEngine,
     Engine<S, D, LocalLedger, E, R, P, WalletFile>: Send + Sync,
 {
-    /// Post the terminal `Unbond` exit for the first live-bonded persona —
+    /// Post the terminal `Release` exit for the first live-bonded persona —
     /// **the irreversible step**: once the exit connects, the bond debits to
     /// zero and the persona can never re-bond on this record.
     ///
@@ -656,7 +656,7 @@ where
         // `NotStaker` (-29513) here: a non-staker's empty snapshot resolves
         // to `NothingStaked` (-29514), so without this the seam's `NotStaker`
         // arm is façade-unreachable and one state gets two names. This is the
-        // same `self.stake.is_some()` predicate `submit_unbond`'s
+        // same `self.stake.is_some()` predicate `submit_release`'s
         // `stake_handle().ok_or(NotStaker)` rests on (lifted, not restated),
         // and the drain façade rejects a non-staker before reading evidence
         // for the same reason.
@@ -668,7 +668,7 @@ where
             g.pending_gate.clone()
         };
         // User work always wins (`ENGINE_CADENCE_DRIVER.md` §3): register
-        // this user-initiated exit — its drains and the terminal unbond —
+        // this user-initiated exit — its drains and the terminal release —
         // on the foreground gauge, so the cadence driver's epoch-claim leg
         // yields rather than racing it to the funding set.
         let _foreground = ForegroundSession::enter(UserPendingPost::Unstake, &gate);
@@ -690,14 +690,14 @@ where
             };
 
         // ① local posture; refuses non-loopback by construction.
-        let unbond_rpc = LocalNodeRpc::new(daemon_address.to_owned(), EXIT_FETCH_TIMEOUT)
+        let release_rpc = LocalNodeRpc::new(daemon_address.to_owned(), EXIT_FETCH_TIMEOUT)
             .await
             .map_err(|e| UnstakeError::Transport {
                 detail: e.to_string(),
             })?;
 
         let witness = SpentRecordsDurablyPruned::arm1_watch_pruning_live();
-        let receipt = Engine::submit_unbond(engine, &unbond_rpc, slot, &witness)
+        let receipt = Engine::submit_release(engine, &release_rpc, slot, &witness)
             .await
             .map_err(flatten_unstake_error)?;
 
@@ -933,11 +933,11 @@ where
 
 /// Flatten the crate-internal exit-seam error onto the `pub` boundary,
 /// keeping the seal dispositions distinct (module docs).
-fn flatten_unstake_error(e: UnbondRequestError) -> UnstakeError {
+fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
     match e {
-        UnbondRequestError::NotStaker => UnstakeError::NotStaker,
-        UnbondRequestError::NoBondRecord => UnstakeError::NoBondRecord,
-        UnbondRequestError::UnbondPending => UnstakeError::ExitInProgress,
+        ReleaseRequestError::NotStaker => UnstakeError::NotStaker,
+        ReleaseRequestError::NoBondRecord => UnstakeError::NoBondRecord,
+        ReleaseRequestError::ReleasePending => UnstakeError::ExitInProgress,
         // NOT ExitInProgress: a confirming bond post is
         // not an exit, and the remedies point at different verbs — wait then
         // UNSTAKE, never "wait then collect_unstaked" (a collect here answers
@@ -946,26 +946,26 @@ fn flatten_unstake_error(e: UnbondRequestError) -> UnstakeError {
         // confirmed match whose pending-post seal has not yet retired — and
         // the seam's refusal must land on the same arm resolution would have
         // picked.
-        UnbondRequestError::BondPostPending => UnstakeError::BondConfirming,
-        UnbondRequestError::InputRaced => UnstakeError::InputRaced,
-        UnbondRequestError::Stake(StakeEngineError::UnbondNotReady(not_ready)) => {
+        ReleaseRequestError::BondPostPending => UnstakeError::BondConfirming,
+        ReleaseRequestError::InputRaced => UnstakeError::InputRaced,
+        ReleaseRequestError::Stake(StakeEngineError::ReleaseNotReady(not_ready)) => {
             UnstakeError::NotReady {
                 detail: not_ready.to_string(),
             }
         }
-        UnbondRequestError::Stake(StakeEngineError::Assembly(
+        ReleaseRequestError::Stake(StakeEngineError::Assembly(
             ref a @ super::bond_assembly::BondAssemblyError::ReferenceResyncing { .. },
         )) => UnstakeError::Resyncing {
             detail: a.to_string(),
         },
-        UnbondRequestError::Stake(StakeEngineError::Assembly(
+        ReleaseRequestError::Stake(StakeEngineError::Assembly(
             ref a @ (super::bond_assembly::BondAssemblyError::NoSpendableFunding
             | super::bond_assembly::BondAssemblyError::OutputNotYetDrained { .. }
             | super::bond_assembly::BondAssemblyError::InsufficientFunding { .. }),
         )) => UnstakeError::ExitNotFundable {
             detail: a.to_string(),
         },
-        UnbondRequestError::Stake(e) => UnstakeError::Engine {
+        ReleaseRequestError::Stake(e) => UnstakeError::Engine {
             context: "exit assembly",
             detail: e.to_string(),
         },
@@ -973,20 +973,20 @@ fn flatten_unstake_error(e: UnbondRequestError) -> UnstakeError {
         // failure classes keep the remedy split every other P-lane verb
         // already carries — a refused ANSWER is -29109 (reconnecting cannot
         // help), a failed QUERY is -29102 (check the daemon and retry).
-        UnbondRequestError::Fee(FeeEstimatorError::DaemonFeeUnreasonable(v)) => {
+        ReleaseRequestError::Fee(FeeEstimatorError::DaemonFeeUnreasonable(v)) => {
             UnstakeError::FeeUnreasonable {
                 reason: v.reason(),
                 rate: v.rate(),
                 bound: v.bound(),
             }
         }
-        UnbondRequestError::Fee(e) => UnstakeError::FeeEstimate {
+        ReleaseRequestError::Fee(e) => UnstakeError::FeeEstimate {
             detail: e.to_string(),
         },
         // The fetch's inner class decides the disposition: a
         // connection/status failure is a reachable daemon outage (retryable),
         // a malformed response is an untrusted-input rejection (internal).
-        UnbondRequestError::Fetch(e) => match e {
+        ReleaseRequestError::Fetch(e) => match e {
             EmissionSourceError::Rpc(_) | EmissionSourceError::Status(_) => {
                 UnstakeError::DaemonUnreachable {
                     detail: e.to_string(),
@@ -999,13 +999,13 @@ fn flatten_unstake_error(e: UnbondRequestError) -> UnstakeError {
         },
         // Pre-seal daemon-tip failure: retryable, never the opaque internal
         // -32603 a sealed-store read gets.
-        UnbondRequestError::DaemonUnreachable { context, detail } => {
+        ReleaseRequestError::DaemonUnreachable { context, detail } => {
             UnstakeError::DaemonUnreachable {
                 detail: format!("{context}: {detail}"),
             }
         }
-        UnbondRequestError::State { context, detail } => UnstakeError::Engine { context, detail },
-        UnbondRequestError::Submit(submit) => match &submit {
+        ReleaseRequestError::State { context, detail } => UnstakeError::Engine { context, detail },
+        ReleaseRequestError::Submit(submit) => match &submit {
             BroadcastSubmitError::PersonaMismatch { .. }
             | BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal { .. }) => {
                 // The same two classes the seam's release predicate names

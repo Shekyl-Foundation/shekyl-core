@@ -22,7 +22,7 @@ pub fn bond_floor(holdings: &HoldingsDescriptor) -> u64 {
 
 /// [`bond_floor`] from the holdings' `(kind, shard count)` alone — the floor
 /// never reads shard-id *values*, so a caller that only knows the count (the
-/// `Unbond` connect fold, whose C++ caller need not marshal the record's
+/// `Release` connect fold, whose C++ caller need not marshal the record's
 /// shard-id array across the FFI) shares the one implementation.
 #[must_use]
 pub fn bond_floor_of(kind: HoldingsKind, shard_count: usize) -> u64 {

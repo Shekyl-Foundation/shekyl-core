@@ -45,8 +45,8 @@ use shekyl_curve_tree::{
 };
 use shekyl_daemon_rpc::submit::{
     parse_submission, CommitOutcome, DaemonTxVerifier, EngineFault, KeyImageConflict,
-    LastServedScanMismatch, ParsedSubmission, ReferenceFacts, SubmitCaller, SubmitEngine,
-    SubmitFacts, SubmitTxKind, TxVerifier, UnbondFacts, UnbondRecordFacts, VerifyFailure,
+    LastServedScanMismatch, ParsedSubmission, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts,
+    SubmitCaller, SubmitEngine, SubmitFacts, SubmitTxKind, TxVerifier, VerifyFailure,
 };
 use shekyl_fcmp::tree::SELENE_CHUNK_WIDTH;
 use shekyl_fcmp::MAX_TREE_DEPTH;
@@ -131,7 +131,7 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
         chain_height: ChainCount::from_raw(fx.reference_height + 6),
         bond_record_exists: None,
         bond_record_bonded_total: None,
-        unbond: None,
+        release: None,
         emission: None,
         emission_claim_conflict: None,
     }
@@ -1019,7 +1019,7 @@ fn non_spend_kinds_refuse_loudly() {
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,
         bond_record_bonded_total: None,
-        unbond: None,
+        release: None,
         emission: None,
         emission_claim_conflict: None,
     };
@@ -1070,7 +1070,7 @@ fn engine_accepts_the_bond_post_end_to_end_with_the_production_verifier() {
         "the snapshot request must carry the bond-post probe key"
     );
     assert!(
-        !snapshots[0].bond_probe_is_unbond,
+        !snapshots[0].bond_probe_is_release,
         "a JoinMarket post must ask the credit arm's question (BP3 absence), \
          not the debit arm's"
     );
@@ -1307,7 +1307,7 @@ fn bond_balance_mismatch_is_rejected() {
 #[test]
 fn producerless_bond_post_kinds_refuse_loudly() {
     // The named rule-21 refusal arm (verifier module docs), NARROWED when
-    // the Unbond fact set landed (§8.7.1.1): Rebond and HoldingsUpdate
+    // the Release fact set landed (§8.7.1.1): Rebond and HoldingsUpdate
     // parse and clear Phase A (the wire admits `Other` kinds), but they
     // have no producer, so building their submit-side fact sets now would
     // be pre-provisioned flexibility with an unverifiable Phase-D race
@@ -1327,7 +1327,7 @@ fn producerless_bond_post_kinds_refuse_loudly() {
             }
         });
         assert!(
-            !parsed.bond_post_is_unbond(),
+            !parsed.bond_post_is_release(),
             "{kind:?} must not route to the debit arm"
         );
         assert_eq!(
@@ -1338,15 +1338,15 @@ fn producerless_bond_post_kinds_refuse_loudly() {
     }
 }
 
-// ─── The Unbond fixture (§8.7.1.1 UB rows) ──────────────────────────────
+// ─── The Release fixture (§8.7.1.1 UB rows) ──────────────────────────────
 
-/// A consensus-valid `Unbond` bond-post built through the production stack:
-/// `derive_archival_p_keys` → `build_unbond_vin` →
+/// A consensus-valid `Release` bond-post built through the production stack:
+/// `derive_archival_p_keys` → `build_release_vin` →
 /// `sign_transaction_with_terms` (the released collateral rides as the sole
 /// `InputTerm`) → wire encode with the bond vin appended and its `pqc_auths`
 /// slot signed by **`bond_spend_sk`** — the cold debit authorizer, not the
-/// identity key. `AssembleUnbond` assembles it the same way.
-struct UnbondFixture {
+/// identity key. `AssembleRelease` assembles it the same way.
+struct ReleaseFixture {
     hex: String,
     parsed: ParsedSubmission,
     /// The record's committed authorizer, i.e. what a correct record holds.
@@ -1362,17 +1362,17 @@ struct UnbondFixture {
     record_bonded_total: u64,
 }
 
-static UNBOND_FIXTURE: OnceLock<UnbondFixture> = OnceLock::new();
+static RELEASE_FIXTURE: OnceLock<ReleaseFixture> = OnceLock::new();
 
-fn unbond_fixture() -> &'static UnbondFixture {
-    UNBOND_FIXTURE.get_or_init(|| build_unbond_fixture(UnbondAuthKey::BondSpend))
+fn release_fixture() -> &'static ReleaseFixture {
+    RELEASE_FIXTURE.get_or_init(|| build_release_fixture(ReleaseAuthKey::BondSpend))
 }
 
 /// Which key signs the bond slot. `Identity` is not a mutation of a signed
 /// transaction — it is a *validly signed* transaction whose signer is the
 /// serving host's key, which is exactly the forgery UB3 exists to refuse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UnbondAuthKey {
+enum ReleaseAuthKey {
     BondSpend,
     Identity,
     /// The DoS shape: present the record's committed `bond_spend_pk` — a
@@ -1386,7 +1386,7 @@ enum UnbondAuthKey {
     /// with the bond slot's signature still valid.
     FundingSignatureMalleated,
     /// A VALID signature by the record's own key over a vin UB9's static
-    /// guards already doom (`bond_credit != 0` ⇒ `UnbondCreditNonzero`).
+    /// guards already doom (`bond_credit != 0` ⇒ `ReleaseCreditNonzero`).
     /// Possession passes, so only the pre-gate's vin-statics half refuses it
     /// before the gather — and every forged txid is unknown, so the identity
     /// clause never fires for this shape.
@@ -1397,55 +1397,55 @@ enum UnbondAuthKey {
 /// and slash gates are **live** rather than vacuously satisfied: a
 /// never-served record passes both by short-circuit, which would make rows
 /// UB5/UB6 untested by a green fixture.
-const UNBOND_SERVED_EPOCH: u64 = 1;
-const UNBOND_CURRENT_EPOCH: u64 = 3;
+const RELEASE_SERVED_EPOCH: u64 = 1;
+const RELEASE_CURRENT_EPOCH: u64 = 3;
 
-fn unbond_chain_height() -> u64 {
-    UNBOND_CURRENT_EPOCH * shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS
+fn release_chain_height() -> u64 {
+    RELEASE_CURRENT_EPOCH * shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS
 }
 
 /// The record facts a correct daemon gather produces for the fixture: a
 /// `CompleteTree` record (so the gather must be the all-shards scan),
-/// serving through `UNBOND_SERVED_EPOCH`, clean interval log.
-fn unbond_record_facts() -> UnbondRecordFacts {
-    let fx = unbond_fixture();
-    UnbondRecordFacts::new(
+/// serving through `RELEASE_SERVED_EPOCH`, clean interval log.
+fn release_record_facts() -> ReleaseRecordFacts {
+    let fx = release_fixture();
+    ReleaseRecordFacts::new(
         fx.record_bonded_total,
         0,
         fx.bond_spend_pk.clone(),
         shekyl_archival_retention::HoldingsKind::CompleteTree,
         shekyl_archival_retention::LastServedScan::AllShards,
-        vec![UNBOND_SERVED_EPOCH],
+        vec![RELEASE_SERVED_EPOCH],
         false,
     )
     .expect("the all-shards scan is what a CompleteTree record selects")
 }
 
-/// Facts under which the Unbond fixture is fully admissible.
-fn unbond_admitting_facts() -> SubmitFacts {
+/// Facts under which the Release fixture is fully admissible.
+fn release_admitting_facts() -> SubmitFacts {
     let mut facts = admitting_facts(fixture());
     facts.key_image_conflicts =
-        vec![KeyImageConflict::Free; unbond_fixture().parsed.key_images.len()];
+        vec![KeyImageConflict::Free; release_fixture().parsed.key_images.len()];
     // Row UB2 as the POD sees it, and the bundle carrying the contents. The
     // shim pins these two against each other.
     facts.bond_record_exists = Some(true);
     // The Phase-D balance fact, pinned to the same total the bundle carries.
-    facts.bond_record_bonded_total = Some(unbond_fixture().record_bonded_total);
-    facts.chain_height = ChainCount::from_raw(unbond_chain_height());
+    facts.bond_record_bonded_total = Some(release_fixture().record_bonded_total);
+    facts.chain_height = ChainCount::from_raw(release_chain_height());
     facts.reference = Some(ReferenceFacts {
-        height: BlockHeight::from_raw(unbond_chain_height() - 50),
+        height: BlockHeight::from_raw(release_chain_height() - 50),
         root: fixture().tree_root,
         tree_depth: fixture().lmdb_depth,
     });
-    facts.unbond = Some(UnbondFacts {
-        record: Some(unbond_record_facts()),
-        last_settled_slash_epoch: Some(UNBOND_SERVED_EPOCH),
+    facts.release = Some(ReleaseFacts {
+        record: Some(release_record_facts()),
+        last_settled_slash_epoch: Some(RELEASE_SERVED_EPOCH),
     });
     facts
 }
 
-fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
-    use shekyl_archival_bond_builder::{build_unbond_vin, verify_debit_funding};
+fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
+    use shekyl_archival_bond_builder::{build_release_vin, verify_debit_funding};
     use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
@@ -1473,8 +1473,8 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
         });
     assert!(record_bonded_total > 0, "the exited record is funded");
 
-    let built = build_unbond_vin(p_keys.bond_post_keys(), record_bonded_total)
-        .expect("build the Unbond vin");
+    let built = build_release_vin(p_keys.bond_post_keys(), record_bonded_total)
+        .expect("build the Release vin");
 
     // Debit funding rule: funding + debit == outputs + fee. The released
     // collateral is a SOURCE, so it enlarges the output side.
@@ -1525,12 +1525,12 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
     let prefix_bond_input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: identity_pk.clone(),
         p_canonical_id: built.vin().p_canonical_id,
-        kind: BondPostKind::Other(shekyl_archival_retention::BondPostKind::Unbond as u8),
+        kind: BondPostKind::Other(shekyl_archival_retention::BondPostKind::Release as u8),
         holdings: Holdings::ShardSetCompact(Vec::new()),
         bonded_total_atomic: 0,
         // UB9 requires 0 here; the doomed variant sets 1 so the static guards
         // refuse a transaction that is otherwise perfectly signed.
-        bond_credit: u64::from(auth_key == UnbondAuthKey::VinStaticsDoomed),
+        bond_credit: u64::from(auth_key == ReleaseAuthKey::VinStaticsDoomed),
         bond_debit: record_bonded_total,
     }));
     let extra_inputs = vec![prefix_bond_input];
@@ -1547,7 +1547,7 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
         &view_tags,
         &submit_fixtures::conforming_pqc_extra(2),
     )
-    .expect("prefix hash with the unbond input");
+    .expect("prefix hash with the release input");
 
     let signed = sign_transaction_with_terms(
         tx_prefix_hash,
@@ -1558,16 +1558,16 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
         &[],
         &su.tree_ctx,
     )
-    .expect("sign the unbond transaction");
+    .expect("sign the release transaction");
 
     let slot_pk = match auth_key {
         // The forged variant PRESENTS the record's key — that is what makes
         // the gather's public-key pin pass it.
-        UnbondAuthKey::BondSpend
-        | UnbondAuthKey::BondSpendKeyForgedSignature
-        | UnbondAuthKey::VinStaticsDoomed
-        | UnbondAuthKey::FundingSignatureMalleated => bond_spend_pk.clone(),
-        UnbondAuthKey::Identity => identity_pk.clone(),
+        ReleaseAuthKey::BondSpend
+        | ReleaseAuthKey::BondSpendKeyForgedSignature
+        | ReleaseAuthKey::VinStaticsDoomed
+        | ReleaseAuthKey::FundingSignatureMalleated => bond_spend_pk.clone(),
+        ReleaseAuthKey::Identity => identity_pk.clone(),
     };
     let mut wire_input = WireEncodeInput {
         key_images: vec![su.key_image],
@@ -1604,14 +1604,14 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
     let mut pqc_auths = sign_pqc_auths(&payload_hashes[..1], std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing (funding slot)");
     let slot_sk = match auth_key {
-        UnbondAuthKey::BondSpend
-        | UnbondAuthKey::VinStaticsDoomed
-        | UnbondAuthKey::FundingSignatureMalleated => &p_keys.bond_spend_sk,
+        ReleaseAuthKey::BondSpend
+        | ReleaseAuthKey::VinStaticsDoomed
+        | ReleaseAuthKey::FundingSignatureMalleated => &p_keys.bond_spend_sk,
         // `Identity` presents this key and signs with it — a VALID signature
         // by the wrong signer. The forged variant presents `bond_spend_pk`
         // and signs with this one, so its signature cannot verify against the
         // key it presents. Same signing key, opposite propositions.
-        UnbondAuthKey::Identity | UnbondAuthKey::BondSpendKeyForgedSignature => {
+        ReleaseAuthKey::Identity | ReleaseAuthKey::BondSpendKeyForgedSignature => {
             &p_keys.hybrid_sign_sk
         }
     };
@@ -1629,7 +1629,7 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
             .expect("encode bond auth signature"),
         public_key: slot_pk.clone(),
     });
-    if auth_key == UnbondAuthKey::FundingSignatureMalleated {
+    if auth_key == ReleaseAuthKey::FundingSignatureMalleated {
         // Flip one byte of the FUNDING slot's signature. Every signing payload
         // is header-only, so no slot's signature covers this byte — the bond
         // slot stays valid — but `PqcAuth::write` feeds the txid, so the
@@ -1638,20 +1638,20 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
     }
     wire_input.pqc_auths = pqc_auths;
 
-    let bytes = encode_final_tx(&wire_input).expect("encode the final unbond");
+    let bytes = encode_final_tx(&wire_input).expect("encode the final release");
     let hex_blob = hex::encode(&bytes);
-    let parsed = parse_submission(&hex_blob).expect("the built unbond clears Phase A");
+    let parsed = parse_submission(&hex_blob).expect("the built release clears Phase A");
     assert_eq!(
         parsed.kind,
         SubmitTxKind::BondPost,
         "fixture is a bond-post"
     );
     assert!(
-        parsed.bond_post_is_unbond(),
+        parsed.bond_post_is_release(),
         "fixture is on the DEBIT arm — every UB assertion below is vacuous otherwise"
     );
 
-    UnbondFixture {
+    ReleaseFixture {
         hex: hex_blob,
         parsed,
         bond_spend_pk,
@@ -1661,15 +1661,15 @@ fn build_unbond_fixture(auth_key: UnbondAuthKey) -> UnbondFixture {
     }
 }
 
-// ─── The Unbond battery (§8.7.1.1) ──────────────────────────────────────
+// ─── The Release battery (§8.7.1.1) ──────────────────────────────────────
 
 #[test]
-fn consensus_valid_unbond_passes_the_production_battery() {
-    let fx = unbond_fixture();
+fn consensus_valid_release_passes_the_production_battery() {
+    let fx = release_fixture();
     assert_eq!(
-        verify(&fx.parsed, &unbond_admitting_facts()),
+        verify(&fx.parsed, &release_admitting_facts()),
         Ok(()),
-        "a consensus-valid Unbond must clear O6 → CT balance → BP2 → UB3 → \
+        "a consensus-valid Release must clear O6 → CT balance → BP2 → UB3 → \
          UB9 → Bp+ → FCMP++ → PQC"
     );
 }
@@ -1680,9 +1680,9 @@ fn the_cooldown_and_slash_gates_are_live_under_the_admitting_facts() {
     // UB5 and UB6 short-circuit on `None`. This asserts the oracle is not
     // that: the admitting facts carry a real serve anchor, so a green above
     // means the two gates were evaluated and passed.
-    let facts = unbond_admitting_facts();
+    let facts = release_admitting_facts();
     let bundle = facts
-        .unbond
+        .release
         .as_ref()
         .expect("admitting facts carry the bundle");
     let record = bundle
@@ -1702,12 +1702,12 @@ fn the_cooldown_and_slash_gates_are_live_under_the_admitting_facts() {
 #[test]
 fn the_identity_key_does_not_authorize_a_debit() {
     // THE row this arm exists for. This is not a tampered transaction: it
-    // is a *validly signed* Unbond whose bond slot is signed by P's
+    // is a *validly signed* Release whose bond slot is signed by P's
     // identity key — the key the serving host holds in order to produce
     // Auth-P. If UB3 pinned the identity key the way the credit arm's BP5
     // does, a serving-host compromise would be a collateral drain.
-    let forged = build_unbond_fixture(UnbondAuthKey::Identity);
-    let mut facts = unbond_admitting_facts();
+    let forged = build_release_fixture(ReleaseAuthKey::Identity);
+    let mut facts = release_admitting_facts();
     facts.key_image_conflicts = vec![KeyImageConflict::Free; forged.parsed.key_images.len()];
     assert_ne!(
         forged.identity_pk, forged.bond_spend_pk,
@@ -1716,7 +1716,7 @@ fn the_identity_key_does_not_authorize_a_debit() {
     assert_eq!(
         verify(&forged.parsed, &facts),
         Err(VerifyFailure::Malformed),
-        "an Unbond authorized by the identity key must be refused"
+        "a Release authorized by the identity key must be refused"
     );
 }
 
@@ -1724,22 +1724,22 @@ fn the_identity_key_does_not_authorize_a_debit() {
 fn a_record_committing_no_key_authorizes_nothing() {
     // Fail closed, not fall back: a record with no committed authorizer
     // refuses every debit, including one presenting a well-formed key.
-    let fx = unbond_fixture();
-    let mut facts = unbond_admitting_facts();
-    facts.unbond = Some(UnbondFacts {
+    let fx = release_fixture();
+    let mut facts = release_admitting_facts();
+    facts.release = Some(ReleaseFacts {
         record: Some(
-            UnbondRecordFacts::new(
+            ReleaseRecordFacts::new(
                 fx.record_bonded_total,
                 0,
                 Vec::new(),
                 shekyl_archival_retention::HoldingsKind::CompleteTree,
                 shekyl_archival_retention::LastServedScan::AllShards,
-                vec![UNBOND_SERVED_EPOCH],
+                vec![RELEASE_SERVED_EPOCH],
                 false,
             )
             .expect("scan matches the kind"),
         ),
-        last_settled_slash_epoch: Some(UNBOND_SERVED_EPOCH),
+        last_settled_slash_epoch: Some(RELEASE_SERVED_EPOCH),
     });
     assert_eq!(
         verify(&fx.parsed, &facts),
@@ -1749,34 +1749,34 @@ fn a_record_committing_no_key_authorizes_nothing() {
 }
 
 #[test]
-fn an_absent_record_refuses_the_unbond_rather_than_conflicting() {
+fn an_absent_record_refuses_the_release_rather_than_conflicting() {
     // Row UB2's Phase-B/C direction. Absent *here* means these bytes can
     // never connect — a submitter error. The DoubleSpendConflict reading
     // belongs to the Phase-D re-check, where absence means a competing
     // debit connected while we verified.
-    let fx = unbond_fixture();
-    let mut facts = unbond_admitting_facts();
+    let fx = release_fixture();
+    let mut facts = release_admitting_facts();
     facts.bond_record_exists = Some(false);
-    facts.unbond = Some(UnbondFacts {
+    facts.release = Some(ReleaseFacts {
         record: None,
-        last_settled_slash_epoch: Some(UNBOND_SERVED_EPOCH),
+        last_settled_slash_epoch: Some(RELEASE_SERVED_EPOCH),
     });
     assert_eq!(
         verify(&fx.parsed, &facts),
         Err(VerifyFailure::Malformed),
-        "an Unbond against a record that never existed is malformed, not raced"
+        "a Release against a record that never existed is malformed, not raced"
     );
 }
 
 #[test]
-fn a_missing_unbond_bundle_is_refused_rather_than_guessed() {
+fn a_missing_release_bundle_is_refused_rather_than_guessed() {
     // Null the SOURCE, not the value: with the probe skipped entirely the
     // battery must refuse, never proceed on defaults. (Through the engine
     // this same state is a loud ShimContract fault; the verifier's own arm
     // is the non-panicking refusal for direct callers.)
-    let fx = unbond_fixture();
-    let mut facts = unbond_admitting_facts();
-    facts.unbond = None;
+    let fx = release_fixture();
+    let mut facts = release_admitting_facts();
+    facts.release = None;
     assert_eq!(
         verify(&fx.parsed, &facts),
         Err(VerifyFailure::Malformed),
@@ -1789,12 +1789,12 @@ fn the_cooldown_is_enforced_against_the_gathered_anchor() {
     // Row UB5. A serve inside the cooldown window closes it: the epochs
     // that could still be slashed have not all been processed, so the
     // collateral cannot be released yet.
-    let fx = unbond_fixture();
-    let mut facts = unbond_admitting_facts();
-    let recent = UNBOND_CURRENT_EPOCH;
-    facts.unbond = Some(UnbondFacts {
+    let fx = release_fixture();
+    let mut facts = release_admitting_facts();
+    let recent = RELEASE_CURRENT_EPOCH;
+    facts.release = Some(ReleaseFacts {
         record: Some(
-            UnbondRecordFacts::new(
+            ReleaseRecordFacts::new(
                 fx.record_bonded_total,
                 0,
                 fx.bond_spend_pk.clone(),
@@ -1820,11 +1820,11 @@ fn an_unsettled_slash_watermark_blocks_the_release() {
     // watermark must have reached the serve anchor. A watermark BEHIND the
     // anchor is the fail-closed direction, and the u64::MAX sentinel
     // (nothing settled yet) normalises to `None`, which is also refused.
-    let fx = unbond_fixture();
-    for watermark in [Some(UNBOND_SERVED_EPOCH - 1), None] {
-        let mut facts = unbond_admitting_facts();
-        facts.unbond = Some(UnbondFacts {
-            record: Some(unbond_record_facts()),
+    let fx = release_fixture();
+    for watermark in [Some(RELEASE_SERVED_EPOCH - 1), None] {
+        let mut facts = release_admitting_facts();
+        facts.release = Some(ReleaseFacts {
+            record: Some(release_record_facts()),
             last_settled_slash_epoch: watermark,
         });
         assert_eq!(
@@ -1839,27 +1839,27 @@ fn an_unsettled_slash_watermark_blocks_the_release() {
 fn a_full_interval_log_makes_the_exit_unverifiable() {
     // Row UB7: the connect must append a clean interval-close, and a full
     // log has no room for it — so the transaction can never connect.
-    let fx = unbond_fixture();
-    let mut facts = unbond_admitting_facts();
-    facts.unbond = Some(UnbondFacts {
+    let fx = release_fixture();
+    let mut facts = release_admitting_facts();
+    facts.release = Some(ReleaseFacts {
         record: Some(
-            UnbondRecordFacts::new(
+            ReleaseRecordFacts::new(
                 fx.record_bonded_total,
                 shekyl_archival_retention::bond_connect::MAX_BOND_BAD_INTERVALS,
                 fx.bond_spend_pk.clone(),
                 shekyl_archival_retention::HoldingsKind::CompleteTree,
                 shekyl_archival_retention::LastServedScan::AllShards,
-                vec![UNBOND_SERVED_EPOCH],
+                vec![RELEASE_SERVED_EPOCH],
                 false,
             )
             .expect("scan matches the kind"),
         ),
-        last_settled_slash_epoch: Some(UNBOND_SERVED_EPOCH),
+        last_settled_slash_epoch: Some(RELEASE_SERVED_EPOCH),
     });
     assert_eq!(
         verify(&fx.parsed, &facts),
         Err(VerifyFailure::Malformed),
-        "a full interval log makes the Unbond unconnectable, so unverifiable"
+        "a full interval log makes the Release unconnectable, so unverifiable"
     );
 }
 
@@ -1867,22 +1867,22 @@ fn a_full_interval_log_makes_the_exit_unverifiable() {
 fn the_debit_must_remove_the_records_whole_balance() {
     // Row UB9. The vin's debit is fixed at build time; moving the record's
     // balance under it is the state a stale wallet would submit against.
-    let fx = unbond_fixture();
-    let mut facts = unbond_admitting_facts();
-    facts.unbond = Some(UnbondFacts {
+    let fx = release_fixture();
+    let mut facts = release_admitting_facts();
+    facts.release = Some(ReleaseFacts {
         record: Some(
-            UnbondRecordFacts::new(
+            ReleaseRecordFacts::new(
                 fx.record_bonded_total + 1,
                 0,
                 fx.bond_spend_pk.clone(),
                 shekyl_archival_retention::HoldingsKind::CompleteTree,
                 shekyl_archival_retention::LastServedScan::AllShards,
-                vec![UNBOND_SERVED_EPOCH],
+                vec![RELEASE_SERVED_EPOCH],
                 false,
             )
             .expect("scan matches the kind"),
         ),
-        last_settled_slash_epoch: Some(UNBOND_SERVED_EPOCH),
+        last_settled_slash_epoch: Some(RELEASE_SERVED_EPOCH),
     });
     assert_eq!(
         verify(&fx.parsed, &facts),
@@ -1900,7 +1900,7 @@ fn a_complete_tree_record_cannot_carry_a_held_shards_gather() {
     // has been serving. The mismatch is refused at construction, so no
     // verifier can ever fold it.
     assert_eq!(
-        UnbondRecordFacts::new(
+        ReleaseRecordFacts::new(
             1,
             0,
             vec![0u8; 4],
@@ -1918,7 +1918,7 @@ fn a_complete_tree_record_cannot_carry_a_held_shards_gather() {
     );
     // And the inverse arm, so the pin is not one-directional.
     assert!(
-        UnbondRecordFacts::new(
+        ReleaseRecordFacts::new(
             1,
             0,
             vec![0u8; 4],
@@ -1933,15 +1933,15 @@ fn a_complete_tree_record_cannot_carry_a_held_shards_gather() {
 }
 
 #[test]
-fn the_engine_asks_the_debit_arms_question_for_an_unbond() {
+fn the_engine_asks_the_debit_arms_question_for_an_release() {
     // The §3.1 pipeline end to end over the debit arm — and specifically the
     // routing, which no other test in this file can see. The verifier tests
     // above hand `verify()` a fact set built by hand, so they would all stay
     // green if `SubmitEngine` asked for `BondProbe::Join` here: production
     // would then get a snapshot with no §8.7.1.1 bundle and reject every
-    // valid Unbond as a `ShimContract` fault, with a fully green suite.
-    let fx = unbond_fixture();
-    let shim = MockShim::new(unbond_admitting_facts(), CommitOutcome::Committed);
+    // valid Release as a `ShimContract` fault, with a fully green suite.
+    let fx = release_fixture();
+    let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
         .submit(&fx.hex, SubmitCaller::Owner)
@@ -1958,13 +1958,13 @@ fn the_engine_asks_the_debit_arms_question_for_an_unbond() {
         "the snapshot request must carry the bond-post probe key"
     );
     assert!(
-        snapshots[0].bond_probe_is_unbond,
-        "an Unbond must ask the debit arm's question (§8.7.1.1 contents), \
+        snapshots[0].bond_probe_is_release,
+        "a Release must ask the debit arm's question (§8.7.1.1 contents), \
          not JoinMarket's presence bit"
     );
     // The probe must carry the VIN'S OWN debit, not a placeholder. The gather
     // skips its per-shard scan when the probe's debit does not equal the
-    // record's live balance, so a wrong value here makes every valid Unbond
+    // record's live balance, so a wrong value here makes every valid Release
     // skip the scan and be refused by the skipped-scan belt — and no fact set
     // this mock serves could reveal it, because the mock never runs the
     // gather.
@@ -1998,14 +1998,14 @@ fn a_forged_debit_signature_never_reaches_the_fact_gather() {
     // signature, but only after the scan had run. A verdict assertion here is
     // green on the broken engine, which is precisely the shape of test that
     // let this defect through review twice.
-    let forged = build_unbond_fixture(UnbondAuthKey::BondSpendKeyForgedSignature);
+    let forged = build_release_fixture(ReleaseAuthKey::BondSpendKeyForgedSignature);
     assert_eq!(
         forged.slot_pk, forged.bond_spend_pk,
         "the attack must PRESENT the record's committed key — if it presented \
          some other key the gather's pin would refuse it and this test would \
          pass without exercising the pre-gate at all"
     );
-    let shim = MockShim::new(unbond_admitting_facts(), CommitOutcome::Committed);
+    let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
         .submit(&forged.hex, SubmitCaller::Owner)
@@ -2059,7 +2059,7 @@ impl tracing::Subscriber for LevelCapture {
 }
 
 #[test]
-fn an_ordinary_invalid_unbond_does_not_log_an_internal_error() {
+fn an_ordinary_invalid_release_does_not_log_an_internal_error() {
     // The gather deliberately skips its per-shard scan for a record whose
     // cheap state already dooms the exit — a zero balance here. Those UB9
     // guards used to sit BELOW the skipped-scan belt, so an ordinary invalid
@@ -2070,12 +2070,12 @@ fn an_ordinary_invalid_unbond_does_not_log_an_internal_error() {
     // The verdict is `Malformed` either way, so the verdict cannot distinguish
     // the two paths — the log level is the whole observable, which is why this
     // test captures it.
-    let fx = unbond_fixture();
-    let mut facts = unbond_admitting_facts();
-    facts.unbond = Some(UnbondFacts {
+    let fx = release_fixture();
+    let mut facts = release_admitting_facts();
+    facts.release = Some(ReleaseFacts {
         record: Some(
-            UnbondRecordFacts::new(
-                0, // exited: nothing left to unbond (UB9 NothingToUnbond)
+            ReleaseRecordFacts::new(
+                0, // exited: nothing left to release (UB9 NothingToRelease)
                 0,
                 fx.bond_spend_pk.clone(),
                 shekyl_archival_retention::HoldingsKind::CompleteTree,
@@ -2085,7 +2085,7 @@ fn an_ordinary_invalid_unbond_does_not_log_an_internal_error() {
             )
             .expect("scan matches the kind"),
         ),
-        last_settled_slash_epoch: Some(UNBOND_SERVED_EPOCH),
+        last_settled_slash_epoch: Some(RELEASE_SERVED_EPOCH),
     });
 
     let capture = LevelCapture::default();
@@ -2098,7 +2098,7 @@ fn an_ordinary_invalid_unbond_does_not_log_an_internal_error() {
     let levels = capture.levels.lock().expect("capture mutex");
     assert!(
         !levels.contains(&tracing::Level::ERROR),
-        "an ordinary invalid Unbond must be refused quietly by the named \
+        "an ordinary invalid Release must be refused quietly by the named \
          guard, not logged as an internal inconsistency; saw {levels:?}"
     );
 }
@@ -2108,11 +2108,11 @@ fn an_unexplained_skipped_scan_is_still_a_loud_error() {
     // The belt's remaining job, and the inverse of the test above: a skip that
     // NOTHING explains — the record is perfectly valid, the pin matches, the
     // statics pass — is a shim contract violation, and must stay loud.
-    let fx = unbond_fixture();
-    let mut facts = unbond_admitting_facts();
-    facts.unbond = Some(UnbondFacts {
+    let fx = release_fixture();
+    let mut facts = release_admitting_facts();
+    facts.release = Some(ReleaseFacts {
         record: Some(
-            UnbondRecordFacts::new(
+            ReleaseRecordFacts::new(
                 fx.record_bonded_total,
                 0,
                 fx.bond_spend_pk.clone(),
@@ -2123,7 +2123,7 @@ fn an_unexplained_skipped_scan_is_still_a_loud_error() {
             )
             .expect("scan matches the kind"),
         ),
-        last_settled_slash_epoch: Some(UNBOND_SERVED_EPOCH),
+        last_settled_slash_epoch: Some(RELEASE_SERVED_EPOCH),
     });
 
     let capture = LevelCapture::default();
@@ -2148,15 +2148,15 @@ fn a_malleated_funding_signature_never_reaches_the_fact_gather() {
     // bond slot verifies, and the state clauses pass because the record is
     // untouched. Every variant bought the lock-held all-shards scan and was
     // refused only by K13, afterwards — unbounded, from anyone who observed
-    // one valid Unbond.
-    let malleated = build_unbond_fixture(UnbondAuthKey::FundingSignatureMalleated);
-    let honest = unbond_fixture();
+    // one valid Release.
+    let malleated = build_release_fixture(ReleaseAuthKey::FundingSignatureMalleated);
+    let honest = release_fixture();
     assert_ne!(
         malleated.parsed.txid, honest.parsed.txid,
         "the flip must change the txid, or the identity clause would cover it \
          and this test would assert nothing"
     );
-    let shim = MockShim::new(unbond_admitting_facts(), CommitOutcome::Committed);
+    let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
         .submit(&malleated.hex, SubmitCaller::Owner)
@@ -2186,13 +2186,13 @@ fn a_vin_the_static_guards_doom_never_reaches_the_fact_gather() {
     // This transaction is VALIDLY signed by the record's own key — only the
     // statics refuse it — so a gather that ran would be doing provably useless
     // work under both locks.
-    let doomed = build_unbond_fixture(UnbondAuthKey::VinStaticsDoomed);
+    let doomed = build_release_fixture(ReleaseAuthKey::VinStaticsDoomed);
     let (_, bond) = doomed.parsed.bond_post().expect("fixture carries the vin");
     assert_eq!(
         bond.bond_credit, 1,
         "fixture must carry the doomed vin, or this asserts nothing"
     );
-    let shim = MockShim::new(unbond_admitting_facts(), CommitOutcome::Committed);
+    let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
         .submit(&doomed.hex, SubmitCaller::Owner)
@@ -2202,7 +2202,7 @@ fn a_vin_the_static_guards_doom_never_reaches_the_fact_gather() {
         SubmitVerdict::Rejected {
             cause: RejectCause::Malformed
         },
-        "UB9's static guards refuse a nonzero bond_credit on an Unbond"
+        "UB9's static guards refuse a nonzero bond_credit on a Release"
     );
     assert_eq!(
         shim.snapshot_count(),
@@ -2215,7 +2215,7 @@ fn a_vin_the_static_guards_doom_never_reaches_the_fact_gather() {
 #[test]
 fn a_valid_signature_by_the_wrong_key_still_reaches_the_gather() {
     // The pre-gate's OTHER direction, and the reason it is not simply a
-    // second copy of UB3. This Unbond is *validly signed* — by P's identity
+    // second copy of UB3. This Release is *validly signed* — by P's identity
     // key, the key a compromised serving host holds — so possession holds and
     // the engine must proceed to the gather. UB3 is what refuses it, on the
     // ground that the presented key is not the record's committed one.
@@ -2224,12 +2224,12 @@ fn a_valid_signature_by_the_wrong_key_still_reaches_the_gather() {
     // this assertion would go red, and the two checks would have collapsed
     // into one — leaving nothing that distinguishes "wrong signature" from
     // "wrong signer" in the operator log (rule 82).
-    let forged = build_unbond_fixture(UnbondAuthKey::Identity);
+    let forged = build_release_fixture(ReleaseAuthKey::Identity);
     assert_ne!(
         forged.slot_pk, forged.bond_spend_pk,
         "this arm presents a DIFFERENT key from the record's"
     );
-    let shim = MockShim::new(unbond_admitting_facts(), CommitOutcome::Committed);
+    let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
         .submit(&forged.hex, SubmitCaller::Owner)
@@ -2250,13 +2250,13 @@ fn a_valid_signature_by_the_wrong_key_still_reaches_the_gather() {
 }
 
 #[test]
-fn a_missing_unbond_bundle_faults_the_engine_rather_than_rejecting() {
-    // The contract's other half: if the shim answers an Unbond probe without
+fn a_missing_release_bundle_faults_the_engine_rather_than_rejecting() {
+    // The contract's other half: if the shim answers a Release probe without
     // the bundle, that is a daemon defect and must surface as a transport
     // fault, never as a verdict the wallet would act on by rebuilding.
-    let fx = unbond_fixture();
-    let mut facts = unbond_admitting_facts();
-    facts.unbond = None;
+    let fx = release_fixture();
+    let mut facts = release_admitting_facts();
+    facts.release = None;
     let shim = MockShim::new(facts, CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let err = engine
@@ -2270,21 +2270,21 @@ fn a_missing_unbond_bundle_faults_the_engine_rather_than_rejecting() {
 }
 
 #[test]
-fn a_competing_unbond_that_exits_the_record_is_a_terminal_conflict() {
-    // The race presence CANNOT see. `apply_archival_unbond` does a
+fn a_competing_release_that_exits_the_record_is_a_terminal_conflict() {
+    // The race presence CANNOT see. `apply_archival_release` does a
     // whole-record write: the exited persona keeps its row with
     // `bonded_total_atomic == 0`, and the pubkey probe still reports it
     // present. So the fresh facts below are exactly what the daemon returns
-    // after a competing Unbond connects during Phase C — record present,
+    // after a competing Release connects during Phase C — record present,
     // balance gone — and a re-check keyed on presence would classify this as
     // "no premise moved" and admit a transaction whose balance binding no
     // longer holds.
-    let fx = unbond_fixture();
-    let mut fresh = unbond_admitting_facts();
+    let fx = release_fixture();
+    let mut fresh = release_admitting_facts();
     fresh.bond_record_exists = Some(true);
     fresh.bond_record_bonded_total = Some(0);
     let shim = MockShim::new(
-        unbond_admitting_facts(),
+        release_admitting_facts(),
         CommitOutcome::Raced(Box::new(fresh)),
     );
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
@@ -2307,11 +2307,11 @@ fn a_balance_that_moved_under_the_debit_is_also_terminal() {
     // equals it and the full-exit equality can never hold again for these
     // bytes. Keying on "exited" alone would miss this; keying on the balance
     // catches both directions.
-    let fx = unbond_fixture();
-    let mut fresh = unbond_admitting_facts();
+    let fx = release_fixture();
+    let mut fresh = release_admitting_facts();
     fresh.bond_record_bonded_total = Some(fx.record_bonded_total + 1);
     let shim = MockShim::new(
-        unbond_admitting_facts(),
+        release_admitting_facts(),
         CommitOutcome::Raced(Box::new(fresh)),
     );
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
@@ -2327,18 +2327,18 @@ fn a_balance_that_moved_under_the_debit_is_also_terminal() {
 }
 
 #[test]
-fn an_unbond_against_a_vanished_record_is_terminal_not_a_fault() {
+fn an_release_against_a_vanished_record_is_terminal_not_a_fault() {
     // The other half of UB2's Phase-D arm. C++ raises `Raced` when the record
     // is absent, and absence carries no balance to compare — so a classifier
     // that only compares balances reports "no premise moved" and the engine
     // returns a ShimContract FAULT instead of a verdict. Absence is a known
     // moved slot, not an unknown.
-    let fx = unbond_fixture();
-    let mut fresh = unbond_admitting_facts();
+    let fx = release_fixture();
+    let mut fresh = release_admitting_facts();
     fresh.bond_record_exists = Some(false);
     fresh.bond_record_bonded_total = None;
     let shim = MockShim::new(
-        unbond_admitting_facts(),
+        release_admitting_facts(),
         CommitOutcome::Raced(Box::new(fresh)),
     );
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);

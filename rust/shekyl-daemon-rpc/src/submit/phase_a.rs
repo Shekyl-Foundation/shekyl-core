@@ -110,17 +110,17 @@ impl ParsedSubmission {
         })
     }
 
-    /// Whether the bond-post input (if any) is an `Unbond` — the **debit**
+    /// Whether the bond-post input (if any) is a `Release` — the **debit**
     /// arm, whose submit-side fact set is §8.7.1.1's rather than §8.7.1's.
     ///
     /// One decision site: the engine keys the Phase-B probe and the
     /// fact-contract check on it, and the Phase-D re-check reads the record
     /// fact in the opposite direction for it. Deriving it independently at
     /// each of those points is how a probe and its contract drift apart.
-    pub fn bond_post_is_unbond(&self) -> bool {
+    pub fn bond_post_is_release(&self) -> bool {
         self.bond_post().is_some_and(|(_, bond)| {
             matches!(&bond.kind, BondPostKind::Other(tag)
-                if *tag == RetentionBondPostKind::Unbond as u8)
+                if *tag == RetentionBondPostKind::Release as u8)
         })
     }
 

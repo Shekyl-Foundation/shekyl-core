@@ -5,7 +5,7 @@
 
 //! Shared prove / sign / encode tail for a bond-post transaction.
 //!
-//! [`AssembleBond`] and [`AssembleUnbond`] are debit/credit twins of one
+//! [`AssembleBond`] and [`AssembleRelease`] are debit/credit twins of one
 //! wire shape: funding spends + one bond-post extra input + two confidential
 //! vouts to `P`'s base + `pqc_auths` with the bond slot last. The policy
 //! that differs — funding equation, extra-term side, which key signs the
@@ -64,7 +64,7 @@ pub(crate) struct BondPostAssembleArgs<'a> {
     pub fee: u64,
     /// The two confidential output amounts (daemon `vout.size() < 2` rejects).
     pub amounts: [u64; 2],
-    /// Cleartext terms on the input side of the CT balance (Unbond debit).
+    /// Cleartext terms on the input side of the CT balance (Release debit).
     pub extra_input_terms: Vec<InputTerm>,
     /// Cleartext terms on the output side of the CT balance (JoinMarket credit).
     pub extra_output_terms: Vec<OutputTerm>,
