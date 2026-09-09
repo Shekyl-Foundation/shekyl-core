@@ -98,6 +98,15 @@ members = [
     # See docs/design/DAEMON_RELAY_PRIVACY.md §18.
     "shekyl-relay",
 
+    # Peer-attribution policy (PWD-B7): whether a rejection justifies severing
+    # the connection that carried it. Deliberately NOT in shekyl-relay, whose
+    # charter is the relay scheduler, and NOT in shekyl-consensus, because two
+    # of the rejections it classifies are relay-tier policy that honest nodes
+    # may legitimately disagree on. Dependency-free by design: it answers
+    # "may we sever?" and must never acquire the ability to ask anything else.
+    # See docs/design/SHEKYL_P2P_PROTOCOL.md, PWD-B7.
+    "shekyl-peer-policy",
+
     # Levin p2p framing layer (bucket header, fragments, noise, zstd flag
     # path) — the byte-exact Rust skeleton of docs/LEVIN_PROTOCOL.md, KAT'd
     # against the C++ epee::levin oracle. Framing only: no portable_storage,

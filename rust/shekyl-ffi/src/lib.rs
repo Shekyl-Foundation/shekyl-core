@@ -119,6 +119,11 @@ pub mod relay_zone_ffi;
 // the Rust-pinned libzstd is the single zstd implementation in the binary.
 pub mod levin_ffi;
 
+// Peer-attribution drop rule FFI — PWD-B7 (`SHEKYL_P2P_PROTOCOL.md`). The
+// classification is recorded by C++ as an opaque byte on the verification
+// context; whether that byte severs a connection is decided only here.
+pub mod peer_policy_ffi;
+
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
 // `shekyl_log_install_tracing_forwarder`, …) are compiled into

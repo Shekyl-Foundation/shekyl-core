@@ -4235,6 +4235,7 @@ dependencies = [
  "shekyl-fcmp-proofs",
  "shekyl-levin",
  "shekyl-logging",
+ "shekyl-peer-policy",
  "shekyl-pow-randomx",
  "shekyl-proofs",
  "shekyl-relay",
@@ -4347,6 +4348,10 @@ dependencies = [
  "shekyl-types",
  "ureq",
 ]
+
+[[package]]
+name = "shekyl-peer-policy"
+version = "3.1.0"
 
 [[package]]
 name = "shekyl-portable-storage"
