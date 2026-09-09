@@ -1204,7 +1204,7 @@ convenience and widen it to a range the first time a number looks off. It is
 not a convenience; it is the property that makes the arm separable.
 
 **And the emitter is batch-blind structurally, which is why the carrier arms
-survive PWD-I1 at all.** `NoiseQueues` is held BESIDE `Driver` in
+survive PWD-B12 at all.** `NoiseQueues` is held BESIDE `Driver` in
 `RelayZoneHandle` and never inside it, and `Driver` owns `Zone` — so
 PWD-B12's subject, `rust/shekyl-relay/src/zone/mod.rs`, cannot reach the
 carrier's buffers. Batch composition changes what `Zone` releases; it cannot
@@ -1231,66 +1231,17 @@ shows in a minute — the length is for defect 1.
 under-reads by construction (CV-2, the second row of the table above) and the
 under-reading is not a finding.
 
-**PRECONDITION ON THE RESULT, not on the run: the rule that governs boundness
-has not been written (2026-09-05).** PWD-I1 routes a same-host outbound cap to
-PWD-B9. PWD-B9 **does not exist** — routed, never drafted. Counted on dev
-2026-09-05: 24 references across four documents, **17 of them inside
-`SHEKYL_P2P_PROTOCOL.md` itself**, and no section heading anywhere in the
-repository. The deliverable cites a section it does not contain, seventeen
-times. So outbound connection lifecycle on encrypted zones is not
-stable-pending-implementation; the rule that decides it is ABSENT.
-
-**The result is TIME-SCOPED, not indeterminate — and the difference decides
-what a reader does with it.** A reading taken today observes the boundness
-rules that exist today, which are real and readable: `is_peer_used`
-(`net_node.inl:1207`) refuses a second outbound connection to an address it
-already holds. That number is **valid about today**. It is not a number of
-unknown meaning, and it should not be discarded — it should be **re-run once
-PWD-I1 and PWD-B9 land**, because those change the rule it was taken under.
-Calling it indeterminate invites throwing it away; calling it time-scoped
-invites repeating it, which is the correct instruction.
-
-**A same-host cap is not a sybil bound in ANY zone, and an earlier draft of
-this paragraph got that wrong in a way worth recording.** It said the cap binds
-on `public_` because a distinct host means a distinct IP, and fails only on
-`tor` because onions are free. That framing is a trap: stated as an overlay
-carve-out, the cap gets derived as a sybil bound for `public_` and inherits
-exactly the error the carve-out was meant to prevent.
-
-**The discriminator is MINTED versus OBSERVED, not overlay versus clearnet.**
-`peer_id` is minted by the peer that declares it, in every zone —
-`net_node.inl:1109` and `:2754` assign it straight off the wire; only our own
-is generated. And `is_same_host` for ipv4 is exact IP equality
-(`net_utils_base.h:83`, `ip() == other.ip()`), so a /24 supplies 256 free
-"hosts" on `public_` as surely as a keypair supplies one on `tor`. What the
-cap keys on is cheap to multiply everywhere; only the unit price differs.
-
-So the transport's name must not do any work here. Tor supplies transport
-encryption and IP concealment. It supplies **no sybil resistance** and **no
-source ambiguity** — the latter is the stem's job, not the transport's.
-Encryption changes what an observer sees on the wire; it changes nothing about
-what a peer costs to create. (The inherited comment crediting Tor with sybil
-protection is already retired in-tree — `levin_notify.cpp:732` retires the
-reasoning. The habit of calling `tor`/`i2p` "the anonymity zone" is what would
-bring it back, so this section uses the `epee::net_utils::zone` names.)
-
-**The condition on the result therefore is not "wait for PWD-B9".** No cap of
-the kind B9 was scoped to set makes the observed boundness adversarially
-meaningful, in any zone. A §3.1c reading measures the **honest posture** — the
-right thing for a bandwidth budget, since cover cost is paid against honest
-peers — and must not be cited as evidence about an adversarial one. That is a
-property of the reading, not a defect awaiting a fix.
-
-**And do not treat B9's absence as temporary.** The P2P design rounds were
-halted 2026-09-06; the direction is the daemon owning its own onion key, an
-identity proven by possession rather than declared on the wire. B9 may never be
-written in the form this section's earlier drafts assumed, so nothing here
-should be sequenced behind it.
-
-Recorded here rather than tracked elsewhere because **an absent rule is
-invisible to every check that reads this document** — no gate, no test and no
-review can see a section that was never written, so naming it in the method is
-the only place it can be seen at all.
+**A §3.1c reading measures the honest posture, not an adversarial one
+(2026-09-09).** Four-slots-bound is a run precondition. What those slots being
+bound *means* is owned by PWD-E4, not here: the same-host outbound cap
+(`has_outbound_connection_to_host` / `outbound_connection_takes_host`, shipped
+with #643) bounds honest duplicates and the single-IP-many-ports gray-list
+shape — nothing adversarial, in any zone. Cover cost is paid against honest
+peers, so that is the right number for a bandwidth budget; it must not be
+cited as evidence about an adversary. PWD-B9 is a numeric value on that
+already-shipped mechanism, informed by deferred PWD-I4; waiting for the
+number does not make the reading adversarially meaningful, so this method is
+not sequenced behind it.
 
 **Histogram the intervals, do not only divide bytes by time.** Defect 2's
 signature is sharper in the distribution than in the mean: jitter applied gives
