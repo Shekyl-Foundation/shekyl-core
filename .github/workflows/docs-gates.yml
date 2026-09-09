@@ -91,6 +91,12 @@ jobs:
           submodules: true
 
       - name: Run doc-link check
+        # Every relative markdown link under docs/ must resolve in the
+        # checkout, or carry a reasoned allowlist entry. The gate this file
+        # was created for; its rationale and negative controls are in the
+        # header. Instance of 47-gate-subject-assertion.mdc.
+        #
+        # No `if:` guard, because nothing has run before it to be masked by.
         run: python3 scripts/ci/check_doc_links.py
 
       - name: Run empty-identifier-heading check
