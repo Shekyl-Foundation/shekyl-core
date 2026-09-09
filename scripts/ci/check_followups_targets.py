@@ -45,6 +45,11 @@ REQUIRED_HEADERS = ("## Pre-genesis", "## Post-genesis", "## V4")
 SKIP_V3X_DIRS = ("docs/completed", "docs/CHANGELOG.md", "docs/V3_WALLET_DECISION_LOG.md")
 
 
+def _opens_unclosed_bold(line: str) -> bool:
+    """True iff a FOLLOWUPS entry line has an odd number of `**` markers."""
+    return bool(ENTRY_RE.match(line)) and line.count("**") % 2 == 1
+
+
 def main() -> int:
     if not os.path.isfile(FOLLOWUPS):
         print("followups targets: docs/FOLLOWUPS.md is missing", file=sys.stderr)
@@ -85,7 +90,7 @@ def main() -> int:
                 f"not in {sorted(ALLOWED)}"
             )
     for n, line in enumerate(lines, start=1):
-        if ENTRY_RE.match(line) and line.count("**") % 2:
+        if _opens_unclosed_bold(line):
             bad.append(
                 f"docs/FOLLOWUPS.md:{n}: entry opens bold it never closes "
                 f"({line.count('**')} '**' markers, odd)"
@@ -152,7 +157,7 @@ def _selftest() -> int:
     ]
     failures = []
     for name, line, must_fire in cases:
-        fired = bool(ENTRY_RE.match(line)) and line.count("**") % 2 == 1
+        fired = _opens_unclosed_bold(line)
         if fired != must_fire:
             failures.append(
                 f"selftest: {name!r} expected fire={must_fire}, got {fired}"
