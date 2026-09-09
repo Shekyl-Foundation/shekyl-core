@@ -1601,6 +1601,8 @@ static_assert(offsetof(struct shekyl_archival_verify_ctx, segment_leaf_count) ==
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE      14
 /// PC-D3: ctx.prev_block_hash was the all-zero unpopulated sentinel.
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED 15
+/// PWD-B7: drop verdict for a shekyl_archival_verify_serve_credit_vin error code.
+uint8_t shekyl_archival_verify_drop_verdict(uint8_t code);
 
 /// Empty-set archival attestation root (`attestation_root(&[])`). Writes 32
 /// bytes to `out_ptr`. Returns true on success. Not the all-zero null hash —
@@ -2137,6 +2139,8 @@ uint8_t shekyl_archival_last_served_scan(
 // submit path cannot drift on this predicate.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY 49
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH  50
+/// PWD-B7: drop verdict for a shekyl_archival_verify_*_bond_post error code.
+uint8_t shekyl_archival_bond_post_drop_verdict(uint8_t code);
 uint8_t shekyl_archival_debit_auth_pin(
     const uint8_t* record_bond_spend_pk_ptr,
     size_t record_bond_spend_pk_len,
@@ -2792,6 +2796,8 @@ uint8_t shekyl_archival_emission_epoch_work(
 #define SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED        15
 /* Step 8: hybrid auth signature rejected over its Q1 binding message. */
 #define SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED         16
+/// PWD-B7: drop verdict for a shekyl_emission_vin_verify error code.
+uint8_t shekyl_emission_vin_drop_verdict(uint8_t code);
 
 /* Upper bound on settlement_epochs per emission vin — mirrors the Rust wire
  * pin MAX_SETTLEMENT_EPOCHS_PER_EMISSION (emission_wire.rs; the parse rejects

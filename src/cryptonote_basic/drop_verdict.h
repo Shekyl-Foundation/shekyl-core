@@ -41,4 +41,21 @@ namespace cryptonote
     classify_drop(tvc, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
     return false;
   }
+
+  /// Classify `incoming` and return false. Sets `m_verifivation_failed`.
+  /// Null `tvc` still returns false (callers with no drop decision).
+  inline bool reject_drop(tx_verification_context *tvc, uint8_t incoming)
+  {
+    if (tvc)
+    {
+      tvc->m_verifivation_failed = true;
+      classify_drop(*tvc, incoming);
+    }
+    return false;
+  }
+
+  inline bool reject_drop(tx_verification_context &tvc, uint8_t incoming)
+  {
+    return reject_drop(&tvc, incoming);
+  }
 }

@@ -15,7 +15,57 @@ use shekyl_archival_retention::{
     SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
+use shekyl_peer_policy::DropVerdict;
 use std::ptr;
+
+#[test]
+fn emission_vin_drop_verdict_classifies_form_and_does_not_sever_on_our_state() {
+    assert!(DropVerdict::from_byte(shekyl_emission_vin_drop_verdict(
+        SHEKYL_EMISSION_VIN_ERR_WIRE
+    ))
+    .severs());
+    assert!(DropVerdict::from_byte(shekyl_emission_vin_drop_verdict(
+        SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED
+    ))
+    .severs());
+    assert!(!DropVerdict::from_byte(shekyl_emission_vin_drop_verdict(
+        SHEKYL_EMISSION_VIN_ERR_BOND_MISSING
+    ))
+    .severs());
+    assert!(DropVerdict::from_byte(shekyl_emission_vin_drop_verdict(
+        SHEKYL_EMISSION_VIN_ERR_MARSHAL
+    ))
+    .is_internal_failure());
+    assert!(!DropVerdict::from_byte(shekyl_emission_vin_drop_verdict(255)).severs());
+}
+
+#[test]
+fn serve_credit_and_bond_post_drop_verdicts_do_not_sever_on_our_state() {
+    assert!(DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE
+    ))
+    .severs());
+    assert!(!DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_CREDIT_DEADLINE
+    ))
+    .severs());
+    assert!(DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR
+    ))
+    .is_internal_failure());
+    assert!(
+        DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
+        ))
+        .severs()
+    );
+    assert!(
+        !DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING
+        ))
+        .severs()
+    );
+}
 
 #[test]
 fn ffi_constants_match_timing_cluster() {

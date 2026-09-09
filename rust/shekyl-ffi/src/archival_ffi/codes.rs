@@ -12,6 +12,7 @@ use shekyl_archival_retention::{
     BondPostError, HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError,
     RebondPopError, ReleaseConnectError, ReleasePopError, WireError,
 };
+use shekyl_peer_policy::DropVerdict;
 
 /// `shekyl_archival_settlement_epoch_arm_regtest`: armed (or the variable
 /// is unset and the genesis pin latched).
@@ -64,6 +65,32 @@ pub const SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE: u8 = 14;
 /// than downstream where it would surface as a path mismatch and be
 /// misattributed to the prover.
 pub const SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED: u8 = 15;
+
+/// PWD-B7: map a serve-credit FFI verify code onto a drop verdict.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_verify_drop_verdict(code: u8) -> u8 {
+    archival_verify_drop_verdict(code).to_byte()
+}
+
+fn archival_verify_drop_verdict(code: u8) -> DropVerdict {
+    match code {
+        SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR | SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED => {
+            DropVerdict::InternalFailure
+        }
+        SHEKYL_ARCHIVAL_VERIFY_ERR_FIRE_NOT_REACHED
+        | SHEKYL_ARCHIVAL_VERIFY_ERR_CREDIT_DEADLINE => DropVerdict::PolicyOrState,
+        SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE
+        | SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW
+        | SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING
+        | SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH
+        | SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_VERIFY
+        | SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_DESER
+        | SHEKYL_ARCHIVAL_VERIFY_ERR_ZERO_GEOMETRY
+        | SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH
+        | SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE => DropVerdict::AttributableForm,
+        _ => DropVerdict::Unclassified,
+    }
+}
 
 /// Bond-post CT balance sum matches (ARCHIVAL_BOND_GATE4.md §3.2).
 pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK: u8 = 0;
@@ -211,6 +238,38 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY: u8 = 49;
 /// Debit authorization: the presented `pqc_auths` key is not the record's
 /// committed `bond_spend_pk` (identity-key or foreign-key authorization).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH: u8 = 50;
+
+/// PWD-B7: map a bond-post FFI verify code onto a drop verdict.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_bond_post_drop_verdict(code: u8) -> u8 {
+    archival_bond_post_drop_verdict(code).to_byte()
+}
+
+fn archival_bond_post_drop_verdict(code: u8) -> DropVerdict {
+    match code {
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR | SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW => {
+            DropVerdict::InternalFailure
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY => DropVerdict::PolicyOrState,
+        SHEKYL_ARCHIVAL_BOND_POST_OK
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED => DropVerdict::Unclassified,
+        2..=50 => DropVerdict::AttributableForm,
+        _ => DropVerdict::Unclassified,
+    }
+}
 
 /// `Release` connect/pop fold succeeded (gate-4 §4.3 / §5).
 pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_OK: u8 = 0;

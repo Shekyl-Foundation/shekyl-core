@@ -3806,11 +3806,10 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           const txin_archival_serve_credit_response& resp =
             std::get<txin_archival_serve_credit_response>(tx.vin[i]);
           if (!check_archival_serve_credit_input(resp, pruned_records[i], chain_height,
-                slot_prev_block_hash))
+                slot_prev_block_hash, &tvc))
           {
             MERROR_VER("Archival serve-credit validation failed for input " << i);
-            tvc.m_verifivation_failed = true;
-            return reject_state(tvc);
+            return false;
           }
         }
       }
@@ -3825,11 +3824,10 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         // signature over the whole-tx payload is verified against the same
         // key by verify_transaction_pqc_auth.
         if (!check_archival_bond_post_input(bond,
-              tx.pqc_auths[archival_bond_post_index].hybrid_public_key, chain_height))
+              tx.pqc_auths[archival_bond_post_index].hybrid_public_key, chain_height, &tvc))
         {
           MERROR_VER("Archival bond-post validation failed");
-          tvc.m_verifivation_failed = true;
-          return reject_state(tvc);
+          return false;
         }
 
         std::vector<size_t> spend_indices;
@@ -4183,8 +4181,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         {
           MERROR_VER("Archival emission vin verification failed (code "
             << (int)verify_rc << ")");
-          tvc.m_verifivation_failed = true;
-          return reject_state(tvc);
+          return reject_drop(tvc, shekyl_emission_vin_drop_verdict(verify_rc));
         }
         MDEBUG("Archival emission vin verified: total_reward=" << total_reward
           << " epochs_to_commit=" << epochs_to_commit_len);
@@ -4973,14 +4970,15 @@ bool archival_marshal_record_facts(BlockchainDB* db, const crypto::hash& p_id,
 } // namespace
 
 bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& bond,
-  const std::vector<uint8_t>& auth_pubkey, uint64_t chain_height) const
+  const std::vector<uint8_t>& auth_pubkey, uint64_t chain_height,
+  tx_verification_context *tvc) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
   if (bond.hybrid_public_key.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
   {
     MERROR_VER("Archival bond-post hybrid pubkey length not canonical");
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
   }
 
   crypto::hash recomputed{};
@@ -4989,12 +4987,12 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
         reinterpret_cast<uint8_t*>(recomputed.data)))
   {
     MERROR_VER("Archival bond-post P_canonical_id recomputation failed");
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
   }
   if (bond.p_canonical_id != recomputed)
   {
     MERROR_VER("Archival bond-post p_canonical_id hint mismatch");
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
   }
 
   const uint64_t* shard_ptr = bond.holdings.shard_ids.empty()
@@ -5011,7 +5009,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     {
       MERROR_VER("Archival Release rejected: vin carries a bond_spend_pk "
         "(JoinMarket-coupled field)");
-      return false;
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
     }
 
     shekyl::db::ArchivalBondValue record{};
@@ -5020,7 +5018,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     // GF-1 debit authorization — the shared pin (archival_debit_auth_pin
     // above), run before the cooldown-anchor gathering + semantic verify.
     if (have_record && !archival_debit_auth_pin(record, auth_pubkey, "Release"))
-      return false;
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
 
     // Release semantic verify (gate-4 §3.5 debit path): marshal the record
     // facts + the P2B-8 Q1/Q2 cooldown anchors (one reverse-cursor seek per
@@ -5035,7 +5033,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       uint8_t scan = 0;
       if (shekyl_archival_last_served_scan(record.holdings_kind, &scan)
           != SHEKYL_ARCHIVAL_BOND_POST_OK)
-        return false;
+        return reject_drop(tvc, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
       last_served = (scan == SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS)
         ? m_db->archival_bond_all_last_served_epochs(bond.p_canonical_id)
         : m_db->archival_bond_last_served_epochs(bond.p_canonical_id,
@@ -5064,7 +5062,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     {
       MERROR_VER("Archival Release verify failed (code " << static_cast<unsigned>(verify_rc)
         << "): " << archival_bond_post_verify_err_string(verify_rc));
-      return false;
+      return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(verify_rc));
     }
     return true;
   }
@@ -5079,7 +5077,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     {
       MERROR_VER("Archival HoldingsUpdate rejected: vin carries a bond_spend_pk "
         "(JoinMarket-coupled field)");
-      return false;
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
     }
 
     shekyl::db::ArchivalBondValue record{};
@@ -5087,7 +5085,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     std::vector<uint64_t> bad_flat;
     if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "HoldingsUpdate",
         record, have_record, bad_flat))
-      return false;
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
     const uint64_t current_epoch = shekyl_archival_settlement_epoch_at_height(chain_height);
     const uint64_t* record_shard_ptr = record.held_shard_ids.empty()
       ? nullptr : record.held_shard_ids.data();
@@ -5124,13 +5122,13 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
         MERROR_VER("Archival HoldingsUpdate-add verify failed (code "
           << static_cast<unsigned>(hu_rc) << "): "
           << archival_bond_post_verify_err_string(hu_rc));
-        return false;
+        return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(hu_rc));
       }
       if (auth_pubkey != bond.hybrid_public_key)
       {
         MERROR_VER("Archival HoldingsUpdate-add rejected: credit-path pqc auth key "
           "does not match the identity key P_pubkey");
-        return false;
+        return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
       }
       return true;
     }
@@ -5138,7 +5136,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     // DROP (grace-tail debit path). GF-1 debit authorization — the shared pin
     // (archival_debit_auth_pin above), the Release arm's twin.
     if (have_record && !archival_debit_auth_pin(record, auth_pubkey, "HoldingsUpdate-drop"))
-      return false;
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
 
     // Identify the dropped shard by set-difference (record CURRENT \ vin POST)
     // and read its per-shard facts. The Rust verify recomputes the diff and
@@ -5213,7 +5211,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       MERROR_VER("Archival HoldingsUpdate-drop verify failed (code "
         << static_cast<unsigned>(hu_rc) << "): "
         << archival_bond_post_verify_err_string(hu_rc));
-      return false;
+      return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(hu_rc));
     }
     return true;
   }
@@ -5227,7 +5225,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     {
       MERROR_VER("Archival Rebond rejected: vin carries a bond_spend_pk "
         "(JoinMarket-coupled field)");
-      return false;
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
     }
 
     // Rebond semantic verify (gate-4 §3.4; P2B-9 reinstatement): marshal the
@@ -5240,7 +5238,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     std::vector<uint64_t> intervals_flat;
     if (!archival_marshal_record_facts(m_db, bond.p_canonical_id, "Rebond",
         record, have_record, intervals_flat))
-      return false;
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
     const uint8_t rb_rc = shekyl_archival_verify_rebond_bond_post(
       bond.post_kind,
       static_cast<uint8_t>(bond.holdings.kind),
@@ -5263,7 +5261,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       MERROR_VER("Archival Rebond verify failed (code "
         << static_cast<unsigned>(rb_rc) << "): "
         << archival_bond_post_verify_err_string(rb_rc));
-      return false;
+      return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(rb_rc));
     }
     // Credit-path authorization (P2B-9 Pin 4, the GF-1 selector): the identity
     // key — a Rebond proves control of P_canonical_id; the funded value (if
@@ -5272,7 +5270,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     {
       MERROR_VER("Archival Rebond rejected: credit-path pqc auth key does not "
         "match the identity key P_pubkey");
-      return false;
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
     }
     return true;
   }
@@ -5289,14 +5287,14 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     if (bond.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
     {
       MERROR_VER("Archival JoinMarket rejected: bond_spend_pk missing or not canonical");
-      return false;
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
     }
   }
   else if (!bond.bond_spend_pk.empty())
   {
     MERROR_VER("Archival bond-post rejected: vin carries a bond_spend_pk "
       "(JoinMarket-coupled field)");
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
   }
 
   std::vector<uint8_t> existing_pubkey;
@@ -5316,7 +5314,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
   {
     MERROR_VER("Archival bond-post verify failed (code " << static_cast<unsigned>(verify_rc)
       << "): " << archival_bond_post_verify_err_string(verify_rc));
-    return false;
+    return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(verify_rc));
   }
 
   // D3/R3 admission viability (JoinMarket only — rebond/HU-add are monotone
@@ -5368,7 +5366,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       MERROR_VER("Archival JoinMarket rejected: "
         << shekyl_archival_admission_err_string(adm_rc)
         << " (admission code " << static_cast<unsigned>(adm_rc) << ")");
-      return false;
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
     }
   }
 
@@ -5378,7 +5376,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
   {
     MERROR_VER("Archival bond-post rejected: credit-path pqc auth key does not "
       "match the identity key P_pubkey");
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
   }
 
   return true;
@@ -5433,7 +5431,7 @@ bool Blockchain::regtest_inject_archival_serve_credit(const crypto::hash& p_cano
 // in the same change.
 bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
   const std::vector<uint8_t>& pruned_record, uint64_t current_height,
-  const crypto::hash& prev_block_hash) const
+  const crypto::hash& prev_block_hash, tx_verification_context *tvc) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -5448,12 +5446,12 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   if (!get_archival_serve_credit_key(resp, sc_p_id, sc_shard_id, sc_settlement_epoch))
   {
     MERROR_VER("Archival serve-credit vin did not parse");
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
   }
   if (pruned_record.empty() || pruned_record.size() > ct::CtSigPrunable::SERVE_CREDIT_PRUNED_MAX_BYTES)
   {
     MERROR_VER("Archival serve-credit pruned record size out of bounds");
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
   }
 
   // PC-D4/PC-D7: PAIR-EPOCH-wide, deliberately, and this is the one place the
@@ -5480,14 +5478,14 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   if (m_db->archival_serve_credit_pass_count(sc_p_id, sc_shard_id, sc_settlement_epoch) > 0)
   {
     MERROR_VER("Duplicate archival serve-credit for (P, shard, E)");
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
   }
 
   std::vector<uint8_t> bond_pubkey;
   if (!m_db->get_archival_bond_hybrid_pubkey(sc_p_id, bond_pubkey))
   {
     MERROR_VER("Archival serve-credit rejected: bond record substrate not available for P_id");
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
   }
 
   const uint64_t join_epoch = m_db->archival_bond_join_epoch(sc_p_id);
@@ -5496,14 +5494,14 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     MERROR_VER("Archival serve-credit settlement epoch " << sc_settlement_epoch
       << " before E_first (join_settlement_epoch+1) for join_settlement_epoch "
       << join_epoch);
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
   }
 
   if (!m_db->archival_bond_good_through(sc_p_id, sc_settlement_epoch))
   {
     MERROR_VER("Archival serve-credit rejected: P not good_through at epoch "
       << sc_settlement_epoch);
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
   }
 
   const uint64_t h_open = shekyl_archival_epoch_open_height(sc_settlement_epoch);
@@ -5512,7 +5510,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   if (current_height > h_close)
   {
     MERROR_VER("Archival serve-credit past credit deadline H_close=" << h_close);
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
   }
 
   // block_hash(H_seal) must be committed to derive the H_fire beacon. The
@@ -5526,7 +5524,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   {
     MERROR_VER("Archival serve-credit: seal block " << h_seal
       << " at or beyond chain height " << current_height << " (not yet committed)");
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
   }
 
   crypto::hash seal_hash{};
@@ -5542,7 +5540,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
     // halt is a separate consensus-policy question, decided for both together.
     MERROR_VER("Archival serve-credit: cannot load seal block hash at height " << h_seal
       << ": " << e.what());
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
   }
 
   // Derived identically to the slash-eligibility consumer (db_lmdb.cpp,
@@ -5561,7 +5559,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   {
     MERROR_VER("Archival serve-credit: shard " << sc_shard_id
       << " not in bond holdings at H_fire=" << h_fire);
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
   }
 
   crypto::hash registry_rk{};
@@ -5570,7 +5568,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   {
     MERROR_VER("Archival serve-credit: shard registry substrate not available at H_fire="
       << h_fire);
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
   }
 
   // Challenge-path leaf chunk (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §6.2): the
@@ -5593,7 +5591,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   {
     MERROR_VER("Archival serve-credit: leaf index derivation refused (code "
       << (int)leaf_index_rc << ")");
-    return false;
+    return reject_drop(tvc, shekyl_archival_verify_drop_verdict(leaf_index_rc));
   }
   uint64_t chunk_first_leaf = 0;
   uint64_t chunk_leaf_count = 0;
@@ -5601,7 +5599,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
         &chunk_first_leaf, &chunk_leaf_count))
   {
     MERROR_VER("Archival serve-credit: challenged leaf index out of segment range");
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
   }
   // Leaf byte-width is the shared shekyl::db::kLeafSize (4 Selene scalars × 32B);
   // no local re-declaration to drift against the DB's leaf-record contract. The
@@ -5618,7 +5616,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   {
     MERROR_VER("Archival serve-credit: leaf chunk read failed at tree position "
       << chunk_first_leaf << " (frozen-segment registry disagrees with curve tree)");
-    return false;
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
   }
 
   // The FFI takes the kept half AFTER its tag byte (the serializer guard
@@ -5642,7 +5640,7 @@ bool Blockchain::check_archival_serve_credit_input(const txin_archival_serve_cre
   if (verify_rc != SHEKYL_ARCHIVAL_VERIFY_OK)
   {
     MERROR_VER("Archival serve-credit FFI verify failed (code " << (int)verify_rc << ")");
-    return false;
+    return reject_drop(tvc, shekyl_archival_verify_drop_verdict(verify_rc));
   }
 
   return true;

@@ -13,6 +13,7 @@ use shekyl_archival_retention::{
     EmissionVerifyContext, EmissionVerifyError, EpochCloseBond, EpochCloseInputs,
     HoldingsDescriptor, HoldingsKind, RewardCommit, ShardSet, MAX_CLAIMED_EPOCH_ENTRIES,
 };
+use shekyl_peer_policy::DropVerdict;
 
 use super::epoch_close::{
     decode_epoch_rows, DecodedEpochRows, ShekylArchivalEmissionEpochSnapshot,
@@ -159,6 +160,39 @@ pub const SHEKYL_EMISSION_VIN_ERR_BACKING_REJECTED: u8 = 14;
 pub const SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED: u8 = 15;
 /// Step 8: a hybrid auth signature rejected over its Q1 binding message.
 pub const SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED: u8 = 16;
+
+/// PWD-B7: map an emission-vin FFI code onto a drop verdict.
+///
+/// Wire, vout-sum, backing, and auth failures describe the input. Null and
+/// marshal failures are ours. Epoch/bond/work/reward codes describe our
+/// chain. Unrecognised codes stay unclassified (do not sever).
+#[no_mangle]
+pub extern "C" fn shekyl_emission_vin_drop_verdict(code: u8) -> u8 {
+    emission_vin_drop_verdict(code).to_byte()
+}
+
+fn emission_vin_drop_verdict(code: u8) -> DropVerdict {
+    match code {
+        SHEKYL_EMISSION_VIN_ERR_NULL_PTR | SHEKYL_EMISSION_VIN_ERR_MARSHAL => {
+            DropVerdict::InternalFailure
+        }
+        SHEKYL_EMISSION_VIN_ERR_WIRE
+        | SHEKYL_EMISSION_VIN_ERR_VOUT_SUM_MISMATCH
+        | SHEKYL_EMISSION_VIN_ERR_BACKING_LEAF
+        | SHEKYL_EMISSION_VIN_ERR_BACKING_REJECTED
+        | SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED
+        | SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED => DropVerdict::AttributableForm,
+        SHEKYL_EMISSION_VIN_ERR_EPOCH_NOT_FINALIZED
+        | SHEKYL_EMISSION_VIN_ERR_EPOCH_EXPIRED
+        | SHEKYL_EMISSION_VIN_ERR_BOND_MISSING
+        | SHEKYL_EMISSION_VIN_ERR_HOLDINGS_MISMATCH
+        | SHEKYL_EMISSION_VIN_ERR_EPOCH_BEFORE_JOIN
+        | SHEKYL_EMISSION_VIN_ERR_ALREADY_CLAIMED
+        | SHEKYL_EMISSION_VIN_ERR_WORK_MISMATCH
+        | SHEKYL_EMISSION_VIN_ERR_REWARD_MISMATCH => DropVerdict::PolicyOrState,
+        _ => DropVerdict::Unclassified,
+    }
+}
 
 /// Pure code mapping — no re-decision (the decision-placement pin: every
 /// consensus decision lives in `shekyl-archival-retention`; this collapses

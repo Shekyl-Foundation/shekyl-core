@@ -33,9 +33,12 @@ CHECK_TX_INPUTS_BODY = (
 ADD_TX = "bool tx_memory_pool::add_tx("
 ASSERT_MACRO_CALL = re.compile(r"\bCHECK_AND_ASSERT_MES\s*\(")
 REJECT_RETURN = re.compile(
-    r"^\s*return reject_(form|state|internal)\s*\(\s*tvc\s*\)\s*;"
+    r"^\s*return reject_(form|state|internal|drop)\s*\("
 )
 PASSTHROUGH = re.compile(r"^\s*if\s*\(\s*!res\s*\)\s*$")
+CLASSIFYING_CALLEE = re.compile(
+    r"check_archival_(serve_credit_input|bond_post_input)\s*\("
+)
 
 
 def _function_body(lines: list[str], signature: str):
@@ -102,6 +105,9 @@ def check_wrapper_classifies_internal() -> bool:
             if PASSTHROUGH.match(prev):
                 continue
             if REJECT_RETURN.match(line):
+                continue
+            window = "".join(body[max(0, i - 6) : i])
+            if CLASSIFYING_CALLEE.search(window):
                 continue
             bare.append(f"{rel}:{lineno + i}")
         if bare:

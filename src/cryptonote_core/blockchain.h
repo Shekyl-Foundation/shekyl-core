@@ -1147,14 +1147,15 @@ namespace cryptonote
     // is no prover-chosen value here to check.
     bool check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
       const std::vector<uint8_t>& pruned_record, uint64_t current_height,
-      const crypto::hash& prev_block_hash) const;
+      const crypto::hash& prev_block_hash, tx_verification_context *tvc = nullptr) const;
 
     // `auth_pubkey` is the bond input's pqc auth key
     // (`tx.pqc_auths[bond_index].hybrid_public_key`); the §3.5 step-5
     // selection is pinned inside — identity key on credit paths, the record's
     // committed GF-1 `bond_spend_pk` on debit paths (never the identity key).
     bool check_archival_bond_post_input(const txin_archival_bond_post& bond,
-      const std::vector<uint8_t>& auth_pubkey, uint64_t chain_height) const;
+      const std::vector<uint8_t>& auth_pubkey, uint64_t chain_height,
+      tx_verification_context *tvc = nullptr) const;
 
     /**
      * @brief FAKECHAIN-only: inject an archival serve-credit bit directly.
