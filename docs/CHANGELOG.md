@@ -10,7 +10,10 @@
   `/opt/shekyl/<version>-<target>/` staging → `PATH`), `shekyld` spawns
   a managed tor, mints a v3 onion key in memory, publishes it with
   `ADD_ONION Flags=DiscardPK`, and serves overlay inbound on a fresh
-  address each boot — no persisted secret, no durable identifier. The new
+  address each boot — no persisted secret, no durable identifier, and no
+  reused tor `DataDirectory` (a unique 0700 subdirectory of the daemon
+  config folder is created per boot and wiped on teardown, so entry guards
+  cannot join one boot's onion to the next). The new
   `rust/shekyl-tor-control-daemon` crate owns the posture; the daemon and
   wallet tor supervisors share only the neutral protocol crate and never
   share a tor instance, config, data directory, or log sink (PWD-E9).

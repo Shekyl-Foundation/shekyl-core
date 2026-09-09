@@ -534,9 +534,11 @@ namespace nodetool
     //! ephemeral per-boot onion, and wire the tor zone (inbound bind +
     //! outbound SOCKS). Yields (no-op) when the operator configured the tor
     //! zone themselves, opted out, is offline, or no pinned tor binary is
-    //! installed; a start failure logs loudly and continues without overlay
-    //! inbound (ruled: never aborts the daemon). Called from init() after
-    //! m_config_folder is final and before zone iteration begins.
+    //! installed; a start failure logs loudly and continues with no tor zone
+    //! (ruled: never aborts the daemon). A bind failure of the loopback
+    //! forward listener erases the zone it inserted — leaving it would
+    //! fail-close originated txs onto a dead overlay. Called from init()
+    //! after m_config_folder is final and before zone iteration begins.
     void add_ephemeral_tor_zone(const boost::program_options::variables_map& vm);
     //! Idle-loop sweep for the ephemeral posture: on the alive->dead edge of
     //! the managed tor, log ONCE that overlay inbound is gone for this boot

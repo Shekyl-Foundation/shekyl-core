@@ -20,9 +20,12 @@
 //! The Tor process itself is **managed** (PWD-E9, MANAGED ruling): this crate
 //! spawns its own pinned tor via the client crate's launch path rather than
 //! requiring the operator to provision a control port — a default nobody
-//! reaches is not a default. The operator-provisioned stable posture
-//! (`--anonymous-inbound` with a torrc-configured hidden service) remains
-//! available and is untouched by this crate.
+//! reaches is not a default. Its `DataDirectory` is a unique 0700 subdirectory
+//! of a caller-named parent, wiped on teardown, so a restart cannot reuse
+//! entry guards (the wallet supervisor keeps a durable directory; this crate
+//! must not). The operator-provisioned stable posture (`--anonymous-inbound`
+//! with a torrc-configured hidden service) remains available and is untouched
+//! by this crate.
 //!
 //! # What this crate deliberately does NOT contain
 //!
@@ -42,10 +45,13 @@
 //!   piece 3 wiring is the named re-evaluation site).
 
 pub mod blocking;
+mod data_dir;
 pub mod ephemeral;
 
-pub use blocking::{probe_binary, BlockingDaemonTor, BlockingDaemonTorConfig, BlockingStartError};
-pub use ephemeral::{DaemonTorConfig, DaemonTorControl, DaemonTorStartError};
+pub use blocking::{BlockingDaemonTor, BlockingDaemonTorConfig, BlockingStartError};
+pub use ephemeral::{
+    DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
+};
 // Re-exported so the FFI crate's probe/start seam names one crate (this one)
 // rather than reaching around it to the client for the error type alone.
 pub use shekyl_tor_control_client::binary::TorBinaryError;

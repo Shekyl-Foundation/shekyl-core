@@ -146,13 +146,15 @@ jobs:
           # The PWD-E7 posture end-to-end: spawn → bootstrap → ADD_ONION with
           # DiscardPK → ServiceID verified → bounded teardown with a real reap,
           # twice, asserting the two boots publish DIFFERENT addresses (the
-          # ephemeral property observed, not asserted). Assert the named test
-          # ran and PASSED, plus the same `-ge` floor discipline as above
-          # (floor = this crate's current ignored count: 1).
+          # ephemeral property observed, not asserted), plus the blocking
+          # facade on a plain thread (the FFI consumer's exact shape). Floor =
+          # this crate's current ignored count (2). `-ge` so adding a live
+          # test never breaks the lane; bump only on a deliberate removal.
           grep -qE '(^|[[:space:]])ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots \.\.\. ok$' ignored-daemon.out
+          grep -qE '(^|[[:space:]])blocking::tests::blocking_facade_full_lifecycle_from_plain_thread \.\.\. ok$' ignored-daemon.out
           passed=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' ignored-daemon.out | head -1)
           echo "ran ${passed:-0} pinned-tor daemon tests"
-          [ "${passed:-0}" -ge 1 ]
+          [ "${passed:-0}" -ge 2 ]
           # Same no-orphan guarantee as the wallet step: a failed daemon start
           # tears its incarnation down before returning, and shutdown reaps.
           orphan="^$GITHUB_WORKSPACE/tor/tor "

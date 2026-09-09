@@ -808,14 +808,17 @@ posture end-to-end (managed pinned tor via the neutral crate's parameterized
 launch, in-memory v3 key, `ADD_ONION` `Flags=DiscardPK`, per-boot `ServiceID`,
 bounded teardown) plus a blocking facade (`BlockingDaemonTor`) that owns its own
 runtime so the FFI stays runtime-free. The daemon consumes it through
-`shekyl_daemon_tor_probe`/`_start`/`_is_alive`/`_shutdown`
+`shekyl_daemon_tor_start`/`_publish`/`_is_alive`/`_shutdown`
 (`rust/shekyl-ffi/src/daemon_tor_ffi.rs`) from
 `node_server::add_ephemeral_tor_zone` (`src/p2p/net_node.inl`): the default
 posture engages when a pinned tor is installed, yields to operator-configured
 `--anonymous-inbound`/`--tx-proxy`, and is disabled by `--no-ephemeral-tor`.
-Per this row's table the crate depends only on `shekyl-tor-control-client` and
-never names `shekyl-tor-control-wallet`; its tor's `DataDirectory` lives under
-the daemon's config folder; it carries no vanguard state.
+Start's return codes classify "no binary" (calm skip) vs "found but unusable"
+(loud) — there is no separate probe export. Per this row's table the crate
+depends only on `shekyl-tor-control-client` and never names
+`shekyl-tor-control-wallet`; its tor's `DataDirectory` is a unique wiped child
+of the daemon's config folder (never reused across boots, so entry guards
+cannot join onions); it carries no vanguard state.
 
 The isolation requirement is carried in the crate's own module doc rather than
 left to this document: *no entry point here may default, infer, or discover which

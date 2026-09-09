@@ -762,7 +762,7 @@ async fn drive_incarnation(
                     // don't spin on a closed channel.
                     return IncarnationEnd::Failed(ServiceFailure::Exited(None));
                 }
-                match ready_rx.borrow_and_update().clone() {
+                match *ready_rx.borrow_and_update() {
                     BootstrapState::Connecting { progress } => {
                         // Suppressed while degraded so a retry's bootstrap does not
                         // flap the alarm; the suppression lifts when a sustained

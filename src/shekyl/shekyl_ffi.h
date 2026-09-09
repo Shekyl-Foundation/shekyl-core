@@ -3725,39 +3725,43 @@ int32_t shekyl_levin_fragmented_notify(size_t noise_size, uint32_t command,
 // The DEFAULT overlay-endpoint posture: the daemon spawns a managed, pinned
 // tor, mints a v3 onion key IN MEMORY, publishes with ADD_ONION Flags=
 // DiscardPK, and uses the returned ServiceID as its per-boot overlay inbound
-// address. Nothing is persisted; a restart mints a new key and a new address.
+// address. The DataDirectory is a unique 0700 subdirectory of the daemon
+// config folder, wiped on teardown -- a restart cannot reuse entry guards.
 // The operator-provisioned stable posture (--anonymous-inbound + torrc) is a
 // different privacy posture, not a different custody of the same thing, and
 // configuring it makes the ephemeral posture yield. All of the posture logic
 // lives in rust/shekyl-tor-control-daemon; these exports are marshaling.
+//
+// These symbols live in shekyl-ffi (linked by every C++ binary that
+// instantiates node_server via SHEKYL_FFI_LINK_LIBS). daemon_image is a
+// superset, so shekyld sees them too. They are not in shekyl-daemon-rpc:
+// that crate is the Axum HTTP server, not the P2P overlay.
 
-//! Probe the tor-binary discovery-and-pin gate (SP-T0c) without spawning:
-//! the default-on posture's log-tone decision. `tor_binary_path` null/empty
-//! runs the standard order (SHEKYL_TOR_BINARY env -> beside the executable ->
-//! /opt/shekyl/<version>-<target>/ staging -> PATH). Returns 0 = pinned tor
-//! available (out_detail = its path); 1 = no
-//! candidate at all (calm skip; out_detail untouched); 2 = candidate found
-//! but unusable -- pin mismatch (a distro tor can never hash-match the pinned
-//! Expert Bundle), unpinned target, unreadable -- diagnostic in out_detail
-//! (recommend >= 256 bytes); 3 = argument error. Advisory only: start re-runs
-//! the gate, so a binary swapped between probe and start cannot bypass it.
-int shekyl_daemon_tor_probe(const char* tor_binary_path,
-                            char* out_detail, size_t out_detail_len);
+#define SHEKYL_DAEMON_TOR_OK                 0
+#define SHEKYL_DAEMON_TOR_ALREADY_RUNNING    1
+#define SHEKYL_DAEMON_TOR_ARG                2
+#define SHEKYL_DAEMON_TOR_NO_BINARY          3
+#define SHEKYL_DAEMON_TOR_BAD_BINARY         4
+#define SHEKYL_DAEMON_TOR_START_FAILED       5
+#define SHEKYL_DAEMON_TOR_NOT_RUNNING        1
+#define SHEKYL_DAEMON_TOR_PUBLISH_FAILED     3
 
-//! Start the managed tor: verify the binary, spawn it with `data_dir` as its
-//! DataDirectory, bootstrap to 100%, and return its SOCKS listener. No onion
-//! is published yet -- that is shekyl_daemon_tor_publish, called after the
-//! daemon has bound its loopback inbound listener (on an OS-assigned port; a
-//! port guessed before binding could already be taken and abort init).
-//! BLOCKS for the whole sequence (tens of seconds on a cold bootstrap; bound
-//! by bootstrap_timeout_secs plus small constants). Outputs are
-//! NUL-terminated: out_socks_addr (>= 48 bytes; the managed tor's SOCKS
-//! "ip:port" -- the zone's outbound proxy), out_error (>= 256 bytes
-//! recommended). Returns 0 = bootstrapped; 1 = already running (refused, not
-//! stacked); 2 = argument error; 3 = start failed (binary/spawn/bootstrap --
-//! detail in out_error; the incarnation was torn down before return, so a
-//! failed start commits the caller to nothing: no tor, no zone this boot).
-int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir,
+//! Start the managed tor: verify the binary, create a unique wiped
+//! DataDirectory under `data_dir_parent` (the daemon config folder -- never
+//! the DataDirectory itself), bootstrap to 100%, and return its SOCKS
+//! listener. No onion is published yet -- that is shekyl_daemon_tor_publish,
+//! called after the daemon has bound its loopback inbound listener (on an
+//! OS-assigned port; a port guessed before binding could already be taken
+//! and abort init). BLOCKS for the whole sequence (tens of seconds on a
+//! cold bootstrap; bound by bootstrap_timeout_secs plus small constants).
+//! Outputs are NUL-terminated: out_socks_addr (>= 48 bytes; the managed
+//! tor's SOCKS "ip:port" -- the zone's outbound proxy), out_error (>= 256
+//! bytes recommended). Return codes: SHEKYL_DAEMON_TOR_OK; _ALREADY_RUNNING
+//! (refused, not stacked); _ARG; _NO_BINARY (calm skip -- no candidate at
+//! all); _BAD_BINARY (candidate found but unusable: pin mismatch, unpinned
+//! target, unreadable); _START_FAILED (spawn/bootstrap -- incarnation torn
+//! down before return, so a failed start commits the caller to nothing).
+int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir_parent,
                             uint32_t bootstrap_timeout_secs,
                             char* out_socks_addr, size_t out_socks_addr_len,
                             char* out_error, size_t out_error_len);

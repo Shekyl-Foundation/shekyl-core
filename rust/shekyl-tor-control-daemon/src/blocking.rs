@@ -22,29 +22,15 @@
 //! the daemon talks to this tor a handful of times per boot.
 
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use shekyl_tor_control_client::binary::{self, TorBinaryError};
 use shekyl_tor_control_client::control::{ServiceId, TorExit};
 
-use crate::ephemeral::{DaemonTorConfig, DaemonTorControl, DaemonTorStartError};
-
-/// Run the discovery-and-pin gate without spawning anything: is there a tor
-/// this posture could use? The **default-on** consumer calls this before
-/// [`BlockingDaemonTor::start`] to pick its log posture — a machine with no
-/// tor installed skips calmly ([`TorBinaryError::NotFound`]), while a tor
-/// that is present but unusable (pin mismatch — usually a distro build that
-/// can never hash-match the pinned Expert Bundle — an unpinned target, an
-/// unreadable file) warrants a loud warning naming what was found. `start`
-/// re-runs the gate itself; this probe is advisory, not a capability token.
-pub fn probe_binary(tor_binary_override: Option<&Path>) -> Result<PathBuf, TorBinaryError> {
-    match tor_binary_override {
-        Some(path) => binary::discover_and_verify_at(path),
-        None => binary::discover_and_verify(),
-    }
-    .map(|verified| verified.as_path().to_path_buf())
-}
+use crate::ephemeral::{
+    DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
+};
 
 /// Spawn-time configuration for [`BlockingDaemonTor::start`] — the same knobs
 /// as [`DaemonTorConfig`] with the binary still a *path question* (the facade
@@ -56,9 +42,9 @@ pub struct BlockingDaemonTorConfig {
     /// `/opt/shekyl/<version>-<target>/` staging → `PATH`).
     /// Either way the SP-T0c hash pin verifies before anything spawns.
     pub tor_binary_override: Option<PathBuf>,
-    /// This instance's `DataDirectory` — daemon-owned, per-boot, never the
-    /// wallet's (PWD-E9). Created if absent.
-    pub data_dir: PathBuf,
+    /// Parent of this boot's unique `DataDirectory` — daemon-owned, never the
+    /// wallet's (PWD-E9). A unique 0700 child is created and wiped on teardown.
+    pub data_dir_parent: PathBuf,
     /// How long tor gets to reach bootstrap 100% before start fails.
     pub bootstrap_deadline: Duration,
     /// Bound on each post-bootstrap control round-trip.
@@ -73,14 +59,15 @@ pub struct BlockingDaemonTorConfig {
 #[derive(Debug)]
 pub enum BlockingStartError {
     /// No pinned tor binary — not found, or found and failing the SP-T0c
-    /// hash pin. The pin failure is deliberately not distinguished here
-    /// beyond the inner error: both mean "no verified binary to spawn".
+    /// hash pin. [`TorBinaryError::NotFound`] is the calm skip (nothing to
+    /// spawn); every other variant is a loud "found but unusable".
     Binary(TorBinaryError),
     /// The tokio runtime could not be built (resource exhaustion; loud and
     /// effectively unreachable in practice).
     Runtime(std::io::Error),
-    /// The start sequence itself failed (spawn, bootstrap, discovery,
-    /// publish). The incarnation was torn down before this returned.
+    /// The start sequence itself failed (spawn, bootstrap, discovery). The
+    /// incarnation was torn down and the DataDirectory wiped before this
+    /// returned.
     Start(DaemonTorStartError),
 }
 
@@ -106,7 +93,8 @@ impl std::error::Error for BlockingStartError {}
 /// incarnation down: dropping the runtime aborts the actor's tasks, and the
 /// child reap is backstopped by `kill_on_drop`/`TAKEOWNERSHIP`. That is the
 /// unclean path — no `DEL_ONION`, no bounded reap, no exit telemetry — but it
-/// means no exit route leaks a running tor.
+/// means no exit route leaks a running tor, and the DataDirectory wipe still
+/// runs on `DaemonTorControl` drop.
 pub struct BlockingDaemonTor {
     /// Keeps the actor's spawned tasks (exit watcher, framer) polled between
     /// FFI calls. Declared first so a plain drop aborts the tasks before the
@@ -117,8 +105,8 @@ pub struct BlockingDaemonTor {
 
 impl BlockingDaemonTor {
     /// Verify the binary, build the runtime, and run the
-    /// [`DaemonTorControl::start`] sequence (spawn → bootstrap → SOCKS
-    /// discovery), blocking until tor is up (or the failure is terminal).
+    /// [`DaemonTorControl::start`] sequence (unique dir → spawn → bootstrap →
+    /// SOCKS discovery), blocking until tor is up (or the failure is terminal).
     /// Expect this to take tens of seconds on a cold tor bootstrap. The onion
     /// publishes separately via [`Self::publish`], after the caller has bound
     /// its inbound listener.
@@ -138,7 +126,7 @@ impl BlockingDaemonTor {
 
         let daemon_config = DaemonTorConfig {
             tor_binary,
-            data_dir: config.data_dir,
+            data_dir_parent: config.data_dir_parent,
             bootstrap_deadline: config.bootstrap_deadline,
             reply_deadline: config.reply_deadline,
         };
@@ -160,7 +148,7 @@ impl BlockingDaemonTor {
         virtual_port: u16,
         local_port: u16,
         max_streams: u16,
-    ) -> Result<ServiceId, DaemonTorStartError> {
+    ) -> Result<ServiceId, DaemonTorPublishError> {
         self.runtime.block_on(self.control.publish(
             virtual_port,
             SocketAddr::from(([127, 0, 0, 1], local_port)),
@@ -181,9 +169,10 @@ impl BlockingDaemonTor {
         self.control.is_alive()
     }
 
-    /// Bounded teardown (`DEL_ONION`, SIGTERM→wait→SIGKILL, reap), then the
-    /// exit telemetry. Consumes the value; the runtime shuts down after the
-    /// teardown completes (destructured so the drop order is explicit).
+    /// Bounded teardown (`DEL_ONION`, SIGTERM→wait→SIGKILL, reap, DataDirectory
+    /// wipe), then the exit telemetry. Consumes the value; the runtime shuts
+    /// down after the teardown completes (destructured so the drop order is
+    /// explicit).
     pub fn shutdown(self) -> Option<TorExit> {
         let Self { runtime, control } = self;
         runtime.block_on(control.shutdown())
@@ -209,7 +198,7 @@ mod tests {
         let path = tor_binary();
         let config = |dir: &std::path::Path| BlockingDaemonTorConfig {
             tor_binary_override: Some(path.clone()),
-            data_dir: dir.to_path_buf(),
+            data_dir_parent: dir.to_path_buf(),
             bootstrap_deadline: Duration::from_secs(300),
             reply_deadline: Duration::from_secs(30),
         };
@@ -233,5 +222,13 @@ mod tests {
         assert_eq!(service_id.as_str().len(), 56);
         let exit = started.shutdown();
         assert!(exit.is_some(), "graceful shutdown must observe a real reap");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "shutdown must wipe the per-boot DataDirectory, leftover: {leftovers:?}"
+        );
     }
 }
