@@ -77,7 +77,9 @@ fn agreeing_get_version() -> String {
         hard_forks: vec![],
         consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
         nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
-        genesis_hash: shekyl_rpc_types::HashHex::from_bytes([0x22; 32]),
+        genesis_hash: shekyl_rpc_types::HashHex::from_bytes(
+            shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::DaemonNetwork::Mainnet),
+        ),
         },
     })
     .to_string()
@@ -2152,7 +2154,9 @@ fn get_version_but(edit: impl FnOnce(&mut shekyl_rpc_types::GetVersionResponse))
         hard_forks: vec![],
         consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
         nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
-        genesis_hash: shekyl_rpc_types::HashHex::from_bytes([0x22; 32]),
+        genesis_hash: shekyl_rpc_types::HashHex::from_bytes(shekyl_rpc_types::genesis_hash_for(
+            shekyl_rpc_types::DaemonNetwork::Mainnet,
+        )),
     };
     edit(&mut reply);
     serde_json::json!({"jsonrpc": "2.0", "id": "0", "result": reply}).to_string()
@@ -2221,6 +2225,20 @@ fn a_wrong_network_daemon_is_refused_even_though_every_other_axis_agrees() {
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(out.contains("network mismatch"), "{out}");
     assert!(out.contains("mainnet") && out.contains("testnet"), "{out}");
+}
+
+#[test]
+fn a_foreign_genesis_daemon_is_refused() {
+    let addr = route_server(vec![(
+        "json_rpc:get_version",
+        get_version_but(|r| {
+            r.genesis_hash = shekyl_rpc_types::HashHex::from_bytes([0xff; 32]);
+        }),
+    )]);
+    let (code, out) = run(&["print_height"], Some(&addr));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("genesis mismatch"), "{out}");
+    assert!(out.contains("different chain"), "{out}");
 }
 
 #[test]

@@ -95,10 +95,7 @@ pub use headers::{
     GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
     HardForkInfoRequest, HardForkInfoResponse,
 };
-pub use identity::{
-    genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch,
-    GENESIS_PINS_ARE_PLACEHOLDERS,
-};
+pub use identity::{genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch};
 pub use p2p::{
     ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
     GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,

@@ -574,7 +574,9 @@ mod tests {
             hard_forks: vec![],
             consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
             nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
-            genesis_hash: shekyl_rpc_types::HashHex::from_bytes([0u8; 32]),
+            genesis_hash: shekyl_rpc_types::HashHex::from_bytes(
+                shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::DaemonNetwork::Mainnet),
+            ),
         };
         edit(&mut reply);
         json!({"jsonrpc": "2.0", "id": "0", "result": reply}).to_string()
@@ -643,6 +645,19 @@ mod tests {
             "a digest mismatch cannot know a stale side and must not name one: {out}"
         );
         assert!(out.contains("different RULE SET"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_foreign_genesis_daemon_is_refused() {
+        let out = first_request_error(
+            version_reply(|r| {
+                r.genesis_hash = shekyl_rpc_types::HashHex::from_bytes([0xff; 32]);
+            }),
+            mainnet_expectation(),
+        )
+        .await;
+        assert!(out.contains("genesis block mismatch"), "{out}");
+        assert!(out.contains("different chain"), "{out}");
     }
 
     #[tokio::test]
