@@ -29,37 +29,6 @@ name: ci/docs-gates
 on:
   pull_request:
     branches: [dev]
-    paths:
-      - "docs/**"
-      - "scripts/ci/check_doc_links.py"
-      - "scripts/ci/check_doc_headings.py"
-      - "scripts/ci/check_lmdb_schema_coverage.py"
-      - "scripts/ci/check_doc_status_banners.py"
-      - "scripts/ci/check_doc_fossils.py"
-      - "scripts/ci/check_followups_targets.py"
-      - "scripts/ci/check_index_prefix_uniqueness.py"
-      - "scripts/ci/check_index_table_shape.py"
-      # Both index gates import their row splitter from here, so a change to it
-      # changes what they see — a gate that cannot see its subject change is
-      # not a gate (rule 47).
-      - "scripts/ci/_gfm_table.py"
-      - "scripts/ci/check_no_claim_era_spec.py"
-      - "scripts/ci/check_landed_rows_stamped.py"
-      - ".cursor/rules/**"
-      # The schema-coverage gate reads the table list and VERSION out of
-      # db_lmdb.cpp, so a source-only table/version change must start this
-      # workflow — that drift arriving with no docs edit is exactly the
-      # case the gate exists to catch (rule 47: a gate that cannot see its
-      # subject change is not a gate).
-      #
-      # NOTE (P0a, 2026-09-05): this workflow is not only link checking —
-      # check_lmdb_schema_coverage.py's subjects ride the paths above:
-      # docs/LMDB_SCHEMA.md and docs/design/DAEMON_REDB_STORE.md (the P0a
-      # reconciliation registry) via "docs/**", and the X-macro via the
-      # db_lmdb.cpp entry below. Pruning or narrowing these paths in a
-      # link-checker restructure silently unwires that gate.
-      - "src/blockchain_db/lmdb/db_lmdb.cpp"
-      - ".github/workflows/docs-gates.yml"
 
 concurrency:
   group: docs-gates-${{ github.ref }}
@@ -69,8 +38,84 @@ permissions:
   contents: read
 
 jobs:
+  # Change scope, computed once. See the identical job in build.yml (#653) for
+  # why this is a job-level condition rather than a workflow `paths:` filter.
+  #
+  # THIS IS THE SAME DEFECT AS #653, AT THE OPPOSITE POLARITY. #653 removed
+  # `paths-ignore: docs/**`, which suppressed the workflow on DOCS-ONLY PRs.
+  # This removes `paths: docs/**`, which suppressed it on CODE-ONLY ones. Either
+  # way the workflow does not start, no check is created, and branch protection
+  # waits forever for a context nobody will report -- and "Docs structural gates
+  # (links, banners, fossils, FOLLOWUPS, index)" is required on dev. #660
+  # (build.yml + scripts/ci/run_live_daemon_gates.sh, zero docs/ files) sat with
+  # that context ABSENT while every other check passed.
+  #
+  # The class is already named in this repo: multisig-feature.yml's header warns
+  # about C-1, "armed gate with no trigger". It was identified, documented and
+  # defended against in one workflow; this is the instance nobody went back for,
+  # and it is the second named case rather than a second anecdote.
+  #
+  # Fails CLOSED in this polarity too, and note the direction flips: an
+  # uncomputable file list RUNS the gates. Skipping them wrongly is the silent
+  # failure; running them wrongly costs seconds.
+  changes:
+    name: 'Doc-gate scope'
+    runs-on: ubuntu-latest
+    outputs:
+      run_gates: ${{ steps.scope.outputs.run_gates }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        run: |
+          set -u
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.sha }}"
+
+          files=""
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$head" 2>/dev/null || true)"
+          fi
+
+          if [ -z "$files" ]; then
+            echo "scope: no computable file list -- running the gates (fail-closed)"
+            echo "run_gates=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Mirrors the `paths:` list this replaced, entry for entry. Each
+          # subject is here because a gate reads it: the doc tree and the rules
+          # tree are the gates' subjects; the named scripts ARE the gates;
+          # _gfm_table.py is the row splitter both index gates import, so a
+          # change to it changes what they see; db_lmdb.cpp carries the table
+          # list and VERSION the schema-coverage gate reads, so source-only
+          # drift must start this workflow; and the workflow itself, so an edit
+          # to these rules is checked by them.
+          run_gates=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              docs/*|.cursor/rules/*) run_gates=true; break ;;
+              scripts/ci/check_doc_links.py|scripts/ci/check_doc_headings.py) run_gates=true; break ;;
+              scripts/ci/check_lmdb_schema_coverage.py|scripts/ci/check_doc_status_banners.py) run_gates=true; break ;;
+              scripts/ci/check_doc_fossils.py|scripts/ci/check_followups_targets.py) run_gates=true; break ;;
+              scripts/ci/check_index_prefix_uniqueness.py|scripts/ci/check_index_table_shape.py) run_gates=true; break ;;
+              scripts/ci/_gfm_table.py) run_gates=true; break ;;
+              scripts/ci/check_no_claim_era_spec.py|scripts/ci/check_landed_rows_stamped.py) run_gates=true; break ;;
+              src/blockchain_db/lmdb/db_lmdb.cpp) run_gates=true; break ;;
+              .github/workflows/docs-gates.yml) run_gates=true; break ;;
+            esac
+          done <<< "$files"
+
+          echo "scope: run_gates=$run_gates"
+          echo "run_gates=$run_gates" >> "$GITHUB_OUTPUT"
+
   check-doc-links:
     name: "Docs structural gates (links, banners, fossils, FOLLOWUPS, index)"
+    needs: changes
+    if: needs.changes.outputs.run_gates == 'true'
     runs-on: ubuntu-latest
     # Both checks are pure-Python over a checkout; a minute is generous.
     # Bounded per 47-gate-subject-assertion.mdc so an infrastructure stall
