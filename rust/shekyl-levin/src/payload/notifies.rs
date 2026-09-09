@@ -12,8 +12,6 @@ use super::error::Error;
 use super::get::{self, HASH_SIZE};
 use super::PortableMap;
 
-/// `NOTIFY_NEW_BLOCK` = `BC_COMMANDS_POOL_BASE + 1`.
-pub const NOTIFY_NEW_BLOCK: u32 = 2001;
 /// `NOTIFY_NEW_TRANSACTIONS`.
 pub const NOTIFY_NEW_TRANSACTIONS: u32 = 2002;
 /// `NOTIFY_REQUEST_GET_OBJECTS`.
@@ -31,19 +29,22 @@ pub const NOTIFY_REQUEST_FLUFFY_MISSING_TX: u32 = 2009;
 /// `NOTIFY_GET_TXPOOL_COMPLEMENT`.
 pub const NOTIFY_GET_TXPOOL_COMPLEMENT: u32 = 2010;
 
-/// Body of `NOTIFY_NEW_BLOCK` (2001) and `NOTIFY_NEW_FLUFFY_BLOCK` (2008).
+/// Body of `NOTIFY_NEW_FLUFFY_BLOCK` (2008), the sole block-propagation
+/// command (PWD-B6).
+///
+/// This type was named `NewBlock` while 2001 existed, with `NewFluffyBlock` as
+/// an alias for it — so the surviving path's body and its only `PortableMap`
+/// lived under the deleted command's name. Renamed rather than deleted for
+/// exactly that reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NewBlock {
+pub struct NewFluffyBlock {
     /// Complete block (header blob + txs; fluffy peers may omit tx bodies).
     pub b: BlockCompleteEntry,
     /// Advertised chain height.
     pub current_blockchain_height: u64,
 }
 
-/// Same map as [`NewBlock`]; distinct command id [`NOTIFY_NEW_FLUFFY_BLOCK`].
-pub type NewFluffyBlock = NewBlock;
-
-impl PortableMap for NewBlock {
+impl PortableMap for NewFluffyBlock {
     fn to_section(&self) -> Result<Section, Error> {
         let mut section = Section::new();
         section.insert("b", Value::Object(self.b.to_section()?));

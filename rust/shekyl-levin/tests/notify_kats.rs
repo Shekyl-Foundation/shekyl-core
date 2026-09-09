@@ -9,7 +9,7 @@
 //! unpruned `txs`, and the attestation-witness transport cap.
 
 use shekyl_levin::{
-    notify, BlockCompleteEntry, BucketReader, GetTxpoolComplement, NewBlock, NewTransactions,
+    notify, BlockCompleteEntry, BucketReader, GetTxpoolComplement, NewFluffyBlock, NewTransactions,
     PayloadError, PortableMap, Received, RequestChain, RequestFluffyMissingTx, RequestGetObjects,
     ResponseChainEntry, ResponseGetObjects, TxBlobEntry, ATTESTATION_WITNESS_MAX_BYTES, HASH_SIZE,
     NOTIFY_NEW_TRANSACTIONS,
@@ -178,7 +178,7 @@ fn witness_over_cap_rejected() {
 
 #[test]
 fn new_block_round_trip() {
-    round_trip(&NewBlock {
+    round_trip(&NewFluffyBlock {
         b: empty_block(),
         current_blockchain_height: 9,
     });

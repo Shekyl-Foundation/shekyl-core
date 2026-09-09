@@ -29,9 +29,9 @@ pub use commands::{
 pub use error::Error;
 pub use get::HASH_SIZE;
 pub use notifies::{
-    GetTxpoolComplement, NewBlock, NewFluffyBlock, NewTransactions, RequestChain,
+    GetTxpoolComplement, NewFluffyBlock, NewTransactions, RequestChain,
     RequestFluffyMissingTx, RequestGetObjects, ResponseChainEntry, ResponseGetObjects,
-    NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_BLOCK, NOTIFY_NEW_FLUFFY_BLOCK,
+    NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_FLUFFY_BLOCK,
     NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_CHAIN, NOTIFY_REQUEST_FLUFFY_MISSING_TX,
     NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_RESPONSE_CHAIN_ENTRY, NOTIFY_RESPONSE_GET_OBJECTS,
 };

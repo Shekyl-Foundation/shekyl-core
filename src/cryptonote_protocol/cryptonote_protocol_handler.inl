@@ -526,20 +526,6 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------
-    template<class t_core>
-    int t_cryptonote_protocol_handler<t_core>::handle_notify_new_block(int command, NOTIFY_NEW_BLOCK::request& arg, cryptonote_connection_context& context)
-  {
-    // @TODO: Eventually drop support for this endpoint
-
-    MLOGIF_P2P_MESSAGE(crypto::hash hash; cryptonote::block b; bool ret = cryptonote::parse_and_validate_block_from_blob(arg.b.block, b, &hash);, ret, context << "Received NOTIFY_NEW_BLOCK " << hash << " (height " << arg.current_blockchain_height << ", " << arg.b.txs.size() << " txes)");
-
-    // Redirect this request form to fluffy block handling
-    NOTIFY_NEW_FLUFFY_BLOCK::request fluffy_arg;
-    fluffy_arg.b = std::move(arg.b);
-    fluffy_arg.current_blockchain_height = arg.current_blockchain_height;
-    return handle_notify_new_fluffy_block(command, fluffy_arg, context);
-  }
-  //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
   int t_cryptonote_protocol_handler<t_core>::handle_notify_new_fluffy_block(int command, NOTIFY_NEW_FLUFFY_BLOCK::request& arg, cryptonote_connection_context& context)
   {
@@ -2729,7 +2715,9 @@ skip:
   template<class t_core>
   bool t_cryptonote_protocol_handler<t_core>::relay_block(NOTIFY_NEW_FLUFFY_BLOCK::request& arg, cryptonote_connection_context& exclude_context)
   {
-    // sort peers between fluffy ones and others
+    // Every peer takes the one block path (PWD-B6), so there is no sort — this
+    // collects the public-zone connections to relay to. The name is kept because
+    // the notify id is still NOTIFY_NEW_FLUFFY_BLOCK.
     std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> fluffyConnections;
     m_p2p->for_each_connection([&exclude_context, &fluffyConnections](connection_context& context, uint32_t support_flags)
     {
@@ -2742,7 +2730,6 @@ skip:
       return true;
     });
 
-    // send fluffy ones first, we want to encourage people to run that
     if (!fluffyConnections.empty())
     {
       epee::levin::message_writer fluffyBlob{32 * 1024};
