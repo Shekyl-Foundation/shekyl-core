@@ -100,23 +100,46 @@ jobs:
       - name: notify on red
         # The visibility route that justifies this lane's existence (header
         # comment): a slow-gate red opens a tracking issue, or comments on
-        # the open one so repeats thread instead of piling up. `gh` needs a
-        # checked-out repo dir; this container has one.
+        # the open one so repeats thread instead of piling up.
+        #
+        # github-script rather than `gh`: this job runs inside the
+        # ubuntu:24.04 container, which does not ship the GitHub CLI, and
+        # installing it would add GitHub's apt repo to the build image for
+        # one failure path. JS actions already run in this container
+        # (checkout/cache above) because the runner injects its own node.
         if: failure()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          title="nightly slow live-daemon gates RED (${{ matrix.branch }})"
-          body="Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          Branch: ${{ matrix.branch }}
-          The GATE_LANE=slow consensus gates (depth-3 FCMP++ spend / emission claim) failed. A red here is a consensus regression and blocks release the same as a per-PR red."
-          existing=$(gh issue list --repo "${{ github.repository }}" \
-            --state open --search "in:title \"$title\"" \
-            --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --repo "${{ github.repository }}" --body "$body"
-          else
-            gh issue create --repo "${{ github.repository }}" \
-              --title "$title" --label ci --body "$body"
-          fi
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const title = `nightly slow live-daemon gates RED (${{ matrix.branch }})`;
+            const body = [
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              'Branch: ${{ matrix.branch }}',
+              'The GATE_LANE=slow consensus gates (depth-3 FCMP++ spend / emission claim) failed.',
+              'A red here is a consensus regression and blocks release the same as a per-PR red.',
+            ].join('\n');
+            // Exact-title match over open issues, not text search: the search
+            // API's in:title is a substring match and lags on freshly created
+            // issues, which would fork the thread on back-to-back nightly reds.
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = open.find((i) => !i.pull_request && i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+            }
