@@ -3732,6 +3732,80 @@ int32_t shekyl_levin_fragmented_notify(size_t noise_size, uint32_t command,
 int32_t shekyl_levin_ingress_admit(uint32_t command, uint32_t flags,
                                     uint64_t* out_cap);
 
+// ---------------------------------------------------------------------------
+// Daemon ephemeral Tor inbound -- PWD-E7 (docs/design/P2P_2_ENDPOINT_ROUND.md)
+// ---------------------------------------------------------------------------
+// The DEFAULT overlay-endpoint posture: the daemon spawns a managed, pinned
+// tor, mints a v3 onion key IN MEMORY, publishes with ADD_ONION Flags=
+// DiscardPK, and uses the returned ServiceID as its per-boot overlay inbound
+// address. The DataDirectory is a unique 0700 subdirectory of the daemon
+// config folder, wiped on teardown -- a restart cannot reuse entry guards.
+// The operator-provisioned stable posture (--anonymous-inbound + torrc) is a
+// different privacy posture, not a different custody of the same thing, and
+// configuring it makes the ephemeral posture yield. All of the posture logic
+// lives in rust/shekyl-tor-control-daemon; these exports are marshaling.
+//
+// These symbols live in shekyl-ffi (linked by every C++ binary that
+// instantiates node_server via SHEKYL_FFI_LINK_LIBS). daemon_image is a
+// superset, so shekyld sees them too. They are not in shekyl-daemon-rpc:
+// that crate is the Axum HTTP server, not the P2P overlay.
+
+#define SHEKYL_DAEMON_TOR_OK                 0
+#define SHEKYL_DAEMON_TOR_ALREADY_RUNNING    1
+#define SHEKYL_DAEMON_TOR_ARG                2
+#define SHEKYL_DAEMON_TOR_NO_BINARY          3
+#define SHEKYL_DAEMON_TOR_BAD_BINARY         4
+#define SHEKYL_DAEMON_TOR_START_FAILED       5
+#define SHEKYL_DAEMON_TOR_NOT_RUNNING        1
+#define SHEKYL_DAEMON_TOR_PUBLISH_FAILED     3
+
+//! Start the managed tor: verify the binary, create a unique wiped
+//! DataDirectory under `data_dir_parent` (the daemon config folder -- never
+//! the DataDirectory itself), bootstrap to 100%, and return its SOCKS
+//! listener. No onion is published yet -- that is shekyl_daemon_tor_publish,
+//! called after the daemon has bound its loopback inbound listener (on an
+//! OS-assigned port; a port guessed before binding could already be taken
+//! and abort init). BLOCKS for the whole sequence (tens of seconds on a
+//! cold bootstrap; bound by bootstrap_timeout_secs plus small constants).
+//! Outputs are NUL-terminated: out_socks_addr (>= 48 bytes; the managed
+//! tor's SOCKS "ip:port" -- the zone's outbound proxy), out_error (>= 256
+//! bytes recommended). Return codes: SHEKYL_DAEMON_TOR_OK; _ALREADY_RUNNING
+//! (refused, not stacked); _ARG; _NO_BINARY (calm skip -- no candidate at
+//! all); _BAD_BINARY (candidate found but unusable: pin mismatch, unpinned
+//! target, unreadable); _START_FAILED (spawn/bootstrap -- incarnation torn
+//! down before return, so a failed start commits the caller to nothing).
+int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir_parent,
+                            uint32_t bootstrap_timeout_secs,
+                            char* out_socks_addr, size_t out_socks_addr_len,
+                            char* out_error, size_t out_error_len);
+
+//! Publish the per-boot v3 onion on the running managed tor (key minted in
+//! memory, ADD_ONION Flags=DiscardPK), forwarding virtual_port (what peers
+//! dial) to 127.0.0.1:local_port (the daemon's already-bound inbound
+//! listener), MaxStreams=max_streams per rendezvous circuit. Outputs are
+//! NUL-terminated: out_service_id (>= 57 bytes; 56-char service id, no
+//! ".onion"), out_error (>= 256 bytes recommended). Returns 0 = published;
+//! 1 = no instance running (start first); 2 = argument error; 3 = publish
+//! failed (detail in out_error). A publish failure leaves tor RUNNING: the
+//! ruled degrade is outbound-only on the zone (keep the SOCKS proxy, serve
+//! no overlay inbound this boot) -- do not abort the daemon.
+int shekyl_daemon_tor_publish(uint16_t virtual_port, uint16_t local_port,
+                              uint16_t max_streams,
+                              char* out_service_id, size_t out_service_id_len,
+                              char* out_error, size_t out_error_len);
+
+//! Is the ephemeral tor still up? false when never started, already shut
+//! down, or died. Per PWD-E7 there is no respawn: a death means the overlay
+//! posture is gone for this boot. The daemon's idle loop polls this and, on
+//! the true->false edge, logs once that overlay inbound is lost and that
+//! originated transactions stay fail-closed on the tor zone.
+bool shekyl_daemon_tor_is_alive(void);
+
+//! Bounded teardown of the ephemeral posture (DEL_ONION, SIGTERM -> wait ->
+//! SIGKILL, reap). Idempotent: true when an instance was running and is now
+//! down, false when there was nothing to stop.
+bool shekyl_daemon_tor_shutdown(void);
+
 } // extern "C"
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and

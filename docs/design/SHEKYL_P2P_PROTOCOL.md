@@ -52,8 +52,8 @@ own branch. P2P-3, the round nominated to carry implementation, **has never
 been opened** — the work landed through ordinary lanes instead, and no
 document reconciled the two.
 
-**UPDATE 2026-09-09:** PWD-B3 / PWD-B3a / PWD-B4 landed (see rows below); the
-2026-09-08 sweep counts for other rows are unchanged.
+**UPDATE 2026-09-09:** PWD-B3 / PWD-B3a / PWD-B4 landed (see rows below).
+PWD-E7 / PWD-E9 landed the same day on `dev` (#672). Counts below include both.
 
 **How a verdict was reached.** PWD ids appear nowhere in code, so nothing here
 was grepped by identifier. For each decision the question asked was *what would
@@ -151,9 +151,9 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **E4** cross-port duplicate avoidance | **RULED ELSEWHERE** | as E3 | n/a |
 | **E5** is §4 discharged by PWD-I1? | **IMPLEMENTED** | discharged: `peerlist_entry_base` carries `adr` + `last_seen` and no `id` (`p2p_protocol_defs.h:58-59`) | done |
 | **E6** `--p2p-external-port` | **IMPLEMENTED** | present in `src/p2p/net_node.cpp` / `net_node.h` | done |
-| **E7** overlay endpoint, two postures | NOT IMPLEMENTED | daemon side unbuilt; blocked on three questions with Rick | No — overlay is post-alpha.8 |
-| **E8** address volatility measurement | **DEFERRED** | external blocker: the fleet measurement is owed from the Q12-D6a rig | No — blocked |
-| **E9** E7's isolation boundary | RULED, NOT IMPLEMENTED | ruled by Rick 2026-09-08; the daemon-side path it constrains does not exist yet | No — follows E7 |
+| **E7** overlay endpoint, two postures | **IMPLEMENTED** (as of 2026-09-09) | the three blocking questions were ruled 2026-09-08 as PWD-E9's ambiguous classes; both postures now live: ephemeral default in `rust/shekyl-tor-control-daemon` (`DaemonTorControl`: managed pinned tor, in-memory key, `ADD_ONION` `DiscardPK`, per-boot `ServiceID`) wired via `shekyl_daemon_tor_start` into `node_server::add_ephemeral_tor_zone` (`src/p2p/net_node.inl`); operator-provisioned `--anonymous-inbound` unchanged and yields-to when configured; opt-out `--no-ephemeral-tor` | done — no wire change (the posture publishes an address; the handshake is untouched) |
+| **E8** address volatility measurement | **DEFERRED** | external blocker chain, first link now discharged: E7 shipped 2026-09-09, so the measurement finally *has a subject* — the remaining links (fleet runs it, stressed, `T` measured admissibly) stay owed from the Q12-D6a rig | No — blocked |
+| **E9** E7's isolation boundary | **IMPLEMENTED** (as of 2026-09-09) | ruled by Rick 2026-09-08; now structural in the build it constrains: `shekyl-tor-control-daemon` and `shekyl-tor-control-wallet` share only `shekyl-tor-control-client` and never name each other (manifest-checkable); the daemon tor's `DataDirectory` is a unique wiped child of `<daemon-config>/` (`ephemeral-tor-<hex>`), never a wallet path and never reused across boots; the managed launch takes instance identity as parameters, so shared code cannot produce a shared instance; no vanguard state on the daemon side by construction | done — node-local isolation, nothing on the wire |
 
 **Counts, tallied from the rows above by script rather than by reading — the
 first draft of this paragraph had three of them wrong.** 37 decisions, which is
@@ -161,9 +161,9 @@ exactly the set of PWD ids present across the round documents and the index:
 
 | | |
 |---|---|
-| IMPLEMENTED | 8 |
+| IMPLEMENTED | 10 *(B3/B3a/B4 and E7/E9 landed 2026-09-09)* |
 | PARTIAL | 2 |
-| NOT IMPLEMENTED | 14, plus 1 ruled-but-not-implemented (E9) = **15 ruled and unbuilt** |
+| NOT IMPLEMENTED | **13 ruled and unbuilt** |
 | NO BUILD REQUIRED | 2 |
 | DEFERRED | 3 |
 | BLOCKED on another row | 1 |
@@ -172,8 +172,9 @@ exactly the set of PWD ids present across the round documents and the index:
 | verification-only | 1 |
 | never ruled / not ruled | 2 (B5, A1) |
 
-**15 of 37 are ruled and unbuilt.** Eight of those fifteen are the transport
-cluster, which Rick has ruled out of alpha.8.
+**13 of 37 are ruled and unbuilt.** Six of those thirteen are the transport
+cluster's unbuilt rows (T1–T4, T6, T8); T5 and T7 need no build. Rick has
+ruled the cluster out of alpha.8.
 
 **What this says about "alpha.8 runs the new p2p".** The identity cluster is
 substantially built and the transport cluster is entirely unbuilt, which is the

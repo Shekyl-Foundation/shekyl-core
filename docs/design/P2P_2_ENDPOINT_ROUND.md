@@ -624,6 +624,17 @@ depending on whose address it is. Every mechanism added under this row must
 answer *does this let anything conclude that two observations involve the same
 party?* — and if yes, stop.
 
+**UPDATE 2026-09-09: IMPLEMENTED, both postures.** The ephemeral default is
+`DaemonTorControl` (`rust/shekyl-tor-control-daemon`) wired into
+`node_server::add_ephemeral_tor_zone` (`src/p2p/net_node.inl`) over the
+`shekyl_daemon_tor_*` FFI; the operator-provisioned posture is the unchanged
+`--anonymous-inbound` path, which the default yields to when configured. The
+durable-address warning ruled above is now stated in the flag's own descriptor
+(`src/p2p/net_node.cpp`, `arg_anonymous_inbound`). Opt-out is
+`--no-ephemeral-tor`. Every seam in the table above landed as ruled: no
+verifier, no persisted key, restart mints a new address, a start failure
+degrades to outbound-only on the zone rather than aborting the daemon.
+
 ### PWD-E8 — address volatility: the measurement PWD-E7 must ship **before** it can exist
 
 **DEFERRED, with a real external blocker and a falsifier chain.** An earlier
@@ -745,10 +756,9 @@ P2P onion and the archival-serving persona's onion **on the same host**.
 | tor **binary discovery + hash pin** | **YES, as policy** | a verification *rule*, not a runtime handle. Both sides should verify the same binary against the same pin; that shares a decision, not a session |
 | **listening ports** | **NO**, and must not collide | not shared state, but two instances need disjoint control/SOCKS ports — an allocation constraint the build must make explicit rather than discover |
 
-**Two of the three ambiguous classes are now RULED (Rick, 2026-09-08); the
-third remains open.** They were named rather than decided quietly because an
-ambiguous class settled silently is how crossover arrives later as a
-convenience.
+**All three ambiguous classes are now RULED (Rick, 2026-09-08).** They were
+named rather than decided quietly because an ambiguous class settled silently
+is how crossover arrives later as a convenience.
 
 - **Operator config file — SEPARATE FILES.** One `shekyl.conf` naming both tors
   would be a shared *file* and not shared runtime state, so nothing links the
@@ -793,8 +803,22 @@ from the wallet crate, so wallet consumers do not take the launch crate just to
 name a field.
 
 The daemon sibling is `DaemonTorControl` in `shekyl-tor-control-daemon` (PWD-E7
-piece 2). It is named so the family is grepable; it is not stubbed as an empty
-crate.
+piece 2). **UPDATE 2026-09-09: built and wired.** The crate owns the ephemeral
+posture end-to-end (managed pinned tor via the neutral crate's parameterized
+launch, in-memory v3 key, `ADD_ONION` `Flags=DiscardPK`, per-boot `ServiceID`,
+bounded teardown) plus a blocking facade (`BlockingDaemonTor`) that owns its own
+runtime so the FFI stays runtime-free. The daemon consumes it through
+`shekyl_daemon_tor_start`/`_publish`/`_is_alive`/`_shutdown`
+(`rust/shekyl-ffi/src/daemon_tor_ffi.rs`) from
+`node_server::add_ephemeral_tor_zone` (`src/p2p/net_node.inl`): the default
+posture engages when a pinned tor is installed, yields to operator-configured
+`--anonymous-inbound`/`--tx-proxy`, and is disabled by `--no-ephemeral-tor`.
+Start's return codes classify "no binary" (calm skip) vs "found but unusable"
+(loud) — there is no separate probe export. Per this row's table the crate
+depends only on `shekyl-tor-control-client` and never names
+`shekyl-tor-control-wallet`; its tor's `DataDirectory` is a unique wiped child
+of the daemon's config folder (never reused across boots, so entry guards
+cannot join onions); it carries no vanguard state.
 
 The isolation requirement is carried in the crate's own module doc rather than
 left to this document: *no entry point here may default, infer, or discover which

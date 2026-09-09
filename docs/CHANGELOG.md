@@ -4,6 +4,25 @@
 
 ### Added
 
+- **The daemon publishes an ephemeral per-boot onion address by default
+  (PWD-E7).** When a pinned Tor binary is installed (SP-T0c gate:
+  `SHEKYL_TOR_BINARY` → beside the executable →
+  `/opt/shekyl/<version>-<target>/` staging → `PATH`), `shekyld` spawns
+  a managed tor, mints a v3 onion key in memory, publishes it with
+  `ADD_ONION Flags=DiscardPK`, and serves overlay inbound on a fresh
+  address each boot — no persisted secret, no durable identifier, and no
+  reused tor `DataDirectory` (a unique 0700 subdirectory of the daemon
+  config folder is created per boot and wiped on teardown, so entry guards
+  cannot join one boot's onion to the next). The new
+  `rust/shekyl-tor-control-daemon` crate owns the posture; the daemon and
+  wallet tor supervisors share only the neutral protocol crate and never
+  share a tor instance, config, data directory, or log sink (PWD-E9).
+  Opt out with `--no-ephemeral-tor`; configuring `--anonymous-inbound` or
+  a tor `--tx-proxy` yourself also makes the default yield.
+  `--anonymous-inbound`'s help text now states that taking it opts into a
+  stable, durable onion address. A tor start failure logs loudly and the
+  daemon continues without overlay inbound; it never aborts.
+
 - **Wallet and daemon console refuse a daemon that is not this build.**
   On first request they compare the four-axis identity tuple in
   `get_version` (wire version, consensus-constants digest, network, genesis)

@@ -21,7 +21,7 @@
 use super::framing::ControlReply;
 
 /// The readiness state a consumer observes over the `watch` channel (design §3b).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootstrapState {
     /// Tor is still bootstrapping. `progress` (0–99) is **telemetry** for the
     /// "Connecting…" UX only — never gate on it; the gate is [`Self::Ready`].
