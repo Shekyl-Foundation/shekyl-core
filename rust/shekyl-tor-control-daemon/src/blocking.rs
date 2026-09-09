@@ -52,7 +52,8 @@ pub fn probe_binary(tor_binary_override: Option<&Path>) -> Result<PathBuf, TorBi
 /// path beyond argument passing).
 pub struct BlockingDaemonTorConfig {
     /// Explicit `tor` binary path, or `None` to run the standard discovery
-    /// order (`SHEKYL_TOR_BINARY` env → beside the executable → `PATH`).
+    /// order (`SHEKYL_TOR_BINARY` env → beside the executable →
+    /// `/opt/shekyl/<version>-<target>/` staging → `PATH`).
     /// Either way the SP-T0c hash pin verifies before anything spawns.
     pub tor_binary_override: Option<PathBuf>,
     /// This instance's `DataDirectory` — daemon-owned, per-boot, never the

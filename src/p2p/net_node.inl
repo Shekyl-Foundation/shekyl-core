@@ -834,7 +834,8 @@ namespace nodetool
       break;
     case 1:
       MINFO("No tor binary found; overlay (.onion) inbound disabled for this boot. Install the pinned "
-          "tor bundle beside the daemon or set SHEKYL_TOR_BINARY to enable the default ephemeral posture");
+          "tor bundle beside the daemon, stage it under /opt/shekyl/<version>-<target>/, or set "
+          "SHEKYL_TOR_BINARY to enable the default ephemeral posture");
       return;
     default:
       MWARNING("A tor binary was found but is unusable for the ephemeral overlay posture: " << detail

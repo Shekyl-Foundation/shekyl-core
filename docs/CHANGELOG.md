@@ -6,7 +6,8 @@
 
 - **The daemon publishes an ephemeral per-boot onion address by default
   (PWD-E7).** When a pinned Tor binary is installed (SP-T0c gate:
-  `SHEKYL_TOR_BINARY` → beside the executable → `PATH`), `shekyld` spawns
+  `SHEKYL_TOR_BINARY` → beside the executable →
+  `/opt/shekyl/<version>-<target>/` staging → `PATH`), `shekyld` spawns
   a managed tor, mints a v3 onion key in memory, publishes it with
   `ADD_ONION Flags=DiscardPK`, and serves overlay inbound on a fresh
   address each boot — no persisted secret, no durable identifier. The new

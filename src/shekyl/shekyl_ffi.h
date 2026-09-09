@@ -3734,7 +3734,8 @@ int32_t shekyl_levin_fragmented_notify(size_t noise_size, uint32_t command,
 //! Probe the tor-binary discovery-and-pin gate (SP-T0c) without spawning:
 //! the default-on posture's log-tone decision. `tor_binary_path` null/empty
 //! runs the standard order (SHEKYL_TOR_BINARY env -> beside the executable ->
-//! PATH). Returns 0 = pinned tor available (out_detail = its path); 1 = no
+//! /opt/shekyl/<version>-<target>/ staging -> PATH). Returns 0 = pinned tor
+//! available (out_detail = its path); 1 = no
 //! candidate at all (calm skip; out_detail untouched); 2 = candidate found
 //! but unusable -- pin mismatch (a distro tor can never hash-match the pinned
 //! Expert Bundle), unpinned target, unreadable -- diagnostic in out_detail

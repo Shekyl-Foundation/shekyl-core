@@ -80,7 +80,8 @@ unsafe fn read_optional_str<'a>(ptr: *const c_char) -> Result<Option<&'a str>, (
 /// Probe the tor-binary discovery-and-pin gate without spawning anything —
 /// the default-on posture's log-tone decision. Discovery order when
 /// `tor_binary_path` is null/empty: `SHEKYL_TOR_BINARY` env → beside the
-/// executable → `PATH`; either way the SP-T0c hash pin must pass.
+/// executable → `/opt/shekyl/<version>-<target>/` staging → `PATH`; either
+/// way the SP-T0c hash pin must pass.
 ///
 /// Returns 0 when a pinned tor is available (`out_detail` = its path); 1 when
 /// no candidate binary exists at all (the calm skip: ephemeral inbound is
