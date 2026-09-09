@@ -45,7 +45,7 @@ surface (like the SOCKS username): its data (circuit IDs, our own targets) **mus
 ### DQ-T0.1 — process ownership + lifecycle
 
 The Tor process is a wallet-session resource with a real lifecycle (start → bootstrap → ready →
-shutdown) and is the natural failure boundary. **Lean: a dedicated `TorService` actor** (kameo) owns
+shutdown) and is the natural failure boundary. **Lean: a dedicated `WalletTorControl` actor** (kameo) owns
 the child + the control connection; `PTorClient` construction and the measurement are its consumers.
 Launch via `tokio::process::Command` with a wallet-private `SocksPort` + `ControlPort` and
 cookie/SAFECOOKIE auth (the `DataDirectory` / guard-persistence choice is **DQ-T0.7**, not an
@@ -125,7 +125,7 @@ are `legacy_tor_controller.rs` / `legacy_tor_control_stream.rs`, control-spec-se
   `wait_async_events()` drains the `650`s at controlled points (the public `update()` is the same
   poll-to-drain). It *sidesteps* the hardest interleaving — a `650` arriving mid command-reply — by
   **phasing** command-issue and event-drain rather than reading concurrently. **SP-T0a should adopt the
-  same discipline**, which the kameo `TorService` actor (DQ-T0.1) affords for free: drain events
+  same discipline**, which the kameo `WalletTorControl` actor (DQ-T0.1) affords for free: drain events
   between command handlers in its message loop. The reference does **not** validate a fully-async reader
   handling events on a separate task while a command is in flight — that harder demux is SP-T0a's to own
   if it ever reaches for it, so don't. (For DQ-T0.4 the hazard is milder anyway: the measurement request
@@ -217,7 +217,7 @@ Developers** key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (signing subkey
 hash — a version bump re-verifies the new bundle's signature against the same fingerprint, then records
 the new binary hash. The **runtime gate is the extracted binary's** SHA256
 `660a8c54d0c9341f85f0a7f827b6bde640e7db14dfde44d3856979d4ee6d16fb` (a bare binary carries no signature),
-recorded in `rust/shekyl-tor-control/src/binary.rs::CURRENT_PIN` — and it is **unchanged across this bump**:
+recorded in `rust/shekyl-tor-control-client/src/binary.rs::CURRENT_PIN` — and it is **unchanged across this bump**:
 15.0.17 and 15.0.19 both ship Tor `0.4.9.11` and the extracted binary is byte identical, so two stable
 bundle releases moved the label and not the gate. That is this paragraph's own claim observed in
 practice — the bundle version and the binary digest are independent facts, and reading a stale label as
@@ -291,7 +291,7 @@ tor via `SHEKYL_TEST_TOR_BINARY`; the pin-match KAT takes **the pinned** tor via
 distinct `SHEKYL_TEST_PINNED_TOR_BINARY`, so the two contracts cannot collide. The unit gate and
 CI-without-Tor stay green because the tests are ignored there, not because they skip.
 
-**Runtime discovery + verify (SP-T0c, built in `shekyl-tor::binary`).** The chosen posture is
+**Runtime discovery + verify (SP-T0c, built in `shekyl-tor-control-client::binary`).** The chosen posture is
 *discover-and-verify-at-launch*: `discover_and_verify()` selects exactly **one** `tor` candidate — a
 non-empty `SHEKYL_TOR_BINARY` override, else a binary beside the wallet executable (the intended
 production layout), else `PATH` (bring-your-own-tor / dev convenience) — canonicalizes it, and gates it
@@ -325,7 +325,7 @@ would detect**.
 
 Tor crash / control-socket drop / bootstrap timeout → the **§3c supervisor/posture path**
 (backoff + posture, retry-forever with a loud `Degraded`), **never a panic**. The
-`TorService` supervisor is the failure boundary; `PTorClient` construction **fails closed**
+`WalletTorControl` supervisor is the failure boundary; `PTorClient` construction **fails closed**
 — no silent fallback to a non-isolated connection. The full pinned contract — posture
 states, restart classification, per-spawn re-verification, `SocksPort auto` — is §3c; its
 economic driver is the transport plan's §5 slash model (sustained-failure-gated: the risk
@@ -385,7 +385,7 @@ fire. The encrypted-mount half of (b) stands.)**
 | SP | Deliverable | Notes |
 | --- | --- | --- |
 | **SP-T0a** | **Control-port client** (DQ-T0.2) — the minimal client + KATs against a real Tor (auth, bootstrap, `STREAM`). **`ADD_ONION`/`DEL_ONION` were *scoped* here but not built here** — see the correction note below. | The keystone; buildable against a *system* Tor before bundling. The rule-17 call (scoped over the whole consumer set) lives here. |
-| **SP-T0b** | **Lifecycle** (DQ-T0.1/.3/.6) — managed child, bootstrap gate, shutdown, failure→backoff; exposes the SOCKS endpoint to SP-T1/SP-T2. *As built, split into `TorControl` (per-incarnation actor, DQ-T0.1/.3) + the `TorService` supervisor (DQ-T0.6/§3c).* | Develops against a system Tor. |
+| **SP-T0b** | **Lifecycle** (DQ-T0.1/.3/.6) — managed child, bootstrap gate, shutdown, failure→backoff; exposes the SOCKS endpoint to SP-T1/SP-T2. *As built, split into `TorControlClient` (per-incarnation actor, DQ-T0.1/.3) + the `WalletTorControl` supervisor (DQ-T0.6/§3c).* | Develops against a system Tor. |
 | **SP-T0c** | **Packaging** (DQ-T0.5) — Guix + hash-pin the **Tor Expert Bundle**; bundled-binary discovery/launch; **add the watch/bump/re-verify line to `docs/RELEASE_CHECKLIST.md`** (DoD, not just the bundle). | The ship step. |
 | **SP-T1-measured** | **Circuit-ID disjointness test** (DQ-T0.4) — over SP-T0a+b; closes the SP-T1 keystone. | Integration job. **Gated on SP-T0 alone — not #205** (§5). |
 
@@ -410,7 +410,7 @@ fire. The encrypted-mount half of (b) stands.)**
 
 ### 3a. SP-T0a actor boundary — type obligations for the integration half
 
-A hindsight review of the **pure core** (PR #208 — `shekyl-tor::control::framing` +
+A hindsight review of the **pure core** (PR #208 — `shekyl-tor-control-client::control::framing` +
 `safecookie`) confirmed the primitives are correct and shaped for the poll/phase
 actor (SAFECOOKIE key strings + HMAC message order, constant-time `verify_slice`,
 the data-block / dot-unstuff / status-mismatch corners, redaction on `Display`
@@ -469,7 +469,7 @@ them in rather than discovers them:
 
 ### 3b. SP-T0b bootstrap readiness — the pinned contract (decided: internal GETINFO poll)
 
-A hindsight review of the **landed** actor (PR #212) surfaced one seam: `TorControl`
+A hindsight review of the **landed** actor (PR #212) surfaced one seam: `TorControlClient`
 reserves a `bootstrap: BootstrapState` field (the actor is meant to hold readiness
 *internally*), but nothing yet drives it. **Decided: the actor owns a self-contained
 `GETINFO status/bootstrap-phase` poll task** that drives `BootstrapState` and publishes
@@ -494,7 +494,7 @@ it as a `watch` — pinned here for SP-T0b the way §3a was pinned for PR-2.
 it *needs* — a one-bit "is the transport usable yet?" fact — not on *how the actor learned
 it*. Making every consumer reimplement bootstrap-detection against Tor's wire format (and
 re-break the day Tor changes it, or we swap to **Arti**, which reports readiness
-completely differently) is a **leak of the abstraction the `TorService` exists to
+completely differently) is a **leak of the abstraction the `WalletTorControl` exists to
 provide**: the actor *is* the boundary between "the Tor control protocol" and "the rest of
 the wallet." The poll confines the protocol knowledge (`GETINFO` keys, `PROGRESS=`
 parsing) to the one component that already speaks it and hands everyone else the bit —
@@ -556,14 +556,14 @@ degradation is loud), **never-unverified** (no respawn skips the SP-T0c gate),
 **always-retrying** (an unattended node that stopped trying is a guaranteed slash; one that
 keeps trying may self-heal). Backoff exists to avoid thrash, not to protect the network.
 
-**Shape: a `TorService` supervisor task in `shekyl-tor`, over per-incarnation `TorControl`
+**Shape: a `WalletTorControl` supervisor task in `shekyl-tor-control-wallet`, over per-incarnation `TorControlClient`
 actors.** The supervisor is a plain owned task (spawn incarnation → await its death or a
 shutdown signal → classify → publish posture → back off → respawn), *not* kameo's
 `SupervisedActorBuilder`: kameo 0.20's supervision has restart policies and a
 `restart_limit(n, within)` but **no backoff delay**, and its restart-by-arg-reuse cannot
 model our per-incarnation side effects (fresh readiness channel, re-run of the binary gate).
 The owned-task idiom is also the crate's existing style (the bootstrap poll task). Liveness
-policy lives in `shekyl-tor` because it is transport policy; the wallet layer consumes
+policy lives in `shekyl-tor-control-wallet` because it is transport policy; the wallet layer consumes
 posture and owns only the UX mapping (`82`).
 
 **The posture contract (the SP-T1-facing API).** One **long-lived**
@@ -573,7 +573,7 @@ posture and owns only the UX mapping (`82`).
 - `Starting` — an incarnation is being launched (gate + spawn in progress).
 - `Connecting { progress }` — bootstrapping (§3b telemetry passed through).
 - `Ready { socks_addr, recovering }` — usable; **the SOCKS endpoint is data on the posture
-  channel**. Read it at use-time (or via the `TorService::current_socks` accessor, which
+  channel**. Read it at use-time (or via the `WalletTorControl::current_socks` accessor, which
   returns it only while the live posture is `Ready`), never cache it — a cached endpoint dies
   with its incarnation. `Ready` is published *unconditionally* the moment the transport is
   usable, even mid-episode: hiding a working transport from SP-T1 would turn a partial outage
@@ -661,7 +661,7 @@ serving-layer miss accounting (transport plan §5/§6) — both consume the post
     plus the `BlockSource` `pub(crate)` → `pub` bump, and `PCanonicalId`).
 - **Build order:** SP-T0a is **two PRs of one actor** — PR-1 (landed pure core) → **PR-2** (the `tokio`
   actor + the *authed* control connection) — then **SP-T0b layers onto the same actor**, it is **not** a
-  parallel crate. §0/§3 put *one* `TorService` actor over both the child and the control connection, and
+  parallel crate. §0/§3 put *one* `WalletTorControl` actor over both the child and the control connection, and
   SP-T0b's load-bearing pieces both ride PR-2's authed connection: the bootstrap gate polls progress over
   the control port (`GETINFO status/bootstrap-phase`, §3b), and `TAKEOWNERSHIP` (the T1 orphan-prevention)
   is a post-auth control command. So **serialize**: PR-2 freezes the actor's shape (struct fields, message
@@ -695,7 +695,7 @@ serving-layer miss accounting (transport plan §5/§6) — both consume the post
 - **2026-06-28:** Created. Round-0 scoping for SP-T0: the two loopback channels (SOCKS + control), the
   control-port-client dependency call (lean roll-our-own minimal, rule-17 gate) **scoped over the whole
   consumer set including SP-T3's `ADD_ONION`** + the security-surface pin (minimal commands, no
-  `SETCONF` passthrough), the `TorService` lifecycle + bootstrap health-gate, the corrected measured
+  `SETCONF` passthrough), the `WalletTorControl` lifecycle + bootstrap health-gate, the corrected measured
   test (**M1 same-target + negative control, M2 `P_A`-vs-`P_B`, M3 CircID at attach not `NEW`, M4
   bounded timeout**), reuse-not-own packaging, the origin-only cross-check, and the **gate lattice**
   (measured test → SP-T0 alone; `PCanonicalId` alignment/`PCircuitTag` deletion → #205; SP-T2 → both).
@@ -723,7 +723,7 @@ serving-layer miss accounting (transport plan §5/§6) — both consume the post
   door* (fails CX-1 ownership **and** DQ-T0.4 measurement); reopen needs **both** the raw isolation key
   **and** raw CircID. Pinned the reference (`legacy_tor_controller.rs`): SAFECOOKIE §3.5 +
   `ADD_ONION`/`DEL_ONION` §3.27/§3.38, and its **poll/phase demux** (not a concurrent reader) as the
-  model SP-T0a's `TorService` actor adopts for free.
+  model SP-T0a's `WalletTorControl` actor adopts for free.
 - **2026-06-29 (DQ-T0.4 co-validation note):** the M1 same/different-username pair (with M3's
   attach-time read) is *also* SP-T0a's event-parsing acceptance test — a zeroed-CircID reader (bad demux
   / `NEW` read) makes the same-username leg falsely green while the different-username leg fails, so the
@@ -752,9 +752,9 @@ serving-layer miss accounting (transport plan §5/§6) — both consume the post
   §5 build-order line and the PR-217 harness comment to match; the fossil is caught before SP-T0b builds.
 - **2026-07-02 (§3c pinned — DQ-T0.6 supervisor + posture, retry-forever / auto-SOCKS):** the "§5
   liveness path" pointer was dangling — this doc's §5 is build-order and the transport plan's §5 is the
-  slash model; the backoff/posture contract itself was never written. Pinned as §3c: a `TorService`
-  supervisor **task** in `shekyl-tor` (not kameo supervision — no backoff delay, arg-reuse restarts
-  can't model per-incarnation side effects) over per-incarnation `TorControl` actors; one long-lived
+  slash model; the backoff/posture contract itself was never written. Pinned as §3c: a `WalletTorControl`
+  supervisor **task** in `shekyl-tor-control-wallet` (not kameo supervision — no backoff delay, arg-reuse restarts
+  can't model per-incarnation side effects) over per-incarnation `TorControlClient` actors; one long-lived
   `watch<TorPosture>` (`Starting`/`Connecting`/`Ready{socks_addr}`/`Restarting`/`Degraded{last}`) with
   the SOCKS endpoint as *data on the channel* (`SocksPort auto` + `GETINFO net/listeners/socks`;
   consumers never cache); restart classification (transient → 1s→60s capped backoff; trust failure →
@@ -789,7 +789,7 @@ serving-layer miss accounting (transport plan §5/§6) — both consume the post
   the guard topology is intact, and "not checking" has to be a value rather than an absence;
   (2) `Degraded`'s episode rule is enforced by a stable `IncidentId` rather than by raise/clear edges,
   since a `watch` coalesces and a subscriber otherwise cannot tell a continuing incident from a
-  re-raise; (3) the translator takes the posture **receiver**, not a `TorService`, so the mapping is
+  re-raise; (3) the translator takes the posture **receiver**, not a `WalletTorControl`, so the mapping is
   testable without a verified tor binary on the test machine.
   **Correction (`21`-style honesty, and it retires a planned slice):** the plan of record had a
   wallet-side translator consuming the control `EventSink`. It cannot do anything, and the reason is

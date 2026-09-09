@@ -898,7 +898,7 @@ the round kept trying to add forensics underneath it.
    - Hot-tree exposure is accepted and stated: P signs every request, so
      the attestation key is necessarily hot on the internet-facing host,
      and host compromise already yields serve-and-sign-as-P. Custody
-     note: `shekyl-tor` generates the onion keypair and hands it via
+     note: `shekyl-tor-control-wallet` generates the onion keypair and hands it via
      `ADD_ONION` — our process holds it, a different exposure than
      Tor-native key handling, stated and accepted.
    Correlation risk, sized honestly: properly generated independent keys
@@ -1429,7 +1429,7 @@ than repealing it:
    serving daemon existing at all.
 3. **The Tor inbound half — premise corrected against source
    (2026-08-11):** the `ADD_ONION`/`DEL_ONION` surface is BUILT
-   (`shekyl-tor-control/src/control/onion.rs`, SP-T3 — typed-parts wire
+   (`shekyl-tor-control-client/src/control/onion.rs`, SP-T3 — typed-parts wire
    assembly, `Detach` unrepresentable, `PoWDefensesEnabled`/queue-rate
    params in place) and the SP-T3 spike harness already drives the full
    inbound path end-to-end with `shekyl-p-transport`'s read-side twin.
@@ -1437,7 +1437,7 @@ than repealing it:
    (loopback listener answering shard-by-id from the store; the
    self-authenticating-against-`R_k` response; provisional framing,
    THROWAWAY per the discipline above), **its lifecycle wiring** into
-   `TorService` with the wallet-derived `hs_id` bundle (index 0 today;
+   `WalletTorControl` with the wallet-derived `hs_id` bundle (index 0 today;
    derived-bundles-only custody per §7.2 check (iii)), and **the
    vanguards-full / Bandguards launch pins** (addon-level, not
    `ADD_ONION` arguments). A W₂ concurrent-batch extension of the spike
@@ -1584,7 +1584,7 @@ part of this that is not consensus code, and it stays that way.
 
 Findings from the serving-path build review, recorded where the build
 slices will look for them. PR-A (`shekyl-p-serve` + the store read) and
-PR-B (the `TorService` onion surface + relocated v3 identity) are landed
+PR-B (the `WalletTorControl` onion surface + relocated v3 identity) are landed
 against these.
 
 1. **Custody boundary is *which secret crosses the process boundary*,
@@ -1729,7 +1729,7 @@ decide implicitly.
 **1. The composition is entirely Rust, and nothing crosses the FFI.** The
 serving host's three inputs are all already wallet-side: the shard bytes are
 the wallet's redb `LeafStore` (the daemon's LMDB curve tree is the consensus
-copy and is not involved), the onion is the wallet's own `TorService`, and
+copy and is not involved), the onion is the wallet's own `WalletTorControl`, and
 the connected `held_shard_ids` come back over the **existing**
 `get_archival_emission_claim_source` RPC, whose wallet-side decode already
 exists in Rust and already rides the persona transport. Recorded because the
@@ -1784,7 +1784,7 @@ escapes `#[cfg(test)]`, or any FFI surface that accepts holdings from outside
 the decode all re-open this item at its full weight.
 
 **4. A new load-bearing invariant, in the same class as the vanguards
-one: a serving host must never rebind its listener.** `TorService`
+one: a serving host must never rebind its listener.** `WalletTorControl`
 republishes the onion on every incarnation from one `OnionServiceSpec`
 holding one loopback target. A listener rebound under an unchanged spec
 (`:0` picks a fresh ephemeral port) leaves the published descriptor pointing

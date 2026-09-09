@@ -15,7 +15,7 @@
 //!
 //! - **Handshake in `on_start`, *then* `attach_stream`.** kameo owns the run loop;
 //!   an actor cannot `select!` on its own mailbox and a socket. So the SAFECOOKIE
-//!   handshake runs *synchronously* in [`on_start`](TorControl) — reading the
+//!   handshake runs *synchronously* in [`on_start`](TorControlClient) — reading the
 //!   framer by hand, which is safe because no async `650` events can arrive before
 //!   `SETEVENTS` is sent — and only *after* `AUTHENTICATE` (and, for a managed child,
 //!   `TAKEOWNERSHIP`) succeeds is the read half wrapped as the internal `ReplyStream`
@@ -194,10 +194,10 @@ impl std::error::Error for ControlError {}
 /// **Consequence for consumers:** because the supervisor retains a sender clone
 /// across restarts, the events receiver does *not* observe all-senders-dropped
 /// when an incarnation dies — a supervised consumer must detect incarnation death
-/// via `shekyl-tor`'s `service::TorService` posture watch (a wallet-owned
-/// consumer of this crate; not linked, see the crate docs on the boundary), not
-/// via `recv() == None` (which is correct only for a directly-spawned, sole-sender
-/// actor).
+/// via the supervisor's posture watch (the wallet's `WalletTorControl`, or the
+/// daemon's `DaemonTorControl` once it exists — not linked, see the crate docs),
+/// not via `recv() == None` (which is correct only for a directly-spawned,
+/// sole-sender actor).
 #[derive(Clone)]
 pub struct EventSink(mpsc::UnboundedSender<ControlReply>);
 
@@ -253,7 +253,7 @@ impl EventSink {
 /// it is issued internally as the first command after `AUTHENTICATE`, not
 /// engine-driven.
 ///
-/// **Not `Clone`, and not `PartialEq`.** `AddOnion` carries the persona's onion
+/// **Not `Clone`, and not `PartialEq`.** `AddOnion` carries an onion
 /// secret key ([`OnionKey`](super::onion::OnionKey)), so the enum inherits that
 /// type's discipline: a
 /// derived `Clone` would silently duplicate the key outside its `Zeroize`
@@ -266,16 +266,17 @@ pub enum Command {
     /// `SETEVENTS <events>` — subscribe to async events (`STREAM` for the
     /// DQ-T0.4 measurement).
     SetEvents(Vec<String>),
-    /// `ADD_ONION ED25519-V3:<key> …` — publish the persona's v3 onion service
-    /// (SP-T3). Built from typed parts, so it cannot render a malformed line;
+    /// `ADD_ONION ED25519-V3:<key> …` — publish a v3 onion service.
+    /// Built from typed parts, so it cannot render a malformed line;
     /// see [`onion`](super::onion) for why that is a type property here rather
     /// than a validation.
     AddOnion(AddOnion),
     /// `DEL_ONION <service-id>` — tear the service down. Issued on the actor's
     /// shutdown path as well as on demand.
     DelOnion(ServiceId),
-    /// `SETCONF HSLayer2Nodes=… HSLayer3Nodes=…` — pin the serving persona's
-    /// vanguard layer-2/layer-3 guard sets (VG-1). Built from typed
+    /// `SETCONF HSLayer2Nodes=… HSLayer3Nodes=…` — pin layer-2/layer-3
+    /// vanguard guards (VG-1). The **wallet** supervisor drives this; the
+    /// daemon's ephemeral onion has no vanguard state. Built from typed
     /// [`RelayFingerprint`](super::vanguards::RelayFingerprint)s, so — like
     /// `ADD_ONION` — it cannot render a line that injects a second command,
     /// which is what makes it safe to add `SETCONF` (the dangerous verb) to
@@ -381,7 +382,7 @@ struct InFlight {
 }
 
 /// Spawn-time configuration ([`Actor::Args`]).
-pub struct TorControlConfig {
+pub struct TorControlClientConfig {
     /// How the actor obtains its control port — spawn-and-own `tor`, or attach to a
     /// running one. The **launch mode** is the thing that varies, not a nullable
     /// address: an attached actor cannot carry a spurious binary path, and a managed
@@ -394,7 +395,7 @@ pub struct TorControlConfig {
     pub readiness: BootstrapReadiness,
 }
 
-/// How the [`TorControl`] actor gets its control port (DQ-T0.1 process ownership).
+/// How the [`TorControlClient`] actor gets its control port (DQ-T0.1 process ownership).
 pub enum TorLaunch {
     /// The actor **spawns and owns** the `tor` process — the production path. It kills
     /// the child on shutdown (`SIGTERM` → bounded wait → `SIGKILL` → reap).
@@ -432,9 +433,13 @@ impl SocksPort {
     }
 }
 
-/// A managed `tor` to spawn (DQ-T0.1). The actor launches it with a wallet-private
+/// A managed `tor` to spawn (DQ-T0.1). The actor launches it with the caller's
 /// `DataDirectory`, a `ControlPort auto` written to a file, cookie authentication, and
 /// the given `SocksPort`, then connects to the port it opened.
+///
+/// **The caller names the instance.** This type does not default, infer, or
+/// discover a data directory — that is how wallet P and daemon Principal can
+/// share this spawn path without sharing a Tor.
 pub struct ManagedTor {
     /// The `tor` binary to spawn — **only a hash-pin-verified witness is accepted**
     /// (SP-T0c). The sole production mints are `binary::discover_and_verify` /
@@ -444,19 +449,15 @@ pub struct ManagedTor {
     /// loudly-named `VerifiedTorBinary::unchecked_for_test` (this crate's own
     /// tests, or a dev-dependency edge enabling `unpinned-tor-for-tests`).
     pub tor_binary: VerifiedTorBinary,
-    /// Wallet-private `DataDirectory` — **persistent across wallet sessions**
-    /// (DQ-T0.7, decided): the dir carries tor's entry-guard identity (`state`),
-    /// and reusing it is what keeps the guard set stable (rotating it per session
-    /// would multiply malicious-guard draws and be a deviation-from-defaults
-    /// signature). Placement contract: wallet-adjacent, wallet-controlled,
-    /// **non-world-writable** (also the SP-T0c TOCTOU layout requirement); tor
-    /// tightens it to `0700`. At-rest protection is *inherited* from the storage
-    /// the wallet lives on — tor reads plaintext, so the wallet's file envelope
-    /// cannot cover it (disclosed in the design doc's DQ-T0.7).
+    /// This instance's `DataDirectory`. The caller supplies it; two callers that
+    /// pass the same path share an instance, which is the crossover PWD-E9
+    /// forbids. Placement (wallet-adjacent and persistent vs daemon-ephemeral)
+    /// is the wrapping capability's decision, not this type's. Tor tightens
+    /// the directory to `0700`. Non-world-writable is also the SP-T0c TOCTOU
+    /// layout requirement.
     pub data_dir: PathBuf,
-    /// Wallet-private `SocksPort` — SP-T1's `PTorClient`s dial it. Production (the
-    /// §3c supervisor) uses [`SocksPort::Auto`] and discovers the bound address via
-    /// `GETINFO net/listeners/socks`, publishing it on the posture channel — a fixed
+    /// This instance's `SocksPort`. Production supervisors use [`SocksPort::Auto`]
+    /// and discover the bound address via `GETINFO net/listeners/socks` — a fixed
     /// port can race the previous incarnation's dying socket on restart. Harnesses
     /// pick [`SocksPort::Fixed`].
     pub socks_port: SocksPort,
@@ -476,16 +477,16 @@ pub struct ManagedTor {
     /// Optional shutdown-outcome observer — the **production telemetry hook**, currently
     /// exercised only by the test. After the bounded shutdown wait, `on_stop` reports how
     /// the child exited ([`TorExit`]); a [`TorExit::Killed`] (an unclean shutdown — tor
-    /// wedged and was SIGKILLed, or the grace wait errored) is the signal the
-    /// wallet-integration layer will want to surface. `None` today; the lifecycle test
+    /// wedged and was SIGKILLed, or the grace wait errored) is the signal a
+    /// supervisor will want to surface. `None` today; the lifecycle test
     /// uses it to assert a *real* reap rather than probing a pid.
     pub exit_observer: Option<oneshot::Sender<TorExit>>,
 }
 
-/// The control-port actor (one `TorService` actor). Owns the write half and the
+/// The control-port actor. Owns the write half and the
 /// in-flight bookkeeping; the read half lives in the attached `ReplyStream`, the
 /// managed child (if any) in `child`, and the bootstrap poll task in `bootstrap_poll`.
-pub struct TorControl {
+pub struct TorControlClient {
     /// Write half — commands go out here, one on the wire at a time.
     writer: OwnedWriteHalf,
     /// Async-event sink.
@@ -503,7 +504,7 @@ pub struct TorControl {
     /// correlation there is) is preserved. Storing the rendered line (not the
     /// `Command`) means `to_wire` runs exactly once per command.
     ///
-    /// [`Zeroizing`] because a queued `ADD_ONION` line embeds the persona's onion
+    /// [`Zeroizing`] because a queued `ADD_ONION` line embeds the onion
     /// secret key: a queued command may sit here across several reply round-trips,
     /// so the encoded key must be wiped when the entry is dropped rather than left
     /// in a freed allocation.
@@ -619,7 +620,7 @@ async fn kill_and_reap(child: &mut Child) {
 /// negligible latency to the readiness signal.
 const BOOTSTRAP_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// The bootstrap-readiness publisher handed to the actor via [`TorControlConfig`].
+/// The bootstrap-readiness publisher handed to the actor via [`TorControlClientConfig`].
 ///
 /// Wraps the [`watch`] sender **and owns the channel's creation**, so the initial
 /// state is always [`BootstrapState::Connecting`]` { progress: 0 }` — a consumer never
@@ -639,12 +640,12 @@ impl BootstrapReadiness {
     }
 }
 
-impl Actor for TorControl {
-    type Args = TorControlConfig;
+impl Actor for TorControlClient {
+    type Args = TorControlClientConfig;
     type Error = ControlError;
 
     async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
-        let TorControlConfig {
+        let TorControlClientConfig {
             launch,
             events,
             readiness,
@@ -700,7 +701,7 @@ impl Actor for TorControl {
         // `ask` queues behind the run loop that begins once `on_start` returns.
         let bootstrap_poll = tokio::spawn(bootstrap_poll_loop(actor_ref.clone(), readiness.0));
 
-        Ok(TorControl {
+        Ok(TorControlClient {
             writer,
             events,
             pending: None,
@@ -712,8 +713,8 @@ impl Actor for TorControl {
         })
     }
 
-    /// Clean shutdown (wallet close): withdraw the persona's onion services, then kill
-    /// the managed child. `TAKEOWNERSHIP` (landed in PR-2) is the *crash* backstop — a
+    /// Clean shutdown: withdraw onions this actor published, then kill the
+    /// managed child. `TAKEOWNERSHIP` (landed in PR-2) is the *crash* backstop — a
     /// panic / SIGKILL sends no `on_stop`, and the control connection dropping then exits
     /// `tor` — but on a clean stop the connection is still open here, so this is the
     /// primary path. Attached mode has no child to kill. (The bootstrap poll task is
@@ -722,11 +723,11 @@ impl Actor for TorControl {
     /// **`DEL_ONION` runs first, and the order is load-bearing.** Killing the child
     /// first would take the services down too, but only for a *managed* tor; against an
     /// **attached** tor (`TorLaunch::Attached` — bring-your-own-`tor`, and every
-    /// integration harness) there is no child to kill, so without this step the persona's
-    /// services would keep running inside someone else's long-lived tor after the wallet
-    /// closed — still publishing descriptors that assert the persona is online while
-    /// nothing is left to serve a byte. That is the same orphan-advertisement failure
-    /// `Detach` is excluded to prevent, arriving by a different route.
+    /// integration harness) there is no child to kill, so without this step the
+    /// services would keep running inside someone else's long-lived tor after this
+    /// actor closed — still publishing descriptors that assert the service is online
+    /// while nothing is left to serve a byte. That is the same orphan-advertisement
+    /// failure `Detach` is excluded to prevent, arriving by a different route.
     ///
     /// Failures are swallowed: shutdown is best-effort by nature (the connection may
     /// already be dying, which is *why* we are stopping), and a `DEL_ONION` that cannot
@@ -750,7 +751,7 @@ impl Actor for TorControl {
     }
 }
 
-impl Drop for TorControl {
+impl Drop for TorControlClient {
     fn drop(&mut self) {
         // Stop the bootstrap poll task when the actor goes away. The managed child (if
         // `on_stop` did not run — a panic path) is SIGKILLed by its `kill_on_drop`.
@@ -815,7 +816,7 @@ async fn handshake(
     Ok((reader, writer, framer))
 }
 
-/// Spawn a **managed** `tor` (DQ-T0.1): a wallet-private `DataDirectory`, `ControlPort
+/// Spawn a **managed** `tor` (DQ-T0.1): the caller's `DataDirectory`, `ControlPort
 /// auto` written to a file, cookie auth, and the configured `SocksPort` — all owned by the
 /// actor (a caller can only toggle the typed `disable_network` knob, never an arbitrary
 /// flag). Waits (bounded) for the control-port file + cookie, then returns the child plus
@@ -857,7 +858,7 @@ async fn spawn_managed_tor(
         .arg("1")
         .arg("--SocksPort")
         .arg(managed.socks_port.as_arg())
-        // A file log in the (0700, wallet-private) DataDirectory so a `Spawn` failure is
+        // A file log in the (0700, caller-owned) DataDirectory so a `Spawn` failure is
         // diagnosable — the actor's own errors stay content-free (no paths), but tor's
         // startup log names the cause (bad binary, torrc/CLI error, bind failure). `notice`
         // level carries bootstrap + warnings, not the C6 forensic surface (circuit IDs /
@@ -1001,8 +1002,8 @@ async fn wait_for_control_port(
 /// startup race (tor has written its port file but not yet its complete cookie). The
 /// authoritative validated read — the exact 32-byte length gate — happens once, later, in the
 /// handshake ([`read_cookie_file`]); this only gates *when* it is safe to attempt. (The
-/// cookie's confidentiality rests on the 0700 wallet-private `DataDirectory`, not on a
-/// wallet-side permission re-check.)
+/// cookie's confidentiality rests on the 0700 caller-owned `DataDirectory`, not on a
+/// caller-side permission re-check.)
 async fn wait_for_cookie(
     cookie_path: &Path,
     deadline: tokio::time::Instant,
@@ -1039,7 +1040,7 @@ async fn wait_for_cookie(
 ///   happening. A run of unparseable replies (parse → `None`, no `send`) must not keep
 ///   the task polling a channel no one is listening on. Not a Tor failure; never `Failed`.
 /// - **100% reached** → publish [`BootstrapState::Ready`] (the gate) and stop.
-async fn bootstrap_poll_loop(actor: ActorRef<TorControl>, tx: watch::Sender<BootstrapState>) {
+async fn bootstrap_poll_loop(actor: ActorRef<TorControlClient>, tx: watch::Sender<BootstrapState>) {
     // The highest progress seen so far; `bootstrap_step` clamps against it so a Tor
     // `PROGRESS=` regression never renders the "Connecting… n%" UX backward.
     let mut peak = 0u8;
@@ -1077,7 +1078,7 @@ async fn bootstrap_poll_loop(actor: ActorRef<TorControl>, tx: watch::Sender<Boot
     }
 }
 
-impl TorControl {
+impl TorControlClient {
     /// Fail every in-flight and queued caller with `err` — the actor is stopping.
     fn fail_all_pending(&mut self, err: &ControlError) {
         if let Some((tx, _in_flight)) = self.pending.take() {
@@ -1133,7 +1134,7 @@ impl TorControl {
     }
 }
 
-impl Message<Command> for TorControl {
+impl Message<Command> for TorControlClient {
     type Reply = DelegatedReply<CommandResult>;
 
     async fn handle(&mut self, cmd: Command, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
@@ -1172,7 +1173,7 @@ impl Message<Command> for TorControl {
     }
 }
 
-impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl {
+impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControlClient {
     type Reply = ();
 
     async fn handle(
@@ -1478,8 +1479,8 @@ mod tests {
 #[cfg(test)]
 mod live_tests {
     use super::{
-        BootstrapReadiness, Command, EventSink, ManagedTor, TorControl, TorControlConfig, TorExit,
-        TorLaunch,
+        BootstrapReadiness, Command, EventSink, ManagedTor, TorControlClient,
+        TorControlClientConfig, TorExit, TorLaunch,
     };
     use kameo::actor::Spawn;
     use std::net::{SocketAddr, TcpListener};
@@ -1602,7 +1603,7 @@ mod live_tests {
         // poll task runs harmlessly against `DisableNetwork 1` (never reaches Ready) and
         // is aborted on drop. Keep the receiver alive so the poll task doesn't stop early.
         let (readiness, _ready_rx) = BootstrapReadiness::new();
-        let actor = TorControl::spawn(TorControlConfig {
+        let actor = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Attached {
                 control_addr: tor.control_addr,
                 cookie_path: tor.cookie_path.clone(),
@@ -1661,7 +1662,7 @@ mod live_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let (tx, _rx) = mpsc::unbounded_channel();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
-        let actor = TorControl::spawn(TorControlConfig {
+        let actor = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Managed(ManagedTor {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: dir.path().to_path_buf(),
@@ -1804,7 +1805,7 @@ mod live_tests {
         // doesn't stop early; it is aborted on shutdown regardless.
         let (readiness, _ready_rx) = BootstrapReadiness::new();
         let (tx, _rx) = mpsc::unbounded_channel();
-        let actor = TorControl::spawn(TorControlConfig {
+        let actor = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Managed(ManagedTor {
                 // The declared test bypass of the hash-pin gate: this lifecycle
                 // test injects an arbitrary tor (any version works — we are

@@ -49,7 +49,7 @@ jobs:
       BUNDLE: tor-expert-bundle-linux-x86_64-${{ inputs.bundle_version }}.tar.gz
       DIST: https://dist.torproject.org/torbrowser/${{ inputs.bundle_version }}
       # The Tor Browser Developers signing key — must equal TOR_SIGNING_KEY_FPR
-      # in rust/shekyl-tor-control/src/binary.rs (the durable pin; a mismatch means
+      # in rust/shekyl-tor-control-client/src/binary.rs (the durable pin; a mismatch means
       # either this file or the code is stale — reconcile, never override).
       TOR_FPR: EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
     steps:
@@ -58,7 +58,7 @@ jobs:
       # The fingerprint above is a copy of the code constant; refuse to verify
       # against a stale one.
       - name: cross-check fingerprint against binary.rs
-        run: grep -q "$TOR_FPR" rust/shekyl-tor-control/src/binary.rs
+        run: grep -q "$TOR_FPR" rust/shekyl-tor-control-client/src/binary.rs
 
       - name: fetch Expert Bundle + signature
         run: |
@@ -81,7 +81,7 @@ jobs:
 
       # TWO invocations, not one, because the pinned-tor set now spans two
       # crates: the control protocol and the pin gate live in
-      # `shekyl-tor-control`, the supervisor that drives them in `shekyl-tor`.
+      # `shekyl-tor-control-client`, the supervisor that drives them in `shekyl-tor-control-wallet`.
       # One `-p a -p b` run would print TWO "test result:" lines, and the
       # single-valued count below would silently grade only the first — a crate
       # could stop running its ignored set entirely and the floor would still
@@ -90,13 +90,13 @@ jobs:
       #
       # Both point the pinned-tor var (pin-match KAT) and the any-tor var (live
       # lifecycle) at the same verified binary.
-      - name: pin-match + control lifecycle (shekyl-tor-control)
+      - name: pin-match + control lifecycle (shekyl-tor-control-client)
         run: |
           set -o pipefail
           cd rust
           SHEKYL_TEST_PINNED_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
           SHEKYL_TEST_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
-            cargo test --locked -p shekyl-tor-control --lib -- --ignored --test-threads=1 | tee ignored-control.out
+            cargo test --locked -p shekyl-tor-control-client --lib -- --ignored --test-threads=1 | tee ignored-control.out
           # The pin-match KAT is this lane's founding guarantee (a mistranscribed
           # CURRENT_PIN otherwise fails closed for every user at first managed
           # launch) — assert it specifically ran and PASSED, not merely that some
@@ -111,13 +111,13 @@ jobs:
           echo "ran ${passed:-0} pinned-tor control tests"
           [ "${passed:-0}" -ge 4 ]
 
-      - name: live supervisor lifecycle (shekyl-tor)
+      - name: live supervisor lifecycle (shekyl-tor-control-wallet)
         run: |
           set -o pipefail
           cd rust
           SHEKYL_TEST_PINNED_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
           SHEKYL_TEST_TOR_BINARY="$GITHUB_WORKSPACE/tor/tor" \
-            cargo test --locked -p shekyl-tor --lib -- --ignored --test-threads=1 | tee ignored.out
+            cargo test --locked -p shekyl-tor-control-wallet --lib -- --ignored --test-threads=1 | tee ignored.out
           # Floor = the supervisor's current linux/x86_64 ignored count (4:
           # bootstrap-timeout, crash-respawn, degraded-episode, onion-republish).
           # Same `-ge` discipline as above.

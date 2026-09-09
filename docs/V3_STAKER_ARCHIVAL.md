@@ -218,7 +218,7 @@ Foundation **seed nodes are seeds of the tree, not just of discovery:**
 > and the fetch is an **ordinary v3 rendezvous**, the same path every `P` serves
 > over. There is **no separate Foundation retrieval mechanism** and no clearnet
 > leg. (Non-anonymous serving is not merely unused: `ADD_ONION`'s `NonAnonymous`
-> flag is absent from `shekyl_tor_control::control::onion::OnionFlags`, so it is
+> flag is absent from `shekyl_tor_control_client::control::onion::OnionFlags`, so it is
 > unrepresentable.)
 
 each holds **complete sets B + C** (deep archival substrate and canonical

@@ -1,11 +1,11 @@
 [package]
-name = "shekyl-tor-control"
+name = "shekyl-tor-control-client"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Tor control-protocol client, binary verification and onion identity — owned by neither the wallet nor the daemon"
+description = "Tor control-protocol client: framing, pin, onion-identity encoding. Any owner. Not a Tor instance."
 publish = false
 
 # The SP-T0c pin gate's test bypass, `VerifiedTorBinary::unchecked_for_test`.

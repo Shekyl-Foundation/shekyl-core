@@ -56,7 +56,7 @@ from pathlib import Path
 # feature without a row leaves it ungated, so add both in the same commit.
 TEST_ONLY: dict[tuple[str, str], str] = {
     (
-        "shekyl-tor-control",
+        "shekyl-tor-control-client",
         "unpinned-tor-for-tests",
     ): "forges VerifiedTorBinary, the SP-T0c hash-pin witness, for lifecycle "
     "tests that inject an arbitrary unpinned tor",

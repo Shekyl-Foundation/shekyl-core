@@ -28,10 +28,10 @@ use shekyl_p_host::{
     HostError, PersonaServing, PersonaServingHost, PinError, PinReport, PinnedServeSet,
     ReportedSet, ServeObligation, ServeSetPinner, Staleness, StalenessBound,
 };
-use shekyl_tor::service::{
-    ServingPosture, SupervisorPolicy, TorBinarySource, TorPosture, TorServiceConfig,
+use shekyl_tor_control_wallet::service::{
+    EventSink, OnionIdentity, ServingPosture, SupervisorPolicy, TorBinarySource, TorPosture,
+    WalletTorControlConfig,
 };
-use shekyl_tor_control::onion_identity::OnionIdentity;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -224,14 +224,14 @@ impl ServeSetPinner for IncoherentPinner {
 
 /// A supervisor config whose binary cannot pass the gate, with a backoff
 /// short enough that several incarnations fail inside a test.
-fn churning_tor(dir: &tempfile::TempDir) -> TorServiceConfig {
+fn churning_tor(dir: &tempfile::TempDir) -> WalletTorControlConfig {
     let bogus = dir.path().join("not-tor");
     std::fs::write(&bogus, b"not a tor binary").expect("write bogus binary");
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    TorServiceConfig {
+    WalletTorControlConfig {
         binary: TorBinarySource::At(bogus),
         data_dir: dir.path().join("data"),
-        events: shekyl_tor_control::control::EventSink::new(tx),
+        events: EventSink::new(tx),
         policy: SupervisorPolicy {
             backoff_base: Duration::from_millis(5),
             backoff_cap: Duration::from_millis(20),
@@ -419,7 +419,7 @@ async fn a_report_whose_outcomes_do_not_cover_its_own_set_mints_no_witness() {
 
 #[tokio::test]
 async fn the_serving_endpoint_outlives_tor_incarnations() {
-    // The load-bearing invariant. `TorService` republishes the onion on every
+    // The load-bearing invariant. `WalletTorControl` republishes the onion on every
     // incarnation from one `OnionServiceSpec` holding one loopback target, so
     // a listener that rebound per incarnation would leave the published
     // address pointing at a dead port — the persona looks healthy, publishes,

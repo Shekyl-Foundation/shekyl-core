@@ -191,7 +191,7 @@ impl ChannelQueue {
 /// This is deliberate rather than incidental. A `Drop` that had to *restore*
 /// state would need a handle back into the queue, which would make this a
 /// borrow — and a borrow cannot span the send, because the transport
-/// (`shekyl-tor`) is async even though the relay logic is not. Non-destructive
+/// (`shekyl-tor-control-wallet`) is async even though the relay logic is not. Non-destructive
 /// take is what lets the token cross an await and still be correct when it is
 /// dropped.
 ///

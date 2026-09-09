@@ -738,7 +738,7 @@ P2P onion and the archival-serving persona's onion **on the same host**.
 |---|---|---|
 | tor **process / instance** | **NO** | the root of every linkage below; one process is one guard set, one descriptor-publishing identity, one crash domain |
 | **control connection** + authed session | **NO** | a single authenticated session that can `ADD_ONION` both services is a component that, once compromised, links them by construction |
-| **supervisor** and its state | **NO** | `TorService` holds cross-incarnation state; a supervisor that knows both is a join |
+| **supervisor** and its state | **NO** | `WalletTorControl` holds cross-incarnation state; a supervisor that knows both is a join |
 | **vanguard / guard set** | **NO** | `vanguard_rotation` is explicitly *"supervisor-scoped state that outlives Tor incarnations"* — persisted and authoritative. Two services under one supervisor share the guard topology **by construction**, not by accident |
 | **circuits**, SOCKS isolation credentials | **NO** | follows from the process split; per-`P` `IsolateSOCKSAuth` isolates within an instance, not across identity domains |
 | **onion identity / service key** | **NO** | trivially — different services |
@@ -779,18 +779,25 @@ convenience.
 #### Build state — the neutral crate exists
 
 The two `YES` rows and the MANAGED ruling's mitigation all name one thing: a
-crate that belongs to neither side. It is **`rust/shekyl-tor-control`**, and the
+crate that belongs to neither side. It is **`rust/shekyl-tor-control-client`**, and the
 control protocol (`control/`), the binary hash-pin gate (`binary.rs`) and the v3
 onion identity encoding (`onion_identity.rs`) were lifted into it out of
-`shekyl-tor` — a move with no behaviour change, so that nothing is built on the
+`shekyl-tor-control-wallet` — a move with no behaviour change, so that nothing is built on the
 old shape and then migrated.
 
-`shekyl-tor` keeps exactly what the table marks **NO**: the `TorService`
+`shekyl-tor-control-wallet` keeps exactly what the table marks **NO**: the `WalletTorControl`
 supervisor and its cross-incarnation state, the vanguard rotation state machine
 and the `VanguardsActive` witness, and the persona publish orchestration. It
-depends on the new crate and does **not** re-export it, so a consumer that wants
-the protocol names the neutral crate rather than reaching it through the wallet's
-supervisor.
+depends on the client crate and does **not** re-export the launch path
+(`TorControlClient`, `ManagedTor`, `AddOnion`), so a consumer that wants to
+speak the protocol names the client crate. Types already on `WalletTorControl`'s
+public surface (`OnionIdentity`, `EventSink`, `ControlError`) are re-exported
+from the wallet crate, so wallet consumers do not take the launch crate just to
+name a field.
+
+The daemon sibling is `DaemonTorControl` in `shekyl-tor-control-daemon` (PWD-E7
+piece 2). It is named so the family is grepable; it is not stubbed as an empty
+crate.
 
 The isolation requirement is carried in the crate's own module doc rather than
 left to this document: *no entry point here may default, infer, or discover which
@@ -839,19 +846,19 @@ merely fail to transfer — it points the other way.
 #### Crate shape (rule 25), proposed
 
 The test the peer named is the right one: **neither crate's docs should have to
-describe the other's posture.** `shekyl-tor` today opens *"Wallet-owned Tor
+describe the other's posture.** `shekyl-tor-control-wallet` today opens *"Wallet-owned Tor
 integration for the 2d-2 archival firewall (SP-T0)"*, so the daemon cannot
 become a second consumer of that ownership without making that sentence false.
 
 - **Lift** the protocol layer — control client, `AddOnion`/reply types, reply
   evaluation, binary verification — into a crate **neither side owns**.
-- **`shekyl-tor` keeps the wallet supervisor**: vanguard rotation, serving
+- **`shekyl-tor-control-wallet` keeps the wallet supervisor**: vanguard rotation, serving
   posture, SP-T0 policy. Its doc sentence stays true.
-- **A new daemon-side crate owns the ephemeral posture**: mint, publish, read the
-  `ServiceID`, tear down on shutdown. No vanguard state, because an ephemeral
-  address has no tenure to protect.
+- **A new daemon-side crate owns the ephemeral posture** (`shekyl-tor-control-daemon`,
+  `DaemonTorControl`): mint, publish, read the `ServiceID`, tear down on shutdown.
+  No vanguard state, because an ephemeral address has no tenure to protect.
 
-**Not proposed: the daemon driving `TorService`.** It is a supervisor for a
+**Not proposed: the daemon driving `WalletTorControl`.** It is a supervisor for a
 long-lived managed tor with vanguard pinning and a retry policy — the wallet's
 posture. Driving it from the daemon imports exactly the state this row forbids.
 

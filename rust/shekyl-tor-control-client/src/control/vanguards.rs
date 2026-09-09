@@ -16,7 +16,7 @@
 //! authority — a worse breach of the no-passthrough control-plane invariant
 //! than the torrc escape hatch that policy forbids). This module is **only
 //! the wire path**: fingerprints and the pin line. Selection, rotation, and
-//! persistence live in `shekyl-tor`'s `vanguard_rotation` — a WALLET policy
+//! persistence live in `shekyl-tor-control-wallet`'s `vanguard_rotation` — a WALLET policy
 //! module, deliberately not linked: this crate must not depend on the wallet
 //! crate, and an intra-doc link across that edge would be either broken or a
 //! circular dependency.

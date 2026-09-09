@@ -4069,8 +4069,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-scanner",
  "shekyl-standoff",
- "shekyl-tor",
- "shekyl-tor-control",
+ "shekyl-tor-control-wallet",
  "shekyl-tx-builder",
  "shekyl-tx-weight",
  "shekyl-types",
@@ -4317,8 +4316,7 @@ name = "shekyl-operator-alarm"
 version = "3.1.0"
 dependencies = [
  "shekyl-p-host",
- "shekyl-tor",
- "shekyl-tor-control",
+ "shekyl-tor-control-wallet",
  "tokio",
 ]
 
@@ -4328,8 +4326,7 @@ version = "3.1.0"
 dependencies = [
  "shekyl-curve-tree",
  "shekyl-p-serve",
- "shekyl-tor",
- "shekyl-tor-control",
+ "shekyl-tor-control-wallet",
  "tempfile",
  "tokio",
 ]
@@ -4546,8 +4543,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-p-serve",
  "shekyl-p-transport",
- "shekyl-tor",
- "shekyl-tor-control",
+ "shekyl-tor-control-client",
  "shekyl-types",
  "tempfile",
  "tokio",
@@ -4577,20 +4573,7 @@ name = "shekyl-stats"
 version = "3.1.0"
 
 [[package]]
-name = "shekyl-tor"
-version = "3.1.0"
-dependencies = [
- "getrandom 0.2.17",
- "kameo",
- "shekyl-p-transport",
- "shekyl-tor-control",
- "shekyl-types",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "shekyl-tor-control"
+name = "shekyl-tor-control-client"
 version = "3.1.0"
 dependencies = [
  "ed25519-dalek",
@@ -4608,12 +4591,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-tor-control-wallet"
+version = "3.1.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "kameo",
+ "shekyl-p-transport",
+ "shekyl-tor-control-client",
+ "shekyl-types",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "shekyl-tor-transit-spike"
 version = "3.1.0"
 dependencies = [
  "kameo",
- "shekyl-tor",
- "shekyl-tor-control",
+ "shekyl-tor-control-client",
  "tokio",
 ]
 

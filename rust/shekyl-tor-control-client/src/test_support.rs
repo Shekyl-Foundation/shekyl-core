@@ -5,7 +5,7 @@
 
 //! Shared helpers for the crate's in-tree live tests (`#[cfg(test)]` only).
 //!
-//! DELIBERATELY DUPLICATED in `shekyl-tor` and `shekyl-tor-control`. It is a
+//! DELIBERATELY DUPLICATED in `shekyl-tor-control-wallet` and `shekyl-tor-control-client`. It is a
 //! `pub(crate)` test fixture, so a crate boundary is uncrossable for it: sharing
 //! it would mean promoting a twelve-line env-var reader to public API on one
 //! crate so the other's tests can call it, which is a worse trade than the
