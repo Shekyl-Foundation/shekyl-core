@@ -70,7 +70,8 @@ fn main() {
         .zip(contents.iter().map(String::as_str))
         .collect();
     let canonical = consensus_canonical::canonical_form(&pairs).unwrap_or_else(|e| panic!("{e}"));
-    let digest = consensus_canonical::digest_hex(&canonical);
+    let digest_bytes = consensus_canonical::digest_bytes(&canonical);
+    let digest = consensus_canonical::hex_of(&digest_bytes);
 
     // The live-file pin (VC-D3, VC-D12). It lives here rather than as a
     // `const _: () = assert!(...)` beside the constant, because a const-eval
@@ -132,6 +133,12 @@ fn main() {
          // The canonical form (CLIENT_VERSION_CONSTANTS_VALIDATION.md §3.3, §3.12)\n\
          // and its SHA-256, computed once for every RPC party in the workspace.\n\
          pub const CONSENSUS_CONSTANTS_DIGEST: &str = \"{digest}\";\n\
+         //\n\
+         // The same 32 bytes, unrendered. VC-3/VC-4 compare `[u8; 32]`\n\
+         // equality with no hex on the path; the string survives for the\n\
+         // panic above and for operator output, which is the only place it\n\
+         // is actually a string (VC-R16).\n\
+         pub const CONSENSUS_CONSTANTS_DIGEST_BYTES: [u8; 32] = {digest_bytes:?};\n\
          pub const CONSENSUS_CONSTANTS_CANONICAL: &str = {canonical:?};\n"
     );
 

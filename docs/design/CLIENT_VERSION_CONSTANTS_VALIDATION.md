@@ -279,9 +279,9 @@ across an omitted field is a window across a silent zero.
 
 ### 3.2 `VC-D2` — the rules digest: subject is the whole file, not a list
 
-**Proposed:** a digest over the canonical form (§3.3) of
-`config/consensus_constants.json`, computed at build time, exposed by the
-daemon, compared by the client.
+**Ruled (ruling 5, signed in-channel 2026-09-07):** a digest over the
+canonical form (§3.3) of **both `config/` integer authorities**, computed at
+build time, exposed by the daemon, compared by the client.
 
 **Rejected alternative A — a per-constant comparison** (`target`, then
 `daa_window_n`, then …). Its subject is whatever someone listed. A constant
@@ -396,9 +396,10 @@ handshakes over two methods validates a tuple that never simultaneously
 existed. One call, one snapshot, no skew — and half the round trips on a
 path every client walks at connect. That argument kills the two-method
 alternative outright; the coupling argument below (tying the handshake to
-RK-5c's bridged leg) was the weaker one. **Corollary for `VC-4`:** the
-genesis axis rides a *second* call (`on_get_block_hash([0])`, §2), so the
-tuple is atomic across three axes and the genesis hash is checked beside it.
+RK-5c's bridged leg) was the weaker one. **Corollary for `VC-4`, as it stood before `VC-R2`:** the
+genesis axis was to ride a *second* call (`on_get_block_hash([0])`), so the
+tuple would have been atomic across three axes with the genesis hash checked
+beside it.
 **`VC-R2` found that exemption unsound and it is now gone (ruled
 2026-09-07).** The atomicity concern is not whether the *value* can move
 between calls but whether the **answerer** can change, which a restart
@@ -415,10 +416,23 @@ exemption does not need defending because it no longer exists.
 As proposed: `GetVersionResponse` gains
 
 ```
-consensus_constants_digest: String   // 64 lowercase hex chars, §3.3
+consensus_constants_digest: HashHex  // 32 bytes, 64 lowercase hex (§3.3)
 nettype: DaemonNetwork               // "mainnet" | "testnet" | "stagenet" | "fakechain"
 genesis_hash: HashHex                // block 0, per network (VC-R2)
 ```
+
+**The digest is `HashHex`, not `String` (`VC-R16`).** It is a SHA-256: 32
+bytes rendered as 64 lowercase hex — the same subject `hash.rs` exists for.
+That module's own doc records why: before RK-3 each such field was a `String`,
+"which made *not a hash at all* a value the type admitted and left every
+consumer to parse hex for itself". A `String` digest would repeat that
+exactly, and worse on this field than on most: it would **false-mismatch on
+uppercase hex** — reporting a rules disagreement, on the axis whose entire job
+is to be precise about rules — and would let `"nope"` reach the comparison as
+data rather than being refused at the parse. `HashHex` refuses any length but
+64 and any non-hex character, accepts either case on the way in, and re-emits
+lowercase, so the strictness `VC-D14` requires is delivered **by the type**
+rather than by a rule someone must remember.
 
 **Every one of these three deserializes strictly** — no `#[serde(default)]`,
 no catch-all variant, an unrecognised value refuses. That is `VC-D14`
@@ -447,11 +461,26 @@ chain state, one oracle vector is the property worth paying one duplicated
 field for; `get_info.nettype` becomes RK-5c's to keep or retire (RK-W's wire
 cleanup is where duplicates die).
 
-**The FFI cost, named (rule 40).** `shekyl-daemon-rpc/src/chain_facts.rs`
-has no network field; the chain-tip POD gains one `u8` (`nettype`, C++
-`cryptonote::network_type` mapped at the export) and the C export fills it.
-One byte, one field, both sides of the boundary in the same slice, ABI pin
-by offset per the existing convention.
+**The FFI cost, re-priced (rule 40) — the original estimate was written
+before `VC-R2` and nobody revisited it.** It read "one `u8`, one field, both
+sides of the boundary in the same slice", and at the time that was nearly
+free: `ChainTipFactsFfi` carries `reserved: [u8; 6]` (`ffi.rs:314-323`), so a
+`nettype` byte could have landed in reserved space **with no layout movement
+at all**. Then `VC-R2` added a 32-byte genesis hash to the same field list,
+and 32 bytes do not fit in six. The estimate was never revised; §4's slice row
+inherited it and expressed it as an ABI-churn warning, which is the same
+un-revised number wearing a different face.
+
+**`VC-R17` splits the seam instead of managing the churn.** The identity facts
+go in their own POD: `ChainTipFactsFfi` does not move, so its layout twins,
+its `_test_fill` / `_rust_fill` seeded indices and its offset pins do not move
+either. The precedent is already in the header — `shekyl_rpc_fee_grace_blocks_max`,
+`shekyl_rpc_peerlist_limits` and `shekyl_rpc_span_pruning_seed` (`ffi.rs:741`,
+`:776`, `:779`) are narrow exports for facts with no business in a bigger POD.
+`nettype` and the genesis hash are process-lifetime constants — fixed at
+daemon start and per network — while the tip POD's contract is "what the chain
+tip looks like right now"; five of its six callers want a tip and one wants
+identity.
 
 **`DaemonNetwork` is a wire-side type**, in `shekyl-rpc-types`, with four
 variants including `Fakechain`, deserialised from the daemon's string with
@@ -511,9 +540,8 @@ There is no operator task that needs it that `version` does not serve.
 
 `Engine::open_*` (`engine/lifecycle/open.rs`) performs the handshake against
 the supplied daemon client **before any wallet operation** — lock 5's
-wording, finally honoured — on all four axes of §2 (the genesis axis via
-`on_get_block_hash([0])`, a second call against an existing method), and
-refuses with a new typed
+wording, finally honoured — on all four axes of §2, **all four read from the
+one `get_version` reply** (`VC-R2`), and refuses with a new typed
 `OpenError::DaemonIdentityMismatch { axis, ours, theirs }`. `shekyl-cli` and
 `shekyl-wallet-rpc` surface it in operator language per
 [`82-failure-mode-ux`](../../.cursor/rules/82-failure-mode-ux.mdc):
@@ -845,6 +873,36 @@ constants *into* the covered set, and full rules identity becomes available
 only when every constant a rule depends on is inside it — a precondition
 with a named owner, not an assumption.
 
+**The per-key membership grade (`VC-R19`), because "integer authority" was
+doing the work of a decision one level up.** `VC-R11` closed that move for the
+*type* of values; the same move survived at the choice of *keys*, which were
+ingested wholesale. All eighteen economics keys were walked. The grade is
+recorded so §3.7 is checkable by a reviewer rather than aspirational:
+
+| Key(s) | Does a different value make a different chain? |
+| --- | --- |
+| `emission_curve_asymptote`, `emission_speed_factor_per_minute`, `final_subsidy_per_minute` | **Yes** — the emission curve and the perpetual tail (`FL-R12′`) |
+| `coin` | **Yes** — the atomic-unit denominator |
+| `display_decimal_point` | **Yes, but only through a coupling that was nowhere written down** — see below |
+| `shekyl_fixed_point_scale` | **Yes** — the denominator every ppm share is read against |
+| `shekyl_staker_pool_share`, `shekyl_staker_emission_share`, `shekyl_staker_emission_decay`, `shekyl_blocks_per_year` | **Yes** — the staker split and its decay (`calc_effective_emission_share`) |
+| `shekyl_burn_base_rate`, `shekyl_burn_cap`, `shekyl_tx_volume_baseline`, `shekyl_tx_volume_window` | **Yes** — burn rate and the window it is measured over |
+| `shekyl_escalation_asymptote_share`, `shekyl_escalation_knee_n`, `shekyl_release_min`, `shekyl_release_max` | **Yes** — D2 escalation; provisional-until-testnet, and §3.12 already rules that a change detector is *supposed* to move on them |
+
+**`display_decimal_point` is the one that needed the walk.** On its own it is
+a rendering convention, and a rendering convention does not make a different
+chain — the finding was right to single it out. But "on its own" is a state it
+cannot occupy: `shekyl-units/build.rs` asserts `coin == 10^display_decimal_point`,
+mirrored by a `const _`, so the two move together or the build fails. The pair
+moving together *is* a change to the atomic-unit denominator, which is
+unambiguously a different chain. **It belongs — via the coupling, not via its
+own semantics** — and that distinction existed nowhere before this grade.
+
+So the finding is right as process and empty as outcome, which is the best
+case a grade can have and still worth the edit: the next key added to this
+file gets asked the question, and the answer for the one key that needed an
+argument is now written down instead of re-derived.
+
 ### `genesis_recipients.*` are excluded, and the exclusion has a trigger (`VC-R12`)
 
 **`genesis_recipients.{mainnet,stagenet,testnet}.json` are excluded from
@@ -852,9 +910,10 @@ the digest, and the genesis block hash becomes the tuple's fourth axis
 (§2).** The files are per-network (which would break the
 digest-is-orthogonal-to-network property §2 relies on) and non-integer
 (strings and lists), so they do not fit the form; and what they determine —
-the genesis block — is better checked directly, by comparing the daemon's
-`on_get_block_hash([0])` (native since RK-2; no wire change) to a
-per-network pinned genesis hash. **This document's first draft excluded them
+the genesis block — is better checked directly, by comparing a per-network
+pinned genesis hash against `get_version.genesis_hash` (`VC-R2` moved this
+off `on_get_block_hash([0])`, so it is one field of the atomic reply rather
+than a second call). **This document's first draft excluded them
 on the claim that the genesis hash "already commits to them" and left the
 comparison as a reopening criterion; the steering lane checked and the
 criterion was already true — nothing pins a genesis hash in Rust and nothing
@@ -1053,9 +1112,9 @@ pass.
 | Slice | Contents | Wire change? | Additional gate |
 | --- | --- | --- | --- |
 | **`VC-1`** — **BUILT** in this document's PR (`dev` e54e5b983) | `shekyl-rpc-types/build.rs` + `CONSENSUS_CONSTANTS_DIGEST` and `CONSENSUS_CONSTANTS_CANONICAL` (§3.3, §3.4), with the canonicaliser in `build_support/consensus_canonical.rs` included by both the build script and the tests — one definition; canonical-form KAT whose expected digest was computed by an independent Python implementation of §3.3; live-file pin (`PINNED_DIGEST` in `build.rs`, with a case-branching panic — `VC-R5`, `VC-R13`); `DaemonNetwork` type with string round-trip and unknown-string refusal tests; the membership-rule sentence in the JSON's `_comment` (§3.7). | **No.** Nothing on the wire moves; the constant exists and is tested; nothing reads it yet, and `consensus_digest.rs`'s module doc says so. | Red observed before trusting green, two ways: with the sentinel disabled, a descending key sort fails `kat_pins_the_canonical_form_and_its_digest` and `the_live_canonical_form_has_the_shape_the_design_pins` while `the_build_used_these_rules_on_the_live_file` stays green (build script and tests share the mutated rules — the Python-derived KAT is what catches a drift both sides share); with the sentinel enabled, the same mutation fails **compilation** on the pinned digest, which is the sentinel doing its job first. |
-| **`VC-2`** — **AUTHORISED for alpha.8, fold with `VC-3`/`VC-4`** (ruling 2: "a wire change belongs in the paired release, not first-thing-after where it becomes the first uncovered delta of the next cycle") | `GetVersionResponse` + **3** fields (digest, `nettype`, `genesis_hash` — `VC-R2`), each strictly deserialized with an omission test (`VC-D14`); `CORE_RPC_VERSION` → next minor, **read from `dev` at write time**; `get_version_synced_v5.json` and siblings for the other two `v1` states; chain-delta test extended per §3.5; chain-facts POD `nettype` byte + genesis-hash bytes + C export + ABI offset pin. **The POD widening is an ABI change to a struct with layout twins and a round-trip pin** (Rick, with ruling 1): `_test_fill` / `_rust_fill` and the seeded field indices move with it, and the offset pins are re-derived rather than edited. Consequence, not objection — but it is the part of `VC-2` that breaks quietly if done by hand; `methods.rs` fills both fields. **Pre-flight pass first (rule 26).** | **Yes.** Needs Rick's ruling on alpha.8 timing (§6). | `rpc_parity` whole chain green; the four-spelling version pin updated; C++ `ninja -C build` + unit suite (the POD changed). |
+| **`VC-2`** — **AUTHORISED for alpha.8, fold with `VC-3`/`VC-4`** (ruling 2: "a wire change belongs in the paired release, not first-thing-after where it becomes the first uncovered delta of the next cycle") | `GetVersionResponse` + **3** fields (digest, `nettype`, `genesis_hash` — `VC-R2`), each strictly deserialized with an omission test (`VC-D14`); `CORE_RPC_VERSION` → next minor, **read from `dev` at write time**; `get_version_synced_v5.json` and siblings for the other two `v1` states; chain-delta test extended per §3.5; a **separate identity POD** carrying `nettype` and the genesis-hash bytes — **not** a widening of the chain-tip POD (`VC-R17`) — plus its C export and ABI offset pins. **This is an ABI addition with layout twins and a round-trip pin:** `_test_fill` / `_rust_fill` and the seeded field indices apply to the new POD, and its offset pins are re-derived rather than edited. It is the part of `VC-2` that breaks quietly if done by hand; `methods.rs` fills both fields. **Pre-flight pass first (rule 26).** | **Yes.** Needs Rick's ruling on alpha.8 timing (§6). | `rpc_parity` whole chain green; the four-spelling version pin updated; C++ `ninja -C build` + unit suite (the POD changed). |
 | **`VC-3`** | Console remote arm handshake (§3.6.2); `version` exemption; delete `daa_target_seconds` and its tests (§3.11); operator-facing message tests for all three axes and both "older side" directions. | No (consumes `VC-2`). | A test per axis that observes the refusal on a fabricated mismatched reply, and one that observes `version` rendering both sides. |
-| **`VC-4`** | Engine open-time handshake (§3.6.3) on all four axes, including the per-network genesis-hash pins compared against `get_version.genesis_hash` (`VC-D12`, `VC-R2` — one reply, not a second call); the connect-time-only claim stated in operator terms (`VC-D13`); refusal wording per `VC-D15`; `OpenError::DaemonIdentityMismatch`; `FakechainPolicy` (§3.6.4) threaded through `open_*`, set by `regtest_e2e.rs` and the operator flag; **fix the `daemon.rs:169` docstring** to say what the code now does; `shekyl-cli` / `shekyl-wallet-rpc` messages per rule 82. | No (consumes `VC-2`). | Regtest e2e green with the policy passed; a lifecycle test per axis observing `open_full` refuse; a test that `FakechainPolicy::Refuse` (the default) refuses a `fakechain` daemon. |
+| **`VC-4`** | Engine open-time handshake (§3.6.3) on all four axes, including the per-network genesis-hash pins compared against `get_version.genesis_hash` (`VC-D12`, `VC-R2` — one reply, not a second call); the connect-time-only claim stated in operator terms (`VC-D13`); refusal wording per `VC-D15`; `OpenError::DaemonIdentityMismatch`; `FakechainPolicy` (§3.6.4) threaded through `open_*`, set by `regtest_e2e.rs` and the operator flag; **fix the two false docstrings** (`daemon.rs:169`, `error/mod.rs:41`) to say what the code now does, **and amend `WALLET_REWRITE_PLAN.md` :216 itself** (`VC-R20`): cross-cutting lock 5 still names `get_info` as the carrier, and a reader of the lock will otherwise try to put the check back on a bridged leg that `RK-5c` retires. The lock's *requirement* is unchanged and finally honoured; only its named carrier moves to `get_version`. **The two states are not equally bad and the worse one is the later one:** today the lock and the mechanism disagree because the mechanism is *absent*, which reads as work owed; after `VC-4` they would disagree because the mechanism is *present* and the lock describes a different one, which reads as a discrepancy to reconcile — and a reader reconciling toward a Phase-1 lock implements it as written, onto the bridged leg `RK-5c` retires, over two round trips, which is the exact shape ruling 1 rejected; `shekyl-cli` / `shekyl-wallet-rpc` messages per rule 82. | No (consumes `VC-2`). | Regtest e2e green with the policy passed; a lifecycle test per axis observing `open_full` refuse; a test that `FakechainPolicy::Refuse` (the default) refuses a `fakechain` daemon. |
 
 `VC-1` landed with this document: the steering lane ruled (2026-09-05) that
 code with no wire change and no C++ clears the throttle, and the enabler
@@ -1064,6 +1123,43 @@ a consumer that cannot exist until `VC-2` is authorised. `VC-3` and `VC-4` land 
 split): producers and callers in one PR is the standing rule, and a
 `get_version` field with no consumer would be the very finding this round
 opened with, recreated.
+
+### 3.16 `VC-D16` — when `get_version`'s own shape is what changed
+
+The tuple is compared after the reply parses. Every tuple field is strict
+(`VC-D14`) and the reply type carries `deny_unknown_fields`, so a daemon
+whose `get_version` shape has moved does not produce a mismatch on any axis —
+it produces a **deserialization error**, before any axis is read. This is the
+handshake's bootstrap case and it is not an edge: a wire-version skew *is*
+what it looks like on the first method a client calls (`VC-R22`).
+
+**Ruled: a `get_version` that does not parse is a wire-axis failure, reported
+as one.** The shape of the handshake reply is part of the RPC contract, so a
+reply that does not fit this build's type is the wire axis disagreeing —
+reached by a different route than a version number comparison, and meaning
+the same thing. The refusal says so in those terms: *this daemon's
+`get_version` does not match the contract this build was compiled against, so
+the two are on different RPC versions*, naming the field that failed as
+evidence rather than as the headline. It must not surface a bare serde error
+naming a field, which tells an operator nothing about what to do
+(`82-failure-mode-ux.mdc`), and it must not be retried.
+
+**The version number is unavailable in this case, and the design does not
+pretend otherwise.** A reply that will not parse cannot be mined for its
+`version` to name the older side, and `VC-D15`'s ordering therefore does not
+apply here. **Rejected: a lenient pre-parse** that extracts `version` from an
+otherwise-unparseable reply to improve the message. It would put a second,
+weaker parser on the exact surface `VC-D14` just made strict — the first code
+to touch untrusted input — to buy a nicer sentence. The operator's action is
+identical either way: align the two builds. Say that, rather than parsing
+loosely to say which.
+
+**Reopening criterion:** a post-genesis compatibility window (`VC-D1`'s
+reopen) would need a stable minimal envelope that older and newer builds can
+always parse. That is a wire-design question for the round that opens the
+window, and it is the natural place to reconsider a two-stage parse — under a
+contract that guarantees a floor, rather than as a rescue attempt on a reply
+that already failed.
 
 ### `VC-2`'s pre-flight, pre-registered (rule 26)
 
@@ -1161,8 +1257,13 @@ message.
    yes** (no wire change, no C++). Built in this PR.
 5. **The digest's file set** (`VC-D12`) — **SIGNED: both integer
    authorities, widened before this PR merges** (§3.12), with the three
-   carries (change detector not freeze; `VC-1` widens first and the
-   `FL-R12′` rename re-pins; the two-year-convention grade). A digest over
+   carries (change detector not freeze; the **`FL-R15`** rename and `VC-1`
+   ordering — **written at signature as "`VC-1` widens first and the `FL-R12′`
+   rename re-pins", wrong twice: the rename is `FL-R15`, which implements the
+   `FL-R12′` ruling, and it landed *first*, so `VC-1`'s own merge re-pinned.
+   The durable form is "whichever lands second re-pins", because a sequencing
+   note is a claim about merge order and no lane controls that (§3.12 (ii),
+   §7)**; the two-year-convention grade). A digest over
    one authority while another goes undigested is the
    excluded-versus-forgotten hole with no signal. **Two denominator
    questions came with the signature** and are answered in §3.12: the word
@@ -1588,3 +1689,187 @@ per the denominator discipline this round promoted into
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc):
 "the round found nothing there" is a different statement from "the round did
 not look there", and only the first is evidence.
+---
+
+## 10. Review round 3 (2026-09-08) — `VC-R15`…`VC-R22`
+
+A second reviewer's pass over the PR, run against `6c6b565da` and answered
+against the merged tree. Three required corrections and five "why" questions
+that the reviewer asked be answered **here** rather than re-derived inside
+`VC-2` — two of which change `VC-2`'s shape and would have been expensive to
+reverse after its ABI pin landed.
+
+| # | Finding | State |
+| --- | --- | --- |
+| `VC-R15` | The §2 family registry row was dropped by my own merge resolution | **Applied** — restored |
+| `VC-R16` | The digest is typed `String` where `HashHex` is the canonical helper | **Applied** — §3.5 |
+| `VC-R17` | Identity facts were to widen the **tip** POD; wrong seam | **Applied** — §4 |
+| `VC-R18` | The independent oracle was authoring-time, not CI-time | **Applied** — new gate |
+| `VC-R19` | Economics keys ingested wholesale without a per-key membership grade | **Applied** — §3.12 |
+| `VC-R20` | Lock 5 still names `get_info` as the carrier | **Applied** — `VC-4` row |
+| `VC-R21` | Ruled dispositions still described in proposal voice, in four places | **Applied** — swept |
+| `VC-R22` | No policy for when `get_version`'s **own shape** is what changed | **Applied** — §3.16 |
+
+### Numbering, because two reviews numbered the same findings differently
+
+The reviewer's pass numbered its findings `VC-R14`…`VC-R19`; those numbers
+were already taken in this document by rounds 1–2 (`VC-R13`, `VC-R14`). The
+tree's numbering is the one that is committed, pushed and cited from code, so
+it stands, and the map is recorded here rather than left for a reader to
+infer from prose:
+
+| Reviewer's | This document's | Subject |
+| --- | --- | --- |
+| `VC-R14` | **`VC-R16`** | `String` where `HashHex` belongs |
+| `VC-R15` | **`VC-R17`** | identity facts in the tip POD |
+| `VC-R16` | **`VC-R19`** | per-key membership grade |
+| `VC-R17` | **`VC-R18`** | the Python oracle is a claim, not an artifact |
+| `VC-R18` | **`VC-R20`** | lock 5 still routes through `get_info` |
+| `VC-R19` | **`VC-R21`** | ruling 5 carries the falsified prediction |
+
+Renumbering to match would have moved identifiers that `build.rs` and
+`consensus_digest.rs` already cite, which is the cost rule 94 exists to
+avoid — a token that means one thing in the tree and another in a review is
+worse than two numbering schemes with a stated map.
+
+### `VC-R15` — I dropped the family row while resolving my own merge
+
+Rule 94's registry row for `VC-` was **gone**. Resolving the
+`IMPLEMENTATION_INDEX.md` conflict, I took `dev`'s file and re-inserted the
+row I remembered — the documents-table row — and the §2 family row was the
+one I did not. The family existed in a document, in code and in a PR, and not
+in the registry that exists so a reader can find out what `VC-` means.
+
+**The prefix-uniqueness gate passed throughout, and could not have failed:**
+it checks the rows that are present for collisions. A *missing* row collides
+with nothing. A census cannot see an absent subject, which is why rule 94
+puts the obligation on the PR that mints the family rather than on a checker.
+**Restored, current** (`VC-D1…VC-D15`, `VC-R1…VC-R22`, five cells matching the
+§2 header). The lesson is narrower than "be careful merging": *reinserting
+from memory is a recall test, and the thing you are recalling is exactly what
+the conflict destroyed*. The resolution should have been a diff of my side's
+`VC-` rows against the result, which is one command.
+
+### `VC-R16` — `String` where `HashHex` exists
+
+The digest field was typed `String`. It is a SHA-256 — 32 bytes, 64 lowercase
+hex — which is precisely `hash.rs`'s subject, and that module's doc says why
+it exists: before RK-3 such fields were `String`, "which made *not a hash at
+all* a value the type admitted". A `String` digest reintroduces that on the
+field least able to afford it: it **false-mismatches on uppercase hex**,
+reporting a rules disagreement on the axis whose job is precision about
+rules, and it lets `"nope"` arrive at the comparison as data instead of being
+refused at the parse. **Applied:** `HashHex`, which refuses any length but 64
+and any non-hex character, accepts either case, and re-emits lowercase — so
+`VC-D14`'s strictness is delivered by the type rather than by a remembered
+rule. A missed reuse of a canonical helper is not a style point when the
+helper was minted to close this exact defect.
+
+### `VC-R17` — the identity facts do not belong in the tip POD
+
+`VC-2` was to widen `ChainTipFactsFfi` with `nettype` and 32 genesis bytes.
+Neither is a tip fact: they are process and configuration identity, constant
+for a daemon's lifetime, while the tip changes every block. `chain_tip()` has
+**six** call sites, and `get_height` / `get_block_count` want none of this.
+The POD already carries one `get_version`-only hitchhiker — `release_build`,
+whose own comment at `chain_facts.rs:28` admits it "rides the same POD
+because `get_version` reports" it — and the widening is that exception
+growing by 33 bytes on every tip read.
+
+**Applied: a separate identity POD.** The decisive point is that **atomicity
+is about round trips, not FFI calls** — two FFI reads inside one
+`get_version` handler still produce one RPC reply from one snapshot, so
+nothing in ruling 1 requires them to share a struct. Splitting also *shrinks*
+`VC-2`'s ABI blast radius: the tip POD's layout twins and offset pins do not
+move at all, and the new pins cover a struct with one purpose. The pre-flight
+correctly flagged the cost of widening the tip; it did not ask whether the
+tip was the right seam, which is the question that mattered.
+
+**Not moved:** `release_build`. Relocating an existing field is a separate
+change with its own ABI cost and no bearing on this round. **Reopen** when
+something else needs the identity POD, at which point the hitchhiker has a
+natural home.
+
+### `VC-R18` — the second oracle was independent when written, not when run
+
+§8 called the Python-computed KAT digest what "catches a rules drift both
+`#[path]` readers share". Measured rather than assumed: the KAT **does** catch
+a Rust drift on its own — a reversed key sort fails it — because its expected
+form and digest are frozen literals. What it cannot catch is a drift where
+those literals move in the same edit, which is two lines in one file. Their
+independence was historical: it protected the *value*, not the *rules*.
+
+**Narrowed in the finding's favour, then applied.** The gap is not total:
+`the_live_canonical_form_has_the_shape_the_design_pins` asserts the form's
+*structure* independently of any digest — bytewise key order, plain decimals,
+no prose leak, `key SP value` — so a reversed sort or a separator change reds
+without the KAT's help. What the KAT alone protects is the **digest arithmetic
+and the header version**, and those are exactly the two an editor moving both
+`#[path]` readers would also move.
+
+**And the artifact exit was taken for a reason outside testing.** The digest
+is a **wire fact**: once `VC-2` ships, any third-party client must be able to
+recompute it, so a tree-resident, language-neutral reference implementation is
+something this project owes that audience regardless of CI. Written for that
+purpose it costs about forty lines, and running it against the generated
+constant is then a free second use rather than the whole justification.
+
+`scripts/ci/check_consensus_digest_oracle.py` re-implements §3.3
+from the design text, recomputes every run, and compares to `build.rs`'s
+`PINNED_DIGEST` — so there is no expected literal to move alongside the
+implementation, and a silent move now requires editing two implementations in
+two languages. It self-tests both directions, asserts its own subject exists
+(a renamed or absent `PINNED_DIGEST` fails rather than passing over nothing,
+rule 47), and is wired into `docs-gates.yml` with the two authorities and the
+pin as its trigger paths. **Verified by construction:** with the Rust
+canonicaliser reversed and the pin updated to match — the exact edit the
+frozen literals would miss — the gate reports the disagreement.
+
+### `VC-R19` — the economics file was ingested wholesale, ungraded
+
+`VC-R11` closed "integer" doing the work of a decision for the *type* of
+values. It did not ask the same question of the *keys*. `display_decimal_point`
+is a display convention coupled to `coin` by a units assert: a different value
+of it, alone, does not make a different chain. `shekyl_blocks_per_year` feeds
+`calc_effective_emission_share` and does. The pin treats them identically.
+
+**Applied, and deliberately *not* by filtering.** The grade is recorded, and
+the disposition is that the digest's subject stays **the whole file**:
+
+- A filter is the silent-shrink hazard `VC-R11` just closed, wearing a
+  different name. A per-key allowlist would need maintaining, and a key
+  dropped from it is invisible.
+- Over-inclusion is the **fail-safe direction**: a display key in the set
+  costs a spurious re-pin — and, post-`VC-2`, a spurious refusal — but never a
+  missed rule change. Under-inclusion costs the opposite, and the opposite is
+  the failure this whole round exists to prevent.
+- **The membership rule (§3.7) binds what goes *into* the file, not what the
+  digest reads out of it.** A key that fails the grade is a finding against
+  `economics_params.json`'s contents, owned by that file's owner, and the
+  right remedy is moving it out — not teaching the digest to look away.
+
+So the grade's product is a question for the economics owner, recorded here
+rather than acted on unilaterally: **does `display_decimal_point` belong in a
+consensus authority at all**, given it is a rendering convention? Until that
+is answered it stays digested, which is the safe side of the error.
+
+### `VC-R21` — ruled dispositions still speaking in proposal voice
+
+Four live instances, not the one reported: `VC-D2` still opened "**Proposed:**";
+§3.5's corollary, §3.6.3 and §3.12 all still described the genesis axis as
+riding `on_get_block_hash([0])`, which `VC-R2` had removed. Swept together,
+with the historical mentions (the decision log, the round sections, the "as it
+stood before `VC-R2`" sentence) deliberately left as records-was. §6's ruling 5
+also still carried the sequencing prediction that §3.12 and §7 had already
+recorded as falsified — a signed-ruling table is the next reader's starting
+assumption, so a false note there outranks a false note anywhere else.
+
+### `VC-R22` — what happens when `get_version`'s own shape is what changed
+
+The tuple is compared *after* the reply parses. `VC-D14` makes every tuple
+field strict and the reply type carries `deny_unknown_fields`, so a daemon
+whose `get_version` shape has changed produces a **deserialization error, not
+an identity refusal** — and the design said nothing about it. That is the
+handshake's own bootstrap case, and it is not rare: it is what a wire-version
+skew *looks like* on the one method the client calls first. **Applied as
+`VC-D16`** (§3.16).

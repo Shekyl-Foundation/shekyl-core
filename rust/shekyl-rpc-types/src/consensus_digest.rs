@@ -36,6 +36,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::hash::HashHex;
+
 include!(concat!(env!("OUT_DIR"), "/consensus_constants_digest.rs"));
 
 // The live-file pin lives in `build.rs`, not here (VC-R5, review round 1):
@@ -54,6 +56,21 @@ include!(concat!(env!("OUT_DIR"), "/consensus_constants_digest.rs"));
 // freeze: values a file marks provisional (the D2 escalation numbers, under
 // a GF-7 freeze ceremony) move it too, and the re-pin is how the ceremony
 // shows rather than a gate against it.
+
+/// The rules digest as the typed 32-byte value the wire will carry.
+///
+/// `VC-R16`: the digest **is** 32 bytes; hex is a rendering. `VC-3` and
+/// `VC-4` compare this — `[u8; 32]` equality inside [`HashHex`] — so no hex
+/// parse sits on the comparison path at all, and
+/// [`CONSENSUS_CONSTANTS_DIGEST`] survives for the build panic and for
+/// operator output, which is the only place it is genuinely a string.
+/// [`HashHex`] is also what makes the field strict for free (`VC-D14`): it
+/// refuses any length but 64 and any non-hex character at the deserializer,
+/// accepts either case, and re-emits lowercase — so an uppercase rendering
+/// of the same bytes is the same value rather than a false identity
+/// mismatch.
+pub const CONSENSUS_CONSTANTS_DIGEST_HASH: HashHex =
+    HashHex::from_bytes(CONSENSUS_CONSTANTS_DIGEST_BYTES);
 
 /// The network a daemon reports it runs, as `get_version.nettype` will carry
 /// it (`VC-2`) and as `/get_info.nettype` carries it today.
@@ -108,7 +125,7 @@ mod canonical;
 #[cfg(test)]
 mod tests {
     use super::canonical::{
-        canonical_form, digest_hex, CanonicalError, CANONICAL_FILES, CANONICAL_HEADER,
+        canonical_form, digest_bytes, hex_of, CanonicalError, CANONICAL_FILES, CANONICAL_HEADER,
     };
     use super::*;
 
@@ -146,7 +163,7 @@ mod tests {
     fn kat_pins_the_canonical_form_and_its_digest() {
         let canonical = canonical_form(&kat()).expect("the KAT documents canonicalise");
         assert_eq!(canonical, KAT_CANONICAL);
-        assert_eq!(digest_hex(&canonical), KAT_DIGEST);
+        assert_eq!(hex_of(&digest_bytes(&canonical)), KAT_DIGEST);
     }
 
     #[test]
@@ -158,7 +175,10 @@ mod tests {
         let pairs: Vec<(&str, &str)> = owned.iter().map(|(f, s)| (*f, s.as_str())).collect();
         let canonical = canonical_form(&pairs).expect("the live files canonicalise");
         assert_eq!(canonical, CONSENSUS_CONSTANTS_CANONICAL);
-        assert_eq!(digest_hex(&canonical), CONSENSUS_CONSTANTS_DIGEST);
+        assert_eq!(
+            hex_of(&digest_bytes(&canonical)),
+            CONSENSUS_CONSTANTS_DIGEST
+        );
         assert_eq!(CONSENSUS_CONSTANTS_DIGEST.len(), 64);
         assert!(CONSENSUS_CONSTANTS_DIGEST
             .bytes()
@@ -252,7 +272,7 @@ mod tests {
         // different digest: which file a constant lives in is part of the
         // binding, exactly as its key is.
         let swapped = [(CANONICAL_FILES[0], KAT_B), (CANONICAL_FILES[1], KAT_A)];
-        let d = digest_hex(&canonical_form(&swapped).unwrap());
+        let d = hex_of(&digest_bytes(&canonical_form(&swapped).unwrap()));
         assert_ne!(d, KAT_DIGEST);
         // And an unknown section name is simply a different form, not an
         // error — the file set is the caller's (`CANONICAL_FILES`), so the
@@ -349,29 +369,49 @@ mod tests {
         // file it lives in.
         let bumped_a = KAT_A.replace(r#""zeta": 7"#, r#""zeta": 8"#);
         assert_ne!(bumped_a, KAT_A, "the replacement found its target");
-        let d = digest_hex(
+        let d = hex_of(&digest_bytes(
             &canonical_form(&[(CANONICAL_FILES[0], &bumped_a), (CANONICAL_FILES[1], KAT_B)])
                 .unwrap(),
-        );
+        ));
         assert_ne!(d, KAT_DIGEST);
         assert_eq!(d.len(), 64);
 
         let bumped_b = KAT_B.replace(r#""a": 1"#, r#""a": 2"#);
         assert_ne!(bumped_b, KAT_B, "the replacement found its target");
-        let d = digest_hex(
+        let d = hex_of(&digest_bytes(
             &canonical_form(&[(CANONICAL_FILES[0], KAT_A), (CANONICAL_FILES[1], &bumped_b)])
                 .unwrap(),
-        );
+        ));
         assert_ne!(d, KAT_DIGEST);
 
         // A key rename with the value unchanged moves it too: a constant is a
         // name bound to a value, and the name is part of the binding (VC-D12).
         let renamed = KAT_A.replace(r#""zeta": 7"#, r#""zeta_renamed": 7"#);
-        let d = digest_hex(
+        let d = hex_of(&digest_bytes(
             &canonical_form(&[(CANONICAL_FILES[0], &renamed), (CANONICAL_FILES[1], KAT_B)])
                 .unwrap(),
-        );
+        ));
         assert_ne!(d, KAT_DIGEST);
+    }
+
+    #[test]
+    fn the_typed_digest_and_its_rendering_are_the_same_value() {
+        // The two constants must not be able to drift: one is the bytes the
+        // comparison uses, the other the string an operator reads.
+        assert_eq!(
+            CONSENSUS_CONSTANTS_DIGEST_HASH,
+            HashHex::from_hex(CONSENSUS_CONSTANTS_DIGEST).expect("the pin is 64 hex chars")
+        );
+        assert_eq!(
+            hex_of(&CONSENSUS_CONSTANTS_DIGEST_BYTES),
+            CONSENSUS_CONSTANTS_DIGEST
+        );
+        // And uppercase is the same value, not a mismatch (VC-R16).
+        assert_eq!(
+            HashHex::from_hex(&CONSENSUS_CONSTANTS_DIGEST.to_uppercase())
+                .expect("uppercase hex is the same 32 bytes"),
+            CONSENSUS_CONSTANTS_DIGEST_HASH
+        );
     }
 
     #[test]

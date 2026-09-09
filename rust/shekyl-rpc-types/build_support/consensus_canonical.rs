@@ -184,11 +184,17 @@ pub fn canonical_form(files: &[(&str, &str)]) -> Result<String, CanonicalError> 
     Ok(out)
 }
 
-/// Rule 8: SHA-256 of the canonical bytes, as 64 lowercase hex characters.
-pub fn digest_hex(canonical: &str) -> String {
-    let digest = Sha256::digest(canonical.as_bytes());
+/// Rule 6, as the 32 bytes themselves. The digest **is** a 32-byte value;
+/// hex is a rendering, and `VC-R16` keeps the two apart so the comparison
+/// downstream is byte equality with no hex on the path.
+pub fn digest_bytes(canonical: &str) -> [u8; 32] {
+    Sha256::digest(canonical.as_bytes()).into()
+}
+
+/// The wire and operator rendering of those bytes: 64 lowercase hex chars.
+pub fn hex_of(bytes: &[u8; 32]) -> String {
     let mut hex = String::with_capacity(64);
-    for byte in digest {
+    for byte in bytes {
         write!(hex, "{byte:02x}").expect("String::write_fmt is infallible");
     }
     hex
