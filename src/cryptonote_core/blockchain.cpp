@@ -3319,7 +3319,20 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
   if (!res)
     return false;
 
-  CHECK_AND_ASSERT_MES(max_used_block_height < m_db->height(), false,  "internal error: max used block index=" << max_used_block_height << " is not less then blockchain size = " << m_db->height());
+  // OUR height versus an index WE just computed. The sender did not choose
+  // this; a node whose DB is briefly inconsistent must not partition itself
+  // by dropping the peer that happened to deliver the tx (PWD-B7). The
+  // macro this replaced returned false without classifying, and add_tx's
+  // coarse ATTRIBUTABLE_FORM fold then severed. combine() keeps this
+  // reading when that fold lands on top.
+  if (!(max_used_block_height < m_db->height()))
+  {
+    MERROR("internal error: max used block index=" << max_used_block_height
+      << " is not less then blockchain size = " << m_db->height());
+    tvc.m_drop_verdict = shekyl_drop_verdict_combine(
+      tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
+    return false;
+  }
   max_used_block_id = m_db->get_block_hash_from_height(max_used_block_height);
   return true;
 }
@@ -3661,8 +3674,18 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     // ─── FCMP++ per-input validation ────────────────────────────────────
     for (const auto& txin : tx.vin)
     {
-      CHECK_AND_ASSERT_MES(std::holds_alternative<txin_to_key>(txin), false,
-        "FCMP++ tx inputs must be txin_to_key at Blockchain::check_tx_inputs");
+      if (!std::holds_alternative<txin_to_key>(txin))
+      {
+        // The input's own type, against a genesis-universal rule. Classified
+        // here rather than inherited from add_tx's coarse fold so a
+        // CHECK_AND_ASSERT_MES cannot again return unclassified from this
+        // function (PWD-B7).
+        MERROR_VER("FCMP++ tx inputs must be txin_to_key at Blockchain::check_tx_inputs");
+        tvc.m_verifivation_failed = true;
+        tvc.m_drop_verdict = shekyl_drop_verdict_combine(
+          tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+        return false;
+      }
       const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
 
       if (!in_to_key.key_offsets.empty())

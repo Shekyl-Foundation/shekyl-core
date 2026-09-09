@@ -154,6 +154,20 @@ TEST(peer_policy_drop_verdict, an_internal_failure_survives_a_later_form_verdict
   EXPECT_TRUE(shekyl_drop_verdict_is_internal_failure(folded));
 }
 
+/// The 5-arg wrapper's leftover arm starts unclassified (the macro this
+/// replaced wrote nothing), then classifies INTERNAL_FAILURE, then add_tx
+/// folds ATTRIBUTABLE_FORM. Absence must not win (PWD-B7 / Bugbot on #674).
+TEST(peer_policy_drop_verdict, the_wrapper_internal_error_survives_add_tx_form_fold)
+{
+  const uint8_t after_wrapper = shekyl_drop_verdict_combine(
+      SHEKYL_DROP_VERDICT_UNCLASSIFIED, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
+  const uint8_t after_add_tx = shekyl_drop_verdict_combine(
+      after_wrapper, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+
+  EXPECT_EQ(SHEKYL_DROP_VERDICT_INTERNAL_FAILURE, after_add_tx);
+  EXPECT_FALSE(shekyl_drop_verdict_severs(after_add_tx));
+}
+
 /// And a form verdict still reaches the gate when nothing contradicts it —
 /// the positive limb, without which every test above would pass on a rule
 /// that never severs anything.

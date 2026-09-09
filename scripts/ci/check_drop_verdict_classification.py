@@ -7,39 +7,47 @@
 # PWD-B7: a rejection that describes OUR STATE must classify itself, so it
 # cannot sever the peer that happened to send it.
 #
-# WHY A GATE AND NOT A COMMENT. The implementation left one bounded residual
-# risk, and it is a smaller copy of the defect the unit removed.
-# `Blockchain::check_tx_inputs` has 57 `return false` sites. Classifying all
-# of them affirmatively would be strictly sound, but it is a large blast
-# radius in consensus-adjacent C++ that the Rust port exists to avoid paying
-# for twice -- so its caller (`tx_pool.cpp`, the "tx used wrong inputs" arm)
-# classifies ATTRIBUTABLE_FORM by default, and the arms that describe our own
-# chain classify themselves as POLICY_OR_STATE before returning. The fold in
-# `shekyl-peer-policy` then keeps the precise reading.
+# WHY A GATE AND NOT A COMMENT. The implementation left two bounded residual
+# risks, both smaller copies of the defect the unit removed.
+# `Blockchain::check_tx_inputs` has dozens of `return false` sites.
+# Classifying all of them affirmatively would be strictly sound, but it is a
+# large blast radius in consensus-adjacent C++ that the Rust port exists to
+# avoid paying for twice -- so its caller (`tx_pool.cpp`, the "tx used wrong
+# inputs" arm) classifies ATTRIBUTABLE_FORM by default, and the arms that
+# describe our own chain classify themselves as POLICY_OR_STATE before
+# returning. The fold in `shekyl-peer-policy` then keeps the precise reading.
 #
-# That leaves exactly one way to reintroduce the bug: add an arm inside
-# `check_tx_inputs` that consults our chain state and forget to classify it.
-# It would then inherit the caller's ATTRIBUTABLE_FORM and sever an honest
-# peer whose transaction merely conflicts with our view. Its only guard would
-# be that someone remembers -- and a warning is not a control.
+# That left two ways to reintroduce the bug:
+#
+#   1. add an arm inside `check_tx_inputs` that consults our chain state and
+#      forget to classify it -- it inherits the caller's ATTRIBUTABLE_FORM;
+#   2. return false through `CHECK_AND_ASSERT_MES`, which cannot write a
+#      verdict, so the same fold promotes OUR invariant failure into a
+#      severing one. The 5-arg wrapper's "internal error: max used block
+#      index" arm was this hole (Bugbot on #674).
 #
 # WHY THIS INSTRUMENT AND NOT A COUNT. Pinning the number of `return false`
 # sites was the other candidate. It was rejected: a legitimate refactor moves
 # that count, so the pin would be moved routinely, and a pin that is moved
-# routinely is not read. This asserts the property actually at issue -- every
-# double-spend verdict is state-describing -- so it fires only on the case it
-# exists for, in both directions:
+# routinely is not read. This asserts the properties actually at issue --
+# every double-spend verdict is state-describing, and neither overload
+# returns through a macro that cannot classify -- so it fires only on the
+# case it exists for, in both directions:
 #
 #   * a new `m_double_spend` arm with no classification FAILS;
 #   * deleting the classification from an existing arm FAILS;
 #   * deleting every arm FAILS, by the rule-47 subject assertion below,
-#     because a shrinking subject is the direction nobody watches.
+#     because a shrinking subject is the direction nobody watches;
+#   * reintroducing `CHECK_AND_ASSERT_MES` inside either overload FAILS;
+#   * deleting the wrapper's INTERNAL_FAILURE classification FAILS.
 #
 # SCOPE, stated so it is not read as more than it is. This gate covers the
 # double-spend class, which is the one identifiable by a field the code
-# already sets. It does NOT prove every state-describing rejection in
+# already sets, and the macro-return class, which is identifiable by a
+# token. It does NOT prove every state-describing rejection in
 # `check_tx_inputs` is classified; no grep can, because "describes our state"
-# is not a syntactic property. It closes the named residual, not the category.
+# is not a syntactic property. It closes the named residuals, not the
+# category.
 
 import re
 import sys
@@ -87,6 +95,99 @@ SOURCES = sorted((ROOT / "src").rglob("*.cpp")) + sorted((ROOT / "src").rglob("*
 # territory, not this gate's.
 POOL_LOOKUP = "bool tx_memory_pool::have_tx_keyimg_as_spent"
 POOL_SPENT_SET = "m_spent_key_images"
+
+# The 5-arg wrapper is the one add_tx actually calls. Its leftover
+# CHECK_AND_ASSERT_MES could not write a verdict; the 4-arg body had a
+# second copy of the same shape. Both overloads must classify on every
+# false return they own, which a macro return cannot do.
+CHECK_TX_INPUTS_WRAPPER = (
+    "bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_height"
+)
+CHECK_TX_INPUTS_BODY = (
+    "bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc,"
+)
+INTERNAL_VERDICT = "SHEKYL_DROP_VERDICT_INTERNAL_FAILURE"
+# Invocation, not the token: a comment naming the macro must not fail the
+# gate, and CHECK_AND_ASSERT_MES_L1 / _THROW_MES must not either.
+ASSERT_MACRO_CALL = re.compile(r"\bCHECK_AND_ASSERT_MES\s*\(")
+
+
+def _function_body(lines: list[str], signature: str):
+    start = next((i for i, line in enumerate(lines) if signature in line), None)
+    if start is None:
+        return None, None
+    # Brace-match from the first `{` on or after the signature. Nested
+    # functions are not a concern: these are member definitions.
+    depth = 0
+    begun = False
+    body: list[str] = []
+    for i in range(start, len(lines)):
+        for ch in lines[i]:
+            if ch == "{":
+                depth += 1
+                begun = True
+            elif ch == "}":
+                depth -= 1
+        if begun:
+            body.append(lines[i])
+            if depth == 0:
+                return start + 1, body
+    return start + 1, body
+
+
+def check_wrapper_classifies_internal() -> bool:
+    path = ROOT / "src" / "cryptonote_core" / "blockchain.cpp"
+    if not path.is_file():
+        print(f"FAIL: {path} is missing; the check_tx_inputs wrapper cannot be checked.")
+        return False
+
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    rel = path.relative_to(ROOT)
+    ok = True
+
+    for label, signature, require_internal in (
+        ("5-arg wrapper", CHECK_TX_INPUTS_WRAPPER, True),
+        ("4-arg body", CHECK_TX_INPUTS_BODY, False),
+    ):
+        lineno, body = _function_body(lines, signature)
+        if lineno is None or body is None:
+            print(f"FAIL: `{signature}` not found in {rel}.")
+            print("  add_tx keys its drop verdict on this function returning")
+            print("  false. With it gone this gate cannot check the residual")
+            print("  Bugbot named, so it fails rather than passing vacuously.")
+            return False
+
+        macro_hits = [
+            f"{rel}:{lineno + i}"
+            for i, line in enumerate(body)
+            if ASSERT_MACRO_CALL.search(line)
+        ]
+        if macro_hits:
+            print(f"FAIL: `CHECK_AND_ASSERT_MES(` inside Blockchain::check_tx_inputs ({label}).")
+            print()
+            print("  That macro returns false without writing tvc.m_drop_verdict,")
+            print("  so add_tx's ATTRIBUTABLE_FORM fold promotes OUR invariant")
+            print("  failure into a severing one -- the hole PWD-B7 exists to")
+            print("  close. Expand it and classify the arm.")
+            print()
+            for hit in macro_hits:
+                print(f"    {hit}")
+            ok = False
+
+        if require_internal and not any(INTERNAL_VERDICT in line for line in body):
+            print("FAIL: the 5-arg `check_tx_inputs` wrapper no longer classifies")
+            print(f"  `{INTERNAL_VERDICT}`.")
+            print()
+            print("  Its leftover arm is `max_used_block_height < m_db->height()`:")
+            print("  OUR chain versus an index WE computed. The sender is not")
+            print("  answerable. Without this classification, add_tx's coarse")
+            print("  form fold severs an innocent peer (PWD-B7).")
+            ok = False
+
+    if ok:
+        print("PASS: neither check_tx_inputs overload returns through an unclassified macro,")
+        print(f"  and the 5-arg wrapper classifies `{INTERNAL_VERDICT}`.")
+    return ok
 
 
 def check_pool_trigger_scope() -> bool:
@@ -177,6 +278,9 @@ def main() -> int:
         return 1
 
     if not check_pool_trigger_scope():
+        return 1
+
+    if not check_wrapper_classifies_internal():
         return 1
 
     print(f"PASS: {len(sites)} double-spend rejection(s), all classified {STATE_VERDICT}:")

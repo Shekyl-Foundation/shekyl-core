@@ -68,7 +68,10 @@
   severs. Unclassified and internal failures keep the connection; the
   announce-size check (our weight limit) declines without disconnecting;
   a block-sync prepare failure still flushes the failed span so sync can
-  recover. Malformed input still drops.
+  recover. Malformed input still drops. The `check_tx_inputs` wrapper's
+  leftover height-versus-our-DB invariant classifies as internal-failure
+  at the failure site, so add_tx's coarse form fold cannot promote our
+  own inconsistency into a disconnect.
 
 - **`docs/FOLLOWUPS.md` genesis-hold triage.** Every pre-genesis row got a
   disposition pass: 44 resolved/overtaken/duplicate/won't-fix rows removed
