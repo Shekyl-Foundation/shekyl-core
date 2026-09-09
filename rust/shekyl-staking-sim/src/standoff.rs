@@ -56,7 +56,7 @@
 //!   network-event rate, not the funding-tx rate swept here (a proxy). Testnet
 //!   must measure the rate of the channel that actually carries the leak.
 //! - **The window cap is anti-griefing (liveness), not privacy.** A maximum
-//!   announce↔bond separation is a *ceiling* (don't let announced-but-unbonded
+//!   announce↔bond separation is a *ceiling* (don't let announced-but-released
 //!   `P`s linger); privacy wants the separation *large and random* — a floor.
 //!   The privacy-load-bearing controls (minimum effective spread + the
 //!   uniform-independent draw) are **wallet-only and consensus-unenforceable**

@@ -32,7 +32,7 @@
 //!   (`stake.is_some()`) gets its firewalled `P`-scan started, a non-staker gets
 //!   `Ok(None)` and pays nothing. Auto-start is the recommended default
 //!   (`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` SP-5): the `P`-scan is load-bearing for
-//!   funding discovery and unbond/retire reconcile, so a staker wallet that never
+//!   funding discovery and release/retire reconcile, so a staker wallet that never
 //!   scans silently accrues nothing and never retires.
 //! - [`Engine::start_pscan`] — the **on-demand** entry mirroring
 //!   [`Engine::start_refresh`]'s shape, for embedders that manage the start
@@ -103,7 +103,7 @@ use crate::engine::Engine;
 /// **Bounds.** Anything in [10 s, 600 s] is safe: below that only wastes RPC on
 /// no-op sweeps (nothing new finalizes that fast); above it the scan still keeps
 /// up trivially (each sweep clears the whole backlog) but funding-output discovery
-/// and unbond/retire reconcile latency degrade for no benefit. The value is not
+/// and release/retire reconcile latency degrade for no benefit. The value is not
 /// embedder-tunable (per `81-no-protocol-knowledge.mdc`); tests inject their own
 /// cadence through [`Engine::start_pscan_with`].
 ///

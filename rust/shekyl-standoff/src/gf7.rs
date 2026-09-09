@@ -59,7 +59,7 @@ pub enum TimelineEvent {
     // event — so emitting it made the sim's observable set include a phantom,
     // which is how the "second event" regenerated after method note 8. The bond
     // post is the single attributable entry event.
-    /// The principal dispatched a drain / unbond-shaped operation.
+    /// The principal dispatched a drain / release-shaped operation.
     DrainDispatched { at: LogicalTime },
     /// A principal refresh cycle ran (the wallet's periodic chain-sync
     /// rhythm — cadence, not content).

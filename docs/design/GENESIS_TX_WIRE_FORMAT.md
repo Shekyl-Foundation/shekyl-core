@@ -587,7 +587,7 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   markers in the wire source. **Reopen clause (rule-21):** if testnet reveals a
   needed change it lands then (pre-genesis = free). `bond_post` is
   **JoinMarket-only at genesis** (`bond_post.rs:44` rejects other `post_kind`s;
-  Rebond/Unbond/HoldingsUpdate are post-genesis). The still-moving parts
+  Rebond/Release/HoldingsUpdate are post-genesis). The still-moving parts
   (cover-entropy `shekyl-standoff` draw; bond magnitude/duration) are **off-wire**
   (cover = a confidential output; magnitude/duration = constants that fill
   `bonded_total`/`bond_credit`), so they don't touch the bytes. *(Collapses the

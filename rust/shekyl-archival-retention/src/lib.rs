@@ -84,10 +84,10 @@ pub use attestation_wire::{
 };
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,
-    holdings_update_pop, is_clean_interval_close, rebond_connect, rebond_pop,
-    slash_open_interval_to_append, unbond_connect, unbond_pop, HoldingsUpdateAddConnect,
+    holdings_update_pop, is_clean_interval_close, rebond_connect, rebond_pop, release_connect,
+    release_pop, slash_open_interval_to_append, HoldingsUpdateAddConnect,
     HoldingsUpdateConnectError, HoldingsUpdateDropConnect, HoldingsUpdatePopError, RebondConnect,
-    RebondConnectError, RebondPopError, UnbondConnect, UnbondConnectError, UnbondPopError,
+    RebondConnectError, RebondPopError, ReleaseConnect, ReleaseConnectError, ReleasePopError,
     MAX_BOND_BAD_INTERVALS,
 };
 pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
@@ -98,9 +98,9 @@ pub use bond_floor::{
     MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS,
 };
 pub use bond_post::{
-    bond_post_block_unique, bond_post_funding_floor_met, unbond_pre_cooldown_guards,
-    unbond_vin_statics, verify_holdings_update_add, verify_holdings_update_drop,
-    verify_join_market_bond_post, verify_rebond_bond_post, verify_unbond_bond_post, BondPostError,
+    bond_post_block_unique, bond_post_funding_floor_met, release_pre_cooldown_guards,
+    release_vin_statics, verify_holdings_update_add, verify_holdings_update_drop,
+    verify_join_market_bond_post, verify_rebond_bond_post, verify_release_bond_post, BondPostError,
 };
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,

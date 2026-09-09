@@ -26,9 +26,9 @@ use super::persona::{
     ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, BondPostPlacement,
     MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost,
 };
+use super::release::{AssembleRelease, AssembledReleasePost};
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
 use super::types::*;
-use super::unbond::{AssembleUnbond, AssembledUnbondPost};
 use crate::engine::bond_assembly::FundingInputContext;
 use crate::engine::drain_assembly::{AssembleDrain, AssembledDrain};
 use crate::engine::pscan::scan_step::{BlockRange, FundingOutputMatch, ScanStep, ScanStepResult};
@@ -288,14 +288,14 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
-    /// Ask the actor to assemble the full `Unbond` exit transaction
-    /// ([`AssembleUnbond`]) — the persona-bound wire bytes, not the vin. It
-    /// returned a bare `UnbondVin` before slice 2b; callers get
-    /// [`AssembledUnbondPost`] now.
+    /// Ask the actor to assemble the full `Release` exit transaction
+    /// ([`AssembleRelease`]) — the persona-bound wire bytes, not the vin. It
+    /// returned a bare `ReleaseVin` before slice 2b; callers get
+    /// [`AssembledReleasePost`] now.
     ///
     /// **`pub(crate)`; user-reachable through the exit lane as of PR-C.**
     /// The reachability gate's history: slice 3's engine walk, PR-B's
-    /// dispatch seam ([`Engine::submit_unbond`]) and its daemon walk each
+    /// dispatch seam ([`Engine::submit_release`]) and its daemon walk each
     /// landed without making anything user-callable; PR-C's
     /// `StakeFacade::unstake` (wallet-RPC + CLI) is what lifted the last
     /// two conditions (no RPC method, no CLI verb). The path's protections
@@ -304,13 +304,13 @@ impl StakeEngineHandle {
     /// (`unstake_facade` module docs).
     /// This is also the seam an actor-level test uses to prove the handler's
     /// persona-binding refusal is reachable, which a unit test on
-    /// `UnbondRecordState` cannot do.
+    /// `ReleaseRecordState` cannot do.
     ///
-    /// [`Engine::submit_unbond`]: crate::engine::Engine::submit_unbond
-    pub(crate) async fn assemble_unbond(
+    /// [`Engine::submit_release`]: crate::engine::Engine::submit_release
+    pub(crate) async fn assemble_release(
         &self,
-        msg: AssembleUnbond,
-    ) -> Result<AssembledUnbondPost, StakeEngineError> {
+        msg: AssembleRelease,
+    ) -> Result<AssembledReleasePost, StakeEngineError> {
         self.actor.ask(msg).await.map_err(collapse_send_error)
     }
 
@@ -367,7 +367,7 @@ impl StakeEngineHandle {
     }
 
     /// Retire a now-terminal bonded persona from the scan union (DQ8), wiping its
-    /// key. The `witness` proves eligibility (`Unbond` + `W`-lapse + finality-deep)
+    /// key. The `witness` proves eligibility (`Release` + `W`-lapse + finality-deep)
     /// — the actor cannot re-verify, so the witness is the guard. `funded_slots`
     /// carries the caller's set of slots still holding unspent funding: the actor
     /// resolves the witness to a slot and, if funded, defers the wipe

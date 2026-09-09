@@ -3,21 +3,21 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The `submit_unbond` dispatch seam — the Engine-side terminal-exit
+//! The `submit_release` dispatch seam — the Engine-side terminal-exit
 //! **request path** (`PRINCIPAL_STAKE_LIFECYCLE.md` PR-P4; the claim/drain
 //! sibling).
 //!
-//! [`AssembleUnbond`] is the production assembler and deliberately returns
+//! [`AssembleRelease`] is the production assembler and deliberately returns
 //! its reply **unbroadcast** (the CB-3 discipline: the builder never
 //! self-schedules). This module is the other half of that routing: one
-//! explicit exit intent in, one assembled `Unbond` dispatched through the
+//! explicit exit intent in, one assembled `Release` dispatched through the
 //! audited posture→submitter choke point ([`BroadcastSubmitter::local`] →
 //! [`submit_bound`]) out — **immediately**. The exit draws no decorrelation
 //! offset and takes no dispatch plan: the event it follows — a release
 //! cooldown expiring — is already public on-chain, so a delay would defer an
 //! irreversible operation the user asked for and hide nothing (the ruling on
-//! [`AssembleUnbond`]). That immediacy is why the sealed record is a
-//! [`PendingUnbond`], never a `PendingBondPost`: it must not enter WI-3's
+//! [`AssembleRelease`]). That immediacy is why the sealed record is a
+//! [`PendingRelease`], never a `PendingBondPost`: it must not enter WI-3's
 //! due-check, and its confirmation observable is its reservation settling
 //! (`remove_settled`), not a pscan bond-post match.
 //!
@@ -42,7 +42,7 @@
 //! ## Persist-before-dispatch
 //!
 //! The bond path's load-bearing invariant holds here too: no exit bytes
-//! reach any submitter unless a sealed [`PendingUnbond`] already holds them
+//! reach any submitter unless a sealed [`PendingRelease`] already holds them
 //! (pin P-2's sibling). The record carries the funding-input reservation (it
 //! feeds the shared
 //! [`reserved_gindexes`](shekyl_engine_state::PendingPostBlock::reserved_gindexes)
@@ -61,7 +61,7 @@
 //! never settle and holding it would brick the lane. A retryable or
 //! ambiguous failure, and a crash between seal and send, HOLD the record:
 //! funds-safe (reservation intact, stored bytes the only re-sendable
-//! form), not yet live — no driver resubmits claims, drains, or unbonds
+//! form), not yet live — no driver resubmits claims, drains, or releases
 //! today, and that is the registered dispatch-driver slice
 //! (`docs/FOLLOWUPS.md`: terminal-reject prune + byte-identical resubmit,
 //! #572), which cannot land piecemeal because the prune half is a
@@ -88,7 +88,7 @@ use std::sync::Arc;
 
 use shekyl_curve_tree::{AssembleInput, ClientError, Gindex};
 use shekyl_engine_file::WalletFile;
-use shekyl_engine_state::pending_post_block::{PendingPostState, PendingUnbond, SealAdmission};
+use shekyl_engine_state::pending_post_block::{PendingPostState, PendingRelease, SealAdmission};
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
@@ -109,7 +109,7 @@ use super::pscan::start::pending_post_store_for_engine;
 use super::signer::EngineSignerKind;
 use super::signing_assembly::{leaf_entry_from_chunk, tree_context_from};
 use super::stake_engine::{
-    AssembleUnbond, AssembledUnbondPost, PSlot, StakeEngineError, UnbondRecordState,
+    AssembleRelease, AssembledReleasePost, PSlot, ReleaseRecordState, StakeEngineError,
 };
 use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 use super::transaction_submitter::{
@@ -124,7 +124,7 @@ use super::Engine;
 /// ([`unstake_facade`](super::unstake_facade)) projects [`Self::submit`] into
 /// the public [`UnstakeOutcome`](super::unstake_facade::UnstakeOutcome).
 #[derive(Debug)]
-pub(crate) struct UnbondReceipt {
+pub(crate) struct ReleaseReceipt {
     /// The dispatched exit exactly as assembled (bytes + funding
     /// reservation) — the actor's reply embedded whole, not field-restated.
     // Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): this
@@ -133,7 +133,7 @@ pub(crate) struct UnbondReceipt {
     // — the same reader `DrainReceipt::drain` stages for; the daemon-walk
     // regtest e2e is the test consumer. The façade reads only `submit`.
     #[allow(dead_code)]
-    pub unbond: AssembledUnbondPost,
+    pub release: AssembledReleasePost,
     /// The daemon's submit verdict (network-exposed / already mined).
     pub submit: SubmitSuccess,
 }
@@ -141,7 +141,7 @@ pub(crate) struct UnbondReceipt {
 /// Why the exit request refused, at any rung: before assembly (no stake
 /// engine, the fee quote, state reads, the record fetch), inside it (the
 /// actor's own refusals, which carry the consensus-ordered
-/// `UnbondNotReady` causes), or at the dispatch choke point. Every arm is
+/// `ReleaseNotReady` causes), or at the dispatch choke point. Every arm is
 /// caller-actionable per rule 82 — this path's confirmation fires the
 /// irreversible persona-key wipe, so a refusal must name *which* condition
 /// and, where it can, when it lifts.
@@ -158,13 +158,13 @@ pub(crate) struct UnbondReceipt {
 /// inhabit. Scrubbing here would trade rule-82 actionability (a funding
 /// shortfall must say how short) for a boundary this path never crosses.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum UnbondRequestError {
+pub(crate) enum ReleaseRequestError {
     /// This wallet runs no stake engine — it is not a staker, and the exit
     /// path does not exist here.
     #[error("this wallet is not a staker: no stake engine is running")]
     NotStaker,
     /// A stake-actor call refused — handle mint, or the assembly itself,
-    /// whose arms carry the record-state causes (`UnbondNotReady`), the
+    /// whose arms carry the record-state causes (`ReleaseNotReady`), the
     /// persona-binding refusal (`RecordPersonaMismatch`), and the
     /// funding/construction failures.
     #[error("stake engine: {0}")]
@@ -211,13 +211,13 @@ pub(crate) enum UnbondRequestError {
     /// to assess. Reported as its own condition rather than an error bucket:
     /// the remedy (this persona never bonded, or its record lives on a chain
     /// this daemon does not have) is not the remedy for any refusal below.
-    #[error("the daemon holds no bond record for this persona; there is nothing to unbond")]
+    #[error("the daemon holds no bond record for this persona; there is nothing to release")]
     NoBondRecord,
     /// A live pending exit already exists for this persona. One live exit
     /// per persona: the exit debits the whole bonded total, so a second is
     /// doomed by construction — wait for the pending exit to settle.
-    #[error("a pending unbond exit already exists for this persona; one live exit per persona")]
-    UnbondPending,
+    #[error("a pending release exit already exists for this persona; one live exit per persona")]
+    ReleasePending,
     /// A live pending **bond post** exists for this persona. Its connect
     /// will change the bonded total this exit must debit exactly, so an exit
     /// assembled now is doomed at the chain (`DebitNotFull`) — wait for the
@@ -225,7 +225,7 @@ pub(crate) enum UnbondRequestError {
     /// fast-fail: the chain's exact-debit rule is the authoritative refusal.
     #[error(
         "a pending bond post is in flight for this persona; its connect changes the \
-         bonded total the exit debits — wait for it to confirm, then unbond"
+         bonded total the exit debits — wait for it to confirm, then release"
     )]
     BondPostPending,
     /// This exit's funding inputs are no longer selectable: a concurrent
@@ -250,11 +250,11 @@ pub(crate) enum UnbondRequestError {
     /// have propagated), and the one-live-exit lane stays shut until the
     /// record settles or the recovery slice (`docs/FOLLOWUPS.md`,
     /// dispatch-driver prune + resubmit) disposes of it.
-    #[error("unbond broadcast: {0}")]
+    #[error("release broadcast: {0}")]
     Submit(#[from] BroadcastSubmitError),
 }
 
-impl UnbondRequestError {
+impl ReleaseRequestError {
     /// A fail-closed **local** sealed-state read refusal, context named.
     fn state(context: &'static str, detail: impl std::fmt::Display) -> Self {
         Self::State {
@@ -308,12 +308,12 @@ where
     P: PendingTxEngine,
     Self: Send + Sync,
 {
-    /// Assemble and dispatch the terminal `Unbond` exit for the persona at
+    /// Assemble and dispatch the terminal `Release` exit for the persona at
     /// `p_slot` — the exit's request path (module docs).
     ///
     /// **Takes a slot, not the active persona, on purpose** — the anti-shape
     /// is `drain_to_principal`'s `active_persona()` resolution, which is
-    /// right for a `P`-lane spend and would brick unbonding every
+    /// right for a `P`-lane spend and would brick releasing every
     /// retired-but-bonded persona here (see [`ClaimSourceFor`]'s note: the
     /// persona being exited is routinely *not* the active one).
     ///
@@ -331,7 +331,7 @@ where
     /// decorrelated drain then sweeps to zero for the funded-gated
     /// retirement. A pool fragmented past
     /// [`MAX_RETENTION_FUNDING_INPUTS`](super::bond_assembly::MAX_RETENTION_FUNDING_INPUTS)
-    /// (the consensus vin cap minus the exit's own `Unbond` vin) caps to
+    /// (the consensus vin cap minus the exit's own `Release` vin) caps to
     /// the largest subset rather than refusing
     /// ([`SweepOverflowPolicy::CapLargest`]) — leftovers stay spendable for
     /// the drain's own capped passes. The sweep's shortfall bound is the
@@ -339,7 +339,7 @@ where
     /// at least the bond floor); the actor's `verify_debit_funding` is the
     /// authoritative sufficiency check.
     ///
-    /// `unbond_rpc` is the persona-isolated transport the record fetch rides
+    /// `release_rpc` is the persona-isolated transport the record fetch rides
     /// (§7.4 pin: the principal's daemon session cannot be passed here — it
     /// does not implement the marker). `pruning_landed` is the shared SP-R0
     /// witness every funding-output spender takes; tests pass
@@ -349,18 +349,18 @@ where
     // The `dead_code` staging allow retired with PR-C: the production caller
     // the rule-21 note reserved landed as
     // [`StakeFacade::unstake`](super::unstake_facade), which calls this seam.
-    pub(crate) async fn submit_unbond<T: PersonaIsolatedTransport>(
+    pub(crate) async fn submit_release<T: PersonaIsolatedTransport>(
         self_arc: Arc<RwLock<Self>>,
-        unbond_rpc: &T,
+        release_rpc: &T,
         p_slot: PSlot,
         pruning_landed: &SpentRecordsDurablyPruned,
-    ) -> Result<UnbondReceipt, UnbondRequestError> {
+    ) -> Result<ReleaseReceipt, ReleaseRequestError> {
         // Brief read: clone the actor handles + the ledger snapshot the
         // assembly needs (same discipline as submit_drain). The exit anchors
         // off the wallet's own synced tip, like a bond post.
         let (daemon, stake, curve_tree, pending_gate, chain_tip, snapshot) = {
             let g = self_arc.read().await;
-            let stake = g.stake_handle().ok_or(UnbondRequestError::NotStaker)?;
+            let stake = g.stake_handle().ok_or(ReleaseRequestError::NotStaker)?;
             (
                 g.daemon().clone(),
                 stake,
@@ -383,7 +383,7 @@ where
             daemon
                 .get_fee_estimates()
                 .await
-                .map_err(|_| UnbondRequestError::Fee(FeeEstimatorError::DaemonUnreachable))?,
+                .map_err(|_| ReleaseRequestError::Fee(FeeEstimatorError::DaemonUnreachable))?,
         )?;
 
         // Two independent reads, joined: the persona canonical id (a pure
@@ -400,8 +400,8 @@ where
         );
         let p_canonical_id = p_canonical_id?;
         let basis = basis.map_err(|e| match e {
-            SealBasisError::Pending(e) => UnbondRequestError::state("reserved gindexes", e),
-            SealBasisError::PScan(e) => UnbondRequestError::state("pscan state load", e),
+            SealBasisError::Pending(e) => ReleaseRequestError::state("reserved gindexes", e),
+            SealBasisError::PScan(e) => ReleaseRequestError::state("pscan state load", e),
         })?;
 
         // Borrowed from the loaded seal, like both sibling seams — no copy
@@ -414,7 +414,7 @@ where
         let reserved = basis.reserved();
 
         // Optimistic fast-fails, of two different strengths. One live exit
-        // per persona IS authoritatively serialized — by `seal_unbond` under
+        // per persona IS authoritatively serialized — by `seal_release` under
         // the write lock at the seal below, which re-checks it atomically.
         // The bond-post condition is a COURTESY fast-fail only (`classify_seal`
         // never re-checks it; the chain's exact-debit rule is the
@@ -424,30 +424,30 @@ where
         let (live_exit, live_post) = store
             .read(|block| {
                 (
-                    block.has_live_unbond_for(&p_canonical_id),
+                    block.has_live_release_for(&p_canonical_id),
                     block.has_live_post_for(&p_canonical_id),
                 )
             })
             .await
-            .map_err(|e| UnbondRequestError::state("pending-unbond read", e))?;
+            .map_err(|e| ReleaseRequestError::state("pending-release read", e))?;
         if live_exit {
-            return Err(UnbondRequestError::UnbondPending);
+            return Err(ReleaseRequestError::ReleasePending);
         }
         if live_post {
-            return Err(UnbondRequestError::BondPostPending);
+            return Err(ReleaseRequestError::BondPostPending);
         }
 
         // The record facts, as ONE read view bound to the persona they were
         // requested for (the binding fetch — never the bare form, which
         // returns facts with no record of whose they are). `None` means the
         // daemon holds no bond record: nothing to exit, its own condition.
-        let fetched = fetch_claim_source_for(unbond_rpc, p_canonical_id).await?;
-        let record = UnbondRecordState::from_claim_source(&fetched)
-            .ok_or(UnbondRequestError::NoBondRecord)?;
+        let fetched = fetch_claim_source_for(release_rpc, p_canonical_id).await?;
+        let record = ReleaseRecordState::from_claim_source(&fetched)
+            .ok_or(ReleaseRequestError::NoBondRecord)?;
 
         // Readiness BEFORE any curve-tree work, with consensus's own
         // predicates in consensus's own order — so a zero-balance record
-        // refuses as `NothingToUnbond` here rather than as a funding
+        // refuses as `NothingToRelease` here rather than as a funding
         // shortfall three stages later. The actor re-runs the same function
         // on the same operands at assembly (`ensure_exit_ready` is called,
         // not restated, at both sites, so the two verdicts cannot drift).
@@ -546,7 +546,7 @@ where
         // the readiness predicates before anything is built.
         let handle = stake.mint_handle(p_slot).await?;
         let assembled = stake
-            .assemble_unbond(AssembleUnbond {
+            .assemble_release(AssembleRelease {
                 handle,
                 record,
                 funding,
@@ -569,9 +569,9 @@ where
         // daemon-claimed-tip clock as the bond/claim/drain dispatch.
         let dispatch_tip = daemon_claimed_tip(&daemon)
             .await
-            .map_err(|e| UnbondRequestError::daemon_unreachable("dispatch tip", e))?;
+            .map_err(|e| ReleaseRequestError::daemon_unreachable("dispatch tip", e))?;
         let persona = *assembled.bound_tx.persona();
-        let sealed = PendingUnbond {
+        let sealed = PendingRelease {
             persona,
             tx_bytes: assembled.bound_tx.bytes().to_vec(),
             funding_gindexes: assembled.funding_gindexes.clone(),
@@ -582,18 +582,18 @@ where
                 // One locked decision, shared with the bond-post/claim/drain
                 // seams: persona dedup first (remedy: wait), then cross-kind
                 // gindex overlap (remedy: retry), then the generation guard.
-                let admission = block.seal_unbond(sealed, dispatch_tip, snapshot_generation);
+                let admission = block.seal_release(sealed, dispatch_tip, snapshot_generation);
                 (admission == SealAdmission::Admit, admission)
             })
             .await
-            .map_err(|e| UnbondRequestError::state("pending-unbond seal", e))?;
+            .map_err(|e| ReleaseRequestError::state("pending-release seal", e))?;
         match admission {
             SealAdmission::Admit => {}
-            SealAdmission::PersonaLive => return Err(UnbondRequestError::UnbondPending),
+            SealAdmission::PersonaLive => return Err(ReleaseRequestError::ReleasePending),
             // Same remedy — retry against a fresh snapshot — so both map to
             // the one retryable refusal, whose message names every cause.
             SealAdmission::InputRaced | SealAdmission::Stale => {
-                return Err(UnbondRequestError::InputRaced)
+                return Err(ReleaseRequestError::InputRaced)
             }
         }
 
@@ -605,13 +605,13 @@ where
         // (`SubmitterError`, `DAEMON_SUBMIT_VERDICT.md` §2.5), and this seam
         // can apply the terminal one where the claim/drain seams cannot:
         // this is provably the record's FIRST and only send (the seal
-        // happened in this call, and no driver resubmits unbonds), so a
+        // happened in this call, and no driver resubmits releases), so a
         // definite `RejectedTerminal` verdict means the bytes were never
         // admitted to any pool and never relayed — the transaction CANNOT
         // confirm, and holding its reservation would brick the persona's
         // one-live-exit lane forever (`remove_settled` retires only records
         // whose inputs get SPENT). The sealed record is therefore released
-        // (`remove_unbond`: byte-prune + reservation release + generation
+        // (`remove_release`: byte-prune + reservation release + generation
         // bump in one seal) before the refusal propagates — release-and-
         // rebuild, the remedy the taxonomy names. A `PersonaMismatch`
         // refusal never reached a transport at all, so it releases too.
@@ -621,19 +621,19 @@ where
         // the driver's reservation settlement / stall alarm owns their fate.
         let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
         match submitter.submit_bound(assembled.bound_tx.clone()).await {
-            Ok(submit) => Ok(UnbondReceipt {
-                unbond: assembled,
+            Ok(submit) => Ok(ReleaseReceipt {
+                release: assembled,
                 submit,
             }),
             Err(e) => {
                 if released_on_first_send_failure(&e) {
                     store
                         .mutate(|block| {
-                            let removed = block.remove_unbond(&persona);
+                            let removed = block.remove_release(&persona);
                             (removed.is_some(), ())
                         })
                         .await
-                        .map_err(|e| UnbondRequestError::state("terminal-reject release", e))?;
+                        .map_err(|e| ReleaseRequestError::state("terminal-reject release", e))?;
                 }
                 Err(e.into())
             }
@@ -703,14 +703,14 @@ mod tests {
     /// 4. dispatch rides ONLY the audited posture→submitter choke point
     ///    (`BroadcastSubmitter::local` + `submit_bound`) — never a bare
     ///    submitter and never a raw `DaemonClient` (T-DS-2);
-    /// 5. persist-before-dispatch: the pending-unbond seal (`seal_unbond`)
+    /// 5. persist-before-dispatch: the pending-release seal (`seal_release`)
     ///    textually precedes the network send.
     #[test]
     fn seam_routes_through_the_pipeline_and_the_submit_choke_point() {
-        let production = include_str!("unbond_dispatch.rs")
+        let production = include_str!("release_dispatch.rs")
             .split("\n#[cfg(test)]\nmod tests {")
             .next()
-            .expect("unbond_dispatch.rs has a production section");
+            .expect("release_dispatch.rs has a production section");
         // Code-only view: drop comment-only lines (`//`, `///`, `//!`).
         let code: String = production
             .lines()
@@ -771,7 +771,7 @@ mod tests {
             code.contains(terminal_arm),
             "the seam must classify the terminal verdict"
         );
-        let release_call = ".remove_unbond(";
+        let release_call = ".remove_release(";
         assert!(
             code.contains(release_call),
             "a terminal first-send refusal must release the sealed record"
@@ -787,14 +787,14 @@ mod tests {
         );
 
         // Persist-before-dispatch ordering pin.
-        let seal_call = ".seal_unbond(";
+        let seal_call = ".seal_release(";
         let seal_at = code
             .find(seal_call)
-            .expect("the seam must seal a pending unbond");
+            .expect("the seam must seal a pending release");
         let submit_at = code.find(choke_submit).expect("checked non-empty above");
         assert!(
             seal_at < submit_at,
-            "the pending-unbond seal must precede the network send"
+            "the pending-release seal must precede the network send"
         );
     }
 }

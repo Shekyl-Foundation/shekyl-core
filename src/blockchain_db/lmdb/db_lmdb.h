@@ -663,7 +663,7 @@ private:
   bool load_archival_bond_value(const crypto::hash& p_id,
     shekyl::db::ArchivalBondValue& out) const;
 
-  // Overrides the BlockchainDB virtual (Unbond release verify marshals it as
+  // Overrides the BlockchainDB virtual (Release release verify marshals it as
   // the slash-settled watermark); also called internally by the slash
   // scheduler. Private override — reached via the base pointer from
   // Blockchain, and as a member here.
@@ -950,7 +950,7 @@ private:
   MDB_dbi m_archival_slash_applied;   // P_id||shard||E -> slash idempotency bit
   MDB_dbi m_archival_slash_log;       // BE(height)||BE(seq) -> revert journal
   MDB_dbi m_archival_emission_claim_log; // BE(height)||BE(seq) -> claimed-set pre-image journal
-  MDB_dbi m_archival_bond_unbond_log; // BE(height)||BE(seq) -> Unbond record pre-image journal
+  MDB_dbi m_archival_bond_unbond_log; // BE(height)||BE(seq) -> Release record pre-image journal
   MDB_dbi m_archival_bond_holdings_update_log; // BE(height)||BE(seq) -> HoldingsUpdate record pre-image journal
   MDB_dbi m_archival_bond_rebond_log; // BE(height)||BE(seq) -> Rebond record pre-image journal
   MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)

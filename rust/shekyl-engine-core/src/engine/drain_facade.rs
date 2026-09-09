@@ -17,8 +17,8 @@
 //!   none. There is no argument through which a caller could point the drain
 //!   at another persona — and no `retired` flag either: the dispatch seam
 //!   resolves live-vs-retired from the sealed P-scan state itself
-//!   (`pending_unbonds`), so a live persona can never be treated as
-//!   terminally unbonded and the DS-4 `EXIT_FEE_RESERVE_ATOMIC` gate stays on
+//!   (`pending_releases`), so a live persona can never be treated as
+//!   terminally released and the DS-4 `EXIT_FEE_RESERVE_ATOMIC` gate stays on
 //!   exactly the orchestrator path `submit_drain` already runs. The
 //!   structural test below pins both absences.
 //! - **No `fee` parameter (P-lane fee-uniformity CONTRACT PIN).** The fee is

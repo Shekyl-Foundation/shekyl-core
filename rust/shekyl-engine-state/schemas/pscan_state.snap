@@ -205,7 +205,7 @@
         }
       },
       {
-        "name": "pending_unbonds",
+        "name": "pending_releases",
         "ty": {
           "name": "BTreeMap<K, V>",
           "ty": {
@@ -1247,7 +1247,7 @@
                     }
                   },
                   {
-                    "name": "unbond_epoch",
+                    "name": "release_epoch",
                     "ty": {
                       "name": "SettlementEpoch",
                       "ty": {

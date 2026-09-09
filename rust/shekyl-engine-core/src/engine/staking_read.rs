@@ -8,7 +8,7 @@
 //! One authoritative Engine read helper the wallet-RPC staking queries
 //! project from. Aggregates exclusively from the **authoritative** durable
 //! records — the sealed [`PScanState`] (funding outputs, bond-post reconcile
-//! evidence, pending unbonds, retired ledger) and the sealed
+//! evidence, pending releases, retired ledger) and the sealed
 //! [`PendingPostBlock`] (in-flight bond posts) — **never** from
 //! `StakingBlock::bonded_slots`, which is a hint, not truth
 //! (`shekyl-engine-state/src/staking_block.rs`). The only `StakingBlock`
@@ -29,7 +29,7 @@
 //! - **`bonded_principal_confirmed`** — Σ [`ARCHIVAL_BOND_FLOOR_ATOMIC`] over
 //!   distinct personas with a confirmed JoinMarket bond post
 //!   ([`PScanState::bond_post_matches`], `post_kind == 0`) that are neither
-//!   pending-unbond nor retired. The bond principal is the consensus bond
+//!   pending-release nor retired. The bond principal is the consensus bond
 //!   floor by construction (the WI-2 assemble path bonds exactly the floor).
 //! - **`bonded_principal_pending`** — the same floor over in-flight posts in
 //!   the sealed [`PendingPostBlock`] (Pending or Dispatched) **whose bond has
@@ -180,7 +180,7 @@ pub enum StakingReadError {
 /// separated from the sealed-file plumbing so the semantics are unit-testable
 /// against constructed states (including the pin-2 hint-divergence KAT).
 /// The **live-bond set**: distinct personas with a confirmed JoinMarket bond
-/// post (`post_kind == 0`) that are neither pending-unbond nor durably
+/// post (`post_kind == 0`) that are neither pending-release nor durably
 /// retired — the set the SP-6 reconcile evidence supports. The single
 /// derivation both the WI-RPC-1 balance and the `unstake` slot resolution
 /// read, so "who still holds a live bond" cannot drift between the query
@@ -192,8 +192,8 @@ pub(crate) fn live_bonded_personas(state: &PScanState) -> BTreeSet<PCanonicalId>
         .filter(|m| m.post_kind == 0)
         .map(|m| m.p_canonical_id)
         .collect();
-    for unbonded in state.pending_unbonds().keys() {
-        live.remove(unbonded);
+    for released in state.pending_releases().keys() {
+        live.remove(released);
     }
     for retired in state.retired_records() {
         live.remove(&retired.p_canonical_id);
@@ -235,10 +235,10 @@ pub(crate) fn staked_balance_from_records(
         Some(block) => {
             // Only posts whose bond has not yet been observed confirmed
             // on-chain. A post whose persona is already in `confirmed_bonds`
-            // is counted as confirmed (or excluded there as unbonding/retired)
+            // is counted as confirmed (or excluded there as releasing/retired)
             // and must not be re-counted here — key on the raw match set, not
             // the live set, so a bond that confirmed *and* is already
-            // unbonding is excluded from pending too.
+            // releasing is excluded from pending too.
             let count = block
                 .posts()
                 .iter()
@@ -476,14 +476,14 @@ mod tests {
 
     fn state(
         matches: Vec<BondPostRecord>,
-        pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
+        pending_releases: BTreeMap<PCanonicalId, SettlementEpoch>,
         retired: Vec<RetiredPersonaRecord>,
         outputs: Vec<PFundingOutputRecord>,
     ) -> PScanState {
         PScanState::new(
             PScanCursor::at(BlockHeight::from_raw(5_000), [0x11; 32]),
             BTreeMap::new(),
-            pending_unbonds,
+            pending_releases,
             matches,
             outputs,
             retired,
@@ -511,16 +511,16 @@ mod tests {
     }
 
     /// Confirmed principal counts distinct live JoinMarket personas ×
-    /// the bond floor: non-JoinMarket kinds, pending unbonds, retired
+    /// the bond floor: non-JoinMarket kinds, pending releases, retired
     /// personas, and duplicate matches for one persona are all excluded.
     #[test]
     fn confirmed_principal_counts_distinct_live_joinmarket_bonds() {
-        let mut unbonds = BTreeMap::new();
-        unbonds.insert(persona(3), SettlementEpoch::from_raw(9));
+        let mut releases = BTreeMap::new();
+        releases.insert(persona(3), SettlementEpoch::from_raw(9));
         let retired = vec![RetiredPersonaRecord {
             p_slot: PSlot::from_raw(4),
             p_canonical_id: persona(4),
-            unbond_epoch: SettlementEpoch::from_raw(1),
+            release_epoch: SettlementEpoch::from_raw(1),
             retired_epoch: SettlementEpoch::from_raw(2),
         }];
         let s = state(
@@ -528,10 +528,10 @@ mod tests {
                 bond_match(1, 0), // live
                 bond_match(1, 0), // duplicate of live — counted once
                 bond_match(2, 2), // non-JoinMarket kind — excluded
-                bond_match(3, 0), // pending unbond — excluded
+                bond_match(3, 0), // pending release — excluded
                 bond_match(4, 0), // retired — excluded
             ],
-            unbonds,
+            releases,
             retired,
             Vec::new(),
         );
@@ -592,14 +592,14 @@ mod tests {
         );
     }
 
-    /// A bond that has confirmed **and** entered pending-unbond within the
+    /// A bond that has confirmed **and** entered pending-release within the
     /// reconcile window is excluded from pending (keyed on the raw match set,
     /// not the live set) — it counts in neither leg, not as phantom pending.
     #[test]
-    fn confirmed_then_unbonding_post_is_not_pending() {
-        let mut unbonds = BTreeMap::new();
-        unbonds.insert(persona(1), SettlementEpoch::from_raw(9));
-        let s = state(vec![bond_match(1, 0)], unbonds, Vec::new(), Vec::new());
+    fn confirmed_then_releasing_post_is_not_pending() {
+        let mut releases = BTreeMap::new();
+        releases.insert(persona(1), SettlementEpoch::from_raw(9));
+        let s = state(vec![bond_match(1, 0)], releases, Vec::new(), Vec::new());
         let mut block = PendingPostBlock::empty();
         let g = block.generation();
         assert_eq!(block.seal_post(pending_post(1), g), SealAdmission::Admit);
@@ -608,7 +608,7 @@ mod tests {
         assert_eq!(
             b.bonded_principal_confirmed,
             AtomicUnits::ZERO,
-            "confirmed-but-unbonding is excluded from confirmed"
+            "confirmed-but-releasing is excluded from confirmed"
         );
         assert_eq!(
             b.bonded_principal_pending,

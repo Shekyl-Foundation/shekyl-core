@@ -181,10 +181,10 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // runs after the gather has already done the work. Debit arm only:
         // the credit arm triggers no scan, so gating it would spend a hybrid
         // verify to protect nothing.
-        if parsed.bond_post_is_unbond() {
+        if parsed.bond_post_is_release() {
             if let Err(failure) = verify_debit_slot_possession(&parsed) {
                 tracing::debug!(
-                    "submit rejected: unbond bond-post slot failed the possession \
+                    "submit rejected: release bond-post slot failed the possession \
                      pre-gate (no fact gather performed)"
                 );
                 return Ok(SubmitVerdict::Rejected {
@@ -198,7 +198,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // the vin's claimed p_canonical_id (BP2 pins the claim to the pubkey
         // in Phase C). Which question depends on the post kind, and the two
         // are opposites: JoinMarket wants the record ABSENT (§8.7.1 BP3),
-        // Unbond wants it PRESENT with its contents as verify operands
+        // Release wants it PRESENT with its contents as verify operands
         // (§8.7.1.1). The other non-JoinMarket kinds have no producer and
         // are refused in Phase C, so they ask JoinMarket's question and
         // never reach a verdict that consumes the answer.
@@ -215,8 +215,8 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 _ => None,
             });
         let bond_probe = bond_probe_id.as_ref().map(|id| {
-            match (parsed.bond_post_is_unbond(), bond_auth) {
-                (true, Some(auth_pubkey)) => BondProbe::Unbond {
+            match (parsed.bond_post_is_release(), bond_auth) {
+                (true, Some(auth_pubkey)) => BondProbe::Release {
                     p_canonical_id: id,
                     auth_pubkey,
                     bond_debit: parsed
@@ -249,7 +249,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // debit arm's possession pre-gate, which refuses BEFORE this point
         // and therefore before the snapshot exists. That ordering is the
         // point of the gate (no lock-held scan for an unauthenticated
-        // caller), and its visible cost is that a malformed-signature Unbond
+        // caller), and its visible cost is that a malformed-signature Release
         // whose txid collides with a pooled one now reads Rejected{Malformed}
         // rather than AlreadyInPool. That is the more accurate answer for
         // bytes that are in fact malformed, and it discloses less.
@@ -386,10 +386,10 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             ));
         }
         // The §8.7.1.1 twin: the debit arm additionally needs the record's
-        // CONTENTS, so an Unbond snapshot must carry the fact bundle.
-        if parsed.bond_post_is_unbond() && facts.unbond.is_none() {
+        // CONTENTS, so a Release snapshot must carry the fact bundle.
+        if parsed.bond_post_is_release() && facts.release.is_none() {
             return Err(EngineFault::ShimContract(
-                "unbond snapshot carries no §8.7.1.1 fact bundle (probe skipped?)",
+                "release snapshot carries no §8.7.1.1 fact bundle (probe skipped?)",
             ));
         }
         // The §8.7.2 E6/E7 contract twin: an emission snapshot must carry
@@ -487,7 +487,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //     key-image leg — someone else consumed the claim slot.
         //     The debit arm cannot use that fact in the opposite direction,
         //     because the record does NOT disappear on exit:
-        //     `apply_archival_unbond` rewrites the row with a zero bonded
+        //     `apply_archival_release` rewrites the row with a zero bonded
         //     total. §8.7.1.1 UB2 therefore re-checks the BALANCE Phase C
         //     verified against — the vin's own `bond_debit`, which the
         //     battery required to equal the record's total.
@@ -506,7 +506,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //     rejected tx is never relayed) — see §8.7.1.1's UB2 note, which
         //     carries the full argument and the terminal-reject-prune link.
         if parsed.kind == SubmitTxKind::BondPost {
-            let slot_moved = if parsed.bond_post_is_unbond() {
+            let slot_moved = if parsed.bond_post_is_release() {
                 let debit = parsed.bond_post().map(|(_, bond)| bond.bond_debit);
                 match (fresh.bond_record_bonded_total, debit) {
                     // The balance moved under a fixed debit: an exit zeroed
@@ -533,7 +533,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             }
         }
         // 3c. Emission claim-slot conflict, the §8.7.2 E6 re-check: the
-        //     claimant record vanished (an Unbond connected) or a claimed
+        //     claimant record vanished (a Release connected) or a claimed
         //     epoch was consumed by a competing claim during Phase C.
         if parsed.kind == SubmitTxKind::Emission && fresh.emission_claim_conflict == Some(true) {
             return Ok(SubmitVerdict::Rejected {

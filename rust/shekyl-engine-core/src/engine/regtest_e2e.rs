@@ -3195,26 +3195,26 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 
 /// The **daemon walk** (`PRINCIPAL_STAKE_LIFECYCLE.md` PR-P4; the FOLLOWUPS
 /// registration this discharges): the byte-level proposition the engine walk
-/// (`retire_walk.rs`) structurally cannot judge — *the `Unbond` bytes the
+/// (`retire_walk.rs`) structurally cannot judge — *the `Release` bytes the
 /// wallet assembles are the bytes consensus accepts*. Before this test,
-/// nothing had ever put an `Unbond` on a wire; `RF-D9` is the precedent for
+/// nothing had ever put a `Release` on a wire; `RF-D9` is the precedent for
 /// why that is a proposition only building can settle (a serve-credit wire
 /// that round-tripped in Rust and had never been through the C++ oracle
 /// failed on first contact, twice, with misattributed errors).
 ///
 /// The walk drives the **production dispatch seam**
-/// ([`Engine::submit_unbond`]) — never a test shim: record fetch over the
+/// ([`Engine::submit_release`]) — never a test shim: record fetch over the
 /// persona-isolated transport, readiness via consensus's own predicates,
-/// sweep-all funding, `AssembleUnbond` in the actor, the `PendingUnbond`
+/// sweep-all funding, `AssembleRelease` in the actor, the `PendingRelease`
 /// persist-before-dispatch seal, and the posture→submitter choke point —
 /// against a real daemon over real RPC. Two assertions ARE the proposition:
 ///
 /// - **submit-accept**: native `/submit_transaction` (the §8.7.1.1 UB
-///   battery, `verify_unbond_bond_post` — the same function the block path
+///   battery, `verify_release_bond_post` — the same function the block path
 ///   calls) admits the wallet-built exit;
 /// - **block-connect**: after mining, the daemon's bond-record row is
 ///   **present with `bonded_total == 0`** — presence plus zero, the
-///   connect's own write (`apply_archival_unbond` preserves the row and
+///   connect's own write (`apply_archival_release` preserves the row and
 ///   zeroes the balance; the debit arm's terminal fact is the *balance*,
 ///   never row absence), observed as a transition from the pre-submit
 ///   read's positive balance.
@@ -3244,12 +3244,12 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
 /// it exists so a façade-layer regression can never mask a wire one.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "PR-B daemon walk; needs SHEKYLD_BIN + a built regtest daemon"]
-async fn e2e_unbond_accepted_and_connected() {
+async fn e2e_release_accepted_and_connected() {
     use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
     use super::emission_source::fetch_claim_source_for;
     use super::prpc::LocalNodeRpc;
+    use super::release_dispatch::ReleaseRequestError;
     use super::stake_engine::{PSlot, StakeEngineError};
-    use super::unbond_dispatch::UnbondRequestError;
     use shekyl_archival_retention::bond_floor;
 
     const SLOT: u32 = 0;
@@ -3286,13 +3286,13 @@ async fn e2e_unbond_accepted_and_connected() {
     // transport — the SAME fetch the seam rides. The positive balance here
     // is what makes the post-connect zero an observed *transition* rather
     // than a state that could have held all along.
-    let unbond_rpc = LocalNodeRpc::new(
+    let release_rpc = LocalNodeRpc::new(
         format!("http://127.0.0.1:{}", daemon.rpc_port),
         Duration::from_secs(10),
     )
     .await
     .expect("loopback exit transport");
-    let before = fetch_claim_source_for(&unbond_rpc, fixture.persona_id)
+    let before = fetch_claim_source_for(&release_rpc, fixture.persona_id)
         .await
         .expect("pre-submit record fetch");
     let bonded_before = before
@@ -3312,31 +3312,36 @@ async fn e2e_unbond_accepted_and_connected() {
     let pruning_landed = SpentRecordsDurablyPruned::for_test();
     let mut receipt = None;
     for attempt in 0..24 {
-        match super::Engine::submit_unbond(fixture.arc.clone(), &unbond_rpc, slot, &pruning_landed)
-            .await
+        match super::Engine::submit_release(
+            fixture.arc.clone(),
+            &release_rpc,
+            slot,
+            &pruning_landed,
+        )
+        .await
         {
             Ok(r) => {
                 receipt = Some(r);
                 break;
             }
-            Err(UnbondRequestError::Stake(StakeEngineError::Assembly(
+            Err(ReleaseRequestError::Stake(StakeEngineError::Assembly(
                 e @ (BondAssemblyError::ReferenceResyncing { .. }
                 | BondAssemblyError::NoSpendableFunding
                 | BondAssemblyError::OutputNotYetDrained { .. }
                 | BondAssemblyError::InsufficientFunding { .. }),
             ))) => {
-                eprintln!("unbond attempt {attempt}: {e}; mining more");
+                eprintln!("release attempt {attempt}: {e}; mining more");
                 daemon.generate_blocks(10, &fixture.principal).await;
                 refresh(&fixture.arc).await;
             }
-            Err(e) => panic!("submit_unbond: {e}"),
+            Err(e) => panic!("submit_release: {e}"),
         }
     }
     let receipt = receipt.expect("the exit must assemble and dispatch within the retry budget");
     eprintln!(
-        "unbond exit ACCEPTED by the daemon submit engine: {} B, {} funding input(s), {:?}",
-        receipt.unbond.bound_tx.bytes().len(),
-        receipt.unbond.funding_gindexes.len(),
+        "release exit ACCEPTED by the daemon submit engine: {} B, {} funding input(s), {:?}",
+        receipt.release.bound_tx.bytes().len(),
+        receipt.release.funding_gindexes.len(),
         receipt.submit,
     );
 
@@ -3344,8 +3349,8 @@ async fn e2e_unbond_accepted_and_connected() {
     // terminal fact back from the daemon. Pool-drain alone proves only that
     // the tx LEFT the pool (a terminal reject leaves it too); the
     // discriminating observable is the connect's own write.
-    mine_until_pool_drains(&daemon, &fixture.principal, "accepted unbond exit", 1).await;
-    let after = fetch_claim_source_for(&unbond_rpc, fixture.persona_id)
+    mine_until_pool_drains(&daemon, &fixture.principal, "accepted release exit", 1).await;
+    let after = fetch_claim_source_for(&release_rpc, fixture.persona_id)
         .await
         .expect("post-connect record fetch");
     let bond_after = after
@@ -3355,11 +3360,11 @@ async fn e2e_unbond_accepted_and_connected() {
         .expect("the exit PRESERVES the record row — presence plus zero, never absence");
     assert_eq!(
         bond_after.bonded_total_atomic, 0,
-        "block-connect must zero the record's bonded total (apply_archival_unbond); \
+        "block-connect must zero the record's bonded total (apply_archival_release); \
          a positive balance here means the exit left the pool WITHOUT connecting"
     );
     eprintln!(
-        "unbond exit CONNECTED: bonded total {bonded_before} → 0, row preserved — \
+        "release exit CONNECTED: bonded total {bonded_before} → 0, row preserved — \
          the assembled bytes are the bytes consensus accepts (the RF-D9 proposition \
          for the exit wire)"
     );
@@ -3391,7 +3396,7 @@ async fn e2e_unbond_accepted_and_connected() {
 /// 1. `unstake` → Broadcast; an immediate second `unstake` refuses
 ///    `ExitInProgress` (the one-live-exit lane, through the public verb).
 /// 2. Connect: the daemon row reads back present with `bonded_total == 0`.
-/// 3. The production P-scan observes the exit (`pending_unbonds`) and the
+/// 3. The production P-scan observes the exit (`pending_releases`) and the
 ///    payout pair as slot funding.
 /// 4. `collect_unstaked` → `Swept` with **`remainder == 0`** (the pool is
 ///    exactly the payout pair, one pass) and a nonzero `swept`.
@@ -3399,7 +3404,7 @@ async fn e2e_unbond_accepted_and_connected() {
 ///    again → `NothingLeft` (the completion contract, end-to-end).
 /// 6. Active moves away (slot 1 activation — retirement skips the active
 ///    slot by design), the claim window expires on-chain, and the sweep
-///    retires the persona: `pending_unbonds` empties into
+///    retires the persona: `pending_releases` empties into
 ///    `retired_records`, and the wipe is observed through a DIFFERENT
 ///    handler (`persona_canonical_id` refuses) — never graded by the
 ///    retire call's own return.
@@ -3528,7 +3533,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
         &fixture.pscan_seal,
         "the observed exit + payout funding",
         |s| {
-            s.pending_unbonds().contains_key(&fixture.persona_id)
+            s.pending_releases().contains_key(&fixture.persona_id)
                 && s.funding_outputs().iter().any(|r| r.p_slot == slot)
         },
     )
@@ -3637,9 +3642,9 @@ async fn e2e_unstake_collect_retire_composed_arc() {
     .await;
     assert!(
         !retired_state
-            .pending_unbonds()
+            .pending_releases()
             .contains_key(&fixture.persona_id),
-        "retirement must move the exit out of pending_unbonds"
+        "retirement must move the exit out of pending_releases"
     );
 
     // The wipe, observed through a DIFFERENT handler than the retire path

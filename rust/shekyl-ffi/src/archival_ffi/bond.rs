@@ -3,13 +3,13 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Bond-post verify / connect / pop FFI (JoinMarket, Unbond, HoldingsUpdate, Rebond).
+//! Bond-post verify / connect / pop FFI (JoinMarket, Release, HoldingsUpdate, Rebond).
 
 use shekyl_archival_retention::{
     debit_auth_pin, holdings_update_add_connect, holdings_update_drop_connect, holdings_update_pop,
-    rebond_connect, rebond_pop, unbond_connect, unbond_pop, verify_holdings_update_add,
+    rebond_connect, rebond_pop, release_connect, release_pop, verify_holdings_update_add,
     verify_holdings_update_drop, verify_join_market_bond_post, verify_rebond_bond_post,
-    verify_unbond_bond_post, whole_record_last_served, ArchivalBondPostVin, BadInterval,
+    verify_release_bond_post, whole_record_last_served, ArchivalBondPostVin, BadInterval,
     BondPostKind, DebitAuthError, HoldingsDescriptor, HoldingsKind, LastServedScan, ShardSet,
     ShardSetError, HYBRID_PUBKEY_CANONICAL_BYTES,
 };
@@ -22,7 +22,7 @@ fn holdings_kind_from_u8(kind: u8) -> Result<HoldingsKind, u8> {
 }
 
 /// Run `f` over a bound-checked `&[u64]` marshaled from a raw C pointer at the
-/// bond-post FFI boundary (shared by the JoinMarket and Unbond entry points).
+/// bond-post FFI boundary (shared by the JoinMarket and Release entry points).
 ///
 /// `len == 0` passes an empty slice (a null pointer is allowed only then). A null
 /// pointer with a positive `len` is a caller marshaling bug (`ERR_NULL_PTR`), and a
@@ -81,9 +81,9 @@ unsafe fn with_bond_post_u8_slice<R>(
 }
 
 /// Marshal the shared bond-post args into an [`ArchivalBondPostVin`] for the JoinMarket
-/// and Unbond FFI entry points. The `post_kind` byte is decoded at each call site (the
+/// and Release FFI entry points. The `post_kind` byte is decoded at each call site (the
 /// two name an out-of-range byte differently — `ERR_POST_KIND` vs
-/// `ERR_POST_KIND_NOT_UNBOND`), so it arrives here already typed. The C++ hybrid pubkey
+/// `ERR_POST_KIND_NOT_RELEASE`), so it arrives here already typed. The C++ hybrid pubkey
 /// and `P_id` hint stay consensus-side, so the vin carries placeholders for them.
 ///
 /// `bond_spend_pk` is marshaled for real, NOT placeholdered: the §9.11 coupling
@@ -201,7 +201,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
     }
 }
 
-/// Verify `Unbond` bond-post semantics after C++ hybrid-pubkey and `P_id` checks
+/// Verify `Release` bond-post semantics after C++ hybrid-pubkey and `P_id` checks
 /// (gate-4 §3.5 debit path; `PHASE_2B_FSM_RETOOL.md` P2B-8).
 ///
 /// Marshaled facts (C++ owns the LMDB I/O): `record_exists` / `record_bonded_total` /
@@ -220,11 +220,11 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
 /// connect-ordering race the module docs name).
 /// # Safety
 /// `bond_spend_pk_ptr` must be valid for `bond_spend_pk_len` bytes, or null when
-/// the len is 0 (an `Unbond` vin never carries the §9.11 field, so a conforming
+/// the len is 0 (a `Release` vin never carries the §9.11 field, so a conforming
 /// caller passes null/0; the shared marshaler rejects anything else as
 /// `ERR_BOND_SPEND_PK_COUPLING`).
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
+pub unsafe extern "C" fn shekyl_archival_verify_release_bond_post(
     post_kind: u8,
     holdings_kind: u8,
     shard_ids_ptr: *const u64,
@@ -244,7 +244,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
 ) -> u8 {
     let post_kind = match BondPostKind::from_u8(post_kind) {
         Ok(k) => k,
-        Err(_) => return SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND,
+        Err(_) => return SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE,
     };
     let vin = match bond_post_vin_from_raw(
         post_kind,
@@ -269,7 +269,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
     // rejected (`RECORD_MISSING`) before the cooldown check, so we neither require
     // the serve-credit pointer nor fold it when there is no record. This keeps the
     // record-missing verdict independent of cooldown marshaling and skips the
-    // reverse-cursor fold on an already-invalid tx; `verify_unbond_bond_post`
+    // reverse-cursor fold on an already-invalid tx; `verify_release_bond_post`
     // remains the sole decider of record validity and the cooldown gate.
     let last_served_epoch = if record_bonded_total.is_some() {
         // The served shards' last-served epochs → the whole-record anchor (Rust);
@@ -294,7 +294,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
     } else {
         Some(last_settled_slash_epoch)
     };
-    match verify_unbond_bond_post(
+    match verify_release_bond_post(
         &vin,
         record_bonded_total,
         record_bad_interval_count,
@@ -309,11 +309,11 @@ pub unsafe extern "C" fn shekyl_archival_verify_unbond_bond_post(
 
 /// Fold the served shards' last-served epochs into the whole-record
 /// release-cooldown anchor — **the same fold** consensus applies inside
-/// [`shekyl_archival_verify_unbond_bond_post`], exported so a marshaling caller
+/// [`shekyl_archival_verify_release_bond_post`], exported so a marshaling caller
 /// reports the anchor instead of deriving a second one.
 ///
 /// The claim-source RPC is that caller: the wallet needs the anchor to answer
-/// `unbond_readiness(P)` and to know whether an `Unbond` can verify at all, and
+/// `release_readiness(P)` and to know whether a `Release` can verify at all, and
 /// a C++-side or wallet-side re-fold would be a second derivation of a
 /// consensus operand — the failure mode `close_block_height` already forbids
 /// ("as the daemon sourced it; the wallet never re-derives").
@@ -374,7 +374,7 @@ pub unsafe extern "C" fn shekyl_archival_whole_record_last_served(
 ///
 /// This is the **kind→scan decision**, exhaustive on [`HoldingsKind`]: a third
 /// variant fails to compile in [`HoldingsKind::last_served_scan`] until its
-/// arm is written. The two C++ gather sites (Unbond verify in
+/// arm is written. The two C++ gather sites (Release verify in
 /// `blockchain.cpp`, claim-source marshal in `archival_claim_source.cpp`)
 /// ask this instead of branching on `is_complete_tree()` independently.
 ///
@@ -410,7 +410,7 @@ pub unsafe extern "C" fn shekyl_archival_last_served_scan(
 /// `bond_spend_pk` (`shekyl-archival-retention::debit_auth_pin`).
 ///
 /// The single authorization gate for a **value-out** bond-post — selected by
-/// `bond_debit > 0`, not by post kind. Consensus consumers are `Unbond` and
+/// `bond_debit > 0`, not by post kind. Consensus consumers are `Release` and
 /// the **drop** arm of `HoldingsUpdate`; `Rebond` and `HoldingsUpdate`-add
 /// are credit paths that consensus authorizes with the identity key, and
 /// applying this pin to them would reject legitimate posts. The C++ block path calls this;
@@ -464,8 +464,8 @@ pub unsafe extern "C" fn shekyl_archival_debit_auth_pin(
     }
 }
 
-/// Fold the `Unbond` block-connect state transition (gate-4 §4.3 "On confirm";
-/// `shekyl-archival-retention::bond_connect::unbond_connect`).
+/// Fold the `Release` block-connect state transition (gate-4 §4.3 "On confirm";
+/// `shekyl-archival-retention::bond_connect::release_connect`).
 ///
 /// The C++ connect arm owns the LMDB write transaction and writes **exactly**
 /// what the outs dictate: the record becomes `post_bonded_total_out` /
@@ -481,20 +481,20 @@ pub unsafe extern "C" fn shekyl_archival_debit_auth_pin(
 ///
 /// The record's holdings arrive as `(kind, held shard count)` — the fold's
 /// floor invariant never reads shard-id values (`bond_floor_of`), so the
-/// caller marshals the count only (the `shekyl_archival_unbond_pop` shape),
+/// caller marshals the count only (the `shekyl_archival_release_pop` shape),
 /// not a pointer to the record's shard-id array.
 ///
 /// # Safety
 /// All out-pointers must be valid for writes.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_archival_unbond_connect(
+pub unsafe extern "C" fn shekyl_archival_release_connect(
     record_bonded_total: u64,
     record_holdings_kind: u8,
     record_held_shard_count: u64,
     record_bad_interval_count: usize,
     vin_bond_debit: u64,
     total_bonded_atomic: u64,
-    unbond_settlement_epoch: u64,
+    release_settlement_epoch: u64,
     post_bonded_total_out: *mut u64,
     post_holdings_kind_out: *mut u8,
     post_held_shard_count_out: *mut u64,
@@ -509,24 +509,24 @@ pub unsafe extern "C" fn shekyl_archival_unbond_connect(
         || interval_close_end_out.is_null()
         || new_total_bonded_out.is_null()
     {
-        return SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR;
+        return SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_NULL_PTR;
     }
     let Ok(kind) = HoldingsKind::from_u8(record_holdings_kind) else {
-        return SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_HOLDINGS_KIND;
+        return SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_HOLDINGS_KIND;
     };
     // A u64 count cannot exceed usize on 64-bit targets; saturate on narrower
     // ones — an over-cap count fails the floor invariant identically.
     let held_shard_count = usize::try_from(record_held_shard_count).unwrap_or(usize::MAX);
-    let effect = match unbond_connect(
+    let effect = match release_connect(
         record_bonded_total,
         kind,
         held_shard_count,
         record_bad_interval_count,
         vin_bond_debit,
         total_bonded_atomic,
-        unbond_settlement_epoch,
+        release_settlement_epoch,
     ) {
-        Err(e) => return map_unbond_connect_error(e),
+        Err(e) => return map_release_connect_error(e),
         Ok(effect) => effect,
     };
     unsafe {
@@ -537,13 +537,13 @@ pub unsafe extern "C" fn shekyl_archival_unbond_connect(
         *interval_close_end_out = effect.interval_close.end_exclusive;
         *new_total_bonded_out = effect.new_total_bonded_atomic;
     }
-    SHEKYL_ARCHIVAL_UNBOND_APPLY_OK
+    SHEKYL_ARCHIVAL_RELEASE_APPLY_OK
 }
 
-/// Fold the `Unbond` pop twin (gate-4 §5;
-/// `shekyl-archival-retention::bond_connect::unbond_pop`): validate the tip
+/// Fold the `Release` pop twin (gate-4 §5;
+/// `shekyl-archival-retention::bond_connect::release_pop`): validate the tip
 /// record is the connect's product — `Exited` state plus the trailing clean
-/// interval-close for `unbond_settlement_epoch` — then re-credit
+/// interval-close for `release_settlement_epoch` — then re-credit
 /// `total_bonded_atomic` with the journaled pre-image balance.
 ///
 /// The record fields themselves are restored caller-side as a byte-copy of the
@@ -555,19 +555,19 @@ pub unsafe extern "C" fn shekyl_archival_unbond_connect(
 /// # Safety
 /// `new_total_bonded_out` must be valid for a write.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_archival_unbond_pop(
+pub unsafe extern "C" fn shekyl_archival_release_pop(
     current_record_bonded_total: u64,
     current_record_held_shard_count: u64,
     has_trailing_interval: u8,
     trailing_interval_start: u64,
     trailing_interval_end: u64,
-    unbond_settlement_epoch: u64,
+    release_settlement_epoch: u64,
     journal_pre_bonded_total: u64,
     total_bonded_atomic: u64,
     new_total_bonded_out: *mut u64,
 ) -> u8 {
     if new_total_bonded_out.is_null() {
-        return SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR;
+        return SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_NULL_PTR;
     }
     let trailing_interval = (has_trailing_interval != 0).then_some(BadInterval {
         start_epoch: trailing_interval_start,
@@ -576,19 +576,19 @@ pub unsafe extern "C" fn shekyl_archival_unbond_pop(
     // A u64 count cannot exceed usize on 64-bit targets; saturate on narrower
     // ones — any nonzero count fails the exited-state check identically.
     let held_shard_count = usize::try_from(current_record_held_shard_count).unwrap_or(usize::MAX);
-    match unbond_pop(
+    match release_pop(
         current_record_bonded_total,
         held_shard_count,
         trailing_interval,
-        unbond_settlement_epoch,
+        release_settlement_epoch,
         journal_pre_bonded_total,
         total_bonded_atomic,
     ) {
         Ok(new_total) => {
             unsafe { *new_total_bonded_out = new_total };
-            SHEKYL_ARCHIVAL_UNBOND_APPLY_OK
+            SHEKYL_ARCHIVAL_RELEASE_APPLY_OK
         }
-        Err(e) => map_unbond_pop_error(e),
+        Err(e) => map_release_pop_error(e),
     }
 }
 
@@ -817,7 +817,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_holdings_update_drop(
 /// pre-image, sets `held_shard_ids = post` + appends `add_settlement_epoch_out`
 /// as the added shard's add-epoch (rebuilding the coupled arrays), and sets the
 /// counters from `new_bonded_total_out` / `new_total_bonded_out`. `total_bonded`
-/// is the **absolute** post-value — thread it per post (the Unbond note).
+/// is the **absolute** post-value — thread it per post (the Release note).
 ///
 /// # Safety
 /// `record_shard_ids_ptr` / `post_shard_ids_ptr` valid for their lens (or null at

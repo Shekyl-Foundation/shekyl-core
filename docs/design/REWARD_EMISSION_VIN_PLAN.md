@@ -599,7 +599,7 @@ relay or sit in a mempool as an un-minable nuisance. E2 is inert unqualified.
 E3's verify body takes the auth result as an **unforgeable `AuthVerified` witness input it cannot
 construct itself** — nothing in E3 (or its KATs) can mint the witness, so E3 **physically cannot
 accept an authed emission**. C-1 does not flip a flag; it **supplies the real ML-DSA witness
-minter**. This is the same witness-typing discipline as `unbond(ExitedConfirmed)` — the stub is
+minter**. This is the same witness-typing discipline as `release(ExitedConfirmed)` — the stub is
 *unrepresentable-to-pass*, not a TODO someone can fill wrong. (Fail-closed by type is the pin
 that makes gate-last safe even mid-sequence.)
 

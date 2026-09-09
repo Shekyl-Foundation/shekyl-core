@@ -443,7 +443,7 @@ async fn retired_records_clean_the_live_hint_at_open() {
                     p_canonical_id: PCanonicalId::from_bytes(
                         [u8::try_from(slot).unwrap_or(0xFF); 32],
                     ),
-                    unbond_epoch: SettlementEpoch::from_raw(0),
+                    release_epoch: SettlementEpoch::from_raw(0),
                     retired_epoch: SettlementEpoch::from_raw(30),
                 })
                 .collect(),

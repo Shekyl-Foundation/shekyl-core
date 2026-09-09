@@ -73,7 +73,7 @@ The ratified position, verified at source:
 
 **The serving rule, for the record:** **one persona serves per wallet.**
 Multi-persona *holding* is real and necessary (retired personas' `bond_spend` keys
-must stay derivable to unbond). An operator wanting several *serving* personas
+must stay derivable to release). An operator wanting several *serving* personas
 uses **separate wallets**, and is advised to run them on **separate machines**
 (each with its own, default-configured tor). The rationale is linkability *and*, independently,
 **attack surface**: each co-served persona adds an inbound onion, intro points, a
@@ -670,7 +670,7 @@ forbids.
 
 **One persona serves per wallet.** Multi-persona *holding* is real and necessary
 (Model D — retired personas' bonds sit on chain and their `bond_spend` keys must
-remain derivable to unbond later), but **serving** is singular. An operator who
+remain derivable to release later), but **serving** is singular. An operator who
 wants several serving personas runs them **on separate wallets**, and is advised
 to run them on **separate machines**, each with its own default-configured tor.
 *(Separate machines, not two tor clients on one host — the latter is the

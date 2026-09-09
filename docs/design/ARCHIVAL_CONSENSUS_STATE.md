@@ -159,7 +159,7 @@ P_id → ArchivalBondRecord
 ```
 
 Per-shard bond posture, `holdings` descriptor, and data to derive **`good_through(P, E)`**
-per settlement epoch. Gate 4 owns slash/unbond mutations; emission reads the result.
+per settlement epoch. Gate 4 owns slash/release mutations; emission reads the result.
 
 **Genesis pin (read requirement):** `good_through(P, E)` must be **derivable at epoch
 close** from bond state — not merely a current `good_standing` flag. See emission leg

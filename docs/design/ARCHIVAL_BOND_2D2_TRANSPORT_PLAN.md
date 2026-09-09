@@ -583,7 +583,7 @@ ledger expects.
   `ingest` only appends (`accrual.rs`), nothing prunes — correct for SP-6 (a match must survive until
   SP-R0 corroborates it, ~`MAX_CLAIM_AGE_W`≈270k blocks later), but it means **SP-R0's durable removal
   must prune a persona's matches when it retires the slot**, in the *same atomic step* that drops the
-  `bonded_slots` entry (and the `pending_unbonds` entry). Otherwise the persisted `bond_post_matches`
+  `bonded_slots` entry (and the `pending_releases` entry). Otherwise the persisted `bond_post_matches`
   set grows unbounded over the wallet's life. The seal-cost comment already flags the per-post growth
   profile; the **bound on that growth is this retire-time prune** — it belongs with the slot-ledger
   removal, not as a separate pass.

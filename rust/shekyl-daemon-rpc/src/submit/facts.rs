@@ -127,20 +127,20 @@ pub struct SubmitFacts {
     /// [`bond_record_bonded_total`](Self::bond_record_bonded_total), which is
     /// the fact that does move.
     ///
-    /// For an Unbond the same presence also rides
-    /// [`unbond`](Self::unbond)`.record`, from a second DB read under the
+    /// For a Release the same presence also rides
+    /// [`release`](Self::release)`.record`, from a second DB read under the
     /// same lock scope: this bit is *presence*, the bundle is *contents*.
     /// The shim pins the two against each other rather than trusting
     /// either — a disagreement is storage inconsistency, and reading past
-    /// it would verify an Unbond against half a record.
+    /// it would verify a Release against half a record.
     pub bond_record_exists: Option<bool>,
-    /// The probed record's bonded total; `Some` iff a [`BondProbe::Unbond`]
+    /// The probed record's bonded total; `Some` iff a [`BondProbe::Release`]
     /// ran and the record exists.
     ///
     /// **This is the fact the debit arm re-checks at Phase D, and presence is
-    /// not a substitute for it.** `apply_archival_unbond` rewrites the row
+    /// not a substitute for it.** `apply_archival_release` rewrites the row
     /// with `bonded_total_atomic == 0` rather than deleting it, so an exited
-    /// persona still probes as *present*. A competing Unbond connecting
+    /// persona still probes as *present*. A competing Release connecting
     /// during Phase C moves the balance, never the row — a re-check keyed on
     /// presence could not observe the exit it exists to catch.
     ///
@@ -148,11 +148,11 @@ pub struct SubmitFacts {
     /// race test is this value against the submitted vin's own debit: gone,
     /// or no longer equal, and the bytes can no longer connect.
     pub bond_record_bonded_total: Option<u64>,
-    /// §8.7.1.1 rows UB2/UB3/UB4/UB6/UB7: the Unbond debit arm's fact
-    /// bundle. `Some` iff the snapshot ran [`BondProbe::Unbond`]; a `None`
-    /// on an Unbond submission is a shim contract violation, pre-checked
+    /// §8.7.1.1 rows UB2/UB3/UB4/UB6/UB7: the Release debit arm's fact
+    /// bundle. `Some` iff the snapshot ran [`BondProbe::Release`]; a `None`
+    /// on a Release submission is a shim contract violation, pre-checked
     /// by the engine exactly as the emission bundle is.
-    pub unbond: Option<UnbondFacts>,
+    pub release: Option<ReleaseFacts>,
     /// §8.7.2 rows E6/E7: the emission-arm fact bundle — the claimant's
     /// pre-block bond record and one frozen as-of-`E` snapshot per claimed
     /// epoch. `Some` iff the snapshot was asked to probe (the engine passes
@@ -177,7 +177,7 @@ pub struct SubmitFacts {
 ///
 /// The two bond-post arms ask *opposite* questions of the same table:
 /// JoinMarket wants the record **absent** (row BP3) and needs nothing but
-/// that bit; Unbond wants it **present** and needs its contents as verify
+/// that bit; Release wants it **present** and needs its contents as verify
 /// operands (§8.7.1.1). Modelling that as one enum rather than two optional
 /// parameters makes "both probes ran" unrepresentable, so no caller can
 /// leave a stale bit beside a fresh bundle.
@@ -191,8 +191,8 @@ pub enum BondProbe<'a> {
     /// JoinMarket (row BP3) — the record must be **absent**; the presence
     /// bit in [`SubmitFacts::bond_record_exists`] is the whole answer.
     Join(&'a [u8; 32]),
-    /// Unbond (§8.7.1.1) — the record must be **present**, so the same
-    /// presence bit is joined by [`SubmitFacts::unbond`] carrying the
+    /// Release (§8.7.1.1) — the record must be **present**, so the same
+    /// presence bit is joined by [`SubmitFacts::release`] carrying the
     /// record's contents as verify operands.
     ///
     /// Carries the bond slot's `pqc_auths` key alongside the id. That is
@@ -206,7 +206,7 @@ pub enum BondProbe<'a> {
     /// unrelated key. Refusing an invalid signature is UB0's job, upstream of
     /// this probe. The composition is argued once, in
     /// `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1's "Why UB0 exists" note.
-    Unbond {
+    Release {
         /// The vin's claimed `p_canonical_id`.
         p_canonical_id: &'a [u8; 32],
         /// The bond slot's `pqc_auths[i].hybrid_public_key`.
@@ -214,7 +214,7 @@ pub enum BondProbe<'a> {
         /// The vin's fixed `bond_debit`. UB9 requires it to equal the
         /// record's whole balance, so a gather that sees a different balance
         /// can skip the scan: no scan result can make these bytes verify.
-        /// That is the clause which stops a broadcast-then-invalidated Unbond
+        /// That is the clause which stops a broadcast-then-invalidated Release
         /// from being replayed for the scan indefinitely — such a tx is
         /// neither in-pool nor in-chain, so the identity clause never fires
         /// for it.
@@ -227,7 +227,7 @@ impl BondProbe<'_> {
     pub fn p_canonical_id(&self) -> &[u8; 32] {
         match self {
             Self::Join(id) => id,
-            Self::Unbond { p_canonical_id, .. } => p_canonical_id,
+            Self::Release { p_canonical_id, .. } => p_canonical_id,
         }
     }
 
@@ -236,24 +236,24 @@ impl BondProbe<'_> {
     pub fn auth_pubkey(&self) -> &[u8] {
         match self {
             Self::Join(_) => &[],
-            Self::Unbond { auth_pubkey, .. } => auth_pubkey,
+            Self::Release { auth_pubkey, .. } => auth_pubkey,
         }
     }
 }
 
-/// §8.7.1.1 Unbond-arm facts, owned POD marshaled by the snapshot shim
+/// §8.7.1.1 Release-arm facts, owned POD marshaled by the snapshot shim
 /// under the **same** lock scope as every other fact — a record read before
 /// a block, paired with a watermark read after it, describes a state the
 /// chain never occupied.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnbondFacts {
+pub struct ReleaseFacts {
     /// Row UB2: the record being debited. `None` = no record for this
     /// `p_canonical_id`, and the *time* of that observation decides the
     /// verdict — absent at Phase B is `Malformed` (these bytes can never
     /// connect), absent at a Phase-D re-check after being present at B is
     /// a competing debit that connected during Phase C, which is
     /// `DoubleSpendConflict`.
-    pub record: Option<UnbondRecordFacts>,
+    pub record: Option<ReleaseRecordFacts>,
     /// Row UB6: the slash scheduler's settled-epoch watermark; `None` =
     /// nothing settled yet.
     ///
@@ -270,7 +270,7 @@ pub struct UnbondFacts {
 /// because one of the invariants cannot be re-checked later without
 /// re-deriving the thing it guards: see [`LastServedScanMismatch`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnbondRecordFacts {
+pub struct ReleaseRecordFacts {
     bonded_total_atomic: u64,
     bad_interval_count: usize,
     bond_spend_pk: Vec<u8>,
@@ -297,7 +297,7 @@ pub struct LastServedScanMismatch {
     pub expected: LastServedScan,
 }
 
-impl UnbondRecordFacts {
+impl ReleaseRecordFacts {
     /// Build the record facts, pinning the gather's reported accessor
     /// against the one `holdings_kind` selects.
     ///
@@ -348,7 +348,7 @@ impl UnbondRecordFacts {
     /// already-known txid, a failed debit pin, a zero balance, a balance the
     /// vin's `bond_debit` no longer matches, or a full bad-interval log. Each
     /// of those is refused by name before the belt — UB3 for the pin, the
-    /// shared `unbond_record_statics` for the record states — so by the time
+    /// shared `release_record_statics` for the record states — so by the time
     /// the belt reads this flag, a `true` means a skip *nothing explains*,
     /// i.e. a shim contract violation rather than an invalid transaction.
     /// (One revision ago the pin was the only reason, and this doc said so.)
@@ -356,8 +356,8 @@ impl UnbondRecordFacts {
         self.last_served_scan_skipped
     }
 
-    /// The record's current bonded total — an Unbond debit must remove all
-    /// of it (row UB9), and a zero total is `NothingToUnbond`.
+    /// The record's current bonded total — a Release debit must remove all
+    /// of it (row UB9), and a zero total is `NothingToRelease`.
     pub fn bonded_total_atomic(&self) -> u64 {
         self.bonded_total_atomic
     }
@@ -523,8 +523,8 @@ pub trait SubmitStateShim {
     /// - **Both variants must fill [`SubmitFacts::bond_record_exists`]** —
     ///   it is the kind-agnostic presence bit, required for every bond-post
     ///   and re-read at Phase D by both arms.
-    /// - [`BondProbe::Unbond`] must **additionally** fill
-    ///   [`SubmitFacts::unbond`] (the record's contents, for Phase C) and
+    /// - [`BondProbe::Release`] must **additionally** fill
+    ///   [`SubmitFacts::release`] (the record's contents, for Phase C) and
     ///   [`SubmitFacts::bond_record_bonded_total`] (the balance, for the
     ///   Phase-D re-check that presence cannot express).
     ///

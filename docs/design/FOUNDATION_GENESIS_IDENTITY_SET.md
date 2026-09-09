@@ -48,7 +48,7 @@ other complete-tree registrant. **No** `foundation → skip slash` branch.
 
 ---
 
-## 3. Nominal uniform bond and slash → unbond → removal
+## 3. Nominal uniform bond and slash → release → removal
 
 ### 3.1 Why nominal stake
 
@@ -68,7 +68,7 @@ for market archivers), **once per `P`**, not per shard. **Floor it; do not tune.
 |---|---|---|
 | Failed challenge on shard *s* | Slash **shard *s*'s bond**; other shards stay bonded | Slash **whole bond** (`ARCHIVAL_BOND_FLOOR` in full) |
 | Fractional `FLOOR/shards` | N/A (per-shard bonds) | **Rejected** — no-op slash = skip-slash in disguise |
-| Post-slash holding | Still bonded on remaining shards | **`P` unbonded** — invalid holding |
+| Post-slash holding | Still bonded on remaining shards | **`P` released** — invalid holding |
 | `durability_count` | Drops *s* if shard bond gone / holder fails good-standing | **Drops entirely** until re-bond |
 | Resume | Replace shard bond | **Re-post full nominal bond** + registration |
 
@@ -131,7 +131,7 @@ material — **same verifier** for all holders.
 - Zero bond + skip-slash branch.
 - Per-shard bond rows for foundation `CompleteTree`.
 - Foundation-only holding type.
-- Counting ghost / unbonded `P` in `durability_count`.
+- Counting ghost / released `P` in `durability_count`.
 
 ---
 
@@ -213,8 +213,8 @@ See **§9.5** for the full 12-slot structure (`PENDING` until key ceremony).
 | Event | Effect |
 |---|---|
 | Reserve → active | Reveal full `P_pubkey` matching commitment; post nominal bond + `CompleteTree`; enters `durability_count` when good-standing. |
-| Active → compromised | Ghost fails challenges → slash → unbond → **out of `durability_count`**; activate next reserve. |
-| Failed retention challenge | Whole-bond slash → unbond → removal from `durability_count` until re-bond. |
+| Active → compromised | Ghost fails challenges → slash → release → **out of `durability_count`**; activate next reserve. |
+| Failed retention challenge | Whole-bond slash → release → removal from `durability_count` until re-bond. |
 
 ---
 
@@ -225,7 +225,7 @@ See **§9.5** for the full 12-slot structure (`PENDING` until key ceremony).
 | `market_R` | **Absent** (`Market` membership excludes foundation) |
 | `durability_count` | **In** when genesis slot + bonded + good-standing |
 | Reward / `Σwork` | **Out** (no market participation) |
-| Slash | Whole bond → unbond → count removal |
+| Slash | Whole bond → release → count removal |
 | Reachability | Discovery + public seeds — **not** a protocol count |
 
 ---
@@ -254,7 +254,7 @@ Tracks every genesis-block TBD: resolved pins, blockers, and closing artifact.
 | **`P_pubkey_wire_version`** | **1** | `shekyl_crypto_pq::signature::HYBRID_KEY_VERSION` |
 | **`P` canonical encoding** | `HybridPublicKey::to_canonical_bytes()` | Scheme id `HYBRID_SCHEME_ID_ED25519_ML_DSA_65` (`1`); **1996 bytes** — not a `ShekylAddress` |
 | **Reserve commitment** | cSHAKE `"shekyl/foundation-p-pubkey-v1"` | §5.1 |
-| **`good_standing`** | Bonded **and** not post-slash unbonded **and** no failed challenge for current challenge epoch | Failed challenge ⇒ whole-bond slash ⇒ out of `durability_count` |
+| **`good_standing`** | Bonded **and** not post-slash released **and** no failed challenge for current challenge epoch | Failed challenge ⇒ whole-bond slash ⇒ out of `durability_count` |
 | **Endpoint hint shape** | `https://<host>/archival/v1/` (ops) | Non-consensus; may be empty at genesis |
 
 ### 9.2 Gate-4 fine sweep — **closed (sim pin)**
