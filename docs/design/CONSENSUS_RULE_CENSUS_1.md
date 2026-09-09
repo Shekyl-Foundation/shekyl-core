@@ -226,8 +226,9 @@ propagation-level attack, and — given the Dandelion++ work assumed a specific
 propagation shape — a path the privacy analysis may not have covered.
 
 The relay round adopted "Design A: fluffs traverse every configured zone."
-Whether `NOTIFY_NEW_BLOCK` traverses zones the same way is a question the
-census should force.
+Whether `NOTIFY_NEW_BLOCK` traverses zones the same way was a question the
+census meant to force; **PWD-B6 dissolved it rather than answering it** by
+deleting 2001, so there is one block path and Design A describes all of it.
 
 ### U-7 — Output histogram / distribution (LOW: RPC-only, but consensus-adjacent)
 

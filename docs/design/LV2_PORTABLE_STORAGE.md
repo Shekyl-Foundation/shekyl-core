@@ -183,7 +183,6 @@ files:
 | 1002 | `COMMAND_TIMED_SYNC` | request / response |
 | 1003 | `COMMAND_PING` | request / response |
 | 1007 | `COMMAND_REQUEST_SUPPORT_FLAGS` | request / response |
-| 2001 | `NOTIFY_NEW_BLOCK` | notify |
 | 2002 | `NOTIFY_NEW_TRANSACTIONS` | notify |
 | 2003 | `NOTIFY_REQUEST_GET_OBJECTS` | notify |
 | 2004 | `NOTIFY_RESPONSE_GET_OBJECTS` | notify |
@@ -217,7 +216,6 @@ headers and are load-bearing for handshake peerlists.
 | `CORE_SYNC_DATA` | `cryptonote_protocol_defs.h` | handshake/timed-sync payload; `cumulative_difficulty_top64` store-always / load-`OPT`; `top_id` POD-as-blob |
 | `tx_blob_entry` | `cryptonote_protocol_defs.h` | pruned-tx path |
 | `block_complete_entry` | `cryptonote_protocol_defs.h` | **Shekyl:** `attestation_witness` `OPT` + transport-cap check inside the map. Unpruned `txs` is an array of blobs; pruned `txs` is an array of `tx_blob_entry` |
-| `NOTIFY_NEW_BLOCK` request | `cryptonote_protocol_defs.h` | 2001 |
 | `NOTIFY_NEW_TRANSACTIONS` request | `cryptonote_protocol_defs.h` | 2002; `_` padding string; `dandelionpp_fluff` `OPT` default **true** |
 | `NOTIFY_REQUEST_GET_OBJECTS` request | `cryptonote_protocol_defs.h` | 2003; `blocks` is `CONTAINER_POD_AS_BLOB` |
 | `NOTIFY_RESPONSE_GET_OBJECTS` request | `cryptonote_protocol_defs.h` | 2004 |
