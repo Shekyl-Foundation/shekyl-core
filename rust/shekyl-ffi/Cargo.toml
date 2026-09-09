@@ -88,6 +88,10 @@ shekyl-relay = { path = "../shekyl-relay" }
 # shim reaches the Rust-pinned libzstd through these exports, making it the
 # single zstd in the binary (system-libzstd link dropped).
 shekyl-levin = { path = "../shekyl-levin" }
+# Daemon ephemeral-onion posture (`daemon_tor_ffi.rs`, PWD-E7 piece 3): the
+# blocking facade over DaemonTorControl. The facade owns its tokio runtime,
+# so this crate takes no tokio edge of its own.
+shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
 # OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is

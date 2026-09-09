@@ -229,7 +229,7 @@ async fn bring_up(
         // One clone, to release the watch borrow; the owned value is moved
         // into `last` at the bottom of the iteration, after the match has
         // borrowed it.
-        let state = ready_rx.borrow_and_update().clone();
+        let state = *ready_rx.borrow_and_update();
         let changed = last.as_ref() != Some(&state);
         if changed {
             eprintln!(
