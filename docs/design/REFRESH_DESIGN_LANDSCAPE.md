@@ -276,7 +276,7 @@ against rather than a re-statement of the rationale.
 **Cross-axis interaction.** α inherits the scan-on-client
 bandwidth cost: each block is fetched serially over a daemon
 RPC round-trip (per
-[`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)).
+[`engine/refresh/`](../../rust/shekyl-engine-core/src/engine/refresh/)).
 The bandwidth FOLLOWUP entry in
 [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) (V3.0, "Refresh
 bandwidth tradeoff under α") names this cost as the cost-benefit
