@@ -58,6 +58,12 @@ pub const CORE_RPC_VERSION_MINOR: u32 = 29;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
+/// `major.minor` from the packed constant, for operator-facing copy.
+#[must_use]
+pub fn core_rpc_version_string(packed: u32) -> String {
+    format!("{}.{}", packed >> 16, packed & 0xffff)
+}
+
 /// The `status` string every daemon reply carries (`rpc_response_base`).
 ///
 /// One type for the three values C++ spelled as three macros
