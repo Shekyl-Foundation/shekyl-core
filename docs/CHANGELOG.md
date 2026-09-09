@@ -70,9 +70,11 @@
   not sever. `check_tx_inputs` classifies each return itself, including
   chain-state arms (spent key image, missing/too-recent reference
   block). `add_tx` does not promote an unclassified inner failure to
-  form. The announce-size check declines without disconnecting; a
-  block-sync prepare failure still flushes the failed span so sync can
-  recover. Malformed input still drops.
+  form. Mixed archival FFI codes (serve-credit, bond-post, admission,
+  debit-auth) classify in Rust; C++ writes the returned byte. Our-state
+  and marshal faults do not sever. The announce-size check declines
+  without disconnecting; a block-sync prepare failure still flushes the
+  failed span so sync can recover. Malformed input still drops.
 
 - **`docs/FOLLOWUPS.md` genesis-hold triage.** Every pre-genesis row got a
   disposition pass: 44 resolved/overtaken/duplicate/won't-fix rows removed

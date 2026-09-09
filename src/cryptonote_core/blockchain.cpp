@@ -4901,13 +4901,15 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
 // so an unauthorized attempt is rejected before it can cost LMDB seeks.
 // Debit authorization for the value-out bond-post arms. The predicate itself
 // is Rust (`shekyl-archival-retention::debit_auth_pin`); this site marshals and
-// logs. It used to be implemented here, which made it a second copy of the one
-// check that has no recovery -- a compromised serving host holds the identity
-// hybrid key, so an identity-authorized debit is a collateral drain. The Rust
-// submit battery calls the same function natively (DAEMON_SUBMIT_VERDICT.md
-// 8.7.1.1 row UB3), so the two verifying paths share it rather than tracking
-// each other.
-bool archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
+// logs. Callers classify the returned code via
+// `shekyl_archival_bond_post_drop_verdict` — this helper does not decide
+// whether the rejection severs. It used to be implemented here, which made it
+// a second copy of the one check that has no recovery -- a compromised serving
+// host holds the identity hybrid key, so an identity-authorized debit is a
+// collateral drain. The Rust submit battery calls the same function natively
+// (DAEMON_SUBMIT_VERDICT.md 8.7.1.1 row UB3), so the two verifying paths share
+// it rather than tracking each other.
+uint8_t archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
   const std::vector<uint8_t>& auth_pubkey, const char* arm)
 {
   const uint8_t rc = shekyl_archival_debit_auth_pin(
@@ -4916,7 +4918,7 @@ bool archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
     auth_pubkey.empty() ? nullptr : auth_pubkey.data(),
     auth_pubkey.size());
   if (rc == SHEKYL_ARCHIVAL_BOND_POST_OK)
-    return true;
+    return rc;
   // Two arms, deliberately distinct in the log: "this record authorizes
   // nothing" and "wrong key against a record that does" have different
   // operator remedies.
@@ -4937,7 +4939,7 @@ bool archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
     MERROR_VER("Archival " << arm << " rejected: debit-auth pin marshal fault (code "
       << static_cast<unsigned>(rc) << ")");
   }
-  return false;
+  return rc;
 }
 
 // Shared record-fact marshal for the record-mutating bond-post verify arms
@@ -5017,8 +5019,14 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 
     // GF-1 debit authorization — the shared pin (archival_debit_auth_pin
     // above), run before the cooldown-anchor gathering + semantic verify.
-    if (have_record && !archival_debit_auth_pin(record, auth_pubkey, "Release"))
-      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+    // Classification is the bond-post mapper: no committed key is our
+    // record state; a key mismatch is the sender's form.
+    if (have_record)
+    {
+      const uint8_t pin_rc = archival_debit_auth_pin(record, auth_pubkey, "Release");
+      if (pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+        return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(pin_rc));
+    }
 
     // Release semantic verify (gate-4 §3.5 debit path): marshal the record
     // facts + the P2B-8 Q1/Q2 cooldown anchors (one reverse-cursor seek per
@@ -5135,8 +5143,12 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 
     // DROP (grace-tail debit path). GF-1 debit authorization — the shared pin
     // (archival_debit_auth_pin above), the Release arm's twin.
-    if (have_record && !archival_debit_auth_pin(record, auth_pubkey, "HoldingsUpdate-drop"))
-      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+    if (have_record)
+    {
+      const uint8_t pin_rc = archival_debit_auth_pin(record, auth_pubkey, "HoldingsUpdate-drop");
+      if (pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+        return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(pin_rc));
+    }
 
     // Identify the dropped shard by set-difference (record CURRENT \ vin POST)
     // and read its per-shard facts. The Rust verify recomputes the diff and
@@ -5366,7 +5378,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       MERROR_VER("Archival JoinMarket rejected: "
         << shekyl_archival_admission_err_string(adm_rc)
         << " (admission code " << static_cast<unsigned>(adm_rc) << ")");
-      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+      return reject_drop(tvc, shekyl_archival_admission_drop_verdict(adm_rc));
     }
   }
 

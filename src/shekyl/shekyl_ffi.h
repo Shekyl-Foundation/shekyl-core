@@ -1951,6 +1951,8 @@ uint64_t shekyl_archival_last_settled_epoch_as_of_parent(uint64_t parent_height)
 /// NUL-terminated static reason for an admission code (do not free). Distinguishes
 /// marshal failures from the below-floor verdict.
 const char* shekyl_archival_admission_err_string(uint8_t code);
+/// PWD-B7: drop verdict for a shekyl_archival_check_bond_admission error code.
+uint8_t shekyl_archival_admission_drop_verdict(uint8_t code);
 
 /// Refuse a bond whose holdings credit no work: admission runs the SAME chain
 /// that pays (shard_work_micro -> work_milli_from_micro).

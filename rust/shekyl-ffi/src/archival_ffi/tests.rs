@@ -65,6 +65,31 @@ fn serve_credit_and_bond_post_drop_verdicts_do_not_sever_on_our_state() {
         ))
         .severs()
     );
+    assert!(!DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_ZERO_GEOMETRY
+    ))
+    .severs());
+    assert!(!DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH
+    ))
+    .severs());
+    assert!(DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE
+    ))
+    .is_internal_failure());
+    assert!(
+        !DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE
+        ))
+        .severs()
+    );
+    assert!(
+        !DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE
+        ))
+        .severs()
+    );
+    assert!(!DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(255)).severs());
 }
 
 #[test]
