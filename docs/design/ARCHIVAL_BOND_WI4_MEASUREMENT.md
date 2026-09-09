@@ -2367,7 +2367,7 @@ vin's actual fields, not inherited from this synergy.*
      exit — verified at source, `segment_freeze.rs:71`; the only
      decrement is the `pop_block` reorg revert), while the calibrated
      property is **live** herd thickness — so the two diverge under
-     any *permanent* attrition (voluntary unbond, key/infra loss,
+     any *permanent* attrition (voluntary release, key/infra loss,
      abandonment, unremediated slash), and
      `frozen_shard_count ≥ K_COVER` can hold at open while live
      cover has attrited arbitrarily far below the calibration. The
@@ -2951,7 +2951,7 @@ per-question coverage (Q1 was §17.5/§18).
 3. **Two smuggled premises, both pinned with reopen criteria (rule
    21).** *(a) Floor persistence:* cover-at-opening is active bonds,
    not cumulative posts; verified at source
-   (`PRINCIPAL_STAKE_LIFECYCLE.md`) that unbond is voluntary-only
+   (`PRINCIPAL_STAKE_LIFECYCLE.md`) that release is voluntary-only
    **but offline forfeiture and slashing are involuntary removal
    paths** — so the monotone floor is monotone only under P2's
    persistence commitment. Reopen trigger: any founder bond
@@ -3105,7 +3105,7 @@ property, margin sized for the wrong window.** R5's escalation
 it closed. The gate fires on *cumulative shards ever frozen*; the
 property `K_COVER` is calibrated to guarantee is *live herd
 thickness at gate-open*. Those diverge under any **permanent** exit
-— voluntary unbond, key/infra loss, abandonment, unremediated slash
+— voluntary release, key/infra loss, abandonment, unremediated slash
 — each of which reduces live cover and leaves the counter untouched,
 so `frozen_shard_count ≥ K_COVER` can hold at open while live cover
 has attrited arbitrarily far below calibration. The R5 margin was
@@ -3204,7 +3204,7 @@ reachability and finding 3's wording pin) all survive.*
 retraction: an R7 linkability construction (peel a replacement
 persona back to its operator via an A′-replaces-A succession
 relationship) was found void — **no succession relationship exists
-in the mechanism**; a persona unbonds and is gone, the next is a new
+in the mechanism**; a persona releases and is gone, the next is a new
 user, and the operator link is precisely what per-persona bonds
 exist to destroy. The construction had presupposed the linkage it
 then "discovered." But the word that smuggled it in — *replacement*
@@ -3258,7 +3258,7 @@ was refuted at source and is withdrawn: entry effects are
 epoch-quantized (`E_join = height / SETTLEMENT_EPOCH_BLOCKS`,
 market membership from `E_join + 1`), exit is smeared across
 `RELEASE_COOLDOWN_EPOCHS = 2` (~28 days) — a constant whose pinned
-rationale names "Unbond decorrelation headroom" — and **no repost
+rationale names "Release decorrelation headroom" — and **no repost
 mechanism exists** in the lifecycle. A smeared-and-quantized exit
 followed by a boundary-landing post amid the window's flow is
 population flow, not trigger-response. **The reopen therefore rests
@@ -3504,7 +3504,7 @@ the entry-seam number as the whole claim.
 ### 18.7 R3 addendum: tiers vs continuous accrual — the design question, answered at source (2026-07-06)
 
 **The question.** Would replacing discrete lock tiers with a climbing,
-duration-based accrual rate (unbond whenever; yield a public function
+duration-based accrual rate (release whenever; yield a public function
 of elapsed time) reduce the bond-attribute partition — or create *more*
 uniqueness, because the payout then encodes exact duration?
 
@@ -3512,11 +3512,11 @@ uniqueness, because the payout then encodes exact duration?
 The two models leak on different channels, and the channels are not
 symmetric. A tier leaks at **two** moments: bond time (the label is on
 the post the instant it lands — a forced, frozen, early-bound partition
-on the exact entry-seam event GF-7 grades) and unbond time (the payout
-reflects it). Continuous accrual leaks at **one**: unbond time, where
+on the exact entry-seam event GF-7 grades) and release time (the payout
+reflects it). Continuous accrual leaks at **one**: release time, where
 the payout back-solves through the public rate schedule to a duration.
 But the duration leak is **late-bound and user-shapeable** (the persona
-chooses when to unbond, and quantized accrual boundaries let it land in
+chooses when to release, and quantized accrual boundaries let it land in
 a duration class shared with everyone else in the window), where the
 tier is **early-bound and protocol-forced**. Controllable exposure
 dominates structural exposure: continuous-with-quantized-boundaries
@@ -3525,9 +3525,9 @@ chosen at exit (invisible at the entry seam) and chosen to maximize
 crowd rather than assigned by capital. It also dissolves the adverse
 value↔privacy coupling of tiers (highest-yield tier = smallest crowd =
 most-valuable personas most linkable). The honest price: the rate-curve
-**shape** becomes a privacy parameter (sharp knees → rational unbonders
+**shape** becomes a privacy parameter (sharp knees → rational releaseers
 cluster past each knee → de-facto tiers rebuilt), and the privacy claim
-loads more heavily onto the exit seam, where correlated mass-unbonding
+loads more heavily onto the exit seam, where correlated mass-releasing
 (a co-trigger) can thin duration classes — cold-start thinness
 relocated to the exit. Verdict: **not more uniqueness — relocated,
 controllable uniqueness**, moved off the channel that cannot be
@@ -3546,7 +3546,7 @@ strong form of this disposition, by a cleaner route than the proposal.**
    not a persona attribute at all, which is strictly cleaner than
    persona-duration accrual: the rate schedule cannot fingerprint the
    persona because it does not read the persona.
-2. **There is no lump-sum unbond payout to back-solve.** Rewards are
+2. **There is no lump-sum release payout to back-solve.** Rewards are
    per-epoch loud claims (§18.5) whose `settlement_epochs` vector
    publishes the persona's bonded epochs **directly**, at
    settlement-epoch granularity (`SETTLEMENT_EPOCH_BLOCKS = 10_000`).
@@ -3598,7 +3598,7 @@ machinery):**
   entry-seam dispersal/jitter discipline applies there; graded in the
   GF-4/value-channel round (§18.1/§18.5), including the batching
   (≤ 15 epochs) and forfeiture (`W = 26`) parameters as sweep axes.
-- **P-correlated-exit:** mass unbonding is a co-trigger (all founders
+- **P-correlated-exit:** mass releasing is a co-trigger (all founders
   exit at once; a market event fires correlated drains); duration-class
   anonymity must hold under **correlated** exits, not independent ones
   — cold-start thinness relocated to the exit seam and the duration
@@ -4109,11 +4109,11 @@ but the opt-out must be explicit and loud, never ambient.
 > exit-timing channel phantom and the amount channel closed by construction; Gate-6's
 > R4 decision round re-homed GF-4's exit seam to **this seam**. Consequences for this
 > section's inventory: the exit's timing exposure is the **T-4 counterparty crossing**
-> (deposit arrival vs the public unbond/claim record — an S-2 ledger row, not a rate
+> (deposit arrival vs the public release/claim record — an S-2 ledger row, not a rate
 > model); F-D1/F-D2 are the boundary-class-3 mistake-set closure named above (drain
 > subsums — "closed by safe-by-default coverage, template: the §18.12 input-level
 > pin"), building exactly as pinned at Gate-6 §12.3–§12.4; cohort-arrival compression
-> after a mass-unbond event is likewise an S-2 row (the counterparty's books are the
+> after a mass-release event is likewise an S-2 row (the counterparty's books are the
 > linking key — F-D4 §16.3). No new boundary class is minted: the three named above
 > are still the whole set.
 
@@ -4634,11 +4634,11 @@ On-chain / P2P-visible events for one archival persona `P`
 | Reward emission | `txin_archival_reward_emission` — self-service mint, not coinbase | yes (cleartext amount) | **wallet** (claim choice, ≤15-epoch batch, `W = 26`) |
 | Slash | **no tx** (consensus-internal mutation) | yes (public event) | consensus |
 | Rebond | bond post; credit zero legal-and-common; self-funded from `P`'s reward lineage (Gate-6 Decision 4) | yes | wallet |
-| Unbond | bond post; event names `P`; **no identifiable refund output** | yes | wallet (cooldown-gated) |
+| Release | bond post; event names `P`; **no identifiable refund output** | yes | wallet (cooldown-gated) |
 | Drain (`P`→principal) | ordinary FCMP++ spend | **no** (F-W10) | wallet |
 
 Wallet-clock-timed, `P`-attributed transactions per persona lifetime:
-`2 + E + H (+ R)` — JoinMarket, Unbond, `E` emission claims
+`2 + E + H (+ R)` — JoinMarket, Release, `E` emission claims
 (`⌈L/15⌉ ≤ E ≤ L`), `H ≥ 0` holdings changes, `R` rebonds. Minimum
 realistic lifetime: **3**.
 
@@ -4653,14 +4653,14 @@ path produces that behavior:
    `generation` counter, atomic wipe — `stake_engine.rs:25–66`);
    nothing schedules or triggers it. Multiple concurrently-**bonded**
    personas are supported (rotates-while-bonded, the derive-forward
-   union — `:20`, `:32`) for unbond reachability, but nothing creates
+   union — `:20`, `:32`) for release reachability, but nothing creates
    a second *posting* persona, and the `1/R` economics make running
    one self-defeating (TM-1). Correction notes to TM-1's "sequential
    rotation (never two active personas)" wording — which overstated
    the enforced property — land with this PR in
    `ARCHIVAL_TM1_CLUSTERING.md` / `ARCHIVAL_FIREWALL_THREATS.md`.
 2. **The operational sample stream is §19.10.1's, not §19.8.2's.**
-   One JoinMarket, one Unbond, `E` claim transactions — not `m = 4`
+   One JoinMarket, one Release, `E` claim transactions — not `m = 4`
    accumulations per persona per run. `m = 4` was instrument
    magnification (grade-pessimistic-lifecycles), legitimate as
    conservatism but not a usage model.

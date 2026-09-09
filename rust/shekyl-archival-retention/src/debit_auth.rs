@@ -11,7 +11,7 @@
 //! never against the persona's identity key.
 //!
 //! **The selector is `bond_debit > 0`, not the post kind.** Consensus
-//! consumers today are `Unbond` and the **drop** arm of `HoldingsUpdate`.
+//! consumers today are `Release` and the **drop** arm of `HoldingsUpdate`.
 //! `Rebond` is *not* one: its verify requires `bond_debit == 0` and
 //! `blockchain.cpp` authorizes it with the **identity** key on the
 //! credit path, exactly as `HoldingsUpdate`-add is. Applying this pin

@@ -29,7 +29,7 @@ use shekyl_sp_t3_spike::harness::{cold_client_id, warm_client_id, Apparatus};
 
 /// The pinned tor binary. **Hard-fails** rather than skipping, so a
 /// misconfigured integration lane is loud instead of silently passing by not
-/// running (the same posture as `shekyl-tor`'s `test_support::tor_binary`).
+/// running (the same posture as `shekyl-tor-control-client`'s `test_support::tor_binary`).
 fn tor_binary() -> std::path::PathBuf {
     std::env::var_os("SHEKYL_SPIKE_TOR")
         .map(std::path::PathBuf::from)

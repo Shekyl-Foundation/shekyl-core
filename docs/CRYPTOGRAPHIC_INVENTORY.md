@@ -259,7 +259,7 @@ other hybrid in the tree. So the **bond-post `pqc_auths`** and the **bond-spend
 authorization** carry a classical backstop: forging either still requires
 breaking Ed25519 *and* ML-DSA. The V4 lattice-only transition retires the
 classical half uniformly across `archival_p` and the principal account, and a
-`bond_spend_pk` re-key path already exists (it is a full Unbond +
+`bond_spend_pk` re-key path already exists (it is a full Release +
 re-JoinMarket) — `ARCHIVAL_BOND_CONSTRUCTION.md` §12.
 
 **Surface 2 — the reward-emission backing input (GF-1): hybrid, and the leaf

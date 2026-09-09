@@ -4802,25 +4802,25 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
     return "bond record already exists";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND:
     return "invalid holdings_kind";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND:
-    return "post_kind not Unbond";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE:
+    return "post_kind not Release";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING:
-    return "Unbond requires an existing bond record";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND:
+    return "Release requires an existing bond record";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE:
     return "record bonded_total is zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_CREDIT:
-    return "Unbond bond_credit must be zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH:
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_CREDIT:
+    return "Release bond_credit must be zero";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_FLOOR_MISMATCH:
     return "post-connect bonded_total must equal bond_floor(holdings)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND:
-    return "Unbond is a full exit: post-connect bonded_total must be zero";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_RELEASE:
+    return "Release is a full exit: post-connect bonded_total must be zero";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL:
     return "bond_debit must equal the record's current bonded_total";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED:
     return "release cooldown has not elapsed";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW:
     return "marshaled array length overflow";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY:
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_HOLDINGS_NOT_EMPTY:
     return "full exit must end at empty holdings";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL:
     return "record interval log is full";
@@ -4849,7 +4849,7 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
     return "HoldingsUpdate-drop must remove exactly one shard, and it must be the "
       "shard whose per-shard facts were marshaled";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD:
-    return "HoldingsUpdate-drop would empty the shard set (a full exit is Unbond)";
+    return "HoldingsUpdate-drop would empty the shard set (a full exit is Release)";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH:
     return "HoldingsUpdate-drop post bonded_total != bond_floor(post) / current - FLOOR";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON:
@@ -4866,7 +4866,7 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
     return "record carries multiple open bad intervals (coalescing invariant broken)";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM:
     return "record interval log lacks Rebond headroom (must leave a slot for the next "
-      "slash and the Unbond clean close)";
+      "slash and the Release clean close)";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS:
     return "Rebond terms mismatch (debit nonzero, or credit != bond_floor(post) - "
       "record bonded_total, or post bonded_total != bond_floor(post))";
@@ -4895,7 +4895,7 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
 }
 
 // GF-1 debit authorization (gate-4 §3.5 step 5) — the SHARED debit authorizer,
-// single-sourced for every bond_debit > 0 arm (Unbond, HoldingsUpdate-drop; a
+// single-sourced for every bond_debit > 0 arm (Release, HoldingsUpdate-drop; a
 // future debit kind rides the same call): the pqc auth key must equal the
 // record's COMMITTED bond_spend_pk — never the identity key P_pubkey
 // (identity-only invariant, gate-6 §9.6). The signature itself is verified
@@ -5005,15 +5005,15 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     ? nullptr
     : bond.holdings.shard_ids.data();
 
-  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Unbond))
+  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Release))
   {
     // §9.11 coupling belt for non-parse callers (every codec refuses this at
     // parse; the credit path's twin belt sits below): only JoinMarket carries
-    // the debit authorizer — an Unbond debit authorizes against the record's
+    // the debit authorizer — a Release debit authorizes against the record's
     // COMMITTED copy, never a key the vin brings along.
     if (!bond.bond_spend_pk.empty())
     {
-      MERROR_VER("Archival Unbond rejected: vin carries a bond_spend_pk "
+      MERROR_VER("Archival Release rejected: vin carries a bond_spend_pk "
         "(JoinMarket-coupled field)");
       return false;
     }
@@ -5023,10 +5023,10 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 
     // GF-1 debit authorization — the shared pin (archival_debit_auth_pin
     // above), run before the cooldown-anchor gathering + semantic verify.
-    if (have_record && !archival_debit_auth_pin(record, auth_pubkey, "Unbond"))
+    if (have_record && !archival_debit_auth_pin(record, auth_pubkey, "Release"))
       return false;
 
-    // Unbond semantic verify (gate-4 §3.5 debit path): marshal the record
+    // Release semantic verify (gate-4 §3.5 debit path): marshal the record
     // facts + the P2B-8 Q1/Q2 cooldown anchors (one reverse-cursor seek per
     // held shard; never-served shards omitted) + the slash scheduler's
     // settled watermark. The kind→scan decision is Rust
@@ -5047,12 +5047,12 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     }
     const uint64_t last_settled_slash_epoch = m_db->get_archival_last_slash_epoch();
     const uint64_t current_epoch = shekyl_archival_settlement_epoch_at_height(chain_height);
-    const uint8_t verify_rc = shekyl_archival_verify_unbond_bond_post(
+    const uint8_t verify_rc = shekyl_archival_verify_release_bond_post(
       bond.post_kind,
       static_cast<uint8_t>(bond.holdings.kind),
       shard_ptr,
       bond.holdings.shard_ids.size(),
-      nullptr, // bond_spend_pk: empty on Unbond (§9.11; the belt above enforces it)
+      nullptr, // bond_spend_pk: empty on Release (§9.11; the belt above enforces it)
       0,
       bond.bonded_total_atomic,
       bond.bond_credit,
@@ -5066,7 +5066,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       current_epoch);
     if (verify_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
     {
-      MERROR_VER("Archival Unbond verify failed (code " << static_cast<unsigned>(verify_rc)
+      MERROR_VER("Archival Release verify failed (code " << static_cast<unsigned>(verify_rc)
         << "): " << archival_bond_post_verify_err_string(verify_rc));
       return false;
     }
@@ -5140,7 +5140,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     }
 
     // DROP (grace-tail debit path). GF-1 debit authorization — the shared pin
-    // (archival_debit_auth_pin above), the Unbond arm's twin.
+    // (archival_debit_auth_pin above), the Release arm's twin.
     if (have_record && !archival_debit_auth_pin(record, auth_pubkey, "HoldingsUpdate-drop"))
       return false;
 
@@ -5281,7 +5281,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     return true;
   }
 
-  // §9.11 belt for non-parse callers, the Unbond arm's twin (the serializer
+  // §9.11 belt for non-parse callers, the Release arm's twin (the serializer
   // enforces this at parse, and the FFI vin marshaler below re-refuses the
   // coupling): JoinMarket must commit a canonical-length bond_spend_pk for
   // the record — it never authorizes the credit itself; the identity-key pin
@@ -6358,14 +6358,14 @@ leave:
   // Per-tx verify runs against pre-block DB state (the Q7 frozen-snapshot
   // purity property), so two txs in this block claiming the same (P, E) — or
   // posting the same P's bond twice (JoinMarket+JoinMarket double-credit,
-  // Unbond+Unbond double-debit, mixed kinds) — each pass verify
+  // Release+Release double-debit, mixed kinds) — each pass verify
   // independently; these passes are the layer that rejects the block. The
   // §4.5 conservation audit is NOT a backstop (a double-credit doubles both
   // sides consistently). C++ only marshals pairs/ids; the duplicate verdicts
   // are Rust's (decision-placement pin, §9.5 item 6).
   //
   // Deliberately NOT rejected here (ratified 2026-07-12): a serve-credit
-  // response and an Unbond for the same P in one block — benign under the
+  // response and a Release for the same P in one block — benign under the
   // settled release semantics (bond_post.rs::bond_post_block_unique docs):
   // served epochs are bit-immune, the re-armed span is the exit-forgiven
   // tail, and rejecting would cost an honest exiting P its final earned

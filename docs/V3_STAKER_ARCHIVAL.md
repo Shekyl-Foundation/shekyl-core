@@ -218,7 +218,7 @@ Foundation **seed nodes are seeds of the tree, not just of discovery:**
 > and the fetch is an **ordinary v3 rendezvous**, the same path every `P` serves
 > over. There is **no separate Foundation retrieval mechanism** and no clearnet
 > leg. (Non-anonymous serving is not merely unused: `ADD_ONION`'s `NonAnonymous`
-> flag is absent from `shekyl_tor::control::onion::OnionFlags`, so it is
+> flag is absent from `shekyl_tor_control_client::control::onion::OnionFlags`, so it is
 > unrepresentable.)
 
 each holds **complete sets B + C** (deep archival substrate and canonical
@@ -316,7 +316,7 @@ uniform holding + challenge + slash path**. Zero bond would require a
 `foundation → skip slash` branch in consensus-critical slash code;
 rejected. On failed challenge the **standard slash path runs** — see
 **`CompleteTree` slash semantics** below — removing the nominal bond and
-**unbonding** the `P` until it re-posts.
+**releasing** the `P` until it re-posts.
 
 **`CompleteTree` slash semantics (consensus chain — same code path, explicit
 post-slash state).** A market holder with `ShardSetCompact` failing shard *s*
@@ -327,7 +327,7 @@ failed retention challenge on **any** sampled shard:
 1. **Slashes the whole bond** (`ARCHIVAL_BOND_FLOOR` in full — not
    `FLOOR/shards`, which would be a no-op slash and **skip-slash in disguise**;
    rejected explicitly).
-2. **Clears the bonded holding** — `P` is **unbonded** (the state zero-bond
+2. **Clears the bonded holding** — `P` is **released** (the state zero-bond
    was designed to avoid).
 3. **Removes `P` from `durability_count`** until it **re-posts bond** and
    re-activates through the normal registration path.
@@ -396,7 +396,7 @@ because privilege is non-extractive and verifiable.
 Immutability of the enumerated set does **not** mean operational keys
 never rotate — compromise, hardware lifecycle, and handoff require it over
 a multi-decade horizon. A compromised operational identity **lingers** as a benign ghost (failing
-public challenges, **unbonded after slash**, absent from `durability_count`
+public challenges, **released after slash**, absent from `durability_count`
 until re-bond) — detectable, not revocable without a fork.
 
 **Pinned resolution: pure over-enumeration.** Genesis lists **more
@@ -440,10 +440,10 @@ use `market_R` under-count and behave incorrectly.
 | **`market_R(shard, E)`** | At epoch close: count of **market** archivers `P` with `serve_credit_bit(P,s,E) ∧ good_through(P,E)` — **derived** from the serve-credit ledger keyed by public `P_id` ([`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) §3.3). **No** `ν = H(P, shard)` primitive — incompatible with form **C** per-`P` cap grouping. | **`CompleteTree` / foundation excluded from `Market`** — absent from count by membership rule, not a nullifier shortcut |
 | **`durability_count(shard)`** | Distinct **bonded-and-good-standing** archivers covering *s* | **`CompleteTree` + genesis-enumerated active slot → covers every shard**; market **`ShardSetCompact`** holders cover *s* iff set includes *s* |
 
-**Good standing:** bonded retention commitment posted; not **unbonded** after
+**Good standing:** bonded retention commitment posted; not **released** after
 slash; most recent challenged sample for the holder passed (or within grace
 per challenge cadence — exact window pinned at gate 4). A compromised ghost
-that keeps failing challenges is **unbonded or not good-standing** and **does
+that keeps failing challenges is **released or not good-standing** and **does
 not** inflate `durability_count`.
 
 **Every consumer must declare which count it reads** (spec-first; the

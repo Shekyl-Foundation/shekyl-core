@@ -60,7 +60,7 @@ use super::pscan::start::{
 /// and its quoted fee undercut the daemon's per-byte floor (a relay
 /// refusal, and — until the drain lifecycle driver lands — a sealed record
 /// bricking that persona's drain lane). The exit-fee reserve derivation
-/// (`shekyl-standoff` `reserve.rs`) prices its pessimistic `Unbond` over
+/// (`shekyl-standoff` `reserve.rs`) prices its pessimistic `Release` over
 /// this same structural shape; its headroom arithmetic is derived against
 /// this computed ceiling (currently 80,456 bytes), and the ceiling test
 /// ties the two so a KAT-table regeneration that grows the ceiling forces

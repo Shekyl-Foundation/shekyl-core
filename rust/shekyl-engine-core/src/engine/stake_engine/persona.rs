@@ -9,7 +9,7 @@ use kameo::message::{Context, Message};
 
 use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
 use shekyl_archival_retention::HoldingsDescriptor;
-use shekyl_tor::onion_identity::OnionIdentity;
+use shekyl_tor_control_wallet::service::OnionIdentity;
 
 use crate::engine::{Network, ShekylAddress};
 

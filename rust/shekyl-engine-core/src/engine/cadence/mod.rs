@@ -171,7 +171,7 @@ pub(crate) type WeakEngine<S, D, L, E, R, P, F> = Weak<RwLock<Engine<S, D, L, E,
 
 /// Leg 4's registered slot (`ENGINE_CADENCE_DRIVER.md` §3 leg 4): the
 /// terminal-reject prune / byte-identical resubmit body is unbuilt —
-/// `docs/FOLLOWUPS.md` "Drain/claim/unbond dispatch driver —
+/// `docs/FOLLOWUPS.md` "Drain/claim/release dispatch driver —
 /// terminal-reject prune + byte-identical resubmit" (pre-genesis; the
 /// prune half is a security item). The slot is registered **now** so the
 /// body lands into proven wiring (tick, ordering, isolation) and must not

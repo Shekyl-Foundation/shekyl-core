@@ -351,7 +351,7 @@ impl Engine<SoloSigner> {
     /// a moved-past persona as "current". The bonded slots are unioned in because
     /// under Model D the seed is dropped after this function returns, so a persona
     /// absent from the held set is unreachable for the wallet's life — and a
-    /// retired-but-bonded persona's `bond_spend` key is needed to unbond it.
+    /// retired-but-bonded persona's `bond_spend` key is needed to release it.
     ///
     /// The bundles are derived here from the transiently-borrowed `master_seed`;
     /// the seed is **not** moved in (it stays owned by the caller and drops at the

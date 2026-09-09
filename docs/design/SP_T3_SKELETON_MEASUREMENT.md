@@ -73,7 +73,7 @@ The ratified position, verified at source:
 
 **The serving rule, for the record:** **one persona serves per wallet.**
 Multi-persona *holding* is real and necessary (retired personas' `bond_spend` keys
-must stay derivable to unbond). An operator wanting several *serving* personas
+must stay derivable to release). An operator wanting several *serving* personas
 uses **separate wallets**, and is advised to run them on **separate machines**
 (each with its own, default-configured tor). The rationale is linkability *and*, independently,
 **attack surface**: each co-served persona adds an inbound onion, intro points, a
@@ -670,7 +670,7 @@ forbids.
 
 **One persona serves per wallet.** Multi-persona *holding* is real and necessary
 (Model D — retired personas' bonds sit on chain and their `bond_spend` keys must
-remain derivable to unbond later), but **serving** is singular. An operator who
+remain derivable to release later), but **serving** is singular. An operator who
 wants several serving personas runs them **on separate wallets**, and is advised
 to run them on **separate machines**, each with its own default-configured tor.
 *(Separate machines, not two tor clients on one host — the latter is the
@@ -976,7 +976,7 @@ should treat it as a bug.
 
 **Candidates to survive, having been *validated* here rather than designed here:**
 
-- **`shekyl_tor::control::onion`** (D1) — already production-shaped and living
+- **`shekyl_tor_control_client::control::onion`** (D1) — already production-shaped and living
   outside the spike crate. Typed arguments, `Detach` unrepresentable, `DEL_ONION`
   on the teardown path before the child is killed, redacting `Debug` on both the
   key and the service id.
@@ -1003,7 +1003,7 @@ should treat it as a bug.
 > **Precision on what actually transfers for hop-latency.** This rig times an
 > *end-to-end 3.33 MB shard fetch* (rendezvous + transfer), which is **not**
 > per-hop or circuit-build RTT. The reusable core for *client-side circuit RTT*
-> is more the **control-port / `CircId` machinery already in `shekyl-tor`** (the
+> is more the **control-port / `CircId` machinery already in `shekyl-tor-control-wallet`** (the
 > DQ-T0.4 `STREAM`-event + attach-time CircID path) than the serve/fetch harness —
 > circuit-build timing is read from control-port `CIRC` events, not from a payload
 > transfer. Point the rig's *deployment shell* at that observable rather than
@@ -1097,7 +1097,7 @@ simpler than gating a capability, and it is the same posture as `Detach`.
 *(`docs/V3_STAKER_ARCHIVAL.md` previously described a clearnet fetch leg for the
 Foundation seeds; corrected 2026-08-03 — see that file's correction note.)*
 
-### Lever 1 — onion-service PoW (`shekyl_tor::control::onion::OnionPow`)
+### Lever 1 — onion-service PoW (`shekyl_tor_control_client::control::onion::OnionPow`)
 
 tor ships a defense for exactly this, and it was missing from the D1 type.
 `ADD_ONION` takes `PoWDefensesEnabled` / `PoWQueueRate` / `PoWQueueBurst`

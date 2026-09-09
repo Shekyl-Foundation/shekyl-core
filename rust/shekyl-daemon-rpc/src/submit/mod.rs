@@ -50,8 +50,8 @@ pub use engine::{EngineFault, SubmitCaller, SubmitEngine};
 pub use facts::{
     BondProbe, CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
     EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, KeyImageConflict,
-    LastServedScanMismatch, ReferenceFacts, ShimFault, SubmitFacts, SubmitStateShim, TxMeta,
-    UnbondFacts, UnbondRecordFacts,
+    LastServedScanMismatch, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts, ShimFault,
+    SubmitFacts, SubmitStateShim, TxMeta,
 };
 pub use ffi_shim::FfiSubmitShim;
 pub use gate::phase_c_semaphore;

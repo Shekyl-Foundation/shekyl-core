@@ -59,10 +59,14 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kameo::actor::{ActorRef, Spawn as _};
-use shekyl_tor::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow};
-use shekyl_tor::control::{BootstrapReadiness, BootstrapState, Command, EventSink, TorControl};
-use shekyl_tor::control::{ManagedTor, SocksPort, TorControlConfig, TorLaunch};
-use shekyl_tor::onion_identity::OnionIdentity;
+use shekyl_tor_control_client::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow};
+use shekyl_tor_control_client::control::{
+    BootstrapReadiness, BootstrapState, Command, EventSink, TorControlClient,
+};
+use shekyl_tor_control_client::control::{
+    ManagedTor, SocksPort, TorControlClientConfig, TorLaunch,
+};
+use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -193,14 +197,14 @@ async fn bring_up(
     label: &'static str,
     binary: &std::path::Path,
     data_dir: std::path::PathBuf,
-) -> Result<(ActorRef<TorControl>, u16), String> {
+) -> Result<(ActorRef<TorControlClient>, u16), String> {
     let started = Instant::now();
     let socks_port = free_port().map_err(|e| format!("[{label}] free port: {e}"))?;
     let (readiness, mut ready_rx) = BootstrapReadiness::new();
-    let verified = shekyl_tor::binary::discover_and_verify_at(binary)
+    let verified = shekyl_tor_control_client::binary::discover_and_verify_at(binary)
         .map_err(|e| format!("[{label}] tor binary: {e}"))?;
     eprintln!("  [{label}] spawning tor, socks={socks_port}");
-    let control = TorControl::spawn(TorControlConfig {
+    let control = TorControlClient::spawn(TorControlClientConfig {
         launch: TorLaunch::Managed(ManagedTor {
             tor_binary: verified,
             data_dir,
@@ -265,7 +269,7 @@ async fn bring_up(
         // third must return: `changed()` on a closed channel fails
         // immediately, so swallowing it would spin this loop hot until the
         // 300s deadline and then report a timeout for something that already
-        // died (the same arm `shekyl-tor`'s own service loop takes).
+        // died (the same arm `shekyl-tor-control-wallet`'s own service loop takes).
         if let Ok(Err(_closed)) =
             tokio::time::timeout(Duration::from_secs(5), ready_rx.changed()).await
         {
@@ -409,7 +413,7 @@ async fn run(
     if reply.status() != 250 {
         return Err(format!("ADD_ONION status {}", reply.status()));
     }
-    let service_id = shekyl_tor::control::onion::parse_service_id(reply.lines())
+    let service_id = shekyl_tor_control_client::control::onion::parse_service_id(reply.lines())
         .ok_or("ADD_ONION returned no ServiceID")?;
     let host = format!("{}.onion", service_id.as_str());
 

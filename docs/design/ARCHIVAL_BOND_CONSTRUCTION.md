@@ -32,7 +32,7 @@ unbuilt, permanent code.
 ### In scope (this design)
 
 - The full architecture for all four `BondPostKind`s (`JoinMarket`, `Rebond`,
-  `Unbond`, `HoldingsUpdate`), so the JoinMarket-first implementation does not
+  `Release`, `HoldingsUpdate`), so the JoinMarket-first implementation does not
   paint into a corner.
 - The `archival_p` key-derivation primitive (`P` identity + `bond_spend_pk`),
   which is the genesis-frozen foundation that gates everything.
@@ -44,7 +44,7 @@ JoinMarket is the only kind with a complete verify counterpart today
 ([`bond_post.rs`](../../rust/shekyl-archival-retention/src/bond_post.rs)
 `verify_join_market_bond_post`;
 [`bond_rct_balance.rs`](../../rust/shekyl-archival-retention/src/bond_ct_balance.rs)).
-Rebond / Unbond / HoldingsUpdate have wire types
+Rebond / Release / HoldingsUpdate have wire types
 ([`bond_wire.rs`](../../rust/shekyl-archival-retention/src/bond_wire.rs)
 `BondPostKind`) but **no verify implementation** ("V3.0 open"). Their
 construction is **provisional** until paired with the verify-side work -- see
@@ -57,7 +57,7 @@ Section 9.
   and it is named here as a sequenced dependency, not buried as an out-of-scope
   bullet.
 - Off-chain announce/backing-presentation wire (separate gate-6 §7 item).
-- HoldingsUpdate / Rebond / Unbond verify-side (their own PRs).
+- HoldingsUpdate / Rebond / Release verify-side (their own PRs).
 
 ## 3. The honest milestone for this unit
 
@@ -338,7 +338,7 @@ credit paths authorize against `P_pubkey`; because the vin rides inside the sign
 (and every other vin field) — SA-2b retired the separate on-vin
 `signature_preimage`, see `SIGNATURE_ALIGNMENT.md` §2.2. `bond_spend_pk` is
 committed on the record at JoinMarket and authorizes only later debit paths
-(Unbond, HoldingsUpdate drop) -- not exercised in PR 1.
+(Release, HoldingsUpdate drop) -- not exercised in PR 1.
 
 ### 7.2 Single-sourced, typed-side cleartext balance terms (`shekyl-rct-balance`)
 
@@ -392,7 +392,7 @@ reuses the existing
 path (as `sign_bridge` does for transfers).
 
 **Fee inputs and their source — RATIFIED (2026-07-19, maintainer;
-`V3_WALLET_DECISION_LOG.md` "P-lane fees").** Debit paths (`Unbond`,
+`V3_WALLET_DECISION_LOG.md` "P-lane fees").** Debit paths (`Release`,
 `HoldingsUpdate` drop) carry fee inputs the same way — every bond post pays
 the standard weight-priced floor fee; there is no fee-less class (gate-4
 §3.2 fee note). Three construction rules, all wallet-side:
@@ -407,7 +407,7 @@ the standard weight-priced floor fee; there is no fee-less class (gate-4
 2. **Exit-fee reserve.** Mid-life constructors (claim fee inputs, both
    `HoldingsUpdate` directions, `Rebond`) never spend the pool below
    `EXIT_FEE_RESERVE_ATOMIC` — a pessimistically-margined weight-priced
-   `Unbond` fee — so the terminal post is always fundable. Spend-time
+   `Release` fee — so the terminal post is always fundable. Spend-time
    invariant only; the cover **draw** is never consulted or narrowed by it
    (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4 stance). ✅ **Dominance assert
    RE-GROUNDED (2026-07-22, DS-PR-2; maintainer-corrects the 2026-07-21 ⚠️
@@ -431,7 +431,7 @@ the standard weight-priced floor fee; there is no fee-less class (gate-4
    corner below). Destitute corner (pool below
    reserve): the wallet's `ClaimFeeInputsRequired` refusal relaxes to admit
    the consensus-admitted Q11 zero-fee-input claim (fee out of the mint),
-   then `Unbond` funds from the claimed output — the exit chain is
+   then `Release` funds from the claimed output — the exit chain is
    constructible from zero pool balance whenever anything is claimable.
 3. **No fee knob.** The fee is the canonical per-block floor at construction
    time — deterministic given (weight, floor params), no estimator
@@ -457,16 +457,16 @@ flowchart LR
 ## 9. The other three kinds are provisional
 
 The four-kind architecture is designed here so JoinMarket-first does not paint
-into a corner. **UPDATE 2026-08-26 (PR-P4): `Unbond` is no longer provisional.**
-Its verify arm landed in #303, its constructor (`build_unbond_vin`) has its own
-round-trip KAT against `verify_unbond_bond_post` (`unbond_round_trip.rs`), and
-the persona-bound transaction around that vin is built too — `AssembleUnbond`
+into a corner. **UPDATE 2026-08-26 (PR-P4): `Release` is no longer provisional.**
+Its verify arm landed in #303, its constructor (`build_release_vin`) has its own
+round-trip KAT against `verify_release_bond_post` (`release_round_trip.rs`), and
+the persona-bound transaction around that vin is built too — `AssembleRelease`
 assembles the whole exit, with the surface-A auth slot under `bond_spend_pk`.
 So the section title overstates for that kind: two of the four are exercised,
-not one. `Unbond`'s reachability gate — held through slice 3's engine walk, the
+not one. `Release`'s reachability gate — held through slice 3's engine walk, the
 submit fact set (2026-08-29), and PR-B's dispatch seam + daemon walk,
 each narrowing without lifting — was **lifted by PR-C (2026-09-03)**:
-`StakeFacade::unstake` drives `Engine::submit_unbond` from wallet-RPC and
+`StakeFacade::unstake` drives `Engine::submit_release` from wallet-RPC and
 the CLI, and `collect_unstaked`'s terminal sweep completes the arc
 (reconciliation in `wallet_rpc.yaml`'s PR-C census). **`Rebond` and `HoldingsUpdate` remain
 provisional** — both have verify arms, neither has a producer — and for them the
@@ -486,9 +486,9 @@ exists to track.
 | HoldingsUpdate add | `P_pubkey` | `verify_holdings_update_add` | provisional — no producer |
 | HoldingsUpdate drop | `bond_spend_pk` | `verify_holdings_update_drop` | provisional — no producer (operator-guide footguns live here) |
 | Rebond | `P_pubkey` | `verify_rebond_bond_post` | provisional — no producer |
-| Unbond | `bond_spend_pk` | `verify_unbond_bond_post` | PR-P4 — `build_unbond_vin` (KAT-validated) + `AssembleUnbond` (full tx; auth under `bond_spend_pk`). **Built, not reachable:** no RPC method or CLI verb; slice 3's engine walk has landed and did not lift it |
+| Release | `bond_spend_pk` | `verify_release_bond_post` | PR-P4 — `build_release_vin` (KAT-validated) + `AssembleRelease` (full tx; auth under `bond_spend_pk`). **Built, not reachable:** no RPC method or CLI verb; slice 3's engine walk has landed and did not lift it |
 
-The `Auth key` column is unchanged and remains correct: `Unbond` and
+The `Auth key` column is unchanged and remains correct: `Release` and
 `HoldingsUpdate drop` authorize under the record's committed `bond_spend_pk`,
 which consensus pins in `archival_debit_auth_pin` — never the identity key. SA-2b
 moved that key off the vin, not out of the requirement.
@@ -722,19 +722,19 @@ rotation covers nearly every session), bounds `[0, 8]`; `k = 0` degenerates to
 reopen-to-rotate, still root-free.
 
 **Why the bonded *union*, not a clean lookahead window (load-bearing — bricks
-unbonding otherwise).** The archival model rotates *while bonded*: you rotate to
+releasing otherwise).** The archival model rotates *while bonded*: you rotate to
 a fresh persona for unlinkability and the retired persona's bonds sit on-chain as
 dormant consensus balances (not co-activation — no simultaneous wire activity —
-so the firewall permits it). Unbonding a retired persona later needs that
+so the firewall permits it). Releasing a retired persona later needs that
 persona's `bond_spend` key. Under the discarded Model E the seed was held so any
 slot was re-derivable on demand; under Model D the seed is gone after
 `assemble()`, so a persona absent from the pre-derived set is **unreachable for
 the rest of the wallet's life**. A retired-but-bonded persona under a bare
 `{p_slot ..= p_slot + k}` window is exactly that — Model D as first converged
-would brick unbonding for every persona you have rotated past. The fix keeps D
+would brick releasing for every persona you have rotated past. The fix keeps D
 intact: the held set is the **bonded union plus the lookahead**. The live-bonded
 set is knowable (the wallet tracks its own outstanding bonds per persona),
-bounded by the staker's own behavior (unbond to shrink it), and each bundle is
+bounded by the staker's own behavior (release to shrink it), and each bundle is
 the same derived class. Rotation-wipe is therefore "wipe retired personas with no
 live bond", not a clean shrinking window.
 
@@ -763,7 +763,7 @@ to remember. Persist-before-use makes the only crash failure a *wasted slot*
 and the can't-happen guard collapses to the single slot→handle minting boundary.
 `LookaheadExhausted` is kept as a **real** domain error (budget consumed →
 reopen), not a can't-happen. The handle is **operation-scoped**: rotation wipes
-retired *ephemeral* (unbonded) personas, so a handle to one held by a caller
+retired *ephemeral* (released) personas, so a handle to one held by a caller
 across that rotation would sign against zeroized memory; handles are therefore
 minted and consumed within one StakeEngine operation, `!Clone`, and an actor
 **generation** counter advances on any activation that changes the active slot,
@@ -982,5 +982,5 @@ on CT-5.
   emission schedule; no coupling to the fee-only transition.
 - **V4 (lattice-only):** `archival_p` is hybrid (Ed25519 + ML-DSA-65) like the
   principal account; the V4 transition that retires the classical half applies
-  uniformly. `bond_spend_pk` rotation is already a full Unbond + re-JoinMarket
+  uniformly. `bond_spend_pk` rotation is already a full Release + re-JoinMarket
   (§4.1), so a V4 re-key path exists by construction.

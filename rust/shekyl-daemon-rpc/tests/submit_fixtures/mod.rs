@@ -287,7 +287,7 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,
         bond_record_bonded_total: None,
-        unbond: None,
+        release: None,
         emission: None,
         emission_claim_conflict: None,
     }
@@ -319,11 +319,11 @@ pub struct SnapshotRecord {
     /// Which archival-bond question the engine asked (§8.7.1 BP3 vs
     /// §8.7.1.1): the debit arm needs the record's contents, not just its
     /// presence, and asking the wrong one is invisible in the id alone.
-    pub bond_probe_is_unbond: bool,
+    pub bond_probe_is_release: bool,
     /// The `bond_debit` the debit arm's probe carried. The C++ gather skips
     /// its per-shard scan when this does not equal the record's live balance,
     /// so an engine that passed a wrong value (0, say) would make the gather
-    /// skip for EVERY valid Unbond and the battery refuse it — a refusal no
+    /// skip for EVERY valid Release and the battery refuse it — a refusal no
     /// mock-served fact set can expose, because the mock never runs the
     /// gather. Recorded so a test can assert the vin's own value reaches it.
     pub bond_probe_debit: Option<u64>,
@@ -382,9 +382,9 @@ impl SubmitStateShim for MockShim {
             key_images: key_images.to_vec(),
             reference_block: *reference_block,
             bond_p_canonical_id: bond_probe.map(|probe| *probe.p_canonical_id()),
-            bond_probe_is_unbond: matches!(bond_probe, Some(BondProbe::Unbond { .. })),
+            bond_probe_is_release: matches!(bond_probe, Some(BondProbe::Release { .. })),
             bond_probe_debit: match bond_probe {
-                Some(BondProbe::Unbond { bond_debit, .. }) => Some(bond_debit),
+                Some(BondProbe::Release { bond_debit, .. }) => Some(bond_debit),
                 _ => None,
             },
             emission_probe: emission_probe.map(|(id, epochs)| (*id, epochs.to_vec())),

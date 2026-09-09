@@ -571,7 +571,7 @@ question of where it is, not what it is.**
 The reading list was worked at this pin. `derive_socks_user` is confirmed
 **still at `rust/shekyl-p-transport/src/lib.rs:134`**, deriving a per-persona
 SOCKS username by cSHAKE256 over the full canonical `P` id, with consumers in
-`shekyl-tor/tests/circuit_isolation.rs:172, 450-453`. The GF-7 cover-blindness
+`shekyl-tor-control-wallet/tests/circuit_isolation.rs:172, 450-453`. The GF-7 cover-blindness
 finding is at [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md)
 `:2004-2032` — worst-arm `r ≈ 1.86` flat across `N ∈ [2,16]`, `r < 2`
 structurally blind to cover; **the finding stands, only the instrument was

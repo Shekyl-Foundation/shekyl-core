@@ -18,6 +18,12 @@ docs/CHANGELOG.md:src/... # prose placeholder describing a path pattern
 docs/CHANGELOG.md:rust/... # prose placeholder describing a path pattern
 docs/CHANGELOG.md:../../src/... # prose placeholder describing a path pattern
 docs/CHANGELOG.md:../.github/workflows/zeroize-check.yml # released CHANGELOG entry; the workflow was deleted 2026-08-24; the link records what shipped (rule 91)
+docs/CHANGELOG.md:../rust/shekyl-engine-core/src/engine/refresh.rs # released CHANGELOG; module is now engine/refresh/; the link records the path as shipped (rule 91)
+docs/V3_WALLET_DECISION_LOG.md:../rust/shekyl-engine-core/src/engine/refresh.rs # dated decision-log entry (2026-04-27); records the test file as of that write (rule 91)
+docs/completed/STAGE_1_PR_1_DAEMON_ENGINE.md:../../rust/shekyl-engine-core/src/engine/refresh.rs # closed plan; cites the file as of the PR (rule 91)
+docs/completed/STAGE_1_PR_2_LEDGER_ENGINE.md:../../rust/shekyl-engine-core/src/engine/refresh.rs # closed plan; cites the file as of the PR (rule 91)
+docs/completed/STAGE_1_PR_4_REFRESH_ENGINE.md:../../rust/shekyl-engine-core/src/engine/refresh.rs # closed plan; line-anchored citations of the file as of the PR (rule 91)
+docs/completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md:../../rust/shekyl-engine-core/src/engine/refresh.rs # closed plan; cites the file as of the PR (rule 91)
 docs/FOLLOWUPS.md:rust/... # the followup entry describing this rot class quotes the broken pattern
 docs/FOLLOWUPS.md:docs/... # the followup entry describing this rot class quotes the broken pattern
 docs/FOLLOWUPS.md:../` # prose example of the fix idiom in the same followup entry

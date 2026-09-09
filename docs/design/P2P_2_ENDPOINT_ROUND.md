@@ -240,37 +240,27 @@ p2p encryption lands (§0).
 **both** transports: a /24 gives 256 free hosts on `public_` as surely as a
 keypair gives one on tor. So the cap **bounds honest duplicates and nothing
 adversarial, in any zone**. Stated only as an overlay limitation, the row reads
-as clearnet-effective and overlay-limited — which is exactly the framing the
-§3.1c correction retired.
+as clearnet-effective and overlay-limited — which is exactly the framing this
+concession retires (the overlay carve-out). Recorded on the §1 ladder in
+[`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) as of 2026-09-09.
 
-> **Question routed to the deliverable, not asserted here — and re-posed
-> 2026-09-06 after reading the passage properly.**
+> **Question routed to the deliverable, not asserted here — DISCHARGED
+> 2026-09-09.**
 >
-> [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) `:142-150` is a **three-tier
-> ladder** — *worst: verify a claim; better: replace it with your own
-> observation; best: bind it into the transcript* — and the same-host cap
-> appears as the **worked example of tier two**, not as a claim about its
-> adversarial strength. As that example it is **correct**: nothing is claimed,
-> so nothing can be forged.
+> [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) §1's three-tier ladder —
+> *worst: verify a claim; better: replace it with your own observation; best:
+> bind it into the transcript* — carries the same-host cap as the **worked
+> example of tier two**, not as a claim about its adversarial strength. As that
+> example it is **correct**: nothing is claimed, so nothing can be forged.
 >
-> **So the line needs no correction. What is missing is a fourth statement the
-> ladder does not make:** tier two closes the **forgery** surface and is silent
+> **The line needed no correction. What was missing was a fourth statement the
+> ladder did not make:** tier two closes the **forgery** surface and is silent
 > on the **multiplication** surface. An observed property can still be cheap to
 > produce — a /24 gives 256 hosts, a keypair gives one onion — so "nothing to
-> spoof" and "adversarially binding" are **independent**. This is why `-43`
-> could stop leaning on the justification without the line being wrong: they
-> needed a property the ladder does not supply.
->
-> **The risk is that the ladder reads as a completeness ordering.** A reader
-> reaching tier two concludes they have arrived somewhere adequate, and tier
-> three is stronger against a *different* problem.
->
-> **The answerable question, therefore, is about the framework and not about
-> any adopted option:** *does the ladder need a note that tier two is silent on
-> cost-to-multiply — that a tier-two mechanism can be correct and still bound
-> nothing an adversary cares about?* Posed as "is the cap's justification
-> adequate?" it invites a defence of a line that is not wrong. Still that
-> document's owner's call.
+> spoof" and "adversarially binding" are **independent**. Written into the
+> ladder on 2026-09-09, immediately after the three rungs. The risk named
+> here — that the ladder reads as a completeness ordering — is why the note
+> sits on the framework, not on the cap.
 
 ## 5b. The decision tables
 
@@ -375,10 +365,17 @@ address, not replaced by it.
 | (b) Accept the duplicate; drop the check with `peer_id` | — | an outbound slot spent on a peer already connected inbound; a stem edge may go to a node already observing us inbound | a measurement showing the duplicate rate is negligible |
 | (c) Re-derive identity from the new address field | **reintroduces a minted value in a control decision** | — | — (rejected on its face) |
 
-**Proposed: (a).** `has_too_many_connections` (`:3115-3136`) already computes
-the predicate; it is a sibling-site wiring, not new mechanism. Its overlay
-limitation is not a regression — `peer_id` was a shared constant there
-(PWD-I2), so the check never fired on those zones either.
+**Proposed: (a)** as a *direction* — host-keyed duplicate avoidance, no minted
+value — and that is what shipped. The first draft's *wiring* was reuse of
+`has_too_many_connections` from the dial side; `-43` built a dedicated
+outbound helper instead (`outbound_connection_takes_host` /
+`has_outbound_connection_to_host`): outbound-only, host-keyed, every zone.
+The first draft's overlay concession ("does nothing on overlay zones — no host
+to compare"; "overlay limitation is not a regression") is the framing the §5
+concession retired. That no-op is a fact about the inbound cap (PWC-E11,
+`net_node.inl:3029` returns false off `public_`), not about job 2. The
+concession cell on (a) in the table above is records-was of the first draft;
+do not cite it as current.
 
 ### PWD-E5 — is §4 discharged by PWD-I1?
 
@@ -738,7 +735,7 @@ P2P onion and the archival-serving persona's onion **on the same host**.
 |---|---|---|
 | tor **process / instance** | **NO** | the root of every linkage below; one process is one guard set, one descriptor-publishing identity, one crash domain |
 | **control connection** + authed session | **NO** | a single authenticated session that can `ADD_ONION` both services is a component that, once compromised, links them by construction |
-| **supervisor** and its state | **NO** | `TorService` holds cross-incarnation state; a supervisor that knows both is a join |
+| **supervisor** and its state | **NO** | `WalletTorControl` holds cross-incarnation state; a supervisor that knows both is a join |
 | **vanguard / guard set** | **NO** | `vanguard_rotation` is explicitly *"supervisor-scoped state that outlives Tor incarnations"* — persisted and authoritative. Two services under one supervisor share the guard topology **by construction**, not by accident |
 | **circuits**, SOCKS isolation credentials | **NO** | follows from the process split; per-`P` `IsolateSOCKSAuth` isolates within an instance, not across identity domains |
 | **onion identity / service key** | **NO** | trivially — different services |
@@ -776,6 +773,44 @@ convenience.
   shared instance, and an attempt to would be a compile-time argument error
   rather than a convention someone remembers to follow.
 
+#### Build state — the neutral crate exists
+
+The two `YES` rows and the MANAGED ruling's mitigation all name one thing: a
+crate that belongs to neither side. It is **`rust/shekyl-tor-control-client`**, and the
+control protocol (`control/`), the binary hash-pin gate (`binary.rs`) and the v3
+onion identity encoding (`onion_identity.rs`) were lifted into it out of
+`shekyl-tor-control-wallet` — a move with no behaviour change, so that nothing is built on the
+old shape and then migrated.
+
+`shekyl-tor-control-wallet` keeps exactly what the table marks **NO**: the `WalletTorControl`
+supervisor and its cross-incarnation state, the vanguard rotation state machine
+and the `VanguardsActive` witness, and the persona publish orchestration. It
+depends on the client crate and does **not** re-export the launch path
+(`TorControlClient`, `ManagedTor`, `AddOnion`), so a consumer that wants to
+speak the protocol names the client crate. Types already on `WalletTorControl`'s
+public surface (`OnionIdentity`, `EventSink`, `ControlError`) are re-exported
+from the wallet crate, so wallet consumers do not take the launch crate just to
+name a field.
+
+The daemon sibling is `DaemonTorControl` in `shekyl-tor-control-daemon` (PWD-E7
+piece 2). It is named so the family is grepable; it is not stubbed as an empty
+crate.
+
+The isolation requirement is carried in the crate's own module doc rather than
+left to this document: *no entry point here may default, infer, or discover which
+Tor instance it is talking to.* That is the compile-time form of the MANAGED
+mitigation above — every instance-identifying input is a parameter, so reusing a
+function cannot yield the other side's instance.
+
+One visibility change was forced by the move and is worth a reviewer's eye: the
+SP-T0c pin gate's test bypass (`VerifiedTorBinary::unchecked_for_test`) was
+`#[cfg(test)]`-private, and `cfg(test)` does not cross a crate boundary. It is now
+`pub` behind the `unpinned-tor-for-tests` feature, which
+`scripts/ci/check_test_only_features.py` holds to dev-dependency edges only. The
+production gate is unchanged and is now *stronger*: `VerifiedTorBinary`'s field was
+already private, and the type is now behind a crate wall as well, so the supervisor
+cannot forge one even by accident.
+
 #### The apparent contradiction with the accepted §7 residual, and why it is not one
 
 A reviewer will find this and should find the answer here first.
@@ -808,19 +843,19 @@ merely fail to transfer — it points the other way.
 #### Crate shape (rule 25), proposed
 
 The test the peer named is the right one: **neither crate's docs should have to
-describe the other's posture.** `shekyl-tor` today opens *"Wallet-owned Tor
+describe the other's posture.** `shekyl-tor-control-wallet` today opens *"Wallet-owned Tor
 integration for the 2d-2 archival firewall (SP-T0)"*, so the daemon cannot
 become a second consumer of that ownership without making that sentence false.
 
 - **Lift** the protocol layer — control client, `AddOnion`/reply types, reply
   evaluation, binary verification — into a crate **neither side owns**.
-- **`shekyl-tor` keeps the wallet supervisor**: vanguard rotation, serving
+- **`shekyl-tor-control-wallet` keeps the wallet supervisor**: vanguard rotation, serving
   posture, SP-T0 policy. Its doc sentence stays true.
-- **A new daemon-side crate owns the ephemeral posture**: mint, publish, read the
-  `ServiceID`, tear down on shutdown. No vanguard state, because an ephemeral
-  address has no tenure to protect.
+- **A new daemon-side crate owns the ephemeral posture** (`shekyl-tor-control-daemon`,
+  `DaemonTorControl`): mint, publish, read the `ServiceID`, tear down on shutdown.
+  No vanguard state, because an ephemeral address has no tenure to protect.
 
-**Not proposed: the daemon driving `TorService`.** It is a supervisor for a
+**Not proposed: the daemon driving `WalletTorControl`.** It is a supervisor for a
 long-lived managed tor with vanguard pinning and a retry policy — the wallet's
 posture. Driving it from the daemon imports exactly the state this row forbids.
 

@@ -48,13 +48,13 @@ void fill_archival_emission_claim_source(const BlockchainDB& db,
     res.bonded_total_atomic = bond.bonded_total_atomic;
     // The interval-log length, as the verify arm marshals it
     // (`record.bad_intervals.size()` at the
-    // `shekyl_archival_verify_unbond_bond_post` call site) — the count only,
+    // `shekyl_archival_verify_release_bond_post` call site) — the count only,
     // never the intervals themselves, which no exit precondition reads.
     res.bad_interval_count = bond.bad_intervals.size();
 
-    // The `Unbond` cooldown-anchor gather. The kind→scan decision is Rust
+    // The `Release` cooldown-anchor gather. The kind→scan decision is Rust
     // (`shekyl_archival_last_served_scan`, exhaustive on HoldingsKind) — the
-    // same function the Unbond verify arm asks — so a third record kind fails
+    // same function the Release verify arm asks — so a third record kind fails
     // to compile until its scan is written, rather than silently folding an
     // empty compact list into "never served" (the permissive cooldown branch).
     // This site marshals the discriminant onto the matching DB accessor.

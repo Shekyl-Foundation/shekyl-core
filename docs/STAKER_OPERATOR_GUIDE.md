@@ -53,7 +53,7 @@ is the safest operating regime; almost every way to hurt yourself below requires
 
 1. **Collateral is locked, and freeing it is slow.** Each shard you hold is
    backed by a flat `ARCHIVAL_BOND_FLOOR` of collateral. When you voluntarily
-   release collateral (a full `Unbond`, or a partial-unbond via
+   release collateral (a full `Release`, or a partial-release via
    `HoldingsUpdate` that drops a shard), the freed collateral enters a
    **release cooldown of `RELEASE_COOLDOWN_EPOCHS = 2` epochs (20,000 blocks)**
    before it is spendable again. This is deliberate: it is the anti-dodge
@@ -78,7 +78,7 @@ is the safest operating regime; almost every way to hurt yourself below requires
 ## Footgun 1: the drop-to-reallocate capital strand
 
 **The mistake:** you drop a shard you are holding (a `HoldingsUpdate`
-partial-unbond) intending to immediately use the freed collateral to fund a
+partial-release) intending to immediately use the freed collateral to fund a
 *different* shard.
 
 **Why it hurts you:** the freed collateral is **frozen for the release cooldown

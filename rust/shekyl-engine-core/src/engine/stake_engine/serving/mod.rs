@@ -58,7 +58,7 @@
 //! the host does not start at all.
 //!
 //! Split the way `pscan/` already is: [`task`] is the running loop,
-//! [`tor_config`] is the fingerprint-minimal `TorServiceConfig` surface,
+//! [`tor_config`] is the fingerprint-minimal `WalletTorControlConfig` surface,
 //! [`start`] is the Engine construction site.
 
 pub(crate) mod disk;

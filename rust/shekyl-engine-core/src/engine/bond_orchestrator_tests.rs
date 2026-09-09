@@ -835,17 +835,17 @@ fn p_lane_ceiling_covers_the_heaviest_legal_shape() {
     );
 
     // The exit-fee reserve derivation (`shekyl-standoff` reserve.rs) prices
-    // one pessimistic Unbond at >= 600 atomic/weight-byte of fee-spike
+    // one pessimistic Release at >= 600 atomic/weight-byte of fee-spike
     // headroom over this same structural worst case; the reserve must keep
     // covering it, or a live persona's held-back reserve no longer funds its
-    // terminal Unbond at the documented headroom. If a KAT-table
+    // terminal Release at the documented headroom. If a KAT-table
     // regeneration grows the ceiling past `50M / 600 ≈ 83_333`, this goes
     // red and reserve.rs's derivation must be re-run, not this bound
     // loosened in place.
     assert!(
         shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC
             >= u64::try_from(ceiling).expect("weight fits u64") * 600,
-        "EXIT_FEE_RESERVE_ATOMIC no longer covers a worst-case Unbond at the \
+        "EXIT_FEE_RESERVE_ATOMIC no longer covers a worst-case Release at the \
          documented 600 atomic/weight-byte headroom (ceiling {ceiling}) — \
          re-derive reserve.rs, do not loosen this bound"
     );

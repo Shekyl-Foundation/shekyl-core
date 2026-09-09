@@ -151,7 +151,7 @@ impl Message<AssembleBond> for StakeEngine {
         let change_hi = change - change_lo;
 
         // Credit policy stays here: identity-key slot, credit term on the
-        // output side. The prove/sign/encode tail is shared with Unbond so
+        // output side. The prove/sign/encode tail is shared with Release so
         // the two cannot drift on wire shape. GF-1 is this closure — a debit
         // would close over `bond_spend_sk` instead.
         let assembled = assemble_signed_bond_post(

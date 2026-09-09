@@ -154,7 +154,7 @@ namespace cryptonote
   {
     JoinMarket = 0,
     Rebond = 1,
-    Unbond = 2,
+    Release = 2,
     HoldingsUpdate = 3,
   };
 

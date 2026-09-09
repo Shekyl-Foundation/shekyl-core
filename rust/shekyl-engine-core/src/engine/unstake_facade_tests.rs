@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc as StdArc;
 
 use shekyl_engine_file::SafetyOverrides;
-use shekyl_engine_state::pending_post_block::{PendingUnbond, SealAdmission};
+use shekyl_engine_state::pending_post_block::{PendingRelease, SealAdmission};
 use shekyl_engine_state::pscan_cursor::PScanCursor;
 use shekyl_engine_state::pscan_state::{
     BondPostRecord, MintLineageOutput, PFundingOutputRecord, RetiredPersonaRecord,
@@ -59,14 +59,14 @@ fn funding(slot: u32, gindex: u64, amount: u64) -> PFundingOutputRecord {
 
 fn pscan(
     matches: Vec<BondPostRecord>,
-    pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
+    pending_releases: BTreeMap<PCanonicalId, SettlementEpoch>,
     retired: Vec<RetiredPersonaRecord>,
     outputs: Vec<PFundingOutputRecord>,
 ) -> PScanState {
     PScanState::new(
         PScanCursor::at(BlockHeight::from_raw(5_000), [0x11; 32]),
         BTreeMap::new(),
-        pending_unbonds,
+        pending_releases,
         matches,
         outputs,
         retired,
@@ -113,7 +113,7 @@ fn the_two_resolutions_never_trade_personas() {
     let ev = evidence(Some(state), None, &[(1, 1), (2, 2)]);
 
     // `unstake` sees persona 2 (slot 2) — the only LIVE bond; persona 1
-    // is pending-unbond and excluded from the live set.
+    // is pending-release and excluded from the live set.
     assert_eq!(
         resolve_unstake_target(&ev).expect("resolvable"),
         UnstakeTarget::Post(PSlot::from_raw(2)),
@@ -140,13 +140,13 @@ fn in_progress_states_are_named_before_nothing_staked() {
     );
 
     // Sealed-but-unconfirmed exit (dispatched, not yet observed): the
-    // pending block's unbond seal is the evidence.
+    // pending block's release seal is the evidence.
     let state = pscan(vec![bond_match(1, 0)], exited(1), Vec::new(), Vec::new());
     let mut block = PendingPostBlock::empty();
     let g = block.generation();
     assert_eq!(
-        block.seal_unbond(
-            PendingUnbond {
+        block.seal_release(
+            PendingRelease {
                 persona: persona(1),
                 tx_bytes: vec![0xEE; 4],
                 funding_gindexes: Vec::new(),
@@ -278,11 +278,11 @@ fn collect_resolves_lowest_exited_slot_with_rows_and_completes_on_empty() {
 #[test]
 fn the_two_pending_refusals_flatten_to_their_own_arms() {
     assert!(matches!(
-        flatten_unstake_error(UnbondRequestError::UnbondPending),
+        flatten_unstake_error(ReleaseRequestError::ReleasePending),
         UnstakeError::ExitInProgress
     ));
     assert!(matches!(
-        flatten_unstake_error(UnbondRequestError::BondPostPending),
+        flatten_unstake_error(ReleaseRequestError::BondPostPending),
         UnstakeError::BondConfirming
     ));
 }
@@ -301,7 +301,7 @@ fn the_two_pending_refusals_flatten_to_their_own_arms() {
 ///    intent is built ONLY from `TerminalExitObserved::for_persona` on
 ///    the same evidence the resolution read.
 /// 3. **The sweep rides the drain seam** (`submit_drain`) and the post
-///    rides the exit seam (`submit_unbond`) — no other dispatch path.
+///    rides the exit seam (`submit_release`) — no other dispatch path.
 #[test]
 fn facade_cannot_steer_slot_or_mint_test_witnesses() {
     let (production, _tests) = include_str!("unstake_facade.rs")
@@ -332,7 +332,7 @@ fn facade_cannot_steer_slot_or_mint_test_witnesses() {
         "the sweep intent is built only from the observed-exit witness mint"
     );
     assert!(
-        code.contains("Engine::submit_unbond(") && code.contains("Engine::submit_drain("),
+        code.contains("Engine::submit_release(") && code.contains("Engine::submit_drain("),
         "the two verbs ride exactly the two production seams"
     );
 }
@@ -489,7 +489,7 @@ async fn a_staker_with_nothing_bonded_is_not_collapsed_to_not_staker() {
 #[test]
 fn a_sealed_exit_is_excluded_so_the_next_live_bond_can_exit() {
     // Personas 1 and 2 both hold live confirmed bonds; neither exit is
-    // observed (pending_unbonds empty), but persona 1's exit is already sealed.
+    // observed (pending_releases empty), but persona 1's exit is already sealed.
     let state = pscan(
         vec![bond_match(1, 0), bond_match(2, 0)],
         BTreeMap::new(),
@@ -499,8 +499,8 @@ fn a_sealed_exit_is_excluded_so_the_next_live_bond_can_exit() {
     let mut block = PendingPostBlock::empty();
     let g = block.generation();
     assert_eq!(
-        block.seal_unbond(
-            PendingUnbond {
+        block.seal_release(
+            PendingRelease {
                 persona: persona(1),
                 tx_bytes: vec![0xEE; 4],
                 funding_gindexes: Vec::new(),

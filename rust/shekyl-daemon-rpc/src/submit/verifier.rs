@@ -37,7 +37,7 @@
 //! - **JoinMarket — the credit arm** (`verify_credit_arm`): BP5 pins the
 //!   bond slot's auth key to `P`'s **identity** key, then BP3's record-absent
 //!   fact and BP4's economic battery.
-//! - **Unbond — the debit arm** (`verify_debit_arm`): UB3 pins it to the
+//! - **Release — the debit arm** (`verify_debit_arm`): UB3 pins it to the
 //!   **record's committed `bond_spend_pk`** instead, then UB2/UB4–UB9 over
 //!   the §8.7.1.1 fact bundle. BP5's rule is *wrong* here: the identity key
 //!   is the one a serving host holds, so an identity-authorized value-out
@@ -81,9 +81,9 @@ use rand_core::OsRng;
 
 use shekyl_archival_retention::{
     debit_auth_pin, emission_vin_verify_auth, emission_vin_verify_backing,
-    emission_vin_verify_claims, p_canonical_id_from_hybrid_pubkey, settlement_epoch_at_height,
-    unbond_pre_cooldown_guards, unbond_vin_statics, verify_bond_post_ct_balance,
-    verify_join_market_bond_post, verify_unbond_bond_post, whole_record_last_served,
+    emission_vin_verify_claims, p_canonical_id_from_hybrid_pubkey, release_pre_cooldown_guards,
+    release_vin_statics, settlement_epoch_at_height, verify_bond_post_ct_balance,
+    verify_join_market_bond_post, verify_release_bond_post, whole_record_last_served,
     ArchivalBondPostVin, BondPostError, BondPostKind as RetentionBondPostKind, BondTerm,
     ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
     EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
@@ -246,20 +246,20 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     };
 
     // Kind dispatch: the credit arm (JoinMarket, §8.7.1 BP rows) and the
-    // debit arm (Unbond, §8.7.1.1 UB rows) are the two kinds whose
+    // debit arm (Release, §8.7.1.1 UB rows) are the two kinds whose
     // submit-side fact sets are pinned. HoldingsUpdate and Rebond have no
     // producer, so their fact sets are deliberately unbuilt and they refuse
     // loudly under their named rule-21 reopening criterion (module docs).
     let arm = match &bond.kind {
         WireBondPostKind::JoinMarket { bond_spend_pk } => BondArm::Credit(bond_spend_pk),
-        WireBondPostKind::Other(tag) if *tag == RetentionBondPostKind::Unbond as u8 => {
+        WireBondPostKind::Other(tag) if *tag == RetentionBondPostKind::Release as u8 => {
             BondArm::Debit
         }
         kind => {
             tracing::error!(
                 ?kind,
                 "bond-post submit battery covers JoinMarket (§8.7.1) and \
-                 Unbond (§8.7.1.1); HoldingsUpdate and Rebond refuse until \
+                 Release (§8.7.1.1); HoldingsUpdate and Rebond refuse until \
                  a producer exists and their fact set + Phase-D re-check \
                  semantics are specified (rule-21 reopening criterion in \
                  the module docs)"
@@ -627,7 +627,7 @@ enum BondArm<'a> {
     /// JoinMarket (§8.7.1) — carries the `bond_spend_pk` the record will
     /// commit; authorized by the identity key (row BP5).
     Credit(&'a [u8]),
-    /// Unbond (§8.7.1.1) — carries no `bond_spend_pk` on the wire;
+    /// Release (§8.7.1.1) — carries no `bond_spend_pk` on the wire;
     /// authorized by the record's committed key (row UB3).
     Debit,
 }
@@ -677,7 +677,7 @@ fn verify_credit_arm(
 }
 
 /// The debit arm (§8.7.1.1 rows UB2–UB9): the record's committed authorizer,
-/// then the Unbond economic battery over the Phase-B fact bundle.
+/// then the Release economic battery over the Phase-B fact bundle.
 ///
 /// **UB3 replaces BP5 here, and the substitution is the point.** A debit
 /// takes bonded collateral out of the system. `P`'s identity key is held by
@@ -692,9 +692,9 @@ fn verify_debit_arm(
     bond_auth: &PqcAuth,
     facts: &SubmitFacts,
 ) -> Result<(), VerifyFailure> {
-    let Some(unbond) = facts.unbond.as_ref() else {
+    let Some(release) = facts.release.as_ref() else {
         tracing::error!(
-            "unbond verifier called without the §8.7.1.1 fact bundle \
+            "release verifier called without the §8.7.1.1 fact bundle \
              (the engine's ShimContract pre-check makes this unreachable \
              through the pipeline)"
         );
@@ -711,7 +711,7 @@ fn verify_debit_arm(
     // C, and the engine classifies that `DoubleSpendConflict` from the
     // fresh facts. Same fact value, different verdict by when it was
     // observed — the `reference` field's asymmetry.
-    let Some(record) = unbond.record.as_ref() else {
+    let Some(record) = release.record.as_ref() else {
         return Err(VerifyFailure::Malformed);
     };
 
@@ -724,15 +724,15 @@ fn verify_debit_arm(
     // These are the states the gather deliberately skips its scan for, and
     // they must be refused HERE, by name, rather than by the belt below. The
     // belt cannot tell an expected skip from a broken shim, so letting an
-    // ordinary malformed Unbond reach it produced an `error!` claiming an
+    // ordinary malformed Release reach it produced an `error!` claiming an
     // internal inconsistency for what is simply an invalid transaction.
     //
-    // The shared consensus function, never a restatement: `verify_unbond_bond_post`
+    // The shared consensus function, never a restatement: `verify_release_bond_post`
     // runs the identical guards, so the block path and this arm cannot drift.
-    let Some(vin) = retention_vin(bond, RetentionBondPostKind::Unbond, &[]) else {
+    let Some(vin) = retention_vin(bond, RetentionBondPostKind::Release, &[]) else {
         return Err(VerifyFailure::Malformed);
     };
-    if unbond_pre_cooldown_guards(
+    if release_pre_cooldown_guards(
         &vin,
         record.bonded_total_atomic(),
         record.bad_interval_count(),
@@ -757,7 +757,7 @@ fn verify_debit_arm(
     // transaction, and it is worth the loud log.
     if record.last_served_scan_skipped() {
         tracing::error!(
-            "unbond gather skipped the last-served scan but the Phase-C pin \
+            "release gather skipped the last-served scan but the Phase-C pin \
              passed — refusing rather than folding an unread slice"
         );
         return Err(VerifyFailure::Malformed);
@@ -780,12 +780,12 @@ fn verify_debit_arm(
 
     // ── UB9: the economic battery, the same function the block path calls ─
     // `vin` was built above, for the record statics.
-    match verify_unbond_bond_post(
+    match verify_release_bond_post(
         &vin,
         Some(record.bonded_total_atomic()),
         record.bad_interval_count(),
         last_served_epoch,
-        unbond.last_settled_slash_epoch,
+        release.last_settled_slash_epoch,
         current_settlement_epoch,
     ) {
         Ok(()) => Ok(()),
@@ -1206,11 +1206,11 @@ pub(crate) fn verify_debit_slot_possession(parsed: &ParsedSubmission) -> Result<
     // each forged txid is unknown, so the gather's identity clause never
     // fires for it. The shared consensus function, never a local restatement:
     // the block path runs the identical checks inside
-    // `verify_unbond_bond_post`, in the same order.
-    let Some(vin) = retention_vin(bond, RetentionBondPostKind::Unbond, &[]) else {
+    // `verify_release_bond_post`, in the same order.
+    let Some(vin) = retention_vin(bond, RetentionBondPostKind::Release, &[]) else {
         return Err(VerifyFailure::Malformed);
     };
-    if unbond_vin_statics(&vin).is_err() {
+    if release_vin_statics(&vin).is_err() {
         return Err(VerifyFailure::Malformed);
     }
     Ok(())

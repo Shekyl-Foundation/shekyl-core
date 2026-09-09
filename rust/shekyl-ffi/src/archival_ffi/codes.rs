@@ -10,7 +10,7 @@
 
 use shekyl_archival_retention::{
     BondPostError, HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError,
-    RebondPopError, UnbondConnectError, UnbondPopError, WireError,
+    RebondPopError, ReleaseConnectError, ReleasePopError, WireError,
 };
 
 /// `shekyl_archival_settlement_epoch_arm_regtest`: armed (or the variable
@@ -101,32 +101,32 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH: u8 = 8;
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS: u8 = 9;
 /// `holdings_kind` is not a known enum value.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND: u8 = 10;
-/// `Unbond` verify: `post_kind` is not `Unbond`.
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND: u8 = 11;
-/// `Unbond` verify: no bond record exists for `P_canonical_id`.
+/// `Release` verify: `post_kind` is not `Release`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE: u8 = 11;
+/// `Release` verify: no bond record exists for `P_canonical_id`.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING: u8 = 12;
-/// `Unbond` verify: record's `bonded_total` is zero (nothing to unbond).
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND: u8 = 13;
-/// `Unbond` verify: `bond_credit` is non-zero on a debit path.
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_CREDIT: u8 = 14;
-/// `Unbond` verify: post-connect `bonded_total_atomic != bond_floor(holdings)`.
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH: u8 = 15;
-/// `Unbond` verify: post-connect `bonded_total_atomic != 0` (partial, not full exit).
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND: u8 = 16;
-/// `Unbond` verify: `bond_debit` != the record's current `bonded_total`.
+/// `Release` verify: record's `bonded_total` is zero (nothing to release).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE: u8 = 13;
+/// `Release` verify: `bond_credit` is non-zero on a debit path.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_CREDIT: u8 = 14;
+/// `Release` verify: post-connect `bonded_total_atomic != bond_floor(holdings)`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_FLOOR_MISMATCH: u8 = 15;
+/// `Release` verify: post-connect `bonded_total_atomic != 0` (partial, not full exit).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_RELEASE: u8 = 16;
+/// `Release` verify: `bond_debit` != the record's current `bonded_total`.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL: u8 = 17;
-/// `Unbond` verify: the release cooldown has not elapsed.
+/// `Release` verify: the release cooldown has not elapsed.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED: u8 = 18;
 /// A shard/served-epoch array length would overflow the `from_raw_parts`
 /// `isize::MAX` byte bound — a corrupted or hostile marshaled length.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW: u8 = 19;
-/// `Unbond` verify: a full exit must end at empty holdings, but the post-connect
+/// `Release` verify: a full exit must end at empty holdings, but the post-connect
 /// descriptor is floor-zero only because its shard set is oversize/invalid.
-pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY: u8 = 20;
-/// `Unbond` verify: the record's interval log is at the codec cap, so the
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_HOLDINGS_NOT_EMPTY: u8 = 20;
+/// `Release` verify: the record's interval log is at the codec cap, so the
 /// connect's clean interval-close could not append — reject at admission.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL: u8 = 21;
-/// `Unbond` verify: the slash scheduler has not yet settled every epoch through
+/// `Release` verify: the slash scheduler has not yet settled every epoch through
 /// the record's last-served anchor (the one-block connect-ordering race guard).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING: u8 = 22;
 /// The marshaled `bond_spend_pk` violates the §9.11 JoinMarket coupling:
@@ -153,7 +153,7 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_FLOOR_MISMATCH: u8 = 30;
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS: u8 = 31;
 /// HoldingsUpdate-drop verify: post is not current holdings minus exactly one shard.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP: u8 = 32;
-/// HoldingsUpdate-drop verify: dropping the last shard (use Unbond for a full exit).
+/// HoldingsUpdate-drop verify: dropping the last shard (use Release for a full exit).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD: u8 = 33;
 /// HoldingsUpdate-drop verify: post bonded_total != bond_floor(post-holdings).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH: u8 = 34;
@@ -176,7 +176,7 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED: u8 = 40;
 /// invariant broken — record corruption).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN: u8 = 41;
 /// Rebond verify: interval log lacks headroom (> 254 entries; Pin 6 reserves one
-/// slot for the next slash + one for the Unbond clean close).
+/// slot for the next slash + one for the Release clean close).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM: u8 = 42;
 /// Rebond verify: terms mismatch (debit nonzero, or credit != bond_floor(post) −
 /// record bonded_total, or post bonded_total != bond_floor(post)).
@@ -212,34 +212,34 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY: u8 = 49;
 /// committed `bond_spend_pk` (identity-key or foreign-key authorization).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH: u8 = 50;
 
-/// `Unbond` connect/pop fold succeeded (gate-4 §4.3 / §5).
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_OK: u8 = 0;
+/// `Release` connect/pop fold succeeded (gate-4 §4.3 / §5).
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_OK: u8 = 0;
 /// A required out-pointer was null.
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR: u8 = 1;
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_NULL_PTR: u8 = 1;
 /// Retired: the connect fold takes the record's held shard COUNT, not a
 /// pointer/length pair, so no slice marshal exists to guard. The value stays
 /// reserved so the family's codes never renumber.
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_LEN_OVERFLOW: u8 = 2;
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_LEN_OVERFLOW: u8 = 2;
 /// `record_holdings_kind` is not a known enum value.
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_HOLDINGS_KIND: u8 = 3;
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_HOLDINGS_KIND: u8 = 3;
 /// Connect: `bond_debit` is zero.
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_ZERO: u8 = 4;
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_DEBIT_ZERO: u8 = 4;
 /// Connect: `bond_debit` != the record's current `bonded_total`.
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL: u8 = 5;
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL: u8 = 5;
 /// Connect: the record's `bonded_total == bond_floor(holdings)` invariant is broken.
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT: u8 = 6;
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_FLOOR_INVARIANT: u8 = 6;
 /// Connect: `total_bonded_atomic` would underflow.
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_UNDERFLOW: u8 = 7;
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_UNDERFLOW: u8 = 7;
 /// Connect: the interval log is at the codec cap; the clean close cannot append.
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_INTERVAL_LOG_FULL: u8 = 8;
-/// Pop: the record is not in the `Unbond` post-connect (`Exited`) state.
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_NOT_EXITED: u8 = 9;
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_INTERVAL_LOG_FULL: u8 = 8;
+/// Pop: the record is not in the `Release` post-connect (`Exited`) state.
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_NOT_EXITED: u8 = 9;
 /// Pop: the trailing interval-log entry is not the expected clean interval-close.
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_MISSING_CLEAN_CLOSE: u8 = 10;
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_MISSING_CLEAN_CLOSE: u8 = 10;
 /// Pop: the journaled pre-image `bonded_total` is zero.
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_PRE_IMAGE_EMPTY: u8 = 11;
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_PRE_IMAGE_EMPTY: u8 = 11;
 /// Pop: `total_bonded_atomic` re-credit would overflow.
-pub const SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_OVERFLOW: u8 = 12;
+pub const SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_OVERFLOW: u8 = 12;
 
 // ── HoldingsUpdate add/drop connect + pop fold codes (gate-4 §4.4) ───────────
 /// HoldingsUpdate connect/pop fold succeeded.
@@ -252,7 +252,7 @@ pub const SHEKYL_ARCHIVAL_HU_APPLY_ERR_LEN_OVERFLOW: u8 = 2;
 pub const SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_ADD: u8 = 3;
 /// Connect: post is not `current ∖ {one shard}` (drop).
 pub const SHEKYL_ARCHIVAL_HU_APPLY_ERR_NOT_SINGLE_DROP: u8 = 4;
-/// Connect: drop would leave no shards (use Unbond).
+/// Connect: drop would leave no shards (use Release).
 pub const SHEKYL_ARCHIVAL_HU_APPLY_ERR_DROP_LAST_SHARD: u8 = 5;
 /// Connect: the record's `bonded_total == bond_floor(holdings)` invariant is broken.
 pub const SHEKYL_ARCHIVAL_HU_APPLY_ERR_RECORD_FLOOR_INVARIANT: u8 = 6;
@@ -421,15 +421,15 @@ pub(super) fn map_bond_post_error(err: BondPostError) -> u8 {
         BondPostError::BondFloorZero => SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO,
         BondPostError::FloorMismatch => SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH,
         BondPostError::RecordExists => SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS,
-        BondPostError::PostKindNotUnbond => SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND,
+        BondPostError::PostKindNotRelease => SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE,
         BondPostError::RecordMissing => SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING,
-        BondPostError::NothingToUnbond => SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND,
-        BondPostError::UnbondCreditNonzero => SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_CREDIT,
-        BondPostError::UnbondHoldingsNotEmpty => {
-            SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY
+        BondPostError::NothingToRelease => SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE,
+        BondPostError::ReleaseCreditNonzero => SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_CREDIT,
+        BondPostError::ReleaseHoldingsNotEmpty => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_HOLDINGS_NOT_EMPTY
         }
-        BondPostError::UnbondFloorMismatch => SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH,
-        BondPostError::NotFullUnbond => SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND,
+        BondPostError::ReleaseFloorMismatch => SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_FLOOR_MISMATCH,
+        BondPostError::NotFullRelease => SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_RELEASE,
         BondPostError::DebitNotFullBalance => SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL,
         BondPostError::CooldownNotElapsed => SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED,
         BondPostError::IntervalLogFull => SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL,
@@ -492,30 +492,30 @@ pub(super) fn map_bond_post_error(err: BondPostError) -> u8 {
 }
 
 #[must_use]
-pub(super) fn map_unbond_connect_error(e: UnbondConnectError) -> u8 {
+pub(super) fn map_release_connect_error(e: ReleaseConnectError) -> u8 {
     match e {
-        UnbondConnectError::DebitZero => SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_ZERO,
-        UnbondConnectError::DebitNotRecordTotal => {
-            SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL
+        ReleaseConnectError::DebitZero => SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_DEBIT_ZERO,
+        ReleaseConnectError::DebitNotRecordTotal => {
+            SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL
         }
-        UnbondConnectError::RecordFloorInvariantBroken => {
-            SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT
+        ReleaseConnectError::RecordFloorInvariantBroken => {
+            SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_FLOOR_INVARIANT
         }
-        UnbondConnectError::TotalBondedUnderflow => {
-            SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_UNDERFLOW
+        ReleaseConnectError::TotalBondedUnderflow => {
+            SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_UNDERFLOW
         }
-        UnbondConnectError::IntervalLogFull => SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_INTERVAL_LOG_FULL,
+        ReleaseConnectError::IntervalLogFull => SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_INTERVAL_LOG_FULL,
     }
 }
 
 #[must_use]
-pub(super) fn map_unbond_pop_error(e: UnbondPopError) -> u8 {
+pub(super) fn map_release_pop_error(e: ReleasePopError) -> u8 {
     match e {
-        UnbondPopError::RecordNotExited => SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_NOT_EXITED,
-        UnbondPopError::MissingCleanClose => SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_MISSING_CLEAN_CLOSE,
-        UnbondPopError::PreImageEmpty => SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_PRE_IMAGE_EMPTY,
-        UnbondPopError::TotalBondedOverflow => {
-            SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_OVERFLOW
+        ReleasePopError::RecordNotExited => SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_NOT_EXITED,
+        ReleasePopError::MissingCleanClose => SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_MISSING_CLEAN_CLOSE,
+        ReleasePopError::PreImageEmpty => SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_PRE_IMAGE_EMPTY,
+        ReleasePopError::TotalBondedOverflow => {
+            SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_OVERFLOW
         }
     }
 }

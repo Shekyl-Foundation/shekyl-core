@@ -44,7 +44,7 @@ impl Message<ProjectPersonaCanonicalId> for StakeEngine {
 /// Retire a now-terminal bonded persona from the scan union (2d-1 DQ8), wiping its
 /// key. Carries the [`RetirementWitness`] — the positive-confirmation evidence
 /// that gates the wipe (the actor cannot re-verify). Sent by the SP-5 scan task
-/// when it confirms an `Unbond` + `W`-lapse + finality-deep.
+/// when it confirms a `Release` + `W`-lapse + finality-deep.
 pub(crate) struct RetireBondedPersona {
     pub witness: RetirementWitness,
     /// Slots the caller knows still hold unspent funding — the funded-gate

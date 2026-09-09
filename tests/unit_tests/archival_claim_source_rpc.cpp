@@ -142,7 +142,7 @@ TEST(archival_claim_source_rpc, fill_matches_single_gather_field_for_field)
   EXPECT_EQ(res.held_shard_ids, bond.held_shard_ids);
   EXPECT_EQ(res.claimed_settlement_epochs, std::vector<uint64_t>{1});
 
-  // The `Unbond` exit operands: same source, same fold, no second derivation.
+  // The `Release` exit operands: same source, same fold, no second derivation.
   EXPECT_EQ(res.bonded_total_atomic, bond.bonded_total_atomic);
   // The interval-log length, from the record — the count only. The verify arm
   // marshals `record.bad_intervals.size()`; this must be the same number.

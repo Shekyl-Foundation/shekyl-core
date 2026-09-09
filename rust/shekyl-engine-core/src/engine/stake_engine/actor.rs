@@ -40,7 +40,7 @@ use super::types::*;
 pub(crate) struct StakeEngine {
     /// The held derive-forward set, keyed by slot and tagged bonded/ephemeral.
     /// Activation wipes only the ephemeral retired slot; bonded personas stay
-    /// resident so unbonding remains reachable.
+    /// resident so releasing remains reachable.
     pub(crate) held: BTreeMap<PSlot, HeldPersona>,
     /// The currently-active slot, or `None` when idle. Always a key of `held`
     /// when `Some`.
@@ -333,7 +333,7 @@ impl StakeEngine {
     /// Quarantine, **not** a step error: the derivation is deterministic
     /// (same record, same vault ⇒ same failure), so failing the step would
     /// permanently wedge the scan pipeline on one bad record — frontier
-    /// frozen, balances, bond-post matches, and unbond processing all
+    /// frozen, balances, bond-post matches, and release processing all
     /// stalled. Skipping only this record keeps the wallet syncing, and is
     /// sound for the [`SpentRecordsDurablyPruned`] attestation: assemble
     /// re-derives the same bundle (`derive_spend_parts`) and fails the same

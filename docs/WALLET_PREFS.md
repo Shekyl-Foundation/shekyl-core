@@ -174,7 +174,7 @@ would lose or endanger funds.
   version mismatch refuses rather than migrates — its "no silent migration" stance.
 - **Why not TOML:** filing funds-load-bearing state into advisory TOML means a
   tamper event quarantines it and loads a default — e.g. `staking_enabled = false`,
-  which bricks unbonding. That is the exact funds-loss this tier exists to prevent.
+  which bricks releasing. That is the exact funds-loss this tier exists to prevent.
 
 ## 3. Field-by-field categorization
 
