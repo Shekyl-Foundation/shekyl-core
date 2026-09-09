@@ -1188,3 +1188,43 @@ unmeasured.
 Precedent followed for scope: the design PR #614 carried its own
 instrument (`fee_ladder.rs`), so the grid arms belong in this round's PR
 rather than a separate code branch.
+
+### Round 18 results (instrument run at the branch tip)
+
+Full figures at [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md)
+§10.10; state only here.
+
+- **C10-1 PARTIAL.** `grid-fold` at `P ≥ 240` restores the oscillation
+  *amplitude* exactly — worst 24, the banded figure, from the served
+  1 161 — but leaves 20 cells oscillating against the band's 14. The
+  band's memory is unbounded; the fold's resets at each anchor.
+- **C10-2 pass.** No grid arm fails the registered dwell gate.
+- **C10-3 FAIL, by 1.33×.** 960 cold block parses against a 720 budget.
+  §10.4 pre-registered this branch, so the consequence was already
+  ruled: **FL-R3 is BLOCKED on the storage-lane per-block tx count**,
+  now on its critical path. Accepting 1.33× instead is a maintainer
+  call and is stated as one.
+- **C10-4 selects `P` = 720**, on FL-D8's measured residence (mean up to
+  637 blocks) — and independently the natural ceiling, since the fold
+  cannot outrun the 720-block average feeding it.
+- **C10-5 answered against itself.** `grid-only` reproduces the
+  withdrawn minimum-dwell floor's signature (114 cells / worst 5 at
+  `P` = 720, against FL-R18's `n` = 720 row at 102 / 5). The band does
+  work a grid alone cannot; **nothing goes to the maintainer on this
+  one.**
+- **FL-D8 CLOSED** as an owed measurement: occupancy 741‰, mean
+  residence 637, max 13 597.
+
+**The pre-registration earned its keep.** `P` = 60 was named as failing
+by two independent pre-committed lines — §10.2's `1/P` weight on the
+unseeded first step, and C10-4's residence rule — before any arm ran. It
+measured worst 45 against 24. The prediction was falsifiable and was not
+adjusted afterwards.
+
+**Two instrument defects found (§10.11).** The dwell gate selected its
+subject with `mode.contains("quantized")`, so the rate-limited arm (since
+round 13) and both new grid arms were skipped by it entirely; replaced
+with a structural predicate, and bringing them under the gate revealed no
+new failures. And §4's dwell-grid count is re-derived 240 → 320 — **the
+second time that figure has gone stale for the same reason**, since a
+count derived from a mode list dies on every addition to the list.

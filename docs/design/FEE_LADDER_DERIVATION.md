@@ -788,7 +788,7 @@ stationary tail and structurally cannot fail for ≤ 2 posted values.
 **swept at round 11 over every registered age at its projected (coupled)
 supply state** — `{0, 1, 4, 12, 30}` years; earlier revisions measured
 the single age-4 state, and age moves `C` relative to every pow2
-boundary (**240 runs total** — six modes × eight scenarios × five ages; the figure read 200 until the rate-limited mode joined the dwell sweep at round 13 and the count was not re-derived, corrected here from the run); **at round 12 the traces EVOLVE chain state per block**
+boundary (**320 runs total** — eight modes × eight scenarios × five ages, of which 240 are quantized; **this figure has now gone stale twice for the same reason** — it read 200 until the rate-limited mode joined at round 13, and 240 until §10's two grid arms joined at round 18, each time because a count derived from a mode list is invalidated by every addition to that list. Re-derived from the run both times, never by arithmetic on the previous number); **at round 12 the traces EVOLVE chain state per block**
 (`already_generated` advances by the shipped paid emission; height, σ,
 supply and reward all drift — §1.8's quasi-static claim is confirmed by
 measurement, not assumed); "current" is the churn baseline, so the table
@@ -1485,7 +1485,7 @@ maintainer chooses to add: ________________
 | FL-D5 | Fee-floor basis derivation (FL-V11 / FL-R13) — whether `Fl ∝ R` survives a 3 413× reward decay as the anti-spam floor, on a chain where stakers store what the floor admits | Its own pre-registered round: criteria must be committed before the floor model is chosen | Open on its own merits (FL-R12′ signature satisfied): the floor's long-run role is the *permanent tail-era floor* and the genesis-blocking escalation is retired; the round opens as FL-R13's calibration |
 | FL-D6 | Fee-variance smoothing pool (declined as a floor at the FL-R12′ direction; may still earn a place as *smoothing*, never as the security floor) | Post-genesis per the accepted direction — no pre-genesis blocker exists once the tail is the floor | Design reopens **before tail onset** (by height ≈ 60·`BLOCKS_PER_YEAR`, five years ahead of the ≈ year-65 tail entry), or **early** if over any rolling 90-day mainnet window the 10th-percentile day's miner fee income falls below 25% of the window median (the dormancy signal the declined pool was meant to paper over) |
 | FL-D7 | W8: miner fee-rank ordering leak — block position reveals fee rank under any multi-rate ladder, and FL-R17's three-tier signature keeps it live | Under a ladder a miner has a *legitimate* reason to order by fee, so inclusion order cannot be made a checkable rule without breaking the fee market — the constraint W8 identified is only available under uniform rates | (a) any FL-R17 reopener fires (single-rate reconsidered ⇒ the checkable rule becomes available); (b) the relay/P2P-3 round takes inclusion-ordering scope and finds a ladder-compatible mitigation (e.g. intra-block shuffle of same-rate transactions, which three tiers still permit within each tier) |
-| FL-D8 | **Boundary-cell OCCUPANCY: what fraction of chain TIME is spent in the cells where `C` sits near a pow2 boundary.** A measurement deferral, not a design one — nothing is being postponed except taking a number. Every disposition that has turned on flicker argued it from **cell count** — how many of the 800 swept cells oscillate — and cell count is a property of the SWEEP GRID, not of the chain: it says how much of the parameter space flickers, never how often anyone is standing there. Three dispositions have now rested on that unknown (FL-C4a's dwell gate, FL-C7's residual, FL-R18's acceptance of it as bounded) and FL-R3's restoration is the fourth. The quantity is occupancy-weighted flicker: over drift-honest traces, the fraction of blocks whose `C` lies within the band region, and the flip rate weighted by it | Not owed by any current disposition. FL-R3 is ruled on the band's own record and does not wait for this; the round-16/17 figures were sufficient for every decision taken. It is registered because the unknown has been load-bearing four times and the argument gets re-run from scratch each time | **Due the next time a disposition turns on flicker** — any reopening of FL-C4a, FL-C7, FL-R18 or FL-R3, or any proposal to change the quantization rule, the band margin, or the served map. The point of the row is that the fifth occasion reaches for a number instead of an argument. Instrument: the existing drift-honest traces already evolve the state needed; this is an added statistic, not a new model |
+| FL-D8 | **Boundary-cell OCCUPANCY: what fraction of chain TIME is spent in the cells where `C` sits near a pow2 boundary.** A measurement deferral, not a design one — nothing is being postponed except taking a number. Every disposition that has turned on flicker argued it from **cell count** — how many of the 800 swept cells oscillate — and cell count is a property of the SWEEP GRID, not of the chain: it says how much of the parameter space flickers, never how often anyone is standing there. Three dispositions have now rested on that unknown (FL-C4a's dwell gate, FL-C7's residual, FL-R18's acceptance of it as bounded) and FL-R3's restoration is the fourth. The quantity is occupancy-weighted flicker: over drift-honest traces, the fraction of blocks whose `C` lies within the band region, and the flip rate weighted by it **MEASURED at round 18 (§10.10), and it selected `P`**: over the dwell ensemble, boundary occupancy reaches **741‰**, mean residence per visit **up to 637 blocks**, max residence **13 597 blocks**. C10-4's rule — `P` must exceed expected residence — therefore rejects `P` = 60 and 240 and selects **720**, independently the natural ceiling since the fold cannot outrun the 720-block average feeding it. No candidate spans the worst single visit (≈ 19 days at 120 s); that residual is the `1/P` first-step effect §10.2 prices, recorded not left to be discovered. **This closes D8 as an owed measurement.** | Not owed by any current disposition. FL-R3 is ruled on the band's own record and does not wait for this; the round-16/17 figures were sufficient for every decision taken. It is registered because the unknown has been load-bearing four times and the argument gets re-run from scratch each time | **Due the next time a disposition turns on flicker** — any reopening of FL-C4a, FL-C7, FL-R18 or FL-R3, or any proposal to change the quantization rule, the band margin, or the served map. The point of the row is that the fifth occasion reaches for a number instead of an argument. Instrument: the existing drift-honest traces already evolve the state needed; this is an added statistic, not a new model |
 
 ---
 
@@ -1733,3 +1733,118 @@ quote, and the memo misses because `top_hash` changed. Recorded because
     behaviour survives the grid. Occupancy then says how much of the
     chain's life that case governs — i.e. whether the residual is worth
     the cold-path cost C10-3 budgets.
+
+### §10.10 Round-1 instrument results
+
+**Run at the branch tip; arms measured on the SAME feedback grid as
+FL-C7 and FL-R18**, with both reference arms swept alongside so every
+comparison below is within one measurement rather than against a figure
+from another.
+
+| arm | oscillating cells | worst tail transitions | thin-margin cells |
+|---|---|---|---|
+| `corrected-quantized-pow2-ceil` — **served today** | 20 | **1 161** | 25 |
+| `...-ceil-hysteresis` — **the RULED banded map** | **14** | **24** | 22 |
+| `grid-fold-p60` | 20 | 45 | 25 |
+| `grid-fold-p240` | 20 | **24** | 25 |
+| `grid-fold-p720` | 20 | **24** | 25 |
+| `grid-only-p60` | 29 | 23 | 26 |
+| `grid-only-p240` | 82 | 9 | 39 |
+| `grid-only-p720` | 114 | 5 | 42 |
+
+**C10-1 — PARTIAL restoration, reported as one.** `grid-fold` at
+`P ≥ 240` reaches **worst = 24**, exactly the banded figure: the
+oscillation's *amplitude* is fully restored from the served 1 161. But
+**oscillating cells stay at 20 — the un-banded count — against the
+band's 14.** Six cells oscillate under the fold that the band keeps
+quiet, and the mechanism is legible: the band's memory is unbounded,
+while the fold's resets at every anchor, so a cell whose quiet depends on
+history older than its current cell loses it. C10-1 pre-committed to
+reporting a between-result as partial with the number rather than
+rounding it up, and this is that case.
+
+**C10-2 — dwell does not regress.** 320 runs, 240 of them quantized, and
+**exactly one** fails the registered gate — the same single failure the
+sweep carried before the grid arms joined it. No grid arm fails.
+
+**C10-3 — NOT MET on the cold path, by 1.33×.** Observed max fold depth
+is **240** (= `P`, as `h mod P` predicts). Cold cost:
+
+| | block parses per cold quote |
+|---|---|
+| today, one `get_tx_volume_avg` | 720 |
+| naive fold, `D` = 240 | **172 800** — disqualifying, as pre-registered |
+| single-scan fold | **960** |
+
+960 against a 720 budget is **1.33×**, so the single-scan shape does not
+meet C10-3 unaided. §10.4 pre-registered exactly this branch, so the
+consequence is already ruled rather than argued now: **FL-R3's
+restoration is BLOCKED on the storage-lane cheap per-block tx count**,
+which takes both the 720 and the 960 to ≈ 0 and makes the fold free. That
+item is hereby on FL-R3's critical path, not a queued nicety. The
+alternative — accepting 1.33× on the cold path — is a maintainer call,
+not this round's to make, and it is stated as such rather than assumed
+either way.
+
+**C10-4 — `P` = 720, and FL-D8 is what says so.** Measured over the
+dwell ensemble: boundary occupancy reaches **741‰** (in the worst states
+three blocks in four sit in the band's flicker zone), **mean residence
+per visit up to 637 blocks**, and **max residence 13 597 blocks**.
+C10-4's pre-registered rule is that `P` must *exceed* expected residence:
+
+- `P` = 60 — fails (60 < 637), and it is the arm that measured worse;
+- `P` = 240 — fails (240 < 637), despite scoring identically to 720 on
+  the boundary axis;
+- `P` = 720 — **passes** (720 > 637), and it is independently the natural
+  ceiling: the fold cannot usefully outrun the 720-block average feeding
+  it.
+
+**No candidate spans the worst single visit** (13 597 blocks ≈ 19 days at
+120 s). That is a bounded residual, not a blocker — a visit longer than
+`P` is re-anchored mid-visit, which is the `1/P` first-step effect §10.2
+already prices — but it is recorded rather than left for someone to
+discover.
+
+**The methodologically important result: `P` = 60's failure was predicted
+twice, before it was run.** §10.2 derived it analytically (the unseeded
+first step's weight falls as `1/P`, so small `P` re-seeds the flaw too
+often) and C10-4 derived it from residence (`P` must exceed 637). Two
+independent pre-registered lines named the same failing candidate, and
+the instrument returned worst = 45 against 24 for the larger periods.
+That is the pre-registration doing its job: the prediction was falsifiable
+and was not adjusted after the fact.
+
+**C10-5 — the grid does NOT subsume the band; the fold is the shape.**
+`grid-only` trades amplitude for breadth in a way the band does not:
+worst transitions fall (23 → 9 → 5) while oscillating cells climb
+sharply (29 → 82 → 114). At `P` = 720 its signature — 114 cells, worst 5
+— is within noise of FL-R18's rate-limited `n` = 720 row (102 cells,
+worst 5), i.e. **grid-only reproduces the minimum-dwell floor's
+signature, the mechanism round 14 WITHDREW** on measured grounds. So
+C10-5's second branch is the one that fired: the band is doing work a
+grid alone cannot do. **No question goes to the maintainer here** — the
+arm was built so this would be answered rather than argued, and it
+answered against itself.
+
+### §10.11 Two instrument defects found by this round
+
+**(1) The dwell gate was selecting its own subject from a display
+string.** It filtered rows on `mode.contains("quantized")`. Two arms
+serve a pow2-snapped map without that word in their label —
+`served-rate-limited-n*`, which joined the dwell sweep at round 13, and
+§10's `grid-*` arms — so **both were skipped by the gate entirely**, and
+a new arm would keep being skipped without anything saying so. Replaced
+with a structural `LadderMode::serves_quantized_map()`. Bringing the
+previously-ungated arms under the gate revealed **no new failures** (still
+exactly one), so nothing ratified moves on the substance — but the gate
+now covers what it claims to.
+
+**(2) §4's dwell-grid figure is re-derived: 240 → 320 runs.** Eight modes
+× eight scenarios × five ages = 320, of which 240 are quantized (six of
+the eight modes), against the previously recorded 240 total / 120
+quantized. **This is the second time this figure has gone stale for the
+same reason:** §4 already records that it "read 200 until the
+rate-limited mode joined the dwell sweep at round 13 and the count was
+not re-derived". A register figure derived from a mode list is invalidated
+by every addition to that list, so it is corrected here **from the run**
+rather than by arithmetic on the old number.

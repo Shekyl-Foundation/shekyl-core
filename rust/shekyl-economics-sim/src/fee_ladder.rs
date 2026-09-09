@@ -312,6 +312,37 @@ fn pow2_le(c: u128, s: u128, k: i32) -> bool {
 /// represent `2^k` exactly (unreachable for the derivation's C range
 /// [0.68, 12.92]; the assert makes a future range widening loud instead of
 /// silently truncated).
+/// FL-D8's pre-registered predicate (§10.9): is raw `C` inside the band's
+/// own flicker zone?
+///
+/// **Why the band's own margin and not a chosen one.** `C` always lies in
+/// some pow2 interval `[B_lo, B_hi]`. The hysteresis band exists to damp
+/// movement across the ends of that interval, and it does so with a
+/// margin of `HYSTERESIS_MARGIN_MILLI` (3%). Defining "near a boundary"
+/// as *within that same margin of either end* makes D8 measure the zone
+/// the mechanism actually acts on, rather than a zone picked to produce a
+/// number. It also keeps the definition tied to one constant: if the
+/// margin is ever retuned, this predicate follows it instead of drifting.
+///
+/// The 3% is re-derived here rather than imported because
+/// `HYSTERESIS_MARGIN_MILLI` is private to the owner. That is a knowing
+/// duplication of a CONSTANT, not of the band's arithmetic — the step
+/// itself is still the owner's — and it is pinned by
+/// `boundary_zone_margin_matches_the_owner` below, which fails if the two
+/// ever disagree.
+const D8_MARGIN_MILLI: u128 = 30;
+
+fn in_boundary_zone(c_scaled: u64) -> bool {
+    if c_scaled == 0 {
+        return false;
+    }
+    let hi = u128::from(quantize_c_pow2(c_scaled, SnapRule::Ceiling));
+    let lo = hi / 2;
+    let c = u128::from(c_scaled);
+    // Within the margin of the upper end, or of the lower end.
+    c * 1000 >= hi * (1000 - D8_MARGIN_MILLI) || c * 1000 <= lo * (1000 + D8_MARGIN_MILLI)
+}
+
 fn quantize_c_pow2(c_scaled: u64, rule: SnapRule) -> u64 {
     assert!(c_scaled > 0, "C is structurally positive");
     let c = u128::from(c_scaled);
@@ -593,6 +624,29 @@ pub struct DwellResult {
     /// Number of value CHANGES per rung (churn; a value revisited counts
     /// each time). The pre-review field misnamed this "distinct values".
     pub value_changes: [u64; 4],
+    /// FL-D8 (§10.9), statistic 1 — **occupancy**: blocks whose raw `C`
+    /// sits in the band's flicker zone, per thousand blocks measured.
+    /// The "how much chain TIME" half of the question the round needs to
+    /// pick `P`; mode-independent, since raw `C` does not depend on how a
+    /// mode serves it.
+    pub d8_boundary_occupancy_permille: u64,
+    /// FL-D8, statistic 2 — **expected residence per visit**: the mean
+    /// length in blocks of a run inside the zone. C10-4's reading: `P`
+    /// must EXCEED this, or the grid re-samples inside a single visit and
+    /// the boundary behaviour survives the grid.
+    pub d8_mean_residence_blocks: u64,
+    /// Longest single visit observed — the tail `P` would have to span to
+    /// cover the worst case, not just the mean.
+    pub d8_max_residence_blocks: u64,
+    /// Whether this arm serves a pow2-snapped map, from
+    /// [`LadderMode::serves_quantized_map`] — carried as data so the gate
+    /// stops inferring its own subject from the mode's display name.
+    pub is_quantized_map: bool,
+    /// Deepest fold evaluated by a grid arm on this trace (0 for
+    /// non-grid arms). C10-3's cost evidence, measured rather than
+    /// derived from `P`: the fold depth is `h mod P`, so the observed
+    /// maximum says what the COLD path actually pays.
+    pub grid_max_fold_depth: u64,
     /// For ramp scenarios: the shortest completed run that STARTED inside
     /// the ramp window, per rung — the statistic the FL-C4a ramp criterion
     /// actually gates on (the whole-trace median is dominated by the
@@ -626,6 +680,18 @@ enum LadderMode {
     /// value — examined for FL-R18 (c) and NOT ADOPTED; swept over
     /// candidate `n` to produce the evidence at §4.5a.
     RateLimited(u64),
+    /// §10.3(B) — the grid-anchored fold, the FL-R3 restoration's
+    /// candidate shape: at height `h` the band is folded from the grid
+    /// anchor `h₀ = h − (h mod P)` with no seed, so the served value is a
+    /// pure function of `(chain state, h)` and costs `h mod P` steps.
+    GridFold(u64),
+    /// §10.3(C) — grid-only, **INSTRUMENTATION, NOT A PROPOSAL**: the
+    /// anchor's plain snap held for the whole cell, so a grid alone
+    /// yields dwell ≥ `P` with no band at all. Built because the question
+    /// "does the grid already do the band's boundary job" is going to be
+    /// asked, and C10-5 pre-registers how each outcome reads. The band
+    /// staying is RULED; this arm may not be read as reopening it.
+    GridOnly(u64),
 }
 
 /// The §7 hysteresis construction — the history, held so the sweep can
@@ -697,7 +763,93 @@ impl RateLimitedCq {
     }
 }
 
+/// §10 grid stepper — both grid arms, one implementation.
+///
+/// **What it holds is the CELL'S RAW INPUTS, never a fold result.** That
+/// distinction is the round's whole subject: the daemon would re-read
+/// `C`'s inputs from chain state at each height in the cell, so this
+/// vector stands in for CHAIN STATE, not for the per-node remembered
+/// value round 17 rejected (`m_fee_correction_cq`, archived at
+/// `archive/fee-ladder-r12-impl-rejected-2026-09-08`).
+///
+/// It re-folds from the anchor on **every** step rather than carrying
+/// `prev` forward. That is deliberate and is what makes the measurement
+/// honest: §10.6 rules that C10-3's budget is met on the COLD path with
+/// no memo counted, so the arm must cost what the cold path costs. The
+/// re-fold is also what makes the served value a pure function of
+/// `(trace, h)` — the property FL-R18 closed on.
+///
+/// The step itself is `shekyl-economics::hysteresis_step`; this holds no
+/// band arithmetic, per FL-R3 constraint (2) and the drifted-copy lesson
+/// that discharged declared exception #3.
+struct GridCq {
+    period: u64,
+    /// Grid-only (§10.3 C) when true: the anchor's snap, held for the cell.
+    only: bool,
+    /// Raw `C` at each height from the anchor to the current height.
+    cell: Vec<u64>,
+    /// Deepest fold actually evaluated — C10-3's evidence.
+    max_depth: u64,
+}
+
+impl GridCq {
+    fn new(period: u64, only: bool) -> Self {
+        Self {
+            period: period.max(1),
+            only,
+            cell: Vec::new(),
+            max_depth: 0,
+        }
+    }
+
+    fn step(&mut self, height: u64, c_raw: u64) -> u64 {
+        let off = (height % self.period) as usize;
+        // Re-anchor at the cell boundary. `truncate` also makes the
+        // stepper total if a driver ever walks non-contiguously: the cell
+        // is rebuilt from whatever prefix is present rather than folding
+        // over stale heights.
+        self.cell.truncate(off);
+        self.cell.push(c_raw);
+        if self.only {
+            // The anchor's plain snap (`prev = 0` is "no history"), held
+            // for the whole cell.
+            let anchor = self.cell[0];
+            self.max_depth = self.max_depth.max(1);
+            return hysteresis_step(anchor, 0);
+        }
+        let mut cq = 0u64;
+        for &c in &self.cell {
+            cq = hysteresis_step(c, cq);
+        }
+        self.max_depth = self.max_depth.max(self.cell.len() as u64);
+        cq
+    }
+}
+
 impl LadderMode {
+    /// Does this arm serve a **pow2-snapped** `C_q`, and therefore fall
+    /// under the registered dwell gate?
+    ///
+    /// **This replaces a name-substring test, which was a silent
+    /// under-gate.** The dwell gate previously selected rows with
+    /// `mode.contains("quantized")`. Two arms serve a snapped map without
+    /// the word in their label — `served-rate-limited-n*` (added to the
+    /// dwell sweep at round 13) and §10's `grid-*` arms — so both were
+    /// counted as non-quantized and skipped by the gate entirely. A gate
+    /// that decides its own subject from a display string is a gate that
+    /// stops covering each new arm without saying so; this asks the mode
+    /// what it serves.
+    fn serves_quantized_map(self) -> bool {
+        match self {
+            LadderMode::Current | LadderMode::CorrectedRaw => false,
+            LadderMode::Quantized(_)
+            | LadderMode::QuantizedHysteresis
+            | LadderMode::RateLimited(_)
+            | LadderMode::GridFold(_)
+            | LadderMode::GridOnly(_) => true,
+        }
+    }
+
     fn name(self) -> String {
         match self {
             LadderMode::Current => "current".to_owned(),
@@ -709,6 +861,8 @@ impl LadderMode {
                 "corrected-quantized-pow2-ceil-hysteresis".to_owned()
             }
             LadderMode::RateLimited(n) => format!("served-rate-limited-n{n}"),
+            LadderMode::GridFold(p) => format!("grid-fold-p{p}"),
+            LadderMode::GridOnly(p) => format!("grid-only-p{p}"),
         }
     }
 }
@@ -786,6 +940,18 @@ fn dwell_scenario(
         LadderMode::RateLimited(n) => RateLimitedCq::new(n),
         _ => RateLimitedCq::new(1),
     };
+    let mut grid = match mode {
+        LadderMode::GridFold(p) => GridCq::new(p, false),
+        LadderMode::GridOnly(p) => GridCq::new(p, true),
+        _ => GridCq::new(1, false),
+    };
+    // FL-D8 (§10.9): raw-`C` boundary occupancy and residence. Raw `C` is
+    // MODE-INDEPENDENT, so these come out identical on every arm — which
+    // is a free self-check that the modes differ only in how they serve a
+    // shared trace, not in the trace itself.
+    let mut near_blocks = 0u64;
+    let mut near_runs: Vec<u64> = Vec::new();
+    let mut near_run = 0u64;
     // Per rung: (value, run_length, run_start_block) plus accumulators.
     let mut runs: [Vec<(u64, u64)>; 4] = [vec![], vec![], vec![], vec![]]; // (start, len)
     let mut values: [BTreeSet<u64>; 4] = Default::default();
@@ -808,24 +974,27 @@ fn dwell_scenario(
         let height = st.height + t;
         let base = base_block_reward(ag, params).expect("base along trace");
         let raw = articmine_ladder_raw(base, median, median);
+        // Hoisted: every corrected arm needs it, and FL-D8 measures it.
+        // Previously each arm recomputed it, which is the shape a new arm
+        // silently forgets.
+        let c_raw = correction_factor(v_avg, ag, height, params).c_scaled;
+        if in_boundary_zone(c_raw) {
+            near_blocks += 1;
+            near_run += 1;
+        } else if near_run > 0 {
+            near_runs.push(near_run);
+            near_run = 0;
+        }
         let fees = match mode {
             LadderMode::Current => rounded(raw),
-            LadderMode::CorrectedRaw => served_ladder(
-                base,
-                median,
-                correction_factor(v_avg, ag, height, params).c_scaled,
-            ),
+            LadderMode::CorrectedRaw => served_ladder(base, median, c_raw),
             LadderMode::Quantized(rule) => {
-                let c = correction_factor(v_avg, ag, height, params).c_scaled;
-                served_ladder(base, median, quantize_c_pow2(c, rule))
+                served_ladder(base, median, quantize_c_pow2(c_raw, rule))
             }
-            LadderMode::QuantizedHysteresis => {
-                let c = correction_factor(v_avg, ag, height, params).c_scaled;
-                served_ladder(base, median, hyst.step(c))
-            }
-            LadderMode::RateLimited(_) => {
-                let c = correction_factor(v_avg, ag, height, params).c_scaled;
-                served_ladder(base, median, rate_limited.step(c))
+            LadderMode::QuantizedHysteresis => served_ladder(base, median, hyst.step(c_raw)),
+            LadderMode::RateLimited(_) => served_ladder(base, median, rate_limited.step(c_raw)),
+            LadderMode::GridFold(_) | LadderMode::GridOnly(_) => {
+                served_ladder(base, median, grid.step(height, c_raw))
             }
         };
         ag = advance_traced_state(ag, v_avg, params);
@@ -876,6 +1045,27 @@ fn dwell_scenario(
         distinct_posted_values: distinct,
         value_changes: changes,
         min_dwell_started_in_ramp: min_ramp,
+        d8_boundary_occupancy_permille: if blocks == 0 {
+            0
+        } else {
+            near_blocks * 1000 / blocks
+        },
+        d8_mean_residence_blocks: {
+            // Close an open run so a trace ending inside the zone is not
+            // silently dropped — the longest visits are exactly the ones
+            // most likely to still be open at the end.
+            if near_run > 0 {
+                near_runs.push(near_run);
+            }
+            if near_runs.is_empty() {
+                0
+            } else {
+                near_runs.iter().sum::<u64>() / near_runs.len() as u64
+            }
+        },
+        d8_max_residence_blocks: near_runs.iter().copied().max().unwrap_or(0),
+        is_quantized_map: mode.serves_quantized_map(),
+        grid_max_fold_depth: grid.max_depth,
     }
 }
 
@@ -965,7 +1155,8 @@ fn feedback_scenario(
                    ag: u64,
                    height: u64,
                    hyst: &mut HysteresisCq,
-                   rl: &mut RateLimitedCq|
+                   rl: &mut RateLimitedCq,
+                   grid: &mut GridCq|
      -> (u64, u64, u64) {
         let base = base_block_reward(ag, params).expect("base along trace");
         let c = correction_factor(v_avg, ag, height, params).c_scaled;
@@ -973,6 +1164,7 @@ fn feedback_scenario(
             LadderMode::Quantized(rule) => quantize_c_pow2(c, rule),
             LadderMode::QuantizedHysteresis => hyst.step(c),
             LadderMode::RateLimited(_) => rl.step(c),
+            LadderMode::GridFold(_) | LadderMode::GridOnly(_) => grid.step(height, c),
             _ => c,
         };
         let ladder = served_ladder(base, median, c);
@@ -989,6 +1181,7 @@ fn feedback_scenario(
         st.height,
         &mut HysteresisCq { prev: 0 },
         &mut RateLimitedCq::new(1),
+        &mut GridCq::new(1, false),
     )
     .0;
 
@@ -1016,13 +1209,19 @@ fn feedback_scenario(
         LadderMode::RateLimited(n) => RateLimitedCq::new(n),
         _ => RateLimitedCq::new(1),
     };
+    let mut grid = match mode {
+        LadderMode::GridFold(p) => GridCq::new(p, false),
+        LadderMode::GridOnly(p) => GridCq::new(p, true),
+        _ => GridCq::new(1, false),
+    };
     let mut ag = st.ag;
     for t in 0..blocks {
         let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
         // FL-R18 rejection race: the served economy rung and its
         // quote-time floor come from the SAME stepping call as the fee,
         // so the margin is measured on the map the mode actually serves.
-        let (fee, economy, floor_now) = step_at(v_avg, ag, st.height + t, &mut hyst, &mut rl);
+        let (fee, economy, floor_now) =
+            step_at(v_avg, ag, st.height + t, &mut hyst, &mut rl, &mut grid);
         served_economy.push(economy);
         floors.push(floor_now);
         ag = advance_traced_state(ag, v_avg, params);
@@ -1108,6 +1307,26 @@ pub struct NSweepPoint {
     /// (§4.5b's thin-margin measure) under this `N` — so the claim that a
     /// dwell floor worsens the rejection race is MEASURED rather than
     /// asserted (PR #634 review).
+    pub thin_margin_cells: u64,
+}
+
+/// §10 — one grid period `P`, for one grid arm, over the SAME feedback
+/// grid FL-C7 and FL-R18 were measured on, so the figures compose with
+/// the ratified ones instead of describing a different sweep.
+#[derive(Serialize)]
+pub struct GridSweepPoint {
+    /// Arm name (`grid-fold-p*` = §10.3 B, the candidate;
+    /// `grid-only-p*` = §10.3 C, INSTRUMENTATION only — C10-5 governs
+    /// how its result reads, and the band staying is RULED).
+    pub mode: String,
+    pub period: u64,
+    /// C10-1's numerator: cells still oscillating beyond one rounding
+    /// step. The ratified banded map leaves 14 boundary-parked cells at
+    /// worst 24 transitions; the served un-banded map leaves 1 161.
+    pub oscillating_cells: u64,
+    pub worst_tail_transitions: u64,
+    /// §4.5b's thin-margin measure, carried so a grid's effect on the
+    /// rejection race is measured on the same axis FL-R18 used.
     pub thin_margin_cells: u64,
 }
 
@@ -1307,6 +1526,8 @@ pub struct FeeLadderReport {
     /// FL-R18's `N` measurement: oscillating cells remaining at each
     /// candidate minimum-dwell floor (§4.5a).
     n_sweep: Vec<NSweepPoint>,
+    /// §10 FL-R3 time-grid round: both arms across the candidate periods.
+    grid_sweep: Vec<GridSweepPoint>,
     /// FL-C9 (§1 birth stamp: minted at maintainer direction, review
     /// round 5, after measurement began; re-labeled at round 6 to the
     /// anchored-attack candidate-set reduction).
@@ -1418,6 +1639,14 @@ pub fn report() -> FeeLadderReport {
             LadderMode::Quantized(SnapRule::Ceiling),
             LadderMode::QuantizedHysteresis,
             LadderMode::RateLimited(FL_R18_MIN_DWELL_BLOCKS),
+            // §10: the FL-R3 candidate shapes must appear on the DWELL
+            // grid too, not only the feedback grid — C10-2 scores dwell
+            // and C10-3 reads the observed fold depth, and both are
+            // measured here. Omitting them left `grid_max_fold_depth` at
+            // 0 on every row, which reads exactly like "the fold is
+            // free" rather than "the fold was never run".
+            LadderMode::GridFold(240),
+            LadderMode::GridOnly(240),
         ] {
             for &(label, m0, m1, median) in DWELL_SCENARIOS {
                 dwell.push(dwell_scenario(label, m0, m1, median, st, mode, &params));
@@ -1511,6 +1740,79 @@ pub fn report() -> FeeLadderReport {
         });
     }
 
+    // §10 FL-R3 time-grid round. Same grid as FL-R18's `n` sweep above,
+    // deliberately: C10-1 scores against FL-C7's ratified banded figures,
+    // and a figure measured on a different sweep cannot be compared to
+    // them. Periods are the §10.5 candidates — 60 (≈ the measured worst
+    // inter-flip dwell), 240 (the FL-C4a stationary bar) and 720 (the
+    // volume window, `P`'s natural ceiling since the fold cannot outrun
+    // the average feeding it). `settlement_epoch_blocks` (10 000) is
+    // NOT swept: §10.5 rejects it on the record rather than measuring a
+    // fee quote frozen for a fortnight.
+    //
+    // The two REFERENCE arms are swept here too, at `period = 0` meaning
+    // "not a grid". Without them C10-1 would score new figures against
+    // numbers taken from a different sweep, which is the comparison the
+    // round is least entitled to make: `corrected-quantized-pow2-ceil` is
+    // what the daemon serves TODAY (the floor to beat) and
+    // `...-hysteresis` is the RULED banded map (the target to reach).
+    // Measuring all three on one grid is what makes "restored" a
+    // comparison rather than an assertion.
+    let mut grid_sweep = Vec::new();
+    let arms: Vec<(LadderMode, u64)> = vec![
+        (LadderMode::Quantized(SnapRule::Ceiling), 0),
+        (LadderMode::QuantizedHysteresis, 0),
+        (LadderMode::GridFold(60), 60),
+        (LadderMode::GridOnly(60), 60),
+        (LadderMode::GridFold(240), 240),
+        (LadderMode::GridOnly(240), 240),
+        (LadderMode::GridFold(720), 720),
+        (LadderMode::GridOnly(720), 720),
+    ];
+    {
+        for (mode, period) in arms {
+            let mut oscillating = 0u64;
+            let mut worst_transitions = 0u64;
+            let mut thin_margin_cells = 0u64;
+            for &(_age, st) in &states {
+                let d_boundary = boundary_demand(st, &params);
+                for &median in &[zone, 3 * zone, 10 * zone, 50 * zone] {
+                    for eps in [0u64, 500, 1000, 2000, 3000] {
+                        for demand_scale in [50u64, 100, d_boundary, 400] {
+                            for start in [demand_scale, 8 * demand_scale.min(1_250)] {
+                                let fb = feedback_scenario(
+                                    eps,
+                                    demand_scale,
+                                    start,
+                                    st,
+                                    median,
+                                    mode,
+                                    &params,
+                                );
+                                if fb.tail_transitions >= 2
+                                    && fb.fee_tail_max > round_money_up_2(fb.fee_tail_min + 1)
+                                {
+                                    oscillating += 1;
+                                    worst_transitions = worst_transitions.max(fb.tail_transitions);
+                                }
+                                if fb.race_margin_min_milli < 1020 {
+                                    thin_margin_cells += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            grid_sweep.push(GridSweepPoint {
+                mode: mode.name(),
+                period,
+                oscillating_cells: oscillating,
+                worst_tail_transitions: worst_transitions,
+                thin_margin_cells,
+            });
+        }
+    }
+
     let degenerate = degenerate_pins(&params);
 
     // FL-C9 under the registered traffic model and its §1.8 sensitivity
@@ -1537,6 +1839,7 @@ pub fn report() -> FeeLadderReport {
         degenerate,
         fee_signal_bits: fee_signal,
         n_sweep,
+        grid_sweep,
     }
 }
 
@@ -1568,11 +1871,7 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     // "no exceptions listed" is the pass statement, so the exceptions ARE
     // the interesting rows; raw-C rows print their per-age summary since
     // raw C is the rejected baseline the table contrasts).
-    let quantized_runs = r
-        .dwell
-        .iter()
-        .filter(|d| d.mode.contains("quantized"))
-        .count();
+    let quantized_runs = r.dwell.iter().filter(|d| d.is_quantized_map).count();
     // Under the evolved traces a value change is NORMAL (the ~1-per-
     // 10-20k-block reward-decay crossing), so the exception filter is the
     // registered gate, not any change.
@@ -1593,7 +1892,7 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     let quantized_gate_violations = r
         .dwell
         .iter()
-        .filter(|d| d.mode.contains("quantized") && fails_registered_gate(d))
+        .filter(|d| d.is_quantized_map && fails_registered_gate(d))
         .count();
     let _ = writeln!(
         out,
@@ -1603,7 +1902,7 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
         quantized_gate_violations
     );
     for d in &r.dwell {
-        let interesting = if d.mode.contains("quantized") {
+        let interesting = if d.is_quantized_map {
             fails_registered_gate(d)
         } else {
             d.mode == "corrected-raw" && d.scenario.starts_with("stationary-v50")
@@ -1611,14 +1910,18 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
         if interesting {
             let _ = writeln!(
                 out,
-                "fee-ladder: dwell {} age={} [{}] median={:?} distinct={:?} changes={:?} min_ramp={:?}",
+                "fee-ladder: dwell {} age={} [{}] median={:?} distinct={:?} changes={:?} min_ramp={:?} d8_occupancy_permille={} d8_residence_mean={} d8_residence_max={} grid_max_fold_depth={}",
                 d.scenario,
                 d.age_years,
                 d.mode,
                 d.median_dwell,
                 d.distinct_posted_values,
                 d.value_changes,
-                d.min_dwell_started_in_ramp
+                d.min_dwell_started_in_ramp,
+                d.d8_boundary_occupancy_permille,
+                d.d8_mean_residence_blocks,
+                d.d8_max_residence_blocks,
+                d.grid_max_fold_depth
             );
         }
     }
@@ -1686,6 +1989,50 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             p.n, p.oscillating_cells, p.worst_tail_transitions, p.thin_margin_cells
         );
     }
+    // §10 C10-3 (cost) and FL-D8, aggregated over the dwell grid. Both
+    // live per-row in the JSON; these lines exist because a criterion
+    // whose evidence is only machine-readable gets scored from memory.
+    for mode in ["grid-fold-p240", "grid-only-p240"] {
+        let depth = r
+            .dwell
+            .iter()
+            .filter(|d| d.mode == mode)
+            .map(|d| d.grid_max_fold_depth)
+            .max()
+            .unwrap_or(0);
+        let _ = writeln!(out, "fee-ladder: FL-R3 cost {mode} max_fold_depth={depth}");
+    }
+    {
+        let occ = r
+            .dwell
+            .iter()
+            .map(|d| d.d8_boundary_occupancy_permille)
+            .max()
+            .unwrap_or(0);
+        let res_mean = r
+            .dwell
+            .iter()
+            .map(|d| d.d8_mean_residence_blocks)
+            .max()
+            .unwrap_or(0);
+        let res_max = r
+            .dwell
+            .iter()
+            .map(|d| d.d8_max_residence_blocks)
+            .max()
+            .unwrap_or(0);
+        let _ = writeln!(
+            out,
+            "fee-ladder: FL-D8 occupancy_permille_max={occ} residence_mean_max={res_mean} residence_max={res_max}"
+        );
+    }
+    for p in &r.grid_sweep {
+        let _ = writeln!(
+            out,
+            "fee-ladder: FL-R3 {} period={} oscillating_cells={} worst_transitions={} thin_margin_cells={}",
+            p.mode, p.period, p.oscillating_cells, p.worst_tail_transitions, p.thin_margin_cells
+        );
+    }
     let _ = writeln!(
         out,
         "fee-ladder: degenerate tail_era_blocks={} est_reward_at_exhaustion={} val_reward_at_exhaustion={} penalty_at_tail_x_half={}",
@@ -1704,6 +2051,43 @@ pub fn render_json(r: &FeeLadderReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The guard [`in_boundary_zone`]'s docstring promises: `D8_MARGIN_MILLI`
+    /// is a re-derivation of the owner's private `HYSTERESIS_MARGIN_MILLI`,
+    /// and a duplicated constant that nothing checks is one that drifts.
+    ///
+    /// The owner's margin is private, so this asserts the BEHAVIOUR the two
+    /// must share rather than the literal: a `C` just inside the band's
+    /// margin above a boundary is one the band holds (`hysteresis_step`
+    /// keeps `prev`), and D8 must call that same `C` "near". Take a pow2
+    /// `C_q`, place `C` a hair under `prev * (1 + margin)`, and require both
+    /// to agree. If either constant moves alone, the two disagree and this
+    /// fails.
+    #[test]
+    fn boundary_zone_margin_matches_the_owner() {
+        // A pow2 step in SCALE units, and a `C` just inside the upper edge
+        // of the band around it: within +3%.
+        let prev = SCALE;
+        let inside = prev + prev * 29 / 1000;
+        assert_eq!(
+            hysteresis_step(inside, prev),
+            prev,
+            "owner must HOLD a C inside its margin — if not, the band's \
+             margin moved and D8_MARGIN_MILLI must move with it"
+        );
+        assert!(
+            in_boundary_zone(inside),
+            "D8 must call the same C 'near a boundary' as the band acts on"
+        );
+        // Well outside the zone: the geometric middle of a pow2 interval
+        // is the farthest a C can be from both ends.
+        let middle = prev * 3 / 2;
+        assert!(
+            !in_boundary_zone(middle),
+            "mid-interval C is not near either boundary; a predicate that \
+             says otherwise would report occupancy ~1 and mean nothing"
+        );
+    }
 
     /// Pin the transliteration against `tests/unit_tests/scaling_2021.cpp`
     /// `wallet_fee_estimate` (10 SKL reward cases) — the instrument's

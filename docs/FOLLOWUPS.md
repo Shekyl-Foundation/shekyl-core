@@ -1062,7 +1062,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Validate `prev_id` before attestation verify on the alt-chain path
   - Target: pre-genesis
 
-- **Restore the §7 hysteresis band to the served fee correction** — the daemon serves the plain pow2 ceiling (`prev_cq = 0`); the time-grid round that unblocks it is OPEN. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10 (round: pre-registered criteria, candidate shapes, cost table and its named blocker), §8 FL-R3 (ruling, two binding constraints).
+- **Restore the §7 hysteresis band to the served fee correction** — round 18 measured the shape: the grid-anchored fold at `P` = 720 restores the oscillation *amplitude* exactly (worst 24, the banded figure) but leaves 20 cells oscillating against the band's 14, and it **exceeds the cold-path cost budget by 1.33×**. Now BLOCKED on the storage-lane cheap per-block tx count, which is on FL-R3's critical path rather than queued. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.10 (results), §8 FL-R3.
   - Target: pre-genesis
 
 - **Size and wire FL-R19's relay-floor clamp margin** — blocked on the construction-to-broadcast gap distribution, which is wallet instrumentation and not this lane's to measure. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §8 FL-R19 (pre-registered sizing criterion; margin must be fixed and deterministic).
@@ -1071,10 +1071,10 @@ Default. Lands before genesis if it should exist at launch.
 - **Disclose the fee-tier privacy trade in the wallet/CLI tier picker** — rule-81 obligation created by FL-R17's signature; carrier is the engine tier-mapping change. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §7.
   - Target: pre-genesis
 
-- **Give the storage layer a cheap per-block transaction count** — `Blockchain::get_tx_volume_avg` walks a 720-block window and `get_block_from_height` loads and parses each full block blob to read `tx_hashes.size()`; #640 memoized the repeat case but a cold call still parses 720 blocks. Owned by the storage lane: [DAEMON_REDB_STORE.md](design/DAEMON_REDB_STORE.md).
+- **Give the storage layer a cheap per-block transaction count** — `Blockchain::get_tx_volume_avg` walks a 720-block window and `get_block_from_height` loads and parses each full block blob to read `tx_hashes.size()`; #640 memoized the repeat case but a cold call still parses 720 blocks. **PROMOTED at FL round 18 — this is now on FL-R3's critical path, not an optimization:** the grid-anchored fold needs raw `C` at up to `P` heights, which costs 960 cold parses against a 720 budget (1.33×), and this item takes both to ≈ 0. Owned by the storage lane: [DAEMON_REDB_STORE.md](design/DAEMON_REDB_STORE.md); the blocking relation is at [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.10.
   - Target: pre-genesis
 
-- **Measure boundary-cell occupancy** — how much chain *time* is spent near a pow2 boundary, as against how many swept cells oscillate; **folded into the §10 time-grid round's instrument**, where it is the input that selects the grid period. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.9 and §9 FL-D8 (why it is owed).
+- ~~**Measure boundary-cell occupancy**~~ — **DONE at round 18**: occupancy 741‰, mean residence 637 blocks, max 13 597; it selected `P` = 720. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.10 (the figures) and §9 FL-D8 (row closed).
   - Target: pre-genesis
 
 
