@@ -4453,6 +4453,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
+ "sha2",
  "shekyl-portable-storage",
  "shekyl-wire",
 ]

@@ -106,6 +106,15 @@ jobs:
               scripts/ci/check_no_claim_era_spec.py|scripts/ci/check_landed_rows_stamped.py) run_gates=true; break ;;
               src/blockchain_db/lmdb/db_lmdb.cpp) run_gates=true; break ;;
               .github/workflows/docs-gates.yml) run_gates=true; break ;;
+              # The consensus-digest oracle's subjects: the two authorities it
+              # canonicalises and the Rust pin it compares against. Added to the
+              # `paths:` list on dev while this branch was open -- migrated here
+              # rather than lost, because dropping one would leave that oracle
+              # unable to see its own subject change (rule 47).
+              config/consensus_constants.json|config/economics_params.json) run_gates=true; break ;;
+              rust/shekyl-rpc-types/build.rs) run_gates=true; break ;;
+              rust/shekyl-rpc-types/build_support/consensus_canonical.rs) run_gates=true; break ;;
+              scripts/ci/check_consensus_digest_oracle.py) run_gates=true; break ;;
             esac
           done <<< "$files"
 
@@ -187,6 +196,17 @@ jobs:
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_index_table_shape.py
+
+      - name: Run consensus-digest independent oracle
+        # Re-implements the canonical form (CLIENT_VERSION_CONSTANTS_VALIDATION.md
+        # §3.3) in Python and compares to build.rs's PINNED_DIGEST. The build
+        # script and the crate's tests share one Rust canonicaliser; the KAT's
+        # frozen literals catch a drift only while they are not moved in the
+        # same edit. Recomputing from the rules every run leaves no literal to
+        # move. VC-R18. Instance of 47-gate-subject-assertion.mdc: it fails if
+        # PINNED_DIGEST is renamed or absent rather than passing over nothing.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_consensus_digest_oracle.py
 
       - name: Run claim-era basename check
         # docs/design/ must not grow CONFIDENTIAL_STAKING.md or a
