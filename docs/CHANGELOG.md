@@ -36,6 +36,13 @@
 
 ### Changed
 
+- **`docs/FOLLOWUPS.md` genesis-hold triage.** Every pre-genesis row got a
+  disposition pass: 44 resolved/overtaken/duplicate/won't-fix rows removed
+  (git history is the archive), 3 rows reclassified to post-genesis with
+  named blockers (fee-bump, wallet-decryption MFA, network-filesystem
+  wallets), and the delivered DRS-P0a–P0c legs trimmed out of the DRS-P0
+  row, leaving P0d as the open blocker. Process-only; no code change.
+
 - **The daemon and the Rust port now admit the same `tx_extra` tag set, and an
   unparseable `extra` is refused rather than skipped.** `shekyl-wire` had long
   documented merge-mining (`0x03`) and "mysterious minergate" (`0xDE`) as
