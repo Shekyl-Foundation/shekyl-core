@@ -51,7 +51,7 @@
 //! Candidates to survive into TJ-B, having been *validated here rather than
 //! designed here*:
 //!
-//! - the D1 onion surface, which lives in `shekyl_tor::control::onion` and is
+//! - the D1 onion surface, which lives in `shekyl_tor_control_client::control::onion` and is
 //!   already production-shaped (it is not in this crate);
 //! - the **construction** of [`onion_key`]'s derivation — seed-derived,
 //!   `p_slot`-bound, nothing at rest — though not its *location*: see the

@@ -8,7 +8,7 @@
 //!
 //! Two halves landed separately and are inert on their own: the loopback
 //! serving loop (`shekyl-p-serve`, PR-A) answers shard reads from the store,
-//! and the onion supervisor (`shekyl-tor`, PR-B + VG-1…VG-3) publishes a v3 service
+//! and the onion supervisor (`shekyl-tor-control-wallet`, PR-B + VG-1…VG-3) publishes a v3 service
 //! behind full vanguards. Neither knows about the other, and neither knows
 //! what a bonded persona is obligated to serve. This crate is where those
 //! three facts meet, and it exists because the ways of getting the meeting

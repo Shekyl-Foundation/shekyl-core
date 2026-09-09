@@ -8,7 +8,7 @@
 //!
 //! Producers already publish alarm-shaped state and nothing consumes it.
 //! `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` §3c calls
-//! [`TorPosture::Degraded`](shekyl_tor::service::TorPosture::Degraded) "the
+//! [`TorPosture::Degraded`](shekyl_tor_control_wallet::service::TorPosture::Degraded) "the
 //! operator-alarm hook (rule 82)" and specifies how an alarm layer must render
 //! it — and no alarm layer exists. This module is that layer, and
 //! [`tor_posture`] is its first producer.
@@ -67,7 +67,7 @@
 //! re-raise every tick, it is simpler" edit reintroduces the leak this
 //! paragraph forbids.
 //!
-//! # What the tor control [`EventSink`](shekyl_tor::control::EventSink) is not
+//! # What the tor control [`EventSink`](shekyl_tor_control_wallet::service::EventSink) is not
 //!
 //! It is **not** this channel's input, and an earlier plan to make it one
 //! rested on a premise the code refutes: no production call site issues
@@ -75,8 +75,8 @@
 //! in production the sink receives nothing at all. (`ControlReply` is also a
 //! raw, deliberately forensic surface — "parse it, never log it" — not an
 //! alarm vocabulary.) The wallet's honest production value for
-//! `TorServiceConfig::events` is
-//! [`EventSink::unsubscribed`](shekyl_tor::control::EventSink::unsubscribed),
+//! `WalletTorControlConfig::events` is
+//! [`EventSink::unsubscribed`](shekyl_tor_control_wallet::service::EventSink::unsubscribed),
 //! which names that fact at the construction site; the alarm input is the
 //! posture watch, which is where the supervisor's liveness policy actually
 //! publishes.
@@ -184,7 +184,7 @@ pub enum Arming {
 pub enum DisarmedReason {
     /// There is no live tor incarnation to report on. Vanguard state is
     /// observable only on
-    /// [`TorPosture::Ready`](shekyl_tor::service::TorPosture::Ready) — the
+    /// [`TorPosture::Ready`](shekyl_tor_control_wallet::service::TorPosture::Ready) — the
     /// `warning` field exists on that variant and nowhere else — so while tor
     /// is starting, bootstrapping, retrying or degraded, the wallet genuinely
     /// does not know whether the guard topology is intact.
@@ -514,7 +514,7 @@ impl OperatorAlarm {
 
 /// Why the tor supervisor entered its degraded episode.
 ///
-/// One tag per [`ServiceFailure`](shekyl_tor::service::ServiceFailure) variant,
+/// One tag per [`ServiceFailure`](shekyl_tor_control_wallet::service::ServiceFailure) variant,
 /// deliberately not collapsed — see [`OperatorAlarm`].
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

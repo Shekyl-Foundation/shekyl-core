@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The `TorService` supervisor — DQ-T0.6, design §3c: keep the wallet's tor
+//! The `WalletTorControl` supervisor — DQ-T0.6, design §3c: keep the wallet's tor
 //! **alive, verified, and honest about its state** across crashes.
 //!
 //! The economic driver is the transport plan's §5 slash model: the slash is
@@ -28,7 +28,7 @@
 //!   self-heal. (Trust failures never fast-retry — see [`FailureClass`].)
 //!
 //! **Detection vs policy, one level up (§3b's discipline):** the per-incarnation
-//! [`TorControl`] actor *detects* and fails fast — it already stops on desync /
+//! [`TorControlClient`] actor *detects* and fails fast — it already stops on desync /
 //! EOF / spawn failure and never reconnects into a desync. This supervisor owns
 //! *policy*: classification, backoff, posture. Nothing inside the actor grows
 //! retry logic.
@@ -37,7 +37,7 @@
 //! `SocksPort auto` and each incarnation's bound address is discovered via
 //! `GETINFO net/listeners/socks`, published in [`TorPosture::Ready`]. Because a
 //! silent restart rebinds a fresh port, consumers must read the endpoint at
-//! use-time, not cache it — the [`TorService::current_socks`] accessor is the safe
+//! use-time, not cache it — the [`WalletTorControl::current_socks`] accessor is the safe
 //! path (it returns the address only while the *live* posture is `Ready`), so a
 //! caller that uses it cannot hold a stale endpoint. (`TorPosture::Ready` still
 //! carries the address for watch-driven consumers; the discipline is theirs.)
@@ -54,21 +54,33 @@ use kameo::actor::Spawn;
 use kameo::error::SendError;
 use tokio::sync::{oneshot, watch};
 
-use crate::binary::{self, TorBinaryError, VerifiedTorBinary};
-use crate::control::framing::ControlReply;
-use crate::control::{
-    BootstrapReadiness, BootstrapState, Command, ControlError, EventSink, ManagedTor, SocksPort,
-    TorControl, TorControlConfig, TorExit, TorLaunch,
-};
 use crate::onion_service::{publish_onion, OnionPublishAbort};
 use crate::vanguard_rotation::{VanguardManager, VanguardsAbort};
+use shekyl_tor_control_client::binary::{self, VerifiedTorBinary};
+use shekyl_tor_control_client::control::framing::ControlReply;
+use shekyl_tor_control_client::control::{
+    BootstrapReadiness, BootstrapState, Command, ManagedTor, SocksPort, TorControlClient,
+    TorControlClientConfig, TorLaunch,
+};
 
 // Config/error types live next to their owners; re-exported here so a
-// `TorServiceConfig` consumer names them beside the supervisor types.
+// `WalletTorControlConfig` consumer names them beside the supervisor types.
 #[doc(inline)]
 pub use crate::onion_service::{OnionPublishError, OnionServiceSpec};
 #[doc(inline)]
 pub use crate::vanguard_rotation::{VanguardsError, VanguardsMode, VanguardsWarning};
+// Types that appear in this crate's public signatures. Re-exported so a wallet
+// consumer does not take `shekyl-tor-control-client` — that crate is the launch
+// path for a second Tor instance (Principal's). The launch types themselves
+// (`TorControlClient`, `ManagedTor`, `AddOnion`, `Command`) stay un-re-exported.
+#[doc(inline)]
+pub use shekyl_tor_control_client::binary::TorBinaryError;
+#[doc(inline)]
+pub use shekyl_tor_control_client::control::onion::OnionPow;
+#[doc(inline)]
+pub use shekyl_tor_control_client::control::{ControlError, EventSink, ServiceId, TorExit};
+#[doc(inline)]
+pub use shekyl_tor_control_client::onion_identity::OnionIdentity;
 
 /// The service-level posture — what the rest of the wallet sees. One long-lived
 /// watch, owned by the supervisor, outliving every incarnation (the §3b
@@ -351,7 +363,11 @@ pub enum TorBinarySource {
     /// `binary::discover_and_verify_at`, hash-gated.
     At(PathBuf),
     /// **Test-only bypass** of the gate (lifecycle tests injecting an arbitrary
-    /// tor). Loud and greppable, like `VerifiedTorBinary::unchecked_for_test`.
+    /// tor). Loud and greppable, like `VerifiedTorBinary::unchecked_for_test`,
+    /// which this arm calls — reachable here only because the dev-dependency
+    /// edge on `shekyl-tor-control-client` enables `unpinned-tor-for-tests`. The arm
+    /// itself stays `#[cfg(test)]`: the feature makes the forge *nameable*
+    /// across the crate wall, it does not put this variant in a normal build.
     #[cfg(test)]
     UncheckedForTest(PathBuf),
 }
@@ -382,7 +398,7 @@ impl TorBinarySource {
 }
 
 /// Supervisor configuration.
-pub struct TorServiceConfig {
+pub struct WalletTorControlConfig {
     /// Per-incarnation binary source (the gate re-runs every spawn).
     pub binary: TorBinarySource,
     /// The wallet-private `DataDirectory`, reused across incarnations **and
@@ -468,17 +484,17 @@ impl ServingPosture {
 }
 
 /// Handle to a running supervisor: the posture watch + shutdown.
-pub struct TorService {
+pub struct WalletTorControl {
     posture: watch::Receiver<TorPosture>,
     shutdown: Option<oneshot::Sender<()>>,
     task: tokio::task::JoinHandle<()>,
 }
 
-impl TorService {
+impl WalletTorControl {
     /// Start the supervisor (needs a tokio runtime). The returned handle owns
     /// shutdown; posture receivers can be cloned freely.
     #[must_use]
-    pub fn spawn(config: TorServiceConfig) -> Self {
+    pub fn spawn(config: WalletTorControlConfig) -> Self {
         let (posture_tx, posture) = watch::channel(TorPosture::Starting);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let task = tokio::spawn(supervise(config, posture_tx, shutdown_rx));
@@ -544,7 +560,7 @@ const REAP_TIMEOUT: Duration = Duration::from_secs(15);
 /// The supervisor loop (§3c). Owns policy only; the incarnation actor owns
 /// detection and fails fast.
 async fn supervise(
-    config: TorServiceConfig,
+    config: WalletTorControlConfig,
     posture: watch::Sender<TorPosture>,
     mut shutdown: oneshot::Receiver<()>,
 ) {
@@ -595,7 +611,7 @@ async fn supervise(
         //    readiness watch (internal); the long-lived events sink is cloned in.
         let (exit_tx, exit_rx) = oneshot::channel();
         let (readiness, ready_rx) = BootstrapReadiness::new();
-        let actor = TorControl::spawn(TorControlConfig {
+        let actor = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Managed(ManagedTor {
                 tor_binary: verified,
                 data_dir: config.data_dir.clone(),
@@ -664,7 +680,7 @@ async fn supervise(
 /// so it cannot linger (its `on_stop`/`kill_on_drop` still reap the child), and we
 /// proceed best-effort.
 async fn stop_and_reap(
-    actor: &kameo::actor::ActorRef<TorControl>,
+    actor: &kameo::actor::ActorRef<TorControlClient>,
     exit_rx: oneshot::Receiver<TorExit>,
 ) -> Option<TorExit> {
     let teardown = async {
@@ -721,7 +737,7 @@ async fn wait_or_shutdown(delay: Duration, shutdown: &mut oneshot::Receiver<()>)
 /// Shared handles for one incarnation drive — keeps `drive_incarnation`'s
 /// signature a single named context instead of a growing argument bag.
 struct IncarnationCtx<'a> {
-    actor: &'a kameo::actor::ActorRef<TorControl>,
+    actor: &'a kameo::actor::ActorRef<TorControlClient>,
     policy: &'a SupervisorPolicy,
     onion: Option<&'a OnionServiceSpec>,
     /// Supervisor-scoped; borrowed so a restart cannot re-draw the set.
@@ -1029,7 +1045,9 @@ mod tests {
             .expect("bind loopback target")
             .local_addr()
             .expect("local addr");
-        let identity = crate::onion_identity::OnionIdentity::from_hs_id_seed(&[0x5cu8; 32]);
+        let identity = shekyl_tor_control_client::onion_identity::OnionIdentity::from_hs_id_seed(
+            &[0x5cu8; 32],
+        );
         let spec = OnionServiceSpec::new(identity, 80, target, 8).expect("loopback spec");
         assert_eq!(
             ServingPosture::Serving(spec).vanguards(),
@@ -1106,7 +1124,7 @@ mod tests {
     // the KAT covers the actual ingress shape, mirroring the bootstrap KATs) ---
 
     fn reply_from(payload: &str) -> ControlReply {
-        let mut framer = crate::control::ReplyFramer::new();
+        let mut framer = shekyl_tor_control_client::control::ReplyFramer::new();
         framer.push_bytes(format!("250-{payload}\r\n250 OK\r\n").as_bytes());
         framer
             .next_reply()
@@ -1189,7 +1207,7 @@ mod tests {
         }
 
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let service = TorService::spawn(TorServiceConfig {
+        let service = WalletTorControl::spawn(WalletTorControlConfig {
             binary: TorBinarySource::At(bogus),
             data_dir: dir.path().join("data"),
             events: EventSink::new(tx),
@@ -1240,7 +1258,7 @@ mod tests {
         let bogus = dir.path().join("not-tor");
         std::fs::write(&bogus, b"x").unwrap();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let service = TorService::spawn(TorServiceConfig {
+        let service = WalletTorControl::spawn(WalletTorControlConfig {
             binary: TorBinarySource::At(bogus),
             data_dir: dir.path().join("data"),
             events: EventSink::new(tx),
@@ -1302,7 +1320,7 @@ mod live_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let data_dir = dir.path().join("data");
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let service = TorService::spawn(TorServiceConfig {
+        let service = WalletTorControl::spawn(WalletTorControlConfig {
             binary: TorBinarySource::UncheckedForTest(tor_binary()),
             data_dir: data_dir.clone(),
             events: EventSink::new(tx),
@@ -1398,14 +1416,16 @@ mod live_tests {
             .expect("bind loopback target")
             .local_addr()
             .expect("local addr");
-        let identity = crate::onion_identity::OnionIdentity::from_hs_id_seed(&[0x5cu8; 32]);
+        let identity = shekyl_tor_control_client::onion_identity::OnionIdentity::from_hs_id_seed(
+            &[0x5cu8; 32],
+        );
         // The address the persona advertises is known before spawn (the caller
         // holds it from the spec), so witnesses can be told where to connect
         // without waiting on any posture.
         let spec = OnionServiceSpec::new(identity, 80, target, 8).expect("loopback spec");
         let _advertised = spec.service_id().clone();
 
-        let service = TorService::spawn(TorServiceConfig {
+        let service = WalletTorControl::spawn(WalletTorControlConfig {
             binary: TorBinarySource::UncheckedForTest(tor_binary()),
             data_dir: data_dir.clone(),
             events: EventSink::new(tx),
@@ -1462,7 +1482,7 @@ mod live_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let data_dir = dir.path().join("data");
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let service = TorService::spawn(TorServiceConfig {
+        let service = WalletTorControl::spawn(WalletTorControlConfig {
             binary: TorBinarySource::UncheckedForTest(tor_binary()),
             data_dir: data_dir.clone(),
             events: EventSink::new(tx),
@@ -1554,7 +1574,7 @@ mod live_tests {
     async fn bootstrap_timeout_restart_does_not_self_lock() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let service = TorService::spawn(TorServiceConfig {
+        let service = WalletTorControl::spawn(WalletTorControlConfig {
             binary: TorBinarySource::UncheckedForTest(tor_binary()),
             data_dir: dir.path().join("data"),
             events: EventSink::new(tx),

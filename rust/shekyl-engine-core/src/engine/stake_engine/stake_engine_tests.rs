@@ -354,7 +354,7 @@ async fn the_onion_credential_matches_the_pinned_derivation() {
             shekyl_crypto_pq::account::SeedFormat::Bip39,
             slot,
         );
-        let oracle = shekyl_tor::onion_identity::OnionIdentity::from_hs_id_seed(&seed);
+        let oracle = shekyl_tor_control_wallet::service::OnionIdentity::from_hs_id_seed(&seed);
 
         assert_eq!(
             minted.service_id(),

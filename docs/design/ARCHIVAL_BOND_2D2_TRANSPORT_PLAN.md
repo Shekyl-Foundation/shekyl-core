@@ -525,7 +525,7 @@ Detail for the load-bearing SPs; the rest carry their §12 contract.
 
 **SP-T0 — bundled-Tor lifecycle.** *(Round 0:
 [`ARCHIVAL_BOND_2D2_SP_T0_TOR.md`](ARCHIVAL_BOND_2D2_SP_T0_TOR.md) — the buildable plan: the
-control-port-client dependency call (lean roll-our-own), the `TorService` lifecycle + bootstrap
+control-port-client dependency call (lean roll-our-own), the `WalletTorControl` lifecycle + bootstrap
 gate, the measured circuit-ID test that closes the keystone, reuse-not-own packaging.)* A managed
 child process with a wallet-private
 `SocksPort`/`ControlPort`; health-gate readiness before any `PTorClient` is handed out; shut down

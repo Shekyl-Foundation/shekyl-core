@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Discover the wallet's `tor` binary and **verify it against a hash pin** before
+//! Discover a `tor` binary and **verify it against a hash pin** before
 //! it is handed to the launcher (SP-T0c, design doc DQ-T0.5).
 //!
 //! The 2d-2 firewall rests on *our* tor: a swapped or tampered `tor` binary
@@ -28,8 +28,9 @@
 //! and `ManagedTor::tor_binary` accepts nothing else — a spawn path cannot skip
 //! verification because it cannot obtain the type without it (the same
 //! make-bad-states-unrepresentable shape as SP-T0a's `ServerVerified`). The one
-//! bypass is the loudly-named, `#[cfg(test)]`-only
-//! `VerifiedTorBinary::unchecked_for_test`.
+//! bypass is the loudly-named `VerifiedTorBinary::unchecked_for_test`, compiled
+//! only under this crate's own tests or the `unpinned-tor-for-tests` feature,
+//! which may be enabled on dev-dependency edges only.
 //!
 //! **Scope boundary — what the pin does and does not defend (read before
 //! extending):** the pin defends against *at-rest* tampering — a bad download, a
@@ -37,9 +38,9 @@
 //! file and the launcher later `exec`s **by path**, which re-opens the file: an
 //! attacker who can write the binary's directory *in the check-to-exec window*
 //! can still swap it (classic TOCTOU). Such an attacker can usually tamper the
-//! wallet itself, so the residual is narrow — but it is a boundary, not zero.
+//! calling process itself, so the residual is narrow — but it is a boundary, not zero.
 //! Load-bearing consequence: the production binary must live in a
-//! wallet-controlled, non-world-writable directory (the beside-the-wallet
+//! caller-controlled, non-world-writable directory (the beside-the-executable
 //! install layout gives this; the `PATH` fallback is the *widest* window and is
 //! a bring-your-own-tor / dev convenience, not the intended production path).
 //! Reopening criterion (rule 21): if the threat model ever includes a local
@@ -142,13 +143,21 @@ impl VerifiedTorBinary {
     /// **Test-only bypass** of the hash gate, for lifecycle tests that inject an
     /// arbitrary (unpinned) tor — e.g. SP-T0b-2's offline child. Deliberately
     /// loud and greppable: every use is a declared exception to the gate.
-    #[cfg(test)]
-    pub(crate) fn unchecked_for_test(path: PathBuf) -> Self {
+    ///
+    /// `pub` under a feature rather than `#[cfg(test)]`-private because the
+    /// supervisor that needs it (`WalletTorControl`'s `TorBinarySource`) is now a
+    /// different crate, and `cfg(test)` does not cross a crate boundary. The
+    /// feature may be enabled on **dev-dependency edges only**; that is a CI
+    /// gate (`scripts/ci/check_test_only_features.py`) reading `cargo metadata`,
+    /// not a convention. See the manifest comment for why a shipped binary
+    /// cannot reach this arm.
+    #[cfg(any(test, feature = "unpinned-tor-for-tests"))]
+    pub fn unchecked_for_test(path: PathBuf) -> Self {
         Self(path)
     }
 }
 
-/// Why the wallet's `tor` binary could not be produced. These are **pre-launch
+/// Why a `tor` binary could not be produced. These are **pre-launch
 /// setup/config failures an operator diagnoses** — so unlike the actor's
 /// content-free `ControlError::Spawn` (whose messages can flow into long-lived
 /// logs), they carry the offending path and cause (rule 82). A tor install path
@@ -159,7 +168,7 @@ pub enum TorBinaryError {
     /// or launched here. (Attach to an externally-run tor instead, or pin this
     /// target.)
     Unpinned,
-    /// No `tor` binary was found via the override / beside-the-wallet / `PATH`
+    /// No `tor` binary was found via the override / beside-the-executable / `PATH`
     /// search.
     NotFound,
     /// The candidate exists but is not a regular file (a directory, FIFO, or
@@ -210,7 +219,7 @@ impl std::fmt::Display for TorBinaryError {
             ),
             Self::NotFound => write!(
                 f,
-                "no tor binary found (set SHEKYL_TOR_BINARY, install beside the wallet, or add to PATH)"
+                "no tor binary found (set SHEKYL_TOR_BINARY, install beside the executable, or add to PATH)"
             ),
             Self::NotAFile(p) => {
                 write!(f, "tor binary candidate is not a regular file: {}", p.display())
@@ -239,14 +248,14 @@ impl std::fmt::Display for TorBinaryError {
 
 impl std::error::Error for TorBinaryError {}
 
-/// Discover the wallet's `tor` binary and verify it against the pinned SHA-256,
+/// Discover a `tor` binary and verify it against the pinned SHA-256,
 /// returning a [`VerifiedTorBinary`] only if it matches.
 ///
 /// Exactly **one** candidate is chosen, in this order, and it is the one verified:
 ///   1. the `SHEKYL_TOR_BINARY` env override (an operator/packager naming a
 ///      specific binary — still hash-gated; the override changes *where* we look,
 ///      never *whether* we verify; a set-but-empty value is treated as unset),
-///   2. a `tor` next to the running wallet executable (the bundled install
+///   2. a `tor` next to the running executable (the bundled install
 ///      layout — the intended production path; note `std::env::current_exe` is
 ///      best-effort by its own docs, and if it errors this tier is skipped),
 ///   3. `tor` on `PATH` (bring-your-own-tor / dev convenience — the widest
@@ -255,10 +264,11 @@ impl std::error::Error for TorBinaryError {}
 /// There is deliberately **no fall-through on a verification failure**: one
 /// candidate is selected and its failure is terminal, so a tampered bundled
 /// binary can never silently defer to a different tor. (Fall-through on
-/// *absence* is how the tiers advance — a missing beside-the-wallet binary means
-/// `PATH` is consulted — so deleting the bundled tor relocates discovery; the
-/// relocated candidate is still hash-gated.) Mission #1: an unpinned tor defeats
-/// the firewall, so "refuse to launch" is the only safe outcome.
+/// *absence* is how the tiers advance — a missing beside-the-executable binary
+/// means `PATH` is consulted — so deleting the bundled tor relocates discovery;
+/// the relocated candidate is still hash-gated.) Mission #1: an unpinned tor
+/// defeats every downstream guarantee, so "refuse to launch" is the only safe
+/// outcome.
 ///
 /// For a caller-supplied path (a settings file), use [`discover_and_verify_at`]
 /// — never route configuration through the env var.
@@ -280,7 +290,7 @@ pub fn discover_and_verify() -> Result<VerifiedTorBinary, TorBinaryError> {
     verify_candidate(&path, &pin.sha256)
 }
 
-/// Verify a **caller-supplied** tor path (e.g. from the wallet's settings file)
+/// Verify a **caller-supplied** tor path (e.g. from a settings file)
 /// against the pin — the same gate as [`discover_and_verify`], minus discovery.
 /// This is the sanctioned route for configuration: never plumb a config value
 /// through the `SHEKYL_TOR_BINARY` env var (process-global, race-prone).
@@ -297,7 +307,7 @@ pub fn discover_and_verify_at(path: &Path) -> Result<VerifiedTorBinary, TorBinar
 /// Precedence: a non-empty override wins unconditionally (an explicit choice is
 /// never bypassed by a fall-through — even if the file does not exist, so a typo
 /// surfaces as *its* error, not a silent fallback); else a binary beside the
-/// wallet if present; else the first **launchable** (regular, executable) `tor`
+/// executable if present; else the first **launchable** (regular, executable) `tor`
 /// on `PATH` — matching the shell's own lookup, so a mode-0644 stray cannot
 /// shadow the tor that `exec` would actually run.
 fn candidate_from(
@@ -520,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn candidate_beside_wallet_is_preferred_over_path() {
+    fn candidate_beside_exe_is_preferred_over_path() {
         let beside_dir = tempfile::tempdir().unwrap();
         let beside = beside_dir.path().join(TOR_EXE_NAME);
         write_executable(&beside, b"beside");

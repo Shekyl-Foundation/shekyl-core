@@ -193,7 +193,7 @@ shekyl-stats = { path = "../shekyl-stats" }
 # Independent (tier-2) oracle for the WALLET_FILE_FORMAT_V1 §2.6 wrap-key
 # KAT: the test re-implements HKDF-Expand from RFC 5869 as raw HMAC-SHA-256
 # so the check does not share the `hkdf` wrapper under test. Already in
-# `Cargo.lock` via `shekyl-engine-prefs` and `shekyl-tor` — adds no package
+# `Cargo.lock` via `shekyl-engine-prefs` and `shekyl-tor-control-wallet` — adds no package
 # to the supply chain (`17-dependency-discipline`).
 hmac = "0.12"
 # Compile-fail harness for `tests/trybuild.rs`: the only way to assert that

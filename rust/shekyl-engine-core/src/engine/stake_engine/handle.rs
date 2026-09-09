@@ -15,7 +15,7 @@ use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_scanner::ScannableBlock;
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::NoOpObserver;
-use shekyl_tor::onion_identity::OnionIdentity;
+use shekyl_tor_control_wallet::service::OnionIdentity;
 use shekyl_tx_builder::TreeContext;
 use shekyl_types::PCanonicalId;
 
