@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Wallet-owned Tor integration: control-port client + lifecycle (2d-2 SP-T0)"
+description = "Wallet-owned Tor supervisor: lifecycle, vanguard rotation and persona publish (2d-2 SP-T0)"
 publish = false
 
 [dependencies]

@@ -167,6 +167,13 @@ jobs:
             exit 1
           fi
           echo "Cargo path portability guard passed."
+      # Reads `cargo metadata`, so it lives here — after install-rust — not in
+      # grep-gates.yml. That job's own header says it does not need a Rust
+      # toolchain; wiring a cargo-metadata gate there works only because the
+      # GitHub-hosted image happens to ship cargo, the same "image has it,
+      # container does not" class this job already paid for with clang.
+      - name: test-only features stay on dev-dependency edges
+        run: python3 scripts/ci/check_test_only_features.py
       - name: verify x86_64 architecture
         run: |
           ARCH=$(uname -m)

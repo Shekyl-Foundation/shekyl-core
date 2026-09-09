@@ -976,7 +976,7 @@ should treat it as a bug.
 
 **Candidates to survive, having been *validated* here rather than designed here:**
 
-- **`shekyl_tor::control::onion`** (D1) — already production-shaped and living
+- **`shekyl_tor_control::control::onion`** (D1) — already production-shaped and living
   outside the spike crate. Typed arguments, `Detach` unrepresentable, `DEL_ONION`
   on the teardown path before the child is killed, redacting `Debug` on both the
   key and the service id.
@@ -1097,7 +1097,7 @@ simpler than gating a capability, and it is the same posture as `Detach`.
 *(`docs/V3_STAKER_ARCHIVAL.md` previously described a clearnet fetch leg for the
 Foundation seeds; corrected 2026-08-03 — see that file's correction note.)*
 
-### Lever 1 — onion-service PoW (`shekyl_tor::control::onion::OnionPow`)
+### Lever 1 — onion-service PoW (`shekyl_tor_control::control::onion::OnionPow`)
 
 tor ships a defense for exactly this, and it was missing from the D1 type.
 `ADD_ONION` takes `PoWDefensesEnabled` / `PoWQueueRate` / `PoWQueueBurst`

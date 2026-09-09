@@ -181,7 +181,9 @@ members = [
     # the read-only store handle and never a wallet seed — §7.2(iii) custody.
     "shekyl-p-host",
 
-    # Wallet-owned Tor integration: control client + lifecycle (2d-2 SP-T0)
+    # Wallet-owned Tor supervisor: lifecycle, vanguard rotation, persona
+    # publish (2d-2 SP-T0). The control protocol, pin gate and v3 identity
+    # live in shekyl-tor-control — owned by neither side (PWD-E9).
     "shekyl-tor",
     "shekyl-tor-control",
 

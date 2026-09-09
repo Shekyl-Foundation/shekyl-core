@@ -27,11 +27,15 @@ build. Nothing in the compiler notices. This gate is what notices.
 
 For every `(package, feature)` in `TEST_ONLY`, over `cargo metadata`:
 
-  1. **Negative limb** — no dependency edge of `kind` `normal` or `build`
-     enables the feature. This is the property the gate is for.
-  2. **Positive limb** — the feature exists in the owning package's feature
+  1. **Negative limb (edges)** — no dependency edge of `kind` `normal` or
+     `build` enables the feature. This is the property the gate is for.
+  2. **Negative limb (owner)** — the owning crate's `default` feature, and
+     every other feature it declares, do not enable it. A consumer-edge-only
+     check is vacuous against `default = ["unpinned-tor-for-tests"]`: no
+     consumer names the feature, every consumer still compiles it in.
+  3. **Positive limb** — the feature exists in the owning package's feature
      map, *and* at least one dev-kind edge enables it. Without this, renaming
-     or deleting the feature makes limb 1 pass vacuously: a gate that cannot
+     or deleting the feature makes limbs 1–2 pass vacuously: a gate that cannot
      fail is worse than no gate, because it reports a property nobody holds
      (rule 47 — a gate asserts its own subject exists).
 
@@ -90,12 +94,29 @@ def main() -> int:
                 f"stale row, or the crate was renamed"
             )
             continue
-        if feature not in pkg.get("features", {}):
+        features_map = pkg.get("features", {})
+        if feature not in features_map:
             failures.append(
                 f"{owner}: no feature `{feature}` — TEST_ONLY names a feature this "
                 f"crate does not declare, so every edge check below is vacuous"
             )
             continue
+
+        # Owner-side enablement ships the arm to every consumer, including
+        # those whose edges never name it. `default` is the loud case;
+        # any other feature that lists this one is the same hole with a
+        # different name.
+        for other, enables in sorted(features_map.items()):
+            if other == feature:
+                continue
+            if feature in enables:
+                failures.append(
+                    f"{owner}: feature `{other}` enables `{feature}` — this "
+                    f"feature {why}, and an intra-crate enablement puts it in "
+                    f"every build that takes `{other}` (including `default`). "
+                    f"Keep `{feature}` as a standalone empty feature enabled "
+                    f"only from a consumer's [dev-dependencies] edge."
+                )
 
         dev_enablers: list[str] = []
         for consumer in meta["packages"]:
