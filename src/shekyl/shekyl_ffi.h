@@ -3668,7 +3668,8 @@ void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms
 // or size-less frame; -4 = null pointer / undersized output buffer;
 // -6 = the Rust image was built without the zstd feature (production always
 // has it on; pure-Rust feature-off builds only); -7 = a size limit was
-// exceeded.
+// exceeded; -8 = unknown flag bits at ingress; -9 = unknown dispatch
+// command.
 //
 // -3 and -7 are separate because they call for opposite operator responses
 // — a corrupt or hostile peer versus an honest peer whose batch outgrew the
@@ -3722,6 +3723,14 @@ int32_t shekyl_levin_noise_notify(size_t noise_bytes, ShekylBuffer* out);
 int32_t shekyl_levin_fragmented_notify(size_t noise_size, uint32_t command,
                                        const uint8_t* payload, size_t payload_len,
                                        ShekylBuffer* out);
+//! Admit one parsed Levin bucket header (PWD-B3 / PWD-B3a / PWD-B4).
+//! Writes the payload cap into `out_cap` on success. A noise/fragment
+//! bucket (neither REQUEST nor RESPONSE) writes UINT64_MAX so the
+//! caller's packet limit binds; cover traffic with command 0 is not
+//! an unknown command. 0 = admitted; -4 = out_cap was null; -8 =
+//! unknown flag bits; -9 = unknown dispatch command.
+int32_t shekyl_levin_ingress_admit(uint32_t command, uint32_t flags,
+                                    uint64_t* out_cap);
 
 } // extern "C"
 

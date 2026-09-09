@@ -30,6 +30,7 @@
 
 #include <boost/thread/mutex.hpp>
 #include <boost/thread/thread.hpp>
+#include <optional>
 
 #include "gtest/gtest.h"
 
@@ -45,7 +46,7 @@ namespace
   {
     static constexpr int handshake_command() noexcept { return 1001; }
     static constexpr bool handshake_complete() noexcept { return true; }
-    size_t get_max_bytes(int command) const { return LEVIN_DEFAULT_MAX_PACKET_SIZE; }
+    std::optional<size_t> get_max_bytes(int, uint32_t) const { return LEVIN_DEFAULT_MAX_PACKET_SIZE; }
   };
 
   typedef epee::levin::async_protocol_handler_config<test_levin_connection_context> test_levin_protocol_handler_config;

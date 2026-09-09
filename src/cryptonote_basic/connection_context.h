@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <optional>
+#include <cstdint>
 #include "net/net_utils_base.h"
 #include "crypto/hash.h"
 
@@ -92,8 +93,11 @@ namespace cryptonote
     static constexpr int handshake_command() noexcept { return 1001; }
     bool handshake_complete() const noexcept { return m_state != state_before_handshake; }
 
-    //! \return Maximum number of bytes permissible for `command`.
-    static size_t get_max_bytes(int command) noexcept;
+    //! \return Payload cap for this `(command, flags)` pair, or `nullopt`
+    //! if the header is unrecognised at ingress (PWD-B3a). `nullopt` is
+    //! connection-fatal even for a zero-length payload — returning cap 0
+    //! would admit empty unknown commands.
+    static std::optional<size_t> get_max_bytes(int command, uint32_t flags) noexcept;
 
     //! Use this instead of `m_state = state_normal`.
     void set_state_normal();

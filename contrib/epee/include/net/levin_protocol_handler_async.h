@@ -34,6 +34,7 @@
 
 #include <atomic>
 #include <deque>
+#include <optional>
 
 #include "levin_base.h"
 #include "levin_compression.h"
@@ -155,6 +156,22 @@ class async_protocol_handler
         <<", cmd = " << head.m_command
         << ", ver=" << head.m_protocol_version);
     return true;
+  }
+
+  //! PWD-B4: admit this header's `(command, flags)` or close the connection.
+  //! `nullopt` is fatal even for a zero-length payload.
+  std::optional<size_t> admitted_payload_cap() const
+  {
+    return m_connection_context.get_max_bytes(m_current_head.m_command, m_current_head.m_flags);
+  }
+
+  bool reject_unrecognised_ingress()
+  {
+    MERROR(m_connection_context << "Unrecognised Levin input at ingress"
+      << ", command " << m_current_head.m_command
+      << ", flags " << m_current_head.m_flags
+      << ", connection will be closed.");
+    return false;
   }
 
 public:
@@ -485,10 +502,12 @@ public:
             temp = std::move(m_fragment_buffer);
             m_fragment_buffer.clear();
             std::memcpy(std::addressof(m_current_head), std::addressof(temp[0]), sizeof(bucket_head2));
-            const size_t max_bytes = m_connection_context.get_max_bytes(m_current_head.m_command);
-            if(m_current_head.m_cb > std::min<size_t>(max_packet_size, max_bytes))
+            const auto max_bytes = admitted_payload_cap();
+            if (!max_bytes)
+              return reject_unrecognised_ingress();
+            if(m_current_head.m_cb > std::min<size_t>(max_packet_size, *max_bytes))
             {
-              MERROR(m_connection_context << "Maximum packet size exceed!, m_max_packet_size = " << std::min<size_t>(max_packet_size, max_bytes)
+              MERROR(m_connection_context << "Maximum packet size exceed!, m_max_packet_size = " << std::min<size_t>(max_packet_size, *max_bytes)
                 << ", packet header received " << m_current_head.m_cb << ", command " << m_current_head.m_command
                 << ", connection will be closed.");
               return false;
@@ -502,8 +521,11 @@ public:
             // Bound the inflated size by the same limit the bucket header was
             // checked against, so a compressed payload cannot expand past the
             // packet-size / per-command caps in force.
+            const auto max_bytes = admitted_payload_cap();
+            if (!max_bytes)
+              return reject_unrecognised_ingress();
             const uint64_t max_decompressed = std::min<uint64_t>(
-                max_packet_size, m_connection_context.get_max_bytes(m_current_head.m_command));
+                max_packet_size, *max_bytes);
             if (!levin::decompress_payload(buff_to_invoke, decompressed_buf, max_decompressed))
             {
               MERROR(m_connection_context << "Failed to decompress Levin payload, cmd=" << m_current_head.m_command);
@@ -616,10 +638,12 @@ public:
           m_cache_in_buffer.erase(sizeof(bucket_head2));
           m_state = stream_state_body;
           m_oponent_protocol_ver = m_current_head.m_protocol_version;
-          const size_t max_bytes = m_connection_context.get_max_bytes(m_current_head.m_command);
-          if(m_current_head.m_cb > std::min<size_t>(max_packet_size, max_bytes))
+          const auto max_bytes = admitted_payload_cap();
+          if (!max_bytes)
+            return reject_unrecognised_ingress();
+          if(m_current_head.m_cb > std::min<size_t>(max_packet_size, *max_bytes))
           {
-            LOG_ERROR_CC(m_connection_context, "Maximum packet size exceed!, m_max_packet_size = " << std::min<size_t>(max_packet_size, max_bytes)
+            LOG_ERROR_CC(m_connection_context, "Maximum packet size exceed!, m_max_packet_size = " << std::min<size_t>(max_packet_size, *max_bytes)
               << ", packet header received " << m_current_head.m_cb << ", command " << m_current_head.m_command
               << ", connection will be closed.");
             return false;

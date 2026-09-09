@@ -59,6 +59,14 @@
 
 ### Changed
 
+- **Levin ingress rejects unknown commands and unknown flag bits.** A
+  dispatch (`REQUEST`/`RESPONSE`) whose command is not in the defined set,
+  or any flag bit outside the five defined flags, is connection-fatal at
+  ingress. Cover traffic (neither `REQUEST` nor `RESPONSE`, typically
+  command 0) is still admitted and bounded by the packet limit.
+  Support-flags (1007) cap tightens 4096 → 256. The table and discriminator
+  live in `shekyl-levin`; C++ `handle_recv` is a marshaling shim
+  (`shekyl_levin_ingress_admit`). `NOTIFY_NEW_BLOCK` stays until PWD-B6.
 - **`docs/FOLLOWUPS.md` genesis-hold triage.** Every pre-genesis row got a
   disposition pass: 44 resolved/overtaken/duplicate/won't-fix rows removed
   (git history is the archive), 3 rows reclassified to post-genesis with

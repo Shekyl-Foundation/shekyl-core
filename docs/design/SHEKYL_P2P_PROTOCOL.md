@@ -52,6 +52,9 @@ own branch. P2P-3, the round nominated to carry implementation, **has never
 been opened** — the work landed through ordinary lanes instead, and no
 document reconciled the two.
 
+**UPDATE 2026-09-09:** PWD-B3 / PWD-B3a / PWD-B4 landed (see rows below); the
+2026-09-08 sweep counts for other rows are unchanged.
+
 **How a verdict was reached.** PWD ids appear nowhere in code, so nothing here
 was grepped by identifier. For each decision the question asked was *what would
 have to be true of the tree if this were built* — a deleted symbol absent, a
@@ -124,9 +127,9 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T8** Shekyl mints its own KATs | NOT IMPLEMENTED | no handshake KATs; nothing to pin until T1 exists | No — follows T1 |
 | **B1** rate limiting adopted | NOT IMPLEMENTED | the decision names four unguarded invoke handlers; all four still unguarded | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
-| **B3** per-command caps | NOT IMPLEMENTED | cap table still **12** arms (`cryptonote_basic/connection_context.cpp`); ruled to reach 11 | **YES** — with B3a and B4, as one unit |
-| **B3a** unknown input rejected at ingress | NOT IMPLEMENTED | no ingress rejection site; the codec's byte-exact round-trip of unknown bits is present but is PWC-A6's requirement, not this one | **YES** — with B3 and B4, as one unit |
-| **B4** places B3a's ingress check | NOT IMPLEMENTED | B4's stated remaining work is the check's *placement*; no such site exists | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
+| **B3** per-command caps | **IMPLEMENTED** | 12-arm table in `rust/shekyl-levin/src/ingress.rs` (2001 stays until PWD-B6; ping already absent); handshake 65536 reconstructed; support-flags 4096→256; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
+| **B3a** unknown input rejected at ingress | **IMPLEMENTED** | `ingress_payload_cap` flag-class discriminator; unknown bits rejected on every bucket; noise/fragment with command 0 admitted | **YES** — with B3 and B4, as one unit |
+| **B4** places B3a's ingress check | **IMPLEMENTED** | `shekyl_levin_ingress_admit` + `get_max_bytes(command, flags)` at the three `handle_recv` sites (outer, inner, decompress); codec still round-trips unknown bits (PWC-A6) | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
 | **B5** — | **NEVER RULED** | appears exactly once tree-wide, in `P2P_2_DISPATCH_BRIEF.md`; dispatched and never dispositioned | n/a — unruled decision, not a status |
 | **B6** one block path | NOT IMPLEMENTED | `NOTIFY_NEW_BLOCK` and `NOTIFY_NEW_FLUFFY_BLOCK` both live (11 references) | **YES** — removes a wire command; "do them before nodes exist, not after" |
 | **B7** drop only when attributable | **PARTIAL** | #628 withdrew a wrong score-removal and recorded that the site needs a typed verdict; the typed verdict is still owed | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
@@ -158,9 +161,9 @@ exactly the set of PWD ids present across the round documents and the index:
 
 | | |
 |---|---|
-| IMPLEMENTED | 5 |
+| IMPLEMENTED | 8 |
 | PARTIAL | 2 |
-| NOT IMPLEMENTED | 17, plus 1 ruled-but-not-implemented (E9) = **18 ruled and unbuilt** |
+| NOT IMPLEMENTED | 14, plus 1 ruled-but-not-implemented (E9) = **15 ruled and unbuilt** |
 | NO BUILD REQUIRED | 2 |
 | DEFERRED | 3 |
 | BLOCKED on another row | 1 |
@@ -169,16 +172,17 @@ exactly the set of PWD ids present across the round documents and the index:
 | verification-only | 1 |
 | never ruled / not ruled | 2 (B5, A1) |
 
-**18 of 37 are ruled and unbuilt.** Eight of those eighteen are the transport
+**15 of 37 are ruled and unbuilt.** Eight of those fifteen are the transport
 cluster, which Rick has ruled out of alpha.8.
 
 **What this says about "alpha.8 runs the new p2p".** The identity cluster is
 substantially built and the transport cluster is entirely unbuilt, which is the
-right way round given Rick's ruling. The gap that matters is **cluster B's wire
-surface**: B3, B3a, B4, B6 and B10 all change what the wire accepts or removes
-a command from it, and none has landed. A release that ships the new
-`basic_node_data` and the new peerlist rules while still carrying
-`COMMAND_PING` and two block paths is running a half-migrated wire.
+right way round given Rick's ruling. Cluster B's remaining wire-surface gap
+is **B6 and B10** (two block paths; `COMMAND_PING` still defined). B3, B3a
+and B4 landed 2026-09-09: unknown commands and unknown flag bits are rejected
+at ingress, and the per-command cap table lives in `shekyl-levin`. A release
+that still carries `COMMAND_PING` and two block paths is still a half-migrated
+wire.
 
 **Note on B12.** Ruled not-required because it does not change the wire, but
 it is an unbounded release of accumulated transactions to a peer, and "not

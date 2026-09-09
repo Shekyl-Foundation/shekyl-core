@@ -112,4 +112,22 @@ pub enum Error {
         /// Minimum size for the requested shape.
         minimum: usize,
     },
+
+    /// A bucket header set a flag bit this protocol does not define
+    /// (PWD-B3a). Connection-fatal at ingress; the codec still round-trips
+    /// the bits (PWC-A6) so this check lives after [`crate::BucketHead::read`].
+    #[error("levin header carries unknown flag bits {flags:#x}")]
+    UnknownFlags {
+        /// The raw flag word, including the unknown bits.
+        flags: u32,
+    },
+
+    /// A dispatch bucket (`REQUEST` or `RESPONSE` set) named a command
+    /// this protocol does not define (PWD-B3a). Noise / fragment headers
+    /// are not this error: they carry no command.
+    #[error("unknown levin command {command} on a dispatch bucket")]
+    UnknownCommand {
+        /// The command id the header claimed.
+        command: u32,
+    },
 }

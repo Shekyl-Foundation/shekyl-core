@@ -33,7 +33,10 @@
 //!
 //! Still inert until LV-3: the read side ([`BucketReader`]) and the plain
 //! notification/request/response builders (the C++ `message_writer` keeps
-//! the hot finalize path).
+//! the hot finalize path). The **ingress policy** (PWD-B3 / PWD-B3a /
+//! PWD-B4) is live on the C++ `handle_recv` path via
+//! `shekyl_levin_ingress_admit` even while [`BucketReader`] itself is unwired
+//! — the command table is not daemon-only policy any more.
 //!
 //! Deliberate **non-goals** of this crate:
 //!
@@ -70,7 +73,8 @@
 //! Every entry is *stricter* than the oracle — none accepts something the
 //! C++ rejects — and each is unreachable for a conforming sender today.
 //! Two entries (4 and 6) stopped being divergences at the 2026-08-06
-//! compression cut and are kept as the record of how they closed; that is
+//! compression cut and a third (9) closed at the 2026-09-09 PWD-B3/B3a/B4
+//! ingress cut; they are kept as the record of how they closed. That is
 //! deliberate, because "the difference went away" is exactly the kind of
 //! claim that rots into folklore once the entry is deleted. Adding a
 //! blanket "no conforming sender" to this list without checking each entry
@@ -149,11 +153,23 @@
 //!    is on each on-wire body's `m_cb`, not on the inner payload that
 //!    fragmentation exists to split. Unreachable for a conforming sender
 //!    (production noise is 3 KiB).
+//! 9. **unknown flags / unknown dispatch commands rejected at ingress** —
+//!    *resolved 2026-09-09; no longer a divergence.* Both sides apply
+//!    [`ingress_payload_cap`]: unknown flag bits are fatal on every bucket;
+//!    a Q/S-flagged command not in [`DEFINED_COMMANDS`] is fatal; a
+//!    noise/fragment bucket (neither Q nor S) is bounded only by the packet
+//!    limit so cover traffic with command 0 is not an unknown command. The
+//!    live C++ path is `handle_recv` → `get_max_bytes(command, flags)` →
+//!    `shekyl_levin_ingress_admit`. The codec still round-trips unknown bits
+//!    (PWC-A6); ingress is what refuses to process them. [`BucketReader`]
+//!    remains unwired until LV-3; this entry is about the *policy*, which
+//!    is shared.
 
 mod compress;
 mod error;
 mod fragment;
 mod header;
+mod ingress;
 mod message;
 mod payload;
 mod reader;
@@ -168,6 +184,11 @@ pub use fragment::{fragmented_notify, noise_notify};
 pub use header::{
     BucketHead, Flags, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE,
     LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
+};
+pub use ingress::{
+    hash_list_cap, ingress_payload_cap, is_defined_command, is_dispatch, payload_cap_for_command,
+    BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT, DEFINED_COMMANDS, FLAGS_DEFINED, MAX_OBJECT_REQUEST_COUNT,
+    P2P_MAX_PEERS_IN_HANDSHAKE,
 };
 pub use message::{invoke, notify, response};
 pub use payload::Error as PayloadError;
