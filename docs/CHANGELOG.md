@@ -47,6 +47,17 @@
 
 ### Changed
 
+- **A peer is dropped only when the rejection is attributable to the
+  sender (PWD-B7).** The inherited `m_no_drop_offense` flag meant
+  droppable by *absence*, so our own pool-bookkeeping failures and
+  storage exceptions severed innocent connections. The drop decision is
+  now a typed tri-state verdict in `shekyl-peer-policy` (unclassified /
+  policy-or-state / internal-failure / attributable-form); only the last
+  severs. Unclassified and internal failures keep the connection; the
+  announce-size check (our weight limit) declines without disconnecting;
+  a block-sync prepare failure still flushes the failed span so sync can
+  recover. Malformed input still drops.
+
 - **`docs/FOLLOWUPS.md` genesis-hold triage.** Every pre-genesis row got a
   disposition pass: 44 resolved/overtaken/duplicate/won't-fix rows removed
   (git history is the archive), 3 rows reclassified to post-genesis with
