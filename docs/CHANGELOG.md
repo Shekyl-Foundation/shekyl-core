@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Every ignored regtest e2e test now has a CI disposition.** The
+  live-daemon gate loop (`scripts/ci/run_live_daemon_gates.sh`) arms all
+  fourteen fast wallet/staking/curve-tree e2e gates per PR, runs the two
+  heavy consensus gates (depth-3 FCMP++ spend, emission claim) in a new
+  nightly lane (`nightly-live-daemon-slow.yml`, `GATE_LANE=slow`), and
+  records the one deliberate non-gate (a fixture regenerator); the
+  undecided count is ratcheted to zero, so a new `#[ignore]`d regtest
+  test fails CI until it is armed (observed red first), scheduled slow,
+  or decided dark with its reason recorded. Tree-wide, every `#[ignore]`
+  must now carry its reason in the attribute
+  (`scripts/ci/check_ignore_reasons.sh` on the grep-gates run).
 - **Staking rewards now claim automatically.** The engine runs a cadence
   driver (`ENGINE_CADENCE_DRIVER.md`) that submits the emission-claim
   transaction once each reward epoch settles — no manual step, and the

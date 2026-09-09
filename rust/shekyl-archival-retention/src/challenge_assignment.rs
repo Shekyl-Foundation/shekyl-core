@@ -537,7 +537,7 @@ mod tests {
     /// the connect path's budget and must be a measured figure, not an
     /// assumption.
     #[test]
-    #[ignore]
+    #[ignore = "measures the reorg full-epoch replay cost at maturity scale (972k cSHAKE draws); run with --ignored (release) on the target machine"]
     fn measure_full_epoch_replay_cost_at_maturity() {
         let pairs: Vec<_> = (0..324_000u32)
             .map(|i| {

@@ -18,8 +18,9 @@
 # A grep over source counts `#[ignore]` written in doc comments too
 # (21 lines, 17 attributes) and would silently disagree with the runner.
 #
-# The accounting is the load-bearing ratchet: every ignored test is either
-# ARMED or EXEMPT, so the undecided set is empty by construction.
+# The accounting is the load-bearing ratchet: every ignored test is on
+# exactly one of the three lists below (ARMED, ARMED_SLOW, DECIDED_DARK),
+# so the undecided set is empty by construction.
 #
 # The work splits, and the split is deliberate. The per-name existence checks
 # catch a gate RENAMED OR DELETED -- naming it, and saying the gate is now
@@ -29,12 +30,21 @@
 # direction only and its message is written for that case. Verified by
 # biting it: deleting an armed gate reports the name, not a count mismatch.
 #
-# All of them run per-PR. There is deliberately no second membership
-# splitting them by cost: these gates ARE the money and privacy surface, so
-# the split would have excused the ones most worth running. A nightly tier
-# would also need a route by which a human sees its reds, and `nightly.yml`
-# already runs with no `if: failure` and no notification — a tier added
-# without that route joins a silence, it does not get watched.
+# Two lanes share this script (GATE_LANE, default "pr"):
+#   pr    — ARMED, per-PR in build.yml (each gate <= ~3.5 min, measured
+#           2026-09-08 local Release; sum ~20 min).
+#   slow  — ARMED_SLOW, the nightly live-daemon workflow (depth-3 spend
+#           780 s + emission claim 1122 s measured 2026-09-08 local
+#           Release — too heavy per-PR, still consensus gates).
+# Both lanes name-check ALL lists, so a rename is caught in every run.
+#
+# PR #660 ruled against a cost tier on the grounds that a nightly tier
+# without a route by which a human sees its reds joins a silence. That
+# named criterion is met here: nightly-live-daemon-slow.yml opens (or
+# comments on) a tracking issue on failure, so a slow-lane red is pushed
+# at a human rather than waiting to be noticed. If that notification step
+# is ever removed, the split loses its justification and the slow pair
+# moves back to ARMED.
 
 set -euo pipefail
 
@@ -68,11 +78,30 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
   exit 1
 }
 
-# Declared once. The loop iterates it and the accounting is derived from it,
-# so the two cannot drift. Every name here was OBSERVED RED before it was
-# added: its driver mutated so the property the gate guards is false, the
-# gate watched fail, then restored. Arming without that puts a gate in the
-# coverage slot while it checks nothing, which is worse than leaving it dark.
+# Declared once. The lane loop iterates one list and the undecided count is
+# derived from all three, so they cannot drift.
+#
+# Every armed gate carries its red observation (the date it was seen failing
+# for its own reason — a doc'd historical red or a 2026-09-08 sabotage run
+# that inverted the gate's subject assertion and watched it panic there):
+#   restricted_listener / ported_console / ported_p2p / native_handlers /
+#     e2e_fcmp_spend_accepted_by_daemon — pre-existing (armed 2026-09-07;
+#     the north-star also failed red in CI 2026-09-08, PR #656).
+#   regtest_daemon_spawns_and_mines_to_wallet_address — sabotage 2026-09-08.
+#   e2e_get_curve_tree_path_returns_valid_path — historical red: 404 on the
+#     Axum transport before the route registration (its doc comment).
+#   e2e_refresh_scans_coinbase_balance — historical red: RpcError::
+#     InvalidNode("invalid block") before the shekyl-wire parse migration.
+#   e2e_trim_curve_tree_restores_grow_root — sabotage 2026-09-08.
+#   e2e_staker_bond_post_accepted_and_applied — historical red: the PR-4a
+#     daemon-gap tripwire pinned the unimplemented-arm Malformed refusal.
+#   e2e_drain_wire_shape_matches_a_real_transfer — sabotage 2026-09-08.
+#   e2e_unbond_accepted_and_connected — sabotage 2026-09-08.
+#   e2e_unstake_collect_retire_composed_arc — sabotage 2026-09-08.
+#   e2e_arm3_phantom_slot_collected_at_open — sabotage 2026-09-08.
+#   e2e_fcmp_spend_over_depth3_tree (slow) — historical red: CurveTreeIngest
+#     root mismatch pre-fix, confirmed 2026-06-27 (its doc comment).
+#   e2e_emission_claim_accepted_and_applied (slow) — sabotage 2026-09-08.
 ARMED=(
   engine::regtest_e2e::restricted_listener_applies_request_caps_through_the_ffi_bridge
   engine::regtest_e2e::ported_console_commands_answer_on_the_in_process_arm
@@ -83,90 +112,84 @@ ARMED=(
   engine::regtest_e2e::e2e_get_curve_tree_path_returns_valid_path
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
-  engine::regtest_e2e::e2e_unbond_accepted_and_connected
-  engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
   engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
+  engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
+  engine::regtest_e2e::e2e_unbond_accepted_and_connected
   engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
-  engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
-  engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
 )
 
-# EXEMPT: an #[ignore]d test with NO verification job — nothing it could be
-# observed failing FOR. `generate_ct2_tier_b_fixture` regenerates a fixture;
-# it asserts no property, so arming it would add runtime and no coverage.
-# Declared rather than left implied, because "not armed" and "nothing to arm"
-# are different states and only one of them is a gap.
-EXEMPT=(
+# Consensus gates too heavy for the per-PR lane (13 + 19 min measured):
+# the nightly live-daemon workflow runs these with GATE_LANE=slow.
+ARMED_SLOW=(
+  engine::regtest_e2e::e2e_fcmp_spend_over_depth3_tree
+  engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
+)
+
+# Deliberately never run here, with the reason recorded (rule 23: a decided
+# disposition leaves a grep surface). Removing or renaming one fails the
+# name-check below, so the decision cannot rot silently.
+#   generate_ct2_tier_b_fixture — fixture regenerator, not a pass/fail
+#     proposition; run manually when the CT-2 Tier-B scenarios change.
+DECIDED_DARK=(
   engine::regtest_e2e::generate_ct2_tier_b_fixture
 )
 
-for a in "${ARMED[@]}"; do
+for a in "${ARMED[@]}" "${ARMED_SLOW[@]}" "${DECIDED_DARK[@]}"; do
   grep -qx "$a: test" "$ignored" || {
-    echo "FATAL: armed gate '$a' names no ignored test — it was renamed or deleted, and this gate is now off" >&2
+    echo "FATAL: listed gate '$a' names no ignored test — it was renamed or deleted, and its disposition is now dangling" >&2
     exit 1
   }
 done
 
-# An exemption that outlived its test is not harmless: it keeps the identity
-# below balancing by one, which would let one genuinely undecided gate hide
-# behind it. Says what to do, because the fix is deletion, not renaming.
-for e in "${EXEMPT[@]}"; do
-  grep -qx "$e: test" "$ignored" || {
-    echo "FATAL: exempt entry '$e' names no ignored test — the exemption outlived its test; delete the entry" >&2
-    exit 1
-  }
-done
-
-# A name in both lists would be run and simultaneously declared to have
-# nothing to run, and the identity below would still balance — so it is
-# checked here rather than inferred from the count.
-for a in "${ARMED[@]}"; do
-  for e in "${EXEMPT[@]}"; do
-    [ "$a" != "$e" ] || {
-      echo "FATAL: '$a' is both ARMED and EXEMPT — it cannot be both run and excused" >&2
-      exit 1
-    }
-  done
-done
-
-# A name REPEATED inside one list is the same hole from the other side, and it
-# is the one the identity cannot see: the count below sums list LENGTHS, so a
-# duplicate inflates the total by one and a genuinely undecided gate balances
-# against it and stays dark. Confirmed by biting it — an extra ARMED line plus
-# one new #[ignore]d test passed every check and ran the loop.
+# A name REPEATED inside one list — or appearing on two lists — is the hole
+# the identity cannot see: the count below sums list LENGTHS, so a duplicate
+# inflates the total by one and a genuinely undecided gate balances against
+# it and stays dark. Confirmed by biting it (PR #660) — an extra ARMED line
+# plus one new #[ignore]d test passed every check and ran the loop.
 #
-# Rejected rather than de-duplicated. Silently collapsing the repeat would fix
-# the arithmetic and keep the defect: a duplicated ARMED entry also runs its
-# gate twice, and on this step that is minutes of CI spent re-proving one
-# result. The name is the thing to delete, so the message says so.
-repeated=$(printf '%s\n' "${ARMED[@]}" "${EXEMPT[@]}" | sort | uniq -d)
+# Rejected rather than de-duplicated. Silently collapsing the repeat would
+# fix the arithmetic and keep the defect: a duplicated ARMED entry also runs
+# its gate twice, and on this step that is minutes of CI spent re-proving one
+# result; a name on two run lanes is run twice across lanes the same way.
+# The name is the thing to delete, so the message says so.
+repeated=$(printf '%s\n' "${ARMED[@]}" "${ARMED_SLOW[@]}" "${DECIDED_DARK[@]}" | sort | uniq -d)
 [ -z "$repeated" ] || {
-  echo "FATAL: repeated in ARMED/EXEMPT: $(printf '%s' "$repeated" | tr '\n' ' ')" >&2
+  echo "FATAL: repeated across ARMED/ARMED_SLOW/DECIDED_DARK: $(printf '%s' "$repeated" | tr '\n' ' ')" >&2
   echo "A repeat inflates the accounting by one and lets an undecided gate balance against it; delete the duplicate line." >&2
   exit 1
 }
 
-# THE DARK SET MAY NOT GROW SILENTLY, and the ratchet is now an identity
-# rather than a pinned number: every ignored test is either armed or exempt,
-# so the undecided set is EMPTY by construction.
+# THE DARK SET MAY NOT GROW SILENTLY, and the ratchet is an identity rather
+# than a pinned number: every ignored test is armed, scheduled slow, or
+# decided dark, so the undecided set is EMPTY by construction.
 #
 # The two sides come from INDEPENDENT sources — the left from the runner's
 # `--list --ignored`, the right from the lists declared above — so this can
 # fail when they disagree. A baseline computed as `regtest_ignored - ARMED`
 # could not: its expected value would be written by the thing it audits.
 #
-# It sums list LENGTHS, which equals the number of distinct names only because
-# the repeat check above rejects duplicates. That check is load-bearing for
-# this arithmetic, not housekeeping.
-accounted=$(( ${#ARMED[@]} + ${#EXEMPT[@]} ))
+# It sums list LENGTHS, which equals the number of distinct names only
+# because the repeat check above rejects duplicates. That check is
+# load-bearing for this arithmetic, not housekeeping.
+accounted=$(( ${#ARMED[@]} + ${#ARMED_SLOW[@]} + ${#DECIDED_DARK[@]} ))
 if [ "$regtest_ignored" -ne "$accounted" ]; then
-  echo "FATAL: $regtest_ignored ignored regtest_e2e tests, but ${#ARMED[@]} armed + ${#EXEMPT[@]} exempt = $accounted." >&2
-  echo "A new #[ignore]d test must be armed (observe it red first) or exempted (no verification job)." >&2
+  echo "FATAL: $regtest_ignored ignored regtest_e2e tests, but ${#ARMED[@]} armed + ${#ARMED_SLOW[@]} slow + ${#DECIDED_DARK[@]} dark = $accounted." >&2
+  echo "A new #[ignore]d test must be armed (observe it red first), added to ARMED_SLOW, or decided dark with its reason recorded here." >&2
   exit 1
 fi
 
-for t in "${ARMED[@]}"; do
+GATE_LANE="${GATE_LANE:-pr}"
+case "$GATE_LANE" in
+  pr) LANE_GATES=("${ARMED[@]}") ;;
+  slow) LANE_GATES=("${ARMED_SLOW[@]}") ;;
+  *)
+    echo "FATAL: unknown GATE_LANE '$GATE_LANE' (expected 'pr' or 'slow')" >&2
+    exit 1
+    ;;
+esac
+
+for t in "${LANE_GATES[@]}"; do
   set +e
   cargo test -p shekyl-engine-core --lib "$t" \
     -- --ignored --exact --nocapture >"$gate_log" 2>&1
