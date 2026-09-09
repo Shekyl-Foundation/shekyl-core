@@ -99,7 +99,7 @@ Their holdings increase **`durability_count`** and decentralization margin but a
   `ShardSetCompact` holdings — **`CompleteTree`** / foundation excluded by
   membership ([`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §3.3).
 - **`durability_count`:** includes **bonded-and-good-standing** holders; genesis
-  **`CompleteTree`** slots count for all shards; drops on slash → unbond until
+  **`CompleteTree`** slots count for all shards; drops on slash → release until
   re-bond.
 - **Reachability ("up now"):** not a consensus count; sim-only metric. Production
   uses discovery + try-list + public seeds.
@@ -127,7 +127,7 @@ public challenge is the binding deterrent.
 
 Each **active** genesis identity posts **one nominal bond** at
 **`ARCHIVAL_BOND_FLOOR`**. A failed challenge **slashes the whole bond**,
-**unbonds** the identity, and **removes it from `durability_count`** until
+**releases** the identity, and **removes it from `durability_count`** until
 re-bond — same code path as other `CompleteTree` holders; **no** skip-slash
 branch. Fractional per-shard slash on `CompleteTree` is rejected (no-op slash).
 

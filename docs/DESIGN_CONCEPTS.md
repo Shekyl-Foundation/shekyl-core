@@ -11,7 +11,7 @@
 > pay-for-service**: stakers post on-chain bonds, join the archival market, and
 > earn reward emission recomputed from **public serve-work** — there is no
 > duration tier, no `staked_amount × duration_multiplier` weighting, and no
-> claim wire (the exit is the `Unbond` bond-post kind, reachable via
+> claim wire (the exit is the `Release` bond-post kind, reachable via
 > `unstake` since PR-C). Component 3 and the participant lifecycle below have been
 > rewritten to the live model. The canonical archival specs are
 > [`docs/V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) (mechanism) and
@@ -729,7 +729,7 @@ burn_pct = min(BURN_CAP, BURN_BASE_RATE × √(tx_volume / baseline) × (circula
 | Reward basis | Verified serve-work | Recomputed from public archival state; no duration tier |
 | Reward division | Anti-concentration curve (form C), `g` band `[1.5, 2.5]`, target ≈ 2 | Caps whale share; see `REWARD_EMISSION_LEG.md` |
 | Principal liquidity | Spendable between settlement epochs | Bond (not a lock) is the honesty anchor; slashable on misbehavior |
-| Admission | Transfer-shaped (`txin_archival_bond_post`) | No separate stake-output type, no claim wire; the exit is a bond-post kind (`Unbond`), reachable via `unstake` since PR-C — not a bespoke wire class |
+| Admission | Transfer-shaped (`txin_archival_bond_post`) | No separate stake-output type, no claim wire; the exit is a bond-post kind (`Release`), reachable via `unstake` since PR-C — not a bespoke wire class |
 
 ### Staker emission share (Component 4)
 

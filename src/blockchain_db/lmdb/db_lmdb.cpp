@@ -5392,7 +5392,7 @@ namespace {
 
 // ─── Height-keyed archival journal helpers ─────────────────────────────────
 //
-// Five archival journals (slash log, emission-claim log, unbond log,
+// Five archival journals (slash log, emission-claim log, release log,
 // holdings-update log, rebond log) share the same BE(height)‖BE(seq) row
 // layout and the same three sub-operations: probe the next free seq for a
 // height, read every row at a height, delete every row at a height. `KeyT`
@@ -5560,7 +5560,7 @@ void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   bond.hybrid_pubkey = hybrid_pubkey;
   // GF-1: the committed debit authorizer (gate-4 §4.1) — written once here,
   // at join time; immutable for the record's life (re-keying is a full
-  // Unbond + re-JoinMarket). Every later bond_debit's pqc auth verifies
+  // Release + re-JoinMarket). Every later bond_debit's pqc auth verifies
   // against this copy, never the identity key.
   bond.bond_spend_pk = bond_spend_pk;
   bond.join_settlement_epoch = join_settlement_epoch;
@@ -5956,7 +5956,7 @@ void BlockchainLMDB::apply_archival_slash_one(uint64_t block_height, uint32_t& s
     const auto it = std::find(shards.begin(), shards.end(), shard_id);
     // Unreachable from the scheduler: process_archival_slash_for_epoch only
     // challenges shards the record currently holds, so the shard is always
-    // present here. In particular an Exited record (Unbond connect) holds
+    // present here. In particular an Exited record (Release connect) holds
     // nothing and is never a slash candidate — slashability ends at the
     // connect; the refund is never clawed back (ratified 2026-07-12). The
     // HoldingsUpdate-drop revisit is DISCHARGED (this slice): a voluntarily
@@ -6103,9 +6103,9 @@ void BlockchainLMDB::process_archival_slash_for_epoch(uint64_t block_height,
     if (!shekyl::db::ArchivalBondValue::decode(v.mv_data, v.mv_size, bond))
       throw std::runtime_error("FATAL: archival_bond decode failed during slash scan");
 
-    // Only currently held shards are challenged. An Exited record (Unbond
+    // Only currently held shards are challenged. An Exited record (Release
     // connect: compact-and-empty) therefore never reaches a challenge — by
-    // design, not accident: slashability ends at the Unbond connect, and the
+    // design, not accident: slashability ends at the Release connect, and the
     // release verify guarantees every epoch through the record's last-served
     // anchor settled BEFORE the exit (ratified 2026-07-12; the exit-forgiven
     // tail is release_cooldown.rs's module contract). Slash-emptied records
@@ -6555,11 +6555,11 @@ void BlockchainLMDB::apply_archival_unbond(uint64_t block_height,
   // mutating helper below dereferences *m_write_txn).
   check_open();
   if (!m_write_txn)
-    throw std::runtime_error("FATAL: archival unbond requires active write txn");
+    throw std::runtime_error("FATAL: archival release requires active write txn");
 
   shekyl::db::ArchivalBondValue bond{};
   if (!load_archival_bond_value(p_id, bond))
-    throw std::runtime_error("FATAL: archival unbond without bond record");
+    throw std::runtime_error("FATAL: archival release without bond record");
 
   // Journal the record's full pre-image BEFORE mutating (gate-4 §3.5 connect
   // step 1, the emission WS-2 §6.3 shape): the vin carries the POST-connect
@@ -6583,26 +6583,26 @@ void BlockchainLMDB::apply_archival_unbond(uint64_t block_height,
   // caller-hoisted per-block value, which would clobber across multiple
   // bond posts in one block.
   const uint64_t total_bonded = get_total_bonded_atomic();
-  const uint64_t unbond_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
+  const uint64_t release_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
   uint64_t post_bonded_total = 0;
   uint8_t post_holdings_kind = 0;
   uint64_t post_held_shard_count = 0;
   uint64_t close_start = 0;
   uint64_t close_end = 0;
   uint64_t new_total_bonded = 0;
-  const uint8_t fold_rc = shekyl_archival_unbond_connect(
+  const uint8_t fold_rc = shekyl_archival_release_connect(
     bond.bonded_total_atomic, bond.holdings_kind, bond.held_shard_ids.size(),
-    bond.bad_intervals.size(), vin_bond_debit, total_bonded, unbond_epoch,
+    bond.bad_intervals.size(), vin_bond_debit, total_bonded, release_epoch,
     &post_bonded_total, &post_holdings_kind, &post_held_shard_count,
     &close_start, &close_end, &new_total_bonded);
   // Never a soft skip: a fold error here means verify (plus the block-level
   // per-P pass) was bypassed or the record/counter state is corrupt — the
   // block must not connect with a half-applied release.
-  if (fold_rc != SHEKYL_ARCHIVAL_UNBOND_APPLY_OK)
-    throw std::runtime_error("FATAL: archival unbond connect fold failed (code "
+  if (fold_rc != SHEKYL_ARCHIVAL_RELEASE_APPLY_OK)
+    throw std::runtime_error("FATAL: archival release connect fold failed (code "
       + std::to_string(static_cast<unsigned>(fold_rc)) + ")");
   if (post_held_shard_count != 0)
-    throw std::runtime_error("FATAL: archival unbond fold returned non-empty holdings");
+    throw std::runtime_error("FATAL: archival release fold returned non-empty holdings");
 
   // Write exactly what the fold dictates.
   bond.bonded_total_atomic = post_bonded_total;
@@ -6619,13 +6619,13 @@ void BlockchainLMDB::apply_archival_unbond(uint64_t block_height,
   set_total_bonded_atomic(new_total_bonded);
 
   // Append the journal row at the next free seq for this height (the per-P
-  // pass forecloses same-P multiplicity but distinct-P unbonds per block are
+  // pass forecloses same-P multiplicity but distinct-P releases per block are
   // legal, so the seq space is shared per height).
   const uint32_t seq = archival_journal_next_seq<shekyl::db::ArchivalBondUnbondLogKey>(
-    *m_write_txn, m_archival_bond_unbond_log, block_height, "archival bond unbond log");
+    *m_write_txn, m_archival_bond_unbond_log, block_height, "archival bond release log");
   archival_journal_put<shekyl::db::ArchivalBondUnbondLogKey>(
     *m_write_txn, m_archival_bond_unbond_log, block_height, seq, log_entry.encode(),
-    "archival bond unbond log");
+    "archival bond release log");
 }
 
 void BlockchainLMDB::revert_archival_unbonds_at_height(uint64_t block_height)
@@ -6633,17 +6633,17 @@ void BlockchainLMDB::revert_archival_unbonds_at_height(uint64_t block_height)
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
   if (!m_write_txn)
-    throw std::runtime_error("FATAL: archival unbond revert requires active write txn");
+    throw std::runtime_error("FATAL: archival release revert requires active write txn");
 
   const std::vector<shekyl::db::ArchivalBondUnbondRevertValue> rows =
     archival_journal_read<shekyl::db::ArchivalBondUnbondLogKey,
       shekyl::db::ArchivalBondUnbondRevertValue>(
-      *m_write_txn, m_archival_bond_unbond_log, block_height, "archival bond unbond log");
+      *m_write_txn, m_archival_bond_unbond_log, block_height, "archival bond release log");
 
-  const uint64_t unbond_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
+  const uint64_t release_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
 
   // Restore in reverse connect order (§5). Trailing-entry invariant (ratified
-  // 2026-07-12, gate-4 §3.5): slashability ends at the Unbond connect — the
+  // 2026-07-12, gate-4 §3.5): slashability ends at the Release connect — the
   // slash scheduler only examines currently held shards and an Exited record
   // holds none — so nothing ever appends after the clean close and the
   // trailing entry here is always this connect's close. pop_block still runs
@@ -6657,7 +6657,7 @@ void BlockchainLMDB::revert_archival_unbonds_at_height(uint64_t block_height)
 
     shekyl::db::ArchivalBondValue bond{};
     if (!load_archival_bond_value(p_id, bond))
-      throw std::runtime_error("FATAL: archival unbond revert without bond record");
+      throw std::runtime_error("FATAL: archival release revert without bond record");
 
     // Rust pop fold: validates the tip record is the connect's product
     // (Exited state + trailing clean close) and re-credits the counter
@@ -6667,12 +6667,12 @@ void BlockchainLMDB::revert_archival_unbonds_at_height(uint64_t block_height)
     const uint64_t trailing_end = has_trailing ? bond.bad_intervals.back().end_exclusive : 0;
     const uint64_t total_bonded = get_total_bonded_atomic();
     uint64_t new_total_bonded = 0;
-    const uint8_t fold_rc = shekyl_archival_unbond_pop(
+    const uint8_t fold_rc = shekyl_archival_release_pop(
       bond.bonded_total_atomic, bond.held_shard_ids.size(),
-      has_trailing, trailing_start, trailing_end, unbond_epoch,
+      has_trailing, trailing_start, trailing_end, release_epoch,
       it->pre_bonded_total, total_bonded, &new_total_bonded);
-    if (fold_rc != SHEKYL_ARCHIVAL_UNBOND_APPLY_OK)
-      throw std::runtime_error("FATAL: archival unbond pop fold failed (code "
+    if (fold_rc != SHEKYL_ARCHIVAL_RELEASE_APPLY_OK)
+      throw std::runtime_error("FATAL: archival release pop fold failed (code "
         + std::to_string(static_cast<unsigned>(fold_rc)) + ")");
 
     // Restore exactly the three mutated fields from the pre-image; the v4
@@ -6697,7 +6697,7 @@ void BlockchainLMDB::revert_archival_unbonds_at_height(uint64_t block_height)
 
   archival_journal_delete<shekyl::db::ArchivalBondUnbondLogKey>(
     *m_write_txn, m_archival_bond_unbond_log, block_height,
-    static_cast<uint32_t>(rows.size()), "archival bond unbond log");
+    static_cast<uint32_t>(rows.size()), "archival bond release log");
 }
 
 namespace {

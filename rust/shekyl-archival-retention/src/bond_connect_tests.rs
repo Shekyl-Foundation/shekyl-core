@@ -9,7 +9,7 @@ use super::*;
 use crate::bond_floor::{bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC};
 use crate::consensus_state::good_through;
 
-const E_UNBOND: u64 = 42;
+const E_RELEASE: u64 = 42;
 const RECORD_BONDED: u64 = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC;
 const TOTAL_BONDED: u64 = 5 * ARCHIVAL_BOND_FLOOR_ATOMIC;
 
@@ -20,16 +20,16 @@ fn record_holdings() -> HoldingsDescriptor {
     }
 }
 
-fn ok_connect() -> UnbondConnect {
+fn ok_connect() -> ReleaseConnect {
     let holdings = record_holdings();
-    unbond_connect(
+    release_connect(
         RECORD_BONDED,
         holdings.kind,
         holdings.shard_ids.len(),
         0,
         RECORD_BONDED,
         TOTAL_BONDED,
-        E_UNBOND,
+        E_RELEASE,
     )
     .expect("valid connect")
 }
@@ -40,7 +40,7 @@ fn connect_full_release_effect() {
     assert_eq!(effect.post_bonded_total, 0);
     assert_eq!(effect.post_holdings.kind, HoldingsKind::ShardSetCompact);
     assert!(effect.post_holdings.shard_ids.is_empty());
-    assert_eq!(effect.interval_close, clean_interval_close(E_UNBOND));
+    assert_eq!(effect.interval_close, clean_interval_close(E_RELEASE));
     assert_eq!(effect.new_total_bonded_atomic, TOTAL_BONDED - RECORD_BONDED);
     // §4.3 identity: refund == debit == bond_floor(record's current holdings).
     assert_eq!(effect.refund_atomic, RECORD_BONDED);
@@ -50,14 +50,14 @@ fn connect_full_release_effect() {
 #[test]
 fn connect_releases_complete_tree_record() {
     // Foundation-shaped record: floor is one FLOOR regardless of shards.
-    let effect = unbond_connect(
+    let effect = release_connect(
         ARCHIVAL_BOND_FLOOR_ATOMIC,
         HoldingsKind::CompleteTree,
         0,
         0,
         ARCHIVAL_BOND_FLOOR_ATOMIC,
         TOTAL_BONDED,
-        E_UNBOND,
+        E_RELEASE,
     )
     .expect("complete-tree release");
     // The exit shape is uniform: compact-and-empty, same as slash-to-zero.
@@ -70,9 +70,9 @@ fn clean_close_leaves_good_through_true() {
     // The load-bearing §4.3 property: appending the clean interval-close
     // changes no `good_through(E)` verdict — backlog emission for served
     // epochs still verifies within `W`.
-    let close = clean_interval_close(E_UNBOND);
+    let close = clean_interval_close(E_RELEASE);
     let join = 3u64;
-    for epoch in [join + 1, E_UNBOND - 1, E_UNBOND, E_UNBOND + 1, u64::MAX] {
+    for epoch in [join + 1, E_RELEASE - 1, E_RELEASE, E_RELEASE + 1, u64::MAX] {
         assert_eq!(
             good_through(join, epoch, &[close]),
             good_through(join, epoch, &[]),
@@ -89,8 +89,8 @@ fn clean_close_is_inert_next_to_an_open_interval() {
         start_epoch: 10,
         end_exclusive: u64::MAX,
     };
-    let with_close = [open, clean_interval_close(E_UNBOND)];
-    for epoch in [1, 9, 10, E_UNBOND, E_UNBOND + 7] {
+    let with_close = [open, clean_interval_close(E_RELEASE)];
+    for epoch in [1, 9, 10, E_RELEASE, E_RELEASE + 7] {
         assert_eq!(
             good_through(0, epoch, &with_close),
             good_through(0, epoch, &[open]),
@@ -107,32 +107,32 @@ const HOLDINGS_COUNT: usize = 2;
 #[test]
 fn connect_rejects_zero_debit() {
     assert_eq!(
-        unbond_connect(
+        release_connect(
             0,
             HOLDINGS_KIND,
             HOLDINGS_COUNT,
             0,
             0,
             TOTAL_BONDED,
-            E_UNBOND
+            E_RELEASE
         ),
-        Err(UnbondConnectError::DebitZero)
+        Err(ReleaseConnectError::DebitZero)
     );
 }
 
 #[test]
 fn connect_rejects_debit_mismatch() {
     assert_eq!(
-        unbond_connect(
+        release_connect(
             RECORD_BONDED,
             HOLDINGS_KIND,
             HOLDINGS_COUNT,
             0,
             RECORD_BONDED - 1,
             TOTAL_BONDED,
-            E_UNBOND,
+            E_RELEASE,
         ),
-        Err(UnbondConnectError::DebitNotRecordTotal)
+        Err(ReleaseConnectError::DebitNotRecordTotal)
     );
 }
 
@@ -141,61 +141,61 @@ fn connect_rejects_broken_floor_invariant() {
     // Record claims 3×FLOOR bonded over 2 shards — §3.2 equality broken.
     let corrupt = 3 * ARCHIVAL_BOND_FLOOR_ATOMIC;
     assert_eq!(
-        unbond_connect(
+        release_connect(
             corrupt,
             HOLDINGS_KIND,
             HOLDINGS_COUNT,
             0,
             corrupt,
             TOTAL_BONDED,
-            E_UNBOND
+            E_RELEASE
         ),
-        Err(UnbondConnectError::RecordFloorInvariantBroken)
+        Err(ReleaseConnectError::RecordFloorInvariantBroken)
     );
 }
 
 #[test]
 fn connect_rejects_total_bonded_underflow() {
     assert_eq!(
-        unbond_connect(
+        release_connect(
             RECORD_BONDED,
             HOLDINGS_KIND,
             HOLDINGS_COUNT,
             0,
             RECORD_BONDED,
             RECORD_BONDED - 1,
-            E_UNBOND,
+            E_RELEASE,
         ),
-        Err(UnbondConnectError::TotalBondedUnderflow)
+        Err(ReleaseConnectError::TotalBondedUnderflow)
     );
 }
 
 #[test]
 fn connect_rejects_full_interval_log() {
     assert_eq!(
-        unbond_connect(
+        release_connect(
             RECORD_BONDED,
             HOLDINGS_KIND,
             HOLDINGS_COUNT,
             MAX_BOND_BAD_INTERVALS,
             RECORD_BONDED,
             TOTAL_BONDED,
-            E_UNBOND,
+            E_RELEASE,
         ),
-        Err(UnbondConnectError::IntervalLogFull)
+        Err(ReleaseConnectError::IntervalLogFull)
     );
 }
 
 #[test]
 fn connect_appends_below_the_cap() {
-    assert!(unbond_connect(
+    assert!(release_connect(
         RECORD_BONDED,
         HOLDINGS_KIND,
         HOLDINGS_COUNT,
         MAX_BOND_BAD_INTERVALS - 1,
         RECORD_BONDED,
         TOTAL_BONDED,
-        E_UNBOND,
+        E_RELEASE,
     )
     .is_ok());
 }
@@ -204,11 +204,11 @@ fn connect_appends_below_the_cap() {
 fn pop_restores_total_bonded_exactly() {
     // Connect ∘ pop is the identity on the global counter (§5 pop twin).
     let effect = ok_connect();
-    let restored = unbond_pop(
+    let restored = release_pop(
         effect.post_bonded_total,
         effect.post_holdings.shard_ids.len(),
         Some(effect.interval_close),
-        E_UNBOND,
+        E_RELEASE,
         RECORD_BONDED,
         effect.new_total_bonded_atomic,
     )
@@ -219,84 +219,84 @@ fn pop_restores_total_bonded_exactly() {
 #[test]
 fn pop_rejects_record_not_exited() {
     assert_eq!(
-        unbond_pop(
+        release_pop(
             1,
             0,
-            Some(clean_interval_close(E_UNBOND)),
-            E_UNBOND,
+            Some(clean_interval_close(E_RELEASE)),
+            E_RELEASE,
             RECORD_BONDED,
             0,
         ),
-        Err(UnbondPopError::RecordNotExited)
+        Err(ReleasePopError::RecordNotExited)
     );
     assert_eq!(
-        unbond_pop(
+        release_pop(
             0,
             1,
-            Some(clean_interval_close(E_UNBOND)),
-            E_UNBOND,
+            Some(clean_interval_close(E_RELEASE)),
+            E_RELEASE,
             RECORD_BONDED,
             0,
         ),
-        Err(UnbondPopError::RecordNotExited)
+        Err(ReleasePopError::RecordNotExited)
     );
 }
 
 #[test]
 fn pop_rejects_missing_or_mismatched_clean_close() {
     assert_eq!(
-        unbond_pop(0, 0, None, E_UNBOND, RECORD_BONDED, 0),
-        Err(UnbondPopError::MissingCleanClose)
+        release_pop(0, 0, None, E_RELEASE, RECORD_BONDED, 0),
+        Err(ReleasePopError::MissingCleanClose)
     );
     // Wrong epoch.
     assert_eq!(
-        unbond_pop(
+        release_pop(
             0,
             0,
-            Some(clean_interval_close(E_UNBOND + 1)),
-            E_UNBOND,
+            Some(clean_interval_close(E_RELEASE + 1)),
+            E_RELEASE,
             RECORD_BONDED,
             0,
         ),
-        Err(UnbondPopError::MissingCleanClose)
+        Err(ReleasePopError::MissingCleanClose)
     );
     // An open interval is not a clean close.
     assert_eq!(
-        unbond_pop(
+        release_pop(
             0,
             0,
             Some(BadInterval {
-                start_epoch: E_UNBOND,
+                start_epoch: E_RELEASE,
                 end_exclusive: u64::MAX,
             }),
-            E_UNBOND,
+            E_RELEASE,
             RECORD_BONDED,
             0,
         ),
-        Err(UnbondPopError::MissingCleanClose)
+        Err(ReleasePopError::MissingCleanClose)
     );
 }
 
 #[test]
 fn pop_rejects_empty_pre_image() {
     assert_eq!(
-        unbond_pop(0, 0, Some(clean_interval_close(E_UNBOND)), E_UNBOND, 0, 0),
-        Err(UnbondPopError::PreImageEmpty)
+        release_pop(0, 0, Some(clean_interval_close(E_RELEASE)), E_RELEASE, 0, 0),
+        Err(ReleasePopError::PreImageEmpty)
     );
 }
 
 #[test]
 fn pop_rejects_total_bonded_overflow() {
     assert_eq!(
-        unbond_pop(
+        release_pop(
             0,
             0,
-            Some(clean_interval_close(E_UNBOND)),
-            E_UNBOND,
+            Some(clean_interval_close(E_RELEASE)),
+            E_RELEASE,
             RECORD_BONDED,
             u64::MAX,
         ),
-        Err(UnbondPopError::TotalBondedOverflow)
+        Err(ReleasePopError::TotalBondedOverflow)
     );
 }
 
@@ -399,7 +399,7 @@ fn holdings_update_pop_reverts_both_directions() {
 }
 
 #[test]
-fn holdings_update_add_connect_rejects_unbonded_record() {
+fn holdings_update_add_connect_rejects_released_record() {
     // The connect-fold belt of the verify-side Bonded gate: an Exited
     // record's floor invariant is vacuously true (bond_floor(∅) == 0 ==
     // bonded_total), so without the explicit gate the fold proceeded and

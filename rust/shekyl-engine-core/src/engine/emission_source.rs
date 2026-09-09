@@ -214,11 +214,11 @@ pub struct BondContext {
     /// (`claimed_epochs_contains` binary-searches it; the ordering is
     /// enforced at decode, not assumed).
     pub claimed_settlement_epochs: Vec<u64>,
-    /// The record's current bonded balance — `verify_unbond_bond_post`'s first
-    /// operand (`NothingToUnbond` at zero) and the exact value a full exit's
+    /// The record's current bonded balance — `verify_release_bond_post`'s first
+    /// operand (`NothingToRelease` at zero) and the exact value a full exit's
     /// `bond_debit` must equal.
     pub bonded_total_atomic: u64,
-    /// The record's interval-log length — `verify_unbond_bond_post`'s sixth
+    /// The record's interval-log length — `verify_release_bond_post`'s sixth
     /// and last record operand (`record_bad_interval_count`).
     ///
     /// No presence flag, because the field has no absent state: an empty log
@@ -597,7 +597,7 @@ pub async fn fetch_emission_claim_source<R: Rpc>(
 ///
 /// This is one of **two** checks, not a replacement for the other. This one
 /// proves the facts came back from a request that named this `P`. The
-/// `AssembleUnbond` handler separately proves that `P` is the one whose
+/// `AssembleRelease` handler separately proves that `P` is the one whose
 /// *handle* is being spent (`RecordPersonaMismatch`) — a caller can still fetch
 /// A honestly and present it with B's handle, and that is the handler's arm to
 /// refuse.
@@ -631,18 +631,18 @@ pub async fn fetch_emission_claim_source<R: Rpc>(
 /// precisely why the non-active ones stay resident: `ARCHIVAL_BOND_CONSTRUCTION.md`
 /// keeps the bonded *union* rather than a clean lookahead window because the
 /// archival model rotates *while bonded*, leaving a retired persona's bonds
-/// on-chain as dormant balances, and "unbonding a retired persona later needs
-/// that persona's `bond_spend` key" — dropping them "bricks unbonding". So the
+/// on-chain as dormant balances, and "releasing a retired persona later needs
+/// that persona's `bond_spend` key" — dropping them "bricks releasing". So the
 /// persona being exited is routinely **not** the active one, several are held at
 /// once, and a caller really can pair one persona's record with another's
-/// handle. That is the arm `AssembleUnbond` refuses.
+/// handle. That is the arm `AssembleRelease` refuses.
 ///
 /// It is also why the exit must **not** copy `drain_to_principal`'s shape. That
 /// façade resolves `active_persona()` and takes no slot parameter, which is
 /// right for a `P`-lane spend and wrong here: applied to the exit it would brick
-/// unbonding every retired-but-bonded persona. *One persona on the wire at a
+/// releasing every retired-but-bonded persona. *One persona on the wire at a
 /// time* is the invariant (no simultaneous wire activity — the firewall permits
-/// the dormant balances); *"only the active persona can be unbonded"* is not,
+/// the dormant balances); *"only the active persona can be released"* is not,
 /// and the two read alike.
 #[derive(Debug, Clone)]
 pub struct ClaimSourceFor {
@@ -680,7 +680,7 @@ impl ClaimSourceFor {
 ///
 /// **Not a convenience wrapper over [`fetch_emission_claim_source`] — it is the
 /// binding.** The bare fetch returns facts with no record of whose they are, so
-/// a consumer that needs to know (anything on the `Unbond` readiness/exit path)
+/// a consumer that needs to know (anything on the `Release` readiness/exit path)
 /// would have to re-attach an id by hand, which is the mislabeling
 /// [`ClaimSourceFor`] exists to make impossible. Reach for this one there, and
 /// do not collapse the two: the delegation is a single line precisely so the

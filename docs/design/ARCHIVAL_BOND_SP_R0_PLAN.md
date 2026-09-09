@@ -119,7 +119,7 @@ the `(b) RPC stake entry` co-gate), **not** an SP-R0 arm.
 | **front** | production **staker-activation** path — *its own round, not an SP-R0 arm* | — | — | — | **every arm's production effect** |
 
 **Prune-on-retire is atomic** (transport plan §14): one seal drops a persona's
-`funding_outputs`, `bond_post_matches`, `pending_unbonds`, and writes its retired-record —
+`funding_outputs`, `bond_post_matches`, `pending_releases`, and writes its retired-record —
 else `bond_post_matches` grows unbounded. Shared plumbing across #1 and #2.
 
 ---
@@ -185,7 +185,7 @@ sealed state** — the DQ-F production fire, asserted live
 ledger landed as designed (2d-1 §"Records-driven retirement"): `RetiredPersonaRecord`
 rows in `PScanState` (**`PSCAN_STATE_VERSION` 6 → 7**, snapshot regenerated per rule 42),
 written by the **atomic retire-time prune** `PScanAccrual::retire_persona` — the
-persona's `bond_post_matches` rows and the `pending_unbonds` trigger leave in the same
+persona's `bond_post_matches` rows and the `pending_releases` trigger leave in the same
 mutation that appends the record, sealed by the task's one atomic write (the §15 pin; the
 bound on `bond_post_matches` growth). The slot's `funding_outputs` are **not** pruned
 here — see the funded-gate in the review-sweep addendum below.
@@ -204,25 +204,25 @@ fire-harness lane impractical (evidence construction uses the cfg(test) batch
 constructor; a conscious, disclosed deviation from the arm-#1/#3 lane form) — and
 **production-discharge — corrected at source (2026-07-19): NOT yet drivable.**
 The prior "drivable now" claim was wrong: arm #2's retire trigger is a confirmed
-`Unbond` post, and while the consensus **block-path** verifies for non-JoinMarket
+`Release` post, and while the consensus **block-path** verifies for non-JoinMarket
 kinds exist (`shekyl-archival-retention` runs them today), the **submit-side**
 fact sets were JoinMarket-only (`DAEMON_SUBMIT_VERDICT.md` §8.7.1 pinned the JM
-BP rows only) and **no wallet constructs these kinds yet** — so no Unbond could
+BP rows only) and **no wallet constructs these kinds yet** — so no Release could
 reach a regtest chain through any production path. Named blockers: the
 non-JoinMarket submit battery (the PR-4b sibling for
-`Unbond`/`Rebond`/`HoldingsUpdate` rows) **and** the wallet-side unbond entry.
+`Release`/`Rebond`/`HoldingsUpdate` rows) **and** the wallet-side release entry.
 The armed settlement-epoch override for the W-lapse rides whichever lands last.
 
-**UPDATE 2026-08-29 (PR-A) — the first named blocker is CLEARED for `Unbond`.**
+**UPDATE 2026-08-29 (PR-A) — the first named blocker is CLEARED for `Release`.**
 `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 now pins the UB rows and the native battery
-dispatches `verify_unbond_bond_post`, so `/submit_transaction` **accepts** a
-well-formed `Unbond`. `Rebond` and `HoldingsUpdate` fact sets remain
+dispatches `verify_release_bond_post`, so `/submit_transaction` **accepts** a
+well-formed `Release`. `Rebond` and `HoldingsUpdate` fact sets remain
 deliberately unbuilt (rule 21: no producer) and are not on arm #2's trigger
 path, so the blocker is discharged for everything arm #2 needs. **Still
-blocking: the wallet-side unbond entry** — the dispatch seam exists as of PR-B
-(`Engine::submit_unbond`, `pub(crate)`, and the daemon walk has produced a
-confirmed `Unbond` on a regtest chain through it), but no user-facing entry
-reaches it, so arm #2's confirmed-`Unbond` trigger still cannot be produced
+blocking: the wallet-side release entry** — the dispatch seam exists as of PR-B
+(`Engine::submit_release`, `pub(crate)`, and the daemon walk has produced a
+confirmed `Release` on a regtest chain through it), but no user-facing entry
+reaches it, so arm #2's confirmed-`Release` trigger still cannot be produced
 through a user-reachable path, and the armed settlement-epoch override now
 rides that entry alone rather than "whichever lands last". Arm #3's production-discharge leg, by
 contrast, needs no post at all and **LANDED 2026-07-19**
@@ -234,14 +234,14 @@ cadence, the same gating as the promoted arm-#1 lane).
 addressed; the load-bearing one is a stranded-funds gap.
 
 - **Funded-gate (correctness — the one that changes behavior).** The witness gates only the
-  *reward-collateral* stuck-funds dimension (`Unbond` + `W`-lapse). It did **not** gate the
+  *reward-collateral* stuck-funds dimension (`Release` + `W`-lapse). It did **not** gate the
   *funding-output* dimension: a slot reaching retire could still hold unspent
-  `funding_outputs` (a post-`Unbond` emission arrival, a reorg re-add, an incomplete drain —
+  `funding_outputs` (a post-`Release` emission arrival, a reorg re-add, an incomplete drain —
   draining is amount-targeted `select_for_drain`, not a lump sweep). The actor wipe is
   irreversible and the open path stops deriving a retired slot, so wiping a *funded* slot
   strands spendable `P` funds. **Fix:** the retire handler now refuses the wipe for a funded
   slot — a new `RetireOutcome::SkippedFunded` gated on a `FundedSlots` operand the task
-  derives from `accrual.funding_outputs()` — and defers (leaving the durable `pending_unbonds`
+  derives from `accrual.funding_outputs()` — and defers (leaving the durable `pending_releases`
   trigger) until the funding drains (arm #1 prunes the last output on its spend). This makes
   the invariant `retire_persona` assumed (a drained slot) **structural**: the function now
   never prunes `funding_outputs`, guarded by a `debug_assert`. The claim-window witness and
@@ -259,7 +259,7 @@ addressed; the load-bearing one is a stranded-funds gap.
   vs prune-durability, the second firing only on a rare pruning step) rather than merged; the
   uncorroborated-retire re-fire comment corrected ("re-fires after a **restart**", not "a later
   sweep" — the session dedup blocks that); a dead `let _ = corroborated;` discard removed; the
-  `PScanState.funding_outputs` / `pending_unbonds` field docs reconciled with the funded-gate
+  `PScanState.funding_outputs` / `pending_releases` field docs reconciled with the funded-gate
   (retire no longer prunes funding; the drain is amount-targeted, not a sweep).
 
 ---

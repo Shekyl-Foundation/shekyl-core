@@ -47,7 +47,7 @@ pub fn cmd_stake(rpc: &RpcSession, foundation: bool) {
         return;
     }
     println!("Staking bonds your wallet's funds as staking principal.");
-    println!("The bond posts on-chain and the principal locks until unbonding.");
+    println!("The bond posts on-chain and the principal locks until releasing.");
     if !confirm("Make this wallet a staker?") {
         println!("Staking cancelled.");
         return;

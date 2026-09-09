@@ -111,7 +111,7 @@ no serialization, no `std::time` (see §4).
 
 | Class | Events (enumerated at wiring time; this is the initial set) | Axis |
 | --- | --- | --- |
-| **Principal lifecycle** | funding-send dispatched; drain/unbond dispatched; refresh-cycle marker; wallet-session marker | (iii) |
+| **Principal lifecycle** | funding-send dispatched; drain/release dispatched; refresh-cycle marker; wallet-session marker | (iii) |
 | **`P` bond-post** | entry-gap draw consumed (`spread`, `bond_first`, `window` — the draw parameters, so the sim can grade the draw that actually ran, not a re-derivation); bond-post scheduled (target block/logical time); bond-post dispatched | (i) |
 | **`P` other broadcasts** | any other per-`P` submit through the `PerP` arm (serve-credit claims, rebond top-ups as they land in later slices) | (ii) |
 

@@ -37,9 +37,11 @@ use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the durable pending-post block. **v9** adds the
-/// [`PendingUnbond`] record set — the terminal exit's persist-before-dispatch
-/// sibling (the `submit_unbond` dispatch seam): an `Unbond` spends `P`-funding
+/// Schema version of the durable pending-post block. **v10** renames the
+/// v9 `PendingUnbond` record set to [`PendingRelease`] (the internal
+/// Unbond → Release vocabulary rename; wire `BondPostKind` discriminant `2`
+/// unchanged) — the terminal exit's persist-before-dispatch
+/// sibling (the `submit_release` dispatch seam): a `Release` spends `P`-funding
 /// inputs, so all of its input gindexes must be reserved durably **before**
 /// the bytes reach any submitter, exactly as a drain reserves its inputs. It
 /// is deliberately NOT a [`PendingBondPost`]: the exit draws no decorrelation
@@ -80,7 +82,7 @@ use crate::error::WalletLedgerError;
 /// a different version **refuse rather than migrate** — pre-genesis, a v4
 /// seal under a v5 binary fails closed and the operator re-assembles
 /// (rule 15).
-pub const PENDING_POST_VERSION: u32 = 9;
+pub const PENDING_POST_VERSION: u32 = 10;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -243,7 +245,7 @@ impl std::fmt::Debug for PendingDrain {
     }
 }
 
-/// One durable pending **`Unbond` exit** (gate-4 §3.5 / the `submit_unbond`
+/// One durable pending **`Release` exit** (gate-4 §3.5 / the `submit_release`
 /// dispatch seam): the assembled, signed, wire-encoded exit bytes bound to
 /// their persona and the funding reservation they hold — sealed **before**
 /// dispatch (persist-before-dispatch, the drain's sibling: a retry re-sends
@@ -257,16 +259,16 @@ impl std::fmt::Debug for PendingDrain {
 /// carries no timing plan: the exit deliberately draws no decorrelation
 /// offset (the event it follows — a release cooldown expiring — is already
 /// public on-chain), which is why this is not a [`PendingBondPost`] and never
-/// enters WI-3's due-check. A live unbond record means those gindexes are
+/// enters WI-3's due-check. A live release record means those gindexes are
 /// reserved and the persona has its one terminal exit in flight
-/// ([`PendingPostBlock::has_live_unbond_for`]).
+/// ([`PendingPostBlock::has_live_release_for`]).
 ///
 /// Same redacted-`Debug` class as [`PendingBondPost`]: persona, funding
 /// placement, and exit timing are `P`-side behavioral history.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
-pub struct PendingUnbond {
+pub struct PendingRelease {
     /// The persona the exit bytes are bound to. Keyed on throughout
-    /// (`has_live_unbond_for` / reservation settlement).
+    /// (`has_live_release_for` / reservation settlement).
     pub persona: PCanonicalId,
     /// The fully-assembled, signed, wire-encoded exit bytes — the value
     /// itself: retries re-send these stored bytes, never a re-encode.
@@ -279,10 +281,10 @@ pub struct PendingUnbond {
     pub state: PendingPostState,
 }
 
-impl std::fmt::Debug for PendingUnbond {
+impl std::fmt::Debug for PendingRelease {
     /// Redacted for the same reason as [`PendingBondPost`].
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("PendingUnbond(<redacted pending-unbond>)")
+        f.write_str("PendingRelease(<redacted pending-release>)")
     }
 }
 
@@ -296,8 +298,8 @@ enum PendingKind {
     Claim,
     /// A `P`→principal drain.
     Drain,
-    /// A terminal `Unbond` exit.
-    Unbond,
+    /// A terminal `Release` exit.
+    Release,
 }
 
 /// What `PendingPostBlock`'s seal classifier decided about a seal attempt.
@@ -334,7 +336,7 @@ pub enum SealAdmission {
 ///
 /// One vector per kind rather than one merged list: the caller logs and books
 /// them separately (a retired claim releases the epoch-dedup gate, a retired
-/// drain the one-live-drain lane, a retired unbond the one-live-exit lane),
+/// drain the one-live-drain lane, a retired release the one-live-exit lane),
 /// and merging them would force a second lookup to tell which gate just
 /// opened.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -343,8 +345,8 @@ pub struct SettledRetirement {
     pub claims: Vec<PCanonicalId>,
     /// Personas whose live `P`→principal drain settled.
     pub drains: Vec<PCanonicalId>,
-    /// Personas whose live terminal `Unbond` exit settled.
-    pub unbonds: Vec<PCanonicalId>,
+    /// Personas whose live terminal `Release` exit settled.
+    pub releases: Vec<PCanonicalId>,
 }
 
 impl SettledRetirement {
@@ -352,7 +354,7 @@ impl SettledRetirement {
     /// short-circuits on rather than sealing an unchanged block.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.claims.is_empty() && self.drains.is_empty() && self.unbonds.is_empty()
+        self.claims.is_empty() && self.drains.is_empty() && self.releases.is_empty()
     }
 }
 
@@ -401,10 +403,10 @@ pub struct PendingPostBlock {
     /// drain seam refuses a second — a live drain reserves the inputs a
     /// second would race for).
     drains: Vec<PendingDrain>,
-    /// The live pending terminal `Unbond` exits. At most one per persona
+    /// The live pending terminal `Release` exits. At most one per persona
     /// (the exit seam refuses a second — the exit debits the record's whole
     /// bonded total, so a second is doomed by construction).
-    unbonds: Vec<PendingUnbond>,
+    releases: Vec<PendingRelease>,
 }
 
 impl std::fmt::Debug for PendingPostBlock {
@@ -420,7 +422,7 @@ impl std::fmt::Debug for PendingPostBlock {
             .field("posts", &"<redacted pending-posts>")
             .field("claims", &"<redacted pending-claims>")
             .field("drains", &"<redacted pending-drains>")
-            .field("unbonds", &"<redacted pending-unbonds>")
+            .field("releases", &"<redacted pending-releases>")
             .finish()
     }
 }
@@ -432,7 +434,7 @@ impl Default for PendingPostBlock {
 }
 
 impl PendingPostBlock {
-    /// A fresh block with no pending posts, claims, drains, or unbonds.
+    /// A fresh block with no pending posts, claims, drains, or releases.
     pub fn empty() -> Self {
         Self {
             version: PENDING_POST_VERSION,
@@ -440,7 +442,7 @@ impl PendingPostBlock {
             posts: Vec::new(),
             claims: Vec::new(),
             drains: Vec::new(),
-            unbonds: Vec::new(),
+            releases: Vec::new(),
         }
     }
 
@@ -485,21 +487,21 @@ impl PendingPostBlock {
         self.drains.iter().any(|d| &d.persona == persona)
     }
 
-    /// The live pending terminal `Unbond` exits.
-    pub fn unbonds(&self) -> &[PendingUnbond] {
-        &self.unbonds
+    /// The live pending terminal `Release` exits.
+    pub fn releases(&self) -> &[PendingRelease] {
+        &self.releases
     }
 
-    /// Whether `persona` already has a live pending `Unbond` exit — the exit
+    /// Whether `persona` already has a live pending `Release` exit — the exit
     /// seam's one-live-exit-per-persona refusal predicate (the exit debits
     /// the record's whole bonded total, so a second is doomed by
     /// construction; wait for the live one to settle).
-    pub fn has_live_unbond_for(&self, persona: &PCanonicalId) -> bool {
-        self.unbonds.iter().any(|u| &u.persona == persona)
+    pub fn has_live_release_for(&self, persona: &PCanonicalId) -> bool {
+        self.releases.iter().any(|u| &u.persona == persona)
     }
 
     /// Every funding gindex reserved by a live post, a live claim's fee
-    /// sweep, a live drain's input set, **or a live `Unbond` exit's input
+    /// sweep, a live drain's input set, **or a live `Release` exit's input
     /// set** — the exclusion set for funding selection
     /// (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.2 rule 1): no bond sweep, claim
     /// fee sweep, drain, or exit may select an output an in-flight tx already
@@ -519,7 +521,7 @@ impl PendingPostBlock {
                     .flat_map(|d| d.funding_gindexes.iter().copied()),
             )
             .chain(
-                self.unbonds
+                self.releases
                     .iter()
                     .flat_map(|u| u.funding_gindexes.iter().copied()),
             )
@@ -647,8 +649,8 @@ impl PendingPostBlock {
         Some(self.drains.remove(idx))
     }
 
-    /// Remove `persona`'s live `Unbond` exit — the terminal-reject release
-    /// (the `submit_unbond` seam prunes the record it just sealed when the
+    /// Remove `persona`'s live `Release` exit — the terminal-reject release
+    /// (the `submit_release` seam prunes the record it just sealed when the
     /// daemon's FIRST-send verdict is `RejectedTerminal`: a definite refusal
     /// means the bytes were never admitted or relayed, so holding the
     /// reservation would brick the persona's one-live-exit lane on a
@@ -657,10 +659,10 @@ impl PendingPostBlock {
     /// release visible to any assembly snapshotted across it; idempotent
     /// under crash-replay (`None` when absent).
     #[must_use]
-    pub fn remove_unbond(&mut self, persona: &PCanonicalId) -> Option<PendingUnbond> {
-        let idx = self.unbonds.iter().position(|u| &u.persona == persona)?;
+    pub fn remove_release(&mut self, persona: &PCanonicalId) -> Option<PendingRelease> {
+        let idx = self.releases.iter().position(|u| &u.persona == persona)?;
         self.generation += 1;
-        Some(self.unbonds.remove(idx))
+        Some(self.releases.remove(idx))
     }
 
     /// WI-3 §3.3 step 2 — transition `persona`'s post into
@@ -765,12 +767,12 @@ impl PendingPostBlock {
     /// needs the identical decision and the original three had been
     /// hand-rolling it — the drain seam with this same inverted order, and
     /// the claim and bond-post seams (until review #572) with no overlap
-    /// check at all; the unbond seam (the fourth writer, PR #601) was born
+    /// check at all; the release seam (the fourth writer, PR #601) was born
     /// onto the shared decision. One implementation cannot drift from
     /// itself.
     ///
     /// Private, and reached only through [`Self::seal_post`],
-    /// [`Self::seal_claim`], [`Self::seal_drain`], and [`Self::seal_unbond`]:
+    /// [`Self::seal_claim`], [`Self::seal_drain`], and [`Self::seal_release`]:
     /// a seam that could classify without sealing could also seal without
     /// classifying.
     ///
@@ -791,7 +793,7 @@ impl PendingPostBlock {
             PendingKind::Post => self.has_live_post_for(persona),
             PendingKind::Claim => self.has_live_claim_for(persona),
             PendingKind::Drain => self.has_live_drain_for(persona),
-            PendingKind::Unbond => self.has_live_unbond_for(persona),
+            PendingKind::Release => self.has_live_release_for(persona),
         };
         if live {
             return SealAdmission::PersonaLive;
@@ -884,34 +886,34 @@ impl PendingPostBlock {
         SealAdmission::Admit
     }
 
-    /// Seal a terminal `Unbond` exit and stamp it `Dispatched` at `at`, the
+    /// Seal a terminal `Release` exit and stamp it `Dispatched` at `at`, the
     /// sibling of [`Self::seal_drain`]: the exit draws no decorrelation
     /// offset, so like the claim and the drain — and unlike the bond post —
     /// it is dispatched by its own seam immediately after this seal, and the
     /// record enters the block already `Dispatched` (see [`Self::seal_claim`]
     /// for why the two-call form is refused).
-    pub fn seal_unbond(
+    pub fn seal_release(
         &mut self,
-        mut unbond: PendingUnbond,
+        mut release: PendingRelease,
         at: BlockHeight,
         snapshot_generation: u64,
     ) -> SealAdmission {
         match self.classify_seal(
-            PendingKind::Unbond,
-            &unbond.persona,
-            &unbond.funding_gindexes,
+            PendingKind::Release,
+            &release.persona,
+            &release.funding_gindexes,
             snapshot_generation,
         ) {
             SealAdmission::Admit => {}
             refused => return refused,
         }
-        unbond.state = PendingPostState::Dispatched { at, attempts: 1 };
-        self.unbonds.push(unbond);
+        release.state = PendingPostState::Dispatched { at, attempts: 1 };
+        self.releases.push(release);
         SealAdmission::Admit
     }
 
     /// Confirmation retire for the **reservation-observed** kinds — claims,
-    /// drains, and `Unbond` exits — the sibling of [`Self::remove_confirmed`].
+    /// drains, and `Release` exits — the sibling of [`Self::remove_confirmed`].
     ///
     /// A bond post is retired against a direct on-chain observation of itself
     /// (`confirmed_join_market_personas`: the pscan matched the post). Claims,
@@ -999,9 +1001,9 @@ impl PendingPostBlock {
                 true
             }
         });
-        self.unbonds.retain(|unbond| {
-            if settled(&unbond.funding_gindexes, live_funding) {
-                out.unbonds.push(unbond.persona);
+        self.releases.retain(|release| {
+            if settled(&release.funding_gindexes, live_funding) {
+                out.releases.push(release.persona);
                 false
             } else {
                 true
@@ -1502,7 +1504,7 @@ mod tests {
             posts: Vec::new(),
             claims: Vec::new(),
             drains: Vec::new(),
-            unbonds: Vec::new(),
+            releases: Vec::new(),
         };
         let bytes = postcard::to_allocvec(&wrong).expect("encode");
         let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("must refuse");
@@ -1526,7 +1528,7 @@ mod tests {
             posts: Vec::new(),
             claims: Vec::new(),
             drains: Vec::new(),
-            unbonds: Vec::new(),
+            releases: Vec::new(),
         };
         let bytes = postcard::to_allocvec(&v1).expect("encode");
         let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("v1 must refuse");
@@ -1811,8 +1813,8 @@ mod tests {
         assert!(block.remove_drain(&persona).is_none());
     }
 
-    fn unbond(persona_byte: u8, funding_gindexes: &[u64]) -> PendingUnbond {
-        PendingUnbond {
+    fn release(persona_byte: u8, funding_gindexes: &[u64]) -> PendingRelease {
+        PendingRelease {
             persona: PCanonicalId::from_bytes([persona_byte; 32]),
             tx_bytes: vec![0xEB; 16],
             funding_gindexes: funding_gindexes
@@ -1825,18 +1827,18 @@ mod tests {
     }
 
     /// The v9 record set, end to end on the production insert path: an
-    /// admitted `seal_unbond` inserts the record already `Dispatched`,
+    /// admitted `seal_release` inserts the record already `Dispatched`,
     /// reserves every funding input, holds the one-live-exit lane, and
     /// round-trips through postcard.
     #[test]
-    fn unbond_records_reserve_dedup_and_round_trip() {
+    fn release_records_reserve_dedup_and_round_trip() {
         let persona = PCanonicalId::from_bytes([0xAA; 32]);
         let mut block = PendingPostBlock::empty();
         assert!(block.push_post(post(0xBB, &[1])));
         let generation = block.generation();
         assert_eq!(
-            block.seal_unbond(
-                unbond(0xAA, &[7, 9]),
+            block.seal_release(
+                release(0xAA, &[7, 9]),
                 BlockHeight::from_raw(500),
                 generation
             ),
@@ -1846,7 +1848,7 @@ mod tests {
         // Inserted already dispatched (the seam sends immediately after the
         // seal — no persistable Pending instant, same as claim/drain).
         assert_eq!(
-            block.unbonds()[0].state,
+            block.releases()[0].state,
             PendingPostState::Dispatched {
                 at: BlockHeight::from_raw(500),
                 attempts: 1
@@ -1856,13 +1858,13 @@ mod tests {
         // One live exit per persona — the second is refused as PersonaLive
         // even on disjoint inputs (an exit debits the whole bonded total; a
         // second is doomed, and "retry" would be the wrong remedy).
-        assert!(block.has_live_unbond_for(&persona));
+        assert!(block.has_live_release_for(&persona));
         assert_eq!(
-            block.seal_unbond(unbond(0xAA, &[11]), BlockHeight::from_raw(501), generation),
+            block.seal_release(release(0xAA, &[11]), BlockHeight::from_raw(501), generation),
             SealAdmission::PersonaLive
         );
 
-        // The reservation union spans posts AND unbonds — and an exit
+        // The reservation union spans posts AND releases — and an exit
         // reserves every input (the released collateral is a debit term, not
         // an input, so it contributes no gindex).
         assert_eq!(
@@ -1887,15 +1889,17 @@ mod tests {
         let bytes = block.to_postcard_bytes().expect("encode");
         let back = PendingPostBlock::from_postcard_bytes(&bytes).expect("decode");
         assert_eq!(back, block);
-        assert_eq!(back.unbonds().len(), 1);
+        assert_eq!(back.releases().len(), 1);
 
         // Terminal-reject release: removal prunes the bytes, releases the
         // reservation, bumps the generation (a release IS a release — an
         // assembly snapshotted across it must land Stale), and is idempotent.
         let g_before = block.generation();
-        let removed = block.remove_unbond(&persona).expect("live unbond removes");
+        let removed = block
+            .remove_release(&persona)
+            .expect("live release removes");
         assert_eq!(removed.persona, persona);
-        assert!(!block.has_live_unbond_for(&persona));
+        assert!(!block.has_live_release_for(&persona));
         assert_eq!(
             block.reserved_gindexes().into_iter().collect::<Vec<_>>(),
             vec![GlobalOutputIndex::from_raw(1)],
@@ -1906,32 +1910,32 @@ mod tests {
             g_before + 1,
             "a terminal-reject release must move the generation"
         );
-        assert!(block.remove_unbond(&persona).is_none());
+        assert!(block.remove_release(&persona).is_none());
     }
 
     /// The reservation-observed retire covers the exit: every reserved input
     /// gone means the exit confirmed, which retires the record, reopens the
     /// one-live-exit lane, and bumps the generation (a release is a release).
     #[test]
-    fn a_spent_reservation_retires_its_unbond() {
+    fn a_spent_reservation_retires_its_release() {
         let persona = PCanonicalId::from_bytes([0xAA; 32]);
         let mut block = PendingPostBlock::empty();
         let g0 = block.generation();
         assert_eq!(
-            block.seal_unbond(unbond(0xAA, &[7, 9]), BlockHeight::from_raw(500), g0),
+            block.seal_release(release(0xAA, &[7, 9]), BlockHeight::from_raw(500), g0),
             SealAdmission::Admit
         );
 
         // Partly spent holds (the confirming spend cannot produce it) …
         let held = block.remove_settled(&live(&[9]));
         assert!(held.is_empty());
-        assert!(block.has_live_unbond_for(&persona));
+        assert!(block.has_live_release_for(&persona));
 
-        // … fully gone retires, in the unbond vector specifically.
+        // … fully gone retires, in the release vector specifically.
         let out = block.remove_settled(&live(&[99]));
-        assert_eq!(out.unbonds, vec![persona]);
+        assert_eq!(out.releases, vec![persona]);
         assert!(out.claims.is_empty() && out.drains.is_empty());
-        assert!(!block.has_live_unbond_for(&persona));
+        assert!(!block.has_live_release_for(&persona));
         assert!(block.reserved_gindexes().is_empty());
         assert_eq!(
             block.generation(),
@@ -1944,24 +1948,24 @@ mod tests {
     /// a release keyed on the wrong persona would free a live reservation
     /// (the inputs a still-in-flight exit spends) while holding the dead one.
     #[test]
-    fn remove_unbond_releases_only_the_named_persona() {
+    fn remove_release_frees_only_the_named_persona() {
         let mut block = PendingPostBlock::empty();
         let g = block.generation();
         assert_eq!(
-            block.seal_unbond(unbond(0xAA, &[7]), BlockHeight::from_raw(500), g),
+            block.seal_release(release(0xAA, &[7]), BlockHeight::from_raw(500), g),
             SealAdmission::Admit
         );
         assert_eq!(
-            block.seal_unbond(unbond(0xBB, &[8]), BlockHeight::from_raw(500), g),
+            block.seal_release(release(0xBB, &[8]), BlockHeight::from_raw(500), g),
             SealAdmission::Admit
         );
 
         let removed = block
-            .remove_unbond(&PCanonicalId::from_bytes([0xAA; 32]))
+            .remove_release(&PCanonicalId::from_bytes([0xAA; 32]))
             .expect("the named persona's exit removes");
         assert_eq!(removed.persona, PCanonicalId::from_bytes([0xAA; 32]));
         assert!(
-            block.has_live_unbond_for(&PCanonicalId::from_bytes([0xBB; 32])),
+            block.has_live_release_for(&PCanonicalId::from_bytes([0xBB; 32])),
             "the other persona's live exit must survive the release"
         );
         assert_eq!(
@@ -1971,10 +1975,10 @@ mod tests {
         );
     }
 
-    /// A v8 seal (no unbond set) under this v9 binary fails closed on the
+    /// A v8 seal (no release set) under this v9 binary fails closed on the
     /// version gate — refuse-not-migrate (rule 15, pre-genesis). Models REAL
     /// v8 bytes the way the v4 test below does: a v8 binary never wrote an
-    /// `unbonds` field, so the tuple form is byte-identical to a v8 layout
+    /// `releases` field, so the tuple form is byte-identical to a v8 layout
     /// with empty sets, and the gate must refuse on the leading `8` before it
     /// ever tries (and fails at EOF) to read the absent field.
     #[test]

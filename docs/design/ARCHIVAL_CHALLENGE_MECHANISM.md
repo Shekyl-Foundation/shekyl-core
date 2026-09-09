@@ -913,7 +913,7 @@ the round kept trying to add forensics underneath it.
    (compromised host, discovered address, lost onion key) leaves the
    persona's economic position untouched — bond, holdings, join epoch,
    earnings history, and the `[E, MAX)` interval state are all
-   unaffected; **only the routing field is spoiled**. Forcing an unbond
+   unaffected; **only the routing field is spoiled**. Forcing a release
    would destroy a clean record to fix a network address — and worse,
    push the operator into a new persona with fresh principal funding,
    which is precisely the clustering edge. Rotation-in-place is the
@@ -958,7 +958,7 @@ the round kept trying to add forensics underneath it.
    path; GF-1 separation plus the leaf gate were already doing the
    work, one layer down. Every hot-key surface accounted:
    countersigning-as-P harmless (the priced q² case); emission claims
-   blocked by Auth-B; `EndpointUpdate` cold by ruling; debit/Unbond
+   blocked by Auth-B; `EndpointUpdate` cold by ruling; debit/Release
    under cold `bond_spend_pk`.
    **The custody proviso the resolution rests on (verified):** the
    backing secret IS reachable from `master_seed_64` — via the
@@ -1016,7 +1016,7 @@ the round kept trying to add forensics underneath it.
       `EndpointUpdate` needs authority the compromised host does not
       have: **the cold tier, despite being a non-debit post.** The cost,
       stated honestly in the operator-facing text: rotation requires
-      reaching for the same custody used for unbonding — the escape is
+      reaching for the same custody used for releasing — the escape is
       not automatable from the serving box. That is the correct
       trade — an escape hatch a compromised host can operate isn't
       one — but it is a real burden. It also cleans up the funding
@@ -1592,7 +1592,7 @@ against these.
    are independent, but they all derive from `master_seed`, so a serving
    process holding `master_seed` (or holding the derived `hs_id_seed`,
    one convenient edit from the master seed) also holds `bond_spend_pk`'s
-   authority — the exposure is **bond authority** (Unbond, the debit
+   authority — the exposure is **bond authority** (Release, the debit
    arms, `EndpointUpdate`), not the emission claim (Auth-B stays
    leaf-gated on `backing_pubkey`, which is not in `ARCHIVAL_P_DERIVE_V1`
    — check (iii) still resolves "no change" on *that* axis). The build

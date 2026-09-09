@@ -150,7 +150,7 @@ async fn the_fetch_binds_the_response_to_the_id_it_asked_for() {
 
 /// The interval-log length is read from the wire, not assumed.
 ///
-/// It is the sixth and last of `verify_unbond_bond_post`'s record operands
+/// It is the sixth and last of `verify_release_bond_post`'s record operands
 /// and the only one with no presence flag, because an empty log is a length
 /// rather than a silence. That makes the decode the whole safety boundary:
 /// `0 < MAX_BOND_BAD_INTERVALS` **passes**, so a defaulted read reports "the

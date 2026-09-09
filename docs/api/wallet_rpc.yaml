@@ -116,7 +116,7 @@
 #                                                   P-lane CONTRACT PIN below
 #                                                   applied)
 #   SPECIFIED (PR-C — the composed exit; SHIPPED 2026-09-03):
-#     unstake                                      (the irreversible Unbond
+#     unstake                                      (the irreversible Release
 #                                                   POST for the first
 #                                                   live-bonded persona. No
 #                                                   parameters — persona,
@@ -133,7 +133,7 @@
 #                                                   CollectUnstakedResult)
 #
 #     RESERVED→SHIPPED RECONCILIATION (read before assuming drift): the
-#     reservation said "`unstake` is the composed unbond() = post + a
+#     reservation said "`unstake` is the composed release() = post + a
 #     decorrelated drain". The shipped shape discharges that composition
 #     ACROSS TWO NAMED ACTIONS rather than inside one method, and the
 #     departure is deliberate, not drift:
@@ -172,9 +172,9 @@
 #     WIRE-ACTIVITY PIN (carried from the reservation, now owned here): a
 #     wallet HOLDS many personas and activates one; the exit pair is
 #     deliberately NOT active-scoped — bonded personas stay resident
-#     precisely so a rotated-away one can still be unbonded
+#     precisely so a rotated-away one can still be released
 #     (ARCHIVAL_BOND_CONSTRUCTION.md keeps the bonded union; "bricks
-#     unbonding otherwise"). What the firewall requires is NO SIMULTANEOUS
+#     releasing otherwise"). What the firewall requires is NO SIMULTANEOUS
 #     WIRE ACTIVITY, and the per-persona one-live-exit / one-live-drain
 #     seals own that serialization on this path.
 #       CONTRACT PIN (P-lane fee uniformity, ratified 2026-07-19,
@@ -903,7 +903,7 @@ components:
                                           exit-fee reserve (DS-4,
                                           EXIT_FEE_RESERVE_ATOMIC) —
                                           draining it there strands the
-                                          future terminal Unbond. Lower the
+                                          future terminal Release. Lower the
                                           amount. Sweep-to-zero exists only
                                           for a retired persona, which this
                                           method cannot select. Scalar-free:
@@ -2229,7 +2229,7 @@ components:
 
     # ── Fees — WI-RPC-1 ──────────────────────────────────────────────
     # Scope: the PRINCIPAL send surface only. The P lane (bond posts,
-    # unbond, emission claims) pays the canonical weight-priced floor fee
+    # release, emission claims) pays the canonical weight-priced floor fee
     # from persona working capital with no tier and no knob (P-lane fee
     # uniformity, V3_WALLET_DECISION_LOG.md "P-lane fees", 2026-07-19) —
     # these estimate/priority methods never apply to it.
@@ -2600,7 +2600,7 @@ components:
       type: object
       additionalProperties: false
       description: >
-        Post the terminal Unbond exit for the first live-bonded persona.
+        Post the terminal Release exit for the first live-bonded persona.
         THE IRREVERSIBLE STEP: once the exit connects, the bond debits to
         zero and the persona can never re-bond on this record. NO
         parameters, and that is the contract: the persona is

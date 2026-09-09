@@ -28,8 +28,8 @@ surfaces that need one are built and idle:
   deliberately; a failed start ends the serving lifecycle for the
   session and the remedy is a wallet reopen.
 - Terminal-reject prune / byte-identical resubmit for the
-  claim/drain/unbond lanes — unbuilt (`docs/FOLLOWUPS.md`
-  "Drain/claim/unbond dispatch driver" entry), user-visible since PR-C
+  claim/drain/release lanes — unbuilt (`docs/FOLLOWUPS.md`
+  "Drain/claim/release dispatch driver" entry), user-visible since PR-C
   as `-29522 UNSTAKE_FATE_UNKNOWN` with no recovery verb.
 
 A per-leg scheduler (one timer per concern) is the wrong shape: four
@@ -329,7 +329,7 @@ qualifier.
 ### Leg 4 — terminal-reject prune / byte-identical resubmit (slot registered now, body unimplemented)
 
 The leg is **registered at construction with an empty body** that
-no-ops and names its debt: the `docs/FOLLOWUPS.md` "Drain/claim/unbond
+no-ops and names its debt: the `docs/FOLLOWUPS.md` "Drain/claim/release
 dispatch driver — terminal-reject prune + byte-identical resubmit"
 entry (pre-genesis; the prune half is a security item — the retained
 terminal-reject copy is a replay channel). Registering the slot now is
@@ -481,7 +481,7 @@ are out of scope here; a FOLLOWUPS row already tracks promoting them.
   workstream exists to close. The trait method's `V3.x` allow-comment
   fossil is retagged to this record in this design round (rule 15:
   `V3.x` is not a target).
-- **Unbond scheduling.** `unbond_dispatch` is a request path
+- **Release scheduling.** `release_dispatch` is a request path
   (immediate submit) and stays one.
 
 ## 7. Test plan
