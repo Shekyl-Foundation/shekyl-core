@@ -264,8 +264,33 @@ ratification the acceptance path could not.
 consensus census did not need. The p2p surface has defences that arrived with
 the Monero lineage and are load-bearing against published attacks. (PWC-E7 was
 the class's founding example, and it and PWC-E8 have since been **examined and
-kept** by PWD-B7, so both are now `ratified`; PWC-D2, PWC-D11 and PWC-E14 are
-the three rows that still carry the class.)
+kept** by PWD-B7, so both are now `ratified`; PWC-D2, PWC-D11 and PWC-E14 still
+carry the class.)
+
+> **This re-class INTRODUCES a coupling between class and disposition that the
+> census did not previously have. That is a choice, not a repair, and it was
+> checked before being made:** of the rows marked **Ruled** in the
+> deliverable's disposition tables, **none had left bucket 4**. Five sub-rounds
+> of rulings changed no row's class, so the practice until now was that class
+> records **census-time evidence** while disposition records what a round did,
+> the two moving independently.
+>
+> **The rule adopted here, so the next reader neither extends it to every ruled
+> row nor reverts these two:** a row moves `inherited-defensive` → `ratified`
+> when a round **examined the inherited defence and KEPT it** — the legend's
+> own wording for the class. It discriminates rather than covering everything:
+> PWC-D11 was ruled *and its mechanism deleted*, which is not keeping, and
+> PWC-E14 is not ruled at all. Rows classed `none` or `pinned-not-re-derived`
+> are outside it — a ruling that supplies a missing record is a different move
+> from one that ratifies an inherited defence, and folding those together is
+> how a class stops meaning anything.
+>
+> **One further row qualifies and is deliberately NOT re-classed here:**
+> **PWC-D2**, whose disposition reads *"Ruled — kept unchanged; it is a real
+> defence"* under **PWD-I2**. It meets the rule exactly. It belongs to cluster
+> I, and re-classing another cluster's ruling from a drop-path PR is the scope
+> reach this note exists to avoid. Named so it is picked up deliberately rather
+> than found later as an inconsistency.
 Rule 16's whole point is that inherited code is not inherited architecture: a
 defence nobody here chose is a defence nobody here is committed to keeping,
 and it is exactly the thing a rewrite silently drops. Folding these into
@@ -350,8 +375,8 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-E4a | A **fourth timer is declared and never driven**: `m_bad_peer_checker` (`once_a_time_seconds<43>`) has exactly one occurrence in the tree — its declaration — and `on_idle` does not call it. A cadence constant that no code reads is not a cadence; it reads as one to anyone auditing the header, which is how a 43-second period gets carried into a redesign that never had it | `cryptonote_protocol_handler.h:186`; tree-wide grep returns the declaration only | `none` | 4 | — |
 | PWC-E5 | Idle peers are kicked at 240 s since last request (`IDLE_PEER_KICK_TIME`); peer score starts at 0 and a peer is dropped at `DROP_PEERS_ON_SCORE = -2` | `cryptonote_protocol_handler.inl:80`, `:85`, `:2715-2725` | `pinned-not-re-derived` | 4 | — |
 | PWC-E6 | Outbound budget: `WHITELIST_CONNECTIONS_PERCENT = 70` white / remainder gray, with `ANCHOR_CONNECTIONS_COUNT = 2` filled first; the default out-degree itself is **Rust-owned** via `shekyl_p2p_default_out_peers()` | `cryptonote_config.h:193-195`, `:178-183`; `net_node.inl:1828-1839` | `ratified` | **2** | PW-17 |
-| PWC-E7 | **A double-spend is a no-drop offense**: a conflicting tx sets `m_verifivation_failed` *and* `m_no_drop_offense`, and `handle_notify_new_transactions` drops only when `!m_no_drop_offense`. The check is against the **pool's** `m_spent_key_images`, so it covers a pool-held conflict, not only a chain-spent one | `tx_pool.cpp:283-293`, `:1676-1696`; `cryptonote_protocol_handler.inl:926-931`; provenance `f7fd209ed` (jeffro256, 2024-03-07). **Examined and kept — PWD-B7 (`SHEKYL_P2P_PROTOCOL.md`), implemented P2P-3.** The ruling states the principle the four-condition list only exhibited, and the implementation makes it affirmative: `m_no_drop_offense` is gone, the drop keys on `shekyl_drop_verdict_severs`, and a double-spend classifies `SHEKYL_DROP_VERDICT_POLICY_OR_STATE` at the pool guard (`tx_pool.cpp:295`) **and** at the three `Blockchain::have_tx_keyimg_as_spent` arms inside `check_tx_inputs` (`blockchain.cpp:3620`, `:3649`, `:3679`) that this row did not reach. **The trigger's SCOPE is part of what is ratified, not only the verdict.** `tx_memory_pool::have_tx_keyimg_as_spent` consults the POOL's `m_spent_key_images` exclusively — a conflicting tx2 arriving while tx1 sits in our pool, which is the D++ arm below; it is a DIFFERENT function from `Blockchain::have_tx_keyimg_as_spent`, which consults the chain, and the two are covered by different sites. A verdict type preserves *that* a no-drop occurs but not *the scope of the condition producing one*, so the pool consultation is pinned by `scripts/ci/check_drop_verdict_classification.py` rather than left to the type | `ratified` | **2** | §5.2 |
-| PWC-E8 | **Three other** tx classes are also no-drop offenses: fee-too-low, oversized `tx_extra`, non-zero unlock time. The fourth `m_no_drop_offense` site in the file is the double-spend of PWC-E7 and is not re-counted here | `tx_pool.cpp:257`, `:267`, `:276` (double-spend at `:291` belongs to PWC-E7) — **examined and kept: PWD-B7 rules each of these three separately** (`:257` fee-too-low describes OUR state; `:267` and `:276` describe the input but fail a rule that is ours rather than universal — both conjuncts load-bearing, each catching two of the four sites). P2P-3 implements them as affirmative `SHEKYL_DROP_VERDICT_POLICY_OR_STATE` classifications rather than carve-outs from a droppable default | `ratified` | **2** | — |
+| PWC-E7 | **A double-spend is a no-drop offense**: a conflicting tx sets `m_verifivation_failed` *and* `m_no_drop_offense`, and `handle_notify_new_transactions` drops only when `!m_no_drop_offense`. The check is against the **pool's** `m_spent_key_images`, so it covers a pool-held conflict, not only a chain-spent one | `tx_pool.cpp:283-293`, `:1676-1696`; `cryptonote_protocol_handler.inl:926-931`; provenance `f7fd209ed` (jeffro256, 2024-03-07). **Examined and kept — PWD-B7 (`SHEKYL_P2P_PROTOCOL.md`), implemented P2P-3.** The ruling states the principle the four-condition list only exhibited, and the implementation makes it affirmative: `m_no_drop_offense` is gone, the drop keys on `shekyl_drop_verdict_severs`, and a double-spend classifies `SHEKYL_DROP_VERDICT_POLICY_OR_STATE` at the pool guard (`tx_pool.cpp:295`) **and** at the three `Blockchain::have_tx_keyimg_as_spent` arms inside `check_tx_inputs` (`blockchain.cpp:3620`, `:3649`, `:3679`) that this row did not reach. **The trigger's SCOPE is part of what is ratified, not only the verdict.** `tx_memory_pool::have_tx_keyimg_as_spent` consults the POOL's `m_spent_key_images` exclusively — a conflicting tx2 arriving while tx1 sits in our pool, which is the D++ arm below; it is a DIFFERENT function from `Blockchain::have_tx_keyimg_as_spent`, which consults the chain, and the two are covered by different sites. A verdict type preserves *that* a no-drop occurs but not *the scope of the condition producing one*, so the pool consultation is pinned by `scripts/ci/check_drop_verdict_classification.py` rather than left to the type. **Re-class rule, stated because it is invisible otherwise:** a row moves `inherited-defensive` → `ratified` when a design round **examined the inherited defence and KEPT it** — the legend's own wording. Examined-and-deleted does not qualify (PWC-D11), nor does unruled (PWC-E14). | `ratified` | **2** | §5.2 |
+| PWC-E8 | **Three other** tx classes are also no-drop offenses: fee-too-low, oversized `tx_extra`, non-zero unlock time. The fourth `m_no_drop_offense` site in the file is the double-spend of PWC-E7 and is not re-counted here | `tx_pool.cpp:257`, `:267`, `:276` (double-spend at `:291` belongs to PWC-E7) — **examined and kept: PWD-B7 rules each of these three separately** (`:257` fee-too-low describes OUR state; `:267` and `:276` describe the input but fail a rule that is ours rather than universal — both conjuncts load-bearing, each catching two of the four sites). P2P-3 implements them as affirmative `SHEKYL_DROP_VERDICT_POLICY_OR_STATE` classifications rather than carve-outs from a droppable default. Same re-class rule as PWC-E7: examined and **kept** | `ratified` | **2** | — |
 | PWC-E9 | `drop_connections(address)` drops **every** connection sharing a host and adds a host-fail score of 5. Four call sites, all on the block-sync path: prepare-failure, tx-parse failure, verification failure, orphaned block | `cryptonote_protocol_handler.inl:1467, 1494, 1528, 1548`, definition `:2842-2863` | `none` | 4 | §5.2 |
 | PWC-E10 | Host blocking: 10 fails before block, 24 h block time; failed-address suppression is 1 h public / 240 s anonymity-zone, the latter **derived at the p90 of measured Tor post-restart recovery** with the derivation recorded beside the constant | `cryptonote_config.h:199-255` | `ratified` | **2** | — |
 | PWC-E11 | `has_too_many_connections` caps inbound per host at `--max-connections-per-ip` (default 1) and **only on the public zone** — it returns false, i.e. permits, on every anonymity zone | `net_node.inl:3083-3105`; `net_node.cpp:179` | `examined-disposition` | 4 | — |
@@ -775,13 +800,22 @@ The substantive result is the **bucket-1 + bucket-2 share: 11 of 57, 19 %.**
 > un-disposition it, and the round states the principle itself: *a deferred
 > row is still dispositioned.*
 >
-> **What is NOT established** is whether the gate's 46 is scoped to
-> *disposition* or to *bucket membership*. Those are different questions and
-> only the first has an answer. The likely reconciliation is that the 46 is the
-> round's HISTORICAL SCOPE — the rows it set out to disposition — while this
-> table is a LIVE count, so both numbers are right in their own frame and
-> neither is stale. **That reading is proposed, not ratified**, and it belongs
-> to whoever owns the P2P-2 status accounting rather than to this census.
+> **The gate's 46 must be read as HISTORICAL — the rows that were bucket 4 at
+> dispatch — and the reason is structural rather than precedent.** A LIVE
+> reading makes the gate circular: bucket 4 is defined as *Open* and bucket 2
+> as *Ratified* (§ the bucket table above), so **ratifying a row is the
+> round's own output**. A denominator defined by its output can be satisfied
+> by re-classing instead of by dispositioning — ratify everything and it reads
+> 0 of 0, passed. The numerator fails the same way: "31 dispositioned" counts
+> rows the round ruled, and under the rule adopted above those leave bucket 4,
+> so "31 of 44" would count rows outside its own denominator. Both numbers are
+> therefore right in their own frame, and neither is stale.
+>
+> **What is still owed is WORDING, not arithmetic**, and it is not this
+> census's to write: the index and the deliverable both say "the census's 46
+> bucket-4 rows", which reads as live and will diverge again at the next
+> ratification. Whoever owns the P2P-2 status accounting should say *at
+> dispatch* there.
 >
 > It is written here because two numbers that disagree with no note between
 > them is precisely the state in which someone "repairs" whichever they found
