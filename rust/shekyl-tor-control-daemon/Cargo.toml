@@ -1,0 +1,47 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-tor-control-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DaemonTorControl: the daemon P2P overlay's Tor instance — ephemeral per-boot onion, no vanguard state (PWD-E7)"
+publish = false
+
+[dependencies]
+# The Tor control protocol, the SP-T0c binary pin gate, the managed launch
+# path and the v3 onion identity — the neutral crate both supervisors name
+# (PWD-E9: sharing code is not crossover; sharing state is). This crate never
+# depends on shekyl-tor-control-wallet: the wallet's supervisor, vanguards and
+# cross-incarnation state are exactly what the daemon posture must not touch.
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+
+# The start sequence: tokio for the bootstrap-gate timers and teardown bounds;
+# kameo for the control actor handle it drives. Both are the workspace's
+# established actor stack (shekyl-engine-core, shekyl-tor-control-wallet).
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "process", "fs"] }
+kameo = { workspace = true }
+# OS CSPRNG for the per-boot hs-id seed mint — the same source the wallet's
+# vanguard rotation draws from.
+getrandom = "0.2"
+# Wipe-on-drop for the minted seed (35-secure-memory): the seed exists only
+# between mint and ADD_ONION, and this makes the window structural.
+zeroize = { version = "1", default-features = false }
+
+[dev-dependencies]
+# The SP-T0c gate's bypass for the live lifecycle tests that inject an
+# arbitrary (unpinned) tor via `VerifiedTorBinary::unchecked_for_test`. A
+# **dev**-dependency edge deliberately: `resolver = "2"` keeps dev-dep
+# features out of normal builds, and `scripts/ci/check_test_only_features.py`
+# asserts no non-dev edge in the workspace enables it.
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client", features = ["unpinned-tor-for-tests"] }
+# Per-test tor DataDirectory trees, reaped with the test.
+tempfile = "3"
+
+[lints]
+workspace = true

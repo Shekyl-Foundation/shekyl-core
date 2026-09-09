@@ -4591,6 +4591,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-tor-control-daemon"
+version = "3.1.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "kameo",
+ "shekyl-tor-control-client",
+ "tempfile",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-tor-control-wallet"
 version = "3.1.0"
 dependencies = [
