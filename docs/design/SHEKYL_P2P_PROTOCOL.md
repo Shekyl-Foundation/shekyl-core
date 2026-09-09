@@ -3568,8 +3568,32 @@ rather than inheriting whatever the default happens to be.
 > peer**, the exact outcome the rule forbids. The ruling stands; the
 > mechanism does not satisfy it.
 >
-> **Implementation action (rides PWD-B7 into the implementing PR; P2P-3, per
-> this round's charter):** the drop decision must key on an **affirmative**
+> **Implementation action — LANDED (P2P-3, `feat/pwd-b7-attributable-drop`).**
+> All three sites below now key on the typed verdict; `bool m_no_drop_offense`
+> is gone from the tree. The type and the rule live in
+> `rust/shekyl-peer-policy`, reached through `shekyl_drop_verdict_severs` /
+> `..._is_internal_failure` / `..._combine`; C++ writes the
+> `SHEKYL_DROP_VERDICT_*` bytes and never interprets them. Two things the
+> implementation found that this ruling did not say, recorded because they
+> changed the design:
+>
+> 1. **`Blockchain::check_tx_inputs` fails for both reasons.** Most of its
+>    arms are form, but its three `have_tx_keyimg_as_spent` arms describe our
+>    chain and are reorg-dependent — the same class as `:291`. Its caller sees
+>    one `false` for both, so a single verdict there would over-sever. Hence
+>    `combine`: a no-drop verdict, once recorded, is never promoted back to
+>    droppable, and the precise reading taken deeper in the call survives the
+>    coarser one taken above it.
+> 2. **At the block-sync site the drop was also the recovery.** `drop_connection`
+>    flushed the span as a side effect. With our own cancellation no longer
+>    dropping the peer, nothing else would clear it and `get_next_span` would
+>    serve the same failed span forever — sync stalling on our own bug instead
+>    of recovering from it. `remove_spans` was already unconditional there and
+>    is now asserted to stay so, in every verdict class.
+>
+> The original statement of the action follows, unchanged:
+>
+> the drop decision must key on an **affirmative**
 > input-attributable verdict, not on flag-absence. The verdict surface is
 > tri-state — *attributable form failure* (drop) / *policy-or-state
 > rejection* (no drop) / *internal failure* (no drop, loud log) — typed so

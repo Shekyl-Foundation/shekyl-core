@@ -68,7 +68,22 @@ public:
   {return std::find(blocks_we_have.begin(), blocks_we_have.end(), id) != blocks_we_have.end();}
   bool have_block_unlocked(const crypto::hash& id, int *where = NULL) const {return false;}
   void get_blockchain_top(uint64_t& height, crypto::hash& top_id)const{height=0;top_id=crypto::null_hash;}
-  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone) { return true; }
+  // PWD-B7: drive the tx-rejection arm. `handle_incoming_tx_calls` is the
+  // oracle for whether the batch loop CONTINUED past a rejection -- an error
+  // code cannot distinguish "kept the connection" from "kept the connection
+  // and gave up on the batch", and the second would be a silent regression.
+  unsigned handle_incoming_tx_calls = 0;
+  bool handle_incoming_tx_result = true;
+  uint8_t handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
+  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone)
+  {
+    ++handle_incoming_tx_calls;
+    if (handle_incoming_tx_result)
+      return true;
+    tvc.m_verifivation_failed = true;
+    tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, handle_incoming_tx_verdict);
+    return false;
+  }
   bool handle_single_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *b, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true) { return true; }
   bool handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block, cryptonote::block_verification_context& bvc, bool update_miner_blocktemplate = true) { return true; }
   bool handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true) { return true; }
@@ -97,7 +112,10 @@ public:
     return prepare_handle_incoming_blocks_result;
   }
   bool cleanup_handle_incoming_blocks(bool force_sync = false) { return true; }
-  bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return true; }
+  // PWD-B7 site 2: the announce-path size check, which compares against OUR
+  // weight limit and therefore must decline rather than sever.
+  bool check_incoming_block_size_result = true;
+  bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return check_incoming_block_size_result; }
   bool update_checkpoints(const bool skip_dns = false) { return true; }
   uint64_t get_target_blockchain_height() const { return 1; }
   size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
@@ -146,6 +164,26 @@ struct cryptonote_protocol_handler_test_seam
   static int try_add_next_blocks(cryptonote::t_cryptonote_protocol_handler<T> &h,
                                  cryptonote::cryptonote_connection_context &ctx)
   { return h.try_add_next_blocks(ctx); }
+
+  // Both notify handlers are private, and both gate on `is_synchronized()`
+  // before reaching the arms PWD-B7 changed -- so the seam grants the flag
+  // alongside them rather than leaving each test to discover that the handler
+  // returned early and asserted nothing.
+  template<class T>
+  static void set_synchronized(cryptonote::t_cryptonote_protocol_handler<T> &h, bool v)
+  { h.m_synchronized = v; }
+
+  template<class T>
+  static int handle_notify_new_transactions(cryptonote::t_cryptonote_protocol_handler<T> &h,
+                                            cryptonote::NOTIFY_NEW_TRANSACTIONS::request &arg,
+                                            cryptonote::cryptonote_connection_context &ctx)
+  { return h.handle_notify_new_transactions(0, arg, ctx); }
+
+  template<class T>
+  static int handle_notify_new_fluffy_block(cryptonote::t_cryptonote_protocol_handler<T> &h,
+                                            cryptonote::NOTIFY_NEW_FLUFFY_BLOCK::request &arg,
+                                            cryptonote::cryptonote_connection_context &ctx)
+  { return h.handle_notify_new_fluffy_block(0, arg, ctx); }
 };
 
 typedef nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<test_core>> Server;
@@ -2487,6 +2525,199 @@ TEST(block_sync_span_lifecycle, an_unclassified_prepare_failure_does_not_drop)
 
   EXPECT_TRUE(endpoint.dropped.empty());
   EXPECT_EQ(0u, queue.get_num_filled_spans());
+}
+
+// ---------------------------------------------------------------------------
+// PWD-B7 site 1: the tx-relay gate. `handle_notify_new_transactions` used to
+// sever unless the rejection was one of four named carve-outs -- so our own
+// pool invariant tripping, or our own storage throwing, disconnected a peer
+// that had done nothing wrong. It now severs only on an affirmative verdict.
+//
+// Each test drives TWO transactions, because the batch loop's behaviour after
+// a rejection is a second property the drop count cannot see.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+  // Two distinct blobs: the handler drops outright on a duplicate within one
+  // notification, which would mask every verdict this section is testing.
+  cryptonote::NOTIFY_NEW_TRANSACTIONS::request two_txs()
+  {
+    cryptonote::NOTIFY_NEW_TRANSACTIONS::request arg{};
+    arg.txs.push_back(cryptonote::blobdata(8, '\x01'));
+    arg.txs.push_back(cryptonote::blobdata(8, '\x02'));
+    return arg;
+  }
+
+  // A connection the notify handlers will actually process: anything short of
+  // `state_normal` returns before reaching the arms under test.
+  void make_ready(cryptonote::cryptonote_connection_context &ctx)
+  {
+    ctx.m_state = cryptonote::cryptonote_connection_context::state_normal;
+  }
+}
+
+// The positive limb, first: an attributable rejection still severs. Without
+// this every other test in this section would pass on a rule that never drops
+// anything, which is the failure mode the whole design leans toward.
+TEST(attributable_drop, a_form_failure_still_severs_and_abandons_the_batch)
+{
+  test_core tx_core;
+  tx_core.handle_incoming_tx_result = false;
+  tx_core.handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(tx_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+  cryptonote_protocol_handler_test_seam::set_synchronized(cprotocol, true);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  endpoint.add(fixed_uuid(1), ip);
+  make_ready(endpoint.conns.front());
+
+  auto arg = two_txs();
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::handle_notify_new_transactions(
+                   cprotocol, arg, endpoint.conns.front()));
+
+  EXPECT_EQ(1u, endpoint.dropped.size())
+    << "bytes that are not a valid transaction are the sender's choice, and "
+       "the drop for them is the one this rule keeps";
+  EXPECT_EQ(1u, tx_core.handle_incoming_tx_calls)
+    << "and the rest of the batch from a peer we just severed is abandoned";
+}
+
+// The defect PWD-B7 was written against, and the reason the correction was
+// required rather than merely tidy: our own storage failing must not partition
+// us from the network.
+TEST(attributable_drop, an_internal_failure_neither_severs_nor_stops_the_batch)
+{
+  test_core tx_core;
+  tx_core.handle_incoming_tx_result = false;
+  tx_core.handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_INTERNAL_FAILURE;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(tx_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+  cryptonote_protocol_handler_test_seam::set_synchronized(cprotocol, true);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  endpoint.add(fixed_uuid(1), ip);
+  make_ready(endpoint.conns.front());
+
+  auto arg = two_txs();
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::handle_notify_new_transactions(
+                   cprotocol, arg, endpoint.conns.front()));
+
+  EXPECT_TRUE(endpoint.dropped.empty())
+    << "our pool invariant tripping is not the sender's offense";
+  EXPECT_EQ(2u, tx_core.handle_incoming_tx_calls)
+    << "and the batch continues, exactly as the policy carve-outs always did "
+       "by falling through this gate";
+}
+
+// A policy or state rejection -- fee below our floor, oversized tx_extra, a
+// double-spend in our view. Same outcome as above by a different arm, and the
+// arm matters: this one is routine and must not be logged as a defect.
+TEST(attributable_drop, a_policy_or_state_rejection_neither_severs_nor_stops_the_batch)
+{
+  test_core tx_core;
+  tx_core.handle_incoming_tx_result = false;
+  tx_core.handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(tx_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+  cryptonote_protocol_handler_test_seam::set_synchronized(cprotocol, true);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  endpoint.add(fixed_uuid(1), ip);
+  make_ready(endpoint.conns.front());
+
+  auto arg = two_txs();
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::handle_notify_new_transactions(
+                   cprotocol, arg, endpoint.conns.front()));
+
+  EXPECT_TRUE(endpoint.dropped.empty());
+  EXPECT_EQ(2u, tx_core.handle_incoming_tx_calls);
+}
+
+// The guard on the design: an UNCLASSIFIED rejection -- what a `return false`
+// added later carries until someone classifies it -- takes the safe arm. Under
+// the boolean this was the DROPPING arm, which is how our own storage errors
+// came to sever peers in the first place.
+TEST(attributable_drop, an_unclassified_rejection_does_not_sever)
+{
+  test_core tx_core;
+  tx_core.handle_incoming_tx_result = false;
+  tx_core.handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(tx_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+  cryptonote_protocol_handler_test_seam::set_synchronized(cprotocol, true);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  endpoint.add(fixed_uuid(1), ip);
+  make_ready(endpoint.conns.front());
+
+  auto arg = two_txs();
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::handle_notify_new_transactions(
+                   cprotocol, arg, endpoint.conns.front()));
+
+  EXPECT_TRUE(endpoint.dropped.empty());
+  EXPECT_EQ(2u, tx_core.handle_incoming_tx_calls);
+}
+
+// PWD-B7 site 2: the announce path's size check compares the blob against OUR
+// current cumulative weight limit, so a peer a few heights ahead of us can
+// legally announce a block above the limit we are holding. It describes our
+// state, so it declines rather than severs.
+TEST(attributable_drop, an_oversized_announce_declines_without_severing)
+{
+  test_core b_core;
+  b_core.check_incoming_block_size_result = false;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(b_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+  cryptonote_protocol_handler_test_seam::set_synchronized(cprotocol, true);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  endpoint.add(fixed_uuid(1), ip);
+  make_ready(endpoint.conns.front());
+
+  cryptonote::NOTIFY_NEW_FLUFFY_BLOCK::request arg{};
+  arg.b.block = cryptonote::blobdata(16, '\x01');
+  arg.current_blockchain_height = 1;
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::handle_notify_new_fluffy_block(
+                   cprotocol, arg, endpoint.conns.front()));
+
+  EXPECT_TRUE(endpoint.dropped.empty())
+    << "a peer ahead of us is not an offender; the announce is declined, not "
+       "the connection severed";
+}
+
+// The positive limb for site 2, and the line the change must not cross: the
+// PARSE arm immediately below the size check is genuine form -- input-
+// describing and universal -- and it still severs. The size check is let
+// through here (default true) so the parse arm is what fires.
+TEST(attributable_drop, an_unparseable_announce_still_severs)
+{
+  test_core b_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(b_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+  cryptonote_protocol_handler_test_seam::set_synchronized(cprotocol, true);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  endpoint.add(fixed_uuid(1), ip);
+  make_ready(endpoint.conns.front());
+
+  cryptonote::NOTIFY_NEW_FLUFFY_BLOCK::request arg{};
+  arg.b.block = cryptonote::blobdata(16, '\xff');   // not a block
+  arg.current_blockchain_height = 1;
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::handle_notify_new_fluffy_block(
+                   cprotocol, arg, endpoint.conns.front()));
+
+  EXPECT_EQ(1u, endpoint.dropped.size())
+    << "bytes that are not a block are the sender's choice";
 }
 
 // The endpoint advertisement is DERIVED: no dedicated flag decides it, so the
