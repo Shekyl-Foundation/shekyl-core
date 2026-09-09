@@ -18,7 +18,7 @@
 
 use serde_json::Value;
 use shekyl_rpc_types::{
-    BlockHeader, ConnectionInfo, ConnectionState, GetBlockCountResponse,
+    BlockHeader, ConnectionInfo, ConnectionState, DaemonNetwork, GetBlockCountResponse,
     GetBlockHeaderByHashResponse, GetBlockHeaderByHeightResponse, GetBlockHeadersRangeResponse,
     GetBlockResponse, GetConnectionsResponse, GetHeightResponse, GetLastBlockHeaderResponse,
     GetNetStatsResponse, GetPeerListRequest, GetPeerListResponse, GetTransactionsRequest,
@@ -141,6 +141,21 @@ fn json_vectors_are_lf() {
 /// oracle byte-for-byte, and `version` is asserted against the constant
 /// directly. Silently normalising both sides would have hidden a wrong
 /// constant; asserting it is what keeps the bump deliberate.
+/// The identity-tuple values the `get_version` vectors carry.
+///
+/// Deliberately **not** the live `CONSENSUS_CONSTANTS_DIGEST` or a real
+/// genesis hash: a vector is a frozen capture, and one carrying live values
+/// would have to be re-minted every time a consensus constant moved — which
+/// would make the vector chain a second thing to maintain on every
+/// `config/` edit, for no gain. These are obviously-synthetic valid hex.
+fn fixture_digest() -> HashHex {
+    HashHex::from_hex(&"a".repeat(64)).expect("fixture digest is 64 hex chars")
+}
+
+fn fixture_genesis() -> HashHex {
+    HashHex::from_hex(&"b".repeat(64)).expect("fixture genesis is 64 hex chars")
+}
+
 fn assert_version_parity(vector: &str, built: &GetVersionResponse) {
     assert_eq!(
         built.version, CORE_RPC_VERSION,
@@ -207,9 +222,12 @@ fn get_version_synced_matches_the_oracle() {
             hf_version: 1,
             height: 0,
         }],
+        consensus_constants_digest: fixture_digest(),
+        nettype: DaemonNetwork::Mainnet,
+        genesis_hash: fixture_genesis(),
     };
     assert_version_parity(
-        include_str!("vectors/rpc/get_version_synced_v1.json"),
+        include_str!("vectors/rpc/get_version_synced_v6.json"),
         &built,
     );
     // The OPT omission is on the wire, not only in the parse.
@@ -236,9 +254,12 @@ fn get_version_syncing_matches_the_oracle() {
                 height: 5000,
             },
         ],
+        consensus_constants_digest: fixture_digest(),
+        nettype: DaemonNetwork::Mainnet,
+        genesis_hash: fixture_genesis(),
     };
     assert_version_parity(
-        include_str!("vectors/rpc/get_version_syncing_v1.json"),
+        include_str!("vectors/rpc/get_version_syncing_v2.json"),
         &built,
     );
 }
@@ -252,9 +273,12 @@ fn get_version_all_defaults_matches_the_oracle() {
         current_height: 0,
         target_height: 0,
         hard_forks: vec![],
+        consensus_constants_digest: fixture_digest(),
+        nettype: DaemonNetwork::Mainnet,
+        genesis_hash: fixture_genesis(),
     };
     assert_version_parity(
-        include_str!("vectors/rpc/get_version_all_defaults_v1.json"),
+        include_str!("vectors/rpc/get_version_all_defaults_v2.json"),
         &built,
     );
     let wire = serde_json::to_string(&built).unwrap();
@@ -849,7 +873,7 @@ fn every_v2_sibling_is_its_v1_capture_minus_only_the_identifier() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 4] = [
+    let links: [(&str, &str); 5] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -866,6 +890,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v4.json"),
             include_str!("vectors/rpc/get_version_synced_v5.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v5.json"),
+            include_str!("vectors/rpc/get_version_synced_v6.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -874,6 +902,23 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             .and_then(serde_json::Value::as_u64)
             .expect("every get_version vector carries a version")
     };
+
+    // Per link, the members that bump is allowed to introduce. Empty for a
+    // pure version bump. VC-2 adds the identity tuple at the last link, and
+    // naming them here is what keeps "differs by exactly the version" a real
+    // invariant rather than one weakened until it stopped failing.
+    const ADDED_AT_LINK: [&[&str]; 5] = [
+        &[],
+        &[],
+        &[],
+        &[],
+        &["consensus_constants_digest", "nettype", "genesis_hash"],
+    ];
+    assert_eq!(
+        ADDED_AT_LINK.len(),
+        links.len(),
+        "every link must declare what it adds, even if that is nothing"
+    );
 
     let mut previous_after: Option<&str> = None;
     for (i, (before_raw, after_raw)) in links.iter().enumerate() {
@@ -898,17 +943,31 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         }
         previous_after = Some(after_raw);
 
-        // The pair differs by the version and by nothing else.
+        // The pair differs by the version, plus exactly the members that
+        // link is *declared* to add. The invariant is not loosened to "some
+        // fields may differ": each addition is named per link, so a field
+        // that appears without being declared still fails, and a declared
+        // field that does not appear fails too.
         let mut before = parsed(before_raw);
-        before
-            .as_object_mut()
-            .expect("vector is an object")
-            .insert("version".to_string(), serde_json::json!(hi));
+        let obj = before.as_object_mut().expect("vector is an object");
+        obj.insert("version".to_string(), serde_json::json!(hi));
+        let after = parsed(after_raw);
+        for member in ADDED_AT_LINK[i] {
+            let value = after
+                .get(*member)
+                .unwrap_or_else(|| {
+                    panic!("link {i}: declared to add `{member}`, which the newer vector lacks")
+                })
+                .clone();
+            assert!(
+                obj.insert((*member).to_string(), value).is_none(),
+                "link {i}: `{member}` is declared as added but the older vector already has it"
+            );
+        }
         assert_eq!(
-            before,
-            parsed(after_raw),
+            before, after,
             "link {i}: the newer vector must be the older one with only the \
-             version changed"
+             version and this link's declared members changed"
         );
     }
 

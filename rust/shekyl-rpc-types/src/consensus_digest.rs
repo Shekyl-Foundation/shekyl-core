@@ -12,23 +12,9 @@
 //! **network** ([`DaemonNetwork`]) and **genesis** (block 0's hash, added by
 //! `VC-R2`). This module carries the second and third.
 //!
-//! # Disposition: STAGED, not RESERVED (`23-disposition-visibility.mdc`)
-//!
-//! **Nothing in the tree reads either symbol yet, and that is the designed
-//! state, not unfinished work.** Rule 23 forbids a bare `const` with no
-//! consuming arm as RESERVED, and permits code symbols under **STAGED** —
-//! which requires a named consumer in a live plan. The consumers are named
-//! and the plan is live: `VC-2` puts both on `get_version` and bumps the
-//! version, `VC-3` (console) and `VC-4` (wallet engine) compare them, all
-//! three are authorised for alpha.8 and folded into one PR by ruling 2 of
-//! `docs/design/CLIENT_VERSION_CONSTANTS_VALIDATION.md` §6, and §4 of that
-//! document is the slice table.
-//!
-//! An agent grepping this crate finds work that is **supposed** to exist. It
-//! is stated here rather than left for the next census to rediscover,
-//! because "a correct mechanism with no consumer" is the finding that
-//! opened this round — and the difference between that defect and this
-//! state is exactly the named live-plan consumer above.
+//! `VC-2` publishes both on `get_version`. [`crate::identity`] compares them
+//! (`VC-3` console, `VC-4` wallet). This module is the source of the rules
+//! and network pins, not a staged placeholder.
 //!
 //! [`CORE_RPC_VERSION`]: crate::CORE_RPC_VERSION
 
@@ -108,6 +94,30 @@ impl DaemonNetwork {
             Self::Testnet => "testnet",
             Self::Stagenet => "stagenet",
             Self::Fakechain => "fakechain",
+        }
+    }
+
+    /// `cryptonote::network_type`: MAINNET=0, TESTNET=1, STAGENET=2,
+    /// FAKECHAIN=3. Unknown codes are `None`, never a default.
+    #[must_use]
+    pub const fn from_cryptonote(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Mainnet),
+            1 => Some(Self::Testnet),
+            2 => Some(Self::Stagenet),
+            3 => Some(Self::Fakechain),
+            _ => None,
+        }
+    }
+
+    /// Inverse of [`Self::from_cryptonote`].
+    #[must_use]
+    pub const fn to_cryptonote(self) -> u8 {
+        match self {
+            Self::Mainnet => 0,
+            Self::Testnet => 1,
+            Self::Stagenet => 2,
+            Self::Fakechain => 3,
         }
     }
 }
@@ -437,6 +447,36 @@ mod tests {
                 serde_json::from_str::<DaemonNetwork>(text).is_err(),
                 "{text} must not parse as a network"
             );
+        }
+    }
+
+    #[test]
+    fn daemon_network_from_cryptonote_is_strict() {
+        assert_eq!(
+            DaemonNetwork::from_cryptonote(0),
+            Some(DaemonNetwork::Mainnet)
+        );
+        assert_eq!(
+            DaemonNetwork::from_cryptonote(1),
+            Some(DaemonNetwork::Testnet)
+        );
+        assert_eq!(
+            DaemonNetwork::from_cryptonote(2),
+            Some(DaemonNetwork::Stagenet)
+        );
+        assert_eq!(
+            DaemonNetwork::from_cryptonote(3),
+            Some(DaemonNetwork::Fakechain)
+        );
+        assert_eq!(DaemonNetwork::from_cryptonote(4), None);
+        assert_eq!(DaemonNetwork::from_cryptonote(255), None);
+        for n in [
+            DaemonNetwork::Mainnet,
+            DaemonNetwork::Testnet,
+            DaemonNetwork::Stagenet,
+            DaemonNetwork::Fakechain,
+        ] {
+            assert_eq!(DaemonNetwork::from_cryptonote(n.to_cryptonote()), Some(n));
         }
     }
 }

@@ -283,6 +283,31 @@ impl CoreRpc {
         self.handle
     }
 
+    /// Daemon identity facts (`shekyl_rpc_identity`); `Err(code)` on a
+    /// non-OK return, including a null handle.
+    ///
+    /// `NOT_READY` when the store cannot produce block 0 — the C++ side
+    /// refuses rather than handing over 32 zero bytes, because a client
+    /// comparing against a pinned genesis would read all-zero as a mismatch
+    /// and blame the wrong thing (VC-2).
+    pub fn identity(&self) -> Result<ffi::IdentityFactsFfi, i32> {
+        if self.handle.is_null() {
+            return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
+        }
+        let mut pod = ffi::IdentityFactsFfi {
+            nettype: 0,
+            reserved: [0; 7],
+            genesis_hash: [0; 32],
+        };
+        // SAFETY: live handle; `pod` is a valid out pointer for the call.
+        let rc = unsafe { ffi::shekyl_rpc_identity(self.handle, &raw mut pod) };
+        if rc == ffi::SHEKYL_RPC_FACTS_OK {
+            Ok(pod)
+        } else {
+            Err(rc)
+        }
+    }
+
     /// Chain-tip facts (`shekyl_rpc_chain_tip`); `Err(code)` on a non-OK
     /// return, including a null handle.
     pub fn chain_tip(&self) -> Result<ffi::ChainTipFactsFfi, i32> {

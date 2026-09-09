@@ -1,0 +1,8 @@
+{
+  "consensus_constants_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "genesis_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "nettype": "mainnet",
+  "release": false,
+  "status": "OK",
+  "version": 196637
+}

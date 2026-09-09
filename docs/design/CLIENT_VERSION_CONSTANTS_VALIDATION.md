@@ -1,7 +1,10 @@
 # VC — Client-side version and constants validation
 
-**Status:** OPEN — design round 2. **Review rounds 1 and 2 (§8, §9) raised
-`VC-R1`…`VC-R12`; all twelve are ruled and applied.** `VC-R2` and `VC-R3`
+**Status:** OPEN — **`VC-2`, `VC-3` and `VC-4` are BUILT** on
+`feat/vc2-identity-tuple-wire` (§4); the genesis axis is armed (`VC-D18`
+discharged — frozen block-0 ids from `GENESIS_ALLOCATIONS.md` /
+`mining_parity`; a remint updates the pins with `GENESIS_TX`). Review rounds 1–3 (§8, §9, §10) raised
+`VC-R1`…`VC-R22`; all are ruled and applied.** `VC-R2` and `VC-R3`
 were upheld — the genesis axis moved onto `get_version`, and the fakechain
 operator flag is rejected outright rather than defaulted off.
 **The §6 rulings are SIGNED in-channel by Rick (2026-09-07).** They were
@@ -11,8 +14,9 @@ the sequence because the discipline is what produced the correction, not the
 outcome. `VC-1` is built in the PR that lands
 this document, widened to both integer authorities under `config/` per
 ruling 5 (`VC-D12`). **`VC-2`, `VC-3` and `VC-4` are authorised for alpha.8,
-folded into one PR** (ruling 2), and are not started; that PR's first
-paragraph must state all four axes. Every `file:line` below was read at
+folded into one PR** (ruling 2); **they are built on this branch**. That PR's
+first paragraph must state all four axes. `VC-D11` is discharged: the
+narrow T warning is deleted. Every `file:line` below was read at
 `dev` = `2dba46537` (PR #619, RK-5b merge); the anchor for `VC-1`'s landing
 is `262c06ba9`.
 **Identifier family:** `VC-` (version and constants validation), registered in
@@ -44,8 +48,11 @@ check refuses, and refusing is the safe direction on every arm (§3.6).
 Two published facts on the daemon's RPC surface have no consumer. Both were
 found during RK-5b; both were re-swept for this document rather than
 inherited, because a negative claim inherits well and verifies badly.
+**UPDATE 2026-09-09:** both now have consumers — `VC-3` and `VC-4` refuse on
+the identity tuple. The headings below keep the findings as they were
+verified; the discharge is the dated line in each subsection.
 
-### 0.1 `CORE_RPC_VERSION` is read by nobody
+### 0.1 `CORE_RPC_VERSION` was read by nobody
 
 The unfiltered sweep, run at the anchor — **not** narrowed by expected
 phrasing, per the 2026-09-04 lesson that a filtered sweep reports clean for
@@ -75,6 +82,8 @@ grep -rn "CORE_RPC_VERSION" rust/ src/ tests/ utils/ \
 across four oracle vectors and delta-tested at every link — and changes
 nobody's behaviour. This is the *correct mechanism with no consumer* class
 the parent's §7 named on 2026-09-04.
+**UPDATE 2026-09-09:** `VC-3` and `VC-4` consume it: both refuse a daemon
+whose `get_version.version` is not this build's packed `CORE_RPC_VERSION`.
 
 ### 0.2 `get_info.nettype` is read by nobody either — and a plan lock says it is
 
@@ -123,16 +132,24 @@ The regtest end-to-end suite (`engine/regtest_e2e.rs`) opens `Network::Mainnet` 
 `shekyld --regtest` daemon that reports `"fakechain"`, and passes, which is
 the proof: the check does not exist, so nothing has ever had to accommodate
 it (§3.6.4 is where that accommodation is designed).
+**UPDATE 2026-09-09:** `VC-4` built the missing half. The carrier is
+`get_version.nettype`, not `get_info` (`VC-R20`); `get_info.nettype` remains
+unread, which is intentional. The two false docstrings and the lock's named
+carrier were corrected in the same PR. The suite selects
+`FakechainPolicy::Accept`.
 
-### 0.3 The one client-side constants check that exists is narrow by design
+### 0.3 The one client-side constants check that existed was narrow by design
 
-`rust/shekyl-daemon-rpc/src/console/info.rs:117` (`daa_target_seconds`)
-compares `/get_info`'s `target` against the build's own
-`crate::consensus::DAA_TARGET_SECONDS` and *warns*, rendering from the
+RK-5b's `daa_target_seconds` (`rust/shekyl-daemon-rpc/src/console/info.rs`)
+compared `/get_info`'s `target` against the build's own
+`crate::consensus::DAA_TARGET_SECONDS` and *warned*, rendering from the
 build's value. RK-5b wrote it that narrow on purpose and said so in the
 function's doc comment: "the general instrument … is a separate round; it is
-not built here". This is that round. `VC-D11` rules what happens to the
-narrow check when the general one lands.
+not built here". This is that round. `VC-D11` ruled what happens to the
+narrow check when the general one lands; **discharged 2026-09-09 with
+`VC-3`**: the function, the `/get_info.target` field it was the only reader
+of, and its tests are gone. Figures still render from
+`crate::consensus::DAA_TARGET_SECONDS`.
 
 ### 0.4 Who acts differently because of a published fact
 
@@ -149,16 +166,23 @@ a client's build and the daemon it dials:
 Three axes, three different failures, three different messages an operator
 needs. That is why §2 does not collapse them into one "handshake".
 
-**And the wrong-chain daemon is undefended twice over, today.** The lock-5
-attack — a wallet pointed at a daemon on a different chain — has no network
+**UPDATE 2026-09-09:** `VC-2`/`VC-3`/`VC-4` closed the three "Nothing" rows
+on connect (genesis axis armed, `VC-D18` discharged). The "Only `T` gets a warning"
+cell is historical: `VC-D11` deleted that warning with `VC-3`.
+
+**And the wrong-chain daemon was undefended twice over when this round
+opened.** The lock-5
+attack — a wallet pointed at a daemon on a different chain — had no network
 check (§0.2) *and* no genesis check: no Rust pin of a genesis block hash
-exists and no client compares block 0's hash to anything (found 2026-09-05
+existed and no client compared block 0's hash to anything (found 2026-09-05
 while grounding `VC-D12`; §2's genesis row). Three stated commitments were
 chased on this day and all three lacked an enforcing site — the plan's
 "verified via `get_info`", this document's own first draft's "committed to
 by the genesis block hash", and, in another lane, `GENESIS_TX_WIRE_FORMAT`'s
 "consensus parses `32·n_outputs`". The identity tuple is the enforcing site
-for the first two.
+for the first two; genesis is armed (`VC-D18` discharged 2026-09-09 — the
+pins are the frozen block-0 ids, reminted with `GENESIS_TX` if those ids
+move).
 
 ---
 
@@ -536,7 +560,31 @@ statistics from a chain it has just proved is not this build's chain prints
 confidently wrong numbers, which is the failure §0.3 was written to avoid.
 There is no operator task that needs it that `version` does not serve.
 
-#### 3.6.3 Wallet engine — refuse to open, on every axis
+#### 3.6.3 Wallet engine — refuse before the first request, on every axis
+
+**Amended at implementation (`VC-D17`, 2026-09-09): the check runs on the
+first request to the daemon, not inside `Engine::open_*`.** `open_*` is
+synchronous and the daemon client is not, so a handshake cannot be awaited
+there; making `open` async ripples through 68 call sites. `DaemonClient`
+instead carries a `DaemonExpectation` and verifies in `Rpc::post` — the single
+funnel every wallet request passes through — so no wallet operation can reach
+the daemon before the tuple is checked. Three reasons this is better than the
+original wording rather than a concession to it: it is the honest reading of
+*connect-time* (before the first request to this daemon); it keeps opening a
+wallet file from requiring a network round trip, which matters because
+`VC-R4` established the engine has no offline open path; and it is the same
+shape `VC-3` uses, so both arms answer the question the same way rather than
+each inventing one. The refusal surfaces as `RpcError::InvalidNode` carrying
+the axis and both values.
+
+**`DaemonClient::verifying` is the constructor every shipped path uses.**
+`DaemonClient::new` remains for harnesses whose fake daemons serve no
+`get_version`, and its docstring says so — it is the one residual: the
+guarantee is by-construction-at-the-production-sites rather than by type. A
+`VerifiedDaemon` newtype would make it typed, and is **reopened** if a
+production path is ever found constructing an unverified client.
+
+#### 3.6.3.1 The original wording, kept for the record
 
 `Engine::open_*` (`engine/lifecycle/open.rs`) performs the handshake against
 the supplied daemon client **before any wallet operation** — lock 5's
@@ -736,6 +784,10 @@ the sentinels make impossible. It becomes unreachable, and unreachable code
 that looks like a check is the class rule 47 exists for. **`VC-3` deletes
 it** and its tests, and re-points the doc comment that names this round.
 Rule 15: pre-genesis, delete rather than keep two instruments for one fact.
+**Discharged 2026-09-09 with `VC-3`:** `daa_target_seconds` and its tests are
+deleted; `GetInfoReplyProvisional` no longer carries `target` (a field with
+no reader must not exist). Callers render from
+`crate::consensus::DAA_TARGET_SECONDS`.
 
 ### 3.12 `VC-D12` — the digest's file set: `consensus_constants.json` alone, or all of `config/`?
 
@@ -1094,11 +1146,12 @@ where an ordering with a named owner would have a real consumer.
 
 ---
 
-## 4. Implementation slices — named, not started
+## 4. Implementation slices — named, built
 
 `VC-1` is built and widened (this PR). **`VC-2`…`VC-4` are authorised for
 alpha.8 as one folded PR (ruling 2); the PR body's first paragraph states the
-four axes.** They are not started. Each slice runs the CI-exact gates
+four axes.** They are built on this branch; the genesis axis is armed
+(`VC-D18` discharged). Each slice runs the CI-exact gates
 (`cargo fmt --all -- --check`; `cargo +1.94.0 clippy --workspace
 --all-targets --keep-going -- -D warnings`; `cargo test --locked --workspace
 --exclude shekyl-randomx-differential`) on the tree it pushes, plus what each
@@ -1112,9 +1165,9 @@ pass.
 | Slice | Contents | Wire change? | Additional gate |
 | --- | --- | --- | --- |
 | **`VC-1`** — **BUILT** in this document's PR (`dev` e54e5b983) | `shekyl-rpc-types/build.rs` + `CONSENSUS_CONSTANTS_DIGEST` and `CONSENSUS_CONSTANTS_CANONICAL` (§3.3, §3.4), with the canonicaliser in `build_support/consensus_canonical.rs` included by both the build script and the tests — one definition; canonical-form KAT whose expected digest was computed by an independent Python implementation of §3.3; live-file pin (`PINNED_DIGEST` in `build.rs`, with a case-branching panic — `VC-R5`, `VC-R13`); `DaemonNetwork` type with string round-trip and unknown-string refusal tests; the membership-rule sentence in the JSON's `_comment` (§3.7). | **No.** Nothing on the wire moves; the constant exists and is tested; nothing reads it yet, and `consensus_digest.rs`'s module doc says so. | Red observed before trusting green, two ways: with the sentinel disabled, a descending key sort fails `kat_pins_the_canonical_form_and_its_digest` and `the_live_canonical_form_has_the_shape_the_design_pins` while `the_build_used_these_rules_on_the_live_file` stays green (build script and tests share the mutated rules — the Python-derived KAT is what catches a drift both sides share); with the sentinel enabled, the same mutation fails **compilation** on the pinned digest, which is the sentinel doing its job first. |
-| **`VC-2`** — **AUTHORISED for alpha.8, fold with `VC-3`/`VC-4`** (ruling 2: "a wire change belongs in the paired release, not first-thing-after where it becomes the first uncovered delta of the next cycle") | `GetVersionResponse` + **3** fields (digest, `nettype`, `genesis_hash` — `VC-R2`), each strictly deserialized with an omission test (`VC-D14`); `CORE_RPC_VERSION` → next minor, **read from `dev` at write time**; `get_version_synced_v5.json` and siblings for the other two `v1` states; chain-delta test extended per §3.5; a **separate identity POD** carrying `nettype` and the genesis-hash bytes — **not** a widening of the chain-tip POD (`VC-R17`) — plus its C export and ABI offset pins. **This is an ABI addition with layout twins and a round-trip pin:** `_test_fill` / `_rust_fill` and the seeded field indices apply to the new POD, and its offset pins are re-derived rather than edited. It is the part of `VC-2` that breaks quietly if done by hand; `methods.rs` fills both fields. **Pre-flight pass first (rule 26).** | **Yes.** Needs Rick's ruling on alpha.8 timing (§6). | `rpc_parity` whole chain green; the four-spelling version pin updated; C++ `ninja -C build` + unit suite (the POD changed). |
-| **`VC-3`** | Console remote arm handshake (§3.6.2); `version` exemption; delete `daa_target_seconds` and its tests (§3.11); operator-facing message tests for all three axes and both "older side" directions. | No (consumes `VC-2`). | A test per axis that observes the refusal on a fabricated mismatched reply, and one that observes `version` rendering both sides. |
-| **`VC-4`** | Engine open-time handshake (§3.6.3) on all four axes, including the per-network genesis-hash pins compared against `get_version.genesis_hash` (`VC-D12`, `VC-R2` — one reply, not a second call); the connect-time-only claim stated in operator terms (`VC-D13`); refusal wording per `VC-D15`; `OpenError::DaemonIdentityMismatch`; `FakechainPolicy` (§3.6.4) threaded through `open_*`, set by `regtest_e2e.rs` and the operator flag; **fix the two false docstrings** (`daemon.rs:169`, `error/mod.rs:41`) to say what the code now does, **and amend `WALLET_REWRITE_PLAN.md` :216 itself** (`VC-R20`): cross-cutting lock 5 still names `get_info` as the carrier, and a reader of the lock will otherwise try to put the check back on a bridged leg that `RK-5c` retires. The lock's *requirement* is unchanged and finally honoured; only its named carrier moves to `get_version`. **The two states are not equally bad and the worse one is the later one:** today the lock and the mechanism disagree because the mechanism is *absent*, which reads as work owed; after `VC-4` they would disagree because the mechanism is *present* and the lock describes a different one, which reads as a discrepancy to reconcile — and a reader reconciling toward a Phase-1 lock implements it as written, onto the bridged leg `RK-5c` retires, over two round trips, which is the exact shape ruling 1 rejected; `shekyl-cli` / `shekyl-wallet-rpc` messages per rule 82. | No (consumes `VC-2`). | Regtest e2e green with the policy passed; a lifecycle test per axis observing `open_full` refuse; a test that `FakechainPolicy::Refuse` (the default) refuses a `fakechain` daemon. |
+| **`VC-2`** — **BUILT** (`feat/vc2-identity-tuple-wire`), folded with `VC-3`/`VC-4` (ruling 2: "a wire change belongs in the paired release, not first-thing-after where it becomes the first uncovered delta of the next cycle") | `GetVersionResponse` + **3** fields (digest, `nettype`, `genesis_hash` — `VC-R2`), each strictly deserialized with an omission test (`VC-D14`); `CORE_RPC_VERSION` → next minor, **read from `dev` at write time**; `get_version_synced_v5.json` and siblings for the other two `v1` states; chain-delta test extended per §3.5; a **separate identity POD** carrying `nettype` and the genesis-hash bytes — **not** a widening of the chain-tip POD (`VC-R17`) — plus its C export and ABI offset pins. **This is an ABI addition with layout twins and a round-trip pin:** `_test_fill` / `_rust_fill` and the seeded field indices apply to the new POD, and its offset pins are re-derived rather than edited. It is the part of `VC-2` that breaks quietly if done by hand; `methods.rs` fills both fields. **Pre-flight pass first (rule 26).** | **Yes.** Needs Rick's ruling on alpha.8 timing (§6). | `rpc_parity` whole chain green; the four-spelling version pin updated; C++ `ninja -C build` + unit suite (the POD changed). |
+| **`VC-3`** — **BUILT** | Console remote arm handshake (§3.6.2), on first request rather than before dispatch so an unknown command still refuses as unknown without opening a socket; the console's own network threaded from `main.cpp` through four C++ files, because the digest is generated from one JSON for every network and `nettype` is the only axis that sees a wrong-network daemon; `version` exemption; deleted `daa_target_seconds` and its tests (`VC-D11` discharged); operator-facing message tests for all four axes and both "older side" directions. | No (consumes `VC-2`). | A test per axis that observes the refusal on a fabricated mismatched reply, and one that observes `version` rendering both sides. |
+| **`VC-4`** — **BUILT**, genesis axis armed (`VC-D18` discharged) | Engine handshake at first request (§3.6.3, `VC-D17`) on all four axes, including the per-network genesis-hash pins compared against `get_version.genesis_hash` (`VC-D12`, `VC-R2` — one reply, not a second call); the connect-time-only claim stated in operator terms (`VC-D13`); refusal wording per `VC-D15`; `RpcError::InvalidNode` (axis + both values; the check is not in `open`); `FakechainPolicy` (§3.6.4) defaults to Refuse; `Accept` is selected only in `regtest_e2e.rs` (no operator flag, `VC-R3`); **fix the two false docstrings** (`daemon.rs:169`, `error/mod.rs:41`) to say what the code now does, **and amend `WALLET_REWRITE_PLAN.md` :216 itself** (`VC-R20`): cross-cutting lock 5 still names `get_info` as the carrier, and a reader of the lock will otherwise try to put the check back on a bridged leg that `RK-5c` retires. The lock's *requirement* is unchanged and finally honoured; only its named carrier moves to `get_version`. **The two states are not equally bad and the worse one is the later one:** today the lock and the mechanism disagree because the mechanism is *absent*, which reads as work owed; after `VC-4` they would disagree because the mechanism is *present* and the lock describes a different one, which reads as a discrepancy to reconcile — and a reader reconciling toward a Phase-1 lock implements it as written, onto the bridged leg `RK-5c` retires, over two round trips, which is the exact shape ruling 1 rejected; `shekyl-cli` / `shekyl-wallet-rpc` messages per rule 82. | No (consumes `VC-2`). | Regtest e2e green with `FakechainPolicy::Accept`; a test per axis observing `Rpc::post` refuse; a test that `FakechainPolicy::Refuse` (the default) refuses a `fakechain` daemon. |
 
 `VC-1` landed with this document: the steering lane ruled (2026-09-05) that
 code with no wire change and no C++ clears the throttle, and the enabler
@@ -1123,6 +1176,35 @@ a consumer that cannot exist until `VC-2` is authorised. `VC-3` and `VC-4` land 
 split): producers and callers in one PR is the standing rule, and a
 `get_version` field with no consumer would be the very finding this round
 opened with, recreated.
+
+### 3.15.1 `VC-D18` — the genesis axis is armed
+
+**UPDATE 2026-09-09:** the per-network pins are the frozen block-0 ids
+already published in [`GENESIS_ALLOCATIONS.md`](../GENESIS_ALLOCATIONS.md)
+and `mining_parity.genesis_identity_is_pow_independent` (mainnet/fakechain
+`e623214c…`, testnet `7cbb8529…`, stagenet `82ccf335…`). Handshake compares
+those ids — `get_block_id_by_height(0)` / `geblock block-id` — not
+`GENESIS_TX`. `GENESIS_PINS_ARE_PLACEHOLDERS` is deleted; [`genesis_hash_for`](../../rust/shekyl-rpc-types/src/identity.rs)
+and [`IdentityExpectation::check`](../../rust/shekyl-rpc-types/src/identity.rs)
+refuse a foreign block 0. Wallet and console do not each hold a copy.
+Reminting genesis updates `GENESIS_TX` / nonce, the frozen-id surfaces, and
+these pins in the same change.
+
+The original disposition shipped the axis **built but not armed**, with a
+constant (`GENESIS_PINS_ARE_PLACEHOLDERS`) so the skip could not be mistaken
+for a live check. That was the right shape while the pins were believed to
+need a live-daemon KAT capture; the ids were already frozen. The trigger
+named below fired by filling `genesis_hash_for` from those ids rather than
+waiting on a second capture.
+
+The other three axes refuse today, and they are the ones this round opened
+with — the wire version and the digest had no consumer at all, and the network
+axis is lock 5. **Named as unarmed rather than quietly absent**, because the
+failure mode of a placeholder pin is worse than no pin: an all-zero expected
+value would refuse every daemon, and a "fixed later" comment is exactly the
+shape §8 keeps finding. **Trigger (discharged):** the pins hold captured
+block-0 hashes, `GENESIS_PINS_ARE_PLACEHOLDERS` is gone, and both `VC-3` and
+`VC-4` arm with no other change.
 
 ### 3.16 `VC-D16` — when `get_version`'s own shape is what changed
 
@@ -1285,6 +1367,8 @@ added `VC-D13`…`VC-D15`. What remains open is implementation
 
 | Date | Entry |
 | --- | --- |
+| 2026-09-09 | **The two handshakes became one comparison.** Wallet and console had each reimplemented the four-axis check; console omitted genesis, and the wallet `OnceCell` cached transport failures as a wire mismatch. Comparison now lives in `shekyl-rpc-types::IdentityExpectation::check`. Transport / JSON-RPC method errors are not stored. Remote console POSTs go through `Source::post_remote`, which handshakes once. |
+| 2026-09-09 | **The slice is built, and two things changed shape on contact with the code.** (1) `VC-D17`: the engine check could not live in `Engine::open_*` — that path is synchronous, the daemon client is not, and making it async ripples through 68 call sites. It moved to the first request, gated at `Rpc::post`, which every wallet request funnels through. That is better than the original wording rather than a concession: it is the honest reading of *connect-time*, it keeps opening a wallet file from needing a network round trip, and it is the shape `VC-3` had already taken for its own reason, so both arms now answer the question the same way instead of each inventing an answer. (2) `VC-D18`: the genesis pins are placeholders, and the code says so with a constant rather than a comment so the skipped arm is greppable. A pin not derived from the chain it names is a number, not a fact. **The console's network axis cost four C++ files and two constructor signatures**, and that was the right trade: the digest is generated from one JSON for every network, so a testnet build carries the same digest and the same RPC version as mainnet, and shipping the two compile-time axes alone would have been a handshake blind to the case an operator most plausibly hits. **`CORE_RPC_VERSION` is 3.29**, read from the tree cut from #658's merge as the pre-flight's first act — 3.28 was taken while this round was in flight, which is the hazard the procedure exists for. |
 | 2026-09-08 | **The pin fired for real, on another lane's change, and the prediction about the order was wrong.** §3.12 (ii) said "`VC-1` widens first; the `FL-R12′` rename re-pins". The rename landed on `dev` first (`aeb601552`, `money_supply` → `emission_curve_asymptote`, `FL-R15`) while this branch sat unmerged, so **`VC-1`'s own merge is what re-pinned**, `6e1f9125…` → `fab6f63e…`. The sequencing note was a claim about which PR would merge first, which is not a fact anyone controls; corrected here and in `FEE_LADDER_DERIVATION.md`'s `FL-R15` row. **The re-pin question was answered rather than skipped:** the key moved and the value did not, and `VC-D12` says to ask the question of the value the new name binds — the asymptote is the emission curve's asymptote, consensus, so the digest moving is correct. **`VC-R5` paid for itself on first contact:** the build printed the computed digest, so the re-pin was a copy rather than a hunt; under the shipped const-assert form the crate would not have compiled and the value would have been unavailable. **And the two digests over that one file disagreed, both correctly** — `shekyl-economics`'s parameter digest hashes values at fixed byte offsets and is name-blind, so its tests passed unre-pinned; `CONSENSUS_CONSTANTS_DIGEST` canonicalises `key value` pairs and is name-sensitive, so it moved. A key is part of the binding for an identity check, because every generator reads it by name, and is not part of it for a fixture-lineage check. Two instruments, two jobs, one file, and the earlier ruling that "two digests with different jobs is right; a gap between them is not" is what makes both answers correct rather than one of them a bug. |
 | 2026-09-07 | **The four rulings are SIGNED in-channel; the relay caveat is discharged, and the sequence is kept because the discipline is what produced it.** They were recorded RULED on 2026-09-06 from a relay quoting Rick, with the provenance written into the banner as a relay rather than a signature and the consequence stated: if those were not his words, §6 was not closed and `VC-1` rested on nothing. They were his words, and the signature adds grounds the relay did not carry — **typed atomicity beats documented discipline** for ruling 1; the fold has a schedule-independent reason the round itself supplied, since `VC-R1` watched the version constant go stale in eight days, so three wire changes mean three bumps and three chances to collide; and typed-over-boolean on `FakechainPolicy` is the same move as `TransportTls` replacing a `bool`, making the fifth silent arm **unrepresentable rather than avoided**. **The caveat cost nothing and bought the correction sequence:** because the provenance was recorded rather than assumed, the round ran against dispositions marked unconfirmed, which is what left `VC-R2` and `VC-R3` free to contest two of them — and both were upheld, one carried further than the finding went. Had the relay been recorded as a signature, the same findings would have read as contesting settled rulings rather than as testing unconfirmed ones. |
 | 2026-09-07 | **A fourth shape for the arc: a failure that suppresses its own explanation.** `VC-R5` found the live-file pin shipped as a const-eval assert that named the failure and could not name the computed digest — and, by failing, made the crate uncompilable, so the test that *would* have printed both values could not run either. The diagnostic was blocked by the very firing that made it necessary. The arc's catalogue now reads: **a gate that decayed** (RK-5b's already-closed-gap gate), **a condition never satisfiable** (the safety condition unsatisfiable at the moment it was written), **a correct mechanism no one reads** (`CORE_RPC_VERSION`, this round's founding finding), and now **a check whose remedy its own failure withholds.** The class is distinct because the earlier three are all caught by asking whether the check *can fire*; this one fires correctly and still leaves the developer stuck, so the catching question is different — *when this fires, is what it demands mechanically available?* Fixed by moving the pin into `build.rs`, where a panic formats, and verified by tripping it and reading the message. **Also from round 2:** `VC-R2`'s fix made `VC-R8` harder to see. Closing the visible two-call hole removed the prompt for the session-length question, so a reader now meets a mechanism that looks complete. A good fix can hide the next question. Both lessons are promoted into `26-sub-pr-design-discipline.mdc` rather than left here. |

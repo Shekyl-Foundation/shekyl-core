@@ -54,6 +54,15 @@ jobs:
 
       - name: Install ripgrep and PyYAML
         run: |
+          # GitHub's ubuntu image ships a Chrome apt source. A hash-sum
+          # mismatch there is not this job's subject (ripgrep + PyYAML)
+          # and has already failed the gate before any script ran
+          # (2026-09-09, PR #671 — same class as the 2026-08-18 apt-get
+          # update stalls recorded in cmake-gate-test.yml). Naming
+          # google-chrome.list and .list.save left .sources / google.list
+          # live; the drop script deletes every chrome source and asserts
+          # the URI is gone.
+          bash scripts/ci/drop_runner_chrome_apt_source.sh
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ripgrep python3-yaml
           rg --version

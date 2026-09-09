@@ -5,7 +5,6 @@
 
 use super::alt_chain::headers_in_correspondence;
 use super::blockchain::{median, version_tally};
-use super::info::daa_target_seconds;
 use super::status::{fork_extra_info, mining_speed, sync_percentage};
 use super::*;
 use crate::ctl_client;
@@ -30,6 +29,9 @@ fn run(args: &[&str], address: Option<&str>) -> (i32, String) {
             std::ptr::null_mut(),
             addr.as_ref().map_or(std::ptr::null(), |a| a.as_ptr()),
             5,
+            // Mainnet: these harnesses drive the dispatch, not the handshake,
+            // and their fake daemons answer mainnet.
+            0,
             &raw mut ptr,
             &raw mut len,
         )
@@ -54,20 +56,63 @@ fn typed_reply<T: serde::Serialize>(reply: &T) -> String {
     serde_json::to_string(reply).expect("wire type serializes")
 }
 
+/// A `get_version` reply that MATCHES this build on all four axes.
+///
+/// Every remote-arm console command now handshakes before it renders
+/// (`VC-3`), so a harness whose fake daemon does not answer `get_version`
+/// tests the refusal rather than the command. This is the "agreeing daemon"
+/// these harnesses assume; the handshake's own tests supply a disagreeing one
+/// deliberately.
+fn agreeing_get_version() -> String {
+    // A JSON-RPC leg: the reply is wrapped in `result`, not bare.
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "0",
+        "result": shekyl_rpc_types::GetVersionResponse {
+        status: shekyl_rpc_types::RpcStatus::ok(),
+        version: shekyl_rpc_types::CORE_RPC_VERSION,
+        release: false,
+        current_height: 1,
+        target_height: 0,
+        hard_forks: vec![],
+        consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
+        nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+        genesis_hash: shekyl_rpc_types::HashHex::from_bytes(
+            shekyl_rpc_types::genesis_hash_for(shekyl_rpc_types::DaemonNetwork::Mainnet),
+        ),
+        },
+    })
+    .to_string()
+}
+
 fn one_shot(reply: String) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
-        let (mut s, _) = listener.accept().unwrap();
-        let mut buf = [0u8; 4096];
-        let n = s.read(&mut buf).expect("read request");
-        assert!(n > 0, "empty request");
-        let head = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            reply.len()
-        );
-        s.write_all(head.as_bytes()).unwrap();
-        s.write_all(reply.as_bytes()).unwrap();
+        // Two requests now, not one: the identity handshake, then the
+        // command. Routed by body rather than by order, so a command that
+        // stopped issuing its leg gets no reply instead of silently
+        // receiving the handshake's.
+        for _ in 0..2 {
+            let Ok((mut s, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = [0u8; 4096];
+            let n = s.read(&mut buf).expect("read request");
+            assert!(n > 0, "empty request");
+            let body = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let payload = if body.contains("\"get_version\"") {
+                agreeing_get_version()
+            } else {
+                reply.clone()
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                payload.len()
+            );
+            s.write_all(head.as_bytes()).unwrap();
+            s.write_all(payload.as_bytes()).unwrap();
+        }
     });
     address
 }
@@ -100,11 +145,17 @@ fn route_server(routes: Vec<(&'static str, String)>) -> String {
 /// window-resolving commands is the whole behaviour under test.
 #[expect(clippy::type_complexity, reason = "a test log of (route, body)")]
 fn route_server_recording(
-    routes: Vec<(&'static str, String)>,
+    mut routes: Vec<(&'static str, String)>,
 ) -> (
     String,
     std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
 ) {
+    // Every remote-arm command handshakes first (VC-3), so an agreeing
+    // daemon is the default. A test that wants a DISAGREEING one supplies its
+    // own `json_rpc:get_version` route and this leaves it alone.
+    if !routes.iter().any(|(k, _)| *k == "json_rpc:get_version") {
+        routes.push(("json_rpc:get_version", agreeing_get_version()));
+    }
     let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
@@ -192,6 +243,22 @@ fn one_shot_projected(slot: crate::core::TxSlot, txid: [u8; 32]) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
+        // The identity handshake arrives first (VC-3); answer it, then the
+        // request this fixture exists to answer.
+        {
+            let Ok((mut hs, _)) = listener.accept() else {
+                return;
+            };
+            let mut hb = [0u8; 4096];
+            let _ = hs.read(&mut hb).expect("read handshake");
+            let hv = agreeing_get_version();
+            let hh = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                hv.len()
+            );
+            hs.write_all(hh.as_bytes()).unwrap();
+            hs.write_all(hv.as_bytes()).unwrap();
+        }
         let (mut s, _) = listener.accept().unwrap();
         let mut buf = vec![0u8; 8192];
         let n = s.read(&mut buf).expect("read request");
@@ -500,6 +567,22 @@ fn one_shot_raw(reply: shekyl_rpc_types::GetTransactionsResponse) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
+        // The identity handshake arrives first (VC-3); answer it, then the
+        // request this fixture exists to answer.
+        {
+            let Ok((mut hs, _)) = listener.accept() else {
+                return;
+            };
+            let mut hb = [0u8; 4096];
+            let _ = hs.read(&mut hb).expect("read handshake");
+            let hv = agreeing_get_version();
+            let hh = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                hv.len()
+            );
+            hs.write_all(hh.as_bytes()).unwrap();
+            hs.write_all(hv.as_bytes()).unwrap();
+        }
         let (mut s, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = s.read(&mut buf).expect("read request");
@@ -545,6 +628,22 @@ fn a_handler_error_envelope_reaches_the_operator() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
+        // The identity handshake arrives first (VC-3); answer it, then the
+        // request this fixture exists to answer.
+        {
+            let Ok((mut hs, _)) = listener.accept() else {
+                return;
+            };
+            let mut hb = [0u8; 4096];
+            let _ = hs.read(&mut hb).expect("read handshake");
+            let hv = agreeing_get_version();
+            let hh = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                hv.len()
+            );
+            hs.write_all(hh.as_bytes()).unwrap();
+            hs.write_all(hv.as_bytes()).unwrap();
+        }
         let (mut s, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = s.read(&mut buf).expect("read request");
@@ -786,6 +885,7 @@ fn both_sources_is_ambiguous_and_refused() {
             sentinel,
             address.as_ptr(),
             1,
+            0,
             &raw mut ptr,
             &raw mut len,
         )
@@ -1136,7 +1236,16 @@ fn a_non_negative_start_needs_no_tip_read() {
     ]);
     let (code, out) = run(&["print_blockchain_info", "2", "3"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
-    let asked = log.lock().unwrap();
+    // The identity handshake is a request too (VC-3), and it is not one of
+    // this command's legs — filter it out so the assertions stay about the
+    // work the command does, not about the handshake's presence.
+    let asked: Vec<(String, String)> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, body)| !body.contains("\"get_version\""))
+        .cloned()
+        .collect();
     assert!(
         asked.iter().all(|(path, _)| path != "/get_info"),
         "the literal form must not spend a bridged leg: {asked:?}"
@@ -1168,7 +1277,16 @@ fn a_negative_start_counts_back_from_the_tip() {
     assert!(out.contains("height: 97"), "{out}");
     assert!(out.contains("height: 99"), "{out}");
 
-    let asked = log.lock().unwrap();
+    // The identity handshake is a request too (VC-3), and it is not one of
+    // this command's legs — filter it out so the assertions stay about the
+    // work the command does, not about the handshake's presence.
+    let asked: Vec<(String, String)> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, body)| !body.contains("\"get_version\""))
+        .cloned()
+        .collect();
     let (_, body) = asked
         .iter()
         .find(|(path, _)| path == "/json_rpc")
@@ -1360,7 +1478,16 @@ fn dynamic_stats_reports_the_window_it_summarized() {
     assert!(out.contains("Voting for: 2 v0, 1 v2"), "{out}");
 
     // The window: height 10, three blocks, so [7, 9].
-    let asked = log.lock().unwrap();
+    // The identity handshake is a request too (VC-3), and it is not one of
+    // this command's legs — filter it out so the assertions stay about the
+    // work the command does, not about the handshake's presence.
+    let asked: Vec<(String, String)> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, body)| !body.contains("\"get_version\""))
+        .cloned()
+        .collect();
     let range_body = asked
         .iter()
         .filter(|(path, _)| path == "/json_rpc")
@@ -1400,7 +1527,16 @@ fn dynamic_stats_clamps_a_window_longer_than_the_chain() {
     let (code, out) = run(&["print_blockchain_dynamic_stats", "500"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
     assert!(out.contains("Last 2:"), "{out}");
-    let asked = log.lock().unwrap();
+    // The identity handshake is a request too (VC-3), and it is not one of
+    // this command's legs — filter it out so the assertions stay about the
+    // work the command does, not about the handshake's presence.
+    let asked: Vec<(String, String)> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, body)| !body.contains("\"get_version\""))
+        .cloned()
+        .collect();
     let range_body = asked
         .iter()
         .filter(|(path, _)| path == "/json_rpc")
@@ -1577,7 +1713,16 @@ fn a_chain_declaring_more_blocks_than_it_lists_is_refused() {
     assert!(out.contains("listed 2"), "{out}");
     // Refused before the headers are fetched: a malformed reply must not
     // cost a round trip per block it claims.
-    let asked = log.lock().unwrap();
+    // The identity handshake is a request too (VC-3), and it is not one of
+    // this command's legs — filter it out so the assertions stay about the
+    // work the command does, not about the handshake's presence.
+    let asked: Vec<(String, String)> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, body)| !body.contains("\"get_version\""))
+        .cloned()
+        .collect();
     assert!(
         asked
             .iter()
@@ -1913,35 +2058,16 @@ fn hard_fork_info_labels_line_one_with_the_version_it_counted() {
     );
 }
 
-/// T comes from the generated authority, and a daemon that disagrees is
-/// reported rather than believed.
+/// After VC-D11 the T warning is gone: the digest handshake is the instrument,
+/// and figures still use the generated authority rather than the wire.
 ///
 /// The C++ read `ires.target` and computed from it. That is one source
 /// too many for a genesis-frozen constant that
 /// `config/consensus_constants.json` already single-sources into both
-/// languages — and on the remote arm the extra source is a daemon that
-/// can report anything. The reply is still read, because a disagreement
-/// means different consensus rules, i.e. a different chain, which is
-/// worth saying out loud.
+/// languages. The reply may still carry `target` (unknown fields are
+/// ignored); this console does not read it.
 #[test]
-fn the_daa_target_comes_from_the_build_not_the_wire() {
-    let authority = crate::consensus::DAA_TARGET_SECONDS;
-    assert_eq!(
-        daa_target_seconds(authority),
-        (authority, None),
-        "agreement is silent"
-    );
-    let (used, warning) = daa_target_seconds(authority.saturating_add(1));
-    assert_eq!(used, authority, "the authority wins, never the wire");
-    let warning = warning.expect("a disagreement must be reported");
-    assert!(warning.contains("different chain"), "{warning}");
-    assert!(warning.contains(&format!("{authority}s")), "{warning}");
-}
-
-/// A daemon reporting a foreign T gets the warning printed above the
-/// figures, and the figures are still computed with the build's T.
-#[test]
-fn a_foreign_target_warns_and_does_not_change_the_arithmetic() {
+fn a_foreign_target_does_not_warn_and_does_not_change_the_arithmetic() {
     let mut info: serde_json::Value = serde_json::from_str(&info_reply(10)).unwrap();
     // The fixture already carries the real T; make this daemon claim 60.
     info["target"] = serde_json::json!(60);
@@ -1952,24 +2078,17 @@ fn a_foreign_target_warns_and_does_not_change_the_arithmetic() {
     ]);
     let (code, out) = run(&["status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
-    assert!(out.contains("WARNING:"), "{out}");
-    assert!(out.contains("reports a block target of 60s"), "{out}");
+    assert!(!out.contains("WARNING:"), "{out}");
     // net hash = 123456 / 120 = 1028 -> 1.03 kH/s, the build's T. Under
     // the daemon's 60 it would be 2057 -> 2.06 kH/s.
     assert!(out.contains("net hash 1.03 kH/s"), "{out}");
     assert!(!out.contains("2.06 kH/s"), "{out}");
 }
 
-/// The warning appears only where T actually changes a number.
-///
-/// `alt_chain_info`'s listing form derives nothing from T, so it stays
-/// silent even against a daemon reporting a foreign one — the inverse
-/// direction of the test above, and the reason it exists: a warning
-/// attached to output it cannot affect is how a reader learns to skip
-/// the one that matters. The tip form, which computes a hash-rate share,
-/// does warn.
+/// The listing form uses no T; the tip form still computes the share from
+/// the build's T even when the daemon reports a foreign one.
 #[test]
-fn the_target_warning_appears_only_where_t_changes_a_number() {
+fn the_alt_chain_share_uses_the_build_t() {
     let mut info: serde_json::Value = serde_json::from_str(&info_reply(100)).unwrap();
     info["target"] = serde_json::json!(60);
     let chains = alt_chains_reply(&serde_json::json!([one_alt_chain(9, 90, 2, &[8, 9], 7)]));
@@ -1996,7 +2115,7 @@ fn the_target_warning_appears_only_where_t_changes_a_number() {
     ]);
     let (code, detail) = run(&["alt_chain_info", &tip, "0", "0"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{detail}");
-    assert!(detail.contains("WARNING:"), "{detail}");
+    assert!(!detail.contains("WARNING:"), "{detail}");
     // And the share is computed with the build's T, not the daemon's 60:
     // 100 * 120 * 2 / 360 = 66.666667, where 60 would give 33.333333.
     assert!(
@@ -2015,4 +2134,189 @@ fn a_bridged_route_the_daemon_stopped_serving_fails_loudly() {
     let (code, out) = run(&["print_net_stats"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
     assert!(!out.contains("limit of 0 B/s"), "{out}");
+}
+
+// ── VC-3: the console's identity handshake ──────────────────────────────
+//
+// One test per axis, each supplying a daemon that disagrees on exactly that
+// axis and agrees on the others, so a passing test names which comparison
+// fired rather than "something refused".
+
+/// A `get_version` reply that agrees with this build except where `edit` says
+/// otherwise.
+fn get_version_but(edit: impl FnOnce(&mut shekyl_rpc_types::GetVersionResponse)) -> String {
+    let mut reply = shekyl_rpc_types::GetVersionResponse {
+        status: shekyl_rpc_types::RpcStatus::ok(),
+        version: shekyl_rpc_types::CORE_RPC_VERSION,
+        release: false,
+        current_height: 1,
+        target_height: 0,
+        hard_forks: vec![],
+        consensus_constants_digest: shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH,
+        nettype: shekyl_rpc_types::DaemonNetwork::Mainnet,
+        genesis_hash: shekyl_rpc_types::HashHex::from_bytes(shekyl_rpc_types::genesis_hash_for(
+            shekyl_rpc_types::DaemonNetwork::Mainnet,
+        )),
+    };
+    edit(&mut reply);
+    serde_json::json!({"jsonrpc": "2.0", "id": "0", "result": reply}).to_string()
+}
+
+#[test]
+fn an_older_daemon_is_refused_and_named_as_the_older_one() {
+    let addr = route_server(vec![(
+        "json_rpc:get_version",
+        get_version_but(|r| r.version -= 1),
+    )]);
+    let (code, out) = run(&["print_height"], Some(&addr));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("RPC contract mismatch"), "{out}");
+    assert!(
+        out.contains("the daemon is the older one"),
+        "the refusal must name WHICH side to update: {out}"
+    );
+}
+
+#[test]
+fn a_newer_daemon_names_this_build_as_the_older_one() {
+    let addr = route_server(vec![(
+        "json_rpc:get_version",
+        get_version_but(|r| r.version += 1),
+    )]);
+    let (_, out) = run(&["print_height"], Some(&addr));
+    assert!(
+        out.contains("this build is the older one"),
+        "the ordering must work in both directions: {out}"
+    );
+}
+
+#[test]
+fn a_different_rules_digest_is_refused_without_inventing_an_ordering() {
+    let addr = route_server(vec![(
+        "json_rpc:get_version",
+        get_version_but(|r| {
+            r.consensus_constants_digest = shekyl_rpc_types::HashHex::from_bytes([0x99; 32]);
+        }),
+    )]);
+    let (code, out) = run(&["print_height"], Some(&addr));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("consensus-constant mismatch"), "{out}");
+    // VC-D15: a hash carries no ordering, so the refusal must NOT claim one.
+    assert!(
+        !out.contains("older"),
+        "a digest mismatch must not name a stale side, because it cannot know one: {out}"
+    );
+    assert!(
+        out.contains("different rule set"),
+        "it must say what the fact means instead: {out}"
+    );
+}
+
+#[test]
+fn a_wrong_network_daemon_is_refused_even_though_every_other_axis_agrees() {
+    // The case only this axis can see: the digest is generated from ONE JSON
+    // for every network, so a testnet daemon built from this tree carries the
+    // same digest and the same RPC version. Three of four axes are blind here.
+    let addr = route_server(vec![(
+        "json_rpc:get_version",
+        get_version_but(|r| r.nettype = shekyl_rpc_types::DaemonNetwork::Testnet),
+    )]);
+    let (code, out) = run(&["print_height"], Some(&addr));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("network mismatch"), "{out}");
+    assert!(out.contains("mainnet") && out.contains("testnet"), "{out}");
+}
+
+#[test]
+fn a_foreign_genesis_daemon_is_refused() {
+    let addr = route_server(vec![(
+        "json_rpc:get_version",
+        get_version_but(|r| {
+            r.genesis_hash = shekyl_rpc_types::HashHex::from_bytes([0xff; 32]);
+        }),
+    )]);
+    let (code, out) = run(&["print_height"], Some(&addr));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(out.contains("genesis mismatch"), "{out}");
+    assert!(out.contains("different chain"), "{out}");
+}
+
+#[test]
+fn a_get_version_that_does_not_parse_is_reported_as_a_wire_mismatch() {
+    // VC-D16: every tuple field is strict, so a daemon whose get_version
+    // shape moved fails deserialization before any axis is read. That IS the
+    // wire axis disagreeing, and the operator must be told so — not handed a
+    // serde error naming a field.
+    let addr = route_server(vec![(
+        "json_rpc:get_version",
+        serde_json::json!({"jsonrpc": "2.0", "id": "0",
+                           "result": {"status": "OK", "version": 1}})
+        .to_string(),
+    )]);
+    let (code, out) = run(&["print_height"], Some(&addr));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{out}");
+    assert!(
+        out.contains("does not match the RPC contract"),
+        "a shape failure must read as a version disagreement: {out}"
+    );
+    assert!(
+        out.contains("cannot be named here"),
+        "it must say the daemon's version is unavailable rather than guess: {out}"
+    );
+}
+
+#[test]
+fn an_unrecognised_network_code_refuses_rather_than_defaulting() {
+    // The trap in a five-hop thread (main.cpp -> command_server ->
+    // parser_executor -> rpc_command_executor -> this FFI) is a default
+    // somewhere in the middle turning a wrong-network daemon into a
+    // silently-correct-looking one. C++ cannot skip the parameter — it has no
+    // default at any hop and precedes the defaulted ones — and this pins the
+    // other half: a code this build does not know REFUSES. `UNDEFINED` is 255
+    // in cryptonote::network_type, so it is the value a miswired hop would
+    // most plausibly deliver.
+    let addr = route_server(vec![]);
+    let ptrs: Vec<CString> = ["print_height"]
+        .iter()
+        .map(|a| CString::new(*a).unwrap())
+        .collect();
+    let raw: Vec<*const c_char> = ptrs.iter().map(|a| a.as_ptr()).collect();
+    let address = CString::new(addr).unwrap();
+    let mut ptr: *mut u8 = std::ptr::null_mut();
+    let mut len: usize = 0;
+    // SAFETY: valid argv/address/out pointers; null core (remote arm).
+    let code = unsafe {
+        shekyl_daemon_console_run(
+            raw.as_ptr(),
+            raw.len(),
+            std::ptr::null_mut(),
+            address.as_ptr(),
+            5,
+            255,
+            &raw mut ptr,
+            &raw mut len,
+        )
+    };
+    let text = if ptr.is_null() {
+        String::new()
+    } else {
+        // SAFETY: the export wrote `len` bytes at `ptr`.
+        let out = unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec();
+        unsafe { crate::ctl_client::shekyl_daemon_ctl_free(ptr, len) };
+        String::from_utf8(out).unwrap()
+    };
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{text}");
+    assert!(
+        text.contains("network code 255"),
+        "an unknown code must refuse and name itself, not fall back to mainnet: {text}"
+    );
+}
+
+#[test]
+fn an_unknown_command_refuses_without_opening_a_socket() {
+    // The handshake runs before the first REQUEST, not before the console
+    // does anything: a typo must not surface as a connection error. The
+    // address here is unreachable on purpose.
+    let (code, _) = run(&["no_such_command"], Some("127.0.0.1:1"));
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN);
 }

@@ -125,6 +125,8 @@ jobs:
 
       - name: install apt deps
         run: |
+          # See scripts/ci/drop_runner_chrome_apt_source.sh.
+          bash scripts/ci/drop_runner_chrome_apt_source.sh
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             valgrind build-essential pkg-config libssl-dev python3 jq
@@ -335,6 +337,7 @@ jobs:
 
       - name: install apt deps
         run: |
+          bash scripts/ci/drop_runner_chrome_apt_source.sh
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libssl-dev
@@ -413,6 +416,8 @@ jobs:
 
       - name: install apt deps
         run: |
+          # See scripts/ci/drop_runner_chrome_apt_source.sh.
+          bash scripts/ci/drop_runner_chrome_apt_source.sh
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             valgrind build-essential pkg-config libssl-dev python3 jq
