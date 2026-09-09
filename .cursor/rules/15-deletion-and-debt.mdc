@@ -11,6 +11,14 @@ Code with no live caller, code that handles state that doesn't exist, code
 marked `[[deprecated]]` for more than one release cycle — all of it goes. Dead
 code is audit surface, attack surface, and review fatigue.
 
+## What each disposition leaves behind
+
+Choosing between delete and defer is this rule's subject. **What each choice
+leaves visible — symbols, FOLLOWUPS rows, contract entries — is
+`23-disposition-visibility.mdc`'s**, which defines REJECTED / DEFERRED /
+STAGED / RESERVED by their grep surfaces. Consult it when recording a decision;
+it is not restated here.
+
 ## When to use `[[deprecated]]`
 
 Almost never. The annotation is a promise to delete by a specific version. If
