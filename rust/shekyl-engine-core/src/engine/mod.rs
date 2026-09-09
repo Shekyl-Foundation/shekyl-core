@@ -433,7 +433,7 @@ pub(crate) mod unbond_dispatch;
 pub mod view_material;
 
 pub use capability::Capability;
-pub use daemon::DaemonClient;
+pub use daemon::{DaemonClient, DaemonExpectation, FakechainPolicy, IdentityAxis};
 pub use diagnostics::{
     BuildErrorKind, BuildRequestSummary, DaemonOp, DiagnosticSink, DiscardReason, MalformedKind,
     NoopDiagnosticSink, PendingTxDiagnostic, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,

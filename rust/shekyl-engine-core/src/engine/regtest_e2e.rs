@@ -40,6 +40,26 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+/// What a wallet requires of the `shekyld --regtest` daemon these tests spawn.
+///
+/// **The only place `FakechainPolicy::Accept` is selected outside unit tests**
+/// (`VC-R3`): the harness constructs the client in-process, so the affordance
+/// needs no operator surface and none ships. A `fakechain` daemon reports
+/// mainnet's genesis hash and mainnet's constants digest — it is the same
+/// build — so `nettype` is the only axis that distinguishes it, which is
+/// exactly why the acceptance has to be explicit here rather than implied by
+/// a lever somewhere else.
+///
+/// These wallets are `Network::Mainnet` because fakechain shares mainnet's
+/// address format and the address enum has no fourth variant
+/// (`V3_WALLET_DECISION_LOG.md` :1397).
+fn regtest_expectation() -> super::DaemonExpectation {
+    super::DaemonExpectation {
+        network: shekyl_address::Network::Mainnet,
+        fakechain: super::FakechainPolicy::Accept,
+    }
+}
+
 use serde::Deserialize;
 use serde_json::json;
 use shekyl_rpc_client::Rpc;
@@ -645,7 +665,7 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
         .expect("wallet rpc");
-    let daemon_client = DaemonClient::new(rpc);
+    let daemon_client = DaemonClient::verifying(rpc, regtest_expectation());
 
     let tmp = tempfile::tempdir().expect("wallet tempdir");
     let wallet_path = tmp.path().join("wallet");
@@ -755,7 +775,8 @@ async fn e2e_get_curve_tree_path_returns_valid_path() {
         prefs: WalletPrefs::default(),
     };
     let wallet =
-        Engine::<SoloSigner>::create(params, DaemonClient::new(rpc)).expect("create wallet");
+        Engine::<SoloSigner>::create(params, DaemonClient::verifying(rpc, regtest_expectation()))
+            .expect("create wallet");
     let address = wallet.primary_address().encode().expect("encode address");
 
     // get_curve_tree_info answers non-404 even on a fresh tree — proves the *info*
@@ -893,7 +914,8 @@ async fn e2e_refresh_scans_coinbase_balance() {
         prefs: shekyl_engine_prefs::WalletPrefs::default(),
     };
     let wallet =
-        Engine::<SoloSigner>::create(params, DaemonClient::new(rpc)).expect("create wallet");
+        Engine::<SoloSigner>::create(params, DaemonClient::verifying(rpc, regtest_expectation()))
+            .expect("create wallet");
     let address = wallet.primary_address().encode().expect("encode address");
 
     // Mine in batches past coinbase maturity, refreshing after each batch. The
@@ -979,7 +1001,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
         &wallet_path,
         &creds,
         shekyl_address::Network::Mainnet,
-        DaemonClient::new(rpc),
+        DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )
     .expect("reopen wallet from disk")
@@ -1142,8 +1164,11 @@ async fn create_wallet(
     let wallet_path = tmp.path().join("wallet");
     let creds = super::lifecycle::Credentials::password_only(password);
     let params = mainnet_params(&wallet_path, &creds, seed);
-    let wallet = super::Engine::<super::SoloSigner>::create(params, super::DaemonClient::new(rpc))
-        .expect("create wallet");
+    let wallet = super::Engine::<super::SoloSigner>::create(
+        params,
+        super::DaemonClient::verifying(rpc, regtest_expectation()),
+    )
+    .expect("create wallet");
     (wallet, tmp)
 }
 
@@ -1669,7 +1694,7 @@ pub(super) async fn staker_wallet(
         &base_path,
         &creds,
         shekyl_address::Network::Mainnet,
-        super::DaemonClient::new(rpc),
+        super::DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )
     .expect("reopen staker wallet");
@@ -3759,7 +3784,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
         &tmp.path().join("wallet"),
         &creds,
         shekyl_address::Network::Mainnet,
-        super::DaemonClient::new(rpc),
+        super::DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )
     .expect("reopen after the scan sealed confirmed absence")
