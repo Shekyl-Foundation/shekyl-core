@@ -148,9 +148,9 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **E4** cross-port duplicate avoidance | **RULED ELSEWHERE** | as E3 | n/a |
 | **E5** is §4 discharged by PWD-I1? | **IMPLEMENTED** | discharged: `peerlist_entry_base` carries `adr` + `last_seen` and no `id` (`p2p_protocol_defs.h:58-59`) | done |
 | **E6** `--p2p-external-port` | **IMPLEMENTED** | present in `src/p2p/net_node.cpp` / `net_node.h` | done |
-| **E7** overlay endpoint, two postures | NOT IMPLEMENTED | daemon side unbuilt; blocked on three questions with Rick | No — overlay is post-alpha.8 |
-| **E8** address volatility measurement | **DEFERRED** | external blocker: the fleet measurement is owed from the Q12-D6a rig | No — blocked |
-| **E9** E7's isolation boundary | RULED, NOT IMPLEMENTED | ruled by Rick 2026-09-08; the daemon-side path it constrains does not exist yet | No — follows E7 |
+| **E7** overlay endpoint, two postures | **IMPLEMENTED** (as of 2026-09-09) | the three blocking questions were ruled 2026-09-08 as PWD-E9's ambiguous classes; both postures now live: ephemeral default in `rust/shekyl-tor-control-daemon` (`DaemonTorControl`: managed pinned tor, in-memory key, `ADD_ONION` `DiscardPK`, per-boot `ServiceID`) wired via `shekyl_daemon_tor_start` into `node_server::add_ephemeral_tor_zone` (`src/p2p/net_node.inl`); operator-provisioned `--anonymous-inbound` unchanged and yields-to when configured; opt-out `--no-ephemeral-tor` | done — no wire change (the posture publishes an address; the handshake is untouched) |
+| **E8** address volatility measurement | **DEFERRED** | external blocker chain, first link now discharged: E7 shipped 2026-09-09, so the measurement finally *has a subject* — the remaining links (fleet runs it, stressed, `T` measured admissibly) stay owed from the Q12-D6a rig | No — blocked |
+| **E9** E7's isolation boundary | **IMPLEMENTED** (as of 2026-09-09) | ruled by Rick 2026-09-08; now structural in the build it constrains: `shekyl-tor-control-daemon` and `shekyl-tor-control-wallet` share only `shekyl-tor-control-client` and never name each other (manifest-checkable); the daemon tor's `DataDirectory` is `<daemon-config>/ephemeral-tor`, never a wallet path; the managed launch takes instance identity as parameters, so shared code cannot produce a shared instance; no vanguard state on the daemon side by construction | done — node-local isolation, nothing on the wire |
 
 **Counts, tallied from the rows above by script rather than by reading — the
 first draft of this paragraph had three of them wrong.** 37 decisions, which is
@@ -158,9 +158,9 @@ exactly the set of PWD ids present across the round documents and the index:
 
 | | |
 |---|---|
-| IMPLEMENTED | 5 |
+| IMPLEMENTED | 7 *(E7 and E9 moved here 2026-09-09)* |
 | PARTIAL | 2 |
-| NOT IMPLEMENTED | 17, plus 1 ruled-but-not-implemented (E9) = **18 ruled and unbuilt** |
+| NOT IMPLEMENTED | **16 ruled and unbuilt** |
 | NO BUILD REQUIRED | 2 |
 | DEFERRED | 3 |
 | BLOCKED on another row | 1 |
