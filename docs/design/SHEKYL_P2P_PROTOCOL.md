@@ -124,11 +124,11 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T8** Shekyl mints its own KATs | NOT IMPLEMENTED | no handshake KATs; nothing to pin until T1 exists | No — follows T1 |
 | **B1** rate limiting adopted | NOT IMPLEMENTED | the decision names four unguarded invoke handlers; all four still unguarded | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
-| **B3** per-command caps | NOT IMPLEMENTED | cap table still **12** arms (`cryptonote_basic/connection_context.cpp`); ruled to reach 11 | **YES** — with B3a and B4, as one unit |
+| **B3** per-command caps | NOT IMPLEMENTED | cap table still **11** arms (`cryptonote_basic/connection_context.cpp`); PWD-B6 deleted the 2001 arm; B3 still owes the derivation | **YES** — with B3a and B4, as one unit |
 | **B3a** unknown input rejected at ingress | NOT IMPLEMENTED | no ingress rejection site; the codec's byte-exact round-trip of unknown bits is present but is PWC-A6's requirement, not this one | **YES** — with B3 and B4, as one unit |
 | **B4** places B3a's ingress check | NOT IMPLEMENTED | B4's stated remaining work is the check's *placement*; no such site exists | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
 | **B5** — | **NEVER RULED** | appears exactly once tree-wide, in `P2P_2_DISPATCH_BRIEF.md`; dispatched and never dispositioned | n/a — unruled decision, not a status |
-| **B6** one block path | NOT IMPLEMENTED | `NOTIFY_NEW_BLOCK` and `NOTIFY_NEW_FLUFFY_BLOCK` both live (11 references) | **YES** — removes a wire command; "do them before nodes exist, not after" |
+| **B6** one block path | **IMPLEMENTED** | 2001 deleted; 2008 is the sole path. `HANDLE_NOTIFY_T2(NOTIFY_NEW_FLUFFY_BLOCK)` at `cryptonote_protocol_handler.h:99`; `relay_block` emits `NOTIFY_NEW_FLUFFY_BLOCK::ID` at `.inl:2737`; no `NOTIFY_NEW_BLOCK` handler remains. Two-limb test `block_propagation_has_exactly_one_command` refuses 2001 (`LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED`) and still dispatches 2008. | **YES** — landed; do it before nodes exist |
 | **B7** drop only when attributable | **PARTIAL** | #628 withdrew a wrong score-removal and recorded that the site needs a typed verdict; the typed verdict is still owed | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
 | **B8** delete the undriven timer | **IMPLEMENTED** | #629 deleted `m_bad_peer_checker`, `network_address_old`, `connection_entry_base` | done |
 | **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
@@ -158,9 +158,9 @@ exactly the set of PWD ids present across the round documents and the index:
 
 | | |
 |---|---|
-| IMPLEMENTED | 7 *(E7 and E9 moved here 2026-09-09)* |
+| IMPLEMENTED | 8 *(B6 moved here 2026-09-09)* |
 | PARTIAL | 2 |
-| NOT IMPLEMENTED | **16 ruled and unbuilt** |
+| NOT IMPLEMENTED | **15 ruled and unbuilt** |
 | NO BUILD REQUIRED | 2 |
 | DEFERRED | 3 |
 | BLOCKED on another row | 1 |
@@ -169,16 +169,16 @@ exactly the set of PWD ids present across the round documents and the index:
 | verification-only | 1 |
 | never ruled / not ruled | 2 (B5, A1) |
 
-**18 of 37 are ruled and unbuilt.** Eight of those eighteen are the transport
+**17 of 37 are ruled and unbuilt.** Eight of those seventeen are the transport
 cluster, which Rick has ruled out of alpha.8.
 
 **What this says about "alpha.8 runs the new p2p".** The identity cluster is
 substantially built and the transport cluster is entirely unbuilt, which is the
-right way round given Rick's ruling. The gap that matters is **cluster B's wire
-surface**: B3, B3a, B4, B6 and B10 all change what the wire accepts or removes
-a command from it, and none has landed. A release that ships the new
-`basic_node_data` and the new peerlist rules while still carrying
-`COMMAND_PING` and two block paths is running a half-migrated wire.
+right way round given Rick's ruling. B6 has landed: one block path. The gap
+that remains is **cluster B's other wire surface**: B3, B3a, B4 and B10 still
+change what the wire accepts or remove a command from it, and none has landed.
+A release that ships the new `basic_node_data` and the new peerlist rules
+while still carrying `COMMAND_PING` is running a half-migrated wire.
 
 **Note on B12.** Ruled not-required because it does not change the wire, but
 it is an unbounded release of accumulated transactions to a peer, and "not

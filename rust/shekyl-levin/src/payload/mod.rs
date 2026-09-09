@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Levin command schemas (LV-2b: 1001–1003 / 1007 and notifies 2001–2004 /
+//! Levin command schemas (LV-2b: 1001–1003 / 1007 and notifies 2002–2004 /
 //! 2006–2010).
 //!
 //! Encode/decode sit on `shekyl-portable-storage`. Cryptonote blobs stay

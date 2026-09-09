@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Cryptonote notify maps 2001–2004 / 2006–2010 (`cryptonote_protocol_defs.h`).
+//! Cryptonote notify maps 2002–2004 / 2006–2010 (`cryptonote_protocol_defs.h`).
 
 use shekyl_portable_storage::{Section, Value};
 

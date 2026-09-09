@@ -111,6 +111,9 @@ any of them would be reporting on the wrong tree:
 | `LEVIN_SIGNATURE` | `rust/shekyl-levin/src/header.rs:14` (`0x0101_0101_0101_2101`), wire bytes pinned by the test at `:189-195` | **FOUND** |
 | Handshake field set | `p2p_protocol_defs.h:172-185` (`basic_node_data`), `:198-223` (`COMMAND_HANDSHAKE_T`) | **FOUND** — four fields, post-#587 |
 | The NOTIFY pair | `cryptonote_protocol_defs.h:115-130` (2001) and `:265-280` (2008) | **FOUND** — both still present |
+
+> **UPDATE 2026-09-09 — PWD-B6 deleted 2001.** The pin found both; the live
+> tree has 2008 only. The row above is the census reading, not the present.
 | Timed-sync cadence | `cryptonote_config.h:184` (`P2P_DEFAULT_HANDSHAKE_INTERVAL 60`), driven by `net_node.h:618` → `net_node.inl:2023` → `:2063` | **FOUND** — and it is in `net_node.inl`, not the protocol handler |
 | Fragmentation | `rust/shekyl-levin/src/fragment.rs:81-127` | **FOUND** — production-live via FFI |
 | Compression | `rust/shekyl-levin/src/compress.rs:24-32` | **FOUND** — production-live since 2026-08-06 |
@@ -319,6 +322,8 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-C6 | `pruning_seed` rides `CORE_SYNC_DATA` and every peerlist entry, and is validated on ingest against the stripe range | `cryptonote_protocol_defs.h:200`; `net_node.inl:2105` | `none` | 4 | — |
 | PWC-C7 | Per-command payload caps are a 13-entry switch; **unknown commands fall through to `size_t::max`**, leaving only the packet limit. **Three** entries are 128 MB and exceed the 100 MB packet limit by design, as their own comments note — `NOTIFY_NEW_BLOCK`, `NOTIFY_NEW_TRANSACTIONS` and `NOTIFY_RESPONSE_GET_OBJECTS`, i.e. the response path as well as the two announce paths | `connection_context.cpp:38-72`, the 128 MB arms at `:51`, `:53`, `:57` | `pinned-not-re-derived` | 4 | — |
 | PWC-C8 | `block_complete_entry` serializes `txs` two different ways — object array when `pruned`, blob array otherwise — and the unpruned load path fills `prunable_hash` with zeros | `cryptonote_protocol_defs.h:76-96`; `rust/shekyl-levin/src/payload/block.rs:92-125` | `KAT-port` | 4 | — |
+
+> **Ruled 2026-09-09 — `SHEKYL_P2P_PROTOCOL.md` PWD-B6: 2001 `NOTIFY_NEW_BLOCK` is deleted, so eight notify commands survive, not nine.** Both were one handler at this pin; the command id was the only distinction. `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS` (0x01) fell with it; 0x01 is unassigned.
 
 ### 4.D Peerlist, peer identity, persisted store
 
@@ -635,7 +640,7 @@ carried forward on the register's authority alone. All 28 resolve here.
 | PW-20, PW-21 | **Off-tree** — Sybil-replacement scope and a rejected proposal; no wire surface |
 | PW-22 | **LOCATED, still open** → §5.3, PWC-X5 |
 | PW-23, PW-23a, PW-24, PW-25, PW-26 | **Designed, not built** — nothing to census; PW-25's `ρ` citation corrected in §5.1 |
-| PW-27 | **CONFIRMED** → PWC-C3, at `:115` / `:265` (register said `:184` / `:334`, pre-#587 line numbers) |
+| PW-27 | **CONFIRMED** → PWC-C3, at `:115` / `:265` (register said `:184` / `:334`, pre-#587 line numbers); **discharged 2026-09-09 by PWD-B6** |
 | PW-28 | **CONFIRMED** → PWC-E1, PWC-E3; every cadence on this surface is fixed and unjittered |
 
 **Fail-to-find is reported, not reconciled.** Three register pointers do not

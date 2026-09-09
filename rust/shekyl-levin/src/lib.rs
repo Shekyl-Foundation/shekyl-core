@@ -41,7 +41,7 @@
 //!   `shekyl-portable-storage` (LV-2a). This crate owns the typed Levin
 //!   maps on top of it (LV-2b): handshake / timed-sync / ping /
 //!   support-flags (1001 / 1002 / 1003 / 1007), `network_address`, and
-//!   notifies 2001–2004 / 2006–2010. Cryptonote blobs stay opaque bytes
+//!   notifies 2002–2004 / 2006–2010. Cryptonote blobs stay opaque bytes
 //!   (`shekyl-wire`); RPC maps stay out. Live `shekyld` dual-stack is
 //!   the `#[ignore]` harness `tests/dual_stack.rs` (`SHEKYLD_BIN`; no
 //!   daemon in default crate tests).

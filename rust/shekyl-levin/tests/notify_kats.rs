@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! LV-2b notify maps: 2001–2004 / 2006–2010.
+//! LV-2b notify maps: 2002–2004 / 2006–2010.
 //!
 //! Pins fluff OPT, empty-container omit, CONTAINER_POD_AS_BLOB, pruned vs
 //! unpruned `txs`, and the attestation-witness transport cap.
