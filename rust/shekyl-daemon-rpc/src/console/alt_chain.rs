@@ -11,7 +11,6 @@ use super::{
     trimmed, wide_difficulty_decimal, Source,
 };
 use crate::chain_facts::FfiChainFacts;
-use crate::ctl_client;
 
 /// One entry of the `get_alternate_chains` reply.
 ///
@@ -46,18 +45,14 @@ fn fetch_alt_chains(src: &Source) -> Result<Vec<AltChainProvisional>, String> {
                 .ok_or_else(|| "no reply from get_alternate_chains".to_owned())?;
             ffi_json_rpc_result(&raw, "get_alternate_chains")?
         }
-        Source::Remote {
-            address, timeout, ..
-        } => {
-            src.ensure_identity()?;
+        Source::Remote { .. } => {
             let body = serde_json::to_vec(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": "0",
                 "method": "get_alternate_chains",
             }))
             .map_err(|e| format!("cannot encode the request: {e}"))?;
-            let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw = src.post_remote("/json_rpc", body)?;
             json_rpc_result::<AltChainsReplyProvisional>(&raw, "get_alternate_chains")?
         }
     };

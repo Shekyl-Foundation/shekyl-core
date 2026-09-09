@@ -39,12 +39,8 @@
 //! # Variant names locked in by the plan
 //!
 //! - [`OpenError::NetworkMismatch`] — wallet file says network N, the
-//!   CALLER's `expected` parameter says network M. **Not the daemon**: the
-//!   variant's fields are `{ wallet, expected }` and no daemon-reported value
-//!   enters the comparison. This line used to say "daemon client says network
-//!   M", which was false for the whole of Phase 1. The daemon side of
-//!   cross-cutting lock 5 is `DaemonClient::verifying` (`VC-4`), which
-//!   refuses on its own axes before the first request.
+//!   caller's `expected` parameter says network M. The daemon side of
+//!   lock 5 is [`DaemonClient::verifying`](crate::engine::DaemonClient::verifying).
 //! - [`RefreshError::ConcurrentMutation`] — `apply_scan_result`'s
 //!   `start_height` does not match the wallet's current `synced_height`
 //!   (a second refresh raced ahead, or the caller mutated the wallet

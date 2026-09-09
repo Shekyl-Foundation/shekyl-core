@@ -29,6 +29,7 @@ use crate::ctl_client;
 
 mod alt_chain;
 mod blockchain;
+mod identity;
 mod info;
 mod status;
 #[cfg(test)]
@@ -69,20 +70,6 @@ enum Source {
         /// — rather than "before the console does anything".
         checked: std::sync::OnceLock<Result<(), String>>,
     },
-}
-
-impl Source {
-    /// Run the identity handshake once, then reuse its verdict (`VC-3`).
-    fn ensure_identity(&self) -> Result<(), String> {
-        match self {
-            // The live arm renders from this process; every axis would
-            // compare a value to itself (`VC-D6`).
-            Source::Live(_) => Ok(()),
-            Source::Remote { checked, .. } => {
-                checked.get_or_init(|| identity_handshake(self)).clone()
-            }
-        }
-    }
 }
 
 /// Decode a REST reply body: the success type, else the daemon's error
@@ -236,7 +223,10 @@ fn print_block(
 /// Unwrap a JSON-RPC 2.0 envelope: the `result`, or the `error`'s message as
 /// the operator's reason. A daemon that refused says why; a body that is
 /// neither is a malformed reply.
-fn json_rpc_result<T: serde::de::DeserializeOwned>(body: &[u8], method: &str) -> Result<T, String> {
+pub(super) fn json_rpc_result<T: serde::de::DeserializeOwned>(
+    body: &[u8],
+    method: &str,
+) -> Result<T, String> {
     let envelope: serde_json::Value = serde_json::from_slice(body).map_err(|_| {
         format!(
             "malformed {method} reply: {}",
@@ -275,11 +265,7 @@ where
 {
     match src {
         Source::Live(core) => live(core).map_err(|e| format!("{e:?}")),
-        Source::Remote {
-            address, timeout, ..
-        } => {
-            // Before the first request to this daemon (VC-3).
-            src.ensure_identity()?;
+        Source::Remote { .. } => {
             let body = serde_json::to_vec(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": "0",
@@ -287,8 +273,7 @@ where
                 "params": request,
             }))
             .map_err(|e| format!("cannot encode the request: {e}"))?;
-            let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw = src.post_remote("/json_rpc", body)?;
             json_rpc_result::<Res>(&raw, method)
         }
     }
@@ -343,13 +328,8 @@ fn print_height(src: &Source) -> Result<String, String> {
             let facts = FfiChainFacts::new(core.clone());
             crate::methods::get_height(&facts).map_err(|e| format!("{e:?}"))?
         }
-        Source::Remote {
-            address, timeout, ..
-        } => {
-            // Before the first request to this daemon (VC-3).
-            src.ensure_identity()?;
-            let body = ctl_client::post_blocking(address, "/get_height", b"{}".to_vec(), *timeout)
-                .map_err(|(_, reason)| reason)?;
+        Source::Remote { .. } => {
+            let body = src.post_remote("/get_height", b"{}".to_vec())?;
             decode_reply::<GetHeightResponse>(&body, "get_height")?
         }
     };
@@ -557,14 +537,9 @@ fn is_key_image_spent(src: &Source, args: &[String]) -> Result<String, String> {
                 spent_status,
             }
         }
-        Source::Remote {
-            address, timeout, ..
-        } => {
-            // Before the first request to this daemon (VC-3).
-            src.ensure_identity()?;
+        Source::Remote { .. } => {
             let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-            let raw = ctl_client::post_blocking(address, "/is_key_image_spent", body, *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw = src.post_remote("/is_key_image_spent", body)?;
             // Through `decode_reply`, as `print_height` does: a native handler
             // reports failure as a `RestErrorEnvelope`, and a success-only
             // decode turns the server's stated reason into "malformed reply".
@@ -628,14 +603,9 @@ fn fetch_transactions(
             )
             .map_err(|f| format!("could not decode {} to json ({})", f.txid, f.code))
         }
-        Source::Remote {
-            address, timeout, ..
-        } => {
-            // Before the first request to this daemon (VC-3).
-            src.ensure_identity()?;
+        Source::Remote { .. } => {
             let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
-            let raw = ctl_client::post_blocking(address, "/get_transactions", body, *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw = src.post_remote("/get_transactions", body)?;
             // See the `is_key_image_spent` arm: a native handler's failure is a
             // `RestErrorEnvelope`, so decoding success-only reports "malformed"
             // over the reason the server actually gave.
@@ -801,106 +771,6 @@ pub unsafe extern "C" fn shekyl_daemon_console_run(
     }
 }
 
-/// The connect-time identity handshake for the remote console arm (`VC-3`).
-///
-/// `shekyld <command>` posts to an address that may be a different binary, so
-/// before rendering anything it asks `get_version` once and compares this
-/// build's identity against the daemon's, on all four axes of §2.
-///
-/// **The live arm returns immediately and that is the design** (`VC-D6`): it
-/// renders from this process, so every axis would compare a value to itself.
-/// A check that cannot fail is worse than no check — it consumes the
-/// attention a real one would get.
-///
-/// **`VC-D16` — a reply that does not parse is a wire-axis failure.** Every
-/// tuple field is strict, so a daemon whose `get_version` shape has moved
-/// fails deserialization before any axis is read. That *is* the wire axis
-/// disagreeing, reached by another route, and it is reported in those terms
-/// rather than as a serde error naming a field. The daemon's version is
-/// unavailable in that case and the message says so instead of guessing; a
-/// lenient second parse to recover it would put a weaker parser on the one
-/// surface that must stay strict.
-fn identity_handshake(src: &Source) -> Result<(), String> {
-    let (address, timeout, nettype) = match src {
-        Source::Live(_) => return Ok(()),
-        Source::Remote {
-            address,
-            timeout,
-            nettype,
-            ..
-        } => (address, timeout, *nettype),
-    };
-    let ours_network = match nettype {
-        0 => shekyl_rpc_types::DaemonNetwork::Mainnet,
-        1 => shekyl_rpc_types::DaemonNetwork::Testnet,
-        2 => shekyl_rpc_types::DaemonNetwork::Stagenet,
-        3 => shekyl_rpc_types::DaemonNetwork::Fakechain,
-        other => {
-            return Err(format!(
-                "refusing to render: this console was given network code {other}, which this \
-                 build does not know. It cannot say what it expects, so it will not compare."
-            ))
-        }
-    };
-
-    let body = serde_json::to_vec(&serde_json::json!({
-        "jsonrpc": "2.0", "id": "0", "method": "get_version", "params": {},
-    }))
-    .map_err(|e| format!("cannot encode the handshake request: {e}"))?;
-    let raw = ctl_client::post_blocking(address, "/json_rpc", body, *timeout)
-        .map_err(|(_, reason)| reason)?;
-
-    let theirs: shekyl_rpc_types::GetVersionResponse = json_rpc_result(&raw, "get_version")
-        .map_err(|reason| {
-            format!(
-                "refusing to render: this daemon's `get_version` does not match the RPC \
-                 contract this build was compiled against, so the two are on different RPC \
-                 versions. This build is {ours}. The reply could not be read, so the daemon's \
-                 version cannot be named here; align the two builds. (evidence: {reason})",
-                ours = version_string(shekyl_rpc_types::CORE_RPC_VERSION),
-            )
-        })?;
-
-    if theirs.version != shekyl_rpc_types::CORE_RPC_VERSION {
-        let (ours, them) = (shekyl_rpc_types::CORE_RPC_VERSION, theirs.version);
-        let older = if them < ours { "daemon" } else { "this build" };
-        return Err(format!(
-            "refusing to render: RPC contract mismatch. This build is {}, the daemon is {} — \
-             the {older} is the older one; update it.",
-            version_string(ours),
-            version_string(them),
-        ));
-    }
-    if theirs.consensus_constants_digest != shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH {
-        // No ordering, and the refusal does not invent one (`VC-D15`): a
-        // digest is a hash. That the versions match is itself the useful
-        // fact, so the message says what the disagreement means instead.
-        return Err(format!(
-            "refusing to render: consensus-constant mismatch. This build's digest is {ours}, \
-             the daemon's is {theirs}. The RPC contract matches, so neither side is a stale \
-             release — one tree's config/ differs from the other, which is a different rule \
-             set rather than a version skew. Compare config/consensus_constants.json and \
-             config/economics_params.json between the two builds.",
-            ours = shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST,
-            theirs = theirs.consensus_constants_digest,
-        ));
-    }
-    if theirs.nettype != ours_network {
-        return Err(format!(
-            "refusing to render: network mismatch. This console is for {ours_network}, the \
-             daemon runs {theirs}. Point at a {ours_network} daemon, or pass the flag for \
-             {theirs}.",
-            theirs = theirs.nettype,
-        ));
-    }
-    Ok(())
-}
-
-/// `3.29` from the packed constant, for an operator-facing message.
-fn version_string(packed: u32) -> String {
-    format!("{}.{}", packed >> 16, packed & 0xffff)
-}
-
 /// Unix seconds, read once per console command so a whole rendering
 /// describes one instant.
 fn unix_now() -> u64 {
@@ -1041,14 +911,9 @@ fn fetch_peer_list(
             let facts = crate::chain_facts::FfiP2pFacts::new(core.clone());
             crate::methods::get_peer_list(&request, &facts).map_err(|e| format!("{e:?}"))?
         }
-        Source::Remote {
-            address, timeout, ..
-        } => {
-            // Before the first request to this daemon (VC-3).
-            src.ensure_identity()?;
+        Source::Remote { .. } => {
             let body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-            let raw = ctl_client::post_blocking(address, "/get_peer_list", body, *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw = src.post_remote("/get_peer_list", body)?;
             decode_reply::<shekyl_rpc_types::GetPeerListResponse>(&raw, "get_peer_list")?
         }
     };
@@ -1296,18 +1161,11 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
                 .map_err(|e| format!("malformed get_limit reply: {e}"))?;
             (stats, limits)
         }
-        Source::Remote {
-            address, timeout, ..
-        } => {
-            // Before the first request to this daemon (VC-3).
-            src.ensure_identity()?;
-            let raw =
-                ctl_client::post_blocking(address, "/get_net_stats", b"{}".to_vec(), *timeout)
-                    .map_err(|(_, reason)| reason)?;
+        Source::Remote { .. } => {
+            let raw = src.post_remote("/get_net_stats", b"{}".to_vec())?;
             let stats =
                 decode_reply::<shekyl_rpc_types::GetNetStatsResponse>(&raw, "get_net_stats")?;
-            let raw = ctl_client::post_blocking(address, "/get_limit", b"{}".to_vec(), *timeout)
-                .map_err(|(_, reason)| reason)?;
+            let raw = src.post_remote("/get_limit", b"{}".to_vec())?;
             let limits: GetLimitReplyProvisional = serde_json::from_slice(&raw)
                 .map_err(|e| format!("malformed get_limit reply: {e}"))?;
             (stats, limits)

@@ -14,7 +14,7 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
-- **The genesis identity axis is built but not armed.** `GENESIS_PINS_ARE_PLACEHOLDERS` is true; capturing block 0 per network (the txid-KAT provenance chain) arms it by flipping that constant. Falsify: that constant is `false`. Owner: [`CLIENT_VERSION_CONSTANTS_VALIDATION.md`](design/CLIENT_VERSION_CONSTANTS_VALIDATION.md) §3.15.1 (`VC-D18`).
+- **The genesis identity axis is built but not armed.** `shekyl_rpc_types::GENESIS_PINS_ARE_PLACEHOLDERS` is true; capturing block 0 per network (the txid-KAT provenance chain) arms every consumer at once by flipping that constant and filling `genesis_hash_for`. Falsify: that constant is `false`. Owner: [`CLIENT_VERSION_CONSTANTS_VALIDATION.md`](design/CLIENT_VERSION_CONSTANTS_VALIDATION.md) §3.15.1 (`VC-D18`).
   - Target: pre-genesis
 
 - **Delete or justify `tx_extra` 0x0A (`PQC_SPEND_AUTH_PUBKEYS`) — it has no producer.** Found at the C2-R2 signing round (Rick, verified at source): declared (`src/cryptonote_basic/tx_extra.h:48`, `rust/shekyl-wire/src/tx_extra.rs:50`), parsed (`tx_extra.rs:233`), picked (`src/cryptonote_basic/cryptonote_format_utils.cpp:540`) — and nothing anywhere constructs the field; the only write arm is the codec's generic `write_blob` branch. A parse surface with no producer is rule-15 debt and a fuzzing surface for free. Rule 15: delete at the port, or record the future producer that justifies it. — [`CONSENSUS_C2_R2_WEIGHT_FEES.md`](completed/CONSENSUS_C2_R2_WEIGHT_FEES.md) Q10

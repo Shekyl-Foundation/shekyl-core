@@ -425,13 +425,8 @@ impl ChainFacts for FfiChainFacts {
         // reporting a network this build does not know is a daemon this
         // build cannot vouch for (VC-D14), and the identity axis is the one
         // place a silent fallback would read as agreement.
-        let nettype = match pod.nettype {
-            0 => shekyl_rpc_types::DaemonNetwork::Mainnet,
-            1 => shekyl_rpc_types::DaemonNetwork::Testnet,
-            2 => shekyl_rpc_types::DaemonNetwork::Stagenet,
-            3 => shekyl_rpc_types::DaemonNetwork::Fakechain,
-            _ => return Err(FactsFault::Inconsistent),
-        };
+        let nettype = shekyl_rpc_types::DaemonNetwork::from_cryptonote(pod.nettype)
+            .ok_or(FactsFault::Inconsistent)?;
         Ok(DaemonIdentity {
             nettype,
             genesis_hash: BlockHash::from_bytes(pod.genesis_hash),

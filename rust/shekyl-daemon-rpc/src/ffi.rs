@@ -306,9 +306,6 @@ pub const SHEKYL_RPC_FACTS_ERR_INTERNAL: i32 = -3;
 /// data-integrity fault of this daemon, distinct from a read that threw.
 pub const SHEKYL_RPC_FACTS_ERR_INCONSISTENT: i32 = -4;
 
-/// Twin of `shekyl_rpc_chain_tip_facts`. Layout pinned both directions by
-/// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via
-/// `shekyl_rpc_chain_tip_facts_rust_{fill,check}`.
 /// Twin of `shekyl_rpc_identity_facts` (VC-2): what this daemon **is**, as
 /// opposed to what its chain tip looks like right now.
 ///
@@ -332,6 +329,9 @@ pub struct IdentityFactsFfi {
     pub genesis_hash: [u8; 32],
 }
 
+/// Twin of `shekyl_rpc_chain_tip_facts`. Layout pinned both directions by
+/// `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via
+/// `shekyl_rpc_chain_tip_facts_rust_{fill,check}`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChainTipFactsFfi {

@@ -6,7 +6,6 @@
 //! Bridged `/get_info` and the DAA target the header commands render with.
 
 use super::Source;
-use crate::ctl_client;
 
 // ── RK-5b: the header console commands ──────────────────────────────────────
 //
@@ -70,12 +69,8 @@ pub(super) fn fetch_get_info(src: &Source) -> Result<GetInfoReplyProvisional, St
                 .ok_or_else(|| "no reply from /get_info".to_owned())?;
             serde_json::from_str(&raw)
         }
-        Source::Remote {
-            address, timeout, ..
-        } => {
-            src.ensure_identity()?;
-            let raw = ctl_client::post_blocking(address, "/get_info", b"{}".to_vec(), *timeout)
-                .map_err(|(_, reason)| reason)?;
+        Source::Remote { .. } => {
+            let raw = src.post_remote("/get_info", b"{}".to_vec())?;
             serde_json::from_slice(&raw)
         }
     }

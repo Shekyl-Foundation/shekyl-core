@@ -21,23 +21,22 @@
 //!    later phase swaps the underlying transport (UDS, gRPC, in-process
 //!    test fake) the `Engine`-level signature is unchanged.
 //! 2. **One audited site for daemon-bound calls.** The wallet's
-//!    daemon-touching operations (`get_info` for network verification,
-//!    `get_fee_estimates` for fee-priority resolution, transfer
-//!    submission) ultimately go through this type, which gives Phase 2a
-//!    a single place to add tracing spans, fee-sanity checks, and
-//!    network-mismatch detection without touching every call site.
+//!    daemon-touching operations (`get_fee_estimates` for fee-priority
+//!    resolution, transfer submission, the identity handshake on
+//!    `get_version`) ultimately go through this type.
 //! 3. **Keeps the cross-cutting lock 1 contract local.** The
 //!    "caller-provided multi-threaded `tokio` runtime" requirement
 //!    sits on a [`HttpRpc`] field rather than radiating through
 //!    the wallet API.
 //!
-//! # Network verification (Phase 2a)
+//! # Identity handshake (`VC-4`)
 //!
-//! [`DaemonClient`] does not yet verify the daemon's network on
-//! construction; that ships with `Engine::open_*`'s lifecycle commit,
-//! which calls `get_info` and compares the daemon-reported network with
-//! the wallet file's region 1 declaration. Mismatches surface as
-//! [`OpenError::NetworkMismatch`](super::error::OpenError::NetworkMismatch).
+//! [`DaemonClient::verifying`] compares the daemon's `get_version` tuple
+//! to this build on first request, gated at [`Rpc::post`]. A mismatch is
+//! [`RpcError::InvalidNode`]. [`DaemonClient::new`] performs no check
+//! and exists for harnesses whose fake daemons serve no `get_version`.
+//! Wallet-file vs caller network remains [`OpenError::NetworkMismatch`]
+//! (`{ wallet, expected }`); that is a different fact.
 
 use std::future::Future;
 
@@ -144,13 +143,10 @@ fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
 
 /// What a wallet requires of the daemon it dials (`VC-4`).
 ///
-/// Cross-cutting lock 5 (`WALLET_REWRITE_PLAN.md` :216) has required since
-/// Phase 1 that the daemon's network be verified before any wallet operation,
-/// as a defence against a DNS answer pointing a testnet wallet at a mainnet
-/// daemon. What landed compared the wallet FILE against the caller's
-/// `expected` parameter and never asked the daemon — the variant's fields,
-/// `{ wallet, expected }`, have no place for a daemon-reported value — while
-/// two docstrings said otherwise. This type is the missing half.
+/// Cross-cutting lock 5 (`WALLET_REWRITE_PLAN.md` :216): the daemon's
+/// network is verified before any wallet operation. Comparison itself lives
+/// in [`shekyl_rpc_types::IdentityExpectation`]; this type is the wallet
+/// mapping (`shekyl_address::Network` has no `Fakechain`).
 #[derive(Debug, Clone)]
 pub struct DaemonExpectation {
     /// The network this wallet is bound to.
@@ -185,28 +181,19 @@ pub enum FakechainPolicy {
     Accept,
 }
 
-/// Which axis of the identity tuple disagreed (`VC-4`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IdentityAxis {
-    /// `CORE_RPC_VERSION`: the two binaries do not share an RPC contract.
-    Wire,
-    /// The consensus-constant digest: built from different `config/`
-    /// authorities, which is a different rule set.
-    Rules,
-    /// `nettype`: same rules, a different instance of them.
-    Network,
-    /// Block 0's hash: the chain does not start where this build's does.
-    Genesis,
-}
-
-impl std::fmt::Display for IdentityAxis {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Wire => "RPC contract",
-            Self::Rules => "consensus constants",
-            Self::Network => "network",
-            Self::Genesis => "genesis block",
-        })
+impl DaemonExpectation {
+    fn pins(&self) -> shekyl_rpc_types::IdentityExpectation {
+        let network = match self.network {
+            shekyl_address::Network::Mainnet => shekyl_rpc_types::DaemonNetwork::Mainnet,
+            shekyl_address::Network::Testnet => shekyl_rpc_types::DaemonNetwork::Testnet,
+            shekyl_address::Network::Stagenet => shekyl_rpc_types::DaemonNetwork::Stagenet,
+        };
+        match self.fakechain {
+            FakechainPolicy::Refuse => shekyl_rpc_types::IdentityExpectation::exact(network),
+            FakechainPolicy::Accept => {
+                shekyl_rpc_types::IdentityExpectation::exact_or_fakechain(network)
+            }
+        }
     }
 }
 
@@ -230,15 +217,9 @@ pub struct DaemonClient {
     /// handshake has run. `None` means the caller took responsibility for
     /// identity itself — see [`DaemonClient::new`].
     expectation: Option<DaemonExpectation>,
-    /// The handshake verdict, computed on the **first** request and reused.
-    ///
-    /// First-use rather than at construction or at `Engine::open_*`: the open
-    /// path is synchronous and the daemon is not, and opening a wallet file
-    /// should not require a network round trip. It is also the honest reading
-    /// of a connect-time check — before the first request to this daemon —
-    /// and it is the same shape the console arm uses (`VC-3`), so the two
-    /// arms answer the question the same way.
-    checked: std::sync::Arc<tokio::sync::OnceCell<Result<(), String>>>,
+    /// Handshake verdict: `Ok` / confirmed mismatch are stored; transport
+    /// failures are not (`get_or_try_init`).
+    checked: std::sync::Arc<tokio::sync::OnceCell<Result<(), shekyl_rpc_types::IdentityMismatch>>>,
 }
 
 impl DaemonClient {
@@ -247,12 +228,6 @@ impl DaemonClient {
     /// **Performs no identity check.** For harnesses whose fake daemons serve
     /// no `get_version`, and for callers that have verified by other means.
     /// Every shipped path uses [`DaemonClient::verifying`] instead.
-    ///
-    /// This docstring used to read "daemon network verification is performed
-    /// by `Engine::open_*`". That was false for the whole of Phase 1: what
-    /// `open_*` compares is the wallet FILE against the caller's `expected`
-    /// parameter, and no daemon-reported value entered the comparison at all.
-    /// Corrected with the check that makes it true elsewhere (`VC-4`).
     pub fn new(inner: HttpRpc) -> Self {
         Self {
             inner,
@@ -274,97 +249,41 @@ impl DaemonClient {
         }
     }
 
-    /// Run the identity handshake once, then reuse its verdict (`VC-4`).
+    /// Run the identity handshake once, then reuse a confirmed verdict (`VC-4`).
     ///
-    /// Four axes, all read from **one** `get_version` reply: two calls could
-    /// straddle a restart or a proxy fronting two nodes and return axes from
-    /// different daemons, so a client would accept a tuple that never
-    /// simultaneously existed (`VC-R2`).
-    ///
-    /// **`VC-D16`** — the reply's fields are strict, so a daemon whose
-    /// `get_version` shape has moved fails to deserialize before any axis is
-    /// read. That is the wire axis disagreeing, reported in those terms.
+    /// Transport / method errors are **not** stored: a daemon that is down or
+    /// not ready on the first request must not permanently disable the client.
+    /// A parsed mismatch (including a strict shape failure, `VC-D16`) is.
     async fn ensure_identity(&self) -> Result<(), RpcError> {
         let Some(expected) = self.expectation.as_ref() else {
             return Ok(());
         };
-        let verdict = self
+        match self
             .checked
-            .get_or_init(|| async { self.run_identity_handshake(expected).await })
-            .await;
-        match verdict {
-            Ok(()) => Ok(()),
-            Err(reason) => Err(RpcError::InvalidNode(reason.clone())),
+            .get_or_try_init(|| async {
+                match self.run_identity_handshake(expected).await {
+                    Ok(()) => Ok(Ok(())),
+                    Err(HandshakeFail::Mismatch(m)) => Ok(Err(m)),
+                    Err(HandshakeFail::Transport(e)) => Err(e),
+                }
+            })
+            .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(mismatch)) => Err(RpcError::InvalidNode(wallet_identity_message(mismatch))),
+            Err(e) => Err(e),
         }
     }
 
-    async fn run_identity_handshake(&self, expected: &DaemonExpectation) -> Result<(), String> {
-        let reply: shekyl_rpc_types::GetVersionResponse = self
-            .inner
-            .json_rpc_call("get_version", None)
-            .await
-            .map_err(|e| {
-                format!(
-                    "this daemon's `get_version` does not match the RPC contract this wallet \
-                     was built against, so the two are on different RPC versions. This wallet \
-                     is {ours}. The reply could not be read, so the daemon's version cannot be \
-                     named here; align the two builds. (evidence: {e})",
-                    ours = version_string(shekyl_rpc_types::CORE_RPC_VERSION),
-                )
-            })?;
-
-        if reply.version != shekyl_rpc_types::CORE_RPC_VERSION {
-            let (ours, them) = (shekyl_rpc_types::CORE_RPC_VERSION, reply.version);
-            let older = if them < ours { "daemon" } else { "this wallet" };
-            return Err(format!(
-                "{axis} mismatch: this wallet is {}, the daemon is {} — the {older} is the \
-                 older one; update it. Refusing before any wallet operation.",
-                version_string(ours),
-                version_string(them),
-                axis = IdentityAxis::Wire,
-            ));
-        }
-        if reply.consensus_constants_digest != shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST_HASH {
-            // A digest carries no ordering, so the refusal does not invent
-            // one (`VC-D15`); it says what the disagreement means instead.
-            return Err(format!(
-                "{axis} mismatch: this wallet's digest is {ours}, the daemon's is {theirs}. The \
-                 RPC contract matches, so neither side is a stale release — one tree's config/ \
-                 differs from the other, which is a different RULE SET rather than a version \
-                 skew. Balances read from it would be computed under rules this wallet does \
-                 not implement.",
-                ours = shekyl_rpc_types::CONSENSUS_CONSTANTS_DIGEST,
-                theirs = reply.consensus_constants_digest,
-                axis = IdentityAxis::Rules,
-            ));
-        }
-
-        let ours_network = expectation_network(expected.network);
-        let network_ok = reply.nettype == ours_network
-            || (reply.nettype == shekyl_rpc_types::DaemonNetwork::Fakechain
-                && expected.fakechain == FakechainPolicy::Accept);
-        if !network_ok {
-            return Err(format!(
-                "{axis} mismatch: this wallet is a {ours_network} wallet, the daemon runs \
-                 {theirs}. This is the case cross-cutting lock 5 names — a wallet pointed at a \
-                 daemon on another network — so it refuses rather than scanning it.",
-                theirs = reply.nettype,
-                axis = IdentityAxis::Network,
-            ));
-        }
-
-        let expected_genesis = genesis_hash_for(expected.network);
-        if !GENESIS_PINS_ARE_PLACEHOLDERS && reply.genesis_hash.to_bytes() != expected_genesis {
-            return Err(format!(
-                "{axis} mismatch: this daemon's chain starts at {theirs}, this wallet's \
-                 {ours_network} genesis is {ours}. Whatever else agrees, that is a different \
-                 chain.",
-                theirs = reply.genesis_hash,
-                ours = shekyl_rpc_types::HashHex::from_bytes(expected_genesis),
-                axis = IdentityAxis::Genesis,
-            ));
-        }
-        Ok(())
+    async fn run_identity_handshake(
+        &self,
+        expected: &DaemonExpectation,
+    ) -> Result<(), HandshakeFail> {
+        let reply = fetch_get_version(&self.inner).await?;
+        expected
+            .pins()
+            .check(&reply)
+            .map_err(HandshakeFail::Mismatch)
     }
 
     /// Fetch the block at `number` as a [`ScannableBlock`] via the native
@@ -385,50 +304,98 @@ impl DaemonClient {
     }
 }
 
-/// `3.29` from the packed constant, for an operator-facing message.
-fn version_string(packed: u32) -> String {
-    format!("{}.{}", packed >> 16, packed & 0xffff)
+enum HandshakeFail {
+    Transport(RpcError),
+    Mismatch(shekyl_rpc_types::IdentityMismatch),
 }
 
-/// The wallet's network as the daemon spells it on the wire.
-///
-/// `shekyl_address::Network` has three variants and deliberately no
-/// `Fakechain` (`V3_WALLET_DECISION_LOG.md` :1397 defers that workspace-wide
-/// change), which is why the wire-side [`shekyl_rpc_types::DaemonNetwork`]
-/// carries the fourth and the fakechain arm is a policy rather than a mapping.
-fn expectation_network(network: shekyl_address::Network) -> shekyl_rpc_types::DaemonNetwork {
-    match network {
-        shekyl_address::Network::Mainnet => shekyl_rpc_types::DaemonNetwork::Mainnet,
-        shekyl_address::Network::Testnet => shekyl_rpc_types::DaemonNetwork::Testnet,
-        shekyl_address::Network::Stagenet => shekyl_rpc_types::DaemonNetwork::Stagenet,
+/// Fetch `get_version` without going through [`DaemonClient::post`] (that
+/// would recurse into the handshake). A JSON-RPC **error** object is
+/// transport — the daemon is reachable but not ready — not a wire mismatch.
+async fn fetch_get_version(
+    inner: &HttpRpc,
+) -> Result<shekyl_rpc_types::GetVersionResponse, HandshakeFail> {
+    let body = serde_json::to_vec(&json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "get_version",
+        "params": {},
+    }))
+    .map_err(|e| HandshakeFail::Transport(RpcError::InternalError(e.to_string())))?;
+    let raw = inner
+        .post("json_rpc", body)
+        .await
+        .map_err(HandshakeFail::Transport)?;
+    let envelope: Value = serde_json::from_slice(&raw)
+        .map_err(|e| HandshakeFail::Mismatch(shekyl_rpc_types::IdentityMismatch::unreadable(e)))?;
+    if let Some(error) = envelope.get("error") {
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("no reason given");
+        return Err(HandshakeFail::Transport(RpcError::ConnectionError(
+            format!("get_version: {message}"),
+        )));
+    }
+    let result = envelope.get("result").ok_or_else(|| {
+        HandshakeFail::Mismatch(shekyl_rpc_types::IdentityMismatch::unreadable(
+            "malformed get_version reply: no result",
+        ))
+    })?;
+    serde_json::from_value(result.clone())
+        .map_err(|e| HandshakeFail::Mismatch(shekyl_rpc_types::IdentityMismatch::unreadable(e)))
+}
+
+fn wallet_identity_message(m: &shekyl_rpc_types::IdentityMismatch) -> String {
+    use shekyl_rpc_types::{core_rpc_version_string, IdentityAxis, IdentityMismatch};
+    match m {
+        IdentityMismatch::Wire { ours, theirs } => {
+            let older = if theirs < ours {
+                "daemon"
+            } else {
+                "this wallet"
+            };
+            format!(
+                "{axis} mismatch: this wallet is {}, the daemon is {} — the {older} is the \
+                 older one; update it. Refusing before any wallet operation.",
+                core_rpc_version_string(*ours),
+                core_rpc_version_string(*theirs),
+                axis = IdentityAxis::Wire,
+            )
+        }
+        IdentityMismatch::WireUnreadable { ours, evidence } => format!(
+            "this daemon's `get_version` does not match the RPC contract this wallet \
+             was built against, so the two are on different RPC versions. This wallet \
+             is {}. The reply could not be read, so the daemon's version cannot be \
+             named here; align the two builds. (evidence: {evidence})",
+            core_rpc_version_string(*ours),
+        ),
+        IdentityMismatch::Rules { ours, theirs } => format!(
+            "{axis} mismatch: this wallet's digest is {ours}, the daemon's is {theirs}. The \
+             RPC contract matches, so neither side is a stale release — one tree's config/ \
+             differs from the other, which is a different RULE SET rather than a version \
+             skew. Balances read from it would be computed under rules this wallet does \
+             not implement.",
+            axis = IdentityAxis::Rules,
+        ),
+        IdentityMismatch::Network { ours, theirs } => format!(
+            "{axis} mismatch: this wallet is a {ours} wallet, the daemon runs \
+             {theirs}. This is the case cross-cutting lock 5 names — a wallet pointed at a \
+             daemon on another network — so it refuses rather than scanning it.",
+            axis = IdentityAxis::Network,
+        ),
+        IdentityMismatch::Genesis {
+            ours,
+            theirs,
+            network,
+        } => format!(
+            "{axis} mismatch: this daemon's chain starts at {theirs}, this wallet's \
+             {network} genesis is {ours}. Whatever else agrees, that is a different \
+             chain.",
+            axis = IdentityAxis::Genesis,
+        ),
     }
 }
-
-/// The genesis block hash this build expects on `network` (`VC-D12`).
-///
-/// Rule 71: the network selects **data** — which constant is compared — and
-/// never control flow. These are pins, not a computation: the daemon derives
-/// block 0 from `GENESIS_TX` / `GENESIS_NONCE` per network
-/// (`src/cryptonote_config.h:368`, `:500`, `:511`) and the client side has
-/// never held the answer at all, which is what `VC-R2` found while checking
-/// whether anything compared it.
-///
-/// **These are placeholders until the KAT lands.** A pin whose value is not
-/// derived from the chain it names is a number, not a fact — so `VC-4`'s
-/// remaining task is capturing block 0 from a live daemon per network the way
-/// the txid KATs were captured, and replacing these. Until then
-/// `GENESIS_PINS_ARE_PLACEHOLDERS` is `true` and the genesis axis does not
-/// refuse; the other three do.
-const fn genesis_hash_for(_network: shekyl_address::Network) -> [u8; 32] {
-    [0u8; 32]
-}
-
-/// Whether [`genesis_hash_for`] returns real pins yet.
-///
-/// Stated as a constant rather than a comment so the arm that skips the
-/// comparison is visible to a grep and cannot be forgotten: this is the one
-/// axis of the tuple that is not yet armed.
-const GENESIS_PINS_ARE_PLACEHOLDERS: bool = true;
 
 impl Rpc for DaemonClient {
     /// Every request this wallet makes funnels here, which is why the
@@ -506,8 +473,7 @@ impl DaemonEngine for DaemonClient {
     }
 
     /// Snapshot daemon health via **one** `get_info` JSON-RPC read
-    /// (§5.2 item 3) — the same info surface `Engine::open_*` already
-    /// queries for network verification, so this adds no new RPC method.
+    /// (§5.2 item 3). Identity is already gated at [`Rpc::post`].
     ///
     /// The summed outgoing/incoming connection counts and the sync
     /// position feed the §5.3 escape ladder's health gate. Untrusted-
@@ -762,6 +728,83 @@ mod tests {
             .expect("loopback endpoint");
         let client = DaemonClient::new(rpc);
         assert!(client.ensure_identity().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_transport_failure_is_not_cached_as_a_mismatch() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let reply = version_reply(|_| {});
+        std::thread::spawn(move || {
+            if let Ok((s, _)) = listener.accept() {
+                drop(s);
+            }
+            while let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 8192];
+                let Ok(n) = s.read(&mut buf) else { return };
+                if n == 0 {
+                    return;
+                }
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    reply.len()
+                );
+                drop(s.write_all(head.as_bytes()));
+                drop(s.write_all(reply.as_bytes()));
+            }
+        });
+        let rpc = HttpRpc::new(format!("http://{address}"))
+            .await
+            .expect("loopback endpoint");
+        let client = DaemonClient::verifying(rpc, mainnet_expectation());
+        let first = client.ensure_identity().await;
+        assert!(
+            matches!(first, Err(RpcError::ConnectionError(_))),
+            "a hang-up is transport, not InvalidNode: {first:?}"
+        );
+        let second = client.ensure_identity().await;
+        assert!(
+            second.is_ok(),
+            "a later agreeing daemon must pass after a transport miss: {second:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_jsonrpc_error_is_not_cached_as_a_mismatch() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let error_body =
+            json!({"jsonrpc":"2.0","id":0,"error":{"code":-1,"message":"not ready"}}).to_string();
+        let ok_body = version_reply(|_| {});
+        std::thread::spawn(move || {
+            for payload in [error_body, ok_body] {
+                let Ok((mut s, _)) = listener.accept() else {
+                    return;
+                };
+                let mut buf = [0u8; 8192];
+                drop(s.read(&mut buf));
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    payload.len()
+                );
+                drop(s.write_all(head.as_bytes()));
+                drop(s.write_all(payload.as_bytes()));
+            }
+        });
+        let rpc = HttpRpc::new(format!("http://{address}"))
+            .await
+            .expect("loopback endpoint");
+        let client = DaemonClient::verifying(rpc, mainnet_expectation());
+        let first = client.ensure_identity().await;
+        assert!(
+            matches!(first, Err(RpcError::ConnectionError(_))),
+            "not-ready is transport, not a contract mismatch: {first:?}"
+        );
+        let second = client.ensure_identity().await;
+        assert!(
+            second.is_ok(),
+            "the handshake must retry after a method error: {second:?}"
+        );
     }
 
     /// V3 daemon: `fees` array present, tiers map to indices 0/1/3
