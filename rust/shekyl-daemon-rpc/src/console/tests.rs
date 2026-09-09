@@ -2275,6 +2275,53 @@ fn a_get_version_that_does_not_parse_is_reported_as_a_wire_mismatch() {
 }
 
 #[test]
+fn an_unrecognised_network_code_refuses_rather_than_defaulting() {
+    // The trap in a five-hop thread (main.cpp -> command_server ->
+    // parser_executor -> rpc_command_executor -> this FFI) is a default
+    // somewhere in the middle turning a wrong-network daemon into a
+    // silently-correct-looking one. C++ cannot skip the parameter — it has no
+    // default at any hop and precedes the defaulted ones — and this pins the
+    // other half: a code this build does not know REFUSES. `UNDEFINED` is 255
+    // in cryptonote::network_type, so it is the value a miswired hop would
+    // most plausibly deliver.
+    let addr = route_server(vec![]);
+    let ptrs: Vec<CString> = ["print_height"]
+        .iter()
+        .map(|a| CString::new(*a).unwrap())
+        .collect();
+    let raw: Vec<*const c_char> = ptrs.iter().map(|a| a.as_ptr()).collect();
+    let address = CString::new(addr).unwrap();
+    let mut ptr: *mut u8 = std::ptr::null_mut();
+    let mut len: usize = 0;
+    // SAFETY: valid argv/address/out pointers; null core (remote arm).
+    let code = unsafe {
+        shekyl_daemon_console_run(
+            raw.as_ptr(),
+            raw.len(),
+            std::ptr::null_mut(),
+            address.as_ptr(),
+            5,
+            255,
+            &raw mut ptr,
+            &raw mut len,
+        )
+    };
+    let text = if ptr.is_null() {
+        String::new()
+    } else {
+        // SAFETY: the export wrote `len` bytes at `ptr`.
+        let out = unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec();
+        unsafe { crate::ctl_client::shekyl_daemon_ctl_free(ptr, len) };
+        String::from_utf8(out).unwrap()
+    };
+    assert_eq!(code, SHEKYL_DAEMON_CONSOLE_ERR_REQUEST, "{text}");
+    assert!(
+        text.contains("network code 255"),
+        "an unknown code must refuse and name itself, not fall back to mainnet: {text}"
+    );
+}
+
+#[test]
 fn an_unknown_command_refuses_without_opening_a_socket() {
     // The handshake runs before the first REQUEST, not before the console
     // does anything: a typo must not surface as a connection error. The
