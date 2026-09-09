@@ -3,9 +3,16 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# Dead-relative-link gate for docs/ — every markdown link whose target is a
-# relative path must resolve in the checkout, or carry a reasoned entry in
-# docs/ci/link-allowlist.txt.
+# Docs structural gates — one job emitting one required status context, over a
+# growing bundle of WHOLE-TREE checks: docs/, the rules, and the source those
+# documents cite. Each step's comment says what that step asserts; read those
+# rather than this header, which cannot stay ahead of the bundle.
+#
+# The bundle began as the dead-relative-link gate and still carries its
+# rationale, because that rationale is the bundle's:
+#
+# Every markdown link in docs/ whose target is a relative path must resolve in
+# the checkout, or carry a reasoned entry in docs/ci/link-allowlist.txt.
 #
 # Why a gate and not a periodic sweep: the rot regenerates. The RP-3a
 # follow-up counted a handful of dead links; the 2026-07-30 census that closed
@@ -16,10 +23,10 @@
 # evidence — so a dead anchor silently converts a grounded claim into an
 # unverifiable one. One-time sweeps have been run and have not held.
 #
-# The checker needs only python3 (present on ubuntu-latest); no ripgrep.
-# Both failure modes are negative-controlled in the closing commit: an
-# injected dead link fails the run, and an allowlist entry without a reason
-# fails the allowlist itself.
+# Every checker here is stdlib python3 (present on ubuntu-latest); no ripgrep,
+# no PyYAML, nothing to install. Both of the link gate's failure modes are
+# negative-controlled in its closing commit: an injected dead link fails the
+# run, and an allowlist entry without a reason fails the allowlist itself.
 #
 # Structure mirrors grep-gates.yml: single job, single runner,
 # fast-running, superseded-run cancellation.
@@ -46,15 +53,16 @@ on:
     # docs and — under a `docs/**` filter — could not start the gate that
     # exists to catch it. That is the rot this workflow was written for; the
     # 2026-07-30 census found 178 dead links, "most introduced by ordinary
-    # file moves".
+    # file moves". Reading this file as "the link gate for docs/" is what made
+    # a `docs/**` filter look reasonable; it never was.
     #
-    # And the filter was a hand-maintained list of the subjects of the eleven
-    # checks below, which had to grow as those checks grew. It already carried
-    # a warning that pruning it "silently unwires that gate" (P0a,
-    # 2026-09-05); while this change was open, #658 added an eleventh check
-    # and five more path entries to feed it, which is the drift, observed. A
-    # list that must not drift, next to gates that keep acquiring subjects, is
-    # a standing liability. Deleting it deletes the drift.
+    # And the filter was a hand-maintained list of the subjects of every check
+    # below, which had to grow as those checks grew. It already carried a
+    # warning that pruning it "silently unwires that gate" (P0a, 2026-09-05);
+    # while this change was open, #658 added a check and five more path entries
+    # to feed it. That is the drift, observed rather than predicted. A list
+    # that must not drift, next to gates that keep acquiring subjects, is a
+    # standing liability. Deleting it deletes the drift.
     #
     # Cost of always running: ~25 s (five consecutive runs: 24/25/25/26 s and
     # one 3m31s outlier), on a job already bounded at 10 minutes.
