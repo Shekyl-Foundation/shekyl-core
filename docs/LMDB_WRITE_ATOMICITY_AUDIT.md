@@ -831,8 +831,9 @@ of them is masked:
    `DEFAULT_WINDOW_SIZE` is `10080` (`hardfork.h:51`), so every pre-genesis
    chain and every plausible fixture sits under it. Because no rebuild
    follows `pop_blocks` or the `:6599` unwind, *k* consecutive pops leave
-   the deque *k* entries long, re-converging only once the chain passes
-   `10080` and `add()`'s eviction clamps it.
+   the deque *k* entries too long relative to the remaining chain,
+   re-converging only once the chain passes `10080` and `add()`'s
+   eviction clamps it.
 
 **No consensus effect today**: `heights[0].threshold` is `0`, so
 `get_voted_fork_index`'s `accumulated_votes >= threshold` is vacuous. The
@@ -880,9 +881,13 @@ reconstruction: CEN-B3 is the only census row over this machinery and it is
 **bucket 4** — no ratified spec to check against — held there deliberately
 for the R4 round. With nothing ratified, there is nothing for the defect to
 block, so the exception has no subject. **It re-runs if R4 ratifies such a
-row.** The April **Forbidden** clause is the binding constraint: classifying
-this **DIVERGE**, having the Rust store delete the row, and asserting the
-delete in a KAT *ships a hardfork-state regression after every reorg*.
+row.** The April **Forbidden** clause is the binding constraint **while
+R4 keeps an incremental window**: classifying this **DIVERGE**, having
+the Rust store delete the row, and asserting the delete in a KAT would
+ship a hardfork-state regression on the two callers that retain that
+window. It does **not** ship a reorg regression — both reorg callers
+rebuild from block data. If R4 drops the incremental window, the clause
+retires.
 
 **Citation warning for anyone quoting CEN-B3 here.** The census cites the
 reorg rebuild at `blockchain.cpp:1494` against *its own* pin (`8ba1aae3d`).
