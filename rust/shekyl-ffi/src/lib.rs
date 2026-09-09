@@ -124,6 +124,11 @@ pub mod levin_ffi;
 // context; whether that byte severs a connection is decided only here.
 pub mod peer_policy_ffi;
 
+// Daemon ephemeral-onion FFI — PWD-E7 piece 3
+// (`P2P_2_ENDPOINT_ROUND.md` PWD-E7/E9). `node_server::init` obtains the
+// per-boot overlay inbound (managed tor, in-memory key, DiscardPK) here.
+pub mod daemon_tor_ffi;
+
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
 // `shekyl_log_install_tracing_forwarder`, …) are compiled into
