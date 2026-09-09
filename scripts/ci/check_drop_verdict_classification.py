@@ -60,6 +60,72 @@ RETURNS = re.compile(r"^\s*return\b")
 SOURCES = sorted((ROOT / "src").rglob("*.cpp")) + sorted((ROOT / "src").rglob("*.inl"))
 
 
+# ── The SECOND residue: the trigger's scope, not the verdict ────────────────
+#
+# A verdict type preserves THAT a no-drop occurs. It does not preserve THE
+# SCOPE OF THE CONDITION that produces one -- and here the scope is the whole
+# point.
+#
+# PWC-E7/§5.2 checked, rather than assumed, that the pool's double-spend guard
+# consults the POOL's `m_spent_key_images`: tx1 sitting in the pool when a
+# conflicting tx2 arrives, which is the Dandelion++ arm of the eclipse attack
+# (Shi et al. §III-C). A chain-spent-only trigger would not see that case at
+# all. So a port that faithfully inherits `DropVerdict`, passes every verdict
+# test above, and narrows this trigger to the chain would look fully
+# discharged while silently regressing exactly what the guard is for.
+#
+# Nothing in the verdict type excludes that, because the fold governs verdict
+# TRANSITIONS rather than trigger SCOPE. This is the narrowest honest pin
+# available without a live pool: the pool's own lookup must read the pool's
+# own spent set.
+#
+# WHAT THIS DOES NOT PROVE, stated so the gate is not read as more than it is:
+# it asserts the pool consultation is PRESENT, not that it is REACHED. A
+# refactor that adds a chain check in front and leaves this one dead would
+# pass. Closing that needs a live-pool behavioural test (tx1 admitted, tx2
+# conflicting, assert no-drop), which needs a Blockchain and a DB -- core_tests
+# territory, not this gate's.
+POOL_LOOKUP = "bool tx_memory_pool::have_tx_keyimg_as_spent"
+POOL_SPENT_SET = "m_spent_key_images"
+
+
+def check_pool_trigger_scope() -> bool:
+    path = ROOT / "src" / "cryptonote_core" / "tx_pool.cpp"
+    if not path.is_file():
+        print(f"FAIL: {path} is missing; the pool double-spend trigger cannot be checked.")
+        return False
+
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    # `lstrip`, not `startswith`: the definition is indented inside the
+    # namespace, and an anchored match would report the subject absent -- a
+    # gate failing for the wrong reason (rule 46).
+    start = next((i for i, line in enumerate(lines) if line.lstrip().startswith(POOL_LOOKUP)), None)
+
+    # Rule 47 again: the subject must exist before its property is asserted.
+    if start is None:
+        print(f"FAIL: `{POOL_LOOKUP}` not found in {path.relative_to(ROOT)}.")
+        print("  PWC-E7 rests on the POOL's double-spend guard consulting the")
+        print("  POOL's spent set -- a pool-held conflict, not only a")
+        print("  chain-spent image. With the function gone this gate cannot")
+        print("  check that, so it fails rather than passing vacuously.")
+        return False
+
+    body = lines[start : start + 40]
+    if not any(POOL_SPENT_SET in line for line in body):
+        print(f"FAIL: `{POOL_LOOKUP}` no longer reads `{POOL_SPENT_SET}`.")
+        print()
+        print("  Narrowing this trigger to chain-spent images would leave every")
+        print("  verdict test green while removing the case the guard exists")
+        print("  for: a conflicting tx2 arriving while tx1 sits in OUR POOL --")
+        print("  the Dandelion++ arm of the eclipse attack, where the")
+        print("  double-spend conflict is what drops the connections.")
+        print(f"  See PWC-E7 and section 5.2 of docs/design/P2P_1_WIRE_CENSUS.md.")
+        return False
+
+    print(f"PASS: the pool double-spend trigger still reads `{POOL_SPENT_SET}`.")
+    return True
+
+
 def main() -> int:
     sites = []
     unclassified = []
@@ -108,6 +174,9 @@ def main() -> int:
         print()
         for site in unclassified:
             print(f"    {site}")
+        return 1
+
+    if not check_pool_trigger_scope():
         return 1
 
     print(f"PASS: {len(sites)} double-spend rejection(s), all classified {STATE_VERDICT}:")
