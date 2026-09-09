@@ -65,13 +65,14 @@
   storage exceptions severed innocent connections. The drop decision is
   now a typed tri-state verdict in `shekyl-peer-policy` (unclassified /
   policy-or-state / internal-failure / attributable-form); only the last
-  severs. Unclassified and internal failures keep the connection; the
-  announce-size check (our weight limit) declines without disconnecting;
-  a block-sync prepare failure still flushes the failed span so sync can
-  recover. Malformed input still drops. The `check_tx_inputs` wrapper's
-  leftover height-versus-our-DB invariant classifies as internal-failure
-  at the failure site, so add_tx's coarse form fold cannot promote our
-  own inconsistency into a disconnect.
+  severs. C++ writes through `shekyl_drop_verdict_classify` /
+  `reject_form|state|internal` at the failure site; unclassified does
+  not sever. `check_tx_inputs` classifies each return itself, including
+  chain-state arms (spent key image, missing/too-recent reference
+  block). `add_tx` does not promote an unclassified inner failure to
+  form. The announce-size check declines without disconnecting; a
+  block-sync prepare failure still flushes the failed span so sync can
+  recover. Malformed input still drops.
 
 - **`docs/FOLLOWUPS.md` genesis-hold triage.** Every pre-genesis row got a
   disposition pass: 44 resolved/overtaken/duplicate/won't-fix rows removed

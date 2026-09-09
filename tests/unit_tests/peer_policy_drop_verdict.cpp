@@ -6,17 +6,8 @@
 /// @file
 /// @brief PWD-B7: the header's verdict constants, pinned to the Rust rule.
 ///
-/// The header is hand-written, so nothing mechanically checks
-/// `SHEKYL_DROP_VERDICT_*` against `shekyl-peer-policy`'s discriminants. These
-/// tests pin them **without restating a number**: they search the whole byte
-/// domain for the value that severs and assert it is the constant C++ writes
-/// for an attributable form failure. A drift in either direction — the header
-/// renumbered, or the Rust discriminants reordered — makes the severing byte
-/// and the constant disagree, and that is the failure.
-///
-/// The other half of the unit lives in `tx_verification_context`: these tests
-/// also assert that a value-initialised context does not sever, which is what
-/// makes an unclassified rejection path safe by construction.
+/// Pins the hand-written `SHEKYL_DROP_VERDICT_*` constants to the Rust rule
+/// by searching the byte domain rather than restating a discriminant.
 
 #include "gtest/gtest.h"
 
@@ -127,10 +118,8 @@ TEST(peer_policy_drop_verdict, folding_can_only_sever_if_an_input_severs)
   }
 }
 
-/// The concrete ordering `Blockchain::check_tx_inputs` produces: a precise
-/// "spent in our chain" recorded deep in the call, then its caller's coarse
-/// "wrong inputs". The precise reading must win, or an honest peer whose
-/// transaction merely conflicts with our view is severed.
+/// A later form classification cannot resurrect a drop once a no-drop
+/// reading has been recorded on the same slot.
 TEST(peer_policy_drop_verdict, a_state_verdict_survives_a_later_form_verdict)
 {
   const uint8_t after_check_tx_inputs = shekyl_drop_verdict_combine(
@@ -154,18 +143,18 @@ TEST(peer_policy_drop_verdict, an_internal_failure_survives_a_later_form_verdict
   EXPECT_TRUE(shekyl_drop_verdict_is_internal_failure(folded));
 }
 
-/// The 5-arg wrapper's leftover arm starts unclassified (the macro this
-/// replaced wrote nothing), then classifies INTERNAL_FAILURE, then add_tx
-/// folds ATTRIBUTABLE_FORM. Absence must not win (PWD-B7 / Bugbot on #674).
-TEST(peer_policy_drop_verdict, the_wrapper_internal_error_survives_add_tx_form_fold)
+/// The write path is classify, not a later caller folding form over an
+/// unclassified inner failure. A null slot is a no-op so a caller with no
+/// peer can pass null.
+TEST(peer_policy_drop_verdict, classify_writes_through_combine_and_null_is_a_noop)
 {
-  const uint8_t after_wrapper = shekyl_drop_verdict_combine(
-      SHEKYL_DROP_VERDICT_UNCLASSIFIED, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
-  const uint8_t after_add_tx = shekyl_drop_verdict_combine(
-      after_wrapper, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-
-  EXPECT_EQ(SHEKYL_DROP_VERDICT_INTERNAL_FAILURE, after_add_tx);
-  EXPECT_FALSE(shekyl_drop_verdict_severs(after_add_tx));
+  uint8_t slot = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
+  shekyl_drop_verdict_classify(&slot, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+  EXPECT_TRUE(shekyl_drop_verdict_severs(slot));
+  shekyl_drop_verdict_classify(&slot, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
+  EXPECT_FALSE(shekyl_drop_verdict_severs(slot));
+  EXPECT_EQ(SHEKYL_DROP_VERDICT_POLICY_OR_STATE, slot);
+  shekyl_drop_verdict_classify(nullptr, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
 }
 
 /// And a form verdict still reaches the gate when nothing contradicts it —

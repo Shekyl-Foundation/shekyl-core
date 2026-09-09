@@ -3619,18 +3619,18 @@ rather than inheriting whatever the default happens to be.
 > All three sites below now key on the typed verdict; `bool m_no_drop_offense`
 > is gone from the tree. The type and the rule live in
 > `rust/shekyl-peer-policy`, reached through `shekyl_drop_verdict_severs` /
-> `..._is_internal_failure` / `..._combine`; C++ writes the
-> `SHEKYL_DROP_VERDICT_*` bytes and never interprets them. Two things the
-> implementation found that this ruling did not say, recorded because they
-> changed the design:
+> `..._is_internal_failure` / `..._classify`; C++ writes the
+> `SHEKYL_DROP_VERDICT_*` bytes through `reject_form|state|internal` and never
+> interprets them. Two things the implementation found that this ruling did
+> not say, recorded because they changed the design:
 >
 > 1. **`Blockchain::check_tx_inputs` fails for both reasons.** Most of its
->    arms are form, but its three `have_tx_keyimg_as_spent` arms describe our
->    chain and are reorg-dependent — the same class as `:291`. Its caller sees
->    one `false` for both, so a single verdict there would over-sever. Hence
->    `combine`: a no-drop verdict, once recorded, is never promoted back to
->    droppable, and the precise reading taken deeper in the call survives the
->    coarser one taken above it.
+>    arms are form, but spent-key-image, missing/too-recent reference-block,
+>    and other chain-state arms describe our view. Classification is at each
+>    return (`reject_form` / `reject_state` / `reject_internal`). `add_tx`
+>    does **not** fold ATTRIBUTABLE_FORM over an unclassified inner failure —
+>    that promotion was the dual default this type exists to forbid. A new
+>    arm that just `return false`s stays unclassified and does not sever.
 > 2. **At the block-sync site the drop was also the recovery.** `drop_connection`
 >    flushed the span as a side effect. With our own cancellation no longer
 >    dropping the peer, nothing else would clear it and `get_next_span` would

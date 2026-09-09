@@ -66,6 +66,7 @@
 #include "difficulty_engine_error.h"
 #include "fcmp/ct_semantics.h"
 #include "shekyl/shekyl_ffi.h"
+#include "cryptonote_basic/drop_verdict.h"
 #include "common/perf_timer.h"
 #include "common/notify.h"
 #include "common/varint.h"
@@ -3319,19 +3320,12 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
   if (!res)
     return false;
 
-  // OUR height versus an index WE just computed. The sender did not choose
-  // this; a node whose DB is briefly inconsistent must not partition itself
-  // by dropping the peer that happened to deliver the tx (PWD-B7). The
-  // macro this replaced returned false without classifying, and add_tx's
-  // coarse ATTRIBUTABLE_FORM fold then severed. combine() keeps this
-  // reading when that fold lands on top.
+  // Our height versus an index we just computed — internal, not the sender's.
   if (!(max_used_block_height < m_db->height()))
   {
     MERROR("internal error: max used block index=" << max_used_block_height
       << " is not less then blockchain size = " << m_db->height());
-    tvc.m_drop_verdict = shekyl_drop_verdict_combine(
-      tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
-    return false;
+    return reject_internal(tvc);
   }
   max_used_block_id = m_db->get_block_hash_from_height(max_used_block_height);
   return true;
@@ -3421,7 +3415,7 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   {
     MERROR_VER("Transaction version " << tx.version << " is not supported (minimum: 3)");
     tvc.m_invalid_output = true;
-    return false;
+    return reject_form(tvc);
   }
 
   // All v3+ outputs must have 0 amount (amounts are encrypted in RingCT) —
@@ -3440,7 +3434,7 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     for (auto &o: tx.vout) {
       if (o.amount != 0) {
         tvc.m_invalid_output = true;
-        return false;
+        return reject_form(tvc);
       }
     }
   }
@@ -3450,7 +3444,7 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   {
     MERROR_VER("Disallowed rct type " << (unsigned)tx.ct_signatures.type);
     tvc.m_invalid_output = true;
-    return false;
+    return reject_form(tvc);
   }
 
   if (tx.unlock_time >= CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL)
@@ -3458,14 +3452,14 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     MERROR_VER("Transaction uses timestamp-based unlock_time (" << tx.unlock_time
                << " >= sentinel " << CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL << ")");
     tvc.m_invalid_output = true;
-    return false;
+    return reject_form(tvc);
   }
 
   // require view tags on outputs
   if (!check_output_types(tx, hf_version))
   {
     tvc.m_invalid_output = true;
-    return false;
+    return reject_form(tvc);
   }
 
   // Commitment mask validation: reject trivial masks (mask=0 or mask=1).
@@ -3474,7 +3468,7 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   {
     MERROR_VER("Output commitment mask validation failed");
     tvc.m_invalid_output = true;
-    return false;
+    return reject_form(tvc);
   }
 
   return true;
@@ -3541,7 +3535,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     {
       MERROR_VER("Tx " << get_transaction_hash(tx) << " has fewer than two outputs");
       tvc.m_too_few_outputs = true;
-      return false;
+      return reject_form(tvc);
     }
   }
 
@@ -3551,7 +3545,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     {
       MERROR_VER("Tx " << get_transaction_hash(tx) << " must use CTTypeFcmpPlusPlusPqc; CTTypeNull is only allowed for coinbase");
       tvc.m_verifivation_failed = true;
-      return false;
+      return reject_form(tvc);
     }
 
     if (tx.vin.size() > FCMP_MAX_INPUTS_PER_TX)
@@ -3559,7 +3553,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " has " << tx.vin.size()
         << " inputs, max is " << FCMP_MAX_INPUTS_PER_TX);
       tvc.m_verifivation_failed = true;
-      return false;
+      return reject_form(tvc);
     }
 
     const size_t max_tx_version = 3;
@@ -3567,14 +3561,14 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     {
       MERROR_VER("transaction version " << (unsigned)tx.version << " is higher than max accepted version " << max_tx_version);
       tvc.m_verifivation_failed = true;
-      return false;
+      return reject_form(tvc);
     }
     const size_t min_tx_version = 3;
     if (tx.version < min_tx_version)
     {
       MERROR_VER("transaction version " << (unsigned)tx.version << " is lower than min accepted version " << min_tx_version);
       tvc.m_verifivation_failed = true;
-      return false;
+      return reject_form(tvc);
     }
   }
 
@@ -3594,7 +3588,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         {
           MERROR_VER("transaction has unsorted inputs");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
         last_key_image = ki;
       }
@@ -3625,18 +3619,13 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       {
         MERROR_VER("Archival bond-post spend input has non-empty key_offsets");
         tvc.m_verifivation_failed = true;
-        return false;
+        return reject_form(tvc);
       }
       if (have_tx_keyimg_as_spent(in_to_key.k_image))
       {
         MERROR_VER("Archival bond-post key image already spent");
         tvc.m_double_spend = true;
-        // OUR chain, and reorg-dependent: a key image spent in our view can be
-        // unspent in the sender's. Not attributable, so this must not sever --
-        // and the fold keeps this precise reading when add_tx's coarser
-        // "wrong inputs" classification lands on top (PWD-B7).
-        tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
-        return false;
+        return reject_state(tvc);
       }
     }
   }
@@ -3654,18 +3643,13 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       {
         MERROR_VER("Archival emission fee input has non-empty key_offsets");
         tvc.m_verifivation_failed = true;
-        return false;
+        return reject_form(tvc);
       }
       if (have_tx_keyimg_as_spent(in_to_key.k_image))
       {
         MERROR_VER("Archival emission fee-input key image already spent");
         tvc.m_double_spend = true;
-        // OUR chain, and reorg-dependent: a key image spent in our view can be
-        // unspent in the sender's. Not attributable, so this must not sever --
-        // and the fold keeps this precise reading when add_tx's coarser
-        // "wrong inputs" classification lands on top (PWD-B7).
-        tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
-        return false;
+        return reject_state(tvc);
       }
     }
   }
@@ -3676,15 +3660,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     {
       if (!std::holds_alternative<txin_to_key>(txin))
       {
-        // The input's own type, against a genesis-universal rule. Classified
-        // here rather than inherited from add_tx's coarse fold so a
-        // CHECK_AND_ASSERT_MES cannot again return unclassified from this
-        // function (PWD-B7).
         MERROR_VER("FCMP++ tx inputs must be txin_to_key at Blockchain::check_tx_inputs");
         tvc.m_verifivation_failed = true;
-        tvc.m_drop_verdict = shekyl_drop_verdict_combine(
-          tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-        return false;
+        return reject_form(tvc);
       }
       const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
 
@@ -3693,19 +3671,14 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
           << " has non-empty key_offsets on input with k_image " << in_to_key.k_image);
         tvc.m_verifivation_failed = true;
-        return false;
+        return reject_form(tvc);
       }
 
       if (have_tx_keyimg_as_spent(in_to_key.k_image))
       {
         MERROR_VER("Key image already spent in blockchain: " << epee::string_tools::pod_to_hex(in_to_key.k_image));
         tvc.m_double_spend = true;
-        // OUR chain, and reorg-dependent: a key image spent in our view can be
-        // unspent in the sender's. Not attributable, so this must not sever --
-        // and the fold keeps this precise reading when add_tx's coarser
-        // "wrong inputs" classification lands on top (PWD-B7).
-        tvc.m_drop_verdict = shekyl_drop_verdict_combine(tvc.m_drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
-        return false;
+        return reject_state(tvc);
       }
     }
   }
@@ -3713,7 +3686,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   {
     MERROR_VER("Non-FCMP++ transaction rejected: ring-based inputs are not supported from genesis");
     tvc.m_verifivation_failed = true;
-    return false;
+    return reject_form(tvc);
   }
 
   {
@@ -3723,7 +3696,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     case ct::CTTypeNull: {
       MERROR_VER("CTTypeNull is not allowed for non-coinbase transactions");
       tvc.m_verifivation_failed = true;
-      return false;
+      return reject_form(tvc);
     }
     case ct::CTTypeFcmpPlusPlusPqc:
     {
@@ -3736,7 +3709,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           << " pqc_auths count " << tx.pqc_auths.size()
           << " does not match input count " << num_inputs);
         tvc.m_verifivation_failed = true;
-        return false;
+        return reject_form(tvc);
       }
 
       if (!is_archival_serve_credit_only && !is_archival_bond_post_tx
@@ -3747,7 +3720,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           << " pseudoOuts count " << rv.p.pseudoOuts.size()
           << " does not match input count " << num_inputs);
         tvc.m_verifivation_failed = true;
-        return false;
+        return reject_form(tvc);
       }
 
       if (is_archival_serve_credit_only)
@@ -3757,7 +3730,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           MERROR_VER("Archival serve-credit tx " << get_transaction_hash(tx)
             << " must not carry pqc_auths (signature is on the vin)");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
         if (!tx.vout.empty() || rv.txnFee != 0)
         {
@@ -3765,7 +3738,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             << " must have no outputs and zero fee");
           tvc.m_verifivation_failed = true;
           tvc.m_invalid_output = true;
-          return false;
+          return reject_form(tvc);
         }
         if (!rv.outPk.empty() || !rv.p.bulletproofs_plus.empty()
           || !rv.p.pseudoOuts.empty())
@@ -3774,14 +3747,14 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             << " must not carry RCT output material");
           tvc.m_verifivation_failed = true;
           tvc.m_invalid_output = true;
-          return false;
+          return reject_form(tvc);
         }
         if (!rv.p.fcmp_pp_proof.empty())
         {
           MERROR_VER("Archival serve-credit tx " << get_transaction_hash(tx)
             << " must not carry an FCMP++ membership proof");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
         // PC-D3: `block_hash(h-1)` for the slot this tx is being validated FOR.
         //
@@ -3826,7 +3799,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           MERROR_VER("Archival serve-credit: " << pruned_records.size()
             << " pruned records for " << num_inputs << " vins");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
         for (size_t i = 0; i < num_inputs; ++i)
         {
@@ -3837,7 +3810,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           {
             MERROR_VER("Archival serve-credit validation failed for input " << i);
             tvc.m_verifivation_failed = true;
-            return false;
+            return reject_state(tvc);
           }
         }
       }
@@ -3856,7 +3829,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         {
           MERROR_VER("Archival bond-post validation failed");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
 
         std::vector<size_t> spend_indices;
@@ -3878,7 +3851,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         {
           MERROR_VER("Archival bond-post tx requires at least one txin_to_key funding input");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
 
         const size_t num_spend = spend_indices.size();
@@ -3887,7 +3860,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           MERROR_VER("Archival bond-post tx pseudoOuts count " << rv.p.pseudoOuts.size()
             << " does not match spend input count " << num_spend);
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
 
         uint64_t ref_height = 0;
@@ -3895,21 +3868,21 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         {
           MERROR_VER("Archival bond-post tx referenceBlock not found");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
         if (chain_height < FCMP_REFERENCE_BLOCK_MIN_AGE ||
             ref_height > chain_height - FCMP_REFERENCE_BLOCK_MIN_AGE)
         {
           MERROR_VER("Archival bond-post tx referenceBlock too recent");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
         if (chain_height > FCMP_REFERENCE_BLOCK_MAX_AGE &&
             ref_height < chain_height - FCMP_REFERENCE_BLOCK_MAX_AGE)
         {
           MERROR_VER("Archival bond-post tx referenceBlock too old");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
         *pmax_used_block_height = ref_height;
 
@@ -3919,13 +3892,13 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         {
           MERROR_VER("Archival bond-post tx curve_trees_tree_depth out of range");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
         if (rv.p.fcmp_pp_proof.empty())
         {
           MERROR_VER("Archival bond-post tx has empty FCMP++ proof");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
 
         std::vector<uint8_t> key_images_flat(num_spend * 32);
@@ -3942,7 +3915,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           {
             MERROR_VER("Archival bond-post tx pqc leaf hash failed for spend input " << i);
             tvc.m_verifivation_failed = true;
-            return false;
+            return reject_form(tvc);
           }
         }
 
@@ -3966,7 +3939,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             MERROR_VER("Archival bond-post FCMP++ proof verification failed (code "
               << (int)fcmp_result << ")");
             tvc.m_verifivation_failed = true;
-            return false;
+            return reject_form(tvc);
           }
         }
       }
@@ -3995,7 +3968,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         {
           MERROR_VER("Archival emission vin parse failed (code " << (int)extract_rc << ")");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
 
         // Tx-level PQC slot binding: the emission slot's hybrid key must
@@ -4014,7 +3987,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           MERROR_VER("Archival emission pqc_auths[" << archival_emission_index
             << "] hybrid pubkey does not derive the vin's P_canonical_id");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
 
         // Fee-spend subset (Q11: >= 0 txin_to_key co-residents; with none,
@@ -4033,7 +4006,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           MERROR_VER("Archival emission tx pseudoOuts count " << rv.p.pseudoOuts.size()
             << " does not match fee-input count " << num_spend);
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
 
         // Reference block + curve-tree context (bond-post idiom). Required
@@ -4044,21 +4017,21 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         {
           MERROR_VER("Archival emission tx referenceBlock not found");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
         if (chain_height < FCMP_REFERENCE_BLOCK_MIN_AGE ||
             ref_height > chain_height - FCMP_REFERENCE_BLOCK_MIN_AGE)
         {
           MERROR_VER("Archival emission tx referenceBlock too recent");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
         if (chain_height > FCMP_REFERENCE_BLOCK_MAX_AGE &&
             ref_height < chain_height - FCMP_REFERENCE_BLOCK_MAX_AGE)
         {
           MERROR_VER("Archival emission tx referenceBlock too old");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
         *pmax_used_block_height = ref_height;
 
@@ -4068,7 +4041,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         {
           MERROR_VER("Archival emission tx curve_trees_tree_depth out of range");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
         // One tx-declared depth for both proofs, in upstream layers units
         // (LMDB depth + 1): the backing proof's wire tree_depth must equal
@@ -4110,7 +4083,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             MERROR_VER("Archival emission claimed epoch " << vin_epochs[k]
               << " has no frozen budget row (epoch not closed, or pruned)");
             tvc.m_verifivation_failed = true;
-            return false;
+            return reject_state(tvc);
           }
           ffi_bonds[k] = snaps[k].to_ffi_bonds();
           ffi_shards[k] = snaps[k].to_ffi_shards();
@@ -4139,7 +4112,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           MERROR_VER("Archival emission tx outPk count " << rv.outPk.size()
             << " does not match vout count " << tx.vout.size());
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
         std::vector<uint8_t> commits_flat;
         commits_flat.reserve(tx.vout.size() * 72);
@@ -4157,7 +4130,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           {
             MERROR_VER("Archival emission reward vout " << i << " has no output public key");
             tvc.m_verifivation_failed = true;
-            return false;
+            return reject_form(tvc);
           }
           const size_t off = commits_flat.size();
           commits_flat.resize(off + 72);
@@ -4177,7 +4150,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         {
           MERROR_VER("Archival emission reward vout sum overflows");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
 
         // The coarse verify crossing: §7.1 claims 1–5, membership-only
@@ -4211,7 +4184,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           MERROR_VER("Archival emission vin verification failed (code "
             << (int)verify_rc << ")");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
         MDEBUG("Archival emission vin verified: total_reward=" << total_reward
           << " epochs_to_commit=" << epochs_to_commit_len);
@@ -4226,7 +4199,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           {
             MERROR_VER("Archival emission tx with no fee inputs must not carry an FCMP++ proof");
             tvc.m_verifivation_failed = true;
-            return false;
+            return reject_form(tvc);
           }
         }
         else
@@ -4235,7 +4208,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           {
             MERROR_VER("Archival emission tx has fee inputs but an empty FCMP++ proof");
             tvc.m_verifivation_failed = true;
-            return false;
+            return reject_form(tvc);
           }
 
           std::vector<uint8_t> key_images_flat(num_spend * 32);
@@ -4252,7 +4225,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             {
               MERROR_VER("Archival emission tx pqc leaf hash failed for fee input " << i);
               tvc.m_verifivation_failed = true;
-              return false;
+              return reject_form(tvc);
             }
           }
 
@@ -4275,7 +4248,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
               MERROR_VER("Archival emission fee-input FCMP++ proof verification failed (code "
                 << (int)fcmp_result << ")");
               tvc.m_verifivation_failed = true;
-              return false;
+              return reject_form(tvc);
             }
           }
         }
@@ -4291,7 +4264,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
             << " referenceBlock " << rv.referenceBlock << " not found in chain");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
 
         if (chain_height < FCMP_REFERENCE_BLOCK_MIN_AGE ||
@@ -4302,7 +4275,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             << " is too recent (min age " << FCMP_REFERENCE_BLOCK_MIN_AGE
             << ", chain height " << chain_height << ")");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
 
         if (chain_height > FCMP_REFERENCE_BLOCK_MAX_AGE &&
@@ -4313,7 +4286,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             << " is too old (max age " << FCMP_REFERENCE_BLOCK_MAX_AGE
             << ", chain height " << chain_height << ")");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
 
         *pmax_used_block_height = ref_height;
@@ -4342,7 +4315,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             << " curve_trees_tree_depth " << (int)rv.p.curve_trees_tree_depth
             << " out of range (current depth " << (int)current_depth << ")");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_state(tvc);
         }
 
         // Step 4: FCMP++ proof verification
@@ -4350,7 +4323,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         {
           MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " has empty proof");
           tvc.m_verifivation_failed = true;
-          return false;
+          return reject_form(tvc);
         }
 
         std::vector<uint8_t> key_images_flat(num_inputs * 32);
@@ -4372,7 +4345,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           {
             MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " pqc leaf hash failed for input " << i);
             tvc.m_verifivation_failed = true;
-            return false;
+            return reject_form(tvc);
           }
         }
 
@@ -4411,7 +4384,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             MERROR_VER("FCMP++ proof verification failed for tx " << get_transaction_hash(tx)
                        << " (error code " << (int)fcmp_result << ")");
             tvc.m_verifivation_failed = true;
-            return false;
+            return reject_form(tvc);
           }
         }
       }
@@ -4420,7 +4393,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     }
     default:
       MERROR_VER("Unsupported ct type: " << rv.type);
-      return false;
+      return reject_form(tvc);
     }
   }
 
@@ -4454,7 +4427,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     {
       MERROR_VER("Failed to verify PQC hybrid signature on v3 transaction");
       tvc.m_verifivation_failed = true;
-      return false;
+      return reject_form(tvc);
     }
   }
 
@@ -7088,21 +7061,11 @@ void Blockchain::output_scan_worker(const uint64_t amount, const std::vector<uin
 //    vs [k_image, output_keys] (m_scan_table). This is faster because it takes advantage of bulk queries
 //    and is threaded if possible. The table (m_scan_table) will be used later when querying output
 //    keys.
-bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks, uint8_t &drop_verdict)
+bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks, uint8_t *drop_verdict)
 {
   MTRACE("Blockchain::" << __func__);
-  // PWD-B7. This call returns one `false` for fifteen distinct conditions in
-  // three classes -- our own cancellation, the sender's malformed input, and
-  // our own broken invariants -- and its p2p caller severs and charges the
-  // span's origin. A boolean cannot say which fired, so the caller could not
-  // classify the failure at all: charge, and our own shutdown punishes an
-  // honest peer; decline, and a peer feeding malformed spans is never priced.
-  // Neither the sever nor the score is separable without this.
-  //
-  // Every failure below classifies itself exactly once and returns
-  // immediately, so these are plain assignments -- there is no second
-  // classification here for the fold to reconcile.
-  drop_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
+  if (drop_verdict)
+    *drop_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
   TIME_MEASURE_START(prepare);
   bool stop_batch;
   uint64_t bytes = 0;
@@ -7128,8 +7091,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
 
   if(blocks_entry.size() == 0)
   {
-    // An empty span is the sender's: we asked for blocks and got none.
-    drop_verdict = SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM;
+    classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
     return false;
   }
 
@@ -7188,8 +7150,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
 
         if (!parse_and_validate_block_from_blob(it->block, block, block_hash))
         {
-          // Bytes that are not a block. Context-free and universal.
-          drop_verdict = SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM;
+          classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
           return false;
         }
 
@@ -7217,8 +7178,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
 
       if (!parse_and_validate_block_from_blob(it->block, block, block_hash))
       {
-        // As above, for the remainder batch.
-        drop_verdict = SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM;
+        classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
         return false;
       }
 
@@ -7249,17 +7209,14 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
 
       if (!waiter.wait())
       {
-        // A longhash worker threw. Ours, and a bug -- log it loudly, and do
-        // not charge the peer whose span happened to be in flight.
-        drop_verdict = SHEKYL_DROP_VERDICT_INTERNAL_FAILURE;
+        classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
         return false;
       }
       m_prepare_height = 0;
 
       if (m_cancel)
       {
-         // Our own shutdown or cancellation. Routine, and not the sender's.
-         drop_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
+         classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
          return false;
       }
 
@@ -7272,7 +7229,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
 
   if (m_cancel)
   {
-    drop_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
+    classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
     return false;
   }
 
@@ -7303,16 +7260,11 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   std::map<uint64_t, std::vector<output_data_t>> tx_map;
   std::vector<std::pair<cryptonote::transaction, crypto::hash>> txes(total_txs);
 
-// Takes the verdict as an argument rather than assuming one: this single
-// `return false` serves six conditions across two classes -- three describing
-// the sender's input, three describing an invariant of ours -- and it is
-// exactly that conflation that made the failure unclassifiable from outside.
-// Two censuses of this function undercounted it for the same reason (PWD-B7).
 #define SCAN_TABLE_QUIT(m, verdict) \
         do { \
             MERROR_VER(m) ;\
             m_scan_table.clear(); \
-            drop_verdict = (verdict); \
+            classify_drop(drop_verdict, (verdict)); \
             return false; \
         } while(0); \
 
@@ -7322,7 +7274,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   {
     if (m_cancel)
     {
-      drop_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
+      classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
       return false;
     }
 
@@ -7421,8 +7373,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
     }
     if (!waiter.wait())
     {
-      // An output-scan worker threw. Ours, as above.
-      drop_verdict = SHEKYL_DROP_VERDICT_INTERNAL_FAILURE;
+      classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
       return false;
     }
   }
@@ -7441,7 +7392,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   {
     if (m_cancel)
     {
-      drop_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
+      classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
       return false;
     }
 

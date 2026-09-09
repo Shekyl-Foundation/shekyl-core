@@ -3723,59 +3723,22 @@ int32_t shekyl_levin_fragmented_notify(size_t noise_size, uint32_t command,
                                        const uint8_t* payload, size_t payload_len,
                                        ShekylBuffer* out);
 
-// -- Peer-attribution drop rule (PWD-B7, SHEKYL_P2P_PROTOCOL.md) -----------
-//
-//! Whether a rejection justifies severing the connection that carried it.
-//!
-//! The rule replaces `bool m_no_drop_offense`, whose ABSENCE meant
-//! "droppable". Absence did not identify malformed input -- it identified
-//! everything outside a four-entry carve-out list, and that set included OUR
-//! OWN failures, so a pool invariant tripping or a storage exception severed
-//! an innocent peer. The surface here is affirmative instead: the zero value
-//! means nothing classified the rejection, and it does NOT sever.
-//!
-//! C++ WRITES these constants onto `tx_verification_context::m_drop_verdict`
-//! and never reads them back. The two questions it may ask are
-//! shekyl_drop_verdict_severs() and shekyl_drop_verdict_is_internal_failure();
-//! a `switch` on the byte here would be a second copy of the rule, in the
-//! language whose default this design exists to remove. Rust twin:
-//! rust/shekyl-ffi/src/peer_policy_ffi.rs over rust/shekyl-peer-policy.
-//!
-//! Nothing mechanically checks these four values against the Rust
-//! discriminants -- the header is hand-written. tests/unit_tests/
-//! peer_policy_drop_verdict.cpp pins them WITHOUT restating a number, by
-//! searching all 256 bytes for the one that severs and asserting it is
-//! SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM.
+// -- Peer-attribution drop rule (PWD-B7) ------------------------------------
+// Opaque ABI for rust/shekyl-peer-policy::DropVerdict. C++ writes these
+// constants through shekyl_drop_verdict_classify and reads only via the
+// two predicates. Zero does not sever. The gtest searches the byte domain
+// for the severing value rather than restating the discriminants.
 
-//! Nothing classified this rejection: the value-initialised state, and what
-//! any newly added failure arm inherits until someone classifies it. Does not
-//! sever, which is what makes a new arm safe by construction.
 #define SHEKYL_DROP_VERDICT_UNCLASSIFIED      0u
-//! Describes our own state, or a rule that is ours rather than everyone's --
-//! a fee below OUR floor, a key image spent in OUR view, or an input-shaped
-//! rejection against relay-tier policy an honest peer may not share.
 #define SHEKYL_DROP_VERDICT_POLICY_OR_STATE   1u
-//! WE failed: a broken invariant, an exception, a resource we could not get.
-//! The sender is not answerable for it. Distinct from POLICY_OR_STATE only so
-//! it can be logged loudly -- both refuse to sever.
 #define SHEKYL_DROP_VERDICT_INTERNAL_FAILURE  2u
-//! Describes the INPUT, against a UNIVERSAL rule: malformed bytes, a
-//! structurally invalid transaction, a consensus rule nothing can satisfy.
-//! The sender chose to send those bytes. The only verdict that severs.
 #define SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM 3u
 
-//! PWD-B7's rule. Ask this instead of testing the byte. Total over uint8_t:
-//! an unrecognised value is unclassified, and does not sever.
 bool shekyl_drop_verdict_severs(uint8_t verdict);
-//! Is this rejection a defect of ours, and so worth logging loudly? A second
-//! predicate rather than a disposition the caller would have to branch on.
 bool shekyl_drop_verdict_is_internal_failure(uint8_t verdict);
-//! Fold a newly observed classification into the one already recorded and
-//! return the byte to store. A no-drop verdict, once recorded, is never
-//! promoted back to droppable -- so a site that classifies coarsely cannot
-//! overwrite a more precise reading taken deeper in the same rejection.
-//! ASSIGN THROUGH THIS rather than writing m_drop_verdict directly.
 uint8_t shekyl_drop_verdict_combine(uint8_t current, uint8_t incoming);
+//! Fold `incoming` into `slot`. Null `slot` is a no-op (no peer to attribute).
+void shekyl_drop_verdict_classify(uint8_t* slot, uint8_t incoming);
 
 } // extern "C"
 

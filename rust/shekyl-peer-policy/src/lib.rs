@@ -144,32 +144,27 @@ impl DropVerdict {
     /// Folds a newly observed classification into one already recorded.
     ///
     /// **A no-drop verdict, once recorded, cannot be promoted back to
-    /// droppable.** This is not tidiness — it is the second thing that makes
-    /// an unattributable drop unexpressible, and a real path needs it.
-    /// `Blockchain::check_tx_inputs` fails for *both* reasons: most of its
-    /// arms are form failures, but several report a key image already spent in
-    /// our chain — our state, reorg-dependent. Its single caller sees one
-    /// `false` for both. Without this fold, whichever assignment ran last
-    /// would decide, and the caller's coarse "inputs were bad" would overwrite
-    /// the precise "we have seen this key image" and sever an honest peer.
+    /// droppable.** The result severs iff at least one classification was
+    /// recorded and every one of them severs. Between two no-drop verdicts
+    /// the first is kept; they agree on the drop decision and differ only
+    /// in how loudly they log, and the earlier one is the more specific.
     ///
-    /// So the result severs **iff at least one classification was recorded and
-    /// every one of them severs**. Between two no-drop verdicts the first is
-    /// kept; they agree on the drop decision and differ only in how loudly
-    /// they log, and the earlier one is the more specific.
+    /// This is the algebra behind [`Self::classify_in_place`]. C++ never
+    /// assigns the ABI byte; it writes through that method so a second
+    /// classification on the same slot cannot resurrect a drop.
     #[must_use]
     pub const fn combine(self, incoming: Self) -> Self {
         match (self, incoming) {
-            // Nothing new was said.
             (current, Self::Unclassified) => current,
-            // Nothing had been said yet, or everything said so far severs --
-            // the two states from which the incoming reading may still take
-            // over. They share a body because they share a reason: neither
-            // has yet recorded a claim that the sender is not answerable.
             (Self::Unclassified | Self::AttributableForm, incoming) => incoming,
-            // A no-drop verdict is final.
             (current, _) => current,
         }
+    }
+
+    /// Folds `incoming` into an ABI slot. This is the only write path the
+    /// C++ side is supposed to use.
+    pub const fn classify_in_place(slot: &mut u8, incoming: Self) {
+        *slot = Self::from_byte(*slot).combine(incoming).to_byte();
     }
 }
 
@@ -243,15 +238,15 @@ mod tests {
         }
     }
 
-    /// The concrete `check_tx_inputs` case, named so a future reader sees the
-    /// path rather than only the algebra: a precise "spent in our chain"
-    /// followed by its caller's coarse "inputs were bad" must not sever.
+    /// A later form classification cannot resurrect a drop once a no-drop
+    /// reading has been recorded on the same slot.
     #[test]
     fn a_coarse_form_verdict_cannot_overwrite_a_precise_state_verdict() {
-        let after_check_tx_inputs = DropVerdict::Unclassified.combine(DropVerdict::PolicyOrState);
-        let after_its_caller = after_check_tx_inputs.combine(DropVerdict::AttributableForm);
-        assert_eq!(after_its_caller, DropVerdict::PolicyOrState);
-        assert!(!after_its_caller.severs());
+        let mut slot = DropVerdict::Unclassified.to_byte();
+        DropVerdict::classify_in_place(&mut slot, DropVerdict::PolicyOrState);
+        DropVerdict::classify_in_place(&mut slot, DropVerdict::AttributableForm);
+        assert_eq!(DropVerdict::from_byte(slot), DropVerdict::PolicyOrState);
+        assert!(!DropVerdict::from_byte(slot).severs());
     }
 
     /// The opposite order, which is the one that actually occurs at

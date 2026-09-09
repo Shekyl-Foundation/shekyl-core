@@ -242,16 +242,12 @@ namespace cryptonote
      *
      * @param blocks_entry a list of incoming blocks
      * @param blocks the parsed blocks
-     * @param drop_verdict out: WHY this call failed, as a SHEKYL_DROP_VERDICT_*
-     *   byte, so a caller with a peer to answer for can decide whether the
-     *   failure is the sender's (PWD-B7). Set on every false return and left
-     *   SHEKYL_DROP_VERDICT_UNCLASSIFIED otherwise. A caller with no peer --
-     *   the block importer, the locally-mined path -- has nothing to attribute
-     *   and passes a local it ignores.
+     * @param drop_verdict out: why this call failed (SHEKYL_DROP_VERDICT_*).
+     *   Null if the caller has no peer to attribute (importer, miner).
      *
      * @return false on erroneous blocks, else true
      */
-    bool prepare_handle_incoming_blocks(const std::vector<block_complete_entry>  &blocks_entry, std::vector<block> &blocks, uint8_t &drop_verdict);
+    bool prepare_handle_incoming_blocks(const std::vector<block_complete_entry>  &blocks_entry, std::vector<block> &blocks, uint8_t *drop_verdict = nullptr);
 
     /**
      * @brief prepare the blockchain for handling an incoming block, without performing preprocessing

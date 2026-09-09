@@ -189,7 +189,7 @@ namespace cryptonote
       *
       * @note see Blockchain::prepare_handle_incoming_blocks
       */
-     bool prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks, uint8_t &drop_verdict);
+     bool prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks, uint8_t *drop_verdict = nullptr);
 
      /**
       * @copydoc Blockchain::cleanup_handle_incoming_blocks

@@ -552,22 +552,7 @@ namespace cryptonote
       return 1;
     }
 
-    // Sanity check the block blob size. DECLINE, do not sever (PWD-B7).
-    //
-    // This used to drop the connection. The test is on the wrong axis for a
-    // drop: check_incoming_block_size compares the blob against OUR current
-    // cumulative weight limit plus a leeway
-    // (`cryptonote_core.cpp:1432`), and a peer a few heights ahead of us can
-    // legally announce a block whose limit exceeds the one we are holding. The
-    // rejection describes our state, not the sender's choice, so it fails
-    // attributability on the first conjunct and severing here punishes a peer
-    // for being ahead of us.
-    //
-    // The window is narrow in practice -- an announce blob is a header plus tx
-    // hashes, far smaller than the weight this limit bounds -- but a narrow
-    // window is a reason the bug is rare, not a reason it is correct. The
-    // parse arm immediately below is the genuine form check, and it still
-    // severs.
+    // Our current weight limit — state, not form. Decline, do not sever.
     if (!m_core.check_incoming_block_size(arg.b.block))
     {
       LOG_PRINT_CCONTEXT_L1("Announced block blob exceeds our current weight limit; declining to process it, keeping the connection");
@@ -943,37 +928,16 @@ namespace cryptonote
       // came from that must not be.
       if (!m_core.handle_incoming_tx(tx, tvc, tx_relay, true, zone))
       {
-        // PWD-B7: sever only on an AFFIRMATIVE input-attributable verdict.
-        //
-        // This used to read `&& !tvc.m_no_drop_offense` -- drop unless the
-        // rejection was one of four named carve-outs. Absence did not mean
-        // "the sender sent malformed bytes"; it meant "not one of those four",
-        // and that set included OUR OWN failures. A tripped pool invariant or
-        // a storage exception returned here with the flag unset and severed a
-        // peer that had done nothing wrong: our storage failing partitioned us
-        // from the network. The verdict is now set at the rejection site and
-        // read only through the rule, which lives in Rust.
         if (shekyl_drop_verdict_severs(tvc.m_drop_verdict))
         {
           LOG_PRINT_CCONTEXT_L1("Tx verification failed, dropping connection");
           drop_connection(context, false, false);
           return 1;
         }
-
         if (shekyl_drop_verdict_is_internal_failure(tvc.m_drop_verdict))
         {
-          // Loud, because this one is a bug in us rather than a routine
-          // refusal -- and because the peer is now NOT punished for it, the
-          // log is the only remaining signal that it happened.
           LOG_ERROR_CCONTEXT("Tx rejected by an internal failure of ours, not the sender's fault; keeping the connection");
         }
-
-        // Not attributable, so the connection stands and the rest of the
-        // batch is still processed -- exactly what the four policy carve-outs
-        // have always done by falling through this gate. A peer that is merely
-        // expensive is PWD-B1's token bucket to charge, not this rule's to
-        // sever; a drop rule doing rate limiting's job is what severs honest
-        // peers.
       }
 
       switch (tvc.m_relay)
@@ -1541,36 +1505,12 @@ namespace cryptonote
 
           std::vector<block> pblocks;
           uint8_t prepare_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
-          if (!m_core.prepare_handle_incoming_blocks(blocks, pblocks, prepare_verdict))
+          if (!m_core.prepare_handle_incoming_blocks(blocks, pblocks, &prepare_verdict))
           {
             LOG_ERROR_CCONTEXT("Failure in prepare_handle_incoming_blocks");
-            // PWD-B7, and this site is why the verdict had to be typed.
-            //
-            // One `false` here serves FIFTEEN conditions in three classes: our
-            // own cancellation, the sender's malformed input, and our own
-            // broken invariants. Under a boolean both answers were wrong --
-            // charge, and our shutdown punishes an honest peer; decline, and a
-            // peer feeding malformed spans is never priced, reconnecting each
-            // time with nothing accumulating. #628 proposed the second and
-            // withdrew it, after two censuses of this call each undercounted
-            // it. Neither the sever nor the score was separable without
-            // knowing WHICH condition fired; now the call says.
-            //
-            // The charge and the sever move together because they answer the
-            // same question. The sweep is the charge; the id-drop passes
-            // `add_fail` false so the origin is not billed twice for one
-            // failure, as the parse-failure sibling does. On an anonymity zone
-            // the charge is moot either way: `add_host_fail` refuses an
-            // address that names no host, whoever calls it.
             if (shekyl_drop_verdict_severs(prepare_verdict))
             {
               drop_connections(span_origin);
-              // The sweep is a no-op where the address names no host, so this
-              // site drops the origin by id and clears its spans itself,
-              // exactly as the two sites below already do. `flush_all_spans`
-              // is true because this span is filled: until now only the
-              // sweep's own `flush_spans(id, true)` erased it, and that is
-              // gone here.
               if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
                 drop_connection(context, false, true);
                 return 1;
@@ -1579,20 +1519,10 @@ namespace cryptonote
             }
             else if (shekyl_drop_verdict_is_internal_failure(prepare_verdict))
             {
-              // An invariant of ours broke -- `tx_index is out of sync`, a tx
-              // missing from our own scan table, a worker that threw. The
-              // sender is not answerable, so it is neither charged nor
-              // dropped, and this log is the only remaining signal.
               LOG_ERROR_CCONTEXT("prepare_handle_incoming_blocks failed on an internal invariant of ours; keeping the connection and charging nothing");
             }
-
-            // Unconditional, and load-bearing in EVERY class. The span must
-            // leave the queue whether or not we severed its origin: this is
-            // what lets sync recover. Left behind, `get_next_span` hands the
-            // same failed span back forever -- and now that our own
-            // cancellation no longer drops the peer, the drop's `flush_spans`
-            // is no longer there to do it as a side effect. Removing the
-            // punishment must not remove the recovery.
+            // Span must leave the queue in every class: the drop used to flush
+            // it as a side effect.
             m_block_queue.remove_spans(span_connection_id, start_height);
             return 1;
           }

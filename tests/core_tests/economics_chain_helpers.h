@@ -43,8 +43,7 @@ inline bool add_block_to_core(cryptonote::core& c, const cryptonote::block& blk)
   bce.pruned = false;
   bce.block = bd;
   bce.txs = {};
-  uint8_t unattributable_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;   // generated locally: no peer
-  if (!c.prepare_handle_incoming_blocks(std::vector<cryptonote::block_complete_entry>(1, bce), pblocks, unattributable_verdict))
+  if (!c.prepare_handle_incoming_blocks(std::vector<cryptonote::block_complete_entry>(1, bce), pblocks))
     return false;
   const bool handled = c.handle_incoming_block(bd, &blk, bvc);
   c.cleanup_handle_incoming_blocks();

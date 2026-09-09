@@ -60,7 +60,6 @@
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "misc_language.h"
 #include "memwipe.h"
-#include "shekyl/shekyl_ffi.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "tests.core"
@@ -668,8 +667,7 @@ public:
     bce.pruned = false;
     bce.block = bd;
     bce.txs = {};
-    uint8_t unattributable_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;   // generated locally: no peer
-    if (m_c.prepare_handle_incoming_blocks(std::vector<cryptonote::block_complete_entry>(1, bce), pblocks, unattributable_verdict))
+    if (m_c.prepare_handle_incoming_blocks(std::vector<cryptonote::block_complete_entry>(1, bce), pblocks))
     {
       m_c.handle_incoming_block(bd, &b, bvc);
       m_c.cleanup_handle_incoming_blocks();
@@ -703,8 +701,7 @@ public:
     bce.pruned = false;
     bce.block = sr_block.data;
     bce.txs = {};
-    uint8_t unattributable_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;   // generated locally: no peer
-    if (m_c.prepare_handle_incoming_blocks(std::vector<cryptonote::block_complete_entry>(1, bce), pblocks, unattributable_verdict))
+    if (m_c.prepare_handle_incoming_blocks(std::vector<cryptonote::block_complete_entry>(1, bce), pblocks))
     {
       m_c.handle_incoming_block(sr_block.data, NULL, bvc);
       m_c.cleanup_handle_incoming_blocks();

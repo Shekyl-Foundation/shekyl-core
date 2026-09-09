@@ -8,9 +8,9 @@
 //! # What crosses, and what deliberately does not
 //!
 //! C++ records a classification as an opaque byte on its verification context
-//! and folds further classifications in through [`shekyl_drop_verdict_combine`].
-//! It never compares that byte against anything. The two questions it is
-//! allowed to ask are [`shekyl_drop_verdict_severs`] and
+//! and writes only through [`shekyl_drop_verdict_classify`]. It never compares
+//! that byte against anything. The two questions it is allowed to ask are
+//! [`shekyl_drop_verdict_severs`] and
 //! [`shekyl_drop_verdict_is_internal_failure`], and both are answered here.
 //!
 //! That asymmetry is the point of the boundary. A `switch` on the byte in C++
@@ -52,12 +52,8 @@ pub extern "C" fn shekyl_drop_verdict_is_internal_failure(verdict: u8) -> bool {
 }
 
 /// Folds a newly observed classification into the one already recorded, and
-/// returns the byte to store.
-///
-/// A no-drop verdict, once recorded, is never promoted back to droppable. C++
-/// assigns through this rather than writing the field directly, so a site that
-/// classifies coarsely cannot overwrite a more precise reading taken deeper in
-/// the same rejection.
+/// returns the byte to store. Prefer [`shekyl_drop_verdict_classify`] at a
+/// live slot; this exists for tests and for folding two locals.
 #[no_mangle]
 pub extern "C" fn shekyl_drop_verdict_combine(current: u8, incoming: u8) -> u8 {
     DropVerdict::from_byte(current)
@@ -65,11 +61,32 @@ pub extern "C" fn shekyl_drop_verdict_combine(current: u8, incoming: u8) -> u8 {
         .to_byte()
 }
 
+/// Writes `incoming` into `slot` through [`DropVerdict::combine`].
+///
+/// This is the C++ write path. A null `slot` is a no-op so callers with no
+/// peer (importer, miner, generated-chain tests) pass null rather than a
+/// dummy they ignore.
+///
+/// # Safety
+///
+/// `slot` may be null. If non-null it must point to a writable `u8` that
+/// lives for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_drop_verdict_classify(slot: *mut u8, incoming: u8) {
+    if slot.is_null() {
+        return;
+    }
+    // SAFETY: non-null, caller-owned writable byte.
+    unsafe {
+        DropVerdict::classify_in_place(&mut *slot, DropVerdict::from_byte(incoming));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        shekyl_drop_verdict_combine, shekyl_drop_verdict_is_internal_failure,
-        shekyl_drop_verdict_severs,
+        shekyl_drop_verdict_classify, shekyl_drop_verdict_combine,
+        shekyl_drop_verdict_is_internal_failure, shekyl_drop_verdict_severs,
     };
     use shekyl_peer_policy::DropVerdict;
 
@@ -142,5 +159,20 @@ mod tests {
         assert!(shekyl_drop_verdict_severs(shekyl_drop_verdict_combine(
             form, form
         )));
+    }
+
+    /// The write path agrees with combine, and a null slot is a no-op so a
+    /// caller with no peer can pass null without manufacturing a drop.
+    #[test]
+    fn classify_in_place_matches_combine_and_null_is_a_noop() {
+        let form = DropVerdict::AttributableForm.to_byte();
+        let state = DropVerdict::PolicyOrState.to_byte();
+        let mut slot = DropVerdict::Unclassified.to_byte();
+        unsafe { shekyl_drop_verdict_classify(&raw mut slot, form) };
+        assert!(shekyl_drop_verdict_severs(slot));
+        unsafe { shekyl_drop_verdict_classify(&raw mut slot, state) };
+        assert!(!shekyl_drop_verdict_severs(slot));
+        assert_eq!(slot, state);
+        unsafe { shekyl_drop_verdict_classify(std::ptr::null_mut(), form) };
     }
 }

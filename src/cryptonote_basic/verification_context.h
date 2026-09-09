@@ -45,24 +45,11 @@ namespace cryptonote
 
     relay_method m_relay; // gives indication on how tx should be relayed (if at all)
     bool m_verifivation_failed; //bad tx, tx should not enter mempool. Whether the connection is ALSO dropped is m_drop_verdict's question, not this flag's
-    // Why this rejection happened, in the only terms a drop decision may consult
-    // (PWD-B7, docs/design/SHEKYL_P2P_PROTOCOL.md). One of the
-    // SHEKYL_DROP_VERDICT_* values from shekyl/shekyl_ffi.h.
-    //
-    // This replaced a `bool m_no_drop_offense` whose ABSENCE meant "droppable".
-    // Absence did not identify malformed input -- it identified everything
-    // outside a four-entry carve-out list, and that set included OUR OWN
-    // failures, so a tripped pool invariant or a storage exception severed an
-    // innocent peer. The zero value here means nothing classified the
-    // rejection, and it does NOT sever: a failure path added later is safe
-    // until someone affirmatively says it describes the sender's input.
-    //
-    // Write it through shekyl_drop_verdict_combine() so a coarse
-    // classification cannot overwrite a precise one; read it only through
-    // shekyl_drop_verdict_severs() / shekyl_drop_verdict_is_internal_failure().
-    // The initialiser is here rather than left to each `tvc{}` because a byte
-    // that reads as garbage would otherwise be one value away from severing.
-    uint8_t m_drop_verdict = 0 /* SHEKYL_DROP_VERDICT_UNCLASSIFIED */;
+    // PWD-B7. Opaque SHEKYL_DROP_VERDICT_* byte. Write through classify_drop /
+    // reject_*; read through shekyl_drop_verdict_severs /
+    // shekyl_drop_verdict_is_internal_failure. Zero is Unclassified and does
+    // not sever (shekyl-peer-policy).
+    uint8_t m_drop_verdict = 0;
     bool m_verifivation_impossible; //the transaction is related with an alternative blockchain
     bool m_added_to_pool; 
     bool m_double_spend;
