@@ -1203,7 +1203,10 @@ Full figures at [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md)
   §10.4 pre-registered this branch, so the consequence was already
   ruled: **FL-R3 is BLOCKED on the storage-lane per-block tx count**,
   now on its critical path. Accepting 1.33× instead is a maintainer
-  call and is stated as one.
+  call and is stated as one. *[**Corrected at round 2 below:** the
+  1.33× / 960 was P = 240's figure — the only period the dwell grid ran.
+  At the P = 720 that C10-4 selects the depth is 720 and the cost 1 440,
+  **2.0×**. The verdict and the block stand; the magnitude was wrong.]*
 - **C10-4 selects `P` = 720**, on FL-D8's measured residence (mean up to
   637 blocks) — and independently the natural ceiling, since the fold
   cannot outrun the 720-block average feeding it.
@@ -1228,3 +1231,35 @@ with a structural predicate, and bringing them under the gate revealed no
 new failures. And §4's dwell-grid count is re-derived 240 → 320 — **the
 second time that figure has gone stale for the same reason**, since a
 count derived from a mode list dies on every addition to the list.
+
+#### Round 18 → time-grid round 2 / 2b (2026-09-09, `design/fl-r3-time-grid`)
+
+Round 2 opened on a **reproduction, not a new arm**: re-running round 1's
+instrument showed C10-3's 1.33× was `P` = 240's depth read as `P` = 720's
+(the dwell grid ran only the 240 pair, and the cost summary iterated a
+hard-coded label list). At the selected `P` the cold cost is **2.0×**
+(1 440 parses), confirmed on the round-2 run (`FEE_LADDER_DERIVATION.md`
+§10.13). The verdict does not move; the magnitude does, and the class of
+defect — a figure derived from a mode or label list rather than from the
+arm — is closed structurally. The round-2 run also **refuted the
+anchor-flip signature** the fold's six extra cells were predicted to show
+(R2-E2: 12 off-anchor transitions against a predicted 0) while confirming
+that a deeper fold recovers none of them (R2-E3): the anchor, not the
+depth, is the lever. The blocker is specified as **FL-R3-STORE** with a
+falsifier, and the fold's daemon wiring is pinned at §10.12.4.
+
+Round 2b (§10.14) came from the maintainer in-channel while round 2's run
+was in flight, and is pre-registered ahead of its arms as the earlier
+rounds were: (i) **the band over the grid *sequence*, anchored at the last
+settled sample** — the §7 band at the period's cadence, made a pure
+function of chain state by the fact that a sample clear of every pow2
+boundary fixes the band's state with no history (`hysteresis_settled`,
+with the theorem as a property test); (ii) **median-W and peak-hold-W over
+the same sequence** — peak-hold ruled *eligible for adoption if it measures
+best* (R18-M4, ruled in advance); (iii) the **stability criterion in the
+user's units** — C10-6 minimum oscillation period in days, C10-7
+probability of a change inside the construction-to-broadcast gap, C10-8
+lag on a secular crossing — with the floor / ceiling set before the run
+(R18-M5) and the maintainer's ranking recorded: *smoothest, fewest inputs,
+no memory*. State: **OPEN**; R18-M1, M3 outstanding; M2 withdrawn as
+premature at §10.13; M4/M5 pre-ruled; selection at §10.15.
