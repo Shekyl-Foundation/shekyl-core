@@ -1484,7 +1484,7 @@ ride each row.
 | FL-R21 | **Quantizers deleted:** `quantize_pow2_ceil`, `fee_correction_quantized`, hysteresis step/fold/settled, `MIN_REPRESENTABLE_C`, the `fees[0]` clamp, `round_money_up_2` on the served path, the §10 instrument. FL-R3 CLOSED premise-refuted; FL-R6 identity; FL-D2 CLOSED; FL-D6/D8 moot; FL-R3-STORE demoted; §10 closed as record. §11.2 | **RULED in-channel 2026-09-09** ("What are we making this so complicated for?") | none |
 | FL-R22 | **Wallet pays exactly the served rung — no pad, fixed or drawn.** Path recorded: random pad proposed (FL-C1 overrule quoted) → withdrawn on the failure-mode analysis ("The safety argument won me over"; FL-C1 stands, premise refuted) → fixed pad → superseded by FL-R23. Temporal link of a deterministic fee accepted as inherent ("ALWAYS going to have a temporal link"). §11.2 | **RULED in-channel 2026-09-10** | none |
 | FL-R23 | **Lookback-min admission:** `fee ≥ mask_round_up(weight · min{F(h′−k) : 0 ≤ k ≤ G})`, `G` = 3 (hot-session gap 0–2 + 1 propagation). A quote at `F(h)` inside the gap is admitted by identity; the 2 % buffer and 0.95 deleted (weight model is byte-exact, §11.1 item 9). Cost = grace = worst `G`-block rise (FL-E3). Predicate lands in Rust behind FFI (rule 20). §11.2 | **RULED in-channel 2026-09-10** ("I agree with the math") | none — relay policy |
-| FL-R24 | **SMA resolution for the floor operand:** (i) integer `tx_count_sum/720` as shipped — the 1/V tick is a grace cost under FL-R23, a quote-quality question only; (ii) exact `(tx_count_sum, baseline·720)` via the scale-invariant ratio functions — floor-only breaks FL-V1 by ≤ one tick; reward-and-floor is a consensus change to `M_r`'s operand (own row, rule 07). Decision rule pre-registered §11.5 FL-E3. §11.2 | **OPEN — decided on FL-E3** | (ii)-with-reward would be a consensus row |
+| FL-R24 | **SMA resolution for the floor operand:** (i) integer `tx_count_sum/720` as shipped — the 1/V tick is a grace cost under FL-R23, a quote-quality question only; (ii) exact `(tx_count_sum, baseline·720)` via the scale-invariant ratio functions — floor-only breaks FL-V1 by ≤ one tick; reward-and-floor is a consensus change to `M_r`'s operand (own row, rule 07). Decision rule pre-registered §11.5 FL-E3. §11.2 | **RULED in-channel 2026-09-10 ("accepted/agree"): (ii) exact SMA for reward AND floor** — the FL-E3 rule fired (integer tick 307 bp at age 30, §11.7) | **consensus row** (change to `M_r`'s operand resolution; pre-genesis; opened by the implementing PR, rule 07 evaluated there) |
 
 Signatures are recorded per-row with their provenance (in-channel, review
 rounds 4–8); this line remains for any wholesale countersign the
@@ -2499,7 +2499,7 @@ Closed as record 2026-09-10 by §11 (FL-R21). Round 2b completed (`/tmp/fl_r3_ro
 
 **Status:** OPEN. Rulings received in-channel 2026-09-09 → 2026-09-10 and
 recorded here per row (§11.2); the confirmation run FL-E1…FL-E3 is
-pre-registered at §11.5 and its results are recorded at §11.7 (FL-E1…FL-E3 run 2026-09-10; FL-R24 rule fired, exact SMA recommended); the implementation
+pre-registered at §11.5 and its results are recorded at §11.7 (FL-E1…FL-E3 run 2026-09-10; FL-R24 RULED: exact SMA for reward and floor, a consensus row); the implementation
 spec is §11.6 and awaits review before code. **This round supersedes §10**,
 which closes as record at §10.16 — not because its measurements were wrong
 but because the thing it was restoring turned out to rest on a premise
@@ -2905,7 +2905,7 @@ not contradict. *Integer arm:* 108/600 outside the bar at 30 000 blocks,
 every one of them the truncation, none of them the map. The tick is not a
 transient; it is a quantizer doing what quantizers do in a loop.
 
-**FL-R24 — the pre-registered rule fires.** Integer stationary
+**FL-R24 — the pre-registered rule fires; RULED 2026-09-10: exact SMA, reward and floor together ("accepted/agree").** Integer stationary
 `grace_bp_max` = 307 > 300 at age 30 (`grace_bp_mean` = 4, inside its
 bound). By the rule as written, branch (ii) is recommended. The
 recommendation on the evidence, not just the rule: the integer SMA is a
@@ -2925,6 +2925,6 @@ what ships, and under FL-R23 it is safe — its tick costs miners ≤ 3 % for
 ≤ 3 blocks after a toggle and bounces nobody. The maintainer's call.
 
 **Disposition of the round.** FL-R20…FL-R23 confirmed as ruled; FL-R24
-recommended (ii)-with-reward, awaiting the call; §11.6 goes to spec review
+RULED (ii)-with-reward; §11.6 goes to spec review
 unchanged except that `check_fee`'s Rust predicate takes the `G+1` floors
 as computed, whichever operand resolution is ruled.

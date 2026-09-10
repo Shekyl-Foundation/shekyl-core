@@ -1281,6 +1281,6 @@ pad → fixed pad → lookback-min) recorded in order at §11.2 FL-R22. §10
 closed as record (§10.16); C10-*, R2-E*, R18-M* closed with it; §10.15
 not written. State: **§11 OPEN** — FL-E1…FL-E3 pre-registered (§11.5), run at
 `5574be2ea`, results at §11.7: FL-R20…FL-R23 confirmed; FL-R24's rule
-fired (integer tick 307 bp at age 30) and exact SMA for reward and floor
-is recommended as a pre-genesis consensus row — maintainer's call owed;
+fired (integer tick 307 bp at age 30) and the maintainer RULED exact SMA
+for reward and floor — a pre-genesis consensus row for the implementing PR;
 implementation spec §11.6 awaits review.
