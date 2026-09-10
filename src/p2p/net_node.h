@@ -438,6 +438,8 @@ namespace nodetool
 
     node_server(t_payload_net_handler& payload_handler)
       : m_payload_handler(payload_handler),
+        m_listening_port(0),
+        m_listening_port_ipv6(0),
         m_external_port(0),
         m_allow_local_ip(false),
         m_igd(no_igd),
@@ -675,9 +677,11 @@ namespace nodetool
 
     bool m_have_address;
     bool m_first_connection_maker_call;
-    uint32_t m_listening_port;
-    uint32_t m_listening_port_ipv6;
-    uint32_t m_external_port;
+    //! 0 until bind. `is_our_listen_address` treats 0 as unbound, so an
+    //! IPv6-disabled node (the default) must not skip on a garbage port.
+    uint32_t m_listening_port{0};
+    uint32_t m_listening_port_ipv6{0};
+    uint32_t m_external_port{0};
     //! Interface host strings (`network_address::host_str()` form), filled
     //! once at the end of `init()` after bind. Used by `is_self_dial` so a
     //! public-zone node does not outbound to its own listen address.

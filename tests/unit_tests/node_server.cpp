@@ -1576,7 +1576,8 @@ TEST(node_server, is_our_listen_address_skips_self_not_other_net)
   EXPECT_TRUE(nodetool::is_our_listen_address(listen, unset, 12021, 0, 0, local_hosts));
   EXPECT_TRUE(nodetool::is_our_listen_address(loopback, unset, 12021, 0, 0, {}));
   EXPECT_FALSE(nodetool::is_our_listen_address(other_port, unset, 12021, 0, 0, local_hosts))
-    << "same host other port (mainnet on the same VPS) must still be dialable";
+    << "same host other port (mainnet on the same VPS) must still be dialable; "
+       "a zero IPv6 listen port (IPv6 off / not yet bound) must not skip it";
   EXPECT_FALSE(nodetool::is_our_listen_address(other_host, unset, 12021, 0, 0, local_hosts));
   EXPECT_FALSE(nodetool::is_our_listen_address(listen, unset, 12021, 0, 0, {}))
     << "a public IP not on an interface is not skipped (NAT home node)";
