@@ -535,7 +535,7 @@ bool gen_block_miner_tx_has_out_to_alice::generate(std::vector<test_event_entry>
   return true;
 }
 
-bool gen_block_has_invalid_tx::generate(std::vector<test_event_entry>& events) const
+bool gen_block_missing_tx::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
 

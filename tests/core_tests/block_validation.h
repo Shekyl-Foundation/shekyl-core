@@ -303,9 +303,22 @@ struct gen_block_miner_tx_has_out_to_alice : public gen_block_verification_base<
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
-struct gen_block_has_invalid_tx : public gen_block_verification_base<1>
+// Inherited name was gen_block_has_invalid_tx. The construction never
+// presents a tx: it lists a null hash that is in neither the pool nor the
+// block supplement. That is MissingTxs, not Rejected — the bytes were
+// never verified. The inherited failed-flag was set for both; PWD-B7
+// made them exclusive. check_block_purged still holds: the block is not
+// added.
+struct gen_block_missing_tx : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
+  bool check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
+  {
+    if (event_idx == 1)
+      return cryptonote::block_missing_txs(bvc) && !cryptonote::block_rejected(bvc);
+    else
+      return !cryptonote::block_rejected(bvc) && !cryptonote::block_missing_txs(bvc);
+  }
 };
 
 struct gen_block_is_too_big : public gen_block_verification_base<1>
