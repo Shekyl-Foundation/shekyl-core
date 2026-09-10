@@ -30,8 +30,9 @@
 # ZSTD_COMPRESSION_LEVEL) are no longer compared: the C++ compression path
 # is a marshaling shim over the shekyl_levin_* FFI, so those constants are
 # single-sourced in rust/shekyl-levin/src/compress.rs with no C++ copy to
-# drift. This gate covers only the constants that still exist twice — the
-# framing values in levin_base.h — until the LV-3 cutover retires them too.
+# drift. Remaining twice-defined constants: framing values in levin_base.h,
+# and advertised support flags (`cryptonote_config.h` vs `SupportFlags` in
+# types.rs, added PWD-B6 so a dropped bit cannot silently diverge).
 
 set -euo pipefail
 
@@ -40,8 +41,10 @@ cd "$repo_root"
 
 levin_base="contrib/epee/include/net/levin_base.h"
 rust_header="rust/shekyl-levin/src/header.rs"
+config_h="src/cryptonote_config.h"
+rust_types="rust/shekyl-levin/src/payload/types.rs"
 
-for f in "$levin_base" "$rust_header"; do
+for f in "$levin_base" "$rust_header" "$config_h" "$rust_types"; do
   if [[ ! -f "$f" ]]; then
     echo "FAIL: expected file is missing: $f" >&2
     echo "      (a move or rename must update this gate, not bypass it)" >&2
@@ -119,6 +122,11 @@ rust_flag() { # name
     sed -E 's/.*Flags\(([^)]*)\).*/\1/'; } || true
 }
 
+rust_support_flag() { # name
+  { grep -E "^[[:space:]]*pub const $1[[:space:]]*: SupportFlags = SupportFlags\(" "$rust_types" | head -1 |
+    sed -E 's/.*SupportFlags\(([^)]*)\).*/\1/'; } || true
+}
+
 echo "Levin wire-constant parity: $levin_base vs rust/shekyl-levin"
 echo
 
@@ -163,6 +171,18 @@ if [[ -z "$header_size_cpp" ]]; then
 else
   compare "HEADER_SIZE" "$header_size_cpp" "$(rust_const HEADER_SIZE "$rust_header")"
 fi
+
+# PWD-B6: advertised support flags. C++ `P2P_SUPPORT_FLAGS` is
+# `(P2P_SUPPORT_FLAG_ZSTD_COMPRESSION)`; expand the name so arithmetic
+# comparison works. Absence of either file or either define fails closed
+# via the extractors above.
+zstd_cpp="$(cpp_define P2P_SUPPORT_FLAG_ZSTD_COMPRESSION "$config_h")"
+flags_cpp="$(cpp_define P2P_SUPPORT_FLAGS "$config_h")"
+flags_cpp="${flags_cpp//P2P_SUPPORT_FLAG_ZSTD_COMPRESSION/${zstd_cpp}}"
+compare "P2P_SUPPORT_FLAG_ZSTD_COMPRESSION" \
+  "$zstd_cpp" "$(rust_support_flag ZSTD_COMPRESSION)"
+compare "P2P_SUPPORT_FLAGS" \
+  "$flags_cpp" "$(rust_support_flag ADVERTISED)"
 
 echo
 if [[ "$failures" -ne 0 ]]; then

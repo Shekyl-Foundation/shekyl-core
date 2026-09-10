@@ -34,7 +34,7 @@ own docs (`rust/shekyl-levin/src/lib.rs`) — kept in one place on purpose.
 Command *bodies* are epee portable_storage. The binary codec is
 `rust/shekyl-portable-storage` (LV-2a, landed). Typed Levin command
 maps in `shekyl-levin` are LV-2b (landed): handshake / timed-sync /
-ping / support-flags, `network_address`, and notifies 2001–2004 /
+ping / support-flags, `network_address`, and notifies 2002–2004 /
 2006–2010. Cryptonote blobs stay opaque bytes (`shekyl-wire`). Live
 `shekyld` dual-stack is the `#[ignore]` harness
 `rust/shekyl-levin/tests/dual_stack.rs` (`SHEKYLD_BIN`;
@@ -194,11 +194,12 @@ exist in Shekyl. `COMMAND_REQUEST_SUPPORT_FLAGS` is
 
 ### Cryptonote Protocol Commands
 
-#### (`2001` Notification) New Block
+#### (`2001` Notification) New Block — deleted (PWD-B6)
 
-Carries a full serialized block. Post-v3, user transactions within the block
-include `pqc_auth` material (~5.4 KB per user tx). Miner coinbase remains
-excluded from `pqc_auth`.
+Command 2001 is refused as unknown. Shekyl never needed Monero's
+full-block / compact-block dual path; 2001 already forwarded into the
+2008 handler, so the second id was a wire alias with a 32× weaker cap.
+`NOTIFY_NEW_COMPACT_BLOCK` (2008) is the sole block announce.
 
 #### (`2002` Notification) New Transactions
 
@@ -224,16 +225,18 @@ requested range.
 Carries block hashes for chain synchronization. Not affected by v3 PQC
 sizing (block headers do not contain `pqc_auth`).
 
-#### (`2008` Notification) New Fluffy Block
+#### (`2008` Notification) New Compact Block
 
-Carries block header plus transaction hashes (not full transactions). The
-receiving peer requests missing transactions via `2009`. Not directly
-affected by PQC sizing, but the follow-up `2002`/`2009` exchange is.
+Sole block-announce path after PWD-B6. Header plus optional tx bodies;
+relay typically omits txs. The receiving peer requests missing
+transactions via `2009`. Full blocks still travel on `2004` during sync.
+Not directly affected by PQC sizing, but the follow-up `2009` exchange is.
 
-#### (`2009` Notification) Request Fluffy Missing TX
+#### (`2009` Notification) Request Compact Missing TX
 
-Requests specific transactions by hash. The response contains full
-serialized v3 transactions including `pqc_auth`.
+Requests omitted transactions by index in the compact-block header.
+The fill is another `2008` carrying the requested tx bodies, including
+`pqc_auth`.
 
 #### (`2010` Notification) Get Txpool Complement
 
@@ -243,7 +246,7 @@ by `handle_notify_get_txpool_complement`. Command 2005 was never
 allocated.
 
 Command-body field layouts for 1001 / 1002 / 1003 / 1007 and
-notifies 2001–2004 / 2006–2010 live in `shekyl-levin` (`payload`).
+notifies 2002–2004 / 2006–2010 live in `shekyl-levin` (`payload`).
 See `LV2_PORTABLE_STORAGE.md` §5–§6.
 
 ### Wire Data Privacy Summary
@@ -252,10 +255,9 @@ See `LV2_PORTABLE_STORAGE.md` §5–§6.
 |---|---|---|---|
 | 1001 Handshake | None | Low | Peer identity exchange |
 | 1002 Timed Sync | None | Medium | Timestamp fingerprinting risk |
-| 2001 New Block | Proportional to tx count | Low | Broadcast, not origin-attributable |
 | 2002 New Transactions | +5.4 KB per user tx | High | Origin-attributable timing signal |
 | 2003/2004 Get Objects | Proportional to tx count | Low | Sync protocol |
 | 2006/2007 Chain Entry | None | None | Hash-only |
-| 2008 Fluffy Block | Minimal | Low | Header + hashes |
-| 2009 Missing TX | +5.4 KB per requested tx | Medium | Follow-up to fluffy block |
+| 2008 Compact Block | Minimal | Low | Sole block announce (PWD-B6); header + optional txs |
+| 2009 Compact missing TX | +5.4 KB per requested tx | Medium | Follow-up to compact block |
 | 2010 Txpool complement | None (hashes only) | Low | Mempool hash set |

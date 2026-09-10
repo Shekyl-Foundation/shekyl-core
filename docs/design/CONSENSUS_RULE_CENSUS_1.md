@@ -216,18 +216,19 @@ wire that advertises a capability that does not exist.
 
 ### U-6 — `NOTIFY_NEW_BLOCK` alongside `NOTIFY_NEW_FLUFFY_BLOCK` (MEDIUM)
 
-Both survive: `cryptonote_protocol_defs.h:184` and `:334`, with
-`handle_notify_new_block` live at `cryptonote_protocol_handler.inl:590`.
+Both survived at the census pin: `cryptonote_protocol_defs.h:184` and `:334`,
+with `handle_notify_new_block` live at `cryptonote_protocol_handler.inl:590`.
 
 Monero kept the legacy full-block notify for backward compatibility during the
 fluffy-block transition. **Shekyl has no such transition.** Two block-propagation
-paths means two code paths that must agree on validation, two surfaces for a
+paths meant two code paths that must agree on validation, two surfaces for a
 propagation-level attack, and — given the Dandelion++ work assumed a specific
 propagation shape — a path the privacy analysis may not have covered.
 
 The relay round adopted "Design A: fluffs traverse every configured zone."
-Whether `NOTIFY_NEW_BLOCK` traverses zones the same way is a question the
-census should force.
+Whether `NOTIFY_NEW_BLOCK` traversed zones the same way was a question the
+census meant to force; **PWD-B6 dissolved it rather than answering it** by
+deleting 2001, so there is one block path and Design A describes all of it.
 
 ### U-7 — Output histogram / distribution (LOW: RPC-only, but consensus-adjacent)
 

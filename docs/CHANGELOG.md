@@ -316,6 +316,23 @@
 
 ### Removed
 
+- **One block-propagation path, not two (PWD-B6).** `NOTIFY_NEW_BLOCK`
+  (2001) is deleted; command **2008** is the sole block announce. The two
+  were already one code path — 2001's handler forwarded into 2008 — and
+  nothing ever sent 2001. Command ids **2008 / 2009 are unchanged**. The
+  identifiers are `NOTIFY_NEW_COMPACT_BLOCK` / `NOTIFY_REQUEST_COMPACT_MISSING_TX`
+  (Rust: `NewCompactBlock` / `RequestCompactMissingTx`): `FLUFFY` collides
+  with Dandelion++ stem/fluff (`dandelionpp_fluff` on 2002) and names a
+  Monero rollout this chain has no history of. Compact, not "just block":
+  2008 is header-first (relay clears `b.txs`); full blocks still travel on
+  `NOTIFY_RESPONSE_GET_OBJECTS` (2004) during sync. `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS`
+  (0x01) goes with 2001; `0x01` is left unassigned. Advertised flags live
+  as `shekyl-levin::SupportFlags::ADVERTISED` (zstd only), pinned against
+  the C++ macros by `check_levin_constant_parity.sh`. The obsolete
+  `--fluffy-blocks` CLI flag is deleted. No protocol version moves:
+  `SHEKYL_PROTOCOL_VERSION` denotes the crypto era, and there is no
+  wire-command-set version to bump.
+
 - **The anchor peerlist mechanism is deleted whole** — the persisted anchor
   section, `anchor_peerlist_entry`, its container and manager methods, the
   anchor dial arm, and `P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT`.

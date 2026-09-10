@@ -372,7 +372,7 @@ Transport carries the witness on `block_complete_entry`, bounded **at each
 codec** (the epee KV map; `bootstrap::block_package`) rather than at call sites,
 so no ingress can be added that bypasses the bound. Every *outgoing* entry fills
 it from the single accessor `Blockchain::get_block_attestation_witness` — IBD
-serving, the fluffy missing-tx response, and the mined/submitted-block relay —
+serving, the compact missing-tx response, and the mined/submitted-block relay —
 because a node that receives a block without its witness stores none, can serve
 none, and propagates the gap.
 

@@ -3,7 +3,8 @@
 **Status.** **Pinned** (2026-08-13). LV-2a landed in
 `rust/shekyl-portable-storage`. LV-2b maps (1001 / 1002 / 1003 / 1007,
 `network_address`, and notifies 2001–2004 / 2006–2010) landed in
-`shekyl-levin` (2026-08-14). This document remains authoritative for
+`shekyl-levin` (2026-08-14). **PWD-B6 (2026-09-09) deleted 2001**; the live
+notify set is 2002–2004 / 2006–2010. This document remains authoritative for
 build-vs-vendor, the crate split, and the LV-2b census. Live `shekyld`
 dual-stack (§12 step 4) landed as the `#[ignore]` harness
 `rust/shekyl-levin/tests/dual_stack.rs` (`SHEKYLD_BIN`; default crate
@@ -158,9 +159,10 @@ command 1001 rather than from a side channel. 2002 next: first
 blob-wrapping notify, the relay path, wraps `shekyl-wire` tx blobs
 inside KV.
 
-The remaining cryptonote notifies (2001, 2003–2004, 2006–2010) ride the
-same derive and land with 2002 or immediately after; they are not a
-third named slice.
+The remaining cryptonote notifies (2001 at the time, 2003–2004, 2006–2010)
+ride the same derive and land with 2002 or immediately after; they are not
+a third named slice. **PWD-B6 later deleted 2001**; the live set is
+2002–2004 / 2006–2010.
 
 ---
 
@@ -174,8 +176,9 @@ ID). Those commands **do not exist** in Shekyl
 `cryptonote_protocol_handler.inl`, and was missing from that doc. 2005
 was never allocated.
 
-Correct set, verified 2026-08-13 against the two `*_protocol_defs.h`
-files:
+Correct set at LV-2b landing, verified 2026-08-13 against the two
+`*_protocol_defs.h` files. **PWD-B6 later deleted 2001**; the table below
+is the live set:
 
 | ID | Name | Kind |
 | --- | --- | --- |
@@ -183,14 +186,13 @@ files:
 | 1002 | `COMMAND_TIMED_SYNC` | request / response |
 | 1003 | `COMMAND_PING` | request / response |
 | 1007 | `COMMAND_REQUEST_SUPPORT_FLAGS` | request / response |
-| 2001 | `NOTIFY_NEW_BLOCK` | notify |
 | 2002 | `NOTIFY_NEW_TRANSACTIONS` | notify |
 | 2003 | `NOTIFY_REQUEST_GET_OBJECTS` | notify |
 | 2004 | `NOTIFY_RESPONSE_GET_OBJECTS` | notify |
 | 2006 | `NOTIFY_REQUEST_CHAIN` | notify |
 | 2007 | `NOTIFY_RESPONSE_CHAIN_ENTRY` | notify |
-| 2008 | `NOTIFY_NEW_FLUFFY_BLOCK` | notify |
-| 2009 | `NOTIFY_REQUEST_FLUFFY_MISSING_TX` | notify |
+| 2008 | `NOTIFY_NEW_COMPACT_BLOCK` | notify |
+| 2009 | `NOTIFY_REQUEST_COMPACT_MISSING_TX` | notify |
 | 2010 | `NOTIFY_GET_TXPOOL_COMPLEMENT` | notify |
 
 The companion edit to `LEVIN_PROTOCOL.md` in this pin's landing is the
@@ -217,14 +219,13 @@ headers and are load-bearing for handshake peerlists.
 | `CORE_SYNC_DATA` | `cryptonote_protocol_defs.h` | handshake/timed-sync payload; `cumulative_difficulty_top64` store-always / load-`OPT`; `top_id` POD-as-blob |
 | `tx_blob_entry` | `cryptonote_protocol_defs.h` | pruned-tx path |
 | `block_complete_entry` | `cryptonote_protocol_defs.h` | **Shekyl:** `attestation_witness` `OPT` + transport-cap check inside the map. Unpruned `txs` is an array of blobs; pruned `txs` is an array of `tx_blob_entry` |
-| `NOTIFY_NEW_BLOCK` request | `cryptonote_protocol_defs.h` | 2001 |
 | `NOTIFY_NEW_TRANSACTIONS` request | `cryptonote_protocol_defs.h` | 2002; `_` padding string; `dandelionpp_fluff` `OPT` default **true** |
 | `NOTIFY_REQUEST_GET_OBJECTS` request | `cryptonote_protocol_defs.h` | 2003; `blocks` is `CONTAINER_POD_AS_BLOB` |
 | `NOTIFY_RESPONSE_GET_OBJECTS` request | `cryptonote_protocol_defs.h` | 2004 |
 | `NOTIFY_REQUEST_CHAIN` request | `cryptonote_protocol_defs.h` | 2006 |
 | `NOTIFY_RESPONSE_CHAIN_ENTRY` request | `cryptonote_protocol_defs.h` | 2007 |
-| `NOTIFY_NEW_FLUFFY_BLOCK` request | `cryptonote_protocol_defs.h` | 2008 |
-| `NOTIFY_REQUEST_FLUFFY_MISSING_TX` request | `cryptonote_protocol_defs.h` | 2009 |
+| `NOTIFY_NEW_COMPACT_BLOCK` request | `cryptonote_protocol_defs.h` | 2008 |
+| `NOTIFY_REQUEST_COMPACT_MISSING_TX` request | `cryptonote_protocol_defs.h` | 2009 |
 | `NOTIFY_GET_TXPOOL_COMPLEMENT` request | `cryptonote_protocol_defs.h` | 2010 |
 
 ### 6.2 Address union (LV-2b, nested under `peerlist_entry.adr`)

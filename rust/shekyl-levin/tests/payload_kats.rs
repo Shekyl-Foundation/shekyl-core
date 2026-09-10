@@ -14,8 +14,9 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use shekyl_levin::{
     invoke, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
-    NetworkAddress, PayloadError, PeerlistEntry, PortableMap, Received, SupportFlagsRequest,
-    SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE,
+    NetworkAddress, PayloadError, PeerlistEntry, PortableMap, Received, SupportFlags,
+    SupportFlagsRequest, SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse,
+    COMMAND_HANDSHAKE,
 };
 use shekyl_portable_storage::{store_to_binary, Section, HEADER};
 
@@ -28,7 +29,7 @@ fn node() -> BasicNodeData {
             ip: Ipv4Addr::new(0, 0, 0, 0),
             port: 18_080,
         },
-        support_flags: 0,
+        support_flags: SupportFlags::default(),
     }
 }
 
@@ -67,7 +68,16 @@ fn support_flags_request_is_empty_section() {
 
 #[test]
 fn support_flags_response_round_trip() {
-    round_trip(&SupportFlagsResponse { support_flags: 1 });
+    round_trip(&SupportFlagsResponse {
+        support_flags: SupportFlags::from_bits(1),
+    });
+}
+
+#[test]
+fn advertised_support_flags_are_zstd_only() {
+    assert_eq!(SupportFlags::ADVERTISED, SupportFlags::ZSTD_COMPRESSION);
+    assert_eq!(SupportFlags::ADVERTISED.bits(), 0x02);
+    assert!(!SupportFlags::ADVERTISED.contains(SupportFlags::from_bits(0x01)));
 }
 
 #[test]
@@ -81,7 +91,7 @@ fn opt_fields_omitted_at_default() {
 #[test]
 fn opt_fields_present_when_nonzero() {
     let mut node = node();
-    node.support_flags = 1;
+    node.support_flags = SupportFlags::from_bits(1);
     let section = node.to_section().expect("section");
     assert!(section.get("support_flags").is_some());
     round_trip(&node);
@@ -193,13 +203,15 @@ fn unknown_address_type_is_hard_error() {
 
 #[test]
 fn extra_fields_ignored() {
-    let mut flags = SupportFlagsResponse { support_flags: 1 }
-        .to_section()
-        .expect("section");
+    let mut flags = SupportFlagsResponse {
+        support_flags: SupportFlags::from_bits(1),
+    }
+    .to_section()
+    .expect("section");
     flags.insert("future", shekyl_portable_storage::Value::Bool(true));
     let bytes = store_to_binary(&flags).expect("encode");
     let loaded = SupportFlagsResponse::load(&bytes).expect("load");
-    assert_eq!(loaded.support_flags, 1);
+    assert_eq!(loaded.support_flags, SupportFlags::from_bits(1));
 }
 
 #[test]
