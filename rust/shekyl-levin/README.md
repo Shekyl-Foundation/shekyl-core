@@ -19,8 +19,8 @@ implementation:
   `async_protocol_handler::handle_recv` state machine: partial reads,
   signature early-reject, packet-size limits (256 KiB pre-handshake / 100 MB
   post), per-command payload caps and the PWD-B3a ingress discriminator
-  (`ingress_payload_cap` — live on C++ `handle_recv` via FFI; the
-  `BucketReader` hook can only tighten a defined command), noise discard,
+  (`ingress_payload_cap` — live on C++ `handle_recv` via FFI; a dispatch
+  command must be a `DefinedCommand`), noise discard,
   fragment reassembly, decompression, and message classification. `feed` buffers bytes and
   `next_message` parses one bucket at a time, so — as in `handle_recv`,
   which dispatches inside its parse loop — at most one decoded payload is

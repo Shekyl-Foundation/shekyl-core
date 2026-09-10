@@ -156,7 +156,7 @@
 //! 9. **unknown flags / unknown dispatch commands rejected at ingress** —
 //!    *resolved 2026-09-09; no longer a divergence.* Both sides apply
 //!    [`ingress_payload_cap`]: unknown flag bits are fatal on every bucket;
-//!    a Q/S-flagged command not in [`DEFINED_COMMANDS`] is fatal; a
+//!    a Q/S-flagged command that is not a [`DefinedCommand`] is fatal; a
 //!    noise/fragment bucket (neither Q nor S) is bounded only by the packet
 //!    limit so cover traffic with command 0 is not an unknown command. The
 //!    live C++ path is `handle_recv` → `get_max_bytes(command, flags)` →
@@ -185,11 +185,7 @@ pub use header::{
     BucketHead, Flags, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE,
     LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
 };
-pub use ingress::{
-    hash_list_cap, ingress_payload_cap, is_defined_command, is_dispatch, payload_cap_for_command,
-    BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT, DEFINED_COMMANDS, FLAGS_DEFINED, MAX_OBJECT_REQUEST_COUNT,
-    P2P_MAX_PEERS_IN_HANDSHAKE,
-};
+pub use ingress::{ingress_payload_cap, DefinedCommand, FLAGS_DEFINED};
 pub use message::{invoke, notify, response};
 pub use payload::Error as PayloadError;
 pub use payload::{

@@ -3,7 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! FFI surface for Levin p2p payload compression, backed by `shekyl-levin`.
+//! FFI surface for Levin framing policy and payload compression, backed by
+//! `shekyl-levin`.
 //!
 //! # Why this boundary exists (single-owner libzstd)
 //!
@@ -638,6 +639,11 @@ mod tests {
         let rc = unsafe { shekyl_levin_ingress_admit(1001, 0x1, &raw mut cap) };
         assert_eq!(rc, SHEKYL_LEVIN_OK);
         assert_eq!(cap, 65_536);
+
+        // Compact announce (2008) keeps the inherited 4 MiB envelope.
+        let rc = unsafe { shekyl_levin_ingress_admit(2008, 0x1, &raw mut cap) };
+        assert_eq!(rc, SHEKYL_LEVIN_OK);
+        assert_eq!(cap, 4 * 1024 * 1024);
 
         // Noise class (BEGIN|END, command 0): admitted, packet limit binds.
         let rc = unsafe { shekyl_levin_ingress_admit(0, 0x4 | 0x8, &raw mut cap) };

@@ -34,15 +34,16 @@
 
 namespace cryptonote
 {
-  std::optional<std::size_t> cryptonote_connection_context::get_max_bytes(const int command, const uint32_t flags) noexcept
+  std::optional<std::size_t> cryptonote_connection_context::get_max_bytes(const uint32_t command, const uint32_t flags, int32_t* reject_rc) noexcept
   {
     // PWD-B3 / PWD-B3a / PWD-B4: the table and the discriminator live in
     // rust/shekyl-levin. This is the marshaling shim (rule 20). PWD-B6
     // deleted NOTIFY_NEW_BLOCK (2001) and PWD-B10 deleted COMMAND_PING
     // (1003); a Q/S-flagged 2001 or 1003 is unknown dispatch.
     uint64_t cap = 0;
-    const int32_t rc = shekyl_levin_ingress_admit(
-        static_cast<uint32_t>(command), flags, &cap);
+    const int32_t rc = shekyl_levin_ingress_admit(command, flags, &cap);
+    if (reject_rc)
+      *reject_rc = rc;
     if (rc != 0)
       return std::nullopt;
     if (cap >= std::numeric_limits<size_t>::max())

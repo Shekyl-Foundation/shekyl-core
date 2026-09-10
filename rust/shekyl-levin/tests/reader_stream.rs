@@ -453,35 +453,23 @@ fn reassembled_response_classifies_by_inner_protocol_version() {
 
 #[test]
 fn per_command_limit_caps_below_packet_limit() {
-    // Tightening hook only: PWD-B3 already caps 1007 at 256; this test
-    // asks for 64 so the header is rejected below both the packet limit
-    // and the table.
-    fn table(command: u32) -> u64 {
-        if command == 1007 {
-            64
-        } else {
-            u64::MAX
-        }
-    }
-
+    // Support-flags (1007) is the tight table cap (256). 300 bytes is under
+    // the 256 KiB packet limit and over the command's own cap — rejected on
+    // the header, as in the C++.
+    let message = invoke(1007, &[0u8; 300]);
     let mut reader = BucketReader::new();
-    reader.set_max_bytes_for_command(table);
-
-    let message = invoke(1007, &[0u8; 100]);
     reader.feed(&message[..HEADER_SIZE]).unwrap();
     assert_eq!(
         reader.next_message(),
         Err(Error::OversizePacket {
-            claimed: 100,
-            limit: 64,
+            claimed: 300,
+            limit: 256,
         })
     );
 
-    // The same size on an uncapped-at-hook defined command (2002's table
-    // cap is the packet limit) passes.
+    // The same size on 2002 (packet-limit arm until PWD-B12) passes.
     let mut reader = BucketReader::new();
-    reader.set_max_bytes_for_command(table);
-    reader.feed(&invoke(2002, &[0u8; 100])).unwrap();
+    reader.feed(&invoke(2002, &[0u8; 300])).unwrap();
     assert!(reader.next_message().unwrap().is_some());
 }
 

@@ -3656,7 +3656,11 @@ void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms
 void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms,
                                    const std::uint8_t* outbound, std::size_t n);
 
-// ── Levin emit framing + compression (IMPLEMENTATION_INDEX.md LV row) ──────
+// ── Levin ingress + emit framing + compression (IMPLEMENTATION_INDEX.md LV row) ──────
+//
+// Levin FFI: ingress admit (PWD-B3 / B3a / B4) plus compression / noise /
+// fragment emit. Ingress policy lives in rust/shekyl-levin; C++ handle_recv
+// is a marshaling shim over shekyl_levin_ingress_admit.
 //
 // The epee::levin compression path is a marshaling shim over these exports
 // (emit: contrib/epee/src/levin_base.cpp try_compress_message; receive:

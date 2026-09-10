@@ -39,14 +39,13 @@
 //! - per-header payload-length check against
 //!   `min(packet limit, per-command cap)` after the PWD-B3a flag-class
 //!   discriminator ([`crate::ingress_payload_cap`]): unknown flag bits are
-//!   rejected; a Q/S-flagged bucket whose command is not in the defined set
-//!   is rejected; a noise/fragment bucket (neither Q nor S) is bounded only
-//!   by the packet limit, so cover traffic with command 0 is not treated as
-//!   an unknown command. [`BucketReader::set_max_bytes_for_command`] can
-//!   only **tighten** a defined command's cap; it cannot admit an unknown
-//!   one. The packet limit is 256 KiB before the handshake and 100 MB
-//!   after (the caller raises it with [`BucketReader::complete_handshake`],
-//!   as the C++ does at its three handshake sites);
+//!   rejected; a Q/S-flagged bucket whose command is not a
+//!   [`crate::DefinedCommand`] is rejected; a noise/fragment bucket (neither
+//!   Q nor S) is bounded only by the packet limit, so cover traffic with
+//!   command 0 is not treated as an unknown command. The packet limit is
+//!   256 KiB before the handshake and 100 MB after (the caller raises it
+//!   with [`BucketReader::complete_handshake`], as the C++ does at its
+//!   three handshake sites);
 //! - total buffered-bytes cap (cache + fragment buffer) against that limit;
 //! - noise/fragment class = header with **neither** `Q` nor `S` set: `B|E`
 //!   is a dummy (discarded), `B` restarts reassembly, `E` completes it and
@@ -118,18 +117,11 @@ pub struct BucketReader {
     fragment: Vec<u8>,
     state: State,
     max_packet_size: u64,
-    max_bytes_for_command: fn(u32) -> u64,
     /// Set by the first [`Error`]. Every framing error is connection-fatal in
     /// the oracle, where returning `false` *is* the disconnect; here the
     /// guard and the consequence are separate statements, so the reader
     /// latches instead of trusting the caller to close.
     failed: bool,
-}
-
-/// Extra per-command tightening hook. The defined-set cap lives in
-/// [`ingress::ingress_payload_cap`]; this default imposes nothing further.
-fn unlimited(_command: u32) -> u64 {
-    u64::MAX
 }
 
 impl Default for BucketReader {
@@ -149,7 +141,6 @@ impl BucketReader {
             fragment: Vec::new(),
             state: State::Head,
             max_packet_size: INITIAL_MAX_PACKET_SIZE,
-            max_bytes_for_command: unlimited,
             failed: false,
         }
     }
@@ -173,23 +164,11 @@ impl BucketReader {
         self.max_packet_size = post_handshake_limit;
     }
 
-    /// Install an extra per-command tightening hook. The defined-set
-    /// table (PWD-B3) always applies via [`ingress::ingress_payload_cap`];
-    /// this hook can only lower a cap further. It cannot admit an unknown
-    /// dispatch command.
-    pub fn set_max_bytes_for_command(&mut self, hook: fn(u32) -> u64) {
-        self.max_bytes_for_command = hook;
-    }
-
-    /// The limit in force for one parsed header: packet limit, PWD-B3
-    /// command cap (or unlimited for the noise/fragment class), and any
-    /// extra tightening hook.
+    /// The limit in force for one parsed header: packet limit and the
+    /// PWD-B3 command cap (or unlimited for the noise/fragment class).
     fn limit_for(&self, command: u32, flags: Flags) -> Result<u64, Error> {
         let admitted = ingress::ingress_payload_cap(command, flags)?;
-        Ok(self
-            .max_packet_size
-            .min(admitted)
-            .min((self.max_bytes_for_command)(command)))
+        Ok(self.max_packet_size.min(admitted))
     }
 
     /// Bytes still waiting to be parsed.

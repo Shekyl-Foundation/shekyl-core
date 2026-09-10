@@ -31,8 +31,12 @@
 # is a marshaling shim over the shekyl_levin_* FFI, so those constants are
 # single-sourced in rust/shekyl-levin/src/compress.rs with no C++ copy to
 # drift. Remaining twice-defined constants: framing values in levin_base.h,
-# and advertised support flags (`cryptonote_config.h` vs `SupportFlags` in
-# types.rs, added PWD-B6 so a dropped bit cannot silently diverge).
+# advertised support flags (`cryptonote_config.h` vs `SupportFlags` in
+# types.rs, added PWD-B6 so a dropped bit cannot silently diverge), and
+# the PWD-B3 ingress table inputs (`P2P_MAX_PEERS_IN_HANDSHAKE`,
+# `BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT`,
+# `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT`) copied into
+# rust/shekyl-levin/src/ingress.rs.
 
 set -euo pipefail
 
@@ -43,8 +47,10 @@ levin_base="contrib/epee/include/net/levin_base.h"
 rust_header="rust/shekyl-levin/src/header.rs"
 config_h="src/cryptonote_config.h"
 rust_types="rust/shekyl-levin/src/payload/types.rs"
+rust_ingress="rust/shekyl-levin/src/ingress.rs"
+protocol_h="src/cryptonote_protocol/cryptonote_protocol_handler.h"
 
-for f in "$levin_base" "$rust_header" "$config_h" "$rust_types"; do
+for f in "$levin_base" "$rust_header" "$config_h" "$rust_types" "$rust_ingress" "$protocol_h"; do
   if [[ ! -f "$f" ]]; then
     echo "FAIL: expected file is missing: $f" >&2
     echo "      (a move or rename must update this gate, not bypass it)" >&2
@@ -183,6 +189,19 @@ compare "P2P_SUPPORT_FLAG_ZSTD_COMPRESSION" \
   "$zstd_cpp" "$(rust_support_flag ZSTD_COMPRESSION)"
 compare "P2P_SUPPORT_FLAGS" \
   "$flags_cpp" "$(rust_support_flag ADVERTISED)"
+
+# PWD-B3: handshake / hash-list cap inputs. Handshake's 65536 is derived
+# from P2P_MAX_PEERS_IN_HANDSHAKE; a silent C++ bump would reconstruct the
+# wrong envelope.
+compare "P2P_MAX_PEERS_IN_HANDSHAKE" \
+  "$(cpp_define P2P_MAX_PEERS_IN_HANDSHAKE "$config_h")" \
+  "$(rust_const P2P_MAX_PEERS_IN_HANDSHAKE "$rust_ingress")"
+compare "BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT" \
+  "$(cpp_define BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT "$config_h")" \
+  "$(rust_const BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT "$rust_ingress")"
+compare "CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT" \
+  "$(cpp_define CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT "$protocol_h")" \
+  "$(rust_const MAX_OBJECT_REQUEST_COUNT "$rust_ingress")"
 
 echo
 if [[ "$failures" -ne 0 ]]; then

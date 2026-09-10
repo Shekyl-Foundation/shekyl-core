@@ -96,8 +96,10 @@ namespace cryptonote
     //! \return Payload cap for this `(command, flags)` pair, or `nullopt`
     //! if the header is unrecognised at ingress (PWD-B3a). `nullopt` is
     //! connection-fatal even for a zero-length payload — returning cap 0
-    //! would admit empty unknown commands.
-    static std::optional<size_t> get_max_bytes(int command, uint32_t flags) noexcept;
+    //! would admit empty unknown commands. On reject, `reject_rc` (when
+    //! non-null) receives the `shekyl_levin_ingress_admit` code (`-8`
+    //! unknown flags, `-9` unknown dispatch command).
+    static std::optional<size_t> get_max_bytes(uint32_t command, uint32_t flags, int32_t* reject_rc = nullptr) noexcept;
 
     //! Use this instead of `m_state = state_normal`.
     void set_state_normal();
