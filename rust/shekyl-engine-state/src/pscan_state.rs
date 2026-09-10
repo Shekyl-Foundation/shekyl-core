@@ -40,7 +40,11 @@ use shekyl_units::AtomicUnits;
 use crate::error::WalletLedgerError;
 use crate::pscan_cursor::PScanCursor;
 
-/// Schema version of the durable P-scan state. **v9** adds the per-persona
+/// Schema version of the durable P-scan state. **v10** renames the v9
+/// `pending_unbonds` map and the `unbond_epoch` field to `pending_releases` /
+/// `release_epoch` (the internal Unbond → Release vocabulary rename; wire
+/// `BondPostKind` discriminant `2` unchanged).
+/// **v9** adds the per-persona
 /// `watch_floors` map (SA-R-6 bond-watch review): the provenance half of the
 /// SP-6 reconcile evidence — `bond_post_matches` is complete only over the
 /// personas watched while coverage advanced, and without the floors an
@@ -70,7 +74,7 @@ use crate::pscan_cursor::PScanCursor;
 /// migration at any step: pre-genesis, a version mismatch means re-scan (rule 15).
 /// Distinct from the inner [`PScanCursor`]'s own version (nested, like the wallet
 /// ledger over its sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 9;
+pub const PSCAN_STATE_VERSION: u32 = 10;
 
 /// The GF-4b mint-lineage ladder for a `P`-owned funding output — the
 /// scan-provenance classification (`ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3;
@@ -132,7 +136,7 @@ pub enum MintLineageOutput {
 /// twin** of the engine-core extractor's transform-shaped `BondPostMatch` (rule 18):
 /// `P` accumulates these as it scans so the reconcile set survives restart — the
 /// cursor never re-scans below its frontier, so a match seen in an earlier run would
-/// otherwise be unavailable when 2d-2 SP-R0 corroborates an `Unbond` at retire time
+/// otherwise be unavailable when 2d-2 SP-R0 corroborates a `Release` at retire time
 /// (`MAX_CLAIM_AGE_W` epochs after it was observed). All fields are public: a
 /// bond-post and its id are on-chain — but **correlated and co-located off-chain is
 /// the leak** the firewall exists to prevent, so this type follows the persona-key
@@ -254,7 +258,7 @@ impl std::fmt::Debug for PFundingOutputRecord {
 /// (SP-R0 arm #2; `ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` §"Records-driven
 /// retirement"). Written exactly once, by the token-corroborated retire-time
 /// prune, in the same atomic seal that drops the persona's
-/// `funding_outputs` / `bond_post_matches` / `pending_unbonds` rows.
+/// `funding_outputs` / `bond_post_matches` / `pending_releases` rows.
 ///
 /// The ledger is *authoritative for retirement and monotonicity, advisory
 /// for live bonds* (the one-sentence invariant): the open path subtracts
@@ -268,18 +272,18 @@ pub struct RetiredPersonaRecord {
     /// subtraction keys on ("stop deriving slot N").
     pub p_slot: PSlot,
     /// The retired persona's public canonical id (matches the
-    /// `pending_unbonds` / `bond_post_matches` keying).
+    /// `pending_releases` / `bond_post_matches` keying).
     pub p_canonical_id: PCanonicalId,
-    /// The settlement epoch the `Unbond` was confirmed in (carried from the
-    /// `pending_unbonds` entry this record replaces). Authoritative-record
+    /// The settlement epoch the `Release` was confirmed in (carried from the
+    /// `pending_releases` entry this record replaces). Authoritative-record
     /// provenance (the retire clock justification); **no live reader** — the
     /// derive-forward subtraction keys on `p_slot`. Retained as the ratified
     /// done-side record shape (`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md`
     /// §"Records-driven retirement"), not a dead-field delete.
-    pub unbond_epoch: SettlementEpoch,
+    pub release_epoch: SettlementEpoch,
     /// The settlement epoch the retire-time prune ran in (the settled epoch
     /// at prune time — after the claim-window lapse, by construction). Same
-    /// provenance/no-live-reader status as `unbond_epoch`.
+    /// provenance/no-live-reader status as `release_epoch`.
     pub retired_epoch: SettlementEpoch,
 }
 
@@ -315,9 +319,9 @@ pub struct PScanState {
     /// past it is not.
     accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
     /// Confirmed-but-retire-pending personas: [`PCanonicalId`] → the settlement
-    /// epoch its `Unbond` was confirmed in (2d-1 DQ8).
+    /// epoch its `Release` was confirmed in (2d-1 DQ8).
     ///
-    /// The **sole durable record** that a persona is unbonded: the `Unbond` block
+    /// The **sole durable record** that a persona is released: the `Release` block
     /// is behind the cursor and never re-scanned. This entry **re-triggers** the
     /// retire on each restart, surviving until SP-R0 **arm #2**'s
     /// token-corroborated retire-time prune removes it — in the same atomic seal
@@ -328,12 +332,12 @@ pub struct PScanState {
     /// retiring slot holds no funding rows to remove. An uncorroborated retire
     /// (the DQ-D tip clamp declines) leaves this entry in place to re-fire. Public
     /// content (the id is a public on-chain pseudonym handle), bounded by `P`'s
-    /// own unbonded-persona count (not adversary-controllable).
-    pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
+    /// own released-persona count (not adversary-controllable).
+    pending_releases: BTreeMap<PCanonicalId, SettlementEpoch>,
     /// Matched archival bond-posts (`p_canonical_id` ∈ `P`'s personas) accumulated
     /// across the scan — the **reconcile evidence** SP-6 binds to the verified
     /// `covered` range (the engine-core `PReconcileSet`). Durable for the same reason
-    /// `pending_unbonds` is: the cursor never re-scans below its frontier, so a match
+    /// `pending_releases` is: the cursor never re-scans below its frontier, so a match
     /// from an earlier run must persist to be available when SP-R0 corroborates a
     /// terminal post at retire time. Ordered by scan (height); public and bounded by
     /// `P`'s own posting.
@@ -382,7 +386,7 @@ impl std::fmt::Debug for PScanState {
             .field("version", &self.version)
             .field("cursor", &self.cursor)
             .field("accruals", &self.accruals)
-            .field("pending_unbonds", &self.pending_unbonds)
+            .field("pending_releases", &self.pending_releases)
             .field("bond_post_matches", &"<redacted persona-history>")
             .field("funding_outputs", &"<redacted funding-history>")
             .field("retired_records", &"<redacted persona-history>")
@@ -392,14 +396,14 @@ impl std::fmt::Debug for PScanState {
 }
 
 impl PScanState {
-    /// A fresh state at genesis: pre-scan cursor, no accruals, no pending unbonds, no
+    /// A fresh state at genesis: pre-scan cursor, no accruals, no pending releases, no
     /// matches, no funding outputs.
     pub fn genesis() -> Self {
         Self {
             version: PSCAN_STATE_VERSION,
             cursor: PScanCursor::genesis(),
             accruals: BTreeMap::new(),
-            pending_unbonds: BTreeMap::new(),
+            pending_releases: BTreeMap::new(),
             bond_post_matches: Vec::new(),
             funding_outputs: Vec::new(),
             retired_records: Vec::new(),
@@ -408,10 +412,10 @@ impl PScanState {
     }
 
     /// A state pinned to `cursor` with the given per-epoch `accruals`,
-    /// `pending_unbonds`, `bond_post_matches`, and `funding_outputs`, stamped with
+    /// `pending_releases`, `bond_post_matches`, and `funding_outputs`, stamped with
     /// the current version. The caller (the SP-5 scan task) owns the invariants that
     /// `accruals` covers exactly the epochs finalized behind `cursor`,
-    /// `pending_unbonds` holds every persona whose `Unbond` was confirmed but not
+    /// `pending_releases` holds every persona whose `Release` was confirmed but not
     /// yet durably retired (SP-6), `bond_post_matches` holds every bond-post matched
     /// in `[0, cursor.synced_height)` (the reconcile evidence — complete because the
     /// scan is exhaustive over that verified range), and `funding_outputs` holds
@@ -421,7 +425,7 @@ impl PScanState {
     pub fn new(
         cursor: PScanCursor,
         accruals: BTreeMap<SettlementEpoch, AtomicUnits>,
-        pending_unbonds: BTreeMap<PCanonicalId, SettlementEpoch>,
+        pending_releases: BTreeMap<PCanonicalId, SettlementEpoch>,
         bond_post_matches: Vec<BondPostRecord>,
         funding_outputs: Vec<PFundingOutputRecord>,
         retired_records: Vec<RetiredPersonaRecord>,
@@ -431,7 +435,7 @@ impl PScanState {
             version: PSCAN_STATE_VERSION,
             cursor,
             accruals,
-            pending_unbonds,
+            pending_releases,
             bond_post_matches,
             funding_outputs,
             retired_records,
@@ -467,10 +471,10 @@ impl PScanState {
     }
 
     /// The confirmed-but-retire-pending personas (`p_canonical_id` → confirmed
-    /// `Unbond` epoch) — the durable record that survives restart and re-triggers
+    /// `Release` epoch) — the durable record that survives restart and re-triggers
     /// the DQ8 retire.
-    pub fn pending_unbonds(&self) -> &BTreeMap<PCanonicalId, SettlementEpoch> {
-        &self.pending_unbonds
+    pub fn pending_releases(&self) -> &BTreeMap<PCanonicalId, SettlementEpoch> {
+        &self.pending_releases
     }
 
     /// The accumulated bond-post matches — the SP-6 reconcile evidence, complete over
@@ -608,10 +612,10 @@ mod tests {
             AtomicUnits::from_raw(250)
         );
         assert_eq!(
-            back.pending_unbonds()
+            back.pending_releases()
                 .get(&PCanonicalId::from_bytes([0xAB; 32])),
             Some(&SettlementEpoch::from_raw(7)),
-            "pending unbonds round-trip through the seal"
+            "pending releases round-trip through the seal"
         );
         assert_eq!(
             back.bond_post_matches(),
@@ -778,7 +782,7 @@ mod tests {
             version: PSCAN_STATE_VERSION + 1,
             cursor: PScanCursor::genesis(),
             accruals: BTreeMap::new(),
-            pending_unbonds: BTreeMap::new(),
+            pending_releases: BTreeMap::new(),
             bond_post_matches: Vec::new(),
             funding_outputs: Vec::new(),
             watch_floors: BTreeMap::new(),

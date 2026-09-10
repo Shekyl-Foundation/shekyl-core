@@ -16,7 +16,7 @@
 //! a crash lands between the sign and the persist, reopen reconstructs a set
 //! that is **behind reality** and the building persona can fall out of the
 //! derived set entirely — unreachable for the wallet's life, the bond
-//! un-unbondable. Persist-before-use makes the only crash failure a *wasted
+//! un-releasable. Persist-before-use makes the only crash failure a *wasted
 //! slot* (cursor ahead of chain — benign, slots are free), never a *lost* one.
 //!
 //! A two-line sign/persist reordering is invisible in review and catastrophic
@@ -320,7 +320,7 @@ pub(crate) struct ChainBondAdoption {
 ///    input that holds a persona in
 ///    [`StakingBlock::derive_forward_slots`], and under Model D the seed is
 ///    gone after `assemble`, so a persona outside that set is unreachable
-///    for the wallet's life — its bond un-unbondable. Raising the cursor
+///    for the wallet's life — its bond un-releasable. Raising the cursor
 ///    past a `Present` slot without adopting it would do exactly that, and
 ///    the on-chain bond that would justify healing is *durable* evidence
 ///    (`PScanState::bond_post_matches` survives every open until arm #2's
@@ -445,7 +445,7 @@ pub(crate) fn adopt_chain_bonds_and_raise_cursor<E>(
 /// The inverse (a live dormant bond at a slot *below* a higher retired slot) is
 /// **unrepresentable**: it requires retiring a persona out of lifecycle order,
 /// before an older funded one is drained. Retirement is driven solely by
-/// scanned on-chain unbond posts (`record_unbond`), and the drain/unbond path
+/// scanned on-chain release posts (`record_release`), and the drain/release path
 /// that produces those posts must never defund out of order. If a future path
 /// makes it reachable, that path is the bug — not this reconstruction;
 /// `FOLLOWUPS.md` carries the reopen the drain/retire lane owes.

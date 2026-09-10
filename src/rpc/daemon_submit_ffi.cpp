@@ -169,26 +169,26 @@ struct shekyl_submit_emission_facts_handle
   shekyl_submit_emission_facts_ffi view{};
 };
 
-// Opaque owner of the §8.7.1.1 Unbond fact buffers. Same contract as the
+// Opaque owner of the §8.7.1.1 Release fact buffers. Same contract as the
 // emission handle: every pointer in `view` aliases the vectors held here, the
 // shim copies during the snapshot call and frees immediately after.
-struct shekyl_submit_unbond_facts_handle
+struct shekyl_submit_release_facts_handle
 {
   std::vector<uint8_t> bond_spend_pk;
   std::vector<uint64_t> per_shard_last_served;
-  shekyl_submit_unbond_facts_ffi view{};
+  shekyl_submit_release_facts_ffi view{};
 };
 
 namespace {
 
-// §8.7.1.1 Unbond fact-bundle marshal. Runs inside the caller's lock scope,
+// §8.7.1.1 Release fact-bundle marshal. Runs inside the caller's lock scope,
 // beside every other fact, so the record, its last-served slice and the slash
 // watermark describe ONE chain state (a record read before a block paired with
 // a watermark read after it describes a state the chain never occupied).
 //
 // The kind->scan decision is Rust's (shekyl_archival_last_served_scan,
 // exhaustive on HoldingsKind); this site marshals the discriminant onto the
-// matching DB accessor and ECHOES it back, exactly as the block path's Unbond
+// matching DB accessor and ECHOES it back, exactly as the block path's Release
 // arm does. The echo is not redundant: the wrong accessor fails permissively
 // (a complete-tree record has no shard list, so the held-shards accessor
 // returns nothing, which folds to "never served" and lets the release cooldown
@@ -196,9 +196,9 @@ namespace {
 // the record's holdings kind rather than trusting this gather.
 //
 // Returns false on a marshal fault (unknown holdings kind) -- never a verdict.
-bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
+bool fill_release_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   const std::vector<uint8_t>& auth_pubkey, bool identity_known,
-  uint64_t bond_debit, shekyl_submit_unbond_facts_handle& handle)
+  uint64_t bond_debit, shekyl_submit_release_facts_handle& handle)
 {
   shekyl::db::ArchivalBondValue record{};
   const bool present = bc.get_db().get_archival_bond_value(p_id, record);
@@ -213,7 +213,7 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   if (shekyl_archival_last_served_scan(record.holdings_kind, &scan)
       != SHEKYL_ARCHIVAL_BOND_POST_OK)
   {
-    MERROR("submit snapshot: unbond gather: unknown holdings kind "
+    MERROR("submit snapshot: release gather: unknown holdings kind "
       << static_cast<unsigned>(record.holdings_kind));
     return false;
   }
@@ -234,7 +234,7 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   // (key equality, then possession, then replay), every time because the check
   // authenticated something other than the event that triggers the work.
   //
-  //   1. IDENTITY. A broadcast Unbond's bytes are public, and its signature
+  //   1. IDENTITY. A broadcast Release's bytes are public, and its signature
   //      stays valid forever, so anyone could resubmit them to buy the scan --
   //      the engine's possession pre-gate passes, and its in-pool/in-chain
   //      early return happens only AFTER this gather. The caller therefore
@@ -255,7 +255,7 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   //      two compose -- possession proves the caller holds the PRESENTED key,
   //      this proves the presented key is the RECORD's.
   //
-  //   3. STATE. A broadcast Unbond that state motion has since invalidated -- a
+  //   3. STATE. A broadcast Release that state motion has since invalidated -- a
   //      slash, or a competing exit -- is never in the pool and never in chain,
   //      so clause 1 never fires, and the exited row keeps its bond_spend_pk,
   //      so clause 2 still passes. Each replay would buy the scan and be
@@ -278,7 +278,7 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
     // cooldown check -- the only thing the scan feeds. If a guard that
     // precedes the cooldown must refuse, the scan's contents cannot change
     // the answer, so gathering them is pure lock-held waste.
-    //   UB9 `NothingToUnbond`: an EXITED record keeps its row (balance 0) and
+    //   UB9 `NothingToRelease`: an EXITED record keeps its row (balance 0) and
     //   its bond_spend_pk, so identity and the pin both pass for it -- and its
     //   cold-key holder has no collateral left to lose, which is what makes
     //   this the cheapest replay of the three. `bond_debit == 0` matches a
@@ -294,7 +294,7 @@ bool fill_unbond_facts_locked(Blockchain& bc, const crypto::hash& p_id,
     //   different verdict, because Rust re-runs the real guard.
     || record.bad_intervals.size() >= shekyl::db::ArchivalBondValue::kMaxBadIntervals;
 
-  shekyl_submit_unbond_record_ffi& out = handle.view.record;
+  shekyl_submit_release_record_ffi& out = handle.view.record;
   out.bonded_total_atomic = record.bonded_total_atomic;
   out.bad_interval_count = record.bad_intervals.size();
   out.bond_spend_pk =
@@ -370,9 +370,9 @@ void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
     // The debit arm additionally needs the BALANCE, because presence does not
     // move when a persona exits: apply_archival_unbond rewrites the row with
     // bonded_total_atomic == 0 rather than deleting it. Read only for the
-    // _UNBOND probe -- the credit arm's question is answered by presence
+    // _RELEASE probe -- the credit arm's question is answered by presence
     // alone, and this is a second, heavier record load.
-    if (bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_UNBOND && facts.bond_record_exists)
+    if (bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_RELEASE && facts.bond_record_exists)
     {
       shekyl::db::ArchivalBondValue record{};
       if (bc.get_db().get_archival_bond_value(*bond_p_canonical_id, record))
@@ -452,7 +452,7 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
   const uint8_t* emission_p_canonical_id,
   const uint64_t* emission_epochs, size_t n_emission_epochs,
   shekyl_submit_emission_facts_handle** out_emission,
-  shekyl_submit_unbond_facts_handle** out_unbond,
+  shekyl_submit_release_facts_handle** out_release,
   shekyl_submit_facts_ffi* out_facts,
   uint8_t* out_ki_conflicts) noexcept
 {
@@ -466,8 +466,8 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
            n_emission_epochs > SHEKYL_EMISSION_MAX_SETTLEMENT_EPOCHS)) ||
         (bond_p_canonical_id != nullptr &&
           bond_probe_kind != SHEKYL_SUBMIT_BOND_PROBE_JOIN &&
-          bond_probe_kind != SHEKYL_SUBMIT_BOND_PROBE_UNBOND) ||
-        // An UNBOND probe with nowhere to put the bundle is an incoherent
+          bond_probe_kind != SHEKYL_SUBMIT_BOND_PROBE_RELEASE) ||
+        // An RELEASE probe with nowhere to put the bundle is an incoherent
         // argument set, not a request for a cheaper probe. The debit arm's
         // Phase-C battery cannot run on the presence bit alone -- UB3, UB5,
         // UB7 and UB9 all read the record's CONTENTS -- so dropping the
@@ -479,16 +479,16 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
         // answer for a consumer that only needs the §8.7.2 E6 re-check, and
         // the E7 bundle is an extra. Do not flatten the two.
         (bond_p_canonical_id != nullptr &&
-          bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_UNBOND &&
-          out_unbond == nullptr))
+          bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_RELEASE &&
+          out_release == nullptr))
     {
       MERROR("submit snapshot: bad arguments (marshalling fault)");
       return SHEKYL_SUBMIT_INTERNAL_FAULT;
     }
     if (out_emission)
       *out_emission = nullptr;
-    if (out_unbond)
-      *out_unbond = nullptr;
+    if (out_release)
+      *out_release = nullptr;
 
     const crypto::hash id = hash_from_bytes(txid);
     const crypto::hash ref = hash_from_bytes(reference_block);
@@ -512,16 +512,16 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
       emission_epochs, n_emission_epochs,
       *out_facts, out_ki_conflicts);
 
-    // §8.7.1.1 Unbond fact-bundle marshal, same lock scope. The POD's
+    // §8.7.1.1 Release fact-bundle marshal, same lock scope. The POD's
     // bond_record_probed/exists pair is filled for every bond-post probe
     // (it is the kind-agnostic "a record exists for this p_canonical_id"
     // fact); this bundle adds the record's CONTENTS, which only the debit
     // arm needs. Rust pins the two against each other.
-    // No `&& out_unbond` here: the argument check above already refused that
+    // No `&& out_release` here: the argument check above already refused that
     // shape, and repeating it would re-read as "the bundle is optional".
-    if (bond_p_canonical_id && bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_UNBOND)
+    if (bond_p_canonical_id && bond_probe_kind == SHEKYL_SUBMIT_BOND_PROBE_RELEASE)
     {
-      auto handle = std::make_unique<shekyl_submit_unbond_facts_handle>();
+      auto handle = std::make_unique<shekyl_submit_release_facts_handle>();
       // Never form `null + 0`: the contract permits a null key with zero
       // length (the absent-record path passes exactly that), and building the
       // range would be pointer arithmetic on a null pointer.
@@ -531,13 +531,13 @@ int snapshot_facts(tx_memory_pool& pool, Blockchain& bc,
       // Clause 1 of the work-gate invariant: the engine returns identity
       // without ever reading this bundle, so a resubmit of already-known
       // bytes must not buy the scan. `in_pool` alone is NOT the condition --
-      // see the embargo note on fill_unbond_facts_locked.
+      // see the embargo note on fill_release_facts_locked.
       const bool identity_known =
         out_facts->in_chain != 0 || out_facts->in_pool_broadcast != 0;
-      if (!fill_unbond_facts_locked(bc, bond_p_id, auth_key, identity_known,
+      if (!fill_release_facts_locked(bc, bond_p_id, auth_key, identity_known,
             bond_debit, *handle))
         return SHEKYL_SUBMIT_INTERNAL_FAULT;
-      *out_unbond = handle.release();
+      *out_release = handle.release();
     }
 
     // §8.7.2 E6/E7 fact-bundle marshal, same lock scope: the record's
@@ -699,7 +699,7 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
     // any new per-vin bond-post read added to this loop must either preserve
     // "at most one" or stop assuming it. (Same for `bond_p_id` above, whose
     // spelling this one copied.)
-    bool bond_is_unbond = false;
+    bool bond_is_release = false;
     // The debit the transaction was verified against. Phase C required it to
     // equal the record's bonded total, so any drift in that total during
     // Phase C makes these bytes unconnectable.
@@ -713,8 +713,8 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
       {
         const auto& bond_vin = std::get<txin_archival_bond_post>(in);
         bond_p_id = &bond_vin.p_canonical_id;
-        bond_is_unbond = bond_vin.post_kind
-          == static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+        bond_is_release = bond_vin.post_kind
+          == static_cast<uint8_t>(archival_bond_post_kind::Release);
         bond_debit = bond_vin.bond_debit;
       }
       else if (std::holds_alternative<txin_archival_reward_emission>(in))
@@ -755,7 +755,7 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
 
     shekyl_submit_facts_ffi fresh;
     collect_facts_locked(pool, bc, id, kis, cert_ref, bond_p_id,
-      bond_is_unbond ? SHEKYL_SUBMIT_BOND_PROBE_UNBOND : SHEKYL_SUBMIT_BOND_PROBE_JOIN,
+      bond_is_release ? SHEKYL_SUBMIT_BOND_PROBE_RELEASE : SHEKYL_SUBMIT_BOND_PROBE_JOIN,
       emission_vin ? &emission_p_id : nullptr, emission_epochs, emission_epochs_len,
       fresh, out_fresh_ki_conflicts);
     if (fresh.fee_per_byte == 0)
@@ -807,7 +807,7 @@ int commit_tx(tx_memory_pool& pool, Blockchain& bc,
       // no longer equal to this transaction's bond_debit, both mean these
       // bytes can no longer connect. Rust classifies; C++ chooses no verdict.
       raced = fresh.bond_record_probed != 0
-        && (bond_is_unbond
+        && (bond_is_release
               ? (fresh.bond_record_exists == 0
                  || fresh.bond_record_bonded_total != bond_debit)
               : fresh.bond_record_exists != 0);
@@ -925,13 +925,13 @@ void shekyl_submit_emission_facts_free(shekyl_submit_emission_facts_handle* h)
   delete h;
 }
 
-const shekyl_submit_unbond_facts_ffi* shekyl_submit_unbond_facts_view(
-  const shekyl_submit_unbond_facts_handle* h)
+const shekyl_submit_release_facts_ffi* shekyl_submit_release_facts_view(
+  const shekyl_submit_release_facts_handle* h)
 {
   return h ? &h->view : nullptr;
 }
 
-void shekyl_submit_unbond_facts_free(shekyl_submit_unbond_facts_handle* h)
+void shekyl_submit_release_facts_free(shekyl_submit_release_facts_handle* h)
 {
   delete h;
 }
@@ -947,7 +947,7 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
   const uint8_t* emission_p_canonical_id,
   const uint64_t* emission_epochs, size_t n_emission_epochs,
   shekyl_submit_emission_facts_handle** out_emission,
-  shekyl_submit_unbond_facts_handle** out_unbond,
+  shekyl_submit_release_facts_handle** out_release,
   shekyl_submit_facts_ffi* out_facts,
   uint8_t* out_ki_conflicts)
 {
@@ -958,7 +958,7 @@ int shekyl_submit_snapshot_facts(core_rpc_handle* h,
     txid, key_images, n_key_images, reference_block, bond_p_canonical_id,
     bond_probe_kind, bond_auth_pubkey, bond_auth_pubkey_len, bond_debit,
     emission_p_canonical_id, emission_epochs, n_emission_epochs, out_emission,
-    out_unbond, out_facts, out_ki_conflicts);
+    out_release, out_facts, out_ki_conflicts);
 }
 
 int shekyl_submit_commit_tx(core_rpc_handle* h,

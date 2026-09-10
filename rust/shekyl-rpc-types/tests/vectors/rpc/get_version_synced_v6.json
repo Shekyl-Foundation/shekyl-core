@@ -1,0 +1,15 @@
+{
+  "consensus_constants_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "current_height": 1234567,
+  "genesis_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "hard_forks": [
+    {
+      "height": 0,
+      "hf_version": 1
+    }
+  ],
+  "nettype": "mainnet",
+  "release": false,
+  "status": "OK",
+  "version": 196637
+}

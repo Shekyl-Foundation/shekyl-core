@@ -38,11 +38,11 @@
 //! |--------|------|
 //! | [`types`] | Domain values, errors, spawn args |
 //! | [`helpers`] | Shared funding/vout prep, P-secrets, entry-gap draw |
-//! | [`bond_post_assemble`] | Shared prove/sign/encode tail for JoinMarket and Unbond |
+//! | [`bond_post_assemble`] | Shared prove/sign/encode tail for JoinMarket and Release |
 //! | [`actor`] | `StakeEngine` struct, spawn, inherent methods, Actor |
 //! | [`persona`] | Mint / activate / identity / PlanBondPost |
 //! | [`bond`] | AssembleBond (credit policy + identity-key slot) |
-//! | [`unbond`] | AssembleUnbond (debit policy + `bond_spend_sk` slot) |
+//! | [`release`] | AssembleRelease (debit policy + `bond_spend_sk` slot) |
 //! | [`drain`] | AssembleDrain shell |
 //! | [`claim`] | AssembleEmissionClaim |
 //! | [`scan`] | ScanStep |
@@ -88,9 +88,9 @@ pub(crate) mod serve_set_source;
 // refresh cadence, and the ordered teardown. Lives under `stake_engine/`
 // because the host's identity and its serve-set both come from persona state,
 // and because `engine/mod.rs` sits at its decomposition ceiling.
+mod release;
 pub(crate) mod serving;
 mod types;
-mod unbond;
 
 #[cfg(test)]
 pub(crate) mod test_fixtures;
@@ -150,8 +150,8 @@ pub(crate) use actor::StakeEngine;
     )
 )]
 pub(crate) use helpers::derive_p_source_secrets_bundle;
+pub(crate) use release::{AssembleRelease, AssembledReleasePost, ReleaseRecordState};
 pub(crate) use types::{
     FundedSlots, PSlot, PersonaHandle, RetireOutcome, RetirementWitness, StakeEngineError,
     ARCHIVAL_PERSONA_LOOKAHEAD, ARCHIVAL_PERSONA_PROBE_WINDOW,
 };
-pub(crate) use unbond::{AssembleUnbond, AssembledUnbondPost, UnbondRecordState};

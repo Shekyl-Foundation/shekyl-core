@@ -4,6 +4,48 @@
 
 ### Added
 
+- **The daemon publishes an ephemeral per-boot onion address by default
+  (PWD-E7).** When a pinned Tor binary is installed (SP-T0c gate:
+  `SHEKYL_TOR_BINARY` → beside the executable →
+  `/opt/shekyl/<version>-<target>/` staging → `PATH`), `shekyld` spawns
+  a managed tor, mints a v3 onion key in memory, publishes it with
+  `ADD_ONION Flags=DiscardPK`, and serves overlay inbound on a fresh
+  address each boot — no persisted secret, no durable identifier, and no
+  reused tor `DataDirectory` (a unique 0700 subdirectory of the daemon
+  config folder is created per boot and wiped on teardown, so entry guards
+  cannot join one boot's onion to the next). The new
+  `rust/shekyl-tor-control-daemon` crate owns the posture; the daemon and
+  wallet tor supervisors share only the neutral protocol crate and never
+  share a tor instance, config, data directory, or log sink (PWD-E9).
+  Opt out with `--no-ephemeral-tor`; configuring `--anonymous-inbound` or
+  a tor `--tx-proxy` yourself also makes the default yield.
+  `--anonymous-inbound`'s help text now states that taking it opts into a
+  stable, durable onion address. A tor start failure logs loudly and the
+  daemon continues without overlay inbound; it never aborts.
+
+- **Wallet and daemon console refuse a daemon that is not this build.**
+  On first request they compare the four-axis identity tuple in
+  `get_version` (wire version, consensus-constants digest, network, genesis)
+  against this binary's compiled values and refuse a mismatch in operator
+  language. Comparison is one function in `shekyl-rpc-types`; a down or
+  not-ready daemon is not cached as a contract mismatch. `CORE_RPC_VERSION`
+  3.28 → **3.29**. The genesis axis compares the daemon's block-0 id to this
+  build's per-network pin (`GENESIS_ALLOCATIONS.md` / `mining_parity`); a
+  remint of genesis updates the pin in the same change. A daemon reporting a
+  foreign DAA target no longer produces a
+  console warning: the digest handshake is the instrument, and figures still
+  use the generated `T`.
+- **Every ignored regtest e2e test now has a CI disposition.** The
+  live-daemon gate loop (`scripts/ci/run_live_daemon_gates.sh`) arms all
+  fourteen fast wallet/staking/curve-tree e2e gates per PR, runs the two
+  heavy consensus gates (depth-3 FCMP++ spend, emission claim) in a new
+  nightly lane (`nightly-live-daemon-slow.yml`, `GATE_LANE=slow`), and
+  records the one deliberate non-gate (a fixture regenerator); the
+  undecided count is ratcheted to zero, so a new `#[ignore]`d regtest
+  test fails CI until it is armed (observed red first), scheduled slow,
+  or decided dark with its reason recorded. Tree-wide, every `#[ignore]`
+  must now carry its reason in the attribute
+  (`scripts/ci/check_ignore_reasons.sh` on the grep-gates run).
 - **Staking rewards now claim automatically.** The engine runs a cadence
   driver (`ENGINE_CADENCE_DRIVER.md`) that submits the emission-claim
   transaction once each reward epoch settles — no manual step, and the
@@ -35,6 +77,44 @@
   on empty extraction (rule 47).
 
 ### Changed
+
+- **A peer is dropped only when the rejection is attributable to the
+  sender (PWD-B7).** The inherited `m_no_drop_offense` flag meant
+  droppable by *absence*, so our own pool-bookkeeping failures and
+  storage exceptions severed innocent connections. The drop decision is
+  now a typed tri-state verdict in `shekyl-peer-policy` (unclassified /
+  policy-or-state / internal-failure / attributable-form); only the last
+  severs. C++ writes through `shekyl_drop_verdict_classify` /
+  `reject_form|state|internal` at the failure site; unclassified does
+  not sever. `check_tx_inputs` classifies each return itself, including
+  chain-state arms (spent key image, missing/too-recent reference
+  block). `add_tx` does not promote an unclassified inner failure to
+  form. Mixed archival FFI codes (serve-credit, bond-post, admission,
+  debit-auth) classify in Rust; C++ writes the returned byte. Our-state
+  and marshal faults do not sever. The announce-size check declines
+  without disconnecting; a block-sync prepare failure still flushes the
+  failed span so sync can recover. Malformed input still drops.
+
+- **`docs/FOLLOWUPS.md` genesis-hold triage.** Every pre-genesis row got a
+  disposition pass: 44 resolved/overtaken/duplicate/won't-fix rows removed
+  (git history is the archive), 3 rows reclassified to post-genesis with
+  named blockers (fee-bump, wallet-decryption MFA, network-filesystem
+  wallets), and the delivered DRS-P0a–P0c legs trimmed out of the DRS-P0
+  row, leaving P0d as the open blocker. Process-only; no code change.
+- **Internal "Unbond" vocabulary renamed to "Release."** The terminal
+  bond exit is now called Release everywhere the code and living docs
+  speak about it (matching `RELEASE_COOLDOWN_EPOCHS`), across Rust
+  (`PendingRelease`, `submit_release`, `stake_engine/release.rs`), the
+  C++ submit path, CI scripts, and design docs. Nothing user-visible or
+  on-wire changed: the `BondPostKind` wire discriminant stays `2`, and
+  the user surface stays `unstake` / `collect_unstaked`. The wallet-file
+  schemas that carried renamed field names bumped versions
+  (`PENDING_POST_VERSION` and `PSCAN_STATE_VERSION` 9 → 10; pre-genesis,
+  no migration). The LMDB journal name `archival_bond_unbond_log` and
+  its direct C++ carriers are deliberately excluded — carried by the DRS
+  redb port per the `docs/FOLLOWUPS.md` entry. Historical records
+  (decision log, reconciliation registry, this changelog's released
+  entries) keep the old name as the record of what was.
 
 - **The daemon and the Rust port now admit the same `tx_extra` tag set, and an
   unparseable `extra` is refused rather than skipped.** `shekyl-wire` had long

@@ -9,8 +9,8 @@
 //! ([`ScanSchedule`]), a [`BlockSource`], and a [`PScanStore`]; messages the
 //! `view_sk`-vault [`StakeEngineHandle`] for the offloaded scan-step. Per cadence
 //! tick it runs one **catch-up sweep**: fetch each bounded range behind the
-//! finality horizon, dual-extract, accumulate, record/act on `Unbond`s, and seal
-//! `(cursor, accruals, pending_unbonds)` atomically after each step (the SP-2
+//! finality horizon, dual-extract, accumulate, record/act on `Release`s, and seal
+//! `(cursor, accruals, pending_releases)` atomically after each step (the SP-2
 //! write-discipline). `view_sk` never crosses the actor boundary; only public
 //! results do.
 
@@ -34,23 +34,23 @@ use crate::engine::stake_engine::{
     FundedSlots, RetireOutcome, RetirementWitness, StakeEngineError, StakeEngineHandle,
 };
 
-/// The wire post-kind byte of an `Unbond` bond-post — the terminal post that makes
+/// The wire post-kind byte of a `Release` bond-post — the terminal post that makes
 /// a persona retire-eligible (DQ8). Single-sourced from the consensus
 /// [`BondPostKind`] enum, which *is* the on-chain byte assignment; `shekyl-wire`
 /// transports that byte unchanged (`Other(b)`), so the comparison in
-/// [`record_unbonds`] is the consensus definition, not a parallel constant.
+/// [`record_releases`] is the consensus definition, not a parallel constant.
 ///
-/// Unbond is a genesis-valid archival bond-post kind (wire `Other(2)` ==
-/// [`BondPostKind::Unbond`]). This retire path fires when pscan sees a
-/// confirmed Unbond, and with PR-C the whole arc feeding it is live: the
-/// producer (`AssembleUnbond`), the dispatch seam (`Engine::submit_unbond`),
+/// Release is a genesis-valid archival bond-post kind (wire `Other(2)` ==
+/// [`BondPostKind::Release`]). This retire path fires when pscan sees a
+/// confirmed Release, and with PR-C the whole arc feeding it is live: the
+/// producer (`AssembleRelease`), the dispatch seam (`Engine::submit_release`),
 /// and the user-facing verbs (`StakeFacade::unstake` posts the exit;
 /// `collect_unstaked`'s terminal sweep is what finally empties a slot so
 /// the funded gate below can clear — until PR-C no user path could produce
 /// that zero, so this consumer had passing coverage and no production
 /// reach). The byte equivalence is pinned by a `scan_step` test so the two
 /// crates' assignments cannot drift.
-const UNBOND_POST_KIND: u8 = BondPostKind::Unbond as u8;
+const RELEASE_POST_KIND: u8 = BondPostKind::Release as u8;
 
 /// Default per-step batch size — the bounded `ScanStep` the actor offloads (DQ6).
 /// Well under [`MAX_SCAN_STEP_BLOCKS`]; sized to interleave rotation/sign between
@@ -160,7 +160,7 @@ pub(crate) trait PScanStore: Send + Sync + 'static {
     ) -> impl std::future::Future<Output = Result<Option<PScanState>, Self::Error>> + Send;
 
     /// Seal the state to the `P`-isolated file (cursor + accruals + pending
-    /// unbonds, one atomic write).
+    /// releases, one atomic write).
     fn save(
         &self,
         state: &PScanState,
@@ -220,7 +220,7 @@ pub(crate) enum PScanTaskError {
 
 /// Run one **catch-up sweep**: scan every bounded range from the accrual frontier
 /// up to the finality horizon (`tip − reorg_depth`), accumulating funding,
-/// recording `Unbond`s, retiring eligible terminal personas, and sealing after
+/// recording `Release`s, retiring eligible terminal personas, and sealing after
 /// each step. Idempotent across crashes by atomic coupling (see [`PScanAccrual`]).
 // Eight parameters: three collaborators (source/stake/store), three pieces of
 // per-task mutable state (accrual/retired/dispatch), config, cancel. Bundling
@@ -244,7 +244,7 @@ where
 {
     let tip = block_source.tip_height().await?;
     // Finality horizon: scan only blocks behind `tip − reorg_depth`, so every
-    // accrued range and every witnessed Unbond is reorg-deep.
+    // accrued range and every witnessed Release is reorg-deep.
     let horizon = tip.to_raw().saturating_sub(config.reorg_depth);
     let batch = config.batch();
 
@@ -352,9 +352,9 @@ where
         if !result.funding_outputs.is_empty() || !result.spent_funding.is_empty() {
             held_funding = accrual.funding_outputs().into();
         }
-        record_unbonds(accrual, &result.bond_post_matches);
+        record_releases(accrual, &result.bond_post_matches);
 
-        // Seal (cursor + accruals + pending unbonds + bond-post matches) atomically —
+        // Seal (cursor + accruals + pending releases + bond-post matches) atomically —
         // the write half of the SP-2 discipline, after every step so a crash re-scans
         // at most one batch. `to_state()` clones the maps + the match vec, but that
         // clone is not the cost here: it is dwarfed by the postcard serialize + AEAD
@@ -373,7 +373,7 @@ where
 
         // Retire AFTER the seal, not before — **seal-then-act**. `retire_bonded_persona`
         // irreversibly wipes the persona's bond_spend key in the actor; its durable
-        // *trigger* is the `pending_unbonds` entry just sealed above. Sealing first means a
+        // *trigger* is the `pending_releases` entry just sealed above. Sealing first means a
         // crash between seal and wipe leaves the trigger durable (the retire re-fires from
         // it on restart, the persona re-derives from seed), whereas wiping first could lose
         // the trigger if the seal never landed. The wipe is idempotent (re-firing re-wipes),
@@ -431,21 +431,21 @@ where
     Ok(())
 }
 
-/// Record every confirmed `Unbond` in a step's bond-post matches into the
-/// accrual's durable pending set (the sole durable "known-unbonded" record).
-fn record_unbonds(accrual: &mut PScanAccrual, matches: &[BondPostMatch]) {
+/// Record every confirmed `Release` in a step's bond-post matches into the
+/// accrual's durable pending set (the sole durable "known-released" record).
+fn record_releases(accrual: &mut PScanAccrual, matches: &[BondPostMatch]) {
     for m in matches {
-        if m.post_kind == UNBOND_POST_KIND {
+        if m.post_kind == RELEASE_POST_KIND {
             // Record the **containing** epoch (floor division). Load-bearing for the
             // stuck-funds guard: `dispatch_retires` feeds this as `e_last` to
-            // `RetirementWitness::from_confirmed_unbond`, whose claim-window check rounds
+            // `RetirementWitness::from_confirmed_release`, whose claim-window check rounds
             // **conservatively** (toward a later expiry). Recording the *settling* epoch
             // instead would silently shorten the window → premature retire → stuck funds.
             // Keep it the containing epoch — see the conservative `e_last` contract at the
             // witness builder.
-            let unbond_epoch =
+            let release_epoch =
                 SettlementEpoch::from_raw(settlement_epoch_at_height(m.height.to_raw()));
-            accrual.record_unbond(m.p_canonical_id, unbond_epoch);
+            accrual.record_release(m.p_canonical_id, release_epoch);
         }
     }
 }
@@ -507,13 +507,13 @@ async fn dispatch_retires(
     ));
     // Snapshot the candidates so the await loop holds no borrow of `accrual`.
     let candidates: Vec<(PCanonicalId, SettlementEpoch)> = accrual
-        .pending_unbonds()
+        .pending_releases()
         .iter()
         .filter(|&(id, _)| !retired_this_session.contains(id))
-        .map(|(&id, &unbond)| (id, unbond))
+        .map(|(&id, &release)| (id, release))
         .collect();
 
-    for (id, unbond_epoch) in candidates {
+    for (id, release_epoch) in candidates {
         // Shutdown responsiveness: the candidate set can be large (the module notes
         // thousands of rows for a long-lived operator) and each retire is an actor
         // round-trip, so a cancel must not wait for the whole list to drain. A half-done
@@ -521,15 +521,15 @@ async fn dispatch_retires(
         if cancel.is_cancelled() {
             return Ok(pruned_any);
         }
-        // `e_last = unbond_epoch` (conservative); the witness exists only if it has
+        // `e_last = release_epoch` (conservative); the witness exists only if it has
         // fallen out of the claim window.
-        let Some(witness) = RetirementWitness::from_confirmed_unbond(id, unbond_epoch, settled)
+        let Some(witness) = RetirementWitness::from_confirmed_release(id, release_epoch, settled)
         else {
             continue; // not yet expired — re-checked on a later sweep
         };
         // DQ-D corroboration for the DURABLE side, shared by both wiped arms.
         let corroborated = token_settled.is_some_and(|ts| {
-            RetirementWitness::from_confirmed_unbond(id, unbond_epoch, ts).is_some()
+            RetirementWitness::from_confirmed_release(id, release_epoch, ts).is_some()
         });
         match stake
             .retire_bonded_persona(witness, std::sync::Arc::clone(&funded_slots))
@@ -539,14 +539,14 @@ async fn dispatch_retires(
             // funded-gate). The durable side (arm #2) runs only under the token
             // corroboration. Without it the wipe still fired but the durable
             // prune is deferred — `retired_this_session` suppresses re-attempt
-            // for the rest of THIS session, and the surviving `pending_unbonds`
+            // for the rest of THIS session, and the surviving `pending_releases`
             // trigger re-fires the retire after a **restart** (the persona is not
             // in `retired_records`, so it re-derives at the next open, the actor
             // holds it again, and the now-corroborated sweep prunes). Not "a later
             // sweep" — the session dedup below blocks that.
             RetireOutcome::Retired { slot } => {
                 retired_this_session.insert(id);
-                if corroborated && accrual.retire_persona(id, slot, unbond_epoch, settled) {
+                if corroborated && accrual.retire_persona(id, slot, release_epoch, settled) {
                     pruned_any = true;
                 }
             }

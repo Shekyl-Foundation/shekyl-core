@@ -123,22 +123,22 @@ fn rejects_existing_record() {
     );
 }
 
-// ── Unbond ──────────────────────────────────────────────────────────────
+// ── Release ──────────────────────────────────────────────────────────────
 
 // `RELEASE_COOLDOWN_EPOCHS` is config-generated (genesis 2); the fixture reads
 // it so a re-pin re-derives the cooldown boundary.
-const UNBOND_LAST_SERVED: u64 = 100;
-const UNBOND_CURRENT: u64 = UNBOND_LAST_SERVED + crate::bond_floor::RELEASE_COOLDOWN_EPOCHS;
+const RELEASE_LAST_SERVED: u64 = 100;
+const RELEASE_CURRENT: u64 = RELEASE_LAST_SERVED + crate::bond_floor::RELEASE_COOLDOWN_EPOCHS;
 // The scheduler watermark has reached the anchor: epochs ≤ last-served settled.
-const UNBOND_SETTLED: Option<u64> = Some(UNBOND_LAST_SERVED);
+const RELEASE_SETTLED: Option<u64> = Some(RELEASE_LAST_SERVED);
 const RECORD_BONDED: u64 = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC;
 
 /// The post-connect state of a full exit: empty holdings, zero total.
-fn valid_unbond_vin() -> ArchivalBondPostVin {
+fn valid_release_vin() -> ArchivalBondPostVin {
     ArchivalBondPostVin {
         hybrid_public_key: vec![0xAB; 64],
         p_canonical_id: [0x11; 32],
-        post_kind: BondPostKind::Unbond,
+        post_kind: BondPostKind::Release,
         bond_spend_pk: Vec::new(),
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
@@ -150,29 +150,30 @@ fn valid_unbond_vin() -> ArchivalBondPostVin {
     }
 }
 
-fn ok_unbond(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
-    verify_unbond_bond_post(
+fn ok_release(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
+    verify_release_bond_post(
         vin,
         Some(RECORD_BONDED),
         0,
-        Some(UNBOND_LAST_SERVED),
-        UNBOND_SETTLED,
-        UNBOND_CURRENT,
+        Some(RELEASE_LAST_SERVED),
+        RELEASE_SETTLED,
+        RELEASE_CURRENT,
     )
 }
 
 #[test]
-fn accepts_valid_full_unbond() {
-    assert!(ok_unbond(&valid_unbond_vin()).is_ok());
+fn accepts_valid_full_release() {
+    assert!(ok_release(&valid_release_vin()).is_ok());
 }
 
 #[test]
-fn accepts_unbond_when_never_served() {
+fn accepts_release_when_never_served() {
     // No serve bit anywhere ⇒ no anchor: every held-but-unserved epoch either
     // already settled (slashed while bonded) or falls in the exit-forgiven
     // tail, with or without a scheduler watermark.
     assert!(
-        verify_unbond_bond_post(&valid_unbond_vin(), Some(RECORD_BONDED), 0, None, None, 0).is_ok()
+        verify_release_bond_post(&valid_release_vin(), Some(RECORD_BONDED), 0, None, None, 0)
+            .is_ok()
     );
 }
 
@@ -181,27 +182,27 @@ fn rejects_slash_settlement_pending() {
     // The one-block race (release_cooldown module docs): cooldown elapsed by
     // epoch distance, but the scheduler watermark has not reached the anchor —
     // the anchor epoch's deadline block has not folded yet.
-    for watermark in [Some(UNBOND_LAST_SERVED - 1), None] {
+    for watermark in [Some(RELEASE_LAST_SERVED - 1), None] {
         assert_eq!(
-            verify_unbond_bond_post(
-                &valid_unbond_vin(),
+            verify_release_bond_post(
+                &valid_release_vin(),
                 Some(RECORD_BONDED),
                 0,
-                Some(UNBOND_LAST_SERVED),
+                Some(RELEASE_LAST_SERVED),
                 watermark,
-                UNBOND_CURRENT,
+                RELEASE_CURRENT,
             ),
             Err(BondPostError::SlashSettlementPending)
         );
     }
     // Watermark past the anchor also accepts.
-    assert!(verify_unbond_bond_post(
-        &valid_unbond_vin(),
+    assert!(verify_release_bond_post(
+        &valid_release_vin(),
         Some(RECORD_BONDED),
         0,
-        Some(UNBOND_LAST_SERVED),
-        Some(UNBOND_LAST_SERVED + 5),
-        UNBOND_CURRENT,
+        Some(RELEASE_LAST_SERVED),
+        Some(RELEASE_LAST_SERVED + 5),
+        RELEASE_CURRENT,
     )
     .is_ok());
 }
@@ -212,79 +213,79 @@ fn rejects_full_interval_log() {
     // verify refuses — a verified-but-unconnectable tx would be a halt.
     use crate::bond_connect::MAX_BOND_BAD_INTERVALS;
     assert_eq!(
-        verify_unbond_bond_post(
-            &valid_unbond_vin(),
+        verify_release_bond_post(
+            &valid_release_vin(),
             Some(RECORD_BONDED),
             MAX_BOND_BAD_INTERVALS,
-            Some(UNBOND_LAST_SERVED),
-            UNBOND_SETTLED,
-            UNBOND_CURRENT,
+            Some(RELEASE_LAST_SERVED),
+            RELEASE_SETTLED,
+            RELEASE_CURRENT,
         ),
         Err(BondPostError::IntervalLogFull)
     );
-    assert!(verify_unbond_bond_post(
-        &valid_unbond_vin(),
+    assert!(verify_release_bond_post(
+        &valid_release_vin(),
         Some(RECORD_BONDED),
         MAX_BOND_BAD_INTERVALS - 1,
-        Some(UNBOND_LAST_SERVED),
-        UNBOND_SETTLED,
-        UNBOND_CURRENT,
+        Some(RELEASE_LAST_SERVED),
+        RELEASE_SETTLED,
+        RELEASE_CURRENT,
     )
     .is_ok());
 }
 
 #[test]
 fn rejects_wrong_post_kind() {
-    let mut vin = valid_unbond_vin();
+    let mut vin = valid_release_vin();
     vin.post_kind = BondPostKind::JoinMarket;
-    assert_eq!(ok_unbond(&vin), Err(BondPostError::PostKindNotUnbond));
+    assert_eq!(ok_release(&vin), Err(BondPostError::PostKindNotRelease));
 }
 
 #[test]
 fn rejects_missing_record() {
     assert_eq!(
-        verify_unbond_bond_post(
-            &valid_unbond_vin(),
+        verify_release_bond_post(
+            &valid_release_vin(),
             None,
             0,
-            Some(UNBOND_LAST_SERVED),
-            UNBOND_SETTLED,
-            UNBOND_CURRENT
+            Some(RELEASE_LAST_SERVED),
+            RELEASE_SETTLED,
+            RELEASE_CURRENT
         ),
         Err(BondPostError::RecordMissing)
     );
 }
 
 #[test]
-fn rejects_nothing_to_unbond() {
-    let mut vin = valid_unbond_vin();
+fn rejects_nothing_to_release() {
+    let mut vin = valid_release_vin();
     vin.bond_debit = 0;
     assert_eq!(
-        verify_unbond_bond_post(
+        verify_release_bond_post(
             &vin,
             Some(0),
             0,
-            Some(UNBOND_LAST_SERVED),
-            UNBOND_SETTLED,
-            UNBOND_CURRENT
+            Some(RELEASE_LAST_SERVED),
+            RELEASE_SETTLED,
+            RELEASE_CURRENT
         ),
-        Err(BondPostError::NothingToUnbond)
+        Err(BondPostError::NothingToRelease)
     );
 }
 
 #[test]
-fn rejects_credit_on_unbond() {
-    let mut vin = valid_unbond_vin();
+fn rejects_credit_on_release() {
+    let mut vin = valid_release_vin();
     vin.bond_credit = 1;
-    assert_eq!(ok_unbond(&vin), Err(BondPostError::UnbondCreditNonzero));
+    assert_eq!(ok_release(&vin), Err(BondPostError::ReleaseCreditNonzero));
 }
 
 #[test]
 fn rejects_floor_mismatch_nonempty_holdings() {
     // Non-empty holdings ⇒ bond_floor > 0, but bonded_total_atomic is 0.
-    let mut vin = valid_unbond_vin();
+    let mut vin = valid_release_vin();
     vin.holdings.shard_ids = ShardSet::new(vec![7]).unwrap();
-    assert_eq!(ok_unbond(&vin), Err(BondPostError::UnbondFloorMismatch));
+    assert_eq!(ok_release(&vin), Err(BondPostError::ReleaseFloorMismatch));
 }
 
 // (The former `rejects_oversize_shard_set_masquerading_as_empty` test is
@@ -294,21 +295,21 @@ fn rejects_floor_mismatch_nonempty_holdings() {
 // in `bond_wire`; the FFI marshal boundary keeps its own oversize test.)
 
 #[test]
-fn rejects_partial_unbond_nonzero_post_total() {
+fn rejects_partial_release_nonzero_post_total() {
     // Consistent post-state but total != 0 ⇒ partial exit; belongs on the
-    // HoldingsUpdate-drop path, not Unbond.
-    let mut vin = valid_unbond_vin();
+    // HoldingsUpdate-drop path, not Release.
+    let mut vin = valid_release_vin();
     vin.holdings.shard_ids = ShardSet::new(vec![7]).unwrap();
     vin.bonded_total_atomic = ARCHIVAL_BOND_FLOOR_ATOMIC;
-    assert_eq!(ok_unbond(&vin), Err(BondPostError::NotFullUnbond));
+    assert_eq!(ok_release(&vin), Err(BondPostError::NotFullRelease));
 }
 
 #[test]
 fn rejects_debit_not_full_balance() {
     // The debit must remove the record's whole current bonded_total.
-    let mut vin = valid_unbond_vin();
+    let mut vin = valid_release_vin();
     vin.bond_debit = ARCHIVAL_BOND_FLOOR_ATOMIC; // record holds RECORD_BONDED = 2*FLOOR
-    assert_eq!(ok_unbond(&vin), Err(BondPostError::DebitNotFullBalance));
+    assert_eq!(ok_release(&vin), Err(BondPostError::DebitNotFullBalance));
 }
 
 #[test]
@@ -328,13 +329,13 @@ fn block_unique_rejects_every_same_p_pair() {
 fn rejects_cooldown_not_elapsed() {
     // One epoch before the boundary: pending challenge could still slash.
     assert_eq!(
-        verify_unbond_bond_post(
-            &valid_unbond_vin(),
+        verify_release_bond_post(
+            &valid_release_vin(),
             Some(RECORD_BONDED),
             0,
-            Some(UNBOND_LAST_SERVED),
-            UNBOND_SETTLED,
-            UNBOND_CURRENT - 1,
+            Some(RELEASE_LAST_SERVED),
+            RELEASE_SETTLED,
+            RELEASE_CURRENT - 1,
         ),
         Err(BondPostError::CooldownNotElapsed)
     );
@@ -454,7 +455,7 @@ fn add_rejects_complete_tree_record() {
 
 #[test]
 fn add_rejects_exited_record_resurrection() {
-    // The Exited shape (post-Unbond): zero total, empty holdings, and a
+    // The Exited shape (post-Release): zero total, empty holdings, and a
     // zero-length clean interval-close that good_through excludes nothing
     // for. Without the Bonded gate this passed EVERY add gate — a
     // JoinMarket-bypassing re-entry path whose connect then threw on the
@@ -580,7 +581,7 @@ fn accepts_valid_drop() {
 }
 
 #[test]
-fn drop_rejects_unbonded_record() {
+fn drop_rejects_released_record() {
     // The add arm's Bonded-gate twin (shared prologue): a zero-total /
     // no-shards record refuses before any diff or term arithmetic runs.
     assert_eq!(
@@ -630,7 +631,7 @@ fn drop_rejects_not_single_or_wrong_shard() {
 
 #[test]
 fn drop_rejects_last_shard() {
-    // Dropping the only shard: post empty → use Unbond.
+    // Dropping the only shard: post empty → use Release.
     let mut vin = valid_drop_vin();
     vin.holdings.shard_ids = ShardSet::empty();
     vin.bonded_total_atomic = 0;
@@ -883,7 +884,7 @@ fn rebond_rejects_multiple_open_intervals() {
 #[test]
 fn rebond_rejects_interval_log_without_headroom() {
     // Pin 6: 254 is the last acceptable size (one slot for the next slash +
-    // one for the Unbond clean close); 255 rejects.
+    // one for the Release clean close); 255 rejects.
     let mut log: Vec<BadInterval> = (0..254u64).map(|i| closed_interval(i, i + 1)).collect();
     log.push(open_interval(300));
     assert_eq!(log.len(), 255);

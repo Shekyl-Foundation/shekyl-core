@@ -54,6 +54,15 @@ jobs:
 
       - name: Install ripgrep and PyYAML
         run: |
+          # GitHub's ubuntu image ships a Chrome apt source. A hash-sum
+          # mismatch there is not this job's subject (ripgrep + PyYAML)
+          # and has already failed the gate before any script ran
+          # (2026-09-09, PR #671 — same class as the 2026-08-18 apt-get
+          # update stalls recorded in cmake-gate-test.yml). Naming
+          # google-chrome.list and .list.save left .sources / google.list
+          # live; the drop script deletes every chrome source and asserts
+          # the URI is gone.
+          bash scripts/ci/drop_runner_chrome_apt_source.sh
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ripgrep python3-yaml
           rg --version
@@ -138,6 +147,14 @@ jobs:
             scripts/ci/check_debit_auth_single_source.sh
           run_one "Rule 71: nettype selects data, not control flow" \
             scripts/ci/check_network_uniformity.sh
+          run_one "Ignored tests carry their reason in the attribute" \
+            scripts/ci/check_ignore_reasons.sh
+          # PWD-B7: a rejection describing OUR chain must classify itself, or
+          # the caller's coarser verdict severs a peer whose transaction is
+          # merely in conflict with our view. The one residual the typed
+          # verdict left open, made mechanical rather than remembered.
+          run_one "PWD-B7: double-spend rejections classify themselves" \
+            python3 scripts/ci/check_drop_verdict_classification.py
           run_one "PoW test-seam containment (CEN-D2)" \
             scripts/ci/check_pow_test_seam.sh
           run_one "LV-1: levin wire-constant parity" \

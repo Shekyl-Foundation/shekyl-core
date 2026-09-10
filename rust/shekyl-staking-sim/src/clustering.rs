@@ -11,7 +11,7 @@
 //! with two active personas" (`shekyl-engine-core` `stake_engine` — atomic
 //! rotation). An operator runs **one** active persona at a time and rotates to a
 //! fresh one for unlinkability; a bonded retired persona stays resident only so
-//! unbonding/claiming remains reachable (the `W`-tail), never as a second active
+//! releasing/claiming remains reachable (the `W`-tail), never as a second active
 //! persona. An earlier draft of this round modelled an operator **splitting
 //! capacity across K *simultaneous* personas** to hide scale and built a
 //! sibling-clustering matcher on it. That premise was a phantom extrapolated from

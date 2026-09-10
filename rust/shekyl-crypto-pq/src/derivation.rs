@@ -943,7 +943,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "KAT regenerator for the kem_derive_v1 vectors; run manually with --ignored --nocapture after a derivation change"]
     fn generate_kem_derive_v1_kat() {
         use fips203::ml_kem_768;
         use fips203::traits::{Encaps as _, KeyGen as _, SerDes as _};

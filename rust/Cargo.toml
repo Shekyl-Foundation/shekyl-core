@@ -98,6 +98,15 @@ members = [
     # See docs/design/DAEMON_RELAY_PRIVACY.md §18.
     "shekyl-relay",
 
+    # Peer-attribution policy (PWD-B7): whether a rejection justifies severing
+    # the connection that carried it. Deliberately NOT in shekyl-relay, whose
+    # charter is the relay scheduler, and NOT in shekyl-consensus, because two
+    # of the rejections it classifies are relay-tier policy that honest nodes
+    # may legitimately disagree on. Dependency-free by design: it answers
+    # "may we sever?" and must never acquire the ability to ask anything else.
+    # See docs/design/SHEKYL_P2P_PROTOCOL.md, PWD-B7.
+    "shekyl-peer-policy",
+
     # Levin p2p framing layer (bucket header, fragments, noise, zstd flag
     # path) — the byte-exact Rust skeleton of docs/LEVIN_PROTOCOL.md, KAT'd
     # against the C++ epee::levin oracle. Framing only: no portable_storage,
@@ -176,13 +185,19 @@ members = [
     "shekyl-p-serve",
 
     # The serving host: composes `shekyl-p-serve`'s loopback endpoint with
-    # `shekyl-tor`'s onion supervisor over a serve-set derived from the bond
+    # `shekyl-tor-control-wallet`'s onion supervisor over a serve-set derived from the bond
     # record (ARCHIVAL_CHALLENGE_MECHANISM.md §9.5 item 3, §9.6 item 4). Holds
     # the read-only store handle and never a wallet seed — §7.2(iii) custody.
     "shekyl-p-host",
 
-    # Wallet-owned Tor integration: control client + lifecycle (2d-2 SP-T0)
-    "shekyl-tor",
+    # Capability families (PWD-E9): the client speaks the protocol for any
+    # owner; the wallet crate is archival-P's Tor instance (`WalletTorControl`);
+    # the daemon crate is the P2P overlay's ephemeral-per-boot instance
+    # (`DaemonTorControl`, PWD-E7 piece 2). Client is the only shared edge —
+    # wallet and daemon never name each other.
+    "shekyl-tor-control-wallet",
+    "shekyl-tor-control-client",
+    "shekyl-tor-control-daemon",
 
     # The operator alarm channel (OA-1): the snapshot a human reads when a
     # guarantee the wallet cannot restore by itself has been lost. A leaf on

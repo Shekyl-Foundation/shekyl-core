@@ -20,7 +20,7 @@
 //!    `bond_debit == 0` (§7.1). The vin carries no signature: its on-chain
 //!    authorization is the transaction-level `pqc_auths` slot (surface A), not
 //!    an on-vin blob (ARCHIVAL_BOND_GATE4.md §3.4.1; SA-2b, SIGNATURE_ALIGNMENT.md §2.2).
-//! 2. [`UnbondVin`]: [`BondPostKind::Unbond`] with empty holdings,
+//! 2. [`ReleaseVin`]: [`BondPostKind::Release`] with empty holdings,
 //!    `bonded_total_atomic == bond_credit == 0`, and
 //!    `bond_debit == record_bonded_total`. The debit term rides the **input**
 //!    side as an [`InputTerm`].
@@ -39,7 +39,7 @@
 //! `CurveTreeClient` (CT-5), are PR 2 / separate-series work (§3, §8).
 
 // Every public item must carry its own docs. This is the gate for a defect this
-// crate actually had: inserting `build_unbond_vin` between `verify_credit_funding`'s
+// crate actually had: inserting `build_release_vin` between `verify_credit_funding`'s
 // doc block and its item silently re-attached those docs to the new function and
 // left the old one undocumented. Rustdoc does not warn — two adjacent doc blocks
 // just concatenate — but `missing_docs` fires on the item that LOST its docs, which
@@ -95,12 +95,12 @@ impl JoinMarketVin {
     }
 }
 
-/// A structurally-valid `Unbond` bond-post input — the debit-side twin of
+/// A structurally-valid `Release` bond-post input — the debit-side twin of
 /// [`JoinMarketVin`].
 ///
-/// Fields are private: an `UnbondVin` can be produced **only** by
-/// [`build_unbond_vin`], which establishes the genesis-frozen Unbond invariants
-/// (`post_kind == Unbond`, `bond_credit == 0`, `bonded_total_atomic == 0`,
+/// Fields are private: a `ReleaseVin` can be produced **only** by
+/// [`build_release_vin`], which establishes the genesis-frozen Release invariants
+/// (`post_kind == Release`, `bond_credit == 0`, `bonded_total_atomic == 0`,
 /// empty holdings, `bond_debit == the record's whole balance`). A consumer
 /// holding one therefore has a structural witness that those hold.
 ///
@@ -113,11 +113,11 @@ impl JoinMarketVin {
 /// was never meant to describe. The type is what stops the wrong post reaching
 /// the right-sounding rule.
 #[derive(Clone, Debug)]
-pub struct UnbondVin {
+pub struct ReleaseVin {
     vin: ArchivalBondPostVin,
 }
 
-impl UnbondVin {
+impl ReleaseVin {
     /// The bond-post input, ready for wire encoding / verify.
     #[must_use]
     pub fn vin(&self) -> &ArchivalBondPostVin {
@@ -256,25 +256,25 @@ pub fn verify_credit_funding(
     Ok(())
 }
 
-/// Build the `Unbond` bond-post vin — the terminal full exit (gate-4 §3.5
+/// Build the `Release` bond-post vin — the terminal full exit (gate-4 §3.5
 /// debit path, `post_kind = 2`).
 ///
 /// **The verifier is the contract, and it is the only one.** Staking is
 /// greenfield: there is no prior implementation to agree with, so every
-/// invariant below is here because `verify_unbond_bond_post` checks it, and the
+/// invariant below is here because `verify_release_bond_post` checks it, and the
 /// tests assert by calling that function rather than by restating its clauses.
 /// The wallet conforms to consensus and never the reverse — that side is
 /// genesis-frozen and this one is not.
 ///
 /// Five fields are producer-controlled and this function fixes all five:
 ///
-/// - `post_kind = Unbond`
-/// - `bond_credit = 0` — a debit path credits nothing (`UnbondCreditNonzero`)
+/// - `post_kind = Release`
+/// - `bond_credit = 0` — a debit path credits nothing (`ReleaseCreditNonzero`)
 /// - `holdings` = the canonical empty descriptor — a full exit ends holding
-///   nothing (`UnbondHoldingsNotEmpty`)
+///   nothing (`ReleaseHoldingsNotEmpty`)
 /// - `bonded_total_atomic = 0` — the **post-connect** state, which for empty
 ///   holdings is also `bond_floor(∅)`, satisfying the floor equality and the
-///   full-exit check together (`UnbondFloorMismatch` / `NotFullUnbond`)
+///   full-exit check together (`ReleaseFloorMismatch` / `NotFullRelease`)
 /// - `bond_debit = record_bonded_total` — exactly the whole current balance
 ///   (`DebitNotFullBalance`)
 ///
@@ -287,7 +287,7 @@ pub fn verify_credit_funding(
 /// The remaining verify arms — `IntervalLogFull`, `CooldownNotElapsed`,
 /// `SlashSettlementPending`, `RecordMissing` — are **record state this function
 /// does not set and cannot fix**. They belong to the caller's precondition
-/// check; see `AssembleUnbond`. The one exception is a zero bonded total, which
+/// check; see `AssembleRelease`. The one exception is a zero bonded total, which
 /// is refused here because it is the operand this function consumes.
 ///
 /// The same division governs the transaction's SHAPE, and it is worth stating
@@ -299,19 +299,19 @@ pub fn verify_credit_funding(
 /// funding set balances arithmetically and is still rejected on the wire.
 /// Enforcing that floor is the assembling caller's contract, and the rule to
 /// call for it is `shekyl_archival_retention::bond_post::bond_post_funding_floor_met`
-/// — not a locally restated count. `AssembleUnbond` calls it before any funding
+/// — not a locally restated count. `AssembleRelease` calls it before any funding
 /// arithmetic.
 ///
 /// # Errors
 ///
-/// - [`BondBuildError::NothingToUnbond`] if `record_bonded_total` is zero.
+/// - [`BondBuildError::NothingToRelease`] if `record_bonded_total` is zero.
 /// - [`BondBuildError::IdentityEncode`] if the identity key fails to serialize.
-pub fn build_unbond_vin(
+pub fn build_release_vin(
     keys: BondPostKeys<'_>,
     record_bonded_total: u64,
-) -> Result<UnbondVin, BondBuildError> {
+) -> Result<ReleaseVin, BondBuildError> {
     if record_bonded_total == 0 {
-        return Err(BondBuildError::NothingToUnbond);
+        return Err(BondBuildError::NothingToRelease);
     }
 
     let hybrid_public_key = keys
@@ -323,10 +323,10 @@ pub fn build_unbond_vin(
     let vin = ArchivalBondPostVin {
         hybrid_public_key,
         p_canonical_id,
-        post_kind: BondPostKind::Unbond,
+        post_kind: BondPostKind::Release,
         // Empty, not omitted: `bond_wire.rs` rejects a `bond_spend_pk` on any
         // non-JoinMarket kind ("JoinMarket-coupled; other post kinds must not
-        // carry one"), and the Unbond verify arm is passed null/0 by the
+        // carry one"), and the Release verify arm is passed null/0 by the
         // consensus caller for the same reason.
         bond_spend_pk: Vec::new(),
         // The canonical empty descriptor. `bond_floor` returns 0 both for this
@@ -341,10 +341,10 @@ pub fn build_unbond_vin(
         bond_credit: 0,
         bond_debit: record_bonded_total,
     };
-    Ok(UnbondVin { vin })
+    Ok(ReleaseVin { vin })
 }
 
-/// Amount-level balance rule for the `Unbond` debit path (gate-4 §3.5).
+/// Amount-level balance rule for the `Release` debit path (gate-4 §3.5).
 ///
 /// `sum(funding) + bond_debit == sum(outputs) + fee`
 ///
@@ -369,7 +369,7 @@ pub fn verify_debit_funding(
     funding_total: AtomicUnits,
     output_total: AtomicUnits,
     fee: AtomicUnits,
-    post: &UnbondVin,
+    post: &ReleaseVin,
 ) -> Result<(), BondBuildError> {
     let bond_debit = AtomicUnits::from_raw(post.vin.bond_debit);
     let sources = funding_total

@@ -454,7 +454,7 @@ this be a one-way read.
 ## 6. What none of the above fixes (carry forward, don't let it substitute)
 
 - IP-level correlation — composes with, does not replace, the existing Tor
-  integration work (`shekyl-tor`, `shekyl-p-transport`).
+  integration work (`shekyl-tor-control-wallet`, `shekyl-p-transport`).
 - Traffic-class fingerprinting independent of identity/transport (PW-22).
 - The Shi et al. (NDSS 2025) eclipse mechanism (trash peer-discovery
   records + priority-list poisoning + forced disconnect via anti-DoS

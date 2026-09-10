@@ -348,7 +348,14 @@ jobs:
       # Armed #[ignore]d regtest_e2e gates against the shekyld just built.
       # Runs here rather than in the test job because that job installs no
       # Rust by design, and here the binary and the toolchain already coexist.
-      # The north-star spend is 76-99 s; the other four are a few seconds.
+      #
+      # 14 gates, each <= ~3.5 min, ~20 min total (measured 2026-09-08 local
+      # Release; a runner is slower). The two heavy consensus gates (depth-3
+      # spend, emission claim; 13 + 19 min) run nightly instead — GATE_LANE=
+      # slow in nightly-live-daemon-slow.yml, same script, red pushed to a
+      # tracking issue (the visibility route #660's ruling required of any
+      # cost tier). Either way this is not the critical path: depends.yml
+      # (74-113 min) and randomx (90 min) already run longer, concurrently.
       - name: live-daemon gates
         if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         # `shell: bash` like the CTest-artifact step below, and for the same

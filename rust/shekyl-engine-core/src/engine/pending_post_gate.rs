@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Coordination gate for the pending-post family (bond posts, emission
-//! claims, drains, unbonds) — one object per wallet carrying both of the
+//! claims, drains, releases) — one object per wallet carrying both of the
 //! family's cross-writer disciplines:
 //!
 //! 1. **The write lock** (WI-3 §3.3): every load→modify→seal cycle over the

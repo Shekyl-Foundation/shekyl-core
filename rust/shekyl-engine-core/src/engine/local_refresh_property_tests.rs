@@ -641,7 +641,7 @@ async fn reorg_past_the_rewind_budget_aborts_as_reorg_storm() {
 /// Fresh empty [`LedgerSnapshot`] anchored at `synced_height = 0`
 /// with an empty reorg window. Matches the
 /// `EngineCreateParams::for_test_full` starting state used across
-/// the integration tests in `engine/refresh.rs`.
+/// the integration tests in `engine/refresh/`.
 fn empty_snapshot() -> LedgerSnapshot {
     LedgerSnapshot::from_ledger(&LedgerBlock::empty())
 }

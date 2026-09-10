@@ -48,6 +48,7 @@
 #include "misc_log_ex.h"
 #include "tx_verification_utils.h"
 #include "shekyl/shekyl_ffi.h"
+#include "cryptonote_basic/drop_verdict.h"
 #include "warnings.h"
 #include "common/perf_timer.h"
 #include "crypto/hash.h"
@@ -208,7 +209,7 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   //---------------------------------------------------------------------------------
-  tx_memory_pool::tx_memory_pool(Blockchain& bchs): m_blockchain(bchs), m_cookie(0), m_txpool_max_weight(DEFAULT_TXPOOL_MAX_WEIGHT), m_txpool_weight(0), m_mine_stem_txes(false), m_next_check(std::time(nullptr))
+  tx_memory_pool::tx_memory_pool(Blockchain& bchs): m_blockchain(bchs), m_cookie(0), m_txpool_max_weight(DEFAULT_TXPOOL_MAX_WEIGHT), m_txpool_weight(0), m_mine_relayable_txes(false), m_next_check(std::time(nullptr))
   {
     // class code expects unsigned values throughout
     if (m_next_check < time_t(0))
@@ -237,7 +238,7 @@ namespace cryptonote
     {
       LOG_PRINT_L1("transaction " << id << " failed non-input consensus rule checks");
       tvc.m_verifivation_failed = true; // should already be set, but just in case
-      return false;
+      return reject_form(tvc);
     }
 
     uint64_t fee;
@@ -249,13 +250,23 @@ namespace cryptonote
       fee = get_tx_fee(tx);
       fee_good = kept_by_block || m_blockchain.check_fee(tx_weight, fee);
     }
-    catch(...) {}
-    if (!fee_good) // if fee calculation failed or fee in relayed tx is too low...
+    catch (const std::exception &e)
+    {
+      MERROR("internal error computing tx fee: " << e.what());
+      tvc.m_verifivation_failed = true;
+      return reject_internal(tvc);
+    }
+    catch (...)
+    {
+      MERROR("internal error computing tx fee");
+      tvc.m_verifivation_failed = true;
+      return reject_internal(tvc);
+    }
+    if (!fee_good) // if fee in relayed tx is too low...
     {
       tvc.m_verifivation_failed = true;
       tvc.m_fee_too_low = true;
-      tvc.m_no_drop_offense = true;
-      return false;
+      return reject_state(tvc);
     }
 
     size_t tx_extra_size = tx.extra.size();
@@ -264,8 +275,7 @@ namespace cryptonote
       LOG_PRINT_L1("transaction tx-extra is too big: " << tx_extra_size << " bytes, the limit is: " << MAX_TX_EXTRA_SIZE);
       tvc.m_verifivation_failed = true;
       tvc.m_tx_extra_too_big = true;
-      tvc.m_no_drop_offense = true;
-      return false;
+      return reject_state(tvc);
     }
 
     if (!kept_by_block && tx.unlock_time)
@@ -273,8 +283,7 @@ namespace cryptonote
       LOG_PRINT_L1("transaction unlock time is not zero: " << tx.unlock_time);
       tvc.m_verifivation_failed = true;
       tvc.m_nonzero_unlock_time = true;
-      tvc.m_no_drop_offense = true;
-      return false;
+      return reject_state(tvc);
     }
 
     // if the transaction came from a block popped from the chain,
@@ -288,8 +297,7 @@ namespace cryptonote
         LOG_PRINT_L1("Transaction with id= "<< id << " used already spent key images");
         tvc.m_verifivation_failed = true;
         tvc.m_double_spend = true;
-        tvc.m_no_drop_offense = true;
-        return false;
+        return reject_state(tvc);
       }
     }
 
@@ -335,7 +343,7 @@ namespace cryptonote
           CRITICAL_REGION_LOCAL1(m_blockchain);
           LockedTXN lock(m_blockchain.get_db());
           if (!insert_key_images(tx, id, tx_relay))
-            return false;
+            return reject_internal(tvc);
 
           m_blockchain.add_txpool_tx(id, blob, meta);
           add_tx_to_transient_lists(id, fee / (double)(tx_weight ? tx_weight : 1), receive_time);
@@ -344,7 +352,7 @@ namespace cryptonote
         catch (const std::exception &e)
         {
           MERROR("Error adding transaction to txpool: " << e.what());
-          return false;
+          return reject_internal(tvc);
         }
         tvc.m_verifivation_impossible = true;
         tvc.m_added_to_pool = true;
@@ -494,7 +502,7 @@ namespace cryptonote
           }
 
           if (!insert_key_images(tx, id, tx_relay))
-            return false;
+            return reject_internal(tvc);
 
           m_blockchain.remove_txpool_tx(id);
           m_blockchain.add_txpool_tx(id, blob, meta);
@@ -506,7 +514,7 @@ namespace cryptonote
       catch (const std::exception &e)
       {
         MERROR("internal error: error adding transaction to txpool: " << e.what());
-        return false;
+        return reject_internal(tvc);
       }
 
       /* Q12-U2 removed the `tx_relay != relay_method::forward` conjunct that
@@ -2082,13 +2090,28 @@ namespace cryptonote
       }
       LOG_PRINT_L2("Considering " << sorted_it->second << ", weight " << meta.weight << ", current block weight " << total_weight << "/" << max_total_weight << ", current coinbase " << print_money(best_coinbase) << ", relay method " << (unsigned)meta.get_relay_method());
 
-      // Broadcast-visible only, plus the operator's opt-in for own stems.
-      // This site asked the deleted `relay_category::legacy`, which also
-      // admitted `relay_method::none` -- mining a transaction whose whole
-      // meaning is "do not put this on the network". Unreachable in practice
-      // (nothing production-writes `none`), wrong on its face, and the reason
-      // the category went rather than being renamed.
-      if (!meta.matches(relay_category::broadcasted) && !(m_mine_stem_txes && meta.get_relay_method() == relay_method::stem))
+      // Broadcast-visible only, plus the FAKECHAIN opt-in for anything
+      // relayable. The opt-in (m_mine_relayable_txes, set from
+      // `m_nettype == FAKECHAIN` at init) exists so a single regtest node
+      // deterministically mines its own submissions: a typed-submit tx sits at
+      // `relay_method::local` under the Dandelion++ embargo
+      // (DAEMON_SUBMIT_VERDICT.md §5.2), so gating the template on
+      // `broadcasted` alone makes inclusion race the embargo/fluff timer --
+      // the e2e wallet gate caught exactly that flake. On mainnet the flag is
+      // off and embargoed own-txs stay out of own templates (mining an
+      // unfluffed self-tx is an origin fingerprint). The earlier shape of the
+      // opt-in admitted only `relay_method::stem` -- a peer's stem being
+      // relayed through us, which a peerless regtest node never holds -- and
+      // missed `local`, the only pre-broadcast method regtest produces.
+      //
+      // `relayable` (method != none) is the widest correct set: this site once
+      // asked the deleted `relay_category::legacy`, which also admitted
+      // `relay_method::none` -- mining a transaction whose whole meaning is
+      // "do not put this on the network". Unreachable in practice (nothing
+      // production-writes `none`), wrong on its face, and the reason the
+      // category went rather than being renamed. `relayable` keeps `none`
+      // excluded under the opt-in too.
+      if (!meta.matches(relay_category::broadcasted) && !(m_mine_relayable_txes && meta.matches(relay_category::relayable)))
       {
         LOG_PRINT_L2("  tx relay method is " << (unsigned)meta.get_relay_method());
         continue;
@@ -2336,7 +2359,7 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   //---------------------------------------------------------------------------------
-  bool tx_memory_pool::init(size_t max_txpool_weight, bool mine_stem_txes)
+  bool tx_memory_pool::init(size_t max_txpool_weight, bool mine_relayable_txes)
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
@@ -2394,7 +2417,7 @@ namespace cryptonote
       lock.commit();
     }
 
-    m_mine_stem_txes = mine_stem_txes;
+    m_mine_relayable_txes = mine_relayable_txes;
     m_cookie = 0;
 
     // Ignore deserialization error

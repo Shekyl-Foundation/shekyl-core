@@ -366,7 +366,14 @@ int main(int argc, char const * argv[])
         // --rpc-ssl* flags are not registered for shekyld. Remote/authenticated
         // access is fronted by an onion service or reverse proxy outside the
         // daemon (docs/DAEMON_RPC_RUST.md).
-        daemonize::t_command_server rpc_commands{rpc_ip, rpc_port};
+        // `net_type` is this process's network, from the same flags the daemon
+        // parses. It is the console's half of the VC-2 identity handshake.
+        const cryptonote::network_type console_nettype =
+          testnet ? cryptonote::TESTNET
+          : stagenet ? cryptonote::STAGENET
+          : regtest ? cryptonote::FAKECHAIN
+          : cryptonote::MAINNET;
+        daemonize::t_command_server rpc_commands{rpc_ip, rpc_port, console_nettype};
         if (rpc_commands.process_command_vec(command))
         {
           // A recognized command that could not get its answer from the

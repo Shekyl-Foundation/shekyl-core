@@ -125,7 +125,7 @@ at close):
 - The **persisted bond record is the reboot-surviving posture marker**:
   `persist_bond_record` writes it durably at the W2 point. The record's
   holdings kind IS the posture; it changes only through consensus lifecycle
-  (Unbond, slash-demotion) — never through a local setting. No pref exists or
+  (Release, slash-demotion) — never through a local setting. No pref exists or
   is wanted: a pref would be a second, locally-editable home for a fact the
   chain owns (the superseded serve-time pref's flaw).
 - **F-3 — RETRACTED (R5).** The R3 finding claimed `start_serving_if_staker`
@@ -239,14 +239,14 @@ stale summary would silently omit owed shards, is the one that earns its
 keep). A production enumeration authority would be a second representation of
 one fact, which is what D-1 rejected.
 
-**Q-5 — No serve-time off-switch: confirmed deliberate; the exit is Unbond.**
-*(Ruled 2026-08-15, R3; verified at source.)* `verify_unbond_bond_post`
-(`bond_post.rs:571-586`) is holdings-kind-blind: a CompleteTree record unbonds
+**Q-5 — No serve-time off-switch: confirmed deliberate; the exit is Release.**
+*(Ruled 2026-08-15, R3; verified at source.)* `verify_release_bond_post`
+(`bond_post.rs:571-586`) is holdings-kind-blind: a CompleteTree record releases
 under the same rules as any P. **Serving follows the bond**: bonded means
-serving; wanting out means ending the obligation itself via Unbond;
+serving; wanting out means ending the obligation itself via Release;
 un-serving *while bonded* is the §9.6-item-4 silent-slash state and
 deliberately has no switch (the superseded serve-time pref was that switch).
-Named residue: the prune-disabled flag survives unbond (one-way), so a former
+Named residue: the prune-disabled flag survives release (one-way), so a former
 foundation node's store retains everything after a clean exit —
 over-retention, conservative, harmless; the clear-path reopen criterion on the
 setter owns it.
@@ -286,7 +286,7 @@ unreachable; the snapshot shape is ratified.** `ServingHandle` holds only
 consumer — refreshed at each pin and cleared on teardown. Semantics: the field
 is the *serving* truth; absent renders "not serving". Pinned trap: deriving
 posture from `prune_disabled` would report `foundation` forever after an
-Unbond (the Q-5 residue misread as state).
+Release (the Q-5 residue misread as state).
 
 **AF-5 (Task-4 halt, ruled R6) — both halves resolve; the dependency half is
 withdrawn.** `rustix = { version = "1", features = ["fs"] }` is already a
@@ -392,12 +392,12 @@ corrected.
    path (a foundation node un-declaring its posture while holding a live bond
    is the §9.6-item-4 silent-slash setup). Named reopen criterion recorded on
    the setter (rule 21).
-   **The clean exit is Unbond** (Q-5) — `verify_unbond_bond_post` is
+   **The clean exit is Release** (Q-5) — `verify_release_bond_post` is
    holdings-kind-blind (`bond_post.rs:571-586`), so a CompleteTree record
-   unbonds under exactly the rules every other P does. There is deliberately
+   releases under exactly the rules every other P does. There is deliberately
    no way to stop serving while *remaining* bonded: that state is the silent
    slash this round exists to make unreachable. **Residue, accepted and
-   named:** the prune-disabled flag survives the unbond, so a former
+   named:** the prune-disabled flag survives the release, so a former
    foundation node's store keeps retaining everything after a clean exit. That
    is over-retention — it costs disk and nothing else — and it fails in the
    conservative direction, which is the same asymmetry §9.7 item 5 rules for

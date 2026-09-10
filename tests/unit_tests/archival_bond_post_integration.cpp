@@ -328,7 +328,7 @@ TEST(archival_bond_post, ffi_maps_each_bond_post_error_code)
   EXPECT_EQ(verify(0, 0, &shard, 1, floor, floor, 0, 1), SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS);
 
   // §9.11 coupling at the shared vin marshaler: JoinMarket without a key (or
-  // with a truncated one) refuses, as does an Unbond carrying any key.
+  // with a truncated one) refuses, as does a Release carrying any key.
   EXPECT_EQ(shekyl_archival_verify_join_market_bond_post(
       0, 0, &shard, 1, nullptr, 0, floor, floor, 0, 0),
     SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING);
@@ -337,8 +337,8 @@ TEST(archival_bond_post, ffi_maps_each_bond_post_error_code)
     SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING);
   EXPECT_EQ(verify(1, 0, &shard, 1, floor, floor, 0, 0),
     SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING);
-  EXPECT_EQ(shekyl_archival_verify_unbond_bond_post(
-      static_cast<uint8_t>(archival_bond_post_kind::Unbond), 0, nullptr, 0,
+  EXPECT_EQ(shekyl_archival_verify_release_bond_post(
+      static_cast<uint8_t>(archival_bond_post_kind::Release), 0, nullptr, 0,
       spend_pk.data(), spend_pk.size(), 0, 0, floor, 1, floor, 0, nullptr, 0,
       UINT64_MAX, 0),
     SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING);
@@ -383,13 +383,13 @@ shekyl::db::ArchivalBondValue exited_candidate_record(
   return record;
 }
 
-txin_archival_bond_post full_unbond_vin(const std::vector<uint8_t>& identity_pk,
+txin_archival_bond_post full_release_vin(const std::vector<uint8_t>& identity_pk,
   const crypto::hash& p_id)
 {
   txin_archival_bond_post bond{};
   bond.hybrid_public_key = identity_pk;
   bond.p_canonical_id = p_id;
-  bond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+  bond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
   bond.holdings.kind = archival_holdings_kind::ShardSetCompact;
   bond.bonded_total_atomic = 0;
   bond.bond_credit = 0;
@@ -399,7 +399,7 @@ txin_archival_bond_post full_unbond_vin(const std::vector<uint8_t>& identity_pk,
 
 } // namespace
 
-TEST(archival_bond_post, gf1_unbond_auth_discriminates_on_committed_key)
+TEST(archival_bond_post, gf1_release_auth_discriminates_on_committed_key)
 {
   const Gate4Kat kat = load_gate4_kat();
   txin_archival_bond_post join = load_join_bond_vin(kat.join_wire_hex);
@@ -412,10 +412,10 @@ TEST(archival_bond_post, gf1_unbond_auth_discriminates_on_committed_key)
   db->put_bond(p_id, exited_candidate_record(identity_pk, committed));
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  const txin_archival_bond_post bond = full_unbond_vin(identity_pk, p_id);
+  const txin_archival_bond_post bond = full_release_vin(identity_pk, p_id);
   const uint64_t h = bap.bc.get_current_blockchain_height();
 
-  // The committed debit authorizer accepts — Unbond verifies end-to-end.
+  // The committed debit authorizer accepts — Release verifies end-to-end.
   EXPECT_TRUE(bap.bc.check_archival_bond_post_input(bond, committed, h));
   // The identity key NEVER authorizes a value-out (GF-1 identity-only).
   EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, identity_pk, h));
@@ -423,7 +423,7 @@ TEST(archival_bond_post, gf1_unbond_auth_discriminates_on_committed_key)
   EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, foreign, h));
 }
 
-TEST(archival_bond_post, gf1_unbond_rejects_record_without_committed_key)
+TEST(archival_bond_post, gf1_release_rejects_record_without_committed_key)
 {
   // A record committing no bond_spend_pk (pre-GF-1 shape) authorizes
   // nothing: fail closed, never an identity-key fallback.
@@ -436,7 +436,7 @@ TEST(archival_bond_post, gf1_unbond_rejects_record_without_committed_key)
   db->put_bond(p_id, exited_candidate_record(identity_pk, {}));
   BlockchainAndPool bap;
   ASSERT_TRUE(init_blockchain(bap.bc, db.release()));
-  const txin_archival_bond_post bond = full_unbond_vin(identity_pk, p_id);
+  const txin_archival_bond_post bond = full_release_vin(identity_pk, p_id);
   const uint64_t h = bap.bc.get_current_blockchain_height();
 
   EXPECT_FALSE(bap.bc.check_archival_bond_post_input(bond, identity_pk, h));

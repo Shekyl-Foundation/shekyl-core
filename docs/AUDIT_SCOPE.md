@@ -325,7 +325,7 @@ Do not audit or implement that surface.
 
 Living staking review targets are archival:
 
-- Bond post / join-Market / Unbond: [`design/ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
+- Bond post / join-Market / Release: [`design/ARCHIVAL_BOND_GATE4.md`](design/ARCHIVAL_BOND_GATE4.md)
 - Reward emission vin: [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md), [`design/REWARD_EMISSION_VIN_PLAN.md`](design/REWARD_EMISSION_VIN_PLAN.md)
 - Wallet FSM: [`design/PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md), [`design/PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md)
 - Mechanism overview: [`V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md)

@@ -16,7 +16,7 @@ use shekyl_p_host::{
     HostError, PersonaServing, PersonaServingHost, PinError, PinnedServeSet, ServeObligation,
     ServeSetPinner, StalenessBound,
 };
-use shekyl_tor::service::TorServiceConfig;
+use shekyl_tor_control_wallet::service::WalletTorControlConfig;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -131,7 +131,7 @@ impl ServingConfig {
 /// as "not serving" rather than as either posture.
 ///
 /// **Do not reconstruct this from the store's prune-disabled flag.** That
-/// flag is one-way and survives Unbond (Q-5's named residue), so a former
+/// flag is one-way and survives Release (Q-5's named residue), so a former
 /// foundation node would report `FoundationCompleteTree` forever — a
 /// retention fact misread as a posture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,7 +243,7 @@ impl Drop for ServingHandle {
 /// and released on exit, so a second `start_serving_if_staker` cannot publish
 /// a second onion against the same identity and Tor data directory.
 pub(crate) fn spawn_serving_task<P>(
-    tor: TorServiceConfig,
+    tor: WalletTorControlConfig,
     serving: PersonaServing,
     pinner: P,
     alarms: Arc<OperatorAlarms>,
@@ -314,7 +314,7 @@ struct ServingSetup {
 }
 
 async fn run_serving_task<P>(
-    tor: TorServiceConfig,
+    tor: WalletTorControlConfig,
     serving: PersonaServing,
     pinner: P,
     reporters: ServingReporters,
@@ -514,7 +514,7 @@ fn count(members: usize) -> u32 {
 /// Start the host, reporting whichever condition prevented it.
 ///
 /// **One attempt per start call, deliberately.** `PersonaServingHost::start`
-/// consumes its inputs by value — the `TorServiceConfig` carries an `EventSink`
+/// consumes its inputs by value — the `WalletTorControlConfig` carries an `EventSink`
 /// and the wallet-private data-dir path — so a retry *here* would have to
 /// rebuild them, and this task is not the thing that knows how: a loop in this
 /// function could only silently rebuild a *different* config from the one the
@@ -526,7 +526,7 @@ fn count(members: usize) -> u32 {
 /// wallet-reopen remedy this ruling once named is retired by that leg; the
 /// one-attempt-per-call shape it ruled stays.
 async fn start_host<P>(
-    tor: TorServiceConfig,
+    tor: WalletTorControlConfig,
     serving: PersonaServing,
     pinner: P,
     alarms: &OperatorAlarms,
@@ -622,12 +622,12 @@ mod lifecycle_tests {
     use shekyl_curve_tree::{BlockHeight, LeafStore, ServingReader};
     use shekyl_operator_alarm::{AlarmCondition, Arming, ConditionState, DisarmedReason};
     use shekyl_p_host::PinReport as HostPinReport;
-    use shekyl_tor::onion_identity::OnionIdentity;
+    use shekyl_tor_control_wallet::service::OnionIdentity;
 
     use crate::engine::refresh::RefreshSlot;
 
     /// A pinner over a real (empty) store. An empty serve-set is a legitimate
-    /// production state — an unbonded persona reports exactly this — so the
+    /// production state — a released persona reports exactly this — so the
     /// lifecycle can be driven end to end without fabricating segments.
     struct EmptySetPinner {
         store: Arc<LeafStore>,
@@ -660,16 +660,16 @@ mod lifecycle_tests {
     /// A tor config whose binary cannot pass the hash gate. `start` returns as
     /// soon as the supervisor is spawned (it does not await readiness), so this
     /// drives a *successful* host start without a real tor.
-    fn churning_tor(dir: &tempfile::TempDir) -> TorServiceConfig {
+    fn churning_tor(dir: &tempfile::TempDir) -> WalletTorControlConfig {
         let bogus = dir.path().join("not-tor");
         std::fs::write(&bogus, b"not a tor binary").expect("write");
-        TorServiceConfig {
-            binary: shekyl_tor::service::TorBinarySource::At(bogus),
+        WalletTorControlConfig {
+            binary: shekyl_tor_control_wallet::service::TorBinarySource::At(bogus),
             data_dir: dir.path().join("data"),
-            events: shekyl_tor::control::EventSink::unsubscribed(),
-            policy: shekyl_tor::service::SupervisorPolicy::default(),
+            events: shekyl_tor_control_wallet::service::EventSink::unsubscribed(),
+            policy: shekyl_tor_control_wallet::service::SupervisorPolicy::default(),
             disable_network: true,
-            posture: shekyl_tor::service::ServingPosture::Client,
+            posture: shekyl_tor_control_wallet::service::ServingPosture::Client,
         }
     }
 

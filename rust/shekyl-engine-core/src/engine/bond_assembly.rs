@@ -441,7 +441,7 @@ pub(crate) struct FundingSelection {
 /// (`FCMP_MAX_INPUTS_PER_TX`, `blockchain.cpp`) bounds `tx.vin.size()` —
 /// the WHOLE vin — and every retention-family tx this sweep funds carries
 /// exactly one vin that is not a funding spend: the bond post's bond vin,
-/// the exit's `Unbond` vin, the claim's emission vin. A selection of
+/// the exit's `Release` vin, the claim's emission vin. A selection of
 /// `MAX_INPUTS` funding records therefore assembles a `MAX_INPUTS + 1`-vin
 /// transaction — accepted on FAKECHAIN (the C++ cap is gated off there, so
 /// no regtest walk can observe the boundary) and rejected on every public
@@ -593,12 +593,12 @@ pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
 /// vin's `write`/`read` coupling guarantees a JoinMarket vin carries a
 /// canonical-length key.
 ///
-/// **`Unbond` was added here by PR-P4**, and the refusal it replaced is worth
+/// **`Release` was added here by PR-P4**, and the refusal it replaced is worth
 /// recording: this function used to reject every non-JoinMarket kind with "has
 /// no wallet-side producer yet". That was true when it was written and its own
 /// doc called it *drift rather than a decided posture* — the gap was the
-/// missing producer, not consensus, which has given `Unbond` a full
-/// allowed-terms row with implemented verify since #303. `build_unbond_vin` is
+/// missing producer, not consensus, which has given `Release` a full
+/// allowed-terms row with implemented verify since #303. `build_release_vin` is
 /// that producer, so the premise is discharged for this one kind.
 ///
 /// `Rebond` and `HoldingsUpdate` still refuse, and now say so by name rather
@@ -610,8 +610,8 @@ pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
 /// The §9.11 coupling is enforced in both directions, not assumed. Only
 /// JoinMarket carries `bond_spend_pk` on the wire; a debit authorizes against
 /// the record's **committed** copy (`archival_debit_auth_pin`), and consensus
-/// rejects an `Unbond` vin that brings a key along — "vin carries a
-/// bond_spend_pk (JoinMarket-coupled field)". So the `Unbond` arm refuses a
+/// rejects a `Release` vin that brings a key along — "vin carries a
+/// bond_spend_pk (JoinMarket-coupled field)". So the `Release` arm refuses a
 /// non-empty key here rather than dropping it on the floor: silently discarding
 /// it would turn a construction bug into a transaction that looks fine locally
 /// and is rejected by every node.
@@ -620,23 +620,23 @@ pub(crate) fn wire_bond_post_input(vin: &ArchivalBondPostVin) -> Result<Input, B
         RetentionBondPostKind::JoinMarket => WireBondPostKind::JoinMarket {
             bond_spend_pk: vin.bond_spend_pk.clone(),
         },
-        RetentionBondPostKind::Unbond => {
+        RetentionBondPostKind::Release => {
             if !vin.bond_spend_pk.is_empty() {
                 return Err(BondAssemblyError::build(
                     "wire bond-post mapping",
-                    "Unbond vin carries a bond_spend_pk; the debit authorizer is \
+                    "Release vin carries a bond_spend_pk; the debit authorizer is \
                      the record's committed key, never one the vin brings along \
                      (§9.11 — consensus rejects this input)",
                 ));
             }
-            WireBondPostKind::Other(RetentionBondPostKind::Unbond as u8)
+            WireBondPostKind::Other(RetentionBondPostKind::Release as u8)
         }
         other => {
             return Err(BondAssemblyError::build(
                 "wire bond-post mapping",
                 format!(
                     "post kind {other:?} has no wallet-side producer yet; \
-                     JoinMarket and Unbond can be assembled"
+                     JoinMarket and Release can be assembled"
                 ),
             ));
         }

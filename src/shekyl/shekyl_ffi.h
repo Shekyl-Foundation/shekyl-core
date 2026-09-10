@@ -1522,12 +1522,16 @@ void shekyl_daemon_ctl_free(uint8_t* ptr, size_t len);
 ///   else NULL. Exactly one of the two is set.
 /// out_ptr / out_len: on OK the text to print, on ERR_REQUEST the reason;
 ///   release with shekyl_daemon_ctl_free.
+// `nettype` is the CALLING process's network (cryptonote::network_type), for
+// the VC-2 identity handshake on the remote arm. Read by nothing on the live
+// arm, where every axis would compare a value to itself.
 int32_t shekyl_daemon_console_run(
     const char* const* argv,
     size_t argc,
     void* rpc_server_ptr,
     const char* address,
     uint64_t timeout_secs,
+    uint8_t nettype,
     uint8_t** out_ptr,
     size_t* out_len);
 
@@ -1597,6 +1601,8 @@ static_assert(offsetof(struct shekyl_archival_verify_ctx, segment_leaf_count) ==
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE      14
 /// PC-D3: ctx.prev_block_hash was the all-zero unpopulated sentinel.
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED 15
+/// PWD-B7: drop verdict for a shekyl_archival_verify_serve_credit_vin error code.
+uint8_t shekyl_archival_verify_drop_verdict(uint8_t code);
 
 /// Empty-set archival attestation root (`attestation_root(&[])`). Writes 32
 /// bytes to `out_ptr`. Returns true on success. Not the all-zero null hash —
@@ -1888,7 +1894,7 @@ uint8_t shekyl_check_commitment_masks(
 // JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++).
 // Codes 1 (NULL_PTR), 19 (LEN_OVERFLOW), and 23 (BOND_SPEND_PK_COUPLING) are shared
 // vin-marshaling guards from the common vin marshaler, so BOTH bond-post entry points
-// can return them: JoinMarket returns 0-10, 19, or 23; Unbond additionally returns
+// can return them: JoinMarket returns 0-10, 19, or 23; Release additionally returns
 // 11-18 and 20-22.
 #define SHEKYL_ARCHIVAL_BOND_POST_OK                           0
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR                 1
@@ -1945,6 +1951,8 @@ uint64_t shekyl_archival_last_settled_epoch_as_of_parent(uint64_t parent_height)
 /// NUL-terminated static reason for an admission code (do not free). Distinguishes
 /// marshal failures from the below-floor verdict.
 const char* shekyl_archival_admission_err_string(uint8_t code);
+/// PWD-B7: drop verdict for a shekyl_archival_check_bond_admission error code.
+uint8_t shekyl_archival_admission_drop_verdict(uint8_t code);
 
 /// Refuse a bond whose holdings credit no work: admission runs the SAME chain
 /// that pays (shard_work_micro -> work_milli_from_micro).
@@ -1972,21 +1980,21 @@ uint8_t shekyl_archival_check_bond_admission(
     size_t has_segment_len,
     uint64_t parent_height);
 
-// Unbond bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
+// Release bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
 // P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18,
-// 20, 21, and 22 are Unbond-semantic; 19 (LEN_OVERFLOW) and 23
+// 20, 21, and 22 are Release-semantic; 19 (LEN_OVERFLOW) and 23
 // (BOND_SPEND_PK_COUPLING) are shared vin-marshaling guards returned by both
 // entry points (see the JoinMarket block above).
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND    11
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE    11
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING          12
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND       13
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_CREDIT           14
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH   15
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND         16
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE       13
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_CREDIT           14
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_FLOOR_MISMATCH   15
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_RELEASE         16
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL          17
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED    18
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW            19
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY 20
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_HOLDINGS_NOT_EMPTY 20
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL       21
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING 22
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING  23
@@ -2043,7 +2051,7 @@ uint8_t shekyl_archival_check_bond_admission(
 // at the same ShardSet::new boundary as the count cap — "a set on the wire").
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD 48
 
-/// Unbond bond-post verify. `record_exists`/`record_bonded_total`/
+/// Release bond-post verify. `record_exists`/`record_bonded_total`/
 /// `record_bad_interval_count` come from the LMDB bond record;
 /// `per_shard_last_served_ptr` is the array of the served shards' last-served
 /// settlement epochs (never-served shards omitted; for a CompleteTree record,
@@ -2054,11 +2062,11 @@ uint8_t shekyl_archival_check_bond_admission(
 /// every epoch through the anchor is slash-settled, closing the one-block
 /// connect-ordering race (add_transaction runs before
 /// process_archival_slash_at_height in add_block). `current_settlement_epoch`
-/// is the epoch the Unbond lands in. A record whose interval log is at the
+/// is the epoch the Release lands in. A record whose interval log is at the
 /// codec cap rejects (INTERVAL_LOG_FULL): the connect's clean interval-close
 /// could not append, and a verified-but-unconnectable tx would be a
 /// deterministic halt.
-uint8_t shekyl_archival_verify_unbond_bond_post(
+uint8_t shekyl_archival_verify_release_bond_post(
     uint8_t post_kind,
     uint8_t holdings_kind,
     const uint64_t* shard_ids_ptr,
@@ -2078,7 +2086,7 @@ uint8_t shekyl_archival_verify_unbond_bond_post(
 
 // Fold the served shards' last-served epochs into the whole-record
 // release-cooldown anchor -- the SAME fold
-// `shekyl_archival_verify_unbond_bond_post` applies internally, exported so a
+// `shekyl_archival_verify_release_bond_post` applies internally, exported so a
 // marshaling caller reports the anchor instead of deriving a second one in C++.
 //
 // `out_present` is written 1 with the anchor in `out_epoch`, or 0 with
@@ -2090,7 +2098,7 @@ uint8_t shekyl_archival_verify_unbond_bond_post(
 // permissive branch. Epoch 0 is a real settlement epoch; only the flag
 // separates it from "never served".
 //
-// Callers gather the slice exactly as the Unbond verify arm does: the record's
+// Callers gather the slice exactly as the Release verify arm does: the record's
 // held shards for a compact set, the all-shards P-prefix scan for a
 // complete-tree record (which stores no shard list); never-served shards are
 // omitted by the DB accessors, so an empty slice is the legitimate
@@ -2122,7 +2130,7 @@ uint8_t shekyl_archival_last_served_scan(
 // no canonical-length key authorizes NOTHING -- fail closed, no identity-key
 // fallback.
 //
-// SELECTOR: bond_debit > 0, NOT the post kind. Consumers are Unbond and the
+// SELECTOR: bond_debit > 0, NOT the post kind. Consumers are Release and the
 // DROP arm of HoldingsUpdate. Rebond and HoldingsUpdate-add are credit paths
 // (bond_debit == 0) that consensus authorizes with the identity key -- do
 // not call this for them, or a legitimate credit is rejected: keying on kind
@@ -2133,35 +2141,37 @@ uint8_t shekyl_archival_last_served_scan(
 // submit path cannot drift on this predicate.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY 49
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH  50
+/// PWD-B7: drop verdict for a shekyl_archival_verify_*_bond_post error code.
+uint8_t shekyl_archival_bond_post_drop_verdict(uint8_t code);
 uint8_t shekyl_archival_debit_auth_pin(
     const uint8_t* record_bond_spend_pk_ptr,
     size_t record_bond_spend_pk_len,
     const uint8_t* auth_pubkey_ptr,
     size_t auth_pubkey_len);
 
-// Unbond block-connect fold + pop twin (gate-4 §4.3 "On confirm" / §5;
+// Release block-connect fold + pop twin (gate-4 §4.3 "On confirm" / §5;
 // PHASE_2B_FSM_RETOOL.md P2B-8 implementation locus). The C++ connect arm owns
 // the LMDB write txn and writes EXACTLY what the out-params dictate; no
 // consensus arithmetic caller-side. Non-OK codes are connect-time invariant
 // breaches / pop-time journal desyncs — the caller maps them to a FATAL abort
 // (the emission-connect posture), never a soft skip.
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_OK                          0
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR                1
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_OK                          0
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_NULL_PTR                1
 // Code 2 (LEN_OVERFLOW) is retired: the connect fold takes the record's held
 // shard COUNT, not a pointer/length pair, so no slice marshal exists to guard.
 // The value stays reserved so the family's codes never renumber.
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_HOLDINGS_KIND           3
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_ZERO              4
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL  5
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT  6
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_UNDERFLOW  7
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_INTERVAL_LOG_FULL       8
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_NOT_EXITED       9
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_MISSING_CLEAN_CLOSE    10
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_PRE_IMAGE_EMPTY        11
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_OVERFLOW  12
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_HOLDINGS_KIND           3
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_DEBIT_ZERO              4
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL  5
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_FLOOR_INVARIANT  6
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_UNDERFLOW  7
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_INTERVAL_LOG_FULL       8
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_NOT_EXITED       9
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_MISSING_CLEAN_CLOSE    10
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_PRE_IMAGE_EMPTY        11
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_OVERFLOW  12
 
-/// Unbond connect fold: record inputs are the record's CURRENT state (before
+/// Release connect fold: record inputs are the record's CURRENT state (before
 /// the release); the outs are the full post-connect write set — record becomes
 /// post_bonded_total/post_holdings_kind with post_held_shard_count (always 0)
 /// shard ids, the clean interval-close [start, end) is APPENDED to the record's
@@ -2171,15 +2181,15 @@ uint8_t shekyl_archival_debit_auth_pin(
 /// write here — bond_debit is the CT-balance source term on the wire. The
 /// record's holdings arrive as (kind, held shard count) — the fold's floor
 /// invariant never reads shard-id values, so no shard-id array crosses the FFI
-/// (the shekyl_archival_unbond_pop shape).
-uint8_t shekyl_archival_unbond_connect(
+/// (the shekyl_archival_release_pop shape).
+uint8_t shekyl_archival_release_connect(
     uint64_t record_bonded_total,
     uint8_t record_holdings_kind,
     uint64_t record_held_shard_count,
     size_t record_bad_interval_count,
     uint64_t vin_bond_debit,
     uint64_t total_bonded_atomic,
-    uint64_t unbond_settlement_epoch,
+    uint64_t release_settlement_epoch,
     uint64_t* post_bonded_total_out,
     uint8_t* post_holdings_kind_out,
     uint64_t* post_held_shard_count_out,
@@ -2191,7 +2201,7 @@ uint8_t shekyl_archival_unbond_connect(
 /// bond-post vin per P_canonical_id per block (gate-4 §3.5; the
 /// shekyl_emission_block_claims_unique sibling, keyed on P alone). Per-tx
 /// verify runs against pre-block DB state, so every same-P same-block pair
-/// (JoinMarket+JoinMarket double-credit, Unbond+Unbond double-debit, mixed
+/// (JoinMarket+JoinMarket double-credit, Release+Release double-debit, mixed
 /// kinds) passes it independently; this pass — run once per block over every
 /// bond-post vin's P_canonical_id, before connect — is the layer that REJECTS
 /// the block. The §4.5 conservation audit is NOT a backstop (a double-credit
@@ -2202,19 +2212,19 @@ uint8_t shekyl_archival_bond_post_block_unique(
     const uint8_t* ids_ptr,
     size_t num_ids);
 
-/// Unbond pop twin: validates the tip record is the connect's product (Exited
-/// state + trailing clean interval-close for unbond_settlement_epoch), then
+/// Release pop twin: validates the tip record is the connect's product (Exited
+/// state + trailing clean interval-close for release_settlement_epoch), then
 /// re-credits total_bonded_atomic with the journaled pre-image balance. The
 /// record fields themselves are restored caller-side as a byte-copy of the
 /// pre-image journal row. `has_trailing_interval` is 0 when the record's
 /// interval log is empty (the trailing start/end operands are then ignored).
-uint8_t shekyl_archival_unbond_pop(
+uint8_t shekyl_archival_release_pop(
     uint64_t current_record_bonded_total,
     uint64_t current_record_held_shard_count,
     uint8_t has_trailing_interval,
     uint64_t trailing_interval_start,
     uint64_t trailing_interval_end,
-    uint64_t unbond_settlement_epoch,
+    uint64_t release_settlement_epoch,
     uint64_t journal_pre_bonded_total,
     uint64_t total_bonded_atomic,
     uint64_t* new_total_bonded_out);
@@ -2222,7 +2232,7 @@ uint8_t shekyl_archival_unbond_pop(
 // HoldingsUpdate verify + connect/pop (gate-4 §4.4). Semantic verify returns the
 // shared SHEKYL_ARCHIVAL_BOND_POST_* space (OK=0, 24-35 HU-semantic, plus the
 // shared marshaling guards); the connect/pop folds return the HU_APPLY family
-// below. As with Unbond, a non-OK apply code is a connect-time invariant breach /
+// below. As with Release, a non-OK apply code is a connect-time invariant breach /
 // pop-time journal desync — the caller maps it to a FATAL abort, never a soft
 // skip.
 #define SHEKYL_ARCHIVAL_HU_APPLY_OK                        0
@@ -2346,7 +2356,7 @@ uint8_t shekyl_archival_holdings_update_pop(
 // Rebond verify + connect/pop (gate-4 §3.4; P2B-9 reinstatement). Semantic
 // verify returns the shared SHEKYL_ARCHIVAL_BOND_POST_* space (OK=0, 37-44
 // Rebond-semantic, plus the shared guards); the connect/pop folds return the
-// REBOND_APPLY family below. As with Unbond/HoldingsUpdate, a non-OK apply code
+// REBOND_APPLY family below. As with Release/HoldingsUpdate, a non-OK apply code
 // is a connect-time invariant breach / pop-time journal desync — the caller
 // maps it to a FATAL abort, never a soft skip.
 #define SHEKYL_ARCHIVAL_REBOND_APPLY_OK                          0
@@ -2788,6 +2798,8 @@ uint8_t shekyl_archival_emission_epoch_work(
 #define SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED        15
 /* Step 8: hybrid auth signature rejected over its Q1 binding message. */
 #define SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED         16
+/// PWD-B7: drop verdict for a shekyl_emission_vin_verify error code.
+uint8_t shekyl_emission_vin_drop_verdict(uint8_t code);
 
 /* Upper bound on settlement_epochs per emission vin — mirrors the Rust wire
  * pin MAX_SETTLEMENT_EPOCHS_PER_EMISSION (emission_wire.rs; the parse rejects
@@ -3718,6 +3730,97 @@ int32_t shekyl_levin_noise_notify(size_t noise_bytes, ShekylBuffer* out);
 int32_t shekyl_levin_fragmented_notify(size_t noise_size, uint32_t command,
                                        const uint8_t* payload, size_t payload_len,
                                        ShekylBuffer* out);
+
+// -- Peer-attribution drop rule (PWD-B7) ------------------------------------
+// Opaque ABI for rust/shekyl-peer-policy::DropVerdict. C++ writes these
+// constants through shekyl_drop_verdict_classify and reads only via the
+// two predicates. Zero does not sever. The gtest searches the byte domain
+// for the severing value rather than restating the discriminants.
+
+#define SHEKYL_DROP_VERDICT_UNCLASSIFIED      0u
+#define SHEKYL_DROP_VERDICT_POLICY_OR_STATE   1u
+#define SHEKYL_DROP_VERDICT_INTERNAL_FAILURE  2u
+#define SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM 3u
+
+bool shekyl_drop_verdict_severs(uint8_t verdict);
+bool shekyl_drop_verdict_is_internal_failure(uint8_t verdict);
+uint8_t shekyl_drop_verdict_combine(uint8_t current, uint8_t incoming);
+//! Fold `incoming` into `slot`. Null `slot` is a no-op (no peer to attribute).
+void shekyl_drop_verdict_classify(uint8_t* slot, uint8_t incoming);
+
+// ---------------------------------------------------------------------------
+// Daemon ephemeral Tor inbound -- PWD-E7 (docs/design/P2P_2_ENDPOINT_ROUND.md)
+// ---------------------------------------------------------------------------
+// The DEFAULT overlay-endpoint posture: the daemon spawns a managed, pinned
+// tor, mints a v3 onion key IN MEMORY, publishes with ADD_ONION Flags=
+// DiscardPK, and uses the returned ServiceID as its per-boot overlay inbound
+// address. The DataDirectory is a unique 0700 subdirectory of the daemon
+// config folder, wiped on teardown -- a restart cannot reuse entry guards.
+// The operator-provisioned stable posture (--anonymous-inbound + torrc) is a
+// different privacy posture, not a different custody of the same thing, and
+// configuring it makes the ephemeral posture yield. All of the posture logic
+// lives in rust/shekyl-tor-control-daemon; these exports are marshaling.
+//
+// These symbols live in shekyl-ffi (linked by every C++ binary that
+// instantiates node_server via SHEKYL_FFI_LINK_LIBS). daemon_image is a
+// superset, so shekyld sees them too. They are not in shekyl-daemon-rpc:
+// that crate is the Axum HTTP server, not the P2P overlay.
+
+#define SHEKYL_DAEMON_TOR_OK                 0
+#define SHEKYL_DAEMON_TOR_ALREADY_RUNNING    1
+#define SHEKYL_DAEMON_TOR_ARG                2
+#define SHEKYL_DAEMON_TOR_NO_BINARY          3
+#define SHEKYL_DAEMON_TOR_BAD_BINARY         4
+#define SHEKYL_DAEMON_TOR_START_FAILED       5
+#define SHEKYL_DAEMON_TOR_NOT_RUNNING        1
+#define SHEKYL_DAEMON_TOR_PUBLISH_FAILED     3
+
+//! Start the managed tor: verify the binary, create a unique wiped
+//! DataDirectory under `data_dir_parent` (the daemon config folder -- never
+//! the DataDirectory itself), bootstrap to 100%, and return its SOCKS
+//! listener. No onion is published yet -- that is shekyl_daemon_tor_publish,
+//! called after the daemon has bound its loopback inbound listener (on an
+//! OS-assigned port; a port guessed before binding could already be taken
+//! and abort init). BLOCKS for the whole sequence (tens of seconds on a
+//! cold bootstrap; bound by bootstrap_timeout_secs plus small constants).
+//! Outputs are NUL-terminated: out_socks_addr (>= 48 bytes; the managed
+//! tor's SOCKS "ip:port" -- the zone's outbound proxy), out_error (>= 256
+//! bytes recommended). Return codes: SHEKYL_DAEMON_TOR_OK; _ALREADY_RUNNING
+//! (refused, not stacked); _ARG; _NO_BINARY (calm skip -- no candidate at
+//! all); _BAD_BINARY (candidate found but unusable: pin mismatch, unpinned
+//! target, unreadable); _START_FAILED (spawn/bootstrap -- incarnation torn
+//! down before return, so a failed start commits the caller to nothing).
+int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir_parent,
+                            uint32_t bootstrap_timeout_secs,
+                            char* out_socks_addr, size_t out_socks_addr_len,
+                            char* out_error, size_t out_error_len);
+
+//! Publish the per-boot v3 onion on the running managed tor (key minted in
+//! memory, ADD_ONION Flags=DiscardPK), forwarding virtual_port (what peers
+//! dial) to 127.0.0.1:local_port (the daemon's already-bound inbound
+//! listener), MaxStreams=max_streams per rendezvous circuit. Outputs are
+//! NUL-terminated: out_service_id (>= 57 bytes; 56-char service id, no
+//! ".onion"), out_error (>= 256 bytes recommended). Returns 0 = published;
+//! 1 = no instance running (start first); 2 = argument error; 3 = publish
+//! failed (detail in out_error). A publish failure leaves tor RUNNING: the
+//! ruled degrade is outbound-only on the zone (keep the SOCKS proxy, serve
+//! no overlay inbound this boot) -- do not abort the daemon.
+int shekyl_daemon_tor_publish(uint16_t virtual_port, uint16_t local_port,
+                              uint16_t max_streams,
+                              char* out_service_id, size_t out_service_id_len,
+                              char* out_error, size_t out_error_len);
+
+//! Is the ephemeral tor still up? false when never started, already shut
+//! down, or died. Per PWD-E7 there is no respawn: a death means the overlay
+//! posture is gone for this boot. The daemon's idle loop polls this and, on
+//! the true->false edge, logs once that overlay inbound is lost and that
+//! originated transactions stay fail-closed on the tor zone.
+bool shekyl_daemon_tor_is_alive(void);
+
+//! Bounded teardown of the ephemeral posture (DEL_ONION, SIGTERM -> wait ->
+//! SIGKILL, reap). Idempotent: true when an instance was running and is now
+//! down, false when there was nothing to stop.
+bool shekyl_daemon_tor_shutdown(void);
 
 } // extern "C"
 

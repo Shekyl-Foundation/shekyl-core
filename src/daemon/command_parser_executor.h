@@ -50,6 +50,7 @@ public:
   t_command_parser_executor(
       uint32_t ip
     , uint16_t port
+    , cryptonote::network_type nettype
     , bool is_rpc
     , cryptonote::core_rpc_server* rpc_server = NULL
     );

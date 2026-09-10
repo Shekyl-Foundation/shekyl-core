@@ -16,7 +16,7 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 shekyl-p-serve = { path = "../shekyl-p-serve" }
 # The onion half: the supervisor, the serving posture (vanguards + onion as one
 # indivisible knob), and the derived serving identity.
-shekyl-tor = { path = "../shekyl-tor" }
+shekyl-tor-control-wallet = { path = "../shekyl-tor-control-wallet" }
 # Same runtime the two halves already use; `sync` for the posture watch this
 # crate re-exports, `time` for the bounded startup wait.
 tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }

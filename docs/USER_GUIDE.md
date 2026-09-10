@@ -528,7 +528,7 @@ timing and funding footguns that matter for your privacy.
   are held, and the wallet raises an operator alarm rather than claiming over
   the remote connection. Remote-daemon claiming arrives with remote-daemon
   support as a whole.
-- **Principal stays liquid.** You can release collateral by unbonding, subject
+- **Principal stays liquid.** You can release collateral by releasing, subject
   to a release cooldown. There is no fixed lock height to wait out.
 
 ### Wallet support today

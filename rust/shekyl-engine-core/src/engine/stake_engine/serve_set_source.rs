@@ -612,7 +612,7 @@ mod tests {
     /// so a wallet that has not bonded yet keeps a witness that describes
     /// reality instead of failing every refresh forever.
     #[tokio::test]
-    async fn an_unbonded_persona_reports_the_empty_set_rather_than_failing() {
+    async fn an_released_persona_reports_the_empty_set_rather_than_failing() {
         let (_dir, curve_tree) = handle();
         let pinner = EngineServeSetPinner::new(curve_tree, daemon(30_001, None), [7; 32]);
 
@@ -626,7 +626,7 @@ mod tests {
             outcomes,
         } = report.set
         else {
-            panic!("an unbonded persona reports the (empty) list arm");
+            panic!("a released persona reports the (empty) list arm");
         };
         assert!(shard_ids.is_empty());
         assert!(outcomes.is_empty());

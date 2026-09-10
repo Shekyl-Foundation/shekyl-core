@@ -87,9 +87,9 @@ pub fn prune_below_epoch_at_height(block_height: u64, max_claim_age_w: u64) -> O
 ///
 /// The log carries **two entry kinds** — do not assume every entry is a slash:
 /// a *bad-standing interval* has `start < end` (a slash opens with
-/// `end_exclusive = u64::MAX`; `Rebond` closes it in place), while the `Unbond`
+/// `end_exclusive = u64::MAX`; `Rebond` closes it in place), while the `Release`
 /// **clean interval-close** is **zero-length** (`start == end`) — a pure exit
-/// marker recording the unbond settlement epoch
+/// marker recording the release settlement epoch
 /// ([`clean_interval_close`](crate::bond_connect::clean_interval_close)). Its
 /// empty range excludes no epoch from [`good_through`] by construction, and
 /// every codec/marshal path deliberately carries `start == end`; never add a

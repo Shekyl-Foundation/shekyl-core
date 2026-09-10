@@ -317,26 +317,26 @@ async fn sweep_halts_and_surfaces_on_a_boundary_mismatch_without_rewinding() {
 }
 
 #[test]
-fn record_unbonds_records_only_unbond_posts() {
+fn record_releases_records_only_release_posts() {
     let p = persona(0);
-    // Drive record_unbonds with the extractor's output shape (the bond-post
+    // Drive record_releases with the extractor's output shape (the bond-post
     // matches a `ScanStepResult` carries), which is what the sweep feeds it.
     let mut accrual = PScanAccrual::genesis();
     let matches = vec![BondPostMatch {
         height: BlockHeight::from_raw(123),
         p_canonical_id: canonical_id(&p),
-        post_kind: UNBOND_POST_KIND,
+        post_kind: RELEASE_POST_KIND,
     }];
-    record_unbonds(&mut accrual, &matches);
+    record_releases(&mut accrual, &matches);
     assert_eq!(
-        accrual.pending_unbonds().get(&canonical_id(&p)),
+        accrual.pending_releases().get(&canonical_id(&p)),
         Some(&SettlementEpoch::from_raw(0)),
-        "an Unbond post at height 123 (epoch 0) is recorded durably"
+        "a Release post at height 123 (epoch 0) is recorded durably"
     );
 
-    // A non-Unbond post is ignored.
+    // A non-Release post is ignored.
     let mut accrual2 = PScanAccrual::genesis();
-    record_unbonds(
+    record_releases(
         &mut accrual2,
         &[BondPostMatch {
             height: BlockHeight::from_raw(1),
@@ -344,12 +344,12 @@ fn record_unbonds_records_only_unbond_posts() {
             post_kind: 0, // JoinMarket
         }],
     );
-    assert!(accrual2.pending_unbonds().is_empty());
+    assert!(accrual2.pending_releases().is_empty());
 }
 
 #[tokio::test]
 async fn dispatch_retires_an_expired_persona_and_dedups_within_session() {
-    // A persona whose Unbond at epoch 0 has fallen out of the claim window:
+    // A persona whose Release at epoch 0 has fallen out of the claim window:
     // settled = W + 1 ⇒ eligible. Build the accrual directly (a real scan to
     // settled = W+1 would be ~270k blocks).
     let p = persona(0);
@@ -409,7 +409,7 @@ async fn dispatch_retires_an_expired_persona_and_dedups_within_session() {
     // that writes the retired-record. "Kept until SP-6 durably removes
     // the persona" has arrived at its removal.
     assert!(
-        !accrual.pending_unbonds().contains_key(&canonical_id(&p)),
+        !accrual.pending_releases().contains_key(&canonical_id(&p)),
         "the corroborated durable prune removes the pending trigger"
     );
     assert_eq!(accrual.retired_pruned_total(), 1, "arm-#2 fire counter");
@@ -472,7 +472,7 @@ async fn dispatch_defers_retire_while_the_slot_holds_unspent_funding() {
         "the funded persona is NOT session-deduped — it is re-checked as draining proceeds"
     );
     assert!(
-        accrual.pending_unbonds().contains_key(&canonical_id(&p)),
+        accrual.pending_releases().contains_key(&canonical_id(&p)),
         "the durable pending trigger survives to re-fire once the funding drains"
     );
     assert!(accrual.retired_records().is_empty());
@@ -517,7 +517,7 @@ async fn durable_prune_defers_when_the_claimed_tip_does_not_corroborate() {
         "the actor wipe still fired on the frontier basis"
     );
     assert!(
-        accrual.pending_unbonds().contains_key(&canonical_id(&p)),
+        accrual.pending_releases().contains_key(&canonical_id(&p)),
         "the durable pending trigger survives to re-fire"
     );
     assert_eq!(accrual.retired_pruned_total(), 0);

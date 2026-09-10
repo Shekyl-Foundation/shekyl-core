@@ -7,7 +7,7 @@
 //! first, and the reason the channel exists before anything serves.
 //!
 //! `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` §3c assigns the split explicitly: "liveness
-//! policy lives in `shekyl-tor` because it is transport policy; the wallet layer
+//! policy lives in `shekyl-tor-control-wallet` because it is transport policy; the wallet layer
 //! consumes posture and owns only the UX mapping (`82`)". This module is that
 //! mapping and nothing else — it decides no retry, no backoff and no
 //! give-up, because §3c already decided all three and there is no give-up state
@@ -36,8 +36,8 @@
 
 use std::sync::Arc;
 
-use shekyl_tor::service::{ServiceFailure, ServiceWarning, TorPosture};
-use shekyl_tor::vanguard_rotation::VanguardsWarning;
+use shekyl_tor_control_wallet::service::{ServiceFailure, ServiceWarning, TorPosture};
+use shekyl_tor_control_wallet::vanguard_rotation::VanguardsWarning;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -47,7 +47,7 @@ use super::{AlarmCondition, DegradedCause, DisarmedReason, OperatorAlarm, Operat
 /// supervisor stops.
 ///
 /// Takes the **receiver**, not the
-/// [`TorService`](shekyl_tor::service::TorService): the mapping is a pure
+/// [`WalletTorControl`](shekyl_tor_control_wallet::service::WalletTorControl): the mapping is a pure
 /// function of published posture, so binding it to a live supervisor would make
 /// it untestable without a verified tor binary on the machine running the test.
 ///
@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn every_service_failure_maps_to_its_own_cause() {
-        use shekyl_tor::control::ControlError;
+        use shekyl_tor_control_wallet::service::ControlError;
         let failures = [
             ServiceFailure::NoSocksListener,
             ServiceFailure::BootstrapTimeout,
