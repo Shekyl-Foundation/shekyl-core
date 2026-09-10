@@ -86,7 +86,8 @@ out of scope — *"that doesn't necessarily include NoiseNN, so that is fine if
 not implemented for alpha.8"* — and that ruling covers the whole transport
 cluster.
 
-**Required (6):** B6 and B10, each removing a wire command — *"the clearest
+**Required (6, of which B10 is already satisfied — five outstanding):** B6 and
+B10, each removing a wire command — *"the clearest
 cases; do them before nodes exist, not after"*. B3, B3a and B4 **as one unit**,
 because caps and ingress rejection gate what the wire accepts, which is wire
 shape even though no command changes, and **B4 is the placement for B3a** — so
@@ -130,11 +131,11 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **B3a** unknown input rejected at ingress | NOT IMPLEMENTED | no ingress rejection site; the codec's byte-exact round-trip of unknown bits is present but is PWC-A6's requirement, not this one | **YES** — with B3 and B4, as one unit |
 | **B4** places B3a's ingress check | NOT IMPLEMENTED | B4's stated remaining work is the check's *placement*; no such site exists | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
 | **B5** — | **NEVER RULED** | appears exactly once tree-wide, in `P2P_2_DISPATCH_BRIEF.md`; dispatched and never dispositioned | n/a — unruled decision, not a status |
-| **B6** one block path | NOT IMPLEMENTED | `NOTIFY_NEW_BLOCK` and `NOTIFY_NEW_FLUFFY_BLOCK` both live (11 references) | **YES** — removes a wire command; "do them before nodes exist, not after" |
+| **B6** one block path | NOT IMPLEMENTED | both paths are live CODE, not records-was: `handle_notify_new_fluffy_block` at `cryptonote_protocol_handler.inl:544`, `relay_block` at `:2720`, and `HANDLE_NOTIFY_T2(NOTIFY_NEW_BLOCK, …)` at `cryptonote_protocol_handler.h:94` | **YES** — removes a wire command; "do them before nodes exist, not after" |
 | **B7** drop only when attributable | **IMPLEMENTED** | typed verdict in `shekyl-peer-policy`; FFI `shekyl_drop_verdict_severs`; `m_no_drop_offense` gone as a field. Three sites (tx relay, announce size, block-sync prepare). `drop_connections`-by-host and the score floor remain deferred (E9/E5), not this row | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
 | **B8** delete the undriven timer | **IMPLEMENTED** | #629 deleted `m_bad_peer_checker`, `network_address_old`, `connection_entry_base` | done |
 | **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
-| **B10** delete the back-ping | NOT IMPLEMENTED | `COMMAND_PING` still in `src/p2p/p2p_protocol_defs.h` | **YES** — removes a wire command; "do them before nodes exist, not after" |
+| **B10** delete the back-ping | **IMPLEMENTED** | #643 (`f98de6b30`) deleted `COMMAND_PING` and the whole back-ping; `p2p_protocol_defs.h:235` records it. *Records-was: this sweep first scored it NOT IMPLEMENTED — see the correction note below* | **YES**, and already satisfied |
 | **B11** `sanitize_peerlist` port-0 | **DEFERRED** | named blocker: tor port-0 semantics disputed (`tor_address::unknown()` is port 0) | No — blocked |
 | **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/zone/mod.rs:864` | No — hardening; but see the note below |
 | **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `p2p_protocol_defs.h:119` records the deletion | done |
@@ -160,9 +161,9 @@ exactly the set of PWD ids present across the round documents and the index:
 
 | | |
 |---|---|
-| IMPLEMENTED | 8 *(B7 this PR; E7 and E9 2026-09-09)* |
+| IMPLEMENTED | 9 *(B7 #674; E7 and E9 2026-09-09; B10 was already implemented)* |
 | PARTIAL | 1 |
-| NOT IMPLEMENTED | **16 ruled and unbuilt** |
+| NOT IMPLEMENTED | **15 ruled and unbuilt** |
 | NO BUILD REQUIRED | 2 |
 | DEFERRED | 3 |
 | BLOCKED on another row | 1 |
@@ -171,16 +172,58 @@ exactly the set of PWD ids present across the round documents and the index:
 | verification-only | 1 |
 | never ruled / not ruled | 2 (B5, A1) |
 
-**16 of 37 are ruled and unbuilt.** Eight of those sixteen are the transport
-cluster, which Rick has ruled out of alpha.8.
+**15 of 37 are ruled and unbuilt.** Six of those fifteen are the transport
+cluster, which Rick has ruled out of alpha.8. *(This read 18 at the #665
+ruling. E7 and E9 landed 2026-09-09; B7 landed in #674; B10 was already
+implemented and is scored that way below. The figure is re-tallied from
+the rows, not adjusted by hand.)*
 
 **What this says about "alpha.8 runs the new p2p".** The identity cluster is
 substantially built and the transport cluster is entirely unbuilt, which is the
 right way round given Rick's ruling. The gap that matters is **cluster B's wire
-surface**: B3, B3a, B4, B6 and B10 all change what the wire accepts or removes
-a command from it, and none has landed. A release that ships the new
-`basic_node_data` and the new peerlist rules while still carrying
-`COMMAND_PING` and two block paths is running a half-migrated wire.
+surface**: B3, B3a, B4 and B6 all change what the wire accepts or remove a
+command from it, and none has landed. B10 belongs to the same group and **has**
+landed, in #643. A release that ships the new `basic_node_data`, the new
+peerlist rules and B10's deletion while still carrying two block paths and the
+inherited caps is running a half-migrated wire.
+
+**Correction, 2026-09-08 — one row of this sweep was wrong, and it was wrong in
+the way this section warns about.** PWD-B10 was first recorded NOT IMPLEMENTED
+on the evidence that `COMMAND_PING` was "still in `src/p2p/p2p_protocol_defs.h`".
+It was not. At the sweep's own base that line was **the comment recording its
+deletion**, which #643 had landed two days earlier — the precise trap described
+four paragraphs above, committed by the person who wrote the description. The
+row was also "re-verified" twice after later merges, both times by re-running
+the same probe: **re-running a broken instrument is not verification**, and
+those runs were reported as confirmation.
+
+Two consequences worth stating rather than quietly fixing. Rick ruled B10
+required-for-alpha.8 against the wrong status — harmless in effect, since the
+work was already done, but a ruling made on a false input. And **the alpha.8
+outstanding set was five, not six**: B6, B3, B3a and B4, plus B7's remainder.
+#674 then landed that remainder, so the outstanding set is **four**: B6, B3,
+B3a and B4.
+
+B6 and B3 were re-checked against the same failure before this correction was
+written, by reading the sites rather than counting them; both hold, and B6's
+evidence cell now names live handlers instead of a reference count.
+
+**A WARNING IS NOT A CONTROL.** The paragraph four above describes this exact
+trap, and its author fell into it in the same commit. The defect has now been
+met from both directions on this surface: an **empty** grep that proved a
+*spelling* rather than the absence of a construct (a peerlist eraser wrongly
+called dead code), and this one — a **non-empty** grep that proved a *comment*
+rather than the presence of a mechanism. Same defect either way: the search
+ran, the output was real, and the verdict was about the wrong subject.
+**Neither a hit nor a miss is a finding until someone reads what matched.**
+
+**The back-ping's real job is still gone, and that is a ruled reduction in
+checking, not an oversight.** Its purpose was verifying an advertised port.
+#643 removed that verification; the ruled answer is that verification returns
+with PWD-E1/E2 in alpha.9, and until then **a node's advertised port is
+operator-configured and unverified** — a state Rick has ruled testnet-acceptable
+and which is recorded here so no reader mistakes it for something nobody
+noticed.
 
 **Note on B12.** Ruled not-required because it does not change the wire, but
 it is an unbounded release of accumulated transactions to a peer, and "not
@@ -189,9 +232,12 @@ rather than filed.
 
 **Two findings that are not statuses.** PWD-B5 was dispatched and never
 dispositioned — it exists in the brief and nowhere else. PWD-B3's own text
-states the inherited cap table has **13** arms; the tree has **12**, so one arm
-left since this document's pin and the derivation above it has not noticed.
-Neither is an implementation gap; both are round residue.
+states the inherited cap table has **13** arms while the tree has **12**. That
+one is now explained rather than open: the missing arm is `COMMAND_PING`'s, and
+**PWD-B10's deletion is arm 3 of B3's own table** (`:2803`), so #643 removed it
+when it removed the command. B3's derivation still reads 13 and has not caught
+up with a deletion its own text anticipates. B5 remains genuine round residue;
+neither is an implementation gap.
 
 ## 1. Invariants — requirements in, not subjects
 
