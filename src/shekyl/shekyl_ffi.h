@@ -3761,6 +3761,55 @@ uint8_t shekyl_drop_verdict_combine(uint8_t current, uint8_t incoming);
 //! Fold `incoming` into `slot`. Null `slot` is a no-op (no peer to attribute).
 void shekyl_drop_verdict_classify(uint8_t* slot, uint8_t incoming);
 
+// -- Block-ingest outcome (PWD-B7 block twin) -------------------------------
+// Opaque ABI for rust/shekyl-peer-policy::BlockIngest. Replaces
+// block_verification_context's bag of independent bools. C++ writes
+// non-reject arms through shekyl_block_ingest_record and reject arms
+// through shekyl_block_ingest_reject_* (Rust pairs the drop slot).
+// Zero is Unclassified: not added, not rejected, not a drop. P2P asks
+// shekyl_block_announce_action / shekyl_block_sync_action, not these
+// bytes. Action bytes have no header constants.
+
+#define SHEKYL_BLOCK_INGEST_UNCLASSIFIED     0u
+#define SHEKYL_BLOCK_INGEST_ADDED            1u
+#define SHEKYL_BLOCK_INGEST_ALREADY_EXISTS   2u
+#define SHEKYL_BLOCK_INGEST_ORPHANED         3u
+#define SHEKYL_BLOCK_INGEST_MISSING_TXS      4u
+#define SHEKYL_BLOCK_INGEST_DEGRADED_KEEP    5u
+#define SHEKYL_BLOCK_INGEST_ALT_STORED       6u
+#define SHEKYL_BLOCK_INGEST_REJECTED         7u
+#define SHEKYL_BLOCK_INGEST_REJECTED_BAD_POW 8u
+
+bool shekyl_block_ingest_is_added(uint8_t outcome);
+bool shekyl_block_ingest_already_exists(uint8_t outcome);
+bool shekyl_block_ingest_is_orphaned(uint8_t outcome);
+bool shekyl_block_ingest_missing_txs(uint8_t outcome);
+bool shekyl_block_ingest_is_rejected(uint8_t outcome);
+bool shekyl_block_ingest_is_bad_pow(uint8_t outcome);
+//! Fold `incoming` into `slot`. First writer wins. Null `slot` is a no-op.
+void shekyl_block_ingest_record(uint8_t* slot, uint8_t incoming);
+//! Pair both slots. Either pointer null is a no-op (do not half-write).
+void shekyl_block_ingest_reject_form(uint8_t* outcome, uint8_t* drop);
+void shekyl_block_ingest_reject_state(uint8_t* outcome, uint8_t* drop);
+void shekyl_block_ingest_reject_internal(uint8_t* outcome, uint8_t* drop);
+void shekyl_block_ingest_reject_bad_pow(uint8_t* outcome, uint8_t* drop);
+void shekyl_block_ingest_reject_with_drop(uint8_t* outcome, uint8_t* drop, uint8_t incoming_drop);
+
+//! Announce/sync instruction bytes. No SHEKYL_BLOCK_ANNOUNCE_* constants:
+//! C++ never writes these. An unrecognised byte is idle (do not drop).
+uint8_t shekyl_block_announce_action(uint8_t outcome, uint8_t drop, bool handle_ok);
+bool shekyl_block_announce_re_request_txs(uint8_t action);
+bool shekyl_block_announce_drop(uint8_t action);
+bool shekyl_block_announce_heavier_score(uint8_t action);
+bool shekyl_block_announce_our_failure(uint8_t action);
+bool shekyl_block_announce_relay(uint8_t action);
+bool shekyl_block_announce_request_history(uint8_t action);
+
+uint8_t shekyl_block_sync_action(uint8_t outcome, uint8_t drop);
+bool shekyl_block_sync_drop(uint8_t action);
+bool shekyl_block_sync_heavier_score(uint8_t action);
+bool shekyl_block_sync_orphan_resync(uint8_t action);
+
 // ---------------------------------------------------------------------------
 // Daemon ephemeral Tor inbound -- PWD-E7 (docs/design/P2P_2_ENDPOINT_ROUND.md)
 // ---------------------------------------------------------------------------
