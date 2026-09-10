@@ -2687,13 +2687,20 @@ TEST_F(levin_notify, fluff_via_scheduled_drive)
 
 TEST_F(levin_notify, command_max_bytes)
 {
-    // COMMAND_PING is deleted (PWD-B10); SUPPORT_FLAGS carries the same
-    // 4096-byte cap and is the surviving small-cap command this test needs.
+    // COMMAND_PING is deleted (PWD-B10). SUPPORT_FLAGS is the remaining
+    // tight cap (PWD-B3 derived the inherited 4096 to the four-byte field
+    // envelope). Size the payload from the same admit function handle_recv
+    // uses so this cannot silently re-pin an inherited number.
     static constexpr int capped_command = nodetool::COMMAND_REQUEST_SUPPORT_FLAGS::ID;
+    const auto cap = cryptonote::cryptonote_connection_context::get_max_bytes(
+        capped_command, LEVIN_PACKET_REQUEST);
+    ASSERT_TRUE(cap.has_value());
+    ASSERT_GT(*cap, 0u);
+    ASSERT_LT(*cap, 64u * 1024);
 
     add_connection(true);
 
-    std::string payload(4096, 'h');
+    std::string payload(*cap, 'h');
     epee::byte_slice bytes;
     {
         epee::levin::message_writer dest{};
@@ -2719,6 +2726,34 @@ TEST_F(levin_notify, command_max_bytes)
 
     EXPECT_EQ(1, get_connections().send(std::move(bytes), contexts_.front().get_id()));
     EXPECT_EQ(1u, contexts_.front().process_send_queue(false));
+    EXPECT_EQ(0u, receiver_.notified_size());
+}
+
+TEST_F(levin_notify, q_flagged_command_zero_is_rejected)
+{
+    // PWD-B3a: command 0 is filler on noise, not a defined dispatch.
+    // finalize_notify sets REQUEST, so this is unknown-command, not cover.
+    add_connection(true);
+
+    epee::levin::message_writer dest{};
+    epee::byte_slice bytes = dest.finalize_notify(0);
+
+    EXPECT_EQ(1, get_connections().send(std::move(bytes), contexts_.front().get_id()));
+    EXPECT_EQ(1u, contexts_.front().process_send_queue(false));
+    EXPECT_EQ(0u, receiver_.notified_size());
+}
+
+TEST_F(levin_notify, noise_command_zero_is_admitted)
+{
+    // Cover traffic is BEGIN|END with neither Q nor S; command 0 must not
+    // be rejected as unknown dispatch (PWD-B3a). The dummy is discarded.
+    add_connection(true);
+
+    epee::byte_slice noise = epee::levin::make_noise_notify(1024);
+    ASSERT_EQ(1024u, noise.size());
+
+    EXPECT_EQ(1, get_connections().send(std::move(noise), contexts_.front().get_id()));
+    EXPECT_EQ(1u, contexts_.front().process_send_queue(true));
     EXPECT_EQ(0u, receiver_.notified_size());
 }
 

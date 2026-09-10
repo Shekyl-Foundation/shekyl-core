@@ -115,6 +115,10 @@ any of them would be reporting on the wrong tree:
 | Fragmentation | `rust/shekyl-levin/src/fragment.rs:81-127` | **FOUND** — production-live via FFI |
 | Compression | `rust/shekyl-levin/src/compress.rs:24-32` | **FOUND** — production-live since 2026-08-06 |
 
+> **UPDATE 2026-09-09 — PWD-B6 deleted 2001.** The pin found both; the live
+> tree has 2008 only (`NOTIFY_NEW_COMPACT_BLOCK`). The row above is the census
+> reading, not the present.
+
 ### 2.2 The denominator
 
 Two parts, because they admit different kinds of check.
@@ -151,8 +155,9 @@ and in the other direction, Rust's 22 impls = 21 exported structs + the
 `NetworkAddress` enum, whose C++ counterpart (`epee::net_utils::
 network_address`) lives in `contrib/epee/.../net_utils_base.h`, **outside both
 defs headers** — a denominator boundary, recorded here so the residual is not
-mistaken for a gap. `NewFluffyBlock` is a type alias over `NewBlock`
-(`notifies.rs:44`), which is why 22 impls cover 23 nominal maps.
+mistaken for a gap. At this pin `NewFluffyBlock` was a type alias over
+`NewBlock` (`notifies.rs:44`), which is why 22 impls covered 23 nominal maps.
+**PWD-B6:** the live type is `NewCompactBlock`; there is no alias.
 
 **Command-id parity closes exactly: 13 = 13.** This is the strongest single
 inverse check in the census — it is the axis #587's field-parity residual
@@ -340,6 +345,10 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-B7 | `my_port` is zeroed when `--hide-my-port` is set or the zone cannot pingback; the back-ping is skipped entirely when it is 0 | `net_node.inl:2151-2160`, `:2512-2513` | `none` | 4 | — |
 
 > **Ruled 2026-09-02 — `SHEKYL_P2P_PROTOCOL.md` PWD-I1/PWD-B10: 1003 `COMMAND_PING` is deleted, so three commands survive, not four.** Its only invoker was `try_ping`, whose one caller gated the inbound whitelist promotion PWD-I2 forbids. The command did not need its own argument; it fell when its consumer did.
+>
+> **UPDATE 2026-09-09 — PWD-B6:** `PWC-B5`'s advertised aggregate is now
+> `ZSTD_COMPRESSION` (0x02) only. `FLUFFY_BLOCKS` (0x01) fell with 2001; 0x01
+> is unassigned. The public-zone-only half of the row is unchanged.
 
 ### 4.C cryptonote notify schemas (2001-2010)
 
@@ -353,6 +362,8 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-C6 | `pruning_seed` rides `CORE_SYNC_DATA` and every peerlist entry, and is validated on ingest against the stripe range | `cryptonote_protocol_defs.h:200`; `net_node.inl:2105` | `none` | 4 | — |
 | PWC-C7 | Per-command payload caps are a 13-entry switch; **unknown commands fall through to `size_t::max`**, leaving only the packet limit. **Three** entries are 128 MB and exceed the 100 MB packet limit by design, as their own comments note — `NOTIFY_NEW_BLOCK`, `NOTIFY_NEW_TRANSACTIONS` and `NOTIFY_RESPONSE_GET_OBJECTS`, i.e. the response path as well as the two announce paths | `connection_context.cpp:38-72`, the 128 MB arms at `:51`, `:53`, `:57` | `pinned-not-re-derived` | 4 | — |
 | PWC-C8 | `block_complete_entry` serializes `txs` two different ways — object array when `pruned`, blob array otherwise — and the unpruned load path fills `prunable_hash` with zeros | `cryptonote_protocol_defs.h:76-96`; `rust/shekyl-levin/src/payload/block.rs:92-125` | `KAT-port` | 4 | — |
+
+> **Ruled 2026-09-09 — `SHEKYL_P2P_PROTOCOL.md` PWD-B6: 2001 `NOTIFY_NEW_BLOCK` is deleted, so eight notify commands survive, not nine.** Both were one handler at this pin; the command id was the only distinction. Live identifiers: `NOTIFY_NEW_COMPACT_BLOCK` (2008) and `NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009). `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS` (0x01) fell with 2001; 0x01 is unassigned.
 
 ### 4.D Peerlist, peer identity, persisted store
 
@@ -700,7 +711,7 @@ carried forward on the register's authority alone. All 28 resolve here.
 | PW-20, PW-21 | **Off-tree** — Sybil-replacement scope and a rejected proposal; no wire surface |
 | PW-22 | **LOCATED, still open** → §5.3, PWC-X5 |
 | PW-23, PW-23a, PW-24, PW-25, PW-26 | **Designed, not built** — nothing to census; PW-25's `ρ` citation corrected in §5.1 |
-| PW-27 | **CONFIRMED** → PWC-C3, at `:115` / `:265` (register said `:184` / `:334`, pre-#587 line numbers) |
+| PW-27 | **CONFIRMED** → PWC-C3, at `:115` / `:265` (register said `:184` / `:334`, pre-#587 line numbers); **discharged 2026-09-09 by PWD-B6** |
 | PW-28 | **CONFIRMED** → PWC-E1, PWC-E3; every cadence on this surface is fixed and unjittered |
 
 **Fail-to-find is reported, not reconciled.** Three register pointers do not

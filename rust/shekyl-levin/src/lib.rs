@@ -33,15 +33,18 @@
 //!
 //! Still inert until LV-3: the read side ([`BucketReader`]) and the plain
 //! notification/request/response builders (the C++ `message_writer` keeps
-//! the hot finalize path).
+//! the hot finalize path). The **ingress policy** (PWD-B3 / PWD-B3a /
+//! PWD-B4) is live on the C++ `handle_recv` path via
+//! `shekyl_levin_ingress_admit` even while [`BucketReader`] itself is unwired
+//! — the command table is not daemon-only policy any more.
 //!
 //! Deliberate **non-goals** of this crate:
 //!
 //! - the epee `portable_storage` **codec** — that is
 //!   `shekyl-portable-storage` (LV-2a). This crate owns the typed Levin
-//!   maps on top of it (LV-2b): handshake / timed-sync / ping /
-//!   support-flags (1001 / 1002 / 1003 / 1007), `network_address`, and
-//!   notifies 2001–2004 / 2006–2010. Cryptonote blobs stay opaque bytes
+//!   maps on top of it (LV-2b): handshake / timed-sync /
+//!   support-flags (1001 / 1002 / 1007), `network_address`, and
+//!   notifies 2002–2004 / 2006–2010. Cryptonote blobs stay opaque bytes
 //!   (`shekyl-wire`); RPC maps stay out. Live `shekyld` dual-stack is
 //!   the `#[ignore]` harness `tests/dual_stack.rs` (`SHEKYLD_BIN`; no
 //!   daemon in default crate tests).
@@ -70,7 +73,8 @@
 //! Every entry is *stricter* than the oracle — none accepts something the
 //! C++ rejects — and each is unreachable for a conforming sender today.
 //! Two entries (4 and 6) stopped being divergences at the 2026-08-06
-//! compression cut and are kept as the record of how they closed; that is
+//! compression cut and a third (9) closed at the 2026-09-09 PWD-B3/B3a/B4
+//! ingress cut; they are kept as the record of how they closed. That is
 //! deliberate, because "the difference went away" is exactly the kind of
 //! claim that rots into folklore once the entry is deleted. Adding a
 //! blanket "no conforming sender" to this list without checking each entry
@@ -149,11 +153,23 @@
 //!    is on each on-wire body's `m_cb`, not on the inner payload that
 //!    fragmentation exists to split. Unreachable for a conforming sender
 //!    (production noise is 3 KiB).
+//! 9. **unknown flags / unknown dispatch commands rejected at ingress** —
+//!    *resolved 2026-09-09; no longer a divergence.* Both sides apply
+//!    [`ingress_payload_cap`]: unknown flag bits are fatal on every bucket;
+//!    a Q/S-flagged command that is not a [`DefinedCommand`] is fatal; a
+//!    noise/fragment bucket (neither Q nor S) is bounded only by the packet
+//!    limit so cover traffic with command 0 is not an unknown command. The
+//!    live C++ path is `handle_recv` → `get_max_bytes(command, flags)` →
+//!    `shekyl_levin_ingress_admit`. The codec still round-trips unknown bits
+//!    (PWC-A6); ingress is what refuses to process them. [`BucketReader`]
+//!    remains unwired until LV-3; this entry is about the *policy*, which
+//!    is shared.
 
 mod compress;
 mod error;
 mod fragment;
 mod header;
+mod ingress;
 mod message;
 mod payload;
 mod reader;
@@ -169,18 +185,18 @@ pub use header::{
     BucketHead, Flags, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE,
     LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
 };
+pub use ingress::{ingress_payload_cap, DefinedCommand, FLAGS_DEFINED};
 pub use message::{invoke, notify, response};
 pub use payload::Error as PayloadError;
 pub use payload::{
     BasicNodeData, BlockCompleteEntry, CoreSyncData, GetTxpoolComplement, HandshakeRequest,
-    HandshakeResponse, NetworkAddress, NewBlock, NewFluffyBlock, NewTransactions, PeerlistEntry,
-    PortableMap, RequestChain, RequestFluffyMissingTx, RequestGetObjects, ResponseChainEntry,
-    ResponseGetObjects, SupportFlagsRequest, SupportFlagsResponse, TimedSyncRequest,
+    HandshakeResponse, NetworkAddress, NewCompactBlock, NewTransactions, PeerlistEntry,
+    PortableMap, RequestChain, RequestCompactMissingTx, RequestGetObjects, ResponseChainEntry,
+    ResponseGetObjects, SupportFlags, SupportFlagsRequest, SupportFlagsResponse, TimedSyncRequest,
     TimedSyncResponse, TxBlobEntry, ADDR_I2P, ADDR_IPV4, ADDR_IPV6, ADDR_TOR,
     ATTESTATION_WITNESS_MAX_BYTES, COMMAND_HANDSHAKE, COMMAND_REQUEST_SUPPORT_FLAGS,
-    COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_BLOCK,
-    NOTIFY_NEW_FLUFFY_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_CHAIN,
-    NOTIFY_REQUEST_FLUFFY_MISSING_TX, NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_RESPONSE_CHAIN_ENTRY,
-    NOTIFY_RESPONSE_GET_OBJECTS,
+    COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK,
+    NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_CHAIN, NOTIFY_REQUEST_COMPACT_MISSING_TX,
+    NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_RESPONSE_CHAIN_ENTRY, NOTIFY_RESPONSE_GET_OBJECTS,
 };
 pub use reader::{BucketReader, Received};

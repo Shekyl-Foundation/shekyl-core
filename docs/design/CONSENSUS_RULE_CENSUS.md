@@ -1204,7 +1204,7 @@ rest resolve per §1's bucket-3 posture.
 | U-3 alt-chain / reorg | merged-into the CEN-K family + finding §6.5. §10 R1 |
 | U-4 tx pool relay decisions | validity/policy half merged-into the CEN-M family (§10 R7); the pool-vs-Dandelion++ relay-*timing* question is relay-privacy material for the [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md) lane, recorded in R7's stake statement |
 | U-5 `rpc_credits_per_hash` in the handshake | rejected-as-nonrule (p2p wire field; no acceptance-path check) — routed to the P2P protocol redesign lane with the L-items; Survey A's free-deletion-pre-genesis observation carried there |
-| U-6 `NOTIFY_NEW_BLOCK` alongside fluffy | rejected-as-nonrule (block propagation above the acceptance entry points) — routed to the P2P protocol redesign lane |
+| U-6 `NOTIFY_NEW_BLOCK` alongside fluffy | rejected-as-nonrule (block propagation above the acceptance entry points) — routed to the P2P protocol redesign lane, **which discharged it: PWD-B6 deleted 2001** |
 | U-7 output histogram / distribution RPC | rejected-as-nonrule (RPC read surface; no acceptance-path check) — rule-60 deletion candidate; its dead `HF_VERSION_DYNAMIC_FEE` height lookup is covered by §5.5 |
 | U-8 timestamp validation | merged-into CEN-C1/C2/C3; the algorithm-vs-spec question U-8 asked is answered and sharpened by the C2 adjudication. §10 R3 |
 | U-9 `miner.cpp` audit | rejected-as-nonrule for this census (block *production*, not validation). The open audit question — the miner-chosen coinbase-revealed challenge origin, and whether an in-daemon miner should exist on a node holding staking keys — is recorded here as adjacent-surface input; it has no owner yet and any future round touching `miner.cpp` starts from Survey A §5 U-9 |

@@ -54,6 +54,10 @@ document reconciled the two. **UPDATE 2026-09-09:** PWD-B7's typed drop
 verdict is the next instance of that pattern (`shekyl-peer-policy`, FFI
 `shekyl_drop_verdict_severs`; row flipped IMPLEMENTED below).
 
+**UPDATE 2026-09-09:** PWD-B3 / PWD-B3a / PWD-B4 landed (see rows below).
+PWD-E7 / PWD-E9 landed the same day on `dev` (#672). PWD-B6 landed in #677;
+PWD-B7's typed drop verdict in #674. Counts below include all of these.
+
 **How a verdict was reached.** PWD ids appear nowhere in code, so nothing here
 was grepped by identifier. For each decision the question asked was *what would
 have to be true of the tree if this were built* — a deleted symbol absent, a
@@ -86,7 +90,8 @@ out of scope — *"that doesn't necessarily include NoiseNN, so that is fine if
 not implemented for alpha.8"* — and that ruling covers the whole transport
 cluster.
 
-**Required (6):** B6 and B10, each removing a wire command — *"the clearest
+**Required (6, of which B10 is already satisfied — five outstanding):** B6 and
+B10, each removing a wire command — *"the clearest
 cases; do them before nodes exist, not after"*. B3, B3a and B4 **as one unit**,
 because caps and ingress rejection gate what the wire accepts, which is wire
 shape even though no command changes, and **B4 is the placement for B3a** — so
@@ -126,15 +131,15 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T8** Shekyl mints its own KATs | NOT IMPLEMENTED | no handshake KATs; nothing to pin until T1 exists | No — follows T1 |
 | **B1** rate limiting adopted | NOT IMPLEMENTED | the decision names four unguarded invoke handlers; all four still unguarded | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
-| **B3** per-command caps | NOT IMPLEMENTED | cap table still **12** arms (`cryptonote_basic/connection_context.cpp`); ruled to reach 11 | **YES** — with B3a and B4, as one unit |
-| **B3a** unknown input rejected at ingress | NOT IMPLEMENTED | no ingress rejection site; the codec's byte-exact round-trip of unknown bits is present but is PWC-A6's requirement, not this one | **YES** — with B3 and B4, as one unit |
-| **B4** places B3a's ingress check | NOT IMPLEMENTED | B4's stated remaining work is the check's *placement*; no such site exists | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
+| **B3** per-command caps | **IMPLEMENTED** | 11-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001 and 1003 are unknown dispatch; sole block path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`); handshake 65536 reconstructed; support-flags 4096→256; 2003/2006 hash-list derived; 2007/2008/2009/2010 keep inherited envelopes (4/4/1/4 MiB); 2002/2004 take the packet limit until PWD-B12 / the 2004 byte budget; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
+| **B3a** unknown input rejected at ingress | **IMPLEMENTED** | `ingress_payload_cap` flag-class discriminator; unknown bits rejected on every bucket; noise/fragment with command 0 admitted; a Q/S-flagged 2001 is unknown input, same class as ping 1003 | **YES** — with B3 and B4, as one unit |
+| **B4** places B3a's ingress check | **IMPLEMENTED** | `shekyl_levin_ingress_admit` + `get_max_bytes(command, flags)` on outer and inner header parse; decompress uses the cached cap; codec still round-trips unknown bits (PWC-A6) | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
 | **B5** — | **NEVER RULED** | appears exactly once tree-wide, in `P2P_2_DISPATCH_BRIEF.md`; dispatched and never dispositioned | n/a — unruled decision, not a status |
-| **B6** one block path | NOT IMPLEMENTED | `NOTIFY_NEW_BLOCK` and `NOTIFY_NEW_FLUFFY_BLOCK` both live (11 references) | **YES** — removes a wire command; "do them before nodes exist, not after" |
+| **B6** one block path | **IMPLEMENTED** | 2001 deleted; 2008 is the sole path. `HANDLE_NOTIFY_T2(NOTIFY_NEW_COMPACT_BLOCK)` at `cryptonote_protocol_handler.h:99`; `relay_block` emits `NOTIFY_NEW_COMPACT_BLOCK::ID` at `.inl:2725`; no `NOTIFY_NEW_BLOCK` handler remains. Identifiers are `COMPACT_*` (ids still 2008/2009). Two-limb test `block_propagation_has_exactly_one_command` refuses 2001 (`LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED`) and still dispatches 2008. | **YES** — landed; do it before nodes exist |
 | **B7** drop only when attributable | **IMPLEMENTED** | typed verdict in `shekyl-peer-policy`; FFI `shekyl_drop_verdict_severs`; `m_no_drop_offense` gone as a field. Three sites (tx relay, announce size, block-sync prepare). `drop_connections`-by-host and the score floor remain deferred (E9/E5), not this row | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
 | **B8** delete the undriven timer | **IMPLEMENTED** | #629 deleted `m_bad_peer_checker`, `network_address_old`, `connection_entry_base` | done |
 | **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
-| **B10** delete the back-ping | NOT IMPLEMENTED | `COMMAND_PING` still in `src/p2p/p2p_protocol_defs.h` | **YES** — removes a wire command; "do them before nodes exist, not after" |
+| **B10** delete the back-ping | **IMPLEMENTED** | #643 (`f98de6b30`) deleted `COMMAND_PING` and the whole back-ping; `p2p_protocol_defs.h:235` records it. *Records-was: this sweep first scored it NOT IMPLEMENTED — see the correction note below* | **YES**, and already satisfied |
 | **B11** `sanitize_peerlist` port-0 | **DEFERRED** | named blocker: tor port-0 semantics disputed (`tor_address::unknown()` is port 0) | No — blocked |
 | **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/zone/mod.rs:864` | No — hardening; but see the note below |
 | **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `p2p_protocol_defs.h:119` records the deletion | done |
@@ -160,9 +165,9 @@ exactly the set of PWD ids present across the round documents and the index:
 
 | | |
 |---|---|
-| IMPLEMENTED | 8 *(B7 this PR; E7 and E9 2026-09-09)* |
+| IMPLEMENTED | 13 *(B3/B3a/B4 this PR; B6 #677; B7 #674; E7 and E9 2026-09-09; B8/B10/I1/I2/E5/E6 were already implemented)* |
 | PARTIAL | 1 |
-| NOT IMPLEMENTED | **16 ruled and unbuilt** |
+| NOT IMPLEMENTED | 11 |
 | NO BUILD REQUIRED | 2 |
 | DEFERRED | 3 |
 | BLOCKED on another row | 1 |
@@ -171,16 +176,63 @@ exactly the set of PWD ids present across the round documents and the index:
 | verification-only | 1 |
 | never ruled / not ruled | 2 (B5, A1) |
 
-**16 of 37 are ruled and unbuilt.** Eight of those sixteen are the transport
-cluster, which Rick has ruled out of alpha.8.
+**12 of 37 are ruled and unbuilt** (11 NOT IMPLEMENTED + 1 PARTIAL). Six of
+those twelve are the transport cluster, which Rick has ruled out of alpha.8.
+*(This read 18 at the #665 ruling. E7 and E9 landed 2026-09-09; B7 landed in
+#674; B6 landed in #677; B10 was already implemented and is scored that way
+below; B3/B3a/B4 land here. The figure is re-tallied from the rows, not
+adjusted by hand.)*
 
 **What this says about "alpha.8 runs the new p2p".** The identity cluster is
 substantially built and the transport cluster is entirely unbuilt, which is the
-right way round given Rick's ruling. The gap that matters is **cluster B's wire
-surface**: B3, B3a, B4, B6 and B10 all change what the wire accepts or removes
-a command from it, and none has landed. A release that ships the new
-`basic_node_data` and the new peerlist rules while still carrying
-`COMMAND_PING` and two block paths is running a half-migrated wire.
+right way round given Rick's ruling. B6 and B10 have landed: one block path
+(`NOTIFY_NEW_COMPACT_BLOCK` 2008; a Q/S-flagged 2001 is unknown dispatch), and
+no `COMMAND_PING`. B3, B3a and B4 land here: unknown commands and unknown flag
+bits are rejected at ingress, and the 11-arm per-command cap table lives in
+`shekyl-levin`. The alpha.8 wire set Rick named (B6, B10, B3/B3a/B4, B7's
+typed remainder) is implemented. Transport (T1–T4, T6, T8) remains unbuilt.
+
+**Correction, 2026-09-08 — one row of this sweep was wrong, and it was wrong in
+the way this section warns about.** PWD-B10 was first recorded NOT IMPLEMENTED
+on the evidence that `COMMAND_PING` was "still in `src/p2p/p2p_protocol_defs.h`".
+It was not. At the sweep's own base that line was **the comment recording its
+deletion**, which #643 had landed two days earlier — the precise trap described
+four paragraphs above, committed by the person who wrote the description. The
+row was also "re-verified" twice after later merges, both times by re-running
+the same probe: **re-running a broken instrument is not verification**, and
+those runs were reported as confirmation.
+
+Two consequences worth stating rather than quietly fixing. Rick ruled B10
+required-for-alpha.8 against the wrong status — harmless in effect, since the
+work was already done, but a ruling made on a false input. And **the alpha.8
+outstanding set was five, not six**: B6, B3, B3a and B4, plus B7's remainder.
+#674 then landed that remainder, so the outstanding set was **four**: B6, B3,
+B3a and B4. #677 landed B6, so the outstanding set was **three**: B3, B3a
+and B4. This PR lands those three.
+
+B6 and B3 were re-checked against the same failure before this correction was
+written, by reading the sites rather than counting them; both held at that
+date, and B6's evidence cell named live handlers instead of a reference count.
+B6's handlers are now the compact path only (`NOTIFY_NEW_COMPACT_BLOCK` at
+`cryptonote_protocol_handler.h:99` / `.inl:530`).
+
+**A WARNING IS NOT A CONTROL.** The paragraph four above describes this exact
+trap, and its author fell into it in the same commit. The defect has now been
+met from both directions on this surface: an **empty** grep that proved a
+*spelling* rather than the absence of a construct (a peerlist eraser wrongly
+called dead code), and this one — a **non-empty** grep that proved a *comment*
+rather than the presence of a mechanism. Same defect either way: the search
+ran, the output was real, and the verdict was about the wrong subject.
+**Neither a hit nor a miss is a finding until someone reads what matched.**
+
+**The back-ping's real job is still gone, and that is a ruled reduction in
+checking, not an oversight.** Its purpose was verifying an advertised port.
+#643 removed that verification; the ruled answer is that verification returns
+with PWD-E1/E2 in alpha.9, and until then **a node's advertised port is
+operator-configured and unverified** — a state Rick has ruled testnet-acceptable
+and which is recorded here so no reader mistakes it for something nobody
+noticed.
+
 
 **Note on B12.** Ruled not-required because it does not change the wire, but
 it is an unbounded release of accumulated transactions to a peer, and "not
@@ -189,9 +241,12 @@ rather than filed.
 
 **Two findings that are not statuses.** PWD-B5 was dispatched and never
 dispositioned — it exists in the brief and nowhere else. PWD-B3's own text
-states the inherited cap table has **13** arms; the tree has **12**, so one arm
-left since this document's pin and the derivation above it has not noticed.
-Neither is an implementation gap; both are round residue.
+stated the inherited cap table has **13** arms while the tree has **11**. That
+one is now explained rather than open: #643 removed `COMMAND_PING` (arm 3 of
+B3's own table, `:2803`) and PWD-B6 removed the 2001 `NOTIFY_NEW_BLOCK` arm.
+The B3 ingress table matches those deletions: 11 defined commands; a
+Q/S-flagged 2001 or 1003 is unknown input. B5 remains genuine round residue;
+neither is an implementation gap.
 
 ## 1. Invariants — requirements in, not subjects
 
@@ -577,7 +632,7 @@ and two of them read it as the same boolean:
 
 - `cryptonote_protocol_handler.inl:1790` — `if (!peer_id || context.m_is_income)`,
   excluding pre-handshake peers from **sync-search**.
-- `:2701-2702` — `if (peer_id && …)`, excluding them from **fluffy-block relay**,
+- `:2701-2702` — `if (peer_id && …)`, excluding them from **block relay**,
   with the tree's own comment: *"peer_id also filters out connections before
   handshake"*.
 
@@ -633,7 +688,7 @@ it:**
 | Site | Kind | Disposition |
 | --- | --- | --- |
 | `cryptonote_protocol_handler.inl:1790` | **Boolean** — excludes pre-handshake peers from sync-search | Migrate to `handshake_complete` |
-| `:2701-2702` | **Boolean** — same, for fluffy-block relay (*"peer_id also filters out connections before handshake"*) | Migrate to `handshake_complete` |
+| `:2701-2702` | **Boolean** — same, for block relay (*"peer_id also filters out connections before handshake"*) | Migrate to `handshake_complete` |
 | `:347` | **Display** — `print_connections`' peer column | Drop the column or show `connection_id` |
 | `rpc_facts_ffi.h:315` / `.cpp:1050-1056` | **Display** — `get_connections` over RPC | Same: `connection_id` is already in the struct |
 
@@ -2807,6 +2862,13 @@ on two surfaces and today gets two different answers:
 | Levin **flag bits** | bits outside the five defined | **preserved verbatim** through the codec (PWC-A6) |
 | Levin **command ids** | any id not in the 13-arm switch | **`std::numeric_limits<size_t>::max()`** — **no *per-command* cap** (`src/cryptonote_basic/connection_context.cpp:68-71`). The global packet limit still binds: the reader takes `min(packet limit, hook(command))` (`rust/shekyl-levin/src/reader.rs:182-185`), so an unknown command is bounded by `DEFAULT_MAX_PACKET_SIZE`, not unbounded. *An earlier version of this row said "no cap at all", which overstates the hazard — the same flattering-error direction §1 warns about, pointed at a defect instead of a defence.* |
 
+*Landed 2026-09-09:* a Q/S-flagged command that is not a `DefinedCommand` is
+`Error::UnknownCommand` at ingress; unknown flag bits are `Error::UnknownFlags`
+on every bucket. The codec still round-trips unknown bits (PWC-A6). 2001 and
+1003 are unknown dispatch. Live table: `rust/shekyl-levin/src/ingress.rs`.
+2008 / 2007 keep their inherited 4 MiB envelopes; they do not take the packet
+limit.
+
 **One question, two answers, and neither was chosen.** That is the drift shape
 that produced the 50 MB / 100 MB packet-limit pair PWD-T6 had to reconcile: two
 rows deriving independently against the same underlying question.
@@ -2864,15 +2926,20 @@ checkable against the release plan rather than against a benchmark.
 
 ### PWD-B6 — one block-propagation path, not two
 
-**RULED: `NOTIFY_NEW_BLOCK` (2001) is deleted; `NOTIFY_NEW_FLUFFY_BLOCK` (2008)
-is the sole block path.**
+**RULED: `NOTIFY_NEW_BLOCK` (2001) is deleted; command 2008 is the sole block
+path.** The surviving identifiers are `NOTIFY_NEW_COMPACT_BLOCK` (2008) and
+`NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009). `FLUFFY` collides with Dandelion++
+stem/fluff (`dandelionpp_fluff` on 2002) and names a Monero rollout this chain
+has no history of. Compact, not "just block": 2008 is header-first (relay
+clears `b.txs`); full blocks still travel on `NOTIFY_RESPONSE_GET_OBJECTS`
+(2004) during sync. Command ids are unchanged.
 
-**The two commands are already one code path.** `handle_notify_new_block`
-builds a fluffy request from its argument and **returns
-`handle_notify_new_fluffy_block(...)`**
-(`src/cryptonote_protocol/cryptonote_protocol_handler.inl:529`). 2001 is a wire
-alias for 2008, not a second implementation, so deleting it removes a name —
-not a behaviour.
+*Records-was: before deletion, 2001 was already one code path.*
+`handle_notify_new_block` built a compact request from its argument and
+returned the 2008 handler. 2001 was a wire alias for 2008, not a second
+implementation, so deleting it removed a name — not a behaviour. The trampoline
+is gone; the live handler is `handle_notify_new_compact_block` at
+`cryptonote_protocol_handler.inl:530`.
 
 > **An earlier version of this row argued from `pruned`, and that was wrong.**
 > It claimed `block_complete_entry`'s peer-controlled `pruned` bool lets either
@@ -2902,7 +2969,7 @@ and 2001 already dispatches into 2008's handler — so the round trip is a
 property of what the sender chose to send, before and after this ruling alike.
 *That concession was written under the `pruned`-based model this row has since
 corrected, and it survived the correction.* What is actually given up is a wire
-name; `NOTIFY_REQUEST_FLUFFY_MISSING_TX` (2009) is unchanged and still the
+name; `NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009) is still the
 mechanism for whatever the sender omitted.
 
 **Falsifier.** **Reopen if measured block-propagation latency on the compact
@@ -2915,7 +2982,7 @@ fetch is not the bounded cost this ruling assumes.
 **RULED as a derivation with a named dynamic input, because the honest answer
 is not a table of constants.**
 
-**The inherited table, read at source** (`src/cryptonote_basic/connection_context.cpp:41-71`) —
+**The inherited table, read at source** (`src/cryptonote_basic/connection_context.cpp:41-71` at ruling; the live table is `rust/shekyl-levin/src/ingress.rs`) —
 13 arms, and after PWD-B10 and PWD-B6 it is **11**:
 
 | Command | Inherited cap | Disposition |
@@ -2930,8 +2997,8 @@ is not a table of constants.**
 | `NOTIFY_RESPONSE_GET_OBJECTS` (2004) | 128 MB | **Batch-bounded, not single-block** — see below |
 | `NOTIFY_REQUEST_CHAIN` (2006) | 512 kB | A hash list; derives from its length bound |
 | `NOTIFY_RESPONSE_CHAIN_ENTRY` (2007) | 4 MB | A hash list; derives from its length bound |
-| `NOTIFY_NEW_FLUFFY_BLOCK` (2008) | 4 MB | **The dynamic one** — see below |
-| `NOTIFY_REQUEST_FLUFFY_MISSING_TX` (2009) | 1 MB | An index list; derives from the block's tx count bound |
+| `NOTIFY_NEW_COMPACT_BLOCK` (2008) | 4 MB | **The dynamic one** — see below |
+| `NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009) | 1 MB | An index list; derives from the block's tx count bound |
 | `NOTIFY_GET_TXPOOL_COMPLEMENT` (2010) | 4 MB | A hash list; derives from the pool bound |
 
 > **The block-carrying commands cannot take a static cap, and this is the
@@ -2992,7 +3059,7 @@ inventing a consensus constant from a p2p round.
 > limit with it.
 
 > **`NOTIFY_RESPONSE_GET_OBJECTS` (2004) takes a different bound from
-> `NOTIFY_NEW_FLUFFY_BLOCK` (2008), because it is not a single block.** Its
+> `NOTIFY_NEW_COMPACT_BLOCK` (2008), because it is not a single block.** Its
 > payload is `std::vector<block_complete_entry> blocks` plus a `missed_ids`
 > list (`src/cryptonote_protocol/cryptonote_protocol_defs.h:173-190`) — a **sync batch**. A cap sized
 > for one block plus a tip-lag margin either rejects legitimate multi-block
@@ -3651,10 +3718,10 @@ rather than inheriting whatever the default happens to be.
 > surface; the type is the gate. The FOLLOWUPS queue carries this action.
 >
 > **The announce path, checked rather than assumed (same review round).** The
-> parse arm of `handle_notify_new_fluffy_block`
-> (`cryptonote_protocol_handler.inl:545-556`) is genuine *form* —
+> parse arm of `handle_notify_new_compact_block`
+> (`cryptonote_protocol_handler.inl:551-562`) is genuine *form* —
 > input-describing, universal — and its drop stands. The size arm
-> (`check_incoming_block_size`, `:536-540`) is **state-describing**: it
+> (`check_incoming_block_size`, `:542-546`) is **state-describing**: it
 > compares the blob against **our** current weight limit + 100
 > (`src/cryptonote_core/cryptonote_core.cpp:1408-1420`), and the limit a few
 > heights ahead can legally exceed ours (how fast is the consensus lane's

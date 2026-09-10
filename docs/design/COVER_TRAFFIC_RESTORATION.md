@@ -1329,7 +1329,7 @@ it.
 
 **The gate is pool MEMBERSHIP, checked at verdict time, and it covers the
 whole application.** `i_core_events::pool_has_tx` — a read-only query
-`cryptonote::core` already implemented for fluffy-block reconstruction, using
+`cryptonote::core` already implemented for compact-block reconstruction, using
 `relay_category::all`, because the question is "do we still hold this", not
 "in what class". Gating the whole verdict rather than only the observation
 also stops the discard arm fluffing a transaction that is already in a block,

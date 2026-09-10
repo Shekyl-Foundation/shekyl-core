@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use shekyl_levin::{
     invoke, response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest,
-    HandshakeResponse, NetworkAddress, PortableMap, Received, SupportFlagsRequest,
+    HandshakeResponse, NetworkAddress, PortableMap, Received, SupportFlags, SupportFlagsRequest,
     SupportFlagsResponse, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE,
     COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
@@ -35,9 +35,6 @@ use shekyl_levin::{
 const MAINNET_NETWORK_ID: [u8; 16] = [
     0x55, 0x6C, 0xA9, 0x70, 0x8F, 0xF9, 0x1F, 0x7A, 0x40, 0x69, 0xDA, 0xF3, 0xFC, 0x55, 0xBB, 0xBD,
 ];
-
-/// `P2P_SUPPORT_FLAGS` (`FLUFFY_BLOCKS | ZSTD_COMPRESSION`).
-const P2P_SUPPORT_FLAGS: u32 = 0x01 | 0x02;
 
 /// C++ p2p command handlers return `1` on success (`net_node.inl`
 /// `handle_handshake` / `handle_ping`). `LEVIN_OK` (0) is the protocol
@@ -315,7 +312,7 @@ impl Session {
                 {
                     SupportFlagsRequest::load(&payload).expect("support-flags request");
                     let body = SupportFlagsResponse {
-                        support_flags: P2P_SUPPORT_FLAGS,
+                        support_flags: SupportFlags::ADVERTISED,
                     }
                     .store()
                     .expect("store support-flags");
@@ -385,7 +382,7 @@ fn rust_client_handshakes_with_shekyld() {
                 ip: Ipv4Addr::new(9, 9, 9, 9),
                 port: advertised_port,
             },
-            support_flags: P2P_SUPPORT_FLAGS,
+            support_flags: SupportFlags::ADVERTISED,
         },
         payload_data: CoreSyncData {
             current_height: tip.height,
@@ -433,5 +430,5 @@ fn rust_client_handshakes_with_shekyld() {
     let (rc, payload) = session.invoke_map(COMMAND_REQUEST_SUPPORT_FLAGS, &SupportFlagsRequest);
     assert_eq!(rc, COMMAND_OK, "support-flags return_code");
     let flags = SupportFlagsResponse::load(&payload).expect("decode support-flags");
-    assert_eq!(flags.support_flags, P2P_SUPPORT_FLAGS);
+    assert_eq!(flags.support_flags, SupportFlags::ADVERTISED);
 }

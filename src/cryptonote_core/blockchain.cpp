@@ -6224,8 +6224,8 @@ leave:
 
     // @TODO: We should move this section (checking if the daemon has all txs from the block) to
     // right after the PoW check. Since it's now expected the node will sometimes not have all txs
-    // in its pool at this point nor the txs included as fluffy txs (and will need to re-request
-    // missing fluffy txs), then the node will sometimes waste cycles doing verification for some
+    // in its pool at this point nor the txs included in the compact payload (and will need to
+    // re-request missing txs), then the node will sometimes waste cycles doing verification for some
     // txs twice.
     if (find_tx_failure) // did not find txid in mempool or provided extra block txs
     {

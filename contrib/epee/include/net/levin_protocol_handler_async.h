@@ -33,6 +33,7 @@
 #include <boost/smart_ptr/make_shared.hpp>
 
 #include <atomic>
+#include <cstdint>
 #include <deque>
 
 #include "levin_base.h"
@@ -157,6 +158,27 @@ class async_protocol_handler
     return true;
   }
 
+  //! PWD-B4: admit this header's `(command, flags)` or close the connection.
+  //! Caches the cap on `m_admitted_cap` so decompress uses the same bound
+  //! without a second FFI round-trip. Fatal even for a zero-length payload.
+  bool admit_current_head()
+  {
+    int32_t rc = 0;
+    const auto cap = m_connection_context.get_max_bytes(
+      m_current_head.m_command, m_current_head.m_flags, &rc);
+    if (!cap)
+    {
+      MERROR(m_connection_context << "Unrecognised Levin input at ingress"
+        << ", command " << m_current_head.m_command
+        << ", flags " << m_current_head.m_flags
+        << ", rc " << rc
+        << ", connection will be closed.");
+      return false;
+    }
+    m_admitted_cap = *cap;
+    return true;
+  }
+
 public:
   typedef t_connection_context connection_context;
   typedef async_protocol_handler_config<t_connection_context> config_type;
@@ -180,6 +202,7 @@ public:
   std::atomic<uint32_t> m_wait_count;
   std::atomic<uint32_t> m_close_called;
   bucket_head2 m_current_head;
+  size_t m_admitted_cap;
   net_utils::i_service_endpoint* m_pservice_endpoint; 
   config_type& m_config;
   t_connection_context& m_connection_context;
@@ -307,6 +330,7 @@ public:
     config_type& config, 
     t_connection_context& conn_context):
             m_current_head(bucket_head2()),
+            m_admitted_cap(0),
             m_pservice_endpoint(psnd_hndlr), 
             m_config(config), 
             m_connection_context(conn_context),
@@ -485,10 +509,11 @@ public:
             temp = std::move(m_fragment_buffer);
             m_fragment_buffer.clear();
             std::memcpy(std::addressof(m_current_head), std::addressof(temp[0]), sizeof(bucket_head2));
-            const size_t max_bytes = m_connection_context.get_max_bytes(m_current_head.m_command);
-            if(m_current_head.m_cb > std::min<size_t>(max_packet_size, max_bytes))
+            if (!admit_current_head())
+              return false;
+            if(m_current_head.m_cb > std::min<size_t>(max_packet_size, m_admitted_cap))
             {
-              MERROR(m_connection_context << "Maximum packet size exceed!, m_max_packet_size = " << std::min<size_t>(max_packet_size, max_bytes)
+              MERROR(m_connection_context << "Maximum packet size exceed!, m_max_packet_size = " << std::min<size_t>(max_packet_size, m_admitted_cap)
                 << ", packet header received " << m_current_head.m_cb << ", command " << m_current_head.m_command
                 << ", connection will be closed.");
               return false;
@@ -503,7 +528,7 @@ public:
             // checked against, so a compressed payload cannot expand past the
             // packet-size / per-command caps in force.
             const uint64_t max_decompressed = std::min<uint64_t>(
-                max_packet_size, m_connection_context.get_max_bytes(m_current_head.m_command));
+                max_packet_size, m_admitted_cap);
             if (!levin::decompress_payload(buff_to_invoke, decompressed_buf, max_decompressed))
             {
               MERROR(m_connection_context << "Failed to decompress Levin payload, cmd=" << m_current_head.m_command);
@@ -616,10 +641,11 @@ public:
           m_cache_in_buffer.erase(sizeof(bucket_head2));
           m_state = stream_state_body;
           m_oponent_protocol_ver = m_current_head.m_protocol_version;
-          const size_t max_bytes = m_connection_context.get_max_bytes(m_current_head.m_command);
-          if(m_current_head.m_cb > std::min<size_t>(max_packet_size, max_bytes))
+          if (!admit_current_head())
+            return false;
+          if(m_current_head.m_cb > std::min<size_t>(max_packet_size, m_admitted_cap))
           {
-            LOG_ERROR_CC(m_connection_context, "Maximum packet size exceed!, m_max_packet_size = " << std::min<size_t>(max_packet_size, max_bytes)
+            LOG_ERROR_CC(m_connection_context, "Maximum packet size exceed!, m_max_packet_size = " << std::min<size_t>(max_packet_size, m_admitted_cap)
               << ", packet header received " << m_current_head.m_cb << ", command " << m_current_head.m_command
               << ", connection will be closed.");
             return false;

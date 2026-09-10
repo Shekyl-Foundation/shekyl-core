@@ -364,7 +364,7 @@ struct RecordingProtocol final : cryptonote::i_cryptonote_protocol
   cryptonote::relay_method method = cryptonote::relay_method::none;
 
   bool is_synchronized() const override { return true; }
-  bool relay_block(NOTIFY_NEW_FLUFFY_BLOCK::request&, cryptonote_connection_context&) override
+  bool relay_block(NOTIFY_NEW_COMPACT_BLOCK::request&, cryptonote_connection_context&) override
   {
     return true;
   }

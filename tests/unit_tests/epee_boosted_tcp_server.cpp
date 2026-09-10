@@ -34,6 +34,8 @@
 #include <boost/thread/mutex.hpp>
 #include <condition_variable>
 #include <mutex>
+#include <cstdint>
+#include <optional>
 
 #include "gtest/gtest.h"
 
@@ -139,7 +141,7 @@ TEST(boosted_tcp_server, worker_threads_are_exception_resistant)
 TEST(test_epee_connection, test_lifetime)
 {
   struct context_t: epee::net_utils::connection_context_base {
-    static constexpr size_t get_max_bytes(int) noexcept { return -1; }
+    static std::optional<size_t> get_max_bytes(uint32_t, uint32_t, int32_t* = nullptr) noexcept { return size_t(-1); }
     static constexpr int handshake_command() noexcept { return 1001; }
     static constexpr bool handshake_complete() noexcept { return true; }
   };
@@ -475,7 +477,7 @@ TEST(test_epee_connection, test_lifetime)
 TEST(test_epee_connection, ssl_shutdown)
 {
   struct context_t: epee::net_utils::connection_context_base {
-    static constexpr size_t get_max_bytes(int) noexcept { return -1; }
+    static std::optional<size_t> get_max_bytes(uint32_t, uint32_t, int32_t* = nullptr) noexcept { return size_t(-1); }
     static constexpr int handshake_command() noexcept { return 1001; }
     static constexpr bool handshake_complete() noexcept { return true; }
   };

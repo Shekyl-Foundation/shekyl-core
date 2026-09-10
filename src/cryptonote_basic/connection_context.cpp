@@ -29,44 +29,26 @@
 
 #include "connection_context.h"
 
-#include <optional>
-#include "cryptonote_protocol/cryptonote_protocol_defs.h"
-#include "p2p/p2p_protocol_defs.h"
+#include <limits>
+#include "shekyl/shekyl_ffi.h"
 
 namespace cryptonote
 {
-  std::size_t cryptonote_connection_context::get_max_bytes(const int command) noexcept
+  std::optional<std::size_t> cryptonote_connection_context::get_max_bytes(const uint32_t command, const uint32_t flags, int32_t* reject_rc) noexcept
   {
-    switch (command)
-    {
-    case nodetool::COMMAND_HANDSHAKE_T<cryptonote::CORE_SYNC_DATA>::ID:
-      return 65536;
-    case nodetool::COMMAND_TIMED_SYNC_T<cryptonote::CORE_SYNC_DATA>::ID:
-      return 65536;
-    case nodetool::COMMAND_REQUEST_SUPPORT_FLAGS::ID:
-      return 4096;
-    case cryptonote::NOTIFY_NEW_BLOCK::ID:
-      return 1024 * 1024 * 128; // 128 MB (max packet is a bit less than 100 MB though)
-    case cryptonote::NOTIFY_NEW_TRANSACTIONS::ID:
-      return 1024 * 1024 * 128; // 128 MB (max packet is a bit less than 100 MB though)
-    case cryptonote::NOTIFY_REQUEST_GET_OBJECTS::ID:
-      return 1024 * 1024 * 2; // 2 MB
-    case cryptonote::NOTIFY_RESPONSE_GET_OBJECTS::ID:
-      return 1024 * 1024 * 128; // 128 MB (max packet is a bit less than 100 MB though)
-    case cryptonote::NOTIFY_REQUEST_CHAIN::ID:
-      return 512 * 1024; // 512 kB
-    case cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::ID:
-      return 1024 * 1024 * 4; // 4 MB
-    case cryptonote::NOTIFY_NEW_FLUFFY_BLOCK::ID:
-      return 1024 * 1024 * 4; // 4 MB, but it does not includes transaction data
-    case cryptonote::NOTIFY_REQUEST_FLUFFY_MISSING_TX::ID:
-      return 1024 * 1024; // 1 MB
-    case cryptonote::NOTIFY_GET_TXPOOL_COMPLEMENT::ID:
-      return 1024 * 1024 * 4; // 4 MB
-    default:
-      break;
-    };
-    return std::numeric_limits<size_t>::max();
+    // PWD-B3 / PWD-B3a / PWD-B4: the table and the discriminator live in
+    // rust/shekyl-levin. This is the marshaling shim (rule 20). PWD-B6
+    // deleted NOTIFY_NEW_BLOCK (2001) and PWD-B10 deleted COMMAND_PING
+    // (1003); a Q/S-flagged 2001 or 1003 is unknown dispatch.
+    uint64_t cap = 0;
+    const int32_t rc = shekyl_levin_ingress_admit(command, flags, &cap);
+    if (reject_rc)
+      *reject_rc = rc;
+    if (rc != 0)
+      return std::nullopt;
+    if (cap >= std::numeric_limits<size_t>::max())
+      return std::numeric_limits<size_t>::max();
+    return static_cast<size_t>(cap);
   }
 
   void cryptonote_connection_context::set_state_normal()

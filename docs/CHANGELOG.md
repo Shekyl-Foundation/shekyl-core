@@ -98,6 +98,22 @@
   `(tx_count_sum, window_blocks)` in place of one `tx_volume` scalar.
   Pre-genesis; no chain to migrate.
 
+- **Levin ingress rejects unknown commands and unknown flag bits.** A
+  dispatch (`REQUEST`/`RESPONSE`) whose command is not a `DefinedCommand`,
+  or any flag bit outside the five defined flags, is connection-fatal at
+  ingress. Cover traffic (neither `REQUEST` nor `RESPONSE`, typically
+  command 0) is still admitted and bounded by the packet limit. The table
+  and discriminator live in `shekyl-levin`; C++ `handle_recv` is a
+  marshaling shim (`shekyl_levin_ingress_admit`). `NOTIFY_NEW_BLOCK`
+  (2001) and `COMMAND_PING` (1003) are unknown dispatch; the sole block
+  announce is 2008 `NOTIFY_NEW_COMPACT_BLOCK`. Cap movements vs the
+  inherited table: 1007 support-flags 4096 → 256; 2003 get-objects
+  request 2 MiB → 5056 (hash-list derivation); 2006 request-chain
+  512 KiB → 1_200_256 (hash-list derivation, the inherited envelope
+  could not fit `BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT`); 2007 / 2008 /
+  2009 / 2010 keep their inherited envelopes (4 / 4 / 1 / 4 MiB) rather
+  than taking the packet limit; 2002 and 2004 stay at the packet limit
+  until PWD-B12 and the 2004 byte budget land.
 - **A peer is dropped only when the rejection is attributable to the
   sender (PWD-B7).** The inherited `m_no_drop_offense` flag meant
   droppable by *absence*, so our own pool-bookkeeping failures and
@@ -335,6 +351,23 @@
   gains a `c_q` parameter.
 
 ### Removed
+
+- **One block-propagation path, not two (PWD-B6).** `NOTIFY_NEW_BLOCK`
+  (2001) is deleted; command **2008** is the sole block announce. The two
+  were already one code path — 2001's handler forwarded into 2008 — and
+  nothing ever sent 2001. Command ids **2008 / 2009 are unchanged**. The
+  identifiers are `NOTIFY_NEW_COMPACT_BLOCK` / `NOTIFY_REQUEST_COMPACT_MISSING_TX`
+  (Rust: `NewCompactBlock` / `RequestCompactMissingTx`): `FLUFFY` collides
+  with Dandelion++ stem/fluff (`dandelionpp_fluff` on 2002) and names a
+  Monero rollout this chain has no history of. Compact, not "just block":
+  2008 is header-first (relay clears `b.txs`); full blocks still travel on
+  `NOTIFY_RESPONSE_GET_OBJECTS` (2004) during sync. `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS`
+  (0x01) goes with 2001; `0x01` is left unassigned. Advertised flags live
+  as `shekyl-levin::SupportFlags::ADVERTISED` (zstd only), pinned against
+  the C++ macros by `check_levin_constant_parity.sh`. The obsolete
+  `--fluffy-blocks` CLI flag is deleted. No protocol version moves:
+  `SHEKYL_PROTOCOL_VERSION` denotes the crypto era, and there is no
+  wire-command-set version to bump.
 
 - **The anchor peerlist mechanism is deleted whole** — the persisted anchor
   section, `anchor_peerlist_entry`, its container and manager methods, the

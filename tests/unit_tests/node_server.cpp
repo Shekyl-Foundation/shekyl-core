@@ -170,10 +170,10 @@ struct cryptonote_protocol_handler_test_seam
   { return h.handle_notify_new_transactions(0, arg, ctx); }
 
   template<class T>
-  static int handle_notify_new_fluffy_block(cryptonote::t_cryptonote_protocol_handler<T> &h,
-                                            cryptonote::NOTIFY_NEW_FLUFFY_BLOCK::request &arg,
+  static int handle_notify_new_compact_block(cryptonote::t_cryptonote_protocol_handler<T> &h,
+                                            cryptonote::NOTIFY_NEW_COMPACT_BLOCK::request &arg,
                                             cryptonote::cryptonote_connection_context &ctx)
-  { return h.handle_notify_new_fluffy_block(0, arg, ctx); }
+  { return h.handle_notify_new_compact_block(0, arg, ctx); }
 };
 
 typedef nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<test_core>> Server;
@@ -203,6 +203,39 @@ static bool is_blocked(Server &server, const epee::net_utils::network_address &a
       return true;
 
   return false;
+}
+
+// PWD-B6: 2008 is the sole block-announce command; 2001 is refused as unknown.
+// `handled` starts false because the invoke map sets it on a match and never
+// clears it. Live-daemon regtest is --offline and does not cover p2p relay.
+TEST(cryptonote_protocol_handler, block_propagation_has_exactly_one_command)
+{
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  cryptonote::cryptonote_connection_context context{};
+  epee::byte_stream out;
+
+  cryptonote::NOTIFY_NEW_COMPACT_BLOCK::request compact{};
+  compact.current_blockchain_height = 1;
+  epee::byte_stream body;
+  ASSERT_TRUE(epee::serialization::store_t_to_binary(compact, body));
+  const epee::span<const uint8_t> in_buff{body.data(), body.size()};
+
+  {
+    bool handled = false;
+    const int rc = cprotocol.handle_invoke_map(true, 2001, in_buff, out, context, handled);
+    EXPECT_FALSE(handled) << "command 2001 is still dispatched somewhere";
+    EXPECT_EQ(LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED, rc)
+        << "2001 must be refused as an unknown command, not silently ignored";
+  }
+
+  {
+    bool handled = false;
+    cprotocol.handle_invoke_map(true, cryptonote::NOTIFY_NEW_COMPACT_BLOCK::ID,
+                                in_buff, out, context, handled);
+    EXPECT_TRUE(handled)
+        << "NOTIFY_NEW_COMPACT_BLOCK must still dispatch — it is the only block path";
+  }
 }
 
 TEST(node_server, sanitize_peerlist_drops_undialable_ipv4)
@@ -2559,10 +2592,10 @@ namespace
 
     int notify_block(const cryptonote::blobdata &blob)
     {
-      cryptonote::NOTIFY_NEW_FLUFFY_BLOCK::request arg{};
+      cryptonote::NOTIFY_NEW_COMPACT_BLOCK::request arg{};
       arg.b.block = blob;
       arg.current_blockchain_height = 1;
-      return cryptonote_protocol_handler_test_seam::handle_notify_new_fluffy_block(
+      return cryptonote_protocol_handler_test_seam::handle_notify_new_compact_block(
           cprotocol, arg, ctx());
     }
   };
