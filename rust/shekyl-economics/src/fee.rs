@@ -207,6 +207,38 @@ pub fn hysteresis_step(c_scaled: u64, prev_cq_scaled: u64) -> u64 {
     }
 }
 
+/// The §7 band applied to a **span** of raw corrections, unseeded at the
+/// first (`FEE_LADDER_DERIVATION.md` §10.12.4).
+///
+/// This is the FL-R3 time-grid fold's single owner: `cells[0]` is the
+/// anchor `h₀ = h − (h mod P)` and `cells[i]` the raw `C` at `h₀ + i`.
+/// The first cell snaps with no history (the anchor is where the grid
+/// forgets), and every later cell enters [`hysteresis_step`] against the
+/// value the previous cell produced. The result is the banded `C_q` at
+/// the last height — a pure function of the span, which is what lets the
+/// daemon recompute it from chain state alone instead of carrying a
+/// `prev_cq` it has no owner for (§10.1's two constraints).
+///
+/// `None` for an empty span: there is no anchor to snap. The FFI wrapper
+/// (§10.12.4) turns that into its `−2` status; nothing here panics on
+/// input, per rule 40. `P` and the anchor rule are the caller's — this
+/// function knows only the span it is handed, so the constant that
+/// R18-M1 has not yet signed lands nowhere in it.
+///
+/// The derivation instrument's grid arms fold through this function
+/// rather than through a private loop, for the same reason
+/// [`hysteresis_step`] exists: a measurement of a copy is a measurement of
+/// a different mechanism.
+#[must_use]
+pub fn hysteresis_fold(cells_scaled: &[u64]) -> Option<u64> {
+    let (first, rest) = cells_scaled.split_first()?;
+    let mut cq = hysteresis_step(*first, 0);
+    for &c in rest {
+        cq = hysteresis_step(c, cq);
+    }
+    Some(cq)
+}
+
 /// Wallet-side emission-claim **value floor**, in atomic units
 /// (`ENGINE_CADENCE_DRIVER.md` §4): the engine cadence driver's claim leg
 /// holds settled epochs until Σreward across the held set clears this
@@ -484,6 +516,28 @@ mod tests {
         assert_eq!(fee_correction_quantized(65, 0, 0, SCALE, &p), 2 * SCALE);
         // And a held higher step survives small dips below its boundary.
         assert_eq!(fee_correction_quantized(51, 0, 0, 2 * SCALE, &p), 2 * SCALE);
+    }
+
+    /// §10.12.4's KAT: a one-cell fold IS the unseeded snap, and a fold
+    /// IS the iterated step — the grid owner adds no mechanism of its own.
+    #[test]
+    fn hysteresis_fold_is_the_iterated_step() {
+        assert_eq!(hysteresis_fold(&[]), None);
+        for c in [0, SCALE >> 6, 680_000, SCALE, 1_020_000, 12_917_390] {
+            assert_eq!(hysteresis_fold(&[c]), Some(hysteresis_step(c, 0)));
+        }
+        // Anchor snaps 1.02 → 2 unseeded; the in-band wobble that follows
+        // (1.02, 0.99, 1.01) is held at 2 by the band; the decisive dip to
+        // 0.9 leaves it. Every intermediate is the step's own answer.
+        let span = [1_020_000, 1_020_000, 990_000, 1_010_000, 900_000];
+        let mut cq = hysteresis_step(span[0], 0);
+        assert_eq!(cq, 2 * SCALE);
+        for (i, &c) in span.iter().enumerate().skip(1) {
+            cq = hysteresis_step(c, cq);
+            assert_eq!(hysteresis_fold(&span[..=i]), Some(cq));
+        }
+        assert_eq!(hysteresis_fold(&span[..4]), Some(2 * SCALE));
+        assert_eq!(hysteresis_fold(&span), Some(SCALE));
     }
 
     #[test]

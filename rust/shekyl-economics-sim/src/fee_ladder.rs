@@ -45,7 +45,7 @@ use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
     calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
-    effective_emission, emission_speed_factor, hysteresis_step, paid_block_reward,
+    effective_emission, emission_speed_factor, hysteresis_fold, hysteresis_step, paid_block_reward,
     projected_already_generated, tail_subsidy_per_block, EconomicParams, BLOCKS_PER_YEAR,
     STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
@@ -647,6 +647,11 @@ pub struct DwellResult {
     /// derived from `P`: the fold depth is `h mod P`, so the observed
     /// maximum says what the COLD path actually pays.
     pub grid_max_fold_depth: u64,
+    /// The arm's grid period (0 for non-grid arms), from
+    /// [`LadderMode::grid_period`]. The C10-3 cost summary selects and
+    /// labels its rows by this, not by a list of names it expects to find
+    /// (§10.12.1's defect).
+    pub grid_period: u64,
     /// For ramp scenarios: the shortest completed run that STARTED inside
     /// the ramp window, per rung — the statistic the FL-C4a ramp criterion
     /// actually gates on (the whole-trace median is dominated by the
@@ -692,6 +697,14 @@ enum LadderMode {
     /// asked, and C10-5 pre-registers how each outcome reads. The band
     /// staying is RULED; this arm may not be read as reopening it.
     GridOnly(u64),
+    /// §10.12.3(b) — the **warm-anchor** fold, round 2's mechanism test:
+    /// `GridFold(p)` with the anchor moved `w` whole cells back, so the
+    /// fold depth is `w·P + (h mod P) + 1 ∈ [w·P, (w+1)·P)`. INSTRUMENT,
+    /// not a proposal — it costs more than the budget by construction.
+    /// It exists to falsify one claim: that C10-1's extra cells are
+    /// anchor-flip cells, which a deeper fold cannot recover because it
+    /// moves the anchor rather than removing it (R2-E3).
+    GridFoldWarm(u64, u64),
 }
 
 /// The §7 hysteresis construction — the history, held so the sweep can
@@ -779,50 +792,80 @@ impl RateLimitedCq {
 /// re-fold is also what makes the served value a pure function of
 /// `(trace, h)` — the property FL-R18 closed on.
 ///
-/// The step itself is `shekyl-economics::hysteresis_step`; this holds no
-/// band arithmetic, per FL-R3 constraint (2) and the drifted-copy lesson
-/// that discharged declared exception #3.
+/// The fold itself is `shekyl-economics::hysteresis_fold` — the owner
+/// §10.12.4 pins for the daemon, so the arm measures the mechanism that
+/// will ship. This holds no band arithmetic, per FL-R3 constraint (2) and
+/// the drifted-copy lesson that discharged declared exception #3; round
+/// 1's private fold loop here was the last such copy and is gone.
 struct GridCq {
     period: u64,
     /// Grid-only (§10.3 C) when true: the anchor's snap, held for the cell.
     only: bool,
-    /// Raw `C` at each height from the anchor to the current height.
-    cell: Vec<u64>,
+    /// Whole cells the anchor is moved back (§10.12.3(b)); 0 is §10.3 B.
+    warm_cells: u64,
+    /// Raw `C` at each height from the anchor to the current height,
+    /// oldest first. Bounded at `(warm_cells + 1)·P`.
+    span: VecDeque<u64>,
+    /// Last height stepped, so a non-contiguous walk is detected rather
+    /// than folded over.
+    last_height: Option<u64>,
     /// Deepest fold actually evaluated — C10-3's evidence.
     max_depth: u64,
 }
 
 impl GridCq {
-    fn new(period: u64, only: bool) -> Self {
+    /// The stepper an arm needs; an inert `P = 1` stepper for non-grid
+    /// arms so the drivers can hold one unconditionally.
+    fn for_mode(mode: LadderMode) -> Self {
+        match mode {
+            LadderMode::GridFold(p) => Self::new(p, false, 0),
+            LadderMode::GridOnly(p) => Self::new(p, true, 0),
+            LadderMode::GridFoldWarm(p, w) => Self::new(p, false, w),
+            _ => Self::new(1, false, 0),
+        }
+    }
+
+    fn new(period: u64, only: bool, warm_cells: u64) -> Self {
         Self {
             period: period.max(1),
             only,
-            cell: Vec::new(),
+            warm_cells,
+            span: VecDeque::new(),
+            last_height: None,
             max_depth: 0,
         }
     }
 
     fn step(&mut self, height: u64, c_raw: u64) -> u64 {
-        let off = (height % self.period) as usize;
-        // Re-anchor at the cell boundary. `truncate` also makes the
-        // stepper total if a driver ever walks non-contiguously: the cell
-        // is rebuilt from whatever prefix is present rather than folding
-        // over stale heights.
-        self.cell.truncate(off);
-        self.cell.push(c_raw);
+        let off = height % self.period;
+        // The anchor is `h₀ − warm·P`; the span the daemon would re-read
+        // from chain state runs from there to `h`. Its length at this
+        // height is fixed by `h` alone — so if the driver skipped a height
+        // the span cannot be rebuilt from what is held, and it restarts
+        // (total, never folding over stale heights).
+        let want = self.warm_cells * self.period + off + 1;
+        if self.last_height != height.checked_sub(1) {
+            self.span.clear();
+        }
+        self.last_height = Some(height);
+        self.span.push_back(c_raw);
+        while self.span.len() as u64 > want {
+            self.span.pop_front();
+        }
+        // During the first `warm` cells of a trace the true anchor lies
+        // before the trace began; the fold then starts at the trace's
+        // first height instead — depth `< want`, which the depth record
+        // shows honestly.
+        let cells = self.span.make_contiguous();
+        let depth = cells.len() as u64;
         if self.only {
             // The anchor's plain snap (`prev = 0` is "no history"), held
             // for the whole cell.
-            let anchor = self.cell[0];
             self.max_depth = self.max_depth.max(1);
-            return hysteresis_step(anchor, 0);
+            return hysteresis_step(cells[0], 0);
         }
-        let mut cq = 0u64;
-        for &c in &self.cell {
-            cq = hysteresis_step(c, cq);
-        }
-        self.max_depth = self.max_depth.max(self.cell.len() as u64);
-        cq
+        self.max_depth = self.max_depth.max(depth);
+        hysteresis_fold(cells).expect("span holds the height just pushed")
     }
 }
 
@@ -846,7 +889,30 @@ impl LadderMode {
             | LadderMode::QuantizedHysteresis
             | LadderMode::RateLimited(_)
             | LadderMode::GridFold(_)
-            | LadderMode::GridOnly(_) => true,
+            | LadderMode::GridOnly(_)
+            | LadderMode::GridFoldWarm(..) => true,
+        }
+    }
+
+    /// The grid period, for the arms that have one.
+    ///
+    /// Everything downstream that is *about the grid* — which rows the
+    /// C10-3 cost summary reads, which arms get a per-cell diff against
+    /// the reference, whether a transition sits on an anchor — asks this,
+    /// never a label. Round 1 read C10-3's depth off a hard-coded label
+    /// list and reported the wrong arm's number (§10.12.1); that is the
+    /// third figure in one round derived from a label or mode list rather
+    /// than from the arm, and this is where the class is closed.
+    fn grid_period(self) -> Option<u64> {
+        match self {
+            LadderMode::GridFold(p) | LadderMode::GridOnly(p) | LadderMode::GridFoldWarm(p, _) => {
+                Some(p)
+            }
+            LadderMode::Current
+            | LadderMode::CorrectedRaw
+            | LadderMode::Quantized(_)
+            | LadderMode::QuantizedHysteresis
+            | LadderMode::RateLimited(_) => None,
         }
     }
 
@@ -863,6 +929,7 @@ impl LadderMode {
             LadderMode::RateLimited(n) => format!("served-rate-limited-n{n}"),
             LadderMode::GridFold(p) => format!("grid-fold-p{p}"),
             LadderMode::GridOnly(p) => format!("grid-only-p{p}"),
+            LadderMode::GridFoldWarm(p, w) => format!("grid-fold-p{p}-w{w}"),
         }
     }
 }
@@ -940,11 +1007,7 @@ fn dwell_scenario(
         LadderMode::RateLimited(n) => RateLimitedCq::new(n),
         _ => RateLimitedCq::new(1),
     };
-    let mut grid = match mode {
-        LadderMode::GridFold(p) => GridCq::new(p, false),
-        LadderMode::GridOnly(p) => GridCq::new(p, true),
-        _ => GridCq::new(1, false),
-    };
+    let mut grid = GridCq::for_mode(mode);
     // FL-D8 (§10.9): raw-`C` boundary occupancy and residence. Raw `C` is
     // MODE-INDEPENDENT, so these come out identical on every arm — which
     // is a free self-check that the modes differ only in how they serve a
@@ -993,7 +1056,7 @@ fn dwell_scenario(
             }
             LadderMode::QuantizedHysteresis => served_ladder(base, median, hyst.step(c_raw)),
             LadderMode::RateLimited(_) => served_ladder(base, median, rate_limited.step(c_raw)),
-            LadderMode::GridFold(_) | LadderMode::GridOnly(_) => {
+            LadderMode::GridFold(_) | LadderMode::GridOnly(_) | LadderMode::GridFoldWarm(..) => {
                 served_ladder(base, median, grid.step(height, c_raw))
             }
         };
@@ -1066,6 +1129,7 @@ fn dwell_scenario(
         d8_max_residence_blocks: near_runs.iter().copied().max().unwrap_or(0),
         is_quantized_map: mode.serves_quantized_map(),
         grid_max_fold_depth: grid.max_depth,
+        grid_period: mode.grid_period().unwrap_or(0),
     }
 }
 
@@ -1116,6 +1180,13 @@ pub struct FeedbackResult {
     /// or an oscillation (transitions ≥ 2: the limit cycle FL-C7
     /// excludes).
     pub tail_transitions: u64,
+    /// Of `tail_transitions`, those at a height `h ≡ 0 (mod P)` — the
+    /// grid's anchors, where the fold forgets (§10.12.3). 0 for non-grid
+    /// arms, which have no anchors. A grid arm whose extra transitions
+    /// (over the banded reference) all sit here is losing cells to the
+    /// anchor flip, which no fold depth removes; one with transitions
+    /// elsewhere is losing them to something else.
+    pub tail_transitions_at_anchor: u64,
     pub v_avg_tail_min: u64,
     pub v_avg_tail_max: u64,
     pub fee_tail_min: u64,
@@ -1164,7 +1235,9 @@ fn feedback_scenario(
             LadderMode::Quantized(rule) => quantize_c_pow2(c, rule),
             LadderMode::QuantizedHysteresis => hyst.step(c),
             LadderMode::RateLimited(_) => rl.step(c),
-            LadderMode::GridFold(_) | LadderMode::GridOnly(_) => grid.step(height, c),
+            LadderMode::GridFold(_) | LadderMode::GridOnly(_) | LadderMode::GridFoldWarm(..) => {
+                grid.step(height, c)
+            }
             _ => c,
         };
         let ladder = served_ladder(base, median, c);
@@ -1181,7 +1254,7 @@ fn feedback_scenario(
         st.height,
         &mut HysteresisCq { prev: 0 },
         &mut RateLimitedCq::new(1),
-        &mut GridCq::new(1, false),
+        &mut GridCq::new(1, false, 0),
     )
     .0;
 
@@ -1203,17 +1276,15 @@ fn feedback_scenario(
     let mut floors: Vec<u64> = Vec::with_capacity(blocks as usize);
     let mut tail_fees = BTreeSet::new();
     let mut tail_transitions = 0u64;
+    let mut tail_transitions_at_anchor = 0u64;
     let mut last_tail_fee: Option<u64> = None;
     let mut hyst = HysteresisCq { prev: 0 };
     let mut rl = match mode {
         LadderMode::RateLimited(n) => RateLimitedCq::new(n),
         _ => RateLimitedCq::new(1),
     };
-    let mut grid = match mode {
-        LadderMode::GridFold(p) => GridCq::new(p, false),
-        LadderMode::GridOnly(p) => GridCq::new(p, true),
-        _ => GridCq::new(1, false),
-    };
+    let mut grid = GridCq::for_mode(mode);
+    let grid_period = mode.grid_period();
     let mut ag = st.ag;
     for t in 0..blocks {
         let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
@@ -1246,6 +1317,9 @@ fn feedback_scenario(
             if let Some(prev_fee) = last_tail_fee {
                 if fee != prev_fee {
                     tail_transitions += 1;
+                    if grid_period.is_some_and(|p| (st.height + t).is_multiple_of(p)) {
+                        tail_transitions_at_anchor += 1;
+                    }
                 }
             }
             last_tail_fee = Some(fee);
@@ -1285,6 +1359,7 @@ fn feedback_scenario(
         mode: mode.name(),
         distinct_fees_tail: tail_fees.len() as u64,
         tail_transitions,
+        tail_transitions_at_anchor,
         v_avg_tail_min: v_min,
         v_avg_tail_max: v_max,
         fee_tail_min: fee_min,
@@ -1328,6 +1403,33 @@ pub struct GridSweepPoint {
     /// §4.5b's thin-margin measure, carried so a grid's effect on the
     /// rejection race is measured on the same axis FL-R18 used.
     pub thin_margin_cells: u64,
+    /// §10.12.3(a) per-cell diff against the RULED banded reference
+    /// (`corrected-quantized-pow2-ceil-hysteresis`, same sweep): cells
+    /// this arm leaves oscillating that the reference does not. C10-1's
+    /// "20 vs 14" made concrete — round 1 counted, round 2 names.
+    pub extra_cells: u64,
+    /// Worst `tail_transitions` among the extra cells.
+    pub extra_cells_worst_transitions: u64,
+    /// Across the extra cells, tail transitions NOT at a grid anchor.
+    /// §10.12.3's claim is that the extra cells are anchor-flip cells,
+    /// which predicts exactly 0 here (R2-E2); any other value is a
+    /// transition the anchor story does not account for.
+    pub extra_cells_off_anchor_transitions: u64,
+    /// The reverse set: cells the reference leaves oscillating that this
+    /// arm does not. Predicted empty for the fold arms — the grid adds
+    /// forgetting, it does not add damping.
+    pub recovered_cells: u64,
+}
+
+/// A feedback cell's identity on the shared sweep grid:
+/// `(state height, median, ε‰, demand scale, start volume)`.
+type CellKey = (u64, u64, u64, u64, u64);
+
+/// FL-C7's oscillation criterion, ONE owner for every sweep that scores
+/// it: at least two value changes in the tail, with an amplitude beyond a
+/// single rounding step.
+fn is_oscillating(fb: &FeedbackResult) -> bool {
+    fb.tail_transitions >= 2 && fb.fee_tail_max > round_money_up_2(fb.fee_tail_min + 1)
 }
 
 #[derive(Serialize)]
@@ -1645,8 +1747,18 @@ pub fn report() -> FeeLadderReport {
             // measured here. Omitting them left `grid_max_fold_depth` at
             // 0 on every row, which reads exactly like "the fold is
             // free" rather than "the fold was never run".
+            //
+            // Round 2 (§10.12.1): round 1 ran ONLY the P = 240 pair here
+            // and read C10-3's depth off it, then attributed the figure
+            // to the P = 720 that C10-4 selected. The selected P must be
+            // measured where the depth is measured; the 240 arms stay so
+            // the round-1 number stays reproducible next to the corrected
+            // one, and the warm arm carries §10.12.3(b)'s depth ∈ [P, 2P).
             LadderMode::GridFold(240),
             LadderMode::GridOnly(240),
+            LadderMode::GridFold(720),
+            LadderMode::GridOnly(720),
+            LadderMode::GridFoldWarm(720, 1),
         ] {
             for &(label, m0, m1, median) in DWELL_SCENARIOS {
                 dwell.push(dwell_scenario(label, m0, m1, median, st, mode, &params));
@@ -1718,9 +1830,7 @@ pub fn report() -> FeeLadderReport {
                                 LadderMode::RateLimited(n),
                                 &params,
                             );
-                            if fb.tail_transitions >= 2
-                                && fb.fee_tail_max > round_money_up_2(fb.fee_tail_min + 1)
-                            {
+                            if is_oscillating(&fb) {
                                 oscillating += 1;
                                 worst_transitions = worst_transitions.max(fb.tail_transitions);
                             }
@@ -1758,59 +1868,95 @@ pub fn report() -> FeeLadderReport {
     // `...-hysteresis` is the RULED banded map (the target to reach).
     // Measuring all three on one grid is what makes "restored" a
     // comparison rather than an assertion.
-    let mut grid_sweep = Vec::new();
-    let arms: Vec<(LadderMode, u64)> = vec![
-        (LadderMode::Quantized(SnapRule::Ceiling), 0),
-        (LadderMode::QuantizedHysteresis, 0),
-        (LadderMode::GridFold(60), 60),
-        (LadderMode::GridOnly(60), 60),
-        (LadderMode::GridFold(240), 240),
-        (LadderMode::GridOnly(240), 240),
-        (LadderMode::GridFold(720), 720),
-        (LadderMode::GridOnly(720), 720),
+    //
+    // Round 2 (§10.12.3(a)) adds the PER-CELL diff against the banded
+    // reference. Round 1 compared totals (20 vs 14) and then EXPLAINED the
+    // difference from the mechanism's construction; the explanation was
+    // never itself measured. Each arm's cells are now matched to the
+    // reference's by state, so "which six" and "where do their
+    // transitions sit" are read off the run. The warm arm
+    // (§10.12.3(b)) is the mechanism's own falsifier: if the six were a
+    // depth artefact a fold of depth ∈ [P, 2P) would recover some of them.
+    let arms: Vec<LadderMode> = vec![
+        LadderMode::Quantized(SnapRule::Ceiling),
+        LadderMode::QuantizedHysteresis,
+        LadderMode::GridFold(60),
+        LadderMode::GridOnly(60),
+        LadderMode::GridFold(240),
+        LadderMode::GridOnly(240),
+        LadderMode::GridFold(720),
+        LadderMode::GridOnly(720),
+        LadderMode::GridFoldWarm(720, 1),
     ];
-    {
-        for (mode, period) in arms {
-            let mut oscillating = 0u64;
-            let mut worst_transitions = 0u64;
-            let mut thin_margin_cells = 0u64;
-            for &(_age, st) in &states {
-                let d_boundary = boundary_demand(st, &params);
-                for &median in &[zone, 3 * zone, 10 * zone, 50 * zone] {
-                    for eps in [0u64, 500, 1000, 2000, 3000] {
-                        for demand_scale in [50u64, 100, d_boundary, 400] {
-                            for start in [demand_scale, 8 * demand_scale.min(1_250)] {
-                                let fb = feedback_scenario(
-                                    eps,
-                                    demand_scale,
-                                    start,
-                                    st,
-                                    median,
-                                    mode,
-                                    &params,
-                                );
-                                if fb.tail_transitions >= 2
-                                    && fb.fee_tail_max > round_money_up_2(fb.fee_tail_min + 1)
-                                {
-                                    oscillating += 1;
-                                    worst_transitions = worst_transitions.max(fb.tail_transitions);
-                                }
-                                if fb.race_margin_min_milli < 1020 {
-                                    thin_margin_cells += 1;
-                                }
-                            }
+    let sweep_arm = |mode: LadderMode| -> Vec<(CellKey, FeedbackResult)> {
+        let mut cells = Vec::new();
+        for &(_age, st) in &states {
+            let d_boundary = boundary_demand(st, &params);
+            for &median in &[zone, 3 * zone, 10 * zone, 50 * zone] {
+                for eps in [0u64, 500, 1000, 2000, 3000] {
+                    for demand_scale in [50u64, 100, d_boundary, 400] {
+                        for start in [demand_scale, 8 * demand_scale.min(1_250)] {
+                            let fb = feedback_scenario(
+                                eps,
+                                demand_scale,
+                                start,
+                                st,
+                                median,
+                                mode,
+                                &params,
+                            );
+                            cells.push(((st.height, median, eps, demand_scale, start), fb));
                         }
                     }
                 }
             }
-            grid_sweep.push(GridSweepPoint {
-                mode: mode.name(),
-                period,
-                oscillating_cells: oscillating,
-                worst_tail_transitions: worst_transitions,
-                thin_margin_cells,
-            });
         }
+        cells
+    };
+    let reference: BTreeSet<CellKey> = sweep_arm(LadderMode::QuantizedHysteresis)
+        .into_iter()
+        .filter(|(_, fb)| is_oscillating(fb))
+        .map(|(key, _)| key)
+        .collect();
+    let mut grid_sweep = Vec::new();
+    for mode in arms {
+        let mut oscillating = 0u64;
+        let mut worst_transitions = 0u64;
+        let mut thin_margin_cells = 0u64;
+        let mut extra_cells = 0u64;
+        let mut extra_cells_worst_transitions = 0u64;
+        let mut extra_cells_off_anchor_transitions = 0u64;
+        let mut recovered_cells = 0u64;
+        for (key, fb) in sweep_arm(mode) {
+            let osc = is_oscillating(&fb);
+            if osc {
+                oscillating += 1;
+                worst_transitions = worst_transitions.max(fb.tail_transitions);
+                if !reference.contains(&key) {
+                    extra_cells += 1;
+                    extra_cells_worst_transitions =
+                        extra_cells_worst_transitions.max(fb.tail_transitions);
+                    extra_cells_off_anchor_transitions +=
+                        fb.tail_transitions - fb.tail_transitions_at_anchor;
+                }
+            } else if reference.contains(&key) {
+                recovered_cells += 1;
+            }
+            if fb.race_margin_min_milli < 1020 {
+                thin_margin_cells += 1;
+            }
+        }
+        grid_sweep.push(GridSweepPoint {
+            mode: mode.name(),
+            period: mode.grid_period().unwrap_or(0),
+            oscillating_cells: oscillating,
+            worst_tail_transitions: worst_transitions,
+            thin_margin_cells,
+            extra_cells,
+            extra_cells_worst_transitions,
+            extra_cells_off_anchor_transitions,
+            recovered_cells,
+        });
     }
 
     let degenerate = degenerate_pins(&params);
@@ -1940,13 +2086,7 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     // flips, not the bar; a smaller multi-step cycle must fail too).
     // "One rounding step" is exact: the next distinct
     // `round_money_up_2` value above the tail minimum.
-    let beyond_one_rounding_step =
-        |fb: &&FeedbackResult| fb.fee_tail_max > round_money_up_2(fb.fee_tail_min + 1);
-    let fb_multi: Vec<_> = r
-        .feedback
-        .iter()
-        .filter(|fb| fb.tail_transitions >= 2 && beyond_one_rounding_step(fb))
-        .collect();
+    let fb_multi: Vec<_> = r.feedback.iter().filter(|fb| is_oscillating(fb)).collect();
     let _ = writeln!(
         out,
         "fee-ladder: feedback grid = {} cells; {} secular single crossings; {} OSCILLATING beyond one rounding step (listed below)",
@@ -1992,7 +2132,20 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     // §10 C10-3 (cost) and FL-D8, aggregated over the dwell grid. Both
     // live per-row in the JSON; these lines exist because a criterion
     // whose evidence is only machine-readable gets scored from memory.
-    for mode in ["grid-fold-p240", "grid-only-p240"] {
+    //
+    // One line per grid arm THAT RAN, selected by the row's own period.
+    // Round 1 iterated a hard-coded pair of labels here; the dwell grid
+    // happened to run exactly that pair, so nothing was missing from the
+    // output — the selected P = 720 simply never appeared, and its depth
+    // was inferred from P = 240's line (§10.12.1). A summary that names
+    // the rows it expects cannot report the row it did not get.
+    let grid_arms: BTreeSet<(u64, &str)> = r
+        .dwell
+        .iter()
+        .filter(|d| d.grid_period > 0)
+        .map(|d| (d.grid_period, d.mode.as_str()))
+        .collect();
+    for (period, mode) in grid_arms {
         let depth = r
             .dwell
             .iter()
@@ -2000,7 +2153,11 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             .map(|d| d.grid_max_fold_depth)
             .max()
             .unwrap_or(0);
-        let _ = writeln!(out, "fee-ladder: FL-R3 cost {mode} max_fold_depth={depth}");
+        let _ = writeln!(
+            out,
+            "fee-ladder: FL-R3 cost {mode} period={period} max_fold_depth={depth} single_scan_cold_parses={}",
+            TX_VOLUME_WINDOW + depth
+        );
     }
     {
         let occ = r
@@ -2029,8 +2186,16 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     for p in &r.grid_sweep {
         let _ = writeln!(
             out,
-            "fee-ladder: FL-R3 {} period={} oscillating_cells={} worst_transitions={} thin_margin_cells={}",
-            p.mode, p.period, p.oscillating_cells, p.worst_tail_transitions, p.thin_margin_cells
+            "fee-ladder: FL-R3 {} period={} oscillating_cells={} worst_transitions={} thin_margin_cells={} extra_vs_banded={} extra_worst_transitions={} extra_off_anchor_transitions={} recovered_vs_banded={}",
+            p.mode,
+            p.period,
+            p.oscillating_cells,
+            p.worst_tail_transitions,
+            p.thin_margin_cells,
+            p.extra_cells,
+            p.extra_cells_worst_transitions,
+            p.extra_cells_off_anchor_transitions,
+            p.recovered_cells
         );
     }
     let _ = writeln!(
