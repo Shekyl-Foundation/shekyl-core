@@ -2998,7 +2998,26 @@ criteria are expected to hold). Until that row lands the integer arm is
 what ships, and under FL-R23 it is safe — its tick costs miners ≤ 3 % for
 ≤ 3 blocks after a toggle and bounces nobody. The maintainer's call.
 
-**Disposition of the round.** FL-R20…FL-R23 confirmed as ruled; FL-R24
+**FL-E4 — the `G` sweep (run 2026-09-10 at `3f3d3e9ac`;
+`/tmp/fl_r3_floor_e4.{json,summary}`).** As pre-registered, against the
+review's guess: the **worst case scales linearly with `G`** because the
+SMA ramps for 720 blocks after a step — exact arm on the 40→500 step
+479 → 639 → **807 bp** at age 0 (predicted ~800), 679 → 916 → **1 153**
+at age 30 (predicted ~1 130); integer arm 706 → 1 067 → 1 407. The
+**mean does not move**: worst stationary `grace_bp_mean` 4 → 4 → 5 bp
+(exact), 4 → 5 → 6 (integer); mean of means over all 40 cells 1 → 2 → 3.
+The integer tick's grace is flat in `G` (307 at all three): a tick is one
+block up then level, so a wider window sees the same tick. Feedback grid
+worst grace 399 → 526 → 650 (exact). **Decision rule: neither trigger
+fires** (no stationary mean near 20 bp; the worst case scales exactly as
+stated, so the operands are as slow as §11.2's safety argument assumes).
+**`G` = 5 stands as derived.** What it buys against 3 is the partial
+relay partition of review A-1 gone; what it costs is a worst case of
+~8 % / ~11.5 % (age 0 / 30) below the current floor for at most five
+blocks after a 10× instantaneous step, and 3 bp in expectation.
+
+**Disposition of the round.** FL-R20…FL-R23 confirmed as ruled, FL-R23
+at `G` = 5 with the A-1/A-2/A-3 amendments; FL-R24
 RULED (ii)-with-reward; §11.6 goes to spec review
 unchanged except that `check_fee`'s Rust predicate takes the `G+1` floors
 as computed, whichever operand resolution is ruled.
