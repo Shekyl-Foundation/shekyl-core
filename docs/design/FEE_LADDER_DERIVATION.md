@@ -2878,12 +2878,51 @@ rather than `G` being tuned down.
 Three PRs, in this order, so a reviewer never meets a consensus
 predicate and a repo-wide deletion in one diff (review 2026-09-10):
 
-- **PR A — consensus operand (FL-R24).** `get_tx_volume_avg` returns the
-  exact ratio (`tx_count_sum`, `baseline·720`) to both the reward and the
-  floor; every reward KAT is re-pinned. A change to a consensus operand's
-  resolution — rule 07 evaluated in its own description (indivisible: no
-  flag has meaning for an operand's resolution). Lands first so PR B is
-  read against a settled operand.
+- **PR A — consensus operand (FL-R24). LANDED on
+  `feat/fl-r24-exact-volume-operand` 2026-09-10.** The operand crosses the
+  FFI as the exact window `(tx_count_sum, blocks)` and is divided once,
+  Rust-side, against the baseline: `shekyl_economics::TxVolume`
+  (`volume.rs`; `window(sum, blocks)` is the chain form, `per_block(mean)`
+  the whole-mean form every pre-existing KAT already used) feeds
+  `calc_release_multiplier`, `calc_burn_pct`, `paid_block_reward` and
+  `fee_correction_quantized`; the four FFI exports take
+  `(tx_count_sum, window_blocks)`; C++ marshals `shekyl::tx_volume_window`
+  and **never divides** — `Blockchain::get_tx_volume_avg` is renamed
+  `get_tx_volume_window` because it now returns a sum and a length, not a
+  mean, and #640's memo (`m_tx_volume_window_*`, same `(tip, height)` key)
+  moves with it. The `G+1` floor ring PR B adds sits beside that memo.
+  Every pre-existing reward KAT is unchanged — each feeds a whole-number
+  mean, on which floored and exact agree — so two discriminating KATs were
+  added with both values in the diff (`emission.rs`
+  `fl_r24_exact_window_mean_moves_the_reward_off_the_truncated_value`,
+  `burn.rs` `…_moves_the_burn_off_…`, and the C++
+  `economics_tx_volume_window` pair): mid-curve, a 720-block window of
+  29 160 transactions (mean 40.5, `M_r` = 0.81) pays 829 440 000 000
+  where the floored operand (40, `M_r` = 0.80 — the lower rail) paid
+  819 200 000 000; at 35 640 (49.5 vs 49) 1 013 760 000 000 vs
+  1 003 520 000 000; `burn_pct` 225 000 vs 223 606 and 248 746 vs
+  247 487. **Rule 07, evaluated:** (1) *consensus-rule boundary* — the
+  operand feeds `M_r` and `b`, so the paid reward and the burn split
+  differ between a floored and an exact node on any block whose window
+  mean is fractional, and each rejects the other's coinbase; (2)
+  *indivisible under flag decomposition* — a "flag off" node computes
+  the floored reward and a "flag on" node the exact one for the same
+  block, so every intermediate is a split, not a staging; there is no
+  consensus-safe PR A/B/C sequence for a change to an operand's
+  resolution; (3) *surface enumerated in advance* — the touched set is
+  the `git grep -n 'tx_volume_avg\|get_tx_volume_avg'` hit list at
+  `bc1808227` (`blockchain.{h,cpp}`, `tx_pool.cpp`, `core_rpc_server.cpp`,
+  `cryptonote_basic_impl.{h,cpp}`, `cryptonote_tx_utils.{h,cpp}`,
+  `economics.h`, `shekyl_ffi.h`; Rust `release.rs`, `burn.rs`,
+  `emission.rs`, `fee.rs`, `activity.rs`, `legacy_core.rs`; the sim and
+  engine-core operand sites; the C++ tests), pasted into the PR
+  description and closed to zero; (4) *disposition and rollback* — in
+  the PR description: reviewer map (consensus-affecting: `volume.rs`,
+  `release.rs`, `burn.rs`, `emission.rs`, the `get_tx_volume_window`
+  body; mechanical: every marshal rename and KAT wrap; deletions: none)
+  and a rollback that restores `/ blocks` at the scan and re-forms the
+  scalar at the four FFI exports. Lands first so PR B is read against a
+  settled operand.
 - **PR B — relay policy (FL-R20, FL-R22, FL-R23)** — items 1–3 and the
   weight gate below. Relay policy and wallet-side only.
 - **PR C — the FL-R21 deletion sweep** (economics, FFI, instrument).
