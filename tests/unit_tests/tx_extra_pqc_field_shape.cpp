@@ -38,6 +38,7 @@
 
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/tx_extra.h"
+#include "cryptonote_basic/block_ingest.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_basic/hardfork.h"
@@ -253,7 +254,7 @@ TEST(tx_extra_pqc_field_shape, coinbase_with_duplicate_leaf_hash_field_is_reject
   ASSERT_TRUE(chain.make_template(b));
   append_leaf(b.miner_tx, LEAF * b.miner_tx.vout.size());
   EXPECT_FALSE(chain.submit(b, bvc)) << "a coinbase with two 0x07 fields connected";
-  EXPECT_TRUE(bvc.m_verifivation_failed);
+  EXPECT_TRUE(cryptonote::block_rejected(bvc));
   EXPECT_EQ(chain.bc.get_current_blockchain_height(), height_before);
 
   ASSERT_TRUE(chain.mine_next(bvc)) << "the honest template after the rejected one";

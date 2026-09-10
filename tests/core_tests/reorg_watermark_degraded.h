@@ -22,8 +22,9 @@
 // sits far below the floor and the switch MUST refuse. 5a re-attempts the
 // switch and must be refused the same way (recurrence), with the flag still
 // set (stickiness). Under the pre-fix code the refusal travelled the
-// switch's false return into bvc.m_verifivation_failed, which fails this
-// test's default block check -- the observed-red form of the defect.
+// switch's false return into a rejection, which fails this test's default
+// block check -- the observed-red form of the defect. The refusal now
+// records DEGRADED_KEEP: not rejected, not added, not a drop.
 class gen_reorg_watermark_refused_switch : public test_chain_unit_base
 {
 public:

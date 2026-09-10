@@ -2221,7 +2221,7 @@ bool test_chain_unit_base::verify(const std::string& cb_name, cryptonote::core& 
 
 bool test_chain_unit_base::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
 {
-  return !bvc.m_verifivation_failed;
+  return !cryptonote::block_rejected(bvc);
 }
 
 bool test_chain_unit_base::check_tx_verification_context(const cryptonote::tx_verification_context& tvc, bool /*tx_added*/, size_t /*event_index*/, const cryptonote::transaction& /*tx*/)

@@ -43,9 +43,9 @@ public:
   bool check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
   {
     if (invalid_block_idx == event_idx)
-      return bvc.m_verifivation_failed;
+      return cryptonote::block_rejected(bvc);
     else
-      return !bvc.m_verifivation_failed;
+      return !cryptonote::block_rejected(bvc);
   }
 
   bool check_block_purged(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events)
@@ -93,9 +93,9 @@ struct gen_block_accepted_base : public test_chain_unit_base
 // callback, so block GENERATION (which mines a real nonce) is unaffected;
 // only the submission under test sees the failing verifier.
 //
-// The rejection must also be attribution-correct: m_verifivation_failed
-// without m_bad_pow. A local verifier failure is not evidence against the
-// block — it is unproven, not disproven — and m_bad_pow drives peer
+// The rejection must also be attribution-correct: REJECTED without
+// REJECTED_BAD_POW. A local verifier failure is not evidence against the
+// block — it is unproven, not disproven — and block_bad_pow drives peer
 // punishment.
 class gen_block_pow_verifier_failure_base : public test_chain_unit_base
 {

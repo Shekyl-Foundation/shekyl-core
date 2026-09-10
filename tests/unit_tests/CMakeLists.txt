@@ -76,6 +76,7 @@ set(unit_tests_sources
   output_distribution.cpp
   parse_amount.cpp
   peer_policy_drop_verdict.cpp
+  peer_policy_block_ingest.cpp
   pruning.cpp
   random.cpp
   rpc_target_wire_contract.cpp

@@ -260,9 +260,9 @@ bool gen_block_invalid_prev_id::generate(std::vector<test_event_entry>& events) 
 bool gen_block_invalid_prev_id::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
 {
   if (1 == event_idx)
-    return bvc.m_marked_as_orphaned && !bvc.m_added_to_main_chain && !bvc.m_verifivation_failed;
+    return cryptonote::block_orphaned(bvc) && !cryptonote::block_added(bvc) && !cryptonote::block_rejected(bvc);
   else
-    return !bvc.m_marked_as_orphaned && bvc.m_added_to_main_chain && !bvc.m_verifivation_failed;
+    return !cryptonote::block_orphaned(bvc) && cryptonote::block_added(bvc) && !cryptonote::block_rejected(bvc);
 }
 
 bool gen_block_invalid_attestation_root::generate(std::vector<test_event_entry>& events) const
@@ -791,11 +791,11 @@ bool gen_block_pow_verifier_failure_base::check_block_verification_context(
   const cryptonote::block& /*blk*/)
 {
   if (event_idx != m_invalid_block_idx)
-    return !bvc.m_verifivation_failed;
+    return !cryptonote::block_rejected(bvc);
 
-  // Rejected, and rejected as UNPROVEN: m_bad_pow would attribute a local
-  // verifier failure to the sender.
-  m_saw_expected_rejection = bvc.m_verifivation_failed && !bvc.m_bad_pow;
+  // Rejected, and rejected as UNPROVEN: REJECTED_BAD_POW would attribute a
+  // local verifier failure to the sender.
+  m_saw_expected_rejection = cryptonote::block_rejected(bvc) && !cryptonote::block_bad_pow(bvc);
   return m_saw_expected_rejection;
 }
 

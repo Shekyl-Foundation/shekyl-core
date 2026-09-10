@@ -64,6 +64,7 @@
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
+#include "cryptonote_basic/block_ingest.h"
 #include "cryptonote_core/blockchain.h"
 #include "cryptonote_core/tx_pool.h"
 #include "testnet_chain_fixture.h"
@@ -90,7 +91,7 @@ TEST(curve_tree_header_root_check, testnet_chain_connects_through_the_first_matu
   for (uint64_t h = 1; h < first_maturing_block; ++h)
   {
     ASSERT_TRUE(chain.mine_next(bvc)) << "block " << h << " rejected";
-    ASSERT_FALSE(bvc.m_verifivation_failed) << "block " << h;
+    ASSERT_FALSE(cryptonote::block_rejected(bvc)) << "block " << h;
   }
   ASSERT_EQ(chain.bc.get_current_blockchain_height(), first_maturing_block);
   ASSERT_EQ(db.get_curve_tree_leaf_count(), 0u) << "nothing matures before block 60";
@@ -100,7 +101,7 @@ TEST(curve_tree_header_root_check, testnet_chain_connects_through_the_first_matu
   ASSERT_TRUE(chain.mine_next(bvc))
     << "block " << first_maturing_block << " rejected: the header-root check "
        "compared the post-drain root against a header filled from the pre-drain root";
-  ASSERT_FALSE(bvc.m_verifivation_failed);
+  ASSERT_FALSE(cryptonote::block_rejected(bvc));
   ASSERT_EQ(chain.bc.get_current_blockchain_height(), first_maturing_block + 1);
   EXPECT_GT(db.get_curve_tree_leaf_count(), 0u) << "the genesis coinbase drained at block 60";
 
@@ -139,8 +140,8 @@ TEST(curve_tree_header_root_check, testnet_chain_rejects_a_header_with_the_wrong
   ASSERT_TRUE(chain.make_template(bad));
   bad.curve_tree_root.data[0] ^= 0x01;
   EXPECT_FALSE(chain.submit(bad, bvc)) << "a header committing to the wrong tree state connected";
-  EXPECT_TRUE(bvc.m_verifivation_failed);
-  EXPECT_FALSE(bvc.m_added_to_main_chain);
+  EXPECT_TRUE(cryptonote::block_rejected(bvc));
+  EXPECT_FALSE(cryptonote::block_added(bvc));
   EXPECT_EQ(chain.bc.get_current_blockchain_height(), height_before) << "rejection changed the height";
   EXPECT_EQ(chain.bc.get_tail_id(), tip_before) << "rejection moved the tip";
   EXPECT_EQ(db.get_curve_tree_root(), root_before) << "rejection touched the tree";
@@ -148,6 +149,6 @@ TEST(curve_tree_header_root_check, testnet_chain_rejects_a_header_with_the_wrong
   // Nothing was consumed or popped by the rejection: the honest template
   // built on the same tip connects.
   ASSERT_TRUE(chain.mine_next(bvc)) << "the honest block after a rejected one was refused";
-  ASSERT_FALSE(bvc.m_verifivation_failed);
+  ASSERT_FALSE(cryptonote::block_rejected(bvc));
   EXPECT_EQ(chain.bc.get_current_blockchain_height(), height_before + 1);
 }
