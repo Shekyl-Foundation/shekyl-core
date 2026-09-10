@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.1.0-alpha.8] - 2026-09-10
+
 ### Added
 
 - **Daemon logical-state digest v0 (DRS-P0d).** A layout-independent
