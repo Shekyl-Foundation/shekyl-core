@@ -397,6 +397,13 @@
 
 ### Fixed
 
+- **Daemon RPC: a Phase C submit rejection names its leg.** The submit
+  engine logs the rejected kind and failure at `info`, and the verifier
+  logs the specific failing check (and the emission battery's error) at
+  `debug`; previously a `Malformed` verdict left no daemon-side trace.
+  The wallet logs at `error` when a transaction it built fails its own
+  local round-trip parse — a build-path defect, never a daemon verdict —
+  since that outcome is otherwise indistinguishable from a daemon refusal.
 - **Consensus: the `tx_extra` PQC fields have a shape rule, and the storage
   fail-open that hid its absence is gone (CEN-I19, S1).** A transaction whose
   `0x07` leaf-hash field was missing, short, long or unparsable was accepted at

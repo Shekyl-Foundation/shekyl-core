@@ -417,6 +417,15 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // The crypto battery (FCMP++ membership, BP+, CT balance, PQC
         // hybrid auth, archival-arm checks) behind the seam.
         if let Err(failure) = self.verifier.verify(parsed, facts) {
+            // `info`, not `debug`: the submitter only ever sees the
+            // coarse `RejectCause`, so this line is the operator's one
+            // record of what the daemon refused. The failing leg itself
+            // is logged at `debug` by the verifier.
+            tracing::info!(
+                kind = ?parsed.kind,
+                ?failure,
+                "submit rejected at Phase C by the verifier"
+            );
             return Ok(Err(failure.into()));
         }
 

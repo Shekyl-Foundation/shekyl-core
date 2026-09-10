@@ -356,6 +356,20 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     verify_pqc_auths(parsed, pqc_auths)
 }
 
+/// A Phase-C `Malformed` that names its leg in the operator log.
+///
+/// The wire verdict stays cause-blind (CB-5: a submitter learns only
+/// `Malformed`); the daemon's own log is the place a rejected leg is
+/// allowed to be loud, the same posture Phase A already takes
+/// (`parse_submission`'s logged `reason`). Without this, a battery of
+/// twenty-odd `return Err(VerifyFailure::Malformed)` sites is
+/// indistinguishable from the outside — which is exactly what made the
+/// first live emission-claim rejection un-diagnosable from a level-2 log.
+fn malformed(leg: &'static str) -> VerifyFailure {
+    tracing::debug!(leg, "submit rejected at Phase C: Malformed");
+    VerifyFailure::Malformed
+}
+
 /// The §8.7.2 emission battery: EV4's mint-balance + Bp+ legs, the E2/E5
 /// structural bindings, the E6–E10 archival legs (native
 /// `shekyl-archival-retention::emission_verify` minters — the same
@@ -379,11 +393,11 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         ..
     } = &parsed.tx.ct
     else {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("emission: ct is not a prunable-bearing Fcmp"));
     };
     // Phase A parsed + validated the vin (E1) and stored it.
     let Some(vin) = parsed.emission_vin.as_deref() else {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("emission: Phase A stored no vin"));
     };
     let Some((emission_index, _)) = parsed
         .tx
@@ -393,7 +407,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         .enumerate()
         .find(|(_, input)| matches!(input, Input::ArchivalRewardEmission { .. }))
     else {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("emission: no emission input in the prefix"));
     };
 
     // ── O6 over every output commitment (blockchain.cpp:3380 runs the
@@ -413,12 +427,12 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
             // parity; stay non-panicking anyway (§7.6).
             sum = sum
                 .checked_add(output.amount)
-                .ok_or(VerifyFailure::Malformed)?;
+                .ok_or_else(|| malformed("emission: loud vout sum overflows"))?;
         }
         sum
     };
     let Some(mint) = NonZeroAtomicUnits::new(AtomicUnits::from_raw(vout_reward_sum)) else {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("emission: loud vout sum is zero"));
     };
     if verify_bond_post_ct_balance(
         prunable.pseudo_outs.as_flattened(),
@@ -428,7 +442,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
     )
     .is_err()
     {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("emission EV4: mint-side CT balance"));
     }
 
     // ── N8 leg 2: Bp+ over the output commitments ───────────────────────
@@ -439,10 +453,12 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
     // FFI necessity there; byte equality of the keys implies id equality
     // and is the direct form here.)
     let Some(emission_auth) = pqc_auths.get(emission_index) else {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed(
+            "emission E2: no pqc_auth slot at the emission index",
+        ));
     };
     if emission_auth.hybrid_public_key != vin.p_pubkey {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("emission E2: pqc_auth key != vin.p_pubkey"));
     }
 
     // ── E5: the F-C1c signable hash — the prefix hash with the emission
@@ -466,7 +482,9 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
     };
     // E7: every claimed epoch must carry a frozen budget row.
     if emission_facts.snapshots.iter().any(|s| !s.has_budget_row) {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed(
+            "emission E7: a claimed epoch has no frozen budget row",
+        ));
     }
     let ctx = EmissionVerifyContext {
         current_block_height: facts.chain_height.to_raw(),
@@ -569,7 +587,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
             })
         })
         .collect::<Option<Vec<_>>>()
-        .ok_or(VerifyFailure::Malformed)?;
+        .ok_or_else(|| malformed("emission: loud vout without a commitment"))?;
     let auth = emission_vin_verify_auth(vin, &reward_commits, &signable_tx_hash)
         .map_err(|e| emission_reject(&e))?;
     // The witness assembly is infallible once the three minters passed —
@@ -607,6 +625,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
 /// or epoch already claimed — is the `DoubleSpendConflict` claim-slot leg;
 /// every other violation is a window/shape/proof failure → `Malformed`.
 fn emission_reject(e: &EmissionVerifyError) -> VerifyFailure {
+    tracing::debug!(error = %e, "emission battery refused the submission");
     match e {
         EmissionVerifyError::BondMissing | EmissionVerifyError::EpochAlreadyClaimed { .. } => {
             VerifyFailure::DoubleSpendConflict
@@ -860,7 +879,7 @@ fn check_commitment_masks(base: &CtBase) -> Result<(), VerifyFailure> {
         if *commitment == IDENTITY_COMPRESSED
             || *commitment == ED25519_BASEPOINT_COMPRESSED.to_bytes()
         {
-            return Err(VerifyFailure::Malformed);
+            return Err(malformed("O6: degenerate output commitment"));
         }
     }
     Ok(())
@@ -879,10 +898,10 @@ fn check_commitment_masks(base: &CtBase) -> Result<(), VerifyFailure> {
 /// `read_scalar` in the wire conversion.
 fn verify_bpplus_leg(base: &CtBase, prunable: &Prunable) -> Result<(), VerifyFailure> {
     let [bp_wire] = prunable.bulletproofs.as_slice() else {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("N8: bulletproofs.len() != 1"));
     };
     let Some(bp) = bulletproof_from_wire(bp_wire) else {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("N8: Bp+ wire conversion"));
     };
     let bp_commitments: Vec<CompressedPoint> = base
         .commitments
@@ -890,7 +909,7 @@ fn verify_bpplus_leg(base: &CtBase, prunable: &Prunable) -> Result<(), VerifyFai
         .map(|c| CompressedPoint::from(*c))
         .collect();
     if !bp.verify(&mut OsRng, &bp_commitments) {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("N8: Bp+ range proof refused"));
     }
     Ok(())
 }
@@ -1029,11 +1048,11 @@ fn verify_pqc_auths(parsed: &ParsedSubmission, pqc_auths: &[PqcAuth]) -> Result<
     // Arity (`:159-163`): one auth per input, non-empty. Structural for a
     // validate()d spend; kept as a loud refusal, not an assumption.
     if pqc_auths.is_empty() || pqc_auths.len() != parsed.tx.prefix.inputs.len() {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("K13: pqc_auths arity != inputs"));
     }
     let payload_hashes = parsed.tx.pqc_signing_payload_hashes();
     if payload_hashes.len() != pqc_auths.len() {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("K13: payload-hash arity != pqc_auths"));
     }
     for (auth, payload_hash) in pqc_auths.iter().zip(&payload_hashes) {
         verify_pqc_auth_slot(auth, payload_hash)?;
@@ -1060,26 +1079,26 @@ fn verify_pqc_auths(parsed: &ParsedSubmission, pqc_auths: &[PqcAuth]) -> Result<
 /// back in front of the authorization it is ordered to follow.
 fn verify_pqc_auth_slot(auth: &PqcAuth, payload_hash: &[u8; 32]) -> Result<(), VerifyFailure> {
     if auth.auth_version != 1 || auth.flags != 0 {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("K13: auth_version/flags"));
     }
     if auth.scheme_id != PQC_SCHEME_SINGLE && auth.scheme_id != PQC_SCHEME_MULTISIG {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("K13: unknown scheme_id"));
     }
     if auth.hybrid_public_key.is_empty() {
-        return Err(VerifyFailure::Malformed);
+        return Err(malformed("K13: empty hybrid_public_key"));
     }
     match auth.scheme_id {
         PQC_SCHEME_SINGLE => {
             if auth.hybrid_public_key.len() != PQC_HYBRID_SINGLE_KEY_LEN {
-                return Err(VerifyFailure::Malformed);
+                return Err(malformed("K13 single: key length"));
             }
             let Ok(public_key) = HybridPublicKey::from_canonical_bytes(&auth.hybrid_public_key)
             else {
-                return Err(VerifyFailure::Malformed);
+                return Err(malformed("K13 single: key decode"));
             };
             let Ok(signature) = HybridSignature::from_canonical_bytes(&auth.hybrid_signature)
             else {
-                return Err(VerifyFailure::Malformed);
+                return Err(malformed("K13 single: signature decode"));
             };
             if HybridEd25519MlDsa
                 .verify(
@@ -1090,14 +1109,14 @@ fn verify_pqc_auth_slot(auth: &PqcAuth, payload_hash: &[u8; 32]) -> Result<(), V
                 )
                 .is_err()
             {
-                return Err(VerifyFailure::Malformed);
+                return Err(malformed("K13 single: hybrid verify refused"));
             }
         }
         PQC_SCHEME_MULTISIG => {
             if auth.hybrid_public_key.len() < MULTISIG_KEY_HEADER_LEN
                 || auth.hybrid_public_key.len() > PQC_MAX_PUBLIC_KEY_BLOB
             {
-                return Err(VerifyFailure::Malformed);
+                return Err(malformed("K13 multisig: key blob bounds"));
             }
             // Group-id binding no longer exists (Option E′ deleted
             // `group_id`; identity is the address fingerprint). This is
@@ -1110,11 +1129,11 @@ fn verify_pqc_auth_slot(auth: &PqcAuth, payload_hash: &[u8; 32]) -> Result<(), V
             )
             .is_err()
             {
-                return Err(VerifyFailure::Malformed);
+                return Err(malformed("K13 multisig: verify refused"));
             }
         }
         // Excluded by the closed-set check above.
-        _ => return Err(VerifyFailure::Malformed),
+        _ => return Err(malformed("K13: unreachable scheme arm")),
     }
     Ok(())
 }

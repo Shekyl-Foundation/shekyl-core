@@ -78,16 +78,33 @@ fn serial_lock() -> Arc<Mutex<()>> {
     SERIAL.get_or_init(|| Arc::new(Mutex::new(()))).clone()
 }
 
+/// Route the wallet's own `tracing` events into this test's captured
+/// output. Without a subscriber they are dropped, and a wallet-side
+/// refusal that never reaches the daemon (the `submit_transaction`
+/// round-trip guard, for one) leaves no trace anywhere. `warn` by
+/// default; `RUST_LOG` overrides. Idempotent across the binary: a second
+/// install is a no-op, never a panic.
+fn install_wallet_tracing() {
+    use tracing_subscriber::EnvFilter;
+    drop(
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()))
+            .with_test_writer()
+            .with_ansi(false)
+            .try_init(),
+    );
+}
+
 /// A live `shekyld --regtest` daemon spawned for one test, with an ephemeral
 /// data dir and RPC port. Killed and cleaned on drop.
-/// Last 15 lines of the daemon's captured log, inlined into panics:
+/// Last 40 lines of the daemon's captured log, inlined into panics:
 /// `RegtestDaemon::drop` removes the datadir (log included) as a panic
 /// unwinds, so a "see the log file" pointer would name a deleted file.
 fn log_tail(log_path: &std::path::Path) -> String {
     std::fs::read_to_string(log_path)
         .map(|s| {
             let lines: Vec<&str> = s.lines().collect();
-            let start = lines.len().saturating_sub(15);
+            let start = lines.len().saturating_sub(40);
             lines[start..].join("\n")
         })
         .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"))
@@ -209,6 +226,7 @@ impl RegtestDaemon {
         // concurrent `cargo test` *process*'s daemon — the in-process lock can't
         // serialize across processes — so it is deliberately not done here.
         let serial = serial_lock().lock_owned().await;
+        install_wallet_tracing();
 
         let bin = Self::binary();
         let rpc_port = Self::free_port();
@@ -230,8 +248,11 @@ impl RegtestDaemon {
             &rpc_port.to_string(),
             "--data-dir",
             data_dir.to_str().expect("utf8 data dir"),
+            // Level 1 (`info`): the submit engine records a Phase C
+            // refusal at `info`, so the log tail a panic inlines names
+            // what the daemon rejected instead of a bare `Malformed`.
             "--log-level",
-            "0",
+            "1",
         ]);
         // Distinct from the main port. Both probes bind :0 and release
         // immediately, so the kernel is free to hand back the same number
@@ -444,6 +465,13 @@ impl RegtestDaemon {
     /// TCP connection), rather than sharing this instance's `rpc` client.
     pub(super) fn rpc_port(&self) -> u16 {
         self.rpc_port
+    }
+
+    /// Last lines of the daemon's log, for inlining into a test's own
+    /// panic. Read it *before* panicking: the unwind drops this fixture,
+    /// which kills the daemon and removes the datadir, log included.
+    pub(super) fn log_tail(&self) -> String {
+        log_tail(&self.data_dir.join("daemon.log"))
     }
 
     /// The harness's RPC client, for tests that drive the daemon directly.
@@ -2646,7 +2674,10 @@ async fn e2e_emission_claim_accepted_and_applied() {
                 daemon.generate_blocks(1, &fixture.principal).await;
                 refresh(&fixture.arc).await;
             }
-            Err(e) => panic!("submit_emission_claim: {e}"),
+            Err(e) => {
+                let tail = daemon.log_tail();
+                panic!("submit_emission_claim: {e}; daemon log tail:\n{tail}");
+            }
         }
     }
     let receipt = receipt.expect("claim must assemble and dispatch within the retry budget");
