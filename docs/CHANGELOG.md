@@ -347,7 +347,9 @@
   `int` stays for timeout/destroyed — that is API, not wire. No protocol
   version moves: `SHEKYL_PROTOCOL_VERSION` denotes the crypto era, and
   there is no wire-command-set version to bump. Pre-genesis: no
-  compatibility with 33-byte peers.
+  compatibility with 33-byte peers. The four `SPEC_VERIFY_COST`
+  `msg_bytes` pins follow the 29-byte header (−4 B each); hop rounding
+  (175 / 453) is unchanged.
 
 - **One block-propagation path, not two (PWD-B6).** `NOTIFY_NEW_BLOCK`
   (2001) is deleted; command **2008** is the sole block announce. The two
