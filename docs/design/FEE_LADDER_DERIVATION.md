@@ -1,6 +1,6 @@
 # FL — Fee Ladder Derivation from Shekyl Miner Economics
 
-**Status:** OPEN — **round 19 (§11) OPEN, 2026-09-10: the relay floor follows raw `C` (FL-R20), the quantizers and §10 go (FL-R21), the wallet pays the served rung exactly (FL-R22), admission is lookback-min over `G` = 3 blocks (FL-R23), SMA resolution decided on FL-E3 (FL-R24); confirmation run pre-registered §11.5, implementation spec §11.6 awaiting review.** Earlier text: round RULED, implementation landed. §8 now carries
+**Status:** OPEN — **round 19 (§11) OPEN, 2026-09-10: the relay floor follows raw `C` (FL-R20), the quantizers and §10 go (FL-R21), the wallet pays the served rung exactly (FL-R22), admission is lookback-min over `G` = 5 blocks (FL-R23; `G` re-derived per node at review A-1, 2026-09-10), SMA resolution decided on FL-E3 (FL-R24); confirmation run pre-registered §11.5, implementation spec §11.6 awaiting review.** Earlier text: round RULED, implementation landed. §8 now carries
 **FL-R12′ and FL-R17 SIGNED and FL-R14 RULED** (in-channel, provenance
 per-row); the remaining rows hold their marked states. Rows marked BUILT
 refer to the round-9 implementation, which **merged as PR #640**
@@ -1483,7 +1483,7 @@ ride each row.
 | FL-R20 | **The relay floor tracks `C`: `F(h) = R·C(h)·w_ref/M²`, raw, one formula for every regime (`C < 1` lowers it), 720-block SMA operand, 0.95 deleted.** Still relay policy; `kept_by_block` exempt; Q9 (no consensus fee floor) untouched. §11.2 | **RULED in-channel 2026-09-09/10** | none — FL-D2's CEN-M3 routing discharged (§11.2 FL-R21) |
 | FL-R21 | **Quantizers deleted:** `quantize_pow2_ceil`, `fee_correction_quantized`, hysteresis step/fold/settled, `MIN_REPRESENTABLE_C`, the `fees[0]` clamp, `round_money_up_2` on the served path, the §10 instrument. FL-R3 CLOSED premise-refuted; FL-R6 identity; FL-D2 CLOSED; FL-D6/D8 moot; FL-R3-STORE demoted; §10 closed as record. §11.2 | **RULED in-channel 2026-09-09** ("What are we making this so complicated for?") | none |
 | FL-R22 | **Wallet pays exactly the served rung — no pad, fixed or drawn.** Path recorded: random pad proposed (FL-C1 overrule quoted) → withdrawn on the failure-mode analysis ("The safety argument won me over"; FL-C1 stands, premise refuted) → fixed pad → superseded by FL-R23. Temporal link of a deterministic fee accepted as inherent ("ALWAYS going to have a temporal link"). §11.2 | **RULED in-channel 2026-09-10** | none |
-| FL-R23 | **Lookback-min admission:** `fee ≥ mask_round_up(weight · min{F(h′−k) : 0 ≤ k ≤ G})`, `G` = 3 (hot-session gap 0–2 + 1 propagation). A quote at `F(h)` inside the gap is admitted by identity; the 2 % buffer and 0.95 deleted (weight model is byte-exact, §11.1 item 9). Cost = grace = worst `G`-block rise (FL-E3). Predicate lands in Rust behind FFI (rule 20). §11.2 | **RULED in-channel 2026-09-10** ("I agree with the math") | none — relay policy |
+| FL-R23 | **Lookback-min admission:** `fee ≥ mask_round_up(weight · min{F(h′−k) : 0 ≤ k ≤ G})`, `G` = 5 (hot-session gap 0–2 + network height spread 2 + 1 slack; the identity is per receiving node — review A-1 2026-09-10 corrected the first draft's `G` = 3). A quote at `F(h)` inside the gap is admitted by identity; the 2 % buffer and 0.95 deleted (weight model is byte-exact, §11.1 item 9). Cost = grace = worst `G`-block rise (FL-E3). Predicate lands in Rust behind FFI (rule 20). §11.2 | **RULED in-channel 2026-09-10** ("I agree with the math"); **spec amended at review 2026-09-10 (A-1 `G` = 5 per-node; A-2 weight-gate property test + `RELAY_ADMISSION_SLACK_BP` = 0 pin; A-3 reopening clause: reopens if any per-block-response operand enters `F`)** | none — relay policy |
 | FL-R24 | **SMA resolution for the floor operand:** (i) integer `tx_count_sum/720` as shipped — the 1/V tick is a grace cost under FL-R23, a quote-quality question only; (ii) exact `(tx_count_sum, baseline·720)` via the scale-invariant ratio functions — floor-only breaks FL-V1 by ≤ one tick; reward-and-floor is a consensus change to `M_r`'s operand (own row, rule 07). Decision rule pre-registered §11.5 FL-E3. §11.2 | **RULED in-channel 2026-09-10 ("accepted/agree"): (ii) exact SMA for reward AND floor** — the FL-E3 rule fired (integer tick 307 bp at age 30, §11.7) | **consensus row** (change to `M_r`'s operand resolution; pre-genesis; opened by the implementing PR, rule 07 evaluated there) |
 
 Signatures are recorded per-row with their provenance (in-channel, review
@@ -2696,14 +2696,43 @@ argued and two were reversed:
 `h′` iff
 
 ```text
-fee ≥ mask_round_up( weight · min{ F(h′−k) : 0 ≤ k ≤ G } ),   G = 3
+fee ≥ mask_round_up( weight · min{ F(h′−k) : 0 ≤ k ≤ G } ),   G = 5
 ```
 
-`G` is the hot-session gap (0–2 blocks, finding 5) plus one block of
-propagation slack — derived from the gap's definition, not from a trace. A
-conforming quote taken at any `h ∈ [h′−G, h′]` and paid at exactly `F(h)`
-is admitted **by identity**; the bounce of finding 8 is impossible inside
-the gap, not merely rare. The 2 % buffer (`needed/50`) and the 0.95 are
+where `h′` is **the receiving node's tip** — the predicate is evaluated
+per node, and the identity it delivers is per node: a quote taken at `h`
+and paid at exactly `F(h)` is admitted **by identity at every node whose
+tip lies in `[h, h+G]`**. That is the honest form of the claim; the
+2026-09-10 text said "impossible, not merely rare" without saying at which
+node, and review A-1 (2026-09-10) caught it. So `G` is derived from three
+terms, none of them a trace: the hot-session gap (0–2 blocks, finding 5)
+**+ the network height spread at relay time** (peers a transaction reaches
+may be ahead of the quoting node's tip by the blocks that arrived during
+propagation; two inside one propagation interval is uncommon under
+Poisson block times but not rare over millions of transactions — 2) **+
+one block of slack** = 5. The first draft's `G` = 3 covered the gap and
+left one block for the spread; a peer two blocks ahead would have
+evaluated `[h+1, h+4]`, excluded `h`, and refused — a partial relay
+partition, harder to diagnose than a bounce. The symmetric case, a peer
+*behind* the quoting node on a *falling* floor, is not covered by the
+predicate and does not need to be: the quoting node's own daemon is at
+`h` and admits; a lagging peer refuses transiently, catches up within its
+lag, and receives the transaction in a block under `kept_by_block`. What
+`G` = 5 costs against 3 is priced by FL-E4 (§11.5); since the mean grace
+was 0–6 bp at `G` = 3 it is expected to stay in single-digit bp.
+
+**Why `min` is safe here, registered so it stays safe (review A-3).** A
+minimum over a window is adversary-favourable by construction: any
+transient dip in `F`, from any cause, becomes the admission threshold for
+`G` blocks. It is safe *because every operand of `F` is slow* — a
+720-block SMA (`C`), a 100-block weight median (`M`), a reward that decays
+by `2⁻²¹` per block (`R`) — so no single block can produce a dip worth
+exploiting; the worst one-block fall in the run is 3.5 % on a 10× volume
+collapse (§11.7). That is a property of the operands, not of `min`.
+**Reopening clause (rule 21, FL-R17 shape): FL-R23 reopens if any operand
+with a per-block response enters `F`** — a fast term added to the floor
+would be amplified by the window for `G` blocks, and this sentence is
+here so whoever adds it finds out why. The 2 % buffer (`needed/50`) and the 0.95 are
 deleted — they insured the same gap probabilistically and finding 9 shows
 they insured nothing else. What the lookback *costs* is grace: admission
 may sit below the current floor by `F(h′)/min_k F(h′−k) − 1`, which is the
@@ -2755,7 +2784,7 @@ reopening condition):
 
 | Criterion | Disposition | Note |
 | --- | --- | --- |
-| FL-C1 continuous-schedule precommitment | **met** | daemon-computed rung values identical for all wallets at a height (§1.1's own clarification); no wallet-side arithmetic beyond `rate × weight`; the overrule of §11.2(a) recorded as premise-refuted |
+| FL-C1 continuous-schedule precommitment | **met — satisfied, not merely un-overruled** | daemon-computed rung values identical for all wallets at a height (§1.1's own clarification); no wallet-side arithmetic beyond `rate × weight`; `round_money_up_2` leaves the served path but `get_fee_quantization_mask` survives at admission, so paid fees still sit on a lattice — "arbitrary-precision fees" was never on the table; the overrule of §11.2(a) recorded as premise-refuted |
 | FL-C2 coverage | **met exactly** | economy = floor by identity |
 | FL-C3 fee rounding | **re-based** | `round_money_up_2` leaves the served path (finding 7); the mask remains the only rounding |
 | FL-C4a dwell | **re-grounded** on quote quality, not anonymity (§1.4 note) | FL-R24's remaining question |
@@ -2776,7 +2805,7 @@ run per rule 26. It measures raw `C` along Poisson-driven traces
 ramp cannot show) and FL-C7's loop through the FL-R20 served map, each
 under **both** SMA resolutions of FL-R24, across the §1.8 age grid. Fee
 ratios are computed on `F × SCALE` so integer atomic/byte granularity
-cannot masquerade as slew. Grace is `F(t)/min_{k≤3} F(t−k) − 1` in basis
+cannot masquerade as slew. Grace is `F(t)/min_{k≤G} F(t−k) − 1` in basis
 points. As the record of the road not taken, each slew cell also reports
 how many quotes a fixed pad of 50 / 100 / 200 / 300 bp would have bounced
 against the inherited 2 % buffer.
@@ -2816,10 +2845,37 @@ No selection is made from this run: FL-R23 is an identity and sizes
 nothing. The run confirms the loop, prices the grace, and produces the
 FL-R24 evidence.
 
+**FL-E4 — the `G` sweep (added 2026-09-10 after review A-1, before its
+run).** Grace re-measured at `G` ∈ {3, 4, 5} on every slew and feedback
+cell, both arms. Expectation, stated against the review's own guess so the
+curve can rule: the review expected "roughly the same worst case" because
+the step is instantaneous; I expect the opposite for the *maximum* — after
+an instantaneous step the SMA ramps **linearly for 720 blocks**, so the
+worst rise over `G` blocks scales with `G`: exact arm ≈ `G × 160` bp at
+age 0 (3 → 479 measured; 5 → ~800), ≈ `G × 225` at age 30 (3 → 679; 5 →
+~1 130); integer arm one tick higher. The *mean* is where the review is
+right: 0–6 bp at `G` = 3, expected ≤ 10 bp at `G` = 5, because rises are
+rare and the window only widens the few blocks they touch. Decision rule:
+`G` = 5 is adopted **as derived** (gap + spread + slack) unless the sweep
+shows `grace_bp_mean` > 20 bp in any stationary cell or a worst case that
+does not scale as stated — either would mean the operands are faster than
+§11.2's safety argument assumes, and FL-R23's reopening clause fires
+rather than `G` being tuned down.
+
 ### §11.6 Implementation scope (specification for review; no code before sign-off)
 
-Relay policy and wallet-side; **no consensus change** unless FL-R24
-branch (ii) is taken, which opens its own row.
+Three PRs, in this order, so a reviewer never meets a consensus
+predicate and a repo-wide deletion in one diff (review 2026-09-10):
+
+- **PR A — consensus operand (FL-R24).** `get_tx_volume_avg` returns the
+  exact ratio (`tx_count_sum`, `baseline·720`) to both the reward and the
+  floor; every reward KAT is re-pinned. A change to a consensus operand's
+  resolution — rule 07 evaluated in its own description (indivisible: no
+  flag has meaning for an operand's resolution). Lands first so PR B is
+  read against a settled operand.
+- **PR B — relay policy (FL-R20, FL-R22, FL-R23)** — items 1–3 and the
+  weight gate below. Relay policy and wallet-side only.
+- **PR C — the FL-R21 deletion sweep** (economics, FFI, instrument).
 
 *Daemon (`blockchain.cpp`, `tx_pool.cpp`), Rust-forward per rule 20:*
 
@@ -2831,8 +2887,26 @@ branch (ii) is taken, which opens its own row.
    marshals a `(height, F)` ring of depth `G+1` maintained beside the
    `tx_volume_avg` memo under the same lock and rebuilt on tip change /
    reorg by one scan of `720 + G` blocks (the overlapping-window cost
-   §10.12.1 derived — 723 parses, at the 720 budget). `needed/50` deleted.
+   §10.12.1 derived — 725 parses at `G` = 5, at the 720 budget).
+   `needed/50` deleted — but **the slack is a named parameter, not an
+   absence**: the predicate takes `slack_bp`, pinned by a single constant
+   `RELAY_ADMISSION_SLACK_BP = 0` with a KAT asserting it is zero and a
+   doc comment naming the gate below as the reason it may be. If the
+   weight gate ever fails on a live shape, re-introducing a buffer is one
+   constant and one KAT, not a design round (review A-2).
    `kept_by_block` exempt, unchanged.
+4. **Weight gate (review A-2, same PR as the deletion, before it):**
+   finding 9 rests on one equality assertion
+   (`transfer_pending_tx_tests.rs:1053`). With zero slack a one-byte
+   prediction error on any untested shape is a hard bounce that FL-R23
+   cannot cover (it is not temporal). The deletion is justified by a
+   **property test over the shape space** — every `n_in` in
+   `1..=MAX_INPUTS`, every `n_out` in `1..=MAX_OUTPUTS` (so both sides of
+   every power-of-two clawback boundary), tree depths across the KAT
+   grid, fee varint lengths across their boundaries — asserting
+   `predict_weight(n_in, n_out, depth, fee) == Transaction::weight()` of
+   the transaction the builder produces, exactly. The gate asserts its own
+   subject (rule 47): it fails if the shape enumeration is empty.
 3. Estimate path: `fees[0] = F` (no clamp, no `round_money_up_2`),
    `fees[1] = 4F`, `fees[2] = 2RC/M`; the wire shape (FL-R7) is unchanged.
 

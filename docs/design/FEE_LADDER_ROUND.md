@@ -9,7 +9,7 @@ one-liner pointing at its owning §-row, which carries the named blocker.
 FL-R3 **CLOSED premise-refuted at round 19** (2026-09-10): its time-grid
 round (§10) is closed as record and **§11 is OPEN** — the relay floor
 follows raw `C`, the quantizers go, the wallet pays the served rung
-exactly, admission is lookback-min over `G` = 3 (FL-R20…FL-R23; FL-R24
+exactly, admission is lookback-min over `G` = 5 (FL-R20…FL-R23; FL-R24
 open on FL-E3). Branch `design/fl-r3-time-grid`.
 All substance lives in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md);
 this file is the thin round-state record only (rule 95 — one owner per
