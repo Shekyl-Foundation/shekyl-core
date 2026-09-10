@@ -969,4 +969,55 @@ mod tests {
         // The only saturation is the u64 rail.
         assert_eq!(advance_already_generated(u64::MAX, u64::MAX), u64::MAX);
     }
+
+    /// FL-R24 KAT: the reward is formed from the EXACT window mean, and the
+    /// truncated mean the operand used to carry lands on a different
+    /// reward. Regenerated for PR A with both values shown so the
+    /// magnitude of the consensus change is in the diff, not inferred.
+    ///
+    /// Mid-curve (`already_generated = asymptote / 2`, so `curve(ag)` =
+    /// 1 024 000 000 000 and neither the tail floor nor the release rails
+    /// bind), a 720-block window carrying 29 160 transactions has an exact
+    /// mean of 40.5 and `M_r = 40.5 / 50 = 0.81`; the pre-FL-R24 operand
+    /// floored that to 40, `M_r = 0.80`, which is also the lower rail —
+    /// so the truncation was not a rounding error, it was pinning the
+    /// multiplier to a rail the exact operand clears.
+    ///
+    /// | window            | operand | `M_r` | paid reward         |
+    /// |-------------------|---------|-------|---------------------|
+    /// | 29 160 / 720      | exact   | 0.81  | 829 440 000 000 (new) |
+    /// | `29160 / 720 = 40`| floored | 0.80  | 819 200 000 000 (old) |
+    /// | 35 640 / 720      | exact   | 0.99  | 1 013 760 000 000 (new) |
+    /// | `35640 / 720 = 49`| floored | 0.98  | 1 003 520 000 000 (old) |
+    ///
+    /// Every pre-existing KAT in this crate feeds a whole-number mean, on
+    /// which the two operands agree — which is why none of their pinned
+    /// values move in PR A and why this test exists: without a fractional
+    /// window nothing in the suite could tell exact from floored.
+    #[test]
+    fn fl_r24_exact_window_mean_moves_the_reward_off_the_truncated_value() {
+        let p = EconomicParams::default();
+        let ag = p.emission_curve_asymptote / 2;
+        let zone = 300_000;
+        let paid =
+            |v: TxVolume| paid_block_reward(0, 1, ag, zone, v, &p).expect("mid-curve reward");
+
+        // 40.5 per block, exact.
+        assert_eq!(paid(TxVolume::window(29_160, 720)), 829_440_000_000);
+        // What the floored operand paid for the same chain state (old).
+        assert_eq!(paid(TxVolume::per_block(40)), 819_200_000_000);
+        // 49.5 per block, exact / floored.
+        assert_eq!(paid(TxVolume::window(35_640, 720)), 1_013_760_000_000);
+        assert_eq!(paid(TxVolume::per_block(49)), 1_003_520_000_000);
+
+        // The two forms agree exactly when the mean is whole: the window
+        // form is a strict superset, not a different curve.
+        assert_eq!(
+            paid(TxVolume::window(40 * 720, 720)),
+            paid(TxVolume::per_block(40))
+        );
+        // The empty window is the 0.8 rail either way (genesis / FAKECHAIN).
+        assert_eq!(paid(TxVolume::ZERO), paid(TxVolume::per_block(0)));
+        assert_eq!(paid(TxVolume::ZERO), 819_200_000_000);
+    }
 }

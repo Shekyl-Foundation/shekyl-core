@@ -342,4 +342,40 @@ mod tests {
             );
         }
     }
+
+    /// FL-R24 KAT: the burn percentage is formed from the EXACT window
+    /// mean; the floored operand landed on a different percentage.
+    /// Same chain states as the reward KAT in `emission.rs`
+    /// (`already_generated = asymptote / 2`), both values shown.
+    ///
+    /// | window        | operand | `burn_pct` (SCALE 10⁶) |
+    /// |---------------|---------|------------------------|
+    /// | 29 160 / 720  | exact   | 225 000 (new)          |
+    /// | floored to 40 | floored | 223 606 (old)          |
+    /// | 35 640 / 720  | exact   | 248 746 (new)          |
+    /// | floored to 49 | floored | 247 487 (old)          |
+    #[test]
+    fn fl_r24_exact_window_mean_moves_the_burn_off_the_truncated_value() {
+        let p = EconomicParams::default();
+        let ag = p.emission_curve_asymptote / 2;
+        let burn = |v: TxVolume| {
+            calc_burn_pct(
+                v,
+                p.tx_volume_baseline,
+                ag,
+                p.emission_curve_asymptote,
+                p.burn_base_rate,
+                p.burn_cap,
+            )
+        };
+        assert_eq!(burn(TxVolume::window(29_160, 720)), 225_000);
+        assert_eq!(burn(TxVolume::per_block(40)), 223_606);
+        assert_eq!(burn(TxVolume::window(35_640, 720)), 248_746);
+        assert_eq!(burn(TxVolume::per_block(49)), 247_487);
+        // Whole means agree across the two forms.
+        assert_eq!(
+            burn(TxVolume::window(40 * 720, 720)),
+            burn(TxVolume::per_block(40))
+        );
+    }
 }

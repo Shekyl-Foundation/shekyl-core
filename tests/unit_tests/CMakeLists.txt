@@ -127,6 +127,7 @@ set(unit_tests_sources
   tx_extra_pqc_field_shape.cpp
   deferred_insertion.cpp
   economics_b5_fee_coinbase.cpp
+  economics_tx_volume_window.cpp
   pruned_tx_hash_parity.cpp
   tx_data_pruning_lmdb.cpp
   tx_prunable_region_sole_occupant.cpp
