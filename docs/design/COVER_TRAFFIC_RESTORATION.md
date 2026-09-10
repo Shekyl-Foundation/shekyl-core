@@ -1222,6 +1222,23 @@ unambiguously like defect 1. But counting at the IP layer adds TCP/IP framing
 manufacturing the one direction this section says is impossible. Count at the
 node→proxy sockets, at the levin layer.
 
+**Capture and count (2026-09-09).** On the subject, dump *only* node→proxy
+(`tcpdump -i lo -s 0 -w arm.pcap 'tcp and dst port 9050'` — `-s 0` is not
+optional; a truncated snaplen under-reads). Count with
+`python3 utils/carrier/count_windows.py arm.pcap`. The counter reassembles
+TCP, scans for the levin signature so SOCKS5 wrapping is skipped, and keeps
+payloads of exactly `WINDOW_BYTES` (20 480). Proxy→node is ignored. Arm A
+rehearsal, carrier still off: `--expect-zero` (exit 1 if any window is
+present). Intervals are histogrammed per flow against `U[3333, 6667]` ms.
+Tests in `utils/carrier/test_count_windows.py` fail if the size filter is
+widened by a byte.
+
+**Arm A rehearsal (2026-09-10, seedusw).** Carrier off, `--expect-zero`:
+`windows=0 payload_bytes=0 flows=13`, 20 877 packets captured, 0 dropped by
+kernel. `duration_s=0.000` is the counter's window-span with n=0, not the
+capture wall-clock. This is the filter rehearsal the method names — not the
+2 h baseline, and not B − A. Arms B and C remain the budget measurement.
+
 **Window: 2 hours per arm.** The relative standard error of the aggregate rate
 is `0.0963/√n` per channel, with four channels at a 5 s mean: ~5 min resolves a
 4 % excess, ~30 min a 1.5 %, and 2 h a 0.75 %. Defect 2 is a 50 % excess and
