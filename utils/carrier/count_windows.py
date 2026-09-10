@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # Copyright (c) 2025-2026, The Shekyl Foundation
 #
-# §3.1c(i) counter: exact-WINDOW_BYTES levin payloads on node→proxy sockets.
+# §3.1c(i) counter: exact framed-WINDOW_BYTES levin messages on node→proxy.
 #
 # COVER_TRAFFIC_RESTORATION.md forbids counting IP bytes, forbids a size
 # range, and forbids subtracting fluff. This program implements that filter
-# and nothing else. Relaxing WINDOW_BYTES from an exact match is the defect
-# the method names — the tests fail if it becomes a range.
+# and nothing else. Relaxing the framed match into a band is the defect the
+# method names — the tests fail if it becomes a range. The match is the
+# on-wire size noise_notify emits (HEADER_SIZE + m_cb), not m_cb itself.
 #
 # Capture (subject host, as root if tcpdump needs it; -s 0 is not optional):
 #
@@ -28,16 +29,20 @@ import json
 import struct
 import sys
 
-# Pinned to rust/shekyl-relay-privacy/src/params/carrier.rs. Do not "improve"
-# the match into a band: a carrier emission is always precisely this size.
+# rust/shekyl-levin/src/header.rs — little-endian on the wire.
+LEVIN_SIGNATURE = bytes.fromhex("0121010101010101")
+HEADER_SIZE = 33
+
+# Pinned to rust/shekyl-relay-privacy/src/params/carrier.rs. This is the
+# FRAMED size: shekyl_levin::noise_notify(n) produces exactly n bytes, and
+# the carrier's dummy is built at n = WINDOW_BYTES. m_cb is WINDOW_BODY.
+# Matching m_cb == WINDOW_BYTES misses every real window.
 WINDOW_BYTES = 20_480
+WINDOW_BODY = WINDOW_BYTES - HEADER_SIZE
 NOISE_MIN_DELAY_MS = 3_333
 NOISE_DELAY_JITTER_MS = 3_334  # inclusive width → U[3333, 6667]
 JITTER_HI_MS = NOISE_MIN_DELAY_MS + NOISE_DELAY_JITTER_MS
 
-# rust/shekyl-levin/src/header.rs — little-endian on the wire.
-LEVIN_SIGNATURE = bytes.fromhex("0121010101010101")
-HEADER_SIZE = 33
 MAX_BODY = 100_000_000  # LEVIN_DEFAULT_MAX_PACKET_SIZE; larger is a false sig
 
 # pcap link types we will see on `tcpdump -i lo`.
@@ -229,7 +234,9 @@ class Flow:
             need = HEADER_SIZE + body
             if len(buf) < need:
                 return
-            if body == window_bytes:
+            # Framed size, the quantity noise_notify pins. window_bytes is
+            # WINDOW_BYTES (20 480), not m_cb.
+            if need == window_bytes:
                 self.windows_ts.append(ts)
             del buf[:need]
 
@@ -272,13 +279,24 @@ def classify_interval(ms):
     return "in_jitter"
 
 
+def _flow_interval_stats(timestamps):
+    """Per-channel jitter. Defect 2 is a law on one channel, not the merge."""
+    iv = intervals_ms(timestamps)
+    buckets = collections.Counter(classify_interval(m) for m in iv)
+    hist = collections.Counter()
+    for m in iv:
+        hist[int(m // 250) * 250] += 1
+    return iv, buckets, hist
+
+
 def summarise(flows):
     all_ts = []
     per_flow = []
+    interval_buckets = collections.Counter()
+    hist = collections.Counter()
     for key, flow in flows.items():
         ts = flow.windows_ts
-        iv = intervals_ms(ts)
-        buckets = collections.Counter(classify_interval(m) for m in iv)
+        iv, buckets, flow_hist = _flow_interval_stats(ts)
         per_flow.append(
             {
                 "src": "%s:%d" % (key[0], key[1]),
@@ -288,24 +306,24 @@ def summarise(flows):
                 "buckets": dict(buckets),
             }
         )
+        interval_buckets.update(buckets)
+        hist.update(flow_hist)
         all_ts.extend(ts)
     all_ts.sort()
     n = len(all_ts)
-    iv = intervals_ms(all_ts)
     duration_s = (all_ts[-1] - all_ts[0]) if n >= 2 else 0.0
+    # Budget unit is the framed window, not m_cb. Charging the body would
+    # under-read the §3.1c pin (20 480 × 4 ÷ 5 s) by HEADER_SIZE/window.
     payload_bytes = n * WINDOW_BYTES
     rate = (payload_bytes / duration_s) if duration_s > 0 else 0.0
-    hist = collections.Counter()
-    for m in iv:
-        # 250 ms bins, labelled by bin start.
-        hist[int(m // 250) * 250] += 1
     return {
         "window_bytes": WINDOW_BYTES,
+        "window_body_bytes": WINDOW_BODY,
         "n": n,
         "payload_bytes": payload_bytes,
         "duration_s": duration_s,
         "rate_Bps": rate,
-        "interval_buckets": dict(collections.Counter(classify_interval(m) for m in iv)),
+        "interval_buckets": dict(interval_buckets),
         "histogram_250ms": {str(k): hist[k] for k in sorted(hist)},
         "flows": per_flow,
         "jitter_ms": [NOISE_MIN_DELAY_MS, JITTER_HI_MS],
@@ -356,14 +374,14 @@ def format_text(summary):
 
 def main(argv=None):
     p = argparse.ArgumentParser(
-        description="Count exact-WINDOW_BYTES levin payloads on node→proxy (COVER_TRAFFIC_RESTORATION.md §3.1c(i))."
+        description="Count framed-WINDOW_BYTES levin messages on node→proxy (COVER_TRAFFIC_RESTORATION.md §3.1c(i))."
     )
     p.add_argument("pcap", help="tcpdump -i lo -s 0 capture of tcp and dst port 9050")
     p.add_argument("--proxy-port", type=int, default=9050)
     p.add_argument(
         "--expect-zero",
         action="store_true",
-        help="arm A rehearsal: exit 1 if any exact-window payload is present",
+        help="arm A rehearsal: exit 1 if any framed-window message is present",
     )
     p.add_argument("--json", action="store_true")
     args = p.parse_args(argv)

@@ -3,10 +3,12 @@
 #
 # Tests for count_windows.py. The load-bearing assertions are:
 #
-#   * a body of exactly WINDOW_BYTES is counted
-#   * 20479 and 20481 are not (the filter is exact, not a band)
+#   * a framed WINDOW_BYTES message (m_cb = WINDOW_BODY) is counted
+#   * m_cb of WINDOW_BYTES is not (that was the false filter)
+#   * WINDOW_BODY ± 1 are not (the filter is exact, not a band)
 #   * proxy→node (src port 9050) is ignored
 #   * SOCKS bytes before the signature do not hide a window
+#   * summary jitter is the per-flow aggregate, not the merged timestamp series
 #   * --expect-zero fails when a window is present
 #
 # A test that would also pass if the filter were `abs(n - 20480) < 64` is
@@ -45,6 +47,13 @@ def levin_msg(body_len, extra_prefix=b""):
     )
     assert len(hdr) == cw.HEADER_SIZE
     return extra_prefix + hdr + body
+
+
+def framed_window(extra_prefix=b""):
+    """A noise_notify(WINDOW_BYTES)-shaped message: framed size, not m_cb."""
+    blob = levin_msg(cw.WINDOW_BODY, extra_prefix=extra_prefix)
+    assert len(blob) - len(extra_prefix) == cw.WINDOW_BYTES
+    return blob
 
 
 def ipv4_tcp(src, sport, dst, dport, seq, payload):
@@ -108,26 +117,35 @@ class CountWindows(unittest.TestCase):
             os.unlink(path)
 
     def test_exact_window_is_counted(self):
-        blob = levin_msg(cw.WINDOW_BYTES)
+        blob = framed_window()
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, blob, 1000.0)
         s, _ = self._run(pkts)
         self.assertEqual(s["n"], 1)
         self.assertEqual(s["payload_bytes"], cw.WINDOW_BYTES)
+        self.assertEqual(s["window_body_bytes"], cw.WINDOW_BODY)
 
     def test_one_byte_short_is_excluded(self):
-        blob = levin_msg(cw.WINDOW_BYTES - 1)
+        blob = levin_msg(cw.WINDOW_BODY - 1)
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, blob, 1000.0)
         s, _ = self._run(pkts)
         self.assertEqual(s["n"], 0)
 
     def test_one_byte_long_is_excluded(self):
-        blob = levin_msg(cw.WINDOW_BYTES + 1)
+        blob = levin_msg(cw.WINDOW_BODY + 1)
+        pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, blob, 1000.0)
+        s, _ = self._run(pkts)
+        self.assertEqual(s["n"], 0)
+
+    def test_mcb_equal_to_window_bytes_is_excluded(self):
+        # The old filter treated WINDOW_BYTES as m_cb. noise_notify never
+        # emits that: it would be a 20 513-byte frame, not a window.
+        blob = levin_msg(cw.WINDOW_BYTES)
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, blob, 1000.0)
         s, _ = self._run(pkts)
         self.assertEqual(s["n"], 0)
 
     def test_proxy_to_node_is_ignored(self):
-        blob = levin_msg(cw.WINDOW_BYTES)
+        blob = framed_window()
         # src port 9050: this is proxy→node, the direction the method excludes.
         pkts = segmented("127.0.0.1", 9050, "127.0.0.1", 40000, 1, blob, 1000.0)
         s, _ = self._run(pkts)
@@ -135,14 +153,14 @@ class CountWindows(unittest.TestCase):
 
     def test_socks_prefix_does_not_hide_a_window(self):
         socks = b"\x05\x01\x00" + b"\x05\x00\x00\x01" + b"\x00" * 6
-        blob = levin_msg(cw.WINDOW_BYTES, extra_prefix=socks)
+        blob = framed_window(extra_prefix=socks)
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, blob, 1000.0)
         s, _ = self._run(pkts)
         self.assertEqual(s["n"], 1)
 
     def test_interval_histogram_is_per_completion_time(self):
-        a = levin_msg(cw.WINDOW_BYTES)
-        b = levin_msg(cw.WINDOW_BYTES)
+        a = framed_window()
+        b = framed_window()
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, a, 10.0)
         seq = 1 + len(a)
         pkts += segmented(
@@ -154,8 +172,8 @@ class CountWindows(unittest.TestCase):
         self.assertEqual(s["interval_buckets"].get("below_min", 0), 0)
 
     def test_metronome_lands_below_min_when_faster_than_3333(self):
-        a = levin_msg(cw.WINDOW_BYTES)
-        b = levin_msg(cw.WINDOW_BYTES)
+        a = framed_window()
+        b = framed_window()
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, a, 10.0)
         pkts += segmented(
             "127.0.0.1", 40000, "127.0.0.1", 9050, 1 + len(a), b, 10.0 + 1.000
@@ -163,8 +181,40 @@ class CountWindows(unittest.TestCase):
         s, _ = self._run(pkts)
         self.assertEqual(s["interval_buckets"].get("below_min"), 1)
 
+    def test_jitter_summary_is_per_flow_not_merged(self):
+        # Two healthy channels at 5 s. Interleaved, the merged series has
+        # 2.5 s gaps (below_min). Defect 2 is per-channel; the summary must
+        # not report that false metronome.
+        w = framed_window()
+        pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, w, 10.0)
+        pkts += segmented(
+            "127.0.0.1", 40000, "127.0.0.1", 9050, 1 + len(w), w, 15.0
+        )
+        pkts += segmented("127.0.0.1", 40001, "127.0.0.1", 9050, 1, w, 12.5)
+        pkts += segmented(
+            "127.0.0.1", 40001, "127.0.0.1", 9050, 1 + len(w), w, 17.5
+        )
+        s, _ = self._run(pkts)
+        self.assertEqual(s["n"], 4)
+        self.assertEqual(s["interval_buckets"].get("in_jitter"), 2)
+        self.assertEqual(s["interval_buckets"].get("below_min", 0), 0)
+
+    def test_one_flow_metronome_is_visible_in_summary(self):
+        w = framed_window()
+        pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, w, 10.0)
+        pkts += segmented(
+            "127.0.0.1", 40000, "127.0.0.1", 9050, 1 + len(w), w, 15.0
+        )
+        pkts += segmented("127.0.0.1", 40001, "127.0.0.1", 9050, 1, w, 10.0)
+        pkts += segmented(
+            "127.0.0.1", 40001, "127.0.0.1", 9050, 1 + len(w), w, 11.0
+        )
+        s, _ = self._run(pkts)
+        self.assertEqual(s["interval_buckets"].get("in_jitter"), 1)
+        self.assertEqual(s["interval_buckets"].get("below_min"), 1)
+
     def test_expect_zero_exits_nonzero(self):
-        blob = levin_msg(cw.WINDOW_BYTES)
+        blob = framed_window()
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, blob, 1000.0)
         with tempfile.NamedTemporaryFile(suffix=".pcap", delete=False) as fh:
             path = fh.name
@@ -215,11 +265,12 @@ class CountWindows(unittest.TestCase):
             os.unlink(path)
 
     def test_json_round_trip_keys(self):
-        blob = levin_msg(cw.WINDOW_BYTES)
+        blob = framed_window()
         pkts = segmented("127.0.0.1", 40000, "127.0.0.1", 9050, 1, blob, 1000.0)
         s, _ = self._run(pkts)
         encoded = json.loads(json.dumps(s))
         self.assertEqual(encoded["window_bytes"], 20480)
+        self.assertEqual(encoded["window_body_bytes"], 20447)
         self.assertEqual(encoded["n"], 1)
 
 
