@@ -253,9 +253,10 @@
 #define P2P_IP_BLOCKTIME                                (60*60*24)  //24 hour
 #define P2P_IP_FAILS_BEFORE_BLOCK                       10
 
-#define P2P_SUPPORT_FLAG_FLUFFY_BLOCKS                  0x01
+// 0x01 is unassigned (former compact-vs-full capability bit). Do not reuse:
+// an old peer's bit must not pick up a new meaning.
 #define P2P_SUPPORT_FLAG_ZSTD_COMPRESSION               0x02
-#define P2P_SUPPORT_FLAGS                               (P2P_SUPPORT_FLAG_FLUFFY_BLOCKS | P2P_SUPPORT_FLAG_ZSTD_COMPRESSION)
+#define P2P_SUPPORT_FLAGS                               (P2P_SUPPORT_FLAG_ZSTD_COMPRESSION)
 
 #define RPC_IP_FAILS_BEFORE_BLOCK                       3
 

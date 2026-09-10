@@ -34,17 +34,18 @@
 //!
 //! Derivations that have a length bound (handshake peerlist, hash lists)
 //! terminate on that bound. Commands whose honest size is a function of
-//! consensus state (2001 / 2002 / 2004 / 2008) take the packet limit at
+//! consensus state (2002 / 2004 / 2007 / 2008) take the packet limit at
 //! ingress — the hook is `fn(u32) -> u64` and must not grow a consensus
-//! argument. `NOTIFY_NEW_BLOCK` (2001) stays in the table until PWD-B6
-//! deletes the command; `COMMAND_PING` (1003) is absent (PWD-B10).
+//! argument. `NOTIFY_NEW_BLOCK` (2001) is deleted (PWD-B6) and
+//! `COMMAND_PING` (1003) is deleted (PWD-B10); a Q/S-flagged either is
+//! unknown dispatch.
 
 use crate::header::{Flags, DEFAULT_MAX_PACKET_SIZE};
 use crate::{
     Error, COMMAND_HANDSHAKE, COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, HASH_SIZE,
-    NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_BLOCK, NOTIFY_NEW_FLUFFY_BLOCK,
-    NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_CHAIN, NOTIFY_REQUEST_FLUFFY_MISSING_TX,
-    NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_RESPONSE_CHAIN_ENTRY, NOTIFY_RESPONSE_GET_OBJECTS,
+    NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
+    NOTIFY_REQUEST_CHAIN, NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_GET_OBJECTS,
+    NOTIFY_RESPONSE_CHAIN_ENTRY, NOTIFY_RESPONSE_GET_OBJECTS,
 };
 
 /// The five defined Levin flag bits (`REQUEST | RESPONSE | BEGIN | END |
@@ -82,31 +83,30 @@ pub const MAX_OBJECT_REQUEST_COUNT: u64 = 100;
 /// `BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT` (`cryptonote_config.h`).
 pub const BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT: u64 = 25_000;
 
-/// Inherited 1 MiB envelope for `NOTIFY_REQUEST_FLUFFY_MISSING_TX` (2009).
+/// Inherited 1 MiB envelope for `NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009).
 /// Consensus `CRYPTONOTE_MAX_TX_PER_BLOCK` is `0x10000000` and is not a
 /// useful framing bound; the index-list cap stays this envelope until a
 /// tighter block-tx-count bound exists on this seam.
-const CAP_FLUFFY_MISSING_TX: u64 = 1024 * 1024;
+const CAP_COMPACT_MISSING_TX: u64 = 1024 * 1024;
 
 /// Inherited 4 MiB envelope for `NOTIFY_GET_TXPOOL_COMPLEMENT` (2010).
 /// There is no pool-cardinality bound on the framing seam.
 const CAP_TXPOOL_COMPLEMENT: u64 = 1024 * 1024 * 4;
 
-/// Commands this protocol defines. `COMMAND_PING` (1003) is retired
-/// (PWD-B10) and is **not** in this set — a Q/S-flagged 1003 is unknown
-/// input. `NOTIFY_NEW_BLOCK` (2001) stays until PWD-B6 deletes it.
+/// Commands this protocol defines. `COMMAND_PING` (1003) and
+/// `NOTIFY_NEW_BLOCK` (2001) are deleted and are **not** in this set — a
+/// Q/S-flagged 1003 or 2001 is unknown input.
 pub const DEFINED_COMMANDS: &[u32] = &[
     COMMAND_HANDSHAKE,
     COMMAND_TIMED_SYNC,
     COMMAND_REQUEST_SUPPORT_FLAGS,
-    NOTIFY_NEW_BLOCK,
     NOTIFY_NEW_TRANSACTIONS,
     NOTIFY_REQUEST_GET_OBJECTS,
     NOTIFY_RESPONSE_GET_OBJECTS,
     NOTIFY_REQUEST_CHAIN,
     NOTIFY_RESPONSE_CHAIN_ENTRY,
-    NOTIFY_NEW_FLUFFY_BLOCK,
-    NOTIFY_REQUEST_FLUFFY_MISSING_TX,
+    NOTIFY_NEW_COMPACT_BLOCK,
+    NOTIFY_REQUEST_COMPACT_MISSING_TX,
     NOTIFY_GET_TXPOOL_COMPLEMENT,
 ];
 
@@ -148,26 +148,25 @@ pub fn is_defined_command(command: u32) -> bool {
 }
 
 /// Per-command payload cap for a **defined** command. `None` for unknown
-/// ids, including retired `COMMAND_PING` (1003).
+/// ids, including retired `COMMAND_PING` (1003) and `NOTIFY_NEW_BLOCK`
+/// (2001).
 #[must_use]
 pub fn payload_cap_for_command(command: u32) -> Option<u64> {
     match command {
         COMMAND_HANDSHAKE | COMMAND_TIMED_SYNC => Some(CAP_HANDSHAKE),
         COMMAND_REQUEST_SUPPORT_FLAGS => Some(CAP_SUPPORT_FLAGS),
-        // 2001 stays until PWD-B6. Ingress cannot see consensus state, so
-        // the packet limit binds; the handler's `check_incoming_block_size`
-        // is the weight-derived bound. 2007 carries `first_block` (a block
-        // blob) in addition to the hash list, so a hash-list-only
+        // Ingress cannot see consensus state, so the packet limit binds
+        // for 2002 / 2004 / 2007 / 2008. 2007 carries `first_block` (a
+        // block blob) in addition to the hash list, so a hash-list-only
         // derivation would be too small; the hash-list length is still
-        // enforced at decode.
-        NOTIFY_NEW_BLOCK
-        | NOTIFY_NEW_TRANSACTIONS
+        // enforced at decode. 2008 is the sole block announce (PWD-B6).
+        NOTIFY_NEW_TRANSACTIONS
         | NOTIFY_RESPONSE_GET_OBJECTS
-        | NOTIFY_NEW_FLUFFY_BLOCK
+        | NOTIFY_NEW_COMPACT_BLOCK
         | NOTIFY_RESPONSE_CHAIN_ENTRY => Some(DEFAULT_MAX_PACKET_SIZE),
         NOTIFY_REQUEST_GET_OBJECTS => Some(hash_list_cap(MAX_OBJECT_REQUEST_COUNT)),
         NOTIFY_REQUEST_CHAIN => Some(hash_list_cap(BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT)),
-        NOTIFY_REQUEST_FLUFFY_MISSING_TX => Some(CAP_FLUFFY_MISSING_TX),
+        NOTIFY_REQUEST_COMPACT_MISSING_TX => Some(CAP_COMPACT_MISSING_TX),
         NOTIFY_GET_TXPOOL_COMPLEMENT => Some(CAP_TXPOOL_COMPLEMENT),
         _ => None,
     }
@@ -200,12 +199,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defined_set_has_twelve_arms() {
-        // 12 live commands: ping already gone, 2001 still present.
-        assert_eq!(DEFINED_COMMANDS.len(), 12);
+    fn defined_set_has_eleven_arms() {
+        // 11 live commands: ping gone (PWD-B10), 2001 gone (PWD-B6).
+        assert_eq!(DEFINED_COMMANDS.len(), 11);
         assert!(!is_defined_command(1003));
+        assert!(!is_defined_command(2001));
         assert!(!is_defined_command(0));
-        assert!(is_defined_command(NOTIFY_NEW_BLOCK));
+        assert!(is_defined_command(NOTIFY_NEW_COMPACT_BLOCK));
+        assert!(is_defined_command(NOTIFY_REQUEST_COMPACT_MISSING_TX));
     }
 
     #[test]
@@ -232,6 +233,19 @@ mod tests {
     }
 
     #[test]
+    fn new_block_dispatch_is_unknown() {
+        // PWD-B6 deleted 2001; Q/S-flagged 2001 is the same class as ping.
+        assert_eq!(
+            ingress_payload_cap(2001, Flags::REQUEST),
+            Err(Error::UnknownCommand { command: 2001 })
+        );
+        assert_eq!(
+            ingress_payload_cap(2001, Flags::RESPONSE),
+            Err(Error::UnknownCommand { command: 2001 })
+        );
+    }
+
+    #[test]
     fn unknown_flag_bit_rejected_on_dispatch_and_noise() {
         let extra = Flags::from_bits(Flags::REQUEST.bits() | 0x20);
         assert_eq!(
@@ -246,6 +260,14 @@ mod tests {
             Err(Error::UnknownFlags {
                 flags: noise_extra.bits()
             })
+        );
+    }
+
+    #[test]
+    fn compact_block_takes_the_packet_limit() {
+        assert_eq!(
+            ingress_payload_cap(NOTIFY_NEW_COMPACT_BLOCK, Flags::REQUEST).unwrap(),
+            DEFAULT_MAX_PACKET_SIZE
         );
     }
 

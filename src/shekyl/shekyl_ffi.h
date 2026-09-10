@@ -1601,6 +1601,8 @@ static_assert(offsetof(struct shekyl_archival_verify_ctx, segment_leaf_count) ==
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE      14
 /// PC-D3: ctx.prev_block_hash was the all-zero unpopulated sentinel.
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED 15
+/// PWD-B7: drop verdict for a shekyl_archival_verify_serve_credit_vin error code.
+uint8_t shekyl_archival_verify_drop_verdict(uint8_t code);
 
 /// Empty-set archival attestation root (`attestation_root(&[])`). Writes 32
 /// bytes to `out_ptr`. Returns true on success. Not the all-zero null hash —
@@ -1949,6 +1951,8 @@ uint64_t shekyl_archival_last_settled_epoch_as_of_parent(uint64_t parent_height)
 /// NUL-terminated static reason for an admission code (do not free). Distinguishes
 /// marshal failures from the below-floor verdict.
 const char* shekyl_archival_admission_err_string(uint8_t code);
+/// PWD-B7: drop verdict for a shekyl_archival_check_bond_admission error code.
+uint8_t shekyl_archival_admission_drop_verdict(uint8_t code);
 
 /// Refuse a bond whose holdings credit no work: admission runs the SAME chain
 /// that pays (shard_work_micro -> work_milli_from_micro).
@@ -2137,6 +2141,8 @@ uint8_t shekyl_archival_last_served_scan(
 // submit path cannot drift on this predicate.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY 49
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH  50
+/// PWD-B7: drop verdict for a shekyl_archival_verify_*_bond_post error code.
+uint8_t shekyl_archival_bond_post_drop_verdict(uint8_t code);
 uint8_t shekyl_archival_debit_auth_pin(
     const uint8_t* record_bond_spend_pk_ptr,
     size_t record_bond_spend_pk_len,
@@ -2792,6 +2798,8 @@ uint8_t shekyl_archival_emission_epoch_work(
 #define SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED        15
 /* Step 8: hybrid auth signature rejected over its Q1 binding message. */
 #define SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED         16
+/// PWD-B7: drop verdict for a shekyl_emission_vin_verify error code.
+uint8_t shekyl_emission_vin_drop_verdict(uint8_t code);
 
 /* Upper bound on settlement_epochs per emission vin — mirrors the Rust wire
  * pin MAX_SETTLEMENT_EPOCHS_PER_EMISSION (emission_wire.rs; the parse rejects
@@ -3731,6 +3739,23 @@ int32_t shekyl_levin_fragmented_notify(size_t noise_size, uint32_t command,
 //! unknown flag bits; -9 = unknown dispatch command.
 int32_t shekyl_levin_ingress_admit(uint32_t command, uint32_t flags,
                                     uint64_t* out_cap);
+
+// -- Peer-attribution drop rule (PWD-B7) ------------------------------------
+// Opaque ABI for rust/shekyl-peer-policy::DropVerdict. C++ writes these
+// constants through shekyl_drop_verdict_classify and reads only via the
+// two predicates. Zero does not sever. The gtest searches the byte domain
+// for the severing value rather than restating the discriminants.
+
+#define SHEKYL_DROP_VERDICT_UNCLASSIFIED      0u
+#define SHEKYL_DROP_VERDICT_POLICY_OR_STATE   1u
+#define SHEKYL_DROP_VERDICT_INTERNAL_FAILURE  2u
+#define SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM 3u
+
+bool shekyl_drop_verdict_severs(uint8_t verdict);
+bool shekyl_drop_verdict_is_internal_failure(uint8_t verdict);
+uint8_t shekyl_drop_verdict_combine(uint8_t current, uint8_t incoming);
+//! Fold `incoming` into `slot`. Null `slot` is a no-op (no peer to attribute).
+void shekyl_drop_verdict_classify(uint8_t* slot, uint8_t incoming);
 
 // ---------------------------------------------------------------------------
 // Daemon ephemeral Tor inbound -- PWD-E7 (docs/design/P2P_2_ENDPOINT_ROUND.md)

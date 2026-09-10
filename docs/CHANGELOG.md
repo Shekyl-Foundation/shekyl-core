@@ -85,7 +85,26 @@
   command 0) is still admitted and bounded by the packet limit.
   Support-flags (1007) cap tightens 4096 → 256. The table and discriminator
   live in `shekyl-levin`; C++ `handle_recv` is a marshaling shim
-  (`shekyl_levin_ingress_admit`). `NOTIFY_NEW_BLOCK` stays until PWD-B6.
+  (`shekyl_levin_ingress_admit`). `NOTIFY_NEW_BLOCK` (2001) and
+  `COMMAND_PING` (1003) are unknown dispatch; the sole block announce is
+  2008 `NOTIFY_NEW_COMPACT_BLOCK`.
+- **A peer is dropped only when the rejection is attributable to the
+  sender (PWD-B7).** The inherited `m_no_drop_offense` flag meant
+  droppable by *absence*, so our own pool-bookkeeping failures and
+  storage exceptions severed innocent connections. The drop decision is
+  now a typed tri-state verdict in `shekyl-peer-policy` (unclassified /
+  policy-or-state / internal-failure / attributable-form); only the last
+  severs. C++ writes through `shekyl_drop_verdict_classify` /
+  `reject_form|state|internal` at the failure site; unclassified does
+  not sever. `check_tx_inputs` classifies each return itself, including
+  chain-state arms (spent key image, missing/too-recent reference
+  block). `add_tx` does not promote an unclassified inner failure to
+  form. Mixed archival FFI codes (serve-credit, bond-post, admission,
+  debit-auth) classify in Rust; C++ writes the returned byte. Our-state
+  and marshal faults do not sever. The announce-size check declines
+  without disconnecting; a block-sync prepare failure still flushes the
+  failed span so sync can recover. Malformed input still drops.
+
 - **`docs/FOLLOWUPS.md` genesis-hold triage.** Every pre-genesis row got a
   disposition pass: 44 resolved/overtaken/duplicate/won't-fix rows removed
   (git history is the archive), 3 rows reclassified to post-genesis with
@@ -306,6 +325,23 @@
   gains a `c_q` parameter.
 
 ### Removed
+
+- **One block-propagation path, not two (PWD-B6).** `NOTIFY_NEW_BLOCK`
+  (2001) is deleted; command **2008** is the sole block announce. The two
+  were already one code path — 2001's handler forwarded into 2008 — and
+  nothing ever sent 2001. Command ids **2008 / 2009 are unchanged**. The
+  identifiers are `NOTIFY_NEW_COMPACT_BLOCK` / `NOTIFY_REQUEST_COMPACT_MISSING_TX`
+  (Rust: `NewCompactBlock` / `RequestCompactMissingTx`): `FLUFFY` collides
+  with Dandelion++ stem/fluff (`dandelionpp_fluff` on 2002) and names a
+  Monero rollout this chain has no history of. Compact, not "just block":
+  2008 is header-first (relay clears `b.txs`); full blocks still travel on
+  `NOTIFY_RESPONSE_GET_OBJECTS` (2004) during sync. `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS`
+  (0x01) goes with 2001; `0x01` is left unassigned. Advertised flags live
+  as `shekyl-levin::SupportFlags::ADVERTISED` (zstd only), pinned against
+  the C++ macros by `check_levin_constant_parity.sh`. The obsolete
+  `--fluffy-blocks` CLI flag is deleted. No protocol version moves:
+  `SHEKYL_PROTOCOL_VERSION` denotes the crypto era, and there is no
+  wire-command-set version to bump.
 
 - **The anchor peerlist mechanism is deleted whole** — the persisted anchor
   section, `anchor_peerlist_entry`, its container and manager methods, the

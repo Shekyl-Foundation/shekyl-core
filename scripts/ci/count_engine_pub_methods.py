@@ -329,7 +329,8 @@ def impl_self_is_engine(header: str) -> bool:
 
 
 def count_in_file(path: str, rel: str, _listing: bool) -> list[str]:
-    raw = open(path, encoding="utf-8").read()
+    with open(path, encoding="utf-8") as fh:
+        raw = fh.read()
     lines = strip_cfg_test_modules(mask_rust_noise(raw).splitlines(True))
     refuse_engine_aliases(lines, rel)
     found: list[str] = []

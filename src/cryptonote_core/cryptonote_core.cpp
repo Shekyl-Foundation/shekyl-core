@@ -54,6 +54,8 @@ using namespace epee;
 #include "hardforks/hardforks.h"
 #include "tx_verification_utils.h"
 #include "version.h"
+#include "shekyl/shekyl_ffi.h"
+#include "cryptonote_basic/drop_verdict.h"
 
 #include <boost/filesystem.hpp>
 
@@ -154,11 +156,6 @@ namespace cryptonote
     "block-sync-size"
   , "How many blocks to sync at once during chain synchronization (0 = adaptive)."
   , 0
-  };
-  static const command_line::arg_descriptor<bool> arg_fluffy_blocks  = {
-    "fluffy-blocks"
-  , "Relay blocks as fluffy blocks (obsolete, now default)"
-  , true
   };
   static const command_line::arg_descriptor<size_t> arg_max_txpool_weight  = {
     "max-txpool-weight"
@@ -296,7 +293,6 @@ namespace cryptonote
     command_line::add_arg(desc, arg_prep_blocks_threads);
     command_line::add_arg(desc, arg_show_time_stats);
     command_line::add_arg(desc, arg_block_sync_size);
-    command_line::add_arg(desc, arg_fluffy_blocks);
     command_line::add_arg(desc, arg_test_dbg_lock_sleep);
     command_line::add_arg(desc, arg_offline);
     command_line::add_arg(desc, arg_block_download_max_size);
@@ -348,9 +344,6 @@ namespace cryptonote
 
     test_drop_download_height(command_line::get_arg(vm, arg_test_drop_download_height));
     m_offline = get_arg(vm, arg_offline);
-
-    if (!command_line::is_arg_defaulted(vm, arg_fluffy_blocks))
-      MWARNING(arg_fluffy_blocks.name << " is obsolete, it is now default");
 
     if (command_line::get_arg(vm, arg_test_drop_download) == true)
       test_drop_download();
@@ -730,7 +723,7 @@ namespace cryptonote
       LOG_PRINT_L1("WRONG TRANSACTION BLOB, too big size " << tx_blob.size() << ", rejected");
       tvc.m_verifivation_failed = true;
       tvc.m_too_big = true;
-      return false;
+      return reject_form(tvc);
     }
 
     transaction tx;
@@ -739,7 +732,7 @@ namespace cryptonote
     {
       LOG_PRINT_L1("Incoming transactions failed to parse, rejected");
       tvc.m_verifivation_failed = true;
-      return false;
+      return reject_form(tvc);
     }
 
     const uint64_t tx_weight = get_transaction_weight(tx, tx_blob.size());
@@ -1256,7 +1249,7 @@ namespace cryptonote
     if(bvc.m_added_to_main_chain)
     {
       cryptonote_connection_context exclude_context = {};
-      NOTIFY_NEW_FLUFFY_BLOCK::request arg{};
+      NOTIFY_NEW_COMPACT_BLOCK::request arg{};
       arg.current_blockchain_height = m_blockchain_storage.get_current_blockchain_height();
       std::vector<crypto::hash> missed_txs;
       for (const auto &tx_hash : b.tx_hashes)
@@ -1288,7 +1281,7 @@ namespace cryptonote
       // remove from the import path. Named here so the next maintainer sees the seam
       // rather than reading this line as a finished path.
       arg.b.attestation_witness = m_blockchain_storage.get_block_attestation_witness(b);
-      // Relay an empty fluffy block
+      // Compact announce: header only; peers request missing txs via 2009.
       arg.b.txs.clear();
 
       m_pprotocol->relay_block(arg, exclude_context);
@@ -1317,10 +1310,10 @@ namespace cryptonote
     return m_blockchain_storage.add_new_block(b, bvc, connect);
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks)
+  bool core::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks, uint8_t *drop_verdict)
   {
     m_incoming_tx_lock.lock();
-    if (!m_blockchain_storage.prepare_handle_incoming_blocks(blocks_entry, blocks))
+    if (!m_blockchain_storage.prepare_handle_incoming_blocks(blocks_entry, blocks, drop_verdict))
     {
       cleanup_handle_incoming_blocks(false);
       return false;
@@ -1391,7 +1384,7 @@ namespace cryptonote
     block_connect_supplement& connect,
     bool update_miner_blocktemplate)
   {
-    // Note: this estimate can be quite far off since fluffy blocks won't contain all their
+    // Note: this estimate can be quite far off since compact blocks won't contain all their
     // transactions in the payload, but also this value doesn't *need* to be super precise. It
     // is used to trigger database backing store syncing once it hits a threshold, and since
     // we under-count the byte size here, it might result in under-syncing the backing store.
@@ -1490,7 +1483,7 @@ namespace cryptonote
        function. TWO production callers now, and both ask a LOCAL question to
        which `all` is the answer by definition:
 
-         - fluffy-block reconstruction, "do I already hold these bytes so I
+         - compact-block reconstruction, "do I already hold these bytes so I
            need not request them" (`cryptonote_protocol_handler.inl`, the
            `bvc.m_missing_txs` arm);
          - the noise carrier's verdict path, "is this still ours to record

@@ -652,8 +652,10 @@ mod tests {
         let rc = unsafe { shekyl_levin_ingress_admit(1001, 0x1 | 0x20, &raw mut cap) };
         assert_eq!(rc, SHEKYL_LEVIN_ERR_UNKNOWN_FLAGS);
 
-        // Retired ping (1003) on a dispatch.
+        // Retired ping (1003) and deleted NOTIFY_NEW_BLOCK (2001) on a dispatch.
         let rc = unsafe { shekyl_levin_ingress_admit(1003, 0x1, &raw mut cap) };
+        assert_eq!(rc, SHEKYL_LEVIN_ERR_UNKNOWN_COMMAND);
+        let rc = unsafe { shekyl_levin_ingress_admit(2001, 0x1, &raw mut cap) };
         assert_eq!(rc, SHEKYL_LEVIN_ERR_UNKNOWN_COMMAND);
 
         let rc = unsafe { shekyl_levin_ingress_admit(1001, 0x1, std::ptr::null_mut()) };

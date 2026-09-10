@@ -38,6 +38,7 @@
 #include "unit_tests_utils.h"
 #include "net/tor_address.h"
 #include <condition_variable>
+#include "shekyl/shekyl_ffi.h"
 
 #define MAKE_IPV4_ADDRESS(a,b,c,d) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),0}
 #define MAKE_IPV4_ADDRESS_PORT(a,b,c,d,e) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),e}
@@ -67,7 +68,18 @@ public:
   {return std::find(blocks_we_have.begin(), blocks_we_have.end(), id) != blocks_we_have.end();}
   bool have_block_unlocked(const crypto::hash& id, int *where = NULL) const {return false;}
   void get_blockchain_top(uint64_t& height, crypto::hash& top_id)const{height=0;top_id=crypto::null_hash;}
-  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone) { return true; }
+  unsigned handle_incoming_tx_calls = 0;
+  bool handle_incoming_tx_result = true;
+  uint8_t handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
+  bool handle_incoming_tx(const cryptonote::blobdata& tx_blob, cryptonote::tx_verification_context& tvc, cryptonote::relay_method tx_relay, bool relayed, epee::net_utils::zone origin_zone)
+  {
+    ++handle_incoming_tx_calls;
+    if (handle_incoming_tx_result)
+      return true;
+    tvc.m_verifivation_failed = true;
+    shekyl_drop_verdict_classify(&tvc.m_drop_verdict, handle_incoming_tx_verdict);
+    return false;
+  }
   bool handle_single_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *b, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true) { return true; }
   bool handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block, cryptonote::block_verification_context& bvc, bool update_miner_blocktemplate = true) { return true; }
   bool handle_incoming_block(const cryptonote::blobdata& block_blob, const cryptonote::block *block, cryptonote::block_verification_context& bvc, cryptonote::block_connect_supplement& connect, bool update_miner_blocktemplate = true) { return true; }
@@ -79,14 +91,21 @@ public:
   cryptonote::blockchain_storage &get_blockchain_storage() { throw std::runtime_error("Called invalid member function: please never call get_blockchain_storage on the TESTING class test_core."); }
   bool get_test_drop_download() const {return true;}
   bool get_test_drop_download_height() const {return true;}
-  // Configurable so a test can drive the failure arm at the
-  // `prepare_handle_incoming_blocks` check in `try_add_next_blocks`.
-  // Defaults to the previous hardcoded `true`, so existing tests are
-  // unaffected.
   bool prepare_handle_incoming_blocks_result = true;
-  bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry>  &blocks_entry, std::vector<cryptonote::block> &blocks) { return prepare_handle_incoming_blocks_result; }
+  uint8_t prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM;
+  bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry>  &blocks_entry, std::vector<cryptonote::block> &blocks, uint8_t *drop_verdict = nullptr)
+  {
+    if (drop_verdict)
+    {
+      *drop_verdict = prepare_handle_incoming_blocks_result
+                          ? uint8_t(SHEKYL_DROP_VERDICT_UNCLASSIFIED)
+                          : prepare_handle_incoming_blocks_verdict;
+    }
+    return prepare_handle_incoming_blocks_result;
+  }
   bool cleanup_handle_incoming_blocks(bool force_sync = false) { return true; }
-  bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return true; }
+  bool check_incoming_block_size_result = true;
+  bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return check_incoming_block_size_result; }
   bool update_checkpoints(const bool skip_dns = false) { return true; }
   uint64_t get_target_blockchain_height() const { return 1; }
   size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
@@ -135,6 +154,26 @@ struct cryptonote_protocol_handler_test_seam
   static int try_add_next_blocks(cryptonote::t_cryptonote_protocol_handler<T> &h,
                                  cryptonote::cryptonote_connection_context &ctx)
   { return h.try_add_next_blocks(ctx); }
+
+  // Both notify handlers are private, and both gate on `is_synchronized()`
+  // before reaching the arms PWD-B7 changed -- so the seam grants the flag
+  // alongside them rather than leaving each test to discover that the handler
+  // returned early and asserted nothing.
+  template<class T>
+  static void set_synchronized(cryptonote::t_cryptonote_protocol_handler<T> &h, bool v)
+  { h.m_synchronized = v; }
+
+  template<class T>
+  static int handle_notify_new_transactions(cryptonote::t_cryptonote_protocol_handler<T> &h,
+                                            cryptonote::NOTIFY_NEW_TRANSACTIONS::request &arg,
+                                            cryptonote::cryptonote_connection_context &ctx)
+  { return h.handle_notify_new_transactions(0, arg, ctx); }
+
+  template<class T>
+  static int handle_notify_new_compact_block(cryptonote::t_cryptonote_protocol_handler<T> &h,
+                                            cryptonote::NOTIFY_NEW_COMPACT_BLOCK::request &arg,
+                                            cryptonote::cryptonote_connection_context &ctx)
+  { return h.handle_notify_new_compact_block(0, arg, ctx); }
 };
 
 typedef nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<test_core>> Server;
@@ -164,6 +203,39 @@ static bool is_blocked(Server &server, const epee::net_utils::network_address &a
       return true;
 
   return false;
+}
+
+// PWD-B6: 2008 is the sole block-announce command; 2001 is refused as unknown.
+// `handled` starts false because the invoke map sets it on a match and never
+// clears it. Live-daemon regtest is --offline and does not cover p2p relay.
+TEST(cryptonote_protocol_handler, block_propagation_has_exactly_one_command)
+{
+  test_core pr_core;
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  cryptonote::cryptonote_connection_context context{};
+  epee::byte_stream out;
+
+  cryptonote::NOTIFY_NEW_COMPACT_BLOCK::request compact{};
+  compact.current_blockchain_height = 1;
+  epee::byte_stream body;
+  ASSERT_TRUE(epee::serialization::store_t_to_binary(compact, body));
+  const epee::span<const uint8_t> in_buff{body.data(), body.size()};
+
+  {
+    bool handled = false;
+    const int rc = cprotocol.handle_invoke_map(true, 2001, in_buff, out, context, handled);
+    EXPECT_FALSE(handled) << "command 2001 is still dispatched somewhere";
+    EXPECT_EQ(LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED, rc)
+        << "2001 must be refused as an unknown command, not silently ignored";
+  }
+
+  {
+    bool handled = false;
+    cprotocol.handle_invoke_map(true, cryptonote::NOTIFY_NEW_COMPACT_BLOCK::ID,
+                                in_buff, out, context, handled);
+    EXPECT_TRUE(handled)
+        << "NOTIFY_NEW_COMPACT_BLOCK must still dispatch — it is the only block path";
+  }
 }
 
 TEST(node_server, sanitize_peerlist_drops_undialable_ipv4)
@@ -2368,6 +2440,220 @@ TEST(block_sync_span_lifecycle, prepare_failure_charges_the_origin_it_disconnect
     << "the sweep must charge (an unchargeable failure is one a peer can "
        "repeat forever) and nothing may charge a second time for it";
   EXPECT_FALSE(endpoint.dropped.empty()) << "but the origin is still disconnected";
+}
+
+// The other half of the same site, and the reason PWD-B7 made the verdict a
+// TYPE. A prepare failure that describes OUR OWN broken invariant --
+// `tx_index is out of sync`, a tx missing from our own scan table, a worker
+// that threw -- must neither disconnect the span's origin nor charge it. Under
+// the boolean this was indistinguishable from a malformed span, so our own bug
+// severed and billed an honest peer.
+//
+// Three assertions, because removing a punishment is not the whole change:
+// the drop is gone, the charge is gone, AND the span still leaves the queue.
+// That last one is the limb that matters most. `drop_connection` flushed the
+// span as a SIDE EFFECT; now that we do not drop, nothing else would clear it,
+// `get_next_span` would hand the same failed span back forever, and sync would
+// stall on our own bug instead of recovering from it. The severing being
+// removed WAS the recovery -- so the recovery is now explicit and asserted.
+//
+// Clearnet origin, because the endpoint refuses to score a non-host address
+// and could not observe an absent charge on an anonymity zone.
+TEST(block_sync_span_lifecycle, prepare_failure_on_our_own_invariant_neither_drops_nor_charges)
+{
+  test_core pr_core;
+  pr_core.prepare_handle_incoming_blocks_result = false;
+  pr_core.prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_INTERNAL_FAILURE;
+  pr_core.blocks_we_have.push_back(crypto::null_hash);
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  const boost::uuids::uuid origin = fixed_uuid(5);
+  endpoint.add(origin, ip);
+
+  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
+  queue.add_blocks(1, {one_block()}, origin, ip, 1.0f, 1);
+  ASSERT_EQ(1u, queue.get_num_filled_spans());
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
+
+  EXPECT_TRUE(endpoint.dropped.empty())
+    << "our own broken invariant must not disconnect the peer that happened "
+       "to be feeding us when it broke";
+  unsigned total = 0;
+  for (const auto &f : endpoint.host_fails)
+    total += f.second;
+  EXPECT_EQ(0u, total) << "and it must not be charged for our bug either";
+  EXPECT_EQ(0u, queue.get_num_filled_spans())
+    << "but the span must STILL leave the queue -- the drop used to flush it "
+       "as a side effect, and removing the drop must not remove the recovery";
+}
+
+// Our own cancellation, which is the routine member of the same class: a
+// shutdown or a cancelled sync is not a defect and not the sender's, so it is
+// neither loud nor chargeable. Separated from the test above because the two
+// take different arms of the verdict and only agree on the outcome.
+TEST(block_sync_span_lifecycle, prepare_failure_on_our_own_cancellation_neither_drops_nor_charges)
+{
+  test_core pr_core;
+  pr_core.prepare_handle_incoming_blocks_result = false;
+  pr_core.prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
+  pr_core.blocks_we_have.push_back(crypto::null_hash);
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  const boost::uuids::uuid origin = fixed_uuid(5);
+  endpoint.add(origin, ip);
+
+  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
+  queue.add_blocks(1, {one_block()}, origin, ip, 1.0f, 1);
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
+
+  EXPECT_TRUE(endpoint.dropped.empty());
+  unsigned total = 0;
+  for (const auto &f : endpoint.host_fails)
+    total += f.second;
+  EXPECT_EQ(0u, total);
+  EXPECT_EQ(0u, queue.get_num_filled_spans());
+}
+
+// And the guard on the whole design: an UNCLASSIFIED failure -- the value a
+// `return false` added later carries until someone classifies it -- takes the
+// safe arm. This is what "the type is the gate" buys; without it a new
+// condition inherits whatever the default happens to be, which is exactly how
+// our own storage errors ended up severing peers.
+TEST(block_sync_span_lifecycle, an_unclassified_prepare_failure_does_not_drop)
+{
+  test_core pr_core;
+  pr_core.prepare_handle_incoming_blocks_result = false;
+  pr_core.prepare_handle_incoming_blocks_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
+  pr_core.blocks_we_have.push_back(crypto::null_hash);
+  cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol(pr_core, NULL);
+  recording_endpoint endpoint;
+  cprotocol.set_p2p_endpoint(&endpoint);
+
+  const auto ip = epee::net_utils::network_address{epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+  const boost::uuids::uuid origin = fixed_uuid(5);
+  endpoint.add(origin, ip);
+
+  auto &queue = cryptonote_protocol_handler_test_seam::queue(cprotocol);
+  queue.add_blocks(1, {one_block()}, origin, ip, 1.0f, 1);
+
+  ASSERT_EQ(1, cryptonote_protocol_handler_test_seam::try_add_next_blocks(cprotocol, endpoint.conns.front()));
+
+  EXPECT_TRUE(endpoint.dropped.empty());
+  EXPECT_EQ(0u, queue.get_num_filled_spans());
+}
+
+namespace
+{
+  cryptonote::NOTIFY_NEW_TRANSACTIONS::request two_txs()
+  {
+    cryptonote::NOTIFY_NEW_TRANSACTIONS::request arg{};
+    arg.txs.push_back(cryptonote::blobdata(8, '\x01'));
+    arg.txs.push_back(cryptonote::blobdata(8, '\x02'));
+    return arg;
+  }
+
+  void make_ready(cryptonote::cryptonote_connection_context &ctx)
+  {
+    ctx.m_state = cryptonote::cryptonote_connection_context::state_normal;
+  }
+
+  struct NotifyHarness
+  {
+    test_core core;
+    cryptonote::t_cryptonote_protocol_handler<test_core> cprotocol;
+    recording_endpoint endpoint;
+
+    NotifyHarness() : cprotocol(core, NULL)
+    {
+      cprotocol.set_p2p_endpoint(&endpoint);
+      cryptonote_protocol_handler_test_seam::set_synchronized(cprotocol, true);
+      const auto ip = epee::net_utils::network_address{
+          epee::net_utils::ipv4_network_address{0x0100007f, 18080}};
+      endpoint.add(fixed_uuid(1), ip);
+      make_ready(endpoint.conns.front());
+    }
+
+    cryptonote::cryptonote_connection_context &ctx() { return endpoint.conns.front(); }
+
+    int notify_txs()
+    {
+      auto arg = two_txs();
+      return cryptonote_protocol_handler_test_seam::handle_notify_new_transactions(
+          cprotocol, arg, ctx());
+    }
+
+    int notify_block(const cryptonote::blobdata &blob)
+    {
+      cryptonote::NOTIFY_NEW_COMPACT_BLOCK::request arg{};
+      arg.b.block = blob;
+      arg.current_blockchain_height = 1;
+      return cryptonote_protocol_handler_test_seam::handle_notify_new_compact_block(
+          cprotocol, arg, ctx());
+    }
+  };
+}
+
+TEST(attributable_drop, a_form_failure_still_severs_and_abandons_the_batch)
+{
+  NotifyHarness h;
+  h.core.handle_incoming_tx_result = false;
+  h.core.handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM;
+  ASSERT_EQ(1, h.notify_txs());
+  EXPECT_EQ(1u, h.endpoint.dropped.size());
+  EXPECT_EQ(1u, h.core.handle_incoming_tx_calls);
+}
+
+TEST(attributable_drop, an_internal_failure_neither_severs_nor_stops_the_batch)
+{
+  NotifyHarness h;
+  h.core.handle_incoming_tx_result = false;
+  h.core.handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_INTERNAL_FAILURE;
+  ASSERT_EQ(1, h.notify_txs());
+  EXPECT_TRUE(h.endpoint.dropped.empty());
+  EXPECT_EQ(2u, h.core.handle_incoming_tx_calls);
+}
+
+TEST(attributable_drop, a_policy_or_state_rejection_neither_severs_nor_stops_the_batch)
+{
+  NotifyHarness h;
+  h.core.handle_incoming_tx_result = false;
+  h.core.handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_POLICY_OR_STATE;
+  ASSERT_EQ(1, h.notify_txs());
+  EXPECT_TRUE(h.endpoint.dropped.empty());
+  EXPECT_EQ(2u, h.core.handle_incoming_tx_calls);
+}
+
+TEST(attributable_drop, an_unclassified_rejection_does_not_sever)
+{
+  NotifyHarness h;
+  h.core.handle_incoming_tx_result = false;
+  h.core.handle_incoming_tx_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
+  ASSERT_EQ(1, h.notify_txs());
+  EXPECT_TRUE(h.endpoint.dropped.empty());
+  EXPECT_EQ(2u, h.core.handle_incoming_tx_calls);
+}
+
+TEST(attributable_drop, an_oversized_announce_declines_without_severing)
+{
+  NotifyHarness h;
+  h.core.check_incoming_block_size_result = false;
+  ASSERT_EQ(1, h.notify_block(cryptonote::blobdata(16, '\x01')));
+  EXPECT_TRUE(h.endpoint.dropped.empty());
+}
+
+TEST(attributable_drop, an_unparseable_announce_still_severs)
+{
+  NotifyHarness h;
+  ASSERT_EQ(1, h.notify_block(cryptonote::blobdata(16, '\xff')));
+  EXPECT_EQ(1u, h.endpoint.dropped.size());
 }
 
 // The endpoint advertisement is DERIVED: no dedicated flag decides it, so the

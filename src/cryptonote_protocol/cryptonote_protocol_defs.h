@@ -96,8 +96,8 @@ namespace cryptonote
       }
       KV_SERIALIZE_OPT(attestation_witness, blobdata{})
       // Bound the opaque witness HERE, at the codec, so no ingress can bypass it —
-      // every p2p path that deserializes a block_complete_entry (fluffy handoff,
-      // get_objects response, and any future one) is covered by construction. This
+      // every p2p path that deserializes a block_complete_entry (compact-block
+      // announce, get_objects response, and any future one) is covered by construction. This
       // mirrors txin_archival_reward_emission, which bounds its own blob inside
       // BEGIN_SERIALIZE rather than trusting its callers. Refusing here also means
       // the oversized blob never reaches m_block_queue's accounting.
@@ -106,27 +106,6 @@ namespace cryptonote
     END_KV_SERIALIZE_MAP()
 
     block_complete_entry(): pruned(false), block_weight(0) {}
-  };
-
-
-  /************************************************************************/
-  /*                                                                      */
-  /************************************************************************/
-  struct NOTIFY_NEW_BLOCK
-  {
-    const static int ID = BC_COMMANDS_POOL_BASE + 1;
-
-    struct request_t
-    {
-      block_complete_entry b;
-      uint64_t current_blockchain_height;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(b)
-        KV_SERIALIZE(current_blockchain_height)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
   };
 
   /************************************************************************/
@@ -262,7 +241,7 @@ namespace cryptonote
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/
-  struct NOTIFY_NEW_FLUFFY_BLOCK
+  struct NOTIFY_NEW_COMPACT_BLOCK
   {
     const static int ID = BC_COMMANDS_POOL_BASE + 8;
 
@@ -282,7 +261,7 @@ namespace cryptonote
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/
-  struct NOTIFY_REQUEST_FLUFFY_MISSING_TX
+  struct NOTIFY_REQUEST_COMPACT_MISSING_TX
   {
     const static int ID = BC_COMMANDS_POOL_BASE + 9;
 

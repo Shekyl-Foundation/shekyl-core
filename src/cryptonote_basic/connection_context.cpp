@@ -38,9 +38,8 @@ namespace cryptonote
   {
     // PWD-B3 / PWD-B3a / PWD-B4: the table and the discriminator live in
     // rust/shekyl-levin. This is the marshaling shim (rule 20). PWD-B6
-    // still owns deleting NOTIFY_NEW_BLOCK (2001 stays in the table);
-    // PWD-B10 still owns deleting COMMAND_PING from the protocol defs
-    // (already absent from the cap table).
+    // deleted NOTIFY_NEW_BLOCK (2001) and PWD-B10 deleted COMMAND_PING
+    // (1003); a Q/S-flagged 2001 or 1003 is unknown dispatch.
     uint64_t cap = 0;
     const int32_t rc = shekyl_levin_ingress_admit(
         static_cast<uint32_t>(command), flags, &cap);

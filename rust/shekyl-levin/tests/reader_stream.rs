@@ -497,6 +497,18 @@ fn unknown_dispatch_command_is_rejected_at_ingress() {
 }
 
 #[test]
+fn deleted_new_block_is_unknown_dispatch() {
+    // PWD-B6 deleted 2001; Q-flagged 2001 is unknown input, same class as ping.
+    let message = invoke(2001, &[0u8; 8]);
+    let mut reader = BucketReader::new();
+    reader.feed(&message[..HEADER_SIZE]).unwrap();
+    assert_eq!(
+        reader.next_message(),
+        Err(Error::UnknownCommand { command: 2001 })
+    );
+}
+
+#[test]
 fn q_flagged_command_zero_is_rejected() {
     let message = invoke(0, b"");
     let mut reader = BucketReader::new();

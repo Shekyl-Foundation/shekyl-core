@@ -3,16 +3,16 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! LV-2b notify maps: 2001–2004 / 2006–2010.
+//! LV-2b notify maps: 2002–2004 / 2006–2010.
 //!
 //! Pins fluff OPT, empty-container omit, CONTAINER_POD_AS_BLOB, pruned vs
 //! unpruned `txs`, and the attestation-witness transport cap.
 
 use shekyl_levin::{
-    notify, BlockCompleteEntry, BucketReader, GetTxpoolComplement, NewBlock, NewTransactions,
-    PayloadError, PortableMap, Received, RequestChain, RequestFluffyMissingTx, RequestGetObjects,
-    ResponseChainEntry, ResponseGetObjects, TxBlobEntry, ATTESTATION_WITNESS_MAX_BYTES, HASH_SIZE,
-    NOTIFY_NEW_TRANSACTIONS,
+    notify, BlockCompleteEntry, BucketReader, GetTxpoolComplement, NewCompactBlock,
+    NewTransactions, PayloadError, PortableMap, Received, RequestChain, RequestCompactMissingTx,
+    RequestGetObjects, ResponseChainEntry, ResponseGetObjects, TxBlobEntry,
+    ATTESTATION_WITNESS_MAX_BYTES, HASH_SIZE, NOTIFY_NEW_TRANSACTIONS,
 };
 use shekyl_portable_storage::{store_to_binary, Array, Section, Value};
 
@@ -177,8 +177,8 @@ fn witness_over_cap_rejected() {
 }
 
 #[test]
-fn new_block_round_trip() {
-    round_trip(&NewBlock {
+fn new_compact_block_round_trip() {
+    round_trip(&NewCompactBlock {
         b: empty_block(),
         current_blockchain_height: 9,
     });
@@ -265,8 +265,8 @@ fn response_chain_entry_top64_stored_when_zero() {
 }
 
 #[test]
-fn fluffy_missing_tx_round_trip() {
-    round_trip(&RequestFluffyMissingTx {
+fn compact_missing_tx_round_trip() {
+    round_trip(&RequestCompactMissingTx {
         block_hash: [0xdd; HASH_SIZE],
         current_blockchain_height: 7,
         missing_tx_indices: vec![0, 2, 5],
