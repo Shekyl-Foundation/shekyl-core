@@ -19,8 +19,12 @@ reconciled `LMDB_SCHEMA.md` (2026-09-05) and DRS-P0b rewrote
 `LMDB_WRITE_ATOMICITY_AUDIT.md` (2026-09-05); both are gate-pinned to the
 `SHEKYL_LMDB_TABLES` macro and graded RECONCILED in the DRS oracles table.
 **DRS-P0c** closed the wart register on 2026-09-08 (DRS-W1…DRS-W15; evidence
-in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9). What
-remains is **P0d** (digest v0).
+in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9).
+**DRS-P0d** landed the logical-state digest v0 on 2026-09-10 (core chain +
+spent keys + live curve-tree root against production LMDB; archival
+journals remain the §7.1.1 named exclusion). The P0a–P0d envelope that
+blocked DRS-0 is complete; DRS-0 still waits on the CEN-B5 S1
+re-verification named in `DAEMON_REDB_STORE.md`.
 
 The historical text below is retained so the V4 deferral rationale (especially
 **no split writers on one LMDB env**) is not lost — those constraints still

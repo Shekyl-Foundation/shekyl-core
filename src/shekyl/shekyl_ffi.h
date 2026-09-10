@@ -3835,6 +3835,25 @@ bool shekyl_daemon_tor_is_alive(void);
 //! down, false when there was nothing to stop.
 bool shekyl_daemon_tor_shutdown(void);
 
+// ---------------------------------------------------------------------------
+// DRS-P0d logical-state digest v0
+// (`docs/design/DAEMON_REDB_STORE.md` §7.1). One coarse call: C++ has
+// already collected height-ordered block hashes, the spent-key set, and
+// the live curve-tree root from production LMDB. Archival journals are
+// not inputs (named exclusion, §7.1.1).
+//
+// `block_hashes` / `spent_keys` may be NULL only when the corresponding
+// count is 0. `curve_root` and `out_digest` are always 32-byte buffers
+// and must be non-NULL.
+// ---------------------------------------------------------------------------
+int32_t shekyl_logical_state_digest_v0(
+    const uint8_t* block_hashes,
+    uint64_t n_blocks,
+    const uint8_t* spent_keys,
+    uint64_t n_spent,
+    const uint8_t* curve_root,
+    uint8_t* out_digest);
+
 } // extern "C"
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and
@@ -3879,6 +3898,15 @@ bool shekyl_daemon_tor_shutdown(void);
 /// Reserved for a panic crossing the FFI boundary. Not currently
 /// emitted; `panic = "abort"` terminates the process first.
 #define SHEKYL_POW_RANDOMX_V2_ERR_INTERNAL            -4
+
+/// `shekyl_logical_state_digest_v0` wrote `*out_digest`.
+#define SHEKYL_CHAIN_DIGEST_V0_OK                      0
+/// A required pointer was null. `curve_root` and `out_digest` are
+/// always required; `block_hashes` / `spent_keys` may be null only
+/// when the corresponding count is 0.
+#define SHEKYL_CHAIN_DIGEST_V0_ERR_NULL_PTR           -1
+/// `n_blocks` or `n_spent` overflowed `size_t` when widened to bytes.
+#define SHEKYL_CHAIN_DIGEST_V0_ERR_OVERFLOW           -2
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h
 /// (C-compatible header used by both memwipe.c and mlocker.cpp).

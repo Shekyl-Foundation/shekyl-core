@@ -549,6 +549,31 @@ The §6.6 seeds re-verified, one dead, and the live set enumerated:
 
 Journals were expected to add more; R-2/R-3/R-4 are those additions.
 
+### 6.1 Digest v0 read set (P0d)
+
+P0b left the rest of the RAW enumeration — full read-set tracing per
+write path — to P0d, "where the reads become the digest's inputs."
+Those inputs, for digest v0, are the three families below. A write
+path that mutates one of them and does not change the digest is a
+coverage hole; a write path that mutates something else and *does*
+change the digest is a v0-scope leak (the txpool exclusion test
+guards the leak direction).
+
+Archival journals are a **named exclusion** (`DAEMON_REDB_STORE.md`
+§7.1.1). They are not digest-v0 reads. Do not extract S-ARCH, and do
+not implement archival apply in `shekyl-chain-store`, until those
+journals are in the digest or carry a replacement KAT.
+
+| Family | Digest read | Write paths that must move the digest | Notes |
+| --- | --- | --- | --- |
+| Core chain | `get_block_hash_from_height(h)` for `h ∈ [0, height)` — the hash is `block_info.bi_hash`, not the `blocks` blob | `add_block`, `remove_block` | height-ordered sequence, not a set |
+| `spent_keys` | `for_all_key_images` | `add_spent_key`, `remove_spent_key` | set-shaped; XOR accumulator; LMDB dup-sort order is not load-bearing |
+| Curve root | `get_curve_tree_root` (`curve_tree_meta` `"root"`; empty → Selene `hash_init`) | `grow_curve_tree`, `trim_curve_tree` | `curve_tree_roots` (per-height history) is P0e, not v0 |
+
+The R-1…R-6 edges above remain the connect/pop partial-order
+constraints. They are not digest inputs: several of them are
+archival-journal RAW edges, which v0 deliberately does not hash.
+
 ## 7. Transcription A-2 — height base per journal (transcribed, not invented)
 
 Connect fires the slash and epoch-close hooks at `prev_height + 1` — the

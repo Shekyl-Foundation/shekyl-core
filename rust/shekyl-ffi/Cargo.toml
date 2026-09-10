@@ -37,6 +37,9 @@ shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+# DRS-P0d logical-state digest v0. The hasher is safe-only; this crate
+# is the pointer boundary. DRS-E1 will grow shekyl-chain-store further.
+shekyl-chain-store = { path = "../shekyl-chain-store" }
 # RandomX v2 light-cache PoW verifier. Consumed by `pow_randomx_ffi.rs`
 # (the `shekyl_pow_randomx_v2_*` exports) which is the consensus PoW
 # verification boundary per `RANDOMX_V2_PHASE3_PLAN.md` §6. Default

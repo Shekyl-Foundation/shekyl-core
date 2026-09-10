@@ -70,6 +70,10 @@ pub mod account_ffi;
 // (Phase 3 onward) by the daemon's difficulty path.
 pub mod difficulty_ffi;
 
+// DRS-P0d layout-independent logical state digest v0. C++ walks
+// production LMDB; the hasher is shekyl-chain-store.
+pub mod chain_digest_ffi;
+
 // RandomX v2 light-cache PoW verification FFI. Wraps `shekyl_pow_randomx`
 // (`compute_hash` + `CacheStore`) in a C-ABI surface — the consensus
 // PoW hash (`shekyl_pow_randomx_v2_hash`) plus the canonical-seedhash
