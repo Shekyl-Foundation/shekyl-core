@@ -1192,6 +1192,10 @@ const DWELL_SCENARIOS: &[(&str, f64, f64, u64)] = &[
     ("stationary-v500", 500.0, 500.0, FULL_REWARD_ZONE_V5),
     ("stationary-v50-m10z", 50.0, 50.0, 10 * FULL_REWARD_ZONE_V5),
     ("ramp-v50-to-v200", 50.0, 200.0, FULL_REWARD_ZONE_V5),
+    // §10.14.6: the same crossing downward. Peak-hold's lag is P up and
+    // W·P down by construction; a grid with one ramp direction measures
+    // C10-8 on the side that flatters it.
+    ("ramp-v200-to-v50", 200.0, 50.0, FULL_REWARD_ZONE_V5),
 ];
 
 /// Advance the traced chain state by one block: the SHIPPED paid emission
@@ -2156,7 +2160,10 @@ pub fn report() -> FeeLadderReport {
             LadderMode::GridBand(720, Some(32)),
             LadderMode::GridMedian(720, 3),
             LadderMode::GridPeak(720, 3),
+            LadderMode::GridPeak(720, 4),
+            LadderMode::GridPeak(720, 8),
             LadderMode::GridPeak(720, 9),
+            LadderMode::GridPeak(720, 16),
         ] {
             for &(label, m0, m1, median) in DWELL_SCENARIOS {
                 dwell.push(dwell_scenario(label, m0, m1, median, st, mode, &params));
@@ -2302,8 +2309,11 @@ pub fn report() -> FeeLadderReport {
         LadderMode::GridMedian(720, 5),
         LadderMode::GridMedian(720, 9),
         LadderMode::GridPeak(720, 3),
+        LadderMode::GridPeak(720, 4),
         LadderMode::GridPeak(720, 5),
+        LadderMode::GridPeak(720, 8),
         LadderMode::GridPeak(720, 9),
+        LadderMode::GridPeak(720, 16),
     ];
     let sweep_arm = |mode: LadderMode| -> Vec<(CellKey, FeedbackResult)> {
         let mut cells = Vec::new();
@@ -2671,6 +2681,11 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             let blocks: u64 = rows.iter().map(|d| d.blocks_measured).sum();
             let changes: u64 = rows.iter().map(|d| d.value_changes[1]).sum();
             let mut lag_max: Option<u64> = None;
+            // Per-direction worst lag (§10.14.6): the ramp scenarios now run
+            // both ways and peak-hold's lag is asymmetric by construction, so
+            // the selection rule's "worst-direction lag" needs each side
+            // visible, not only their max.
+            let mut lag_by_ramp: BTreeMap<&str, u64> = BTreeMap::new();
             let mut lag_unresolved = 0u64;
             for d in rows.iter().filter(|d| d.is_ramp) {
                 match (
@@ -2678,11 +2693,18 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
                     ceiling_first.get(&(d.scenario, d.age_years)),
                 ) {
                     (Some(mine), Some(&ceil)) => {
-                        lag_max = Some(lag_max.unwrap_or(0).max(mine.saturating_sub(ceil)));
+                        let lag = mine.saturating_sub(ceil);
+                        lag_max = Some(lag_max.unwrap_or(0).max(lag));
+                        let slot = lag_by_ramp.entry(d.scenario).or_insert(0);
+                        *slot = (*slot).max(lag);
                     }
                     _ => lag_unresolved += 1,
                 }
             }
+            let lag_by_ramp: Vec<String> = lag_by_ramp
+                .iter()
+                .map(|(s, l)| format!("{s}={l}"))
+                .collect();
             let over = rows
                 .iter()
                 .map(|d| d.over_ceiling_permille)
@@ -2695,10 +2717,11 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
                 .unwrap_or(0);
             let _ = writeln!(
                 out,
-                "fee-ladder: C10-8 {mode} flips_per_10k_blocks={} ramp_lag_max_blocks={} ramp_lag_max_millidays={} ramp_lag_unresolved={lag_unresolved} over_ceiling_permille_max={over} under_ceiling_permille_max={under}",
+                "fee-ladder: C10-8 {mode} flips_per_10k_blocks={} ramp_lag_max_blocks={} ramp_lag_max_millidays={} ramp_lag_by_ramp=[{}] ramp_lag_unresolved={lag_unresolved} over_ceiling_permille_max={over} under_ceiling_permille_max={under}",
                 changes * 10_000 / blocks.max(1),
                 lag_max.map_or("none".to_owned(), |l| l.to_string()),
                 lag_max.map_or("none".to_owned(), |l| (l * 1000 / BLOCKS_PER_DAY).to_string()),
+                lag_by_ramp.join(","),
             );
         }
     }
