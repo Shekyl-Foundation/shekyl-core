@@ -788,7 +788,7 @@ stationary tail and structurally cannot fail for ≤ 2 posted values.
 **swept at round 11 over every registered age at its projected (coupled)
 supply state** — `{0, 1, 4, 12, 30}` years; earlier revisions measured
 the single age-4 state, and age moves `C` relative to every pow2
-boundary (**320 runs total** — eight modes × eight scenarios × five ages, of which 240 are quantized; **this figure has now gone stale twice for the same reason** — it read 200 until the rate-limited mode joined at round 13, and 240 until §10's two grid arms joined at round 18, each time because a count derived from a mode list is invalidated by every addition to that list. Re-derived from the run both times, never by arithmetic on the previous number); **at round 12 the traces EVOLVE chain state per block**
+boundary (**440 runs at time-grid round 2** — eleven modes × eight scenarios × five ages, 360 of them quantized, read off the run's own `dwell grid = N runs` line; **this figure has now gone stale three times for the same reason** — 200 until the rate-limited mode joined at round 13, 240 until §10's grid arms joined at round 18, 320 until round 2 added the `P` = 720 pair and the warm arm — each time because a count derived from a mode list is invalidated by every addition to that list. It is re-derived from the run, never by arithmetic on the previous number, and round 2b will move it again); **at round 12 the traces EVOLVE chain state per block**
 (`already_generated` advances by the shipped paid emission; height, σ,
 supply and reward all drift — §1.8's quasi-static claim is confirmed by
 measurement, not assumed); "current" is the churn baseline, so the table
@@ -2114,10 +2114,43 @@ reading are then taken on whichever shape §10.15 selects.)*
 
 ### §10.13 Round-2 instrument results — the fold arms
 
-*Reserved for the run pre-registered at §10.12; filled from
-`/tmp/fl_r3_round2.summary` when it lands. Written after §10.14 was
-committed, so that the two pre-registrations below cannot have been shaped
-by it.*
+Run of the §10.12 instrument at `b8c2e270c`, 36 min on the contended box;
+written after §10.14 was committed, so the round-2b pre-registration below
+cannot have been shaped by these numbers. Scored against §10.12.3's
+expectations as stated:
+
+| expectation | stated | measured | verdict |
+|---|---|---|---|
+| **R2-E1** fold depth at `P` = 720 | 720; single-scan cold 1 440 | `grid-fold-p720` max depth **720**, `single_scan_cold_parses` **1 440**; warm arm depth 1 440 → 2 160 | **holds** — C10-3 is **2.0×**, §10.12.1's correction confirmed on the run |
+| **R2-E2** the six extra cells' transitions all sit at anchors | off-anchor = 0 | `grid-fold-p720`: 6 extra cells, worst 4 transitions, **12 off-anchor**; `P` = 240: 18; `P` = 60: 16 | **FAILS** — see below |
+| **R2-E3** the warm arm recovers none of the six | recovered = 0 | `grid-fold-p720-w1`: 6 extra, **0 recovered**, off-anchor 7 | **holds** — a deeper fold does not buy the cells back |
+| **R2-E4** no new dwell failure | 1 pre-existing | 440 runs, 360 quantized, **1 fails** — the same row as the baseline | **holds** |
+
+Also reproduced unchanged: banded reference 14 / 24; served ceiling 20 /
+1 161; every fold arm at `P` ≥ 240 at 20 / 24; grid-only at 114 / 5 at
+`P` = 720 (C10-5's reading stands); FL-D8 741‰ / 637 / 13 597.
+
+**What R2-E2's failure means, stated without rescuing it.** §10.12.3(a)
+predicted that the fold's six extra cells were *anchor-flip* cells, and
+pre-registered the signature: their transitions would sit **at** grid
+anchors. They do not — twelve of them at `P` = 720 fall inside periods.
+The mechanism claim is therefore **not confirmed by the signature it
+named**. What the run does show is consistent with a *reset* rather than a
+*flip*: at each anchor the fold restarts from the unseeded snap, which can
+land the band in the other state from the one the unbounded band holds;
+the transition then happens mid-period, when `C` next crosses the margin
+from that wrong state. That reading is offered as a hypothesis with its
+own falsifier — **a band anchored where its state is history-free
+(§10.14.2) should lose none of the six** — and it is exactly what round
+2b's `grid-band-*` arms test. R2-E3 holding alongside R2-E2 failing is the
+useful combination: depth is not the lever, the anchor is.
+
+**Consequences for the maintainer calls.** R18-M2's requested reading ("14
+unreachable by any chain-state realisation") is **withdrawn as
+premature** — §10.14.2 names a chain-state realisation that may reach it,
+and the round should not ask for a closure the next arm might refute.
+R18-M1 and R18-M3 are unchanged: the fold at `P` = 720 costs 2.0× cold and
+the block stands.
 
 ### §10.14 Round 2b (pre-registered 2026-09-09): the band over the grid *sequence*; window filters; the stability criterion in human time
 
@@ -2203,7 +2236,7 @@ is run as the exact-recurrence reference.
   the 13 597 observed). A violation on `kfull` means the arm is not a
   hysteresis and the run is void.
 - *Long memory at low cost.* One period is one step, so the cells C10-1
-  lost to the fold's per-cell reset are reachable. **Expectation R2b-E1:
+  lost to the fold's per-cell reset are reachable. **Expectation R2-E5:
   `grid-band-p720-k32` oscillating cells ≤ 14 (the banded figure), worst
   transitions ≤ 24.** If it lands between 14 and the fold's 20, that is
   the finding and it is reported at its number.
@@ -2240,7 +2273,7 @@ the whole question:
 
 - **Median-W.** A temporal filter: suppresses excursions shorter than
   `W/2` periods, adds `W/2` periods of lag to a real move. **Pre-registered
-  expectation R2b-E2: it does NOT handle the regime FL-D8 says we live
+  expectation R2-E6: it does NOT handle the regime FL-D8 says we live
   in.** A `C` parked at a boundary alternating `a, b, a, b` across samples
   has a median that phase-locks to the alternation for every odd `W`, so
   the served value flips every period — grid-only's behaviour. Median is
@@ -2286,7 +2319,7 @@ in **blocks and days** (120 s target: 720 blocks = 1 day).
   blocks (ten minutes) — the window FL-R18's 4.0 % was quoted on. **`g` is
   a placeholder for FL-R19's gap distribution, which the wallet lane owes;
   it is named as one.** Reported as worst cell and as the mean over the
-  dwell ensemble (chain time, so occupancy-weighted). Expectation R2b-E3:
+  dwell ensemble (chain time, so occupancy-weighted). Expectation R2-E7:
   the banded reference reproduces ≈ 4 % in its worst cell; grid-sequence
   arms at `P` = 720 land near `≤ 5/720 ≈ 0.7 %` per transition-period, and
   peak-hold-8-class arms an order lower.
@@ -2356,5 +2389,86 @@ rather than discovered in §10.15):
   even though at `P` = 60 twelve consecutive samples share one volume
   window and the cost columns are least favourable; the number is
   reported rather than the arm being excluded on the argument.
+
+#### §10.14.6 Maintainer rulings received before the run (2026-09-09), and the selection rule they fix
+
+Three rulings arrived in-channel after §10.14.1–5 were committed and
+before any round-2b arm ran. Each is recorded here so the selection at
+§10.15 is made by a rule that predates its numbers.
+
+- **R18-M4 — RULED in advance, conditionally.** *"Peak-hold is eligible,
+  if it is proven best."* The window arms are no longer instrumentation
+  only: a window arm that wins under the rule below is adopted, and §10.0's
+  "the band stays" is thereby amended by the maintainer for this round. If
+  no window arm wins, §10.0 stands as written.
+- **R18-M5 — values accepted as proposed.** C10-7 ceiling **0.5 %** (an
+  order below FL-R18's accepted 4 %); C10-6 floor **2 days** (strictly
+  longer than one period at `P` = 720, so the grid alone cannot clear it).
+- **R18-M3 — deferred to the results, with a stated preference for the
+  memo column.** What that column proves and does not is set out below;
+  the round reports both columns regardless.
+- **What "best" means, in the maintainer's words:** *"the smoothest, with
+  the least required input, and preferably without memory."* Mapped to the
+  registered statistics: *smoothest* = fewest served-value changes per unit
+  chain time (the occupancy-weighted flip rate) and the longest C10-6
+  period; *least input* = fewest tunables the mechanism needs beyond `P`
+  (grid-only 0, peak-hold / median 1 (`W`), settled-anchor band 1 (`K`) plus
+  the already-ruled margin); *without memory* = a pure function of chain
+  state — every grid-sequence arm satisfies this by construction, and a
+  chain-state-keyed memo is a cache of that function, not memory (it can be
+  dropped at any height and recomputed identically, which is the property
+  the rejected `m_fee_correction_cq` lacked).
+
+**Selection rule (fixed before the run).**
+
+1. *Eligible* = zero monotonicity-invariant violations, C10-7 worst-cell
+   ≤ 0.5 %, C10-6 minimum sustained period ≥ 2 days, and **worst-direction
+   secular lag (C10-8) ≤ 7 days**. The lag cap is the one number added
+   here rather than ruled: without it "smoothest" is won by `W → ∞` — a
+   constant fee is infinitely smooth and tracks nothing — so a cap is what
+   makes the criterion a criterion. Seven days is the horizon the
+   maintainer discussion itself used ("a fee that takes a week to come
+   down"); it may be re-ruled, but only before §10.15 is written.
+2. Among eligible arms, **lowest flip rate** wins; ties (within 10 %) go to
+   the **longer C10-6 period**; remaining ties to the **fewest inputs**.
+3. C10-8's lag and the over-quote share are reported beside the winner as
+   its price, in days and per-mille; they do not re-rank within the cap.
+4. Two outcomes stated in advance: **peak-hold clears and is adopted** at
+   the smallest `W` that wins, or **peak-hold is ineligible (lag) and the
+   settled-anchor band is adopted** with `K` set from FL-D8's residence.
+   A third — nothing clears — sends the round to the operand axis below.
+
+**The `W` sweep is widened to {3, 4, 5, 8, 9, 16}** for peak-hold (the
+maintainer discussion proposed {4, 8, 16}; §10.14.3's {3, 5, 9} stays so
+the two sets are one run). Median stays at odd {3, 5, 9}. **A downward
+ramp (`ramp-v200-to-v50`) is added to the dwell scenarios**: the grid had
+one ramp, one direction, and peak-hold's lag is asymmetric by
+construction — measured on the rising side alone it ties the band, so a
+selection made there would be made on the flattering half.
+
+**What judging C10-3 on the memo column proves, in plain terms.** The cold
+column bounds the cost of *one quote on a node that has nothing cached* —
+after a restart, or the first query after a reorg past the samples: it is
+a per-request latency figure, and on the interim C++ path it is paid under
+the blockchain lock. The memo column bounds the cost *per unit of chain
+time* once the node is warm: one volume window per period, for every
+grid-sequence arm alike, however many quotes arrive. Adopting the memo
+column therefore proves **amortised affordability** — the mechanism's
+running cost is set by the chain, not by the query rate — and it changes
+nothing about correctness or purity, because the cache is keyed by block
+hash and can be discarded freely. What it does **not** prove is that the
+first quote after a restart is fast: that quote pays the cold figure once
+(`W × 720` or `(K+1) × 720` parses), and the register would then owe a
+separate **restart-latency bound at the rule-76 device floor** — either
+measured on a Pi 4, or made moot by FL-R3-STORE, whose O(1) row read
+collapses both columns. Recommended shape if the column moves: C10-3 judged
+on the memo column *and* a named cold-restart budget carried as owed, not
+a silent relaxation.
+
+**Out of scope, named:** the operand question — whether `M_r` sits inside
+the served value, the only lever that lowers the gain-≥2 loop's *gain*
+rather than lengthening its period. It **opens** if no arm clears rule 1;
+otherwise it is a refinement for a later round and this one does not grow
+to include it.
 
 Round 2b's results go in §10.15.
