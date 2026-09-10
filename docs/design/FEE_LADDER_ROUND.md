@@ -6,9 +6,11 @@ FL-R14 ruled). The round-9 implementation bundle **merged as PR #640**
 is in flight on `feat/fee-ladder-impl-2`. What keeps the round OPEN is
 the residue queued in [`FOLLOWUPS.md`](../FOLLOWUPS.md) — each row a
 one-liner pointing at its owning §-row, which carries the named blocker.
-FL-R3 is the one with a consensus-surface consequence, and **its
-time-grid round is now OPEN as §10 of the derivation** (opened
-2026-09-08 on `design/fl-r3-time-grid`).
+FL-R3 **CLOSED premise-refuted at round 19** (2026-09-10): its time-grid
+round (§10) is closed as record and **§11 is OPEN** — the relay floor
+follows raw `C`, the quantizers go, the wallet pays the served rung
+exactly, admission is lookback-min over `G` = 3 (FL-R20…FL-R23; FL-R24
+open on FL-E3). Branch `design/fl-r3-time-grid`.
 All substance lives in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md);
 this file is the thin round-state record only (rule 95 — one owner per
 claim, no restatement). Consensus behavior changes live in the
@@ -1263,3 +1265,20 @@ lag on a secular crossing — with the floor / ceiling set before the run
 (R18-M5) and the maintainer's ranking recorded: *smoothest, fewest inputs,
 no memory*. State: **OPEN**; R18-M1, M3 outstanding; M2 withdrawn as
 premature at §10.13; M4/M5 pre-ruled; selection at §10.15.
+
+#### Round 19 (2026-09-09 → 10, `design/fl-r3-time-grid`): the floor follows `C`
+
+Substance at `FEE_LADDER_DERIVATION.md` §11; state only here. Opened by
+the maintainer while round 2b ran ("What are we making this so
+complicated for?"). Nine findings verified at source (§11.1) — acceptance
+was `C`-free; the snap outlived its premise; "must not track demand" was
+scoping; `tx_volume_avg` is consensus (LWMA closed); no offline signing
+(FL-R19's premise void); the SMA is integer-truncated and its tick is the
+whole of round 2b's raw-`C` "oscillation"; `round_money_up_2` is a
+quantizer; admission runs once; the weight model is byte-exact. Rulings
+FL-R20…FL-R23 in-channel, FL-R24 open; the day's two reversals (random
+pad → fixed pad → lookback-min) recorded in order at §11.2 FL-R22. §10
+closed as record (§10.16); C10-*, R2-E*, R18-M* closed with it; §10.15
+not written. State: **§11 OPEN** — FL-E1…FL-E3 pre-registered (§11.5),
+instrument `--fee-floor` committed ahead of its run; implementation spec
+§11.6 awaits review; results owed at §11.7.
