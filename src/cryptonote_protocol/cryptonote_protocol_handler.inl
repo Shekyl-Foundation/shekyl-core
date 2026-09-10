@@ -552,10 +552,10 @@ namespace cryptonote
       return 1;
     }
 
-    // sanity check block blob size
+    // Our current weight limit — state, not form. Decline, do not sever.
     if (!m_core.check_incoming_block_size(arg.b.block))
     {
-      drop_connection(context, false, false);
+      LOG_PRINT_CCONTEXT_L1("Announced block blob exceeds our current weight limit; declining to process it, keeping the connection");
       return 1;
     }
 
@@ -926,11 +926,18 @@ namespace cryptonote
       // `tx_relay` rather than folded into it: the relay method is a routing
       // decision that may be revised, the zone is a fact about where the bytes
       // came from that must not be.
-      if (!m_core.handle_incoming_tx(tx, tvc, tx_relay, true, zone) && !tvc.m_no_drop_offense)
+      if (!m_core.handle_incoming_tx(tx, tvc, tx_relay, true, zone))
       {
-        LOG_PRINT_CCONTEXT_L1("Tx verification failed, dropping connection");
-        drop_connection(context, false, false);
-        return 1;
+        if (shekyl_drop_verdict_severs(tvc.m_drop_verdict))
+        {
+          LOG_PRINT_CCONTEXT_L1("Tx verification failed, dropping connection");
+          drop_connection(context, false, false);
+          return 1;
+        }
+        if (shekyl_drop_verdict_is_internal_failure(tvc.m_drop_verdict))
+        {
+          LOG_ERROR_CCONTEXT("Tx rejected by an internal failure of ours, not the sender's fault; keeping the connection");
+        }
       }
 
       switch (tvc.m_relay)
@@ -1497,42 +1504,25 @@ namespace cryptonote
           }
 
           std::vector<block> pblocks;
-          if (!m_core.prepare_handle_incoming_blocks(blocks, pblocks))
+          uint8_t prepare_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED;
+          if (!m_core.prepare_handle_incoming_blocks(blocks, pblocks, &prepare_verdict))
           {
             LOG_ERROR_CCONTEXT("Failure in prepare_handle_incoming_blocks");
-            // Charged, deliberately -- see PWD-B7. It is tempting to treat a
-            // prepare failure as our own fault, because six of this call's
-            // `return false` sites are (`m_cancel`, and a thread-pool
-            // `!waiter.wait()`). But it returns false for about as many
-            // SENDER-attributable reasons: an unparseable block blob, an
-            // unparseable transaction, a duplicate transaction, a duplicate
-            // key image, an empty span.
-            //
-            // The boolean cannot say which fired, so a caller cannot honestly
-            // classify this failure at all -- and declining to charge would
-            // let a peer feed malformed spans forever, reconnecting each time
-            // with no score accumulating. That is the concrete argument for
-            // the typed tri-state verdict, which is owned by the P2P-3
-            // drop-rule item in FOLLOWUPS and belongs in Rust.
-            //
-            // The sweep is the charge. The id-drop below passes `add_fail`
-            // false so the origin is not billed twice for one failure, which
-            // is what the parse-failure sibling does; on an anonymity zone the
-            // question is moot, since `add_host_fail` refuses an address that
-            // names no host whoever calls it.
-            drop_connections(span_origin);
-            // The sweep is a no-op where the address names no host, so this
-            // site drops the origin by id and clears its spans itself, exactly
-            // as the two sites below already do. `flush_all_spans` is true
-            // because this span is filled: until now only the sweep's own
-            // `flush_spans(id, true)` erased it, and that is gone here.
-            if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
-              drop_connection(context, false, true);
-              return 1;
-            }))
-              LOG_ERROR_CCONTEXT("span connection id not found");
-
-            // in case the peer had dropped beforehand, remove the span anyway so other threads can wake up and get it
+            if (shekyl_drop_verdict_severs(prepare_verdict))
+            {
+              drop_connections(span_origin);
+              if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
+                drop_connection(context, false, true);
+                return 1;
+              }))
+                LOG_ERROR_CCONTEXT("span connection id not found");
+            }
+            else if (shekyl_drop_verdict_is_internal_failure(prepare_verdict))
+            {
+              LOG_ERROR_CCONTEXT("prepare_handle_incoming_blocks failed on an internal invariant of ours; keeping the connection and charging nothing");
+            }
+            // Span must leave the queue in every class: the drop used to flush
+            // it as a side effect.
             m_block_queue.remove_spans(span_connection_id, start_height);
             return 1;
           }

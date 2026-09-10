@@ -15,6 +15,7 @@ use shekyl_archival_retention::{
     admission_code_cstr, admission_codes, check_admission_of, last_settled_epoch_as_of_parent,
     parent_state_shards_from_gather, HoldingsKind, ParentStateHoldings,
 };
+use shekyl_peer_policy::DropVerdict;
 
 /// The holding credits at least `ADMISSION_MIN_WORK_MILLI`.
 pub const SHEKYL_ARCHIVAL_ADMISSION_OK: u8 = admission_codes::OK;
@@ -52,6 +53,28 @@ pub extern "C" fn shekyl_archival_last_settled_epoch_as_of_parent(parent_height:
 #[no_mangle]
 pub extern "C" fn shekyl_archival_admission_err_string(code: u8) -> *const c_char {
     admission_code_cstr(code).as_ptr()
+}
+
+/// PWD-B7: map an admission FFI code onto a drop verdict.
+///
+/// C++ writes the byte; it does not interpret the family. Marshal faults
+/// (`NULL_PTR`, `GATHER_*`) are ours. `BELOW_FLOOR` is scored from our
+/// `r_market` and parent height. Only `HOLDINGS_KIND` is the sender's
+/// discriminant. Unknown codes stay unclassified — they do not sever.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_admission_drop_verdict(code: u8) -> u8 {
+    archival_admission_drop_verdict(code).to_byte()
+}
+
+fn archival_admission_drop_verdict(code: u8) -> DropVerdict {
+    match code {
+        SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR
+        | SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH
+        | SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_COLUMNS => DropVerdict::InternalFailure,
+        SHEKYL_ARCHIVAL_ADMISSION_ERR_BELOW_FLOOR => DropVerdict::PolicyOrState,
+        SHEKYL_ARCHIVAL_ADMISSION_ERR_HOLDINGS_KIND => DropVerdict::AttributableForm,
+        _ => DropVerdict::Unclassified,
+    }
 }
 
 /// D3/R3 admission gate: refuse a bond whose holdings credit no work.
@@ -331,5 +354,40 @@ mod tests {
             assert!(s.is_ascii(), "code {code} reason is not ASCII: {s}");
         }
         assert!(mismatch_s.contains("gather"), "{mismatch_s}");
+    }
+
+    #[test]
+    fn admission_drop_verdict_does_not_sever_on_our_state() {
+        assert!(
+            DropVerdict::from_byte(shekyl_archival_admission_drop_verdict(
+                SHEKYL_ARCHIVAL_ADMISSION_ERR_HOLDINGS_KIND
+            ))
+            .severs()
+        );
+        assert!(
+            !DropVerdict::from_byte(shekyl_archival_admission_drop_verdict(
+                SHEKYL_ARCHIVAL_ADMISSION_ERR_BELOW_FLOOR
+            ))
+            .severs()
+        );
+        assert!(
+            DropVerdict::from_byte(shekyl_archival_admission_drop_verdict(
+                SHEKYL_ARCHIVAL_ADMISSION_ERR_NULL_PTR
+            ))
+            .is_internal_failure()
+        );
+        assert!(
+            DropVerdict::from_byte(shekyl_archival_admission_drop_verdict(
+                SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_MISMATCH
+            ))
+            .is_internal_failure()
+        );
+        assert!(
+            DropVerdict::from_byte(shekyl_archival_admission_drop_verdict(
+                SHEKYL_ARCHIVAL_ADMISSION_ERR_GATHER_COLUMNS
+            ))
+            .is_internal_failure()
+        );
+        assert!(!DropVerdict::from_byte(shekyl_archival_admission_drop_verdict(255)).severs());
     }
 }
