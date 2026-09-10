@@ -2718,8 +2718,14 @@ partition, harder to diagnose than a bounce. The symmetric case, a peer
 predicate and does not need to be: the quoting node's own daemon is at
 `h` and admits; a lagging peer refuses transiently, catches up within its
 lag, and receives the transaction in a block under `kept_by_block`. What
-`G` = 5 costs against 3 is priced by FL-E4 (§11.5); since the mean grace
-was 0–6 bp at `G` = 3 it is expected to stay in single-digit bp.
+`G` = 5 costs against 3 is priced by FL-E4 (§11.5), and the run gave it a
+closed form (§11.7): **worst-case grace ≈ `G` × the one-block slew of
+`F`** — 479 / 639 / 807 bp at `G` = 3 / 4 / 5 is ~160 bp per block against
+FL-E2's measured 160, because after a step the 720-block SMA is a linear
+ramp and `min` sits `G` blocks back down it. Each extra block of `G` costs
+one block of slew in the worst case and nothing in expectation (mean 3–6
+bp at every `G`), so the trade is a formula, not a table; and it is the
+same quantity FL-E2 measures, not an independent one.
 
 **Why `min` is safe here, registered so it stays safe (review A-3).** A
 minimum over a window is adversary-favourable by construction: any
@@ -2728,7 +2734,12 @@ transient dip in `F`, from any cause, becomes the admission threshold for
 720-block SMA (`C`), a 100-block weight median (`M`), a reward that decays
 by `2⁻²¹` per block (`R`) — so no single block can produce a dip worth
 exploiting; the worst one-block fall in the run is 3.5 % on a 10× volume
-collapse (§11.7). That is a property of the operands, not of `min`.
+collapse (§11.7). That is a property of the operands, not of `min` —
+and it is why the mean stays at 3–6 bp while the worst case is `G` × slew:
+a fast operand would move both together, so the clause below fires on
+evidence, not on someone noticing. The integer tick is the contrast case:
+its grace is 307 bp at every `G`, flat, because a quantizer's step has
+nothing for a wider window to average out (FL-R24's one-line case).
 **Reopening clause (rule 21, FL-R17 shape): FL-R23 reopens if any operand
 with a per-block response enters `F`** — a fast term added to the floor
 would be amplified by the window for `G` blocks, and this sentence is
