@@ -11,9 +11,11 @@
 //! fee/byte ≥ min{ F(h′−k) : 0 ≤ k ≤ G }        (lookback-min, G = LOOKBACK_G)
 //! ```
 //!
-//! so a quote taken at any `h ∈ [h′−G, h′]` is admitted by IDENTITY — the
-//! construction-to-broadcast gap is one hot session (0–2 blocks) and `G`
-//! is that plus one block of propagation slack. Nothing in the inequality
+//! with `h′` the RECEIVING node's tip, so a quote taken at `h` is admitted
+//! by IDENTITY at every node whose tip is in `[h, h+G]` — the
+//! construction-to-broadcast gap is one hot session (0–2 blocks), peers
+//! may be up to two blocks ahead at relay time, and `G` is those plus one
+//! block of slack (review A-1). FL-E4 sweeps `G` ∈ [`LOOKBACK_SWEEP`]. Nothing in the inequality
 //! depends on tiers, snaps, pads, or stored state beyond `G+1` floor
 //! values every node derives from the chain. What the lookback COSTS is
 //! the grace it extends: admission may sit below the current floor by
@@ -60,9 +62,16 @@ use crate::fee_ladder::{
 
 const VOLUME_WINDOW: usize = TX_VOLUME_WINDOW as usize;
 
-/// FL-R23's lookback depth: the hot-session gap (0–2 blocks) plus one block
-/// of propagation slack.
-pub const LOOKBACK_G: usize = 3;
+/// FL-R23's lookback depth as re-derived at review A-1: the hot-session gap
+/// (0–2 blocks) + the network height spread at relay (2) + one block of
+/// slack. The identity the predicate delivers is per receiving node — a
+/// quote at `h` is admitted by identity at every node whose tip is in
+/// `[h, h+G]`.
+pub const LOOKBACK_G: usize = 5;
+/// FL-E4's sweep: the first draft's `G` = 3, the re-derived 5, and the
+/// point between, so the grace curve — not the derivation alone — is on
+/// record.
+pub const LOOKBACK_SWEEP: [usize; 3] = [3, 4, 5];
 
 /// Gaps at which the road-not-taken pad race is scored, in blocks — the
 /// same span the lookback covers.
@@ -88,6 +97,30 @@ pub const fn pad_admission_margin_bp(pad_bp: u64) -> u64 {
 /// tail wobbles by less than a quarter of that is at its fixed point for
 /// every purpose a user can observe.
 pub const CONVERGED_AMPLITUDE_BP: u64 = 50;
+
+/// Lookback grace over each `G` in [`LOOKBACK_SWEEP`]: `(max, mean)` of
+/// `F(t)/min_{k≤G} F(t−k) − 1` in basis points, ceiling ratio.
+fn grace_sweep(floors: &[u128]) -> ([u64; 3], [u64; 3]) {
+    let mut maxes = [0u64; 3];
+    let mut means = [0u64; 3];
+    for (i, &g) in LOOKBACK_SWEEP.iter().enumerate() {
+        let (mut mx, mut sum, mut n) = (0u64, 0u128, 0u64);
+        for t in g..floors.len() {
+            let lo = floors[t - g..=t]
+                .iter()
+                .copied()
+                .min()
+                .expect("non-empty lookback");
+            let bp = ((floors[t] * 10_000).div_ceil(lo.max(1)) - 10_000) as u64;
+            mx = mx.max(bp);
+            sum += u128::from(bp);
+            n += 1;
+        }
+        maxes[i] = mx;
+        means[i] = (sum / u128::from(n.max(1))) as u64;
+    }
+    (maxes, means)
+}
 
 /// `F = R·C·w_ref/M²` × `SCALE`, with `M` floored at the penalty-free zone
 /// as the shipped floor does. Single division. The `SCALE` factor is kept
@@ -171,11 +204,12 @@ pub struct SlewResult {
     pub rise_bp_max: [i64; 3],
     /// `min_t F(t+k)/F(t) − 1` for `k ∈ GAPS`, basis points (fall).
     pub fall_bp_max: [i64; 3],
-    /// FL-R23's grace: `F(t)/min_{k≤G} F(t−k) − 1`, basis points — the
+    /// FL-R23's grace, `F(t)/min_{k≤G} F(t−k) − 1` in basis points — the
     /// most an admitted transaction may sit below the current floor, and
-    /// the mean over the trace.
-    pub grace_bp_max: u64,
-    pub grace_bp_mean: u64,
+    /// the mean over the trace — for each `G` in [`LOOKBACK_SWEEP`]
+    /// (FL-E4).
+    pub grace_bp_max: [u64; 3],
+    pub grace_bp_mean: [u64; 3],
     /// Road not taken, per [`PAD_CANDIDATES_BP`]: blocks `t` from which
     /// some `k ∈ GAPS` rise exceeds that pad's margin under the inherited
     /// buffer — a quote at `t` that would have bounced at `t+k`.
@@ -264,18 +298,7 @@ fn slew_scenario(
             }
         }
     }
-    let (mut grace_max, mut grace_sum, mut grace_n) = (0u64, 0u128, 0u64);
-    for t in LOOKBACK_G..floors.len() {
-        let lo = floors[t - LOOKBACK_G..=t]
-            .iter()
-            .copied()
-            .min()
-            .expect("non-empty lookback");
-        let g = ((floors[t] * 10_000).div_ceil(lo.max(1)) - 10_000) as u64;
-        grace_max = grace_max.max(g);
-        grace_sum += u128::from(g);
-        grace_n += 1;
-    }
+    let (grace_max, grace_mean) = grace_sweep(&floors);
     SlewResult {
         scenario,
         age_years: st.height / BLOCKS_PER_YEAR,
@@ -283,7 +306,7 @@ fn slew_scenario(
         rise_bp_max: rise,
         fall_bp_max: fall,
         grace_bp_max: grace_max,
-        grace_bp_mean: (grace_sum / u128::from(grace_n.max(1))) as u64,
+        grace_bp_mean: grace_mean,
         bounce_blocks_by_pad: bounce,
         blocks_measured: n as u64,
         c_changes,
@@ -307,9 +330,9 @@ pub struct FloorFeedbackResult {
     pub tail_transitions: u64,
     pub converged: bool,
     /// FL-R23 along the deterministic trace: the lookback grace, max and
-    /// mean, basis points.
-    pub grace_bp_max: u64,
-    pub grace_bp_mean: u64,
+    /// mean in basis points, per `G` in [`LOOKBACK_SWEEP`].
+    pub grace_bp_max: [u64; 3],
+    pub grace_bp_mean: [u64; 3],
 }
 
 /// FL-C7's loop under the FL-R20 served map. Deterministic demand
@@ -377,18 +400,7 @@ fn floor_feedback_scenario(
             last_tail_fee = Some(fee);
         }
     }
-    let (mut grace_max, mut grace_sum, mut grace_n) = (0u64, 0u128, 0u64);
-    for t in LOOKBACK_G..floors.len() {
-        let lo = floors[t - LOOKBACK_G..=t]
-            .iter()
-            .copied()
-            .min()
-            .expect("non-empty lookback");
-        let g = ((floors[t] * 10_000).div_ceil(lo.max(1)) - 10_000) as u64;
-        grace_max = grace_max.max(g);
-        grace_sum += u128::from(g);
-        grace_n += 1;
-    }
+    let (grace_max, grace_mean) = grace_sweep(&floors);
     let amplitude_bp = (fee_max * 10_000 / fee_min.max(1) - 10_000) as u64;
     FloorFeedbackResult {
         age_years: st.height / BLOCKS_PER_YEAR,
@@ -403,13 +415,14 @@ fn floor_feedback_scenario(
         tail_transitions,
         converged: amplitude_bp <= CONVERGED_AMPLITUDE_BP,
         grace_bp_max: grace_max,
-        grace_bp_mean: (grace_sum / u128::from(grace_n.max(1))) as u64,
+        grace_bp_mean: grace_mean,
     }
 }
 
 #[derive(Serialize)]
 pub struct FeeFloorReport {
     pub lookback_g: usize,
+    pub lookback_sweep: [usize; 3],
     pub pad_candidates_bp: [u64; 4],
     pub q_buffer_bp: u64,
     pub pad_admission_margin_bp: [u64; 4],
@@ -469,6 +482,7 @@ pub fn report() -> FeeFloorReport {
     }
     FeeFloorReport {
         lookback_g: LOOKBACK_G,
+        lookback_sweep: LOOKBACK_SWEEP,
         pad_candidates_bp: PAD_CANDIDATES_BP,
         q_buffer_bp: Q_BUFFER_BP,
         pad_admission_margin_bp: PAD_CANDIDATES_BP.map(pad_admission_margin_bp),
@@ -481,8 +495,9 @@ pub fn report() -> FeeFloorReport {
 pub fn render_summary(r: &FeeFloorReport, out: &mut String) {
     let _ = writeln!(
         out,
-        "fee-floor: lookback_g={} gaps={:?} pad_candidates_bp={:?} q_bp={} pad_admission_margin_bp={:?} converged_amplitude_bp={}",
+        "fee-floor: lookback_g={} lookback_sweep={:?} gaps={:?} pad_candidates_bp={:?} q_bp={} pad_admission_margin_bp={:?} converged_amplitude_bp={}",
         r.lookback_g,
+        r.lookback_sweep,
         GAPS,
         r.pad_candidates_bp,
         r.q_buffer_bp,
@@ -492,7 +507,7 @@ pub fn render_summary(r: &FeeFloorReport, out: &mut String) {
     for s in &r.slew {
         let _ = writeln!(
             out,
-            "fee-floor: slew {} age={} sma={} rise_bp_max={:?} fall_bp_max={:?} grace_bp_max={} grace_bp_mean={} bounce_blocks_by_pad={:?}/{} c_changes={} c_range=[{},{}]",
+            "fee-floor: slew {} age={} sma={} rise_bp_max={:?} fall_bp_max={:?} grace_bp_max[G=3,4,5]={:?} grace_bp_mean[G=3,4,5]={:?} bounce_blocks_by_pad={:?}/{} c_changes={} c_range=[{},{}]",
             s.scenario,
             s.age_years,
             s.sma.label(),
@@ -511,12 +526,23 @@ pub fn render_summary(r: &FeeFloorReport, out: &mut String) {
     for &sma in &[Sma::Integer, Sma::Exact] {
         let cells: Vec<&SlewResult> = r.slew.iter().filter(|s| s.sma == sma).collect();
         let worst_rise1 = cells.iter().map(|s| s.rise_bp_max[0]).max().unwrap_or(0);
-        let worst_grace = cells.iter().map(|s| s.grace_bp_max).max().unwrap_or(0);
-        let mean_grace = if cells.is_empty() {
-            0
-        } else {
-            cells.iter().map(|s| s.grace_bp_mean).sum::<u64>() / cells.len() as u64
-        };
+        let worst_grace: [u64; 3] =
+            core::array::from_fn(|i| cells.iter().map(|s| s.grace_bp_max[i]).max().unwrap_or(0));
+        let mean_grace: [u64; 3] = core::array::from_fn(|i| {
+            if cells.is_empty() {
+                0
+            } else {
+                cells.iter().map(|s| s.grace_bp_mean[i]).sum::<u64>() / cells.len() as u64
+            }
+        });
+        let stationary_mean: [u64; 3] = core::array::from_fn(|i| {
+            cells
+                .iter()
+                .filter(|s| s.scenario.starts_with("stationary"))
+                .map(|s| s.grace_bp_mean[i])
+                .max()
+                .unwrap_or(0)
+        });
         let bounce: [u64; 4] = PAD_CANDIDATES_BP
             .iter()
             .enumerate()
@@ -526,12 +552,13 @@ pub fn render_summary(r: &FeeFloorReport, out: &mut String) {
             .expect("four candidates");
         let _ = writeln!(
             out,
-            "fee-floor: FL-E2/E3 sma={} cells={} worst_1block_rise_bp={} grace_bp_max={} grace_bp_mean_of_means={} pad_bounce_blocks_by_pad={:?}",
+            "fee-floor: FL-E2/E3/E4 sma={} cells={} worst_1block_rise_bp={} grace_bp_max[G=3,4,5]={:?} grace_bp_mean_of_means[G=3,4,5]={:?} stationary_grace_bp_mean_max[G=3,4,5]={:?} pad_bounce_blocks_by_pad={:?}",
             sma.label(),
             cells.len(),
             worst_rise1,
             worst_grace,
             mean_grace,
+            stationary_mean,
             bounce
         );
     }
@@ -540,10 +567,11 @@ pub fn render_summary(r: &FeeFloorReport, out: &mut String) {
         let cells: Vec<&FloorFeedbackResult> = r.feedback.iter().filter(|f| f.sma == sma).collect();
         let not_converged = cells.iter().filter(|f| !f.converged).count();
         let worst_amp = cells.iter().map(|f| f.tail_amplitude_bp).max().unwrap_or(0);
-        let worst_grace = cells.iter().map(|f| f.grace_bp_max).max().unwrap_or(0);
+        let worst_grace: [u64; 3] =
+            core::array::from_fn(|i| cells.iter().map(|f| f.grace_bp_max[i]).max().unwrap_or(0));
         let _ = writeln!(
             out,
-            "fee-floor: FL-E1 sma={} cells={} not_converged={} worst_tail_amplitude_bp={} grace_bp_max={}",
+            "fee-floor: FL-E1 sma={} cells={} not_converged={} worst_tail_amplitude_bp={} grace_bp_max[G=3,4,5]={:?}",
             sma.label(),
             cells.len(),
             not_converged,
