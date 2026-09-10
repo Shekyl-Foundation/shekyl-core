@@ -54,6 +54,10 @@ document reconciled the two. **UPDATE 2026-09-09:** PWD-B7's typed drop
 verdict is the next instance of that pattern (`shekyl-peer-policy`, FFI
 `shekyl_drop_verdict_severs`; row flipped IMPLEMENTED below).
 
+**UPDATE 2026-09-09:** PWD-B3 / PWD-B3a / PWD-B4 landed (see rows below).
+PWD-E7 / PWD-E9 landed the same day on `dev` (#672). PWD-B6 landed in #677;
+PWD-B7's typed drop verdict in #674. Counts below include all of these.
+
 **How a verdict was reached.** PWD ids appear nowhere in code, so nothing here
 was grepped by identifier. For each decision the question asked was *what would
 have to be true of the tree if this were built* — a deleted symbol absent, a
@@ -127,9 +131,9 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T8** Shekyl mints its own KATs | NOT IMPLEMENTED | no handshake KATs; nothing to pin until T1 exists | No — follows T1 |
 | **B1** rate limiting adopted | NOT IMPLEMENTED | the decision names four unguarded invoke handlers; all four still unguarded | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
-| **B3** per-command caps | NOT IMPLEMENTED | cap table still **11** arms (`cryptonote_basic/connection_context.cpp`); PWD-B6 deleted the 2001 arm; B3 still owes the derivation | **YES** — with B3a and B4, as one unit |
-| **B3a** unknown input rejected at ingress | NOT IMPLEMENTED | no ingress rejection site; the codec's byte-exact round-trip of unknown bits is present but is PWC-A6's requirement, not this one | **YES** — with B3 and B4, as one unit |
-| **B4** places B3a's ingress check | NOT IMPLEMENTED | B4's stated remaining work is the check's *placement*; no such site exists | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
+| **B3** per-command caps | **IMPLEMENTED** | 11-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001 and 1003 are unknown dispatch; sole block path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`); handshake 65536 reconstructed; support-flags 4096→256; 2003/2006 hash-list derived; 2007/2008/2009/2010 keep inherited envelopes (4/4/1/4 MiB); 2002/2004 take the packet limit until PWD-B12 / the 2004 byte budget; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
+| **B3a** unknown input rejected at ingress | **IMPLEMENTED** | `ingress_payload_cap` flag-class discriminator; unknown bits rejected on every bucket; noise/fragment with command 0 admitted; a Q/S-flagged 2001 is unknown input, same class as ping 1003 | **YES** — with B3 and B4, as one unit |
+| **B4** places B3a's ingress check | **IMPLEMENTED** | `shekyl_levin_ingress_admit` + `get_max_bytes(command, flags)` on outer and inner header parse; decompress uses the cached cap; codec still round-trips unknown bits (PWC-A6) | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
 | **B5** — | **NEVER RULED** | appears exactly once tree-wide, in `P2P_2_DISPATCH_BRIEF.md`; dispatched and never dispositioned | n/a — unruled decision, not a status |
 | **B6** one block path | **IMPLEMENTED** | 2001 deleted; 2008 is the sole path. `HANDLE_NOTIFY_T2(NOTIFY_NEW_COMPACT_BLOCK)` at `cryptonote_protocol_handler.h:99`; `relay_block` emits `NOTIFY_NEW_COMPACT_BLOCK::ID` at `.inl:2725`; no `NOTIFY_NEW_BLOCK` handler remains. Identifiers are `COMPACT_*` (ids still 2008/2009). Two-limb test `block_propagation_has_exactly_one_command` refuses 2001 (`LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED`) and still dispatches 2008. | **YES** — landed; do it before nodes exist |
 | **B7** drop only when attributable | **IMPLEMENTED** | typed verdict in `shekyl-peer-policy`; FFI `shekyl_drop_verdict_severs`; `m_no_drop_offense` gone as a field. Three sites (tx relay, announce size, block-sync prepare). `drop_connections`-by-host and the score floor remain deferred (E9/E5), not this row | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
@@ -161,9 +165,9 @@ exactly the set of PWD ids present across the round documents and the index:
 
 | | |
 |---|---|
-| IMPLEMENTED | 10 *(B6 this PR; B7 #674; E7 and E9 2026-09-09; B8/B10/I1/I2/E5/E6 were already implemented)* |
+| IMPLEMENTED | 13 *(B3/B3a/B4 this PR; B6 #677; B7 #674; E7 and E9 2026-09-09; B8/B10/I1/I2/E5/E6 were already implemented)* |
 | PARTIAL | 1 |
-| NOT IMPLEMENTED | 14 |
+| NOT IMPLEMENTED | 11 |
 | NO BUILD REQUIRED | 2 |
 | DEFERRED | 3 |
 | BLOCKED on another row | 1 |
@@ -172,18 +176,21 @@ exactly the set of PWD ids present across the round documents and the index:
 | verification-only | 1 |
 | never ruled / not ruled | 2 (B5, A1) |
 
-**15 of 37 are ruled and unbuilt** (14 NOT IMPLEMENTED + 1 PARTIAL). Six of
-those fifteen are the transport cluster, which Rick has ruled out of alpha.8.
+**12 of 37 are ruled and unbuilt** (11 NOT IMPLEMENTED + 1 PARTIAL). Six of
+those twelve are the transport cluster, which Rick has ruled out of alpha.8.
 *(This read 18 at the #665 ruling. E7 and E9 landed 2026-09-09; B7 landed in
-#674; B6 landed in this PR; B10 was already implemented and is scored that way
-below. The figure is re-tallied from the rows, not adjusted by hand.)*
+#674; B6 landed in #677; B10 was already implemented and is scored that way
+below; B3/B3a/B4 land here. The figure is re-tallied from the rows, not
+adjusted by hand.)*
 
 **What this says about "alpha.8 runs the new p2p".** The identity cluster is
 substantially built and the transport cluster is entirely unbuilt, which is the
-right way round given Rick's ruling. B6 and B10 have landed: one block path,
-and no `COMMAND_PING`. The outstanding alpha.8 wire set is **three: B3, B3a
-and B4**. A release that ships the new `basic_node_data` and the new peerlist
-rules while still carrying the inherited caps is running a half-migrated wire.
+right way round given Rick's ruling. B6 and B10 have landed: one block path
+(`NOTIFY_NEW_COMPACT_BLOCK` 2008; a Q/S-flagged 2001 is unknown dispatch), and
+no `COMMAND_PING`. B3, B3a and B4 land here: unknown commands and unknown flag
+bits are rejected at ingress, and the 11-arm per-command cap table lives in
+`shekyl-levin`. The alpha.8 wire set Rick named (B6, B10, B3/B3a/B4, B7's
+typed remainder) is implemented. Transport (T1–T4, T6, T8) remains unbuilt.
 
 **Correction, 2026-09-08 — one row of this sweep was wrong, and it was wrong in
 the way this section warns about.** PWD-B10 was first recorded NOT IMPLEMENTED
@@ -200,8 +207,8 @@ required-for-alpha.8 against the wrong status — harmless in effect, since the
 work was already done, but a ruling made on a false input. And **the alpha.8
 outstanding set was five, not six**: B6, B3, B3a and B4, plus B7's remainder.
 #674 then landed that remainder, so the outstanding set was **four**: B6, B3,
-B3a and B4. This PR lands B6, so the outstanding set is **three**: B3, B3a
-and B4.
+B3a and B4. #677 landed B6, so the outstanding set was **three**: B3, B3a
+and B4. This PR lands those three.
 
 B6 and B3 were re-checked against the same failure before this correction was
 written, by reading the sites rather than counting them; both held at that
@@ -226,6 +233,7 @@ operator-configured and unverified** — a state Rick has ruled testnet-acceptab
 and which is recorded here so no reader mistakes it for something nobody
 noticed.
 
+
 **Note on B12.** Ruled not-required because it does not change the wire, but
 it is an unbounded release of accumulated transactions to a peer, and "not
 required for alpha.8" is not the same as "safe to ship indefinitely". Flagged
@@ -233,12 +241,12 @@ rather than filed.
 
 **Two findings that are not statuses.** PWD-B5 was dispatched and never
 dispositioned — it exists in the brief and nowhere else. PWD-B3's own text
-states the inherited cap table has **13** arms while the tree has **11**. That
+stated the inherited cap table has **13** arms while the tree has **11**. That
 one is now explained rather than open: #643 removed `COMMAND_PING` (arm 3 of
 B3's own table, `:2803`) and PWD-B6 removed the 2001 `NOTIFY_NEW_BLOCK` arm.
-B3's derivation still reads 13 and has not caught up with deletions its own
-text anticipates. B5 remains genuine round residue; neither is an
-implementation gap.
+The B3 ingress table matches those deletions: 11 defined commands; a
+Q/S-flagged 2001 or 1003 is unknown input. B5 remains genuine round residue;
+neither is an implementation gap.
 
 ## 1. Invariants — requirements in, not subjects
 
@@ -2854,6 +2862,13 @@ on two surfaces and today gets two different answers:
 | Levin **flag bits** | bits outside the five defined | **preserved verbatim** through the codec (PWC-A6) |
 | Levin **command ids** | any id not in the 13-arm switch | **`std::numeric_limits<size_t>::max()`** — **no *per-command* cap** (`src/cryptonote_basic/connection_context.cpp:68-71`). The global packet limit still binds: the reader takes `min(packet limit, hook(command))` (`rust/shekyl-levin/src/reader.rs:182-185`), so an unknown command is bounded by `DEFAULT_MAX_PACKET_SIZE`, not unbounded. *An earlier version of this row said "no cap at all", which overstates the hazard — the same flattering-error direction §1 warns about, pointed at a defect instead of a defence.* |
 
+*Landed 2026-09-09:* a Q/S-flagged command that is not a `DefinedCommand` is
+`Error::UnknownCommand` at ingress; unknown flag bits are `Error::UnknownFlags`
+on every bucket. The codec still round-trips unknown bits (PWC-A6). 2001 and
+1003 are unknown dispatch. Live table: `rust/shekyl-levin/src/ingress.rs`.
+2008 / 2007 keep their inherited 4 MiB envelopes; they do not take the packet
+limit.
+
 **One question, two answers, and neither was chosen.** That is the drift shape
 that produced the 50 MB / 100 MB packet-limit pair PWD-T6 had to reconcile: two
 rows deriving independently against the same underlying question.
@@ -2967,7 +2982,7 @@ fetch is not the bounded cost this ruling assumes.
 **RULED as a derivation with a named dynamic input, because the honest answer
 is not a table of constants.**
 
-**The inherited table, read at source** (`src/cryptonote_basic/connection_context.cpp:41-71`) —
+**The inherited table, read at source** (`src/cryptonote_basic/connection_context.cpp:41-71` at ruling; the live table is `rust/shekyl-levin/src/ingress.rs`) —
 13 arms, and after PWD-B10 and PWD-B6 it is **11**:
 
 | Command | Inherited cap | Disposition |

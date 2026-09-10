@@ -78,6 +78,22 @@
 
 ### Changed
 
+- **Levin ingress rejects unknown commands and unknown flag bits.** A
+  dispatch (`REQUEST`/`RESPONSE`) whose command is not a `DefinedCommand`,
+  or any flag bit outside the five defined flags, is connection-fatal at
+  ingress. Cover traffic (neither `REQUEST` nor `RESPONSE`, typically
+  command 0) is still admitted and bounded by the packet limit. The table
+  and discriminator live in `shekyl-levin`; C++ `handle_recv` is a
+  marshaling shim (`shekyl_levin_ingress_admit`). `NOTIFY_NEW_BLOCK`
+  (2001) and `COMMAND_PING` (1003) are unknown dispatch; the sole block
+  announce is 2008 `NOTIFY_NEW_COMPACT_BLOCK`. Cap movements vs the
+  inherited table: 1007 support-flags 4096 → 256; 2003 get-objects
+  request 2 MiB → 5056 (hash-list derivation); 2006 request-chain
+  512 KiB → 1_200_256 (hash-list derivation, the inherited envelope
+  could not fit `BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT`); 2007 / 2008 /
+  2009 / 2010 keep their inherited envelopes (4 / 4 / 1 / 4 MiB) rather
+  than taking the packet limit; 2002 and 2004 stay at the packet limit
+  until PWD-B12 and the 2004 byte budget land.
 - **A peer is dropped only when the rejection is attributable to the
   sender (PWD-B7).** The inherited `m_no_drop_offense` flag meant
   droppable by *absence*, so our own pool-bookkeeping failures and

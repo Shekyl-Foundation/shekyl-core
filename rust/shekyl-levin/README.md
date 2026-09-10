@@ -18,10 +18,10 @@ implementation:
 - an incremental stream reader (`BucketReader`) mirroring the
   `async_protocol_handler::handle_recv` state machine: partial reads,
   signature early-reject, packet-size limits (256 KiB pre-handshake / 100 MB
-  post), a pluggable per-command size-limit hook (the C++
-  `connection_context::get_max_bytes` seam — the daemon's command table
-  itself is cutover-layer policy), noise discard, fragment reassembly,
-  decompression, and message classification. `feed` buffers bytes and
+  post), per-command payload caps and the PWD-B3a ingress discriminator
+  (`ingress_payload_cap` — live on C++ `handle_recv` via FFI; a dispatch
+  command must be a `DefinedCommand`), noise discard,
+  fragment reassembly, decompression, and message classification. `feed` buffers bytes and
   `next_message` parses one bucket at a time, so — as in `handle_recv`,
   which dispatches inside its parse loop — at most one decoded payload is
   live at a time and an already-delivered message survives a later bucket
@@ -36,8 +36,8 @@ chunk boundaries, and noise sizes.
 
 - **Not the payload codec.** Command bodies are epee `portable_storage`
   blobs; the codec is first-party `shekyl-portable-storage` (LV-2a). This
-  crate owns the typed maps (LV-2b): handshake / timed-sync /
-  ping / support-flags (1001 / 1002 / 1003 / 1007) plus `network_address`
+  crate owns the typed maps (LV-2b):   handshake / timed-sync /
+  support-flags (1001 / 1002 / 1007) plus `network_address`
   and notifies 2002–2004 / 2006–2010. Cryptonote blobs stay opaque bytes.
   Live `shekyld` dual-stack is the `#[ignore]` harness
   `tests/dual_stack.rs` (`SHEKYLD_BIN`); default crate tests spawn no daemon.

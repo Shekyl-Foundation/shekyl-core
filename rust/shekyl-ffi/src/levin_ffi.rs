@@ -3,7 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! FFI surface for Levin p2p payload compression, backed by `shekyl-levin`.
+//! FFI surface for Levin framing policy and payload compression, backed by
+//! `shekyl-levin`.
 //!
 //! # Why this boundary exists (single-owner libzstd)
 //!
@@ -41,7 +42,8 @@
 //! Error codes follow rule 40 (distinct codes, not booleans):
 //! `0` success; `1` compression declined (send the input unchanged); `-3`
 //! malformed frame; `-4` null pointer; `-6` compression not compiled in;
-//! `-7` size limit exceeded.
+//! `-7` size limit exceeded; `-8` unknown flag bits at ingress;
+//! `-9` unknown dispatch command.
 //!
 //! `-3` and `-7` are deliberately **not** one code. On the receive path
 //! both close the connection, but they describe opposite situations — a
@@ -89,6 +91,12 @@ pub const SHEKYL_LEVIN_ERR_UNAVAILABLE: i32 = -6;
 /// `min(max_output, DECOMPRESSED_MAX_SIZE)` on the receive side, or a
 /// payload above `DECOMPRESSED_MAX_SIZE` offered to the compressor.
 pub const SHEKYL_LEVIN_ERR_TOO_LARGE: i32 = -7;
+/// A bucket header set a flag bit this protocol does not define
+/// (PWD-B3a). Connection-fatal at ingress.
+pub const SHEKYL_LEVIN_ERR_UNKNOWN_FLAGS: i32 = -8;
+/// A dispatch bucket (`REQUEST` or `RESPONSE`) named a command this
+/// protocol does not define (PWD-B3a). Connection-fatal at ingress.
+pub const SHEKYL_LEVIN_ERR_UNKNOWN_COMMAND: i32 = -9;
 
 /// Map a `shekyl-levin` error onto its wire code. Written as a total match
 /// on purpose: a new variant must be given a code here rather than falling
@@ -106,6 +114,37 @@ fn code_for(err: &shekyl_levin::Error) -> i32 {
         | Error::InnerLengthTruncated { .. }
         | Error::Poisoned
         | Error::NoiseTooSmall { .. } => SHEKYL_LEVIN_ERR_FORMAT,
+        Error::UnknownFlags { .. } => SHEKYL_LEVIN_ERR_UNKNOWN_FLAGS,
+        Error::UnknownCommand { .. } => SHEKYL_LEVIN_ERR_UNKNOWN_COMMAND,
+    }
+}
+
+/// Admit one parsed bucket header (PWD-B3 / PWD-B3a / PWD-B4).
+///
+/// Writes the payload cap into `out_cap` on success. A noise/fragment
+/// bucket (neither `REQUEST` nor `RESPONSE`) writes `u64::MAX` so the
+/// caller's packet limit binds — cover traffic with command 0 is not
+/// an unknown command. A Q/S-flagged bucket whose command is not in the
+/// defined set, or any unknown flag bit, is connection-fatal.
+///
+/// Return: `0` admitted (`*out_cap` set); `-4` `out_cap` was null;
+/// `-8` unknown flags; `-9` unknown dispatch command.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_levin_ingress_admit(
+    command: u32,
+    flags: u32,
+    out_cap: *mut u64,
+) -> i32 {
+    if out_cap.is_null() {
+        return SHEKYL_LEVIN_ERR_NULL;
+    }
+    match shekyl_levin::ingress_payload_cap(command, shekyl_levin::Flags::from_bits(flags)) {
+        Ok(cap) => {
+            // SAFETY: `out_cap` checked non-null above.
+            unsafe { *out_cap = cap };
+            SHEKYL_LEVIN_OK
+        }
+        Err(err) => code_for(&err),
     }
 }
 
@@ -591,5 +630,41 @@ mod tests {
 
         // SAFETY: freeing exactly the buffer the compress export returned.
         unsafe { crate::shekyl_buffer_free(compressed.ptr, compressed.len) };
+    }
+
+    #[test]
+    fn ingress_admit_maps_the_three_codes() {
+        let mut cap = 0u64;
+        // Handshake (1001) + REQUEST: admitted at the derived envelope.
+        let rc = unsafe { shekyl_levin_ingress_admit(1001, 0x1, &raw mut cap) };
+        assert_eq!(rc, SHEKYL_LEVIN_OK);
+        assert_eq!(cap, 65_536);
+
+        // Compact announce (2008) keeps the inherited 4 MiB envelope.
+        let rc = unsafe { shekyl_levin_ingress_admit(2008, 0x1, &raw mut cap) };
+        assert_eq!(rc, SHEKYL_LEVIN_OK);
+        assert_eq!(cap, 4 * 1024 * 1024);
+
+        // Noise class (BEGIN|END, command 0): admitted, packet limit binds.
+        let rc = unsafe { shekyl_levin_ingress_admit(0, 0x4 | 0x8, &raw mut cap) };
+        assert_eq!(rc, SHEKYL_LEVIN_OK);
+        assert_eq!(cap, u64::MAX);
+
+        // Q-flagged command 0 is a dispatch of an unknown command.
+        let rc = unsafe { shekyl_levin_ingress_admit(0, 0x1, &raw mut cap) };
+        assert_eq!(rc, SHEKYL_LEVIN_ERR_UNKNOWN_COMMAND);
+
+        // Unknown flag bit, even on a defined command.
+        let rc = unsafe { shekyl_levin_ingress_admit(1001, 0x1 | 0x20, &raw mut cap) };
+        assert_eq!(rc, SHEKYL_LEVIN_ERR_UNKNOWN_FLAGS);
+
+        // Retired ping (1003) and deleted NOTIFY_NEW_BLOCK (2001) on a dispatch.
+        let rc = unsafe { shekyl_levin_ingress_admit(1003, 0x1, &raw mut cap) };
+        assert_eq!(rc, SHEKYL_LEVIN_ERR_UNKNOWN_COMMAND);
+        let rc = unsafe { shekyl_levin_ingress_admit(2001, 0x1, &raw mut cap) };
+        assert_eq!(rc, SHEKYL_LEVIN_ERR_UNKNOWN_COMMAND);
+
+        let rc = unsafe { shekyl_levin_ingress_admit(1001, 0x1, std::ptr::null_mut()) };
+        assert_eq!(rc, SHEKYL_LEVIN_ERR_NULL);
     }
 }

@@ -223,12 +223,12 @@ fn fragmented_stream_reassembles_to_the_original_notification() {
     let payload: Vec<u8> = (0u32..2922)
         .map(|i| u8::try_from(i % 256).unwrap())
         .collect();
-    let stream = fragmented_notify(1024, 114, &payload).unwrap();
+    let stream = fragmented_notify(1024, 2002, &payload).unwrap();
 
     assert_eq!(
         only_message(&stream),
         Received::Notification {
-            command: 114,
+            command: 2002,
             payload,
         }
     );
@@ -241,7 +241,7 @@ fn fragment_restart_on_second_begin_mirrors_cpp() {
     let payload: Vec<u8> = (0u32..2922)
         .map(|i| u8::try_from(i % 256).unwrap())
         .collect();
-    let stream = fragmented_notify(1024, 114, &payload).unwrap();
+    let stream = fragmented_notify(1024, 2002, &payload).unwrap();
 
     let mut reader = BucketReader::new();
     // First fragment (BEGIN) fed once...
@@ -252,7 +252,7 @@ fn fragment_restart_on_second_begin_mirrors_cpp() {
     assert_eq!(
         reader.next_message().unwrap(),
         Some(Received::Notification {
-            command: 114,
+            command: 2002,
             payload,
         })
     );
@@ -453,35 +453,82 @@ fn reassembled_response_classifies_by_inner_protocol_version() {
 
 #[test]
 fn per_command_limit_caps_below_packet_limit() {
-    // Mirrors connection_context::get_max_bytes: ping (1003) caps at 4096.
-    fn table(command: u32) -> u64 {
-        if command == 1003 {
-            4096
-        } else {
-            u64::MAX
-        }
-    }
-
+    // Support-flags (1007) is the tight table cap (256). 300 bytes is under
+    // the 256 KiB packet limit and over the command's own cap — rejected on
+    // the header, as in the C++.
+    let message = invoke(1007, &[0u8; 300]);
     let mut reader = BucketReader::new();
-    reader.set_max_bytes_for_command(table);
-
-    // 5000-byte ping claim: under the 256 KiB packet limit, over the
-    // command's own cap — rejected on the header, as in the C++.
-    let message = invoke(1003, &vec![0u8; 5000]);
     reader.feed(&message[..HEADER_SIZE]).unwrap();
     assert_eq!(
         reader.next_message(),
         Err(Error::OversizePacket {
-            claimed: 5000,
-            limit: 4096,
+            claimed: 300,
+            limit: 256,
         })
     );
 
-    // The same size on an uncapped command passes.
+    // The same size on 2002 (packet-limit arm until PWD-B12) passes.
     let mut reader = BucketReader::new();
-    reader.set_max_bytes_for_command(table);
-    reader.feed(&invoke(9999, &vec![0u8; 5000])).unwrap();
+    reader.feed(&invoke(2002, &[0u8; 300])).unwrap();
     assert!(reader.next_message().unwrap().is_some());
+}
+
+#[test]
+fn unknown_dispatch_command_is_rejected_at_ingress() {
+    let message = invoke(9999, &[0u8; 8]);
+    let mut reader = BucketReader::new();
+    reader.feed(&message[..HEADER_SIZE]).unwrap();
+    assert_eq!(
+        reader.next_message(),
+        Err(Error::UnknownCommand { command: 9999 })
+    );
+}
+
+#[test]
+fn deleted_new_block_is_unknown_dispatch() {
+    // PWD-B6 deleted 2001; Q-flagged 2001 is unknown input, same class as ping.
+    let message = invoke(2001, &[0u8; 8]);
+    let mut reader = BucketReader::new();
+    reader.feed(&message[..HEADER_SIZE]).unwrap();
+    assert_eq!(
+        reader.next_message(),
+        Err(Error::UnknownCommand { command: 2001 })
+    );
+}
+
+#[test]
+fn q_flagged_command_zero_is_rejected() {
+    let message = invoke(0, b"");
+    let mut reader = BucketReader::new();
+    reader.feed(&message[..HEADER_SIZE]).unwrap();
+    assert_eq!(
+        reader.next_message(),
+        Err(Error::UnknownCommand { command: 0 })
+    );
+}
+
+#[test]
+fn unknown_flag_bit_is_rejected_on_a_defined_command() {
+    let mut message = invoke(1001, b"req");
+    // flags field is bytes 25..29 (see BucketHead::write).
+    let flags = u32::from_le_bytes(message[25..29].try_into().unwrap());
+    message[25..29].copy_from_slice(&(flags | 0x20).to_le_bytes());
+    let mut reader = BucketReader::new();
+    reader.feed(&message[..HEADER_SIZE]).unwrap();
+    assert_eq!(
+        reader.next_message(),
+        Err(Error::UnknownFlags {
+            flags: flags | 0x20
+        })
+    );
+}
+
+#[test]
+fn noise_dummy_with_command_zero_is_not_an_unknown_command() {
+    let stream = noise_notify(1024).unwrap();
+    let mut reader = BucketReader::new();
+    reader.feed(&stream).unwrap();
+    assert_eq!(reader.next_message().unwrap(), None);
 }
 
 #[test]

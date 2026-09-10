@@ -14,6 +14,12 @@ use shekyl_levin::{
     fragmented_notify, invoke, noise_notify, notify, response, BucketReader, Received, HEADER_SIZE,
 };
 
+/// After PWD-B3a, `notify` / `invoke` / `response` are dispatch (Q or S), so
+/// an arbitrary `u32` command is connection-fatal at ingress. Sample from
+/// defined commands whose table cap is above the generated payload sizes;
+/// 1007 (256) and 2003 (5056) would fail 0..8192.
+const WIDE_CAP_COMMANDS: &[u32] = &[2002, 2004, 2008];
+
 /// Feed a byte stream to a fresh reader in chunks of at most `chunk` bytes,
 /// pulling messages as they complete.
 ///
@@ -45,7 +51,7 @@ fn read_chunked(stream: &[u8], chunk: usize) -> Option<Received> {
 proptest! {
     #[test]
     fn notify_roundtrips_through_any_chunking(
-        command in any::<u32>(),
+        command in prop::sample::select(WIDE_CAP_COMMANDS),
         payload in proptest::collection::vec(any::<u8>(), 0..4096),
         chunk in 1usize..512,
     ) {
@@ -55,7 +61,7 @@ proptest! {
 
     #[test]
     fn invoke_roundtrips_as_request(
-        command in any::<u32>(),
+        command in prop::sample::select(WIDE_CAP_COMMANDS),
         payload in proptest::collection::vec(any::<u8>(), 0..4096),
         chunk in 1usize..512,
     ) {
@@ -65,7 +71,7 @@ proptest! {
 
     #[test]
     fn response_roundtrips_with_return_code(
-        command in any::<u32>(),
+        command in prop::sample::select(WIDE_CAP_COMMANDS),
         return_code in any::<i32>(),
         payload in proptest::collection::vec(any::<u8>(), 0..4096),
         chunk in 1usize..512,
@@ -94,7 +100,7 @@ proptest! {
     /// bucket (`length` covers the padding in that case — C++ parity).
     #[test]
     fn fragmented_notify_roundtrips_at_noise_granularity(
-        command in any::<u32>(),
+        command in prop::sample::select(WIDE_CAP_COMMANDS),
         payload in proptest::collection::vec(any::<u8>(), 0..8192),
         noise_size in (HEADER_SIZE * 2)..2048usize,
         chunk in 1usize..512,
