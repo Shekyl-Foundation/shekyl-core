@@ -2499,7 +2499,7 @@ Closed as record 2026-09-10 by §11 (FL-R21). Round 2b completed (`/tmp/fl_r3_ro
 
 **Status:** OPEN. Rulings received in-channel 2026-09-09 → 2026-09-10 and
 recorded here per row (§11.2); the confirmation run FL-E1…FL-E3 is
-pre-registered at §11.5 and its results go in §11.7; the implementation
+pre-registered at §11.5 and its results are recorded at §11.7 (FL-E1…FL-E3 run 2026-09-10; FL-R24 rule fired, exact SMA recommended); the implementation
 spec is §11.6 and awaits review before code. **This round supersedes §10**,
 which closes as record at §10.16 — not because its measurements were wrong
 but because the thing it was restoring turned out to rest on a premise
@@ -2856,7 +2856,75 @@ call to the economics owner when it lands.
 (relay admission behaviour is user-visible); `IMPLEMENTATION_INDEX.md`
 rows; FOLLOWUPS rows for FL-R3 / FL-R3-STORE.
 
-### §11.7 Results
+### §11.7 Results (run 2026-09-10 at `5574be2ea`; `/tmp/fl_r3_floor.{json,summary}`)
 
-*To be filled from `--fee-floor` output after the pre-registration
-commit.*
+40 slew cells (5 ages × 8 traces) × 2 arms; 600 feedback cells × 2 arms.
+Ten seconds.
+
+**FL-E2 — per-block slew.** At age 0 the prediction lands on the number:
+exact-arm one-block rise on the 40→500 step **160 bp** (predicted ~160),
+ramps ≤ 33, stationary ≤ 13; integer-arm tick at `V` = 50 **209 bp**.
+Two things the pre-registration got wrong, recorded rather than
+re-fitted: *(i)* at `V` = 40 the integer tick is invisible in the `M_r`
+term because 39 and 40 both clamp to the 0.8 rail — the tick appears at
+`V` = 50, not at the rail (stationary-`V`40 rise 1 bp, `V`50 209 bp);
+*(ii)* the bound omitted the burn term. `C = (1−σ)·M_r/(1−b)` and
+`b/(1−b)` grows with `supply/asymptote`, so the same volume tick moves
+`C` more as the chain ages: integer tick at `V` = 50 is 209 bp at age 0
+and **307 bp at age 30**; exact one-block step rise is 160 at age 0 and
+**225 at age 30**. The slew bound is `ΔC/C ≈ ΔM_r/M_r + Δb/(1−b)`, not
+`ΔM_r/M_r` alone. §11.5's consequence clause ("`G` must be re-derived")
+was mis-stated and is withdrawn: `G` is defined by the gap (0–2 blocks +
+1), not by the slew; the slew prices the **grace**, and a larger slew is a
+larger grace, not a different `G`.
+
+**FL-E3 — lookback grace.** `grace_bp_max` (worst case any admitted
+transaction sits below the current floor, for at most `G` blocks after a
+rise): exact arm 479 at age 0 → **679 at age 30** on the 40→500 step;
+≤ 32 stationary at every age. Integer arm: 501 → **706**, and its
+stationary `V`50 grace is the tick itself (209 → 307). `grace_bp_mean` is
+**0–6 bp in every cell of both arms**: in expectation the lookback gives
+miners nothing; in the worst block after a 10× instantaneous step it
+gives ≤ 7 % for three blocks. **Zero bounces under FL-R23 by identity.**
+The road-not-taken column shows why: a 50 bp fixed pad bounces **281 of
+19 997** quotes in the integer arm's *stationary* `V`50 cell at age 30
+(1.4 %, in a chain doing nothing), and **even a 300 bp pad bounces 23–36**
+quotes per 20 000 in every step cell on both arms. No fixed pad covers
+the step; the lookback covers it exactly and charges nothing on average.
+
+**FL-E1 — FL-C7 with the floor in the loop.** *Exact arm:* 596/600
+converge inside the 50 bp bar at 30 000 blocks; the 4 misses are one cell
+shape — age 30, ε = 3, `D` = 100, start displaced 8× — at 77 bp, changing
+every block. Re-run at 120 000 blocks (diagnostic only, not committed):
+**600/600, worst 34 bp** — a slow transient from the 8× displacement at
+the most elastic ε, not a cycle. The map's fixed point is stable under raw
+`C` in the loop, as §4.5 argued and round 2b's raw-`C` "oscillations" did
+not contradict. *Integer arm:* 108/600 outside the bar at 30 000 blocks,
+**152/600 at 120 000** (longer tails catch more toggles), amplitudes 62 →
+**312 bp** — persistent limit cycles of ≤ ~1.5 ticks at the cell's `V`,
+every one of them the truncation, none of them the map. The tick is not a
+transient; it is a quantizer doing what quantizers do in a loop.
+
+**FL-R24 — the pre-registered rule fires.** Integer stationary
+`grace_bp_max` = 307 > 300 at age 30 (`grace_bp_mean` = 4, inside its
+bound). By the rule as written, branch (ii) is recommended. The
+recommendation on the evidence, not just the rule: the integer SMA is a
+quantizer on a **consensus operand** — the block reward's `M_r` toggles by
+2–3 % between adjacent blocks under Poisson noise today, independently of
+anything this round did — and the exact ratio removes it from both the
+reward and the floor with no new arithmetic (`calc_release_multiplier` /
+`calc_burn_pct` already take `(volume, baseline)`). Floor-only exactness
+(branch (ii) without the reward) is rejected here: it makes the miner's
+`M_r` and the floor's `C` disagree by up to a tick and breaks the FL-V1
+identity for a saving of nothing. **Recommended: exact SMA for the
+operand, reward and floor together — a pre-genesis consensus row, opened
+by the implementing PR, rule 07 evaluated there** (a change to a
+consensus operand's resolution; a flag has no meaning, so the four
+criteria are expected to hold). Until that row lands the integer arm is
+what ships, and under FL-R23 it is safe — its tick costs miners ≤ 3 % for
+≤ 3 blocks after a toggle and bounces nobody. The maintainer's call.
+
+**Disposition of the round.** FL-R20…FL-R23 confirmed as ruled; FL-R24
+recommended (ii)-with-reward, awaiting the call; §11.6 goes to spec review
+unchanged except that `check_fee`'s Rust predicate takes the `G+1` floors
+as computed, whichever operand resolution is ruled.
