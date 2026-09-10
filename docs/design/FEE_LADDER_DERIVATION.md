@@ -1496,9 +1496,10 @@ later reader sees method, not accident.*
 
 ---
 
-## §10 FL-R3 restoration — the time-grid round (OPEN, round 1)
+## §10 FL-R3 restoration — the time-grid round (OPEN, round 2)
 
-**Status:** OPEN. Opened 2026-09-08 against `dev` `c1709cf2f`. This round
+**Status:** OPEN. Opened 2026-09-08 against `dev` `c1709cf2f`; round 2
+opened 2026-09-09 (§10.12). This round
 exists because FL-R3 was RULED at review round 17 — the hysteresis band
 **stays** and FL-R3 closes by **restoring it to the served path** — and
 the ruling put the restoration on the time-grid branch rather than
@@ -1767,7 +1768,11 @@ rounding it up, and this is that case.
 **exactly one** fails the registered gate — the same single failure the
 sweep carried before the grid arms joined it. No grid arm fails.
 
-**C10-3 — NOT MET on the cold path, by 1.33×.** Observed max fold depth
+**C10-3 — NOT MET on the cold path, by 1.33×.** *[**Corrected at round 2,
+§10.12.1:** the depth below was read from the dwell grid, which ran only
+the `P` = 240 arms; at the `P` = 720 that C10-4 selects the depth is 720
+and the single-scan cost 1 440 — **2.0×**, not 1.33×. The disposition
+(BLOCKED) is unchanged; the magnitude was wrong.]* Observed max fold depth
 is **240** (= `P`, as `h mod P` predicts). Cold cost:
 
 | | block parses per cold quote |
@@ -1784,7 +1789,9 @@ which takes both the 720 and the 960 to ≈ 0 and makes the fold free. That
 item is hereby on FL-R3's critical path, not a queued nicety. The
 alternative — accepting 1.33× on the cold path — is a maintainer call,
 not this round's to make, and it is stated as such rather than assumed
-either way.
+either way. *[Round 2: the figure the maintainer is asked to accept or
+refuse is 2.0×, per the correction above; the call itself is restated
+with its options at §10.12.5.]*
 
 **C10-4 — `P` = 720, and FL-D8 is what says so.** Measured over the
 dwell ensemble: boundary occupancy reaches **741‰** (in the worst states
@@ -1848,3 +1855,255 @@ rate-limited mode joined the dwell sweep at round 13 and the count was
 not re-derived". A register figure derived from a mode list is invalidated
 by every addition to that list, so it is corrected here **from the run**
 rather than by arithmetic on the old number.
+
+### §10.12 Round 2 (opened 2026-09-09): the cost figure at the selected `P`; the blocker specified; C10-1's residual put to measurement
+
+Round 1 closed with C10-3 failed and FL-R3 blocked, and left three things
+undone that a round can do without the maintainer: it measured the cost at
+a `P` it did not select, it named the blocker without specifying what would
+discharge it, and it explained C10-1's six lost cells by a mechanism it did
+not test. Round 2 does those three. **Everything in §10.12.1–§10.12.4 is
+written before the round-2 instrument is run**; the commit ordering on
+`design/fl-r3-time-grid` is the register, as it was for round 1. Results go
+in §10.13.
+
+#### §10.12.1 Finding: the C10-3 figure was measured at the wrong `P`
+
+§10.10 reads the cold cost off "observed max fold depth **240**". That
+number is true and is the wrong one. The dwell grid — the only sweep that
+reports `grid_max_fold_depth` — ran the grid arms **at `P` = 240 only**
+(`fee_ladder.rs`, the dwell mode list), and the cost summary printed depth
+for the two labels `grid-fold-p240` / `grid-only-p240` and no others. C10-4
+then selected **`P` = 720** on the feedback grid, where depth is not
+measured. The fold depth is `h mod P` + 1 (anchor inclusive), so at the
+selected period it reaches **720**, and §10.4's single-scan formula gives
+`D + 720` = **1 440** block parses per cold quote — **2.0×** the budget,
+not 1.33×. The 1.33× recorded in §10.10, in round 18's record, and in both
+FOLLOWUPS rows is the `P` = 240 arm's cost attributed to the `P` = 720
+selection.
+
+**Nothing ratified moves on the disposition** — C10-3 fails either way and
+§10.4 pre-registered the consequence — but the *magnitude* is what the
+maintainer was asked to accept or refuse, and it was understated by a
+third. C10-2 has the same gap: "no grid arm fails the dwell gate" was
+measured on the `P` = 240 arms, so dwell at the selected `P` is unverified.
+
+**This is the third instance in one round of the same defect class.**
+§10.11(1) was a gate selecting its subject from a display string;
+§10.11(2) was a figure derived from a mode list that died on every
+addition to the list. The cost line did both: a hard-coded label list,
+naming an arm the selection had already moved past. The fix is
+structural, not a corrected constant — the dwell grid runs every grid arm
+at the selected `P`, and the cost line iterates over the arms actually run.
+
+**Pre-registered expectation (R2-E1).** The re-run reports
+`grid_max_fold_depth` = 720 for `grid-fold-p720` on the dwell grid. If it
+reports anything else, the `h mod P` model in §10.2 is wrong and the cost
+table is re-derived from what is observed, not from the formula.
+
+#### §10.12.2 The blocker, specified — RECORD-AND-SPECIFY, not fix-in-C++
+
+Round 1 named the blocker ("the storage-lane cheap per-block tx count") and
+stopped. A named blocker with no specification is one the storage lane can
+build wrong, or not at all, without anyone noticing — rule 22's "falsify
+by" is unanswerable when nobody has written down what "it landed" means.
+This section writes it down.
+
+**The substrate has moved under the blocker since it was queued.**
+`DAEMON_REDB_STORE.md`'s 2026-09-01 countermand rules the inherited C++
+"not a base": genesis is redb-only, DRS-C ships no C++ refactor PRs, and
+DRS-P0c's FIX-IN-CPP-FIRST default is **inverted to RECORD-AND-SPECIFY**.
+So the shape this item was queued in — an LMDB field the C++
+`BlockchainLMDB` writes — is the shape the countermand retires. The item
+is a **requirement on `shekyl-chain-store`'s S-CHAIN-R surface**, and FL-R3
+owes the store lane the requirement, not a patch.
+
+**Requirement FL-R3-STORE (for `shekyl-chain-store`, S-CHAIN-R).**
+
+- **What.** An O(1) per-height read `cumulative_tx_count(h)` =
+  `Σ_{i ≤ h} |tx_hashes(i)|` — the count of **non-coinbase** transactions
+  through height `h`, which is exactly the summand `get_tx_volume_avg`
+  walks today (`blk.tx_hashes.size()`, `blockchain.cpp:2117`). Then
+  `tx_volume_avg(h)` for any `h` is two reads:
+  `(cum(h−1) − cum(start−1)) / (h − start)` with
+  `start = h > W ? h − W : 0`, `W` = `SHEKYL_TX_VOLUME_WINDOW`, and the
+  `h` = 0 / `cum(−1)` = 0 edges as the walk defines them
+  (`blockchain.cpp:2055–2061`).
+- **Layout precedent, not invention.** `mdb_block_info_4.bi_cum_rct` is a
+  cumulative-at-write, differenced-at-read per-block counter
+  (`db_lmdb.cpp`, `bi.bi_cum_rct = num_rct_outs; bi.bi_cum_rct +=
+  bi_prev->bi_cum_rct`), pop-symmetric for free because the row goes with
+  the block. The redb block row carries the same field in the same
+  discipline. Eight bytes per block.
+- **Consensus bit-identity gate (rule 47).** `get_tx_volume_avg` is not a
+  fee-estimate convenience: it feeds `get_block_reward` inside
+  `validate_miner_transaction` (`blockchain.cpp:1669`), i.e. **block
+  validity**. A store read that disagrees with the walk by one at one
+  height is a consensus split. The gate the store PR must carry: on a
+  regtest chain containing empty blocks, a pop, and a reorg,
+  `cum(h) − cum(h−1) == |tx_hashes(h)|` at every height **and** the
+  derived `tx_volume_avg(h)` equals the blob walk's at every height. A
+  gate that checks only the tip is not this gate.
+- **Falsifier for the FL-R3 blocker (rule 22).** *Blocked on the store
+  providing O(1) `cumulative_tx_count(h)` — falsify by
+  `rg cumulative_tx_count rust/shekyl-chain-store` returning the read and
+  its bit-identity gate.* Until that grep returns, the blocker holds; when
+  it does, FL-R3's fold costs `2(D + 1)` field reads and **zero** blob
+  parses at any `D`, and C10-3 is met with room to spare.
+
+**The LMDB alternative, recorded so it is not re-derived.** Under the
+countermand the default is *not* to add `bi_cum_tx_count` to
+`mdb_block_info` (a `VERSION 12 → 13` bump, delete-and-resync,
+`LMDB_SCHEMA.md` +8 B at offset 96). It is ~40 lines of C++ against a store
+that does not reach genesis, so it is fix-in-C++ against DRS-P0c's
+inversion. It is recorded here as the alternative the maintainer may
+choose **if a banded quote on the current C++ daemon is wanted before the
+Rust store lands** — e.g. for a testnet cycle — with its cost stated: the
+field dies at redb genesis and the C++ PR must carry the same bit-identity
+gate. It is a maintainer call (§10.12.5), not this round's.
+
+#### §10.12.3 C10-1's residual — a mechanism claimed, so a mechanism tested
+
+Round 1 explained the six cells the fold loses to the band as "the band's
+memory is unbounded, the fold's resets at every anchor". That is a
+mechanism, and rule 16's corollary says a mechanism asserted from the
+design is a hypothesis until it is read at the implementation. Read at the
+instrument, it sharpens into a **testable** claim with a consequence for
+what C10-1 was asking:
+
+**Claim.** In a cell where raw `C` sits inside the band's flicker zone for
+the whole 3 000-block tail, the reference banded map's served value was
+fixed by history *before* the tail — ultimately by the trace's initial
+condition — and never moves. The fold re-anchors every `P` blocks with an
+unseeded `snap(C(h₀))`, which lands on one side of the boundary or the
+other according to where `C(h₀)` happens to sit, and the band then holds
+that value for the cell. So in those six cells the fold's transitions
+occur **only at anchor heights** — at most `⌈3 000 / 720⌉` = 5 in the
+tail — and **no fold depth removes them**: a deeper fold moves the anchor,
+it does not remove the anchor.
+
+**Consequence if the claim holds.** The reference's 14 is not a quieter
+mechanism than the fold's 20. It is the *same* mechanism plus infinite
+memory of an arbitrary start — memory FL-R18 forbids a real node from
+holding. Then **20 is the oscillating-cell count for any realisation of
+the band that is a pure function of chain state**, and C10-1's target of
+14 was unreachable by construction, not missed. The honest re-reading of
+C10-1 is: *amplitude* restored (worst 24 = 24) and the residual bounded by
+the §10.2 `1/P` first-step effect, already priced. That re-reading is
+**not adopted here** — a round may not move its own pre-registered
+target after seeing the result. It goes to the maintainer (§10.12.5) with
+the measurement that supports or refutes it.
+
+**Measurement, pre-registered.**
+
+- **(a) Per-cell diff, fold vs reference.** For each grid-fold arm on the
+  feedback grid: the cells oscillating under the fold and *not* under the
+  reference (predicted: six for `P` ≥ 240), each cell's tail transitions
+  (predicted: ≤ 5 at `P` = 720), and how many of those transitions fall at
+  a height `≡ 0 (mod P)` (predicted: **all of them**). Also the reverse
+  set — cells quiet under the fold but oscillating under the reference
+  (predicted: none; a non-empty reverse set means the fold *damps* what
+  the band does not, which would be its own finding).
+- **(b) A deeper-fold arm, `grid-fold-p720-w1`.** Anchor one full cell
+  earlier: `h₀ = h − (h mod P) − P`, depth ∈ [720, 1 440). **Prediction:
+  oscillating cells stay at 20.** If they fall toward 14, the claim is
+  false — the band's memory horizon is finite in practice and fold depth
+  *is* a lever — and the round tables a depth-versus-cost trade instead of
+  the re-reading above. This arm is instrumentation for the mechanism
+  question only: its cold cost without FL-R3-STORE is ≥ 2 160 parses and
+  it is not a candidate shape.
+
+Both readings are written before the run. **R2-E2:** (a) all extra-cell
+transitions at anchors, each ≤ 5, reverse set empty. **R2-E3:** (b) leaves
+the count at 20. **R2-E4 (C10-2 at the selected `P`):** the dwell grid at
+`P` = 720 adds no gate failure beyond the one pre-existing.
+
+#### §10.12.4 The fold's owner and the FFI shape, pinned
+
+§10.7 stated the principle — Rust folds, C++ marshals — and left the
+signature to the implementing PR. A principle without a signature gets
+implemented per-step "just for now". Pinned:
+
+**Owner, landing on this branch.** `shekyl-economics::fee::hysteresis_fold`
+— the §7 recurrence from an unseeded anchor over a slice of raw `C`,
+returning `None` for an empty slice (there is no "no history" `C_q`; `0`
+is what `fee_correction_quantized` *takes* as no-history, never what it
+returns). The instrument's `GridCq` calls it, retiring the fold loop the
+instrument carried itself — the same drift hazard that discharged declared
+exception #3, closed the same way. A KAT pins `hysteresis_fold(&[c]) ==
+hysteresis_step(c, 0)`: a fold of one is today's served value, so at every
+anchor height the restored path and the interim path agree by
+construction. This lands now because §10.7 requires the instrument to call
+the owner and round 2's measurement must be of that owner; the grid period
+and anchor rule do **not** land now — `P` is selected, not signed, and a
+constant for an unsigned value is pre-provisioning (rule 21).
+
+**FFI, for the implementing PR (after C10-4's `P` is signed and
+FL-R3-STORE lands or the alternative is chosen):**
+
+```c
+/* h0 = h − (h mod P); P is owned in Rust with the fold. */
+uint64_t shekyl_fee_grid_anchor(uint64_t height);
+
+/* Fold the §7 band from the grid anchor to `anchor_height + count − 1`.
+ * Per-height inputs, oldest first, both arrays `count` long:
+ *   tx_volume_avg[i]     = Blockchain::get_tx_volume_avg(anchor + i)
+ *   already_generated[i] = already_generated_coins at anchor + i
+ * Rust derives σ, b, M_r and C per height from the shipped
+ * EconomicParams (EconomicParams::default(), the build-generated set —
+ * exactly as shekyl_fee_correction_quantized already sources it in
+ * legacy_core.rs) and folds via hysteresis_fold.
+ * Returns 0 and writes *out_cq; −1 on a null pointer; −2 when count == 0
+ * or count > P (a fold longer than one cell is not this function).
+ * count == 1 returns shekyl_fee_correction_quantized(…, prev_cq = 0)
+ * for the anchor height — the identity the KAT pins. No panic across
+ * the ABI (rule 40): every derivation clamps as fee_correction_quantized
+ * does today, and hysteresis_step is total. */
+int shekyl_fee_correction_grid_fold(uint64_t anchor_height,
+                                    const uint64_t* tx_volume_avg,
+                                    const uint64_t* already_generated,
+                                    size_t count,
+                                    uint64_t genesis_ng_height,
+                                    uint64_t* out_cq);
+```
+
+C++ at `blockchain.cpp:4612–4631` becomes: anchor from the FFI, two array
+reads over `[h₀, h]`, one call — and `prev_cq = 0` leaves the call site.
+The array-marshal shape is `shekyl_tree_hash`'s (§10.4). Memoisation of
+the fold, if any, is keyed `(top_hash, h)` exactly like `get_tx_volume_avg`'s
+(§10.6) and counts for nothing in C10-3.
+
+**Implementing-PR pre-flight (rule 26), written now so it is not
+reconstructed then.** (i) Re-verify the call-site lines and the store
+surface at PR open — both are cited by line here and lines move. (ii) Gates:
+the anchor-identity KAT above; a pinned trace vector on which the FFI fold
+equals the instrument's `grid-fold-p720` arm block-for-block (the
+instrument and the daemon are then measuring one mechanism, which is what
+constraint (2) means); the `count > P` refusal; FL-R3-STORE's bit-identity
+gate if the store PR has not carried it. (iii) Scope: the fold, its two
+exports, the C++ marshal, and the deletion of the `prev_cq = 0` literal.
+Nothing else rides — §10.11's instrument fixes are already on this branch.
+
+#### §10.12.5 What closes round 18, and who decides it
+
+Round 2 leaves the round OPEN on three maintainer calls, each of which the
+round has now measured or specified but may not make:
+
+- **R18-M1 — sign `P` = 720** (C10-4's selection; the residence rule and
+  the window ceiling agree). Signing it is what lets the anchor rule and
+  `P` land in the owner.
+- **R18-M2 — C10-1's reading.** If §10.13 confirms R2-E2 and R2-E3, the
+  round asks the maintainer to close C10-1 as *amplitude restored, residual
+  bounded by `1/P`, the 14-cell target unreachable by any chain-state
+  realisation*. If either expectation fails, the round tables a
+  depth-versus-cost trade instead and asks nothing yet.
+- **R18-M3 — the blocker's disposition.** Default: RECORD-AND-SPECIFY —
+  FL-R3-STORE goes to the store lane and FL-R3's wiring waits on its
+  falsifier. Alternatives, both stated with cost: the LMDB
+  `bi_cum_tx_count` field (§10.12.2; dies at redb genesis) or accepting
+  **2.0×** cold on the interim C++ path (1 440 blob parses per cold quote
+  under the blockchain lock, memoised to ~0 on repeat — against a budget
+  C10-3 pre-registered and this round cannot relax).
+
+With M1–M3 ruled the round closes; the implementing PR follows §10.12.4's
+pre-flight.
