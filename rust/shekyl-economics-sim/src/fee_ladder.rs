@@ -38,16 +38,16 @@
 //! writes (`main.rs --fee-ladder`), per the crate's stage2 precedent.
 
 use core::fmt::Write as _;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::Serialize;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
     calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
-    effective_emission, emission_speed_factor, hysteresis_fold, hysteresis_step, paid_block_reward,
-    projected_already_generated, tail_subsidy_per_block, EconomicParams, BLOCKS_PER_YEAR,
-    STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    effective_emission, emission_speed_factor, hysteresis_fold, hysteresis_settled,
+    hysteresis_step, paid_block_reward, projected_already_generated, tail_subsidy_per_block,
+    EconomicParams, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
@@ -108,6 +108,19 @@ const FL_R18_MIN_DWELL_BLOCKS: u64 = 240;
 ///   proof may carry at admission, so no conforming transaction can be
 ///   quoted more than 100 blocks before it is submitted.
 const RACE_LAGS: [u64; 4] = [1, 3, 25, 100];
+
+/// Blocks per day at the 120 s target — the unit §10.14.4's C10-6/7/8
+/// report in, beside blocks. `BLOCKS_PER_YEAR / 365` would silently
+/// inherit any leap-day convention the year constant carries; a day is
+/// stated directly.
+const BLOCKS_PER_DAY: u64 = 720;
+
+/// C10-7's construction-to-broadcast window, in blocks: ten minutes at the
+/// 120 s target — the window FL-R18's "≈ 4 %" was quoted on. **A
+/// PLACEHOLDER for FL-R19's gap distribution, which the wallet lane owes**;
+/// named as one in §10.14.4, so the figure it produces is comparable to
+/// R18's, not a claim about real wallets.
+const R19_GAP_BLOCKS_PLACEHOLDER: u64 = 5;
 
 // ---------------------------------------------------------------------------
 // Correction factor
@@ -652,6 +665,18 @@ pub struct DwellResult {
     /// labels its rows by this, not by a list of names it expects to find
     /// (§10.12.1's defect).
     pub grid_period: u64,
+    /// C10-8 (§10.14.4): offset in blocks of the standard rung's first
+    /// served change from the trace start; on the ramp scenario, this
+    /// arm's minus the un-banded ceiling's is the lag on a secular
+    /// crossing. `None` if the rung never changed.
+    pub first_change_offset: Option<u64>,
+    /// §10.14.3 over-quote share: blocks per thousand where the served
+    /// `C_q` exceeds the un-banded ceiling of the same raw `C` —
+    /// peak-hold's conservative bias, priced. 0 for non-snapped arms.
+    pub over_ceiling_permille: u64,
+    /// The mirror: blocks per thousand served BELOW the ceiling (a band
+    /// holding the lower state through a rise).
+    pub under_ceiling_permille: u64,
     /// For ramp scenarios: the shortest completed run that STARTED inside
     /// the ramp window, per rung — the statistic the FL-C4a ramp criterion
     /// actually gates on (the whole-trace median is dominated by the
@@ -705,6 +730,22 @@ enum LadderMode {
     /// anchor-flip cells, which a deeper fold cannot recover because it
     /// moves the anchor rather than removing it (R2-E3).
     GridFoldWarm(u64, u64),
+    /// §10.14.2 — shape (D), the **settled-anchor grid band**: the §7 band
+    /// run over the sequence of grid SAMPLES `C(k·P)`, anchored at the
+    /// most recent sample that is settled (`hysteresis_settled`), where
+    /// the band's state is fixed with no history. `(P, K)`: look back at
+    /// most `K` samples for a settled one, else fall back to the unseeded
+    /// snap at `k − K`; `None` is the unbounded exact recurrence, the
+    /// reference the bounded arms are measured against.
+    GridBand(u64, Option<u64>),
+    /// §10.14.3 — median of the last `W` sample snaps, **INSTRUMENTATION,
+    /// NOT A PROPOSAL**: not the band (a time release in place of the
+    /// amplitude margin), so a result here routes to R18-M4, never to
+    /// closure. `(P, W)`.
+    GridMedian(u64, u64),
+    /// §10.14.3 — peak-hold: the maximum of the last `W` sample snaps.
+    /// Same instrumentation status as [`Self::GridMedian`]. `(P, W)`.
+    GridPeak(u64, u64),
 }
 
 /// The §7 hysteresis construction — the history, held so the sweep can
@@ -869,7 +910,201 @@ impl GridCq {
     }
 }
 
+/// How a §10.14 arm turns the grid-sample sequence into a served value.
+#[derive(Clone, Copy)]
+enum SeqRule {
+    /// §10.14.2: band over the sequence from the last settled sample,
+    /// scanning back at most `K` samples (`None` = unbounded).
+    Band(Option<u64>),
+    /// §10.14.3: median of the last `W` snaps.
+    Median(u64),
+    /// §10.14.3: maximum of the last `W` snaps.
+    Peak(u64),
+}
+
+/// §10.14 grid-SEQUENCE stepper — the arms whose unit of time is the
+/// period, not the block.
+///
+/// Holds the raw `C` at each grid sample `g_k = k·P`, oldest first — again
+/// the cell's RAW INPUTS standing in for chain state, never a fold result
+/// (see [`GridCq`]). The trace's first height is taken as a pseudo-sample
+/// so the arm has something to serve before its first anchor; that is the
+/// trace edge, and the depth record shows it.
+///
+/// Every step re-derives the served value from the samples (the cold
+/// path, per §10.6); the band rule folds with the owner's
+/// `hysteresis_fold` from the anchor `hysteresis_settled` selects. The
+/// filters snap each sample with `hysteresis_step(c, 0)` — the owner's
+/// unseeded snap — and hold no band arithmetic of their own.
+struct GridSeq {
+    period: u64,
+    rule: SeqRule,
+    samples: Vec<u64>,
+    last_height: Option<u64>,
+    /// Deepest evaluation (samples read) — the cold column's worst case.
+    max_depth: u64,
+    /// Sum of depths over steps, for the cold column's mean.
+    depth_sum: u64,
+    steps: u64,
+    /// Steps whose scan hit the `K` bound without a settled sample and
+    /// anchored on the unseeded snap instead — where the §10.2 defect
+    /// lives for this shape, and the only way the monotonicity invariant
+    /// can break.
+    fallbacks: u64,
+}
+
+impl GridSeq {
+    fn new(period: u64, rule: SeqRule) -> Self {
+        Self {
+            period: period.max(1),
+            rule,
+            samples: Vec::new(),
+            last_height: None,
+            max_depth: 0,
+            depth_sum: 0,
+            steps: 0,
+            fallbacks: 0,
+        }
+    }
+
+    /// Samples the rule can ever read, so the vector stays bounded.
+    fn retain(&self) -> usize {
+        match self.rule {
+            SeqRule::Band(Some(k)) => k as usize + 1,
+            SeqRule::Band(None) => usize::MAX,
+            SeqRule::Median(w) | SeqRule::Peak(w) => w as usize,
+        }
+    }
+
+    fn step(&mut self, height: u64, c_raw: u64) -> u64 {
+        if self.last_height != height.checked_sub(1) {
+            self.samples.clear();
+        }
+        self.last_height = Some(height);
+        if self.samples.is_empty() || height.is_multiple_of(self.period) {
+            self.samples.push(c_raw);
+            let keep = self.retain();
+            if self.samples.len() > keep {
+                let drop = self.samples.len() - keep;
+                self.samples.drain(..drop);
+            }
+        }
+        let n = self.samples.len();
+        let (served, depth) = match self.rule {
+            SeqRule::Band(bound) => {
+                let floor = bound.map_or(0, |k| n.saturating_sub(k as usize + 1));
+                let anchor = (floor..n)
+                    .rev()
+                    .find(|&i| hysteresis_settled(self.samples[i]));
+                let j = anchor.unwrap_or(floor);
+                if anchor.is_none() && floor > 0 {
+                    self.fallbacks += 1;
+                }
+                (
+                    hysteresis_fold(&self.samples[j..]).expect("at least the sample just pushed"),
+                    (n - j) as u64,
+                )
+            }
+            SeqRule::Median(w) => {
+                let from = n.saturating_sub(w as usize);
+                let mut snaps: Vec<u64> = self.samples[from..]
+                    .iter()
+                    .map(|&c| hysteresis_step(c, 0))
+                    .collect();
+                snaps.sort_unstable();
+                (snaps[snaps.len() / 2], (n - from) as u64)
+            }
+            SeqRule::Peak(w) => {
+                let from = n.saturating_sub(w as usize);
+                let peak = self.samples[from..]
+                    .iter()
+                    .map(|&c| hysteresis_step(c, 0))
+                    .max()
+                    .expect("at least the sample just pushed");
+                (peak, (n - from) as u64)
+            }
+        };
+        self.max_depth = self.max_depth.max(depth);
+        self.depth_sum += depth;
+        self.steps += 1;
+        served
+    }
+}
+
+/// The one grid stepper a driver holds — asks the mode which kind it
+/// needs, so neither driver carries a per-variant match that a new arm
+/// can be left out of.
+enum GridArm {
+    Block(GridCq),
+    Seq(GridSeq),
+}
+
+impl GridArm {
+    fn for_mode(mode: LadderMode) -> Self {
+        match mode {
+            LadderMode::GridBand(p, k) => Self::Seq(GridSeq::new(p, SeqRule::Band(k))),
+            LadderMode::GridMedian(p, w) => Self::Seq(GridSeq::new(p, SeqRule::Median(w))),
+            LadderMode::GridPeak(p, w) => Self::Seq(GridSeq::new(p, SeqRule::Peak(w))),
+            _ => Self::Block(GridCq::for_mode(mode)),
+        }
+    }
+
+    /// An inert stepper for the history-free reference evaluation.
+    fn inert() -> Self {
+        Self::Block(GridCq::new(1, false, 0))
+    }
+
+    fn step(&mut self, height: u64, c_raw: u64) -> u64 {
+        match self {
+            Self::Block(g) => g.step(height, c_raw),
+            Self::Seq(g) => g.step(height, c_raw),
+        }
+    }
+
+    /// `(max depth, mean depth, fallback steps)` — the cold column's
+    /// evidence. For block arms the mean is not tracked (their depth is
+    /// fixed by `h mod P`, §10.4) and reads 0.
+    fn depth_stats(&self) -> (u64, u64, u64) {
+        match self {
+            Self::Block(g) => (g.max_depth, 0, 0),
+            Self::Seq(g) => (g.max_depth, g.depth_sum / g.steps.max(1), g.fallbacks),
+        }
+    }
+}
+
 impl LadderMode {
+    /// Cold parses of the 720-block volume window a quote at the arm's
+    /// deepest observed evaluation costs, with NO memo (§10.6, C10-3 as
+    /// registered). Block-fold arms read one window per height from the
+    /// anchor to `h` and those windows overlap, so a single scan covers
+    /// them: `720 + depth` (§10.12.1). Sequence arms read one DISJOINT
+    /// window per sample: `depth × 720`. Non-grid arms read one window.
+    fn cold_parses(self, depth: u64) -> u64 {
+        match self {
+            LadderMode::GridBand(..) | LadderMode::GridMedian(..) | LadderMode::GridPeak(..) => {
+                depth.max(1) * TX_VOLUME_WINDOW
+            }
+            LadderMode::GridFold(_) | LadderMode::GridOnly(_) | LadderMode::GridFoldWarm(..) => {
+                TX_VOLUME_WINDOW + depth
+            }
+            _ => TX_VOLUME_WINDOW,
+        }
+    }
+
+    /// Steady-state parses **per day (720 blocks)** under a
+    /// chain-state-keyed memo (§10.6's legitimate kind — a column the
+    /// register has NOT adopted; reported beside the cold one, never
+    /// instead of it). Sequence arms compute one new sample per period;
+    /// every per-block arm computes one new window per block.
+    fn memo_parses_per_day(self) -> u64 {
+        match self {
+            LadderMode::GridBand(p, _)
+            | LadderMode::GridMedian(p, _)
+            | LadderMode::GridPeak(p, _) => TX_VOLUME_WINDOW * (BLOCKS_PER_DAY / p.max(1)).max(1),
+            _ => TX_VOLUME_WINDOW * BLOCKS_PER_DAY,
+        }
+    }
+
     /// Does this arm serve a **pow2-snapped** `C_q`, and therefore fall
     /// under the registered dwell gate?
     ///
@@ -890,7 +1125,10 @@ impl LadderMode {
             | LadderMode::RateLimited(_)
             | LadderMode::GridFold(_)
             | LadderMode::GridOnly(_)
-            | LadderMode::GridFoldWarm(..) => true,
+            | LadderMode::GridFoldWarm(..)
+            | LadderMode::GridBand(..)
+            | LadderMode::GridMedian(..)
+            | LadderMode::GridPeak(..) => true,
         }
     }
 
@@ -905,9 +1143,12 @@ impl LadderMode {
     /// than from the arm, and this is where the class is closed.
     fn grid_period(self) -> Option<u64> {
         match self {
-            LadderMode::GridFold(p) | LadderMode::GridOnly(p) | LadderMode::GridFoldWarm(p, _) => {
-                Some(p)
-            }
+            LadderMode::GridFold(p)
+            | LadderMode::GridOnly(p)
+            | LadderMode::GridFoldWarm(p, _)
+            | LadderMode::GridBand(p, _)
+            | LadderMode::GridMedian(p, _)
+            | LadderMode::GridPeak(p, _) => Some(p),
             LadderMode::Current
             | LadderMode::CorrectedRaw
             | LadderMode::Quantized(_)
@@ -930,6 +1171,10 @@ impl LadderMode {
             LadderMode::GridFold(p) => format!("grid-fold-p{p}"),
             LadderMode::GridOnly(p) => format!("grid-only-p{p}"),
             LadderMode::GridFoldWarm(p, w) => format!("grid-fold-p{p}-w{w}"),
+            LadderMode::GridBand(p, Some(k)) => format!("grid-band-p{p}-k{k}"),
+            LadderMode::GridBand(p, None) => format!("grid-band-p{p}-kfull"),
+            LadderMode::GridMedian(p, w) => format!("grid-median-p{p}-w{w}"),
+            LadderMode::GridPeak(p, w) => format!("grid-peak-p{p}-w{w}"),
         }
     }
 }
@@ -1007,7 +1252,7 @@ fn dwell_scenario(
         LadderMode::RateLimited(n) => RateLimitedCq::new(n),
         _ => RateLimitedCq::new(1),
     };
-    let mut grid = GridCq::for_mode(mode);
+    let mut grid = GridArm::for_mode(mode);
     // FL-D8 (§10.9): raw-`C` boundary occupancy and residence. Raw `C` is
     // MODE-INDEPENDENT, so these come out identical on every arm — which
     // is a free self-check that the modes differ only in how they serve a
@@ -1015,6 +1260,11 @@ fn dwell_scenario(
     let mut near_blocks = 0u64;
     let mut near_runs: Vec<u64> = Vec::new();
     let mut near_run = 0u64;
+    // §10.14.3: blocks where the served `C_q` sits above / below the
+    // un-banded ceiling of the same raw `C` — peak-hold's conservative
+    // bias, and every band's lag, in the units users pay.
+    let mut over_ceiling = 0u64;
+    let mut under_ceiling = 0u64;
     // Per rung: (value, run_length, run_start_block) plus accumulators.
     let mut runs: [Vec<(u64, u64)>; 4] = [vec![], vec![], vec![], vec![]]; // (start, len)
     let mut values: [BTreeSet<u64>; 4] = Default::default();
@@ -1048,17 +1298,30 @@ fn dwell_scenario(
             near_runs.push(near_run);
             near_run = 0;
         }
-        let fees = match mode {
-            LadderMode::Current => rounded(raw),
-            LadderMode::CorrectedRaw => served_ladder(base, median, c_raw),
-            LadderMode::Quantized(rule) => {
-                served_ladder(base, median, quantize_c_pow2(c_raw, rule))
-            }
-            LadderMode::QuantizedHysteresis => served_ladder(base, median, hyst.step(c_raw)),
-            LadderMode::RateLimited(_) => served_ladder(base, median, rate_limited.step(c_raw)),
-            LadderMode::GridFold(_) | LadderMode::GridOnly(_) | LadderMode::GridFoldWarm(..) => {
-                served_ladder(base, median, grid.step(height, c_raw))
-            }
+        // The served `C_q` first, so §10.14.3's over-quote share can be
+        // read off it against the un-banded ceiling of the SAME raw `C`
+        // (`None` for the arms that serve no snapped map).
+        let served_cq: Option<u64> = match mode {
+            LadderMode::Current | LadderMode::CorrectedRaw => None,
+            LadderMode::Quantized(rule) => Some(quantize_c_pow2(c_raw, rule)),
+            LadderMode::QuantizedHysteresis => Some(hyst.step(c_raw)),
+            LadderMode::RateLimited(_) => Some(rate_limited.step(c_raw)),
+            m if m.grid_period().is_some() => Some(grid.step(height, c_raw)),
+            m => unreachable!(
+                "mode {} serves a quantized map but has no stepper",
+                m.name()
+            ),
+        };
+        if let Some(cq) = served_cq {
+            let ceiling = quantize_c_pow2(c_raw, SnapRule::Ceiling);
+            over_ceiling += u64::from(cq > ceiling);
+            under_ceiling += u64::from(cq < ceiling);
+        }
+        let fees = match (mode, served_cq) {
+            (LadderMode::Current, _) => rounded(raw),
+            (LadderMode::CorrectedRaw, _) => served_ladder(base, median, c_raw),
+            (_, Some(cq)) => served_ladder(base, median, cq),
+            (m, None) => unreachable!("mode {} produced no served C_q", m.name()),
         };
         ag = advance_traced_state(ag, v_avg, params);
         for i in 0..4 {
@@ -1128,8 +1391,13 @@ fn dwell_scenario(
         },
         d8_max_residence_blocks: near_runs.iter().copied().max().unwrap_or(0),
         is_quantized_map: mode.serves_quantized_map(),
-        grid_max_fold_depth: grid.max_depth,
+        grid_max_fold_depth: grid.depth_stats().0,
         grid_period: mode.grid_period().unwrap_or(0),
+        // The standard rung's first CHANGE after the trace's opening value
+        // (`runs[1][0]` starts at 0 by construction).
+        first_change_offset: runs[1].get(1).map(|&(start, _)| start),
+        over_ceiling_permille: over_ceiling * 1000 / blocks.max(1),
+        under_ceiling_permille: under_ceiling * 1000 / blocks.max(1),
     }
 }
 
@@ -1187,6 +1455,35 @@ pub struct FeedbackResult {
     /// anchor flip, which no fold depth removes; one with transitions
     /// elsewhere is losing them to something else.
     pub tail_transitions_at_anchor: u64,
+    /// Standard-rung value changes over the WHOLE trace — the quantity
+    /// §10.14.2's monotonicity invariant is stated on (band ≤ grid-only,
+    /// same `P`, same cell). The tail alone cannot carry it: the tail is
+    /// a 3 000-block window and a `P` = 720 grid cycle is ≈ 1 440 blocks.
+    pub trace_transitions: u64,
+    /// §10.14.4 C10-6, read on the LATE HALF of the trace (15 000 blocks)
+    /// rather than the 3 000-block tail: a peak-hold-9 cycle at `P` = 720
+    /// is ≈ 7 200 blocks and would not fit in the tail at all, so a
+    /// tail-only reading would flatter exactly the arms with the longest
+    /// cycles. Value changes in the late half; the min and mean gap in
+    /// blocks between consecutive ones (0 when fewer than two); and the
+    /// late-half fee range, so "sustained" can require the FL-C7
+    /// amplitude bar over the same window.
+    pub late_transitions: u64,
+    pub late_gap_min: u64,
+    pub late_gap_mean: u64,
+    pub late_fee_min: u64,
+    pub late_fee_max: u64,
+    /// §10.14.4 C10-7: blocks per thousand (whole trace) from which a
+    /// served-value change occurs within the next
+    /// [`R19_GAP_BLOCKS_PLACEHOLDER`] blocks — the probability a quote
+    /// taken at a uniformly random block is stale by broadcast.
+    pub change_within_gap_permille: u64,
+    /// §10.14's cold-cost evidence for the arm: deepest evaluation, mean
+    /// evaluation, and (`grid-band-*` only) steps that hit the `K` bound
+    /// without a settled sample. 0 / 0 / 0 for non-grid arms.
+    pub grid_max_depth: u64,
+    pub grid_mean_depth: u64,
+    pub grid_fallbacks: u64,
     pub v_avg_tail_min: u64,
     pub v_avg_tail_max: u64,
     pub fee_tail_min: u64,
@@ -1227,7 +1524,7 @@ fn feedback_scenario(
                    height: u64,
                    hyst: &mut HysteresisCq,
                    rl: &mut RateLimitedCq,
-                   grid: &mut GridCq|
+                   grid: &mut GridArm|
      -> (u64, u64, u64) {
         let base = base_block_reward(ag, params).expect("base along trace");
         let c = correction_factor(v_avg, ag, height, params).c_scaled;
@@ -1235,9 +1532,7 @@ fn feedback_scenario(
             LadderMode::Quantized(rule) => quantize_c_pow2(c, rule),
             LadderMode::QuantizedHysteresis => hyst.step(c),
             LadderMode::RateLimited(_) => rl.step(c),
-            LadderMode::GridFold(_) | LadderMode::GridOnly(_) | LadderMode::GridFoldWarm(..) => {
-                grid.step(height, c)
-            }
+            m if m.grid_period().is_some() => grid.step(height, c),
             _ => c,
         };
         let ladder = served_ladder(base, median, c);
@@ -1254,7 +1549,7 @@ fn feedback_scenario(
         st.height,
         &mut HysteresisCq { prev: 0 },
         &mut RateLimitedCq::new(1),
-        &mut GridCq::new(1, false, 0),
+        &mut GridArm::inert(),
     )
     .0;
 
@@ -1278,12 +1573,18 @@ fn feedback_scenario(
     let mut tail_transitions = 0u64;
     let mut tail_transitions_at_anchor = 0u64;
     let mut last_tail_fee: Option<u64> = None;
+    // Whole-trace and late-half records (§10.14.2 invariant; C10-6/7).
+    let late_from = blocks / 2;
+    let mut last_fee: Option<u64> = None;
+    let mut transition_blocks: Vec<u64> = Vec::new();
+    let mut late_fee_min = u64::MAX;
+    let mut late_fee_max = 0u64;
     let mut hyst = HysteresisCq { prev: 0 };
     let mut rl = match mode {
         LadderMode::RateLimited(n) => RateLimitedCq::new(n),
         _ => RateLimitedCq::new(1),
     };
-    let mut grid = GridCq::for_mode(mode);
+    let mut grid = GridArm::for_mode(mode);
     let grid_period = mode.grid_period();
     let mut ag = st.ag;
     for t in 0..blocks {
@@ -1308,6 +1609,14 @@ fn feedback_scenario(
         sum += demand;
         window.push_back(demand);
         sum -= window.pop_front().expect("window warm");
+        if last_fee.is_some_and(|prev| prev != fee) {
+            transition_blocks.push(t);
+        }
+        last_fee = Some(fee);
+        if t >= late_from {
+            late_fee_min = late_fee_min.min(fee);
+            late_fee_max = late_fee_max.max(fee);
+        }
         if t >= blocks - tail {
             fee_min = fee_min.min(fee);
             fee_max = fee_max.max(fee);
@@ -1347,6 +1656,33 @@ fn feedback_scenario(
         .min()
         .unwrap_or(0);
 
+    // Late-half inter-transition gaps.
+    let late: Vec<u64> = transition_blocks
+        .iter()
+        .copied()
+        .filter(|&t| t >= late_from)
+        .collect();
+    let late_gaps: Vec<u64> = late.windows(2).map(|w| w[1] - w[0]).collect();
+    let late_gap_min = late_gaps.iter().copied().min().unwrap_or(0);
+    let late_gap_mean = if late_gaps.is_empty() {
+        0
+    } else {
+        late_gaps.iter().sum::<u64>() / late_gaps.len() as u64
+    };
+    // C10-7: the union over transitions at `t` of the blocks
+    // `[t − g, t − 1]` from which that change lies within the next `g`
+    // blocks; transitions are in ascending order so the union is a single
+    // forward pass.
+    let g = R19_GAP_BLOCKS_PLACEHOLDER;
+    let mut covered = 0u64;
+    let mut covered_until = 0u64;
+    for &t in &transition_blocks {
+        let lo = t.saturating_sub(g).max(covered_until);
+        covered += t.saturating_sub(lo);
+        covered_until = t;
+    }
+    let (grid_max_depth, grid_mean_depth, grid_fallbacks) = grid.depth_stats();
+
     FeedbackResult {
         race_quotes: served_economy.len() as u64,
         race_refused,
@@ -1360,6 +1696,20 @@ fn feedback_scenario(
         distinct_fees_tail: tail_fees.len() as u64,
         tail_transitions,
         tail_transitions_at_anchor,
+        trace_transitions: transition_blocks.len() as u64,
+        late_transitions: late.len() as u64,
+        late_gap_min,
+        late_gap_mean,
+        late_fee_min: if late_fee_min == u64::MAX {
+            0
+        } else {
+            late_fee_min
+        },
+        late_fee_max,
+        change_within_gap_permille: covered * 1000 / blocks.max(1),
+        grid_max_depth,
+        grid_mean_depth,
+        grid_fallbacks,
         v_avg_tail_min: v_min,
         v_avg_tail_max: v_max,
         fee_tail_min: fee_min,
@@ -1419,6 +1769,35 @@ pub struct GridSweepPoint {
     /// arm does not. Predicted empty for the fold arms — the grid adds
     /// forgetting, it does not add damping.
     pub recovered_cells: u64,
+    /// §10.14.2's monotonicity invariant, MEASURED: cells where this arm's
+    /// whole-trace transitions exceed `grid-only` at the same `P` on the
+    /// same cell. `None` where there is no comparator (non-grid arms, and
+    /// grid-only itself). Expected 0 for every sequence arm with an
+    /// unbounded scan; a non-zero count on a bounded band arm is its
+    /// fallback anchor at work, and on `kfull` it voids the run.
+    pub invariant_violations: Option<u64>,
+    /// C10-6 (§10.14.4): over cells with a SUSTAINED late-half oscillation
+    /// ([`is_sustained_late`]), the minimum cycle period
+    /// `2 × late_gap_mean` and the minimum single inter-transition gap —
+    /// in blocks; the summary converts to days. 0 when no cell sustains.
+    pub sustained_cells: u64,
+    pub min_cycle_blocks: u64,
+    pub min_gap_blocks: u64,
+    /// C10-7 (§10.14.4): worst cell and cell-mean of the change-within-gap
+    /// share, per thousand blocks.
+    pub change_within_gap_worst_permille: u64,
+    pub change_within_gap_mean_permille: u64,
+    /// Cold-cost evidence (§10.14.2's first column): deepest evaluation
+    /// over the sweep, the worst cell-mean depth, cells that hit the `K`
+    /// bound, and the parses those imply under [`LadderMode::cold_parses`].
+    pub max_depth: u64,
+    pub mean_depth_worst: u64,
+    pub fallback_cells: u64,
+    pub cold_parses_worst: u64,
+    pub cold_parses_mean: u64,
+    /// The memo column, structural (§10.14.2's second column; not a
+    /// register-adopted budget): parses per day at steady state.
+    pub memo_parses_per_day: u64,
 }
 
 /// A feedback cell's identity on the shared sweep grid:
@@ -1430,6 +1809,17 @@ type CellKey = (u64, u64, u64, u64, u64);
 /// single rounding step.
 fn is_oscillating(fb: &FeedbackResult) -> bool {
     fb.tail_transitions >= 2 && fb.fee_tail_max > round_money_up_2(fb.fee_tail_min + 1)
+}
+
+/// C10-6's "sustained" (§10.14.4): FL-C7's bar — two changes and an
+/// amplitude beyond one rounding step — applied over the LATE HALF of the
+/// trace instead of the 3 000-block tail, so cycles longer than the tail
+/// (peak-hold at `W` = 9 is ≈ 7 200 blocks) are counted rather than
+/// vanished. `is_oscillating` stays the C10-1 owner so round 1's figures
+/// remain comparable; this one exists for the criterion that asks about
+/// PERIOD, which the tail cannot resolve.
+fn is_sustained_late(fb: &FeedbackResult) -> bool {
+    fb.late_transitions >= 2 && fb.late_fee_max > round_money_up_2(fb.late_fee_min + 1)
 }
 
 #[derive(Serialize)]
@@ -1759,6 +2149,14 @@ pub fn report() -> FeeLadderReport {
             LadderMode::GridFold(720),
             LadderMode::GridOnly(720),
             LadderMode::GridFoldWarm(720, 1),
+            // Round 2b (§10.14.5): the settled-anchor band at the selected
+            // P and K, and the window filters — on the dwell grid for
+            // C10-8's lag, the flip rate FL-D8 owed, and the over-quote
+            // share.
+            LadderMode::GridBand(720, Some(32)),
+            LadderMode::GridMedian(720, 3),
+            LadderMode::GridPeak(720, 3),
+            LadderMode::GridPeak(720, 9),
         ] {
             for &(label, m0, m1, median) in DWELL_SCENARIOS {
                 dwell.push(dwell_scenario(label, m0, m1, median, st, mode, &params));
@@ -1887,6 +2285,25 @@ pub fn report() -> FeeLadderReport {
         LadderMode::GridFold(720),
         LadderMode::GridOnly(720),
         LadderMode::GridFoldWarm(720, 1),
+        // Round 2b (§10.14.5).
+        LadderMode::GridBand(60, Some(8)),
+        LadderMode::GridBand(60, Some(16)),
+        LadderMode::GridBand(60, Some(32)),
+        LadderMode::GridBand(60, None),
+        LadderMode::GridBand(240, Some(8)),
+        LadderMode::GridBand(240, Some(16)),
+        LadderMode::GridBand(240, Some(32)),
+        LadderMode::GridBand(240, None),
+        LadderMode::GridBand(720, Some(8)),
+        LadderMode::GridBand(720, Some(16)),
+        LadderMode::GridBand(720, Some(32)),
+        LadderMode::GridBand(720, None),
+        LadderMode::GridMedian(720, 3),
+        LadderMode::GridMedian(720, 5),
+        LadderMode::GridMedian(720, 9),
+        LadderMode::GridPeak(720, 3),
+        LadderMode::GridPeak(720, 5),
+        LadderMode::GridPeak(720, 9),
     ];
     let sweep_arm = |mode: LadderMode| -> Vec<(CellKey, FeedbackResult)> {
         let mut cells = Vec::new();
@@ -1918,8 +2335,25 @@ pub fn report() -> FeeLadderReport {
         .filter(|(_, fb)| is_oscillating(fb))
         .map(|(key, _)| key)
         .collect();
+    // Every arm is swept once and held, because §10.14.2's invariant
+    // compares each grid arm's cells against grid-only's AT THE SAME P —
+    // a per-cell comparator, like the banded reference above.
+    let swept: Vec<(LadderMode, Vec<(CellKey, FeedbackResult)>)> =
+        arms.iter().map(|&mode| (mode, sweep_arm(mode))).collect();
+    let grid_only_transitions: BTreeMap<(u64, CellKey), u64> = swept
+        .iter()
+        .filter_map(|(mode, cells)| match mode {
+            LadderMode::GridOnly(p) => Some((*p, cells)),
+            _ => None,
+        })
+        .flat_map(|(p, cells)| {
+            cells
+                .iter()
+                .map(move |(key, fb)| ((p, *key), fb.trace_transitions))
+        })
+        .collect();
     let mut grid_sweep = Vec::new();
-    for mode in arms {
+    for (mode, cells) in swept {
         let mut oscillating = 0u64;
         let mut worst_transitions = 0u64;
         let mut thin_margin_cells = 0u64;
@@ -1927,7 +2361,36 @@ pub fn report() -> FeeLadderReport {
         let mut extra_cells_worst_transitions = 0u64;
         let mut extra_cells_off_anchor_transitions = 0u64;
         let mut recovered_cells = 0u64;
-        for (key, fb) in sweep_arm(mode) {
+        let has_comparator =
+            mode.grid_period().is_some() && !matches!(mode, LadderMode::GridOnly(_));
+        let mut invariant_violations = 0u64;
+        let mut sustained_cells = 0u64;
+        let mut min_cycle_blocks = u64::MAX;
+        let mut min_gap_blocks = u64::MAX;
+        let mut gap_worst = 0u64;
+        let mut gap_sum = 0u64;
+        let mut max_depth = 0u64;
+        let mut mean_depth_worst = 0u64;
+        let mut fallback_cells = 0u64;
+        let n_cells = cells.len() as u64;
+        for (key, fb) in cells {
+            if has_comparator {
+                let p = mode.grid_period().expect("has_comparator implies a period");
+                let only = grid_only_transitions
+                    .get(&(p, key))
+                    .expect("grid-only swept at every period a grid arm uses");
+                invariant_violations += u64::from(fb.trace_transitions > *only);
+            }
+            if is_sustained_late(&fb) {
+                sustained_cells += 1;
+                min_cycle_blocks = min_cycle_blocks.min(2 * fb.late_gap_mean);
+                min_gap_blocks = min_gap_blocks.min(fb.late_gap_min);
+            }
+            gap_worst = gap_worst.max(fb.change_within_gap_permille);
+            gap_sum += fb.change_within_gap_permille;
+            max_depth = max_depth.max(fb.grid_max_depth);
+            mean_depth_worst = mean_depth_worst.max(fb.grid_mean_depth);
+            fallback_cells += u64::from(fb.grid_fallbacks > 0);
             let osc = is_oscillating(&fb);
             if osc {
                 oscillating += 1;
@@ -1956,6 +2419,26 @@ pub fn report() -> FeeLadderReport {
             extra_cells_worst_transitions,
             extra_cells_off_anchor_transitions,
             recovered_cells,
+            invariant_violations: has_comparator.then_some(invariant_violations),
+            sustained_cells,
+            min_cycle_blocks: if sustained_cells == 0 {
+                0
+            } else {
+                min_cycle_blocks
+            },
+            min_gap_blocks: if sustained_cells == 0 {
+                0
+            } else {
+                min_gap_blocks
+            },
+            change_within_gap_worst_permille: gap_worst,
+            change_within_gap_mean_permille: gap_sum / n_cells.max(1),
+            max_depth,
+            mean_depth_worst,
+            fallback_cells,
+            cold_parses_worst: mode.cold_parses(max_depth),
+            cold_parses_mean: mode.cold_parses(mean_depth_worst),
+            memo_parses_per_day: mode.memo_parses_per_day(),
         });
     }
 
@@ -2153,11 +2636,71 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             .map(|d| d.grid_max_fold_depth)
             .max()
             .unwrap_or(0);
+        // The dwell rows carry the mode's NAME, not the mode; the parses
+        // formula differs by arm kind (§10.14.5), so the dwell line reports
+        // depth only and the per-arm cost triple is printed from the
+        // feedback sweep below, where the mode is known.
         let _ = writeln!(
             out,
-            "fee-ladder: FL-R3 cost {mode} period={period} max_fold_depth={depth} single_scan_cold_parses={}",
-            TX_VOLUME_WINDOW + depth
+            "fee-ladder: FL-R3 cost {mode} period={period} max_fold_depth={depth} (dwell grid; parses on the C10-6/7 line)"
         );
+    }
+    // Round 2b (§10.14.4/5): per quantized-map arm on the DWELL grid — the
+    // occupancy-weighted flip rate FL-D8 owed (standard-rung changes per
+    // 10 000 blocks over the whole ensemble), C10-8's lag on the ramp
+    // against the un-banded ceiling (max over ramp traces, blocks and
+    // milli-days), and the over-/under-ceiling shares.
+    {
+        let modes: BTreeSet<&str> = r
+            .dwell
+            .iter()
+            .filter(|d| d.is_quantized_map)
+            .map(|d| d.mode.as_str())
+            .collect();
+        let ceiling_first: BTreeMap<(&str, u64), u64> = r
+            .dwell
+            .iter()
+            .filter(|d| d.mode == LadderMode::Quantized(SnapRule::Ceiling).name() && d.is_ramp)
+            .filter_map(|d| {
+                d.first_change_offset
+                    .map(|f| ((d.scenario, d.age_years), f))
+            })
+            .collect();
+        for mode in modes {
+            let rows: Vec<&DwellResult> = r.dwell.iter().filter(|d| d.mode == mode).collect();
+            let blocks: u64 = rows.iter().map(|d| d.blocks_measured).sum();
+            let changes: u64 = rows.iter().map(|d| d.value_changes[1]).sum();
+            let mut lag_max: Option<u64> = None;
+            let mut lag_unresolved = 0u64;
+            for d in rows.iter().filter(|d| d.is_ramp) {
+                match (
+                    d.first_change_offset,
+                    ceiling_first.get(&(d.scenario, d.age_years)),
+                ) {
+                    (Some(mine), Some(&ceil)) => {
+                        lag_max = Some(lag_max.unwrap_or(0).max(mine.saturating_sub(ceil)));
+                    }
+                    _ => lag_unresolved += 1,
+                }
+            }
+            let over = rows
+                .iter()
+                .map(|d| d.over_ceiling_permille)
+                .max()
+                .unwrap_or(0);
+            let under = rows
+                .iter()
+                .map(|d| d.under_ceiling_permille)
+                .max()
+                .unwrap_or(0);
+            let _ = writeln!(
+                out,
+                "fee-ladder: C10-8 {mode} flips_per_10k_blocks={} ramp_lag_max_blocks={} ramp_lag_max_millidays={} ramp_lag_unresolved={lag_unresolved} over_ceiling_permille_max={over} under_ceiling_permille_max={under}",
+                changes * 10_000 / blocks.max(1),
+                lag_max.map_or("none".to_owned(), |l| l.to_string()),
+                lag_max.map_or("none".to_owned(), |l| (l * 1000 / BLOCKS_PER_DAY).to_string()),
+            );
+        }
     }
     {
         let occ = r
@@ -2196,6 +2739,24 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             p.extra_cells_worst_transitions,
             p.extra_cells_off_anchor_transitions,
             p.recovered_cells
+        );
+        let _ = writeln!(
+            out,
+            "fee-ladder: C10-6/7 {} sustained_cells={} min_cycle_blocks={} min_cycle_millidays={} min_gap_blocks={} change_in_gap_worst_permille={} change_in_gap_mean_permille={} invariant_violations={} max_depth={} mean_depth_worst={} fallback_cells={} cold_parses_worst={} cold_parses_mean={} memo_parses_per_day={}",
+            p.mode,
+            p.sustained_cells,
+            p.min_cycle_blocks,
+            p.min_cycle_blocks * 1000 / BLOCKS_PER_DAY,
+            p.min_gap_blocks,
+            p.change_within_gap_worst_permille,
+            p.change_within_gap_mean_permille,
+            p.invariant_violations.map_or("n/a".to_owned(), |v| v.to_string()),
+            p.max_depth,
+            p.mean_depth_worst,
+            p.fallback_cells,
+            p.cold_parses_worst,
+            p.cold_parses_mean,
+            p.memo_parses_per_day
         );
     }
     let _ = writeln!(

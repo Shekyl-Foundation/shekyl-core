@@ -2329,4 +2329,32 @@ C10-6 floor and C10-7 ceiling, and choose `W` / `K` against C10-8's lag.**
   violations, the cost triple from measured depth, flips per 10 000
   blocks, over-quote share.
 
+**Amendments made while building the instrument, before it ran** (each is
+a measurement choice the results depend on, so it is registered here
+rather than discovered in §10.15):
+
+- *C10-6 is read on the late half of the trace (15 000 blocks), not the
+  3 000-block tail.* A peak-hold cycle at `W` = 9, `P` = 720 is ≈ 7 200
+  blocks; the tail cannot hold one, so a tail-only reading would report
+  the longest-cycle arms as *not oscillating* — flattering exactly the
+  arms whose cycle length is the question. `is_oscillating` (the C10-1
+  owner) is unchanged so round 1's counts stay comparable;
+  `is_sustained_late` applies FL-C7's same two-changes-plus-amplitude bar
+  over the late half for C10-6 only.
+- *The monotonicity invariant is measured on whole-trace transitions*,
+  for the same reason: the tail is shorter than two grid cycles.
+- *Cost formulas differ by arm kind and are stated as such*: block-fold
+  arms `720 + depth` (one overlapping scan, §10.12.1); sequence arms
+  `depth × 720` (disjoint windows); memo column as parses **per day**
+  (720 blocks) so arms with different `P` compare — `720 × (720/P)` for
+  sequence arms, `720 × 720` for every per-block arm.
+- *C10-8's over-quote share* is measured against the un-banded ceiling of
+  the **same** raw `C` at each block, per dwell trace; the lag is the
+  arm's first served change minus the ceiling arm's on the same ramp
+  trace, reported as the maximum over ramp traces.
+- *`grid-band` runs at `P` ∈ {60, 240, 720}* — the full sweep as asked —
+  even though at `P` = 60 twelve consecutive samples share one volume
+  window and the cost columns are least favourable; the number is
+  reported rather than the arm being excluded on the argument.
+
 Round 2b's results go in §10.15.
