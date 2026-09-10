@@ -54,7 +54,7 @@ use shekyl_economics::{
     burn::compute_burn_split_at,
     calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
     params::{EconomicParams, SCALE},
-    split_block_emission, FrozenSegmentCount,
+    split_block_emission, FrozenSegmentCount, TxVolume,
 };
 
 use crate::engine::SimParams;
@@ -208,14 +208,14 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         let tx_volume = (scenario.get_volume)(block, params.blocks_per_year);
 
         let multiplier = calc_release_multiplier(
-            tx_volume,
+            TxVolume::per_block(tx_volume),
             params.tx_volume_baseline,
             params.release_min,
             params.release_max,
         );
 
         // Real ledger advance uses the paid emission (both arms share it).
-        let effective_reward = effective_emission(ag, tx_volume, &economic)
+        let effective_reward = effective_emission(ag, TxVolume::per_block(tx_volume), &economic)
             .expect("sim paid emission stays within the arithmetic domain");
 
         let emission_share = calc_effective_emission_share(
@@ -234,7 +234,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         // Fee leg — identical under both dispositions.
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
         let burn_pct = calc_burn_pct(
-            tx_volume,
+            TxVolume::per_block(tx_volume),
             params.tx_volume_baseline,
             circulating,
             params.emission_curve_asymptote,

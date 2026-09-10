@@ -2382,12 +2382,17 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// `staker_emission + staker_pool_amount` (blockchain.cpp) summed over the
 /// epoch, i.e. the staker-inflow identity over real RPC. At regtest e2e
 /// activity the fee-pool half is **genuinely zero by the law**, and the
-/// test pins that executably: `get_tx_volume_avg` is an integer per-block
-/// mean over `SHEKYL_TX_VOLUME_WINDOW`, a handful of e2e txs floors it to
-/// 0, and a zero volume operand zeroes `burn_pct` — so `compute_burn_split`
-/// legitimately yields `staker_pool_amount = 0` (asserted via
-/// `total_burned == 0`, the tied observable). Driving the pool half
-/// positive needs a sustained ≥ 1 tx/block average — infeasible in an e2e;
+/// test pins that executably. Since FL-R24 the volume operand is the exact
+/// window `tx_count_sum : blocks` (no longer floored to whole tx/block), so
+/// a handful of e2e txs gives a small but NONZERO `sqrt(V/B)` — the arm that
+/// used to zero the burn is gone. What zeroes `burn_pct` here is the supply
+/// ratio: `calc_burn_pct` forms `circulating · 10⁶ / asymptote` in SCALE
+/// fixed point, which is 0 until ~4.3e15 has been emitted (≈ 2 600+ blocks
+/// of the young curve), and this e2e closes epoch 1 at ~1 100 blocks. So
+/// `compute_burn_split` legitimately yields `staker_pool_amount = 0`
+/// (asserted via `total_burned == 0`, the tied observable) — and the
+/// assertion is the falsifier: a longer chain or a fatter curve moves it.
+/// Driving the pool half positive needs supply an e2e cannot reach;
 /// the positive-pool split coverage is the B5 unit KAT family. The claim
 /// itself still carries real `ToKey` fee inputs (`fee_gindexes`
 /// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg

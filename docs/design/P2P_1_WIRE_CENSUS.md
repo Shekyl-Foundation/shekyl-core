@@ -332,6 +332,11 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-A10 | Compression is zstd level 1, floor 256 B, inflate bounded by `min(packet limit, per-command limit)`, applied to a whole finalized message. **Recorded as a constraint on P2P-2, not as a present defect:** there is no encryption on this wire today, so no compression-before-encryption oracle exists to census. *If* the redesign places compression below encryption, this becomes a CRIME/BREACH-class oracle that interacts with D++ padding — which is why the parameters are enumerated here rather than left for the transport round to rediscover | `compress.rs:24-32`, `:62-70` | `none` | 4 | PW-13 |
 | PWC-A11 | The reader latches on framing error (`Error::Poisoned`), and verifies the inner reassembled fragment signature the C++ `memcpy`s unchecked — both **stricter** than the oracle | `rust/shekyl-levin/src/lib.rs:79-112` (divergence census entries 1-2, 5) | `spec` | 1 | — |
 
+> **UPDATE 2026-09-10 — PWD-B5:** `return_code` is deleted; the live header is
+> 29 bytes (`static_assert(sizeof(bucket_head2)==29)`). PWC-A2's 33-byte
+> figure is the pin. PWC-A7 is discharged (deleted from the wire, not zeroed
+> and ignored).
+
 ### 4.B p2p command schemas (1001 / 1002 / 1003 / 1007)
 
 | ID | Commitment | Evidence | Class | B | Seeds |
@@ -700,7 +705,7 @@ carried forward on the register's authority alone. All 28 resolve here.
 | PW-9 | **CONFIRMED** → PWC-A1 |
 | PW-10 | **CONFIRMED** → PWC-A5, and **extended**: a second, disagreeing packet-size constant exists (PWC-F3) |
 | PW-11 | **CONFIRMED** → PWC-A6; the preservation is asserted by a test, so it is a requirement, not an accident |
-| PW-12 | **CONFIRMED** → PWC-A7 |
+| PW-12 | **CONFIRMED** → PWC-A7; **discharged 2026-09-10 by PWD-B5** |
 | PW-13 | **CONFIRMED** → PWC-A10, PWC-E13 |
 | PW-14 | **HALF REFUTED AT THE TREE.** `rpc_port` is **gone** (#587) — the register's `p2p_protocol_defs.h:180-196` pointer no longer resolves to it. The `peer_id` half stands → PWC-D4 |
 | PW-15 | **CONFIRMED as an absence** → PWC-E2, grounded against the enumerated frontier per rule 47 |
@@ -817,6 +822,9 @@ The substantive result is the **bucket-1 + bucket-2 share: 12 of 57, 21 %.**
 > B6, B7, C1, C5, C6, C8, E11, E13, E14, F4). Ratifying a row does not
 > un-disposition it, and the round states the principle itself: *a deferred
 > row is still dispositioned.*
+>
+> **UPDATE 2026-09-10:** PWD-B5 dispositioned PWC-A7 (deleted). The
+> deliverable's authoritative remain list is 14, without A7.
 >
 > **The gate's 46 must be read as HISTORICAL — the rows that were bucket 4 at
 > dispatch — and the reason is structural rather than precedent.** A LIVE

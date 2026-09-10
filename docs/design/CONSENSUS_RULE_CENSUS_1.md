@@ -309,6 +309,10 @@ An inherited RPC-over-Levin affordance. Error codes on a P2P wire leak
 implementation state to a peer. Worth asking whether any Shekyl command
 actually reads it, and deleting it if not.
 
+> **UPDATE 2026-09-10 — PWD-B5:** deleted. No command read it. The header is
+> 29 bytes. Local invoke-callback `int` (timeout / destroyed) is API, not
+> wire.
+
 ### L-5 — Compression: zstd level 1, min payload 256 B (`compress.rs:25,32`)
 
 Compression before encryption is a **CRIME/BREACH-class oracle** whenever an

@@ -19,10 +19,11 @@ pub const SCALE: u64 = GENERATED_SCALE;
 /// build assertion, on the `u64` headroom above it.
 pub const EMISSION_CURVE_ASYMPTOTE: u64 = GENERATED_EMISSION_CURVE_ASYMPTOTE;
 
-/// Rolling `tx_volume_avg` window in blocks (`shekyl_tx_volume_window`
+/// Rolling transaction-volume window in blocks (`shekyl_tx_volume_window`
 /// from `config/economics_params.json`; mirrors C++
-/// `SHEKYL_TX_VOLUME_WINDOW` / `Blockchain::get_tx_volume_avg`). Surfaced
-/// so instruments that model the rolling average read the same
+/// `SHEKYL_TX_VOLUME_WINDOW` / `Blockchain::get_tx_volume_window`, whose
+/// `(tx_count_sum, blocks)` pair [`TxVolume`](crate::TxVolume) divides
+/// exactly, FL-R24). Surfaced so instruments that model the window read the same
 /// build-generated value consensus uses instead of hand-copying the
 /// provisional-until-testnet JSON number.
 pub const TX_VOLUME_WINDOW: u64 = GENERATED_TX_VOLUME_WINDOW;

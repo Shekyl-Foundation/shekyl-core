@@ -604,13 +604,13 @@ mod tests {
                     );
                     for v in [0u64, 5, 50, 100, 200, 500] {
                         let mult = shekyl_economics::calc_release_multiplier(
-                            v,
+                            shekyl_economics::TxVolume::per_block(v),
                             p.tx_volume_baseline,
                             p.release_min,
                             p.release_max,
                         );
                         let b = shekyl_economics::calc_burn_pct(
-                            v,
+                            shekyl_economics::TxVolume::per_block(v),
                             p.tx_volume_baseline,
                             ag,
                             p.emission_curve_asymptote,

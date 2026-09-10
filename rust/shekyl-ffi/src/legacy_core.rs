@@ -365,16 +365,22 @@ pub unsafe extern "C" fn shekyl_tree_hash(
 
 /// Calculate the release multiplier from transaction volume.
 ///
+/// The volume operand crosses as the exact window `(tx_count_sum,
+/// window_blocks)` — FL-R24: the daemon no longer truncates the mean to
+/// whole transactions per block before the ratio is formed. C++ marshals
+/// `Blockchain::get_tx_volume_window` here and computes nothing itself.
+///
 /// Returns fixed-point value (SCALE=1_000_000). 1_000_000 = 1.0x.
 #[no_mangle]
 pub extern "C" fn shekyl_calc_release_multiplier(
-    tx_volume_avg: u64,
+    tx_count_sum: u64,
+    window_blocks: u64,
     tx_volume_baseline: u64,
     release_min: u64,
     release_max: u64,
 ) -> u64 {
     shekyl_economics::release::calc_release_multiplier(
-        tx_volume_avg,
+        shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
         tx_volume_baseline,
         release_min,
         release_max,
@@ -385,10 +391,14 @@ pub extern "C" fn shekyl_calc_release_multiplier(
 
 /// Calculate the burn percentage from chain state.
 ///
+/// Volume operand as for [`shekyl_calc_release_multiplier`]: the exact
+/// window `(tx_count_sum, window_blocks)` (FL-R24).
+///
 /// Returns fixed-point burn percentage (SCALE=1_000_000). 400_000 = 40%.
 #[no_mangle]
 pub extern "C" fn shekyl_calc_burn_pct(
-    tx_volume: u64,
+    tx_count_sum: u64,
+    window_blocks: u64,
     tx_baseline: u64,
     circulating_supply: u64,
     total_supply: u64,
@@ -396,7 +406,7 @@ pub extern "C" fn shekyl_calc_burn_pct(
     burn_cap: u64,
 ) -> u64 {
     shekyl_economics::burn::calc_burn_pct(
-        tx_volume,
+        shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
         tx_baseline,
         circulating_supply,
         total_supply,
@@ -522,8 +532,9 @@ pub const SHEKYL_BLOCK_REWARD_INVALID: i32 = -1;
 ///
 /// Since FL-R12′ this marshals the ONE owner `paid_block_reward` — the full
 /// signed composition `max(M_r·curve(remaining), TAIL)·penalty(x)` — so it
-/// takes `tx_volume_avg` and there is no C++-side multiplier, cap, or flag
-/// path. A past-asymptote accumulator is a legitimate perpetual-tail state,
+/// takes the volume operand, as the exact window `(tx_count_sum,
+/// window_blocks)` since FL-R24, and there is no C++-side multiplier, cap,
+/// or flag path. A past-asymptote accumulator is a legitimate perpetual-tail state,
 /// not an error (FL-R16a).
 ///
 /// # Safety
@@ -537,7 +548,8 @@ pub unsafe extern "C" fn shekyl_block_reward(
     current_block_weight: u64,
     already_generated_coins: u64,
     full_reward_zone: u64,
-    tx_volume_avg: u64,
+    tx_count_sum: u64,
+    window_blocks: u64,
     out_reward: *mut u64,
     out_weight_limit: *mut u64,
 ) -> i32 {
@@ -558,7 +570,7 @@ pub unsafe extern "C" fn shekyl_block_reward(
         current_block_weight,
         already_generated_coins,
         full_reward_zone,
-        tx_volume_avg,
+        shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
         &params,
     ) {
         Ok(reward) => {
@@ -586,14 +598,15 @@ pub unsafe extern "C" fn shekyl_block_reward(
 /// constraints before wiring a caller to a nonzero value. Cannot fail.
 #[no_mangle]
 pub extern "C" fn shekyl_fee_correction_quantized(
-    tx_volume_avg: u64,
+    tx_count_sum: u64,
+    window_blocks: u64,
     sigma_scaled: u64,
     burn_pct_scaled: u64,
     prev_cq_scaled: u64,
 ) -> u64 {
     let params = shekyl_economics::params::EconomicParams::default();
     shekyl_economics::fee_correction_quantized(
-        tx_volume_avg,
+        shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
         sigma_scaled,
         burn_pct_scaled,
         prev_cq_scaled,

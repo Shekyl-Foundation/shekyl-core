@@ -495,7 +495,7 @@ bucket-4 mass lives here.
 | PWD-B2 | Cadence jitter — currently **absent**; a distinct fix from PWD-B1, and neither substitutes for the other | PWC-E1, PWC-E3, PW-28 |
 | PWD-B3 | Per-command caps: derive them, and decide the unknown-command fallthrough that currently reaches `size_t::max` | PWC-C7 |
 | PWD-B4 | Unknown flag bits: reject at ingress, or keep accepting | PWC-A6 / **PWC-A6a** (the codec accepts them; no relay carries them today) |
-| PWD-B5 | `return_code` on notifications — inherited RPC-over-Levin affordance | PWC-A7, PW-12 |
+| PWD-B5 | **DELIVERED.** `return_code` deleted from every bucket (not notifications only). Header 29 bytes. A later NACK is a command body, not a flag bit | PWC-A7, PW-12 |
 | PWD-B6 | The two block-propagation paths (2001 alongside 2008) — collapse or keep, on a chain with no fluffy transition | PWC-C3, PW-27 |
 | PWD-B7 | **Attributable-drop half DELIVERED** (typed `DropVerdict` in `shekyl-peer-policy`; `m_no_drop_offense` gone). `drop_connections`-by-host remains **deferred with PWD-I4** (PWC-E9); the score floor remains **deferred with PWC-E5** | PWC-E7, PWC-E8, PWC-E9 |
 | PWD-B8 | Dead surface: the two lineage-dead structs and the never-driven 43-second timer | PWC-F1, PWC-F2, **PWC-E4a** |

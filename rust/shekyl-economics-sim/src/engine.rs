@@ -3,7 +3,7 @@ use shekyl_economics::{
     burn::{calc_burn_pct_from_activity, compute_burn_split_at},
     calc_burn_pct, calc_effective_emission_share, calc_release_multiplier, effective_emission,
     params::{calc_stake_ratio, EconomicParams, SCALE},
-    split_block_emission, FrozenSegmentCount,
+    split_block_emission, FrozenSegmentCount, TxVolume,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -211,13 +211,13 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         };
 
         let multiplier = calc_release_multiplier(
-            tx_volume,
+            TxVolume::per_block(tx_volume),
             params.tx_volume_baseline,
             params.release_min,
             params.release_max,
         );
 
-        let effective_reward = effective_emission(ag, tx_volume, &economic)
+        let effective_reward = effective_emission(ag, TxVolume::per_block(tx_volume), &economic)
             .expect("sim paid emission stays within the arithmetic domain");
 
         let emission_share = calc_effective_emission_share(
@@ -238,14 +238,14 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
             // Gate-7 path: the engine-equivalent composition over the
             // consensus circulating quantity (follows the recorder).
             (Some(_), Some(_locked)) => calc_burn_pct_from_activity(
-                tx_volume,
+                TxVolume::per_block(tx_volume),
                 params.tx_volume_baseline,
                 circ_consensus,
                 &economic,
             ),
             // Legacy path: byte-identical to the pre-gate-7 modeling loop.
             _ => calc_burn_pct(
-                tx_volume,
+                TxVolume::per_block(tx_volume),
                 params.tx_volume_baseline,
                 circulating,
                 params.emission_curve_asymptote,

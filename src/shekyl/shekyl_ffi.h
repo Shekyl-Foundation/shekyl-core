@@ -239,19 +239,27 @@ bool shekyl_tree_hash(
     uint8_t* out_ptr);
 
 /// Release multiplier from demand pacing:
-/// clamp(tx_volume_avg / baseline, RELEASE_MIN, RELEASE_MAX), fixed-point
-/// SCALE. Since FL-R12' the PAID composition applies this Rust-side inside
-/// shekyl_block_reward; this export remains for observability (RPC
-/// get_info's release_multiplier field).
+/// clamp(tx_volume / baseline, RELEASE_MIN, RELEASE_MAX), fixed-point
+/// SCALE. The volume operand crosses as the exact window
+/// (tx_count_sum, window_blocks) -- FL-R24: Rust forms
+/// tx_count_sum / (baseline * window_blocks) in one division; C++ counts and
+/// never divides (shekyl/tx_volume_window.h). Since FL-R12' the PAID
+/// composition applies this Rust-side inside shekyl_block_reward; this
+/// export remains for observability (RPC get_info's release_multiplier
+/// field).
 uint64_t shekyl_calc_release_multiplier(
-    uint64_t tx_volume_avg,
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
     uint64_t tx_volume_baseline,
     uint64_t release_min,
     uint64_t release_max);
 
-/// Calculate fee burn percentage based on network metrics.
+/// Calculate fee burn percentage based on network metrics. Volume operand
+/// as for shekyl_calc_release_multiplier: the exact window
+/// (tx_count_sum, window_blocks), FL-R24.
 uint64_t shekyl_calc_burn_pct(
-    uint64_t tx_volume,
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
     uint64_t tx_baseline,
     uint64_t circulating_supply,
     uint64_t total_supply,
@@ -312,7 +320,8 @@ uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 /// property of the served rate. FL-R3 is RULED -- the band stays and is
 /// restored -- pending the grid-anchored previous value's own round.
 uint64_t shekyl_fee_correction_quantized(
-    uint64_t tx_volume_avg,
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
     uint64_t sigma_scaled,
     uint64_t burn_pct_scaled,
     uint64_t prev_cq_scaled);
@@ -361,7 +370,8 @@ int32_t shekyl_block_reward(
     uint64_t current_block_weight,
     uint64_t already_generated_coins,
     uint64_t full_reward_zone,
-    uint64_t tx_volume_avg,
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
     uint64_t *out_reward,
     uint64_t *out_weight_limit);
 
@@ -3761,6 +3771,55 @@ uint8_t shekyl_drop_verdict_combine(uint8_t current, uint8_t incoming);
 //! Fold `incoming` into `slot`. Null `slot` is a no-op (no peer to attribute).
 void shekyl_drop_verdict_classify(uint8_t* slot, uint8_t incoming);
 
+// -- Block-ingest outcome (PWD-B7 block twin) -------------------------------
+// Opaque ABI for rust/shekyl-peer-policy::BlockIngest. Replaces
+// block_verification_context's bag of independent bools. C++ writes
+// non-reject arms through shekyl_block_ingest_record and reject arms
+// through shekyl_block_ingest_reject_* (Rust pairs the drop slot).
+// Zero is Unclassified: not added, not rejected, not a drop. P2P asks
+// shekyl_block_announce_action / shekyl_block_sync_action, not these
+// bytes. Action bytes have no header constants.
+
+#define SHEKYL_BLOCK_INGEST_UNCLASSIFIED     0u
+#define SHEKYL_BLOCK_INGEST_ADDED            1u
+#define SHEKYL_BLOCK_INGEST_ALREADY_EXISTS   2u
+#define SHEKYL_BLOCK_INGEST_ORPHANED         3u
+#define SHEKYL_BLOCK_INGEST_MISSING_TXS      4u
+#define SHEKYL_BLOCK_INGEST_DEGRADED_KEEP    5u
+#define SHEKYL_BLOCK_INGEST_ALT_STORED       6u
+#define SHEKYL_BLOCK_INGEST_REJECTED         7u
+#define SHEKYL_BLOCK_INGEST_REJECTED_BAD_POW 8u
+
+bool shekyl_block_ingest_is_added(uint8_t outcome);
+bool shekyl_block_ingest_already_exists(uint8_t outcome);
+bool shekyl_block_ingest_is_orphaned(uint8_t outcome);
+bool shekyl_block_ingest_missing_txs(uint8_t outcome);
+bool shekyl_block_ingest_is_rejected(uint8_t outcome);
+bool shekyl_block_ingest_is_bad_pow(uint8_t outcome);
+//! Fold `incoming` into `slot`. First writer wins. Null `slot` is a no-op.
+void shekyl_block_ingest_record(uint8_t* slot, uint8_t incoming);
+//! Pair both slots. Either pointer null is a no-op (do not half-write).
+void shekyl_block_ingest_reject_form(uint8_t* outcome, uint8_t* drop);
+void shekyl_block_ingest_reject_state(uint8_t* outcome, uint8_t* drop);
+void shekyl_block_ingest_reject_internal(uint8_t* outcome, uint8_t* drop);
+void shekyl_block_ingest_reject_bad_pow(uint8_t* outcome, uint8_t* drop);
+void shekyl_block_ingest_reject_with_drop(uint8_t* outcome, uint8_t* drop, uint8_t incoming_drop);
+
+//! Announce/sync instruction bytes. No SHEKYL_BLOCK_ANNOUNCE_* constants:
+//! C++ never writes these. An unrecognised byte is idle (do not drop).
+uint8_t shekyl_block_announce_action(uint8_t outcome, uint8_t drop, bool handle_ok);
+bool shekyl_block_announce_re_request_txs(uint8_t action);
+bool shekyl_block_announce_drop(uint8_t action);
+bool shekyl_block_announce_heavier_score(uint8_t action);
+bool shekyl_block_announce_our_failure(uint8_t action);
+bool shekyl_block_announce_relay(uint8_t action);
+bool shekyl_block_announce_request_history(uint8_t action);
+
+uint8_t shekyl_block_sync_action(uint8_t outcome, uint8_t drop);
+bool shekyl_block_sync_drop(uint8_t action);
+bool shekyl_block_sync_heavier_score(uint8_t action);
+bool shekyl_block_sync_orphan_resync(uint8_t action);
+
 // ---------------------------------------------------------------------------
 // Daemon ephemeral Tor inbound -- PWD-E7 (docs/design/P2P_2_ENDPOINT_ROUND.md)
 // ---------------------------------------------------------------------------
@@ -3835,6 +3894,25 @@ bool shekyl_daemon_tor_is_alive(void);
 //! down, false when there was nothing to stop.
 bool shekyl_daemon_tor_shutdown(void);
 
+// ---------------------------------------------------------------------------
+// DRS-P0d logical-state digest v0
+// (`docs/design/DAEMON_REDB_STORE.md` §7.1). One coarse call: C++ has
+// already collected height-ordered block hashes, the spent-key set, and
+// the live curve-tree root from production LMDB. Archival journals are
+// not inputs (named exclusion, §7.1.1).
+//
+// `block_hashes` / `spent_keys` may be NULL only when the corresponding
+// count is 0. `curve_root` and `out_digest` are always 32-byte buffers
+// and must be non-NULL.
+// ---------------------------------------------------------------------------
+int32_t shekyl_logical_state_digest_v0(
+    const uint8_t* block_hashes,
+    uint64_t n_blocks,
+    const uint8_t* spent_keys,
+    uint64_t n_spent,
+    const uint8_t* curve_root,
+    uint8_t* out_digest);
+
 } // extern "C"
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and
@@ -3879,6 +3957,15 @@ bool shekyl_daemon_tor_shutdown(void);
 /// Reserved for a panic crossing the FFI boundary. Not currently
 /// emitted; `panic = "abort"` terminates the process first.
 #define SHEKYL_POW_RANDOMX_V2_ERR_INTERNAL            -4
+
+/// `shekyl_logical_state_digest_v0` wrote `*out_digest`.
+#define SHEKYL_CHAIN_DIGEST_V0_OK                      0
+/// A required pointer was null. `curve_root` and `out_digest` are
+/// always required; `block_hashes` / `spent_keys` may be null only
+/// when the corresponding count is 0.
+#define SHEKYL_CHAIN_DIGEST_V0_ERR_NULL_PTR           -1
+/// `n_blocks` or `n_spent` overflowed `size_t` when widened to bytes.
+#define SHEKYL_CHAIN_DIGEST_V0_ERR_OVERFLOW           -2
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h
 /// (C-compatible header used by both memwipe.c and mlocker.cpp).

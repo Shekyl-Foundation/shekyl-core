@@ -204,11 +204,11 @@ weight penalty applies LAST, to the paid quantity — floors belong to
 emission, penalties to what is paid, so block-size governance never dies,
 tail era included.
 
-Where `release_multiplier` is derived from a rolling average of transaction volume over the previous 720 blocks (~1 day):
+Where `release_multiplier` is derived from the exact rolling mean of transaction volume over the previous 720 blocks (~1 day) — the sum and the window length cross into the economics crate as a pair and are divided once against the baseline, so the operand is never an integer-floored mean (FL-R24):
 
 ```
 release_multiplier = clamp(
-    tx_volume_avg / tx_volume_baseline,
+    tx_count_sum / (tx_volume_baseline * blocks),
     RELEASE_MIN,       // e.g., 0.8
     RELEASE_MAX        // e.g., 1.3
 )

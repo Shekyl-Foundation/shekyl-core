@@ -1,0 +1,18 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-chain-store"
+description = "Daemon chain-store crate (DRS-R-19). P0d lands logical-state digest v0; the redb engine is DRS-E1."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+
+[lints]
+workspace = true

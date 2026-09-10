@@ -39,13 +39,13 @@ pub fn invoke(command: u32, payload: &[u8]) -> Vec<u8> {
     )
 }
 
-/// A response to a prior request (`finalize_response`): `S` set, carrying the
-/// command-specific return code.
+/// A response to a prior request (`finalize_response`): `S` set.
 #[must_use]
-pub fn response(command: u32, return_code: i32, payload: &[u8]) -> Vec<u8> {
-    let mut head = BucketHead::make(command, len_u64(payload), Flags::RESPONSE, false);
-    head.return_code = return_code;
-    build(&head, payload)
+pub fn response(command: u32, payload: &[u8]) -> Vec<u8> {
+    build(
+        &BucketHead::make(command, len_u64(payload), Flags::RESPONSE, false),
+        payload,
+    )
 }
 
 #[cfg(test)]
@@ -61,7 +61,6 @@ mod tests {
         assert_eq!(head.payload_len, 3);
         assert!(!head.expects_response());
         assert_eq!(head.flags, Flags::REQUEST);
-        assert_eq!(head.return_code, 0);
         assert_eq!(head.protocol_version, PROTOCOL_VERSION_1);
         assert_eq!(&msg[HEADER_SIZE..], b"abc");
     }
@@ -75,11 +74,10 @@ mod tests {
     }
 
     #[test]
-    fn response_carries_return_code() {
-        let msg = response(1001, -4, b"x");
+    fn response_sets_s_flag() {
+        let msg = response(1001, b"x");
         let head = BucketHead::read(msg[..HEADER_SIZE].try_into().unwrap()).unwrap();
         assert_eq!(head.flags, Flags::RESPONSE);
-        assert_eq!(head.return_code, -4);
         assert!(!head.expects_response());
     }
 }

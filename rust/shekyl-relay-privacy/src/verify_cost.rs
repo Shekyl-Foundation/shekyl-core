@@ -340,11 +340,13 @@ pub const SPEC_VERIFY_COST: SpecVerifyCost = {
     const EMPTY_ROW: [Option<VerifyCell>; DEPTH_TIERS] = [NONE; DEPTH_TIERS];
     let mut cells = [EMPTY_ROW; MAX_TABLE_INPUTS];
     // n_in = 1 (the modal shape): genesis and depth-7 endpoints.
-    cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_122));
-    cells[0][DEPTH_TIERS - 1] = Some(pi4(143.3, TreeBasis::SynthesizedProjection, 15_554));
+    // msg_bytes is NOTIFY_NEW_TRANSACTIONS + tx, including the 29-byte Levin
+    // header (PWD-B5). Enforced by tests/carrier_window.rs against notify().
+    cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_118));
+    cells[0][DEPTH_TIERS - 1] = Some(pi4(143.3, TreeBasis::SynthesizedProjection, 15_550));
     // n_in = 8 (the consensus maximum): the tail §75's sorting is about.
-    cells[7][0] = Some(pi4(399.2, TreeBasis::Genesis, 59_348));
-    cells[7][DEPTH_TIERS - 1] = Some(pi4(791.9, TreeBasis::SynthesizedProjection, 63_765));
+    cells[7][0] = Some(pi4(399.2, TreeBasis::Genesis, 59_344));
+    cells[7][DEPTH_TIERS - 1] = Some(pi4(791.9, TreeBasis::SynthesizedProjection, 63_761));
     SpecVerifyCost { cells }
 };
 
@@ -691,7 +693,7 @@ mod tests {
     fn the_adopted_modal_hop_is_the_priced_175() {
         assert_eq!(adopted_hop_ms(1, GENESIS_TREE_DEPTH), Ok(175));
         // And the tail endpoint at genesis: 399.2 + 50 + 4.26 ms node crypto
-        // over that shape's 59,348 B message.
+        // over that shape's 59,344 B message.
         assert_eq!(adopted_hop_ms(8, GENESIS_TREE_DEPTH), Ok(453));
     }
 

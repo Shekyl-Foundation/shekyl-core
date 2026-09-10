@@ -150,7 +150,7 @@ namespace
 
           bool r = epee::net_utils::async_invoke_remote_command2<CMD_DATA_REQUEST::response>(ctx, CMD_DATA_REQUEST::ID, req2,
             m_tcp_server.get_config_object(), [=](int code, const CMD_DATA_REQUEST::response& rsp, const test_connection_context&) {
-              if (code <= 0)
+              if (code < 0)
               {
                 LOG_PRINT_L0("Failed to invoke CMD_DATA_REQUEST. code = " << code);
               }

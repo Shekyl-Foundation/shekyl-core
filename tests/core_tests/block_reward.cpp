@@ -42,7 +42,7 @@ namespace
     size_t target_block_weight, uint64_t fee = 0)
   {
     if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, fee, /*frozen_segment_count=*/0, miner_address, miner_tx, blobdata(), /*max_outs=*/1, 1,
-        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
+        /*tx_volume=*/{}, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
       return false;
 
     size_t current_weight = get_transaction_weight(miner_tx);
@@ -224,11 +224,11 @@ bool gen_block_reward::check_block_verification_context(const cryptonote::block_
   if (m_invalid_block_index == event_idx)
   {
     m_invalid_block_index = 0;
-    return bvc.m_verifivation_failed;
+    return cryptonote::block_rejected(bvc);
   }
   else
   {
-    return !bvc.m_verifivation_failed;
+    return !cryptonote::block_rejected(bvc);
   }
 }
 
@@ -260,7 +260,8 @@ bool gen_block_reward::check_block_rewards(cryptonote::core& /*c*/, size_t /*ev_
         1,
         0,
         CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
-        /*tx_volume_avg=*/0,
+        /*tx_count_sum=*/0,
+        /*window_blocks=*/0,
         &base_reward,
         &weight_limit);
     CHECK_TEST_CONDITION(st == SHEKYL_BLOCK_REWARD_OK);
@@ -271,7 +272,7 @@ bool gen_block_reward::check_block_rewards(cryptonote::core& /*c*/, size_t /*ev_
     // change and catch only a marshalling disagreement (PR #640 review).
     // These literals are derived from the frozen parameters and fail if
     // the arithmetic moves: at genesis `curve(0) = SHEKYL_EMISSION_CURVE_ASYMPTOTE >> esf`
-    // = 2 048 000 000 000, `tx_volume_avg = 0` pins `M_r` at its 0.8
+    // = 2 048 000 000 000, an empty volume window pins `M_r` at its 0.8
     // rail, and the tail floor does not bind, so the paid pre-penalty
     // quantity is 1 638 400 000 000; the genesis emission share is 15%,
     // leaving the miner 1 392 640 000 000.
@@ -298,7 +299,7 @@ bool gen_block_reward::check_block_rewards(cryptonote::core& /*c*/, size_t /*ev_
 
   // Checked block 5: has 3 * TESTS_DEFAULT_FEE in fees
   // The miner gets base emission + miner_fee_income (fee minus burn).
-  // With tx_volume_avg=0, burn_pct=0, so miner gets ALL fees.
+  // With an empty volume window, burn_pct=0, so miner gets ALL fees.
   block blk_no_fee = std::get<block>(events[m_checked_blocks_indices[4]]);
   uint64_t base_no_fee = get_tx_out_amount(blk_no_fee.miner_tx);
 

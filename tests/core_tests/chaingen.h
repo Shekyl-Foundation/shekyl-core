@@ -56,6 +56,7 @@
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "cryptonote_basic/block_ingest.h"
 #include "cryptonote_protocol/enums.h"
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "misc_language.h"
@@ -673,7 +674,7 @@ public:
       m_c.cleanup_handle_incoming_blocks();
     }
     else
-      bvc.m_verifivation_failed = true;
+      cryptonote::reject_block_internal(bvc);
     bool r = m_validator.check_block_verification_context(bvc, m_ev_index, b);
     CHECK_AND_NO_ASSERT_MES(r, false, "block verification context check failed");
     return r;
@@ -707,7 +708,7 @@ public:
       m_c.cleanup_handle_incoming_blocks();
     }
     else
-      bvc.m_verifivation_failed = true;
+      cryptonote::reject_block_internal(bvc);
 
     cryptonote::block blk;
     binary_archive<false> ba{epee::strspan<std::uint8_t>(sr_block.data)};

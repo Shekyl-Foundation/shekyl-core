@@ -64,9 +64,9 @@ struct gen_bpp_tx_validation_base : public test_chain_unit_base
   bool check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*block*/)
   {
     if (m_invalid_block_index == event_idx)
-      return bvc.m_verifivation_failed;
+      return cryptonote::block_rejected(bvc);
     else
-      return !bvc.m_verifivation_failed;
+      return !cryptonote::block_rejected(bvc);
   }
 
   bool mark_invalid_block(cryptonote::core& /*c*/, size_t ev_index, const std::vector<test_event_entry>& /*events*/)

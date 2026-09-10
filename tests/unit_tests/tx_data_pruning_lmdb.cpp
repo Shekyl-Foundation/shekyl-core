@@ -122,7 +122,7 @@ bool construct_miner_only_block(
             blobdata(),
             10,
             hf_version,
-            /*tx_volume_avg=*/0,
+            /*tx_volume=*/{},
             /*circulating_supply=*/already_generated_coins,
             /*genesis_ng_height=*/0))
       return false;

@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Daemon logical-state digest v0 (DRS-P0d).** A layout-independent
+  cSHAKE256 digest of production LMDB's core chain (height-ordered
+  block hashes), spent-key set, and live curve-tree root, read under
+  one LMDB snapshot. Two engines with the same logical state agree
+  regardless of B-tree layout. The digest is a regression oracle
+  except on CHECKED-CONFORMANT census rows, where a match is
+  correctness evidence (CSR-3). Archival journals are a named
+  exclusion — a core-only match is not archival parity
+  (`DAEMON_REDB_STORE.md` §7.1.1).
+
 - **The daemon publishes an ephemeral per-boot onion address by default
   (PWD-E7).** When a pinned Tor binary is installed (SP-T0c gate:
   `SHEKYL_TOR_BINARY` → beside the executable →
@@ -78,6 +88,26 @@
 
 ### Changed
 
+- **Consensus: the transaction-volume operand is the exact window mean,
+  not its integer floor (FL-R24, `FEE_LADDER_DERIVATION.md` §11.6 PR A).**
+  The block reward's release multiplier `M_r` and the fee burn `b` were
+  computed from `tx_count_sum / 720` truncated to an integer, which
+  quantized a consensus operand to ticks of `1/V` (2–3 % of `M_r` under
+  Poisson noise, §11.7 FL-E1) and pinned it to the 0.8 rail on chains whose
+  mean sat just above 40. The daemon now hands Rust the pair
+  `(tx_count_sum, blocks)` (`Blockchain::get_tx_volume_window`, renamed
+  from `get_tx_volume_avg`; `shekyl::tx_volume_window`) and
+  `shekyl_economics::TxVolume` divides once against the baseline. Every
+  block whose 720-block window mean is fractional pays a different reward
+  than before: mid-curve at mean 40.5 the paid reward moves
+  819 200 000 000 → 829 440 000 000 (+1.25 %), `burn_pct` 223 606 →
+  225 000 (SCALE 10⁶). Pre-existing reward KATs are unchanged because all
+  of them feed whole-number means; the new KATs pin both values. FFI:
+  `shekyl_block_reward`, `shekyl_calc_release_multiplier`,
+  `shekyl_calc_burn_pct` and `shekyl_fee_correction_quantized` take
+  `(tx_count_sum, window_blocks)` in place of one `tx_volume` scalar.
+  Pre-genesis; no chain to migrate.
+
 - **Levin ingress rejects unknown commands and unknown flag bits.** A
   dispatch (`REQUEST`/`RESPONSE`) whose command is not a `DefinedCommand`,
   or any flag bit outside the five defined flags, is connection-fatal at
@@ -110,6 +140,16 @@
   and marshal faults do not sever. The announce-size check declines
   without disconnecting; a block-sync prepare failure still flushes the
   failed span so sync can recover. Malformed input still drops.
+
+- **Block ingest no longer drops on failed-set-ness (PWD-B7 block
+  twin).** `block_verification_context`'s bag of bools is an opaque
+  `m_outcome` (`BlockIngest` in `shekyl-peer-policy`) plus the same
+  `m_drop_verdict` slot the tx path uses. Announce and sync ask
+  `shekyl_block_announce_action` / `shekyl_block_sync_action`; a
+  rejected block does not sever unless the drop slot severs. Missing-txs
+  re-requests compact transactions. C++ writes through
+  `record_block_ingest` / `reject_block_*` (Rust pairs the drop slot)
+  and never switches on a classification byte.
 
 - **`docs/FOLLOWUPS.md` genesis-hold triage.** Every pre-genesis row got a
   disposition pass: 44 resolved/overtaken/duplicate/won't-fix rows removed
@@ -332,6 +372,25 @@
 
 ### Removed
 
+- **Levin `return_code` is deleted (PWD-B5).** The bucket header is **29
+  bytes**, not 33: the inherited signed `i32` at old offset 21 is gone, and
+  flags follow command immediately. Notifications always wrote `0`; the
+  three remaining invokes put a handler `int` on the wire. Application
+  callbacks already tested `code < 0` (local timeout `-4` / destroyed `-3`).
+  The epee invoke wrapper still treated `code <= 0` as failure because it
+  expected the handler's positive `1`; that `1` left with the field, so a
+  `RESPONSE` now delivers `LEVIN_OK` (0) — a reply arrived — and the
+  wrapper fails only on `code < 0`. Handshake failures hang up after
+  sending Levin "success." Application success or failure is the payload
+  or the close. A later NACK is a command body, not a header field and
+  not a flag bit (PWD-B4 rejects unknown bits). Local invoke-callback
+  `int` stays for timeout/destroyed — that is API, not wire. No protocol
+  version moves: `SHEKYL_PROTOCOL_VERSION` denotes the crypto era, and
+  there is no wire-command-set version to bump. Pre-genesis: no
+  compatibility with 33-byte peers. The four `SPEC_VERIFY_COST`
+  `msg_bytes` pins follow the 29-byte header (−4 B each); hop rounding
+  (175 / 453) is unchanged.
+
 - **One block-propagation path, not two (PWD-B6).** `NOTIFY_NEW_BLOCK`
   (2001) is deleted; command **2008** is the sole block announce. The two
   were already one code path — 2001's handler forwarded into 2008 — and
@@ -414,6 +473,16 @@
   The wallet logs at `error` when a transaction it built fails its own
   local round-trip parse — a build-path defect, never a daemon verdict —
   since that outcome is otherwise indistinguishable from a daemon refusal.
+- **P2P: a node no longer retries outbound to its own public listen address.**
+  Foundation seeds sit in a shared hardcoded list; public zone binds
+  `0.0.0.0` and leaves `m_our_address` unset, so a seed TCP-hairpinned
+  itself, the handshake nonce dropped the connection, and
+  `start_outer_call` logged ERROR on a ~13s cadence. Outbound now skips a
+  candidate whose port is our listen / advertised-external port and whose
+  host is loopback or a local interface address. Detection stays the nonce
+  (PWD-T1); this is the wasted-dial half of PWD-E3(c). Same-host other-port
+  (mainnet + testnet on one VPS) is still dialable.
+
 - **Consensus: the `tx_extra` PQC fields have a shape rule, and the storage
   fail-open that hid its absence is gone (CEN-I19, S1).** A transaction whose
   `0x07` leaf-hash field was missing, short, long or unparsable was accepted at

@@ -150,6 +150,10 @@ members = [
     "shekyl-address",
     "shekyl-difficulty",
 
+    # Daemon chain store (DRS-R-19). P0d lands digest v0; the redb engine
+    # is DRS-E1. Named at birth so DRS-0 has a crate to grow into.
+    "shekyl-chain-store",
+
     # Foundational monetary-amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md)
     "shekyl-units",
 

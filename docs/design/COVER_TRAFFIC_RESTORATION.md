@@ -1218,9 +1218,32 @@ arm C; it does not make A's baseline stop moving.
 sources — jitter (either way), unbound slots (under), discards (neither) — and
 **none of them can produce an over-reading**. So an over-reading looks
 unambiguously like defect 1. But counting at the IP layer adds TCP/IP framing
-(~2–5 %) and the levin header adds ~33 B per 20 480 B window (~0.16 %),
+(~2–5 %) and the levin header adds ~29 B per 20 480 B window (~0.14 %),
 manufacturing the one direction this section says is impossible. Count at the
 node→proxy sockets, at the levin layer.
+
+**Capture and count (2026-09-09; filter pin 2026-09-10).** On the subject, dump *only* node→proxy
+(`tcpdump -i lo -s 0 -w arm.pcap 'tcp and dst port 9050'` — `-s 0` is not
+optional; a truncated snaplen under-reads). Count with
+`python3 utils/carrier/count_windows.py arm.pcap`. The counter reassembles
+TCP, scans for the levin signature so SOCKS5 wrapping is skipped, and keeps
+messages whose *framed* size is `WINDOW_BYTES` (20 480) — that is
+`HEADER_SIZE + m_cb`, the quantity `noise_notify(WINDOW_BYTES)` emits.
+`m_cb` itself is `WINDOW_BODY` (20 447). Matching `m_cb == WINDOW_BYTES`
+misses every real window. Each hit is charged `WINDOW_BYTES` (the budget
+unit), not the body. Proxy→node is ignored. Arm A rehearsal, carrier still
+off: `--expect-zero` (exit 1 if any window is present). Interval buckets at
+the summary are the per-flow aggregate against `U[3333, 6667]` ms — not the
+merged timestamp series, which would read four healthy channels as a
+metronome. Tests in `utils/carrier/test_count_windows.py` fail if the size
+filter is widened by a byte, if `m_cb == WINDOW_BYTES` is accepted, or if
+the summary jitter is computed on the merge.
+
+**Arm A rehearsal (2026-09-10, seedusw).** Carrier off, `--expect-zero`:
+`windows=0 payload_bytes=0 flows=13`, 20 877 packets captured, 0 dropped by
+kernel. `duration_s=0.000` is the counter's window-span with n=0, not the
+capture wall-clock. This is the filter rehearsal the method names — not the
+2 h baseline, and not B − A. Arms B and C remain the budget measurement.
 
 **Window: 2 hours per arm.** The relative standard error of the aggregate rate
 is `0.0963/√n` per channel, with four channels at a 5 s mean: ~5 min resolves a

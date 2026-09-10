@@ -48,13 +48,12 @@ namespace levin
     buffer.put_n(0, sizeof(header));
   }
 
-  byte_slice message_writer::finalize(const uint32_t command, const uint32_t flags, const uint32_t return_code, const bool expect_response)
+  byte_slice message_writer::finalize(const uint32_t command, const uint32_t flags, const bool expect_response)
   {
     if (buffer.size() < sizeof(header))
       throw std::runtime_error{"levin_writer::finalize already called"};
 
     header head = make_header(command, payload_size(), flags, expect_response);
-    head.m_return_code = SWAP32LE(return_code);
 
     std::memcpy(buffer.tellp() - buffer.size(), std::addressof(head), sizeof(head));
     return byte_slice{std::move(buffer)};

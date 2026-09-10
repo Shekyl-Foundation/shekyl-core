@@ -46,7 +46,10 @@ See also `docs/design/IMPLEMENTATION_INDEX.md` (LV row) and the
 
 
 ## Header
-This header is sent for every Shekyl p2p message.
+This header is sent for every Shekyl p2p message. It is **29 bytes**.
+PWD-B5 deleted the inherited signed `i32` that used to sit at offset 21
+(`return_code`); flags follow command immediately. The slot is retired,
+never reused.
 
 ```
  0               1               2               3
@@ -60,8 +63,6 @@ This header is sent for every Shekyl p2p message.
 |                                                               |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |  E. Response  |                   Command
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-                |                 Return Code
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
                 |Q|S|B|E|               Reserved
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -102,10 +103,6 @@ as notify messages and can be sent in any order by the peer.
 An unsigned 32-bit little endian integer representing the Shekyl-specific
 command being invoked.
 
-### Return Code
-A signed 32-bit little endian integer representing the response from the peer
-from the last command that was invoked. This is `0` for request messages.
-
 ### Flags
  * `Q` - Bit is set if the message is a request.
  * `S` - Bit is set if the message is a response.
@@ -142,8 +139,8 @@ must be non-zero. The peer is expected to send a response message with the same
 Response message can only be sent after a peer first issues a request message.
 Responses must have the `S` bit set, the `Q`, `B` and `E` bits unset, and have
 a zeroed `Expect Response` field. The `Command` field must be the same value
-that was sent in the request message. The `Return Code` is specific to the
-`Command` being issued (see [commands])(#commands)).
+that was sent in the request message. Application success or failure is the
+payload or hanging up; there is no header status field.
 
 ### Fragmented
 Fragmented messages were introduced for the "white noise" feature for i2p/tor.

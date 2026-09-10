@@ -120,7 +120,6 @@ namespace levin
 					phead.m_signature = SWAP64LE(phead.m_signature);
 					phead.m_cb = SWAP64LE(phead.m_cb);
 					phead.m_command = SWAP32LE(phead.m_command);
-					phead.m_return_code = SWAP32LE(phead.m_return_code);
 					phead.m_reservedA = SWAP32LE(phead.m_reservedA);
 					phead.m_reservedB = SWAP32LE(phead.m_reservedB);
 #endif
@@ -154,7 +153,7 @@ namespace levin
 					if(m_current_head.m_have_to_return_data)
 					{
 						std::string return_buff;
-						m_current_head.m_return_code = m_config.m_pcommands_handler->invoke(m_current_head.m_command, buff_to_invoke, return_buff, m_conn_context);
+						m_config.m_pcommands_handler->invoke(m_current_head.m_command, buff_to_invoke, return_buff, m_conn_context);
 						m_current_head.m_cb = return_buff.size();
 						m_current_head.m_have_to_return_data = 0;
 

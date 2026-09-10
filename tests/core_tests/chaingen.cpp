@@ -521,7 +521,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
     // must thread the real parent leaf-derived n here or its coinbase will be
     // refused at connect — which is the loud failure we want.
     if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), /*max_outs=*/1, hf_ver ? *hf_ver : 1,
-        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
+        /*tx_volume=*/{}, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
       return false;
 
     size_t actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
@@ -581,7 +581,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
   {
     get_block_reward(misc_utils::median(block_weights), target_block_weight,
                      already_generated_coins, accum_reward,
-                     hf_ver ? *hf_ver : 1, /*tx_volume_avg=*/0);
+                     hf_ver ? *hf_ver : 1, /*tx_volume=*/{});
   }
   add_block(blk, txs_weight, block_weights, already_generated_coins, accum_reward, hf_ver ? *hf_ver : 1,
     std::vector<cryptonote::transaction>(tx_list.begin(), tx_list.end()));
@@ -649,7 +649,7 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
     size_t current_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
     // TODO: This will work, until size of constructed block is less then CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE
     if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, current_block_weight, fees, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), max_outs, hf_version,
-        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
+        /*tx_volume=*/{}, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
       return false;
   }
 
@@ -665,7 +665,7 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   get_block_reward(misc_utils::median(block_weights),
                    txs_weight + get_transaction_weight(blk.miner_tx),
                    already_generated_coins, full_base_reward, hf_version,
-                   /*tx_volume_avg=*/0);
+                   /*tx_volume=*/{});
   add_block(blk, txs_weight, block_weights, already_generated_coins, full_base_reward, hf_version,
     find_txs_in_events(blk.tx_hashes));
 
@@ -1510,13 +1510,13 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     in.height = height;
 
     uint64_t block_reward;
-    if (!get_block_reward(median_block_weight, target_block_weight, already_generated_coins, block_reward, hf_version, 0))
+    if (!get_block_reward(median_block_weight, target_block_weight, already_generated_coins, block_reward, hf_version, /*tx_volume=*/{}))
       return false;
 
     shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0);
     block_reward = em_split.miner_emission;
 
-    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, /*frozen_segment_count=*/0);
+    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, shekyl::tx_volume_window{}, 0, /*frozen_segment_count=*/0);
     block_reward += burn.miner_fee_income;
 
     tx_extra_pqc_kem_ciphertext kem_field;
@@ -2221,7 +2221,7 @@ bool test_chain_unit_base::verify(const std::string& cb_name, cryptonote::core& 
 
 bool test_chain_unit_base::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
 {
-  return !bvc.m_verifivation_failed;
+  return !cryptonote::block_rejected(bvc);
 }
 
 bool test_chain_unit_base::check_tx_verification_context(const cryptonote::tx_verification_context& tvc, bool /*tx_added*/, size_t /*event_index*/, const cryptonote::transaction& /*tx*/)

@@ -717,6 +717,20 @@ private:
     uint64_t settlement_epoch, ArchivalSealHashCache* seal_cache = nullptr) const;
 
 public:
+  // DRS-P0d: layout-independent logical state digest v0 against this
+  // LMDB (core chain hashes + spent_keys set + live curve-tree root).
+  // Archival journals are excluded (§7.1.1). Not a BlockchainDB virtual:
+  // the oracle is LMDB-specific until DRS-E1. Public on BlockchainLMDB
+  // (same shape as apply_archival_slash_one below) so DRS-C and the
+  // walker tests can call it; BlockchainDB overrides stay private.
+  std::array<uint8_t, 32> logical_state_digest_v0() const;
+
+  // spent_keys writes are BlockchainDB-private (add_transaction). The
+  // digest walker tests mutate that family without a spend tx; these
+  // two are that door. Not BlockchainDB virtuals.
+  void digest_v0_add_spent_key(const crypto::key_image& k_image);
+  void digest_v0_remove_spent_key(const crypto::key_image& k_image);
+
   // Single-slash load-modify-store helper. Production caller is the private
   // process_archival_slash_for_epoch; exposed here so the bond field-preservation
   // regression test can drive the load-modify-store path directly

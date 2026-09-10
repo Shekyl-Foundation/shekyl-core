@@ -76,6 +76,7 @@ set(unit_tests_sources
   output_distribution.cpp
   parse_amount.cpp
   peer_policy_drop_verdict.cpp
+  peer_policy_block_ingest.cpp
   pruning.cpp
   random.cpp
   rpc_target_wire_contract.cpp
@@ -104,6 +105,7 @@ set(unit_tests_sources
   wipeable_string.cpp
   is_hdd.cpp
   aligned.cpp
+  logical_state_digest.cpp
   archival_credit_wire.cpp
   archival_serve_credit.cpp
   archival_serve_credit_equivalence.cpp
@@ -127,6 +129,7 @@ set(unit_tests_sources
   tx_extra_pqc_field_shape.cpp
   deferred_insertion.cpp
   economics_b5_fee_coinbase.cpp
+  economics_tx_volume_window.cpp
   pruned_tx_hash_parity.cpp
   tx_data_pruning_lmdb.cpp
   tx_prunable_region_sole_occupant.cpp

@@ -53,7 +53,7 @@ use std::collections::VecDeque;
 
 use serde::Serialize;
 use shekyl_economics::params::TX_VOLUME_WINDOW;
-use shekyl_economics::{base_block_reward, EconomicParams, BLOCKS_PER_YEAR};
+use shekyl_economics::{base_block_reward, EconomicParams, TxVolume, BLOCKS_PER_YEAR};
 
 use crate::fee_ladder::{
     advance_traced_state, age_state, correction_factor_ratio, AgeState, Rng, FULL_REWARD_ZONE_V5,
@@ -136,7 +136,8 @@ fn floor_rate(base_reward: u64, median: u64, c_scaled: u64) -> u128 {
 /// Which SMA the arm feeds `C` with.
 #[derive(Serialize, Clone, Copy, PartialEq, Eq)]
 pub enum Sma {
-    /// `tx_count_sum / 720`, truncated — what `get_tx_volume_avg` returns.
+    /// `tx_count_sum / 720`, truncated — what `get_tx_volume_avg` returned
+    /// before FL-R24 (PR A).
     Integer,
     /// `tx_count_sum : baseline·720` — the same quotient, unrounded.
     Exact,
@@ -159,19 +160,14 @@ fn c_for(sum: u64, unit: u64, sma: Sma, ag: u64, height: u64, params: &EconomicP
     let window = VOLUME_WINDOW as u64;
     match sma {
         Sma::Integer => correction_factor_ratio(
-            sum / (unit * window),
-            params.tx_volume_baseline,
+            TxVolume::per_block(sum / (unit * window)),
             ag,
             height,
             params,
         ),
-        Sma::Exact => correction_factor_ratio(
-            sum,
-            params.tx_volume_baseline * unit * window,
-            ag,
-            height,
-            params,
-        ),
+        Sma::Exact => {
+            correction_factor_ratio(TxVolume::window(sum, unit * window), ag, height, params)
+        }
     }
     .c_scaled
 }

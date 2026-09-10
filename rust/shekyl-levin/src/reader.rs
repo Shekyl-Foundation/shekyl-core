@@ -92,15 +92,13 @@ pub enum Received {
     Response {
         /// Command identifier (matches the request).
         command: u32,
-        /// Command-specific return code.
-        return_code: i32,
         /// Opaque payload bytes.
         payload: Vec<u8>,
     },
 }
 
 enum State {
-    /// Waiting for a complete 33-byte header.
+    /// Waiting for a complete 29-byte header.
     Head,
     /// Header parsed; waiting for `payload_len` bytes of body.
     Body(BucketHead),
@@ -446,7 +444,6 @@ fn classify(head: &BucketHead, payload: Vec<u8>) -> Received {
     if head.protocol_version == PROTOCOL_VERSION_1 && head.flags.contains(Flags::RESPONSE) {
         Received::Response {
             command: head.command,
-            return_code: head.return_code,
             payload,
         }
     } else if head.expects_response() {

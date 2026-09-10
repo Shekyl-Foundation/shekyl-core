@@ -38,7 +38,7 @@ using namespace cryptonote;
 namespace {
 
 // Reports open for Blockchain::init and a busy prior block so
-// get_tx_volume_avg(1) is above SHEKYL_TX_VOLUME_BASELINE — with an empty
+// get_tx_volume_window(1) is above SHEKYL_TX_VOLUME_BASELINE — with an empty
 // chain the burn percentage is zero and the fee split degenerates to
 // miner-takes-all, which would leave the fee-side foreclosure untested.
 class B5TestDB: public BaseTestDB
@@ -125,15 +125,16 @@ B5Operands expected_operands(const Blockchain& bc)
   const uint64_t median = bc.get_current_cumulative_block_weight_median();
   // Same DB-derived operand the production check reads (B5TestDB's busy
   // prior block makes it exceed the burn baseline).
-  const uint64_t tx_volume_avg = bc.get_tx_volume_avg(kBlockHeight);
-  EXPECT_GT(tx_volume_avg, 0u);
+  const shekyl::tx_volume_window tx_volume = bc.get_tx_volume_window(kBlockHeight);
+  EXPECT_GT(tx_volume.tx_count_sum, 0u);
+  EXPECT_GT(tx_volume.blocks, 0u);
   EXPECT_TRUE(get_block_reward(median, 0, kAlreadyGenerated, ops.base_reward,
-    kHfVersion, tx_volume_avg));
+    kHfVersion, tx_volume));
   ops.split = shekyl::compute_emission_split(ops.base_reward, kBlockHeight,
     /*genesis_ng_height=*/0);
   // n = 0 is the same parent-state operand the production check reads:
   // B5TestDB's curve tree is empty, so parent_frozen_segment_count yields 0.
-  ops.burn = shekyl::compute_fee_burn(kFee, tx_volume_avg,
+  ops.burn = shekyl::compute_fee_burn(kFee, tx_volume,
     kAlreadyGenerated, /*frozen_segment_count=*/0);
   return ops;
 }

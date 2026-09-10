@@ -72,7 +72,7 @@ bool gen_uint_overflow_base::check_tx_verification_context(const cryptonote::tx_
 
 bool gen_uint_overflow_base::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*block*/)
 {
-  return m_last_valid_block_event_idx < event_idx ? bvc.m_verifivation_failed | bvc.m_marked_as_orphaned : !bvc.m_verifivation_failed;
+  return m_last_valid_block_event_idx < event_idx ? cryptonote::block_rejected(bvc) || cryptonote::block_orphaned(bvc) : !cryptonote::block_rejected(bvc);
 }
 
 bool gen_uint_overflow_base::mark_last_valid_block(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events)
