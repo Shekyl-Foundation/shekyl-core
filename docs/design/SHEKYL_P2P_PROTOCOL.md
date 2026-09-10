@@ -53,6 +53,10 @@ been opened as a named round** — the work landed through ordinary lanes instea
 document reconciled the two. **UPDATE 2026-09-09:** PWD-B7's typed drop
 verdict is the next instance of that pattern (`shekyl-peer-policy`, FFI
 `shekyl_drop_verdict_severs`; row flipped IMPLEMENTED below).
+**UPDATE 2026-09-10:** the block-ingest twin of that verdict
+(`BlockIngest`, `bvc.m_outcome`) lands on the same row — still
+IMPLEMENTED; P2P asks `shekyl_block_announce_action` /
+`shekyl_block_sync_action` rather than failed-set-ness.
 
 **UPDATE 2026-09-09:** PWD-B3 / PWD-B3a / PWD-B4 landed (see rows below).
 PWD-E7 / PWD-E9 landed the same day on `dev` (#672). PWD-B6 landed in #677;
@@ -136,7 +140,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **B4** places B3a's ingress check | **IMPLEMENTED** | `shekyl_levin_ingress_admit` + `get_max_bytes(command, flags)` on outer and inner header parse; decompress uses the cached cap; codec still round-trips unknown bits (PWC-A6) | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
 | **B5** — | **NEVER RULED** | appears exactly once tree-wide, in `P2P_2_DISPATCH_BRIEF.md`; dispatched and never dispositioned | n/a — unruled decision, not a status |
 | **B6** one block path | **IMPLEMENTED** | 2001 deleted; 2008 is the sole path. `HANDLE_NOTIFY_T2(NOTIFY_NEW_COMPACT_BLOCK)` at `cryptonote_protocol_handler.h:99`; `relay_block` emits `NOTIFY_NEW_COMPACT_BLOCK::ID` at `.inl:2725`; no `NOTIFY_NEW_BLOCK` handler remains. Identifiers are `COMPACT_*` (ids still 2008/2009). Two-limb test `block_propagation_has_exactly_one_command` refuses 2001 (`LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED`) and still dispatches 2008. | **YES** — landed; do it before nodes exist |
-| **B7** drop only when attributable | **IMPLEMENTED** | typed verdict in `shekyl-peer-policy`; FFI `shekyl_drop_verdict_severs`; `m_no_drop_offense` gone as a field. Three sites (tx relay, announce size, block-sync prepare). `drop_connections`-by-host and the score floor remain deferred (E9/E5), not this row | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
+| **B7** drop only when attributable | **IMPLEMENTED** | typed verdict in `shekyl-peer-policy`; FFI `shekyl_drop_verdict_severs`; `m_no_drop_offense` gone as a field. Three sites (tx relay, announce size, block-sync prepare). UPDATE 2026-09-10: block twin — `BlockIngest` / `bvc.m_outcome`; announce and sync ask `shekyl_block_announce_action` / `shekyl_block_sync_action`, not failed-set-ness. `drop_connections`-by-host and the score floor remain deferred (E9/E5), not this row | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
 | **B8** delete the undriven timer | **IMPLEMENTED** | #629 deleted `m_bad_peer_checker`, `network_address_old`, `connection_entry_base` | done |
 | **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
 | **B10** delete the back-ping | **IMPLEMENTED** | #643 (`f98de6b30`) deleted `COMMAND_PING` and the whole back-ping; `p2p_protocol_defs.h:235` records it. *Records-was: this sweep first scored it NOT IMPLEMENTED — see the correction note below* | **YES**, and already satisfied |
@@ -3715,7 +3719,15 @@ rather than inheriting whatever the default happens to be.
 > form failure as internal keeps one hostile connection alive for PWD-B1's
 > token bucket to charge, while the opposite default partitions the network
 > on our own bugs. A boolean whose absence means "droppable" is the unsound
-> surface; the type is the gate. The FOLLOWUPS queue carries this action.
+> surface; the type is the gate.
+>
+> **UPDATE 2026-09-10:** the remaining block-path drop on
+> `bvc.m_verifivation_failed` set-ness is closed. `block_verification_context`
+> carries `m_outcome` (`BlockIngest`) and `m_drop_verdict`; P2P asks
+> `shekyl_block_announce_action` / `shekyl_block_sync_action`. A rejected
+> block does not sever unless the drop slot severs. Missing-txs re-requests;
+> DegradedKeep / AltStored / Orphaned / AlreadyExists are named arms, not
+> both-false.
 >
 > **The announce path, checked rather than assumed (same review round).** The
 > parse arm of `handle_notify_new_compact_block`
