@@ -36,11 +36,6 @@ const MAINNET_NETWORK_ID: [u8; 16] = [
     0x55, 0x6C, 0xA9, 0x70, 0x8F, 0xF9, 0x1F, 0x7A, 0x40, 0x69, 0xDA, 0xF3, 0xFC, 0x55, 0xBB, 0xBD,
 ];
 
-/// C++ p2p command handlers return `1` on success (`net_node.inl`
-/// `handle_handshake` / `handle_ping`). `LEVIN_OK` (0) is the protocol
-/// layer, not the command-handler return.
-const COMMAND_OK: i32 = 1;
-
 struct Daemon {
     child: Child,
     data_dir: PathBuf,
@@ -293,20 +288,16 @@ impl Session {
             .unwrap_or_else(|e| panic!("write: {e}; log tail:\n{}", log_tail(&self.log_path)));
     }
 
-    fn invoke_map<T: PortableMap>(&mut self, command: u32, body: &T) -> (i32, Vec<u8>) {
+    fn invoke_map<T: PortableMap>(&mut self, command: u32, body: &T) -> Vec<u8> {
         let payload = body.store().expect("store");
         self.send(&invoke(command, &payload));
         self.recv_response(command)
     }
 
-    fn recv_response(&mut self, want: u32) -> (i32, Vec<u8>) {
+    fn recv_response(&mut self, want: u32) -> Vec<u8> {
         loop {
             match self.next_message() {
-                Received::Response {
-                    command,
-                    return_code,
-                    payload,
-                } if command == want => return (return_code, payload),
+                Received::Response { command, payload } if command == want => return payload,
                 Received::Request { command, payload }
                     if command == COMMAND_REQUEST_SUPPORT_FLAGS =>
                 {
@@ -316,7 +307,7 @@ impl Session {
                     }
                     .store()
                     .expect("store support-flags");
-                    self.send(&response(COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_OK, &body));
+                    self.send(&response(COMMAND_REQUEST_SUPPORT_FLAGS, &body));
                 }
                 Received::Notification { command, .. } => {
                     // Fresh regtest may still emit cryptonote notifies; maps
@@ -394,8 +385,7 @@ fn rust_client_handshakes_with_shekyld() {
         },
         nonce: CLIENT_NONCE,
     };
-    let (rc, payload) = session.invoke_map(COMMAND_HANDSHAKE, &req);
-    assert_eq!(rc, COMMAND_OK, "handshake return_code");
+    let payload = session.invoke_map(COMMAND_HANDSHAKE, &req);
     let hs = HandshakeResponse::load(&payload).expect("decode handshake response");
     assert_eq!(hs.node_data.network_id, MAINNET_NETWORK_ID);
     assert_eq!(hs.payload_data.current_height, tip.height);
@@ -416,19 +406,17 @@ fn rust_client_handshakes_with_shekyld() {
         "the advertised host was adopted; only the port is admissible: {peers}"
     );
 
-    let (rc, payload) = session.invoke_map(
+    let payload = session.invoke_map(
         COMMAND_TIMED_SYNC,
         &TimedSyncRequest {
             payload_data: req.payload_data.clone(),
         },
     );
-    assert_eq!(rc, COMMAND_OK, "timed-sync return_code");
     let ts = TimedSyncResponse::load(&payload).expect("decode timed-sync");
     assert_eq!(ts.payload_data.top_id, tip.top_id);
     assert_eq!(ts.payload_data.current_height, tip.height);
 
-    let (rc, payload) = session.invoke_map(COMMAND_REQUEST_SUPPORT_FLAGS, &SupportFlagsRequest);
-    assert_eq!(rc, COMMAND_OK, "support-flags return_code");
+    let payload = session.invoke_map(COMMAND_REQUEST_SUPPORT_FLAGS, &SupportFlagsRequest);
     let flags = SupportFlagsResponse::load(&payload).expect("decode support-flags");
     assert_eq!(flags.support_flags, SupportFlags::ADVERTISED);
 }

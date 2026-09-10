@@ -332,6 +332,20 @@
 
 ### Removed
 
+- **Levin `return_code` is deleted (PWD-B5).** The bucket header is **29
+  bytes**, not 33: the inherited signed `i32` at old offset 21 is gone, and
+  flags follow command immediately. Notifications always wrote `0`; the
+  three remaining invokes put a handler `int` on the wire that the initiator
+  only tested as `code < 0`, which also fires for local transport errors
+  that never hit the wire. Handshake failures hang up after sending Levin
+  "success." Application success or failure is the payload or the close.
+  A later NACK is a command body, not a header field and not a flag bit
+  (PWD-B4 rejects unknown bits). Local invoke-callback `int` stays for
+  timeout/destroyed — that is API, not wire. No protocol version moves:
+  `SHEKYL_PROTOCOL_VERSION` denotes the crypto era, and there is no
+  wire-command-set version to bump. Pre-genesis: no compatibility with
+  33-byte peers.
+
 - **One block-propagation path, not two (PWD-B6).** `NOTIFY_NEW_BLOCK`
   (2001) is deleted; command **2008** is the sole block announce. The two
   were already one code path — 2001's handler forwarded into 2008 — and

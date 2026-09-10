@@ -51,7 +51,6 @@ namespace levin
 		uint64_t m_cb;
 		uint8_t  m_have_to_return_data;
 		uint32_t m_command;
-		int32_t  m_return_code;
 		uint32_t m_reservedA; //probably some flags in future
 		uint32_t m_reservedB; //probably some check sum in future
 	};
@@ -66,19 +65,26 @@ namespace levin
     uint64_t m_cb;
     uint8_t  m_have_to_return_data;
     uint32_t m_command;
-    int32_t  m_return_code;
     uint32_t m_flags;
     uint32_t m_protocol_version;
   };
 #pragma pack(pop)
 
+  // m_return_code (i32) is deleted (PWD-B5 / PWC-A7 / PW-12): inherited
+  // RPC-over-Levin status. Notifications always wrote 0; the three remaining
+  // invokes (handshake / timed-sync / support-flags) put the handler's int on
+  // the wire and the initiator only tested `code < 0`, which also fires for
+  // local transport errors that never hit the wire. Application success or
+  // failure is the payload or hanging up. A later NACK is a command body, not
+  // a header i32. The slot is retired, never reused.
+  //
   // The on-wire header size. Every other Levin wire constant is a literal a
   // grep gate can compare against the Rust port
   // (rust/shekyl-levin/src/header.rs); this one is only ever `sizeof`, so
   // without a literal to anchor, a change to the struct above would drift
   // silently past `scripts/ci/check_levin_constant_parity.sh`. Do not delete
   // or relax: the gate reads this number.
-  static_assert(sizeof(bucket_head2) == 33, "Levin bucket header must stay 33 bytes on the wire");
+  static_assert(sizeof(bucket_head2) == 29, "Levin bucket header must stay 29 bytes on the wire");
 
 
 constexpr const std::chrono::milliseconds LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED{0};
@@ -140,7 +146,7 @@ constexpr const std::chrono::milliseconds LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED{0}
   //! Provides space for levin (p2p) header, so that payload can be sent without copy
   class message_writer
   {
-    byte_slice finalize(uint32_t command, uint32_t flags, uint32_t return_code, bool expect_response);
+    byte_slice finalize(uint32_t command, uint32_t flags, bool expect_response);
   public:
     using header = bucket_head2;
 
@@ -158,11 +164,11 @@ constexpr const std::chrono::milliseconds LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED{0}
       return buffer.size() < sizeof(header) ? 0 : buffer.size() - sizeof(header);
     }
 
-    byte_slice finalize_invoke(uint32_t command) { return finalize(command, LEVIN_PACKET_REQUEST, 0, true); }
-    byte_slice finalize_notify(uint32_t command) { return finalize(command, LEVIN_PACKET_REQUEST, 0, false); }
-    byte_slice finalize_response(uint32_t command, uint32_t return_code)
+    byte_slice finalize_invoke(uint32_t command) { return finalize(command, LEVIN_PACKET_REQUEST, true); }
+    byte_slice finalize_notify(uint32_t command) { return finalize(command, LEVIN_PACKET_REQUEST, false); }
+    byte_slice finalize_response(uint32_t command)
     {
-      return finalize(command, LEVIN_PACKET_RESPONSE, return_code, false);
+      return finalize(command, LEVIN_PACKET_RESPONSE, false);
     }
 
     //! Has space for levin header until a finalize method is used

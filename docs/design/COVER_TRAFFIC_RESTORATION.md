@@ -1218,7 +1218,7 @@ arm C; it does not make A's baseline stop moving.
 sources — jitter (either way), unbound slots (under), discards (neither) — and
 **none of them can produce an over-reading**. So an over-reading looks
 unambiguously like defect 1. But counting at the IP layer adds TCP/IP framing
-(~2–5 %) and the levin header adds ~33 B per 20 480 B window (~0.16 %),
+(~2–5 %) and the levin header adds ~29 B per 20 480 B window (~0.14 %),
 manufacturing the one direction this section says is impossible. Count at the
 node→proxy sockets, at the levin layer.
 

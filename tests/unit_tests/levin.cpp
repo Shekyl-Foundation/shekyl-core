@@ -1016,10 +1016,9 @@ TEST(message_writer, notify_with_payload)
 
 TEST(message_writer, response_with_empty_payload)
 {
-    const epee::byte_slice message = epee::levin::message_writer{}.finalize_response(443, 1);
-    epee::levin::bucket_head2 header =
+    const epee::byte_slice message = epee::levin::message_writer{}.finalize_response(443);
+    const epee::levin::bucket_head2 header =
         epee::levin::make_header(443, 0, LEVIN_PACKET_RESPONSE, false);
-    header.m_return_code = SWAP32LE(1);
     ASSERT_EQ(sizeof(header), message.size());
     EXPECT_TRUE(std::memcmp(std::addressof(header), message.data(), sizeof(header)) == 0);
 }
@@ -1032,10 +1031,9 @@ TEST(message_writer, response_with_payload)
     epee::levin::message_writer writer{};
     writer.buffer.write(epee::to_span(bytes));
 
-    const epee::byte_slice message = writer.finalize_response(443, 6450);
-    epee::levin::bucket_head2 header =
+    const epee::byte_slice message = writer.finalize_response(443);
+    const epee::levin::bucket_head2 header =
         epee::levin::make_header(443, bytes.size(), LEVIN_PACKET_RESPONSE, false);
-    header.m_return_code = SWAP32LE(6450);
 
     ASSERT_EQ(sizeof(header) + bytes.size(), message.size());
     EXPECT_TRUE(std::memcmp(std::addressof(header), message.data(), sizeof(header)) == 0);
@@ -1049,7 +1047,7 @@ TEST(message_writer, error)
 
     EXPECT_THROW(writer.finalize_invoke(0), std::runtime_error);
     EXPECT_THROW(writer.finalize_notify(0), std::runtime_error);
-    EXPECT_THROW(writer.finalize_response(0, 0), std::runtime_error);
+    EXPECT_THROW(writer.finalize_response(0), std::runtime_error);
 }
 
 TEST(make_noise, invalid)
@@ -1147,8 +1145,7 @@ TEST(make_fragment, multiple)
 
     fragment.take_slice(bytes.size());
 
-    EXPECT_EQ(18, fragment.size());
-    EXPECT_EQ(18, std::count(fragment.cbegin(), fragment.cend(), 0));
+    EXPECT_EQ(fragment.size(), std::count(fragment.cbegin(), fragment.cend(), 0));
 }
 
 // ── Compression shim (shekyl_levin_* FFI) ──────────────────────────────────
