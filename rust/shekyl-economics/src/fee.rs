@@ -160,6 +160,10 @@ pub fn fee_correction_quantized(
     hysteresis_step(c, prev_cq_scaled)
 }
 
+/// The smallest exactly-representable raw `C`: the floor [`hysteresis_step`]
+/// applies before snapping, and therefore the smallest band state there is.
+const MIN_REPRESENTABLE_C: u64 = SCALE >> 6;
+
 /// The pow2 ceiling snap of a raw correction `C`, behind the §7
 /// hysteresis band.
 ///
@@ -189,7 +193,6 @@ pub fn fee_correction_quantized(
 /// the caller's relay-floor clamp then lifts (§5.2's acceptance identity).
 #[must_use]
 pub fn hysteresis_step(c_scaled: u64, prev_cq_scaled: u64) -> u64 {
-    const MIN_REPRESENTABLE_C: u64 = SCALE >> 6;
     const HYSTERESIS_MARGIN_MILLI: u128 = 30; // 3%
     let c = c_scaled.max(MIN_REPRESENTABLE_C);
     let cq = quantize_pow2_ceil(c);
@@ -237,6 +240,34 @@ pub fn hysteresis_fold(cells_scaled: &[u64]) -> Option<u64> {
         cq = hysteresis_step(c, cq);
     }
     Some(cq)
+}
+
+/// Is a raw correction **settled** — clear of every pow2 boundary by more
+/// than the §7 margin, so the band's state at it is `⌈c⌉₂` **whatever the
+/// history** (`FEE_LADDER_DERIVATION.md` §10.14.2)?
+///
+/// [`hysteresis_step`] holds a `prev ≠ ⌈c⌉₂` only when `c` lies inside
+/// `[(prev/2)(1−m), prev(1+m)]`. With `cq = ⌈c⌉₂` and `c ∈ (cq/2, cq]`,
+/// the only powers of two that window can reach are `2cq` (needs `c` within
+/// the margin *below* the boundary `cq`) and `cq/2` (needs `c` within the
+/// margin *above* the boundary `cq/2`). So a sample is settled iff the step
+/// from **both** neighbours lands on `cq` — and that is how this is
+/// computed: through the step itself, never through a second copy of the
+/// margin arithmetic, so the predicate and the band cannot drift apart.
+///
+/// This is what lets a fold anchor at *the last settled sample* and be the
+/// exact recurrence rather than an approximation of it:
+/// `hysteresis_fold(seq) == hysteresis_fold(&seq[j..])` for every settled
+/// `j` (the property test below is that theorem).
+#[must_use]
+pub fn hysteresis_settled(c_scaled: u64) -> bool {
+    let cq = hysteresis_step(c_scaled, 0);
+    // `cq / 2` below the representable floor is not a state the band can
+    // be in (every state is the snap of a floored `c`), so only the upper
+    // neighbour can hold there.
+    let lower_holds = cq / 2 >= MIN_REPRESENTABLE_C && hysteresis_step(c_scaled, cq / 2) != cq;
+    let upper_holds = hysteresis_step(c_scaled, cq.saturating_mul(2)) != cq;
+    !(lower_holds || upper_holds)
 }
 
 /// Wallet-side emission-claim **value floor**, in atomic units
@@ -538,6 +569,93 @@ mod tests {
         }
         assert_eq!(hysteresis_fold(&span[..4]), Some(2 * SCALE));
         assert_eq!(hysteresis_fold(&span), Some(SCALE));
+    }
+
+    /// A deterministic ensemble of raw-`C` sequences **biased toward the
+    /// pow2 boundaries** (where the settled predicate is false and the band
+    /// actually does something), so the two theorems below are exercised
+    /// on the hard region rather than on samples the snap decides alone.
+    fn boundary_biased_sequences() -> Vec<Vec<u64>> {
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        (0..200)
+            .map(|_| {
+                let len = 8 + (next() % 40) as usize;
+                (0..len)
+                    .map(|_| {
+                        let boundary = SCALE << (next() % 6);
+                        // ±6 % of a boundary, half the draws inside the 3 % margin.
+                        let milli = next() % 121; // 0 ..= 120
+                        boundary / 1000 * (940 + milli)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// §10.14.2's settled-state theorem, as a test rather than a claim: at
+    /// a settled sample the band's state is `⌈c⌉₂` from EVERY `prev`, hence
+    /// the fold from any settled index equals the full fold.
+    #[test]
+    fn hysteresis_fold_from_any_settled_index_is_the_full_fold() {
+        let mut settled_seen = 0u32;
+        let mut unsettled_seen = 0u32;
+        for seq in boundary_biased_sequences() {
+            let full = hysteresis_fold(&seq);
+            for (j, &c) in seq.iter().enumerate() {
+                let cq = hysteresis_step(c, 0);
+                if hysteresis_settled(c) {
+                    settled_seen += 1;
+                    for prev in [0, cq / 4, cq / 2, cq, 2 * cq, 4 * cq, SCALE >> 6] {
+                        assert_eq!(hysteresis_step(c, prev), cq, "c={c} prev={prev}");
+                    }
+                    assert_eq!(hysteresis_fold(&seq[j..]), full, "j={j} c={c}");
+                } else {
+                    unsettled_seen += 1;
+                    // The predicate is exact, not conservative: an unsettled
+                    // sample really IS held by some neighbour.
+                    let held = hysteresis_step(c, 2 * cq) != cq
+                        || (cq / 2 >= (SCALE >> 6) && hysteresis_step(c, cq / 2) != cq);
+                    assert!(held, "c={c} declared unsettled but no neighbour holds it");
+                }
+            }
+        }
+        // The ensemble has to reach both branches or the test proved nothing.
+        assert!(
+            settled_seen > 500 && unsettled_seen > 500,
+            "{settled_seen}/{unsettled_seen}"
+        );
+    }
+
+    /// §10.14.2's monotonicity invariant for the exact recurrence: the band
+    /// over a sequence changes value no more often than the snap of that
+    /// sequence does. (The bounded-scan arm can break this only through
+    /// its fallback anchor; that is measured in the sim, not asserted here.)
+    #[test]
+    fn banded_sequence_transitions_never_exceed_snap_transitions() {
+        for seq in boundary_biased_sequences() {
+            let mut snap_transitions = 0u32;
+            let mut band_transitions = 0u32;
+            let mut prev_snap = hysteresis_step(seq[0], 0);
+            let mut prev_band = prev_snap;
+            for &c in &seq[1..] {
+                let snap = hysteresis_step(c, 0);
+                let band = hysteresis_step(c, prev_band);
+                snap_transitions += u32::from(snap != prev_snap);
+                band_transitions += u32::from(band != prev_band);
+                prev_snap = snap;
+                prev_band = band;
+            }
+            assert!(
+                band_transitions <= snap_transitions,
+                "{band_transitions} > {snap_transitions}"
+            );
+        }
     }
 
     #[test]

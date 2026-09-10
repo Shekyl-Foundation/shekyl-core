@@ -41,7 +41,8 @@ pub use escalation::{
 };
 pub use fee::{
     checked_corrected_fee_ladder, corrected_fee_ladder, fee_correction_quantized, hysteresis_fold,
-    hysteresis_step, quantize_pow2_ceil, round_money_up_2, FeeLadder, EMISSION_CLAIM_FEE_FLOOR,
+    hysteresis_settled, hysteresis_step, quantize_pow2_ceil, round_money_up_2, FeeLadder,
+    EMISSION_CLAIM_FEE_FLOOR,
 };
 pub use params::{
     calc_stake_ratio, EconomicParams, EconomicParamsError, BLOCKS_PER_YEAR, CALIBRATION_GENERATION,
