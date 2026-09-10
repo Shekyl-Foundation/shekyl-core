@@ -39,8 +39,8 @@
 //!
 //! - the epee `portable_storage` **codec** — that is
 //!   `shekyl-portable-storage` (LV-2a). This crate owns the typed Levin
-//!   maps on top of it (LV-2b): handshake / timed-sync / ping /
-//!   support-flags (1001 / 1002 / 1003 / 1007), `network_address`, and
+//!   maps on top of it (LV-2b): handshake / timed-sync /
+//!   support-flags (1001 / 1002 / 1007), `network_address`, and
 //!   notifies 2002–2004 / 2006–2010. Cryptonote blobs stay opaque bytes
 //!   (`shekyl-wire`); RPC maps stay out. Live `shekyld` dual-stack is
 //!   the `#[ignore]` harness `tests/dual_stack.rs` (`SHEKYLD_BIN`; no
@@ -173,13 +173,13 @@ pub use message::{invoke, notify, response};
 pub use payload::Error as PayloadError;
 pub use payload::{
     BasicNodeData, BlockCompleteEntry, CoreSyncData, GetTxpoolComplement, HandshakeRequest,
-    HandshakeResponse, NetworkAddress, NewFluffyBlock, NewTransactions, PeerlistEntry, PortableMap,
-    RequestChain, RequestFluffyMissingTx, RequestGetObjects, ResponseChainEntry,
-    ResponseGetObjects, SupportFlagsRequest, SupportFlagsResponse, TimedSyncRequest,
+    HandshakeResponse, NetworkAddress, NewCompactBlock, NewTransactions, PeerlistEntry,
+    PortableMap, RequestChain, RequestCompactMissingTx, RequestGetObjects, ResponseChainEntry,
+    ResponseGetObjects, SupportFlags, SupportFlagsRequest, SupportFlagsResponse, TimedSyncRequest,
     TimedSyncResponse, TxBlobEntry, ADDR_I2P, ADDR_IPV4, ADDR_IPV6, ADDR_TOR,
     ATTESTATION_WITNESS_MAX_BYTES, COMMAND_HANDSHAKE, COMMAND_REQUEST_SUPPORT_FLAGS,
-    COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_FLUFFY_BLOCK,
-    NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_CHAIN, NOTIFY_REQUEST_FLUFFY_MISSING_TX,
+    COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK,
+    NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_CHAIN, NOTIFY_REQUEST_COMPACT_MISSING_TX,
     NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_RESPONSE_CHAIN_ENTRY, NOTIFY_RESPONSE_GET_OBJECTS,
 };
 pub use reader::{BucketReader, Received};

@@ -191,8 +191,8 @@ is the live set:
 | 2004 | `NOTIFY_RESPONSE_GET_OBJECTS` | notify |
 | 2006 | `NOTIFY_REQUEST_CHAIN` | notify |
 | 2007 | `NOTIFY_RESPONSE_CHAIN_ENTRY` | notify |
-| 2008 | `NOTIFY_NEW_FLUFFY_BLOCK` | notify |
-| 2009 | `NOTIFY_REQUEST_FLUFFY_MISSING_TX` | notify |
+| 2008 | `NOTIFY_NEW_COMPACT_BLOCK` | notify |
+| 2009 | `NOTIFY_REQUEST_COMPACT_MISSING_TX` | notify |
 | 2010 | `NOTIFY_GET_TXPOOL_COMPLEMENT` | notify |
 
 The companion edit to `LEVIN_PROTOCOL.md` in this pin's landing is the
@@ -224,8 +224,8 @@ headers and are load-bearing for handshake peerlists.
 | `NOTIFY_RESPONSE_GET_OBJECTS` request | `cryptonote_protocol_defs.h` | 2004 |
 | `NOTIFY_REQUEST_CHAIN` request | `cryptonote_protocol_defs.h` | 2006 |
 | `NOTIFY_RESPONSE_CHAIN_ENTRY` request | `cryptonote_protocol_defs.h` | 2007 |
-| `NOTIFY_NEW_FLUFFY_BLOCK` request | `cryptonote_protocol_defs.h` | 2008 |
-| `NOTIFY_REQUEST_FLUFFY_MISSING_TX` request | `cryptonote_protocol_defs.h` | 2009 |
+| `NOTIFY_NEW_COMPACT_BLOCK` request | `cryptonote_protocol_defs.h` | 2008 |
+| `NOTIFY_REQUEST_COMPACT_MISSING_TX` request | `cryptonote_protocol_defs.h` | 2009 |
 | `NOTIFY_GET_TXPOOL_COMPLEMENT` request | `cryptonote_protocol_defs.h` | 2010 |
 
 ### 6.2 Address union (LV-2b, nested under `peerlist_entry.adr`)

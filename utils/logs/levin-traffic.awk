@@ -18,8 +18,8 @@ commands["command-2003"] = "REQUEST_GET_OBJECTS"
 commands["command-2004"] = "RESPONSE_GET_OBJECTS"
 commands["command-2006"] = "NOTIFY_REQUEST_CHAIN"
 commands["command-2007"] = "RESPONSE_CHAIN_ENTRY"
-commands["command-2008"] = "NOTIFY_NEW_FLUFFY_BLOCK"
-commands["command-2009"] = "NOTIFY_REQUEST_FLUFFY_MISSING_TX"
+commands["command-2008"] = "NOTIFY_NEW_COMPACT_BLOCK"
+commands["command-2009"] = "NOTIFY_REQUEST_COMPACT_MISSING_TX"
 }
 
 /	net.p2p.traffic	/ {

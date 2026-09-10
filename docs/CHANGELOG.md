@@ -300,21 +300,21 @@
 ### Removed
 
 - **One block-propagation path, not two (PWD-B6).** `NOTIFY_NEW_BLOCK`
-  (2001) is deleted; `NOTIFY_NEW_FLUFFY_BLOCK` (2008) is the sole block
-  path. The two were already one code path — 2001's handler built a fluffy
-  request and returned `handle_notify_new_fluffy_block` — and nothing ever
-  sent 2001, so this removes a wire name rather than a behaviour. It existed
-  only because Monero needed both during a fluffy rollout this chain has no
-  history of. `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS` goes with it: it was
-  advertised and never tested, and with one path it would advertise a
-  capability distinction that no longer exists; `0x01` is left unassigned so
-  an old peer's bit cannot be read as a new meaning. On the Rust side the
-  change is a **rename**, not a deletion — `NewFluffyBlock` was an alias for
-  `NewBlock` and the only `PortableMap` was on `NewBlock`, so the surviving
-  path's serializer lived under the deleted command's name. No protocol
-  version moves: `SHEKYL_PROTOCOL_VERSION` denotes the crypto era, and there
-  is no wire-command-set version to bump — a gap that costs nothing now,
-  before any nodes exist, and would cost a second wire change afterwards.
+  (2001) is deleted; command **2008** is the sole block announce. The two
+  were already one code path — 2001's handler forwarded into 2008 — and
+  nothing ever sent 2001. Command ids **2008 / 2009 are unchanged**. The
+  identifiers are `NOTIFY_NEW_COMPACT_BLOCK` / `NOTIFY_REQUEST_COMPACT_MISSING_TX`
+  (Rust: `NewCompactBlock` / `RequestCompactMissingTx`): `FLUFFY` collides
+  with Dandelion++ stem/fluff (`dandelionpp_fluff` on 2002) and names a
+  Monero rollout this chain has no history of. Compact, not "just block":
+  2008 is header-first (relay clears `b.txs`); full blocks still travel on
+  `NOTIFY_RESPONSE_GET_OBJECTS` (2004) during sync. `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS`
+  (0x01) goes with 2001; `0x01` is left unassigned. Advertised flags live
+  as `shekyl-levin::SupportFlags::ADVERTISED` (zstd only), pinned against
+  the C++ macros by `check_levin_constant_parity.sh`. The obsolete
+  `--fluffy-blocks` CLI flag is deleted. No protocol version moves:
+  `SHEKYL_PROTOCOL_VERSION` denotes the crypto era, and there is no
+  wire-command-set version to bump.
 
 - **The anchor peerlist mechanism is deleted whole** — the persisted anchor
   section, `anchor_peerlist_entry`, its container and manager methods, the

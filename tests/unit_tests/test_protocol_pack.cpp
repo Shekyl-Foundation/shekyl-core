@@ -108,7 +108,7 @@ TEST(protocol_pack, block_complete_entry_attestation_witness_roundtrip)
 }
 
 // The transport cap is enforced BY the codec, so no p2p ingress can bypass it — the
-// fluffy handoff, the get_objects response loop, and any path added later are all
+// compact-block announce, the get_objects response loop, and any path added later are all
 // covered by construction rather than by a hand-placed check each one remembers.
 // This is the only test standing behind that enforcement; without it the three
 // deleted call-site checks would have been traded for an untested one.

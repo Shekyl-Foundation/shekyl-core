@@ -253,13 +253,8 @@
 #define P2P_IP_BLOCKTIME                                (60*60*24)  //24 hour
 #define P2P_IP_FAILS_BEFORE_BLOCK                       10
 
-// `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS` (0x01) is deleted with PWD-B6. Its only job
-// was telling fluffy-capable peers from 2001-only ones during Monero's rollout;
-// with one block path there is no distinction left to advertise, and a flag
-// claiming one would be a wire-visible statement that is false. Nothing ever
-// tested it — its only occurrences were this definition and the aggregate below.
-// 0x01 is left unassigned rather than reused, so an old peer's bit cannot be
-// read as a new meaning.
+// 0x01 is unassigned (former compact-vs-full capability bit). Do not reuse:
+// an old peer's bit must not pick up a new meaning.
 #define P2P_SUPPORT_FLAG_ZSTD_COMPRESSION               0x02
 #define P2P_SUPPORT_FLAGS                               (P2P_SUPPORT_FLAG_ZSTD_COMPRESSION)
 

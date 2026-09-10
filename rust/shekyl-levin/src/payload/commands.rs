@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Levin command 1001 / 1002 / 1003 / 1007 request and response maps.
+//! Levin command 1001 / 1002 / 1007 request and response maps.
 
 use shekyl_portable_storage::{Section, Value};
 
@@ -11,6 +11,7 @@ use super::error::Error;
 use super::get;
 use super::types::{
     insert_peerlist, peerlist_from_section, BasicNodeData, CoreSyncData, PeerlistEntry,
+    SupportFlags,
 };
 use super::PortableMap;
 
@@ -161,19 +162,19 @@ impl PortableMap for SupportFlagsRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupportFlagsResponse {
     /// Peer's `support_flags`.
-    pub support_flags: u32,
+    pub support_flags: SupportFlags,
 }
 
 impl PortableMap for SupportFlagsResponse {
     fn to_section(&self) -> Result<Section, Error> {
         let mut section = Section::new();
-        section.insert("support_flags", Value::UInt32(self.support_flags));
+        section.insert("support_flags", Value::UInt32(self.support_flags.bits()));
         Ok(section)
     }
 
     fn from_section(section: &Section) -> Result<Self, Error> {
         Ok(Self {
-            support_flags: get::u32_val(section, "support_flags")?,
+            support_flags: SupportFlags::from_bits(get::u32_val(section, "support_flags")?),
         })
     }
 }

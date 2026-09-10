@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Levin command schemas (LV-2b: 1001–1003 / 1007 and notifies 2002–2004 /
+//! Levin command schemas (LV-2b: 1001 / 1002 / 1007 and notifies 2002–2004 /
 //! 2006–2010).
 //!
 //! Encode/decode sit on `shekyl-portable-storage`. Cryptonote blobs stay
@@ -29,13 +29,13 @@ pub use commands::{
 pub use error::Error;
 pub use get::HASH_SIZE;
 pub use notifies::{
-    GetTxpoolComplement, NewFluffyBlock, NewTransactions, RequestChain, RequestFluffyMissingTx,
+    GetTxpoolComplement, NewCompactBlock, NewTransactions, RequestChain, RequestCompactMissingTx,
     RequestGetObjects, ResponseChainEntry, ResponseGetObjects, NOTIFY_GET_TXPOOL_COMPLEMENT,
-    NOTIFY_NEW_FLUFFY_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_CHAIN,
-    NOTIFY_REQUEST_FLUFFY_MISSING_TX, NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_RESPONSE_CHAIN_ENTRY,
+    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_CHAIN,
+    NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_RESPONSE_CHAIN_ENTRY,
     NOTIFY_RESPONSE_GET_OBJECTS,
 };
-pub use types::{BasicNodeData, CoreSyncData, PeerlistEntry};
+pub use types::{BasicNodeData, CoreSyncData, PeerlistEntry, SupportFlags};
 
 /// A C++ `BEGIN_KV_SERIALIZE_MAP` as a portable_storage section.
 pub trait PortableMap: Sized {

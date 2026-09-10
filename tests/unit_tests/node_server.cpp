@@ -166,23 +166,9 @@ static bool is_blocked(Server &server, const epee::net_utils::network_address &a
   return false;
 }
 
-// PWD-B6 collapsed block propagation to one command: NOTIFY_NEW_FLUFFY_BLOCK
-// (2008) is the sole path and NOTIFY_NEW_BLOCK (2001) is deleted. A removal
-// needs both limbs — that the command is gone AND that propagation still
-// works — because a bite on the first proves nothing about the second, and
-// "no callers" is a claim about a search rather than about what the removal
-// makes impossible.
-//
-// The discriminator is read from the macro rather than guessed:
-// BEGIN_INVOKE_MAP2 generates handle_invoke_map(..., bool& handled) and
-// END_INVOKE_MAP2 logs "Unknown command", leaves `handled` false and returns
-// LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED. So a deleted command is not
-// merely un-dispatched, it is actively refused, and that is observable.
-//
-// Note what does NOT cover this: the armed live-daemon regtest gates spawn a
-// single --offline daemon, so relay_block's for_each_connection iterates zero
-// peers and no block is ever put on a wire. There is no CI coverage of p2p
-// block relay; this unit test is the whole of it.
+// PWD-B6: 2008 is the sole block-announce command; 2001 is refused as unknown.
+// `handled` starts false because the invoke map sets it on a match and never
+// clears it. Live-daemon regtest is --offline and does not cover p2p relay.
 TEST(cryptonote_protocol_handler, block_propagation_has_exactly_one_command)
 {
   test_core pr_core;
@@ -190,22 +176,13 @@ TEST(cryptonote_protocol_handler, block_propagation_has_exactly_one_command)
   cryptonote::cryptonote_connection_context context{};
   epee::byte_stream out;
 
-  // A well-formed NOTIFY_NEW_FLUFFY_BLOCK body, so limb 2 fails on dispatch
-  // rather than on a parse it was never meant to test.
-  cryptonote::NOTIFY_NEW_FLUFFY_BLOCK::request fluffy{};
-  fluffy.current_blockchain_height = 1;
+  cryptonote::NOTIFY_NEW_COMPACT_BLOCK::request compact{};
+  compact.current_blockchain_height = 1;
   epee::byte_stream body;
-  ASSERT_TRUE(epee::serialization::store_t_to_binary(fluffy, body));
+  ASSERT_TRUE(epee::serialization::store_t_to_binary(compact, body));
   const epee::span<const uint8_t> in_buff{body.data(), body.size()};
 
-  // Limb 1 — the deleted command is refused. 2001 is written as a literal
-  // because the symbol it used to have is gone; that is the point.
   {
-    // `false`, exactly as CHAIN_LEVIN_NOTIFY_MAP2 initializes it in production.
-    // The map SETS `handled` on a match and never clears it, so "still false"
-    // is the observable for "nothing claimed this command". Initializing it
-    // true instead asserts a contract the macro does not have — this test was
-    // written that way first and said so by failing.
     bool handled = false;
     const int rc = cprotocol.handle_invoke_map(true, 2001, in_buff, out, context, handled);
     EXPECT_FALSE(handled) << "command 2001 is still dispatched somewhere";
@@ -213,14 +190,12 @@ TEST(cryptonote_protocol_handler, block_propagation_has_exactly_one_command)
         << "2001 must be refused as an unknown command, not silently ignored";
   }
 
-  // Limb 2 — the surviving command still reaches its handler. Without this,
-  // limb 1 is satisfied by deleting block propagation entirely.
   {
     bool handled = false;
-    cprotocol.handle_invoke_map(true, cryptonote::NOTIFY_NEW_FLUFFY_BLOCK::ID,
+    cprotocol.handle_invoke_map(true, cryptonote::NOTIFY_NEW_COMPACT_BLOCK::ID,
                                 in_buff, out, context, handled);
     EXPECT_TRUE(handled)
-        << "NOTIFY_NEW_FLUFFY_BLOCK must still dispatch — it is the only block path";
+        << "NOTIFY_NEW_COMPACT_BLOCK must still dispatch — it is the only block path";
   }
 }
 

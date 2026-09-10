@@ -22,29 +22,24 @@ pub const NOTIFY_RESPONSE_GET_OBJECTS: u32 = 2004;
 pub const NOTIFY_REQUEST_CHAIN: u32 = 2006;
 /// `NOTIFY_RESPONSE_CHAIN_ENTRY`.
 pub const NOTIFY_RESPONSE_CHAIN_ENTRY: u32 = 2007;
-/// `NOTIFY_NEW_FLUFFY_BLOCK`.
-pub const NOTIFY_NEW_FLUFFY_BLOCK: u32 = 2008;
-/// `NOTIFY_REQUEST_FLUFFY_MISSING_TX`.
-pub const NOTIFY_REQUEST_FLUFFY_MISSING_TX: u32 = 2009;
+/// `NOTIFY_NEW_COMPACT_BLOCK`.
+pub const NOTIFY_NEW_COMPACT_BLOCK: u32 = 2008;
+/// `NOTIFY_REQUEST_COMPACT_MISSING_TX`.
+pub const NOTIFY_REQUEST_COMPACT_MISSING_TX: u32 = 2009;
 /// `NOTIFY_GET_TXPOOL_COMPLEMENT`.
 pub const NOTIFY_GET_TXPOOL_COMPLEMENT: u32 = 2010;
 
-/// Body of `NOTIFY_NEW_FLUFFY_BLOCK` (2008), the sole block-propagation
-/// command (PWD-B6).
-///
-/// This type was named `NewBlock` while 2001 existed, with `NewFluffyBlock` as
-/// an alias for it — so the surviving path's body and its only `PortableMap`
-/// lived under the deleted command's name. Renamed rather than deleted for
-/// exactly that reason.
+/// Body of `NOTIFY_NEW_COMPACT_BLOCK` (2008), the sole block-announce command.
+/// Header plus optional tx bodies; omitted txs are fetched via 2009.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NewFluffyBlock {
-    /// Complete block (header blob + txs; fluffy peers may omit tx bodies).
+pub struct NewCompactBlock {
+    /// Block header blob plus any tx bodies the sender included.
     pub b: BlockCompleteEntry,
     /// Advertised chain height.
     pub current_blockchain_height: u64,
 }
 
-impl PortableMap for NewFluffyBlock {
+impl PortableMap for NewCompactBlock {
     fn to_section(&self) -> Result<Section, Error> {
         let mut section = Section::new();
         section.insert("b", Value::Object(self.b.to_section()?));
@@ -245,9 +240,9 @@ impl PortableMap for ResponseChainEntry {
     }
 }
 
-/// `NOTIFY_REQUEST_FLUFFY_MISSING_TX` body.
+/// `NOTIFY_REQUEST_COMPACT_MISSING_TX` body.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RequestFluffyMissingTx {
+pub struct RequestCompactMissingTx {
     /// Block hash, POD-as-blob.
     pub block_hash: [u8; HASH_SIZE],
     /// Advertised chain height.
@@ -256,7 +251,7 @@ pub struct RequestFluffyMissingTx {
     pub missing_tx_indices: Vec<u64>,
 }
 
-impl PortableMap for RequestFluffyMissingTx {
+impl PortableMap for RequestCompactMissingTx {
     fn to_section(&self) -> Result<Section, Error> {
         let mut section = Section::new();
         section.insert("block_hash", Value::Bytes(self.block_hash.to_vec()));

@@ -197,10 +197,9 @@ exist in Shekyl. `COMMAND_REQUEST_SUPPORT_FLAGS` is
 #### (`2001` Notification) New Block — deleted (PWD-B6)
 
 Command 2001 is refused as unknown. Shekyl never needed Monero's
-full-block / fluffy-block dual path; `handle_notify_new_block` already
-forwarded into the 2008 handler, so the second id was a wire alias with
-a 32× weaker cap. `NOTIFY_NEW_FLUFFY_BLOCK` (2008) is the sole block
-announce.
+full-block / compact-block dual path; 2001 already forwarded into the
+2008 handler, so the second id was a wire alias with a 32× weaker cap.
+`NOTIFY_NEW_COMPACT_BLOCK` (2008) is the sole block announce.
 
 #### (`2002` Notification) New Transactions
 
@@ -226,17 +225,18 @@ requested range.
 Carries block hashes for chain synchronization. Not affected by v3 PQC
 sizing (block headers do not contain `pqc_auth`).
 
-#### (`2008` Notification) New Fluffy Block
+#### (`2008` Notification) New Compact Block
 
-Sole block-announce path after PWD-B6. Carries block header plus
-transaction hashes (not full transactions). The receiving peer requests
-missing transactions via `2009`. Not directly affected by PQC sizing, but
-the follow-up `2002`/`2009` exchange is.
+Sole block-announce path after PWD-B6. Header plus optional tx bodies;
+relay typically omits txs. The receiving peer requests missing
+transactions via `2009`. Full blocks still travel on `2004` during sync.
+Not directly affected by PQC sizing, but the follow-up `2009` exchange is.
 
-#### (`2009` Notification) Request Fluffy Missing TX
+#### (`2009` Notification) Request Compact Missing TX
 
-Requests specific transactions by hash. The response contains full
-serialized v3 transactions including `pqc_auth`.
+Requests omitted transactions by index in the compact-block header.
+The fill is another `2008` carrying the requested tx bodies, including
+`pqc_auth`.
 
 #### (`2010` Notification) Get Txpool Complement
 
@@ -258,6 +258,6 @@ See `LV2_PORTABLE_STORAGE.md` §5–§6.
 | 2002 New Transactions | +5.4 KB per user tx | High | Origin-attributable timing signal |
 | 2003/2004 Get Objects | Proportional to tx count | Low | Sync protocol |
 | 2006/2007 Chain Entry | None | None | Hash-only |
-| 2008 Fluffy Block | Minimal | Low | Sole block announce (PWD-B6); header + hashes |
-| 2009 Missing TX | +5.4 KB per requested tx | Medium | Follow-up to fluffy block |
+| 2008 Compact Block | Minimal | Low | Sole block announce (PWD-B6); header + optional txs |
+| 2009 Compact missing TX | +5.4 KB per requested tx | Medium | Follow-up to compact block |
 | 2010 Txpool complement | None (hashes only) | Low | Mempool hash set |

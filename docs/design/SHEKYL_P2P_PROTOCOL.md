@@ -128,7 +128,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **B3a** unknown input rejected at ingress | NOT IMPLEMENTED | no ingress rejection site; the codec's byte-exact round-trip of unknown bits is present but is PWC-A6's requirement, not this one | **YES** — with B3 and B4, as one unit |
 | **B4** places B3a's ingress check | NOT IMPLEMENTED | B4's stated remaining work is the check's *placement*; no such site exists | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
 | **B5** — | **NEVER RULED** | appears exactly once tree-wide, in `P2P_2_DISPATCH_BRIEF.md`; dispatched and never dispositioned | n/a — unruled decision, not a status |
-| **B6** one block path | **IMPLEMENTED** | 2001 deleted; 2008 is the sole path. `HANDLE_NOTIFY_T2(NOTIFY_NEW_FLUFFY_BLOCK)` at `cryptonote_protocol_handler.h:99`; `relay_block` emits `NOTIFY_NEW_FLUFFY_BLOCK::ID` at `.inl:2737`; no `NOTIFY_NEW_BLOCK` handler remains. Two-limb test `block_propagation_has_exactly_one_command` refuses 2001 (`LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED`) and still dispatches 2008. | **YES** — landed; do it before nodes exist |
+| **B6** one block path | **IMPLEMENTED** | 2001 deleted; 2008 is the sole path. `HANDLE_NOTIFY_T2(NOTIFY_NEW_COMPACT_BLOCK)` at `cryptonote_protocol_handler.h:99`; `relay_block` emits `NOTIFY_NEW_COMPACT_BLOCK::ID` at `.inl:2735`; no `NOTIFY_NEW_BLOCK` handler remains. Identifiers are `COMPACT_*` (ids still 2008/2009). Two-limb test `block_propagation_has_exactly_one_command` refuses 2001 (`LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED`) and still dispatches 2008. | **YES** — landed; do it before nodes exist |
 | **B7** drop only when attributable | **PARTIAL** | #628 withdrew a wrong score-removal and recorded that the site needs a typed verdict; the typed verdict is still owed | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
 | **B8** delete the undriven timer | **IMPLEMENTED** | #629 deleted `m_bad_peer_checker`, `network_address_old`, `connection_entry_base` | done |
 | **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
@@ -575,7 +575,7 @@ and two of them read it as the same boolean:
 
 - `cryptonote_protocol_handler.inl:1790` — `if (!peer_id || context.m_is_income)`,
   excluding pre-handshake peers from **sync-search**.
-- `:2701-2702` — `if (peer_id && …)`, excluding them from **fluffy-block relay**,
+- `:2701-2702` — `if (peer_id && …)`, excluding them from **block relay**,
   with the tree's own comment: *"peer_id also filters out connections before
   handshake"*.
 
@@ -631,7 +631,7 @@ it:**
 | Site | Kind | Disposition |
 | --- | --- | --- |
 | `cryptonote_protocol_handler.inl:1790` | **Boolean** — excludes pre-handshake peers from sync-search | Migrate to `handshake_complete` |
-| `:2701-2702` | **Boolean** — same, for fluffy-block relay (*"peer_id also filters out connections before handshake"*) | Migrate to `handshake_complete` |
+| `:2701-2702` | **Boolean** — same, for block relay (*"peer_id also filters out connections before handshake"*) | Migrate to `handshake_complete` |
 | `:347` | **Display** — `print_connections`' peer column | Drop the column or show `connection_id` |
 | `rpc_facts_ffi.h:315` / `.cpp:1050-1056` | **Display** — `get_connections` over RPC | Same: `connection_id` is already in the struct |
 
@@ -2862,8 +2862,13 @@ checkable against the release plan rather than against a benchmark.
 
 ### PWD-B6 — one block-propagation path, not two
 
-**RULED: `NOTIFY_NEW_BLOCK` (2001) is deleted; `NOTIFY_NEW_FLUFFY_BLOCK` (2008)
-is the sole block path.**
+**RULED: `NOTIFY_NEW_BLOCK` (2001) is deleted; command 2008 is the sole block
+path.** The surviving identifiers are `NOTIFY_NEW_COMPACT_BLOCK` (2008) and
+`NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009). `FLUFFY` collides with Dandelion++
+stem/fluff (`dandelionpp_fluff` on 2002) and names a Monero rollout this chain
+has no history of. Compact, not "just block": 2008 is header-first (relay
+clears `b.txs`); full blocks still travel on `NOTIFY_RESPONSE_GET_OBJECTS`
+(2004) during sync. Command ids are unchanged.
 
 **The two commands are already one code path.** `handle_notify_new_block`
 builds a fluffy request from its argument and **returns
@@ -2900,7 +2905,7 @@ and 2001 already dispatches into 2008's handler — so the round trip is a
 property of what the sender chose to send, before and after this ruling alike.
 *That concession was written under the `pruned`-based model this row has since
 corrected, and it survived the correction.* What is actually given up is a wire
-name; `NOTIFY_REQUEST_FLUFFY_MISSING_TX` (2009) is unchanged and still the
+name; `NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009) is still the
 mechanism for whatever the sender omitted.
 
 **Falsifier.** **Reopen if measured block-propagation latency on the compact
@@ -2928,8 +2933,8 @@ is not a table of constants.**
 | `NOTIFY_RESPONSE_GET_OBJECTS` (2004) | 128 MB | **Batch-bounded, not single-block** — see below |
 | `NOTIFY_REQUEST_CHAIN` (2006) | 512 kB | A hash list; derives from its length bound |
 | `NOTIFY_RESPONSE_CHAIN_ENTRY` (2007) | 4 MB | A hash list; derives from its length bound |
-| `NOTIFY_NEW_FLUFFY_BLOCK` (2008) | 4 MB | **The dynamic one** — see below |
-| `NOTIFY_REQUEST_FLUFFY_MISSING_TX` (2009) | 1 MB | An index list; derives from the block's tx count bound |
+| `NOTIFY_NEW_COMPACT_BLOCK` (2008) | 4 MB | **The dynamic one** — see below |
+| `NOTIFY_REQUEST_COMPACT_MISSING_TX` (2009) | 1 MB | An index list; derives from the block's tx count bound |
 | `NOTIFY_GET_TXPOOL_COMPLEMENT` (2010) | 4 MB | A hash list; derives from the pool bound |
 
 > **The block-carrying commands cannot take a static cap, and this is the
@@ -2990,7 +2995,7 @@ inventing a consensus constant from a p2p round.
 > limit with it.
 
 > **`NOTIFY_RESPONSE_GET_OBJECTS` (2004) takes a different bound from
-> `NOTIFY_NEW_FLUFFY_BLOCK` (2008), because it is not a single block.** Its
+> `NOTIFY_NEW_COMPACT_BLOCK` (2008), because it is not a single block.** Its
 > payload is `std::vector<block_complete_entry> blocks` plus a `missed_ids`
 > list (`src/cryptonote_protocol/cryptonote_protocol_defs.h:173-190`) — a **sync batch**. A cap sized
 > for one block plus a tip-lag margin either rejects legitimate multi-block
@@ -3625,10 +3630,10 @@ rather than inheriting whatever the default happens to be.
 > surface; the type is the gate. The FOLLOWUPS queue carries this action.
 >
 > **The announce path, checked rather than assumed (same review round).** The
-> parse arm of `handle_notify_new_fluffy_block`
-> (`cryptonote_protocol_handler.inl:545-556`) is genuine *form* —
+> parse arm of `handle_notify_new_compact_block`
+> (`cryptonote_protocol_handler.inl:551-562`) is genuine *form* —
 > input-describing, universal — and its drop stands. The size arm
-> (`check_incoming_block_size`, `:536-540`) is **state-describing**: it
+> (`check_incoming_block_size`, `:542-546`) is **state-describing**: it
 > compares the blob against **our** current weight limit + 100
 > (`src/cryptonote_core/cryptonote_core.cpp:1408-1420`), and the limit a few
 > heights ahead can legally exceed ours (how fast is the consensus lane's

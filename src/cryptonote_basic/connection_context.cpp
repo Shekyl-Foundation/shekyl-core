@@ -55,9 +55,9 @@ namespace cryptonote
       return 512 * 1024; // 512 kB
     case cryptonote::NOTIFY_RESPONSE_CHAIN_ENTRY::ID:
       return 1024 * 1024 * 4; // 4 MB
-    case cryptonote::NOTIFY_NEW_FLUFFY_BLOCK::ID:
-      return 1024 * 1024 * 4; // 4 MB, but it does not includes transaction data
-    case cryptonote::NOTIFY_REQUEST_FLUFFY_MISSING_TX::ID:
+    case cryptonote::NOTIFY_NEW_COMPACT_BLOCK::ID:
+      return 1024 * 1024 * 4; // 4 MB; compact announce omits tx bodies the peer should already have
+    case cryptonote::NOTIFY_REQUEST_COMPACT_MISSING_TX::ID:
       return 1024 * 1024; // 1 MB
     case cryptonote::NOTIFY_GET_TXPOOL_COMPLEMENT::ID:
       return 1024 * 1024 * 4; // 4 MB

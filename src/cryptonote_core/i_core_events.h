@@ -64,7 +64,7 @@ namespace cryptonote
         `relay_category::all`: the question is pool MEMBERSHIP, not relay
         class. A transaction that is still held but has changed class is
         still ours to record; one that is gone is gone. `core::pool_has_tx`
-        already answered exactly this question for fluffy-block
+        already answered exactly this question for compact-block
         reconstruction and carries the same reasoning. */
     virtual bool pool_has_tx(const crypto::hash &txid) const = 0;
     /*! \param zone The relay zone the transactions went out on.

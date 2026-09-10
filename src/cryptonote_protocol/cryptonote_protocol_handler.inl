@@ -119,7 +119,7 @@ namespace cryptonote
     connect.pool.nic_verified_hf_version = 0;
     // Single assignment site for the credit-wire attestation witness (opaque
     // bytes). Block-level data lives on block_connect_supplement, not on the
-    // tx-shaped pool_supplement. Fluffy + full paths funnel through here.
+    // tx-shaped pool_supplement. Compact-announce and get-objects both funnel through here.
     connect.attestation_witness = attestation_witness;
 
     if (tx_entries.size() > blk_tx_hashes.size())
@@ -527,7 +527,7 @@ namespace cryptonote
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
-  int t_cryptonote_protocol_handler<t_core>::handle_notify_new_fluffy_block(int command, NOTIFY_NEW_FLUFFY_BLOCK::request& arg, cryptonote_connection_context& context)
+  int t_cryptonote_protocol_handler<t_core>::handle_notify_new_compact_block(int command, NOTIFY_NEW_COMPACT_BLOCK::request& arg, cryptonote_connection_context& context)
   {
     // If we are synchronizing the node or setting up this connection, then do nothing
     if(context.m_state != cryptonote_connection_context::state_normal)
@@ -562,7 +562,7 @@ namespace cryptonote
     }
 
     // Log block info
-    MLOG_P2P_MESSAGE(context << "Received NOTIFY_NEW_FLUFFY_BLOCK " << new_block_hash << " (height "
+    MLOG_P2P_MESSAGE(context << "Received NOTIFY_NEW_COMPACT_BLOCK " << new_block_hash << " (height "
       << arg.current_blockchain_height << ", " << arg.b.txs.size() << " txes)");
 
     // Pause mining and resume after block verification to prevent wasted mining cycles while
@@ -572,7 +572,7 @@ namespace cryptonote
     const auto resume_mine_on_leave = epee::misc_utils::create_scope_leave_handler([this](){ m_core.resume_mine(); });
 
     // This set allows us to quickly sanity check that the block binds all txs contained in this
-    // fluffy payload, which means that no extra stowaway txs can be harbored. In the case of a
+    // compact payload, which means that no extra stowaway txs can be harbored. In the case of a
     // deterministic block verification failure, the peer will be punished accordingly. For other
     // cases, *once* valid PoW will be required to perform expensive consensus checks for the txs
     // inside the block.
@@ -614,7 +614,7 @@ namespace cryptonote
     {
       LOG_ERROR_CCONTEXT
       (
-        "Failed to parse one or more transactions in fluffy block with ID " << new_block_hash <<
+        "Failed to parse one or more transactions in compact block with ID " << new_block_hash <<
         ", dropping connection"
       );
 
@@ -634,10 +634,10 @@ namespace cryptonote
     {
       if (bvc.m_missing_txs)
       {
-        // Block verification failed b/c of missing transactions, so request fluffy block again with
-        // missing transactions (including the ones newly discovered in this fluffy block). Note that
+        // Block verification failed b/c of missing transactions, so request the compact block again
+        // with missing transactions (including the ones newly discovered in this payload). Note that
         // PoW checking happens before missing transactions checks, so if bvc.m_missing_txs is true,
-        // then that means that we passed PoW checking, so a peer can't get us to re-request fluffy
+        // then that means that we passed PoW checking, so a peer can't get us to re-request compact
         // blocks for free.
 
         // Instead of requesting missing transactions by hash like BTC,
@@ -663,17 +663,17 @@ namespace cryptonote
         }
 
         // Make request form
-        MDEBUG("We are missing " << need_tx_indices.size() << " txes for this fluffy block");
+        MDEBUG("We are missing " << need_tx_indices.size() << " txes for this compact block");
         for (auto txidx: need_tx_indices)
           MDEBUG("  tx " << new_block.tx_hashes[txidx]);
-        NOTIFY_REQUEST_FLUFFY_MISSING_TX::request missing_tx_req;
+        NOTIFY_REQUEST_COMPACT_MISSING_TX::request missing_tx_req;
         missing_tx_req.block_hash = new_block_hash;
         missing_tx_req.current_blockchain_height = arg.current_blockchain_height;
         missing_tx_req.missing_tx_indices = std::move(need_tx_indices);
 
-        // Post NOTIFY_REQUEST_FLUFFY_MISSING_TX request to peer
-        MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_FLUFFY_MISSING_TX: missing_tx_indices.size()=" << missing_tx_req.missing_tx_indices.size() );
-        post_notify<NOTIFY_REQUEST_FLUFFY_MISSING_TX>(missing_tx_req, context);
+        // Post NOTIFY_REQUEST_COMPACT_MISSING_TX request to peer
+        MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_COMPACT_MISSING_TX: missing_tx_indices.size()=" << missing_tx_req.missing_tx_indices.size() );
+        post_notify<NOTIFY_REQUEST_COMPACT_MISSING_TX>(missing_tx_req, context);
       }
       else // failure for some other reason besides missing txs...
       {
@@ -704,12 +704,12 @@ namespace cryptonote
   }  
   //------------------------------------------------------------------------------------------------------------------------  
   template<class t_core>
-  int t_cryptonote_protocol_handler<t_core>::handle_request_fluffy_missing_tx(int command, NOTIFY_REQUEST_FLUFFY_MISSING_TX::request& arg, cryptonote_connection_context& context)
+  int t_cryptonote_protocol_handler<t_core>::handle_request_compact_missing_tx(int command, NOTIFY_REQUEST_COMPACT_MISSING_TX::request& arg, cryptonote_connection_context& context)
   {
-    MLOG_P2P_MESSAGE("Received NOTIFY_REQUEST_FLUFFY_MISSING_TX (" << arg.missing_tx_indices.size() << " txes), block hash " << arg.block_hash);
+    MLOG_P2P_MESSAGE("Received NOTIFY_REQUEST_COMPACT_MISSING_TX (" << arg.missing_tx_indices.size() << " txes), block hash " << arg.block_hash);
     if (context.m_state == cryptonote_connection_context::state_before_handshake)
     {
-      LOG_ERROR_CCONTEXT("Requested fluffy tx before handshake, dropping connection");
+      LOG_ERROR_CCONTEXT("Requested compact missing tx before handshake, dropping connection");
       drop_connection(context, false, false);
       return 1;
     }
@@ -727,15 +727,15 @@ namespace cryptonote
 
     std::vector<crypto::hash> txids;
     txids.reserve(b.tx_hashes.size());
-    NOTIFY_NEW_FLUFFY_BLOCK::request fluffy_response;
-    fluffy_response.b.block = t_serializable_object_to_blob(b);
+    NOTIFY_NEW_COMPACT_BLOCK::request compact_response;
+    compact_response.b.block = t_serializable_object_to_blob(b);
     // Re-attach the credit-wire attestation witness we hold for this block
     // (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2). This response is rebuilt from
     // our own DB, so without this the requesting peer connects the block with no
     // witness, stores no row, and relays that gap to ITS peers — the loss is
     // permanent and spreads. Empty is omitted on the wire.
-    fluffy_response.b.attestation_witness = m_core.get_block_attestation_witness(b);
-    fluffy_response.current_blockchain_height = arg.current_blockchain_height;
+    compact_response.b.attestation_witness = m_core.get_block_attestation_witness(b);
+    compact_response.current_blockchain_height = arg.current_blockchain_height;
     std::vector<bool> seen(b.tx_hashes.size(), false);
     for(auto& tx_idx: arg.missing_tx_indices)
     {
@@ -746,7 +746,7 @@ namespace cryptonote
         {
           LOG_ERROR_CCONTEXT
           (
-            "Failed to handle request NOTIFY_REQUEST_FLUFFY_MISSING_TX"
+            "Failed to handle request NOTIFY_REQUEST_COMPACT_MISSING_TX"
             << ", request is asking for duplicate tx "
             << ", tx index = " << tx_idx << ", block tx count " << b.tx_hashes.size()
             << ", block_height = " << arg.current_blockchain_height
@@ -762,7 +762,7 @@ namespace cryptonote
       {
         LOG_ERROR_CCONTEXT
         (
-          "Failed to handle request NOTIFY_REQUEST_FLUFFY_MISSING_TX"
+          "Failed to handle request NOTIFY_REQUEST_COMPACT_MISSING_TX"
           << ", request is asking for a tx whose index is out of bounds "
           << ", tx index = " << tx_idx << ", block tx count " << b.tx_hashes.size()
           << ", block_height = " << arg.current_blockchain_height
@@ -778,14 +778,14 @@ namespace cryptonote
     std::vector<crypto::hash> missed;
     if (!m_core.get_transactions(txids, txs, missed))
     {
-      LOG_ERROR_CCONTEXT("Failed to handle request NOTIFY_REQUEST_FLUFFY_MISSING_TX, "
+      LOG_ERROR_CCONTEXT("Failed to handle request NOTIFY_REQUEST_COMPACT_MISSING_TX, "
         << "failed to get requested transactions");
       drop_connection(context, false, false);
       return 1;
     }
     if (!missed.empty() || txs.size() != txids.size())
     {
-      LOG_ERROR_CCONTEXT("Failed to handle request NOTIFY_REQUEST_FLUFFY_MISSING_TX, "
+      LOG_ERROR_CCONTEXT("Failed to handle request NOTIFY_REQUEST_COMPACT_MISSING_TX, "
         << missed.size() << " requested transactions not found" << ", dropping connection");
       drop_connection(context, false, false);
       return 1;
@@ -793,17 +793,17 @@ namespace cryptonote
 
     for(auto& tx: txs)
     {
-      fluffy_response.b.txs.push_back({t_serializable_object_to_blob(tx), crypto::null_hash});
+      compact_response.b.txs.push_back({t_serializable_object_to_blob(tx), crypto::null_hash});
     }
 
     MLOG_P2P_MESSAGE
     (
-        "-->>NOTIFY_RESPONSE_FLUFFY_MISSING_TX: " 
-        << ", txs.size()=" << fluffy_response.b.txs.size()
-        << ", rsp.current_blockchain_height=" << fluffy_response.current_blockchain_height
+        "-->>NOTIFY_NEW_COMPACT_BLOCK: " 
+        << ", txs.size()=" << compact_response.b.txs.size()
+        << ", rsp.current_blockchain_height=" << compact_response.current_blockchain_height
     );
            
-    post_notify<NOTIFY_NEW_FLUFFY_BLOCK>(fluffy_response, context);    
+    post_notify<NOTIFY_NEW_COMPACT_BLOCK>(compact_response, context);    
     return 1;        
   }
   //------------------------------------------------------------------------------------------------------------------------
@@ -2713,28 +2713,26 @@ skip:
   }
   //------------------------------------------------------------------------------------------------------------------------
   template<class t_core>
-  bool t_cryptonote_protocol_handler<t_core>::relay_block(NOTIFY_NEW_FLUFFY_BLOCK::request& arg, cryptonote_connection_context& exclude_context)
+  bool t_cryptonote_protocol_handler<t_core>::relay_block(NOTIFY_NEW_COMPACT_BLOCK::request& arg, cryptonote_connection_context& exclude_context)
   {
-    // Every peer takes the one block path (PWD-B6), so there is no sort — this
-    // collects the public-zone connections to relay to. The name is kept because
-    // the notify id is still NOTIFY_NEW_FLUFFY_BLOCK.
-    std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> fluffyConnections;
-    m_p2p->for_each_connection([&exclude_context, &fluffyConnections](connection_context& context, uint32_t support_flags)
+    // Public-zone peers only: compact-block announce is the sole block path (PWD-B6).
+    std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> connections;
+    m_p2p->for_each_connection([&exclude_context, &connections](connection_context& context, uint32_t)
     {
       // handshake_complete() filters out connections before handshake
       if (context.handshake_complete() && exclude_context.m_connection_id != context.m_connection_id && context.m_remote_address.get_zone() == epee::net_utils::zone::public_)
       {
-        LOG_DEBUG_CC(context, "RELAYING FLUFFY BLOCK TO PEER");
-        fluffyConnections.push_back({context.m_remote_address.get_zone(), context.m_connection_id});
+        LOG_DEBUG_CC(context, "RELAYING BLOCK TO PEER");
+        connections.push_back({context.m_remote_address.get_zone(), context.m_connection_id});
       }
       return true;
     });
 
-    if (!fluffyConnections.empty())
+    if (!connections.empty())
     {
-      epee::levin::message_writer fluffyBlob{32 * 1024};
-      epee::serialization::store_t_to_binary(arg, fluffyBlob.buffer);
-      m_p2p->relay_notify_to_list(NOTIFY_NEW_FLUFFY_BLOCK::ID, std::move(fluffyBlob), std::move(fluffyConnections));
+      epee::levin::message_writer blob{32 * 1024};
+      epee::serialization::store_t_to_binary(arg, blob.buffer);
+      m_p2p->relay_notify_to_list(NOTIFY_NEW_COMPACT_BLOCK::ID, std::move(blob), std::move(connections));
     }
 
     return true;
