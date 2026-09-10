@@ -36,7 +36,14 @@
 #include <boost/thread/future.hpp>
 #include <boost/utility/string_ref.hpp>
 #include <chrono>
+#include <cstring>
 #include <utility>
+
+#ifndef _WIN32
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
 
 #include "common/command_line.h"
 #include "cryptonote_core/cryptonote_core.h"
@@ -379,6 +386,43 @@ namespace nodetool
       return epee::net_utils::network_address{epee::net_utils::ipv6_network_address(
         observed.as<epee::net_utils::ipv6_network_address>().ip(), advertised_port)};
     return std::nullopt;
+  }
+
+  std::set<std::string> local_interface_hosts()
+  {
+    std::set<std::string> hosts;
+#ifndef _WIN32
+    struct ifaddrs *ifaddr = nullptr;
+    if (getifaddrs(&ifaddr) != 0)
+      return hosts;
+    for (struct ifaddrs *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next)
+    {
+      if (ifa->ifa_addr == nullptr)
+        continue;
+      if (ifa->ifa_addr->sa_family == AF_INET)
+      {
+        const auto *sin = reinterpret_cast<const sockaddr_in *>(ifa->ifa_addr);
+        if (sin->sin_addr.s_addr == INADDR_ANY)
+          continue;
+        // s_addr is already network-order, matching ipv4_network_address.
+        hosts.insert(epee::net_utils::network_address{
+          epee::net_utils::ipv4_network_address{sin->sin_addr.s_addr, 0}}.host_str());
+      }
+      else if (ifa->ifa_addr->sa_family == AF_INET6)
+      {
+        const auto *sin6 = reinterpret_cast<const sockaddr_in6 *>(ifa->ifa_addr);
+        boost::asio::ip::address_v6::bytes_type bytes{};
+        std::memcpy(bytes.data(), sin6->sin6_addr.s6_addr, bytes.size());
+        const boost::asio::ip::address_v6 v6{bytes, sin6->sin6_scope_id};
+        if (v6.is_unspecified())
+          continue;
+        hosts.insert(epee::net_utils::network_address{
+          epee::net_utils::ipv6_network_address{v6, 0}}.host_str());
+      }
+    }
+    freeifaddrs(ifaddr);
+#endif
+    return hosts;
   }
 
   bool is_filtered_command(const epee::net_utils::network_address& address, int command)

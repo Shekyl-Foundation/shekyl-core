@@ -436,6 +436,16 @@
 
 ### Fixed
 
+- **P2P: a node no longer retries outbound to its own public listen address.**
+  Foundation seeds sit in a shared hardcoded list; public zone binds
+  `0.0.0.0` and leaves `m_our_address` unset, so a seed TCP-hairpinned
+  itself, the handshake nonce dropped the connection, and
+  `start_outer_call` logged ERROR on a ~13s cadence. Outbound now skips a
+  candidate whose port is our listen / advertised-external port and whose
+  host is loopback or a local interface address. Detection stays the nonce
+  (PWD-T1); this is the wasted-dial half of PWD-E3(c). Same-host other-port
+  (mainnet + testnet on one VPS) is still dialable.
+
 - **Consensus: the `tx_extra` PQC fields have a shape rule, and the storage
   fail-open that hid its absence is gone (CEN-I19, S1).** A transaction whose
   `0x07` leaf-hash field was missing, short, long or unparsable was accepted at

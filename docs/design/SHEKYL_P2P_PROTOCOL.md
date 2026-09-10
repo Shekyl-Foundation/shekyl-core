@@ -825,6 +825,21 @@ the mirror never matches. It covers the public-address node, which is the case
 that least needed help. **Recorded as a possible optimisation for PWD-T1, not as
 the mechanism** — the nonce covers both cases and the socket check covers one.
 
+**Public-zone AVOIDANCE is a local-listen filter, not a second detector.**
+Anonymity zones already skip outbound when `zone.m_our_address` equals the
+candidate (they generated the keypair). Public zone typically binds
+`0.0.0.0` and leaves that field unset, so a Foundation seed whose own IP is
+in the hardcoded list kept dialling itself: TCP hairpin succeeded, the nonce
+dropped the handshake, and the connector retried. `is_our_listen_address`
+closes that loop: skip when the candidate port is our listen / IPv6 listen /
+advertised-external port **and** the host is loopback or an address on a
+local interface (collected after bind). The skip is port-sensitive so two
+daemons on one host (mainnet + testnet) still reach each other. **The nonce
+remains the detector** (PWD-T1 / stem width); this is the wasted-dial half
+of PWD-E3 option (c), not a replacement for it. NAT'd nodes are not in the
+hardcoded seed list, so a missing public IP on `getifaddrs` does not
+re-open the seed loop.
+
 > **Binding on PWD-T1: the clearnet nonce is load-bearing for D++ stem width,
 > not for slot hygiene, and its failure mode is silent.** A nonce that is wrong,
 > or whose per-zone window is too short to cover the handshake round trip, does

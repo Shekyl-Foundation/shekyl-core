@@ -38,6 +38,7 @@
 #include "unit_tests_utils.h"
 #include "net/tor_address.h"
 #include <condition_variable>
+#include <set>
 #include "shekyl/shekyl_ffi.h"
 
 #define MAKE_IPV4_ADDRESS(a,b,c,d) epee::net_utils::ipv4_network_address{MAKE_IP(a,b,c,d),0}
@@ -1557,6 +1558,31 @@ TEST(node_server, same_host_outbound_cap_matches_host_and_only_outbound)
   EXPECT_FALSE(nodetool::outbound_connection_takes_host(true, candidate, candidate))
     << "an inbound connection consumed the host's outbound slot: a peer can "
        "suppress our dials by dialling us";
+}
+
+TEST(node_server, is_our_listen_address_skips_self_not_other_net)
+{
+  // Public-zone AVOIDANCE (PWD-E3(c)): skip outbound to our listen address
+  // so a seed in the hardcoded list does not TCP-hairpin itself. Detection
+  // stays the nonce. Port-sensitive so mainnet+testnet on one VPS still
+  // reach each other.
+  const epee::net_utils::network_address unset{};
+  const epee::net_utils::network_address listen{MAKE_IPV4_ADDRESS_PORT(45, 76, 171, 128, 12021)};
+  const epee::net_utils::network_address other_port{MAKE_IPV4_ADDRESS_PORT(45, 76, 171, 128, 11021)};
+  const epee::net_utils::network_address other_host{MAKE_IPV4_ADDRESS_PORT(45, 77, 147, 65, 12021)};
+  const epee::net_utils::network_address loopback{MAKE_IPV4_ADDRESS_PORT(127, 0, 0, 1, 12021)};
+  const std::set<std::string> local_hosts{listen.host_str()};
+
+  EXPECT_TRUE(nodetool::is_our_listen_address(listen, unset, 12021, 0, 0, local_hosts));
+  EXPECT_TRUE(nodetool::is_our_listen_address(loopback, unset, 12021, 0, 0, {}));
+  EXPECT_FALSE(nodetool::is_our_listen_address(other_port, unset, 12021, 0, 0, local_hosts))
+    << "same host other port (mainnet on the same VPS) must still be dialable; "
+       "a zero IPv6 listen port (IPv6 off / not yet bound) must not skip it";
+  EXPECT_FALSE(nodetool::is_our_listen_address(other_host, unset, 12021, 0, 0, local_hosts));
+  EXPECT_FALSE(nodetool::is_our_listen_address(listen, unset, 12021, 0, 0, {}))
+    << "a public IP not on an interface is not skipped (NAT home node)";
+  EXPECT_TRUE(nodetool::is_our_listen_address(listen, listen, 0, 0, 0, {}));
+  EXPECT_TRUE(nodetool::is_our_listen_address(listen, unset, 0, 0, 12021, local_hosts));
 }
 
 TEST(node_server, handshake_nonce_is_recorded_before_it_can_be_written)
