@@ -121,6 +121,14 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_lmdb_schema_coverage.py
 
+      - name: Run DRS-P0d digest-v0 coverage check
+        # The logical-state digest v0 must name its three families
+        # (core chain, spent_keys, curve root) at the hasher, the LMDB
+        # walker, the FFI, and the audit read-set — and must record the
+        # archival-journal exclusion. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_drs_p0d_digest_coverage.py
+
       - name: Run status-banner check
         # design/ and completed/ without a Status line in the first 40 lines
         # after H1 read as current SoT. Instance of 47-gate-subject-assertion.mdc.

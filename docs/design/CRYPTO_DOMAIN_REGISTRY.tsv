@@ -38,8 +38,8 @@
 #     unregistered byte string, which is what the count-pins currently
 #     approximate by counting call sites
 #
-# Scope, stated so it is not mistaken for a small edit: ~43 cSHAKE call sites,
-# 6 mechanisms, 114 rows across the workspace, and FROST's associated consts do
+# Scope, stated so it is not mistaken for a small edit: ~48 cSHAKE call sites,
+# 6 mechanisms, 117 rows across the workspace, and FROST's associated consts do
 # not fit the same shape and need their own treatment. That is a design round
 # (rules 19 + 26), not a review fix.
 #
@@ -118,6 +118,9 @@
 1	shekyl/archival-attestation-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_ATTESTATION	shekyl-live
 1	shekyl/archival-serve-credit-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_SERVE_CREDIT	shekyl-live
 1	shekyl/snapshot-id-v1	rust/shekyl-engine-core/src/engine/refresh/types.rs	SNAPSHOT_ID_CUSTOMIZATION	shekyl-live		wallet-internal reservation-staleness digest; cSHAKE customization (SA-3c retargeted it off cn_fast_hash — unpersisted, no wire, fresh mint)
+1	shekyl/chain-digest/v0	rust/shekyl-chain-store/src/digest_v0.rs	OUTER_CUSTOMIZATION	shekyl-live		DRS-P0d logical-state digest outer
+1	shekyl/chain-digest/v0/chain	rust/shekyl-chain-store/src/digest_v0.rs	CHAIN_CUSTOMIZATION	shekyl-live		DRS-P0d height-ordered chain component
+1	shekyl/chain-digest/v0/spent-elem	rust/shekyl-chain-store/src/digest_v0.rs	SPENT_ELEM_CUSTOMIZATION	shekyl-live		DRS-P0d spent-key XOR leaf
 #
 # ── Mechanism 2 — HKDF salt + info ───────────
 # distinctness key = salt|info. The three shared infos (spend/view/kem) are

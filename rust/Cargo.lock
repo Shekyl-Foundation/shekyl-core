@@ -3788,6 +3788,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-chain-store"
+version = "3.1.0"
+dependencies = [
+ "shekyl-crypto-hash",
+]
+
+[[package]]
 name = "shekyl-cli"
 version = "3.1.0"
 dependencies = [
@@ -4220,6 +4227,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-bulletproofs",
  "shekyl-chacha",
+ "shekyl-chain-store",
  "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",

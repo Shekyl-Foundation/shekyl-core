@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Daemon logical-state digest v0 (DRS-P0d).** A layout-independent
+  cSHAKE256 digest of production LMDB's core chain (height-ordered
+  block hashes), spent-key set, and live curve-tree root, read under
+  one LMDB snapshot. Two engines with the same logical state agree
+  regardless of B-tree layout. The digest is a regression oracle
+  except on CHECKED-CONFORMANT census rows, where a match is
+  correctness evidence (CSR-3). Archival journals are a named
+  exclusion — a core-only match is not archival parity
+  (`DAEMON_REDB_STORE.md` §7.1.1).
+
 - **The daemon publishes an ephemeral per-boot onion address by default
   (PWD-E7).** When a pinned Tor binary is installed (SP-T0c gate:
   `SHEKYL_TOR_BINARY` → beside the executable →

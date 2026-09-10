@@ -105,6 +105,7 @@ set(unit_tests_sources
   wipeable_string.cpp
   is_hdd.cpp
   aligned.cpp
+  logical_state_digest.cpp
   archival_credit_wire.cpp
   archival_serve_credit.cpp
   archival_serve_credit_equivalence.cpp

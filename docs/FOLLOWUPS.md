@@ -107,9 +107,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Daemon chain store (`DRS-*`) — gap-close pass landed in design.** SoT: [`docs/design/DAEMON_REDB_STORE.md`](./design/DAEMON_REDB_STORE.md)
   - Target: pre-genesis
 
-- **DRS-P0d — Digest v0, the last DRS-P0 leg that blocks DRS-0.** P0a (schema+CI), P0b (atomicity+journals+transcriptions) and P0c (wart register) are DELIVERED (2026-09-05 / -05 / -08 — git history holds the delivery detail this row used to carry); P0d builds the logical-state digest v0 (core chain + spent keys + curve root minimum; must expand archival journals before S-ARCH / DRS-E), and inherits P0b's remaining RAW-edge read-set tracing. P0e may trail with named exclusions; P0f gates E2's correctness arm, not DRS-0. Owner: [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) §7 P0 table.
-  - Target: pre-genesis
-
 - **`txs` is a zero-write, zero-read LMDB table (P0b DRS-W4).** Handle's only occurrence is its `open()`; inherited-dead deletion candidate — C++ + schema-version change, census/DRS lane owns ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
   - Target: pre-genesis
 
