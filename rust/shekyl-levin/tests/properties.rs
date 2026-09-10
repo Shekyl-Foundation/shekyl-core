@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Round-trip properties (rule 50): whatever the builders emit, the reader
-//! must reconstruct — for arbitrary payloads, commands, return codes, chunk
+//! must reconstruct — for arbitrary payloads, commands, chunk
 //! boundaries, and noise sizes. These bite against builder/reader drift
 //! (e.g. an off-by-one in fragment padding or a mis-sliced header field);
 //! they do NOT pin C++ byte-identity (that is `oracle_kats.rs`).
@@ -70,16 +70,15 @@ proptest! {
     }
 
     #[test]
-    fn response_roundtrips_with_return_code(
+    fn response_roundtrips(
         command in prop::sample::select(WIDE_CAP_COMMANDS),
-        return_code in any::<i32>(),
         payload in proptest::collection::vec(any::<u8>(), 0..4096),
         chunk in 1usize..512,
     ) {
-        let got = read_chunked(&response(command, return_code, &payload), chunk);
+        let got = read_chunked(&response(command, &payload), chunk);
         prop_assert_eq!(
             got,
-            Some(Received::Response { command, return_code, payload })
+            Some(Received::Response { command, payload })
         );
     }
 

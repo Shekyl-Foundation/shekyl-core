@@ -8,8 +8,8 @@ protocol specified in [`docs/LEVIN_PROTOCOL.md`](../../docs/LEVIN_PROTOCOL.md).
 The bottom layer of the p2p stack, byte-identical to the C++ `epee::levin`
 implementation:
 
-- the 33-byte bucket header (`bucket_head2`): signature, length, expect-response,
-  command, return code, Q/S/B/E/COMPRESSED flags, protocol version;
+- the 29-byte bucket header (`bucket_head2`): signature, length, expect-response,
+  command, Q/S/B/E/COMPRESSED flags, protocol version;
 - whole-message builders for the notification / request / response flows;
 - dummy ("noise") messages and noise-shaped fragmentation for the white-noise
   feature over i2p/Tor;

@@ -10,7 +10,7 @@
 //!
 //! # Scope (framing only)
 //!
-//! This crate owns the bottom layer of the p2p stack: the 33-byte bucket
+//! This crate owns the bottom layer of the p2p stack: the 29-byte bucket
 //! header, the five message flows (notification / request / response /
 //! fragmented / dummy), noise-shaped fragmentation for the white-noise
 //! feature, the optional zstd `COMPRESSED` path, and an incremental

@@ -23,7 +23,7 @@
 # gate.
 #
 # `HEADER_SIZE` has no C++ literal — it is `sizeof(bucket_head2)` — so
-# `levin_base.h` carries a `static_assert(sizeof(bucket_head2) == 33)` for
+# `levin_base.h` carries a `static_assert(sizeof(bucket_head2) == 29)` for
 # this script to read. That assert is load-bearing; see the comment on it.
 #
 # The compression constants (COMPRESSION_MIN_PAYLOAD, DECOMPRESSED_MAX_SIZE,

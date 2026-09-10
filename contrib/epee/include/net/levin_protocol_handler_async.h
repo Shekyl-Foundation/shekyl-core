@@ -560,7 +560,7 @@ public:
               invoke_response_handlers_guard.unlock();
 
               if(timer_cancelled)
-                response_handler->handle(m_current_head.m_return_code, buff_to_invoke, m_connection_context);
+                response_handler->handle(LEVIN_OK, buff_to_invoke, m_connection_context);
             }
             else
             {
@@ -575,7 +575,7 @@ public:
                 CRITICAL_REGION_BEGIN(m_local_inv_buff_lock);
                 m_local_inv_buff = std::string((const char*)buff_to_invoke.data(), buff_to_invoke.size());
                 buff_to_invoke = epee::span<const uint8_t>((const uint8_t*)NULL, 0);
-                m_invoke_result_code = m_current_head.m_return_code;
+                m_invoke_result_code = LEVIN_OK;
                 CRITICAL_REGION_END();
                 m_invoke_buf_ready = true;
               }
@@ -585,7 +585,7 @@ public:
             if(m_current_head.m_have_to_return_data)
             {
               levin::message_writer return_message{32 * 1024};
-              const uint32_t return_code = m_config.m_pcommands_handler->invoke(
+              m_config.m_pcommands_handler->invoke(
                 m_current_head.m_command, buff_to_invoke, return_message.buffer, m_connection_context
               );
 
@@ -593,7 +593,7 @@ public:
               if (m_current_head.m_command == m_connection_context.handshake_command() && m_connection_context.handshake_complete())
                 m_max_packet_size = m_config.m_max_packet_size;
 
-              if(!send_message(return_message.finalize_response(m_current_head.m_command, return_code)))
+              if(!send_message(return_message.finalize_response(m_current_head.m_command)))
                 return false;
             }
             else
@@ -627,7 +627,6 @@ public:
           phead.m_signature = SWAP64LE(phead.m_signature);
           phead.m_cb = SWAP64LE(phead.m_cb);
           phead.m_command = SWAP32LE(phead.m_command);
-          phead.m_return_code = SWAP32LE(phead.m_return_code);
           phead.m_flags = SWAP32LE(phead.m_flags);
           phead.m_protocol_version = SWAP32LE(phead.m_protocol_version);
 #endif

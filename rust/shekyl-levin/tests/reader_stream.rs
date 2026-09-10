@@ -61,7 +61,7 @@ fn one_byte_trickle_reassembles_a_notification() {
 fn classification_follows_flags_and_expect_response() {
     let mut stream = Vec::new();
     stream.extend(invoke(1001, b"req"));
-    stream.extend(response(1001, -4, b"rsp"));
+    stream.extend(response(1001, b"rsp"));
     stream.extend(notify(2002, b"ntf"));
 
     let mut reader = BucketReader::new();
@@ -77,7 +77,6 @@ fn classification_follows_flags_and_expect_response() {
         reader.next_message().unwrap(),
         Some(Received::Response {
             command: 1001,
-            return_code: -4,
             payload: b"rsp".to_vec(),
         })
     );
@@ -172,17 +171,14 @@ fn a_fatal_error_poisons_the_reader() {
 #[test]
 fn an_error_raised_mid_bucket_poisons_too() {
     // Inner header claims 100 payload bytes; the fragment body carries none.
-    let mut inner_head =
-        shekyl_levin::BucketHead::make(2002, 100, shekyl_levin::Flags::REQUEST, false);
-    inner_head.return_code = 0;
+    let inner_head = shekyl_levin::BucketHead::make(2002, 100, shekyl_levin::Flags::REQUEST, false);
     let inner = inner_head.write().to_vec();
-    let mut outer = shekyl_levin::BucketHead::make(
+    let outer = shekyl_levin::BucketHead::make(
         0,
         u64::try_from(inner.len()).unwrap(),
         shekyl_levin::Flags::END,
         false,
     );
-    outer.return_code = 0;
     let mut stream = outer.write().to_vec();
     stream.extend_from_slice(&inner);
     // A perfectly good message behind it, which must never be reached.
@@ -324,8 +320,7 @@ fn truncated_fragment_reassembly_rejected() {
     // contain the required inner message (C++: "Fragmented data too small").
     let inner_too_small = {
         // Build a fragment header claiming a 10-byte body with END set.
-        let mut head = shekyl_levin::BucketHead::make(0, 10, shekyl_levin::Flags::END, false);
-        head.return_code = 0;
+        let head = shekyl_levin::BucketHead::make(0, 10, shekyl_levin::Flags::END, false);
         let mut msg = head.write().to_vec();
         msg.extend_from_slice(&[0u8; 10]);
         msg
@@ -342,13 +337,12 @@ fn truncated_fragment_reassembly_rejected() {
 fn reassembled_inner_bad_signature_rejected() {
     let mut bad_inner = notify(2002, b"x");
     bad_inner[0] = 0xFF; // corrupt the signature of the logical message
-    let mut head = shekyl_levin::BucketHead::make(
+    let head = shekyl_levin::BucketHead::make(
         0,
         u64::try_from(bad_inner.len()).unwrap(),
         shekyl_levin::Flags::END,
         false,
     );
-    head.return_code = 0;
     let mut stream = head.write().to_vec();
     stream.extend_from_slice(&bad_inner);
 
@@ -362,18 +356,15 @@ fn reassembled_inner_bad_signature_rejected() {
 #[test]
 fn reassembled_inner_length_past_body_rejected() {
     // Inner header claims 100 payload bytes, but the fragment body only
-    // carries the 33-byte header (available = 0 after the inner header).
-    let mut inner_head =
-        shekyl_levin::BucketHead::make(2002, 100, shekyl_levin::Flags::REQUEST, false);
-    inner_head.return_code = 0;
+    // carries the 29-byte header (available = 0 after the inner header).
+    let inner_head = shekyl_levin::BucketHead::make(2002, 100, shekyl_levin::Flags::REQUEST, false);
     let inner = inner_head.write().to_vec(); // no payload bytes after it
-    let mut outer = shekyl_levin::BucketHead::make(
+    let outer = shekyl_levin::BucketHead::make(
         0,
         u64::try_from(inner.len()).unwrap(),
         shekyl_levin::Flags::END,
         false,
     );
-    outer.return_code = 0;
     let mut stream = outer.write().to_vec();
     stream.extend_from_slice(&inner);
 
@@ -400,13 +391,12 @@ fn reassembled_inner_payload_trimmed_to_declared_length() {
     inner.extend_from_slice(&[0u8; 9]);
     // Overwrite the outer framing: END fragment whose body is the padded
     // inner notification. The inner header still claims `real.len()`.
-    let mut outer = shekyl_levin::BucketHead::make(
+    let outer = shekyl_levin::BucketHead::make(
         0,
         u64::try_from(inner.len()).unwrap(),
         shekyl_levin::Flags::END,
         false,
     );
-    outer.return_code = 0;
     let mut stream = outer.write().to_vec();
     stream.extend_from_slice(&inner);
 
@@ -426,17 +416,16 @@ fn reassembled_inner_payload_trimmed_to_declared_length() {
 /// notification here.
 #[test]
 fn reassembled_response_classifies_by_inner_protocol_version() {
-    let mut inner = response(1001, -4, b"rsp");
-    // Overwrite the inner protocol-version field (bytes 29..33) with 0.
-    inner[29..33].copy_from_slice(&0u32.to_le_bytes());
+    let mut inner = response(1001, b"rsp");
+    // Overwrite the inner protocol-version field (bytes 25..29) with 0.
+    inner[25..29].copy_from_slice(&0u32.to_le_bytes());
 
-    let mut outer = shekyl_levin::BucketHead::make(
+    let outer = shekyl_levin::BucketHead::make(
         0,
         u64::try_from(inner.len()).unwrap(),
         shekyl_levin::Flags::END,
         false,
     );
-    outer.return_code = 0;
     // Outer still carries PROTOCOL_VERSION_1 (BucketHead::make default).
     let mut stream = outer.write().to_vec();
     stream.extend_from_slice(&inner);
@@ -510,9 +499,9 @@ fn q_flagged_command_zero_is_rejected() {
 #[test]
 fn unknown_flag_bit_is_rejected_on_a_defined_command() {
     let mut message = invoke(1001, b"req");
-    // flags field is bytes 25..29 (see BucketHead::write).
-    let flags = u32::from_le_bytes(message[25..29].try_into().unwrap());
-    message[25..29].copy_from_slice(&(flags | 0x20).to_le_bytes());
+    // flags field is bytes 21..25 (see BucketHead::write).
+    let flags = u32::from_le_bytes(message[21..25].try_into().unwrap());
+    message[21..25].copy_from_slice(&(flags | 0x20).to_le_bytes());
     let mut reader = BucketReader::new();
     reader.feed(&message[..HEADER_SIZE]).unwrap();
     assert_eq!(
@@ -537,13 +526,12 @@ fn end_without_begin_reassembles_from_empty_buffer() {
     // whatever the fragment buffer holds (possibly nothing) and completes.
     // A lone END fragment whose body is a complete inner message delivers.
     let inner = notify(2002, b"lone-end");
-    let mut head = shekyl_levin::BucketHead::make(
+    let head = shekyl_levin::BucketHead::make(
         0,
         u64::try_from(inner.len()).unwrap(),
         shekyl_levin::Flags::END,
         false,
     );
-    head.return_code = 0;
     let mut stream = head.write().to_vec();
     stream.extend_from_slice(&inner);
 
@@ -560,9 +548,9 @@ fn end_without_begin_reassembles_from_empty_buffer() {
 fn response_flag_without_version_one_is_not_a_response() {
     // The C++ classifies as response only when the peer's protocol version
     // is LEVIN_PROTOCOL_VER_1; otherwise expect_response decides.
-    let mut message = response(1001, -4, b"rsp");
-    // Overwrite the protocol-version field (bytes 29..33) with 0.
-    message[29..33].copy_from_slice(&0u32.to_le_bytes());
+    let mut message = response(1001, b"rsp");
+    // Overwrite the protocol-version field (bytes 25..29) with 0.
+    message[25..29].copy_from_slice(&0u32.to_le_bytes());
 
     assert_eq!(
         only_message(&message),
@@ -595,10 +583,10 @@ fn compressed_dummy_is_discarded_without_decompression() {
     // The noise check precedes the COMPRESSED check in handle_recv, so a
     // dummy with a garbage "compressed" body is discarded, not an error.
     let mut dummy = noise_notify(256).unwrap();
-    // Set the COMPRESSED bit on the flags field (bytes 25..29) — body stays
+    // Set the COMPRESSED bit on the flags field (bytes 21..25) — body stays
     // zeros, which is not a valid zstd frame.
-    let flags = u32::from_le_bytes(dummy[25..29].try_into().unwrap()) | 0x10;
-    dummy[25..29].copy_from_slice(&flags.to_le_bytes());
+    let flags = u32::from_le_bytes(dummy[21..25].try_into().unwrap()) | 0x10;
+    dummy[21..25].copy_from_slice(&flags.to_le_bytes());
 
     let mut reader = BucketReader::new();
     reader.feed(&dummy).unwrap();
@@ -641,8 +629,7 @@ fn compressed_payload_cannot_exceed_the_limit_in_force() {
 
     // Build the compressed bucket post-handshake, where the packet limit
     // permits it, then present it to a pre-handshake reader.
-    let mut builder = shekyl_levin::BucketHead::make(2002, inflated_len, Flags::REQUEST, false);
-    builder.return_code = 0;
+    let builder = shekyl_levin::BucketHead::make(2002, inflated_len, Flags::REQUEST, false);
     let mut raw = builder.write().to_vec();
     raw.extend_from_slice(&payload);
     let compressed = try_compress_message(raw);

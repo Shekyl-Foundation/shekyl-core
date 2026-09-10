@@ -67,7 +67,7 @@ pub fn noise_notify(noise_bytes: usize) -> Result<Vec<u8>, Error> {
 ///   to fill `noise_size` exactly (the payload parser ignores trailing
 ///   bytes);
 /// - otherwise the finalized notification (inner header included) is split
-///   across fragments: every fragment header claims `noise_size - 33` bytes
+///   across fragments: every fragment header claims `noise_size - HEADER_SIZE` bytes
 ///   of body, the first sets `B`, middles set neither, the last sets `E`
 ///   and its body is zero-padded to the same length.
 ///

@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The 33-byte Levin bucket header (`bucket_head2` in the C++ oracle) and
+//! The 29-byte Levin bucket header (`bucket_head2` in the C++ oracle) and
 //! its flag word. Byte layout per `docs/LEVIN_PROTOCOL.md` §Header; all
 //! multi-byte fields are little-endian.
 
@@ -13,8 +13,9 @@ use crate::Error;
 /// little-endian bytes read `01 21 01 01 01 01 01 01`.
 pub const LEVIN_SIGNATURE: u64 = 0x0101_0101_0101_2101;
 
-/// Serialized header size in bytes.
-pub const HEADER_SIZE: usize = 33;
+/// Serialized header size in bytes. The inherited `i32 return_code` at
+/// offset 21 is deleted (PWD-B5); flags follow command immediately.
+pub const HEADER_SIZE: usize = 29;
 
 /// The only protocol version Shekyl speaks (`LEVIN_PROTOCOL_VER_1`).
 pub const PROTOCOL_VERSION_1: u32 = 1;
@@ -84,7 +85,7 @@ impl Flags {
 ///
 /// The signature is verified on decode and written on encode; it is not
 /// stored. Every other field is kept in its wire form so that
-/// `BucketHead::read(b).write() == *b` for **any** 33 bytes carrying a valid
+/// `BucketHead::read(b).write() == *b` for **any** 29 bytes carrying a valid
 /// signature: unknown [`Flags`] bits are preserved verbatim, and
 /// `expect_response` keeps the raw `uint8_t` the C++ reads as truthy rather
 /// than being narrowed to a `bool` (which would re-encode a sender's `0x02`
@@ -99,8 +100,6 @@ pub struct BucketHead {
     pub expect_response: u8,
     /// Command identifier (e.g. 1001 handshake, 2002 new-transactions).
     pub command: u32,
-    /// Response return code; `0` on requests and notifications.
-    pub return_code: i32,
     /// Q/S/B/E/COMPRESSED flag word.
     pub flags: Flags,
     /// Protocol version; always [`PROTOCOL_VERSION_1`] from conforming peers.
@@ -108,15 +107,13 @@ pub struct BucketHead {
 }
 
 impl BucketHead {
-    /// Build a header the way the C++ `make_header` does: version 1,
-    /// return code 0.
+    /// Build a header the way the C++ `make_header` does: version 1.
     #[must_use]
     pub fn make(command: u32, payload_len: u64, flags: Flags, expect_response: bool) -> BucketHead {
         BucketHead {
             payload_len,
             expect_response: u8::from(expect_response),
             command,
-            return_code: 0,
             flags,
             protocol_version: PROTOCOL_VERSION_1,
         }
@@ -129,7 +126,7 @@ impl BucketHead {
         self.expect_response != 0
     }
 
-    /// Serialize to the 33-byte wire form.
+    /// Serialize to the 29-byte wire form.
     #[must_use]
     pub fn write(&self) -> [u8; HEADER_SIZE] {
         let mut out = [0u8; HEADER_SIZE];
@@ -137,13 +134,12 @@ impl BucketHead {
         out[8..16].copy_from_slice(&self.payload_len.to_le_bytes());
         out[16] = self.expect_response;
         out[17..21].copy_from_slice(&self.command.to_le_bytes());
-        out[21..25].copy_from_slice(&self.return_code.to_le_bytes());
-        out[25..29].copy_from_slice(&self.flags.bits().to_le_bytes());
-        out[29..33].copy_from_slice(&self.protocol_version.to_le_bytes());
+        out[21..25].copy_from_slice(&self.flags.bits().to_le_bytes());
+        out[25..29].copy_from_slice(&self.protocol_version.to_le_bytes());
         out
     }
 
-    /// Parse the 33-byte wire form, verifying the signature.
+    /// Parse the 29-byte wire form, verifying the signature.
     ///
     /// # Errors
     ///
@@ -165,9 +161,8 @@ impl BucketHead {
             payload_len: le_u64(8..16),
             expect_response: bytes[16],
             command: le_u32(17..21),
-            return_code: i32::from_le_bytes(bytes[21..25].try_into().expect("static 4-byte slice")),
-            flags: Flags::from_bits(le_u32(25..29)),
-            protocol_version: le_u32(29..33),
+            flags: Flags::from_bits(le_u32(21..25)),
+            protocol_version: le_u32(25..29),
         })
     }
 }
@@ -200,7 +195,6 @@ mod tests {
             payload_len: 0xDEAD_BEEF,
             expect_response: 1,
             command: 1001,
-            return_code: -7,
             flags: Flags::REQUEST.union(Flags::COMPRESSED),
             protocol_version: PROTOCOL_VERSION_1,
         };
@@ -217,7 +211,7 @@ mod tests {
         // A sender whose `expect_response` is truthy but not 1, and flag bits
         // outside the five this crate names.
         bytes[16] = 0x02;
-        bytes[25..29].copy_from_slice(&0x8000_0021u32.to_le_bytes());
+        bytes[21..25].copy_from_slice(&0x8000_0021u32.to_le_bytes());
 
         let head = BucketHead::read(&bytes).unwrap();
         assert!(head.expects_response(), "0x02 is truthy");

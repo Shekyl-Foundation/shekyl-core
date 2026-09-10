@@ -58,6 +58,8 @@ verdict is the next instance of that pattern (`shekyl-peer-policy`, FFI
 PWD-E7 / PWD-E9 landed the same day on `dev` (#672). PWD-B6 landed in #677;
 PWD-B7's typed drop verdict in #674. Counts below include all of these.
 
+**UPDATE 2026-09-10:** PWD-B5 landed (see row below). Counts include it.
+
 **How a verdict was reached.** PWD ids appear nowhere in code, so nothing here
 was grepped by identifier. For each decision the question asked was *what would
 have to be true of the tree if this were built* — a deleted symbol absent, a
@@ -134,7 +136,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **B3** per-command caps | **IMPLEMENTED** | 11-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001 and 1003 are unknown dispatch; sole block path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`); handshake 65536 reconstructed; support-flags 4096→256; 2003/2006 hash-list derived; 2007/2008/2009/2010 keep inherited envelopes (4/4/1/4 MiB); 2002/2004 take the packet limit until PWD-B12 / the 2004 byte budget; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
 | **B3a** unknown input rejected at ingress | **IMPLEMENTED** | `ingress_payload_cap` flag-class discriminator; unknown bits rejected on every bucket; noise/fragment with command 0 admitted; a Q/S-flagged 2001 is unknown input, same class as ping 1003 | **YES** — with B3 and B4, as one unit |
 | **B4** places B3a's ingress check | **IMPLEMENTED** | `shekyl_levin_ingress_admit` + `get_max_bytes(command, flags)` on outer and inner header parse; decompress uses the cached cap; codec still round-trips unknown bits (PWC-A6) | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
-| **B5** — | **NEVER RULED** | appears exactly once tree-wide, in `P2P_2_DISPATCH_BRIEF.md`; dispatched and never dispositioned | n/a — unruled decision, not a status |
+| **B5** `return_code` deleted | **IMPLEMENTED** | field absent from `bucket_head2`; `static_assert(sizeof(bucket_head2) == 29)` in `levin_base.h`; Rust `HEADER_SIZE = 29`; deletion comment at `levin_base.h:73`. `git grep m_return_code contrib/epee` hits that comment only. | **YES** — delete before nodes exist; cheaper than carrying four dead bytes into the Rust rewrite |
 | **B6** one block path | **IMPLEMENTED** | 2001 deleted; 2008 is the sole path. `HANDLE_NOTIFY_T2(NOTIFY_NEW_COMPACT_BLOCK)` at `cryptonote_protocol_handler.h:99`; `relay_block` emits `NOTIFY_NEW_COMPACT_BLOCK::ID` at `.inl:2725`; no `NOTIFY_NEW_BLOCK` handler remains. Identifiers are `COMPACT_*` (ids still 2008/2009). Two-limb test `block_propagation_has_exactly_one_command` refuses 2001 (`LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED`) and still dispatches 2008. | **YES** — landed; do it before nodes exist |
 | **B7** drop only when attributable | **IMPLEMENTED** | typed verdict in `shekyl-peer-policy`; FFI `shekyl_drop_verdict_severs`; `m_no_drop_offense` gone as a field. Three sites (tx relay, announce size, block-sync prepare). `drop_connections`-by-host and the score floor remain deferred (E9/E5), not this row | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
 | **B8** delete the undriven timer | **IMPLEMENTED** | #629 deleted `m_bad_peer_checker`, `network_address_old`, `connection_entry_base` | done |
@@ -165,7 +167,7 @@ exactly the set of PWD ids present across the round documents and the index:
 
 | | |
 |---|---|
-| IMPLEMENTED | 13 *(B3/B3a/B4 this PR; B6 #677; B7 #674; E7 and E9 2026-09-09; B8/B10/I1/I2/E5/E6 were already implemented)* |
+| IMPLEMENTED | 14 *(B5 this PR; B3/B3a/B4 #675; B6 #677; B7 #674; E7 and E9 2026-09-09; B8/B10/I1/I2/E5/E6 were already implemented)* |
 | PARTIAL | 1 |
 | NOT IMPLEMENTED | 11 |
 | NO BUILD REQUIRED | 2 |
@@ -174,7 +176,7 @@ exactly the set of PWD ids present across the round documents and the index:
 | RULED ELSEWHERE | 2 |
 | SUPERSEDED | 1 |
 | verification-only | 1 |
-| never ruled / not ruled | 2 (B5, A1) |
+| never ruled / not ruled | 1 (A1) |
 
 **12 of 37 are ruled and unbuilt** (11 NOT IMPLEMENTED + 1 PARTIAL). Six of
 those twelve are the transport cluster, which Rick has ruled out of alpha.8.
@@ -190,7 +192,10 @@ right way round given Rick's ruling. B6 and B10 have landed: one block path
 no `COMMAND_PING`. B3, B3a and B4 land here: unknown commands and unknown flag
 bits are rejected at ingress, and the 11-arm per-command cap table lives in
 `shekyl-levin`. The alpha.8 wire set Rick named (B6, B10, B3/B3a/B4, B7's
-typed remainder) is implemented. Transport (T1–T4, T6, T8) remains unbuilt.
+typed remainder) is implemented. **PWD-B5 is an extra wire shrink on the
+same pre-nodes window:** deleting the inherited header `i32` is cheaper
+now than carrying it into the Rust rewrite. Transport (T1–T4, T6, T8)
+remains unbuilt.
 
 **Correction, 2026-09-08 — one row of this sweep was wrong, and it was wrong in
 the way this section warns about.** PWD-B10 was first recorded NOT IMPLEMENTED
@@ -240,13 +245,14 @@ required for alpha.8" is not the same as "safe to ship indefinitely". Flagged
 rather than filed.
 
 **Two findings that are not statuses.** PWD-B5 was dispatched and never
-dispositioned — it exists in the brief and nowhere else. PWD-B3's own text
-stated the inherited cap table has **13** arms while the tree has **11**. That
-one is now explained rather than open: #643 removed `COMMAND_PING` (arm 3 of
-B3's own table, `:2803`) and PWD-B6 removed the 2001 `NOTIFY_NEW_BLOCK` arm.
-The B3 ingress table matches those deletions: 11 defined commands; a
-Q/S-flagged 2001 or 1003 is unknown input. B5 remains genuine round residue;
-neither is an implementation gap.
+dispositioned until 2026-09-10 — it existed in the brief and nowhere else.
+It is now ruled and implemented (delete the field; see the B5 row). PWD-B3's
+own text stated the inherited cap table has **13** arms while the tree has
+**11**. That one is now explained rather than open: #643 removed
+`COMMAND_PING` (arm 3 of B3's own table, `:2803`) and PWD-B6 removed the
+2001 `NOTIFY_NEW_BLOCK` arm. The B3 ingress table matches those deletions:
+11 defined commands; a Q/S-flagged 2001 or 1003 is unknown input. B5 is no
+longer round residue.
 
 ## 1. Invariants — requirements in, not subjects
 
@@ -2795,7 +2801,7 @@ self-minted set is no longer the strongest evidence obtainable.
 | Row | Disposition | Where |
 | --- | --- | --- |
 | PWC-A1 (`LEVIN_SIGNATURE` fixed 8 bytes) | **Ruled** — kept, re-derived from `network_id`, repriced to two jobs: cheap rejection of non-adversarial noise, and the responder's network separation | PWD-T5 |
-| PWC-A2 (33-byte bucket header, field order) | **Deferred — named blocker: PWD-B3 owns per-command caps**, and the header's length field cannot be sized before them. Target pre-genesis, queued in FOLLOWUPS | PWD-B3 |
+| PWC-A2 (29-byte bucket header, field order) | **Deferred — named blocker: PWD-B3 owns per-command caps**, and the header's length field cannot be sized before them. Target pre-genesis, queued in FOLLOWUPS. *(Size 33→29 is PWD-B5, independent of this deferral.)* | PWD-B3 |
 | PWC-A3 (one protocol version, never negotiated) | **Ruled** — the **protocol name** is mixed into `ck` at initialisation, so a suite mismatch fails on **both** sides; version negotiation is refused for the same reason PW-19a refuses identity: it is a claim, and the binding makes it unnecessary. *(The `network_id` prologue is the initiator-side binding and is a weaker instance — see PWD-T1.)* | PWD-T1 |
 | PWC-A4 (256 KiB pre-handshake limit) | **Ruled** — collapses to one first flight | PWD-T6 |
 | PWC-A5 (100 MB post-handshake, inherited) | **Ruled** — replaced by a derivation terminating on PWD-B3 | PWD-T6 |
@@ -2822,8 +2828,8 @@ dependency that prevents deciding (rule 22). The row count is unchanged; the
 claim about what this cluster ruled is not.*
 
 **Not decided here, and named so the boundary is legible:** per-command caps and
-the rekey interval (PWD-B3), the `return_code` and unknown-flag questions
-(PWD-B4/B5), and every behavioural cadence (cluster B). **PWD-T6's post-handshake
+the rekey interval (PWD-B3), the unknown-flag question (PWD-B4), and every
+behavioural cadence (cluster B). **PWD-T6's post-handshake
 limit and PWD-T3's interval both terminate on cluster B** — that is a real
 dependency, stated rather than papered over with a placeholder number.
 
@@ -2921,8 +2927,8 @@ checkable against the release plan rather than against a benchmark.
 
 > **PWD-B4 applies this rule; it does not re-derive it.** B4's remaining work is
 > the *ingress check's* placement and its interaction with the framing rows
-> (PWC-A6/A6a/A7), not the policy. Recorded here so the two sub-rounds cannot
-> reach different answers.
+> (PWC-A6/A6a), not the policy. Recorded here so the two sub-rounds cannot
+> reach different answers. PWC-A7 (`return_code`) is PWD-B5, not this row.
 
 ### PWD-B6 — one block-propagation path, not two
 
@@ -2976,6 +2982,45 @@ mechanism for whatever the sender omitted.
 path exceeds the full-block path by more than one round-trip time at the
 95th percentile**, on the Q12-D6a rig — a figure that would mean the missing-tx
 fetch is not the bounded cost this ruling assumes.
+
+### PWD-B5 — delete `return_code` from every bucket
+
+**RULED and IMPLEMENTED: the inherited RPC-over-Levin `i32` is gone.** The
+header is 29 bytes. Flags follow command immediately. The slot is retired,
+never reused.
+
+Notifications always wrote `0`. The three remaining invokes (handshake /
+timed-sync / support-flags) put the handler's `int` on the wire.
+Application callbacks already tested `code < 0`, which also fires for
+**local** epee errors (timeout `-4`, destroyed `-3`) that never hit the
+wire. The epee invoke wrapper still treated `code <= 0` as failure
+because it expected the handler's positive `1`; that `1` left with the
+field. A `RESPONSE` now delivers `LEVIN_OK` (0) — a reply arrived — and
+the wrapper fails only on `code < 0`. Handshake failures
+`drop_connection` then `return 1` — Levin "success," then hang-up. Real
+success or failure is the **payload or the close**.
+
+The local invoke-callback `int` stays for timeout/destroyed. That is API,
+not wire. C++ `invoke()` handlers may still return `int`; it is not
+serialized. On receive of a `RESPONSE` bucket the async callback gets
+`LEVIN_OK` (a reply arrived). Body parse is how the initiator fails.
+
+| Option | Adversary / channel | Verdict |
+| --- | --- | --- |
+| **Delete the field** | A peer reading implementation state from a header status; a port that has to carry four bytes nobody consumes | **Adopted.** Pre-genesis, cheaper than carrying the field into the Rust rewrite |
+| Keep, zero, ignore | The same | **Refused.** Four bytes of always-zero is a fingerprint and a lie about a status that is not there |
+| Park a NACK in the flag word | The same | **Refused.** The flag word is framing (Q/S/B/E/COMPRESSED). PWD-B4 rejects unknown bits. A later NACK is a **command body**, not a header `i32` |
+
+**Conceded.** There is no header-level "understood, refused, stay up"
+without hanging up or putting the refusal in a reply body. No
+compatibility with 33-byte peers.
+
+**Falsifier.** **Reopen if a live command must say "understood, refused,
+stay up" and hang-up plus a reply body cannot.**
+
+| Row | Disposition | Where |
+| --- | --- | --- |
+| PWC-A7 (`return_code` on every bucket) | **Ruled** — deleted from the wire | PWD-B5 |
 
 ### PWD-B3 — per-command caps, and the bound that is not a number
 
@@ -3236,6 +3281,11 @@ with a computable subject rather than a static number to compare against.
 | PWC-A6a (no relay carries unknown bits today) | **Absorbed** | PWD-B3a (it is the reason the change is safe now) |
 
 **Sum check: 3 ruled + 1 absorbed + 0 deferred = 4 rows.** ✅
+
+> **UPDATE 2026-09-10 — PWD-B5 / PWC-A7.** B5 was dispatched and never sat in
+> a sub-round. It is ruled and implemented in the same PR as this note:
+> `return_code` is deleted. PWC-A7 leaves the remain list below; the
+> historical 4-row sum of this sub-round is unchanged.
 
 **Running total as of cluster B's first sub-round — historical:** **22 of 46**
 bucket-4 rows dispositioned — cluster I's 10 + cluster T's 8 + this
@@ -3890,10 +3940,10 @@ no falsifier, which §0 requires of a ruling. The row count and the running
 total are unchanged — a deferred row is still dispositioned — but the claim
 about what this sub-round ruled is not.*
 
-**Running total against the round's gate — authoritative:** **31 of 46**
+**Running total against the round's gate — authoritative:** **32 of 46**
 bucket-4 rows dispositioned — cluster I's 10 + cluster T's 8 + B sub-round 1's
-4 + B sub-round 2's 4 + this sub-round's 5. **15 rows remain**, all in cluster
-B: `PWC-A7`, `PWC-B1`, `PWC-B2`, `PWC-B4`, `PWC-B5`, `PWC-B6`, `PWC-B7`,
+4 + B sub-round 2's 4 + this sub-round's 5 + PWD-B5's PWC-A7. **14 rows remain**, all in cluster
+B: `PWC-B1`, `PWC-B2`, `PWC-B4`, `PWC-B5`, `PWC-B6`, `PWC-B7`,
 `PWC-C1`, `PWC-C5`, `PWC-C6`, `PWC-C8`, `PWC-E11`, `PWC-E13`, `PWC-E14`,
 `PWC-F4`.
 
