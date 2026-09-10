@@ -97,10 +97,10 @@ namespace cryptonote {
     // Production consumers are the fee/relay floors that must not track
     // demand (CEN-M3's held machinery); everything reward-paying calls the
     // volume-aware overload below.
-    return get_block_reward(median_weight, current_block_weight, already_generated_coins, reward, version, SHEKYL_TX_VOLUME_BASELINE);
+    return get_block_reward(median_weight, current_block_weight, already_generated_coins, reward, version, shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1});
   }
   //-----------------------------------------------------------------------------------------------
-  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version, uint64_t tx_volume_avg)
+  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version, shekyl::tx_volume_window tx_volume)
   {
     // Marshaling shim for THE one owner of the paid reward
     // (shekyl-economics `paid_block_reward`, FL-R12' signed composition):
@@ -136,7 +136,8 @@ namespace cryptonote {
         current_block_weight,
         already_generated_coins,
         get_min_block_weight(version),
-        tx_volume_avg,
+        tx_volume.tx_count_sum,
+        tx_volume.blocks,
         &computed,
         &weight_limit);
 

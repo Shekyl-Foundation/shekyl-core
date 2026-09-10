@@ -23,6 +23,7 @@ pub mod escalation;
 pub mod fee;
 pub mod params;
 pub mod release;
+pub mod volume;
 
 pub use activity::{ActivityInvariantViolation, ActivityMetric};
 pub use burn::{
@@ -49,3 +50,4 @@ pub use params::{
     EMISSION_CURVE_ASYMPTOTE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 pub use release::calc_release_multiplier;
+pub use volume::TxVolume;

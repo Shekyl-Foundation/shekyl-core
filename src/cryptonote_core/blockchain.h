@@ -58,6 +58,7 @@
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "cryptonote_basic/difficulty.h"
+#include "shekyl/tx_volume_window.h"
 #include "cryptonote_tx_utils.h"
 #include "tx_verification_utils.h"
 #include "cryptonote_basic/verification_context.h"
@@ -396,7 +397,17 @@ namespace cryptonote
      * @return true if block template filled in successfully, else false
      */
     bool get_miner_data(uint8_t& major_version, uint64_t& height, crypto::hash& prev_id, crypto::hash& seed_hash, difficulty_type& difficulty, uint64_t& median_weight, uint64_t& already_generated_coins, std::vector<tx_block_template_backlog_entry>& tx_backlog);
-    uint64_t get_tx_volume_avg(uint64_t height) const;
+    /**
+     * @brief the transaction-volume operand at @p height, as the exact window
+     *
+     * Counts transactions over the trailing SHEKYL_TX_VOLUME_WINDOW blocks
+     * below @p height and returns the pair (tx_count_sum, blocks). It does
+     * NOT divide: since FL-R24 the ratio is formed Rust-side, in one
+     * division with the baseline, so the operand the reward and the fee
+     * floor see is the exact mean and not its integer floor. Memoized per
+     * (tip, height); see the definition.
+     */
+    shekyl::tx_volume_window get_tx_volume_window(uint64_t height) const;
 
     /**
      * @brief checks if a block is known about with a given hash
@@ -1254,14 +1265,14 @@ namespace cryptonote
     crypto::hash m_difficulty_for_next_block_top_hash;
     difficulty_type m_difficulty_for_next_block;
 
-    // Memo for get_tx_volume_avg, keyed on (top block hash, height) so it
-    // is a memoization of a pure function of chain state and never a held
-    // value two nodes could disagree on. See the function for why it is
-    // needed.
-    mutable epee::critical_section m_tx_volume_avg_lock;
-    mutable crypto::hash m_tx_volume_avg_top_hash;
-    mutable uint64_t m_tx_volume_avg_height;
-    mutable uint64_t m_tx_volume_avg_value;
+    // Memo for get_tx_volume_window, keyed on (top block hash, height) so
+    // it is a memoization of a pure function of chain state and never a
+    // held value two nodes could disagree on. See the function for why it
+    // is needed.
+    mutable epee::critical_section m_tx_volume_window_lock;
+    mutable crypto::hash m_tx_volume_window_top_hash;
+    mutable uint64_t m_tx_volume_window_height;
+    mutable shekyl::tx_volume_window m_tx_volume_window_value;
 
     boost::asio::io_context m_async_service;
     boost::thread_group m_async_pool;

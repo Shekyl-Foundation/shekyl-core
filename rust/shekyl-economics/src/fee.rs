@@ -35,6 +35,7 @@
 
 use crate::params::{EconomicParams, SCALE};
 use crate::release::calc_release_multiplier;
+use crate::volume::TxVolume;
 
 /// `CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES = 2`:
 /// `round_money_up(v, 2)` — round UP to 2 significant decimal digits.
@@ -137,14 +138,14 @@ pub fn quantize_pow2_ceil(c_scaled: u64) -> u64 {
 /// transliterated copy had already drifted.**
 #[must_use]
 pub fn fee_correction_quantized(
-    tx_volume_avg: u64,
+    tx_volume: TxVolume,
     sigma_scaled: u64,
     burn_pct_scaled: u64,
     prev_cq_scaled: u64,
     params: &EconomicParams,
 ) -> u64 {
     let m_r = calc_release_multiplier(
-        tx_volume_avg,
+        tx_volume,
         params.tx_volume_baseline,
         params.release_min,
         params.release_max,
@@ -540,13 +541,25 @@ mod tests {
         let p = EconomicParams::default();
         // v = 51 at zero sigma/burn puts raw C = 1.02 — just past the
         // 2^0 boundary, inside the 3% band of a held C_q = 1.
-        assert_eq!(fee_correction_quantized(51, 0, 0, SCALE, &p), SCALE);
+        assert_eq!(
+            fee_correction_quantized(TxVolume::per_block(51), 0, 0, SCALE, &p),
+            SCALE
+        );
         // Without a previous value it snaps up.
-        assert_eq!(fee_correction_quantized(51, 0, 0, 0, &p), 2 * SCALE);
+        assert_eq!(
+            fee_correction_quantized(TxVolume::per_block(51), 0, 0, 0, &p),
+            2 * SCALE
+        );
         // A decisive move (v = 65 → M_r = 1.3) leaves the band and steps.
-        assert_eq!(fee_correction_quantized(65, 0, 0, SCALE, &p), 2 * SCALE);
+        assert_eq!(
+            fee_correction_quantized(TxVolume::per_block(65), 0, 0, SCALE, &p),
+            2 * SCALE
+        );
         // And a held higher step survives small dips below its boundary.
-        assert_eq!(fee_correction_quantized(51, 0, 0, 2 * SCALE, &p), 2 * SCALE);
+        assert_eq!(
+            fee_correction_quantized(TxVolume::per_block(51), 0, 0, 2 * SCALE, &p),
+            2 * SCALE
+        );
     }
 
     /// §10.12.4's KAT: a one-cell fold IS the unseeded snap, and a fold

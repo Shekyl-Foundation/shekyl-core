@@ -72,7 +72,7 @@ Drift labels:
    - `gen_block_reward` test re-enabled and rewritten to verify miner
      outputs against the four-component formula (release multiplier +
      emission split + fee burn). `chaingen.cpp` test generator now passes
-     explicit `circulating_supply`, `tx_volume_avg`, `stake_ratio`, and
+     explicit `circulating_supply`, `tx_volume` (the FL-R24 window pair), `stake_ratio`, and
      `genesis_ng_height` to `construct_miner_tx` for parameter parity
      with the validator.
    - Status: `implemented` (80/80 core_tests pass)

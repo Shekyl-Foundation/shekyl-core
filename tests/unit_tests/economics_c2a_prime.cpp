@@ -75,7 +75,7 @@ TEST(EconomicsC2aPrime, Layer1SubsidyWithReleaseCallPathMatchesFfiPrimitives) {
         already_generated,
         cpp_reward,
         1,
-        SHEKYL_TX_VOLUME_BASELINE));
+        shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1}));
 
     // FL-R12': the release multiplier composes INSIDE the one owner
     // (shekyl_block_reward); at baseline volume it is exactly 1, so the
@@ -99,7 +99,7 @@ TEST(EconomicsC2aPrime, Layer1PerQuantityCallPathComposesSplitAndCoinbase) {
     // Q_subsidy → Q_full_emission (release applied at empty-block volume 0).
     uint64_t q_full = 0;
     ASSERT_TRUE(get_block_reward(
-        0, kStandardBlockWeight, ag, q_full, 1, /*tx_volume_avg=*/0));
+        0, kStandardBlockWeight, ag, q_full, 1, /*tx_volume=*/{}));
 
     for (const uint64_t height : height_grid) {
       // Q_miner_base / Q_staker_emission via the production split.
@@ -128,7 +128,7 @@ TEST(EconomicsC2aPrime, Layer1PerQuantityCallPathComposesSplitAndCoinbase) {
       // legs to zero independently so the coinbase collapse is a real check:
       // a regression where compute_fee_burn returned a nonzero miner leg for
       // zero fees would now fail here rather than pass tautologically.
-      const shekyl::BurnResult no_fee = shekyl::compute_fee_burn(0, 0, ag, /*frozen_segment_count=*/0);
+      const shekyl::BurnResult no_fee = shekyl::compute_fee_burn(0, shekyl::tx_volume_window{}, ag, /*frozen_segment_count=*/0);
       EXPECT_EQ(no_fee.miner_fee_income, UINT64_C(0))
           << "fee-free miner leg nonzero: ag=" << ag << " h=" << height;
       EXPECT_EQ(no_fee.staker_pool_amount, UINT64_C(0))
@@ -154,7 +154,7 @@ TEST(EconomicsC2aPrime, Layer2FullEmissionAccumulationCallPathMatchesFfiPrimitiv
         ag_cpp,
         q_sub,
         1,
-        SHEKYL_TX_VOLUME_BASELINE));
+        shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1}));
 
     // FL-R12': multiplier inside the one owner; 1 at baseline.
     const uint64_t q_rust = shekyl_base_block_reward(ag_rust);
@@ -176,7 +176,7 @@ TEST(EconomicsC2aPrime, Layer2MinerOnlyAccumulationDiffersFromFullEmission) {
   for (unsigned height = 1; height <= 100; ++height) {
     uint64_t q_sub = 0;
     ASSERT_TRUE(get_block_reward(
-        0, kStandardBlockWeight, ag_full, q_sub, 1, SHEKYL_TX_VOLUME_BASELINE));
+        0, kStandardBlockWeight, ag_full, q_sub, 1, shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1}));
 
     const shekyl::EmissionSplit split =
         shekyl::compute_emission_split(q_sub, height, 0);

@@ -26,6 +26,8 @@
 
 use serde::Serialize;
 
+use crate::volume::TxVolume;
+
 /// Structural-invariant failure from [`ActivityMetric::new`].
 ///
 /// These are field combinations impossible for **any** single chain
@@ -78,9 +80,10 @@ pub enum ActivityInvariantViolation {
 /// in-memory construction path is `new`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ActivityMetric {
-    /// Rolling `SHEKYL_TX_VOLUME_WINDOW` (720-block) mean transaction
-    /// count, daemon-reported (`get_tx_volume_avg(as_of_height)`).
-    tx_volume: u64,
+    /// The trailing `SHEKYL_TX_VOLUME_WINDOW` (720-block) transaction
+    /// volume as the exact ratio the daemon's
+    /// `get_tx_volume_window(as_of_height)` marshals (FL-R24).
+    tx_volume: TxVolume,
     /// Prev-block `already_generated` at `as_of_height` — the
     /// consensus burn-site quantity (`validate_miner_transaction`),
     /// **not** `already_generated − total_burned`.
@@ -110,7 +113,7 @@ impl ActivityMetric {
     /// EMISSION_CURVE_ASYMPTOTE` is a reachable chain state and rejecting
     /// it would fail the burn advisory precisely in the terminal regime.
     pub fn new(
-        tx_volume: u64,
+        tx_volume: TxVolume,
         circulating_supply: u64,
         total_staked: u128,
         as_of_height: u64,
@@ -137,7 +140,7 @@ impl ActivityMetric {
 
     /// Rolling-window mean transaction count (see field docs).
     #[must_use]
-    pub const fn tx_volume(&self) -> u64 {
+    pub const fn tx_volume(&self) -> TxVolume {
         self.tx_volume
     }
 
@@ -168,14 +171,15 @@ mod tests {
 
     #[test]
     fn new_accepts_steady_state() {
-        let m = ActivityMetric::new(48, 987_654_321, 12_345_678, 1234).unwrap();
-        assert_eq!(m.tx_volume, 48);
+        let m =
+            ActivityMetric::new(TxVolume::per_block(48), 987_654_321, 12_345_678, 1234).unwrap();
+        assert_eq!(m.tx_volume, TxVolume::per_block(48));
         assert_eq!(m.as_of_height, 1234);
     }
 
     #[test]
     fn new_accepts_genesis_zero_state() {
-        let m = ActivityMetric::new(0, 0, 0, 0).unwrap();
+        let m = ActivityMetric::new(TxVolume::per_block(0), 0, 0, 0).unwrap();
         assert_eq!(m.circulating_supply, 0);
     }
 
@@ -188,14 +192,14 @@ mod tests {
     /// asserting an invariant the emission owner does not hold.
     #[test]
     fn new_accepts_circulating_past_the_asymptote() {
-        let m = ActivityMetric::new(0, EMISSION_CURVE_ASYMPTOTE + 1, 0, 10)
+        let m = ActivityMetric::new(TxVolume::per_block(0), EMISSION_CURVE_ASYMPTOTE + 1, 0, 10)
             .expect("past-asymptote supply is reachable under the perpetual tail");
         assert_eq!(m.circulating_supply, EMISSION_CURVE_ASYMPTOTE + 1);
     }
 
     #[test]
     fn new_rejects_staked_over_circulating() {
-        let err = ActivityMetric::new(0, 1_000, 1_001, 10).unwrap_err();
+        let err = ActivityMetric::new(TxVolume::per_block(0), 1_000, 1_001, 10).unwrap_err();
         assert!(matches!(
             err,
             ActivityInvariantViolation::StakedExceedsCirculating { .. }
@@ -204,7 +208,7 @@ mod tests {
 
     #[test]
     fn new_rejects_nonzero_genesis() {
-        let err = ActivityMetric::new(0, 1, 0, 0).unwrap_err();
+        let err = ActivityMetric::new(TxVolume::per_block(0), 1, 0, 0).unwrap_err();
         assert!(matches!(
             err,
             ActivityInvariantViolation::GenesisStateNonZero { .. }

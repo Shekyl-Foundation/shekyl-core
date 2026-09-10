@@ -59,7 +59,7 @@ bool economics_c2a_prime_layer3_pop_replay::verify_pop_replay(
     // already_generated delta MUST equal the FULL block subsidy (miner emission
     // + staker emission), recomputed independently from the Rust 0h curve and
     // the release multiplier the chain applies to these empty blocks
-    // (tx_volume_avg == 0 → RELEASE_MIN, since get_tx_volume_avg counts only
+    // (empty volume window → RELEASE_MIN, since get_tx_volume_window counts only
     // non-coinbase txs). If validate_miner_transaction's base_reward out-param is
     // ever overwritten with the miner-only emission again (the :1608 regression),
     // the connect path at blockchain.cpp :4945 accumulates the miner share

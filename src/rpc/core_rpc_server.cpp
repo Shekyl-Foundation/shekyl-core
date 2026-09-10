@@ -261,13 +261,13 @@ namespace cryptonote
       already_generated = m_core.get_blockchain_storage().get_db().get_block_already_generated_coins(res.height - 1);
 
     // Shekyl NG four-component economics fields
-    const uint64_t tx_vol_avg = m_core.get_blockchain_storage().get_tx_volume_avg(res.height);
+    const shekyl::tx_volume_window tx_volume = m_core.get_blockchain_storage().get_tx_volume_window(res.height);
     res.release_multiplier = shekyl_calc_release_multiplier(
-        tx_vol_avg, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
+        tx_volume.tx_count_sum, tx_volume.blocks, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
     // Burn is a pure function of activity and supply — stake was deleted as a
     // burn input (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md F-D).
     res.burn_pct = shekyl_calc_burn_pct(
-        tx_vol_avg, SHEKYL_TX_VOLUME_BASELINE,
+        tx_volume.tx_count_sum, tx_volume.blocks, SHEKYL_TX_VOLUME_BASELINE,
         already_generated, SHEKYL_EMISSION_CURVE_ASYMPTOTE,
         SHEKYL_BURN_BASE_RATE, SHEKYL_BURN_CAP);
     res.total_burned = m_core.get_blockchain_storage().get_db().get_total_burned();

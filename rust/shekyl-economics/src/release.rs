@@ -5,7 +5,7 @@
 //! tail floors the result afterward (FL-R12′):
 //!
 //! ```text
-//! M_r  = clamp(tx_volume_avg / tx_volume_baseline, RELEASE_MIN, RELEASE_MAX)
+//! M_r  = clamp(tx_volume / tx_volume_baseline, RELEASE_MIN, RELEASE_MAX)
 //! paid = max(M_r · curve(remaining), TAIL) · penalty(x)
 //! ```
 //!
@@ -22,11 +22,13 @@
 //! an end.
 
 use crate::params::{clamp, SCALE};
+use crate::volume::TxVolume;
 
 /// Calculate the release rate multiplier from transaction volume.
 ///
 /// # Arguments
-/// * `tx_volume_avg` - Rolling average tx count over the volume window
+/// * `tx_volume` - The trailing-window transaction volume as the exact
+///   ratio `tx_count_sum : blocks` ([`TxVolume`], FL-R24)
 /// * `tx_volume_baseline` - Reference transaction volume (from config)
 /// * `release_min` - Minimum multiplier (fixed-point, e.g. 800_000 = 0.8)
 /// * `release_max` - Maximum multiplier (fixed-point, e.g. 1_300_000 = 1.3)
@@ -34,7 +36,7 @@ use crate::params::{clamp, SCALE};
 /// # Returns
 /// Fixed-point multiplier in SCALE units. 1_000_000 = 1.0x release rate.
 pub fn calc_release_multiplier(
-    tx_volume_avg: u64,
+    tx_volume: TxVolume,
     tx_volume_baseline: u64,
     release_min: u64,
     release_max: u64,
@@ -43,20 +45,15 @@ pub fn calc_release_multiplier(
         return SCALE; // 1.0x if baseline is unconfigured
     }
 
-    // ratio = tx_volume_avg / tx_volume_baseline, scaled to SCALE.
-    // Saturating, not truncating: this is reached through `extern "C"`
-    // (`shekyl_calc_release_multiplier`, and `fee_correction_quantized`'s
-    // `M_r`), where the volume and baseline are bare `u64`s. A wrapping
-    // cast turns a ratio past the rail into a SMALL one, which `clamp`
-    // then honours as `release_min` — the opposite end of the range from
-    // the truth. Saturating lands on `release_max`, which is where an
-    // unboundedly-high volume belongs.
-    let ratio = u64::try_from(
-        u128::from(tx_volume_avg) * u128::from(SCALE) / u128::from(tx_volume_baseline),
+    // ratio = tx_volume / tx_volume_baseline in SCALE units, one division
+    // with the baseline and the window length both in the denominator
+    // (FL-R24: nothing truncated before the ratio). Saturating past the
+    // rail — the reasoning is on `TxVolume::ratio_scaled`.
+    clamp(
+        tx_volume.ratio_scaled(tx_volume_baseline),
+        release_min,
+        release_max,
     )
-    .unwrap_or(u64::MAX);
-
-    clamp(ratio, release_min, release_max)
 }
 
 /// Apply the release multiplier to a CURVE emission.
@@ -95,7 +92,12 @@ mod tests {
     #[test]
     fn a_ratio_past_the_rail_clamps_to_the_top_not_the_bottom() {
         let just_past_the_rail = 18_446_744_073_710u64; // ⌈2⁶⁴ / SCALE⌉
-        let got = calc_release_multiplier(just_past_the_rail, 1, 800_000, 1_300_000);
+        let got = calc_release_multiplier(
+            TxVolume::per_block(just_past_the_rail),
+            1,
+            800_000,
+            1_300_000,
+        );
         assert_eq!(
             got, 1_300_000,
             "a ratio past the rail belongs at release_max; \
@@ -105,36 +107,36 @@ mod tests {
 
     #[test]
     fn test_baseline_volume_returns_1x() {
-        let m = calc_release_multiplier(100, 100, 800_000, 1_300_000);
+        let m = calc_release_multiplier(TxVolume::per_block(100), 100, 800_000, 1_300_000);
         assert_eq!(m, 1_000_000);
     }
 
     #[test]
     fn test_low_volume_clamps_to_min() {
-        let m = calc_release_multiplier(10, 100, 800_000, 1_300_000);
+        let m = calc_release_multiplier(TxVolume::per_block(10), 100, 800_000, 1_300_000);
         assert_eq!(m, 800_000);
     }
 
     #[test]
     fn test_high_volume_clamps_to_max() {
-        let m = calc_release_multiplier(500, 100, 800_000, 1_300_000);
+        let m = calc_release_multiplier(TxVolume::per_block(500), 100, 800_000, 1_300_000);
         assert_eq!(m, 1_300_000);
     }
 
     #[test]
     fn test_zero_baseline_returns_1x() {
-        let m = calc_release_multiplier(100, 0, 800_000, 1_300_000);
+        let m = calc_release_multiplier(TxVolume::per_block(100), 0, 800_000, 1_300_000);
         assert_eq!(m, SCALE);
     }
 
     #[test]
     fn test_proportional_scaling() {
         // 150 / 100 = 1.5, clamped to 1.3
-        let m = calc_release_multiplier(150, 100, 800_000, 1_300_000);
+        let m = calc_release_multiplier(TxVolume::per_block(150), 100, 800_000, 1_300_000);
         assert_eq!(m, 1_300_000);
 
         // 120 / 100 = 1.2, within bounds
-        let m = calc_release_multiplier(120, 100, 800_000, 1_300_000);
+        let m = calc_release_multiplier(TxVolume::per_block(120), 100, 800_000, 1_300_000);
         assert_eq!(m, 1_200_000);
     }
 
@@ -158,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_zero_volume() {
-        let m = calc_release_multiplier(0, 100, 800_000, 1_300_000);
+        let m = calc_release_multiplier(TxVolume::per_block(0), 100, 800_000, 1_300_000);
         assert_eq!(m, 800_000);
     }
 
@@ -171,7 +173,7 @@ mod tests {
         let samples = [0u64, 10, 25, 50, 75, 100, 120, 150, 500];
         let mut prev = 0u64;
         for s in samples {
-            let m = calc_release_multiplier(s, baseline, min, max);
+            let m = calc_release_multiplier(TxVolume::per_block(s), baseline, min, max);
             assert!(
                 m >= prev,
                 "multiplier regressed at volume {s}: {m} < {prev}"

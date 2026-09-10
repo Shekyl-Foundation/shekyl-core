@@ -47,7 +47,7 @@ use shekyl_economics::{
     calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
     effective_emission, emission_speed_factor, hysteresis_fold, hysteresis_settled,
     hysteresis_step, paid_block_reward, projected_already_generated, tail_subsidy_per_block,
-    EconomicParams, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    EconomicParams, TxVolume, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
@@ -61,7 +61,7 @@ pub(crate) const FULL_REWARD_ZONE_V5: u64 = shekyl_wire::transaction::MIN_BLOCK_
 /// pinned copy wallet-side.
 pub(crate) const REF_TX_WEIGHT: u64 = 3_000;
 
-/// Rolling `tx_volume_avg` window (`SHEKYL_TX_VOLUME_WINDOW`): 720 blocks =
+/// Rolling transaction-volume window (`SHEKYL_TX_VOLUME_WINDOW`): 720 blocks =
 /// one day at 120 s. Build-generated from `config/economics_params.json` so
 /// a pre-genesis window recalibration cannot leave this instrument silently
 /// measuring a window the chain no longer uses.
@@ -152,27 +152,24 @@ pub struct CorrectionPoint {
 /// crate. Single division (`(1−σ)·M_r / (1−b)`) so no intermediate
 /// truncation is amplified; `b < SCALE` structurally (burn cap 0.9).
 fn correction_factor(v: u64, circulating: u64, height: u64, params: &EconomicParams) -> Correction {
-    correction_factor_ratio(v, params.tx_volume_baseline, circulating, height, params)
+    correction_factor_ratio(TxVolume::per_block(v), circulating, height, params)
 }
 
-/// [`correction_factor`] with the volume operand given as a RATIO
-/// `v_num / baseline`. Both owners (`calc_release_multiplier`,
-/// `calc_burn_pct`) take `(volume, baseline)` and form the quotient
-/// internally, so `(tx_count_sum, baseline · 720)` evaluates the 720-block
-/// SMA at exact rational resolution — no new economics code, only a
-/// different pair of arguments. §11 (FL-E2) measures the shipped
-/// integer-truncated operand (`tx_count_sum / 720`, `blockchain.cpp:2115`)
-/// against this one.
+/// [`correction_factor`] with the volume operand given as the exact
+/// window [`TxVolume`] the owners take since FL-R24 (PR A): `window(sum,
+/// 720)` is the 720-block SMA at rational resolution and `per_block(sum /
+/// 720)` the integer-truncated operand the daemon used to ship — §11
+/// (FL-E2) measures the two against each other through this one function.
 pub(crate) fn correction_factor_ratio(
-    v_num: u64,
-    baseline: u64,
+    volume: TxVolume,
     circulating: u64,
     height: u64,
     params: &EconomicParams,
 ) -> Correction {
-    let m_r = calc_release_multiplier(v_num, baseline, params.release_min, params.release_max);
+    let baseline = params.tx_volume_baseline;
+    let m_r = calc_release_multiplier(volume, baseline, params.release_min, params.release_max);
     let b = calc_burn_pct(
-        v_num,
+        volume,
         baseline,
         circulating,
         params.emission_curve_asymptote,
@@ -1229,7 +1226,8 @@ pub(crate) fn advance_traced_state(ag: u64, v_avg: u64, params: &EconomicParams)
     // supply — the substitution the round-12 comment anticipated, made at
     // the merge that introduced the owners (§1.9: call them, reimplement
     // none of them).
-    let paid = effective_emission(ag, v_avg, params).expect("paid emission along trace");
+    let paid = effective_emission(ag, TxVolume::per_block(v_avg), params)
+        .expect("paid emission along trace");
     advance_already_generated(ag, paid)
 }
 
@@ -1890,13 +1888,13 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
         FULL_REWARD_ZONE_V5,
         s,
         FULL_REWARD_ZONE_V5,
-        params.tx_volume_baseline,
+        TxVolume::per_block(params.tx_volume_baseline),
         params,
     )
     .expect("paid reward at the asymptote is total");
     DegeneratePins {
         burn_at_cap: calc_burn_pct(
-            500,
+            TxVolume::per_block(500),
             params.tx_volume_baseline,
             ratio_09,
             s,
@@ -1904,13 +1902,13 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
             params.burn_cap,
         ),
         release_at_zero: calc_release_multiplier(
-            0,
+            TxVolume::ZERO,
             params.tx_volume_baseline,
             params.release_min,
             params.release_max,
         ),
         release_at_double_baseline: calc_release_multiplier(
-            100,
+            TxVolume::per_block(100),
             params.tx_volume_baseline,
             params.release_min,
             params.release_max,

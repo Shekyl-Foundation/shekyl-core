@@ -78,6 +78,26 @@
 
 ### Changed
 
+- **Consensus: the transaction-volume operand is the exact window mean,
+  not its integer floor (FL-R24, `FEE_LADDER_DERIVATION.md` §11.6 PR A).**
+  The block reward's release multiplier `M_r` and the fee burn `b` were
+  computed from `tx_count_sum / 720` truncated to an integer, which
+  quantized a consensus operand to ticks of `1/V` (2–3 % of `M_r` under
+  Poisson noise, §11.7 FL-E1) and pinned it to the 0.8 rail on chains whose
+  mean sat just above 40. The daemon now hands Rust the pair
+  `(tx_count_sum, blocks)` (`Blockchain::get_tx_volume_window`, renamed
+  from `get_tx_volume_avg`; `shekyl::tx_volume_window`) and
+  `shekyl_economics::TxVolume` divides once against the baseline. Every
+  block whose 720-block window mean is fractional pays a different reward
+  than before: mid-curve at mean 40.5 the paid reward moves
+  819 200 000 000 → 829 440 000 000 (+1.25 %), `burn_pct` 223 606 →
+  225 000 (SCALE 10⁶). Pre-existing reward KATs are unchanged because all
+  of them feed whole-number means; the new KATs pin both values. FFI:
+  `shekyl_block_reward`, `shekyl_calc_release_multiplier`,
+  `shekyl_calc_burn_pct` and `shekyl_fee_correction_quantized` take
+  `(tx_count_sum, window_blocks)` in place of one `tx_volume` scalar.
+  Pre-genesis; no chain to migrate.
+
 - **Levin ingress rejects unknown commands and unknown flag bits.** A
   dispatch (`REQUEST`/`RESPONSE`) whose command is not a `DefinedCommand`,
   or any flag bit outside the five defined flags, is connection-fatal at

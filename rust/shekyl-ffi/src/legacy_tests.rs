@@ -100,7 +100,7 @@ fn test_version() {
 
 #[test]
 fn test_release_multiplier_ffi() {
-    let m = shekyl_calc_release_multiplier(100, 100, 800_000, 1_300_000);
+    let m = shekyl_calc_release_multiplier(100, 1, 100, 800_000, 1_300_000);
     assert_eq!(m, 1_000_000);
 }
 
@@ -385,8 +385,15 @@ fn test_burn_pct_ffi_matches_rust_impl() {
         ),
     ];
     for (txv, base, circ, total, rate, cap) in cases {
-        let ffi = shekyl_calc_burn_pct(txv, base, circ, total, rate, cap);
-        let direct = shekyl_economics::burn::calc_burn_pct(txv, base, circ, total, rate, cap);
+        let ffi = shekyl_calc_burn_pct(txv, 1, base, circ, total, rate, cap);
+        let direct = shekyl_economics::burn::calc_burn_pct(
+            shekyl_economics::TxVolume::per_block(txv),
+            base,
+            circ,
+            total,
+            rate,
+            cap,
+        );
         assert_eq!(ffi, direct);
     }
 }
@@ -830,6 +837,7 @@ fn block_reward_ok_writes_both_out_params() {
             0,
             ZONE,
             baseline_v(),
+            1,
             &raw mut reward,
             &raw mut limit,
         )
@@ -853,6 +861,7 @@ fn block_reward_accepts_the_inclusive_limit_and_pays_zero() {
             0,
             ZONE,
             baseline_v(),
+            1,
             &raw mut reward,
             &raw mut limit,
         )
@@ -874,6 +883,7 @@ fn block_reward_too_big_writes_the_limit_and_leaves_the_reward_untouched() {
             0,
             ZONE,
             baseline_v(),
+            1,
             &raw mut reward,
             &raw mut limit,
         )
@@ -910,6 +920,7 @@ fn block_reward_null_out_pointers_return_invalid_without_writing() {
             0,
             ZONE,
             baseline_v(),
+            1,
             std::ptr::null_mut(),
             &raw mut limit,
         )
@@ -931,6 +942,7 @@ fn block_reward_null_out_pointers_return_invalid_without_writing() {
             0,
             ZONE,
             baseline_v(),
+            1,
             &raw mut reward,
             std::ptr::null_mut(),
         )
@@ -948,6 +960,7 @@ fn block_reward_null_out_pointers_return_invalid_without_writing() {
             0,
             ZONE,
             baseline_v(),
+            1,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
         )
@@ -970,6 +983,7 @@ fn block_reward_beyond_the_exact_domain_is_invalid_not_wrapped() {
             0,
             ZONE,
             baseline_v(),
+            1,
             &raw mut reward,
             &raw mut limit,
         )
@@ -995,6 +1009,7 @@ fn block_reward_past_the_asymptote_pays_the_tail() {
             u64::MAX,
             ZONE,
             baseline_v(),
+            1,
             &raw mut reward,
             &raw mut limit,
         )
@@ -1024,6 +1039,7 @@ fn block_reward_marshals_the_signed_composition() {
             s - tail + 1,
             ZONE,
             0,
+            0,
             &raw mut reward,
             &raw mut limit,
         )
@@ -1040,6 +1056,7 @@ fn block_reward_marshals_the_signed_composition() {
             s + tail,
             ZONE,
             0,
+            0,
             &raw mut reward,
             &raw mut limit,
         )
@@ -1049,12 +1066,21 @@ fn block_reward_marshals_the_signed_composition() {
 
     // Mid-curve dormancy: the paid quantity carries M_r.
     let st = unsafe {
-        shekyl_block_reward(0, ZONE / 2, s / 2, ZONE, 0, &raw mut reward, &raw mut limit)
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            s / 2,
+            ZONE,
+            0,
+            0,
+            &raw mut reward,
+            &raw mut limit,
+        )
     };
     assert_eq!(st, SHEKYL_BLOCK_REWARD_OK);
     assert_eq!(
         reward,
-        shekyl_economics::effective_emission(s / 2, 0, &p).unwrap()
+        shekyl_economics::effective_emission(s / 2, shekyl_economics::TxVolume::ZERO, &p).unwrap()
     );
 }
 
@@ -1095,7 +1121,7 @@ fn advance_already_generated_passes_the_asymptote() {
 fn fee_correction_quantized_is_total_at_hostile_scalars() {
     let scale = shekyl_economics::params::SCALE;
     // The reported case: sigma at its clamp, no burn, dormant volume.
-    let cq = shekyl_fee_correction_quantized(0, scale - 1, 0, 0);
+    let cq = shekyl_fee_correction_quantized(0, 0, scale - 1, 0, 0);
     assert!(cq > 0, "a total boundary must still return a usable step");
 
     // The same state carried through the hysteresis band, and the
@@ -1107,7 +1133,7 @@ fn fee_correction_quantized_is_total_at_hostile_scalars() {
         (u64::MAX, u64::MAX, u64::MAX, u64::MAX),
         (u64::MAX, 0, u64::MAX, 0),
     ] {
-        let out = shekyl_fee_correction_quantized(v, sigma, burn, prev);
+        let out = shekyl_fee_correction_quantized(v, 1, sigma, burn, prev);
         assert!(
             out > 0,
             "boundary returned an unusable value at (v={v}, sigma={sigma}, burn={burn}, prev={prev})"
@@ -1211,10 +1237,16 @@ fn fee_correction_quantized_ffi_matches_the_crate() {
     // A decisive surge state (M_r pinned at 1.3, no sigma/burn, no previous
     // value): C = 1.3 snaps up to the C_q = 2 step.
     let v = 2 * p.tx_volume_baseline;
-    let got = shekyl_fee_correction_quantized(v, 0, 0, 0);
+    let got = shekyl_fee_correction_quantized(v, 1, 0, 0, 0);
     assert_eq!(
         got,
-        shekyl_economics::fee_correction_quantized(v, 0, 0, 0, &p)
+        shekyl_economics::fee_correction_quantized(
+            shekyl_economics::TxVolume::per_block(v),
+            0,
+            0,
+            0,
+            &p
+        )
     );
     assert_eq!(got, 2 * scale);
     // And the hysteresis argument is threaded, not dropped — asserted at a
@@ -1224,11 +1256,11 @@ fn fee_correction_quantized_ffi_matches_the_crate() {
     // not fail on a dropped argument.
     let boundary_v = p.tx_volume_baseline + 1;
     assert_eq!(
-        shekyl_fee_correction_quantized(boundary_v, 0, 0, scale),
+        shekyl_fee_correction_quantized(boundary_v, 1, 0, 0, scale),
         scale
     );
     assert_eq!(
-        shekyl_fee_correction_quantized(boundary_v, 0, 0, 0),
+        shekyl_fee_correction_quantized(boundary_v, 1, 0, 0, 0),
         2 * scale
     );
 }
