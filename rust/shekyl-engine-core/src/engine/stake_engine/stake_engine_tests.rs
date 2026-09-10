@@ -1385,6 +1385,10 @@ mod emission_claim_assembly {
         let mut cursor: &[u8] = reply.bound_tx.bytes();
         let mut tx = Transaction::read(&mut cursor).expect("assembled bytes parse whole");
         assert!(cursor.is_empty(), "no trailing bytes after the tx");
+        // The daemon's Phase A runs exactly this on the submitted bytes;
+        // a claim the builder emits must clear it before it ever leaves.
+        tx.validate()
+            .expect("assembled claim passes shekyl-wire context-free validation");
 
         // (1) Index pin.
         let to_key_count = tx
