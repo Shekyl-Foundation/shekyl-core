@@ -8,6 +8,7 @@ mod challenge_coverage;
 mod distribution;
 mod engine;
 mod escalation;
+mod fee_floor;
 mod fee_ladder;
 mod mn_feasibility;
 mod population;
@@ -64,6 +65,18 @@ fn main() {
         fee_ladder::render_summary(&report, &mut summary);
         eprint!("{summary}");
         println!("{}", fee_ladder::render_json(&report));
+        return;
+    }
+
+    // §11 confirmation set (`FEE_LADDER_DERIVATION.md` §11.5, FL-E1…FL-E3):
+    // the relay floor's per-block slew on raw `C` under both SMA
+    // resolutions, and FL-C7's loop through the FL-R20 served map.
+    if std::env::args().any(|a| a == "--fee-floor") {
+        let report = fee_floor::report();
+        let mut summary = String::new();
+        fee_floor::render_summary(&report, &mut summary);
+        eprint!("{summary}");
+        println!("{}", fee_floor::render_json(&report));
         return;
     }
 

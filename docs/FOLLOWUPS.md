@@ -925,19 +925,16 @@ Default. Lands before genesis if it should exist at launch.
 - **Validate `prev_id` before attestation verify on the alt-chain path**
   - Target: pre-genesis
 
-- **Restore the §7 hysteresis band to the served fee correction** — the daemon serves the plain pow2 ceiling (`prev_cq = 0`); blocked on the grid-anchored previous value, which is its own round. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §8 FL-R3 (ruling, blocker, two binding constraints).
-  - Target: pre-genesis
-
-- **Size and wire FL-R19's relay-floor clamp margin** — blocked on the construction-to-broadcast gap distribution, which is wallet instrumentation and not this lane's to measure. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §8 FL-R19 (pre-registered sizing criterion; margin must be fixed and deterministic).
+- **Land round 19: the relay floor follows raw `C` (FL-R20…FL-R23)** — implementation spec at [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §11.6, awaiting spec review after the FL-E1…FL-E3 run (§11.7): `get_current_fee_per_byte` = `R·C·w_ref/M²` raw; lookback-min admission over `G` = 5 in a Rust predicate (with the A-2 weight-gate property test and a zero-pinned `RELAY_ADMISSION_SLACK_BP`); three PRs — consensus operand (FL-R24), relay policy, deletion sweep; delete the pow2 snap, hysteresis, `MIN_REPRESENTABLE_C`, the `fees[0]` clamp, `round_money_up_2` on the served path, the 2 % buffer and the 0.95; wallet path unchanged. FL-R24 (SMA resolution) decided on FL-E3 first. Replaces the former §7-band restoration row: the snap the band smoothed is deleted (FL-R21), so nothing is restored. Falsify by `rg quantize_pow2_ceil rust/shekyl-economics/src/fee.rs` returning nothing.
   - Target: pre-genesis
 
 - **Disclose the fee-tier privacy trade in the wallet/CLI tier picker** — rule-81 obligation created by FL-R17's signature; carrier is the engine tier-mapping change. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §7.
   - Target: pre-genesis
 
-- **Give the storage layer a cheap per-block transaction count** — `Blockchain::get_tx_volume_avg` walks a 720-block window and `get_block_from_height` loads and parses each full block blob to read `tx_hashes.size()`; #640 memoized the repeat case but a cold call still parses 720 blocks. Owned by the storage lane: [DAEMON_REDB_STORE.md](design/DAEMON_REDB_STORE.md).
+- **FL-R3-STORE: O(1) cumulative transaction count on the Rust chain store** — `Blockchain::get_tx_volume_avg` walks a 720-block window and `get_block_from_height` loads and parses each full block blob to read `tx_hashes.size()`; #640 memoized the repeat case but a cold call still parses 720 blocks, and it is **consensus** (`get_block_reward` in `validate_miner_transaction`). **Promoted at FL round 18, specified at round 2, DEMOTED at round 19 (§11.2 FL-R21):** the fee round no longer blocks on it — FL-R23's cold cost is one `720 + 3` scan, at the 720 budget — so this is the storage lane's performance item on its own merits (a consensus operand parsing 720 full blocks cold). The specification stands as written: the grid-anchored fold at `P` = 720 needs raw `C` at 720 heights — 1 440 cold parses against a 720 budget (2.0×) — and a `cumulative_tx_count(h)` read on `shekyl-chain-store`'s S-CHAIN-R surface takes both to O(1). Requirement, bit-identity gate and the recorded LMDB alternative at [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.12.2; the store's shape is the storage lane's, per [DAEMON_REDB_STORE.md](design/DAEMON_REDB_STORE.md)'s 2026-09-01 countermand (RECORD-AND-SPECIFY, no C++ refactor). Falsify by `rg cumulative_tx_count rust/shekyl-chain-store`.
   - Target: pre-genesis
 
-- **Measure boundary-cell occupancy** — how much chain *time* is spent near a pow2 boundary, as against how many swept cells oscillate. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §9 FL-D8 (why it is owed, and when it comes due).
+- ~~**Measure boundary-cell occupancy**~~ — **DONE at round 18**: occupancy 741‰, mean residence 637 blocks, max 13 597; it selected `P` = 720. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.10 (the figures) and §9 FL-D8 (row closed).
   - Target: pre-genesis
 
 

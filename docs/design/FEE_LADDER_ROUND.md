@@ -6,9 +6,11 @@ FL-R14 ruled). The round-9 implementation bundle **merged as PR #640**
 is in flight on `feat/fee-ladder-impl-2`. What keeps the round OPEN is
 the residue queued in [`FOLLOWUPS.md`](../FOLLOWUPS.md) — each row a
 one-liner pointing at its owning §-row, which carries the named blocker.
-FL-R3 (restoring the hysteresis band to the served path, which needs the
-time-grid shape and returns as its own round) is the one with a
-consensus-surface consequence.
+FL-R3 **CLOSED premise-refuted at round 19** (2026-09-10): its time-grid
+round (§10) is closed as record and **§11 is OPEN** — the relay floor
+follows raw `C`, the quantizers go, the wallet pays the served rung
+exactly, admission is lookback-min over `G` = 5 (FL-R20…FL-R23; FL-R24
+open on FL-E3). Branch `design/fl-r3-time-grid`.
 All substance lives in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md);
 this file is the thin round-state record only (rule 95 — one owner per
 claim, no restatement). Consensus behavior changes live in the
@@ -1152,3 +1154,133 @@ directly. Dispositions:
    resume per its own criterion; the routing to the consensus lane
    (C2-R0 phase 2, which edits `CONSENSUS_RULE_CENSUS.md` §10) carries
    the criteria, and this file records their satisfaction.
+
+## Round 18 (opened 2026-09-08): FL-R3 restoration — the time-grid round
+
+**OPEN.** Substance in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md)
+§10; this record carries state only (rule 95 — one owner per claim).
+
+Opened against `dev` `c1709cf2f`, citing rule 26. Jurisdiction is narrow
+by construction: the band staying and `C_q` not becoming chain state are
+RULED and are inputs, not questions. The round decides the *shape* of the
+previous value — the four questions `blockchain.cpp` already names at the
+call site: grid period, fold depth, reorg behaviour, per-query cost.
+
+Two findings the opening already puts on the record, both of which change
+what the implementing PR can do:
+
+- **The fold's first step is the ruled-out unseeded snap**, confined to
+  one block per grid cell. Its weight falls as `1/P`, which bounds `P`
+  from below *independently of cost* — and disqualifies the
+  "seed at the anchor, one step to `h`" shape as the rejected shape with
+  a longer lever.
+- **The naive fold is disqualifying on cost.** `get_tx_volume_avg` parses
+  720 full block blobs and memoizes ONE entry, so a depth-`D` fold thrashes
+  it: `D × 720` parses under the blockchain lock. The restoration
+  therefore rides a single-scan shape (the `D` windows overlap; their
+  union is one contiguous range) or it is **BLOCKED on the storage-lane
+  cheap per-block tx count**, named per rule 22.
+
+Pre-registration is committed before the instrument exists, and the
+commit ordering in this branch is the register. **FL-D8 folds into this
+round's instrument** — boundary-cell occupancy is the input that selects
+the grid period, and it has been load-bearing in four dispositions while
+unmeasured.
+
+Precedent followed for scope: the design PR #614 carried its own
+instrument (`fee_ladder.rs`), so the grid arms belong in this round's PR
+rather than a separate code branch.
+
+### Round 18 results (instrument run at the branch tip)
+
+Full figures at [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md)
+§10.10; state only here.
+
+- **C10-1 PARTIAL.** `grid-fold` at `P ≥ 240` restores the oscillation
+  *amplitude* exactly — worst 24, the banded figure, from the served
+  1 161 — but leaves 20 cells oscillating against the band's 14. The
+  band's memory is unbounded; the fold's resets at each anchor.
+- **C10-2 pass.** No grid arm fails the registered dwell gate.
+- **C10-3 FAIL, by 1.33×.** 960 cold block parses against a 720 budget.
+  §10.4 pre-registered this branch, so the consequence was already
+  ruled: **FL-R3 is BLOCKED on the storage-lane per-block tx count**,
+  now on its critical path. Accepting 1.33× instead is a maintainer
+  call and is stated as one. *[**Corrected at round 2 below:** the
+  1.33× / 960 was P = 240's figure — the only period the dwell grid ran.
+  At the P = 720 that C10-4 selects the depth is 720 and the cost 1 440,
+  **2.0×**. The verdict and the block stand; the magnitude was wrong.]*
+- **C10-4 selects `P` = 720**, on FL-D8's measured residence (mean up to
+  637 blocks) — and independently the natural ceiling, since the fold
+  cannot outrun the 720-block average feeding it.
+- **C10-5 answered against itself.** `grid-only` reproduces the
+  withdrawn minimum-dwell floor's signature (114 cells / worst 5 at
+  `P` = 720, against FL-R18's `n` = 720 row at 102 / 5). The band does
+  work a grid alone cannot; **nothing goes to the maintainer on this
+  one.**
+- **FL-D8 CLOSED** as an owed measurement: occupancy 741‰, mean
+  residence 637, max 13 597.
+
+**The pre-registration earned its keep.** `P` = 60 was named as failing
+by two independent pre-committed lines — §10.2's `1/P` weight on the
+unseeded first step, and C10-4's residence rule — before any arm ran. It
+measured worst 45 against 24. The prediction was falsifiable and was not
+adjusted afterwards.
+
+**Two instrument defects found (§10.11).** The dwell gate selected its
+subject with `mode.contains("quantized")`, so the rate-limited arm (since
+round 13) and both new grid arms were skipped by it entirely; replaced
+with a structural predicate, and bringing them under the gate revealed no
+new failures. And §4's dwell-grid count is re-derived 240 → 320 — **the
+second time that figure has gone stale for the same reason**, since a
+count derived from a mode list dies on every addition to the list.
+
+#### Round 18 → time-grid round 2 / 2b (2026-09-09, `design/fl-r3-time-grid`)
+
+Round 2 opened on a **reproduction, not a new arm**: re-running round 1's
+instrument showed C10-3's 1.33× was `P` = 240's depth read as `P` = 720's
+(the dwell grid ran only the 240 pair, and the cost summary iterated a
+hard-coded label list). At the selected `P` the cold cost is **2.0×**
+(1 440 parses), confirmed on the round-2 run (`FEE_LADDER_DERIVATION.md`
+§10.13). The verdict does not move; the magnitude does, and the class of
+defect — a figure derived from a mode or label list rather than from the
+arm — is closed structurally. The round-2 run also **refuted the
+anchor-flip signature** the fold's six extra cells were predicted to show
+(R2-E2: 12 off-anchor transitions against a predicted 0) while confirming
+that a deeper fold recovers none of them (R2-E3): the anchor, not the
+depth, is the lever. The blocker is specified as **FL-R3-STORE** with a
+falsifier, and the fold's daemon wiring is pinned at §10.12.4.
+
+Round 2b (§10.14) came from the maintainer in-channel while round 2's run
+was in flight, and is pre-registered ahead of its arms as the earlier
+rounds were: (i) **the band over the grid *sequence*, anchored at the last
+settled sample** — the §7 band at the period's cadence, made a pure
+function of chain state by the fact that a sample clear of every pow2
+boundary fixes the band's state with no history (`hysteresis_settled`,
+with the theorem as a property test); (ii) **median-W and peak-hold-W over
+the same sequence** — peak-hold ruled *eligible for adoption if it measures
+best* (R18-M4, ruled in advance); (iii) the **stability criterion in the
+user's units** — C10-6 minimum oscillation period in days, C10-7
+probability of a change inside the construction-to-broadcast gap, C10-8
+lag on a secular crossing — with the floor / ceiling set before the run
+(R18-M5) and the maintainer's ranking recorded: *smoothest, fewest inputs,
+no memory*. State: **OPEN**; R18-M1, M3 outstanding; M2 withdrawn as
+premature at §10.13; M4/M5 pre-ruled; selection at §10.15.
+
+#### Round 19 (2026-09-09 → 10, `design/fl-r3-time-grid`): the floor follows `C`
+
+Substance at `FEE_LADDER_DERIVATION.md` §11; state only here. Opened by
+the maintainer while round 2b ran ("What are we making this so
+complicated for?"). Nine findings verified at source (§11.1) — acceptance
+was `C`-free; the snap outlived its premise; "must not track demand" was
+scoping; `tx_volume_avg` is consensus (LWMA closed); no offline signing
+(FL-R19's premise void); the SMA is integer-truncated and its tick is the
+whole of round 2b's raw-`C` "oscillation"; `round_money_up_2` is a
+quantizer; admission runs once; the weight model is byte-exact. Rulings
+FL-R20…FL-R23 in-channel, FL-R24 open; the day's two reversals (random
+pad → fixed pad → lookback-min) recorded in order at §11.2 FL-R22. §10
+closed as record (§10.16); C10-*, R2-E*, R18-M* closed with it; §10.15
+not written. State: **§11 OPEN** — FL-E1…FL-E3 pre-registered (§11.5), run at
+`5574be2ea`, results at §11.7: FL-R20…FL-R23 confirmed; FL-R24's rule
+fired (integer tick 307 bp at age 30) and the maintainer RULED exact SMA
+for reward and floor — a pre-genesis consensus row for the implementing PR;
+implementation spec §11.6 awaits review.

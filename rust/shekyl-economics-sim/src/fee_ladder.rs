@@ -38,28 +38,28 @@
 //! writes (`main.rs --fee-ladder`), per the crate's stage2 precedent.
 
 use core::fmt::Write as _;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::Serialize;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
     calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
-    effective_emission, emission_speed_factor, hysteresis_step, paid_block_reward,
-    projected_already_generated, tail_subsidy_per_block, EconomicParams, BLOCKS_PER_YEAR,
-    STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    effective_emission, emission_speed_factor, hysteresis_fold, hysteresis_settled,
+    hysteresis_step, paid_block_reward, projected_already_generated, tail_subsidy_per_block,
+    EconomicParams, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
 /// Rust owner (`shekyl-wire`; `fee_policy.rs` single-sources from the same
 /// constant).
-const FULL_REWARD_ZONE_V5: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
+pub(crate) const FULL_REWARD_ZONE_V5: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
 
 /// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT` (`src/cryptonote_config.h:70`).
 /// Declared exception: no single Rust owner exists;
 /// `rust/shekyl-engine-core/src/engine/fee_policy.rs` carries the same
 /// pinned copy wallet-side.
-const REF_TX_WEIGHT: u64 = 3_000;
+pub(crate) const REF_TX_WEIGHT: u64 = 3_000;
 
 /// Rolling `tx_volume_avg` window (`SHEKYL_TX_VOLUME_WINDOW`): 720 blocks =
 /// one day at 120 s. Build-generated from `config/economics_params.json` so
@@ -109,6 +109,19 @@ const FL_R18_MIN_DWELL_BLOCKS: u64 = 240;
 ///   quoted more than 100 blocks before it is submitted.
 const RACE_LAGS: [u64; 4] = [1, 3, 25, 100];
 
+/// Blocks per day at the 120 s target — the unit §10.14.4's C10-6/7/8
+/// report in, beside blocks. `BLOCKS_PER_YEAR / 365` would silently
+/// inherit any leap-day convention the year constant carries; a day is
+/// stated directly.
+const BLOCKS_PER_DAY: u64 = 720;
+
+/// C10-7's construction-to-broadcast window, in blocks: ten minutes at the
+/// 120 s target — the window FL-R18's "≈ 4 %" was quoted on. **A
+/// PLACEHOLDER for FL-R19's gap distribution, which the wallet lane owes**;
+/// named as one in §10.14.4, so the figure it produces is comparable to
+/// R18's, not a claim about real wallets.
+const R19_GAP_BLOCKS_PLACEHOLDER: u64 = 5;
+
 // ---------------------------------------------------------------------------
 // Correction factor
 // ---------------------------------------------------------------------------
@@ -139,15 +152,28 @@ pub struct CorrectionPoint {
 /// crate. Single division (`(1−σ)·M_r / (1−b)`) so no intermediate
 /// truncation is amplified; `b < SCALE` structurally (burn cap 0.9).
 fn correction_factor(v: u64, circulating: u64, height: u64, params: &EconomicParams) -> Correction {
-    let m_r = calc_release_multiplier(
-        v,
-        params.tx_volume_baseline,
-        params.release_min,
-        params.release_max,
-    );
+    correction_factor_ratio(v, params.tx_volume_baseline, circulating, height, params)
+}
+
+/// [`correction_factor`] with the volume operand given as a RATIO
+/// `v_num / baseline`. Both owners (`calc_release_multiplier`,
+/// `calc_burn_pct`) take `(volume, baseline)` and form the quotient
+/// internally, so `(tx_count_sum, baseline · 720)` evaluates the 720-block
+/// SMA at exact rational resolution — no new economics code, only a
+/// different pair of arguments. §11 (FL-E2) measures the shipped
+/// integer-truncated operand (`tx_count_sum / 720`, `blockchain.cpp:2115`)
+/// against this one.
+pub(crate) fn correction_factor_ratio(
+    v_num: u64,
+    baseline: u64,
+    circulating: u64,
+    height: u64,
+    params: &EconomicParams,
+) -> Correction {
+    let m_r = calc_release_multiplier(v_num, baseline, params.release_min, params.release_max);
     let b = calc_burn_pct(
-        v,
-        params.tx_volume_baseline,
+        v_num,
+        baseline,
         circulating,
         params.emission_curve_asymptote,
         params.burn_base_rate,
@@ -312,6 +338,37 @@ fn pow2_le(c: u128, s: u128, k: i32) -> bool {
 /// represent `2^k` exactly (unreachable for the derivation's C range
 /// [0.68, 12.92]; the assert makes a future range widening loud instead of
 /// silently truncated).
+/// FL-D8's pre-registered predicate (§10.9): is raw `C` inside the band's
+/// own flicker zone?
+///
+/// **Why the band's own margin and not a chosen one.** `C` always lies in
+/// some pow2 interval `[B_lo, B_hi]`. The hysteresis band exists to damp
+/// movement across the ends of that interval, and it does so with a
+/// margin of `HYSTERESIS_MARGIN_MILLI` (3%). Defining "near a boundary"
+/// as *within that same margin of either end* makes D8 measure the zone
+/// the mechanism actually acts on, rather than a zone picked to produce a
+/// number. It also keeps the definition tied to one constant: if the
+/// margin is ever retuned, this predicate follows it instead of drifting.
+///
+/// The 3% is re-derived here rather than imported because
+/// `HYSTERESIS_MARGIN_MILLI` is private to the owner. That is a knowing
+/// duplication of a CONSTANT, not of the band's arithmetic — the step
+/// itself is still the owner's — and it is pinned by
+/// `boundary_zone_margin_matches_the_owner` below, which fails if the two
+/// ever disagree.
+const D8_MARGIN_MILLI: u128 = 30;
+
+fn in_boundary_zone(c_scaled: u64) -> bool {
+    if c_scaled == 0 {
+        return false;
+    }
+    let hi = u128::from(quantize_c_pow2(c_scaled, SnapRule::Ceiling));
+    let lo = hi / 2;
+    let c = u128::from(c_scaled);
+    // Within the margin of the upper end, or of the lower end.
+    c * 1000 >= hi * (1000 - D8_MARGIN_MILLI) || c * 1000 <= lo * (1000 + D8_MARGIN_MILLI)
+}
+
 fn quantize_c_pow2(c_scaled: u64, rule: SnapRule) -> u64 {
     assert!(c_scaled > 0, "C is structurally positive");
     let c = u128::from(c_scaled);
@@ -416,10 +473,10 @@ fn x_ladder_row(base_reward: u64, mnw: u64, mlw: u64) -> XLadderRow {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy)]
-struct AgeState {
-    height: u64,
-    ag: u64,
-    base_reward: u64,
+pub(crate) struct AgeState {
+    pub(crate) height: u64,
+    pub(crate) ag: u64,
+    pub(crate) base_reward: u64,
 }
 
 /// The demand scale at which the ceiling-quantized `C_q` first steps above
@@ -443,7 +500,7 @@ fn boundary_demand(st: AgeState, params: &EconomicParams) -> u64 {
         .unwrap_or(230)
 }
 
-fn age_state(age_years: u64, params: &EconomicParams) -> AgeState {
+pub(crate) fn age_state(age_years: u64, params: &EconomicParams) -> AgeState {
     let height = age_years * BLOCKS_PER_YEAR;
     let ag = projected_already_generated(height, params).expect("projected ag");
     let base_reward = base_block_reward(ag, params).expect("base reward");
@@ -529,7 +586,7 @@ fn rung_table(
 
 /// xorshift64* — deterministic instrument RNG (reproducible runs; the crate
 /// deliberately has no `rand` dependency).
-struct Rng(u64);
+pub(crate) struct Rng(pub(crate) u64);
 
 impl Rng {
     fn next(&mut self) -> u64 {
@@ -548,7 +605,7 @@ impl Rng {
 
     /// Knuth Poisson sampler; exact for the registered means (≤ 500 —
     /// `e^-500 ≈ 7.9e-218` is a normal f64; the real breakdown is ≳ 745).
-    fn poisson(&mut self, mean: f64) -> u64 {
+    pub(crate) fn poisson(&mut self, mean: f64) -> u64 {
         // Hard assert (release-mode instrument): past ~745 the Knuth
         // product underflows and silently CAPS samples — corrupted
         // measurements, not an error, if this were stripped.
@@ -593,6 +650,46 @@ pub struct DwellResult {
     /// Number of value CHANGES per rung (churn; a value revisited counts
     /// each time). The pre-review field misnamed this "distinct values".
     pub value_changes: [u64; 4],
+    /// FL-D8 (§10.9), statistic 1 — **occupancy**: blocks whose raw `C`
+    /// sits in the band's flicker zone, per thousand blocks measured.
+    /// The "how much chain TIME" half of the question the round needs to
+    /// pick `P`; mode-independent, since raw `C` does not depend on how a
+    /// mode serves it.
+    pub d8_boundary_occupancy_permille: u64,
+    /// FL-D8, statistic 2 — **expected residence per visit**: the mean
+    /// length in blocks of a run inside the zone. C10-4's reading: `P`
+    /// must EXCEED this, or the grid re-samples inside a single visit and
+    /// the boundary behaviour survives the grid.
+    pub d8_mean_residence_blocks: u64,
+    /// Longest single visit observed — the tail `P` would have to span to
+    /// cover the worst case, not just the mean.
+    pub d8_max_residence_blocks: u64,
+    /// Whether this arm serves a pow2-snapped map, from
+    /// [`LadderMode::serves_quantized_map`] — carried as data so the gate
+    /// stops inferring its own subject from the mode's display name.
+    pub is_quantized_map: bool,
+    /// Deepest fold evaluated by a grid arm on this trace (0 for
+    /// non-grid arms). C10-3's cost evidence, measured rather than
+    /// derived from `P`: the fold depth is `h mod P`, so the observed
+    /// maximum says what the COLD path actually pays.
+    pub grid_max_fold_depth: u64,
+    /// The arm's grid period (0 for non-grid arms), from
+    /// [`LadderMode::grid_period`]. The C10-3 cost summary selects and
+    /// labels its rows by this, not by a list of names it expects to find
+    /// (§10.12.1's defect).
+    pub grid_period: u64,
+    /// C10-8 (§10.14.4): offset in blocks of the standard rung's first
+    /// served change from the trace start; on the ramp scenario, this
+    /// arm's minus the un-banded ceiling's is the lag on a secular
+    /// crossing. `None` if the rung never changed.
+    pub first_change_offset: Option<u64>,
+    /// §10.14.3 over-quote share: blocks per thousand where the served
+    /// `C_q` exceeds the un-banded ceiling of the same raw `C` —
+    /// peak-hold's conservative bias, priced. 0 for non-snapped arms.
+    pub over_ceiling_permille: u64,
+    /// The mirror: blocks per thousand served BELOW the ceiling (a band
+    /// holding the lower state through a rise).
+    pub under_ceiling_permille: u64,
     /// For ramp scenarios: the shortest completed run that STARTED inside
     /// the ramp window, per rung — the statistic the FL-C4a ramp criterion
     /// actually gates on (the whole-trace median is dominated by the
@@ -626,6 +723,42 @@ enum LadderMode {
     /// value — examined for FL-R18 (c) and NOT ADOPTED; swept over
     /// candidate `n` to produce the evidence at §4.5a.
     RateLimited(u64),
+    /// §10.3(B) — the grid-anchored fold, the FL-R3 restoration's
+    /// candidate shape: at height `h` the band is folded from the grid
+    /// anchor `h₀ = h − (h mod P)` with no seed, so the served value is a
+    /// pure function of `(chain state, h)` and costs `h mod P` steps.
+    GridFold(u64),
+    /// §10.3(C) — grid-only, **INSTRUMENTATION, NOT A PROPOSAL**: the
+    /// anchor's plain snap held for the whole cell, so a grid alone
+    /// yields dwell ≥ `P` with no band at all. Built because the question
+    /// "does the grid already do the band's boundary job" is going to be
+    /// asked, and C10-5 pre-registers how each outcome reads. The band
+    /// staying is RULED; this arm may not be read as reopening it.
+    GridOnly(u64),
+    /// §10.12.3(b) — the **warm-anchor** fold, round 2's mechanism test:
+    /// `GridFold(p)` with the anchor moved `w` whole cells back, so the
+    /// fold depth is `w·P + (h mod P) + 1 ∈ [w·P, (w+1)·P)`. INSTRUMENT,
+    /// not a proposal — it costs more than the budget by construction.
+    /// It exists to falsify one claim: that C10-1's extra cells are
+    /// anchor-flip cells, which a deeper fold cannot recover because it
+    /// moves the anchor rather than removing it (R2-E3).
+    GridFoldWarm(u64, u64),
+    /// §10.14.2 — shape (D), the **settled-anchor grid band**: the §7 band
+    /// run over the sequence of grid SAMPLES `C(k·P)`, anchored at the
+    /// most recent sample that is settled (`hysteresis_settled`), where
+    /// the band's state is fixed with no history. `(P, K)`: look back at
+    /// most `K` samples for a settled one, else fall back to the unseeded
+    /// snap at `k − K`; `None` is the unbounded exact recurrence, the
+    /// reference the bounded arms are measured against.
+    GridBand(u64, Option<u64>),
+    /// §10.14.3 — median of the last `W` sample snaps, **INSTRUMENTATION,
+    /// NOT A PROPOSAL**: not the band (a time release in place of the
+    /// amplitude margin), so a result here routes to R18-M4, never to
+    /// closure. `(P, W)`.
+    GridMedian(u64, u64),
+    /// §10.14.3 — peak-hold: the maximum of the last `W` sample snaps.
+    /// Same instrumentation status as [`Self::GridMedian`]. `(P, W)`.
+    GridPeak(u64, u64),
 }
 
 /// The §7 hysteresis construction — the history, held so the sweep can
@@ -697,7 +830,346 @@ impl RateLimitedCq {
     }
 }
 
+/// §10 grid stepper — both grid arms, one implementation.
+///
+/// **What it holds is the CELL'S RAW INPUTS, never a fold result.** That
+/// distinction is the round's whole subject: the daemon would re-read
+/// `C`'s inputs from chain state at each height in the cell, so this
+/// vector stands in for CHAIN STATE, not for the per-node remembered
+/// value round 17 rejected (`m_fee_correction_cq`, archived at
+/// `archive/fee-ladder-r12-impl-rejected-2026-09-08`).
+///
+/// It re-folds from the anchor on **every** step rather than carrying
+/// `prev` forward. That is deliberate and is what makes the measurement
+/// honest: §10.6 rules that C10-3's budget is met on the COLD path with
+/// no memo counted, so the arm must cost what the cold path costs. The
+/// re-fold is also what makes the served value a pure function of
+/// `(trace, h)` — the property FL-R18 closed on.
+///
+/// The fold itself is `shekyl-economics::hysteresis_fold` — the owner
+/// §10.12.4 pins for the daemon, so the arm measures the mechanism that
+/// will ship. This holds no band arithmetic, per FL-R3 constraint (2) and
+/// the drifted-copy lesson that discharged declared exception #3; round
+/// 1's private fold loop here was the last such copy and is gone.
+struct GridCq {
+    period: u64,
+    /// Grid-only (§10.3 C) when true: the anchor's snap, held for the cell.
+    only: bool,
+    /// Whole cells the anchor is moved back (§10.12.3(b)); 0 is §10.3 B.
+    warm_cells: u64,
+    /// Raw `C` at each height from the anchor to the current height,
+    /// oldest first. Bounded at `(warm_cells + 1)·P`.
+    span: VecDeque<u64>,
+    /// Last height stepped, so a non-contiguous walk is detected rather
+    /// than folded over.
+    last_height: Option<u64>,
+    /// Deepest fold actually evaluated — C10-3's evidence.
+    max_depth: u64,
+}
+
+impl GridCq {
+    /// The stepper an arm needs; an inert `P = 1` stepper for non-grid
+    /// arms so the drivers can hold one unconditionally.
+    fn for_mode(mode: LadderMode) -> Self {
+        match mode {
+            LadderMode::GridFold(p) => Self::new(p, false, 0),
+            LadderMode::GridOnly(p) => Self::new(p, true, 0),
+            LadderMode::GridFoldWarm(p, w) => Self::new(p, false, w),
+            _ => Self::new(1, false, 0),
+        }
+    }
+
+    fn new(period: u64, only: bool, warm_cells: u64) -> Self {
+        Self {
+            period: period.max(1),
+            only,
+            warm_cells,
+            span: VecDeque::new(),
+            last_height: None,
+            max_depth: 0,
+        }
+    }
+
+    fn step(&mut self, height: u64, c_raw: u64) -> u64 {
+        let off = height % self.period;
+        // The anchor is `h₀ − warm·P`; the span the daemon would re-read
+        // from chain state runs from there to `h`. Its length at this
+        // height is fixed by `h` alone — so if the driver skipped a height
+        // the span cannot be rebuilt from what is held, and it restarts
+        // (total, never folding over stale heights).
+        let want = self.warm_cells * self.period + off + 1;
+        if self.last_height != height.checked_sub(1) {
+            self.span.clear();
+        }
+        self.last_height = Some(height);
+        self.span.push_back(c_raw);
+        while self.span.len() as u64 > want {
+            self.span.pop_front();
+        }
+        // During the first `warm` cells of a trace the true anchor lies
+        // before the trace began; the fold then starts at the trace's
+        // first height instead — depth `< want`, which the depth record
+        // shows honestly.
+        let cells = self.span.make_contiguous();
+        let depth = cells.len() as u64;
+        if self.only {
+            // The anchor's plain snap (`prev = 0` is "no history"), held
+            // for the whole cell.
+            self.max_depth = self.max_depth.max(1);
+            return hysteresis_step(cells[0], 0);
+        }
+        self.max_depth = self.max_depth.max(depth);
+        hysteresis_fold(cells).expect("span holds the height just pushed")
+    }
+}
+
+/// How a §10.14 arm turns the grid-sample sequence into a served value.
+#[derive(Clone, Copy)]
+enum SeqRule {
+    /// §10.14.2: band over the sequence from the last settled sample,
+    /// scanning back at most `K` samples (`None` = unbounded).
+    Band(Option<u64>),
+    /// §10.14.3: median of the last `W` snaps.
+    Median(u64),
+    /// §10.14.3: maximum of the last `W` snaps.
+    Peak(u64),
+}
+
+/// §10.14 grid-SEQUENCE stepper — the arms whose unit of time is the
+/// period, not the block.
+///
+/// Holds the raw `C` at each grid sample `g_k = k·P`, oldest first — again
+/// the cell's RAW INPUTS standing in for chain state, never a fold result
+/// (see [`GridCq`]). The trace's first height is taken as a pseudo-sample
+/// so the arm has something to serve before its first anchor; that is the
+/// trace edge, and the depth record shows it.
+///
+/// Every step re-derives the served value from the samples (the cold
+/// path, per §10.6); the band rule folds with the owner's
+/// `hysteresis_fold` from the anchor `hysteresis_settled` selects. The
+/// filters snap each sample with `hysteresis_step(c, 0)` — the owner's
+/// unseeded snap — and hold no band arithmetic of their own.
+struct GridSeq {
+    period: u64,
+    rule: SeqRule,
+    samples: Vec<u64>,
+    last_height: Option<u64>,
+    /// Deepest evaluation (samples read) — the cold column's worst case.
+    max_depth: u64,
+    /// Sum of depths over steps, for the cold column's mean.
+    depth_sum: u64,
+    steps: u64,
+    /// Steps whose scan hit the `K` bound without a settled sample and
+    /// anchored on the unseeded snap instead — where the §10.2 defect
+    /// lives for this shape, and the only way the monotonicity invariant
+    /// can break.
+    fallbacks: u64,
+}
+
+impl GridSeq {
+    fn new(period: u64, rule: SeqRule) -> Self {
+        Self {
+            period: period.max(1),
+            rule,
+            samples: Vec::new(),
+            last_height: None,
+            max_depth: 0,
+            depth_sum: 0,
+            steps: 0,
+            fallbacks: 0,
+        }
+    }
+
+    /// Samples the rule can ever read, so the vector stays bounded.
+    fn retain(&self) -> usize {
+        match self.rule {
+            SeqRule::Band(Some(k)) => k as usize + 1,
+            SeqRule::Band(None) => usize::MAX,
+            SeqRule::Median(w) | SeqRule::Peak(w) => w as usize,
+        }
+    }
+
+    fn step(&mut self, height: u64, c_raw: u64) -> u64 {
+        if self.last_height != height.checked_sub(1) {
+            self.samples.clear();
+        }
+        self.last_height = Some(height);
+        if self.samples.is_empty() || height.is_multiple_of(self.period) {
+            self.samples.push(c_raw);
+            let keep = self.retain();
+            if self.samples.len() > keep {
+                let drop = self.samples.len() - keep;
+                self.samples.drain(..drop);
+            }
+        }
+        let n = self.samples.len();
+        let (served, depth) = match self.rule {
+            SeqRule::Band(bound) => {
+                let floor = bound.map_or(0, |k| n.saturating_sub(k as usize + 1));
+                let anchor = (floor..n)
+                    .rev()
+                    .find(|&i| hysteresis_settled(self.samples[i]));
+                let j = anchor.unwrap_or(floor);
+                if anchor.is_none() && floor > 0 {
+                    self.fallbacks += 1;
+                }
+                (
+                    hysteresis_fold(&self.samples[j..]).expect("at least the sample just pushed"),
+                    (n - j) as u64,
+                )
+            }
+            SeqRule::Median(w) => {
+                let from = n.saturating_sub(w as usize);
+                let mut snaps: Vec<u64> = self.samples[from..]
+                    .iter()
+                    .map(|&c| hysteresis_step(c, 0))
+                    .collect();
+                snaps.sort_unstable();
+                (snaps[snaps.len() / 2], (n - from) as u64)
+            }
+            SeqRule::Peak(w) => {
+                let from = n.saturating_sub(w as usize);
+                let peak = self.samples[from..]
+                    .iter()
+                    .map(|&c| hysteresis_step(c, 0))
+                    .max()
+                    .expect("at least the sample just pushed");
+                (peak, (n - from) as u64)
+            }
+        };
+        self.max_depth = self.max_depth.max(depth);
+        self.depth_sum += depth;
+        self.steps += 1;
+        served
+    }
+}
+
+/// The one grid stepper a driver holds — asks the mode which kind it
+/// needs, so neither driver carries a per-variant match that a new arm
+/// can be left out of.
+enum GridArm {
+    Block(GridCq),
+    Seq(GridSeq),
+}
+
+impl GridArm {
+    fn for_mode(mode: LadderMode) -> Self {
+        match mode {
+            LadderMode::GridBand(p, k) => Self::Seq(GridSeq::new(p, SeqRule::Band(k))),
+            LadderMode::GridMedian(p, w) => Self::Seq(GridSeq::new(p, SeqRule::Median(w))),
+            LadderMode::GridPeak(p, w) => Self::Seq(GridSeq::new(p, SeqRule::Peak(w))),
+            _ => Self::Block(GridCq::for_mode(mode)),
+        }
+    }
+
+    /// An inert stepper for the history-free reference evaluation.
+    fn inert() -> Self {
+        Self::Block(GridCq::new(1, false, 0))
+    }
+
+    fn step(&mut self, height: u64, c_raw: u64) -> u64 {
+        match self {
+            Self::Block(g) => g.step(height, c_raw),
+            Self::Seq(g) => g.step(height, c_raw),
+        }
+    }
+
+    /// `(max depth, mean depth, fallback steps)` — the cold column's
+    /// evidence. For block arms the mean is not tracked (their depth is
+    /// fixed by `h mod P`, §10.4) and reads 0.
+    fn depth_stats(&self) -> (u64, u64, u64) {
+        match self {
+            Self::Block(g) => (g.max_depth, 0, 0),
+            Self::Seq(g) => (g.max_depth, g.depth_sum / g.steps.max(1), g.fallbacks),
+        }
+    }
+}
+
 impl LadderMode {
+    /// Cold parses of the 720-block volume window a quote at the arm's
+    /// deepest observed evaluation costs, with NO memo (§10.6, C10-3 as
+    /// registered). Block-fold arms read one window per height from the
+    /// anchor to `h` and those windows overlap, so a single scan covers
+    /// them: `720 + depth` (§10.12.1). Sequence arms read one DISJOINT
+    /// window per sample: `depth × 720`. Non-grid arms read one window.
+    fn cold_parses(self, depth: u64) -> u64 {
+        match self {
+            LadderMode::GridBand(..) | LadderMode::GridMedian(..) | LadderMode::GridPeak(..) => {
+                depth.max(1) * TX_VOLUME_WINDOW
+            }
+            LadderMode::GridFold(_) | LadderMode::GridOnly(_) | LadderMode::GridFoldWarm(..) => {
+                TX_VOLUME_WINDOW + depth
+            }
+            _ => TX_VOLUME_WINDOW,
+        }
+    }
+
+    /// Steady-state parses **per day (720 blocks)** under a
+    /// chain-state-keyed memo (§10.6's legitimate kind — a column the
+    /// register has NOT adopted; reported beside the cold one, never
+    /// instead of it). Sequence arms compute one new sample per period;
+    /// every per-block arm computes one new window per block.
+    fn memo_parses_per_day(self) -> u64 {
+        match self {
+            LadderMode::GridBand(p, _)
+            | LadderMode::GridMedian(p, _)
+            | LadderMode::GridPeak(p, _) => TX_VOLUME_WINDOW * (BLOCKS_PER_DAY / p.max(1)).max(1),
+            _ => TX_VOLUME_WINDOW * BLOCKS_PER_DAY,
+        }
+    }
+
+    /// Does this arm serve a **pow2-snapped** `C_q`, and therefore fall
+    /// under the registered dwell gate?
+    ///
+    /// **This replaces a name-substring test, which was a silent
+    /// under-gate.** The dwell gate previously selected rows with
+    /// `mode.contains("quantized")`. Two arms serve a snapped map without
+    /// the word in their label — `served-rate-limited-n*` (added to the
+    /// dwell sweep at round 13) and §10's `grid-*` arms — so both were
+    /// counted as non-quantized and skipped by the gate entirely. A gate
+    /// that decides its own subject from a display string is a gate that
+    /// stops covering each new arm without saying so; this asks the mode
+    /// what it serves.
+    fn serves_quantized_map(self) -> bool {
+        match self {
+            LadderMode::Current | LadderMode::CorrectedRaw => false,
+            LadderMode::Quantized(_)
+            | LadderMode::QuantizedHysteresis
+            | LadderMode::RateLimited(_)
+            | LadderMode::GridFold(_)
+            | LadderMode::GridOnly(_)
+            | LadderMode::GridFoldWarm(..)
+            | LadderMode::GridBand(..)
+            | LadderMode::GridMedian(..)
+            | LadderMode::GridPeak(..) => true,
+        }
+    }
+
+    /// The grid period, for the arms that have one.
+    ///
+    /// Everything downstream that is *about the grid* — which rows the
+    /// C10-3 cost summary reads, which arms get a per-cell diff against
+    /// the reference, whether a transition sits on an anchor — asks this,
+    /// never a label. Round 1 read C10-3's depth off a hard-coded label
+    /// list and reported the wrong arm's number (§10.12.1); that is the
+    /// third figure in one round derived from a label or mode list rather
+    /// than from the arm, and this is where the class is closed.
+    fn grid_period(self) -> Option<u64> {
+        match self {
+            LadderMode::GridFold(p)
+            | LadderMode::GridOnly(p)
+            | LadderMode::GridFoldWarm(p, _)
+            | LadderMode::GridBand(p, _)
+            | LadderMode::GridMedian(p, _)
+            | LadderMode::GridPeak(p, _) => Some(p),
+            LadderMode::Current
+            | LadderMode::CorrectedRaw
+            | LadderMode::Quantized(_)
+            | LadderMode::QuantizedHysteresis
+            | LadderMode::RateLimited(_) => None,
+        }
+    }
+
     fn name(self) -> String {
         match self {
             LadderMode::Current => "current".to_owned(),
@@ -709,6 +1181,13 @@ impl LadderMode {
                 "corrected-quantized-pow2-ceil-hysteresis".to_owned()
             }
             LadderMode::RateLimited(n) => format!("served-rate-limited-n{n}"),
+            LadderMode::GridFold(p) => format!("grid-fold-p{p}"),
+            LadderMode::GridOnly(p) => format!("grid-only-p{p}"),
+            LadderMode::GridFoldWarm(p, w) => format!("grid-fold-p{p}-w{w}"),
+            LadderMode::GridBand(p, Some(k)) => format!("grid-band-p{p}-k{k}"),
+            LadderMode::GridBand(p, None) => format!("grid-band-p{p}-kfull"),
+            LadderMode::GridMedian(p, w) => format!("grid-median-p{p}-w{w}"),
+            LadderMode::GridPeak(p, w) => format!("grid-peak-p{p}-w{w}"),
         }
     }
 }
@@ -726,6 +1205,10 @@ const DWELL_SCENARIOS: &[(&str, f64, f64, u64)] = &[
     ("stationary-v500", 500.0, 500.0, FULL_REWARD_ZONE_V5),
     ("stationary-v50-m10z", 50.0, 50.0, 10 * FULL_REWARD_ZONE_V5),
     ("ramp-v50-to-v200", 50.0, 200.0, FULL_REWARD_ZONE_V5),
+    // §10.14.6: the same crossing downward. Peak-hold's lag is P up and
+    // W·P down by construction; a grid with one ramp direction measures
+    // C10-8 on the side that flatters it.
+    ("ramp-v200-to-v50", 200.0, 50.0, FULL_REWARD_ZONE_V5),
 ];
 
 /// Advance the traced chain state by one block: the SHIPPED paid emission
@@ -736,7 +1219,7 @@ const DWELL_SCENARIOS: &[(&str, f64, f64, u64)] = &[
 /// `already_generated` and height per block, so any rung or `C_q`
 /// crossing that supply/σ drift can cause is measured rather than frozen
 /// out.
-fn advance_traced_state(ag: u64, v_avg: u64, params: &EconomicParams) -> u64 {
+pub(crate) fn advance_traced_state(ag: u64, v_avg: u64, params: &EconomicParams) -> u64 {
     // Since the FL-R12′ implementation landed, this calls THE OWNERS rather
     // than modelling the composition: `effective_emission` is the paid
     // pre-penalty quantity `max(M_r·curve, TAIL)` and
@@ -786,6 +1269,19 @@ fn dwell_scenario(
         LadderMode::RateLimited(n) => RateLimitedCq::new(n),
         _ => RateLimitedCq::new(1),
     };
+    let mut grid = GridArm::for_mode(mode);
+    // FL-D8 (§10.9): raw-`C` boundary occupancy and residence. Raw `C` is
+    // MODE-INDEPENDENT, so these come out identical on every arm — which
+    // is a free self-check that the modes differ only in how they serve a
+    // shared trace, not in the trace itself.
+    let mut near_blocks = 0u64;
+    let mut near_runs: Vec<u64> = Vec::new();
+    let mut near_run = 0u64;
+    // §10.14.3: blocks where the served `C_q` sits above / below the
+    // un-banded ceiling of the same raw `C` — peak-hold's conservative
+    // bias, and every band's lag, in the units users pay.
+    let mut over_ceiling = 0u64;
+    let mut under_ceiling = 0u64;
     // Per rung: (value, run_length, run_start_block) plus accumulators.
     let mut runs: [Vec<(u64, u64)>; 4] = [vec![], vec![], vec![], vec![]]; // (start, len)
     let mut values: [BTreeSet<u64>; 4] = Default::default();
@@ -808,25 +1304,41 @@ fn dwell_scenario(
         let height = st.height + t;
         let base = base_block_reward(ag, params).expect("base along trace");
         let raw = articmine_ladder_raw(base, median, median);
-        let fees = match mode {
-            LadderMode::Current => rounded(raw),
-            LadderMode::CorrectedRaw => served_ladder(
-                base,
-                median,
-                correction_factor(v_avg, ag, height, params).c_scaled,
+        // Hoisted: every corrected arm needs it, and FL-D8 measures it.
+        // Previously each arm recomputed it, which is the shape a new arm
+        // silently forgets.
+        let c_raw = correction_factor(v_avg, ag, height, params).c_scaled;
+        if in_boundary_zone(c_raw) {
+            near_blocks += 1;
+            near_run += 1;
+        } else if near_run > 0 {
+            near_runs.push(near_run);
+            near_run = 0;
+        }
+        // The served `C_q` first, so §10.14.3's over-quote share can be
+        // read off it against the un-banded ceiling of the SAME raw `C`
+        // (`None` for the arms that serve no snapped map).
+        let served_cq: Option<u64> = match mode {
+            LadderMode::Current | LadderMode::CorrectedRaw => None,
+            LadderMode::Quantized(rule) => Some(quantize_c_pow2(c_raw, rule)),
+            LadderMode::QuantizedHysteresis => Some(hyst.step(c_raw)),
+            LadderMode::RateLimited(_) => Some(rate_limited.step(c_raw)),
+            m if m.grid_period().is_some() => Some(grid.step(height, c_raw)),
+            m => unreachable!(
+                "mode {} serves a quantized map but has no stepper",
+                m.name()
             ),
-            LadderMode::Quantized(rule) => {
-                let c = correction_factor(v_avg, ag, height, params).c_scaled;
-                served_ladder(base, median, quantize_c_pow2(c, rule))
-            }
-            LadderMode::QuantizedHysteresis => {
-                let c = correction_factor(v_avg, ag, height, params).c_scaled;
-                served_ladder(base, median, hyst.step(c))
-            }
-            LadderMode::RateLimited(_) => {
-                let c = correction_factor(v_avg, ag, height, params).c_scaled;
-                served_ladder(base, median, rate_limited.step(c))
-            }
+        };
+        if let Some(cq) = served_cq {
+            let ceiling = quantize_c_pow2(c_raw, SnapRule::Ceiling);
+            over_ceiling += u64::from(cq > ceiling);
+            under_ceiling += u64::from(cq < ceiling);
+        }
+        let fees = match (mode, served_cq) {
+            (LadderMode::Current, _) => rounded(raw),
+            (LadderMode::CorrectedRaw, _) => served_ladder(base, median, c_raw),
+            (_, Some(cq)) => served_ladder(base, median, cq),
+            (m, None) => unreachable!("mode {} produced no served C_q", m.name()),
         };
         ag = advance_traced_state(ag, v_avg, params);
         for i in 0..4 {
@@ -876,6 +1388,33 @@ fn dwell_scenario(
         distinct_posted_values: distinct,
         value_changes: changes,
         min_dwell_started_in_ramp: min_ramp,
+        d8_boundary_occupancy_permille: if blocks == 0 {
+            0
+        } else {
+            near_blocks * 1000 / blocks
+        },
+        d8_mean_residence_blocks: {
+            // Close an open run so a trace ending inside the zone is not
+            // silently dropped — the longest visits are exactly the ones
+            // most likely to still be open at the end.
+            if near_run > 0 {
+                near_runs.push(near_run);
+            }
+            if near_runs.is_empty() {
+                0
+            } else {
+                near_runs.iter().sum::<u64>() / near_runs.len() as u64
+            }
+        },
+        d8_max_residence_blocks: near_runs.iter().copied().max().unwrap_or(0),
+        is_quantized_map: mode.serves_quantized_map(),
+        grid_max_fold_depth: grid.depth_stats().0,
+        grid_period: mode.grid_period().unwrap_or(0),
+        // The standard rung's first CHANGE after the trace's opening value
+        // (`runs[1][0]` starts at 0 by construction).
+        first_change_offset: runs[1].get(1).map(|&(start, _)| start),
+        over_ceiling_permille: over_ceiling * 1000 / blocks.max(1),
+        under_ceiling_permille: under_ceiling * 1000 / blocks.max(1),
     }
 }
 
@@ -926,6 +1465,42 @@ pub struct FeedbackResult {
     /// or an oscillation (transitions ≥ 2: the limit cycle FL-C7
     /// excludes).
     pub tail_transitions: u64,
+    /// Of `tail_transitions`, those at a height `h ≡ 0 (mod P)` — the
+    /// grid's anchors, where the fold forgets (§10.12.3). 0 for non-grid
+    /// arms, which have no anchors. A grid arm whose extra transitions
+    /// (over the banded reference) all sit here is losing cells to the
+    /// anchor flip, which no fold depth removes; one with transitions
+    /// elsewhere is losing them to something else.
+    pub tail_transitions_at_anchor: u64,
+    /// Standard-rung value changes over the WHOLE trace — the quantity
+    /// §10.14.2's monotonicity invariant is stated on (band ≤ grid-only,
+    /// same `P`, same cell). The tail alone cannot carry it: the tail is
+    /// a 3 000-block window and a `P` = 720 grid cycle is ≈ 1 440 blocks.
+    pub trace_transitions: u64,
+    /// §10.14.4 C10-6, read on the LATE HALF of the trace (15 000 blocks)
+    /// rather than the 3 000-block tail: a peak-hold-9 cycle at `P` = 720
+    /// is ≈ 7 200 blocks and would not fit in the tail at all, so a
+    /// tail-only reading would flatter exactly the arms with the longest
+    /// cycles. Value changes in the late half; the min and mean gap in
+    /// blocks between consecutive ones (0 when fewer than two); and the
+    /// late-half fee range, so "sustained" can require the FL-C7
+    /// amplitude bar over the same window.
+    pub late_transitions: u64,
+    pub late_gap_min: u64,
+    pub late_gap_mean: u64,
+    pub late_fee_min: u64,
+    pub late_fee_max: u64,
+    /// §10.14.4 C10-7: blocks per thousand (whole trace) from which a
+    /// served-value change occurs within the next
+    /// [`R19_GAP_BLOCKS_PLACEHOLDER`] blocks — the probability a quote
+    /// taken at a uniformly random block is stale by broadcast.
+    pub change_within_gap_permille: u64,
+    /// §10.14's cold-cost evidence for the arm: deepest evaluation, mean
+    /// evaluation, and (`grid-band-*` only) steps that hit the `K` bound
+    /// without a settled sample. 0 / 0 / 0 for non-grid arms.
+    pub grid_max_depth: u64,
+    pub grid_mean_depth: u64,
+    pub grid_fallbacks: u64,
     pub v_avg_tail_min: u64,
     pub v_avg_tail_max: u64,
     pub fee_tail_min: u64,
@@ -965,7 +1540,8 @@ fn feedback_scenario(
                    ag: u64,
                    height: u64,
                    hyst: &mut HysteresisCq,
-                   rl: &mut RateLimitedCq|
+                   rl: &mut RateLimitedCq,
+                   grid: &mut GridArm|
      -> (u64, u64, u64) {
         let base = base_block_reward(ag, params).expect("base along trace");
         let c = correction_factor(v_avg, ag, height, params).c_scaled;
@@ -973,6 +1549,7 @@ fn feedback_scenario(
             LadderMode::Quantized(rule) => quantize_c_pow2(c, rule),
             LadderMode::QuantizedHysteresis => hyst.step(c),
             LadderMode::RateLimited(_) => rl.step(c),
+            m if m.grid_period().is_some() => grid.step(height, c),
             _ => c,
         };
         let ladder = served_ladder(base, median, c);
@@ -989,6 +1566,7 @@ fn feedback_scenario(
         st.height,
         &mut HysteresisCq { prev: 0 },
         &mut RateLimitedCq::new(1),
+        &mut GridArm::inert(),
     )
     .0;
 
@@ -1010,19 +1588,29 @@ fn feedback_scenario(
     let mut floors: Vec<u64> = Vec::with_capacity(blocks as usize);
     let mut tail_fees = BTreeSet::new();
     let mut tail_transitions = 0u64;
+    let mut tail_transitions_at_anchor = 0u64;
     let mut last_tail_fee: Option<u64> = None;
+    // Whole-trace and late-half records (§10.14.2 invariant; C10-6/7).
+    let late_from = blocks / 2;
+    let mut last_fee: Option<u64> = None;
+    let mut transition_blocks: Vec<u64> = Vec::new();
+    let mut late_fee_min = u64::MAX;
+    let mut late_fee_max = 0u64;
     let mut hyst = HysteresisCq { prev: 0 };
     let mut rl = match mode {
         LadderMode::RateLimited(n) => RateLimitedCq::new(n),
         _ => RateLimitedCq::new(1),
     };
+    let mut grid = GridArm::for_mode(mode);
+    let grid_period = mode.grid_period();
     let mut ag = st.ag;
     for t in 0..blocks {
         let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
         // FL-R18 rejection race: the served economy rung and its
         // quote-time floor come from the SAME stepping call as the fee,
         // so the margin is measured on the map the mode actually serves.
-        let (fee, economy, floor_now) = step_at(v_avg, ag, st.height + t, &mut hyst, &mut rl);
+        let (fee, economy, floor_now) =
+            step_at(v_avg, ag, st.height + t, &mut hyst, &mut rl, &mut grid);
         served_economy.push(economy);
         floors.push(floor_now);
         ag = advance_traced_state(ag, v_avg, params);
@@ -1038,6 +1626,14 @@ fn feedback_scenario(
         sum += demand;
         window.push_back(demand);
         sum -= window.pop_front().expect("window warm");
+        if last_fee.is_some_and(|prev| prev != fee) {
+            transition_blocks.push(t);
+        }
+        last_fee = Some(fee);
+        if t >= late_from {
+            late_fee_min = late_fee_min.min(fee);
+            late_fee_max = late_fee_max.max(fee);
+        }
         if t >= blocks - tail {
             fee_min = fee_min.min(fee);
             fee_max = fee_max.max(fee);
@@ -1047,6 +1643,9 @@ fn feedback_scenario(
             if let Some(prev_fee) = last_tail_fee {
                 if fee != prev_fee {
                     tail_transitions += 1;
+                    if grid_period.is_some_and(|p| (st.height + t).is_multiple_of(p)) {
+                        tail_transitions_at_anchor += 1;
+                    }
                 }
             }
             last_tail_fee = Some(fee);
@@ -1074,6 +1673,33 @@ fn feedback_scenario(
         .min()
         .unwrap_or(0);
 
+    // Late-half inter-transition gaps.
+    let late: Vec<u64> = transition_blocks
+        .iter()
+        .copied()
+        .filter(|&t| t >= late_from)
+        .collect();
+    let late_gaps: Vec<u64> = late.windows(2).map(|w| w[1] - w[0]).collect();
+    let late_gap_min = late_gaps.iter().copied().min().unwrap_or(0);
+    let late_gap_mean = if late_gaps.is_empty() {
+        0
+    } else {
+        late_gaps.iter().sum::<u64>() / late_gaps.len() as u64
+    };
+    // C10-7: the union over transitions at `t` of the blocks
+    // `[t − g, t − 1]` from which that change lies within the next `g`
+    // blocks; transitions are in ascending order so the union is a single
+    // forward pass.
+    let g = R19_GAP_BLOCKS_PLACEHOLDER;
+    let mut covered = 0u64;
+    let mut covered_until = 0u64;
+    for &t in &transition_blocks {
+        let lo = t.saturating_sub(g).max(covered_until);
+        covered += t.saturating_sub(lo);
+        covered_until = t;
+    }
+    let (grid_max_depth, grid_mean_depth, grid_fallbacks) = grid.depth_stats();
+
     FeedbackResult {
         race_quotes: served_economy.len() as u64,
         race_refused,
@@ -1086,6 +1712,21 @@ fn feedback_scenario(
         mode: mode.name(),
         distinct_fees_tail: tail_fees.len() as u64,
         tail_transitions,
+        tail_transitions_at_anchor,
+        trace_transitions: transition_blocks.len() as u64,
+        late_transitions: late.len() as u64,
+        late_gap_min,
+        late_gap_mean,
+        late_fee_min: if late_fee_min == u64::MAX {
+            0
+        } else {
+            late_fee_min
+        },
+        late_fee_max,
+        change_within_gap_permille: covered * 1000 / blocks.max(1),
+        grid_max_depth,
+        grid_mean_depth,
+        grid_fallbacks,
         v_avg_tail_min: v_min,
         v_avg_tail_max: v_max,
         fee_tail_min: fee_min,
@@ -1109,6 +1750,93 @@ pub struct NSweepPoint {
     /// dwell floor worsens the rejection race is MEASURED rather than
     /// asserted (PR #634 review).
     pub thin_margin_cells: u64,
+}
+
+/// §10 — one grid period `P`, for one grid arm, over the SAME feedback
+/// grid FL-C7 and FL-R18 were measured on, so the figures compose with
+/// the ratified ones instead of describing a different sweep.
+#[derive(Serialize)]
+pub struct GridSweepPoint {
+    /// Arm name (`grid-fold-p*` = §10.3 B, the candidate;
+    /// `grid-only-p*` = §10.3 C, INSTRUMENTATION only — C10-5 governs
+    /// how its result reads, and the band staying is RULED).
+    pub mode: String,
+    pub period: u64,
+    /// C10-1's numerator: cells still oscillating beyond one rounding
+    /// step. The ratified banded map leaves 14 boundary-parked cells at
+    /// worst 24 transitions; the served un-banded map leaves 1 161.
+    pub oscillating_cells: u64,
+    pub worst_tail_transitions: u64,
+    /// §4.5b's thin-margin measure, carried so a grid's effect on the
+    /// rejection race is measured on the same axis FL-R18 used.
+    pub thin_margin_cells: u64,
+    /// §10.12.3(a) per-cell diff against the RULED banded reference
+    /// (`corrected-quantized-pow2-ceil-hysteresis`, same sweep): cells
+    /// this arm leaves oscillating that the reference does not. C10-1's
+    /// "20 vs 14" made concrete — round 1 counted, round 2 names.
+    pub extra_cells: u64,
+    /// Worst `tail_transitions` among the extra cells.
+    pub extra_cells_worst_transitions: u64,
+    /// Across the extra cells, tail transitions NOT at a grid anchor.
+    /// §10.12.3's claim is that the extra cells are anchor-flip cells,
+    /// which predicts exactly 0 here (R2-E2); any other value is a
+    /// transition the anchor story does not account for.
+    pub extra_cells_off_anchor_transitions: u64,
+    /// The reverse set: cells the reference leaves oscillating that this
+    /// arm does not. Predicted empty for the fold arms — the grid adds
+    /// forgetting, it does not add damping.
+    pub recovered_cells: u64,
+    /// §10.14.2's monotonicity invariant, MEASURED: cells where this arm's
+    /// whole-trace transitions exceed `grid-only` at the same `P` on the
+    /// same cell. `None` where there is no comparator (non-grid arms, and
+    /// grid-only itself). Expected 0 for every sequence arm with an
+    /// unbounded scan; a non-zero count on a bounded band arm is its
+    /// fallback anchor at work, and on `kfull` it voids the run.
+    pub invariant_violations: Option<u64>,
+    /// C10-6 (§10.14.4): over cells with a SUSTAINED late-half oscillation
+    /// ([`is_sustained_late`]), the minimum cycle period
+    /// `2 × late_gap_mean` and the minimum single inter-transition gap —
+    /// in blocks; the summary converts to days. 0 when no cell sustains.
+    pub sustained_cells: u64,
+    pub min_cycle_blocks: u64,
+    pub min_gap_blocks: u64,
+    /// C10-7 (§10.14.4): worst cell and cell-mean of the change-within-gap
+    /// share, per thousand blocks.
+    pub change_within_gap_worst_permille: u64,
+    pub change_within_gap_mean_permille: u64,
+    /// Cold-cost evidence (§10.14.2's first column): deepest evaluation
+    /// over the sweep, the worst cell-mean depth, cells that hit the `K`
+    /// bound, and the parses those imply under [`LadderMode::cold_parses`].
+    pub max_depth: u64,
+    pub mean_depth_worst: u64,
+    pub fallback_cells: u64,
+    pub cold_parses_worst: u64,
+    pub cold_parses_mean: u64,
+    /// The memo column, structural (§10.14.2's second column; not a
+    /// register-adopted budget): parses per day at steady state.
+    pub memo_parses_per_day: u64,
+}
+
+/// A feedback cell's identity on the shared sweep grid:
+/// `(state height, median, ε‰, demand scale, start volume)`.
+type CellKey = (u64, u64, u64, u64, u64);
+
+/// FL-C7's oscillation criterion, ONE owner for every sweep that scores
+/// it: at least two value changes in the tail, with an amplitude beyond a
+/// single rounding step.
+fn is_oscillating(fb: &FeedbackResult) -> bool {
+    fb.tail_transitions >= 2 && fb.fee_tail_max > round_money_up_2(fb.fee_tail_min + 1)
+}
+
+/// C10-6's "sustained" (§10.14.4): FL-C7's bar — two changes and an
+/// amplitude beyond one rounding step — applied over the LATE HALF of the
+/// trace instead of the 3 000-block tail, so cycles longer than the tail
+/// (peak-hold at `W` = 9 is ≈ 7 200 blocks) are counted rather than
+/// vanished. `is_oscillating` stays the C10-1 owner so round 1's figures
+/// remain comparable; this one exists for the criterion that asks about
+/// PERIOD, which the tail cannot resolve.
+fn is_sustained_late(fb: &FeedbackResult) -> bool {
+    fb.late_transitions >= 2 && fb.late_fee_max > round_money_up_2(fb.late_fee_min + 1)
 }
 
 #[derive(Serialize)]
@@ -1307,6 +2035,8 @@ pub struct FeeLadderReport {
     /// FL-R18's `N` measurement: oscillating cells remaining at each
     /// candidate minimum-dwell floor (§4.5a).
     n_sweep: Vec<NSweepPoint>,
+    /// §10 FL-R3 time-grid round: both arms across the candidate periods.
+    grid_sweep: Vec<GridSweepPoint>,
     /// FL-C9 (§1 birth stamp: minted at maintainer direction, review
     /// round 5, after measurement began; re-labeled at round 6 to the
     /// anchored-attack candidate-set reduction).
@@ -1418,6 +2148,35 @@ pub fn report() -> FeeLadderReport {
             LadderMode::Quantized(SnapRule::Ceiling),
             LadderMode::QuantizedHysteresis,
             LadderMode::RateLimited(FL_R18_MIN_DWELL_BLOCKS),
+            // §10: the FL-R3 candidate shapes must appear on the DWELL
+            // grid too, not only the feedback grid — C10-2 scores dwell
+            // and C10-3 reads the observed fold depth, and both are
+            // measured here. Omitting them left `grid_max_fold_depth` at
+            // 0 on every row, which reads exactly like "the fold is
+            // free" rather than "the fold was never run".
+            //
+            // Round 2 (§10.12.1): round 1 ran ONLY the P = 240 pair here
+            // and read C10-3's depth off it, then attributed the figure
+            // to the P = 720 that C10-4 selected. The selected P must be
+            // measured where the depth is measured; the 240 arms stay so
+            // the round-1 number stays reproducible next to the corrected
+            // one, and the warm arm carries §10.12.3(b)'s depth ∈ [P, 2P).
+            LadderMode::GridFold(240),
+            LadderMode::GridOnly(240),
+            LadderMode::GridFold(720),
+            LadderMode::GridOnly(720),
+            LadderMode::GridFoldWarm(720, 1),
+            // Round 2b (§10.14.5): the settled-anchor band at the selected
+            // P and K, and the window filters — on the dwell grid for
+            // C10-8's lag, the flip rate FL-D8 owed, and the over-quote
+            // share.
+            LadderMode::GridBand(720, Some(32)),
+            LadderMode::GridMedian(720, 3),
+            LadderMode::GridPeak(720, 3),
+            LadderMode::GridPeak(720, 4),
+            LadderMode::GridPeak(720, 8),
+            LadderMode::GridPeak(720, 9),
+            LadderMode::GridPeak(720, 16),
         ] {
             for &(label, m0, m1, median) in DWELL_SCENARIOS {
                 dwell.push(dwell_scenario(label, m0, m1, median, st, mode, &params));
@@ -1489,9 +2248,7 @@ pub fn report() -> FeeLadderReport {
                                 LadderMode::RateLimited(n),
                                 &params,
                             );
-                            if fb.tail_transitions >= 2
-                                && fb.fee_tail_max > round_money_up_2(fb.fee_tail_min + 1)
-                            {
+                            if is_oscillating(&fb) {
                                 oscillating += 1;
                                 worst_transitions = worst_transitions.max(fb.tail_transitions);
                             }
@@ -1508,6 +2265,203 @@ pub fn report() -> FeeLadderReport {
             oscillating_cells: oscillating,
             worst_tail_transitions: worst_transitions,
             thin_margin_cells,
+        });
+    }
+
+    // §10 FL-R3 time-grid round. Same grid as FL-R18's `n` sweep above,
+    // deliberately: C10-1 scores against FL-C7's ratified banded figures,
+    // and a figure measured on a different sweep cannot be compared to
+    // them. Periods are the §10.5 candidates — 60 (≈ the measured worst
+    // inter-flip dwell), 240 (the FL-C4a stationary bar) and 720 (the
+    // volume window, `P`'s natural ceiling since the fold cannot outrun
+    // the average feeding it). `settlement_epoch_blocks` (10 000) is
+    // NOT swept: §10.5 rejects it on the record rather than measuring a
+    // fee quote frozen for a fortnight.
+    //
+    // The two REFERENCE arms are swept here too, at `period = 0` meaning
+    // "not a grid". Without them C10-1 would score new figures against
+    // numbers taken from a different sweep, which is the comparison the
+    // round is least entitled to make: `corrected-quantized-pow2-ceil` is
+    // what the daemon serves TODAY (the floor to beat) and
+    // `...-hysteresis` is the RULED banded map (the target to reach).
+    // Measuring all three on one grid is what makes "restored" a
+    // comparison rather than an assertion.
+    //
+    // Round 2 (§10.12.3(a)) adds the PER-CELL diff against the banded
+    // reference. Round 1 compared totals (20 vs 14) and then EXPLAINED the
+    // difference from the mechanism's construction; the explanation was
+    // never itself measured. Each arm's cells are now matched to the
+    // reference's by state, so "which six" and "where do their
+    // transitions sit" are read off the run. The warm arm
+    // (§10.12.3(b)) is the mechanism's own falsifier: if the six were a
+    // depth artefact a fold of depth ∈ [P, 2P) would recover some of them.
+    let arms: Vec<LadderMode> = vec![
+        LadderMode::Quantized(SnapRule::Ceiling),
+        LadderMode::QuantizedHysteresis,
+        LadderMode::GridFold(60),
+        LadderMode::GridOnly(60),
+        LadderMode::GridFold(240),
+        LadderMode::GridOnly(240),
+        LadderMode::GridFold(720),
+        LadderMode::GridOnly(720),
+        LadderMode::GridFoldWarm(720, 1),
+        // Round 2b (§10.14.5).
+        LadderMode::GridBand(60, Some(8)),
+        LadderMode::GridBand(60, Some(16)),
+        LadderMode::GridBand(60, Some(32)),
+        LadderMode::GridBand(60, None),
+        LadderMode::GridBand(240, Some(8)),
+        LadderMode::GridBand(240, Some(16)),
+        LadderMode::GridBand(240, Some(32)),
+        LadderMode::GridBand(240, None),
+        LadderMode::GridBand(720, Some(8)),
+        LadderMode::GridBand(720, Some(16)),
+        LadderMode::GridBand(720, Some(32)),
+        LadderMode::GridBand(720, None),
+        LadderMode::GridMedian(720, 3),
+        LadderMode::GridMedian(720, 5),
+        LadderMode::GridMedian(720, 9),
+        LadderMode::GridPeak(720, 3),
+        LadderMode::GridPeak(720, 4),
+        LadderMode::GridPeak(720, 5),
+        LadderMode::GridPeak(720, 8),
+        LadderMode::GridPeak(720, 9),
+        LadderMode::GridPeak(720, 16),
+    ];
+    let sweep_arm = |mode: LadderMode| -> Vec<(CellKey, FeedbackResult)> {
+        let mut cells = Vec::new();
+        for &(_age, st) in &states {
+            let d_boundary = boundary_demand(st, &params);
+            for &median in &[zone, 3 * zone, 10 * zone, 50 * zone] {
+                for eps in [0u64, 500, 1000, 2000, 3000] {
+                    for demand_scale in [50u64, 100, d_boundary, 400] {
+                        for start in [demand_scale, 8 * demand_scale.min(1_250)] {
+                            let fb = feedback_scenario(
+                                eps,
+                                demand_scale,
+                                start,
+                                st,
+                                median,
+                                mode,
+                                &params,
+                            );
+                            cells.push(((st.height, median, eps, demand_scale, start), fb));
+                        }
+                    }
+                }
+            }
+        }
+        cells
+    };
+    let reference: BTreeSet<CellKey> = sweep_arm(LadderMode::QuantizedHysteresis)
+        .into_iter()
+        .filter(|(_, fb)| is_oscillating(fb))
+        .map(|(key, _)| key)
+        .collect();
+    // Every arm is swept once and held, because §10.14.2's invariant
+    // compares each grid arm's cells against grid-only's AT THE SAME P —
+    // a per-cell comparator, like the banded reference above.
+    let swept: Vec<(LadderMode, Vec<(CellKey, FeedbackResult)>)> =
+        arms.iter().map(|&mode| (mode, sweep_arm(mode))).collect();
+    let grid_only_transitions: BTreeMap<(u64, CellKey), u64> = swept
+        .iter()
+        .filter_map(|(mode, cells)| match mode {
+            LadderMode::GridOnly(p) => Some((*p, cells)),
+            _ => None,
+        })
+        .flat_map(|(p, cells)| {
+            cells
+                .iter()
+                .map(move |(key, fb)| ((p, *key), fb.trace_transitions))
+        })
+        .collect();
+    let mut grid_sweep = Vec::new();
+    for (mode, cells) in swept {
+        let mut oscillating = 0u64;
+        let mut worst_transitions = 0u64;
+        let mut thin_margin_cells = 0u64;
+        let mut extra_cells = 0u64;
+        let mut extra_cells_worst_transitions = 0u64;
+        let mut extra_cells_off_anchor_transitions = 0u64;
+        let mut recovered_cells = 0u64;
+        let has_comparator =
+            mode.grid_period().is_some() && !matches!(mode, LadderMode::GridOnly(_));
+        let mut invariant_violations = 0u64;
+        let mut sustained_cells = 0u64;
+        let mut min_cycle_blocks = u64::MAX;
+        let mut min_gap_blocks = u64::MAX;
+        let mut gap_worst = 0u64;
+        let mut gap_sum = 0u64;
+        let mut max_depth = 0u64;
+        let mut mean_depth_worst = 0u64;
+        let mut fallback_cells = 0u64;
+        let n_cells = cells.len() as u64;
+        for (key, fb) in cells {
+            if has_comparator {
+                let p = mode.grid_period().expect("has_comparator implies a period");
+                let only = grid_only_transitions
+                    .get(&(p, key))
+                    .expect("grid-only swept at every period a grid arm uses");
+                invariant_violations += u64::from(fb.trace_transitions > *only);
+            }
+            if is_sustained_late(&fb) {
+                sustained_cells += 1;
+                min_cycle_blocks = min_cycle_blocks.min(2 * fb.late_gap_mean);
+                min_gap_blocks = min_gap_blocks.min(fb.late_gap_min);
+            }
+            gap_worst = gap_worst.max(fb.change_within_gap_permille);
+            gap_sum += fb.change_within_gap_permille;
+            max_depth = max_depth.max(fb.grid_max_depth);
+            mean_depth_worst = mean_depth_worst.max(fb.grid_mean_depth);
+            fallback_cells += u64::from(fb.grid_fallbacks > 0);
+            let osc = is_oscillating(&fb);
+            if osc {
+                oscillating += 1;
+                worst_transitions = worst_transitions.max(fb.tail_transitions);
+                if !reference.contains(&key) {
+                    extra_cells += 1;
+                    extra_cells_worst_transitions =
+                        extra_cells_worst_transitions.max(fb.tail_transitions);
+                    extra_cells_off_anchor_transitions +=
+                        fb.tail_transitions - fb.tail_transitions_at_anchor;
+                }
+            } else if reference.contains(&key) {
+                recovered_cells += 1;
+            }
+            if fb.race_margin_min_milli < 1020 {
+                thin_margin_cells += 1;
+            }
+        }
+        grid_sweep.push(GridSweepPoint {
+            mode: mode.name(),
+            period: mode.grid_period().unwrap_or(0),
+            oscillating_cells: oscillating,
+            worst_tail_transitions: worst_transitions,
+            thin_margin_cells,
+            extra_cells,
+            extra_cells_worst_transitions,
+            extra_cells_off_anchor_transitions,
+            recovered_cells,
+            invariant_violations: has_comparator.then_some(invariant_violations),
+            sustained_cells,
+            min_cycle_blocks: if sustained_cells == 0 {
+                0
+            } else {
+                min_cycle_blocks
+            },
+            min_gap_blocks: if sustained_cells == 0 {
+                0
+            } else {
+                min_gap_blocks
+            },
+            change_within_gap_worst_permille: gap_worst,
+            change_within_gap_mean_permille: gap_sum / n_cells.max(1),
+            max_depth,
+            mean_depth_worst,
+            fallback_cells,
+            cold_parses_worst: mode.cold_parses(max_depth),
+            cold_parses_mean: mode.cold_parses(mean_depth_worst),
+            memo_parses_per_day: mode.memo_parses_per_day(),
         });
     }
 
@@ -1537,6 +2491,7 @@ pub fn report() -> FeeLadderReport {
         degenerate,
         fee_signal_bits: fee_signal,
         n_sweep,
+        grid_sweep,
     }
 }
 
@@ -1568,11 +2523,7 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     // "no exceptions listed" is the pass statement, so the exceptions ARE
     // the interesting rows; raw-C rows print their per-age summary since
     // raw C is the rejected baseline the table contrasts).
-    let quantized_runs = r
-        .dwell
-        .iter()
-        .filter(|d| d.mode.contains("quantized"))
-        .count();
+    let quantized_runs = r.dwell.iter().filter(|d| d.is_quantized_map).count();
     // Under the evolved traces a value change is NORMAL (the ~1-per-
     // 10-20k-block reward-decay crossing), so the exception filter is the
     // registered gate, not any change.
@@ -1593,7 +2544,7 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     let quantized_gate_violations = r
         .dwell
         .iter()
-        .filter(|d| d.mode.contains("quantized") && fails_registered_gate(d))
+        .filter(|d| d.is_quantized_map && fails_registered_gate(d))
         .count();
     let _ = writeln!(
         out,
@@ -1603,7 +2554,7 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
         quantized_gate_violations
     );
     for d in &r.dwell {
-        let interesting = if d.mode.contains("quantized") {
+        let interesting = if d.is_quantized_map {
             fails_registered_gate(d)
         } else {
             d.mode == "corrected-raw" && d.scenario.starts_with("stationary-v50")
@@ -1611,14 +2562,18 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
         if interesting {
             let _ = writeln!(
                 out,
-                "fee-ladder: dwell {} age={} [{}] median={:?} distinct={:?} changes={:?} min_ramp={:?}",
+                "fee-ladder: dwell {} age={} [{}] median={:?} distinct={:?} changes={:?} min_ramp={:?} d8_occupancy_permille={} d8_residence_mean={} d8_residence_max={} grid_max_fold_depth={}",
                 d.scenario,
                 d.age_years,
                 d.mode,
                 d.median_dwell,
                 d.distinct_posted_values,
                 d.value_changes,
-                d.min_dwell_started_in_ramp
+                d.min_dwell_started_in_ramp,
+                d.d8_boundary_occupancy_permille,
+                d.d8_mean_residence_blocks,
+                d.d8_max_residence_blocks,
+                d.grid_max_fold_depth
             );
         }
     }
@@ -1637,13 +2592,7 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     // flips, not the bar; a smaller multi-step cycle must fail too).
     // "One rounding step" is exact: the next distinct
     // `round_money_up_2` value above the tail minimum.
-    let beyond_one_rounding_step =
-        |fb: &&FeedbackResult| fb.fee_tail_max > round_money_up_2(fb.fee_tail_min + 1);
-    let fb_multi: Vec<_> = r
-        .feedback
-        .iter()
-        .filter(|fb| fb.tail_transitions >= 2 && beyond_one_rounding_step(fb))
-        .collect();
+    let fb_multi: Vec<_> = r.feedback.iter().filter(|fb| is_oscillating(fb)).collect();
     let _ = writeln!(
         out,
         "fee-ladder: feedback grid = {} cells; {} secular single crossings; {} OSCILLATING beyond one rounding step (listed below)",
@@ -1686,6 +2635,166 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             p.n, p.oscillating_cells, p.worst_tail_transitions, p.thin_margin_cells
         );
     }
+    // §10 C10-3 (cost) and FL-D8, aggregated over the dwell grid. Both
+    // live per-row in the JSON; these lines exist because a criterion
+    // whose evidence is only machine-readable gets scored from memory.
+    //
+    // One line per grid arm THAT RAN, selected by the row's own period.
+    // Round 1 iterated a hard-coded pair of labels here; the dwell grid
+    // happened to run exactly that pair, so nothing was missing from the
+    // output — the selected P = 720 simply never appeared, and its depth
+    // was inferred from P = 240's line (§10.12.1). A summary that names
+    // the rows it expects cannot report the row it did not get.
+    let grid_arms: BTreeSet<(u64, &str)> = r
+        .dwell
+        .iter()
+        .filter(|d| d.grid_period > 0)
+        .map(|d| (d.grid_period, d.mode.as_str()))
+        .collect();
+    for (period, mode) in grid_arms {
+        let depth = r
+            .dwell
+            .iter()
+            .filter(|d| d.mode == mode)
+            .map(|d| d.grid_max_fold_depth)
+            .max()
+            .unwrap_or(0);
+        // The dwell rows carry the mode's NAME, not the mode; the parses
+        // formula differs by arm kind (§10.14.5), so the dwell line reports
+        // depth only and the per-arm cost triple is printed from the
+        // feedback sweep below, where the mode is known.
+        let _ = writeln!(
+            out,
+            "fee-ladder: FL-R3 cost {mode} period={period} max_fold_depth={depth} (dwell grid; parses on the C10-6/7 line)"
+        );
+    }
+    // Round 2b (§10.14.4/5): per quantized-map arm on the DWELL grid — the
+    // occupancy-weighted flip rate FL-D8 owed (standard-rung changes per
+    // 10 000 blocks over the whole ensemble), C10-8's lag on the ramp
+    // against the un-banded ceiling (max over ramp traces, blocks and
+    // milli-days), and the over-/under-ceiling shares.
+    {
+        let modes: BTreeSet<&str> = r
+            .dwell
+            .iter()
+            .filter(|d| d.is_quantized_map)
+            .map(|d| d.mode.as_str())
+            .collect();
+        let ceiling_first: BTreeMap<(&str, u64), u64> = r
+            .dwell
+            .iter()
+            .filter(|d| d.mode == LadderMode::Quantized(SnapRule::Ceiling).name() && d.is_ramp)
+            .filter_map(|d| {
+                d.first_change_offset
+                    .map(|f| ((d.scenario, d.age_years), f))
+            })
+            .collect();
+        for mode in modes {
+            let rows: Vec<&DwellResult> = r.dwell.iter().filter(|d| d.mode == mode).collect();
+            let blocks: u64 = rows.iter().map(|d| d.blocks_measured).sum();
+            let changes: u64 = rows.iter().map(|d| d.value_changes[1]).sum();
+            let mut lag_max: Option<u64> = None;
+            // Per-direction worst lag (§10.14.6): the ramp scenarios now run
+            // both ways and peak-hold's lag is asymmetric by construction, so
+            // the selection rule's "worst-direction lag" needs each side
+            // visible, not only their max.
+            let mut lag_by_ramp: BTreeMap<&str, u64> = BTreeMap::new();
+            let mut lag_unresolved = 0u64;
+            for d in rows.iter().filter(|d| d.is_ramp) {
+                match (
+                    d.first_change_offset,
+                    ceiling_first.get(&(d.scenario, d.age_years)),
+                ) {
+                    (Some(mine), Some(&ceil)) => {
+                        let lag = mine.saturating_sub(ceil);
+                        lag_max = Some(lag_max.unwrap_or(0).max(lag));
+                        let slot = lag_by_ramp.entry(d.scenario).or_insert(0);
+                        *slot = (*slot).max(lag);
+                    }
+                    _ => lag_unresolved += 1,
+                }
+            }
+            let lag_by_ramp: Vec<String> = lag_by_ramp
+                .iter()
+                .map(|(s, l)| format!("{s}={l}"))
+                .collect();
+            let over = rows
+                .iter()
+                .map(|d| d.over_ceiling_permille)
+                .max()
+                .unwrap_or(0);
+            let under = rows
+                .iter()
+                .map(|d| d.under_ceiling_permille)
+                .max()
+                .unwrap_or(0);
+            let _ = writeln!(
+                out,
+                "fee-ladder: C10-8 {mode} flips_per_10k_blocks={} ramp_lag_max_blocks={} ramp_lag_max_millidays={} ramp_lag_by_ramp=[{}] ramp_lag_unresolved={lag_unresolved} over_ceiling_permille_max={over} under_ceiling_permille_max={under}",
+                changes * 10_000 / blocks.max(1),
+                lag_max.map_or("none".to_owned(), |l| l.to_string()),
+                lag_max.map_or("none".to_owned(), |l| (l * 1000 / BLOCKS_PER_DAY).to_string()),
+                lag_by_ramp.join(","),
+            );
+        }
+    }
+    {
+        let occ = r
+            .dwell
+            .iter()
+            .map(|d| d.d8_boundary_occupancy_permille)
+            .max()
+            .unwrap_or(0);
+        let res_mean = r
+            .dwell
+            .iter()
+            .map(|d| d.d8_mean_residence_blocks)
+            .max()
+            .unwrap_or(0);
+        let res_max = r
+            .dwell
+            .iter()
+            .map(|d| d.d8_max_residence_blocks)
+            .max()
+            .unwrap_or(0);
+        let _ = writeln!(
+            out,
+            "fee-ladder: FL-D8 occupancy_permille_max={occ} residence_mean_max={res_mean} residence_max={res_max}"
+        );
+    }
+    for p in &r.grid_sweep {
+        let _ = writeln!(
+            out,
+            "fee-ladder: FL-R3 {} period={} oscillating_cells={} worst_transitions={} thin_margin_cells={} extra_vs_banded={} extra_worst_transitions={} extra_off_anchor_transitions={} recovered_vs_banded={}",
+            p.mode,
+            p.period,
+            p.oscillating_cells,
+            p.worst_tail_transitions,
+            p.thin_margin_cells,
+            p.extra_cells,
+            p.extra_cells_worst_transitions,
+            p.extra_cells_off_anchor_transitions,
+            p.recovered_cells
+        );
+        let _ = writeln!(
+            out,
+            "fee-ladder: C10-6/7 {} sustained_cells={} min_cycle_blocks={} min_cycle_millidays={} min_gap_blocks={} change_in_gap_worst_permille={} change_in_gap_mean_permille={} invariant_violations={} max_depth={} mean_depth_worst={} fallback_cells={} cold_parses_worst={} cold_parses_mean={} memo_parses_per_day={}",
+            p.mode,
+            p.sustained_cells,
+            p.min_cycle_blocks,
+            p.min_cycle_blocks * 1000 / BLOCKS_PER_DAY,
+            p.min_gap_blocks,
+            p.change_within_gap_worst_permille,
+            p.change_within_gap_mean_permille,
+            p.invariant_violations.map_or("n/a".to_owned(), |v| v.to_string()),
+            p.max_depth,
+            p.mean_depth_worst,
+            p.fallback_cells,
+            p.cold_parses_worst,
+            p.cold_parses_mean,
+            p.memo_parses_per_day
+        );
+    }
     let _ = writeln!(
         out,
         "fee-ladder: degenerate tail_era_blocks={} est_reward_at_exhaustion={} val_reward_at_exhaustion={} penalty_at_tail_x_half={}",
@@ -1704,6 +2813,43 @@ pub fn render_json(r: &FeeLadderReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The guard [`in_boundary_zone`]'s docstring promises: `D8_MARGIN_MILLI`
+    /// is a re-derivation of the owner's private `HYSTERESIS_MARGIN_MILLI`,
+    /// and a duplicated constant that nothing checks is one that drifts.
+    ///
+    /// The owner's margin is private, so this asserts the BEHAVIOUR the two
+    /// must share rather than the literal: a `C` just inside the band's
+    /// margin above a boundary is one the band holds (`hysteresis_step`
+    /// keeps `prev`), and D8 must call that same `C` "near". Take a pow2
+    /// `C_q`, place `C` a hair under `prev * (1 + margin)`, and require both
+    /// to agree. If either constant moves alone, the two disagree and this
+    /// fails.
+    #[test]
+    fn boundary_zone_margin_matches_the_owner() {
+        // A pow2 step in SCALE units, and a `C` just inside the upper edge
+        // of the band around it: within +3%.
+        let prev = SCALE;
+        let inside = prev + prev * 29 / 1000;
+        assert_eq!(
+            hysteresis_step(inside, prev),
+            prev,
+            "owner must HOLD a C inside its margin — if not, the band's \
+             margin moved and D8_MARGIN_MILLI must move with it"
+        );
+        assert!(
+            in_boundary_zone(inside),
+            "D8 must call the same C 'near a boundary' as the band acts on"
+        );
+        // Well outside the zone: the geometric middle of a pow2 interval
+        // is the farthest a C can be from both ends.
+        let middle = prev * 3 / 2;
+        assert!(
+            !in_boundary_zone(middle),
+            "mid-interval C is not near either boundary; a predicate that \
+             says otherwise would report occupancy ~1 and mean nothing"
+        );
+    }
 
     /// Pin the transliteration against `tests/unit_tests/scaling_2021.cpp`
     /// `wallet_fee_estimate` (10 SKL reward cases) — the instrument's
