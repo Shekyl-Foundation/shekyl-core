@@ -54,6 +54,8 @@ using namespace epee;
 #include "hardforks/hardforks.h"
 #include "tx_verification_utils.h"
 #include "version.h"
+#include "shekyl/shekyl_ffi.h"
+#include "cryptonote_basic/drop_verdict.h"
 
 #include <boost/filesystem.hpp>
 
@@ -721,7 +723,7 @@ namespace cryptonote
       LOG_PRINT_L1("WRONG TRANSACTION BLOB, too big size " << tx_blob.size() << ", rejected");
       tvc.m_verifivation_failed = true;
       tvc.m_too_big = true;
-      return false;
+      return reject_form(tvc);
     }
 
     transaction tx;
@@ -730,7 +732,7 @@ namespace cryptonote
     {
       LOG_PRINT_L1("Incoming transactions failed to parse, rejected");
       tvc.m_verifivation_failed = true;
-      return false;
+      return reject_form(tvc);
     }
 
     const uint64_t tx_weight = get_transaction_weight(tx, tx_blob.size());
@@ -1308,10 +1310,10 @@ namespace cryptonote
     return m_blockchain_storage.add_new_block(b, bvc, connect);
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks)
+  bool core::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks, uint8_t *drop_verdict)
   {
     m_incoming_tx_lock.lock();
-    if (!m_blockchain_storage.prepare_handle_incoming_blocks(blocks_entry, blocks))
+    if (!m_blockchain_storage.prepare_handle_incoming_blocks(blocks_entry, blocks, drop_verdict))
     {
       cleanup_handle_incoming_blocks(false);
       return false;

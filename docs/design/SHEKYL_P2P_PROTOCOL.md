@@ -6,7 +6,7 @@ ratification; clusters B and A not yet drafted.** Produced by the P2P-2
 design round dispatched on
 [`P2P_2_DISPATCH_BRIEF.md`](P2P_2_DISPATCH_BRIEF.md). Ratification is Rick's,
 **per cluster**, on the relay-round convention; the umbrella chat reviews each
-package first. **Implementation status: PARTIAL, and P2P-3 was never opened.** This document said "nothing here is implemented" until 2026-09-08, while at least eight merged PRs had already built parts of the round. [§0.5](#05-implementation-status--per-decision) carries a per-decision status with its evidence; read it before assuming any row is unbuilt, and before assuming any row is built.
+package first. **Implementation status: PARTIAL.** P2P-3 was never opened as a named round; PWD-B7's typed drop verdict lands through this PR on the ordinary lane (the same pattern §0.5 records). This document said "nothing here is implemented" until 2026-09-08, while at least eight merged PRs had already built parts of the round. [§0.5](#05-implementation-status--per-decision) carries a per-decision status with its evidence; read it before assuming any row is unbuilt, and before assuming any row is built.
 
 **Pinned:** `dev` @ `47bfa66c33000249b1402a4bb104ae20ab68b757`
 (`git ls-remote origin dev`, 2026-09-01). Papers corpus at `shekyl-dev`
@@ -49,8 +49,10 @@ ruled — it is a deferral with extra words**:
 claimed nothing in it was implemented. That was false: **eight merged PRs had
 already built parts of the round**, one of them (#629) naming a PWD id in its
 own branch. P2P-3, the round nominated to carry implementation, **has never
-been opened** — the work landed through ordinary lanes instead, and no
-document reconciled the two.
+been opened as a named round** — the work landed through ordinary lanes instead, and no
+document reconciled the two. **UPDATE 2026-09-09:** PWD-B7's typed drop
+verdict is the next instance of that pattern (`shekyl-peer-policy`, FFI
+`shekyl_drop_verdict_severs`; row flipped IMPLEMENTED below).
 
 **How a verdict was reached.** PWD ids appear nowhere in code, so nothing here
 was grepped by identifier. For each decision the question asked was *what would
@@ -84,7 +86,8 @@ out of scope — *"that doesn't necessarily include NoiseNN, so that is fine if
 not implemented for alpha.8"* — and that ruling covers the whole transport
 cluster.
 
-**Required (6):** B6 and B10, each removing a wire command — *"the clearest
+**Required (6, of which B10 is already satisfied — five outstanding):** B6 and
+B10, each removing a wire command — *"the clearest
 cases; do them before nodes exist, not after"*. B3, B3a and B4 **as one unit**,
 because caps and ingress rejection gate what the wire accepts, which is wire
 shape even though no command changes, and **B4 is the placement for B3a** — so
@@ -128,11 +131,11 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **B3a** unknown input rejected at ingress | NOT IMPLEMENTED | no ingress rejection site; the codec's byte-exact round-trip of unknown bits is present but is PWC-A6's requirement, not this one | **YES** — with B3 and B4, as one unit |
 | **B4** places B3a's ingress check | NOT IMPLEMENTED | B4's stated remaining work is the check's *placement*; no such site exists | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
 | **B5** — | **NEVER RULED** | appears exactly once tree-wide, in `P2P_2_DISPATCH_BRIEF.md`; dispatched and never dispositioned | n/a — unruled decision, not a status |
-| **B6** one block path | **IMPLEMENTED** | 2001 deleted; 2008 is the sole path. `HANDLE_NOTIFY_T2(NOTIFY_NEW_COMPACT_BLOCK)` at `cryptonote_protocol_handler.h:99`; `relay_block` emits `NOTIFY_NEW_COMPACT_BLOCK::ID` at `.inl:2735`; no `NOTIFY_NEW_BLOCK` handler remains. Identifiers are `COMPACT_*` (ids still 2008/2009). Two-limb test `block_propagation_has_exactly_one_command` refuses 2001 (`LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED`) and still dispatches 2008. | **YES** — landed; do it before nodes exist |
-| **B7** drop only when attributable | **PARTIAL** | #628 withdrew a wrong score-removal and recorded that the site needs a typed verdict; the typed verdict is still owed | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
+| **B6** one block path | **IMPLEMENTED** | 2001 deleted; 2008 is the sole path. `HANDLE_NOTIFY_T2(NOTIFY_NEW_COMPACT_BLOCK)` at `cryptonote_protocol_handler.h:99`; `relay_block` emits `NOTIFY_NEW_COMPACT_BLOCK::ID` at `.inl:2725`; no `NOTIFY_NEW_BLOCK` handler remains. Identifiers are `COMPACT_*` (ids still 2008/2009). Two-limb test `block_propagation_has_exactly_one_command` refuses 2001 (`LEVIN_ERROR_CONNECTION_HANDLER_NOT_DEFINED`) and still dispatches 2008. | **YES** — landed; do it before nodes exist |
+| **B7** drop only when attributable | **IMPLEMENTED** | typed verdict in `shekyl-peer-policy`; FFI `shekyl_drop_verdict_severs`; `m_no_drop_offense` gone as a field. Three sites (tx relay, announce size, block-sync prepare). `drop_connections`-by-host and the score floor remain deferred (E9/E5), not this row | **YES** — the typed verdict: "leaving a half-corrected drop path through a testnet is how the sync-arm defect survived" |
 | **B8** delete the undriven timer | **IMPLEMENTED** | #629 deleted `m_bad_peer_checker`, `network_address_old`, `connection_entry_base` | done |
 | **B9** same-host outbound cap | **PARTIAL** | mechanism present (`net_node.h:142`, `net_node.inl:1262`) via #643's PWD-I1 amendment; the **numeric** value is informed by PWD-I4, which is deferred | **NO — deferred to alpha.9.** Rick split this: the mechanism is merged, the outstanding part is a NUMBER informed by deferred I4, and a number is not a wire change — it moves in alpha.9 at no compatibility cost. Ship the mechanism; its value is **provisional pending I4**. *(Sweep proposed Yes for the mechanism.)* |
-| **B10** delete the back-ping | NOT IMPLEMENTED | `COMMAND_PING` still in `src/p2p/p2p_protocol_defs.h` | **YES** — removes a wire command; "do them before nodes exist, not after" |
+| **B10** delete the back-ping | **IMPLEMENTED** | #643 (`f98de6b30`) deleted `COMMAND_PING` and the whole back-ping; `p2p_protocol_defs.h:235` records it. *Records-was: this sweep first scored it NOT IMPLEMENTED — see the correction note below* | **YES**, and already satisfied |
 | **B11** `sanitize_peerlist` port-0 | **DEFERRED** | named blocker: tor port-0 semantics disputed (`tor_address::unknown()` is port 0) | No — blocked |
 | **B12** bound the fluff batch | NOT IMPLEMENTED | `std::mem::take(&mut peer.queued)` still releases the whole accumulation, `rust/shekyl-relay/src/zone/mod.rs:864` | No — hardening; but see the note below |
 | **I1** no peer identifier on the wire | **IMPLEMENTED** | #643; `p2p_protocol_defs.h:119` records the deletion | done |
@@ -158,9 +161,9 @@ exactly the set of PWD ids present across the round documents and the index:
 
 | | |
 |---|---|
-| IMPLEMENTED | 8 *(B6 moved here 2026-09-09)* |
-| PARTIAL | 2 |
-| NOT IMPLEMENTED | **15 ruled and unbuilt** |
+| IMPLEMENTED | 10 *(B6 this PR; B7 #674; E7 and E9 2026-09-09; B8/B10/I1/I2/E5/E6 were already implemented)* |
+| PARTIAL | 1 |
+| NOT IMPLEMENTED | 14 |
 | NO BUILD REQUIRED | 2 |
 | DEFERRED | 3 |
 | BLOCKED on another row | 1 |
@@ -169,16 +172,59 @@ exactly the set of PWD ids present across the round documents and the index:
 | verification-only | 1 |
 | never ruled / not ruled | 2 (B5, A1) |
 
-**17 of 37 are ruled and unbuilt.** Eight of those seventeen are the transport
-cluster, which Rick has ruled out of alpha.8.
+**15 of 37 are ruled and unbuilt** (14 NOT IMPLEMENTED + 1 PARTIAL). Six of
+those fifteen are the transport cluster, which Rick has ruled out of alpha.8.
+*(This read 18 at the #665 ruling. E7 and E9 landed 2026-09-09; B7 landed in
+#674; B6 landed in this PR; B10 was already implemented and is scored that way
+below. The figure is re-tallied from the rows, not adjusted by hand.)*
 
 **What this says about "alpha.8 runs the new p2p".** The identity cluster is
 substantially built and the transport cluster is entirely unbuilt, which is the
-right way round given Rick's ruling. B6 has landed: one block path. The gap
-that remains is **cluster B's other wire surface**: B3, B3a, B4 and B10 still
-change what the wire accepts or remove a command from it, and none has landed.
-A release that ships the new `basic_node_data` and the new peerlist rules
-while still carrying `COMMAND_PING` is running a half-migrated wire.
+right way round given Rick's ruling. B6 and B10 have landed: one block path,
+and no `COMMAND_PING`. The outstanding alpha.8 wire set is **three: B3, B3a
+and B4**. A release that ships the new `basic_node_data` and the new peerlist
+rules while still carrying the inherited caps is running a half-migrated wire.
+
+**Correction, 2026-09-08 — one row of this sweep was wrong, and it was wrong in
+the way this section warns about.** PWD-B10 was first recorded NOT IMPLEMENTED
+on the evidence that `COMMAND_PING` was "still in `src/p2p/p2p_protocol_defs.h`".
+It was not. At the sweep's own base that line was **the comment recording its
+deletion**, which #643 had landed two days earlier — the precise trap described
+four paragraphs above, committed by the person who wrote the description. The
+row was also "re-verified" twice after later merges, both times by re-running
+the same probe: **re-running a broken instrument is not verification**, and
+those runs were reported as confirmation.
+
+Two consequences worth stating rather than quietly fixing. Rick ruled B10
+required-for-alpha.8 against the wrong status — harmless in effect, since the
+work was already done, but a ruling made on a false input. And **the alpha.8
+outstanding set was five, not six**: B6, B3, B3a and B4, plus B7's remainder.
+#674 then landed that remainder, so the outstanding set was **four**: B6, B3,
+B3a and B4. This PR lands B6, so the outstanding set is **three**: B3, B3a
+and B4.
+
+B6 and B3 were re-checked against the same failure before this correction was
+written, by reading the sites rather than counting them; both held at that
+date, and B6's evidence cell named live handlers instead of a reference count.
+B6's handlers are now the compact path only (`NOTIFY_NEW_COMPACT_BLOCK` at
+`cryptonote_protocol_handler.h:99` / `.inl:530`).
+
+**A WARNING IS NOT A CONTROL.** The paragraph four above describes this exact
+trap, and its author fell into it in the same commit. The defect has now been
+met from both directions on this surface: an **empty** grep that proved a
+*spelling* rather than the absence of a construct (a peerlist eraser wrongly
+called dead code), and this one — a **non-empty** grep that proved a *comment*
+rather than the presence of a mechanism. Same defect either way: the search
+ran, the output was real, and the verdict was about the wrong subject.
+**Neither a hit nor a miss is a finding until someone reads what matched.**
+
+**The back-ping's real job is still gone, and that is a ruled reduction in
+checking, not an oversight.** Its purpose was verifying an advertised port.
+#643 removed that verification; the ruled answer is that verification returns
+with PWD-E1/E2 in alpha.9, and until then **a node's advertised port is
+operator-configured and unverified** — a state Rick has ruled testnet-acceptable
+and which is recorded here so no reader mistakes it for something nobody
+noticed.
 
 **Note on B12.** Ruled not-required because it does not change the wire, but
 it is an unbounded release of accumulated transactions to a peer, and "not
@@ -187,9 +233,12 @@ rather than filed.
 
 **Two findings that are not statuses.** PWD-B5 was dispatched and never
 dispositioned — it exists in the brief and nowhere else. PWD-B3's own text
-states the inherited cap table has **13** arms; the tree has **12**, so one arm
-left since this document's pin and the derivation above it has not noticed.
-Neither is an implementation gap; both are round residue.
+states the inherited cap table has **13** arms while the tree has **11**. That
+one is now explained rather than open: #643 removed `COMMAND_PING` (arm 3 of
+B3's own table, `:2803`) and PWD-B6 removed the 2001 `NOTIFY_NEW_BLOCK` arm.
+B3's derivation still reads 13 and has not caught up with deletions its own
+text anticipates. B5 remains genuine round residue; neither is an
+implementation gap.
 
 ## 1. Invariants — requirements in, not subjects
 
@@ -2870,12 +2919,12 @@ has no history of. Compact, not "just block": 2008 is header-first (relay
 clears `b.txs`); full blocks still travel on `NOTIFY_RESPONSE_GET_OBJECTS`
 (2004) during sync. Command ids are unchanged.
 
-**The two commands are already one code path.** `handle_notify_new_block`
-builds a fluffy request from its argument and **returns
-`handle_notify_new_fluffy_block(...)`**
-(`src/cryptonote_protocol/cryptonote_protocol_handler.inl:529`). 2001 is a wire
-alias for 2008, not a second implementation, so deleting it removes a name —
-not a behaviour.
+*Records-was: before deletion, 2001 was already one code path.*
+`handle_notify_new_block` built a compact request from its argument and
+returned the 2008 handler. 2001 was a wire alias for 2008, not a second
+implementation, so deleting it removed a name — not a behaviour. The trampoline
+is gone; the live handler is `handle_notify_new_compact_block` at
+`cryptonote_protocol_handler.inl:530`.
 
 > **An earlier version of this row argued from `pruned`, and that was wrong.**
 > It claimed `block_complete_entry`'s peer-controlled `pruned` bool lets either
@@ -3618,8 +3667,32 @@ rather than inheriting whatever the default happens to be.
 > peer**, the exact outcome the rule forbids. The ruling stands; the
 > mechanism does not satisfy it.
 >
-> **Implementation action (rides PWD-B7 into the implementing PR; P2P-3, per
-> this round's charter):** the drop decision must key on an **affirmative**
+> **Implementation action — LANDED (P2P-3).**
+> All three sites below now key on the typed verdict; `bool m_no_drop_offense`
+> is gone from the tree. The type and the rule live in
+> `rust/shekyl-peer-policy`, reached through `shekyl_drop_verdict_severs` /
+> `..._is_internal_failure` / `..._classify`; C++ writes the
+> `SHEKYL_DROP_VERDICT_*` bytes through `reject_form|state|internal` and never
+> interprets them. Two things the implementation found that this ruling did
+> not say, recorded because they changed the design:
+>
+> 1. **`Blockchain::check_tx_inputs` fails for both reasons.** Most of its
+>    arms are form, but spent-key-image, missing/too-recent reference-block,
+>    and other chain-state arms describe our view. Classification is at each
+>    return (`reject_form` / `reject_state` / `reject_internal`). `add_tx`
+>    does **not** fold ATTRIBUTABLE_FORM over an unclassified inner failure —
+>    that promotion was the dual default this type exists to forbid. A new
+>    arm that just `return false`s stays unclassified and does not sever.
+> 2. **At the block-sync site the drop was also the recovery.** `drop_connection`
+>    flushed the span as a side effect. With our own cancellation no longer
+>    dropping the peer, nothing else would clear it and `get_next_span` would
+>    serve the same failed span forever — sync stalling on our own bug instead
+>    of recovering from it. `remove_spans` was already unconditional there and
+>    is now asserted to stay so, in every verdict class.
+>
+> The original statement of the action follows, unchanged:
+>
+> the drop decision must key on an **affirmative**
 > input-attributable verdict, not on flag-absence. The verdict surface is
 > tri-state — *attributable form failure* (drop) / *policy-or-state
 > rejection* (no drop) / *internal failure* (no drop, loud log) — typed so

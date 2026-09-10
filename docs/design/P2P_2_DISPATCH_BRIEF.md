@@ -497,7 +497,7 @@ bucket-4 mass lives here.
 | PWD-B4 | Unknown flag bits: reject at ingress, or keep accepting | PWC-A6 / **PWC-A6a** (the codec accepts them; no relay carries them today) |
 | PWD-B5 | `return_code` on notifications — inherited RPC-over-Levin affordance | PWC-A7, PW-12 |
 | PWD-B6 | The two block-propagation paths (2001 alongside 2008) — collapse or keep, on a chain with no fluffy transition | PWC-C3, PW-27 |
-| PWD-B7 | Drop semantics: `drop_connections`-by-host, the score floor, and whether the **inherited** no-drop-offense set is adopted deliberately | PWC-E7, PWC-E8, PWC-E9 |
+| PWD-B7 | **Attributable-drop half DELIVERED** (typed `DropVerdict` in `shekyl-peer-policy`; `m_no_drop_offense` gone). `drop_connections`-by-host remains **deferred with PWD-I4** (PWC-E9); the score floor remains **deferred with PWC-E5** | PWC-E7, PWC-E8, PWC-E9 |
 | PWD-B8 | Dead surface: the two lineage-dead structs and the never-driven 43-second timer | PWC-F1, PWC-F2, **PWC-E4a** |
 | **PWD-B9** | **Outbound connection diversity: a same-host cap on outbound slots.** Added 2026-09-02 by PWD-I1's amendment, which removes `peer_id` from the wire and needs this as the replacement for id-based duplicate avoidance. **No pre-existing B row covered outbound selection** — B1 is command rate limiting, B7 is *drop* semantics — so routing to "cluster B" had no owner. Note the list asymmetry it must handle: the white list already holds one entry per host via `evict_host_from_peerlist`; the **gray list does not**, so the amplifier runs through gray draws | PWD-I1, PWC-E11, `net_peerlist.h:374` |
 | **PWD-B10** | **Delete the back-ping and `COMMAND_PING` (1003) from the wire surface.** Added 2026-09-02 and **answered the same day by PWD-I1's consumer inventory**, so this row carries an execution, not an open design question: `try_ping` has one caller whose callback is the whitelist promotion PWD-I2 forbids, and `try_ping` is `COMMAND_PING`'s only invoker. Four p2p commands become three | PWC-D11, PWD-I1, PWD-I2 |
@@ -512,7 +512,7 @@ bucket-4 mass lives here.
 | PWD-I3 | **DELIVERED.** Tenure is address-keyed, never serialized, ordered by `first_seen` — which decides which *single* anchor is kept, the multi-slot premise having been withdrawn | PWC-D5, PWC-D6, PW-17, PW-18 |
 | PWD-I4 | **DEFERRED to its own sub-round with blockers named** — `ρ`/`g_max` is not specified here; it must derive against the *fixed* anchor and white/gray behaviour, not the current one | PW-25, PWC-E6, Q-10 |
 | PWD-I5 | **DELIVERED as an obligation, not a closure** — the Q-10 write-back into `DAEMON_RELAY_PRIVACY.md` is specified now; its *discharge* is gated on PWD-I4 | PW-26, §12.10, §7 |
-| PWD-I6 | **DELIVERED.** Shi ① and ② are closed by PWD-I2's three rules; the inherited double-spend no-drop guard is recorded as the one residue, owned by PWD-B7 | `P2P_1_WIRE_CENSUS.md` §5.2, PWC-E7 |
+| PWD-I6 | **DELIVERED.** Shi ① and ② are closed by PWD-I2's three rules; the inherited double-spend no-drop guard is **now the PWD-B7 typed verdict** (PWC-E7/E8 ratified in the census; the FOLLOWUPS "decide it deliberately" row is closed) | `P2P_1_WIRE_CENSUS.md` §5.2, PWC-E7 |
 
 ### 2.4 Cluster A — the archival submission-path gap
 
