@@ -2990,11 +2990,15 @@ header is 29 bytes. Flags follow command immediately. The slot is retired,
 never reused.
 
 Notifications always wrote `0`. The three remaining invokes (handshake /
-timed-sync / support-flags) put the handler's `int` on the wire; the
-initiator only tested `code < 0`, which also fires for **local** epee
-errors (timeout `-4`, destroyed `-3`) that never hit the wire. Handshake
-failures `drop_connection` then `return 1` — Levin "success," then
-hang-up. Real success or failure is the **payload or the close**.
+timed-sync / support-flags) put the handler's `int` on the wire.
+Application callbacks already tested `code < 0`, which also fires for
+**local** epee errors (timeout `-4`, destroyed `-3`) that never hit the
+wire. The epee invoke wrapper still treated `code <= 0` as failure
+because it expected the handler's positive `1`; that `1` left with the
+field. A `RESPONSE` now delivers `LEVIN_OK` (0) — a reply arrived — and
+the wrapper fails only on `code < 0`. Handshake failures
+`drop_connection` then `return 1` — Levin "success," then hang-up. Real
+success or failure is the **payload or the close**.
 
 The local invoke-callback `int` stays for timeout/destroyed. That is API,
 not wire. C++ `invoke()` handlers may still return `int`; it is not

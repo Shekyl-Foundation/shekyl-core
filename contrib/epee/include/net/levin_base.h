@@ -73,10 +73,15 @@ namespace levin
   // m_return_code (i32) is deleted (PWD-B5 / PWC-A7 / PW-12): inherited
   // RPC-over-Levin status. Notifications always wrote 0; the three remaining
   // invokes (handshake / timed-sync / support-flags) put the handler's int on
-  // the wire and the initiator only tested `code < 0`, which also fires for
-  // local transport errors that never hit the wire. Application success or
-  // failure is the payload or hanging up. A later NACK is a command body, not
-  // a header i32. The slot is retired, never reused.
+  // the wire. Application callbacks already tested `code < 0` (timeout -4,
+  // destroyed -3 — local, never on the wire). The epee invoke wrapper still
+  // treated `code <= 0` as failure because it expected the handler's positive
+  // 1; that 1 left with the field. A RESPONSE now delivers LEVIN_OK (0) = a
+  // reply arrived, and the wrapper fails only on `code < 0`. Handshake
+  // failures drop_connection then return 1 — Levin "success," then hang-up.
+  // Application success or failure is the payload or hanging up. A later
+  // NACK is a command body, not a header i32. The slot is retired, never
+  // reused.
   //
   // The on-wire header size. Every other Levin wire constant is a literal a
   // grep gate can compare against the Rust port
