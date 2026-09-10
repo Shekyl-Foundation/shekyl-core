@@ -43,6 +43,8 @@
 #include <boost/uuid/uuid.hpp>
 #include <chrono>
 #include <functional>
+#include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -141,6 +143,53 @@ namespace nodetool
   {
     return !connection_is_income && candidate.is_same_host(connected);
   }
+
+  /*! Is `candidate` THIS node's own public listen, so an outbound must not
+    start?
+
+    Anonymity zones already skip via `zone_our_address` (they generated the
+    keypair, so they know the address). Public zone typically binds
+    `0.0.0.0` and leaves that field unset, so a seed whose own IP is in the
+    hardcoded list kept dialling itself: TCP hairpin succeeded, the PWD-E3
+    nonce dropped the handshake, `start_outer_call` logged ERROR, and the
+    connector retried. Detection stays the nonce (PWD-T1 / stem width).
+    This is the AVOIDANCE half of PWD-E3(c) — the wasted dial never starts.
+
+    Port-sensitive on purpose: two daemons on one host (mainnet + testnet)
+    must still reach each other. Loopback at our listen port is always us.
+    `local_hosts` is this process's interface addresses; matching one at
+    our listen or advertised-external port is us. */
+  inline bool is_our_listen_address(
+    const epee::net_utils::network_address& candidate,
+    const epee::net_utils::network_address& zone_our_address,
+    const uint16_t listen_port,
+    const uint16_t listen_port_ipv6,
+    const uint16_t external_port,
+    const std::set<std::string>& local_hosts)
+  {
+    if (zone_our_address.get_type_id() != epee::net_utils::address_type::invalid
+        && zone_our_address == candidate)
+      return true;
+
+    const uint16_t port = candidate.port();
+    if (port == 0)
+      return false;
+    const bool port_is_ours =
+      (listen_port != 0 && port == listen_port)
+      || (listen_port_ipv6 != 0 && port == listen_port_ipv6)
+      || (external_port != 0 && port == external_port);
+    if (!port_is_ours)
+      return false;
+
+    if (candidate.is_loopback())
+      return true;
+
+    return local_hosts.count(candidate.host_str()) != 0;
+  }
+
+  //! Host strings of this process's interface addresses, keyed as
+  //! `network_address::host_str()` so they compare equal to a candidate.
+  std::set<std::string> local_interface_hosts();
 
   // hides boost::future and chrono stuff from mondo template file
   std::optional<boost::asio::ip::tcp::socket>
@@ -454,6 +503,7 @@ namespace nodetool
     //! cross-zone probe never matches — the drop would otherwise be a
     //! cross-zone correlation oracle.
     bool detect_self_handshake(epee::net_utils::zone zone, const std::array<uint8_t, 32>& nonce);
+    bool is_self_dial(const epee::net_utils::network_address& na) const;
     //! \return How many outbound-handshake nonces `zone` currently holds in
     //! flight. The set's BOUNDEDNESS rests on the attempt scope guard alone —
     //! `m_inflight_handshake_nonces` is attempt-scoped by construction, and
@@ -628,6 +678,10 @@ namespace nodetool
     uint32_t m_listening_port;
     uint32_t m_listening_port_ipv6;
     uint32_t m_external_port;
+    //! Interface host strings (`network_address::host_str()` form), filled
+    //! once at the end of `init()` after bind. Used by `is_self_dial` so a
+    //! public-zone node does not outbound to its own listen address.
+    std::set<std::string> m_local_hosts;
     bool m_allow_local_ip;
     igd_t m_igd;
     bool m_offline;

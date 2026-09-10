@@ -728,6 +728,9 @@ namespace nodetool
     // provisioned after this list was written and were reachable but invisible --
     // absent here and absent from DNS, so no node could ever bootstrap from them.
     // Literal addresses, not hostnames: bootstrap must not depend on a resolver.
+    // The list is shared across the fleet; a node whose listen address matches
+    // an entry is omitted at connect (`is_self_dial`), so a seed does not dial
+    // itself. Do not special-case a host here.
     static const std::array<const char *, 6> default_seed_hosts = {
       "134.199.166.22",  // seedaus  -- Sydney
       "45.77.147.65",    // seeduse  -- US East
@@ -1045,6 +1048,15 @@ namespace nodetool
     }
     if(m_external_port)
       MDEBUG("External port defined as " << m_external_port);
+
+    m_local_hosts = local_interface_hosts();
+    auto consider_bind = [this](const std::string& ip) {
+      if (ip.empty() || ip == "0.0.0.0" || ip == "::" || ip == "::0")
+        return;
+      m_local_hosts.insert(ip);
+    };
+    consider_bind(public_zone.m_bind_ip);
+    consider_bind(public_zone.m_bind_ipv6_address);
 
     // add UPnP port mapping
     if(m_igd == igd)
@@ -1404,6 +1416,25 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
+  bool node_server<t_payload_net_handler>::is_self_dial(const epee::net_utils::network_address& na) const
+  {
+    const auto found = m_network_zones.find(na.get_zone());
+    const epee::net_utils::network_address unset{};
+    const epee::net_utils::network_address& zone_ours =
+      found == m_network_zones.end() ? unset : found->second.m_our_address;
+    const auto as_port = [](uint32_t p) -> uint16_t {
+      return p > 65535u ? uint16_t{0} : static_cast<uint16_t>(p);
+    };
+    return is_our_listen_address(
+      na,
+      zone_ours,
+      as_port(m_listening_port),
+      as_port(m_listening_port_ipv6),
+      as_port(m_external_port),
+      m_local_hosts);
+  }
+  //-----------------------------------------------------------------------------------
+  template<class t_payload_net_handler>
   bool node_server<t_payload_net_handler>::has_outbound_connection_to_host(network_zone& zone, const epee::net_utils::network_address& adr)
   {
     // Same-host outbound cap (the PWD-I1 amendment's condition for removing
@@ -1487,8 +1518,11 @@ namespace nodetool
     if (zone.m_connect == nullptr) // outgoing connections in zone not possible
       return false;
 
-    if (zone.m_our_address == na)
+    if (is_self_dial(na))
+    {
+      MDEBUG("Not connecting to " << na.str() << " — it is this node's listen address");
       return false;
+    }
 
     if (zone.m_current_number_of_out_peers == zone.m_config.m_net_config.max_out_connection_count) // out peers limit
     {
@@ -1904,7 +1938,13 @@ namespace nodetool
         {
           // seeds should have hostname converted to IP already
           MDEBUG("Seed node: " << full_addr);
-          server.m_seed_nodes.push_back(MONERO_UNWRAP(net::get_network_address(full_addr, default_port)));
+          auto seed = MONERO_UNWRAP(net::get_network_address(full_addr, default_port));
+          if (is_self_dial(seed))
+          {
+            MINFO("Omitting seed " << seed.str() << " — it is this node's listen address");
+            continue;
+          }
+          server.m_seed_nodes.push_back(std::move(seed));
         }
         MDEBUG("Number of seed nodes: " << server.m_seed_nodes.size());
       }
