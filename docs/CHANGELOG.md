@@ -397,6 +397,16 @@
 
 ### Fixed
 
+- **Build: shared internal libraries are refused; Debug builds link
+  statically.** `BUILD_SHARED_LIBS=ON` (the inherited Debug default) gave
+  every internal `.so` that links the Rust FFI archive its own copy of the
+  Rust image, duplicating process-global Rust state behind the single-image
+  `nm` gate's back. Observed as a Debug `shekyld` refusing every emission
+  claim as not-yet-finalized: `Blockchain::init` armed the regtest
+  settlement-epoch schedule in `libcryptonote_core.so`'s copy while the RPC
+  verifier read the executable's unarmed copy. Configure now fails with the
+  reason (`V3_WALLET_DECISION_LOG.md` 2026-09-10). Release and CI
+  configurations were already static and are unaffected.
 - **Daemon RPC: a Phase C submit rejection names its leg.** The submit
   engine logs the rejected kind and failure at `info`, and the verifier
   logs the specific failing check (and the emission battery's error) at

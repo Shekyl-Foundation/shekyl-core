@@ -58,7 +58,6 @@ cmake ../.. \
 -DCMAKE_CXX_COMPILER=clang++ \
 -DUSE_CCACHE=OFF \
 -DUSE_COMPILATION_TIME_PROFILER=ON \
--DBUILD_SHARED_LIBS=ON \
 -DBUILD_TESTS=ON
 
 make clean 				# Clean up, so that the trace can be regenerated from scratch
