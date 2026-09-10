@@ -77,8 +77,8 @@ TEST(mining_parity, release_multiplier_scales_reward)
   ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, base_reward, version));
   ASSERT_GT(base_reward, 0u);
 
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, high_volume_reward, version, SHEKYL_TX_VOLUME_BASELINE * 100));
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, low_volume_reward, version, 1));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, high_volume_reward, version, {SHEKYL_TX_VOLUME_BASELINE * 100, 1}));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, low_volume_reward, version, {1, 1}));
 
   ASSERT_GT(high_volume_reward, base_reward);
   ASSERT_LT(low_volume_reward, base_reward);
@@ -94,7 +94,7 @@ TEST(mining_parity, reward_multiplier_is_neutral_at_baseline)
   uint64_t base_reward = 0;
   uint64_t release_reward = 0;
   ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, base_reward, version));
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, release_reward, version, SHEKYL_TX_VOLUME_BASELINE));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, release_reward, version, {SHEKYL_TX_VOLUME_BASELINE, 1}));
   ASSERT_EQ(base_reward, release_reward);
 }
 
@@ -117,30 +117,30 @@ TEST(mining_parity, marshal_pins_the_signed_composition_at_the_tail)
   // Tail boundary under dormancy (v = 0 pins M_r at its 0.8 rail), no
   // penalty: the floor pays TAIL whole. The shipped pre-FL-R12' order
   // paid 480000000 here (the multiplier applied to the floored base).
-  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE - tail + 1, reward, version, 0));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE - tail + 1, reward, version, {}));
   ASSERT_EQ(reward, tail);
 
   // Past the asymptote with x = 1/2: penalty AFTER the floor => TAIL*3/4.
   // Pre-FL-R12' this state was an error arm (FL-R16a).
-  ASSERT_TRUE(cryptonote::get_block_reward(zone, zone + zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE + tail, reward, version, 0));
+  ASSERT_TRUE(cryptonote::get_block_reward(zone, zone + zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE + tail, reward, version, {}));
   ASSERT_EQ(reward, tail / 4 * 3);
 
   // Surge rail (M_r at 1.3) at the asymptote: rail-independent TAIL — the
   // axis that separates max(M_r*curve, TAIL) from a floor-inside-the-
   // operand rebuild (FL round 10, T-3).
-  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE, reward, version, SHEKYL_TX_VOLUME_BASELINE * 100));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE, reward, version, {SHEKYL_TX_VOLUME_BASELINE * 100, 1}));
   ASSERT_EQ(reward, tail);
 
   // Mid-curve dormancy, cross-checked against the DIRECT FFI call: the
-  // marshal identity that pins the tx_volume_avg threading itself. The
+  // marshal identity that pins the volume-window threading itself. The
   // three tail probes above are M_r-independent by contract, so only a
   // mid-curve probe can catch a shim that drops or rewrites the volume
   // argument on the way through.
   uint64_t expected = 0;
   uint64_t limit = 0;
   ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
-            shekyl_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, zone, 0, &expected, &limit));
-  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, reward, version, 0));
+            shekyl_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, zone, 0, 0, &expected, &limit));
+  ASSERT_TRUE(cryptonote::get_block_reward(0, zone / 2, SHEKYL_EMISSION_CURVE_ASYMPTOTE / 2, reward, version, {}));
   ASSERT_EQ(reward, expected);
 }
 
@@ -155,8 +155,8 @@ TEST(mining_parity, genesis_paid_reward_and_split_are_pinned)
   //
   // Independent literals, derived from the frozen parameters rather than
   // read back from the owner under test: at genesis `curve(0) =
-  // SHEKYL_EMISSION_CURVE_ASYMPTOTE >> esf` = 2 048 000 000 000; `tx_volume_avg = 0` pins
-  // `M_r` at its 0.8 rail and the tail floor does not bind, so the paid
+  // SHEKYL_EMISSION_CURVE_ASYMPTOTE >> esf` = 2 048 000 000 000; an empty volume window
+  // pins `M_r` at its 0.8 rail and the tail floor does not bind, so the paid
   // pre-penalty quantity is 1 638 400 000 000; the genesis emission share
   // is 15%, leaving the miner 1 392 640 000 000. A reward-math change
   // fails this even though the marshal still agrees with itself.
@@ -164,7 +164,7 @@ TEST(mining_parity, genesis_paid_reward_and_split_are_pinned)
   uint64_t limit = 0;
   ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
             shekyl_block_reward(0, 1, 0, CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
-                                /*tx_volume_avg=*/0, &paid, &limit));
+                                /*tx_count_sum=*/0, /*window_blocks=*/0, &paid, &limit));
   ASSERT_EQ(paid, UINT64_C(1638400000000));
 
   const shekyl::EmissionSplit em = shekyl::compute_emission_split(paid, 0, 0);

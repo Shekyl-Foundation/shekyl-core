@@ -32,6 +32,7 @@
 
 use crate::escalation::{staker_pool_share_at, FrozenSegmentCount, ScaledShare};
 use crate::params::{clamp, isqrt, mul_scale, EconomicParams, SCALE};
+use crate::volume::TxVolume;
 
 /// Result of the fee burn split calculation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +45,8 @@ pub struct BurnSplit {
 /// Calculate the burn percentage (fixed-point, SCALE = 1_000_000).
 ///
 /// # Arguments
-/// * `tx_volume` - Transaction count over the volume window
+/// * `tx_volume` - The trailing-window transaction volume as the exact
+///   ratio `tx_count_sum : blocks` ([`TxVolume`], FL-R24)
 /// * `tx_baseline` - Baseline transaction volume
 /// * `circulating_supply` - Currently circulating atomic units
 /// * `total_supply` - The emission curve's asymptote in atomic units
@@ -56,7 +58,7 @@ pub struct BurnSplit {
 /// Burn percentage in fixed-point SCALE units (e.g. 400_000 = 40%).
 #[allow(clippy::cast_possible_truncation)]
 pub fn calc_burn_pct(
-    tx_volume: u64,
+    tx_volume: TxVolume,
     tx_baseline: u64,
     circulating_supply: u64,
     total_supply: u64,
@@ -67,11 +69,10 @@ pub fn calc_burn_pct(
         return 0;
     }
 
-    // sqrt(tx_volume / tx_baseline) scaled to SCALE
-    // = sqrt(tx_volume * SCALE^2 / tx_baseline) but we do it step by step
-    let volume_ratio_scaled = (u128::from(tx_volume) * u128::from(SCALE) * u128::from(SCALE)
-        / u128::from(tx_baseline)) as u64;
-    let sqrt_volume = isqrt(volume_ratio_scaled); // result is in SCALE units
+    // sqrt(tx_volume / tx_baseline) scaled to SCALE: the operand is the
+    // ratio in SCALE² units, computed by `TxVolume` with the window length
+    // in the denominator and saturating rather than wrapping (FL-R24).
+    let sqrt_volume = isqrt(tx_volume.ratio_scaled_squared(tx_baseline)); // SCALE units
 
     // circulating_supply / total_supply scaled to SCALE, saturated at 1.0
     // (FL-R16c): under the perpetual tail gross issuance passes the
@@ -92,7 +93,7 @@ pub fn calc_burn_pct(
 
 /// Burn percentage from raw activity inputs.
 pub fn calc_burn_pct_from_activity(
-    tx_volume: u64,
+    tx_volume: TxVolume,
     tx_baseline: u64,
     circulating_supply: u64,
     params: &crate::params::EconomicParams,
@@ -152,12 +153,18 @@ mod tests {
 
     #[test]
     fn test_zero_baseline() {
-        assert_eq!(calc_burn_pct(100, 0, 1000, 10000, 400_000, 900_000), 0);
+        assert_eq!(
+            calc_burn_pct(TxVolume::per_block(100), 0, 1000, 10000, 400_000, 900_000),
+            0
+        );
     }
 
     #[test]
     fn test_zero_supply() {
-        assert_eq!(calc_burn_pct(100, 100, 1000, 0, 400_000, 900_000), 0);
+        assert_eq!(
+            calc_burn_pct(TxVolume::per_block(100), 100, 1000, 0, 400_000, 900_000),
+            0
+        );
     }
 
     #[test]
@@ -165,7 +172,14 @@ mod tests {
         // Early chain: 10% circulating, baseline volume
         let supply = 4_294_967_296_000_000_000u64;
         let circulating = supply / 10; // 10%
-        let burn = calc_burn_pct(100, 100, circulating, supply, 400_000, 900_000);
+        let burn = calc_burn_pct(
+            TxVolume::per_block(100),
+            100,
+            circulating,
+            supply,
+            400_000,
+            900_000,
+        );
         // burn_base(0.4) * sqrt(1.0)(1.0) * supply_ratio(0.1) = 0.04 = 4%
         assert_eq!(burn, 40_000);
     }
@@ -175,7 +189,14 @@ mod tests {
         // Mature: 80% circulating, 3x volume (stake no longer a burn input — F-D)
         let supply = 4_294_967_296_000_000_000u64;
         let circulating = supply / 100 * 80;
-        let burn = calc_burn_pct(300, 100, circulating, supply, 400_000, 900_000);
+        let burn = calc_burn_pct(
+            TxVolume::per_block(300),
+            100,
+            circulating,
+            supply,
+            400_000,
+            900_000,
+        );
         // burn_base(0.4) * sqrt(3.0)(~1.732) * 0.8 ≈ 0.554
         assert!(burn > 500_000 && burn < 600_000, "burn was {burn}");
     }
@@ -185,7 +206,14 @@ mod tests {
         let supply = 4_294_967_296_000_000_000u64;
         let circulating = supply; // 100% circulating
                                   // Extreme volume: 10x baseline → 0.4·sqrt(10)·1.0 ≈ 1.26, capped
-        let burn = calc_burn_pct(1000, 100, circulating, supply, 400_000, 900_000);
+        let burn = calc_burn_pct(
+            TxVolume::per_block(1000),
+            100,
+            circulating,
+            supply,
+            400_000,
+            900_000,
+        );
         assert_eq!(burn, 900_000); // capped at 90%
     }
 
@@ -249,7 +277,14 @@ mod tests {
         // the two "was it staked?" scenarios that once diverged now coincide.
         let supply = 4_294_967_296_000_000_000u64;
         let circulating = supply / 2;
-        let burn = calc_burn_pct(100, 100, circulating, supply, 400_000, 900_000);
+        let burn = calc_burn_pct(
+            TxVolume::per_block(100),
+            100,
+            circulating,
+            supply,
+            400_000,
+            900_000,
+        );
         // 0.4 * sqrt(1.0) * 0.5 = 0.20 = 20%, regardless of any stake level.
         assert_eq!(burn, 200_000);
     }
@@ -260,7 +295,14 @@ mod tests {
         let cap = 900_000u64;
         let cases = [(0u64, 50u64), (10, 50), (50, 50), (200, 50), (500, 50)];
         for (tx_volume, tx_baseline) in cases {
-            let burn = calc_burn_pct(tx_volume, tx_baseline, supply / 2, supply, 500_000, cap);
+            let burn = calc_burn_pct(
+                TxVolume::per_block(tx_volume),
+                tx_baseline,
+                supply / 2,
+                supply,
+                500_000,
+                cap,
+            );
             assert!(burn <= cap, "burn exceeds cap: {burn}");
         }
     }
@@ -285,14 +327,15 @@ mod tests {
         // what the assertions can see: a clamped burn would mask drift.
         let v = baseline;
 
-        let at_asymptote = calc_burn_pct(v, baseline, supply, supply, rate, cap);
+        let at_asymptote =
+            calc_burn_pct(TxVolume::per_block(v), baseline, supply, supply, rate, cap);
         assert!(
             at_asymptote < cap,
             "probe must sit below the burn cap or the clamp hides the ratio: {at_asymptote}"
         );
 
         for past in [supply + 1, supply + supply / 2, u64::MAX] {
-            let burn = calc_burn_pct(v, baseline, past, supply, rate, cap);
+            let burn = calc_burn_pct(TxVolume::per_block(v), baseline, past, supply, rate, cap);
             assert_eq!(
                 burn, at_asymptote,
                 "burn moved past the asymptote at circulating={past}: the supply ratio did not saturate"

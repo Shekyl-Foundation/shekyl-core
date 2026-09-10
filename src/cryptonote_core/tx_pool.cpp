@@ -2056,10 +2056,10 @@ namespace cryptonote
     uint64_t best_coinbase = 0, coinbase = 0;
     total_weight = 0;
     fee = 0;
-    const uint64_t tx_volume_avg = m_blockchain.get_tx_volume_avg(block_height);
-    
+    const shekyl::tx_volume_window tx_volume = m_blockchain.get_tx_volume_window(block_height);
+
     //baseline empty block
-    if (!get_block_reward(median_weight, total_weight, already_generated_coins, best_coinbase, version, tx_volume_avg))
+    if (!get_block_reward(median_weight, total_weight, already_generated_coins, best_coinbase, version, tx_volume))
     {
       MERROR("Failed to get block reward for empty block");
       return false;
@@ -2135,7 +2135,7 @@ namespace cryptonote
         // If we're getting lower coinbase tx,
         // stop including more tx
         uint64_t block_reward;
-        if(!get_block_reward(median_weight, total_weight + meta.weight, already_generated_coins, block_reward, version, tx_volume_avg))
+        if(!get_block_reward(median_weight, total_weight + meta.weight, already_generated_coins, block_reward, version, tx_volume))
         {
           LOG_PRINT_L2("  would exceed maximum block weight");
           continue;

@@ -25,7 +25,7 @@ use shekyl_economics::{
     burn::{calc_burn_pct, compute_burn_split},
     calc_effective_emission_share, effective_emission,
     params::{mul_scale, EconomicParams, SCALE},
-    split_block_emission, ScaledShare,
+    split_block_emission, ScaledShare, TxVolume,
 };
 
 use crate::burden::{
@@ -206,7 +206,8 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
         cumulative_outputs += tx_volume as f64 * OUTPUTS_PER_TX_NORMAL;
 
-        let effective = effective_emission(ag, tx_volume, &economic).unwrap_or(0);
+        let effective =
+            effective_emission(ag, TxVolume::per_block(tx_volume), &economic).unwrap_or(0);
 
         let emission_share = calc_effective_emission_share(
             abs_height,
@@ -219,7 +220,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
         let burn_pct = calc_burn_pct(
-            tx_volume,
+            TxVolume::per_block(tx_volume),
             params.tx_volume_baseline,
             circulating,
             params.emission_curve_asymptote,

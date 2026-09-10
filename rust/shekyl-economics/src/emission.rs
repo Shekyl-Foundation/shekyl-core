@@ -6,6 +6,7 @@
 //! not a stage of the paid pipeline.
 
 use crate::params::EconomicParams;
+use crate::volume::TxVolume;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum EmissionError {
@@ -92,11 +93,11 @@ pub fn base_block_reward(
 /// fees are lowest (the dormancy case the floor exists for).
 pub fn effective_emission(
     already_generated_coins: u64,
-    tx_volume_avg: u64,
+    tx_volume: TxVolume,
     params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
     let m_r = crate::release::calc_release_multiplier(
-        tx_volume_avg,
+        tx_volume,
         params.tx_volume_baseline,
         params.release_min,
         params.release_max,
@@ -173,11 +174,11 @@ pub fn paid_block_reward(
     current_block_weight: u64,
     already_generated_coins: u64,
     full_reward_zone: u64,
-    tx_volume_avg: u64,
+    tx_volume: TxVolume,
     params: &EconomicParams,
 ) -> Result<u64, EmissionError> {
     apply_weight_penalty(
-        effective_emission(already_generated_coins, tx_volume_avg, params)?,
+        effective_emission(already_generated_coins, tx_volume, params)?,
         median_weight,
         current_block_weight,
         full_reward_zone,
@@ -249,7 +250,7 @@ pub fn block_reward_with_penalty(
         current_block_weight,
         already_generated_coins,
         full_reward_zone,
-        params.tx_volume_baseline,
+        TxVolume::per_block(params.tx_volume_baseline),
         params,
     )
 }
@@ -447,8 +448,12 @@ mod tests {
             ("dormancy", 0, p.release_min),
             ("surge", 2 * p.tx_volume_baseline, p.release_max),
         ] {
-            let m_r =
-                calc_release_multiplier(v, p.tx_volume_baseline, p.release_min, p.release_max);
+            let m_r = calc_release_multiplier(
+                TxVolume::per_block(v),
+                p.tx_volume_baseline,
+                p.release_min,
+                p.release_max,
+            );
             assert_eq!(m_r, pinned, "rail setup: v={v} must pin the {rail} rail");
 
             // Leg 1 — floor on the PAID emission at x = 0, both sides
@@ -456,7 +461,7 @@ mod tests {
             // arm: FL-R16a): TAIL exactly, on this rail as on the other.
             for ag in [s - tail + 1, s, s + tail] {
                 assert_eq!(
-                    paid_block_reward(zone, zone, ag, zone, v, &p).unwrap(),
+                    paid_block_reward(zone, zone, ag, zone, TxVolume::per_block(v), &p).unwrap(),
                     tail,
                     "paid reward != TAIL on the {rail} rail at already_generated={ag}"
                 );
@@ -472,7 +477,7 @@ mod tests {
             };
             assert_eq!(expected, 450_000_000);
             assert_eq!(
-                paid_block_reward(median, weight, s, zone, v, &p).unwrap(),
+                paid_block_reward(median, weight, s, zone, TxVolume::per_block(v), &p).unwrap(),
                 expected,
                 "penalized tail reward != TAIL*(1-x^2) on the {rail} rail: \
                  penalty must compose AFTER the floor"
@@ -481,7 +486,7 @@ mod tests {
             // Leg 4's paid limb — the projection-fed state pays the same
             // rail-independent TAIL contract.
             assert_eq!(
-                paid_block_reward(zone, 1, ag_proj, zone, v, &p).unwrap(),
+                paid_block_reward(zone, 1, ag_proj, zone, TxVolume::per_block(v), &p).unwrap(),
                 tail,
                 "projection-fed paid reward != TAIL on the {rail} rail (height {past_boundary})"
             );
@@ -491,8 +496,8 @@ mod tests {
         // everywhere, mid-curve included (weight = 1 ⇒ no penalty).
         for ag in [0, s / 2, s - tail + 1, s, s + tail] {
             assert_eq!(
-                paid_block_reward(zone, 1, ag, zone, dormancy_v, &p).unwrap(),
-                effective_emission(ag, dormancy_v, &p).unwrap(),
+                paid_block_reward(zone, 1, ag, zone, TxVolume::per_block(dormancy_v), &p).unwrap(),
+                effective_emission(ag, TxVolume::per_block(dormancy_v), &p).unwrap(),
                 "pre-penalty paid quantity != effective_emission at ag={ag}"
             );
         }
@@ -501,7 +506,8 @@ mod tests {
         // estimate operand really was a different number (FL-V1).
         let mid = s / 2;
         assert!(
-            effective_emission(mid, dormancy_v, &p).unwrap() < base_block_reward(mid, &p).unwrap(),
+            effective_emission(mid, TxVolume::per_block(dormancy_v), &p).unwrap()
+                < base_block_reward(mid, &p).unwrap(),
             "dormancy must modulate the mid-curve paid quantity below the neutral base"
         );
     }
@@ -596,7 +602,7 @@ mod tests {
             // Q_subsidy → Q_full_emission. Empty-block volume 0 pins M_r at
             // RELEASE_MIN. The paid quantity is the one owner, not
             // M_r · max(curve, TAIL).
-            let q_full = effective_emission(ag, 0, &p).unwrap();
+            let q_full = effective_emission(ag, TxVolume::ZERO, &p).unwrap();
 
             for h in height_grid {
                 let share = calc_effective_emission_share(

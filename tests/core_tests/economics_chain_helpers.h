@@ -51,7 +51,7 @@ inline bool add_block_to_core(cryptonote::core& c, const cryptonote::block& blk)
 }
 
 // Independent recompute of the paid pre-penalty quantity for an empty
-// FAKECHAIN block (tx_volume_avg == 0). One owner: shekyl_block_reward
+// FAKECHAIN block (empty volume window). One owner: shekyl_block_reward
 // (weight 1 < zone ⇒ no penalty). Deliberately NOT read back from the
 // connect path — this is the conservation identity's independent leg.
 inline uint64_t expected_full_subsidy(uint64_t already_generated)
@@ -63,7 +63,8 @@ inline uint64_t expected_full_subsidy(uint64_t already_generated)
       1,
       already_generated,
       CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
-      /*tx_volume_avg=*/0,
+      /*tx_count_sum=*/0,
+      /*window_blocks=*/0,
       &computed,
       &limit);
   // Fail LOUDLY. Returning 0 here would hand the conservation identity a

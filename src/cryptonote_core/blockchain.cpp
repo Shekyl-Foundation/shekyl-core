@@ -217,9 +217,9 @@ Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_long_term_block_weights_cache_rolling_median(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE),
   m_difficulty_for_next_block_top_hash(crypto::null_hash),
   m_difficulty_for_next_block(1),
-  m_tx_volume_avg_top_hash(crypto::null_hash),
-  m_tx_volume_avg_height(0),
-  m_tx_volume_avg_value(0),
+  m_tx_volume_window_top_hash(crypto::null_hash),
+  m_tx_volume_window_height(0),
+  m_tx_volume_window_value{},
   m_btc_valid(false),
   m_genesis_timestamp(0),
   m_batch_success(true),
@@ -1666,10 +1666,10 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   }
 
   uint64_t median_weight = m_current_block_cumul_weight_median;
-  const uint64_t tx_volume_avg = get_tx_volume_avg(block_height);
+  const shekyl::tx_volume_window tx_volume = get_tx_volume_window(block_height);
   const uint64_t circulating_supply = already_generated_coins;
 
-  if (!get_block_reward(median_weight, cumulative_block_weight, already_generated_coins, base_reward, version, tx_volume_avg))
+  if (!get_block_reward(median_weight, cumulative_block_weight, already_generated_coins, base_reward, version, tx_volume))
   {
     MERROR_VER("block weight " << cumulative_block_weight << " is bigger than allowed for this blockchain");
     return false;
@@ -1684,7 +1684,7 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   // frozen_segment_count is the caller's parent-state read (the asserting
   // read-point above); the escalated share cannot reach miner_fee_income
   // (§12.11.1 Leg 1), so this stays the security-budget-preserving split.
-  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, frozen_segment_count);
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume, circulating_supply, frozen_segment_count);
   uint64_t effective_fee = burn.miner_fee_income;
 
   if(miner_base_reward + effective_fee < money_in_use)
@@ -1953,7 +1953,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   //make blocks coin-base tx looks close to real coinbase tx to get truthful blob weight
   uint8_t hf_version = b.major_version;
   size_t max_outs = 1;
-  const uint64_t tx_volume_avg = get_tx_volume_avg(height);
+  const shekyl::tx_volume_window tx_volume = get_tx_volume_window(height);
   const uint64_t circulating_supply = already_generated_coins;
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
   // D2 escalation operand, computed ONCE and passed to BOTH construct_miner_tx
@@ -1961,7 +1961,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   // a second read there could price against a different n than the first pass
   // (criterion #1 — template and connect must agree by construction).
   const uint64_t frozen_segment_count = parent_frozen_segment_count(height);
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, genesis_ng_height);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, circulating_supply, genesis_ng_height);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1970,7 +1970,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, genesis_ng_height);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, circulating_supply, genesis_ng_height);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     size_t coinbase_weight = get_transaction_weight(b.miner_tx);
@@ -2050,16 +2050,25 @@ bool Blockchain::get_miner_data(uint8_t& major_version, uint64_t& height, crypto
   return true;
 }
 //------------------------------------------------------------------
-uint64_t Blockchain::get_tx_volume_avg(uint64_t height) const
+shekyl::tx_volume_window Blockchain::get_tx_volume_window(uint64_t height) const
 {
   if (height == 0)
-    return 0;
+    return {};
 
   const uint64_t start_height = height > SHEKYL_TX_VOLUME_WINDOW ? height - SHEKYL_TX_VOLUME_WINDOW : 0;
   const uint64_t blocks = height - start_height;
   if (blocks == 0)
-    return 0;
+    return {};
 
+  // THIS FUNCTION COUNTS; IT DOES NOT DIVIDE (FL-R24). It used to return
+  // `tx_count_sum / blocks` as one integer, and that truncation was a
+  // quantizer on a consensus operand: one tick moved `M_r` by 1/V, and the
+  // reward and the served fee floor with it (FEE_LADDER_DERIVATION.md
+  // §11.7, FL-E1 — the integer arm holds the fee loop in a limit cycle the
+  // exact arm converges out of). The pair `(tx_count_sum, blocks)` crosses
+  // the FFI whole and Rust forms `sum / (baseline · blocks)` in one
+  // division. Nothing on the C++ side may divide these two fields.
+  //
   // MEMOIZED, and it has to be. This walks SHEKYL_TX_VOLUME_WINDOW (720)
   // blocks and `get_block_from_height` loads and PARSES each full block
   // blob only to read `tx_hashes.size()`. Validation, `check_fee`
@@ -2087,9 +2096,9 @@ uint64_t Blockchain::get_tx_volume_avg(uint64_t height) const
   // lane and is queued in FOLLOWUPS.
   crypto::hash top_hash = get_tail_id();
   {
-    CRITICAL_REGION_LOCAL(m_tx_volume_avg_lock);
-    if (top_hash == m_tx_volume_avg_top_hash && height == m_tx_volume_avg_height)
-      return m_tx_volume_avg_value;
+    CRITICAL_REGION_LOCAL(m_tx_volume_window_lock);
+    if (top_hash == m_tx_volume_window_top_hash && height == m_tx_volume_window_height)
+      return m_tx_volume_window_value;
   }
 
   // THE SCAN AND ITS KEY MUST COME FROM ONE CHAIN SNAPSHOT. `get_info`
@@ -2105,26 +2114,26 @@ uint64_t Blockchain::get_tx_volume_avg(uint64_t height) const
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
   top_hash = get_tail_id(); // get it again now that we have the lock
   {
-    CRITICAL_REGION_LOCAL1(m_tx_volume_avg_lock);
-    if (top_hash == m_tx_volume_avg_top_hash && height == m_tx_volume_avg_height)
-      return m_tx_volume_avg_value;
+    CRITICAL_REGION_LOCAL1(m_tx_volume_window_lock);
+    if (top_hash == m_tx_volume_window_top_hash && height == m_tx_volume_window_height)
+      return m_tx_volume_window_value;
   }
 
-  uint64_t tx_count_sum = 0;
+  shekyl::tx_volume_window window;
+  window.blocks = blocks;
   for (uint64_t h = start_height; h < height; ++h)
   {
     const block blk = m_db->get_block_from_height(h);
-    tx_count_sum += blk.tx_hashes.size();
+    window.tx_count_sum += blk.tx_hashes.size();
   }
-  const uint64_t avg = tx_count_sum / blocks;
 
   {
-    CRITICAL_REGION_LOCAL1(m_tx_volume_avg_lock);
-    m_tx_volume_avg_top_hash = top_hash;
-    m_tx_volume_avg_height = height;
-    m_tx_volume_avg_value = avg;
+    CRITICAL_REGION_LOCAL1(m_tx_volume_window_lock);
+    m_tx_volume_window_top_hash = top_hash;
+    m_tx_volume_window_height = height;
+    m_tx_volume_window_value = window;
   }
-  return avg;
+  return window;
 }
 //------------------------------------------------------------------
 // for an alternate chain, get the timestamps from the main chain to complete
@@ -4462,7 +4471,7 @@ uint64_t Blockchain::get_current_fee_per_byte() const
   // CEN-M3's held machinery and must not start tracking demand as a side
   // effect of the FL-R12' cutover — at baseline the values are bit-for-bit
   // the pre-cutover ones for every pre-asymptote state, no per-transaction
-  // tx_volume_avg scan lands on the pool-admission path, and past the
+  // tx_volume_window scan lands on the pool-admission path, and past the
   // asymptote the floor is now tail-derived instead of the failure-arm 0
   // that rejected the entire mempool (FL-R16a's relay dead-letter).
   if (!get_block_reward(median, 1, already_generated_coins, base_reward, version))
@@ -4571,8 +4580,8 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
   }
 
   // C_q inputs read from the SAME sources validation uses at this state
-  // (one derivation, no estimate-side re-model): tx_volume_avg over the
-  // consensus window, sigma from the emission-share schedule, burn from
+  // (one derivation, no estimate-side re-model): the exact volume window
+  // (FL-R24), sigma from the emission-share schedule, burn from
   // the canonical burn curve.
   //
   // NO BAND ON THE SERVED VALUE **YET**: `C_q` is the plain ceiling snap
@@ -4609,7 +4618,7 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
   // makes that tolerable in the interim: the residual boundary
   // oscillation is accepted as bounded, its anonymity premise examined
   // and refuted.
-  const uint64_t tx_volume_avg = get_tx_volume_avg(db_height);
+  const shekyl::tx_volume_window tx_volume = get_tx_volume_window(db_height);
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
   const uint64_t sigma = shekyl_calc_emission_share(
       db_height,
@@ -4618,7 +4627,8 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
       SHEKYL_STAKER_EMISSION_DECAY,
       SHEKYL_BLOCKS_PER_YEAR);
   const uint64_t burn_pct = shekyl_calc_burn_pct(
-      tx_volume_avg,
+      tx_volume.tx_count_sum,
+      tx_volume.blocks,
       SHEKYL_TX_VOLUME_BASELINE,
       already_generated_coins,
       SHEKYL_EMISSION_CURVE_ASYMPTOTE,
@@ -4626,7 +4636,7 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
       SHEKYL_BURN_CAP);
   // `prev_cq = 0` is "no held value": the plain ceiling quantization.
   const uint64_t fee_correction_cq =
-      shekyl_fee_correction_quantized(tx_volume_avg, sigma, burn_pct, 0);
+      shekyl_fee_correction_quantized(tx_volume.tx_count_sum, tx_volume.blocks, sigma, burn_pct, 0);
 
   get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, base_reward, Mnw, Mlw_penalty_free_zone_for_wallet, fee_correction_cq, fees);
 
@@ -6516,7 +6526,7 @@ leave:
   //    whenever the release multiplier or weight penalty fired — an
   //    inflation surface, since the accrued leg is re-mintable through
   //    emission claims (coins the ledger never counted as emitted).
-  //  - Fee leg (c1): the same prev-cumulative supply and tx_volume_avg
+  //  - Fee leg (c1): the same prev-cumulative supply and volume window
   //    validate_miner_transaction used — a zero volume operand zeroes
   //    burn_pct, which silently zeroed the fee-pool half of the inflow
   //    (accrued nowhere, burn-recorded nowhere).
@@ -6535,7 +6545,7 @@ leave:
         base_reward, blockchain_height, genesis_ng_height);
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
-        fee_summary, get_tx_volume_avg(blockchain_height), already_generated_coins,
+        fee_summary, get_tx_volume_window(blockchain_height), already_generated_coins,
         frozen_segment_count);
 
     archival_budget_accrual = em_split.staker_emission + burn.staker_pool_amount;

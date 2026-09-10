@@ -31,7 +31,7 @@ use serde::Deserialize;
 use shekyl_economics::params::mul_scale;
 use shekyl_economics::{
     base_block_reward, calc_burn_pct_from_activity, params_digest, ActivityMetric, EconomicParams,
-    CALIBRATION_GENERATION, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    TxVolume, CALIBRATION_GENERATION, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 use super::economics_snapshot::snapshot_calibration_digest;
@@ -65,6 +65,8 @@ struct Row {
     height: u64,
     already_generated_coins: u64,
     base_block_reward: u64,
+    /// Whole transactions per block along the recorded scenario; the
+    /// recorder writes an integer mean, so `TxVolume::per_block` is exact.
     tx_volume: u64,
     circulating_supply: u64,
     total_staked: u64,
@@ -143,14 +145,14 @@ fn economics_differential_records_match_engine() {
         // (2) burn_amount composes the shared `from_activity` path; the
         // recorded `burn_pct_bp` must be reproducible (Bug-2 class).
         let metric = ActivityMetric::new(
-            row.tx_volume,
+            TxVolume::per_block(row.tx_volume),
             row.circulating_supply,
             u128::from(row.total_staked),
             row.height,
         )
         .expect("fixture row is a valid ActivityMetric");
         let pct = calc_burn_pct_from_activity(
-            row.tx_volume,
+            TxVolume::per_block(row.tx_volume),
             params.tx_volume_baseline,
             row.circulating_supply,
             &params,

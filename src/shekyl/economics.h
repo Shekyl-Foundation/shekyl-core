@@ -36,6 +36,7 @@
 #include <cstdint>
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
+#include "shekyl/tx_volume_window.h"
 
 namespace shekyl {
 
@@ -62,7 +63,7 @@ struct BurnResult {
 // EconomicParams — so no share constant crosses this boundary.
 inline BurnResult compute_fee_burn(
     uint64_t total_fees,
-    uint64_t tx_volume,
+    tx_volume_window tx_volume,
     uint64_t circulating_supply,
     uint64_t frozen_segment_count)
 {
@@ -72,7 +73,8 @@ inline BurnResult compute_fee_burn(
     }
 
     uint64_t burn_pct = shekyl_calc_burn_pct(
-        tx_volume,
+        tx_volume.tx_count_sum,
+        tx_volume.blocks,
         SHEKYL_TX_VOLUME_BASELINE,
         circulating_supply,
         SHEKYL_EMISSION_CURVE_ASYMPTOTE,

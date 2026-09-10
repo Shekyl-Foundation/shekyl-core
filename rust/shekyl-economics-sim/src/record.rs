@@ -41,7 +41,7 @@ use shekyl_economics::params::{EconomicParams, SCALE};
 use shekyl_economics::{
     base_block_reward, base_emission_at, calc_burn_pct_from_activity,
     calc_effective_emission_share, calc_release_multiplier, compute_burn_split_at,
-    effective_emission, params_digest, split_block_emission, FrozenSegmentCount,
+    effective_emission, params_digest, split_block_emission, FrozenSegmentCount, TxVolume,
 };
 
 use crate::engine::SimParams;
@@ -189,14 +189,15 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         let stake_ratio = (config.stake.get_stake_ratio)(block, blocks_per_year, circulating);
 
         let multiplier = calc_release_multiplier(
-            tx_volume,
+            TxVolume::per_block(tx_volume),
             sim.tx_volume_baseline,
             sim.release_min,
             sim.release_max,
         );
 
-        let effective_reward = effective_emission(ag_start, tx_volume, &params)
-            .expect("sim paid emission stays within the arithmetic domain");
+        let effective_reward =
+            effective_emission(ag_start, TxVolume::per_block(tx_volume), &params)
+                .expect("sim paid emission stays within the arithmetic domain");
 
         let emission_share = calc_effective_emission_share(
             block + config.genesis_height_offset,
@@ -219,8 +220,12 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         // `LocalEconomics::burn_amount`'s composition (Bug-2 class). Burn no
         // longer consumes stake (F-D); `total_staked` is recorded below as a
         // scenario observable only.
-        let burn_pct =
-            calc_burn_pct_from_activity(tx_volume, sim.tx_volume_baseline, circulating, &params);
+        let burn_pct = calc_burn_pct_from_activity(
+            TxVolume::per_block(tx_volume),
+            sim.tx_volume_baseline,
+            circulating,
+            &params,
+        );
         let total_fees = (u128::from(tx_volume) * u128::from(config.fee_per_tx))
             .min(u128::from(u64::MAX)) as u64;
         let fee_split =
