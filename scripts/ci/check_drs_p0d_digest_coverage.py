@@ -96,6 +96,8 @@ def main() -> None:
             "LMDB walker does not read the live curve-tree root")
     require("shekyl_logical_state_digest_v0" in walker,
             "LMDB walker does not call the Rust hasher")
+    require("block_rtxn_start" in walker,
+            "LMDB walker does not hold one snapshot for the three families")
 
     require("shekyl_logical_state_digest_v0" in ffi_rs,
             "FFI rust export shekyl_logical_state_digest_v0 missing")

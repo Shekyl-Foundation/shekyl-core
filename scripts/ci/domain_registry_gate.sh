@@ -247,7 +247,10 @@ count_pattern() {
 # PC-D3: 41 -> 43. The -v2 leaf-index separator's negative control hashes ONE
 # preimage under both the live and the retired label to assert they differ, so
 # it adds exactly two inline #[cfg(test)] sites and no production site.
-MECH1_EXPECTED=43
+# DRS-P0d: 43 -> 48. Three production sites (outer / chain / spent-elem) plus
+# two #[cfg(test)] sites that hash under the same registered domains to pin
+# XOR identity and the empty-chain preimage.
+MECH1_EXPECTED=48
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

@@ -549,15 +549,20 @@ The §6.6 seeds re-verified, one dead, and the live set enumerated:
 
 Journals were expected to add more; R-2/R-3/R-4 are those additions.
 
-### 6.1 Digest v0 read set (P0d)
+### Digest v0 read set (P0d)
+
+Unnumbered on purpose: this document's `§6.6` citations are DRS
+§6.6 (cross-document). A dotted local heading would make the
+sections-leg treat those four as dangling internals.
 
 P0b left the rest of the RAW enumeration — full read-set tracing per
 write path — to P0d, "where the reads become the digest's inputs."
-Those inputs, for digest v0, are the three families below. A write
-path that mutates one of them and does not change the digest is a
-coverage hole; a write path that mutates something else and *does*
-change the digest is a v0-scope leak (the txpool exclusion test
-guards the leak direction).
+Those inputs, for digest v0, are the three families below, read
+under **one** LMDB snapshot (`block_rtxn_start` around the walker so
+nested `TXN_PREFIX_RDONLY` reuse it). A write path that mutates one
+of them and does not change the digest is a coverage hole; a write
+path that mutates something else and *does* change the digest is a
+v0-scope leak (the txpool exclusion test guards the leak direction).
 
 Archival journals are a **named exclusion** (`DAEMON_REDB_STORE.md`
 §7.1.1). They are not digest-v0 reads. Do not extract S-ARCH, and do

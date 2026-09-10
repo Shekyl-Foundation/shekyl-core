@@ -43,6 +43,20 @@ std::array<uint8_t, 32> BlockchainLMDB::logical_state_digest_v0() const
   // Do not call check_open() here: it is an inline defined only in
   // db_lmdb.cpp, so a second TU cannot link it. height() / the other
   // reads below all check_open themselves.
+  //
+  // Hold one LMDB snapshot for the three v0 families. Nested
+  // TXN_PREFIX_RDONLY in height / get_block_hash_from_height /
+  // for_all_key_images / get_curve_tree_root reuses an already-open
+  // rtxn (or the batch write txn). Without this, each public read
+  // opens its own snapshot and a concurrent add_block / remove_block
+  // can mix tips — the oracle would then disagree with itself.
+  const bool mine_rtxn = block_rtxn_start();
+  struct rtxn_stop {
+    const BlockchainLMDB* db;
+    bool mine;
+    ~rtxn_stop() { if (mine) db->block_rtxn_stop(); }
+  } const snapshot{this, mine_rtxn};
+
   const uint64_t n_blocks = height();
   if (n_blocks > std::numeric_limits<size_t>::max() / 32)
     throw DB_ERROR("logical_state_digest_v0: block count overflows size_t");
