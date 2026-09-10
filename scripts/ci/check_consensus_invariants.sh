@@ -246,18 +246,21 @@ echo
 # ----------------------------------------------------------------------
 echo "[7/7] sync orphan arm re-syncs without penalizing (C2-R1c-Q3b)"
 INL=src/cryptonote_protocol/cryptonote_protocol_handler.inl
-# Capture each WHOLE m_marked_as_orphaned arm (its if-line through the
-# closing brace at the same indent) and keep the one carrying the Q3b
-# marker -- a fixed post-marker line count missed both a punitive call
-# placed before the marker and the arm growing past the window (review
-# round 1 on the R1c PR). Punitive tokens: every drop_* spelling plus
-# host scoring and host blocking.
+# Capture each WHOLE block_sync_orphan_resync arm (its if-line through
+# the closing brace at the same indent) and keep the one carrying the
+# Q3b marker -- a fixed post-marker line count missed both a punitive
+# call placed before the marker and the arm growing past the window
+# (review round 1 on the R1c PR). The inherited subject was
+# `bvc.m_marked_as_orphaned`; PWD-B7's block twin replaced that bool
+# with the Rust sync-action predicate. Re-point, do not delete.
+# Punitive tokens: every drop_* spelling plus host scoring and host
+# blocking.
 # set -e would abort at this assignment on extractor failure, making the
 # pinpoint diagnostic below unreachable (rule 46's class: the verdict
 # must not die in transit) -- capture the rc through an || arm.
 Q3B_RC=0
 Q3B_ARM=$(awk '
-  /if\(bvc\.m_marked_as_orphaned\)/ { cap=1; buf="" }
+  /if[[:space:]]*\(block_sync_orphan_resync\(/ { cap=1; buf="" }
   cap { buf = buf $0 "\n";
         if ($0 ~ /^            \}$/) { cap=0;
           if (buf ~ /re-syncing without penalizing the origin/) { print buf; found++ } } }
@@ -276,6 +279,10 @@ else
     echo "            defect; the fix falsifier in the round doc names the"
     echo "            only evidence that reopens HOW, and nothing reopens"
     echo "            WHETHER)."
+    FAIL=1
+  elif rg -n 'm_marked_as_orphaned' "$INL" >/dev/null; then
+    echo "      FAIL: $INL still names m_marked_as_orphaned -- the bool is gone;"
+    echo "            the sync path asks block_sync_orphan_resync (PWD-B7)."
     FAIL=1
   else
     echo "      OK"

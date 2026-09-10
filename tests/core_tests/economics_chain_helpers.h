@@ -29,11 +29,10 @@
 // self-cleans on that path (cryptonote_core.cpp prepare_handle_incoming_blocks).
 //
 // Success requires the block to actually land on the main chain. A block
-// that is accepted-but-orphaned or routed to an alt chain reports
-// m_verifivation_failed == false with m_added_to_main_chain == false; for
-// these fixtures that is a failure to report at the offending height, not
-// a phantom success to surface later as an opaque BLOCK_DNE or an
-// aggregate height mismatch.
+// that is accepted-but-orphaned or routed to an alt chain is not
+// rejected and not added; for these fixtures that is a failure to report
+// at the offending height, not a phantom success to surface later as an
+// opaque BLOCK_DNE or an aggregate height mismatch.
 inline bool add_block_to_core(cryptonote::core& c, const cryptonote::block& blk)
 {
   cryptonote::block_verification_context bvc = AUTO_VAL_INIT(bvc);
@@ -47,7 +46,7 @@ inline bool add_block_to_core(cryptonote::core& c, const cryptonote::block& blk)
     return false;
   const bool handled = c.handle_incoming_block(bd, &blk, bvc);
   c.cleanup_handle_incoming_blocks();
-  return handled && !bvc.m_verifivation_failed && bvc.m_added_to_main_chain;
+  return handled && !cryptonote::block_rejected(bvc) && cryptonote::block_added(bvc);
 }
 
 // Independent recompute of the paid pre-penalty quantity for an empty

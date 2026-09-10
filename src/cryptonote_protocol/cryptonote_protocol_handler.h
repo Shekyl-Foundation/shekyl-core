@@ -49,6 +49,7 @@
 #include "net/levin_base.h"
 #include "p2p/net_node_common.h"
 #include "shekyl/shekyl_ffi.h"
+#include "cryptonote_basic/block_ingest.h"
 #include <boost/circular_buffer.hpp>
 
 PUSH_WARNINGS

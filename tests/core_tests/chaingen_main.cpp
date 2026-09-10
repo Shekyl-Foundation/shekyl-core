@@ -147,7 +147,7 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_miner_tx_out_has_no_view_tag_from_hf_view_tags);
     GENERATE_AND_PLAY(gen_block_miner_tx_out_has_view_tag_before_hf_view_tags);
     GENERATE_AND_PLAY(gen_block_miner_tx_out_has_view_tag_from_hf_view_tags);
-    GENERATE_AND_PLAY(gen_block_has_invalid_tx);
+    GENERATE_AND_PLAY(gen_block_missing_tx);
     GENERATE_AND_PLAY(gen_block_is_too_big);
     // Disabled: no "late v1 coinbase" era in Shekyl (1 = 1 = genesis)
     // GENERATE_AND_PLAY(gen_block_late_v1_coinbase_tx);

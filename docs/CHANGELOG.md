@@ -131,6 +131,16 @@
   without disconnecting; a block-sync prepare failure still flushes the
   failed span so sync can recover. Malformed input still drops.
 
+- **Block ingest no longer drops on failed-set-ness (PWD-B7 block
+  twin).** `block_verification_context`'s bag of bools is an opaque
+  `m_outcome` (`BlockIngest` in `shekyl-peer-policy`) plus the same
+  `m_drop_verdict` slot the tx path uses. Announce and sync ask
+  `shekyl_block_announce_action` / `shekyl_block_sync_action`; a
+  rejected block does not sever unless the drop slot severs. Missing-txs
+  re-requests compact transactions. C++ writes through
+  `record_block_ingest` / `reject_block_*` (Rust pairs the drop slot)
+  and never switches on a classification byte.
+
 - **`docs/FOLLOWUPS.md` genesis-hold triage.** Every pre-genesis row got a
   disposition pass: 44 resolved/overtaken/duplicate/won't-fix rows removed
   (git history is the archive), 3 rows reclassified to post-genesis with

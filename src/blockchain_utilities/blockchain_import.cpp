@@ -45,6 +45,7 @@
 #include "serialization/json_utils.h" // dump_json()
 #include "include_base_utils.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "cryptonote_basic/block_ingest.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "bcutil"
@@ -180,7 +181,7 @@ int check_flush(cryptonote::core &core, std::vector<block_complete_entry> &block
 
     core.handle_incoming_block(block_entry.block, pblocks.empty() ? NULL : &pblocks[blockidx++], bvc, connect, false); // <--- process block
 
-    if(bvc.m_verifivation_failed)
+    if (cryptonote::block_rejected(bvc))
     {
       cryptonote::block block;
       if (cryptonote::parse_and_validate_block_from_blob(block_entry.block, block))
@@ -190,7 +191,7 @@ int check_flush(cryptonote::core &core, std::vector<block_complete_entry> &block
       core.cleanup_handle_incoming_blocks();
       return 1;
     }
-    if(bvc.m_marked_as_orphaned)
+    if (cryptonote::block_orphaned(bvc))
     {
       MERROR("Block received at sync phase was marked as orphaned");
       core.cleanup_handle_incoming_blocks();

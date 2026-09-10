@@ -629,16 +629,15 @@ namespace cryptonote
       bvc,
       connect);
 
-    // handle result of attempted block add
-    if (!handle_block_res || bvc.m_verifivation_failed)
+    // handle result of attempted block add. The tree lives in
+    // shekyl-peer-policy::BlockAnnounceAction (PWD-B7): C++ asks predicates
+    // on the returned action, never on the classification bytes.
+    const uint8_t announce = block_announce_action(bvc, handle_block_res);
+    if (block_announce_re_request_txs(announce))
     {
-      if (bvc.m_missing_txs)
-      {
-        // Block verification failed b/c of missing transactions, so request the compact block again
-        // with missing transactions (including the ones newly discovered in this payload). Note that
-        // PoW checking happens before missing transactions checks, so if bvc.m_missing_txs is true,
-        // then that means that we passed PoW checking, so a peer can't get us to re-request compact
-        // blocks for free.
+        // PoW checking happens before missing transactions checks, so if
+        // this arm fired, we passed PoW — a peer can't get us to re-request
+        // compact blocks for free.
 
         // Instead of requesting missing transactions by hash like BTC,
         // we do it by index (thanks to a suggestion from moneromooo) because
@@ -674,22 +673,23 @@ namespace cryptonote
         // Post NOTIFY_REQUEST_COMPACT_MISSING_TX request to peer
         MLOG_P2P_MESSAGE("-->>NOTIFY_REQUEST_COMPACT_MISSING_TX: missing_tx_indices.size()=" << missing_tx_req.missing_tx_indices.size() );
         post_notify<NOTIFY_REQUEST_COMPACT_MISSING_TX>(missing_tx_req, context);
-      }
-      else // failure for some other reason besides missing txs...
-      {
-        // drop connection and punish peer
-        LOG_PRINT_CCONTEXT_L0("Block verification failed, dropping connection");
-        drop_connection_with_score(context, bvc.m_bad_pow ? P2P_IP_FAILS_BEFORE_BLOCK : 1, false);
-        return 1;
-      }
     }
-    else if( bvc.m_added_to_main_chain )
+    else if (block_announce_drop(announce))
     {
-      // Relay an empty block
+        LOG_PRINT_CCONTEXT_L0("Block verification failed, dropping connection");
+        drop_connection_with_score(context, block_announce_heavier_score(announce) ? P2P_IP_FAILS_BEFORE_BLOCK : 1, false);
+        return 1;
+    }
+    else if (block_announce_our_failure(announce))
+    {
+        LOG_PRINT_CCONTEXT_L0("Block ingest returned false without an attributable drop; not dropping the peer");
+    }
+    else if (block_announce_relay(announce))
+    {
       arg.b.txs.clear();
       relay_block(arg, context);
     }
-    else if( bvc.m_marked_as_orphaned )
+    else if (block_announce_request_history(announce))
     {
       request_chain_history(context);
     }
@@ -1568,12 +1568,13 @@ namespace cryptonote
               connect,
               false); // <--- process block
 
-            if(bvc.m_verifivation_failed)
+            const uint8_t sync = block_sync_action(bvc);
+            if (block_sync_drop(sync))
             {
               drop_connections(span_origin);
               if (!m_p2p->for_connection(span_connection_id, [&](cryptonote_connection_context& context, uint32_t f)->bool{
                 LOG_PRINT_CCONTEXT_L1("Block verification failed, dropping connection");
-                drop_connection_with_score(context, bvc.m_bad_pow ? P2P_IP_FAILS_BEFORE_BLOCK : 1, true);
+                drop_connection_with_score(context, block_sync_heavier_score(sync) ? P2P_IP_FAILS_BEFORE_BLOCK : 1, true);
                 return 1;
               }))
                 LOG_ERROR_CCONTEXT("span connection id not found");
@@ -1588,7 +1589,7 @@ namespace cryptonote
               m_block_queue.remove_spans(span_connection_id, start_height);
               return 1;
             }
-            if(bvc.m_marked_as_orphaned)
+            if (block_sync_orphan_resync(sync))
             {
               // C2-R1c-Q3b: an in-loop orphan here means OUR store lost the
               // parent between the span's parent pre-check and this add --

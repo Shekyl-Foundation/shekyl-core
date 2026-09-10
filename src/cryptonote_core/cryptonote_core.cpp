@@ -56,6 +56,7 @@ using namespace epee;
 #include "version.h"
 #include "shekyl/shekyl_ffi.h"
 #include "cryptonote_basic/drop_verdict.h"
+#include "cryptonote_basic/block_ingest.h"
 
 #include <boost/filesystem.hpp>
 
@@ -1245,8 +1246,8 @@ namespace cryptonote
     m_miner.resume();
 
 
-    CHECK_AND_ASSERT_MES(!bvc.m_verifivation_failed, false, "mined block failed verification");
-    if(bvc.m_added_to_main_chain)
+    CHECK_AND_ASSERT_MES(!block_rejected(bvc), false, "mined block failed verification");
+    if(block_added(bvc))
     {
       cryptonote_connection_context exclude_context = {};
       NOTIFY_NEW_COMPACT_BLOCK::request arg{};
@@ -1270,7 +1271,7 @@ namespace cryptonote
       // Attach the credit-wire attestation witness the block connected with
       // (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2). Read back from the DB rather
       // than carried separately: the block is on the main chain by here
-      // (m_added_to_main_chain, re-checked above), so its height row is the one
+      // (block_added, re-checked above), so its height row is the one
       // authority for what this block's witness is.
       //
       // This is the relay site for both locally mined blocks and RPC-submitted ones.
@@ -1351,8 +1352,7 @@ namespace cryptonote
 
     if (!check_incoming_block_size(block_blob))
     {
-      bvc.m_verifivation_failed = true;
-      return false;
+      return reject_block_state(bvc);
     }
 
     if (((size_t)-1) <= 0xffffffff && block_blob.size() >= 0x3fffffff)
@@ -1365,17 +1365,27 @@ namespace cryptonote
       if(!parse_and_validate_block_from_blob(block_blob, lb, block_hash))
       {
         LOG_PRINT_L1("Failed to parse and validate new block");
-        bvc.m_verifivation_failed = true;
-        return false;
+        return reject_block_form(bvc);
       }
       b = &lb;
     }
     add_new_block(*b, bvc, connect);
-    if(update_miner_blocktemplate && bvc.m_added_to_main_chain)
+    if(update_miner_blocktemplate && block_added(bvc))
        update_miner_block_template();
     return true;
-
-    CATCH_ENTRY_L0("core::handle_incoming_block()", false);
+    }
+    catch(const std::exception& ex)
+    {
+      LOG_ERROR("Exception at [core::handle_incoming_block()], what=" << ex.what());
+      reject_block_internal(bvc);
+      return false;
+    }
+    catch(...)
+    {
+      LOG_ERROR("Exception at [core::handle_incoming_block()], generic exception \"...\"");
+      reject_block_internal(bvc);
+      return false;
+    }
   }
   //-----------------------------------------------------------------------------------------------
   bool core::handle_single_incoming_block(const blobdata& block_blob,
@@ -1485,7 +1495,7 @@ namespace cryptonote
 
          - compact-block reconstruction, "do I already hold these bytes so I
            need not request them" (`cryptonote_protocol_handler.inl`, the
-           `bvc.m_missing_txs` arm);
+           MissingTxs arm);
          - the noise carrier's verdict path, "is this still ours to record
            against" (`levin_notify.cpp`, via `i_core_events::pool_has_tx`).
            The carrier can hold a transaction for up to an epoch before

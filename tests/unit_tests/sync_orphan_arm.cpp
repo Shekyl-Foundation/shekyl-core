@@ -29,6 +29,7 @@
 #include <boost/uuid/nil_generator.hpp>
 
 #include "cryptonote_core/cryptonote_core.h"
+#include "cryptonote_basic/block_ingest.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.inl"
@@ -221,7 +222,7 @@ TEST(sync_orphan_arm, orphan_is_resync_not_misconduct)
   // the add is the race's observable (our store lost it in between).
   r.core.have_block_fn = [&](const crypto::hash& id) { return id == parent; };
   r.core.incoming_block_fn = [](cryptonote::block_verification_context& bvc) {
-    bvc.m_marked_as_orphaned = true;
+    cryptonote::record_block_ingest(bvc, SHEKYL_BLOCK_INGEST_ORPHANED);
   };
 
   const boost::uuids::uuid span_id = {{1}};
@@ -278,7 +279,7 @@ TEST(sync_orphan_arm, cleanup_failure_still_recovers)
   memset(&parent, 0x77, sizeof(parent));
   r.core.have_block_fn = [&](const crypto::hash& id) { return id == parent; };
   r.core.incoming_block_fn = [](cryptonote::block_verification_context& bvc) {
-    bvc.m_marked_as_orphaned = true;
+    cryptonote::record_block_ingest(bvc, SHEKYL_BLOCK_INGEST_ORPHANED);
   };
   const boost::uuids::uuid span_id = {{4}};
   const epee::net_utils::network_address addr{};

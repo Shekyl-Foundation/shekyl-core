@@ -67,6 +67,7 @@
 #include "fcmp/ct_semantics.h"
 #include "shekyl/shekyl_ffi.h"
 #include "cryptonote_basic/drop_verdict.h"
+#include "cryptonote_basic/block_ingest.h"
 #include "common/perf_timer.h"
 #include "common/notify.h"
 #include "common/varint.h"
@@ -517,7 +518,7 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
     generate_genesis_block(bl, get_config(m_nettype).GENESIS_TX, get_config(m_nettype).GENESIS_NONCE);
     db_wtxn_guard wtxn_guard(m_db);
     add_new_block(bl, bvc);
-    CHECK_AND_ASSERT_MES(!bvc.m_verifivation_failed, false, "Failed to add genesis block to blockchain");
+    CHECK_AND_ASSERT_MES(!block_rejected(bvc), false, "Failed to add genesis block to blockchain");
   }
   // TODO: if blockchain load successful, verify blockchain against both
   //       hard-coded and runtime-loaded (and enforced) checkpoints.
@@ -933,7 +934,7 @@ bool Blockchain::reset_and_set_genesis_block(const block& b)
   add_new_block(b, bvc);
   if (!update_next_cumulative_weight_limit())
     return false;
-  if (bvc.m_added_to_main_chain && !bvc.m_verifivation_failed)
+  if (block_added(bvc) && !block_rejected(bvc))
   {
     // This is the second of the two places block 0 can be (re)installed
     // (Blockchain::init is the first): refresh the cached C2-R3 padding
@@ -1253,7 +1254,7 @@ bool Blockchain::rollback_blockchain_switching(std::list<detached_block>& origin
     // restored block gets its height-keyed row back.
     connect.attestation_witness = entry.attestation_witness;
     bool r = handle_block_to_main_chain(entry.bl, restore_id, bvc, connect);
-    CHECK_AND_ASSERT_MES(r && bvc.m_added_to_main_chain, false, "PANIC! failed to add (again) block while chain switching during the rollback!");
+    CHECK_AND_ASSERT_MES(r && block_added(bvc), false, "PANIC! failed to add (again) block while chain switching during the rollback!");
   }
 
   m_hardfork->reorganize_from_chain_height(rollback_height);
@@ -1331,7 +1332,7 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
 
     // if adding block to main chain failed, rollback to previous state and
     // return false
-    if(!r || !bvc.m_added_to_main_chain)
+    if(!r || !block_added(bvc))
     {
       MERROR("Failed to switch to alternative blockchain");
 
@@ -2231,7 +2232,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
   if(0 == block_height)
   {
     MERROR_VER("Block with id: " << epee::string_tools::pod_to_hex(id) << " (as alternative), but miner tx says height is 0.");
-    bvc.m_verifivation_failed = true;
+    reject_block_form(bvc);
     return false;
   }
   // this basically says if the blockchain is smaller than the first
@@ -2241,7 +2242,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
   if (!m_checkpoints.is_alternative_block_allowed(get_current_blockchain_height(), block_height))
   {
     MERROR_VER("Block with id: " << id << std::endl << " can't be accepted for alternative chain, block height: " << block_height << std::endl << " blockchain height: " << get_current_blockchain_height());
-    bvc.m_verifivation_failed = true;
+    reject_block_form(bvc);
     return false;
   }
 
@@ -2250,7 +2251,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
   if (!m_hardfork->check_for_height(b, block_height))
   {
     LOG_PRINT_L1("Block with id: " << id << std::endl << "has old version for height " << block_height);
-    bvc.m_verifivation_failed = true;
+    reject_block_form(bvc);
     return false;
   }
 
@@ -2260,7 +2261,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
   // ordering constraint, see FOLLOWUPS). verify_block_attestation logs the specific verdict code.
   if (!verify_block_attestation(b, connect.attestation_witness))
   {
-    bvc.m_verifivation_failed = true;
+    reject_block_form(bvc);
     return false;
   }
 
@@ -2325,7 +2326,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     if(!check_block_timestamp(timestamps, b))
     {
       MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, has invalid timestamp: " << b.timestamp);
-      bvc.m_verifivation_failed = true;
+      reject_block_form(bvc);
       return false;
     }
 
@@ -2333,7 +2334,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     if(!m_checkpoints.check_block(bei.height, id, is_a_checkpoint))
     {
       LOG_ERROR("CHECKPOINT VALIDATION FAILED");
-      bvc.m_verifivation_failed = true;
+      reject_block_form(bvc);
       return false;
     }
 
@@ -2364,25 +2365,24 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
       {
         // CEN-D2, alt path: verifier failure rejects at every difficulty
         // (the sentinel alone passes check_hash at difficulty 1). Local
-        // failure, not evidence against the block -- no m_bad_pow.
+        // failure, not evidence against the block -- not REJECTED_BAD_POW.
         MERROR_VER("PoW verifier failure (RandomX FFI) for alt block " << id
           << " -- block rejected unverified");
-        bvc.m_verifivation_failed = true;
+        reject_block_internal(bvc);
         return false;
       }
     }
     if(!check_hash(proof_of_work, current_diff))
     {
       MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, does not have enough proof of work: " << proof_of_work << std::endl << " expected difficulty: " << current_diff);
-      bvc.m_verifivation_failed = true;
-      bvc.m_bad_pow = true;
+      reject_block_bad_pow(bvc);
       return false;
     }
 
     if(!prevalidate_miner_transaction(b, bei.height, hf_version))
     {
       MERROR_VER("Block with id: " << epee::string_tools::pod_to_hex(id) << " (as alternative) has incorrect miner transaction.");
-      bvc.m_verifivation_failed = true;
+      reject_block_form(bvc);
       return false;
     }
 
@@ -2407,7 +2407,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     if (!ver_non_input_consensus(extra_block_txs, tvc, hf_version))
     {
       MERROR_VER("Transaction pool supplement verification failure for alt block " << id);
-      bvc.m_verifivation_failed = true;
+      reject_block_from_tvc(bvc, tvc);
       return false;
     }
 
@@ -2427,7 +2427,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
       {
         MERROR_VER("Transaction " << txid <<
           " in pool supplement failed to enter main pool for alt block " << id);
-        bvc.m_verifivation_failed = true;
+        reject_block_from_tvc(bvc, tvc);
         return false;
       }
 
@@ -2460,7 +2460,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
         else
         {
           MERROR_VER("Transaction is in the txpool, but metadata not found");
-          bvc.m_verifivation_failed = true;
+          reject_block_internal(bvc);
           return false;
         }
       }
@@ -2470,7 +2470,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
         if (!cryptonote::parse_and_validate_tx_base_from_blob(blob, tx))
         {
           MERROR_VER("Block with id: " << epee::string_tools::pod_to_hex(id) << " (as alternative) refers to unparsable transaction hash " << txid << ".");
-          bvc.m_verifivation_failed = true;
+          reject_block_internal(bvc);
           return false;
         }
         bei.block_cumulative_weight += cryptonote::get_pruned_transaction_weight(tx);
@@ -2526,7 +2526,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     {
       // Fail closed: an FFI failure must never silently keep OR switch.
       MERROR("fork-choice FFI failure for alt block " << id);
-      bvc.m_verifivation_failed = true;
+      reject_block_internal(bvc);
       return false;
     }
     if (fc_verdict == SHEKYL_FORK_CHOICE_SWITCH)
@@ -2560,6 +2560,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
             << " Continuing DEGRADED on the current chain; the block is kept as an"
             << " alternative and its peer is not penalized; get_info reports"
             << " following_degraded=true; remedy: resync this node");
+          record_block_ingest(bvc, SHEKYL_BLOCK_INGEST_DEGRADED_KEEP);
           return true;
         }
       }
@@ -2573,21 +2574,22 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
 
       bool r = switch_to_alternative_blockchain(alt_chain, is_a_checkpoint);
       if (r)
-        bvc.m_added_to_main_chain = true;
+        record_block_ingest(bvc, SHEKYL_BLOCK_INGEST_ADDED);
       else
-        bvc.m_verifivation_failed = true;
+        reject_block_internal(bvc);
       return r;
     }
     else
     {
       MGINFO_BLUE("----- BLOCK ADDED AS ALTERNATIVE ON HEIGHT " << bei.height << std::endl << "id:\t" << id << std::endl << "PoW:\t" << proof_of_work << std::endl << "difficulty:\t" << current_diff);
+      record_block_ingest(bvc, SHEKYL_BLOCK_INGEST_ALT_STORED);
       return true;
     }
   }
   else
   {
     //block orphaned
-    bvc.m_marked_as_orphaned = true;
+    record_block_ingest(bvc, SHEKYL_BLOCK_INGEST_ORPHANED);
     MERROR_VER("Block recognized as orphaned and rejected, id = " << id << ", height " << block_height
         << ", parent in alt " << parent_in_alt << ", parent in main " << parent_in_main
         << " (parent " << b.prev_id << ", current top " << get_tail_id() << ", chain height " << get_current_blockchain_height() << ")");
@@ -5920,7 +5922,7 @@ bool Blockchain::handle_block_to_main_chain(const block& bl, const crypto::hash&
   if(bl.prev_id != top_hash)
   {
     MERROR_VER("Block with id: " << id << std::endl << "has wrong prev_id: " << bl.prev_id << std::endl << "expected: " << top_hash);
-    bvc.m_verifivation_failed = true;
+    reject_block_internal(bvc);
 leave:
     return false;
   }
@@ -5942,7 +5944,7 @@ leave:
   if (!m_hardfork->check(bl))
   {
     MERROR_VER("Block with id: " << id << std::endl << "has old version: " << (unsigned)bl.major_version << std::endl << "current: " << (unsigned)hf_version);
-    bvc.m_verifivation_failed = true;
+    reject_block_form(bvc);
     goto leave;
   }
 
@@ -5952,7 +5954,7 @@ leave:
   // ordering constraint, see FOLLOWUPS). verify_block_attestation logs the specific verdict code.
   if (!verify_block_attestation(bl, connect.attestation_witness))
   {
-    bvc.m_verifivation_failed = true;
+    reject_block_form(bvc);
     goto leave;
   }
 
@@ -5964,7 +5966,7 @@ leave:
   if(!check_block_timestamp(bl))
   {
     MERROR_VER("Block with id: " << id << std::endl << "has invalid timestamp: " << bl.timestamp);
-    bvc.m_verifivation_failed = true;
+    reject_block_form(bvc);
     goto leave;
   }
 
@@ -6009,12 +6011,12 @@ leave:
       // CEN-D2: a longhash the verifier could not compute must reject the
       // block at EVERY difficulty — the 0xff sentinel alone passes
       // check_hash at difficulty 1. This is a local verifier failure, not
-      // evidence against the block, so m_bad_pow is deliberately NOT set
-      // (same class as the checkpoint-validation arm below: the block is
-      // unproven, not disproven).
+      // evidence against the block, so REJECTED_BAD_POW is deliberately NOT
+      // recorded (same class as the checkpoint-validation arm below: the
+      // block is unproven, not disproven).
       MERROR_VER("PoW verifier failure (RandomX FFI) for block " << id
         << " at height " << blockchain_height << " -- block rejected unverified");
-      bvc.m_verifivation_failed = true;
+      reject_block_internal(bvc);
       goto leave;
     }
 
@@ -6022,8 +6024,7 @@ leave:
     if(!check_hash(proof_of_work, current_diffic))
     {
       MERROR_VER("Block with id: " << id << std::endl << "does not have enough proof of work: " << proof_of_work << " at height " << blockchain_height << ", unexpected difficulty: " << current_diffic);
-      bvc.m_verifivation_failed = true;
-      bvc.m_bad_pow = true;
+      reject_block_bad_pow(bvc);
       goto leave;
     }
   }
@@ -6035,7 +6036,7 @@ leave:
     if(!m_checkpoints.check_block(blockchain_height, id))
     {
       LOG_ERROR("CHECKPOINT VALIDATION FAILED");
-      bvc.m_verifivation_failed = true;
+      reject_block_form(bvc);
       goto leave;
     }
   }
@@ -6073,7 +6074,7 @@ leave:
     {
       MERROR_VER("Block with id: " << id << " curve_tree_root mismatch at height " << blockchain_height
         << ": header " << bl.curve_tree_root << ", chain tip " << expected_root);
-      bvc.m_verifivation_failed = true;
+      reject_block_form(bvc);
       goto leave;
     }
   }
@@ -6082,7 +6083,7 @@ leave:
   if(!prevalidate_miner_transaction(bl, blockchain_height, hf_version))
   {
     MERROR_VER("Block with id: " << id << " failed to pass prevalidation");
-    bvc.m_verifivation_failed = true;
+    reject_block_form(bvc);
     goto leave;
   }
 
@@ -6093,7 +6094,7 @@ leave:
     if (!ver_non_input_consensus(extra_block_txs, tvc, hf_version))
     {
       MERROR_VER("Pool supplement provided for block with id: " << id << " failed to pass validation");
-      bvc.m_verifivation_failed = true;
+      reject_block_from_tvc(bvc, tvc);
       goto leave;
     }
   }
@@ -6169,7 +6170,7 @@ leave:
     if (m_db->tx_exists(tx_id))
     {
       MERROR("Block with id: " << id << " attempting to add transaction already in blockchain with id: " << tx_id);
-      bvc.m_verifivation_failed = true;
+      reject_block_form(bvc);
       return_txs_to_pool();
       return false;
     }
@@ -6235,8 +6236,7 @@ leave:
       else
         LOG_PRINT_L2("Block with id: " << id  << " has at least one unknown transaction with id: " << tx_id);
       txs.pop_back(); // We push to the back preemptively. On fail, we need txs & txs_meta to match size
-      bvc.m_verifivation_failed = true;
-      bvc.m_missing_txs = true;
+      record_block_ingest(bvc, SHEKYL_BLOCK_INGEST_MISSING_TXS);
       return_txs_to_pool();
       return false;
     }
@@ -6296,7 +6296,7 @@ leave:
 
         add_block_as_invalid(bl, id);
         MERROR_VER("Block with id " << id << " added as invalid because of wrong inputs in transactions");
-        bvc.m_verifivation_failed = true;
+        reject_block_from_tvc(bvc, tvc);
         return_txs_to_pool();
         return false;
       }
@@ -6313,6 +6313,7 @@ leave:
   if (n_pruned > 0)
   {
     MERROR("Block at " << blockchain_height << " is pruned, but we do not have a weight for it");
+    reject_block_internal(bvc);
     goto leave;
   }
 
@@ -6349,7 +6350,7 @@ leave:
         if (!get_archival_serve_credit_key(resp, sc_p_id, sc_shard, sc_epoch))
         {
           MERROR_VER("Archival serve-credit vin unparseable in block");
-          return false;
+          return reject_block_internal(bvc);
         }
         const shekyl::db::ArchivalPairEpochKey credit_key(
           reinterpret_cast<const uint8_t*>(sc_p_id.data), sc_shard, sc_epoch);
@@ -6358,7 +6359,7 @@ leave:
         if (!block_serve_credits.insert(std::move(key)).second)
         {
           MERROR_VER("Block " << id << " has duplicate archival serve-credit (P, shard, E)");
-          bvc.m_verifivation_failed = true;
+          reject_block_form(bvc);
           return_txs_to_pool();
           return false;
         }
@@ -6419,7 +6420,7 @@ leave:
           // failure here is an internal inconsistency between two parses of
           // the same bytes — fail closed.
           MERROR_VER("Block " << id << " has an unparseable archival emission vin");
-          bvc.m_verifivation_failed = true;
+          reject_block_internal(bvc);
           return_txs_to_pool();
           return false;
         }
@@ -6443,7 +6444,7 @@ leave:
         && shekyl_emission_block_claims_unique(emission_claim_pairs.data(), num_pairs) != 1)
     {
       MERROR_VER("Block " << id << " has duplicate archival emission (P, E) claims");
-      bvc.m_verifivation_failed = true;
+      reject_block_form(bvc);
       return_txs_to_pool();
       return false;
     }
@@ -6452,7 +6453,7 @@ leave:
         && shekyl_archival_bond_post_block_unique(bond_post_ids.data(), num_ids) != 1)
     {
       MERROR_VER("Block " << id << " has multiple archival bond posts for one P");
-      bvc.m_verifivation_failed = true;
+      reject_block_form(bvc);
       return_txs_to_pool();
       return false;
     }
@@ -6469,7 +6470,7 @@ leave:
   if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), frozen_segment_count))
   {
     MERROR_VER("Block with id: " << id << " has incorrect miner transaction");
-    bvc.m_verifivation_failed = true;
+    reject_block_form(bvc);
     return_txs_to_pool();
     return false;
   }
@@ -6586,7 +6587,7 @@ leave:
   rtxn_guard.stop();
   TIME_MEASURE_START(addblock);
   uint64_t new_height = 0;
-  if (!bvc.m_verifivation_failed)
+  if (!block_rejected(bvc))
   {
     try
     {
@@ -6602,7 +6603,7 @@ leave:
     {
       LOG_ERROR("Error adding block with hash: " << id << " to blockchain, what = " << e.what());
       m_batch_success = false;
-      bvc.m_verifivation_failed = true;
+      reject_block_form(bvc);
       return_txs_to_pool();
       return false;
     }
@@ -6611,7 +6612,7 @@ leave:
       //TODO: figure out the best way to deal with this failure
       LOG_ERROR("Error adding block with hash: " << id << " to blockchain, what = " << e.what());
       m_batch_success = false;
-      bvc.m_verifivation_failed = true;
+      reject_block_internal(bvc);
       return_txs_to_pool();
       return false;
     }
@@ -6656,7 +6657,7 @@ leave:
         << "/" << t_checktx << "/" << t_dblspnd << "/" << vmt << "/" << addblock << ")ms");
   }
 
-  bvc.m_added_to_main_chain = true;
+  record_block_ingest(bvc, SHEKYL_BLOCK_INGEST_ADDED);
   ++m_sync_counter;
 
   // appears to be a NOP *and* is called elsewhere.  wat?
@@ -6824,7 +6825,7 @@ bool Blockchain::add_new_block(const block& bl, block_verification_context& bvc,
   if(have_block(id))
   {
     LOG_PRINT_L3("block with id = " << id << " already exists");
-    bvc.m_already_exists = true;
+    record_block_ingest(bvc, SHEKYL_BLOCK_INGEST_ALREADY_EXISTS);
     return false;
   }
 
@@ -6832,7 +6833,6 @@ bool Blockchain::add_new_block(const block& bl, block_verification_context& bvc,
   if(!(bl.prev_id == get_tail_id()))
   {
     //chain switching or wrong block
-    bvc.m_added_to_main_chain = false;
     rtxn_guard.stop();
     return handle_alternative_block(bl, id, bvc, connect);
     //never relay alternative blocks
@@ -6845,7 +6845,7 @@ bool Blockchain::add_new_block(const block& bl, block_verification_context& bvc,
   catch (const std::exception &e)
   {
     LOG_ERROR("Exception at [add_new_block], what=" << e.what());
-    bvc.m_verifivation_failed = true;
+    reject_block_internal(bvc);
     return false;
   }
 }
