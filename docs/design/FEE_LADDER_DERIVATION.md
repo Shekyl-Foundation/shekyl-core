@@ -2106,4 +2106,227 @@ round has now measured or specified but may not make:
   C10-3 pre-registered and this round cannot relax).
 
 With M1–M3 ruled the round closes; the implementing PR follows §10.12.4's
-pre-flight.
+pre-flight. *(Round 2b, §10.14, adds R18-M4 — jurisdiction on a non-band
+window filter, asked only if one measures dominant — and R18-M5 — the
+human-time floor/ceiling and the `W`/`K` choice. It also puts a fourth
+shape, the settled-anchor band, beside the fold; M1's `P` and M2's
+reading are then taken on whichever shape §10.15 selects.)*
+
+### §10.13 Round-2 instrument results — the fold arms
+
+*Reserved for the run pre-registered at §10.12; filled from
+`/tmp/fl_r3_round2.summary` when it lands. Written after §10.14 was
+committed, so that the two pre-registrations below cannot have been shaped
+by it.*
+
+### §10.14 Round 2b (pre-registered 2026-09-09): the band over the grid *sequence*; window filters; the stability criterion in human time
+
+Three maintainer proposals arrived in-channel on 2026-09-09 while §10.12's
+run was in flight. Each is pre-registered here **before its arm exists**;
+the commit ordering is the register, as at rounds 1 and 2. Nothing in
+§10.12 is withdrawn: its fold arms are still measured and recorded at
+§10.13, because the comparison the new arms have to win is against the
+fold's *measured* figures, not its predicted ones.
+
+#### §10.14.1 Jurisdiction, checked before anything is built
+
+- **The settled-anchor grid band (§10.14.2) is inside §10.0.** It *is*
+  the §7 band — the same `hysteresis_step`, the same 3 % margin, the same
+  owner — applied to the sequence of grid samples rather than the sequence
+  of blocks. "The previous value" becomes *the band's state at the previous
+  grid sample*, reconstructed from chain state. That is the question §10.0
+  says this round may decide.
+- **The window filters (§10.14.3) are NOT the band.** Median and peak-hold
+  replace the amplitude margin with a time release. §10.0 rules that the
+  band stays. So both window arms are **INSTRUMENTATION under a
+  pre-registered reading, exactly as C10-5 treated grid-only**: if a
+  window arm dominates every band arm on the registered criteria, the
+  finding goes to the maintainer as **R18-M4 — widen the round's
+  jurisdiction to a non-band filter**, with the measured dominance as the
+  rule-21 reopening criterion for "the band stays". It does not close
+  FL-R3 by itself, however well it measures. If no window arm dominates,
+  the reading is *the band's amplitude margin does work a time release
+  does not*, and the band arms are the shape.
+
+#### §10.14.2 Shape (D): the band over the grid sequence, anchored at the last settled sample
+
+**Construction.** Sample at grid heights `g_k = k·P`. `C_k = C(g_k)` is a
+pure function of chain state at `g_k` (at `P` = 720 each sample's volume
+window `[g_k − 720, g_k)` is disjoint from the next). Run the band over
+the *sequence*: `S_k = hysteresis_step(C_k, S_{k−1})`. Serve `S_⌊h/P⌋`
+for every `h` in the period.
+
+**The settled-state property, verified against the owner's arithmetic
+rather than asserted.** `hysteresis_step(c, prev)` holds `prev ≠ ⌈c⌉₂`
+only when `c ∈ [ (prev/2)(1−m), prev(1+m) ]`. With `cq = ⌈c⌉₂`, so
+`c ∈ (cq/2, cq]`: `prev = 2cq` can be held only if `c ≥ (1−m)·cq`;
+`prev = cq/2` only if `c ≤ (1+m)·cq/2`; no other power of two intersects
+`(cq/2, cq]` at all. So when `c` lies **more than the margin from every
+pow2 boundary** — call the sample *settled* — `hysteresis_step(c, prev) =
+cq` for **every** `prev`, and the band's state at that sample is
+`⌈C_k⌉₂` regardless of history. Consequently, for the most recent
+settled index `j ≤ k`:
+
+```text
+S_k  =  hysteresis_fold(C_j, C_{j+1}, …, C_k)        (exact, not approximate)
+```
+
+The anchor is not a fixed depth and not an epoch: it is *wherever the band
+was last unambiguous*. The owner gains one predicate,
+`hysteresis_settled(c) = step(c, 2cq) == cq ∧ step(c, cq/2) == cq`,
+defined **through** `hysteresis_step` so the two cannot drift, and one
+property test that IS the theorem: for any sequence and any settled `j`,
+`hysteresis_fold(seq) == hysteresis_fold(seq[j..])`.
+
+**Scan bound `K`.** Look back at most `K` samples for a settled one; if
+none, anchor at `k − K` with the unseeded snap. That fallback is where the
+§10.2 first-step defect now lives — at weight *P(residence in the margin
+> K·P)* instead of once per cell. FL-D8 measured max residence 13 597
+blocks (≈ 19 periods at `P` = 720), so `K` = 32 covers the observed worst
+with margin; `K` ∈ {8, 16, 32} are swept and the unbounded arm (`kfull`)
+is run as the exact-recurrence reference.
+
+**Properties pre-registered, each with its falsifier.**
+
+- *Pure function of chain state.* No held value; a restarted node and a
+  long-running node agree at every height. (By construction; the
+  instrument's arm holds only the sample sequence, which stands in for
+  chain state exactly as `GridCq.span` does.)
+- *Transitions ≤ grid-only, per cell, over the whole trace* — **the
+  monotonicity invariant.** Proof sketch: a band transition at `k` either
+  coincides with a snap transition at `k` (band in sync at `k−1`), or ends
+  a desync run that *began* at a snap transition the band did not follow;
+  the map from band transitions to snap transitions is injective. It is
+  **exact for the unbounded arm** and can be broken only by the bounded
+  arm's fallback anchor. The instrument counts violations per arm;
+  **expected 0 at `K` = 32, possibly > 0 at `K` = 8** (5 760 blocks <
+  the 13 597 observed). A violation on `kfull` means the arm is not a
+  hysteresis and the run is void.
+- *Long memory at low cost.* One period is one step, so the cells C10-1
+  lost to the fold's per-cell reset are reachable. **Expectation R2b-E1:
+  `grid-band-p720-k32` oscillating cells ≤ 14 (the banded figure), worst
+  transitions ≤ 24.** If it lands between 14 and the fold's 20, that is
+  the finding and it is reported at its number.
+- *Reorg.* Each `C_k` memoises on `(hash_at_g_k, g_k)` — chain-state
+  keyed, §10.6's legitimate kind; a reorg below `g_k` invalidates that
+  sample and nothing older, and the served value does not move under any
+  reorg inside the current period.
+- *The FL-R18 corner.* Gain-≥2 feedback swings `C` by ≈ 20 %, which
+  clears a 3 % band, so those cells still flip — **once per period**, on
+  the grid's cadence, not every ≈ 125 blocks. That residual is bounded by
+  `P` and is what §10.14.4's criteria price in days.
+
+**The honest cost line — three columns, and the arm may not be ranked on
+the one that flatters it.**
+
+| column | settled-anchor band | fold (§10.3 B, P = 720) | window-W (§10.14.3) |
+|---|---|---|---|
+| cold, no memo (C10-3 as registered) | `(scan+1) × 720`: mean measured; worst `(K+1) × 720` = 23 760 at `K` = 32 | 1 440 (§10.12.1) | `W × 720` |
+| chain-state memo (§10.6's legitimate kind; **not adopted by the register**) | 720 per **period** — one new sample; the cold figure is a once-per-restart backfill | 720 per **block** — one new height per block | 720 per period |
+| FL-R3-STORE (§10.12.2) | `scan+1` O(1) reads | 720 reads | `W` reads |
+
+The cold worst case is disqualifying under C10-3 *as written*; the memo
+column is where the shape wins, and the register has not adopted that
+column (§10.6 explains why it may not be counted toward the budget). Both
+facts go to R18-M3 together. The instrument measures `scan` (mean, max,
+fallback count) so the first column is a number, not a formula.
+
+#### §10.14.3 Window filters over the grid sequence — INSTRUMENTATION
+
+Served value at `h` is a function of the last `W` grid samples' snaps,
+`W` ∈ {3, 5, 9}, `P` = 720. Fixed cost `W × 720` cold; no anchor, no
+seed, no scan bound. Two statistics, and the difference between them is
+the whole question:
+
+- **Median-W.** A temporal filter: suppresses excursions shorter than
+  `W/2` periods, adds `W/2` periods of lag to a real move. **Pre-registered
+  expectation R2b-E2: it does NOT handle the regime FL-D8 says we live
+  in.** A `C` parked at a boundary alternating `a, b, a, b` across samples
+  has a median that phase-locks to the alternation for every odd `W`, so
+  the served value flips every period — grid-only's behaviour. Median is
+  expected to measure at or near grid-only on C10-1.
+- **Peak-hold-W.** `max` over the window of snapped values: upward moves
+  served immediately, downward moves held `W` periods — one-directional
+  hysteresis with a time release instead of an amplitude margin. Handles
+  parking (`a, b, a, b` serves `b`). Its price is a **conservative bias**:
+  over-quoting for up to `W` periods after `C` genuinely falls. On a
+  ceiling-snapped fee that is the safe direction for the rejection race
+  (§4.5b) and a cost in the user's fee, so the instrument measures it —
+  **over-quote time share**: blocks where the served `C_q` exceeds the
+  un-banded ceiling's, per thousand, on the dwell ensemble.
+- *Monotonicity.* Both are transition-removing filters over the same
+  sequence; the invariant of §10.14.2 is measured for them too, and a
+  violation means the arm is not what it claims.
+
+**What none of them does, stated so the record cannot be read otherwise.**
+A gain-≥2 fee↔volume loop with a period of delay is still a loop. A filter
+**lengthens the period** of that oscillation (from ≈ 2 periods toward
+≈ `W` periods); it does not remove it. Only lowering the loop gain removes
+it, and the gain lives in `M_r` inside the served operand. Every arm's
+result on the feedback corner is a period, not a cure.
+
+#### §10.14.4 The stability criterion restated in the user's units — C10-6, C10-7, C10-8
+
+What a user cannot tolerate is not change but **change faster than their
+planning horizon**: a quote that differs from the one ten minutes ago is a
+seizure; one that differs from last week's is weather. A dwell floor in
+blocks was a proxy for that. The criteria below are the thing itself, and
+all three are direct statistics on the traces already swept. Numbers are
+in **blocks and days** (120 s target: 720 blocks = 1 day).
+
+- **C10-6 — minimum period of any sustained oscillation in the served
+  value.** For each cell FL-C7 scores as oscillating, the cycle period is
+  `2 × mean inter-transition gap` over the tail; the arm's figure is the
+  **minimum over cells** (its worst state). FL-R18's accepted residual is
+  the baseline: ≈ 125-block inter-flip dwell, ≈ 4.2 h. The floor is the
+  maintainer's (R18-M5); the arm reports blocks and days.
+- **C10-7 — probability that the served value moves inside the
+  construction-to-broadcast gap.** Over the whole trace, the fraction of
+  blocks `h` such that a transition occurs in `(h, h+g]`, with `g` = 5
+  blocks (ten minutes) — the window FL-R18's 4.0 % was quoted on. **`g` is
+  a placeholder for FL-R19's gap distribution, which the wallet lane owes;
+  it is named as one.** Reported as worst cell and as the mean over the
+  dwell ensemble (chain time, so occupancy-weighted). Expectation R2b-E3:
+  the banded reference reproduces ≈ 4 % in its worst cell; grid-sequence
+  arms at `P` = 720 land near `≤ 5/720 ≈ 0.7 %` per transition-period, and
+  peak-hold-8-class arms an order lower.
+- **C10-8 — lag on a secular crossing, in blocks and days.** On the ramp
+  scenario, the offset of the arm's first served change from the un-banded
+  ceiling's. This is the *price* of `W` and of `P`, in the same units as
+  C10-6 so both sides of the trade are visible at once.
+
+**Occupancy-weighted flip rate — the number FL-D8 still owed.** FL-D8's row
+named "the flip rate weighted by occupancy" and round 1 measured occupancy
+and residence but not the rate. Per arm: `Σ standard-rung changes / Σ
+blocks` over the dwell ensemble, per 10 000 blocks. Time-weighted by
+construction, which is what the cell-count figures were not.
+
+**What this reclassifies, contingent on measurement.** "Accepted as
+bounded" was the honest label for a 125-block flicker nobody could fix.
+Under a grid-sequence mechanism the residual's period is a **designed
+quantity** — `P` for the band, ≈ `W·P` for peak-hold — so the FL-R18 row
+could say *the corner oscillates on an ≈ N-day cycle by construction*
+rather than *we could not stop it*. The trade is not free: larger `W`
+lengthens both the cycle and the lag on real moves. Both are now in days,
+so it is a choice a person can make on the record — **R18-M5 — set the
+C10-6 floor and C10-7 ceiling, and choose `W` / `K` against C10-8's lag.**
+
+#### §10.14.5 Instrument additions, enumerated before they are written
+
+- Owner (`shekyl-economics`): `hysteresis_settled(c) -> bool`; property
+  test *fold from any settled index equals the full fold*; property test
+  *band transitions ≤ snap transitions over the sequence*.
+- Arms: `grid-band-p{P}-k{K}` for `P` ∈ {60, 240, 720}, `K` ∈ {8, 16, 32,
+  full}; `grid-median-p720-w{W}` and `grid-peak-p720-w{W}` for `W` ∈ {3,
+  5, 9}. Feedback sweep: all of them beside §10.12's arms. Dwell grid:
+  `grid-band-p720-k32`, `grid-median-p720-w3`, `grid-peak-p720-w3`,
+  `grid-peak-p720-w9`.
+- Per cell: full-trace transitions (for the invariant), tail
+  inter-transition gap (min, mean), change-within-`g` share, scan depth
+  (max, mean, fallbacks). Per dwell trace: first-change offset (C10-8),
+  over-/under-ceiling time share, standard-rung changes (flip rate).
+- Per arm in the summary: C10-6/7/8 figures in blocks and days, invariant
+  violations, the cost triple from measured depth, flips per 10 000
+  blocks, over-quote share.
+
+Round 2b's results go in §10.15.
