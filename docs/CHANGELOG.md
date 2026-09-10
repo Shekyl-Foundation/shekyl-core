@@ -78,6 +78,23 @@
 
 ### Changed
 
+- **A peer is dropped only when the rejection is attributable to the
+  sender (PWD-B7).** The inherited `m_no_drop_offense` flag meant
+  droppable by *absence*, so our own pool-bookkeeping failures and
+  storage exceptions severed innocent connections. The drop decision is
+  now a typed tri-state verdict in `shekyl-peer-policy` (unclassified /
+  policy-or-state / internal-failure / attributable-form); only the last
+  severs. C++ writes through `shekyl_drop_verdict_classify` /
+  `reject_form|state|internal` at the failure site; unclassified does
+  not sever. `check_tx_inputs` classifies each return itself, including
+  chain-state arms (spent key image, missing/too-recent reference
+  block). `add_tx` does not promote an unclassified inner failure to
+  form. Mixed archival FFI codes (serve-credit, bond-post, admission,
+  debit-auth) classify in Rust; C++ writes the returned byte. Our-state
+  and marshal faults do not sever. The announce-size check declines
+  without disconnecting; a block-sync prepare failure still flushes the
+  failed span so sync can recover. Malformed input still drops.
+
 - **`docs/FOLLOWUPS.md` genesis-hold triage.** Every pre-genesis row got a
   disposition pass: 44 resolved/overtaken/duplicate/won't-fix rows removed
   (git history is the archive), 3 rows reclassified to post-genesis with

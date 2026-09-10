@@ -149,6 +149,12 @@ jobs:
             scripts/ci/check_network_uniformity.sh
           run_one "Ignored tests carry their reason in the attribute" \
             scripts/ci/check_ignore_reasons.sh
+          # PWD-B7: a rejection describing OUR chain must classify itself, or
+          # the caller's coarser verdict severs a peer whose transaction is
+          # merely in conflict with our view. The one residual the typed
+          # verdict left open, made mechanical rather than remembered.
+          run_one "PWD-B7: double-spend rejections classify themselves" \
+            python3 scripts/ci/check_drop_verdict_classification.py
           run_one "PoW test-seam containment (CEN-D2)" \
             scripts/ci/check_pow_test_seam.sh
           run_one "LV-1: levin wire-constant parity" \

@@ -33,6 +33,7 @@
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.inl"
 #include "p2p/net_node_common.h"
+#include "shekyl/shekyl_ffi.h"
 
 namespace cryptonote {
   class blockchain_storage;
@@ -61,8 +62,8 @@ public:
   bool have_block_unlocked(const crypto::hash& id, int *where = NULL) const
   { return have_block(id, where); }
   uint64_t get_current_blockchain_height() const { return chain_height; }
-  bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry> &blocks_entry, std::vector<cryptonote::block> &blocks)
-  { ++prepare_calls; return true; }
+  bool prepare_handle_incoming_blocks(const std::vector<cryptonote::block_complete_entry> &blocks_entry, std::vector<cryptonote::block> &blocks, uint8_t *drop_verdict = nullptr)
+  { ++prepare_calls; if (drop_verdict) *drop_verdict = SHEKYL_DROP_VERDICT_UNCLASSIFIED; return true; }
   bool cleanup_ok = true;
   bool cleanup_handle_incoming_blocks(bool force_sync = false)
   { ++cleanup_calls; return cleanup_ok; }
