@@ -53,13 +53,13 @@ use shekyl_economics::{
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
 /// Rust owner (`shekyl-wire`; `fee_policy.rs` single-sources from the same
 /// constant).
-const FULL_REWARD_ZONE_V5: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
+pub(crate) const FULL_REWARD_ZONE_V5: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
 
 /// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT` (`src/cryptonote_config.h:70`).
 /// Declared exception: no single Rust owner exists;
 /// `rust/shekyl-engine-core/src/engine/fee_policy.rs` carries the same
 /// pinned copy wallet-side.
-const REF_TX_WEIGHT: u64 = 3_000;
+pub(crate) const REF_TX_WEIGHT: u64 = 3_000;
 
 /// Rolling `tx_volume_avg` window (`SHEKYL_TX_VOLUME_WINDOW`): 720 blocks =
 /// one day at 120 s. Build-generated from `config/economics_params.json` so
@@ -152,15 +152,28 @@ pub struct CorrectionPoint {
 /// crate. Single division (`(1−σ)·M_r / (1−b)`) so no intermediate
 /// truncation is amplified; `b < SCALE` structurally (burn cap 0.9).
 fn correction_factor(v: u64, circulating: u64, height: u64, params: &EconomicParams) -> Correction {
-    let m_r = calc_release_multiplier(
-        v,
-        params.tx_volume_baseline,
-        params.release_min,
-        params.release_max,
-    );
+    correction_factor_ratio(v, params.tx_volume_baseline, circulating, height, params)
+}
+
+/// [`correction_factor`] with the volume operand given as a RATIO
+/// `v_num / baseline`. Both owners (`calc_release_multiplier`,
+/// `calc_burn_pct`) take `(volume, baseline)` and form the quotient
+/// internally, so `(tx_count_sum, baseline · 720)` evaluates the 720-block
+/// SMA at exact rational resolution — no new economics code, only a
+/// different pair of arguments. §11 (FL-E2) measures the shipped
+/// integer-truncated operand (`tx_count_sum / 720`, `blockchain.cpp:2115`)
+/// against this one.
+pub(crate) fn correction_factor_ratio(
+    v_num: u64,
+    baseline: u64,
+    circulating: u64,
+    height: u64,
+    params: &EconomicParams,
+) -> Correction {
+    let m_r = calc_release_multiplier(v_num, baseline, params.release_min, params.release_max);
     let b = calc_burn_pct(
-        v,
-        params.tx_volume_baseline,
+        v_num,
+        baseline,
         circulating,
         params.emission_curve_asymptote,
         params.burn_base_rate,
@@ -460,10 +473,10 @@ fn x_ladder_row(base_reward: u64, mnw: u64, mlw: u64) -> XLadderRow {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy)]
-struct AgeState {
-    height: u64,
-    ag: u64,
-    base_reward: u64,
+pub(crate) struct AgeState {
+    pub(crate) height: u64,
+    pub(crate) ag: u64,
+    pub(crate) base_reward: u64,
 }
 
 /// The demand scale at which the ceiling-quantized `C_q` first steps above
@@ -487,7 +500,7 @@ fn boundary_demand(st: AgeState, params: &EconomicParams) -> u64 {
         .unwrap_or(230)
 }
 
-fn age_state(age_years: u64, params: &EconomicParams) -> AgeState {
+pub(crate) fn age_state(age_years: u64, params: &EconomicParams) -> AgeState {
     let height = age_years * BLOCKS_PER_YEAR;
     let ag = projected_already_generated(height, params).expect("projected ag");
     let base_reward = base_block_reward(ag, params).expect("base reward");
@@ -573,7 +586,7 @@ fn rung_table(
 
 /// xorshift64* — deterministic instrument RNG (reproducible runs; the crate
 /// deliberately has no `rand` dependency).
-struct Rng(u64);
+pub(crate) struct Rng(pub(crate) u64);
 
 impl Rng {
     fn next(&mut self) -> u64 {
@@ -592,7 +605,7 @@ impl Rng {
 
     /// Knuth Poisson sampler; exact for the registered means (≤ 500 —
     /// `e^-500 ≈ 7.9e-218` is a normal f64; the real breakdown is ≳ 745).
-    fn poisson(&mut self, mean: f64) -> u64 {
+    pub(crate) fn poisson(&mut self, mean: f64) -> u64 {
         // Hard assert (release-mode instrument): past ~745 the Knuth
         // product underflows and silently CAPS samples — corrupted
         // measurements, not an error, if this were stripped.
@@ -1206,7 +1219,7 @@ const DWELL_SCENARIOS: &[(&str, f64, f64, u64)] = &[
 /// `already_generated` and height per block, so any rung or `C_q`
 /// crossing that supply/σ drift can cause is measured rather than frozen
 /// out.
-fn advance_traced_state(ag: u64, v_avg: u64, params: &EconomicParams) -> u64 {
+pub(crate) fn advance_traced_state(ag: u64, v_avg: u64, params: &EconomicParams) -> u64 {
     // Since the FL-R12′ implementation landed, this calls THE OWNERS rather
     // than modelling the composition: `effective_emission` is the paid
     // pre-penalty quantity `max(M_r·curve, TAIL)` and
