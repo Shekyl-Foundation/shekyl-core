@@ -718,10 +718,28 @@ mod tests {
         // cheap tripwire that the old `shekyl_oxide::{transaction,fcmp}` coupling never
         // reappears. wire.rs is checked on its PRODUCTION half only (split off the test
         // module), so these very assertion strings don't self-match.
+        //
+        // The marker is the full `#[cfg(test)]\nmod tests {` and the split is
+        // `split_once`, for two separate reasons:
+        //
+        //  - `#[cfg(test)]` alone matches its FIRST occurrence, which today is
+        //    the tests module but need not stay that way. One `#[cfg(test)]`
+        //    attribute added to a production helper above it would silently
+        //    truncate the scanned region — here, from 55% of the file to
+        //    whatever precedes the new attribute — and the needles below would
+        //    stop seeing the code they exist to watch. Green, and narrower.
+        //  - `split(..).next()` cannot fail, so marker drift would instead
+        //    widen the text to the whole file. These needles are NEGATIVE, so
+        //    that direction is a false red rather than a false green — but a
+        //    gate should not depend on which way its own accident points.
+        //
+        // Same class as the seal-lock gate in `engine/pscan/dispatch_tests.rs`,
+        // fixed together: the defect is a marker that does not uniquely name
+        // the boundary it is splitting on.
         let wire_prod = include_str!("wire.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("wire.rs has a production section");
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("wire.rs carries the tests-module marker this split relies on")
+            .0;
         for (name, src) in [
             ("wire.rs", wire_prod),
             ("lib.rs", include_str!("lib.rs")),
