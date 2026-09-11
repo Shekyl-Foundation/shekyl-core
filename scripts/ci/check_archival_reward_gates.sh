@@ -126,7 +126,14 @@ fi
 
 # Mint gate: no live emission vin crediting outputs (provisional bands).
 MINT_PATTERN='reward_P|archival.*emission.*mint|mint.*archival.*reward'
-MINT_EXCLUDE='TODO|FOLLOWUP|comment'
+MINT_EXCLUDE='TODO|FOLLOWUP'
+# A COMMENT is excluded by being a comment LINE, not by containing the word.
+# The exclude list read 'TODO|FOLLOWUP|comment', so `rg -v` dropped any hit
+# whose text contained the bare English word -- `reward_P = 1; // no comment
+# here` was silently excluded from an INFLATION-SURFACE gate. Matching the
+# rg -n `path:line:content` shape and anchoring on the comment leader is the
+# same drop_comment_hits idiom check_segment_freeze_sites.sh already uses.
+MINT_COMMENT_LINE='^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)'
 
 # The verdict is the OUTPUT, never the pipeline's status, and the scan's own
 # status is checked separately. The previous form was:
@@ -161,7 +168,7 @@ if (( MINT_RC > 1 )); then
   echo "       search root was deleted/renamed, or a --glob is malformed." >&2
   exit 2
 fi
-MINT_HITS="$(printf '%s' "$MINT_RAW" | rg -v "$MINT_EXCLUDE" || true)"
+MINT_HITS="$(printf '%s' "$MINT_RAW" | rg -v "$MINT_EXCLUDE" | rg -v "$MINT_COMMENT_LINE" || true)"
 if [[ -n "$MINT_HITS" ]]; then
   echo "FAIL: possible live archival reward mint path in C++ (grep hit)" >&2
   printf '%s\n' "$MINT_HITS" >&2
