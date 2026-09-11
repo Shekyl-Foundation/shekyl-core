@@ -5,6 +5,7 @@
 use serde_json::json;
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
+    SCHEME_DOMAIN_PQC_AUTH_TX,
 };
 use std::path::PathBuf;
 
@@ -40,9 +41,11 @@ fn to_hex(bytes: &[u8]) -> String {
 /// has a corrupted byte, so the ownership proof is broken.
 fn generate_and_write_vector_002() -> serde_json::Value {
     let scheme = HybridEd25519MlDsa;
-    let (pk, sk) = scheme.keypair_generate().unwrap();
+    let (pk, sk) = scheme.generate_ephemeral_keypair_for_tests().unwrap();
     let message = b"shekyl-pqc-v3-test-vector-002-tampered-ownership";
-    let sig = scheme.sign(&sk, message).unwrap();
+    let sig = scheme
+        .sign(&sk, SCHEME_DOMAIN_PQC_AUTH_TX, message)
+        .unwrap();
 
     // Canonical public-key layout:
     //   [0] version  [1] scheme  [2..3] reserved
@@ -74,9 +77,11 @@ fn generate_and_write_vector_002() -> serde_json::Value {
 /// public-key encoding changed from 0x01 to 0x02.
 fn generate_and_write_vector_003() -> serde_json::Value {
     let scheme = HybridEd25519MlDsa;
-    let (pk, sk) = scheme.keypair_generate().unwrap();
+    let (pk, sk) = scheme.generate_ephemeral_keypair_for_tests().unwrap();
     let message = b"shekyl-pqc-v3-test-vector-003-wrong-scheme-id";
-    let sig = scheme.sign(&sk, message).unwrap();
+    let sig = scheme
+        .sign(&sk, SCHEME_DOMAIN_PQC_AUTH_TX, message)
+        .unwrap();
 
     let mut pk_bytes = pk.to_canonical_bytes().unwrap();
     assert_eq!(pk_bytes[1], 0x01, "expected scheme_id 0x01 before mutation");
@@ -105,9 +110,11 @@ fn generate_and_write_vector_003() -> serde_json::Value {
 /// claims 256 more bytes than actually present (truncated blob).
 fn generate_and_write_vector_004() -> serde_json::Value {
     let scheme = HybridEd25519MlDsa;
-    let (pk, sk) = scheme.keypair_generate().unwrap();
+    let (pk, sk) = scheme.generate_ephemeral_keypair_for_tests().unwrap();
     let message = b"shekyl-pqc-v3-test-vector-004-oversized-blob";
-    let sig = scheme.sign(&sk, message).unwrap();
+    let sig = scheme
+        .sign(&sk, SCHEME_DOMAIN_PQC_AUTH_TX, message)
+        .unwrap();
 
     let pk_bytes = pk.to_canonical_bytes().unwrap();
     let mut sig_bytes = sig.to_canonical_bytes().unwrap();
@@ -158,8 +165,11 @@ fn vector_002_tampered_ownership_rejected() {
     let sig = HybridSignature::from_canonical_bytes(&sig_bytes).unwrap();
 
     if let Ok(pk) = HybridPublicKey::from_canonical_bytes(&pk_bytes) {
-        if let Ok(true) = HybridEd25519MlDsa.verify(&pk, &message, &sig) {
-            panic!("tampered ownership must NOT verify as Ok(true)");
+        if HybridEd25519MlDsa
+            .verify(&pk, SCHEME_DOMAIN_PQC_AUTH_TX, &message, &sig)
+            .is_ok()
+        {
+            panic!("tampered ownership must NOT verify");
         }
     }
 }

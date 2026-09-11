@@ -51,6 +51,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use shekyl_p_serve::{ProviderError, ShardBody, ShardProvider};
+
 /// Leaves in one frozen level-2 segment (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`
 /// §5.2: `SELENE_CHUNK_WIDTH · HELIOS_CHUNK_WIDTH · SELENE_CHUNK_WIDTH`
 /// = 38 · 18 · 38).
@@ -114,7 +116,7 @@ impl std::error::Error for FixtureError {}
 
 /// A shard payload held in memory, ready to serve.
 pub struct ShardFixture {
-    bytes: Arc<Vec<u8>>,
+    bytes: Arc<[u8]>,
 }
 
 impl ShardFixture {
@@ -136,13 +138,15 @@ impl ShardFixture {
             });
         }
         Ok(Self {
-            bytes: Arc::new(bytes),
+            bytes: Arc::from(bytes.into_boxed_slice()),
         })
     }
 
-    /// The payload, shareable across connections without copying.
+    /// The payload, shareable across connections without copying — the
+    /// exact shape `shekyl_p_serve::ShardBody::flat` takes, so serving it
+    /// costs an `Arc` clone and nothing else.
     #[must_use]
-    pub fn bytes(&self) -> Arc<Vec<u8>> {
+    pub fn bytes(&self) -> Arc<[u8]> {
         Arc::clone(&self.bytes)
     }
 
@@ -168,6 +172,50 @@ impl std::fmt::Debug for ShardFixture {
     }
 }
 
+/// Serves the one pre-loaded payload for **every** shard id — the spike's
+/// half of `shekyl_p_serve`'s [`ShardProvider`] seam.
+///
+/// The production provider (`shekyl_p_serve::StoreShardProvider`) selects a
+/// frozen segment by id out of a real store. This crate measures a
+/// *transport*: the fixture **is** the shard, the id is only the part of the
+/// URL the timing is taken around, and no store exists to select from. That
+/// difference is the whole reason the seam is a trait — it is what lets the
+/// spike drive the production serving loop, byte for byte, instead of
+/// carrying a second copy of it that drifts (as it did, until the copy was
+/// deleted).
+pub struct FixtureShardProvider {
+    payload: Arc<[u8]>,
+}
+
+impl FixtureShardProvider {
+    /// Wrap a pre-loaded payload.
+    #[must_use]
+    pub fn new(payload: Arc<[u8]>) -> Self {
+        Self { payload }
+    }
+}
+
+impl ShardProvider for FixtureShardProvider {
+    fn shard_bytes(&self, _shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
+        // `flat` refuses a payload that is not a whole number of leaves —
+        // the served frame declares a leaf count, so such bytes have no
+        // representable header. [`ShardFixture::load`] already enforces
+        // exactly [`SHARD_BYTES`], so the `None` arm is the guard for a
+        // payload handed to [`FixtureShardProvider::new`] directly, and it
+        // renders the ordinary miss rather than a body no witness could
+        // verify.
+        Ok(ShardBody::flat(Arc::clone(&self.payload)))
+    }
+}
+
+impl std::fmt::Debug for FixtureShardProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FixtureShardProvider")
+            .field("len", &self.payload.len())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +229,21 @@ mod tests {
         // "≈ 3.33 MB" as the design docs state it, checked in integer bytes so
         // the assertion needs no lossy usize→f64 cast.
         assert!((3_320_000..3_340_000).contains(&SHARD_BYTES));
+    }
+
+    /// The body a reader actually receives is the frame header plus the
+    /// shard, and the apparatus derives that number through the production
+    /// contract rather than taking it from a caller. Pinned here because the
+    /// first version of the harness compared against `SHARD_BYTES` directly,
+    /// and when RF-D4's frame landed every probe went stale at once.
+    ///
+    /// `4` is the hand-derived header for a full unpadded segment
+    /// (`88 CB 01 00`, `ARCHIVAL_RESPONSE_FORMAT.md` §3.5).
+    #[test]
+    fn served_body_is_the_frame_plus_the_shard() {
+        let payload: std::sync::Arc<[u8]> = vec![0u8; SHARD_BYTES].into();
+        let body = shekyl_p_serve::ShardBody::flat(payload).expect("a full shard is framable");
+        assert_eq!(body.header().framed_len(), (SHARD_BYTES + 4) as u64);
     }
 
     #[test]

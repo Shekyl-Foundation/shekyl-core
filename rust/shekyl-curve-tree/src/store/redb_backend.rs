@@ -6,11 +6,13 @@
 //! redb-backed `LeafStore` tables and transactional operations.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use redb::backends::InMemoryBackend;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
-use crate::segment::{leaves_per_segment, segment_freeze_eligible, SegmentId};
+use crate::segment::{leaves_per_segment, segment_freeze_eligible, SegmentId, LEAF_BYTES};
+use crate::served_frame::ServedFrameHeader;
 use crate::store::ops::{
     full_build_root, mixed_composition_root, recompute_segment_r_k, MixedRootError,
 };
@@ -42,6 +44,11 @@ const META_LEAF_COUNT: &str = "leaf_count";
 const META_SYNC_TIP: &str = "sync_tip_height";
 const META_NEXT_FREEZE_SEG: &str = "next_freeze_seg";
 const META_SCHEMA_VERSION: &str = "schema_version";
+// Prune-disabled posture declaration (CompleteTree serving). Boolean as
+// 0/1 in the u64 meta store; absent reads as false — the same
+// absent-defaults posture every other meta cell rides, so a pre-posture
+// store needs no migration.
+const META_PRUNE_DISABLED: &str = "prune_disabled";
 
 /// In-band layout version this build reads and writes.
 ///
@@ -89,6 +96,47 @@ pub struct FrozenSegmentRecord {
     pub frozen_at_height: BlockHeight,
 }
 
+/// Outcome of [`LeafStore::pin_segment_for_serving`] — the three states a
+/// serve-set member can actually be in, decided in one write transaction so
+/// a concurrent [`LeafStore::prune_frozen`] cannot land between the check
+/// and the pin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SegmentPin {
+    /// Frozen, leaf bytes present, pin recorded: servable now, and
+    /// [`LeafStore::prune_frozen`] will retain it.
+    PinnedServable,
+    /// Not frozen yet, pin recorded anyway. Pinning ahead of the freeze is
+    /// what makes the freeze unable to race a prune — without it there is a
+    /// window in which a bonded shard freezes, gets pruned, and can never
+    /// be served again. Not servable until it freezes (no committed `R_k`).
+    PinnedNotYetFrozen,
+    /// Frozen, but the leaf bytes were already pruned — **no pin recorded**,
+    /// because a pin cannot bring bytes back. The store must be rebuilt by
+    /// chain replay before this segment can be served. Reported rather than
+    /// silently succeeding: a pin that "worked" on absent bytes is exactly
+    /// how a serving persona reaches its challenge epoch believing it is
+    /// healthy.
+    AlreadyPruned,
+}
+
+/// What [`LeafStore::set_prune_disabled`] found when it declared — the
+/// posture-loss detector for the serving refresh that re-declares on every
+/// tick.
+///
+/// A two-variant enum rather than a `bool` so a call site cannot invert the
+/// polarity silently: `NewlyDeclared` at a *first* declaration is the normal
+/// activation, while `NewlyDeclared` at a *re*-declaration means the one-way
+/// flag was lost in the gap (corruption or tampering — no API clears it)
+/// and the gap must be treated as unretained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostureDeclaration {
+    /// The posture was already declared; the call changed nothing.
+    AlreadyDeclared,
+    /// The call wrote the declaration — either the first activation, or
+    /// the repair of a lost flag.
+    NewlyDeclared,
+}
+
 /// Persistent curve-tree leaf store (redb).
 pub struct LeafStore {
     db: Database,
@@ -97,6 +145,291 @@ pub struct LeafStore {
 impl std::fmt::Debug for LeafStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LeafStore").finish_non_exhaustive()
+    }
+}
+
+/// A **read-only** handle on the store, for the persona serving path.
+///
+/// The store is a single-writer redb database, and in the wallet that
+/// single writer is the `CurveTreeActor` — its message loop is what
+/// serializes writes, in place of an explicit lock. The serving loop runs
+/// concurrently with block ingest and holds a body reader open for the
+/// seconds a 3.33 MB rendezvous transfer takes, so handing it the store
+/// itself would put a second writer beside the one the actor exists to be.
+/// redb would not corrupt anything, but the two would contend on the write
+/// lock, and the actor's structural guarantee would become a convention
+/// nobody is checking.
+///
+/// So the serving side gets *this* instead: the same `Arc<LeafStore>`,
+/// with only [`Self::open_frozen_segment_body`] reachable through it.
+/// redb readers are MVCC snapshots and run concurrently with the writer,
+/// so nothing is given up — a read-only reader is all the serving loop
+/// ever needed. The point is that it is now the only thing it *can* do:
+/// there is no `&LeafStore` behind this handle to reach a write through,
+/// which is what makes "the serving host does not write to the store" a
+/// property of the types rather than a rule in a doc.
+///
+/// # Narrowing, not gating — which is why [`Self::new`] is public
+///
+/// In production this comes from `CurveTreeClient::serving_reader`, the
+/// object the actor owns. But [`Self::new`] is deliberately public and takes
+/// an `Arc<LeafStore>`, so anyone holding the store can mint one directly
+/// (the serving crates' tests do).
+///
+/// That is not a hole, because this type is **capability-narrowing, not
+/// capability-gating** — a different category from the witnesses elsewhere
+/// on this path. `VerifiedTorBinary` and `VanguardsActive` gate: possessing
+/// one is evidence a check ran, so a public constructor would forge the
+/// evidence. `ServingReader` proves nothing. It removes reach: whoever holds
+/// one can only read, and whoever can mint one already held the store and so
+/// already had strictly more. Restricting construction would buy no
+/// invariant and would only push the serving crates into a test-only
+/// back door — which is how a narrowing type acquires the ceremony of a
+/// gating one without the guarantee.
+///
+/// What the type is for is the *holder*: the serving host is handed one of
+/// these and therefore cannot write, whatever it is asked to do later.
+#[derive(Clone)]
+pub struct ServingReader {
+    store: Arc<LeafStore>,
+}
+
+impl ServingReader {
+    /// Wrap a store handle in the read-only view.
+    #[must_use]
+    pub fn new(store: Arc<LeafStore>) -> Self {
+        Self { store }
+    }
+
+    /// The serving read — see [`LeafStore::open_frozen_segment_body`] for
+    /// the full contract (this is a pure forward).
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`LeafStore::open_frozen_segment_body`]'s.
+    pub fn open_frozen_segment_body(
+        &self,
+        id: SegmentId,
+    ) -> Result<Option<FrozenSegmentBody>, StoreError> {
+        self.store.open_frozen_segment_body(id)
+    }
+
+    /// How far this store has ingested — the serving host's staleness clock.
+    ///
+    /// A serving host reads this **twice**: once when it mints a serve-set
+    /// witness, and again whenever it is asked how stale that witness is.
+    /// One quantity read at two times, so the difference is exactly "blocks
+    /// this wallet has ingested since it last re-derived its holdings".
+    ///
+    /// The independence that makes the reading a *liveness* signal is
+    /// between the two **drivers**, not between two quantities: the stamp is
+    /// taken by the persona-side P-scan refresh, while the value it stamps is
+    /// advanced by the principal's block scan through
+    /// `CurveTreeClient::ingest_block`. Stop the refresh and the stamp
+    /// freezes while this keeps climbing. Pairing this against a *remote*
+    /// height instead — the daemon's tip, say — would measure how far behind
+    /// the daemon this wallet is, which reads healthy for a wallet that is
+    /// simply catching up, precisely across the window in which holdings move.
+    ///
+    /// A wallet that is merely offline freezes both readings and correctly
+    /// reports no staleness: it has learned nothing its serve-set could be
+    /// stale against.
+    ///
+    /// **Not monotonic.** [`Self::truncate_from_tree_position`] resets it to
+    /// zero and [`Self::rollback_to_fork`] moves it back to the fork height,
+    /// and both also delete pinned-segment rows above the truncation point.
+    /// A reader that stamped this value and later sees a *lower* one is
+    /// therefore looking at a store that rolled back beneath its pins — a
+    /// distinct condition from lag, and not one a saturating subtraction may
+    /// quietly report as zero.
+    ///
+    /// # Errors
+    ///
+    /// Store failure (a read transaction on the meta table).
+    pub fn sync_tip_height(&self) -> Result<BlockHeight, StoreError> {
+        self.store.sync_tip_height()
+    }
+
+    /// Which claimed members the store no longer holds pins for — see
+    /// [`LeafStore::members_missing_pins`] for the full contract (this is a
+    /// pure forward).
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`LeafStore::members_missing_pins`]'s.
+    pub fn members_missing_pins(&self, shard_ids: &[u64]) -> Result<Vec<u64>, StoreError> {
+        self.store.members_missing_pins(shard_ids)
+    }
+
+    /// Whether the prune-disabled posture is declared — see
+    /// [`LeafStore::prune_disabled`], of which this is a pure read-only
+    /// forward. The CompleteTree-prefix serve-set witness verifies its
+    /// retention against this on mint and on every staleness poll: the
+    /// posture flag is the prefix arm's pin, so the reader that answers
+    /// "are these pins still there" for the list arm answers "is the
+    /// declaration still there" for the prefix arm.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`LeafStore::prune_disabled`]'s.
+    pub fn prune_disabled(&self) -> Result<bool, StoreError> {
+        self.store.prune_disabled()
+    }
+
+    /// The store's burial-gated freeze cursor — see
+    /// [`LeafStore::next_freeze_seg`], of which this is a pure read-only
+    /// forward. The CompleteTree-prefix witness verifies a reported
+    /// `frozen_count` against this on mint: the store is the authority
+    /// for the number, and a report that overstates it claims shards
+    /// the store has not frozen.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`LeafStore::next_freeze_seg`]'s.
+    pub fn next_freeze_seg(&self) -> Result<u64, StoreError> {
+        self.store.next_freeze_seg()
+    }
+
+    /// The corpus integrity scan — see
+    /// [`LeafStore::pruned_frozen_segments`], of which this is a pure
+    /// read-only forward. The CompleteTree-prefix witness runs it only on
+    /// the posture-loss path ([`PostureDeclaration::NewlyDeclared`] at a
+    /// refresh, or prior holes carried on the witness): whether bytes
+    /// were pruned during an unretained gap is a fact about the store,
+    /// answered by the store.
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`LeafStore::pruned_frozen_segments`]'s.
+    pub fn pruned_frozen_segments(&self) -> Result<Vec<u64>, StoreError> {
+        self.store.pruned_frozen_segments()
+    }
+
+    /// Whether `other` is a handle on the **same open database**.
+    ///
+    /// This is allocation identity, and that is store identity: a
+    /// `LeafStore` is the live `redb::Database`, and the wallet's
+    /// curve-tree handle keeps this `Arc` across fail-stop so recovery
+    /// resumes the writer over it rather than opening a second file.
+    /// A healthy respawn therefore does not mint a new `Arc`. Two
+    /// readers that do not share an `Arc` are two open stores — even
+    /// when they were opened on the same path — and pins applied to
+    /// one are not pins in the other.
+    #[must_use]
+    pub fn same_store(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.store, &other.store)
+    }
+}
+
+// The store handle carries no secret (the curve tree is public on-chain
+// material), but there is nothing useful to print either.
+impl std::fmt::Debug for ServingReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServingReader").finish_non_exhaustive()
+    }
+}
+
+/// Chunked reader over a frozen segment's leaf bytes — the body a persona
+/// serves for one shard, from [`LeafStore::open_frozen_segment_body`].
+///
+/// **Chunked rather than one `Vec`** because the serving loop holds one
+/// reader per in-flight connection. Materialising a whole segment would
+/// make that endpoint's concurrency cap a multiple of ~3.33 MB resident —
+/// a bound the rule-76 provisioning floor cannot pay, and one nothing in
+/// the serving contract admits to. Peak cost here is one chunk, so the cap
+/// bounds egress and descriptors, which is what it claims to bound.
+///
+/// Each chunk is one ordered `range` walk in its own read transaction. A
+/// fresh snapshot per chunk is right for the case that matters — a pinned
+/// segment cannot be pruned out from under the reader — and it keeps no
+/// snapshot pinned open for the seconds a rendezvous transfer takes.
+pub struct FrozenSegmentBody {
+    store: Arc<LeafStore>,
+    /// Next unread leaf position.
+    next: u64,
+    /// One past the segment's last leaf position.
+    end: u64,
+}
+
+impl FrozenSegmentBody {
+    /// Bytes not yet read. Before the first [`Self::next_chunk`] this is
+    /// the whole segment, known without touching a leaf — which is what
+    /// lets the response head go out before any store read.
+    ///
+    /// **The segment, not the whole response.** A served response also
+    /// carries the frame header and, eventually, padding; its length is
+    /// [`ServedFrameHeader::framed_len`] via [`Self::frame_header`]. Both
+    /// are computable in this same pre-read window, which is the property
+    /// that matters.
+    #[must_use]
+    pub fn remaining_bytes(&self) -> usize {
+        usize::try_from(self.end - self.next).expect("segment length fits usize") * LEAF_BYTES
+    }
+
+    /// The served-frame header for this body — [`RF-D4`], the two leading
+    /// lengths of the response.
+    ///
+    /// **Before the first [`Self::next_chunk`]**, like
+    /// [`Self::remaining_bytes`]: it describes what is still to be written,
+    /// and the frame's `leaf_count` is only the segment's leaf count while
+    /// nothing has been read.
+    ///
+    /// Infallible, and the reason belongs here rather than at the caller: a
+    /// *frozen segment* spans `[k·E, (k+1)·E)`, so its leaf count is at most
+    /// `leaves_per_segment()` by construction. The bound
+    /// [`ServedFrameHeader::for_segment`] enforces is a property this type
+    /// already has, and a caller made to handle its failure would be handling
+    /// a case the store cannot produce.
+    ///
+    /// [`RF-D4`]: crate::served_frame
+    #[must_use]
+    pub fn frame_header(&self) -> ServedFrameHeader {
+        let leaves = usize::try_from(self.end - self.next).expect("segment length fits usize");
+        ServedFrameHeader::for_segment(leaves)
+            .expect("a frozen segment spans at most leaves_per_segment() leaves")
+    }
+
+    /// Next body chunk of at most `max_bytes`, or `None` once the segment
+    /// has been read to the end.
+    ///
+    /// `max_bytes` is rounded down to whole leaves — the body is a leaf
+    /// array, so a partial leaf is never a useful read unit — and at least
+    /// one leaf is always taken, so any positive `max_bytes` makes
+    /// progress.
+    ///
+    /// # Errors
+    ///
+    /// Store failure, or [`StoreError::CorruptMeta`] for a hole in a
+    /// segment whose servability [`LeafStore::open_frozen_segment_body`]
+    /// already established. Past that check a hole means the store changed
+    /// under a validated segment — corruption, or a prune of a segment
+    /// being served without a pin. Both are "no longer servable", so the
+    /// pruned/corrupt distinction the open call draws is not re-drawn per
+    /// chunk on a snapshot that cannot answer it.
+    pub fn next_chunk(&mut self, max_bytes: usize) -> Result<Option<Vec<u8>>, StoreError> {
+        if self.next >= self.end {
+            return Ok(None);
+        }
+        let leaves_wanted = u64::try_from((max_bytes / LEAF_BYTES).max(1)).expect("chunk fits u64");
+        let stop = self.end.min(self.next + leaves_wanted);
+        let txn = self.store.db.begin_read()?;
+        let table = txn.open_table(LEAVES_TABLE)?;
+        let mut out = Vec::with_capacity(
+            usize::try_from(stop - self.next).expect("chunk fits usize") * LEAF_BYTES,
+        );
+        scan_leaf_range(&table, self.next, stop, missing_leaf, |leaf| {
+            out.extend_from_slice(leaf);
+        })?;
+        self.next = stop;
+        Ok(Some(out))
+    }
+}
+
+impl std::fmt::Debug for FrozenSegmentBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FrozenSegmentBody")
+            .field("remaining_bytes", &self.remaining_bytes())
+            .finish_non_exhaustive()
     }
 }
 
@@ -116,6 +449,42 @@ pub enum StoreError {
     /// Truncation would retain a prefix with pruned leaf bytes but without
     /// the frozen `R_k` needed to query it — caller must rebuild the store.
     TruncatedIntoPrunedRange { pos: u64 },
+    /// A frozen segment's leaf bytes were requested (the persona serving
+    /// read) but [`LeafStore::prune_frozen`] already discarded them. The
+    /// serving persona must [`LeafStore::pin_segment_for_serving`] its
+    /// serve-set before any prune runs — typed so the misconfiguration is
+    /// loud at read time instead of surfacing as a silently unservable
+    /// shard (and, an epoch later, a slash).
+    ///
+    /// Raised **only** for a segment that is not pinned. `prune_frozen`
+    /// skips pinned segments, so missing bytes under a pin are corruption
+    /// ([`Self::CorruptMeta`]) and must not be reported here: this error
+    /// names a remedy — pin the serve-set — that would provably do nothing
+    /// for a segment that is already pinned.
+    FrozenSegmentPruned {
+        /// The frozen segment whose leaf bytes are gone.
+        id: SegmentId,
+    },
+    /// [`LeafStore::prune_frozen`] was called on a store whose
+    /// prune-disabled posture is declared
+    /// ([`LeafStore::set_prune_disabled`] — the CompleteTree serving
+    /// posture: the node owes every frozen shard, so pruning *any* frozen
+    /// bytes is the §9.6-item-4 silent-slash setup). A typed refusal,
+    /// never a silent no-op (rule 82): the caller asked for something the
+    /// store's declared posture forbids, and must learn it here rather
+    /// than at the first failed challenge.
+    PruneDisabledPosture,
+    /// A [`LeafStore::pin_serve_set`] member does not fit the store's `u32`
+    /// [`SegmentId`] space, so it cannot name a segment in *any* store — a
+    /// construction bug in whatever built the serve-set, not a freeze race.
+    /// Refused rather than skipped: silently dropping a member would report
+    /// a serve-set as fully pinned while a shard the persona is bonded to
+    /// serve was never covered, which is the same silent-slash shape the
+    /// pin exists to close.
+    UnrepresentableShardId {
+        /// The illegal shard id.
+        shard_id: u64,
+    },
     /// `append_drained` was handed leaf bytes that are not four canonical
     /// Selene scalars. Rejected at write time so invalid bytes can never
     /// poison the persisted stream (they would otherwise surface only later
@@ -358,6 +727,219 @@ impl LeafStore {
         ))
     }
 
+    /// The store's freeze-prefix cursor (`META_NEXT_FREEZE_SEG`): the
+    /// frozen set is exactly `[0, k)` for the returned `k`. Defaults to 0
+    /// when the cell is absent (the same posture as [`Self::leaf_count`]
+    /// reads; `init_tables` seeds it to 0 on a fresh store).
+    ///
+    /// **Not** `shekyl_archival_retention::frozen_segment_count` — that
+    /// helper is first-crossing completeness (`⌊leaf_count / E⌋`) and is
+    /// what the daemon registry writes. This cursor is burial-gated
+    /// ([`segment_freeze_eligible`]): a completed but unburied segment
+    /// does not advance it. D-5's refresh operand is *this* number;
+    /// `COMPLETETREE_ACTIVATION.md` drafted the getter as
+    /// `frozen_segment_count()`, which is amended here so the two facts
+    /// cannot share a name. Slice 2's `CompleteTreePrefix.frozen_count`
+    /// is this value.
+    ///
+    /// # The prefix invariant
+    ///
+    /// [`Self::maybe_freeze_segments`]'s in-transaction body advances the
+    /// cursor **sequentially** — segment `k` is considered only after
+    /// `0..k` have frozen, and the loop stops at the first ineligible
+    /// segment — and the only other writers are the truncate/rollback
+    /// recompute (`recompute_next_freeze_seg`, which re-derives the same
+    /// prefix below the truncation point) and the fresh-store seed to 0.
+    /// A frozen-segments table that disagrees with this prefix is
+    /// corruption, not a reportable state; the KATs bind the cursor to
+    /// the table in both the growth and rollback directions so the
+    /// invariant is a tested property rather than prose.
+    ///
+    /// Consumer: the CompleteTree serve-set derivation
+    /// (`COMPLETETREE_ACTIVATION.md` D-1/D-5) — a CompleteTree persona's
+    /// obligation *is* this prefix, so "the CompleteTree collection" is
+    /// one growing number, never a stored list that could drift.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::CorruptMeta`] when the persisted cursor exceeds the
+    /// representable [`SegmentId`] space (`u32::MAX + 1` — the count with
+    /// every `u32` id frozen). No frozen-segments table can contain such a
+    /// segment, so a larger cursor is provably corrupt with zero false
+    /// positives, and this getter is the serve-obligation authority — it
+    /// exists to report the prefix, not to trust a value the prefix cannot
+    /// have. Same decoder as `verify_frozen_tail`.
+    pub fn next_freeze_seg(&self) -> Result<u64, StoreError> {
+        let txn = self.db.begin_read()?;
+        let meta = txn.open_table(META_TABLE)?;
+        next_freeze_seg_in(&meta)
+    }
+
+    /// Whether the prune-disabled posture is declared — see
+    /// [`Self::set_prune_disabled`]. Absent reads `false`: a store that
+    /// never declared the posture prunes as before.
+    pub fn prune_disabled(&self) -> Result<bool, StoreError> {
+        let txn = self.db.begin_read()?;
+        let meta = txn.open_table(META_TABLE)?;
+        prune_disabled_in(&meta)
+    }
+
+    /// Declare the prune-disabled posture: from this call on,
+    /// [`Self::prune_frozen`] refuses with
+    /// [`StoreError::PruneDisabledPosture`].
+    ///
+    /// This is the CompleteTree serving posture's structural half
+    /// (`COMPLETETREE_ACTIVATION.md` D-1): a whole-corpus obligation is
+    /// not pinned per segment — the bad state (a foundation node pruning
+    /// bytes it owes) is made unrepresentable instead, with no pin
+    /// bookkeeping to forget and no freeze→pin race window to schedule
+    /// around.
+    ///
+    /// **One-way, deliberately — there is no clear path.** Idempotent to
+    /// re-declare; never clearable through this surface. A node
+    /// un-declaring the posture while holding a live CompleteTree bond is
+    /// exactly the §9.6-item-4 silent-slash setup (locally discard bytes
+    /// the record still owes, fail challenges an epoch later). Reopen
+    /// criterion (rule 21): a clear path, if ever wanted, arrives only
+    /// with its own design round, and must bind the clear to evidence
+    /// that no live bond owes the corpus — it is not a flag flip.
+    ///
+    /// **The return value is the loss detector.** The serving refresh
+    /// re-declares on every tick, so this call is the one place a cleared
+    /// flag is guaranteed to be *seen* — the repair site is the
+    /// observation site. [`PostureDeclaration::NewlyDeclared`] from a
+    /// store that was declared before means the flag was lost in the gap
+    /// (corruption or tampering; no API clears it), and the caller must
+    /// treat the gap as unretained — bytes may have been pruned in it.
+    /// The answer is decided **inside the write transaction**, so a
+    /// concurrent declaration cannot make two callers both read
+    /// `NewlyDeclared`.
+    pub fn set_prune_disabled(&self) -> Result<PostureDeclaration, StoreError> {
+        // Steady-state short-circuit: the serving refresh re-declares on
+        // every tick, and the only transition is false→true, so an
+        // already-declared store answers with an MVCC read — no write
+        // serialization, no commit. The durable write happens exactly
+        // once. This matters at the provisioning floor (rule 76): a
+        // needless per-refresh fsync is flash wear on the Pi-class
+        // devices a foundation node may run on. The read-then-write race
+        // is benign — a concurrent declaration can only have written the
+        // same value, and redb's single writer serializes the commits.
+        if self.prune_disabled()? {
+            return Ok(PostureDeclaration::AlreadyDeclared);
+        }
+        let txn = self.db.begin_write()?;
+        let declaration = {
+            let mut meta = txn.open_table(META_TABLE)?;
+            // Re-checked inside the txn: the MVCC short-circuit above can
+            // race a concurrent declaration, and the loss detector must
+            // not read `NewlyDeclared` twice for one loss.
+            let declaration = if prune_disabled_in(&meta)? {
+                PostureDeclaration::AlreadyDeclared
+            } else {
+                PostureDeclaration::NewlyDeclared
+            };
+            meta.insert(META_PRUNE_DISABLED, &1u64)?;
+            declaration
+        };
+        txn.commit()?;
+        Ok(declaration)
+    }
+
+    /// Every frozen segment whose leaf bytes are gone — the corpus
+    /// integrity scan behind the posture-loss repair path, ascending.
+    ///
+    /// The prune discriminant is the same one [`Self::pin_ids_within`]
+    /// uses (a segment's first leaf position: prune removes whole
+    /// segments in one transaction). O(frozen count) reads, which is why
+    /// the caller runs it **only on the loss path**
+    /// ([`PostureDeclaration::NewlyDeclared`] at a serve-set refresh, or
+    /// a witness carrying prior holes) — running it per refresh would be
+    /// the O(D)-per-tick cost the prefix design exists to avoid.
+    ///
+    /// # Errors
+    ///
+    /// Store failure.
+    pub fn pruned_frozen_segments(&self) -> Result<Vec<u64>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
+        let leaves = txn.open_table(LEAVES_TABLE)?;
+        let e = leaves_per_segment() as u64;
+        let mut pruned = Vec::new();
+        for row in frozen.iter()? {
+            let (id, _) = row?;
+            let id = id.value();
+            let start = u64::from(id.0) * e;
+            if leaves.get(TreePosition(start))?.is_none() {
+                pruned.push(u64::from(id.0));
+            }
+        }
+        Ok(pruned)
+    }
+
+    /// Overwrite the prune-disabled cell with 0 so a prefix witness can
+    /// observe posture loss. **Not a clear path, and not compiled into
+    /// production.** The production setter is one-way (rule 21); this
+    /// exists so `shekyl-p-host` can KAT `Staleness::PostureLost` and the
+    /// posture-loss repair path — tampering is the only way the one-way
+    /// flag reads false, which is exactly the state those readings exist
+    /// to report. Behind the default-off `test-tamper` feature, enabled
+    /// only on `shekyl-p-host`'s dev-dependency edge: a `#[doc(hidden)]`
+    /// method would still ship callable, and the ruling is that a clear
+    /// path must not exist in shipped code, not that it must be
+    /// undocumented.
+    #[cfg(feature = "test-tamper")]
+    pub fn test_tamper_clear_prune_disabled(&self) -> Result<(), StoreError> {
+        let txn = self.db.begin_write()?;
+        {
+            let mut meta = txn.open_table(META_TABLE)?;
+            meta.insert(META_PRUNE_DISABLED, &0u64)?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Which of `shard_ids` no longer have a pin row — the members a serve-set
+    /// witness claims are retained but the store would now prune.
+    ///
+    /// **The direct question, asked directly.** A pin is deleted only by
+    /// [`Self::truncate_from_tree_position`] / [`Self::rollback_to_fork`]
+    /// (the F9 pinned-segment rollback), and **nothing recreates it except a
+    /// re-pin** — block ingest does not. So a holder cannot infer this from
+    /// the sync tip: the tip is explicitly not monotonic, it climbs back past
+    /// its old value on re-ingest, and the pins do not come back with it. Any
+    /// tip-derived signal therefore self-clears while the exposure persists.
+    /// Asking the pin table removes the inference.
+    ///
+    /// Both pinned outcomes are checked, not just the servable ones:
+    /// [`Self::pin_ids_within`] writes a row for `PinnedNotYetFrozen` too, so
+    /// a missing row means the pin was dropped rather than never taken. Ids a
+    /// segment id cannot represent are reported as missing — such a member was
+    /// never pinnable, so treating it as retained would be the optimistic
+    /// direction on exactly the question this answers.
+    ///
+    /// One read transaction for the whole set: a serve-set may hold up to
+    /// `MAX_HOLDINGS_SHARDS` = 4096 members, and this is polled beside tor
+    /// posture.
+    ///
+    /// # Errors
+    ///
+    /// Store I/O opening the read transaction or the pinned-segment table.
+    pub fn members_missing_pins(&self, shard_ids: &[u64]) -> Result<Vec<u64>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
+        let mut missing = Vec::new();
+        for &shard_id in shard_ids {
+            let retained = match u32::try_from(shard_id) {
+                Ok(id) => pinned.get(SegmentId(id))?.is_some(),
+                Err(_) => false,
+            };
+            if !retained {
+                missing.push(shard_id);
+            }
+        }
+        Ok(missing)
+    }
+
     /// Test-only wrapper for appending drained leaves and advancing sync tip.
     ///
     /// Production ingest must use [`Self::append_block_deltas`] so drained
@@ -560,12 +1142,16 @@ impl LeafStore {
         let complete_segments = leaf_count / e;
         let mut next_freeze_seg = {
             let meta = txn.open_table(META_TABLE)?;
-            let next = meta.get(META_NEXT_FREEZE_SEG)?;
-            next.map(|v| v.value()).unwrap_or(0)
+            next_freeze_seg_in(&meta)?
         };
         let mut seg_k = next_freeze_seg;
         while seg_k < complete_segments {
-            let segment_id = SegmentId(u32::try_from(seg_k).expect("segment id fits u32"));
+            // `next_freeze_seg_in` admits `u32::MAX + 1` (every id frozen).
+            // There is nothing further to freeze in this store's id space.
+            let Ok(id) = u32::try_from(seg_k) else {
+                break;
+            };
+            let segment_id = SegmentId(id);
             {
                 let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
                 if frozen.get(segment_id)?.is_some() {
@@ -774,6 +1360,45 @@ impl LeafStore {
         Ok(())
     }
 
+    /// Start of the **contiguous** present-leaf run ending at `leaf_count`.
+    ///
+    /// [`Self::prune_frozen`] skips pinned segments, and pinning has a
+    /// production caller now — the persona serve-set, via
+    /// [`Self::pin_segment_for_serving`] — so "lowest present position" and
+    /// "start of a contiguous run" are no longer the same number: a pinned
+    /// segment below a pruned one is an island with a hole above it. The
+    /// partition search in [`Self::rollback_to_fork`] probes arbitrary
+    /// positions by bisection and must never land in that hole, so the
+    /// frontier is taken one position above the **highest** pruned segment.
+    /// Islands below it are simply not searched; a fork that deep is
+    /// rejected by the `partition == frontier` guard, which is the same
+    /// conservative answer pruned rows already got.
+    ///
+    /// Prune removes an unpinned frozen segment's whole range in one
+    /// transaction, so a segment's first position is an exact
+    /// pruned/present discriminant and walking frozen ids downwards can
+    /// stop at the first hole. With nothing pruned this degenerates to the
+    /// lowest present position (0 for a store that has never pruned), and
+    /// an empty table to `leaf_count` — an empty search range.
+    fn present_suffix_start(
+        txn: &redb::WriteTransaction,
+        leaf_meta: &impl ReadableTable<TreePosition, &'static [u8; 192]>,
+        leaf_count: u64,
+    ) -> Result<u64, StoreError> {
+        let e = leaves_per_segment() as u64;
+        let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
+        for row in frozen.iter()?.rev() {
+            let seg_start = u64::from(row?.0.value().0) * e;
+            if leaf_meta.get(TreePosition(seg_start))?.is_none() {
+                return Ok(seg_start + e);
+            }
+        }
+        Ok(match leaf_meta.iter()?.next().transpose()? {
+            Some((key, _)) => key.value().0,
+            None => leaf_count,
+        })
+    }
+
     /// Roll the store back to `fork_height` after a reorg, in one ACID
     /// write txn (CT3_SYNC.md R1-Q3, amended two-class form):
     ///
@@ -784,8 +1409,11 @@ impl LeafStore {
     ///    equal-maturity run. A store synced through block `F` has drained
     ///    leaves through `F - 1`; leaves maturing exactly at `F` enter on
     ///    connection of block `F + 1` and must be pending after rollback.
-    ///    Probes run over the present suffix `[pruned frontier, leaf_count)`
-    ///    only, so a post-prune store can never `None`-probe. A partition
+    ///    Probes run over the **contiguous** present suffix
+    ///    `[pruned frontier, leaf_count)` only, so a post-prune store can
+    ///    never `None`-probe — see `present_suffix_start`, which
+    ///    earns that word now that pinning (persona serving) lets prune
+    ///    leave present segments *below* pruned ones. A partition
     ///    resolving at a non-zero frontier means the cut lands at/below pruned rows:
     ///    [`StoreError::TruncatedIntoPrunedRange`], before any write.
     ///    (Intentionally conservative when `partition == frontier > 0`
@@ -796,7 +1424,7 @@ impl LeafStore {
     /// 2. **Read-before-delete migration.** The truncated suffix is read
     ///    in full (leaf bytes + meta, including `creation_height`) before
     ///    any delete — `leaf_meta` alone does not carry the leaf bytes.
-    /// 3. [`Self::truncate_internals`] — shared with
+    /// 3. `truncate_internals` — shared with
     ///    [`Self::truncate_from_tree_position`], so frozen/pinned segment
     ///    rollback (F9) and the freeze-cursor recompute cannot drift; the
     ///    tip resets to `fork_height` (not 0 — the store is still synced,
@@ -832,15 +1460,7 @@ impl LeafStore {
         let (partition, migrated) = {
             let leaf_meta = txn.open_table(LEAF_META_TABLE)?;
             let leaves = txn.open_table(LEAVES_TABLE)?;
-            // Pruned frontier: lowest present meta position. Prune only
-            // ever removes a prefix of frozen segments (pin_segment has no
-            // production caller, so interior holes cannot occur); an empty
-            // table degenerates to frontier == leaf_count and the search
-            // range is empty.
-            let frontier = match leaf_meta.iter()?.next().transpose()? {
-                Some((key, _)) => key.value().0,
-                None => leaf_count,
-            };
+            let frontier = Self::present_suffix_start(&txn, &leaf_meta, leaf_count)?;
             let maturity_at = |pos: u64| -> Result<u64, StoreError> {
                 let row = leaf_meta
                     .get(TreePosition(pos))?
@@ -923,21 +1543,222 @@ impl LeafStore {
         Ok(())
     }
 
-    /// Pin segment `id` so [`Self::prune_frozen`] retains its full leaf bytes.
+    /// Pin segment `id` so [`Self::prune_frozen`] retains its full leaf
+    /// bytes, and report whether the segment is actually servable.
     ///
-    /// Pin before pruning any segment whose full chunk contents may be needed
-    /// later (root queries below the frozen boundary, or store-backed branch
-    /// reads). Path assembly today rebuilds branches from the client's
-    /// replay-held entries, so pruning does not break it; pinning is the
-    /// store-level escape hatch if that ever changes.
-    pub fn pin_segment(&self, id: SegmentId) -> Result<(), StoreError> {
+    /// **Primary consumer: persona serving.** A bonded serve-set must be
+    /// pinned before any prune runs; otherwise
+    /// [`Self::open_frozen_segment_body`] returns
+    /// [`StoreError::FrozenSegmentPruned`] and the persona cannot answer
+    /// challenges (the silent-slash precursor). Secondary: any other reader
+    /// that needs a frozen segment's leaf bytes across prune (root queries
+    /// below the frozen boundary, store-backed branch reads). Path assembly
+    /// today rebuilds branches from the client's replay-held entries, so it
+    /// does not require pins.
+    ///
+    /// The pin is recorded for a segment that has **not frozen yet**
+    /// ([`SegmentPin::PinnedNotYetFrozen`]) — deliberately. Bonding before
+    /// freeze is legal (`bond_post.rs`), and a pin taken in advance is what
+    /// removes the freeze-then-prune race; without it, correctness would
+    /// depend on a lifecycle re-pin trigger firing between the two, which
+    /// makes an availability guarantee out of a scheduling accident. A
+    /// re-pin after freeze is then an observability call — it reports
+    /// [`SegmentPin::PinnedServable`] — not a correctness one. (One case
+    /// still needs it: [`Self::rollback_to_fork`] drops pins above the
+    /// truncation boundary along with the rows they named.)
+    ///
+    /// Check, pin, and commit share one write transaction, so a prune
+    /// cannot commit between deciding "frozen and present" and recording
+    /// the pin.
+    ///
+    /// # Errors
+    ///
+    /// Store failure. A pruned segment is [`SegmentPin::AlreadyPruned`],
+    /// not an error — the caller decides how loud that is.
+    pub fn pin_segment_for_serving(&self, id: SegmentId) -> Result<SegmentPin, StoreError> {
         let txn = self.db.begin_write()?;
+        let mut outcomes = Self::pin_ids_within(&txn, &[id])?;
+        txn.commit()?;
+        // `pin_ids_within` returns one outcome per input, so the pop is total.
+        Ok(outcomes.pop().unwrap_or(SegmentPin::AlreadyPruned))
+    }
+
+    /// Pin `ids` inside a caller-supplied write transaction, one outcome per
+    /// input, in order.
+    ///
+    /// The single and whole-set entry points share this rather than one
+    /// calling the other in a loop: a serve-set may hold up to
+    /// `MAX_HOLDINGS_SHARDS` = 4096 members, and a transaction per member
+    /// made host start pay 4096 durable commits. It also made pinning
+    /// **partial** — a failure part-way left earlier members pinned and later
+    /// ones not, a half-applied state the caller then had to be told was safe
+    /// to retry. One transaction for the whole set removes that state instead
+    /// of documenting it: either every member is pinned or none is.
+    fn pin_ids_within(
+        txn: &redb::WriteTransaction,
+        ids: &[SegmentId],
+    ) -> Result<Vec<SegmentPin>, StoreError> {
+        let mut outcomes = Vec::with_capacity(ids.len());
+        {
+            let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
+            let leaves = txn.open_table(LEAVES_TABLE)?;
+            let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
+            for &id in ids {
+                let outcome = if frozen.get(id)?.is_none() {
+                    SegmentPin::PinnedNotYetFrozen
+                } else {
+                    // Prune removes a segment's whole leaf range in one
+                    // transaction, so the first position is an exact
+                    // pruned/present discriminant — no full-segment scan.
+                    let start = u64::from(id.0) * leaves_per_segment() as u64;
+                    if leaves.get(TreePosition(start))?.is_none() {
+                        SegmentPin::AlreadyPruned
+                    } else {
+                        SegmentPin::PinnedServable
+                    }
+                };
+                if outcome != SegmentPin::AlreadyPruned {
+                    pinned.insert(id, &1u32)?;
+                }
+                outcomes.push(outcome);
+            }
+        }
+        Ok(outcomes)
+    }
+
+    /// Pin a whole serve-set, returning each member's outcome paired with
+    /// its shard id, in the caller's order.
+    ///
+    /// Shard ids are segment indices — "shard" and "frozen segment" are the
+    /// same object — so this is the same pin decision as
+    /// [`Self::pin_segment_for_serving`], plus the `u64` → [`SegmentId`]
+    /// narrowing the wire form needs.
+    ///
+    /// The whole set is pinned in ONE write transaction, so it is applied
+    /// atomically: a serve-set of up to `MAX_HOLDINGS_SHARDS` = 4096 members
+    /// costs one durable commit rather than 4096, and no failure can leave
+    /// half a serve-set pinned.
+    ///
+    /// [`SegmentPin::AlreadyPruned`] is *returned*, not raised: it is a
+    /// fact about the store, and what to do about a pruned member is a
+    /// serving-policy question (`shekyl-p-host` refuses the whole set)
+    /// deliberately not decided here.
+    ///
+    /// Members are validated **before** any pin is attempted, so an
+    /// unrepresentable id cannot leave the pin state a partial function of
+    /// an invalid input. Pinning is idempotent, so a call interrupted by a
+    /// store fault is re-covered by re-calling; pins already written stay
+    /// written.
+    ///
+    /// # There is no release
+    ///
+    /// Pins are cleared by [`Self::truncate_from_tree_position`] (and so by
+    /// [`Self::rollback_to_fork`]) at and above the truncation point, and by
+    /// nothing else. A shard that leaves a persona's holdings therefore keeps
+    /// its pin — and its full leaf bytes — indefinitely.
+    ///
+    /// That asymmetry is deliberate for now, not an oversight: acquisition is
+    /// idempotent and safe to repeat, while a release that a reorg undoes can
+    /// let a prune discard bytes no later pin restores
+    /// ([`SegmentPin::AlreadyPruned`] is terminal — chain replay, not retry).
+    /// Failing toward retention costs disk; failing the other way costs a
+    /// slash. The retention leak it buys is real and priced in
+    /// `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 5, which also states the
+    /// condition a release path would have to meet (a finality depth).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::UnrepresentableShardId`] for a member outside the
+    /// `u32` id space, plus any [`Self::pin_segment_for_serving`] failure.
+    pub fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<Vec<(u64, SegmentPin)>, StoreError> {
+        let ids = shard_ids
+            .iter()
+            .map(|&shard_id| {
+                u32::try_from(shard_id)
+                    .map(|id| (shard_id, SegmentId(id)))
+                    .map_err(|_| StoreError::UnrepresentableShardId { shard_id })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let segment_ids: Vec<SegmentId> = ids.iter().map(|(_, id)| *id).collect();
+        let txn = self.db.begin_write()?;
+        let outcomes = Self::pin_ids_within(&txn, &segment_ids)?;
+        txn.commit()?;
+        Ok(ids
+            .into_iter()
+            .map(|(shard_id, _)| shard_id)
+            .zip(outcomes)
+            .collect())
+    }
+
+    /// Every shard id currently pinned in this store.
+    ///
+    /// The reconcile input for pin **release**: a serve-set refresh knows what
+    /// the bond record says it owes *now*, and this is the only way to learn
+    /// what the store is still retaining on the strength of an older record.
+    /// Without it a pin from a previous session — or from before a holdings
+    /// drop — is invisible, and invisible pins are exactly the leak
+    /// `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 5 prices at ~13.6 GB
+    /// against a rule-76 Pi-4 floor.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError`] on a read fault.
+    pub fn pinned_shard_ids(&self) -> Result<Vec<u64>, StoreError> {
+        let txn = self.db.begin_read()?;
+        let pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
+        pinned
+            .iter()?
+            .map(|r| r.map(|(k, _)| u64::from(k.value().0)).map_err(Into::into))
+            .collect()
+    }
+
+    /// Release pins, letting [`Self::prune_frozen`] reclaim those segments.
+    ///
+    /// Returns how many pins were actually removed — ids with no pin are a
+    /// no-op, not an error, so a caller re-releasing an already-released shard
+    /// is idempotent rather than a failure to special-case.
+    ///
+    /// # This is the dangerous verb, and the caller owns the gate
+    ///
+    /// §9.7 item 5 rules the asymmetry: **acquiring a pin needs no finality;
+    /// releasing one does.** A holdings change that is later reorged back can,
+    /// if the pin was already released, have let a prune discard bytes that no
+    /// re-pin restores — `AlreadyPruned` is terminal, and its remedy is a chain
+    /// replay. The reclaim this buys is disk, which is recoverable; the loss it
+    /// risks is a slash, which is not.
+    ///
+    /// The store deliberately does **not** enforce that gate: it has no clock,
+    /// no view of the bond record, and no memory of when a shard left one. The
+    /// finality decision belongs to the side that reads the record over time,
+    /// and putting a half-check here would make it look guarded while the real
+    /// condition went unenforced. What the store owes is that this is the only
+    /// path — pins are otherwise removed solely by truncation.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::UnrepresentableShardId`] for an id outside the `u32`
+    /// space, plus any write fault.
+    pub fn release_pins(&self, shard_ids: &[u64]) -> Result<usize, StoreError> {
+        let ids = shard_ids
+            .iter()
+            .map(|&shard_id| {
+                u32::try_from(shard_id)
+                    .map(SegmentId)
+                    .map_err(|_| StoreError::UnrepresentableShardId { shard_id })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let txn = self.db.begin_write()?;
+        let mut removed = 0usize;
         {
             let mut pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?;
-            pinned.insert(id, &1u32)?;
+            for id in ids {
+                if pinned.remove(id)?.is_some() {
+                    removed += 1;
+                }
+            }
         }
         txn.commit()?;
-        Ok(())
+        Ok(removed)
     }
 
     /// Prune frozen, unpinned segments down to their `R_k` records.
@@ -946,12 +1767,29 @@ impl LeafStore {
     /// table before removal — the owned *leaf record* is retained, not the
     /// surrounding chunk. Root composition over a pruned segment uses the
     /// frozen `R_k`; anything needing a pruned segment's full chunk contents
-    /// must have pinned it first ([`Self::pin_segment`]). All leaf bytes are
+    /// must have pinned it first ([`Self::pin_segment_for_serving`]). All leaf bytes are
     /// reconstructible by chain replay regardless.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::PruneDisabledPosture`] when the store's prune-disabled
+    /// posture is declared ([`Self::set_prune_disabled`]) — a refusal,
+    /// never a silent no-op: under that posture every frozen byte is owed,
+    /// and a caller that wanted to prune anyway must find out here.
     pub fn prune_frozen(&self, owned_positions: &[TreePosition]) -> Result<(), StoreError> {
         let owned: std::collections::BTreeSet<TreePosition> =
             owned_positions.iter().copied().collect();
         let txn = self.db.begin_write()?;
+        // Posture check inside the same write transaction that would
+        // mutate, so a concurrent declaration cannot land between the
+        // check and the removals (single-writer redb serializes on
+        // `begin_write`, making the read-then-mutate atomic).
+        {
+            let meta = txn.open_table(META_TABLE)?;
+            if prune_disabled_in(&meta)? {
+                return Err(StoreError::PruneDisabledPosture);
+            }
+        }
         let e = leaves_per_segment() as u64;
         let frozen_ids: Vec<SegmentId> = {
             let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
@@ -1001,6 +1839,61 @@ impl LeafStore {
         Ok(frozen.get(id)?.map(|v| decode_frozen_segment(v.value())))
     }
 
+    /// Open a chunked reader over **frozen** segment `id`'s leaf bytes in
+    /// tree order — the persona serving read
+    /// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §2: the witness pulls the entire
+    /// shard and verifies it against the committed `R_k`, so the served
+    /// unit is exactly this chunk).
+    ///
+    /// `Ok(None)` when the segment is not frozen: an unfrozen segment has
+    /// no committed `R_k`, so it can be neither challenged nor
+    /// content-verified — there is nothing coherent to serve. (Bonding
+    /// deliberately does not require freeze, `bond_post.rs`; serving does.)
+    ///
+    /// **Servability is decided here, before the caller commits to a
+    /// response.** That is what lets the serving loop pick 404-or-200 with
+    /// no bytes written yet, so store health stays unprobeable; a reader
+    /// that only discovered missing bytes mid-body would leak it as a
+    /// truncated `200`.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::FrozenSegmentPruned`] when the segment froze but
+    /// [`Self::prune_frozen`] already discarded its bytes — the serving
+    /// persona must [`Self::pin_segment_for_serving`] its serve-set before
+    /// any prune. Missing bytes under a **pinned** segment are
+    /// [`StoreError::CorruptMeta`] instead: prune skips pins, so pinning
+    /// again — the remedy `FrozenSegmentPruned` names — provably would not
+    /// help.
+    pub fn open_frozen_segment_body(
+        self: &Arc<Self>,
+        id: SegmentId,
+    ) -> Result<Option<FrozenSegmentBody>, StoreError> {
+        let e = leaves_per_segment() as u64;
+        let start = u64::from(id.0) * e;
+        {
+            let txn = self.db.begin_read()?;
+            let frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
+            if frozen.get(id)?.is_none() {
+                return Ok(None);
+            }
+            let pinned = txn.open_table(PINNED_SEGMENTS_TABLE)?.get(id)?.is_some();
+            let leaves = txn.open_table(LEAVES_TABLE)?;
+            if leaves.get(TreePosition(start))?.is_none() {
+                return Err(if pinned {
+                    StoreError::CorruptMeta("pinned frozen segment is missing leaf bytes")
+                } else {
+                    StoreError::FrozenSegmentPruned { id }
+                });
+            }
+        }
+        Ok(Some(FrozenSegmentBody {
+            store: Arc::clone(self),
+            next: start,
+            end: start + e,
+        }))
+    }
+
     /// Recompute the boundary-adjacent frozen segment's `R_k`.
     ///
     /// The freeze cursor names the next segment to freeze, so `cursor - 1`
@@ -1011,19 +1904,14 @@ impl LeafStore {
         let txn = self.db.begin_read()?;
         let next_freeze_seg = {
             let meta = txn.open_table(META_TABLE)?;
-            meta.get(META_NEXT_FREEZE_SEG)?
-                .map(|v| v.value())
-                .unwrap_or(0)
+            next_freeze_seg_in(&meta)?
         };
         if next_freeze_seg == 0 {
             return Ok(());
         }
 
-        // `verify_frozen_tail` runs on the rollback path against persisted
-        // metadata, so a corrupt `META_NEXT_FREEZE_SEG` must surface as a
-        // structured error rather than panic — the function exists to detect
-        // corruption, not to trust it. (`next_freeze_seg >= 1` here, so the
-        // subtraction cannot underflow.)
+        // Bound is `next_freeze_seg_in`'s: `1..=u32::MAX+1`, so `k-1`
+        // always fits `SegmentId`. A larger cursor never reaches here.
         let segment = SegmentId(
             u32::try_from(next_freeze_seg - 1)
                 .map_err(|_| StoreError::CorruptMeta("freeze segment counter exceeds u32"))?,
@@ -1112,6 +2000,38 @@ fn delete_seg_keys_batched<V: redb::Value>(
     Ok(())
 }
 
+/// Largest legal `META_NEXT_FREEZE_SEG`: every `u32` [`SegmentId`] frozen.
+const NEXT_FREEZE_SEG_MAX: u64 = u32::MAX as u64 + 1;
+
+/// Read the freeze-prefix cursor from an already-open meta table.
+///
+/// Absent defaults to 0. A value above [`NEXT_FREEZE_SEG_MAX`] is
+/// [`StoreError::CorruptMeta`] — the same bound the public getter and
+/// `verify_frozen_tail` must share, so they cannot drift.
+fn next_freeze_seg_in(meta: &impl ReadableTable<&'static str, u64>) -> Result<u64, StoreError> {
+    let count = meta
+        .get(META_NEXT_FREEZE_SEG)?
+        .map(|v| v.value())
+        .unwrap_or(0);
+    if count > NEXT_FREEZE_SEG_MAX {
+        return Err(StoreError::CorruptMeta(
+            "freeze segment counter exceeds u32",
+        ));
+    }
+    Ok(count)
+}
+
+/// Read the prune-disabled posture from an already-open meta table.
+/// Absent (and 0) is undeclared; any non-zero is declared — the safe
+/// direction if the cell is corrupt.
+fn prune_disabled_in(meta: &impl ReadableTable<&'static str, u64>) -> Result<bool, StoreError> {
+    Ok(meta
+        .get(META_PRUNE_DISABLED)?
+        .map(|v| v.value())
+        .unwrap_or(0)
+        != 0)
+}
+
 fn recompute_next_freeze_seg(
     txn: &redb::WriteTransaction,
     leaf_count: u64,
@@ -1161,21 +2081,63 @@ struct StoredLeafMeta {
     identity: crate::types::OutputIdentity,
 }
 
+/// What a hole in a leaf range means everywhere except the serving read's
+/// servability check: store corruption, naming the position.
+fn missing_leaf(_pos: TreePosition) -> StoreError {
+    StoreError::CorruptMeta("missing leaf")
+}
+
+/// The one ordered leaf-range walk every bulk reader goes through.
+///
+/// A single `range` scan rather than a point get per position: these
+/// readers run over whole segments (`leaves_per_segment()` = 25 992
+/// leaves), where the difference is one b-tree descent against ~26 000 of
+/// them. The caller supplies what a hole means and how the bytes
+/// accumulate — a leaf array for root recomposition, flat bytes for the
+/// wire — so there is one loop and no second copy of the hole logic.
+fn scan_leaf_range(
+    leaves: &impl ReadableTable<TreePosition, &'static [u8; 128]>,
+    start: u64,
+    end: u64,
+    missing: impl Fn(TreePosition) -> StoreError,
+    mut take: impl FnMut(&[u8; 128]),
+) -> Result<(), StoreError> {
+    // A range walk *skips* absent keys rather than yielding a `None`, so
+    // holes are detected by position: the first key that is not the one
+    // expected names the missing position exactly, and a walk that ends
+    // short names the first missing tail position.
+    let mut expected = start;
+    for row in leaves.range(TreePosition(start)..TreePosition(end))? {
+        let (key, value) = row?;
+        if key.value().0 != expected {
+            return Err(missing(TreePosition(expected)));
+        }
+        take(value.value());
+        expected += 1;
+    }
+    if expected != end {
+        return Err(missing(TreePosition(expected)));
+    }
+    Ok(())
+}
+
+/// Bulk leaf read into a leaf array, for the root/recompute paths.
+fn read_leaf_bytes_range_in(
+    leaves: &impl ReadableTable<TreePosition, &'static [u8; 128]>,
+    start: u64,
+    end: u64,
+) -> Result<Vec<[u8; 128]>, StoreError> {
+    let mut out = Vec::with_capacity(usize::try_from(end - start).expect("leaf range fits usize"));
+    scan_leaf_range(leaves, start, end, missing_leaf, |leaf| out.push(*leaf))?;
+    Ok(out)
+}
+
 fn read_leaf_bytes_range(
     txn: &redb::WriteTransaction,
     start: u64,
     end: u64,
 ) -> Result<Vec<[u8; 128]>, StoreError> {
-    let leaves = txn.open_table(LEAVES_TABLE)?;
-    let cap = usize::try_from(end - start).expect("leaf range fits usize");
-    let mut out = Vec::with_capacity(cap);
-    for pos in (start..end).map(TreePosition) {
-        let leaf = leaves
-            .get(pos)?
-            .ok_or(StoreError::CorruptMeta("missing leaf"))?;
-        out.push(*leaf.value());
-    }
-    Ok(out)
+    read_leaf_bytes_range_in(&txn.open_table(LEAVES_TABLE)?, start, end)
 }
 
 fn read_leaf_bytes_range_read(
@@ -1183,16 +2145,7 @@ fn read_leaf_bytes_range_read(
     start: u64,
     end: u64,
 ) -> Result<Vec<[u8; 128]>, StoreError> {
-    let leaves = txn.open_table(LEAVES_TABLE)?;
-    let cap = usize::try_from(end - start).expect("leaf range fits usize");
-    let mut out = Vec::with_capacity(cap);
-    for pos in (start..end).map(TreePosition) {
-        let leaf = leaves
-            .get(pos)?
-            .ok_or(StoreError::CorruptMeta("missing leaf"))?;
-        out.push(*leaf.value());
-    }
-    Ok(out)
+    read_leaf_bytes_range_in(&txn.open_table(LEAVES_TABLE)?, start, end)
 }
 
 fn encode_frozen_segment(rec: &FrozenSegmentRecord) -> [u8; 56] {
@@ -2122,8 +3075,629 @@ mod tests {
     #[test]
     fn pin_and_prune_smoke() {
         let store = LeafStore::open_ephemeral().unwrap();
-        store.pin_segment(SegmentId(0)).unwrap();
+        assert_eq!(
+            store.pin_segment_for_serving(SegmentId(0)).unwrap(),
+            SegmentPin::PinnedNotYetFrozen,
+            "a bonded shard is pinned before it freezes, so no prune can slip \
+             between the freeze and a re-pin"
+        );
         store.prune_frozen(&[]).unwrap();
+    }
+
+    /// A full segment of *distinct* canonical leaves — uniform bytes would
+    /// let a stride/offset bug in the serving read still hash to the right
+    /// `R_k`, so the fixture varies the first scalar lane per leaf.
+    fn distinct_segment_entries() -> Vec<LeafEntry> {
+        (0..leaves_per_segment())
+            .map(|i| {
+                let gindex = u64::try_from(i).expect("index fits u64");
+                let mut entry = sample_entry(gindex, 0);
+                entry.leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
+                entry
+            })
+            .collect()
+    }
+
+    /// Drain a segment body the way the serving loop does — in chunks far
+    /// smaller than a segment, so the assertions run against the
+    /// multi-chunk path rather than a single lucky read — and check that
+    /// the length declared before the first read is the length delivered.
+    fn serve_body(store: &Arc<LeafStore>, id: SegmentId) -> Vec<u8> {
+        let mut body = store
+            .open_frozen_segment_body(id)
+            .expect("open body")
+            .expect("segment is frozen");
+        let declared = body.remaining_bytes();
+        let mut out = Vec::new();
+        while let Some(chunk) = body.next_chunk(4096).expect("chunk") {
+            out.extend_from_slice(&chunk);
+        }
+        assert_eq!(
+            out.len(),
+            declared,
+            "the segment length is declared before any leaf is read; the body must match it"
+        );
+        out
+    }
+
+    #[test]
+    fn serving_read_is_frozen_only_and_matches_the_committed_r_k() {
+        let store = Arc::new(LeafStore::open_ephemeral().unwrap());
+        // Unfrozen segment: refuse with None — no committed R_k, nothing
+        // coherent to serve.
+        assert!(store
+            .open_frozen_segment_body(SegmentId(0))
+            .unwrap()
+            .is_none());
+
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        let body = serve_body(&store, SegmentId(0));
+        assert_eq!(body.len(), leaves_per_segment() * LEAF_BYTES);
+
+        // The axis the serving path lives on: recomputing R_k from the
+        // *served* bytes must reproduce the committed record — exactly the
+        // check a witness runs on the far side of the rendezvous, chunking
+        // flat wire bytes back into leaves as the witness must.
+        let leaves: Vec<[u8; LEAF_BYTES]> = body
+            .chunks_exact(LEAF_BYTES)
+            .map(|c| c.try_into().expect("leaf-sized chunk"))
+            .collect();
+        let recomputed = crate::store::ops::recompute_segment_r_k(&leaves).unwrap();
+        let record = store.frozen_segment(SegmentId(0)).unwrap().unwrap();
+        assert_eq!(recomputed, record.r_k);
+    }
+
+    /// A segment's worth of entries **created above** `created`, so a rollback
+    /// below it genuinely truncates them.
+    ///
+    /// `distinct_segment_entries` cannot be used for a rollback test:
+    /// `sample_entry` derives `creation_height = maturity - 60`, so those
+    /// leaves are created at height 0 and *survive* every rollback. A test
+    /// built on them reports "the pin was not dropped" and looks like a defect
+    /// in the store rather than in the fixture — which is exactly what it did
+    /// on first run here.
+    fn segment_entries_created_at(created: u64) -> Vec<LeafEntry> {
+        (0..leaves_per_segment())
+            .map(|i| {
+                let gindex = u64::try_from(i).expect("index fits u64");
+                let mut entry = sample_entry(gindex, created + 60);
+                entry.creation_height = BlockHeight(created);
+                entry.leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
+                entry
+            })
+            .collect()
+    }
+
+    /// The leak §9.7 item 5 prices, and its close: a released pin lets the
+    /// prune reclaim the bytes, and an un-released one does not.
+    #[test]
+    fn releasing_a_pin_lets_the_prune_reclaim_the_segment() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        store.pin_serve_set(&[0]).unwrap();
+        assert_eq!(store.pinned_shard_ids().unwrap(), vec![0]);
+
+        // Pinned: the prune must leave the bytes alone.
+        store.prune_frozen(&[]).unwrap();
+        assert_eq!(
+            store.pin_serve_set(&[0]).unwrap(),
+            vec![(0, SegmentPin::PinnedServable)],
+            "a pinned segment survives the prune",
+        );
+
+        // Released: the same prune now reclaims it, which is the whole point.
+        assert_eq!(store.release_pins(&[0]).unwrap(), 1);
+        assert!(store.pinned_shard_ids().unwrap().is_empty());
+        store.prune_frozen(&[]).unwrap();
+        assert_eq!(
+            store.pin_serve_set(&[0]).unwrap(),
+            vec![(0, SegmentPin::AlreadyPruned)],
+            "with the pin gone the prune reclaimed the leaf bytes — the disk the \
+             persona is no longer obligated to hold",
+        );
+    }
+
+    /// Releasing what was never pinned is a no-op, not a failure: the caller
+    /// re-computes its release set every refresh and must not have to remember
+    /// what it already released.
+    #[test]
+    fn releasing_an_unpinned_shard_is_idempotent() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        assert_eq!(store.release_pins(&[0]).unwrap(), 0);
+        store.pin_serve_set(&[0]).unwrap();
+        assert_eq!(store.release_pins(&[0]).unwrap(), 1);
+        assert_eq!(store.release_pins(&[0]).unwrap(), 0);
+    }
+
+    /// `pinned_shard_ids` is what makes a *previous session's* pin visible —
+    /// the cross-restart half of the leak. A refresh that only knew the current
+    /// record could never learn about it.
+    #[test]
+    fn pinned_shard_ids_reports_what_no_current_record_would_mention() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        store.pin_serve_set(&[0, 1]).unwrap();
+        let mut pinned = store.pinned_shard_ids().unwrap();
+        pinned.sort_unstable();
+        assert_eq!(pinned, vec![0, 1]);
+
+        // A later record owes only shard 1; shard 0 is retained on the strength
+        // of a record nobody holds any more.
+        store.pin_serve_set(&[1]).unwrap();
+        let mut still = store.pinned_shard_ids().unwrap();
+        still.sort_unstable();
+        assert_eq!(
+            still,
+            vec![0, 1],
+            "pinning a narrower set does not release the difference — that is the \
+             leak, and why release is an explicit verb",
+        );
+    }
+
+    /// The link `Staleness::PinsDropped` rests on, and the one nothing walked:
+    /// a **real** rollback deletes the pin rows, and `members_missing_pins`
+    /// sees it.
+    ///
+    /// Both halves existed and were tested separately — `rollback_to_fork` has
+    /// its own tests, `members_missing_pins` has its own — while the claim
+    /// joining them lived only in a doc comment ("Pins are cleared by
+    /// `truncate_from_tree_position` (and so by `rollback_to_fork`) at and
+    /// above the truncation point"). A serving host's dropped-pin tripwire is
+    /// built on that sentence: if a rollback silently left the rows in place,
+    /// `members_missing_pins` would report nothing, the tripwire would read
+    /// healthy, and the wallet's own `prune_frozen` would be free to remove
+    /// bonded bytes — §9.6 item 4's slash, reached through a check that passed.
+    #[test]
+    fn a_rollback_drops_the_pins_the_staleness_tripwire_reads() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .unwrap();
+
+        // Segment 0 is frozen and pinned; the tripwire sees nothing missing.
+        assert_eq!(
+            store.pin_serve_set(&[0]).unwrap(),
+            vec![(0, SegmentPin::PinnedServable)],
+        );
+        assert!(
+            store.members_missing_pins(&[0]).unwrap().is_empty(),
+            "a freshly pinned member is not missing its pin",
+        );
+
+        // A chain reorg takes the tree back below the leaves' creation height.
+        store.rollback_to_fork(BlockHeight(500)).unwrap();
+
+        assert_eq!(
+            store.members_missing_pins(&[0]).unwrap(),
+            vec![0],
+            "the rollback deleted the pin row, and the tripwire's reading is what \
+             must show it — the doc comment claiming this is now walked",
+        );
+    }
+
+    /// The recovery half of the same story, and the reason
+    /// `Staleness::PinsDropped` is an `Episode` rather than a latch: re-pinning
+    /// after the rollback restores the row, so the condition genuinely ends.
+    ///
+    /// This is what separates it from `already_pruned` — bytes that are gone
+    /// stay gone, and that one is the board's only irreversible entry.
+    #[test]
+    fn re_pinning_after_a_rollback_clears_the_dropped_pin() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .unwrap();
+        store.pin_serve_set(&[0]).unwrap();
+        store.rollback_to_fork(BlockHeight(500)).unwrap();
+        assert_eq!(store.members_missing_pins(&[0]).unwrap(), vec![0]);
+
+        // Re-ingest past the fork and re-pin, exactly as the serving host's
+        // unconditional refresh does.
+        store
+            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .unwrap();
+        store.pin_serve_set(&[0]).unwrap();
+        assert!(
+            store.members_missing_pins(&[0]).unwrap().is_empty(),
+            "a refresh that runs again re-pins: the condition is recoverable, which \
+             is why it is an Episode and not a latch",
+        );
+    }
+
+    #[test]
+    fn pin_serve_set_reports_each_member_and_refuses_an_unrepresentable_id() {
+        // A whole serve-set in one call: a frozen member, a member bonded
+        // before its segment froze, and a pruned one. All three are
+        // *reported* — the store states facts, and the serving host decides
+        // which of them is disqualifying.
+        let store = Arc::new(LeafStore::open_ephemeral().unwrap());
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        assert_eq!(
+            store.pin_serve_set(&[0, 1]).unwrap(),
+            vec![
+                (0, SegmentPin::PinnedServable),
+                (1, SegmentPin::PinnedNotYetFrozen)
+            ],
+            "outcomes come back paired with their shard ids, in caller order"
+        );
+
+        let pruned = Arc::new(LeafStore::open_ephemeral().unwrap());
+        pruned
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        pruned.prune_frozen(&[]).unwrap();
+        assert_eq!(
+            pruned.pin_serve_set(&[0]).unwrap(),
+            vec![(0, SegmentPin::AlreadyPruned)],
+            "a pruned member is a reported state, not a store-level error"
+        );
+
+        // An id outside SegmentId space cannot name a segment in any store,
+        // so it is a construction bug — and it is refused *before* any pin
+        // runs, so a bad set cannot leave the store half-pinned.
+        let refused = Arc::new(LeafStore::open_ephemeral().unwrap());
+        refused
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        let bad = u64::from(u32::MAX) + 1;
+        assert!(matches!(
+            refused.pin_serve_set(&[0, bad]),
+            Err(StoreError::UnrepresentableShardId { shard_id }) if shard_id == bad
+        ));
+        // Segment 0 is valid and came first: if the loop had pinned as it
+        // walked, this prune would spare it. It does not.
+        refused.prune_frozen(&[]).unwrap();
+        assert!(
+            matches!(
+                refused.open_frozen_segment_body(SegmentId(0)),
+                Err(StoreError::FrozenSegmentPruned { id: SegmentId(0) })
+            ),
+            "the valid member of a refused set must not have been pinned"
+        );
+    }
+
+    /// The freeze-prefix cursor getter, bound to the frozen-segments table
+    /// at every step — the composed check that turns the prefix invariant
+    /// ("the frozen set is exactly `[0, k)`") from prose into a tested
+    /// property. Covers: 0 on a fresh store; advance across a segment
+    /// boundary on the ingest path; advance through the public
+    /// [`LeafStore::maybe_freeze_segments`] wrapper.
+    #[test]
+    fn next_freeze_seg_is_the_prefix_and_the_table_agrees() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        assert_eq!(store.next_freeze_seg().unwrap(), 0);
+        assert!(store.frozen_segment(SegmentId(0)).unwrap().is_none());
+
+        // Segment 0 full and buried, one tail row into segment 1: the
+        // ingest path freezes exactly the completed, buried prefix.
+        let e = leaves_per_segment() as u64;
+        let mut entries = distinct_segment_entries();
+        entries.push(sample_entry(e, 5_000));
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        assert_eq!(store.next_freeze_seg().unwrap(), 1);
+        assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
+        assert!(store.frozen_segment(SegmentId(1)).unwrap().is_none());
+
+        // Segment 1 completes and is buried: the cursor crosses the
+        // boundary and the table crosses with it.
+        let more: Vec<LeafEntry> = (e + 1..2 * e).map(|g| sample_entry(g, 5_000)).collect();
+        store.append_drained(&more, BlockHeight(20_000)).unwrap();
+        assert_eq!(store.next_freeze_seg().unwrap(), 2);
+        assert!(store.frozen_segment(SegmentId(1)).unwrap().is_some());
+        assert!(store.frozen_segment(SegmentId(2)).unwrap().is_none());
+
+        // Segment 2 completes but is NOT yet buried (recent maturity):
+        // the cursor must not advance on completion alone…
+        let tail: Vec<LeafEntry> = (2 * e..3 * e).map(|g| sample_entry(g, 19_900)).collect();
+        store.append_drained(&tail, BlockHeight(20_000)).unwrap();
+        assert_eq!(store.next_freeze_seg().unwrap(), 2);
+        assert!(store.frozen_segment(SegmentId(2)).unwrap().is_none());
+
+        // …and advances through the public wrapper once burial is deep
+        // enough, table agreeing at the new boundary.
+        store.maybe_freeze_segments(BlockHeight(30_000)).unwrap();
+        assert_eq!(store.next_freeze_seg().unwrap(), 3);
+        assert!(store.frozen_segment(SegmentId(2)).unwrap().is_some());
+        assert!(store.frozen_segment(SegmentId(3)).unwrap().is_none());
+    }
+
+    /// The cursor is persisted state, not session state: it survives a
+    /// close/reopen unchanged.
+    #[test]
+    fn next_freeze_seg_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.redb");
+        {
+            let store = LeafStore::open(&path).unwrap();
+            store
+                .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+                .unwrap();
+            assert_eq!(store.next_freeze_seg().unwrap(), 1);
+        }
+        let reopened = LeafStore::open(&path).unwrap();
+        assert_eq!(reopened.next_freeze_seg().unwrap(), 1);
+        assert!(reopened.frozen_segment(SegmentId(0)).unwrap().is_some());
+    }
+
+    /// The rollback path recomputes the cursor, and the getter reports the
+    /// recomputation — with the table agreeing on the shrunken prefix.
+    /// This is the direction where a stale summary would silently omit
+    /// owed shards, so the agreement assertion matters most here.
+    #[test]
+    fn next_freeze_seg_agrees_after_rollback_recompute() {
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .unwrap();
+        assert_eq!(store.next_freeze_seg().unwrap(), 1);
+
+        store.rollback_to_fork(BlockHeight(500)).unwrap();
+        assert_eq!(
+            store.next_freeze_seg().unwrap(),
+            0,
+            "the truncate path recomputed the cursor below the fork"
+        );
+        assert!(
+            store.frozen_segment(SegmentId(0)).unwrap().is_none(),
+            "and the table shrank with it — cursor and table stay one fact"
+        );
+    }
+
+    /// A persisted cursor above the representable `SegmentId` space is
+    /// reported as corruption, not returned as an obligation — with the
+    /// negative control at the exact boundary: `u32::MAX + 1` (every `u32`
+    /// id frozen) is the largest value a real table could correspond to
+    /// and must still be returned, or the check would be refusing a legal
+    /// state rather than detecting an illegal one.
+    #[test]
+    fn next_freeze_seg_reports_a_cursor_beyond_segment_id_space_as_corrupt() {
+        let store = LeafStore::open_ephemeral().unwrap();
+
+        let plant = |value: u64| {
+            let txn = store.db.begin_write().unwrap();
+            {
+                let mut meta = txn.open_table(META_TABLE).unwrap();
+                meta.insert(META_NEXT_FREEZE_SEG, &value).unwrap();
+            }
+            txn.commit().unwrap();
+        };
+
+        // Boundary: representable, returned.
+        plant(u64::from(u32::MAX) + 1);
+        assert_eq!(store.next_freeze_seg().unwrap(), u64::from(u32::MAX) + 1);
+
+        // One past it: no u32-keyed frozen table can agree with this
+        // cursor, so the getter must surface corruption instead of
+        // handing the serve-set derivation an impossible obligation.
+        plant(u64::from(u32::MAX) + 2);
+        assert!(matches!(
+            store.next_freeze_seg(),
+            Err(StoreError::CorruptMeta(_))
+        ));
+    }
+
+    /// The prune-disabled posture flag: false by default, one-way,
+    /// idempotent to redeclare, persisted across reopen.
+    #[test]
+    fn prune_disabled_defaults_false_and_the_declaration_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.redb");
+        {
+            let store = LeafStore::open(&path).unwrap();
+            assert!(!store.prune_disabled().unwrap());
+            // The declaring call reports what it found — the loss detector
+            // for the refresh that re-declares every tick.
+            assert_eq!(
+                store.set_prune_disabled().unwrap(),
+                PostureDeclaration::NewlyDeclared,
+                "the first declaration wrote the flag"
+            );
+            assert!(store.prune_disabled().unwrap());
+            // Idempotent redeclare — the pinner sets it on every refresh.
+            assert_eq!(
+                store.set_prune_disabled().unwrap(),
+                PostureDeclaration::AlreadyDeclared,
+                "a re-declaration over an intact flag changes nothing and \
+                 says so"
+            );
+            assert!(store.prune_disabled().unwrap());
+        }
+        let reopened = LeafStore::open(&path).unwrap();
+        assert!(
+            reopened.prune_disabled().unwrap(),
+            "the posture is a durable declaration, not session state"
+        );
+        assert_eq!(
+            reopened.set_prune_disabled().unwrap(),
+            PostureDeclaration::AlreadyDeclared,
+            "the declaration survives reopen, so re-declaring reports it"
+        );
+    }
+
+    /// The corpus integrity scan: clean on an intact store, names exactly
+    /// the frozen segments whose bytes are gone, and ignores the unfrozen
+    /// tail (nothing owed there yet).
+    #[test]
+    fn pruned_frozen_segments_names_the_holes_and_only_the_holes() {
+        let store = Arc::new(LeafStore::open_ephemeral().unwrap());
+        // Segment 0 frozen; one tail row into segment 1 (unfrozen).
+        let e = leaves_per_segment() as u64;
+        let mut entries = distinct_segment_entries();
+        entries.push(sample_entry(e, 5_000));
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+
+        assert!(
+            store.pruned_frozen_segments().unwrap().is_empty(),
+            "an intact corpus scans clean"
+        );
+
+        store.prune_frozen(&[]).unwrap();
+        assert_eq!(
+            store.pruned_frozen_segments().unwrap(),
+            vec![0],
+            "the pruned frozen segment is named; the unfrozen tail is not \
+             a hole — nothing is owed there yet"
+        );
+    }
+
+    /// Under the declared posture, `prune_frozen` refuses with the typed
+    /// error and mutates nothing — the frozen bytes stay servable. A
+    /// silent no-op would be indistinguishable from a successful prune to
+    /// the caller; the refusal names the posture (rule 82).
+    #[test]
+    fn prune_frozen_refuses_typed_under_the_declared_posture() {
+        let store = Arc::new(LeafStore::open_ephemeral().unwrap());
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        store.set_prune_disabled().unwrap();
+
+        assert!(matches!(
+            store.prune_frozen(&[]),
+            Err(StoreError::PruneDisabledPosture)
+        ));
+        assert!(
+            matches!(store.open_frozen_segment_body(SegmentId(0)), Ok(Some(_))),
+            "the refused prune must have removed nothing: the frozen body \
+             is still present AND servable — Ok(None) would mean the frozen \
+             record itself vanished, which this oracle must catch"
+        );
+    }
+
+    #[test]
+    fn serving_read_names_the_pruned_case_and_a_pin_prevents_it() {
+        // Unpinned: prune discards the bytes, and the serving read surfaces
+        // the misconfiguration as a typed error instead of a silent miss.
+        let store = Arc::new(LeafStore::open_ephemeral().unwrap());
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        store.prune_frozen(&[]).unwrap();
+        assert!(matches!(
+            store.open_frozen_segment_body(SegmentId(0)),
+            Err(StoreError::FrozenSegmentPruned { id: SegmentId(0) })
+        ));
+
+        // Pinned: the same sequence keeps the segment fully servable.
+        let pinned = Arc::new(LeafStore::open_ephemeral().unwrap());
+        pinned
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        assert_eq!(
+            pinned.pin_segment_for_serving(SegmentId(0)).unwrap(),
+            SegmentPin::PinnedServable
+        );
+        pinned.prune_frozen(&[]).unwrap();
+        assert_eq!(
+            serve_body(&pinned, SegmentId(0)).len(),
+            leaves_per_segment() * LEAF_BYTES
+        );
+    }
+
+    #[test]
+    fn pinning_a_pruned_segment_reports_it_rather_than_claiming_success() {
+        // The silent-slash shape, inverted: the bytes are gone *before* the
+        // serve-set is pinned (serve-set changed after a prune, restart
+        // after an unpinned prune, bond on an already-pruned segment).
+        // Pinning cannot bring them back, so a `Pinned` answer here would
+        // let startup validation pass on a shard that can never be served
+        // — and the persona would learn that from a slash.
+        let store = LeafStore::open_ephemeral().unwrap();
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        store.prune_frozen(&[]).unwrap();
+        assert_eq!(
+            store.pin_segment_for_serving(SegmentId(0)).unwrap(),
+            SegmentPin::AlreadyPruned
+        );
+        // No pin was recorded, so the answer does not drift on a retry: a
+        // pin over absent bytes would make the *second* call report the
+        // segment servable purely because the first one wrote a row.
+        assert_eq!(
+            store.pin_segment_for_serving(SegmentId(0)).unwrap(),
+            SegmentPin::AlreadyPruned
+        );
+    }
+
+    #[test]
+    fn missing_bytes_under_a_pin_are_corruption_not_a_pinning_remedy() {
+        // `prune_frozen` skips pinned segments, so a hole under a pin is
+        // provably not a prune. Reporting `FrozenSegmentPruned` would hand
+        // the operator a remedy — pin the serve-set — that succeeds,
+        // changes nothing, and leaves the shard returning 404 until the
+        // bond is slashed.
+        let store = Arc::new(LeafStore::open_ephemeral().unwrap());
+        store
+            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .unwrap();
+        assert_eq!(
+            store.pin_segment_for_serving(SegmentId(0)).unwrap(),
+            SegmentPin::PinnedServable
+        );
+
+        // Injected corruption: no store operation can produce this state,
+        // which is the point — it is the class the error must not conflate.
+        let txn = store.db.begin_write().unwrap();
+        {
+            let mut leaves = txn.open_table(LEAVES_TABLE).unwrap();
+            drop(leaves.remove(TreePosition(0)).unwrap());
+        }
+        txn.commit().unwrap();
+
+        assert!(matches!(
+            store.open_frozen_segment_body(SegmentId(0)),
+            Err(StoreError::CorruptMeta(_))
+        ));
+    }
+
+    #[test]
+    fn rollback_survives_a_pinned_segment_below_a_pruned_one() {
+        // The serving startup sequence makes the present leaves
+        // *discontiguous*: pin the serve-set, prune the rest, and segment 0
+        // survives below the hole segment 1 leaves behind. The partition
+        // search bisects arbitrary positions, so a frontier taken as
+        // "lowest present position" walks straight into that hole and the
+        // wallet can never roll back across a reorg again.
+        let store = Arc::new(LeafStore::open_ephemeral().unwrap());
+        let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
+        let mut entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 50, 10)).collect();
+        entries.extend((e..2 * e).map(|i| entry_created_at(i, 60, 20)));
+        // Unfrozen tail, two leaves so the cut can land strictly above the
+        // frontier rather than on it (an exact-frontier cut is rejected by
+        // design and would not exercise the search).
+        entries.push(entry_created_at(2 * e, 100, 20));
+        entries.push(entry_created_at(2 * e + 1, 5_000, 4_000));
+        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        assert!(
+            store.frozen_segment(SegmentId(1)).unwrap().is_some(),
+            "both segments must freeze for segment 0 to become an island"
+        );
+
+        assert_eq!(
+            store.pin_segment_for_serving(SegmentId(0)).unwrap(),
+            SegmentPin::PinnedServable
+        );
+        store.prune_frozen(&[]).unwrap();
+
+        store.rollback_to_fork(BlockHeight(4_500)).unwrap();
+        assert_eq!(store.leaf_count().unwrap(), 2 * e + 1);
+        assert_eq!(
+            serve_body(&store, SegmentId(0)).len(),
+            leaves_per_segment() * LEAF_BYTES,
+            "the pinned shard stays servable across the reorg — the point of the pin"
+        );
     }
 
     #[test]
@@ -2163,7 +3737,7 @@ mod tests {
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
         store.append_drained(&entries, BlockHeight(10_000)).unwrap();
-        store.pin_segment(SegmentId(0)).unwrap();
+        store.pin_segment_for_serving(SegmentId(0)).unwrap();
         store.truncate_from_tree_position(TreePosition(0)).unwrap();
         store.append_drained(&entries, BlockHeight(20_000)).unwrap();
         store.prune_frozen(&[]).unwrap();

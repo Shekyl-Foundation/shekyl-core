@@ -21,8 +21,8 @@
 //! - The **error surface** ([`BondAssemblyError`]) for the assemble path's
 //!   named failure modes (§3.6, rule 82).
 //!
-//! The actor-side halves (P spend-bundle derivation, prefix assembly, vin
-//! build + invariant A-1, proving, PQC auth completion, the `PBoundBytes`
+//! The actor-side halves (P spend-bundle derivation, single-sourced vin
+//! build + prefix assembly, proving, PQC auth completion, the `PBoundBytes`
 //! mint) build on these types; secrets never appear in this module's Engine
 //! surface (rule 36).
 
@@ -67,9 +67,8 @@ use shekyl_wire::{BondPost, BondPostKind as WireBondPostKind, Holdings, Input};
 ///
 /// [`BroadcastSubmitter::submit_bound`]: super::transaction_submitter::BroadcastSubmitter::submit_bound
 //
-// `allow(dead_code)`: transient — the production minter is the WI-2 assemble
-// handler; the production consumer is the WI-3 dispatch driver.
-#[allow(dead_code)]
+// Lint-visible: the WI-2 assemble handler mints these and the WI-3 dispatch
+// driver consumes them, so no suppression applies.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PBoundBytes {
     persona: PCanonicalId,
@@ -86,7 +85,6 @@ impl std::fmt::Debug for PBoundBytes {
     }
 }
 
-#[allow(dead_code)]
 impl PBoundBytes {
     /// Bind fully-assembled, signed transaction bytes to the persona they
     /// were built for. **Private to this module** (pin P-1): the only mint
@@ -168,11 +166,72 @@ pub(crate) enum BondAssemblyError {
     )]
     NoSpendableFunding,
 
+    /// The eligible funding set exceeds the per-transaction vin headroom
+    /// ([`MAX_RETENTION_FUNDING_INPUTS`]: the consensus vin cap minus the
+    /// one non-funding vin this transaction carries) and the caller's sweep
+    /// semantics forbid a silent subset
+    /// ([`SweepOverflowPolicy::RefuseTooMany`]). Raised BEFORE assembly, so
+    /// a transaction every public network would reject is never built —
+    /// FAKECHAIN does not enforce the cap, so an e2e cannot catch this. The
+    /// funding is intact and spendable; what does not exist yet is a
+    /// consolidation path for a pool this fragmented (the drain lane
+    /// consolidates `P`-funding in capped passes).
+    #[error(
+        "too many spendable funding outputs for one transaction: {count} eligible, \
+         max {max} (the transaction carries one non-funding input of its own); \
+         the funding is intact — consolidate before retrying"
+    )]
+    TooManyFundingInputs {
+        /// How many records were eligible at the reference height.
+        count: usize,
+        /// The per-transaction funding-input headroom.
+        max: usize,
+    },
+
+    /// The presented input set carries **no funding input at all** — a
+    /// structural shape refusal, not a shortfall. The rule belongs to
+    /// [`bond_post_funding_floor_met`](shekyl_archival_retention::bond_post::bond_post_funding_floor_met):
+    /// a bond post carries at least one real `txin_to_key` spend input, checked
+    /// before any amount rule. This arm is what the producer raises when that
+    /// predicate says no — the condition is not restated here.
+    ///
+    /// Distinct from [`Self::NoSpendableFunding`], which names what the *sweep*
+    /// found eligible at its reference height. This arm is about the set a
+    /// caller actually presented — and it is the exit path that needs it,
+    /// because there the amount rules cannot see the difference: released
+    /// collateral alone covers the fee, so both the sufficiency check and the
+    /// balance equation close with an empty funding vector.
+    #[error(
+        "the transaction carries no funding input: consensus requires at least one \
+         txin_to_key spend input on a bond post"
+    )]
+    FundingInputsRequired,
+
     /// A live pending post already exists for this persona. JoinMarket-only
     /// at genesis: one live post per persona (§3.5); the caller waits for the
     /// pending post to confirm or fail before re-assembling.
     #[error("a pending bond post already exists for this persona; one live post per persona")]
     PendingPostExists,
+
+    /// This post's funding inputs are no longer selectable, for either of the
+    /// two reasons the seal-time re-check can find:
+    ///
+    /// - a concurrent **claim or drain** now reserves one of them
+    ///   (`SealAdmission::InputRaced`); or
+    /// - a reservation was **released** between the pre-assembly snapshot and
+    ///   the seal (`SealAdmission::Stale`), so the set this assembly selected
+    ///   against no longer describes the wallet — the released record may have
+    ///   confirmed and spent an input this post still believes is fundable.
+    ///
+    /// Both refuse **before** sealing, so no doomed record is left behind, and
+    /// both take the same remedy: retry against a current snapshot. One variant
+    /// because one remedy; the message names both causes because naming only
+    /// one sends a caller looking for a collision that may not exist.
+    #[error(
+        "this post's funding inputs are no longer current — another live record \
+         holds one, or a reservation was released mid-assembly; retry"
+    )]
+    InputRaced,
 
     /// The curve-tree / ledger anchoring procedure could not produce a
     /// submittable [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock)
@@ -200,16 +259,6 @@ pub(crate) enum BondAssemblyError {
         /// The global output index the reference tree has no leaf for.
         gindex: u64,
     },
-
-    /// Invariant A-1 (§3.3 step 4, fail closed): the signed vin's
-    /// wire-encoded `BondPost` fields differ from the prefix's `BondPost`
-    /// input. The signature binds a different post than the prefix hash
-    /// covered — a build defect, never a recoverable state.
-    #[error(
-        "bond-post input mismatch: the signed vin does not match the prefix's BondPost \
-         input (invariant A-1) — build defect, nothing was persisted"
-    )]
-    BondPostMismatch,
 
     /// The funding arithmetic (`floor + fee`, change split, balance rule)
     /// overflowed u64 — unreachable with consensus-bounded amounts; fail
@@ -386,7 +435,42 @@ pub(crate) struct FundingSelection {
 /// persona until durable removal lands. [`SpentRecordsDurablyPruned`] makes
 /// that sequencing compile-enforced. See FOLLOWUPS "2d-1 WI-2 — durable
 /// removal of SPENT funding outputs".
-#[allow(dead_code)] // transient — consumed by the Engine-side WI-2 orchestrator as it lands.
+/// The funding-input headroom every consumer of [`sweep_funding_outputs`]
+/// has: [`shekyl_tx_builder::MAX_INPUTS`] **minus the one non-funding vin**
+/// each of those transactions appends. The consensus cap
+/// (`FCMP_MAX_INPUTS_PER_TX`, `blockchain.cpp`) bounds `tx.vin.size()` —
+/// the WHOLE vin — and every retention-family tx this sweep funds carries
+/// exactly one vin that is not a funding spend: the bond post's bond vin,
+/// the exit's `Release` vin, the claim's emission vin. A selection of
+/// `MAX_INPUTS` funding records therefore assembles a `MAX_INPUTS + 1`-vin
+/// transaction — accepted on FAKECHAIN (the C++ cap is gated off there, so
+/// no regtest walk can observe the boundary) and rejected on every public
+/// network. The drain does NOT take this constant: a drain is
+/// transfer-shaped with no extra vin, so its selector caps at the full
+/// [`shekyl_tx_builder::MAX_INPUTS`].
+pub(crate) const MAX_RETENTION_FUNDING_INPUTS: usize = shekyl_tx_builder::MAX_INPUTS - 1;
+
+/// What [`sweep_funding_outputs`] does when the eligible set exceeds
+/// [`MAX_RETENTION_FUNDING_INPUTS`]. The policy is the CALLER's semantics,
+/// named at the call site — the headroom itself is not optional.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SweepOverflowPolicy {
+    /// Refuse, typed ([`BondAssemblyError::TooManyFundingInputs`]). For the
+    /// consume-everything callers — the bond post and the claim's fee sweep
+    /// — whose GF-4b structural-emptiness argument ("nothing raw survives
+    /// backing-eligible") forbids silently leaving a subset alive: a loud
+    /// refusal trades a transaction every public network rejects for a
+    /// named state, and surrenders nothing GF-4b protects.
+    RefuseTooMany,
+    /// Select the [`MAX_RETENTION_FUNDING_INPUTS`] **largest** records
+    /// (ties `(height, gindex)` ascending), restored to oldest-first wire
+    /// order. For the terminal exit, which owes no consume-everything
+    /// invariant: leftovers stay spendable and the retired persona's drain
+    /// sweeps them to zero, while the greedy-max subset covers `required`
+    /// whenever any admissible subset does.
+    CapLargest,
+}
+
 pub(crate) fn sweep_funding_outputs<'a, I>(
     _pruning_landed: &SpentRecordsDurablyPruned,
     records: I,
@@ -394,6 +478,7 @@ pub(crate) fn sweep_funding_outputs<'a, I>(
     reserved: &std::collections::BTreeSet<GlobalOutputIndex>,
     required: AtomicUnits,
     reference_height: BlockHeight,
+    overflow: SweepOverflowPolicy,
 ) -> Result<FundingSelection, BondAssemblyError>
 where
     I: IntoIterator<Item = &'a PFundingOutputRecord>,
@@ -409,6 +494,30 @@ where
     // Oldest-first: height, then gindex. Distinct outputs have distinct
     // gindexes, so the order is total and deterministic.
     eligible.sort_by_key(|r| (r.height, r.gindex));
+
+    // The vin-headroom bound (see [`MAX_RETENTION_FUNDING_INPUTS`]): applied
+    // BEFORE the sufficiency arithmetic, so a shortfall reported below is a
+    // shortfall of the selection that would actually assemble.
+    if eligible.len() > MAX_RETENTION_FUNDING_INPUTS {
+        match overflow {
+            SweepOverflowPolicy::RefuseTooMany => {
+                return Err(BondAssemblyError::TooManyFundingInputs {
+                    count: eligible.len(),
+                    max: MAX_RETENTION_FUNDING_INPUTS,
+                });
+            }
+            SweepOverflowPolicy::CapLargest => {
+                eligible.sort_by(|a, b| {
+                    b.amount
+                        .cmp(&a.amount)
+                        .then(a.height.cmp(&b.height))
+                        .then(a.gindex.cmp(&b.gindex))
+                });
+                eligible.truncate(MAX_RETENTION_FUNDING_INPUTS);
+                eligible.sort_by_key(|r| (r.height, r.gindex));
+            }
+        }
+    }
 
     // An empty eligible set refuses structurally BEFORE any arithmetic —
     // never as a `0 < required` shortfall, which would conflate "nothing to
@@ -484,24 +593,58 @@ pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
 /// vin's `write`/`read` coupling guarantees a JoinMarket vin carries a
 /// canonical-length key.
 ///
-/// Refuses a non-JoinMarket vin: JoinMarket is the only post kind valid at
-/// genesis, and the `bond_spend_pk` coupling below is JoinMarket-specific.
+/// **`Release` was added here by PR-P4**, and the refusal it replaced is worth
+/// recording: this function used to reject every non-JoinMarket kind with "has
+/// no wallet-side producer yet". That was true when it was written and its own
+/// doc called it *drift rather than a decided posture* — the gap was the
+/// missing producer, not consensus, which has given `Release` a full
+/// allowed-terms row with implemented verify since #303. `build_release_vin` is
+/// that producer, so the premise is discharged for this one kind.
+///
+/// `Rebond` and `HoldingsUpdate` still refuse, and now say so by name rather
+/// than by being everything-else: their producers genuinely do not exist. The
+/// `docs/FOLLOWUPS.md` entry ("Staking has no exit") stays open for them, with
+/// its pre-genesis deadline intact — staking is default-on and genesis-frozen,
+/// and half a discharge is not one.
+///
+/// The §9.11 coupling is enforced in both directions, not assumed. Only
+/// JoinMarket carries `bond_spend_pk` on the wire; a debit authorizes against
+/// the record's **committed** copy (`archival_debit_auth_pin`), and consensus
+/// rejects a `Release` vin that brings a key along — "vin carries a
+/// bond_spend_pk (JoinMarket-coupled field)". So the `Release` arm refuses a
+/// non-empty key here rather than dropping it on the floor: silently discarding
+/// it would turn a construction bug into a transaction that looks fine locally
+/// and is rejected by every node.
 pub(crate) fn wire_bond_post_input(vin: &ArchivalBondPostVin) -> Result<Input, BondAssemblyError> {
-    match vin.post_kind {
-        RetentionBondPostKind::JoinMarket => {}
+    let kind = match vin.post_kind {
+        RetentionBondPostKind::JoinMarket => WireBondPostKind::JoinMarket {
+            bond_spend_pk: vin.bond_spend_pk.clone(),
+        },
+        RetentionBondPostKind::Release => {
+            if !vin.bond_spend_pk.is_empty() {
+                return Err(BondAssemblyError::build(
+                    "wire bond-post mapping",
+                    "Release vin carries a bond_spend_pk; the debit authorizer is \
+                     the record's committed key, never one the vin brings along \
+                     (§9.11 — consensus rejects this input)",
+                ));
+            }
+            WireBondPostKind::Other(RetentionBondPostKind::Release as u8)
+        }
         other => {
             return Err(BondAssemblyError::build(
                 "wire bond-post mapping",
-                format!("non-JoinMarket post kind {other:?} is invalid at genesis"),
+                format!(
+                    "post kind {other:?} has no wallet-side producer yet; \
+                     JoinMarket and Release can be assembled"
+                ),
             ));
         }
-    }
+    };
     Ok(Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vin.hybrid_public_key.clone(),
         p_canonical_id: vin.p_canonical_id,
-        kind: WireBondPostKind::JoinMarket {
-            bond_spend_pk: vin.bond_spend_pk.clone(),
-        },
+        kind,
         holdings: wire_holdings(&vin.holdings),
         bonded_total_atomic: vin.bonded_total_atomic,
         bond_credit: vin.bond_credit,
@@ -567,6 +710,24 @@ mod tests {
         required: u64,
         reference_height: u64,
     ) -> Result<FundingSelection, BondAssemblyError> {
+        sweep_with_policy(
+            records,
+            p_slot,
+            reserved,
+            required,
+            reference_height,
+            SweepOverflowPolicy::RefuseTooMany,
+        )
+    }
+
+    fn sweep_with_policy(
+        records: &[PFundingOutputRecord],
+        p_slot: u32,
+        reserved: &std::collections::BTreeSet<u64>,
+        required: u64,
+        reference_height: u64,
+        overflow: SweepOverflowPolicy,
+    ) -> Result<FundingSelection, BondAssemblyError> {
         let reference_height = BlockHeight::from_raw(reference_height);
         let reserved: std::collections::BTreeSet<_> = reserved
             .iter()
@@ -580,7 +741,147 @@ mod tests {
             &reserved,
             AtomicUnits::from_raw(required),
             reference_height,
+            overflow,
         )
+    }
+
+    /// The headroom's VALUE, pinned absolutely — every other test in this
+    /// family measures relative to the constant, so this is the one that
+    /// goes red if the `- 1` is dropped (a bite proved the relative tests
+    /// cannot see it). 7 = the genesis-frozen consensus vin cap
+    /// (`FCMP_MAX_INPUTS_PER_TX` = 8, mirrored as
+    /// `shekyl_fcmp::MAX_INPUTS`) minus the ONE non-funding vin every
+    /// retention-family tx carries. Re-pinning either side is a consensus
+    /// decision, not a constant bump.
+    #[test]
+    fn vin_headroom_is_the_consensus_cap_minus_the_retention_vin() {
+        assert_eq!(MAX_RETENTION_FUNDING_INPUTS, 7);
+        assert_eq!(shekyl_tx_builder::MAX_INPUTS, 8);
+    }
+
+    /// A pool past the headroom under RefuseTooMany refuses by name BEFORE any
+    /// arithmetic — the tx carries its own non-funding vin, so an 8-record
+    /// selection is a 9-vin transaction every public network rejects
+    /// (FAKECHAIN does not enforce the cap, so no e2e can see this).
+    #[test]
+    fn refuse_policy_names_a_pool_past_the_vin_headroom() {
+        let records: Vec<_> = (0..=MAX_RETENTION_FUNDING_INPUTS as u64)
+            .map(|g| record(g, g, 10))
+            .collect();
+        let Err(err) = sweep(&records, 0, &Default::default(), 0, REF_HEIGHT) else {
+            panic!("must refuse past the headroom");
+        };
+        assert!(
+            matches!(
+                err,
+                BondAssemblyError::TooManyFundingInputs { count, max }
+                    if count == MAX_RETENTION_FUNDING_INPUTS + 1
+                        && max == MAX_RETENTION_FUNDING_INPUTS
+            ),
+            "got {err:?}"
+        );
+    }
+
+    /// Exactly the headroom passes under BOTH policies — the bound is the
+    /// funding-input count, not the vin count the tx ends up with.
+    #[test]
+    fn a_pool_at_the_headroom_sweeps_whole_under_both_policies() {
+        let records: Vec<_> = (0..MAX_RETENTION_FUNDING_INPUTS as u64)
+            .map(|g| record(g, g, 10))
+            .collect();
+        for policy in [
+            SweepOverflowPolicy::RefuseTooMany,
+            SweepOverflowPolicy::CapLargest,
+        ] {
+            let selection =
+                sweep_with_policy(&records, 0, &Default::default(), 0, REF_HEIGHT, policy)
+                    .expect("at the headroom, both policies admit the whole set");
+            assert_eq!(selection.records.len(), MAX_RETENTION_FUNDING_INPUTS);
+        }
+    }
+
+    /// CapLargest selects the covering record over older dust: eight old
+    /// dust records must not shadow the one newer record that funds the
+    /// requirement (an oldest-first truncation refused this shape forever,
+    /// re-selecting the same dust on every retry), and the kept subset is
+    /// restored to oldest-first wire order.
+    #[test]
+    fn cap_largest_selects_a_covering_record_over_older_dust() {
+        let mut records: Vec<_> = (0..=MAX_RETENTION_FUNDING_INPUTS as u64 + 1)
+            .map(|g| record(g, g, 1))
+            .collect();
+        let whale = MAX_RETENTION_FUNDING_INPUTS as u64 + 2;
+        records.push(record(whale, whale, 1_000));
+        let selection = sweep_with_policy(
+            &records,
+            0,
+            &Default::default(),
+            900,
+            REF_HEIGHT,
+            SweepOverflowPolicy::CapLargest,
+        )
+        .expect("the capped subset covers via the whale");
+        assert_eq!(selection.records.len(), MAX_RETENTION_FUNDING_INPUTS);
+        assert!(
+            selection.records.iter().any(|r| r.gindex.to_raw() == whale),
+            "largest-first selection must include the covering record"
+        );
+        assert!(
+            selection
+                .records
+                .windows(2)
+                .all(|w| (w[0].height, w[0].gindex) < (w[1].height, w[1].gindex)),
+            "the kept subset must be restored to oldest-first wire order"
+        );
+        assert!(
+            selection.total >= AtomicUnits::from_raw(900),
+            "the re-summed total must reflect the capped subset"
+        );
+    }
+
+    /// CapLargest with equal amounts tie-breaks oldest-first, and a
+    /// shortfall of the capped subset refuses by name with the CAPPED
+    /// total — because the subset is greedy-max, that refusal means no
+    /// admissible subset covers.
+    #[test]
+    fn cap_largest_ties_oldest_and_a_capped_shortfall_refuses_by_name() {
+        let records: Vec<_> = (0..MAX_RETENTION_FUNDING_INPUTS as u64 + 3)
+            .map(|g| record(g, g, 10))
+            .collect();
+        let selection = sweep_with_policy(
+            &records,
+            0,
+            &Default::default(),
+            0,
+            REF_HEIGHT,
+            SweepOverflowPolicy::CapLargest,
+        )
+        .expect("cap admits");
+        assert_eq!(
+            picked_gindexes(&selection),
+            (0..MAX_RETENTION_FUNDING_INPUTS as u64).collect::<Vec<_>>(),
+            "equal amounts tie-break oldest-first"
+        );
+
+        let capped_total = 10 * MAX_RETENTION_FUNDING_INPUTS as u64;
+        let Err(err) = sweep_with_policy(
+            &records,
+            0,
+            &Default::default(),
+            capped_total + 5,
+            REF_HEIGHT,
+            SweepOverflowPolicy::CapLargest,
+        ) else {
+            panic!("full pool covers but the capped subset cannot");
+        };
+        assert!(
+            matches!(
+                err,
+                BondAssemblyError::InsufficientFunding { available, required }
+                    if available == capped_total && required == capped_total + 5
+            ),
+            "got {err:?}"
+        );
     }
 
     fn picked_gindexes(selection: &FundingSelection) -> Vec<u64> {

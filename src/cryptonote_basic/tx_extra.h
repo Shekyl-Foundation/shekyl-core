@@ -38,7 +38,10 @@
 #define TX_EXTRA_TAG_PADDING                0x00
 #define TX_EXTRA_TAG_PUBKEY                 0x01
 #define TX_EXTRA_NONCE                      0x02
-#define TX_EXTRA_MERGE_MINING_TAG           0x03
+// 0x03 and 0xDE were the inherited merge-mining and "mysterious minergate" tags.
+// They are not in the Shekyl genesis grammar (rule 60) and were shed; the byte
+// values stay retired so a future tag cannot silently reuse a meaning old
+// software would parse differently.
 #define TX_EXTRA_TAG_ADDITIONAL_PUBKEYS     0x04
 #define TX_EXTRA_TAG_PQC_OWNERSHIP          0x05
 #define TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT     0x06
@@ -47,7 +50,6 @@
 #define TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS     0x09
 #define TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS 0x0A
 #define TX_EXTRA_TAG_ARCHIVAL_ATTESTATION   0x0B
-#define TX_EXTRA_MYSTERIOUS_MINERGATE_TAG   0xDE
 
 #define TX_EXTRA_NONCE_PAYMENT_ID           0x00
 #define TX_EXTRA_NONCE_ENCRYPTED_PAYMENT_ID 0x01
@@ -116,52 +118,6 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  struct tx_extra_merge_mining_tag
-  {
-    struct serialize_helper
-    {
-      tx_extra_merge_mining_tag& mm_tag;
-
-      serialize_helper(tx_extra_merge_mining_tag& mm_tag_) : mm_tag(mm_tag_)
-      {
-      }
-
-      BEGIN_SERIALIZE()
-        VARINT_FIELD_N("depth", mm_tag.depth)
-        FIELD_N("merkle_root", mm_tag.merkle_root)
-      END_SERIALIZE()
-    };
-
-    size_t depth;
-    crypto::hash merkle_root;
-
-    // load
-    template <template <bool> class Archive>
-    bool member_do_serialize(Archive<false>& ar)
-    {
-      std::string field;
-      if(!::do_serialize(ar, field))
-        return false;
-
-      binary_archive<false> iar{epee::strspan<std::uint8_t>(field)};
-      serialize_helper helper(*this);
-      return ::serialization::serialize(iar, helper);
-    }
-
-    // store
-    template <template <bool> class Archive>
-    bool member_do_serialize(Archive<true>& ar)
-    {
-      std::ostringstream oss;
-      binary_archive<true> oar(oss);
-      serialize_helper helper(*this);
-      if(!::do_serialize(oar, helper))
-        return false;
-
-      std::string field = oss.str();
-      return ::serialization::serialize(ar, field);
-    }
-  };
 
   // per-output additional tx pubkey for multi-destination transfers involving at least one subaddress
   struct tx_extra_additional_pub_keys
@@ -173,14 +129,6 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  struct tx_extra_mysterious_minergate
-  {
-    std::string data;
-
-    BEGIN_SERIALIZE()
-      FIELD(data)
-    END_SERIALIZE()
-  };
 
   struct tx_extra_pqc_ownership_entry
   {
@@ -272,15 +220,13 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  typedef std::variant<tx_extra_padding, tx_extra_pub_key, tx_extra_nonce, tx_extra_merge_mining_tag, tx_extra_additional_pub_keys, tx_extra_mysterious_minergate, tx_extra_pqc_ownership, tx_extra_pqc_kem_ciphertext, tx_extra_pqc_leaf_hashes, tx_extra_multisig_migration, tx_extra_pqc_view_tag_hints, tx_extra_pqc_spend_auth_pubkeys, tx_extra_archival_attestation> tx_extra_field;
+  typedef std::variant<tx_extra_padding, tx_extra_pub_key, tx_extra_nonce, tx_extra_additional_pub_keys, tx_extra_pqc_ownership, tx_extra_pqc_kem_ciphertext, tx_extra_pqc_leaf_hashes, tx_extra_multisig_migration, tx_extra_pqc_view_tag_hints, tx_extra_pqc_spend_auth_pubkeys, tx_extra_archival_attestation> tx_extra_field;
 }
 
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_padding, TX_EXTRA_TAG_PADDING);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pub_key, TX_EXTRA_TAG_PUBKEY);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_nonce, TX_EXTRA_NONCE);
-VARIANT_TAG(binary_archive, cryptonote::tx_extra_merge_mining_tag, TX_EXTRA_MERGE_MINING_TAG);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_additional_pub_keys, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS);
-VARIANT_TAG(binary_archive, cryptonote::tx_extra_mysterious_minergate, TX_EXTRA_MYSTERIOUS_MINERGATE_TAG);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_ownership, TX_EXTRA_TAG_PQC_OWNERSHIP);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_kem_ciphertext, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_leaf_hashes, TX_EXTRA_TAG_PQC_LEAF_HASHES);

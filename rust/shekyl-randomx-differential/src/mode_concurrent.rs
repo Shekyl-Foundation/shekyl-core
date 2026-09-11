@@ -23,16 +23,18 @@
 //! - **T8 — RSS bound.** During concurrent execution, resident-set
 //!   size measured via Linux `/proc/self/statm` field 2 (resident
 //!   pages × page size) must satisfy
-//!   `max(steady_state_samples) - baseline ≤ 640 MiB × 1.10`
-//!   per R1-D9 F4. `steady_state_samples` = samples taken at t > 5 s
-//!   after worker spawn ("after worker scheduling warms up").
+//!   `max(steady_state_samples) - baseline ≤ rss_ceiling_bytes(workers) × 1.10`
+//!   per the R1-D9 F4 Round-3 amendment (Arc reach-through
+//!   residency; see [`rss_ceiling_bytes`]). `steady_state_samples`
+//!   = samples taken at t > 5 s after worker spawn ("after worker
+//!   scheduling warms up").
 //!
 //! ## R1-D9 amendment mode-scoping pin
 //!
 //! Per Round 2 T3 (the R1-D9 amendment), the RSS-sampler thread is
 //! spawned **only** inside this module's [`run`]; the
 //! [`crate::mode_correctness`] / [`crate::mode_latency`] paths do
-//! not spawn it and do not assert against the 640 MiB ceiling.
+//! not spawn it and do not assert against the RSS ceiling.
 //! Inheritance-by-default is rejected: a future mode addition that
 //! needs RSS-bound enforcement must explicitly extend its dispatch
 //! to spawn the sampler.
@@ -120,12 +122,58 @@ pub const DEFAULT_WORKER_COUNT: usize = 5;
 /// invariant multiple times under contention.
 pub const HASHES_PER_WORKER: usize = 256;
 
-/// Per R1-D9 F4: 640 MiB ceiling = 2 × 256 MiB CacheStore
-/// derived-cache holdings + ~10 MiB worker working-set + ~118 MiB
-/// OS/allocator overhead headroom. Asserted as
+/// Per-cache resident footprint used by the T8 ceiling derivation:
+/// one `PreparedCache` is one 256 MiB Argon2d cache
+/// (`shekyl-pow-randomx`'s `CACHE_SIZE` = `RANDOMX_ARGON_BLOCKS`
+/// (262_144) × 1 KiB blocks, filled in place — derivation does not
+/// double-buffer).
+pub const CACHE_FOOTPRINT_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Working-set + overhead term of the T8 ceiling: ~10 MiB worker
+/// working-set (5 × ~2 MiB scratchpad + register files) + ~118 MiB
+/// OS/allocator overhead headroom — the same split as the original
+/// R1-D9 F4 pin, rounded to 128 MiB.
+pub const RSS_HEADROOM_BYTES: u64 = 128 * 1024 * 1024;
+
+/// T8 RSS-delta ceiling per the R1-D9 F4 **Round-3 amendment**
+/// (2026-08, `docs/completed/RANDOMX_V2_PHASE2G_PLAN.md`):
+/// `(workers + 1) × 256 MiB + 128 MiB`. Asserted as
 /// `max(steady_state) - baseline ≤ ceiling × (numerator /
 /// denominator)`.
-pub const RSS_CEILING_BYTES: u64 = 640 * 1024 * 1024;
+///
+/// # Derivation (Arc reach-through residency)
+///
+/// The original F4 pin (640 MiB = 2 slot holdings + overhead)
+/// modeled only [`CacheStore`]'s capacity-2
+/// *slot* bound and omitted the store's own documented Arc
+/// reach-through: a cache displaced from the transient slot stays
+/// resident while any worker's `Arc<PreparedCache>` still
+/// references it. With free-running workers cycling a
+/// multi-seedhash corpus, scheduler drift legitimately keeps
+/// several displaced-generation caches live at once. The true
+/// per-run bound on delta-visible caches (canonical is pre-seeded
+/// before the baseline and thus excluded) is:
+///
+/// - `workers` — each worker holds at most one Arc at a time
+///   (`worker_loop` drops before the next lookup); a derivation
+///   leader's in-progress 256 MiB allocation occupies its hold
+///   slot in the count;
+/// - `+ 1` — the transient slot's occupant, which may be a cache
+///   no worker currently holds.
+///
+/// The gate's purpose (Phase 2F F2 backstop: catch an Arc
+/// retention leak past the `lookup_or_derive` hand-off) is
+/// preserved: a persistent per-rotation leak accretes ~256 MiB per
+/// corpus rotation (32 rotations per run, ~8 GiB if unchecked) and
+/// crosses the tolerance-inclusive bound within four leaked
+/// rotations, while the legitimate drift plateau — measured flat
+/// at ~1035 MiB delta across 30 consecutive daily crons on the
+/// committed runner class (2026-07-08 → 2026-08-08, both
+/// branches) — sits at ~62% of the 5-worker ceiling.
+#[must_use]
+pub fn rss_ceiling_bytes(workers: usize) -> u64 {
+    (workers as u64 + 1).saturating_mul(CACHE_FOOTPRINT_BYTES) + RSS_HEADROOM_BYTES
+}
 
 /// Per R1-D9 F4: ±10% tolerance band numerator (1.10).
 pub const RSS_TOLERANCE_NUMERATOR: u64 = 11;
@@ -193,7 +241,7 @@ pub struct ConcurrentReport {
     /// only; `None` if either component is `None` or the
     /// subtraction would saturate to zero on a noisy runner).
     pub rss_delta_bytes: Option<u64>,
-    /// Constant [`RSS_CEILING_BYTES`] = 640 MiB; reported for
+    /// [`rss_ceiling_bytes`]`(workers)` for this run; reported for
     /// `BENCH_RESULTS.md` traceability per R1-D9 F4 "max sample
     /// reported in `BENCH_RESULTS.md`".
     pub rss_ceiling_bytes: u64,
@@ -302,8 +350,8 @@ pub enum ConcurrentError {
         max_steady_state_bytes: u64,
         /// `max_steady_state_bytes - baseline_bytes`.
         delta_bytes: u64,
-        /// `RSS_CEILING_BYTES × (RSS_TOLERANCE_NUMERATOR /
-        /// RSS_TOLERANCE_DENOMINATOR)` = 640 MiB × 1.10.
+        /// [`rss_ceiling_bytes`]`(workers) ×
+        /// (RSS_TOLERANCE_NUMERATOR / RSS_TOLERANCE_DENOMINATOR)`.
         ceiling_with_tolerance_bytes: u64,
     },
 }
@@ -360,7 +408,8 @@ impl fmt::Display for ConcurrentError {
                 "RSS bound exceeded (T8): baseline={baseline_bytes} bytes, \
                  max_steady_state={max_steady_state_bytes} bytes, delta={delta_bytes} \
                  bytes > ceiling_with_tolerance={ceiling_with_tolerance_bytes} bytes \
-                 (640 MiB × 1.10 per R1-D9 F4)"
+                 ((workers + 1) × 256 MiB + 128 MiB, × 1.10 tolerance, per the \
+                 R1-D9 F4 Round-3 amendment)"
             ),
         }
     }
@@ -511,9 +560,14 @@ pub fn run(workers: usize) -> Result<ConcurrentReport, ConcurrentError> {
         }
     }
 
-    // 10. RSS-bound assertion (T8; Linux only).
+    // 10. RSS-bound assertion (T8; Linux only). The ceiling is
+    //     worker-count-derived per the R1-D9 F4 Round-3 amendment
+    //     (each worker's Arc hold — or in-progress derivation —
+    //     contributes one 256 MiB cache to the worst-case
+    //     delta-visible residency).
+    let ceiling_bytes = rss_ceiling_bytes(workers);
     let (max_steady_state, rss_delta, rss_assertion_evaluated) =
-        evaluate_rss(baseline_rss, &samples)?;
+        evaluate_rss(baseline_rss, &samples, ceiling_bytes)?;
 
     Ok(ConcurrentReport {
         workers,
@@ -523,7 +577,7 @@ pub fn run(workers: usize) -> Result<ConcurrentReport, ConcurrentError> {
         baseline_rss_bytes: baseline_rss,
         max_steady_state_rss_bytes: max_steady_state,
         rss_delta_bytes: rss_delta,
-        rss_ceiling_bytes: RSS_CEILING_BYTES,
+        rss_ceiling_bytes: ceiling_bytes,
         rss_assertion_evaluated,
     })
 }
@@ -666,7 +720,9 @@ fn read_baseline_rss() -> Option<u64> {
 ///
 /// On Linux: filter `samples` to those with `elapsed >
 /// STEADY_STATE_WARMUP`, take `max`, subtract baseline, assert
-/// `delta ≤ 640 MiB × 1.10`. If no steady-state samples were
+/// `delta ≤ ceiling_bytes × 1.10` (the caller derives
+/// `ceiling_bytes` from the worker count via
+/// [`rss_ceiling_bytes`]). If no steady-state samples were
 /// collected (test finished before 5 s) the assertion is skipped
 /// and the function returns `(None, None, false)` to surface this
 /// transparently rather than silently pass.
@@ -675,6 +731,7 @@ fn read_baseline_rss() -> Option<u64> {
 fn evaluate_rss(
     baseline: Option<u64>,
     samples: &Arc<Mutex<Vec<(Duration, u64)>>>,
+    ceiling_bytes: u64,
 ) -> Result<(Option<u64>, Option<u64>, bool), ConcurrentError> {
     let Some(baseline) = baseline else {
         return Ok((None, None, false));
@@ -689,7 +746,7 @@ fn evaluate_rss(
     };
     let delta = max_steady_state.saturating_sub(baseline);
     let ceiling_with_tolerance =
-        RSS_CEILING_BYTES.saturating_mul(RSS_TOLERANCE_NUMERATOR) / RSS_TOLERANCE_DENOMINATOR;
+        ceiling_bytes.saturating_mul(RSS_TOLERANCE_NUMERATOR) / RSS_TOLERANCE_DENOMINATOR;
     if delta > ceiling_with_tolerance {
         return Err(ConcurrentError::RssBoundExceeded {
             baseline_bytes: baseline,
@@ -771,7 +828,7 @@ mod tests {
             baseline_bytes: 100_000_000,
             max_steady_state_bytes: 900_000_000,
             delta_bytes: 800_000_000,
-            ceiling_with_tolerance_bytes: RSS_CEILING_BYTES * 11 / 10,
+            ceiling_with_tolerance_bytes: rss_ceiling_bytes(DEFAULT_WORKER_COUNT) * 11 / 10,
         };
         let s = format!("{e}");
         assert!(s.contains("RSS bound exceeded"), "got: {s}");
@@ -782,7 +839,8 @@ mod tests {
         assert!(s.contains("worker 4 panicked"), "got: {s}");
     }
 
-    /// The constants in this module match the R1-D9 close pins.
+    /// The constants in this module match the R1-D9 close pins
+    /// (as amended by the F4 Round-3 ceiling re-derivation).
     /// A drift would break the §4.6 T-A4 assertion-tampering catch
     /// at the §5.7 + §8.3 PR-review-time discipline level; this
     /// test catches the drift at `cargo test` time too.
@@ -790,7 +848,10 @@ mod tests {
     fn r1_d9_constants_match_plan_doc_pins() {
         assert_eq!(DEFAULT_WORKER_COUNT, 5);
         assert_eq!(HASHES_PER_WORKER, 256);
-        assert_eq!(RSS_CEILING_BYTES, 640 * 1024 * 1024);
+        assert_eq!(CACHE_FOOTPRINT_BYTES, 256 * 1024 * 1024);
+        assert_eq!(RSS_HEADROOM_BYTES, 128 * 1024 * 1024);
+        // (5 + 1) × 256 MiB + 128 MiB = 1664 MiB.
+        assert_eq!(rss_ceiling_bytes(DEFAULT_WORKER_COUNT), 1664 * 1024 * 1024);
         assert_eq!(RSS_TOLERANCE_NUMERATOR, 11);
         assert_eq!(RSS_TOLERANCE_DENOMINATOR, 10);
         assert_eq!(RSS_SAMPLE_INTERVAL, Duration::from_millis(100));
@@ -798,20 +859,32 @@ mod tests {
     }
 
     /// The ceiling-with-tolerance computation matches the
-    /// `640 MiB × 1.10` literal value (within integer rounding).
-    /// Pins the arithmetic shape that
+    /// `1664 MiB × 1.10` literal value at the default worker count
+    /// (within integer rounding). Pins the arithmetic shape that
     /// [`ConcurrentError::RssBoundExceeded`]'s
     /// `ceiling_with_tolerance_bytes` field carries.
     #[test]
-    fn ceiling_with_tolerance_matches_640_mib_times_1_10() {
-        let cwt =
-            RSS_CEILING_BYTES.saturating_mul(RSS_TOLERANCE_NUMERATOR) / RSS_TOLERANCE_DENOMINATOR;
-        // 640 × 1024 × 1024 × 11 / 10 = 738_197_504
-        assert_eq!(cwt, 738_197_504);
-        // The bound is the headroom plus the ceiling; rounded to
-        // MiB it is 704 MiB (= 640 + 64).
+    fn ceiling_with_tolerance_matches_1664_mib_times_1_10() {
+        let cwt = rss_ceiling_bytes(DEFAULT_WORKER_COUNT).saturating_mul(RSS_TOLERANCE_NUMERATOR)
+            / RSS_TOLERANCE_DENOMINATOR;
+        // 1664 × 1024 × 1024 × 11 / 10 = 1_919_313_510 (integer div)
+        assert_eq!(cwt, 1_919_313_510);
+        // Rounded to MiB the tolerance-inclusive bound is 1830 MiB.
         let cwt_mib = cwt / (1024 * 1024);
-        assert_eq!(cwt_mib, 704);
+        assert_eq!(cwt_mib, 1830);
+    }
+
+    /// The ceiling scales with the `--workers=<N>` override: each
+    /// additional worker adds one 256 MiB potential Arc hold to the
+    /// worst-case delta-visible residency.
+    #[test]
+    fn ceiling_scales_with_worker_count() {
+        assert_eq!(
+            rss_ceiling_bytes(6) - rss_ceiling_bytes(5),
+            CACHE_FOOTPRINT_BYTES
+        );
+        // Degenerate single-worker case: 2 × 256 MiB + 128 MiB.
+        assert_eq!(rss_ceiling_bytes(1), (2 * 256 + 128) * 1024 * 1024);
     }
 
     /// `max_steady_state_sample` filters samples by elapsed time
@@ -849,7 +922,9 @@ mod tests {
     #[test]
     fn evaluate_rss_no_baseline_skips() {
         let samples: Arc<Mutex<Vec<(Duration, u64)>>> = Arc::new(Mutex::new(Vec::new()));
-        let (max, delta, evaluated) = evaluate_rss(None, &samples).expect("no error path");
+        let (max, delta, evaluated) =
+            evaluate_rss(None, &samples, rss_ceiling_bytes(DEFAULT_WORKER_COUNT))
+                .expect("no error path");
         assert_eq!(max, None);
         assert_eq!(delta, None);
         assert!(!evaluated);
@@ -861,15 +936,19 @@ mod tests {
     #[test]
     fn evaluate_rss_within_bound() {
         let baseline = 100_000_000;
-        // delta = 50 MiB; well under the 640 MiB ceiling
+        // delta = 50 MiB; well under the 1664 MiB default ceiling
         let max_ss = baseline + 50 * 1024 * 1024;
         let samples = Arc::new(Mutex::new(vec![
             (Duration::from_secs(1), baseline),
             (Duration::from_secs(6), max_ss),
             (Duration::from_secs(7), max_ss - 1024 * 1024),
         ]));
-        let (max, delta, evaluated) =
-            evaluate_rss(Some(baseline), &samples).expect("within-bound path");
+        let (max, delta, evaluated) = evaluate_rss(
+            Some(baseline),
+            &samples,
+            rss_ceiling_bytes(DEFAULT_WORKER_COUNT),
+        )
+        .expect("within-bound path");
         assert_eq!(max, Some(max_ss));
         assert_eq!(delta, Some(50 * 1024 * 1024));
         assert!(evaluated);
@@ -880,11 +959,16 @@ mod tests {
     #[test]
     fn evaluate_rss_exceeds_bound() {
         let baseline = 100_000_000;
-        // delta = 800 MiB; well over the 704 MiB ceiling-with-tolerance
-        let max_ss = baseline + 800 * 1024 * 1024;
+        // delta = 2048 MiB; over the 1830 MiB ceiling-with-tolerance
+        // at the default worker count
+        let max_ss = baseline + 2048 * 1024 * 1024;
         let samples = Arc::new(Mutex::new(vec![(Duration::from_secs(6), max_ss)]));
-        let err = evaluate_rss(Some(baseline), &samples)
-            .expect_err("over-ceiling path should surface error");
+        let err = evaluate_rss(
+            Some(baseline),
+            &samples,
+            rss_ceiling_bytes(DEFAULT_WORKER_COUNT),
+        )
+        .expect_err("over-ceiling path should surface error");
         match err {
             ConcurrentError::RssBoundExceeded {
                 baseline_bytes,
@@ -894,11 +978,28 @@ mod tests {
             } => {
                 assert_eq!(baseline_bytes, baseline);
                 assert_eq!(max_steady_state_bytes, max_ss);
-                assert_eq!(delta_bytes, 800 * 1024 * 1024);
-                assert_eq!(ceiling_with_tolerance_bytes, 738_197_504);
+                assert_eq!(delta_bytes, 2048 * 1024 * 1024);
+                assert_eq!(ceiling_with_tolerance_bytes, 1_919_313_510);
             }
             other => panic!("expected RssBoundExceeded, got {other:?}"),
         }
+    }
+
+    /// The legitimate drift plateau recorded on the committed
+    /// runner class (~1035 MiB delta, flat across the 2026-07-08 →
+    /// 2026-08-08 daily crons on both branches) passes the amended
+    /// ceiling with headroom, and a persistent Arc-retention leak
+    /// stacked on that plateau trips the tolerance-inclusive bound
+    /// within four leaked rotations (of the 32 per run). Pins the
+    /// amendment's leak-detection claim.
+    #[test]
+    fn amended_ceiling_admits_plateau_and_catches_leak() {
+        let cwt = rss_ceiling_bytes(DEFAULT_WORKER_COUNT).saturating_mul(RSS_TOLERANCE_NUMERATOR)
+            / RSS_TOLERANCE_DENOMINATOR;
+        let recorded_plateau_delta: u64 = 1_085_100_032; // 2026-08-09 cron
+        assert!(recorded_plateau_delta <= cwt);
+        let four_leaked_rotations = recorded_plateau_delta + 4 * CACHE_FOOTPRINT_BYTES;
+        assert!(four_leaked_rotations > cwt);
     }
 
     /// On Linux, `/proc/self/statm` is readable and returns a

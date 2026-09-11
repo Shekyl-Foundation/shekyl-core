@@ -32,15 +32,15 @@ set(core_tests_sources
   block_validation.cpp
   chain_split_1.cpp
   chain_switch_1.cpp
+  checkpoint_conflict_rollback.cpp
   chaingen.cpp
   chaingen001.cpp
   chaingen_main.cpp
   economics_c2a_prime.cpp
   integer_overflow.cpp
+  reorg_watermark_degraded.cpp
   transaction_tests.cpp
-  tx_pool.cpp
-  bulletproof_plus.cpp
-  wallet_tools.cpp)
+  bulletproof_plus.cpp)
 
 set(core_tests_headers
   archival_budget_conservation.h
@@ -48,15 +48,15 @@ set(core_tests_headers
   block_validation.h
   chain_split_1.h
   chain_switch_1.h
+  checkpoint_conflict_rollback.h
   chaingen.h
   chaingen_tests_list.h
   economics_c2a_prime.h
   economics_chain_helpers.h
   integer_overflow.h
-  tx_pool.h
+  reorg_watermark_degraded.h
   transaction_tests.h
-  bulletproof_plus.h
-  wallet_tools.h)
+  bulletproof_plus.h)
 
 monero_add_minimal_executable(core_tests
   ${core_tests_sources}
@@ -68,7 +68,6 @@ target_link_libraries(core_tests
     version
     epee
     device
-    wallet
     ${CMAKE_THREAD_LIBS_INIT}
     ${EXTRA_LIBRARIES})
 enable_stack_trace(core_tests)

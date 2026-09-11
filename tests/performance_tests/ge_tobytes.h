@@ -69,7 +69,7 @@ public:
 
   bool test()
   {
-    rct::key key;
+    ct::key key;
     ge_p3_tobytes(key.bytes, &m_p3);
     return true;
   }

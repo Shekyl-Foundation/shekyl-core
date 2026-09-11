@@ -7,6 +7,7 @@
 
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme as _,
+    SCHEME_DOMAIN_PQC_AUTH_TX, SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
 };
 use std::os::raw::c_char;
 use std::sync::Mutex;
@@ -94,10 +95,16 @@ pub unsafe extern "C" fn xchacha20(
 ///
 /// Returns canonical-encoded public and secret key buffers. Caller owns the
 /// buffers and must release them via `shekyl_buffer_free`.
+/// **Test-support only** (F-7): generates a fresh, *non-derived* hybrid keypair.
+/// Real wallets derive their keys (`generate_pqc_key_material`); this export
+/// exists solely for the C++ FFI test suite (`fcmp.cpp`) and has no production
+/// caller. Comment-gated only: the C++ tests link the same `shekyl-ffi`
+/// archive as production, so this symbol is present in production builds
+/// (FOLLOWUPS F-7 tracks the structural gate). Do not call from production C++.
 #[no_mangle]
 pub extern "C" fn shekyl_pqc_keypair_generate() -> ShekylPqcKeypair {
     let scheme = HybridEd25519MlDsa;
-    match scheme.keypair_generate() {
+    match scheme.generate_ephemeral_keypair_for_tests() {
         Ok((pk, sk)) => {
             let public_key = pk.to_canonical_bytes().map(ShekylBuffer::from_vec);
             let secret_key = sk.to_canonical_bytes().map(ShekylBuffer::from_vec);
@@ -122,7 +129,48 @@ pub extern "C" fn shekyl_pqc_keypair_generate() -> ShekylPqcKeypair {
     }
 }
 
-/// Sign a message using a canonical-encoded hybrid secret key.
+/// One FFI sign body for every hybrid sign export: pointer validation, secret
+/// key parse, nested sign under the export's Rust-owned domain (SA-R-2), and
+/// canonical encoding. The exports differ **only** in the domain constant they
+/// bind — keeping the body single-sourced means a hardening fix (zeroization,
+/// slice validation) cannot land in one export and silently miss the other.
+fn pqc_sign_with_domain(
+    domain: &[u8],
+    secret_key_ptr: *const u8,
+    secret_key_len: usize,
+    message_ptr: *const u8,
+    message_len: usize,
+) -> ShekylPqcSignatureResult {
+    let fail = ShekylPqcSignatureResult {
+        signature: ShekylBuffer::null(),
+        success: false,
+    };
+    let Some(secret_key_bytes) = (unsafe { slice_from_ptr(secret_key_ptr, secret_key_len) }) else {
+        return fail;
+    };
+    let Some(message) = (unsafe { slice_from_ptr(message_ptr, message_len) }) else {
+        return fail;
+    };
+    let Ok(secret_key) = HybridSecretKey::from_canonical_bytes(secret_key_bytes) else {
+        return fail;
+    };
+    match HybridEd25519MlDsa
+        .sign(&secret_key, domain, message)
+        .and_then(|sig| sig.to_canonical_bytes())
+    {
+        Ok(signature) => ShekylPqcSignatureResult {
+            signature: ShekylBuffer::from_vec(signature),
+            success: true,
+        },
+        Err(_) => fail,
+    }
+}
+
+/// Sign a message using a canonical-encoded hybrid secret key, under the
+/// **tx per-input PQC auth** surface (`SCHEME_DOMAIN_PQC_AUTH_TX`, SA-R-2 —
+/// the domain is Rust-owned; C++ never carries a domain string). Signatures
+/// from this export verify only on that surface; use the surface-specific
+/// export for any other context.
 ///
 /// Returns a canonical-encoded hybrid signature buffer. Caller owns the buffer
 /// and must release it via `shekyl_buffer_free`.
@@ -133,40 +181,40 @@ pub extern "C" fn shekyl_pqc_sign(
     message_ptr: *const u8,
     message_len: usize,
 ) -> ShekylPqcSignatureResult {
-    let Some(secret_key_bytes) = (unsafe { slice_from_ptr(secret_key_ptr, secret_key_len) }) else {
-        return ShekylPqcSignatureResult {
-            signature: ShekylBuffer::null(),
-            success: false,
-        };
-    };
-    let Some(message) = (unsafe { slice_from_ptr(message_ptr, message_len) }) else {
-        return ShekylPqcSignatureResult {
-            signature: ShekylBuffer::null(),
-            success: false,
-        };
-    };
+    pqc_sign_with_domain(
+        SCHEME_DOMAIN_PQC_AUTH_TX,
+        secret_key_ptr,
+        secret_key_len,
+        message_ptr,
+        message_len,
+    )
+}
 
-    let scheme = HybridEd25519MlDsa;
-    let Ok(secret_key) = HybridSecretKey::from_canonical_bytes(secret_key_bytes) else {
-        return ShekylPqcSignatureResult {
-            signature: ShekylBuffer::null(),
-            success: false,
-        };
-    };
-
-    match scheme
-        .sign(&secret_key, message)
-        .and_then(|sig| sig.to_canonical_bytes())
-    {
-        Ok(signature) => ShekylPqcSignatureResult {
-            signature: ShekylBuffer::from_vec(signature),
-            success: true,
-        },
-        Err(_) => ShekylPqcSignatureResult {
-            signature: ShekylBuffer::null(),
-            success: false,
-        },
-    }
+/// Sign a message as a **multisig participant** (scheme 2), under the
+/// multisig-specific domain (SA-R-5). A participant signature is NOT
+/// interchangeable with a single-signer signature (`shekyl_pqc_sign`) over the
+/// same message: this applies `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`, which is
+/// what `verify_multisig` (scheme_id=2) checks.
+///
+/// **Test-support only** (F-7): production multisig participant signing is
+/// unbuilt; this export exists so the C++ FFI test suite can assemble genuine
+/// multisig containers instead of faking participant sigs through the
+/// single-signer FFI. The domain is Rust-owned — C++ carries no domain string.
+/// Do not call from production C++. Free the buffer via `shekyl_buffer_free`.
+#[no_mangle]
+pub extern "C" fn shekyl_pqc_sign_multisig_participant(
+    secret_key_ptr: *const u8,
+    secret_key_len: usize,
+    message_ptr: *const u8,
+    message_len: usize,
+) -> ShekylPqcSignatureResult {
+    pqc_sign_with_domain(
+        SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+        secret_key_ptr,
+        secret_key_len,
+        message_ptr,
+        message_len,
+    )
 }
 
 /// Return the canonical PQC multisig wire lengths (see `ShekylPqcCanonicalLens`).
@@ -231,16 +279,16 @@ pub extern "C" fn shekyl_pqc_verify(
             let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
                 return 11;
             };
-            match scheme.verify(&pk, msg, &sig) {
-                Ok(true) => 0,
-                Ok(false) | Err(_) => 10, // CryptoVerifyFailed
+            // Rust-owned tx-auth domain (SA-R-2); C++ passes no domain.
+            match scheme.verify(&pk, SCHEME_DOMAIN_PQC_AUTH_TX, msg, &sig) {
+                Ok(()) => 0,
+                Err(_) => 10, // CryptoVerifyFailed
             }
         }
         2 => {
             use shekyl_crypto_pq::multisig::verify_multisig;
             match verify_multisig(scheme_id, pk_bytes, sig_bytes, msg) {
-                Ok(true) => 0,
-                Ok(false) => 10, // CryptoVerifyFailed
+                Ok(()) => 0,
                 Err(e) => e as u8,
             }
         }
@@ -250,9 +298,14 @@ pub extern "C" fn shekyl_pqc_verify(
 
 // ─── Crypto: Hash Functions ──────────────────────────────────────────────────
 
-/// Compute Keccak-256 (cn_fast_hash) of `data_len` bytes at `data_ptr`.
+/// Compute original Keccak-256 of `data_len` bytes at `data_ptr`.
 /// Result is written to `out_ptr` which must point to 32 writable bytes.
 /// Returns true on success, false if pointers are null.
+///
+/// **ABI name** `shekyl_cn_fast_hash` is stable (C++ callers via
+/// `src/shekyl/shekyl_ffi.h`). Body forwards to
+/// [`shekyl_crypto_hash::keccak256`] — same primitive, Rust-side name that
+/// states it is Keccak-256 (not cSHAKE).
 ///
 /// # Safety
 /// Caller must ensure all pointer arguments are valid or null.
@@ -268,7 +321,7 @@ pub unsafe extern "C" fn shekyl_cn_fast_hash(
     let Some(data) = (unsafe { slice_from_ptr(data_ptr, data_len) }) else {
         return false;
     };
-    let hash = shekyl_crypto_hash::cn_fast_hash(data);
+    let hash = shekyl_crypto_hash::keccak256(data);
     std::ptr::copy_nonoverlapping(hash.as_ptr(), out_ptr, 32);
     true
 }
@@ -312,38 +365,40 @@ pub unsafe extern "C" fn shekyl_tree_hash(
 
 /// Calculate the release multiplier from transaction volume.
 ///
+/// The volume operand crosses as the exact window `(tx_count_sum,
+/// window_blocks)` — FL-R24: the daemon no longer truncates the mean to
+/// whole transactions per block before the ratio is formed. C++ marshals
+/// `Blockchain::get_tx_volume_window` here and computes nothing itself.
+///
 /// Returns fixed-point value (SCALE=1_000_000). 1_000_000 = 1.0x.
 #[no_mangle]
 pub extern "C" fn shekyl_calc_release_multiplier(
-    tx_volume_avg: u64,
+    tx_count_sum: u64,
+    window_blocks: u64,
     tx_volume_baseline: u64,
     release_min: u64,
     release_max: u64,
 ) -> u64 {
     shekyl_economics::release::calc_release_multiplier(
-        tx_volume_avg,
+        shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
         tx_volume_baseline,
         release_min,
         release_max,
     )
 }
 
-/// Apply a release multiplier to a base reward.
-///
-/// Returns: base_reward * multiplier / SCALE
-#[no_mangle]
-pub extern "C" fn shekyl_apply_release_multiplier(base_reward: u64, multiplier: u64) -> u64 {
-    shekyl_economics::release::apply_release_multiplier(base_reward, multiplier)
-}
-
 // ─── Economics: Fee Burn ────────────────────────────────────────────────────
 
 /// Calculate the burn percentage from chain state.
 ///
+/// Volume operand as for [`shekyl_calc_release_multiplier`]: the exact
+/// window `(tx_count_sum, window_blocks)` (FL-R24).
+///
 /// Returns fixed-point burn percentage (SCALE=1_000_000). 400_000 = 40%.
 #[no_mangle]
 pub extern "C" fn shekyl_calc_burn_pct(
-    tx_volume: u64,
+    tx_count_sum: u64,
+    window_blocks: u64,
     tx_baseline: u64,
     circulating_supply: u64,
     total_supply: u64,
@@ -351,7 +406,7 @@ pub extern "C" fn shekyl_calc_burn_pct(
     burn_cap: u64,
 ) -> u64 {
     shekyl_economics::burn::calc_burn_pct(
-        tx_volume,
+        shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
         tx_baseline,
         circulating_supply,
         total_supply,
@@ -433,19 +488,201 @@ pub extern "C" fn shekyl_staker_pool_share_at(frozen_segment_count: u64) -> u64 
 
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 ///
-/// Saturating at `money_supply`: past full emission the base curve yields the
-/// tail floor, so clamping the input keeps `base_block_reward` in range and this
-/// `extern "C"` export cannot panic (or unwind) across the FFI boundary. The
-/// consensus connect path already caps `already_generated_coins` at
-/// `MONEY_SUPPLY`, so the clamp is only reached by out-of-range callers.
+/// Total since FL-R12′: `base_block_reward` floors `remaining` at zero, so a
+/// past-asymptote accumulator yields the perpetual tail rather than needing an
+/// input clamp — this `extern "C"` export cannot panic (or unwind) across the
+/// FFI boundary. Note this is the M_r-NEUTRAL view; the paid pipeline's floor
+/// applies after the release multiplier (see `shekyl_block_reward`).
 #[no_mangle]
 pub extern "C" fn shekyl_base_block_reward(already_generated_coins: u64) -> u64 {
     let params = shekyl_economics::params::EconomicParams::default();
-    let clamped = already_generated_coins.min(params.money_supply);
-    // After clamping `clamped <= money_supply`, so the only residual error is a
-    // tail-subsidy overflow that canonical params never trigger; fall back to 0
-    // deterministically rather than panicking.
-    shekyl_economics::base_block_reward(clamped, &params).unwrap_or(0)
+    // The only residual error is a tail-subsidy overflow that canonical
+    // params never trigger; fall back to 0 deterministically.
+    shekyl_economics::base_block_reward(already_generated_coins, &params).unwrap_or(0)
+}
+
+/// Status: reward computed. `out_reward` and `out_weight_limit` are written.
+pub const SHEKYL_BLOCK_REWARD_OK: i32 = 0;
+/// Status: the block exceeds twice the effective median — a CONSENSUS
+/// REJECTION the caller is expected to act on, not an internal fault.
+/// `out_weight_limit` is written so the caller can report the limit it was
+/// rejected against; `out_reward` is left untouched.
+pub const SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG: i32 = 1;
+/// Status: a required out-pointer was null, or the inputs were out of domain.
+/// A CALLER BUG. Negative to keep misuse distinguishable from rejection.
+pub const SHEKYL_BLOCK_REWARD_INVALID: i32 = -1;
+
+/// Block reward after the median-weight penalty.
+///
+/// The C2c cutover's last step: the `mul128`/`div128_64` penalty arithmetic
+/// that lived in `get_block_reward` (`cryptonote_basic_impl.cpp`) now lives in
+/// `shekyl-economics`, and C++ marshals to it here.
+///
+/// THIS IS THE FIRST FALLIBLE ENTRY IN THE ECONOMICS FFI FAMILY, and the break
+/// is deliberate. The other economics exports document themselves as unable to
+/// fail across the boundary (they clamp their inputs instead). This one has a
+/// genuine consensus outcome to report — "too big" is how a block gets
+/// rejected — and collapsing it into a sentinel reward would make an invalid
+/// block indistinguishable from a valid one paying zero at exactly
+/// `2 * median`. Hence a status return, with rejection POSITIVE and caller
+/// misuse NEGATIVE.
+///
+/// `full_reward_zone` is supplied by the caller rather than read here; see
+/// `block_reward_with_penalty` for why the constant is not duplicated in Rust.
+///
+/// Since FL-R12′ this marshals the ONE owner `paid_block_reward` — the full
+/// signed composition `max(M_r·curve(remaining), TAIL)·penalty(x)` — so it
+/// takes the volume operand, as the exact window `(tx_count_sum,
+/// window_blocks)` since FL-R24, and there is no C++-side multiplier, cap,
+/// or flag path. A past-asymptote accumulator is a legitimate perpetual-tail state,
+/// not an error (FL-R16a).
+///
+/// # Safety
+///
+/// `out_reward` and `out_weight_limit` must each be either null or a valid,
+/// writable `u64`. Null is checked, not assumed: the function returns
+/// [`SHEKYL_BLOCK_REWARD_INVALID`] without writing through either pointer.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_block_reward(
+    median_weight: u64,
+    current_block_weight: u64,
+    already_generated_coins: u64,
+    full_reward_zone: u64,
+    tx_count_sum: u64,
+    window_blocks: u64,
+    out_reward: *mut u64,
+    out_weight_limit: *mut u64,
+) -> i32 {
+    if out_reward.is_null() || out_weight_limit.is_null() {
+        return SHEKYL_BLOCK_REWARD_INVALID;
+    }
+    let params = shekyl_economics::params::EconomicParams::default();
+
+    // Written on every path, including rejection: the caller logs the limit it
+    // was rejected against, and it must come from the same clamp that made the
+    // decision rather than a recomputation on the C++ side.
+    let limit = shekyl_economics::block_weight_limit(median_weight, full_reward_zone);
+    // SAFETY: non-null per the check above; the caller guarantees writability.
+    unsafe { out_weight_limit.write(limit) };
+
+    match shekyl_economics::paid_block_reward(
+        median_weight,
+        current_block_weight,
+        already_generated_coins,
+        full_reward_zone,
+        shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
+        &params,
+    ) {
+        Ok(reward) => {
+            // SAFETY: non-null per the check above.
+            unsafe { out_reward.write(reward) };
+            SHEKYL_BLOCK_REWARD_OK
+        }
+        Err(shekyl_economics::EmissionError::BlockTooBig) => SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG,
+        // Total in `ag` (FL-R16a); the only other arms are overflow shapes
+        // canonical params never trigger. Report misuse rather than
+        // panicking across the boundary.
+        Err(_) => SHEKYL_BLOCK_REWARD_INVALID,
+    }
+}
+
+/// The quantized fee-correction scalar C_q (FL-R12′ round-8 amendment,
+/// whole-scalar form) with pow2-boundary hysteresis. `sigma_scaled` and
+/// `burn_pct_scaled` are the SAME `shekyl_calc_emission_share` /
+/// `shekyl_calc_burn_pct` outputs the validation path computes at this
+/// state — one source, no second derivation. `prev_cq_scaled = 0` means no
+/// held value, and it is what the daemon passes today — so the band is a
+/// capability of this export, not yet a property of the served rate.
+/// FL-R3 is ruled: it is restored once the grid-anchored previous value
+/// has its own round. See the crate function's note for the two binding
+/// constraints before wiring a caller to a nonzero value. Cannot fail.
+#[no_mangle]
+pub extern "C" fn shekyl_fee_correction_quantized(
+    tx_count_sum: u64,
+    window_blocks: u64,
+    sigma_scaled: u64,
+    burn_pct_scaled: u64,
+    prev_cq_scaled: u64,
+) -> u64 {
+    let params = shekyl_economics::params::EconomicParams::default();
+    shekyl_economics::fee_correction_quantized(
+        shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
+        sigma_scaled,
+        burn_pct_scaled,
+        prev_cq_scaled,
+        &params,
+    )
+}
+
+/// The corrected four-slot fee ladder (FL-R17 three tiers + the RK-5 wire
+/// bridge slot; `Fh` main arm unconditional; economy is clamped by the
+/// CALLER at the relay floor). Writes exactly four values through
+/// `out_fees`. Returns:
+///
+/// * `0` — the four values were written;
+/// * `-1` — null `out_fees`, nothing written;
+/// * `-2` — the scalars are outside the arithmetic's domain, nothing
+///   written (see below).
+///
+/// **Domain, per rule 40.** The rungs form products in `u128` that
+/// operands near `u64::MAX` overflow BEFORE the conversion fallback can
+/// see it — an abort in an overflow-checked build, wrapped fee values
+/// otherwise, and neither may cross `extern "C"`. No chain state reaches
+/// that input, so the domain is not made fallible for internal callers;
+/// it is decided by
+/// [`shekyl_economics::checked_corrected_fee_ladder`], which lives with
+/// the arithmetic and reads the same operands the rungs multiply, and a
+/// caller handing us an impossible state gets `-2` rather than an abort.
+/// The check is NOT re-derived here: the three rungs do not share an
+/// operand list, and a boundary copy written against one of them missed
+/// `priority`'s `2·R·C_q` for a full review cycle.
+///
+/// # Safety
+///
+/// `out_fees` must be null or valid for writing four `u64`s.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
+    base_reward: u64,
+    mnw: u64,
+    mlw: u64,
+    full_reward_zone: u64,
+    ref_tx_weight: u64,
+    c_q: u64,
+    out_fees: *mut u64,
+) -> i32 {
+    if out_fees.is_null() {
+        return -1;
+    }
+    let Some(ladder) = shekyl_economics::checked_corrected_fee_ladder(
+        base_reward,
+        mnw,
+        mlw,
+        full_reward_zone,
+        ref_tx_weight,
+        c_q,
+    ) else {
+        return -2;
+    };
+    let fees = ladder.as_slots();
+    for (i, f) in fees.iter().enumerate() {
+        // SAFETY: non-null per the check; caller guarantees 4 writable u64s.
+        unsafe { out_fees.add(i).write(*f) };
+    }
+    0
+}
+
+/// Advance `already_generated_coins` by a block reward.
+///
+/// One entry point for both C++ connect paths (main-chain and alt-chain),
+/// which each carried their own copy of the rule. Cannot fail. Since
+/// FL-R12′ it advances THROUGH the emission-curve asymptote (perpetual
+/// tail); the only saturation is the u64 rail (FL-R14).
+#[no_mangle]
+pub extern "C" fn shekyl_advance_already_generated(
+    already_generated_coins: u64,
+    block_reward: u64,
+) -> u64 {
+    shekyl_economics::advance_already_generated(already_generated_coins, block_reward)
 }
 
 // ─── Emission Share (Component 4) ───────────────────────────────────────────

@@ -1550,7 +1550,11 @@ TEST(NetUtils, NetworkAddress)
   CHECK_EQUAL(address1, address1);
   CHECK_EQUAL(epee::net_utils::network_address{address1}, address1);
   CHECK_LESS(empty, address1);
+  // Regression limb for the anon-zone sentinel guard (fix/anon-zone-address-keying):
+  // the IPv4 same-host path is what the public-zone per-host cap runs on, so a
+  // guard that over-reached into "always false" fails loudly right here.
   EXPECT_TRUE(address1.is_same_host(address1));
+
   EXPECT_FALSE(empty.is_same_host(address1));
   EXPECT_FALSE(address1.is_same_host(empty));
   EXPECT_STREQ("51.0.18.255:65535", address1.str().c_str());

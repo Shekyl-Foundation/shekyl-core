@@ -23,12 +23,10 @@ use shekyl_archival_retention::{
 };
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
-use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
 use shekyl_ct_balance::amount_commitment;
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 
 const MASTER: [u8; MASTER_SEED_BYTES] = [0x33u8; MASTER_SEED_BYTES];
-const TX_PREFIX_HASH: [u8; 32] = [0xCDu8; 32];
 
 /// `mask * G + amount * H`, the masked commitment the verify side decompresses
 /// and sums. Built inline here (the synthetic witness); in the real path the
@@ -54,8 +52,8 @@ fn join_market_construct_verifies_against_retention() {
     let floor = bond_floor(&holdings);
     assert!(floor > 0);
 
-    // --- construct: vin + hybrid signature ---
-    let built = build_join_market_vin(&keys, holdings.clone(), &TX_PREFIX_HASH)
+    // --- construct: vin (no on-vin signature; authorization rides surface A) ---
+    let built = build_join_market_vin(keys.bond_post_keys(), holdings.clone())
         .expect("build JoinMarket vin");
 
     // The vin is shaped exactly as the credit-path verify side requires.
@@ -65,13 +63,6 @@ fn join_market_construct_verifies_against_retention() {
 
     // --- verify (1/2): vin semantics, record does not yet exist ---
     verify_join_market_bond_post(built.vin(), false).expect("verify accepts fresh JoinMarket post");
-
-    // The hybrid signature is valid under P_pubkey over the post preimage.
-    let preimage = built.vin().signature_preimage(&TX_PREFIX_HASH);
-    let sig_ok = HybridEd25519MlDsa
-        .verify(keys.hybrid_bond_id(), &preimage, built.signature())
-        .expect("verify hybrid signature");
-    assert!(sig_ok, "JoinMarket signature must verify under P_pubkey");
 
     // --- construct the synthetic RCT credit witness ---
     // One funding input committing F = change + fee + floor; one change output.
@@ -108,7 +99,7 @@ fn join_market_construct_verifies_against_retention() {
 fn imbalanced_funding_is_rejected_before_proving() {
     let keys = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
         .expect("derive P keys");
-    let built = build_join_market_vin(&keys, shard_set(vec![1]), &TX_PREFIX_HASH)
+    let built = build_join_market_vin(keys.bond_post_keys(), shard_set(vec![1]))
         .expect("build JoinMarket vin");
 
     // Funding short by 1 atomic unit: caught at the amount level.
@@ -131,7 +122,7 @@ fn wrong_credit_amount_breaks_the_balance() {
     let holdings = shard_set(vec![7, 42]);
     let floor = bond_floor(&holdings);
     let built =
-        build_join_market_vin(&keys, holdings, &TX_PREFIX_HASH).expect("build JoinMarket vin");
+        build_join_market_vin(keys.bond_post_keys(), holdings).expect("build JoinMarket vin");
 
     const CHANGE: u64 = 1_000_000;
     const FEE: u64 = 2_000;

@@ -1,5 +1,68 @@
 # Bench-baseline `instructions=0` flake — investigation (2026-05-09)
 
+> **Update (2026-09-04) — `engine_trait_bench_key_merge_projection_iai`
+> converted; third cell to hit the deterministic form.** On PR #607 this
+> cell captured green on head `5e56fefad`, then reported `instructions=0`
+> on all 3 in-run attempts across two CI runs (the original and a fresh
+> rerun, run `33838623180`) once the next head (`f90e9ea2d`) shifted
+> engine-core enough to tip the wrapper fold — while measuring ~5.16M
+> instructions locally under valgrind 3.24.0. The 2026-08-30 remedy
+> applied verbatim: `client_requests` + `--instr-atstart=no` +
+> `EntryPoint::None`, `black_box` inside the measured region. Converted
+> count 5,157,997 vs toggle-based 5,158,026 (−0.00056%, well inside the
+> ±10% warn band). Anti-symmetry clause honoured: only the cell that
+> demonstrably zeroed was converted; the remaining toggle-based `_iai`
+> cells stay until one of them fails.
+
+> **Update (2026-08-30) — the flake has a deterministic form, and "re-run
+> the workflow" cannot clear it; `key_dispatch_baseline_iai` converted to
+> client requests.** On PR #576 the `engine_trait_bench_key_dispatch_baseline_iai`
+> cell reported `instructions=0` on four consecutive CI runs, three in-run
+> retries each, **and on a fresh-runner re-run of the identical commit** —
+> while the same commit measured ~14.6M instructions under the identical
+> valgrind (3.22.0-0ubuntu3), rustc (1.94.0) and gungraun (0.19.3) locally
+> and in an ubuntu-24.04 container, single-bench and full-sequence alike.
+> That falsifies the 2026-06-25 note's remediation for this cell: the June
+> observation was that only a fresh runner clears it, but a folded wrapper
+> is a property of the emitted binary, so when the fold is deterministic
+> for a given source + toolchain, every runner that reproduces the build
+> reproduces the zero. (Both observations can be true — a fold sitting at
+> an inlining threshold flips on VM-state-sensitive inputs; one past it
+> does not flip at all.) Applied the §Update-2026-08-14 remedy:
+> `client_requests` + `start`/`stop_instrumentation` + `EntryPoint::None`
+> + `--instr-atstart=no`, the `ledger_iai` pattern. Measured locally:
+> 14,593,850 vs 14,593,888 toggle-based — 38 instructions, -0.00026%,
+> far inside the ±10% `engine_trait_bench_*` warn band — and the run falls
+> from ~40s to ~1.6s because setup is no longer instrumented. The
+> remaining toggle-based `_iai` cells stay as they are until one of them
+> zeros: each conversion moves a baseline, and a moved baseline should be
+> bought by a demonstrated failure, not by symmetry.
+
+> **Update (2026-08-14) — cause identified; `ledger_iai` now uses
+> Callgrind client requests.** The six `hot_path_bench_ledger_postcard_*`
+> cells that the producer guard rejects (`instructions=0` while
+> wall-clock is healthy) miss Callgrind's default collection toggle.
+> Gungraun library benches collect via
+> `--toggle-collect=*::__gungraun_wrapper_mod::*` with
+> `--collect-at-start=no`. Collection starts only when that wrapper
+> symbol is *entered*. The macros already put `#[inline(never)]` on the
+> wrapper; rustc sometimes still inlines or ICF-folds it, and Callgrind
+> then records 0. These six cells are one-liners under
+> `#[benches::with_setup]` — uniquely small among the `_iai` suite —
+> which is why `balance_iai` (same macro, heavier body) never flaked.
+> Same-VM retry cannot help: the compiled wrapper is already gone.
+> A second `--toggle-collect` on `__gungraun_wrapper_id_mod` would
+> nest-invert collection; replacing Default with Custom on id-mod
+> would zero the *successful* path if id-mod inlines and wrapper-mod
+> does not. The load-bearing fix is position-based: enable gungraun
+> `client_requests` (the `act` path — `client_requests_defs` is a
+> no-op), wrap the measured work in
+> `callgrind::{start,stop}_instrumentation`, and set
+> `EntryPoint::None` plus `--instr-atstart=no` so setup stays
+> uninstrumented. First post-merge `update-baseline` on `dev` refreshes
+> `bench-baseline`; the extra client-request sequences are a handful of
+> instructions against millions of postcard work.
+
 > **Update (2026-06-25) — gungraun did NOT fix the flake; an in-run
 > auto-rerun was tried and reverted as architecturally racy.** The capture
 > still flakes to `instructions=0` under the latest gungraun (`0.19.2`, the
@@ -45,12 +108,15 @@
 > The flake-fix remains **speculative** (§3.3 cause unknown) — the trajectory /
 > debt argument (§4) is what justifies the upgrade regardless.
 
-**Status:** **cause unknown.** Initial smoking-gun hypothesis (iai-
-callgrind issue #19) was withdrawn after source verification — see
-§3 for the retraction. Eliminations in §2 stand. Disposition in §4
-recommends a gungraun 0.17.x / 0.18.x upgrade on debt-reduction
-grounds with speculative incidental flake-mitigation; the upgrade
-is **not** a targeted fix because there is no confirmed target.
+**Status (as of 2026-08-14):** cause identified — Callgrind's default
+wrapper-symbol toggle records 0 when `__gungraun_wrapper_mod` is
+inlined; fixed in `ledger_iai` via client requests. See the
+2026-08-14 banner. Historical status below is the 2026-05-09 /
+2026-06-16 record: initial smoking-gun hypothesis (iai-callgrind
+issue #19) was withdrawn after source verification — see §3 for the
+retraction. Eliminations in §2 stand. Disposition in §4 was the
+gungraun upgrade on debt-reduction grounds, which did **not** fix
+the flake (2026-06-25 banner).
 
 **Branch:** `chore/investigate-bench-baseline-flake-2026-05-09`.
 

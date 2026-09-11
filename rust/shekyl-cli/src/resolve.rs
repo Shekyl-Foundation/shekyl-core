@@ -45,11 +45,24 @@ pub enum ResolvedCommand {
         dest: String,
         amount: u64,
         priority: Option<u32>,
-        do_not_relay: bool,
         no_confirm: bool,
     },
     Transfers,
     ShowTransfer {
+        txid: String,
+    },
+    GetTxNote {
+        txid: String,
+    },
+    SetTxNote {
+        txid: String,
+        /// Taken verbatim from the input line (like `sign`): the note is
+        /// user-authored text, and a token re-join would collapse the
+        /// whitespace the user typed into it.
+        note: String,
+    },
+    /// Give up on a dispatched send (`abandon_tx`, PR-SJ-3).
+    Abandon {
         txid: String,
     },
 
@@ -75,10 +88,47 @@ pub enum ResolvedCommand {
     },
 
     // -- Staking (WI-RPC-1) --
-    Stake,
+    Stake {
+        /// `--complete-tree-foundation`: request the Foundation
+        /// whole-corpus archival posture instead of market staking
+        /// (`COMPLETETREE_ACTIVATION.md` D-2/D-4).
+        ///
+        /// A flag rather than a subcommand, and off by default, because
+        /// the posture must be *named* to be reached — there is no
+        /// select-all affordance and no default that could land on the
+        /// unbounded obligation. Setting it does not by itself stake: the
+        /// command states the terms and requires a typed phrase first.
+        foundation: bool,
+    },
     StakedBalance,
     StakedOutputs,
     StakingInfo,
+
+    // -- Archival principal staking actions (WI-RPC-5) --
+    /// `stake_in <amount>` — fund the staking balance with an ordinary
+    /// principal transfer. Amount only, by contract: cover is
+    /// system-drawn and the `P` destination never appears on the wire.
+    StakeIn {
+        amount: u64,
+    },
+    /// `drain_balance` — the aggregate drainable staking amount, or an
+    /// honest "syncing" (never a zero that would lie, rule 82 / F-D2).
+    DrainBalance,
+    /// `drain <amount>` — move staking funds back to this wallet. No fee,
+    /// destination, or slot parameter exists, by contract (the
+    /// anti-fingerprint pin): the fee is the canonical P-lane floor and
+    /// the destination is this wallet's primary address, both engine-side.
+    Drain {
+        amount: u64,
+    },
+    /// `unstake` — post the permanent exit for the staked bond (PR-C).
+    /// No arguments exist, by contract: the persona, fee, and amount are
+    /// all engine-resolved, and the CLI's job is the irreversibility
+    /// confirmation.
+    Unstake,
+    /// `collect_unstaked` — sweep the released exit collateral back to
+    /// this wallet, one pass at a time. No arguments, by contract.
+    CollectUnstaked,
 
     // -- Fees (WI-RPC-1) --
     Fee {
@@ -110,26 +160,19 @@ pub enum ResolvedCommand {
         message: Option<String>,
     },
 
-    // -- Signing (RESERVED) --
+    // -- Message signing (PR-SM-2) --
     Sign {
         message: String,
     },
     Verify {
         address: String,
-        message: String,
         signature: String,
-    },
-
-    // -- Offline signing (RESERVED: cold-wallet workflow) --
-    DescribeTransfer {
-        unsigned_hex: String,
-    },
-    SignTransfer {
-        unsigned_hex: String,
-        file: Option<String>,
-    },
-    SubmitTransfer {
-        signed_hex: String,
+        /// Required, not `Option`: the RPC contract treats an absent
+        /// message as the empty string, and silently substituting `""`
+        /// for a forgotten argument would turn an incomplete command
+        /// into a confident false "INVALID" verdict (rule 82). Empty-
+        /// message signatures remain verifiable over the RPC directly.
+        message: String,
     },
 
     // -- Meta --
@@ -197,7 +240,10 @@ pub fn parse(input: &str) -> ResolvedCommand {
         "restore" => {
             if args.len() >= 2 {
                 let filename = args[0].to_string();
-                let seed_words = args[1..].iter().map(|s| s.to_string()).collect();
+                let seed_words = args[1..]
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
                 ResolvedCommand::Restore {
                     filename,
                     seed_words,
@@ -212,7 +258,6 @@ pub fn parse(input: &str) -> ResolvedCommand {
         "balance" => ResolvedCommand::Balance,
         "address" => ResolvedCommand::Address,
         "transfer" => {
-            let do_not_relay = args.contains(&"--do-not-relay");
             let no_confirm = args.contains(&"--no-confirm");
             let priority = match parse_flag::<u32>(args, "--priority") {
                 FlagValue::Absent => None,
@@ -232,7 +277,6 @@ pub fn parse(input: &str) -> ResolvedCommand {
                         dest: filtered[1].to_string(),
                         amount,
                         priority,
-                        do_not_relay,
                         no_confirm,
                     }
                 } else {
@@ -252,6 +296,32 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 diag("show_transfer: need <txid>")
             }
         }
+        "get_tx_note" => match args {
+            [txid] => ResolvedCommand::GetTxNote {
+                txid: (*txid).to_string(),
+            },
+            _ => diag("get_tx_note: need <txid>"),
+        },
+        "set_tx_note" => {
+            // The note is the VERBATIM remainder after the txid (the `sign`
+            // grammar): user-authored text keeps its internal whitespace.
+            // A missing note is a usage error, never a silent clear — the
+            // RPC clears on an empty note, and a forgotten argument must
+            // not erase an annotation (rule 82).
+            match raw_remainder(input, 2) {
+                Some(note) => ResolvedCommand::SetTxNote {
+                    txid: args[0].to_string(),
+                    note: note.to_string(),
+                },
+                None => diag("set_tx_note: need <txid> <note>"),
+            }
+        }
+        "abandon" => match args {
+            [txid] => ResolvedCommand::Abandon {
+                txid: (*txid).to_string(),
+            },
+            _ => diag("abandon: need <txid>"),
+        },
         "request" if args.first().copied() == Some("new") => {
             let rest: Vec<&str> = args.iter().skip(1).copied().collect();
             let expiry = match parse_flag::<u64>(&rest, "--expiry") {
@@ -286,7 +356,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 diag("requests list: too many arguments (usage: requests list [pending|matched|all])")
             } else {
                 ResolvedCommand::RequestsList {
-                    filter: args.get(1).map(|s| s.to_string()),
+                    filter: args.get(1).map(std::string::ToString::to_string),
                 }
             }
         }
@@ -336,10 +406,69 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 diag("parse_uri: need <uri>")
             }
         }
-        "stake" => ResolvedCommand::Stake,
+        // Exhaustive rather than `contains`, and unrecognized arguments are
+        // a diagnostic instead of a shrug. `stake` is capital-locking and
+        // its two postures carry different obligations, so an argument the
+        // parser does not understand means the operator asked for something
+        // this build cannot map — and *guessing* market would post the
+        // wrong-shaped bond under a typo'd foundation flag once assignment
+        // exists. Silent divergence between what was asked and what is done
+        // is the whole class D-3's mandatory enum removed at the engine; the
+        // CLI must not reintroduce it at the front door.
+        "stake" => match args {
+            [] => ResolvedCommand::Stake { foundation: false },
+            ["--complete-tree-foundation"] => ResolvedCommand::Stake { foundation: true },
+            _ => diag("stake: unrecognized argument; usage: stake [--complete-tree-foundation]"),
+        },
         "staked_balance" => ResolvedCommand::StakedBalance,
         "staked_outputs" => ResolvedCommand::StakedOutputs,
         "staking_info" => ResolvedCommand::StakingInfo,
+        // `stake_in` / `drain` take exactly one amount and NO flags, by
+        // contract: a fee, destination, or slot token would be a steering
+        // attempt the server rejects with -32602 (F-1) — say so here rather
+        // than let muscle-memory flags travel and fail with less context.
+        "stake_in" => match args {
+            [one] if !one.starts_with('-') => match crate::commands::parse_amount(one) {
+                Some(amount) => ResolvedCommand::StakeIn { amount },
+                None => diag(format!("stake_in: invalid amount {one:?}")),
+            },
+            _ => diag(
+                "stake_in: need exactly <amount>; the command takes no flags \
+                 (usage: stake_in <amount>)",
+            ),
+        },
+        "drain_balance" => match args {
+            [] => ResolvedCommand::DrainBalance,
+            _ => diag("drain_balance: takes no arguments"),
+        },
+        "drain" => match args {
+            [one] if !one.starts_with('-') => match crate::commands::parse_amount(one) {
+                Some(amount) => ResolvedCommand::Drain { amount },
+                None => diag(format!("drain: invalid amount {one:?}")),
+            },
+            _ => diag(
+                "drain: need exactly <amount>; the command takes no flags — \
+                 the network fee and the destination (this wallet) are set \
+                 automatically (usage: drain <amount>)",
+            ),
+        },
+        // The exit pair takes NO arguments, by contract: an amount or slot
+        // token here would be a steering attempt the server rejects with
+        // -32602 (F-1) — say so at the front door with more context.
+        "unstake" => match args {
+            [] => ResolvedCommand::Unstake,
+            _ => diag(
+                "unstake: takes no arguments — the exit releases the whole \
+                 bond and the fee is set automatically (usage: unstake)",
+            ),
+        },
+        "collect_unstaked" => match args {
+            [] => ResolvedCommand::CollectUnstaked,
+            _ => diag(
+                "collect_unstaked: takes no arguments — each pass collects \
+                 everything currently spendable (usage: collect_unstaked)",
+            ),
+        },
         "fee" => {
             // Parsed as u64, so a negative or non-numeric value is a hard
             // client-side diagnostic, never a silent fall-back to the default
@@ -434,70 +563,38 @@ pub fn parse(input: &str) -> ResolvedCommand {
             }
         }
         "sign" => {
-            let message = args.join(" ");
-            if message.is_empty() {
-                diag("sign: need <message>")
-            } else {
-                ResolvedCommand::Sign { message }
+            // The message is taken VERBATIM from the input line (not a
+            // re-join of tokens): the signature binds it byte-for-byte,
+            // so a run of spaces or a tab inside the message must reach
+            // the signer exactly as typed. The proofs grammars keep
+            // their join-with-single-spaces challenge semantics
+            // (`trailing_message`) — a proof challenge is an agreed
+            // label, not an attested text.
+            match raw_remainder(input, 1) {
+                Some(message) => ResolvedCommand::Sign {
+                    message: message.to_string(),
+                },
+                None => diag("sign: need <message>"),
             }
         }
         "verify" => {
-            if args.len() >= 3 {
-                ResolvedCommand::Verify {
+            // Signature before message, mirroring the proofs grammar
+            // (`check_tx_proof <txid> <address> <proof> [message]`): the
+            // trailing message is variadic, so everything else must
+            // come first. The signature is one token — the canonical
+            // armored form is a single line by construction (SM-R-5).
+            // Like `sign`, the message is the VERBATIM remainder of the
+            // line: re-joining tokens would collapse whitespace and
+            // report a genuine signature as INVALID (rule 82).
+            // A `Some` remainder implies at least four tokens on the
+            // line, so `args[0]` / `args[1]` are present by construction.
+            match raw_remainder(input, 3) {
+                Some(message) => ResolvedCommand::Verify {
                     address: args[0].to_string(),
-                    message: args[1].to_string(),
-                    signature: args[2].to_string(),
-                }
-            } else {
-                diag("verify: need <address> <message> <signature>")
-            }
-        }
-        "describe_transfer" => {
-            if let Some(hex) = args.first() {
-                ResolvedCommand::DescribeTransfer {
-                    unsigned_hex: hex.to_string(),
-                }
-            } else {
-                diag("describe_transfer: need <unsigned_hex>")
-            }
-        }
-        "sign_transfer" => {
-            let file = match parse_flag_str(args, "--file") {
-                FlagValue::Absent => None,
-                FlagValue::Set(f) => Some(f),
-                FlagValue::Invalid(_) => return diag("sign_transfer: --file expects a path"),
-            };
-            let filtered: Vec<&str> = args
-                .iter()
-                .filter(|a| !a.starts_with("--"))
-                .copied()
-                .collect();
-            if let Some(hex) = filtered.first() {
-                ResolvedCommand::SignTransfer {
-                    unsigned_hex: hex.to_string(),
-                    file,
-                }
-            } else if file.is_some() {
-                ResolvedCommand::SignTransfer {
-                    unsigned_hex: String::new(),
-                    file,
-                }
-            } else {
-                diag("sign_transfer: need <hex> or --file <path>")
-            }
-        }
-        "submit_transfer" => {
-            let filtered: Vec<&str> = args
-                .iter()
-                .filter(|a| !a.starts_with("--"))
-                .copied()
-                .collect();
-            if let Some(hex) = filtered.first() {
-                ResolvedCommand::SubmitTransfer {
-                    signed_hex: hex.to_string(),
-                }
-            } else {
-                diag("submit_transfer: need <signed_hex>")
+                    signature: args[1].to_string(),
+                    message: message.to_string(),
+                },
+                None => diag("verify: need <address> <signature> <message>"),
             }
         }
         "password" => ResolvedCommand::Password,
@@ -527,6 +624,25 @@ fn trailing_message(args: &[&str], start: usize) -> Option<String> {
     }
 }
 
+/// The verbatim remainder of `input` after its first `n` whitespace-
+/// delimited tokens, with the separating whitespace run stripped.
+///
+/// This is the message grammar for `sign` / `verify`: the message binds
+/// into the signature byte-for-byte, so internal whitespace must survive
+/// exactly as typed — [`trailing_message`]'s re-join would collapse it
+/// and make a genuine signature unverifiable. The REPL trims the line
+/// before parsing, so there is no trailing-whitespace ambiguity to
+/// resolve here. `None` when fewer than `n` tokens exist or nothing
+/// follows them.
+fn raw_remainder(input: &str, n: usize) -> Option<&str> {
+    let mut rest = input.trim_start();
+    for _ in 0..n {
+        let end = rest.find(char::is_whitespace)?;
+        rest = rest[end..].trim_start();
+    }
+    (!rest.is_empty()).then_some(rest)
+}
+
 // ---------------------------------------------------------------------------
 // Removed-surface rejection (rule 60 / rule 82: fail loud with guidance)
 // ---------------------------------------------------------------------------
@@ -546,6 +662,14 @@ fn reject_removed_flags(args: &[&str]) -> Option<String> {
             "--account",
             "accounts were deleted; use payment requests (\"request new\") to \
              attribute incoming payments",
+        ),
+        (
+            "--do-not-relay",
+            "not offered. It was step 1 of the Monero cold-signing workflow, \
+             which Shekyl rejects permanently (an FCMP++ witness needs the \
+             live chain). For fees use \"fee\"; transfer already shows the \
+             built transaction and waits for confirmation — decline to \
+             discard without broadcasting",
         ),
     ];
     for arg in args {
@@ -590,6 +714,13 @@ fn reject_removed_command(cmd: &str, args: &[&str]) -> Option<String> {
         "sweep_all" => Some(
             "sweep_all was removed: no native sweep surface exists yet \
              (see docs/FOLLOWUPS.md for the reopening criterion).",
+        ),
+        "describe_transfer" | "sign_transfer" | "submit_transfer" => Some(
+            "cold signing is not offered: an FCMP++ membership witness needs \
+             the live curve tree, so an offline signer cannot deliver the \
+             isolation the workflow claims. Rejected permanently \
+             (V3_WALLET_DECISION_LOG.md 2026-09-07). Cold storage is your \
+             seed phrase.",
         ),
         _ => None,
     };
@@ -717,11 +848,29 @@ mod tests {
         }
     }
 
+    /// `--do-not-relay` is not offered (cold signing rejected permanently,
+    /// decision log 2026-09-07): the flag is a parse-time refusal that says
+    /// "not offered", never a "not yet" pointing at a gate that will not
+    /// open. Same for the cold-signing command names.
     #[test]
-    fn test_transfer_do_not_relay() {
-        match parse("transfer --do-not-relay 1.0 skl1addr") {
-            ResolvedCommand::Transfer { do_not_relay, .. } => assert!(do_not_relay),
-            other => panic!("expected Transfer, got {other:?}"),
+    fn cold_signing_surface_is_refused_at_parse() {
+        for line in [
+            "transfer --do-not-relay 1.0 skl1addr",
+            "describe_transfer deadbeef",
+            "sign_transfer deadbeef",
+            "sign_transfer --file bundle.hex",
+            "submit_transfer deadbeef",
+        ] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(
+                        !message.to_lowercase().contains("not yet")
+                            && !message.to_lowercase().contains("forthcoming"),
+                        "{line:?}: refusal must not promise future availability: {message}"
+                    );
+                }
+                other => panic!("{line:?}: expected Diagnostic refusal, got {other:?}"),
+            }
         }
     }
 
@@ -739,6 +888,66 @@ mod tests {
             }
             other => panic!("expected RequestNew, got {other:?}"),
         }
+    }
+
+    /// `sign` takes the message VERBATIM from the line — internal
+    /// whitespace runs survive, because the signature binds the exact
+    /// bytes; an empty message is a diagnostic, not an empty sign.
+    #[test]
+    fn test_sign_parsing() {
+        match parse("sign I own   this address") {
+            ResolvedCommand::Sign { message } => {
+                assert_eq!(message, "I own   this address");
+            }
+            other => panic!("expected Sign, got {other:?}"),
+        }
+        assert!(matches!(parse("sign"), ResolvedCommand::Diagnostic { .. }));
+    }
+
+    /// `verify <address> <signature> <message...>`: the message is
+    /// REQUIRED (a forgotten argument must be a usage error, never a
+    /// silent empty-string verify that prints a false INVALID) and
+    /// verbatim — whitespace runs inside it are preserved, matching
+    /// `sign`. The signature is one token per the single-line canonical
+    /// form.
+    #[test]
+    fn test_verify_parsing() {
+        match parse("verify skl1abc shekylmsgsig1.AAAA the  signed words") {
+            ResolvedCommand::Verify {
+                address,
+                signature,
+                message,
+            } => {
+                assert_eq!(address, "skl1abc");
+                assert_eq!(signature, "shekylmsgsig1.AAAA");
+                assert_eq!(message, "the  signed words");
+            }
+            other => panic!("expected Verify, got {other:?}"),
+        }
+        assert!(matches!(
+            parse("verify skl1abc shekylmsgsig1.AAAA"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+        assert!(matches!(
+            parse("verify skl1abc"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
+    }
+
+    /// The verbatim-remainder tokenizer behind `sign` / `verify`:
+    /// internal whitespace preserved, separator run stripped, missing
+    /// remainder is `None` (including a whitespace-only tail).
+    #[test]
+    fn raw_remainder_preserves_internal_whitespace() {
+        assert_eq!(
+            raw_remainder("sign  a  b\tc", 1),
+            Some("a  b\tc"),
+            "separator stripped, message whitespace intact"
+        );
+        assert_eq!(raw_remainder("verify addr sig  m", 3), Some("m"));
+        assert_eq!(raw_remainder("verify addr sig", 3), None);
+        assert_eq!(raw_remainder("sign", 1), None);
+        assert_eq!(raw_remainder("sign   ", 1), None);
     }
 
     /// A present-but-unparseable flag value is a hard diagnostic, never a
@@ -805,7 +1014,6 @@ mod tests {
             "make_uri --address=",
             "make_uri --label",
             "make_uri --amount",
-            "sign_transfer --file",
         ] {
             assert!(
                 matches!(parse(line), ResolvedCommand::Diagnostic { .. }),
@@ -993,7 +1201,33 @@ mod tests {
 
     #[test]
     fn test_staking_commands() {
-        assert!(matches!(parse("stake"), ResolvedCommand::Stake));
+        assert!(matches!(
+            parse("stake"),
+            ResolvedCommand::Stake { foundation: false }
+        ));
+        assert!(
+            matches!(
+                parse("stake --complete-tree-foundation"),
+                ResolvedCommand::Stake { foundation: true }
+            ),
+            "the foundation posture must be reachable only by naming it"
+        );
+        // A near-miss flag arms nothing and is not silently downgraded to a
+        // market stake either: the operator asked for something this build
+        // does not understand, and the honest answer is to say so. Both
+        // failure directions are covered — the typo must not reach the
+        // unbounded obligation, and it must not quietly reach the other one.
+        assert!(
+            matches!(
+                parse("stake --complete-tree"),
+                ResolvedCommand::Diagnostic { .. }
+            ),
+            "a misspelt posture flag must be refused, never guessed"
+        );
+        assert!(matches!(
+            parse("stake --complete-tree-foundation --extra"),
+            ResolvedCommand::Diagnostic { .. }
+        ));
         assert!(matches!(
             parse("staked_balance"),
             ResolvedCommand::StakedBalance
@@ -1006,6 +1240,124 @@ mod tests {
             parse("staking_info"),
             ResolvedCommand::StakingInfo
         ));
+    }
+
+    /// WI-RPC-5 notes/abandon grammar: one txid each; `set_tx_note` takes
+    /// the note VERBATIM (whitespace preserved), and a missing note is a
+    /// usage error rather than a silent clear.
+    #[test]
+    fn notes_and_abandon_parse() {
+        match parse("get_tx_note deadbeef") {
+            ResolvedCommand::GetTxNote { txid } => assert_eq!(txid, "deadbeef"),
+            other => panic!("expected GetTxNote, got {other:?}"),
+        }
+        match parse("set_tx_note deadbeef rent  march") {
+            ResolvedCommand::SetTxNote { txid, note } => {
+                assert_eq!(txid, "deadbeef");
+                assert_eq!(note, "rent  march", "note whitespace must survive");
+            }
+            other => panic!("expected SetTxNote, got {other:?}"),
+        }
+        match parse("abandon deadbeef") {
+            ResolvedCommand::Abandon { txid } => assert_eq!(txid, "deadbeef"),
+            other => panic!("expected Abandon, got {other:?}"),
+        }
+        for line in [
+            "get_tx_note",
+            "get_tx_note a b",
+            "set_tx_note deadbeef", // forgotten note must not clear silently
+            "abandon",
+            "abandon a b",
+        ] {
+            assert!(
+                matches!(parse(line), ResolvedCommand::Diagnostic { .. }),
+                "{line:?} should be a Diagnostic"
+            );
+        }
+    }
+
+    /// PR-C exit pair: no arguments, by contract. Extra slot/amount/fee
+    /// tokens are a hard diagnostic naming the no-steering grammar — the
+    /// CLI-side half of the F-1 `-32602` pin. Bitten red by accepting a
+    /// trailing token.
+    #[test]
+    fn unstake_and_collect_unstaked_parse_no_args() {
+        assert!(matches!(parse("unstake"), ResolvedCommand::Unstake));
+        assert!(matches!(
+            parse("collect_unstaked"),
+            ResolvedCommand::CollectUnstaked
+        ));
+        for line in [
+            "unstake 1",
+            "unstake 1.0",
+            "unstake --slot 0",
+            "unstake --fee 1",
+            "unstake extra",
+            "collect_unstaked 1",
+            "collect_unstaked 1.0",
+            "collect_unstaked --slot 0",
+            "collect_unstaked --amount 5",
+            "collect_unstaked extra",
+        ] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    let verb = if line.starts_with("collect") {
+                        "collect_unstaked"
+                    } else {
+                        "unstake"
+                    };
+                    assert!(
+                        message.contains(verb) && message.contains("no arguments"),
+                        "{line:?} diagnostic must name the no-argument grammar: {message}"
+                    );
+                }
+                other => panic!("expected Diagnostic for {line:?}, got {other:?}"),
+            }
+        }
+    }
+
+    /// WI-RPC-5 staking actions: exactly one amount, no flags. A
+    /// flag-shaped token is a hard diagnostic naming the no-steering
+    /// grammar — the CLI-side half of the F-1 `-32602` pin.
+    #[test]
+    fn stake_in_and_drain_parse_amount_only() {
+        match parse("stake_in 2.5") {
+            ResolvedCommand::StakeIn { amount } => assert_eq!(amount, 2_500_000_000),
+            other => panic!("expected StakeIn, got {other:?}"),
+        }
+        match parse("drain 1.0") {
+            ResolvedCommand::Drain { amount } => assert_eq!(amount, 1_000_000_000),
+            other => panic!("expected Drain, got {other:?}"),
+        }
+        assert!(matches!(
+            parse("drain_balance"),
+            ResolvedCommand::DrainBalance
+        ));
+        for line in [
+            "stake_in",
+            "stake_in 1.0 extra",
+            "stake_in --fee 1", // steering flags refused at parse
+            "stake_in abc",
+            "drain",
+            "drain 1.0 skl1dest", // no destination arg exists
+            "drain --fee 1",
+            "drain --priority 3",
+            "drain abc",
+            "drain_balance extra",
+        ] {
+            assert!(
+                matches!(parse(line), ResolvedCommand::Diagnostic { .. }),
+                "{line:?} should be a Diagnostic"
+            );
+        }
+        // The no-flags diagnostics name the grammar.
+        match parse("drain --fee 1") {
+            ResolvedCommand::Diagnostic { message } => {
+                assert!(message.contains("drain <amount>"), "{message}");
+                assert!(message.contains("no flags"), "{message}");
+            }
+            other => panic!("expected Diagnostic, got {other:?}"),
+        }
     }
 
     #[test]

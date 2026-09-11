@@ -36,8 +36,8 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
     let scale = (size as f64 * 0.45) / max_r.max(1e-6);
     let radii_pix: Vec<f64> = radii.iter().map(|r| r * scale).collect();
 
-    let seed_radius_base = 1.5 + 4.5 * f.value_magnitude;
-    let seed_radius_grow = 0.8 + 1.6 * f.tier_skew_high;
+    let seed_radius_base = 1.5 + 4.5 * ent.unit(3);
+    let seed_radius_grow = 0.8 + 1.6 * ent.unit(4);
 
     let max_rp = radii_pix.last().copied().unwrap_or(1.0).max(1e-6);
 

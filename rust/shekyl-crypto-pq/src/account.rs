@@ -9,7 +9,7 @@
 //! keys are derived from a user-supplied seed. Every byte of every address
 //! ever minted on mainnet or stagenet is reproducible by running the inputs
 //! through this one file. The derivation is frozen at release tag `v1` and
-//! pinned in CI by the `ADDRESS_DERIVATION_V1` KAT suite.
+//! pinned in CI by the `ADDRESS_DERIVATION_V2` KAT suite.
 //!
 //! # Pipeline overview
 //!
@@ -127,9 +127,24 @@ pub const SEED_FORMAT_BIP39: u8 = 0x01;
 /// Wire byte for `SeedFormat::Raw32`. Part of the wallet-file AAD.
 pub const SEED_FORMAT_RAW32: u8 = 0x02;
 
-/// Length of the Shekyl classical-segment address bytes. 1-byte version plus
-/// 32-byte spend public key plus 32-byte view public key.
-pub const CLASSICAL_ADDRESS_BYTES: usize = 1 + 32 + 32;
+/// Length of the Shekyl classical-segment address bytes. Owned by
+/// `shekyl-address`; this alias exists so the FFI blob and the
+/// derivation pipeline name the same width.
+pub const CLASSICAL_ADDRESS_BYTES: usize = shekyl_address::CLASSICAL_SEGMENT_LEN;
+
+/// The persisted wallet-envelope field keeps the
+/// `version ‖ spend ‖ view` PREFIX of these bytes (see
+/// `wallet_envelope::EXPECTED_CLASSICAL_ADDRESS_BYTES`): the prefix
+/// detects a seed/file mismatch at full strength — `msg_sign_pk` is
+/// deterministic from the same seed and adds no detection power — and
+/// keeping the stored bytes unchanged keeps every existing wallet file
+/// openable (the field feeds the file-KEK HKDF info).
+pub const CLASSICAL_ADDRESS_PREFIX_BYTES: usize =
+    CLASSICAL_ADDRESS_BYTES - shekyl_address::MSG_SIGN_PK_LEN;
+const _: () = assert!(shekyl_address::MSG_SIGN_PK_LEN == crate::message_signing::SLH_192S_PK_LEN);
+const _: () = assert!(
+    CLASSICAL_ADDRESS_PREFIX_BYTES == crate::wallet_envelope::EXPECTED_CLASSICAL_ADDRESS_BYTES
+);
 
 /// Length of the concatenated PQC public-key buffer stored as
 /// `m_pqc_public_key` in C++ `account_public_address`. X25519 32 bytes
@@ -523,8 +538,10 @@ pub struct AllKeysBlob {
     /// `x25519_pk || ml_kem_ek`, byte-identical to what C++ stores as
     /// `account_public_address::m_pqc_public_key`. 1216 bytes.
     pub pqc_public_key: [u8; PQC_PUBLIC_KEY_BYTES],
-    /// `version || spend_pk || view_pk`, byte-identical to what C++ stores
-    /// as `m_expected_classical_address_bytes`. 65 bytes.
+    /// `version || spend_pk || view_pk || msg_sign_pk`, the full classical
+    /// address payload (113 bytes). The persisted envelope field and C++'s
+    /// `m_expected_classical_address_bytes` keep only the 65-byte prefix —
+    /// see [`CLASSICAL_ADDRESS_PREFIX_BYTES`].
     pub classical_address_bytes: [u8; CLASSICAL_ADDRESS_BYTES],
 
     // --- secret side (held by C++ only as opaque bytes) -------------------
@@ -574,6 +591,29 @@ impl AllKeysBlob {
             view_sk: ViewSecret::from_bytes([0u8; 32]),
             ml_kem_dk: MlKem768DecapKey::zero(),
         }
+    }
+
+    /// The SLH-DSA-192s message-signing public key — the fourth classical
+    /// field, sliced out of `classical_address_bytes` here so no caller
+    /// re-learns the layout's offsets.
+    #[must_use]
+    pub fn msg_sign_pk(&self) -> &[u8; shekyl_address::MSG_SIGN_PK_LEN] {
+        shekyl_address::ClassicalFields::parse(&self.classical_address_bytes)
+            .expect("blob fill writes a well-formed classical segment")
+            .msg_sign_pk
+    }
+
+    /// The encoded receive address this blob derives. The one
+    /// constructor that knows how the blob's public fields become a
+    /// [`shekyl_address::ShekylAddress`] — callers do not re-slice.
+    #[must_use]
+    pub fn to_address(&self, network: shekyl_address::Network) -> shekyl_address::ShekylAddress {
+        shekyl_address::ShekylAddress::from_classical_bytes(
+            network,
+            &self.classical_address_bytes,
+            self.ml_kem_ek.to_vec(),
+        )
+        .expect("blob fill writes a well-formed classical segment")
     }
 }
 
@@ -635,9 +675,21 @@ pub fn rederive_account(
     blob.pqc_public_key[..32].copy_from_slice(&blob.x25519_pk);
     blob.pqc_public_key[32..].copy_from_slice(&blob.ml_kem_ek);
 
-    blob.classical_address_bytes[0] = shekyl_address::ADDRESS_VERSION_V1;
-    blob.classical_address_bytes[1..33].copy_from_slice(blob.spend_pk.as_canonical_bytes());
-    blob.classical_address_bytes[33..65].copy_from_slice(blob.view_pk.as_canonical_bytes());
+    // Fourth classical field: the SLH-DSA-192s message-signing public key
+    // (fork (ii), SM-R-8), derived under the same `(network, seed_format)`
+    // scoping as every key above (SM-R-4 R4-c — the published key must
+    // not link addresses across networks). This is a full SLH keygen
+    // (~415 ms on the Pi-4 floor): acceptable because `rederive_account`
+    // runs only on the create/open paths, where the Argon2 KDF already
+    // dominates — do not add it to any per-request path.
+    let msg_sign_pk =
+        crate::message_signing::derive_message_signing_public_key(master_seed, net, fmt)?;
+    blob.classical_address_bytes = shekyl_address::classical_segment_bytes(
+        shekyl_address::ADDRESS_VERSION_V1,
+        blob.spend_pk.as_canonical_bytes(),
+        blob.view_pk.as_canonical_bytes(),
+        &msg_sign_pk,
+    );
 
     Ok(blob)
 }
@@ -857,8 +909,8 @@ mod tests {
     }
 
     // Tier-2 golden vectors (mainnet/stagenet BIP-39, testnet Raw32, passphrase
-    // separation) live in `docs/test_vectors/ADDRESS_DERIVATION_V1/vectors.json`
-    // and are exercised by `tests/kat_address_derivation_v1.rs`. BIP-39 wallet
+    // separation) live in `docs/test_vectors/ADDRESS_DERIVATION_V2/vectors.json`
+    // and are exercised by `tests/kat_address_derivation_v2.rs`. BIP-39 wallet
     // creation has no C++ `wallet2` equivalent by design — see FOLLOWUPS
     // "wallet2 has no generate_from_bip39 entry point".
 

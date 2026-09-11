@@ -41,8 +41,8 @@
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "fcmp/bulletproofs_plus.h"
-#include "fcmp/rctOps.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_ops.h"
+#include "fcmp/ct_semantics.h"
 #include "serialization/binary_archive.h"
 #include "serialization/json_object.h"
 #include "shekyl/consensus_constants_generated.h"
@@ -124,9 +124,9 @@ TEST(archival_bond_post, vin_serializer_enforces_bond_spend_pk_coupling)
     EXPECT_FALSE(::do_serialize(oar, vin_truncated_key));
   }
   {
-    txin_v vin_unbond_with_key = [] {
+    txin_v vin_release_with_key = [] {
       txin_archival_bond_post b = make_join_market_vin();
-      b.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+      b.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
       b.holdings.shard_ids.clear();
       b.bonded_total_atomic = 0;
       b.bond_credit = 0;
@@ -135,13 +135,13 @@ TEST(archival_bond_post, vin_serializer_enforces_bond_spend_pk_coupling)
     }();
     std::ostringstream oss;
     binary_archive<true> oar(oss);
-    EXPECT_FALSE(::do_serialize(oar, vin_unbond_with_key));
+    EXPECT_FALSE(::do_serialize(oar, vin_release_with_key));
   }
   {
-    // The same Unbond vin without the key serializes and round-trips key-less.
-    txin_v vin_unbond = [] {
+    // The same Release vin without the key serializes and round-trips key-less.
+    txin_v vin_release = [] {
       txin_archival_bond_post b = make_join_market_vin();
-      b.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+      b.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
       b.bond_spend_pk.clear();
       b.holdings.shard_ids.clear();
       b.bonded_total_atomic = 0;
@@ -151,7 +151,7 @@ TEST(archival_bond_post, vin_serializer_enforces_bond_spend_pk_coupling)
     }();
     std::ostringstream oss;
     binary_archive<true> oar(oss);
-    ASSERT_TRUE(::do_serialize(oar, vin_unbond));
+    ASSERT_TRUE(::do_serialize(oar, vin_release));
     const std::string wire = oss.str();
     txin_v decoded;
     binary_archive<false> iar({reinterpret_cast<const uint8_t*>(wire.data()), wire.size()});
@@ -195,15 +195,15 @@ TEST(archival_bond_post, boost_serializer_enforces_bond_spend_pk_coupling)
     EXPECT_THROW(boost_round_trip(truncated_key), boost::archive::archive_exception);
   }
   {
-    txin_archival_bond_post unbond_with_key = make_join_market_vin();
-    unbond_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
-    EXPECT_THROW(boost_round_trip(unbond_with_key), boost::archive::archive_exception);
+    txin_archival_bond_post release_with_key = make_join_market_vin();
+    release_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
+    EXPECT_THROW(boost_round_trip(release_with_key), boost::archive::archive_exception);
   }
   {
-    txin_archival_bond_post unbond = make_join_market_vin();
-    unbond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
-    unbond.bond_spend_pk.clear();
-    EXPECT_TRUE(boost_round_trip(unbond).bond_spend_pk.empty());
+    txin_archival_bond_post release = make_join_market_vin();
+    release.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
+    release.bond_spend_pk.clear();
+    EXPECT_TRUE(boost_round_trip(release).bond_spend_pk.empty());
   }
 }
 
@@ -240,9 +240,9 @@ TEST(archival_bond_post, json_codec_enforces_bond_spend_pk_coupling)
     EXPECT_THROW(to_json(truncated_key), cryptonote::json::WRONG_TYPE);
   }
   {
-    txin_archival_bond_post unbond_with_key = make_join_market_vin();
-    unbond_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
-    EXPECT_THROW(to_json(unbond_with_key), cryptonote::json::WRONG_TYPE);
+    txin_archival_bond_post release_with_key = make_join_market_vin();
+    release_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
+    EXPECT_THROW(to_json(release_with_key), cryptonote::json::WRONG_TYPE);
   }
 }
 
@@ -270,73 +270,73 @@ TEST(archival_bond_post, rct_balance_rejects_zero_bond_terms)
 {
   constexpr uint64_t amount = 750'000'000;
 
-  rct::rctSig rv{};
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig rv{};
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 0;
   rv.p.fcmp_pp_proof = {0x01};
-  rv.p.pseudoOuts.push_back(rct::scalarmultH(rct::d2h(amount)));
+  rv.p.pseudoOuts.push_back(ct::scalarmultH(ct::d2h(amount)));
 
-  EXPECT_FALSE(rct::verRctSemanticsBondPost(rv, 0, 0));
+  EXPECT_FALSE(ct::verCtSemanticsBondPost(rv, 0, 0));
 }
 
 TEST(archival_bond_post, rct_balance_includes_bond_credit_term)
 {
   constexpr uint64_t bond_credit = 750'000'000;
 
-  rct::rctSig rv{};
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig rv{};
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 0;
   rv.p.fcmp_pp_proof = {0x01};
-  rv.p.pseudoOuts.push_back(rct::scalarmultH(rct::d2h(bond_credit)));
+  rv.p.pseudoOuts.push_back(ct::scalarmultH(ct::d2h(bond_credit)));
 
-  EXPECT_FALSE(rct::verRctSemanticsSimple(rv));
-  EXPECT_TRUE(rct::verRctSemanticsBondPost(rv, bond_credit, 0));
-  EXPECT_FALSE(rct::verRctSemanticsBondPost(rv, bond_credit - 1, 0));
-  EXPECT_FALSE(rct::verRctSemanticsBondPost(rv, 0, bond_credit));
+  EXPECT_FALSE(ct::verCtSemanticsSimple(rv));
+  EXPECT_TRUE(ct::verCtSemanticsBondPost(rv, bond_credit, 0));
+  EXPECT_FALSE(ct::verCtSemanticsBondPost(rv, bond_credit - 1, 0));
+  EXPECT_FALSE(ct::verCtSemanticsBondPost(rv, 0, bond_credit));
 }
 
 TEST(archival_bond_post, rct_balance_rejects_noncanonical_bulletproof_layout)
 {
   constexpr uint64_t bond_debit = 500'000'000;
 
-  rct::rctSig rv{};
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig rv{};
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 0;
   rv.p.fcmp_pp_proof = {0x01};
-  const rct::key mask_scalar = rct::skGen();
+  const ct::key mask_scalar = ct::skGen();
   rv.outPk.resize(2);
-  rv.outPk[0].mask = rct::commit(bond_debit / 2, mask_scalar);
-  rv.outPk[1].mask = rct::commit(bond_debit / 2, mask_scalar);
+  rv.outPk[0].mask = ct::commit(bond_debit / 2, mask_scalar);
+  rv.outPk[1].mask = ct::commit(bond_debit / 2, mask_scalar);
   rv.enc_amounts.resize(2);
   rv.enc_labels.resize(2);
   // Two outputs share one blinding scalar → pseudo must carry 2× that blinding so the
   // bond balance equation holds; failure is then only the non-canonical two-proof layout.
-  const rct::key zero_mask = rct::commit(0, mask_scalar);
-  rv.p.pseudoOuts.push_back(rct::addKeys(zero_mask, zero_mask));
-  rv.p.bulletproofs_plus.push_back(rct::bulletproof_plus_PROVE(bond_debit / 2, mask_scalar));
-  rv.p.bulletproofs_plus.push_back(rct::bulletproof_plus_PROVE(bond_debit / 2, mask_scalar));
+  const ct::key zero_mask = ct::commit(0, mask_scalar);
+  rv.p.pseudoOuts.push_back(ct::addKeys(zero_mask, zero_mask));
+  rv.p.bulletproofs_plus.push_back(ct::bulletproof_plus_PROVE(bond_debit / 2, mask_scalar));
+  rv.p.bulletproofs_plus.push_back(ct::bulletproof_plus_PROVE(bond_debit / 2, mask_scalar));
 
-  EXPECT_FALSE(rct::verRctSemanticsBondPost(rv, 0, bond_debit));
+  EXPECT_FALSE(ct::verCtSemanticsBondPost(rv, 0, bond_debit));
 }
 
 TEST(archival_bond_post, rct_balance_includes_bond_debit_term)
 {
   constexpr uint64_t bond_debit = 500'000'000;
 
-  rct::rctSig rv{};
-  rv.type = rct::CTTypeFcmpPlusPlusPqc;
+  ct::CtSig rv{};
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
   rv.txnFee = 0;
   rv.p.fcmp_pp_proof = {0x01};
-  const rct::key mask_scalar = rct::skGen();
+  const ct::key mask_scalar = ct::skGen();
   rv.outPk.resize(1);
-  rv.outPk[0].mask = rct::commit(bond_debit, mask_scalar);
+  rv.outPk[0].mask = ct::commit(bond_debit, mask_scalar);
   rv.enc_amounts.resize(1);
   rv.enc_labels.resize(1);
   // Funding input contributes only blinding; bond_debit is the cleartext source term.
-  rv.p.pseudoOuts.push_back(rct::commit(0, mask_scalar));
-  rv.p.bulletproofs_plus.push_back(rct::bulletproof_plus_PROVE(bond_debit, mask_scalar));
+  rv.p.pseudoOuts.push_back(ct::commit(0, mask_scalar));
+  rv.p.bulletproofs_plus.push_back(ct::bulletproof_plus_PROVE(bond_debit, mask_scalar));
 
-  EXPECT_FALSE(rct::verRctSemanticsSimple(rv));
-  EXPECT_TRUE(rct::verRctSemanticsBondPost(rv, 0, bond_debit));
-  EXPECT_FALSE(rct::verRctSemanticsBondPost(rv, bond_debit, 0));
+  EXPECT_FALSE(ct::verCtSemanticsSimple(rv));
+  EXPECT_TRUE(ct::verCtSemanticsBondPost(rv, 0, bond_debit));
+  EXPECT_FALSE(ct::verCtSemanticsBondPost(rv, bond_debit, 0));
 }

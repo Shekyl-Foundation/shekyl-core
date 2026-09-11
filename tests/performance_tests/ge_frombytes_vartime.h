@@ -61,7 +61,7 @@ public:
       return false;
 
     const cryptonote::txin_to_key& txin = std::get<cryptonote::txin_to_key>(m_tx.vin[0]);
-    m_key = rct::ki2rct(txin.k_image);
+    m_key = ct::ki2rct(txin.k_image);
 
     return true;
   }
@@ -73,5 +73,5 @@ public:
   }
 
 private:
-  rct::key m_key;
+  ct::key m_key;
 };

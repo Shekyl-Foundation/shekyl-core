@@ -35,6 +35,7 @@
 #include <map>
 
 #include "blockchain_db.h"
+#include "shekyl/shekyl_ffi.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 
 namespace cryptonote
@@ -114,7 +115,7 @@ public:
   virtual void remove_block() override { }
   virtual uint64_t add_transaction_data(const crypto::hash& blk_hash, const std::pair<cryptonote::transaction, cryptonote::blobdata_ref>& tx, const crypto::hash& tx_hash, const crypto::hash& tx_prunable_hash) override {return 0;}
   virtual void remove_transaction_data(const crypto::hash& tx_hash, const cryptonote::transaction& tx) override {}
-  virtual uint64_t add_output(const crypto::hash& tx_hash, const cryptonote::tx_out& tx_output, const uint64_t& local_index, const uint64_t unlock_time, const rct::key *commitment) override {return 0;}
+  virtual uint64_t add_output(const crypto::hash& tx_hash, const cryptonote::tx_out& tx_output, const uint64_t& local_index, const uint64_t unlock_time, const ct::key *commitment) override {return 0;}
   virtual void add_tx_amount_output_indices(const uint64_t tx_index, const std::vector<uint64_t>& amount_output_indices) override {}
   virtual void add_spent_key(const crypto::key_image& k_image) override {}
   virtual void remove_spent_key(const crypto::key_image& k_image) override {}
@@ -156,7 +157,6 @@ public:
   virtual bool prune_blockchain(uint32_t pruning_seed = 0) override { return true; }
   virtual bool update_pruning() override { return true; }
   virtual bool check_pruning() override { return true; }
-  virtual void prune_outputs(uint64_t amount) override {}
 
   virtual void add_alt_block(const crypto::hash &blkid, const cryptonote::alt_block_data_t &data, const cryptonote::blobdata_ref &blob) override {}
   virtual bool get_alt_block(const crypto::hash &blkid, alt_block_data_t *data, cryptonote::blobdata *blob) override { return false; }
@@ -180,9 +180,10 @@ public:
   virtual void set_settlement_epoch_blocks_pin(uint64_t blocks) override {}
   virtual uint64_t get_settlement_epoch_blocks_pin() const override { return 0; }
 
-  virtual bool has_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) const override { return false; }
-  virtual void set_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
-  virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t) override {}
+  virtual bool has_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t, uint64_t) const override { return false; }
+  virtual void set_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t, uint64_t) override {}
+  virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t, uint64_t) override {}
+  virtual uint32_t archival_serve_credit_pass_count(const crypto::hash&, uint64_t, uint64_t) const override { return 0; }
 
   virtual void put_archival_bond_record(const crypto::hash&, const std::vector<uint8_t>&,
     const std::vector<uint8_t>&, uint64_t,
@@ -220,7 +221,18 @@ public:
 
   virtual void grow_curve_tree(const std::vector<uint8_t>&, uint64_t) override {}
   virtual void trim_curve_tree(uint64_t) override {}
-  virtual std::array<uint8_t, 32> get_curve_tree_root() const override { return {}; }
+  // A double that never grows a tree holds the EMPTY tree, and the empty
+  // tree's root is the selene_hash_init sentinel (CT2_DRAIN_ORDER.md §5), not
+  // zeros -- zeros are a root no tree has. The admission-time header-root
+  // check (CEN-B5) runs on every nettype, so a Blockchain over this double
+  // meets it at genesis: the genesis header carries the sentinel and must
+  // find it here.
+  virtual std::array<uint8_t, 32> get_curve_tree_root() const override
+  {
+    std::array<uint8_t, 32> root{};
+    shekyl_curve_tree_selene_hash_init(root.data());
+    return root;
+  }
   virtual uint8_t get_curve_tree_depth() const override { return 0; }
   virtual uint64_t get_curve_tree_leaf_count() const override { return 0; }
   virtual bool get_curve_tree_layer_hash(uint8_t, uint64_t, uint8_t*) const override { return false; }
@@ -228,7 +240,8 @@ public:
   virtual bool get_curve_tree_leaf_by_output_index(uint64_t, uint8_t*) const override { return false; }
 
   virtual void store_curve_tree_root_at_height(uint64_t, const std::array<uint8_t, 32>&) override {}
-  virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t) const override { return {}; }
+  // Same empty tree at every height (see get_curve_tree_root above).
+  virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t) const override { return get_curve_tree_root(); }
   virtual void remove_curve_tree_root_at_height(uint64_t) override {}
 
   virtual void store_archival_attestation_witness_at_height(uint64_t, const cryptonote::blobdata&) override {}

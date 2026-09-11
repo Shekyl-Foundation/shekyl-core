@@ -82,13 +82,13 @@
 //!
 //! There is no miss-tally in persisted consensus state, and therefore no
 //! `42-serialization-policy` version bump. The window is a pure function of the
-//! per-`(P, s, E)` `serve_credit_bit` ledger and the bond record — both already
+//! serve-credit ledger and the bond record — both already
 //! persisted, and both already reverted by `pop_block` (gate-2 §8, gate-4 §5).
 //! Recomputing is what makes the mechanism reorg-safe for free: a rewound bit is
 //! a rewound observation, with no second copy of the history to keep in sync.
 //!
 //! **The price of recomputing: `n` is now a retention constraint.** Before the
-//! window, the slash decision read a *single* epoch's `serve_credit_bit`; it now
+//! window, the slash decision read a *single* epoch's served state; it now
 //! reads up to `n − 1` epochs further back. Those rows are not permanent —
 //! `prune_archival_epochs_before` deletes `archival_serve_credit` below
 //! `tip_epoch − MAX_CLAIM_AGE_W` (`prune_below_epoch_at_height`,
@@ -183,16 +183,56 @@ const _: () = assert!(
      epochs they served and the node deleted"
 );
 
+/// **Connect-order coupling — the slash pass must read what the close wrote.**
+/// At every connect the hooks run slash **then** close
+/// (`blockchain_db.cpp`: `process_archival_slash_at_height` before
+/// `process_archival_epoch_close_at_height`), so the height at which the
+/// slash pass settles epoch `E` (the first block above
+/// `H_slash_deadline(E) = (E+1)·SEB − 1 + CHALLENGE_RESOLUTION_BLOCKS`, i.e.
+/// operand `(E+1)·SEB + CHALLENGE_RESOLUTION_BLOCKS`) must be **strictly**
+/// greater than the height at which `E`'s close fires (operand `(E+1)·SEB`) —
+/// same-height is not enough, because within one connect the slash arm runs
+/// first. The difference is exactly `CHALLENGE_RESOLUTION_BLOCKS`, so the
+/// coupling holds iff it is at least one block.
+///
+/// This can fire on a real re-pin: a future `W`-window redesign that sets the
+/// resolution window to zero ("settle immediately at close") silently inverts
+/// the order — the slash pass would read settlement state the close has not
+/// written yet, exactly the fold-before-read hazard the settlement design
+/// gates structurally. Re-pinning `CHALLENGE_RESOLUTION_BLOCKS` below one
+/// block requires reordering the connect hooks first, and that is a decision
+/// about both sides, not a constant bump. The affine-shape coupling of the
+/// two independently-maintained derivations (`epoch_close_height` here,
+/// `settlement_epoch_slash_deadline_height` in `shekyl-ffi`) is asserted by
+/// test in `shekyl-ffi`'s schedule module, which imports both.
+const _: () = assert!(
+    CHALLENGE_RESOLUTION_BLOCKS >= 1,
+    "CHALLENGE_RESOLUTION_BLOCKS = 0 lands the slash pass for epoch E on the \
+     SAME connect height as E's close, and the connect order runs slash before \
+     close - the slash would read settlement state the close has not written \
+     yet; reorder the connect hooks before re-pinning this below one block"
+);
+
 /// One baseline observation for a `(P_id, shard)` pair: an epoch at which a
 /// challenge was posed and could have been answered.
 ///
-/// `served` is the epoch's `serve_credit_bit` — an **affirmative pass**, never
+/// `served` is the epoch's served state — an **affirmative pass**, never
 /// absence-of-failure (gate-2 §0.1). `!served` is the miss the window counts.
+///
+/// **`PC-D4`: this is a per-EPOCH boolean, and deliberately not a count.** The
+/// ledger is per-challenge now — a pair-epoch may hold several rows — and the
+/// caller collapses them (`archival_serve_credit_pass_count(...) > 0`) before
+/// marshaling. The row multiplicity therefore never reaches this module, which
+/// is why widening the key needed no change here. Anything that wants to
+/// distinguish two passes from three must take the count as a new input rather
+/// than reinterpret this flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BaselineObservation {
     /// The settlement epoch the baseline was observed in.
     pub settlement_epoch: u64,
-    /// `serve_credit_bit(P_id, shard, settlement_epoch)`.
+    /// Whether `(P_id, shard, settlement_epoch)` has any affirmative pass —
+    /// `archival_serve_credit_pass_count(...) > 0` on the C++ side. Under
+    /// `PC-D4` that is a fold over rows, not a single stored bit.
     pub served: bool,
 }
 

@@ -53,16 +53,28 @@ pub struct SelectionCriteria {
     pub dust_threshold: AtomicUnits,
 }
 
-impl Default for SelectionCriteria {
-    fn default() -> Self {
-        // Reference economy rate for default criteria; callers with a live
-        // fee snapshot should set `dust_threshold` via `tx_fee::dust_threshold(&rate)`.
-        let reference_rate = FeeRate::new(1, 1).expect("reference fee rate is non-zero");
+impl SelectionCriteria {
+    /// Default input bounds, with the dust boundary derived from the
+    /// fee rate the spend will actually be built at.
+    ///
+    /// There is no `Default`: dust is fee-relative
+    /// (`PHASE_2A_SEND_PATH.md` §3.8.5), so a criteria value built
+    /// without a rate would carry a well-formed-looking threshold that
+    /// is wrong for every real snapshot — the exact failure the
+    /// migrated-away nominal `1_000_000` had. Requiring the rate makes
+    /// that unrepresentable; the formula itself is single-owned by
+    /// `shekyl_rpc_client::tx_fee::dust_threshold` and the weight by
+    /// `shekyl_tx_weight`, so this composes rather than restates.
+    #[must_use]
+    pub fn for_rate(target_amount: AtomicUnits, rate: &FeeRate) -> Self {
         SelectionCriteria {
-            target_amount: AtomicUnits::ZERO,
+            target_amount,
             min_inputs: 1,
             max_inputs: 16,
-            dust_threshold: AtomicUnits::from_raw(tx_fee::dust_threshold(&reference_rate)),
+            dust_threshold: AtomicUnits::from_raw(tx_fee::dust_threshold(
+                rate,
+                shekyl_tx_weight::marginal_input_weight_at_d_ref(),
+            )),
         }
     }
 }
@@ -192,6 +204,12 @@ mod tests {
     use crate::tests::ledger_ops::make_wallet_output;
     use shekyl_engine_state::TransferDetails;
 
+    /// A stand-in economy rate. Fixture only — production callers pass
+    /// the rate from the live `ValidatedFeeEstimates` snapshot.
+    fn test_rate() -> FeeRate {
+        FeeRate::new(1, 1).expect("fixture fee rate is non-zero")
+    }
+
     fn make_candidate(global_idx: u64, amount: u64, height: u64) -> TransferDetails {
         let mut tx_hash = [0u8; 32];
         tx_hash[..8].copy_from_slice(&global_idx.to_le_bytes());
@@ -222,10 +240,8 @@ mod tests {
         let c3 = make_candidate(3, 2_000_000_000, 3000);
         let candidates: Vec<&TransferDetails> = vec![&c1, &c2, &c3];
 
-        let criteria = SelectionCriteria {
-            target_amount: AtomicUnits::from_raw(4_000_000_000),
-            ..Default::default()
-        };
+        let criteria =
+            SelectionCriteria::for_rate(AtomicUnits::from_raw(4_000_000_000), &test_rate());
 
         let result = select_outputs(&candidates, &criteria).unwrap();
         assert!(result.total_amount >= AtomicUnits::from_raw(4_000_000_000));
@@ -237,10 +253,8 @@ mod tests {
         let c1 = make_candidate(1, 1_000_000_000, 1000);
         let candidates: Vec<&TransferDetails> = vec![&c1];
 
-        let criteria = SelectionCriteria {
-            target_amount: AtomicUnits::from_raw(10_000_000_000),
-            ..Default::default()
-        };
+        let criteria =
+            SelectionCriteria::for_rate(AtomicUnits::from_raw(10_000_000_000), &test_rate());
 
         assert!(select_outputs(&candidates, &criteria).is_none());
     }
@@ -252,9 +266,8 @@ mod tests {
         let candidates: Vec<&TransferDetails> = vec![&c1, &c2];
 
         let criteria = SelectionCriteria {
-            target_amount: AtomicUnits::from_raw(1_000_000_000),
             dust_threshold: AtomicUnits::from_raw(1_000_000),
-            ..Default::default()
+            ..SelectionCriteria::for_rate(AtomicUnits::from_raw(1_000_000_000), &test_rate())
         };
 
         let result = select_outputs(&candidates, &criteria).unwrap();
@@ -270,9 +283,8 @@ mod tests {
         let candidates: Vec<&TransferDetails> = vec![&c1, &c2, &c3];
 
         let criteria = SelectionCriteria {
-            target_amount: AtomicUnits::from_raw(1_000_000),
             dust_threshold: AtomicUnits::from_raw(1_000_000),
-            ..Default::default()
+            ..SelectionCriteria::for_rate(AtomicUnits::from_raw(1_000_000), &test_rate())
         };
 
         let result = select_outputs(&candidates, &criteria).unwrap();

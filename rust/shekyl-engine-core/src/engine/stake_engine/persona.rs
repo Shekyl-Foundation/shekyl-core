@@ -3,12 +3,13 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Persona lifecycle messages (mint, activate, identity, SignBond).
+//! Persona lifecycle messages (mint, activate, identity, PlanBondPost).
 
 use kameo::message::{Context, Message};
 
 use shekyl_archival_bond_builder::{build_join_market_vin, JoinMarketVin};
 use shekyl_archival_retention::HoldingsDescriptor;
+use shekyl_tor_control_wallet::service::OnionIdentity;
 
 use crate::engine::{Network, ShekylAddress};
 
@@ -24,7 +25,6 @@ use super::types::*;
 /// an unheld slot is [`StakeEngineError::LookaheadExhausted`] (reopen to extend
 /// the lookahead). The minted handle carries the current activation generation, so
 /// it is valid only until the next activation (operation-scoped).
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct MintPersonaHandle {
     pub p_slot: PSlot,
 }
@@ -57,7 +57,6 @@ impl Message<MintPersonaHandle> for StakeEngine {
 /// active slot, the retired slot is wiped iff ephemeral (typed contract #4), and
 /// the generation advances (invalidating every prior handle). There is never a
 /// window with two active personas and never a gap with none (§10.1 #2 / §10.9).
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct ActivatePersona {
     pub handle: PersonaHandle,
 }
@@ -98,7 +97,7 @@ impl Message<ActivatePersona> for StakeEngine {
 }
 
 /// Report the public identity of the **held** persona at `p_slot` — a pure
-/// projection, like [`ActivePersona`]: no activation, no activation, no
+/// projection, like [`ActivePersona`]: no activation, no retired-slot wipe, no
 /// generation advance, so every outstanding handle stays valid. The claim
 /// request path (CB-3) uses this to derive the claimant's canonical id from
 /// actor-held state without the lifecycle side effects of
@@ -107,7 +106,6 @@ impl Message<ActivatePersona> for StakeEngine {
 /// retired ephemeral persona as a side effect of an unrelated request.
 /// An unheld slot is [`StakeEngineError::LookaheadExhausted`], exactly as
 /// at the mint boundary.
-#[allow(dead_code)] // inert until the RPC stake entry (same retirement as the claim seam)
 pub(crate) struct PersonaIdentityOf {
     pub p_slot: PSlot,
 }
@@ -130,9 +128,57 @@ impl Message<PersonaIdentityOf> for StakeEngine {
     }
 }
 
+/// Mint the persona's **onion serving credential** — the SH-2b handoff.
+///
+/// Returns an [`OnionIdentity`], never the seed, and that asymmetry is the
+/// custody ruling rather than a convenience. §7.2(iii): the wallet's HKDF
+/// siblings all descend from `master_seed`, so a serving role holding
+/// `hs_id_seed` is one edit away from holding `bond_spend`'s authority. The
+/// expansion therefore runs **here**, inside the secret owner, and what
+/// crosses the actor boundary is a value authorizing exactly one thing:
+/// publishing this onion.
+///
+/// **The guarantee is the boundary, not the seed's lifetime**, and the two are
+/// easy to conflate. This call does not shorten the seed's life or wipe it:
+/// `hs_id_seed` stays in the actor's [`ArchivalPKeys`] for the persona's life,
+/// under that field's `Zeroizing` and the `on_stop` wipe, and
+/// [`OnionIdentity::from_hs_id_seed`] borrows it and retains nothing. What
+/// makes the custody property hold is narrower and stronger: no caller of this
+/// message can obtain the seed, only the expanded credential.
+///
+/// Minted per request rather than cached, because [`OnionIdentity`] is
+/// deliberately not `Clone`: holding the expanded bytes *is* the persona on
+/// the network, so the actor keeps the seed (already in its `ArchivalPKeys`)
+/// and re-derives, rather than keeping a second copy of the serving secret
+/// alive for the session.
+///
+/// A read-only projection like [`PersonaIdentityOf`]: no activation, no
+/// retired-slot wipe, no generation advance. An unheld slot is
+/// [`StakeEngineError::LookaheadExhausted`], as at every other slot boundary.
+pub(crate) struct PersonaOnionIdentityOf {
+    pub p_slot: PSlot,
+}
+
+impl Message<PersonaOnionIdentityOf> for StakeEngine {
+    type Reply = Result<OnionIdentity, StakeEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: PersonaOnionIdentityOf,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let held = self
+            .held
+            .get(&msg.p_slot)
+            .ok_or(StakeEngineError::LookaheadExhausted {
+                requested: msg.p_slot,
+            })?;
+        Ok(OnionIdentity::from_hs_id_seed(&held.keys().hs_id_seed))
+    }
+}
+
 /// Report the public identity of the currently-active persona, or `None` when
 /// idle. Inspection only — never the secret bundle.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct ActivePersona;
 
 impl Message<ActivePersona> for StakeEngine {
@@ -172,14 +218,17 @@ impl Message<ActivePersonaReceiveAddress> for StakeEngine {
     }
 }
 
-/// Request the StakeEngine to build and sign a JoinMarket archival bond post,
-/// consuming the persist-before-use typestate (Bond-PR 2c-2b, S1/S2).
+/// Request the StakeEngine to construct a JoinMarket archival bond-post vin
+/// and draw its placement, consuming the persist-before-use typestate
+/// (Bond-PR 2c-2b, S1/S2). Formerly `SignBond`; renamed when SA-2b deleted
+/// on-vin signing — the handler constructs and plans, it signs nothing
+/// (surface-A signing is the assemble path).
 ///
 /// Both `handle` and `ticket` must name the same persona slot: the handle
 /// proves the slot is currently held at the generation this message was minted
 /// for; the ticket proves its live-bond record was durably committed before
-/// signing. This structural pairing makes "sign before persist" and "sign for
-/// an unheld persona" unexpressible (typed contracts #1 and #2).
+/// construction. This structural pairing makes "construct before persist" and
+/// "construct for an unheld persona" unexpressible (typed contracts #1 and #2).
 ///
 /// The entry-gap timing draw runs inside the handler (S4/S5): the OS entropy
 /// source is preflighted via `try_fill_bytes` (fail-loud on source failure —
@@ -190,12 +239,14 @@ impl Message<ActivePersonaReceiveAddress> for StakeEngine {
 ///
 /// The `ArchivalPKeys` bundle is borrowed inside the actor and never crosses
 /// the actor boundary (rule 36-secret-locality). `build_join_market_vin` is
-/// called here; the reply is a [`SignedBondPost`] carrying the signed
-/// `JoinMarketVin` **and** the bond-post placement offset derived from this
-/// request's entry-gap draw — the caller receives the placement offset with the
-/// bytes it places, so the draw cannot be lost between signing and scheduling.
+/// called here with **public** key halves only; the reply is a
+/// [`BondPostPlacement`] carrying the constructed `JoinMarketVin` **and** the
+/// bond-post placement offset from this request's entry-gap draw — the caller
+/// receives the placement offset with the bytes it places, so the draw cannot
+/// be lost between construction and scheduling. On-vin signing is gone (SA-2b);
+/// surface-A `pqc_auths` signing happens later in assemble.
 ///
-/// Does **not** advance the activation generation — signing does not change
+/// Does **not** advance the activation generation — this path does not change
 /// the active slot or wipe any persona.
 ///
 /// # Caller workflow
@@ -205,36 +256,33 @@ impl Message<ActivePersonaReceiveAddress> for StakeEngine {
 /// stake.activate_persona(handle1)           (sets active slot; handle1 consumed)
 /// engine.persist_bond_record(slot) → ticket (durable; Engine, not actor)
 /// stake.mint_handle(slot)      → handle2
-/// stake.sign_bond(handle2, ticket, holdings, tx_prefix_hash) → SignedBondPost
+/// stake.plan_bond_post(handle2, ticket, holdings) → BondPostPlacement
 /// ```
-#[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
-pub(crate) struct SignBond {
+pub(crate) struct PlanBondPost {
     /// Operation-scoped capability proving the slot is currently held (typed
     /// contract #2). Must match `ticket.p_slot()`.
     pub handle: PersonaHandle,
     /// Proof that the live-bond record was durably persisted for this slot
-    /// before signing (typed contract #1). Must match `handle.p_slot()`.
+    /// before construction (typed contract #1). Must match `handle.p_slot()`.
     pub ticket: crate::engine::stake_persist::PersistedBondTicket,
     /// Holdings to compute `bond_floor` from. Passed to
     /// [`build_join_market_vin`] inside the actor.
     pub holdings: HoldingsDescriptor,
-    /// 32-byte prefix hash of the transaction the bond post rides in.
-    /// Binds the signature to this specific transaction.
-    pub tx_prefix_hash: [u8; 32],
 }
 
-/// Reply of [`SignBond`]: the signed bond vin **and** the block-timed
+/// Reply of [`PlanBondPost`]: the constructed bond vin **and** the block-timed
 /// placement offset derived from the same request's entry-gap draw.
 ///
 /// Pairing them in one reply is the seam discipline: the caller that receives
 /// the bytes to place also receives *where to place them* (blocks from its
 /// private intent anchor `t0`), so the placement offset cannot be lost between
-/// signing and scheduling. The offset is relative; the anchor itself never
-/// leaves the caller.
-#[allow(dead_code)] // inert until the 2c-2a assemble / 2d dispatch consumer lands
+/// construction and scheduling. The offset is relative; the anchor itself never
+/// leaves the caller. The vin carries no on-vin signature (SA-2b).
 #[derive(Debug)]
-pub(crate) struct SignedBondPost {
-    /// The signed JoinMarket bond vin, ready for transaction assembly.
+#[allow(dead_code)] // 2c-2b: the field readers land with the request path — this is `PlanBondPost`'s reply, not `AssembleBond`'s (that is `AssembledBondPost`).
+pub(crate) struct BondPostPlacement {
+    /// The constructed JoinMarket bond vin, ready for transaction assembly.
+    /// Authorization is the later surface-A `pqc_auths` slot, not an on-vin blob.
     pub vin: JoinMarketVin,
     /// Blocks from the private-intent anchor `t0` to the bond-post broadcast —
     /// the drawn entry-gap spread. (No entry offset: only the bond post is
@@ -242,12 +290,12 @@ pub(crate) struct SignedBondPost {
     pub bond_post_offset_blocks: u64,
 }
 
-impl Message<SignBond> for StakeEngine {
-    type Reply = Result<SignedBondPost, StakeEngineError>;
+impl Message<PlanBondPost> for StakeEngine {
+    type Reply = Result<BondPostPlacement, StakeEngineError>;
 
     async fn handle(
         &mut self,
-        msg: SignBond,
+        msg: PlanBondPost,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         // Steps 1–5 (validate + slot cross-check + entropy preflight + guarded
@@ -267,7 +315,7 @@ impl Message<SignBond> for StakeEngine {
         // `PTransactionSubmitter` (per-`P` CX-2) + `BroadcastPosture`
         // (no-③-by-type) in `transaction_submitter.rs` / `posture.rs` (SP-T4a).
         // The remaining CONSUMER wiring is the 2c-2a assemble / 2d dispatch path
-        // (see `AssembleBond`); this handler plans + signs the vin, it does not
+        // (see `AssembleBond`); this handler plans + constructs the vin, it does not
         // broadcast.
         let (handle_slot, bond_post_offset_blocks) =
             self.validate_and_draw_bond_offset(&msg.handle, msg.ticket.p_slot())?;
@@ -279,13 +327,14 @@ impl Message<SignBond> for StakeEngine {
             .expect("validate_handle confirmed slot is held")
             .keys();
 
-        // 7. Build and sign the JoinMarket vin inside the actor.
-        //    `ArchivalPKeys` is borrowed here and never returned to the caller
-        //    (rule 36-secret-locality): only the signed `JoinMarketVin` (paired
-        //    with its placement offset) crosses the actor boundary.
-        let vin = build_join_market_vin(keys, msg.holdings, &msg.tx_prefix_hash)
+        // 7. Construct the JoinMarket vin inside the actor (public keys only;
+        //    SA-2b — no on-vin signature). `ArchivalPKeys` is borrowed here and
+        //    never returned to the caller (rule 36-secret-locality): only the
+        //    constructed `JoinMarketVin` (paired with its placement offset)
+        //    crosses the actor boundary.
+        let vin = build_join_market_vin(keys.bond_post_keys(), msg.holdings)
             .map_err(StakeEngineError::BondBuild)?;
-        Ok(SignedBondPost {
+        Ok(BondPostPlacement {
             vin,
             bond_post_offset_blocks,
         })

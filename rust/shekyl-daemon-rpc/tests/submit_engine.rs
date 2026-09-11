@@ -14,8 +14,8 @@ mod submit_fixtures;
 use std::sync::Arc;
 
 use shekyl_daemon_rpc::submit::{
-    parse_submission, CommitOutcome, EngineFault, KeyImageConflict, SubmitCaller, SubmitEngine,
-    SubmitFacts, VerifyFailure,
+    parse_submission, BondProbe, CommitOutcome, EngineFault, KeyImageConflict, SubmitCaller,
+    SubmitEngine, SubmitFacts, VerifyFailure,
 };
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 use shekyl_types::{BlockHeight, ChainCount};
@@ -339,7 +339,7 @@ fn snapshot_fault_is_a_fault_not_a_verdict() {
             _txid: &shekyl_types::TxHash,
             _key_images: &[[u8; 32]],
             _reference_block: &shekyl_types::BlockHash,
-            _bond_p_canonical_id: Option<&[u8; 32]>,
+            _bond_probe: Option<BondProbe<'_>>,
             _emission_probe: Option<(&[u8; 32], &[u64])>,
         ) -> Result<SubmitFacts, shekyl_daemon_rpc::submit::ShimFault> {
             Err(shekyl_daemon_rpc::submit::ShimFault)
@@ -505,7 +505,7 @@ fn raced_with_no_changed_premise_is_a_shim_contract_fault() {
 //
 // `in_pool` (relay_category::all) is the internal presence truth; a foreign
 // caller (restricted/public endpoint) may learn only `in_pool_broadcast`
-// (relay_category::legacy). Disclosing embargoed presence to a foreigner
+// (relay_category::broadcasted). Disclosing embargoed presence to a foreigner
 // would turn POST /submit_transaction into a Dandelion++ stem-presence
 // oracle, so an embargoed pool-resident tx is concealed — verified in full
 // and reported Accepted, indistinguishable from a fresh submission.
@@ -534,8 +534,8 @@ fn foreign_embargoed_presence_is_concealed_at_phase_b() {
 #[test]
 fn foreign_broadcast_presence_reveals_already_in_pool() {
     // Already fluffed (broadcast-visible): no embargo secret, so disclosing
-    // AlreadyInPool to a foreign caller is safe — exactly what the legacy
-    // `relay_category::legacy` identity check disclosed.
+    // AlreadyInPool to a foreign caller is safe — exactly what the
+    // `relay_category::broadcasted` identity check discloses.
     let mut facts = base_facts();
     facts.in_pool = true;
     facts.in_pool_broadcast = true;

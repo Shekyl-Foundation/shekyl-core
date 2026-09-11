@@ -374,6 +374,11 @@ fn build_test_case(iteration: u32) {
         "c2_layers": [],
     }]);
 
+    // Hand-assembled on purpose: `change_out` is this test's mirror of the C
+    // ABI's ShekylOutputData, not an `OutputData`, because the point of this
+    // test is to drive the FFI JSON path exactly as a C++ caller would. The
+    // typed `OutputData::enc_*_wire()` accessors are the in-process path's
+    // constructor and are deliberately out of reach here.
     let mut enc_amount_9 = [0u8; 9];
     enc_amount_9[..8].copy_from_slice(&change_out.enc_amount);
     enc_amount_9[8] = change_out.amount_tag;

@@ -175,9 +175,27 @@ make release-static-win64
 
 The current CMake targets produce:
 
-- daemon: `shekyld`
-- CLI wallet: `shekyl-cli`
-- wallet RPC: `shekyl-wallet-rpc`
+- daemon: `shekyld` (C++)
+- CLI wallet: `shekyl-cli` (Rust)
+- wallet RPC: `shekyl-wallet-rpc` (Rust)
+
+The two wallet binaries are built from the Rust workspace by
+`cmake/BuildRust.cmake` as part of the ordinary CMake build — no separate
+`cargo` step is needed, and `cargo` is already a build prerequisite.
+
+**Platform note.** The wallet binaries are produced for Unix targets
+(Linux, macOS). They are **not built for Windows** — `BuildRust.cmake`
+skips them there, so a Windows build produces `shekyld` and the
+blockchain utilities as before, and Windows release archives carry the
+daemon but no wallet.
+
+That skip is no longer because the code cannot be built: as of
+2026-08-25 both `shekyl-cli` and `shekyl-wallet-rpc` compile and link for
+`x86_64-pc-windows-msvc`, and their end-to-end tests pass there. What is
+unverified is everything *after* compilation — the CMake cross-compile
+path, staging, `install()`, and the archive layout — so the gate stays
+until that is done deliberately rather than as a side effect. See
+`docs/FOLLOWUPS.md`, "Rust wallet stack: no Windows support" (WP-W5).
 
 Typical output location:
 
@@ -219,7 +237,8 @@ flags were removed in V3.1; the daemon now only runs in the foreground
 and is supervised externally. The GUI wallet embeds `shekyld` as a
 Tauri sidecar and does not require a separate service unit.
 
-If running a public remote RPC node, always use restricted mode.
+RPC is operator-to-operator. Restricted RPC is a view-only listener for
+your own wallet, not a public remote node.
 
 ---
 
@@ -250,7 +269,8 @@ Some static dependencies may need to be rebuilt with `-fPIC` for successful stat
 
 ## 10) Runtime safety notes
 
-- For public node operation, use restricted RPC mode.
+- RPC is operator-to-operator (a daemon you control). Restricted RPC is a
+  view-only listener for *your* wallet, not a public remote node.
 - On macOS, if you encounter refresh/runtime instability, try `--max-concurrency 1`.
 - Keep daemon and wallet versions from the same build.
 - Prefer explicit `--data-dir` and `--config-file` paths in service environments.

@@ -6,7 +6,7 @@ cleared to cut. Stage 1 PR 3 of the seven-trait
 extraction chain pinned in
 [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
 §8.1, named explicitly as PR 3 in
-[`docs/design/STAGE_0_HARNESS.md:1722`](../design/STAGE_0_HARNESS.md) and
+[`docs/design/STAGE_0_HARNESS.md:1722`](STAGE_0_HARNESS.md) and
 [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](STAGE_1_PR_2_LEDGER_ENGINE.md)
 §2.2 ("PR 3 (`KeyEngine` per §8.1)").
 
@@ -1662,7 +1662,7 @@ spec-clarification" provenance subsection).**
 ### 3.2 Phase 0b — `KeyError` / `KeyEngineError` split (§7-non-compliant)
 
 **Drift.** Existing `KeyError`
-([`engine/error.rs:362`](../../rust/shekyl-engine-core/src/engine/error.rs))
+([`engine/error/key.rs`](../../rust/shekyl-engine-core/src/engine/error/key.rs))
 covers wallet-open / derivation only: `PublicBytesMismatch`,
 `UnsupportedDerivationPair`, `Primitive`. The §2.1 trait surface
 has runtime ops (signing, ECDH, decap, subaddress derivation)
@@ -4324,7 +4324,7 @@ production code; it is clean post-removal.
 - Spec: [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.1 (current) → §4 (post-amendment).
 - Sibling PR design docs:
-  [`STAGE_0_HARNESS.md`](../design/STAGE_0_HARNESS.md),
+  [`STAGE_0_HARNESS.md`](STAGE_0_HARNESS.md),
   [`STAGE_1_PR_2_LEDGER_ENGINE.md`](STAGE_1_PR_2_LEDGER_ENGINE.md).
 - Cryptography rules:
   [`30-cryptography.mdc`](../../.cursor/rules/30-cryptography.mdc),

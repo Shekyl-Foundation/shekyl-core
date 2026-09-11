@@ -31,8 +31,8 @@
 #include "gtest/gtest.h"
 
 #include "string_tools.h"
-#include "fcmp/rctOps.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_ops.h"
+#include "fcmp/ct_semantics.h"
 #include "fcmp/bulletproofs_plus.h"
 #include "cryptonote_basic/blobdatatype.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
@@ -41,22 +41,22 @@
 
 TEST(bulletproofs_plus, valid_zero)
 {
-  rct::BulletproofPlus proof = bulletproof_plus_PROVE(0, rct::skGen());
-  ASSERT_TRUE(rct::bulletproof_plus_VERIFY(proof));
+  ct::BulletproofPlus proof = bulletproof_plus_PROVE(0, ct::skGen());
+  ASSERT_TRUE(ct::bulletproof_plus_VERIFY(proof));
 }
 
 TEST(bulletproofs_plus, valid_max)
 {
-  rct::BulletproofPlus proof = bulletproof_plus_PROVE(0xffffffffffffffff, rct::skGen());
-  ASSERT_TRUE(rct::bulletproof_plus_VERIFY(proof));
+  ct::BulletproofPlus proof = bulletproof_plus_PROVE(0xffffffffffffffff, ct::skGen());
+  ASSERT_TRUE(ct::bulletproof_plus_VERIFY(proof));
 }
 
 TEST(bulletproofs_plus, valid_random)
 {
   for (int n = 0; n < 8; ++n)
   {
-    rct::BulletproofPlus proof = bulletproof_plus_PROVE(crypto::rand<uint64_t>(), rct::skGen());
-    ASSERT_TRUE(rct::bulletproof_plus_VERIFY(proof));
+    ct::BulletproofPlus proof = bulletproof_plus_PROVE(crypto::rand<uint64_t>(), ct::skGen());
+    ASSERT_TRUE(ct::bulletproof_plus_VERIFY(proof));
   }
 }
 
@@ -66,50 +66,50 @@ TEST(bulletproofs_plus, valid_multi_random)
   {
     size_t outputs = 2 + n;
     std::vector<uint64_t> amounts;
-    rct::keyV gamma;
+    ct::keyV gamma;
     for (size_t i = 0; i < outputs; ++i)
     {
       amounts.push_back(crypto::rand<uint64_t>());
-      gamma.push_back(rct::skGen());
+      gamma.push_back(ct::skGen());
     }
-    rct::BulletproofPlus proof = bulletproof_plus_PROVE(amounts, gamma);
-    ASSERT_TRUE(rct::bulletproof_plus_VERIFY(proof));
+    ct::BulletproofPlus proof = bulletproof_plus_PROVE(amounts, gamma);
+    ASSERT_TRUE(ct::bulletproof_plus_VERIFY(proof));
   }
 }
 
 TEST(bulletproofs_plus, valid_aggregated)
 {
   static const size_t N_PROOFS = 8;
-  std::vector<rct::BulletproofPlus> proofs(N_PROOFS);
+  std::vector<ct::BulletproofPlus> proofs(N_PROOFS);
   for (size_t n = 0; n < N_PROOFS; ++n)
   {
     size_t outputs = 2 + n;
     std::vector<uint64_t> amounts;
-    rct::keyV gamma;
+    ct::keyV gamma;
     for (size_t i = 0; i < outputs; ++i)
     {
       amounts.push_back(crypto::rand<uint64_t>());
-      gamma.push_back(rct::skGen());
+      gamma.push_back(ct::skGen());
     }
     proofs[n] = bulletproof_plus_PROVE(amounts, gamma);
   }
-  ASSERT_TRUE(rct::bulletproof_plus_VERIFY(proofs));
+  ASSERT_TRUE(ct::bulletproof_plus_VERIFY(proofs));
 }
 
 TEST(bulletproofs_plus, invalid_8)
 {
-  rct::key invalid_amount = rct::zero();
+  ct::key invalid_amount = ct::zero();
   invalid_amount[8] = 1;
-  rct::BulletproofPlus proof = bulletproof_plus_PROVE(invalid_amount, rct::skGen());
-  ASSERT_FALSE(rct::bulletproof_plus_VERIFY(proof));
+  ct::BulletproofPlus proof = bulletproof_plus_PROVE(invalid_amount, ct::skGen());
+  ASSERT_FALSE(ct::bulletproof_plus_VERIFY(proof));
 }
 
 TEST(bulletproofs_plus, invalid_31)
 {
-  rct::key invalid_amount = rct::zero();
+  ct::key invalid_amount = ct::zero();
   invalid_amount[31] = 1;
-  rct::BulletproofPlus proof = bulletproof_plus_PROVE(invalid_amount, rct::skGen());
-  ASSERT_FALSE(rct::bulletproof_plus_VERIFY(proof));
+  ct::BulletproofPlus proof = bulletproof_plus_PROVE(invalid_amount, ct::skGen());
+  ASSERT_FALSE(ct::bulletproof_plus_VERIFY(proof));
 }
 
 static const char * const torsion_elements[] =
@@ -125,45 +125,45 @@ static const char * const torsion_elements[] =
 
 TEST(bulletproofs_plus, invalid_torsion)
 {
-  rct::BulletproofPlus proof = bulletproof_plus_PROVE(7329838943733, rct::skGen());
-  ASSERT_TRUE(rct::bulletproof_plus_VERIFY(proof));
+  ct::BulletproofPlus proof = bulletproof_plus_PROVE(7329838943733, ct::skGen());
+  ASSERT_TRUE(ct::bulletproof_plus_VERIFY(proof));
   for (const auto &xs: torsion_elements)
   {
-    rct::key x;
+    ct::key x;
     ASSERT_TRUE(epee::string_tools::hex_to_pod(xs, x));
-    ASSERT_FALSE(rct::isInMainSubgroup(x));
+    ASSERT_FALSE(ct::isInMainSubgroup(x));
     for (auto &k: proof.V)
     {
-      const rct::key org_k = k;
-      rct::addKeys(k, org_k, x);
-      ASSERT_FALSE(rct::bulletproof_plus_VERIFY(proof));
+      const ct::key org_k = k;
+      ct::addKeys(k, org_k, x);
+      ASSERT_FALSE(ct::bulletproof_plus_VERIFY(proof));
       k = org_k;
     }
     for (auto &k: proof.L)
     {
-      const rct::key org_k = k;
-      rct::addKeys(k, org_k, x);
-      ASSERT_FALSE(rct::bulletproof_plus_VERIFY(proof));
+      const ct::key org_k = k;
+      ct::addKeys(k, org_k, x);
+      ASSERT_FALSE(ct::bulletproof_plus_VERIFY(proof));
       k = org_k;
     }
     for (auto &k: proof.R)
     {
-      const rct::key org_k = k;
-      rct::addKeys(k, org_k, x);
-      ASSERT_FALSE(rct::bulletproof_plus_VERIFY(proof));
+      const ct::key org_k = k;
+      ct::addKeys(k, org_k, x);
+      ASSERT_FALSE(ct::bulletproof_plus_VERIFY(proof));
       k = org_k;
     }
-    const rct::key org_A = proof.A;
-    rct::addKeys(proof.A, org_A, x);
-    ASSERT_FALSE(rct::bulletproof_plus_VERIFY(proof));
+    const ct::key org_A = proof.A;
+    ct::addKeys(proof.A, org_A, x);
+    ASSERT_FALSE(ct::bulletproof_plus_VERIFY(proof));
     proof.A = org_A;
-    const rct::key org_A1 = proof.A1;
-    rct::addKeys(proof.A1, org_A1, x);
-    ASSERT_FALSE(rct::bulletproof_plus_VERIFY(proof));
+    const ct::key org_A1 = proof.A1;
+    ct::addKeys(proof.A1, org_A1, x);
+    ASSERT_FALSE(ct::bulletproof_plus_VERIFY(proof));
     proof.A1 = org_A1;
-    const rct::key org_B = proof.B;
-    rct::addKeys(proof.B, org_B, x);
-    ASSERT_FALSE(rct::bulletproof_plus_VERIFY(proof));
+    const ct::key org_B = proof.B;
+    ct::addKeys(proof.B, org_B, x);
+    ASSERT_FALSE(ct::bulletproof_plus_VERIFY(proof));
     proof.B = org_B;
   }
 }

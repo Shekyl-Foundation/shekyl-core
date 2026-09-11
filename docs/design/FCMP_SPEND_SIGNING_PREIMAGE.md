@@ -1,7 +1,8 @@
 # FCMP++ spend serialization & PQC signing preimage — C++ ↔ shekyl-wire reconciliation
 
 **Status:** spec-grounded; consensus-critical. Written to ground the tx-builder
-spend-encoding migration (§8 step-4) and the open §1.1 "Live FCMP++ spend KAT".
+spend-encoding migration (§8 step-4) and the §1.1 "Live FCMP++ spend KAT"
+(`live_oracle_spend_v1.json`, now landed).
 **No code lands on this spec alone** — it pins the C++ (daemon) layout so the
 eventual implementation PR is reviewable, and documents that the *current*
 tx-builder spend encoder diverges from the daemon in four consensus-critical spots.
@@ -18,8 +19,8 @@ Migrating tx-builder onto `shekyl-wire` is therefore not a transparent swap. The
 current encoder is built on `shekyl-oxide`, whose spend layout **does not match the
 C++ daemon**; `shekyl-wire`'s layout **does**. So the migration is a *correctness
 fix* whose parity target is the **C++ daemon / shekyl-wire**, never the current
-shekyl-oxide output. Its full end-to-end proof is the live C++ oracle — the open
-§1.1 spend KAT, blocked on the daemon spend path.
+shekyl-oxide output. Its full end-to-end proof is the live-oracle spend KAT
+(`live_oracle_spend_v1.json`, both language legs in `pruned_tx_hash_parity`).
 
 ## 1. Canonical layout — the C++ daemon
 
@@ -32,8 +33,8 @@ signed_hash(i) = keccak256(payload(i))         # PQC sig (ML-DSA+ed25519) signs 
 ```
 
 - **prefix_blob** = `serialize(transaction_prefix)` — see §1.2. *Includes the tx version.*
-- **ct_base_blob** = `rctSigBase::serialize_rctsig_base(inputs, outputs)` — see §1.3.
-- **prunable_hash** = `keccak256(rctSigPrunable::serialize_rctsig_prunable(type, inputs, outputs))` — see §1.4 (a 32-byte digest, not the blob).
+- **ct_base_blob** = `CtSigBase::serialize_ctsig_base(inputs, outputs)` — see §1.3.
+- **prunable_hash** = `keccak256(CtSigPrunable::serialize_ctsig_prunable(type, inputs, outputs))` — see §1.4 (a 32-byte digest, not the blob).
 - **pqc_header(i)** = the i-th auth's header — see §1.5 (no signature bytes).
 - **all_key_hashes** = `‖ over all auths: keccak256(hybrid_public_key)` (binds every input's key).
 
@@ -48,7 +49,7 @@ FIELD(extra)           # varint(len) + bytes
 The FCMP++ **`signable_tx_hash`** (what the membership/SAL proof signs) is the prefix
 hash = `keccak256(serialize(transaction_prefix))` — **also includes `version=3`**.
 
-### 1.3 rctSigBase (`src/fcmp/rctTypes.h:198-…`)
+### 1.3 CtSigBase (`src/fcmp/ct_types.h:198-…`)
 ```
 FIELD(type)                       # 1 byte: CTTypeNull(coinbase) | CTTypeFcmpPlusPlusPqc
 if Fcmp:
@@ -59,7 +60,7 @@ enc_labels                        # outputs × 9 bytes,            no len prefix
 outPk                             # outputs × 32 bytes (commitments), no len prefix
 ```
 
-### 1.4 rctSigPrunable (`src/fcmp/rctTypes.h:348-…`)
+### 1.4 CtSigPrunable (`src/fcmp/ct_types.h:348-…`)
 ```
 VARINT(nbp)                       # bulletproof+ count (= 1 at genesis)
 bulletproofs_plus[nbp]            # Bp+ structure
@@ -110,8 +111,9 @@ daemon would reject (consistent with the known broken-spend status):
 ## 4. Migration spec (for the eventual consensus PR)
 
 **Add to shekyl-wire** (the wire authority owns the format *and* its signing hashes):
-- `Transaction::prefix_hash() -> [u8;32]` = `cn_fast_hash(varint(TX_VERSION) ‖ TxPrefix::write)`
-  — the FCMP++ `signable_tx_hash`.
+- `Transaction::prefix_hash() -> [u8;32]` = `keccak256(varint(TX_VERSION) ‖ TxPrefix::write)`
+  — the FCMP++ `signable_tx_hash` (byte-identical to the C++ daemon's `cn_fast_hash`
+  composition; SA-3d renamed the Rust API only).
 - `Transaction::pqc_signing_payload_hashes() -> Vec<[u8;32]>` — per input, the §1.1
   composition then `keccak256`, reusing the existing component serializers:
   `prefix_blob = varint(3) ‖ TxPrefix::write`; `ct_base_blob` = the `Ct::Fcmp` head
@@ -136,15 +138,16 @@ proof-type imports are removed.
   round-trip #169 (prunable).
 - **Golden vectors (new):** pin `prefix_hash` + `pqc_signing_payload_hashes` for fixed
   inputs so a future drift fails closed (mirror the `scan_output_kat` idiom).
-- **Live C++ oracle (residual = §1.1):** build via tx-builder → the C++ daemon
-  verifies the PQC auths + FCMP++ proof. Blocked on the daemon spend path; this is the
-  end-to-end proof that closes both this migration and §1.1. Until it lands, the
-  migration is *source- and corpus-validated but not live-proven*.
+- **Live C++ oracle (§1.1):** **landed.** `e2e_fcmp_spend_accepted_by_daemon`
+  builds via the production Engine; a live `shekyld` accepts and connects the
+  spend; `live_oracle_spend_v1.json` is the captured blob, with Rust and C++
+  legs deriving the identities independently.
 
 ## 6. Decision (resolved): **implemented**
 
 Implemented (`feat/tx-builder-shekyl-wire-spend`) as the "implement now" path — source +
-corpus + golden validated, with the live C++ oracle (§1.1) as the remaining residual:
+corpus + golden validated; the live C++ oracle (§1.1) has since landed as
+`live_oracle_spend_v1.json`:
 
 - **shekyl-wire** gained `Transaction::prefix_hash()` (§1.2 signable_tx_hash, version
   included) and `pqc_signing_payload_hashes()` (§1.1 per-input preimage), composed from
@@ -157,7 +160,9 @@ corpus + golden validated, with the live C++ oracle (§1.1) as the remaining res
   removed (crypto `Bulletproof` kept). The four §3 divergences are fixed by construction.
 
 Validation that landed: the keccak swap to RustCrypto `sha3` is pinned byte-equal
-(`cn_fast_hash == shekyl_oxide::keccak256`); the BP+ oxide↔wire layout identity is pinned
+(`shekyl_crypto_hash::keccak256 == shekyl_curve_primitives::keccak256` — the
+`crypto_hash_keccak256_equals_curve_primitives_keccak256` pin in tx-builder
+`wire.rs`); the BP+ oxide↔wire layout identity is pinned
 by an exact-consumption parse; an encode→reparse→rehash test pins that the signed bytes
 equal the encoded bytes; and golden vectors pin `prefix_hash` + the per-input preimage
 against drift. The four §3 divergences thus have a precise, reviewable resolution — the

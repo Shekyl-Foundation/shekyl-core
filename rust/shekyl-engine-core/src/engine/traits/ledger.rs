@@ -248,4 +248,11 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     // through the trait (Phase 2 balance display).
     #[allow(dead_code)]
     fn balance(&self) -> BalanceSummary;
+
+    /// Whether staking is enabled in the wallet's staking record — the one
+    /// authoritative field of the `StakingBlock`. Read by the P-scan start
+    /// gate to distinguish "not a staker" from "staking recovered this
+    /// session, actor pending reopen" (rule 82). Same class-**a**
+    /// synchronous-read semantics as [`Self::synced_height`].
+    fn staking_enabled(&self) -> bool;
 }

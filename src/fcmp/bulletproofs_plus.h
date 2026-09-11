@@ -31,15 +31,15 @@
 #ifndef BULLETPROOFS_PLUS_H
 #define BULLETPROOFS_PLUS_H
 
-#include "rctTypes.h"
+#include "ct_types.h"
 
-namespace rct
+namespace ct
 {
 
-BulletproofPlus bulletproof_plus_PROVE(const rct::key &v, const rct::key &gamma);
-BulletproofPlus bulletproof_plus_PROVE(uint64_t v, const rct::key &gamma);
-BulletproofPlus bulletproof_plus_PROVE(const rct::keyV &v, const rct::keyV &gamma);
-BulletproofPlus bulletproof_plus_PROVE(const std::vector<uint64_t> &v, const rct::keyV &gamma);
+BulletproofPlus bulletproof_plus_PROVE(const ct::key &v, const ct::key &gamma);
+BulletproofPlus bulletproof_plus_PROVE(uint64_t v, const ct::key &gamma);
+BulletproofPlus bulletproof_plus_PROVE(const ct::keyV &v, const ct::keyV &gamma);
+BulletproofPlus bulletproof_plus_PROVE(const std::vector<uint64_t> &v, const ct::keyV &gamma);
 bool bulletproof_plus_VERIFY(const BulletproofPlus &proof);
 bool bulletproof_plus_VERIFY(const std::vector<const BulletproofPlus*> &proofs);
 bool bulletproof_plus_VERIFY(const std::vector<BulletproofPlus> &proofs);

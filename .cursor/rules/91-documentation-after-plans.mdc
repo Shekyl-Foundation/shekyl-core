@@ -6,7 +6,7 @@ alwaysApply: true
 # Documentation After Plans
 
 After any Plan is executed, documentation must be read and updated to reflect
-the changes.
+the changes. 
 
 ## Rules
 
@@ -17,19 +17,85 @@ the changes.
   current behavior, APIs, or design.
 - **What to update:** fix outdated steps, names, examples, and TODOs; add
   or revise sections for new behavior; keep cross-references and checklist
-  items accurate. Update `CHANGELOG.md`.
+  items accurate. Update `docs/CHANGELOG.md` **only** for user-visible,
+  consensus, API, or security-relevant deltas (see
+  [`95-documentation-lifecycle.mdc`](95-documentation-lifecycle.mdc)).
+  Design-round archaeology stays in the plan doc. Completing a plan
+  includes archive-or-contract: living SoTs stay and flip their Status
+  banner; finished plans/preflights `git mv` to `docs/completed/` in the
+  same change per `IMPLEMENTATION_INDEX.md` §8.
 - **Scope:** prefer docs under `docs/` and the main README; update
   file-level or inline docs (Doxygen, module READMEs, Rust crate-level
   `//!` comments) when the change touches that code.
 - **Stale-doc detection:** if a doc references behavior that no longer
   exists (e.g., a removed RPC field, a deleted RCT type), the doc update is
   not optional — the doc is wrong and will mislead readers.
+- **Sweep the indexes, not just the text.** A correction is not landed until
+  every surface that *points at* the corrected text agrees with it: the item's
+  own **heading**, tables of contents, `docs/design/IMPLEMENTATION_INDEX.md`
+  rows (rule 94), `docs/FOLLOWUPS.md` entry titles, cross-references from other
+  docs, and the doc-comment headings above a corrected Rust item.
+
+  **A corrected body under a stale heading is worse than an uncorrected
+  item.** Scanning is how long documents are actually used — `FOLLOWUPS.md` is
+  read by heading, and the body is read only if the heading says it is
+  relevant. So a stale heading routes the correction to exactly the readers who
+  did not need it, and hides it from the ones who did, while the file looks
+  fixed to anyone grepping the body. Landed 2026-08-16: a FOLLOWUPS entry whose
+  blocker had been removed in the body still read *"provisional pin awaiting
+  the W₂ rig"* in its title.
+
+- **A constant's doc is part of the edit, not adjacent to it.** When a constant's
+  *value* changes, its own doc comment changes in the same edit — not in a later
+  sweep. This is a narrower and more dangerous class than a stale comment
+  elsewhere in the tree, because **proximity implies authority**: a reader trusts
+  a comment attached to the thing it describes far more than one three files
+  away, so the two disagreeing *inside one declaration* is the worst possible
+  place for the disagreement to sit, and nothing checks the pair. Landed
+  2026-08-19: `WITNESS_PREFIX_LEN` moved `40 → 8` while its own doc still read
+  *"`r(32) ‖ count_le(8)`"* — a reader trusting the comment over the value would
+  conclude the wire still carried a field that had been deleted.
+
+- **The sweep covers claims about the present, never the record of what was.**
+  A released `CHANGELOG` entry, a shipped release note, a dated audit record, or
+  a "superseded text, retained" block describing a value **as it shipped** is
+  *correct* — it is history, not staleness. A mechanical sweep that "fixes" every
+  match corrupts the record **while reporting success**, which is worse than the
+  staleness it set out to remove: the file now lies about what shipped, and
+  nothing flags it. Before editing a match, ask whether the text asserts
+  something *is* true or records something *was* true. Landed 2026-08-19: a
+  transport-cap sweep matched a released `CHANGELOG` entry stating the old cap;
+  the four live comments were corrected and that entry deliberately was not.
+
+- **A match can be the rationale for the fix, phrased as the hazard.** Beyond
+  *asserts-is* and *records-was* there is a third category, and it is the one
+  that reverses meaning when swept: a live present-tense sentence describing a
+  hazard **inside the construct that closes it**. It is indistinguishable from
+  the vulnerability at one line of context, and "fixing" it rewrites the
+  sentence documenting the fix into a claim the fix is missing — a diff that
+  reads correct in review. Landed 2026-08-29 (PR #576): a sweep for a trusted
+  label matched `gf7_sealing_run.rs`'s *"the grader trusts the label; a
+  mislabeled row would be undetectable downstream"*, which is the parenthetical
+  justifying why the arm is bound **by construction** — an enum that makes a
+  transposed label unrepresentable. It was correctly left alone. Read the
+  enclosing block, not the line, and ask which of the three a match is. Run the
+  inverse sweep too: a line-grep cannot find the claim it did not spell.
+
+**Why this discipline exists at all, stated plainly:** the tree's **executable**
+surface is checked continuously — by builds, tests, const-asserts, CI gates. Its
+**descriptive** surface is checked *never*. One round in August 2026 turned up
+**eight** stale numerals, and not one of them sat where any gate reads. A wrong
+constant fails a build; a wrong comment *about* a constant becomes the next
+person's starting assumption. Sweeping is the only thing standing in for a gate
+there, which is why it keeps paying.
 
 ## Example
 
 When a Plan has N tasks, the (N+1)th task is:
 
 > "Read and update documentation (docs/*.md, README, design/API docs) to
-> reflect the changes. Ensure CHANGELOG.md is updated."
+> reflect the changes. Archive-or-contract per rule 95. Update
+> CHANGELOG.md only if the change is user-visible, consensus, API, or
+> security-relevant."
 
 Complete that task before considering the Plan done.

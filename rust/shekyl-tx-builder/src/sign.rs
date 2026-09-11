@@ -17,6 +17,7 @@ use curve25519_dalek::scalar::Scalar;
 use rand_core::OsRng;
 use zeroize::Zeroizing;
 
+use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
@@ -120,7 +121,7 @@ pub fn sign_transaction_with_terms(
     // consensus convention `rv.outPk[i].mask = scalarmult8(bp.V[i])` (the BP+
     // V is the C/8 form, so scalarmult8 recovers the real C) and the
     // pseudo-out side `genC(...)` (also real C). The balance check
-    // `sum(pseudoOuts) == sum(outPk) + fee*H` (`verRctSemanticsSimple`) sums
+    // `sum(pseudoOuts) == sum(outPk) + fee*H` (`verCtSemanticsSimple`) sums
     // these points directly, so both sides must be the real ×1 commitment;
     // `pseudo_outs` below are `C_tilde = a*G + amount_in*H` (real ×1), so the
     // output side must not be cofactor-scaled.
@@ -134,8 +135,13 @@ pub fn sign_transaction_with_terms(
         .collect();
 
     // ── 4. Pre-computed encrypted amounts (HKDF k_amount XOR + tag) ─
-    let enc_amounts: Vec<[u8; 9]> = outputs.iter().map(|out| out.enc_amount).collect();
-    let enc_labels: Vec<[u8; 9]> = outputs.iter().map(|out| out.enc_label).collect();
+    // Carried as `EncryptedOutputField`, not unwrapped to `[u8; 9]`. This was
+    // where the guarantee used to end: everything downstream took raw arrays, so
+    // safe in-process Rust could hand the encoder nine chosen bytes without ever
+    // constructing the type. The bytes are now taken out only inside the private
+    // wire assembly, at the point they become wire.
+    let enc_amounts: Vec<EncryptedOutputField> = outputs.iter().map(|out| out.enc_amount).collect();
+    let enc_labels: Vec<EncryptedOutputField> = outputs.iter().map(|out| out.enc_label).collect();
 
     // ── 5. Pseudo-output balancing ───────────────────────────────────
     // Generate random blindings for all-but-last input; the last mask is
@@ -251,11 +257,15 @@ pub fn sign_pqc_auths(
         let mut ss = [0u8; 64];
         ss.copy_from_slice(&inp.combined_ss);
 
-        let auth_sig = sign_pqc_auth_for_output(&ss, inp.output_index, hash).map_err(|e| {
-            TxBuilderError::PqcSignError {
-                index: i,
-                reason: format!("sign_pqc_auth_for_output failed: {e}"),
-            }
+        let auth_sig = sign_pqc_auth_for_output(
+            &ss,
+            inp.output_index,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+            hash,
+        )
+        .map_err(|e| TxBuilderError::PqcSignError {
+            index: i,
+            reason: format!("sign_pqc_auth_for_output failed: {e}"),
         })?;
 
         auths.push(PqcAuth {

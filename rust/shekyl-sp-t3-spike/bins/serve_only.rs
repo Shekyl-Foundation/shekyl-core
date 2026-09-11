@@ -33,12 +33,11 @@
 //! variable the withdrawn concurrency arm confused.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_sp_t3_spike::fixture::ShardFixture;
 use shekyl_sp_t3_spike::harness::Apparatus;
-use shekyl_tor::control::onion::OnionPow;
+use shekyl_tor_control_client::control::onion::OnionPow;
 
 fn env_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key).map(PathBuf::from)
@@ -86,16 +85,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let dir = tempfile::tempdir()?;
     eprintln!("bringing up 1 persona (conformant shape) behind one tor...");
-    let app = Apparatus::bring_up_with_pow(
-        tor,
-        dir.path().join("tor-data"),
-        1,
-        Arc::new(fixture.bytes().to_vec()),
-        pow,
-    )
-    .await?;
+    let app =
+        Apparatus::bring_up_with_pow(tor, dir.path().join("tor-data"), 1, fixture.bytes(), pow)
+            .await?;
 
-    let publish = app.await_reachable(len).await?;
+    let publish = app.await_reachable().await?;
     let persona = &app.personas[0];
 
     // The address readers dial. This is the one place a service id is printed on
@@ -104,6 +98,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("ONION={}", persona.service_id().hostname());
     println!("URL={}", persona.shard_url(0));
     println!("PAYLOAD_BYTES={len}");
+    // The number a remote reader should compare a fetched body against. Not
+    // PAYLOAD_BYTES: since RF-D4 the body leads with a frame header, and the
+    // apparatus derives the framed length through the production contract.
+    println!("BODY_BYTES={}", app.expected_body_len());
     eprintln!(
         "reachable after {:.1} s; holding. Ctrl-C to stop.",
         publish.as_secs_f64()

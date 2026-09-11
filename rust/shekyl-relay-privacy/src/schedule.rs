@@ -32,7 +32,7 @@
 use std::collections::BTreeMap;
 
 use crate::geometric::GeometricTable;
-use crate::params::{inherited, DandelionParams};
+use crate::params::{carrier, inherited, DandelionParams};
 use crate::poisson::PoissonTable;
 use crate::rng::{bernoulli, bounded_uniform, RelayRng};
 use crate::stem_map::ConnectionId;
@@ -446,23 +446,59 @@ pub const DEFAULT_EMBARGO_TICK_MILLIS: u64 = 250;
 /// un-reserves their inputs. One in a hundred is the point where the deadline
 /// stops being a coin-flip against the backstop it is waiting for.
 ///
-/// On the adopted embargo that rate is exactly
-/// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`] (874 s — was 664 s before F-7 corrected
-/// `fluff_return_ms`; §44). Pin the seconds, not only the
-/// rate: the same F-1 class of defect reappears if the wait is left as a loose
-/// bound that can drift when the table, tick, or rounding changes.
+/// The seconds this rate buys are pinned by
+/// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`] — **2 297 s**, drawn on the *worst
+/// zone's* embargo since §89.2 made the embargo per-zone (it was 874 s when
+/// the wait was the adopted clearnet embargo, and 664 s before F-7 corrected
+/// `fluff_return_ms`; §44). Which zone the quantile is taken over is the
+/// wallet-coupling defect §89.6 records, not a property of this rate.
+///
+/// Pin the seconds, not only the rate: the same F-1 class of defect reappears
+/// if the wait is left as a loose bound that can drift when the table, tick,
+/// or rounding changes.
 pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
 
-/// Sender "still unseen → failed" wait on the **adopted** embargo, in seconds,
-/// at [`PROPAGATION_FALSE_FAIL_ONE_IN`].
+/// Sender "still unseen → failed" wait, in seconds, at
+/// [`PROPAGATION_FALSE_FAIL_ONE_IN`] — the **worst zone's**, deliberately.
 ///
-/// This is the exact output of
-/// `EmbargoTimer::adopted(...).judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN)`
-/// today: table survival quantile, tick conversion rounded **up**. It is not a
-/// free-standing timeout and must not be retuned here — change the rate or the
-/// embargo derivation, then update this pin when the test says the seconds
-/// moved. See `DAEMON_RELAY_PRIVACY.md` §17.
-pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 874;
+/// **This constant is a deletion target (§89.6.)** A wallet safety invariant
+/// should not be a function of a relay-privacy constant; the wallet should ask
+/// the daemon whether a transaction is still in flight rather than time it. The
+/// worst-zone global is the interim precisely because it needs no machinery and
+/// is the cheapest thing to remove. Do not make it per-zone, and do not grow it
+/// — the reasoning lives in §89.6, not here.
+///
+/// Cost of the interim, stated: a clearnet send reports failure at ~38 minutes
+/// rather than ~15.
+pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_297;
+
+/* `ADOPTED_FORWARD_DELAY_MEAN_SECS` and `ForwardDelay` were here, and Q12-U2
+deleted them with `relay_method::forward`.
+
+They were F-4's family fix for the i2p/tor -> clearnet forwarding delay:
+memoryless rather than the inherited Poisson, at an unchanged 22 s mean.
+`ForwardDelay`'s own docstring called this outcome in advance -- "if Q-12
+deletes `relay_method::forward`, the call site goes with it and the
+retirement stands" -- and Q12-D3 deleted it. An arrival now stems on the zone
+it arrived over instead of crossing to clearnet on a timer, so the bridge the
+delay blurred is not on the admission path at all.
+
+The FINDING outlives the constant and is not carried by this file: the
+residual-inversion result (only a memoryless family has residual identical to
+the full draw; a Poisson is near-fully invertible late in its window) is
+asserted independently in `tests/propagation_measurement/fluff_delay.rs`,
+against the embargo family that does still ship.
+
+One methodological note went with the deleted `forward_delay_family.rs` and
+is recorded here because nothing else holds it: a residual-inversion sweep
+must stop while the table still carries mass. Past that point it conditions
+on an event that essentially never happens and every family -- memoryless
+included -- climbs toward 1.0, so an unbounded sweep measures TRUNCATION
+rather than the distribution. That file caught itself doing exactly this and
+reported a spurious 0.875 phase drift for the memoryless draw. No remaining
+sweep is unbounded (`fluff_delay.rs` samples fixed phases well inside its
+table), which is why the guard is a note here and not a constant with no
+consumer. */
 
 impl EmbargoTimer {
     /// The configuration this crate recommends shipping: exact discrete survival
@@ -697,30 +733,35 @@ impl EmbargoTimer {
 /// conformance question, not because it is part of Dandelion++.
 #[derive(Debug, Clone, Copy)]
 pub struct NoiseCadence {
-    min_delay_secs: u32,
-    jitter_secs: u32,
+    min_delay_ms: u32,
+    jitter_ms: u32,
 }
 
 impl NoiseCadence {
-    /// The inherited cadence: 10 s + U[0, 5 s] between covert sends.
+    /// The shipped cadence: 3.333 s + U[0, 3.334 s] between covert sends, a
+    /// mean of exactly 5 000 ms.
+    ///
+    /// Named `shipped` rather than `inherited` since 2026-08-28: the pair it
+    /// reads is no longer a mirror of `cryptonote_config.h`, and those
+    /// `#define`s are deleted.
     #[must_use]
-    pub const fn inherited() -> Self {
+    pub const fn shipped() -> Self {
         Self {
-            min_delay_secs: inherited::NOISE_MIN_DELAY_SECS,
-            jitter_secs: inherited::NOISE_DELAY_JITTER_SECS,
+            min_delay_ms: carrier::NOISE_MIN_DELAY_MS,
+            jitter_ms: carrier::NOISE_DELAY_JITTER_MS,
         }
     }
 
     /// Next covert-send deadline relative to `start`.
     pub fn next_send<R: RelayRng + ?Sized>(&self, start: Millis, rng: &mut R) -> Millis {
-        let jitter_ms = u64::from(self.jitter_secs) * 1_000;
+        let jitter_ms = u64::from(self.jitter_ms);
         let offset = if jitter_ms == 0 {
             0
         } else {
             bounded_uniform(rng, jitter_ms)
         };
         start
-            .saturating_add(u64::from(self.min_delay_secs).saturating_mul(1_000))
+            .saturating_add(u64::from(self.min_delay_ms))
             .saturating_add(offset)
     }
 }
@@ -926,19 +967,51 @@ mod tests {
         );
     }
 
+    /// The band is derived from the constants rather than transcribed, so a
+    /// cadence change retargets it instead of turning it red — the literal
+    /// `10_500..=15_500` here was a second copy of the pair.
+    ///
+    /// **Containment alone was too weak to be worth keeping.** A `next_send`
+    /// that ignored the jitter and returned `min` every time satisfied the old
+    /// assertion — that is precisely the **metronome**, the one shape §56
+    /// disqualified at a 1.000 re-identification rate. So the span is asserted
+    /// too: over 2 000 draws across a 3 335 ms band, missing either 5 % tail
+    /// has probability `0.95^2000`, which is zero for practical purposes.
     #[test]
     fn noise_cadence_spans_its_band() {
-        let c = NoiseCadence::inherited();
+        const START: u64 = 500;
+        let lo = START + u64::from(carrier::NOISE_MIN_DELAY_MS);
+        let hi = lo + u64::from(carrier::NOISE_DELAY_JITTER_MS);
+        let tail = u64::from(carrier::NOISE_DELAY_JITTER_MS) / 20;
+
+        let c = NoiseCadence::shipped();
         let mut rng = SplitMix64::new(9);
+        let (mut seen_lo, mut seen_hi) = (u64::MAX, 0_u64);
         for _ in 0..2_000 {
-            let t = c.next_send(500, &mut rng);
-            assert!((10_500..=15_500).contains(&t), "noise send at {t}");
+            let t = c.next_send(START, &mut rng);
+            assert!(
+                (lo..=hi).contains(&t),
+                "noise send at {t}, band {lo}..={hi}"
+            );
+            seen_lo = seen_lo.min(t);
+            seen_hi = seen_hi.max(t);
         }
+        assert!(
+            seen_lo <= lo + tail,
+            "no draw within 5% of the band floor ({seen_lo} vs {lo}) — a \
+             cadence pinned near its maximum is not the law that was graded"
+        );
+        assert!(
+            seen_hi >= hi - tail,
+            "no draw within 5% of the band ceiling ({seen_hi} vs {hi}) — at \
+             zero effective width the carrier is a metronome, which Q-11 \
+             Unit 2 disqualified"
+        );
     }
 
     #[test]
     fn propagation_timeout_follows_from_the_shipped_table() {
-        let t = EmbargoTimer::adopted(&DandelionParams::inherited());
+        let t = EmbargoTimer::adopted(&DandelionParams::adopted_for(crate::zone::RelayZone::Tor));
         let secs = t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN);
 
         // Exact pin: the number and the table must not drift apart. A loose
@@ -965,6 +1038,26 @@ mod tests {
             t.judge_failed_after_secs(1_000) > secs,
             "a 1-in-1000 deadline must wait longer than 1-in-100"
         );
+    }
+
+    #[test]
+    fn the_shipped_wait_clears_every_zones_embargo() {
+        // The one property the worst-zone interim must have: no zone's embargo
+        // outlasts it. A wait that clears only the zone it was derived from is
+        // how 874 s came to be wrong for the anonymity path.
+        for zone in [
+            crate::zone::RelayZone::Public,
+            crate::zone::RelayZone::I2p,
+            crate::zone::RelayZone::Tor,
+            crate::zone::RelayZone::Invalid,
+        ] {
+            let t = EmbargoTimer::adopted(&DandelionParams::adopted_for(zone));
+            assert!(
+                ADOPTED_PROPAGATION_TIMEOUT_SECS
+                    >= t.judge_failed_after_secs(PROPAGATION_FALSE_FAIL_ONE_IN),
+                "{zone:?} needs a longer wait than the shipped {ADOPTED_PROPAGATION_TIMEOUT_SECS}s"
+            );
+        }
     }
 
     #[test]

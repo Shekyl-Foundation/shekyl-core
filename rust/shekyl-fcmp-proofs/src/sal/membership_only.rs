@@ -81,8 +81,15 @@ fn synthesize_scalar(
     for part in context_parts {
         transcript.update(part);
     }
+    // Fail-safe, not fail-stop: the secret and the full context are
+    // already in the transcript, so on RNG failure the scalar degrades to
+    // its deterministic RFC-6979-style form rather than panicking (the
+    // same policy as `shekyl-crypto-pq::rng::hedged_fresh32`; this crate
+    // does not depend on it, so the policy is restated here).
     let mut fresh = [0u8; 32];
-    rng.fill_bytes(&mut fresh);
+    if rng.try_fill_bytes(&mut fresh).is_err() {
+        fresh = [0u8; 32];
+    }
     transcript.update(fresh);
     fresh.zeroize();
     Zeroizing::new(Scalar::from_hash(transcript))

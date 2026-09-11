@@ -28,9 +28,9 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 set(fcmp_basic_sources
-  rctOps.cpp
-  rctTypes.cpp
-  rctCryptoOps.c
+  ct_ops.cpp
+  ct_types.cpp
+  ct_crypto_ops.c
   multiexp.cc
   bulletproofs.cc
   bulletproofs_plus.cc)
@@ -51,13 +51,13 @@ target_link_libraries(fcmp_basic
     ${EXTRA_LIBRARIES})
 
 set(fcmp_sources
-  rctSigs.cpp
+  ct_semantics.cpp
 )
 
 set(fcmp_headers)
 
 set(fcmp_private_headers
-  rctSigs.h
+  ct_semantics.h
 )
 
 monero_private_headers(fcmp

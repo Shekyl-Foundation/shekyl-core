@@ -3,7 +3,7 @@ name: ci/gh-actions/rust
 # Split out of build.yml (workflow `ci/gh-actions/cli`) so the long-running,
 # most-commonly-flaking Rust gate is its own workflow *run*. In GitHub Actions
 # you cannot "Re-run failed jobs" until the whole run concludes; while this job
-# (the longest in the CLI workflow, ~35–48m per docs/CI_TIMING_BASELINE.md) was
+# (the longest in the CLI workflow, ~35–95m per docs/CI_TIMING_BASELINE.md) was
 # bundled with the C/C++ compile_by_OS matrix, an OS-runner flake could not be
 # re-run until this job finished. This job never depended on those OS builds —
 # no `needs:`, no artifact download, its own Swatinem cache — so the split is
@@ -18,18 +18,17 @@ name: ci/gh-actions/rust
 
 on:
   push:
-    # dev/main only. PR branches are covered by the pull_request event
-    # (which tests the PR merged into its base — the stronger signal);
-    # an unrestricted push trigger double-runs every job on each push
-    # to an open PR. Branches without a PR get CI by opening a draft PR.
-    branches: [dev, main]
-    paths-ignore:
-      - 'docs/**'
-      - '**/README.md'
+    # `main` only. PRs are covered by `pull_request`. A push-to-dev
+    # trigger double-ran this ~95-minute job on every merge.
+    #
+    # `paths` with negations instead of `paths-ignore` (the two cannot be
+    # combined per event): docs are skipped EXCEPT the domain registry TSV,
+    # which shekyl-crypto-pq's tests/domain_registry.rs include_str!s — a
+    # TSV-only PR that skipped this workflow could merge a duplicate domain
+    # and turn dev's test suite red for the next unrelated rust/** PR.
+    # Order matters: the last matching pattern wins.
+    branches: [main]
   pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - '**/README.md'
 
 # Own concurrency group (distinct from build.yml's `build-<ref>`) so same-PR
 # reruns of the Rust gate supersede only each other, not the OS build run.
@@ -50,8 +49,66 @@ env:
     EOF
 
 jobs:
+  # See build.yml's `changes` job for why this is a job-level condition rather
+  # than a workflow `paths` filter: a path filter suppresses the WORKFLOW, so a
+  # docs-only PR gets no check at all and branch protection waits forever for
+  # `Rust: audit, test, determinism`. A skipped job still reports.
+  #
+  # The domain-registry carve-out that used to live in the `paths` list is
+  # preserved in the scope computation: docs/design/CRYPTO_DOMAIN_REGISTRY.tsv
+  # is a code input (shekyl-crypto-pq's tests/domain_registry.rs include_str!s
+  # it), so a TSV-only PR must still run this suite or a duplicate domain could
+  # merge and turn dev red for the next unrelated rust/** PR.
+  #
+  # Fails closed: an uncomputable file list yields `false` and the suite runs.
+  changes:
+    name: 'Change scope (rust)'
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        run: |
+          set -u
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          head="${{ github.sha }}"
+
+          files=""
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$head" 2>/dev/null || true)"
+          fi
+
+          if [ -z "$files" ]; then
+            echo "scope: no computable file list -- running the suite (fail-closed)"
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          docs_only=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              docs/design/CRYPTO_DOMAIN_REGISTRY.tsv) docs_only=false; break ;;
+              docs/*|*/README.md|README.md) ;;
+              *) docs_only=false; break ;;
+            esac
+          done <<< "$files"
+
+          echo "scope: docs_only=$docs_only"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   rust-audit-and-test:
     name: "Rust: audit, test, determinism"
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     container:
       image: ubuntu:24.04
@@ -63,13 +120,33 @@ jobs:
       - name: update apt
         run: apt update
       - name: install dependencies
-        # ripgrep: hard-required by scripts/lint_cpp_clamp_ban.sh below.
-        run: apt -y install build-essential git curl pkg-config libssl-dev ripgrep
+        # valgrind: headers required to compile `shekyl-engine-state`'s
+        # `ledger_iai` bench (`gungraun` `client_requests` / `act`).
+        # libclang-dev + clang: `valgrind-requests` bindgens those
+        # headers; a bare `ubuntu:24.04` container has neither
+        # libclang.so nor clang. GitHub's hosted `ubuntu-latest`
+        # (`ci/benchmarks`) already ships clang, so the capture job
+        # stayed green while this gate failed. Still gungraun — no
+        # harness swap. clippy `--all-targets` builds benches.
+        # ripgrep moved with lint_cpp_clamp_ban.sh to grep-gates.yml.
+        run: apt -y install build-essential git curl pkg-config libssl-dev valgrind libclang-dev clang
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
           submodules: recursive
+          # Full history: the golden-revision gate below diffs against the
+          # merge base, which a depth-1 checkout cannot resolve.
+          fetch-depth: 0
+      - name: "shard-visual: golden PNGs require a RENDER_REVISION bump"
+        # A modified golden means the pixel derivation changed, and a consumer
+        # caching by RENDER_REVISION (the GUI wallet's cache_digest) would keep
+        # serving images from the old one. The in-crate KAT cannot catch this
+        # direction: the generator writes the same constant the test reads, so
+        # regenerating without a bump leaves both sides agreeing. Needs the
+        # diff, hence a gate rather than a test.
+        # Instance of 47-gate-subject-assertion.mdc.
+        run: python3 scripts/ci/check_golden_revision_bump.py
       - name: install Rust
         # Composite action (.github/actions/install-rust), after
         # checkout — see the build job's step comment.
@@ -90,6 +167,13 @@ jobs:
             exit 1
           fi
           echo "Cargo path portability guard passed."
+      # Reads `cargo metadata`, so it lives here — after install-rust — not in
+      # grep-gates.yml. That job's own header says it does not need a Rust
+      # toolchain; wiring a cargo-metadata gate there works only because the
+      # GitHub-hosted image happens to ship cargo, the same "image has it,
+      # container does not" class this job already paid for with clang.
+      - name: test-only features stay on dev-dependency edges
+        run: python3 scripts/ci/check_test_only_features.py
       - name: verify x86_64 architecture
         run: |
           ARCH=$(uname -m)
@@ -209,15 +293,94 @@ jobs:
         # this is a dev/test lane, and dev edges are deliberately in scope
         # for the feature (see gf7-no-emit-guard.yml header).
         run: cargo clippy -p shekyl-engine-core --all-targets --features gf7-hooks -- -D warnings
-      - name: rustdoc -D warnings (shekyl-tor)
+      - name: "cargo clippy: bench-internals lane (shekyl-engine-core)"
         working-directory: rust
-        # shekyl-tor's docs carry load-bearing security contracts (the trust
-        # gate, the §3c supervisor posture, the pin-time/runtime split) and its
-        # reviews repeatedly turned up public→private intra-doc links that only a
-        # `-D warnings` doc build catches. Scoped to shekyl-tor (not `--workspace`)
-        # because other crates carry pre-existing rustdoc warnings; widening this
-        # to the workspace is a separate hygiene task, tracked in FOLLOWUPS.
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --locked -p shekyl-tor --no-deps --lib
+        # Same defect class as the lane above, by a different mechanism. The
+        # §5.3 B9 bench support (`engine/key_dispatch_bench.rs`, the
+        # `__bench_internals` re-exports) is `#[cfg(feature =
+        # "bench-internals")]` with no `test` alternative, and every bench
+        # target that consumes it carries `required-features =
+        # ["bench-internals"]` — which cargo SKIPS SILENTLY when the feature
+        # is off. So the workspace `--all-targets` gate above neither compiles
+        # the module nor reports that it declined to.
+        #
+        # PR #544 paid for that: making `OutputData`'s encrypted fields
+        # `pub(crate)` updated every consumer the gates could see, and this
+        # module — the one they could not — first reported the break in the
+        # 10-minute bench-capture job. This lane reproduces it in seconds.
+        #
+        # Clippy, not test: the module declares no `#[test]`; it is fixture and
+        # harness code whose only failure mode here is failing to compile.
+        #
+        # Subject assertion (47-gate-subject-assertion): clippy with this
+        # feature is green if the module or its cfg vanishes. Assert the file
+        # exists, the feature is declared, and the cfg sits on the module
+        # declaration — not a doc comment inside the file. Each command is
+        # unpiped (46-shell-gate-exits).
+        run: |
+          test -f shekyl-engine-core/src/engine/key_dispatch_bench.rs
+          grep -F -q 'bench-internals = []' shekyl-engine-core/Cargo.toml
+          # Accept the attribute on the declaration's own line or the line
+          # before it, and any visibility. An earlier form required the
+          # previous-line spelling, so `#[cfg(...)] mod key_dispatch_bench;`
+          # would have failed CI for being written differently — a gate that
+          # fires on formatting teaches people to route around it.
+          #
+          # The declaration is ANCHORED to the start of the line so that a
+          # commented-out `// pub(crate) mod key_dispatch_bench;` does not
+          # satisfy it. That spelling is how the module would most plausibly
+          # disappear, and matching the text inside a comment would have let the
+          # gate pass with its subject absent — the exact vacuity this assertion
+          # exists to prevent.
+          awk '
+            /^[[:space:]]*(#\[cfg\(feature = "bench-internals"\)\][[:space:]]*)?(pub([[:space:]]*\([^)]*\))?[[:space:]]+)?mod[[:space:]]+key_dispatch_bench[[:space:]]*;/ {
+              if ($0 ~ /#\[cfg\(feature = "bench-internals"\)\]/ ||
+                  prev ~ /#\[cfg\(feature = "bench-internals"\)\]/) { found=1; exit 0 }
+            }
+            # Blank and comment lines do not become `prev`: a comment between
+            # an attribute and its item is legal Rust and must not read as an
+            # ungated module.
+            !/^[[:space:]]*(\/\/.*)?$/ { prev = $0 }
+            END { if (!found) { print "key_dispatch_bench missing or not cfg-gated" > "/dev/stderr"; exit 1 } }
+          ' shekyl-engine-core/src/engine/mod.rs
+          cargo clippy -p shekyl-engine-core --all-targets --features bench-internals -- -D warnings
+      # The probe sheet is a PRE-REGISTRATION: it records which probes exist
+      # and which decision each failure revisits. That only means something if
+      # the probes it names are implemented.
+      #
+      # Nothing else checks it. A deleted `#[test]` still compiles and still
+      # passes CI — unlike a deleted function it produces no error anywhere —
+      # which is exactly how P-14, the bounds check guarding an out-of-bounds
+      # read on an attacker-supplied SACL, was lost in PR #523 and caught only
+      # by a reviewer.
+      #
+      # Runs on Linux: it is a pure text comparison, and the drift can land on
+      # any commit rather than only ones that reach a Windows runner.
+      - name: "WP: probe sheet and probe suite agree"
+        run: python3 scripts/ci/check_probe_registry.py
+
+      - name: rustdoc -D warnings (persona serving path)
+        working-directory: rust
+        # These crates' docs carry load-bearing security contracts (shekyl-tor-control-wallet's
+        # trust gate, §3c supervisor posture and pin-time/runtime split;
+        # shekyl-p-serve's wire-indistinguishability invariants; shekyl-p-host's
+        # custody boundary and endpoint-lifetime invariant), and reviews here
+        # repeatedly turned up public→private intra-doc links that only a
+        # `-D warnings` doc build catches. Each crate joins this list in the PR
+        # that lands it, while it is known clean — retrofitting a gate over
+        # accumulated warnings is the task that never happens. Still scoped
+        # rather than `--workspace` because other crates carry pre-existing
+        # rustdoc warnings; widening to the whole workspace is a separate
+        # hygiene task, tracked in FOLLOWUPS.
+        #
+        # `shekyl-win-sec` is deliberately NOT here: it is `cfg(windows)` and
+        # compiles to nothing on this runner, so documenting it would gate an
+        # empty crate and pass forever. Its rustdoc gate runs on the Windows
+        # job in build.yml, where its docs exist.
+        run: >-
+          RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
+          -p shekyl-tor-control-wallet -p shekyl-tor-control-client -p shekyl-p-serve -p shekyl-p-host
+          -p shekyl-operator-alarm -p shekyl-economics
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
@@ -238,6 +401,26 @@ jobs:
         # bare-Rust environment passes; the differential harness asserts
         # under its own substrate-correct environment.
         run: cargo test --locked --workspace --exclude shekyl-randomx-differential
+      - name: "shard-visual-x86-smoke"
+        working-directory: rust
+        # Option (c) of `docs/V3_SHARD_VISUALIZATION.md` "Where the bound is
+        # enforced" (Performance targets, amended 2026-09-06). This catches
+        # GROSS render regressions early on the machine CI already has; it
+        # CANNOT bound the Pi 4 floor (GAP-7: x86:A72 per-term ratios
+        # 3.86x-12x with one axis changing sign, so no scaling factor
+        # exists). The floor itself is re-run by trigger, option (a).
+        #
+        # Deliberately named a smoke check, not a budget or performance
+        # gate, so the step name cannot overclaim; and the binary prints the
+        # same disclaimer on PASS as on FAIL, because a green line reads as
+        # "performance is fine" to every human and every dashboard while a
+        # design-doc paragraph three files away does not travel with the
+        # checkmark.
+        #
+        # --release is mandatory (the binary refuses debug: a debug-profile
+        # latency measurement is meaningless). Thresholds are x86-derived
+        # and live beside the floor ones in the example source.
+        run: cargo run --locked --release -p shekyl-shard-visual --example budget_matrix -- x86-smoke
       - name: "shekyl-levin: zstd-feature-off unavailability lane (--no-default-features)"
         working-directory: rust
         # `shekyl-levin`'s `zstd` feature is default-on (production always
@@ -316,60 +499,6 @@ jobs:
         # this gate catches.
         working-directory: rust
         run: cargo test --locked --release -p shekyl-pow-randomx
-      - name: Bech32m address encoding tests
-        working-directory: rust
-        run: cargo test --locked -p shekyl-crypto-pq -- address
-      - name: C++ clamp-ban lint (address-freeze)
-        run: bash scripts/lint_cpp_clamp_ban.sh
-      - name: "CI grep gate: no shekyl_y in C++ source"
-        run: |
-          if grep -rn 'shekyl_y' src/crypto/ src/wallet/ --include='*.cpp' --include='*.h'; then
-            echo "FATAL: 'shekyl_y' salt still present in C++ source"
-            exit 1
-          fi
-          echo "PASS: no shekyl_y in C++ source"
-      - name: "CI grep gate: no derivation_to_y_scalar in C++ source"
-        run: |
-          if grep -rn 'derivation_to_y_scalar' src/crypto/ src/wallet/ --include='*.cpp' --include='*.h'; then
-            echo "FATAL: derivation_to_y_scalar still present in C++ source"
-            exit 1
-          fi
-          echo "PASS: no derivation_to_y_scalar in C++ source"
-      - name: "CI grep gate: no RCTTypeFull/Simple/Bulletproof in C++ source"
-        run: |
-          if grep -rn 'RCTTypeFull\|RCTTypeSimple\|RCTTypeBulletproof[^P]' src/ --include='*.cpp' --include='*.h'; then
-            echo "FATAL: legacy RCT types still referenced in C++ source"
-            exit 1
-          fi
-          echo "PASS: no legacy RCT types"
-      - name: "CI grep gate: no v1/v2 tx version branches"
-        run: |
-          if grep -rn 'tx\.version\s*==\s*1\b\|tx\.version\s*<\s*2\b\|hf_version\s*<\s*1\b' src/ --include='*.cpp' --include='*.h'; then
-            echo "FATAL: legacy v1/v2 transaction version checks still present"
-            exit 1
-          fi
-          echo "PASS: no v1/v2 tx version branches"
-      - name: "CI grep gate: no HASH_KEY_TXPROOF in C++ source"
-        run: |
-          if grep -rn 'HASH_KEY_TXPROOF' --include='*.cpp' --include='*.h' src/ tests/; then
-            echo "FATAL: legacy HASH_KEY_TXPROOF still referenced"
-            exit 1
-          fi
-          echo "PASS: no HASH_KEY_TXPROOF"
-      - name: "CI grep gate: combined_shared_secret confined to wallet"
-        run: |
-          if grep -rn 'combined_shared_secret' --include='*.cpp' --include='*.h' src/common/ src/rpc/ src/cryptonote_protocol/; then
-            echo "FATAL: combined_shared_secret leaked outside wallet boundary"
-            exit 1
-          fi
-          echo "PASS: combined_shared_secret confined"
-      - name: "CI grep gate: no ecdhEncode/ecdhDecode outside Ledger"
-        run: |
-          if grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/ | grep -v device_ledger; then
-            echo "FATAL: ecdhEncode/ecdhDecode used outside Ledger gate"
-            exit 1
-          fi
-          echo "PASS: no ecdhEncode/ecdhDecode outside Ledger"
       - name: "CI grep gate: no direct dalek_ff_group 0.4 usage"
         working-directory: rust
         run: |

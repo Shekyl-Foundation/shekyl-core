@@ -32,6 +32,9 @@
 #include "block_validation.h"
 
 using namespace epee;
+#include "crypto/pow_registry.h"
+#include "crypto/pow_schema.h"
+
 using namespace cryptonote;
 
 // The inherited Monero-era `lift_up_difficulty` helper (which exercised
@@ -75,16 +78,22 @@ bool gen_block_big_minor_version::generate(std::vector<test_event_entry>& events
   return true;
 }
 
-bool gen_block_ts_not_checked::generate(std::vector<test_event_entry>& events) const
+bool gen_block_ts_below_median_in_bootstrap::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
   REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, SHEKYL_DAA_MTP_WINDOW - 2);
 
+  // C2-R3-Q2: the chain holds SHEKYL_DAA_MTP_WINDOW - 1 blocks, one short of
+  // a full window; the window is right-padded with the genesis timestamp and
+  // the median check runs anyway. A timestamp an hour before genesis sits
+  // below any element of that window and must be rejected. (The inherited
+  // carve-out accepted it — this generator replaced gen_block_ts_not_checked,
+  // which asserted exactly that acceptance.)
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0r, miner_account, test_generator::bf_timestamp, 0, 0, blk_0.timestamp - 60 * 60);
   events.push_back(blk_1);
 
-  DO_CALLBACK(events, "check_block_accepted");
+  DO_CALLBACK(events, "check_block_purged");
 
   return true;
 }
@@ -112,6 +121,44 @@ bool gen_block_ts_in_past::generate(std::vector<test_event_entry>& events) const
   return true;
 }
 
+bool gen_block_ts_at_genesis_in_deep_bootstrap::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+  REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, 3);
+
+  // Window at h = 4: the four real timestamps [g, g+T, g+2T, g+3T] plus
+  // seven genesis pads -> sorted index 5 IS the genesis timestamp, so a
+  // candidate equal to it violates the strict boundary. If the padding
+  // value is a stale init-time genesis (timestamp 0 on fakechain) the
+  // median collapses to 0 and this candidate is wrongly accepted.
+  block blk_1;
+  generator.construct_block_manually(blk_1, blk_0r, miner_account, test_generator::bf_timestamp, 0, 0, blk_0.timestamp);
+  events.push_back(blk_1);
+
+  DO_CALLBACK(events, "check_block_purged");
+
+  return true;
+}
+
+bool gen_block_ts_at_median::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+  REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, SHEKYL_DAA_MTP_WINDOW - 1);
+
+  // C2-R3-Q1: the strict boundary itself. REWIND timestamps ascend by T per
+  // block, so chain order equals sorted order and the window's sorted
+  // index-5 element is events[SHEKYL_DAA_MTP_WINDOW / 2]'s timestamp — the
+  // exact median. Equality must be rejected (`>` , not `>=`).
+  uint64_t ts_at_median = std::get<block>(events[SHEKYL_DAA_MTP_WINDOW / 2]).timestamp;
+  block blk_1;
+  generator.construct_block_manually(blk_1, blk_0r, miner_account, test_generator::bf_timestamp, 0, 0, ts_at_median);
+  events.push_back(blk_1);
+
+  DO_CALLBACK(events, "check_block_purged");
+
+  return true;
+}
+
 bool gen_block_ts_in_future::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
@@ -121,6 +168,76 @@ bool gen_block_ts_in_future::generate(std::vector<test_event_entry>& events) con
   events.push_back(blk_1);
 
   DO_CALLBACK(events, "check_block_purged");
+
+  return true;
+}
+
+bool gen_block_alt_ts_above_ftl::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  MAKE_NEXT_BLOCK(events, blk_1, blk_0, miner_account);
+  MAKE_NEXT_BLOCK(events, blk_2, blk_1, miner_account);
+
+  // C2-R3-Q3: this candidate forks from blk_1 while the main tip is blk_2,
+  // so it takes handle_alternative_block; its timestamp is beyond
+  // local_clock + FTL and must be refused at admission rather than parked
+  // in the alt store until promotion re-checks it.
+  block blk_alt;
+  generator.construct_block_manually(blk_alt, blk_1, miner_account, test_generator::bf_timestamp, 0, 0, time(NULL) + 60*60 + SHEKYL_DAA_FTL_SECONDS);
+  events.push_back(blk_alt);
+
+  DO_CALLBACK(events, "check_block_purged");
+
+  return true;
+}
+
+bool gen_block_alt_ts_window_truncation::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  // Main chain: SHEKYL_DAA_MTP_WINDOW + 2 blocks past genesis, so its
+  // cumulative difficulty (fixed at 1 per block) strictly exceeds anything
+  // the shorter alt fork below can accumulate — no reorg, the candidate
+  // stays on the alternative path.
+  REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, SHEKYL_DAA_MTP_WINDOW + 2);
+
+  // Alt fork at genesis: SHEKYL_DAA_MTP_WINDOW + 1 blocks (one longer than
+  // the MTP window), timestamps ascending by T per block.
+  cryptonote::block alt_prev = blk_0;
+  for (size_t i = 0; i < SHEKYL_DAA_MTP_WINDOW + 1; ++i)
+  {
+    cryptonote::block blk_a;
+    generator.construct_block(blk_a, alt_prev, miner_account);
+    events.push_back(blk_a);
+    alt_prev = blk_a;
+  }
+
+  // With T = 120 the 12 alt timestamps are genesis + 120..1440. The
+  // inherited code medianed the WHOLE alt chain — epee's even-window arm
+  // averages the two middle elements: (g+720 + g+840)/2 = g+780. The ruled
+  // window is the newest 11 (g+240..g+1440), sorted index 5 = g+840. A
+  // candidate at g+800 is strictly above the inherited median (accepted
+  // before this round) and at-or-below the ruled one (rejected after) —
+  // it isolates the window-selection axis from the boundary axis.
+  block blk_bad;
+  generator.construct_block_manually(blk_bad, alt_prev, miner_account, test_generator::bf_timestamp, 0, 0, blk_0.timestamp + 800);
+  events.push_back(blk_bad);
+
+  DO_CALLBACK(events, "check_alt_stored_top_unmoved");
+
+  return true;
+}
+
+bool gen_block_alt_ts_window_truncation::check_alt_stored_top_unmoved(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& /*events*/)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_alt_ts_window_truncation::check_alt_stored_top_unmoved");
+
+  // The well-formed alt blocks really entered the alt store — proving the
+  // candidate was evaluated on the alternative path rather than refused
+  // earlier — and neither the candidate nor the fork moved the main tip.
+  CHECK_EQ(SHEKYL_DAA_MTP_WINDOW + 1, c.get_alternative_blocks_count());
+  CHECK_EQ(SHEKYL_DAA_MTP_WINDOW + 3, c.get_current_blockchain_height());
 
   return true;
 }
@@ -143,9 +260,9 @@ bool gen_block_invalid_prev_id::generate(std::vector<test_event_entry>& events) 
 bool gen_block_invalid_prev_id::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
 {
   if (1 == event_idx)
-    return bvc.m_marked_as_orphaned && !bvc.m_added_to_main_chain && !bvc.m_verifivation_failed;
+    return cryptonote::block_orphaned(bvc) && !cryptonote::block_added(bvc) && !cryptonote::block_rejected(bvc);
   else
-    return !bvc.m_marked_as_orphaned && bvc.m_added_to_main_chain && !bvc.m_verifivation_failed;
+    return !cryptonote::block_orphaned(bvc) && cryptonote::block_added(bvc) && !cryptonote::block_rejected(bvc);
 }
 
 bool gen_block_invalid_attestation_root::generate(std::vector<test_event_entry>& events) const
@@ -377,9 +494,9 @@ bool gen_block_miner_tx_has_no_out::generate(std::vector<test_event_entry>& even
 
   MAKE_MINER_TX_MANUALLY(miner_tx, blk_0);
   miner_tx.vout.clear();
-  miner_tx.rct_signatures.outPk.clear();
-  miner_tx.rct_signatures.enc_amounts.clear();
-  miner_tx.rct_signatures.enc_labels.clear();
+  miner_tx.ct_signatures.outPk.clear();
+  miner_tx.ct_signatures.enc_amounts.clear();
+  miner_tx.ct_signatures.enc_labels.clear();
   miner_tx.extra.clear();
   miner_tx.invalidate_hashes();
 
@@ -418,7 +535,7 @@ bool gen_block_miner_tx_has_out_to_alice::generate(std::vector<test_event_entry>
   return true;
 }
 
-bool gen_block_has_invalid_tx::generate(std::vector<test_event_entry>& events) const
+bool gen_block_missing_tx::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
 
@@ -445,18 +562,18 @@ bool gen_block_is_too_big::generate(std::vector<test_event_entry>& events) const
   uint64_t remainder = amount % tx_out_count;
   txout_target_v target = miner_tx.vout[0].target;
   miner_tx.vout.clear();
-  miner_tx.rct_signatures.outPk.clear();
-  miner_tx.rct_signatures.enc_amounts.clear();
-  miner_tx.rct_signatures.enc_labels.clear();
+  miner_tx.ct_signatures.outPk.clear();
+  miner_tx.ct_signatures.enc_amounts.clear();
+  miner_tx.ct_signatures.enc_labels.clear();
   for (size_t i = 0; i < tx_out_count; ++i)
   {
     tx_out o;
     o.amount = portion;
     o.target = target;
     miner_tx.vout.push_back(o);
-    miner_tx.rct_signatures.outPk.push_back({});
-    miner_tx.rct_signatures.enc_amounts.push_back({});
-    miner_tx.rct_signatures.enc_labels.push_back({});
+    miner_tx.ct_signatures.outPk.push_back({});
+    miner_tx.ct_signatures.enc_amounts.push_back({});
+    miner_tx.ct_signatures.enc_labels.push_back({});
   }
   if (0 < remainder)
   {
@@ -464,9 +581,9 @@ bool gen_block_is_too_big::generate(std::vector<test_event_entry>& events) const
     o.amount = remainder;
     o.target = target;
     miner_tx.vout.push_back(o);
-    miner_tx.rct_signatures.outPk.push_back({});
-    miner_tx.rct_signatures.enc_amounts.push_back({});
-    miner_tx.rct_signatures.enc_labels.push_back({});
+    miner_tx.ct_signatures.outPk.push_back({});
+    miner_tx.ct_signatures.enc_amounts.push_back({});
+    miner_tx.ct_signatures.enc_labels.push_back({});
   }
 
   block blk_1;
@@ -599,6 +716,123 @@ bool gen_block_miner_tx_out_has_view_tag_from_hf_view_tags::generate(std::vector
   events.push_back(blk_1);
 
   DO_CALLBACK(events, "check_block_accepted");
+
+  return true;
+}
+
+
+//----------------------------------------------------------------------------------------------------------------------
+// CEN-D2: the PoW-verdict consumers (see block_validation.h for the contract)
+
+namespace
+{
+// Twin of the unit-test double in pow_longhash_gate.cpp -- deliberately
+// duplicated rather than shared: it is five lines of test scaffolding in a
+// different binary, and any IPowSchema change breaks both loudly at compile
+// time, so there is nothing here that can silently drift.
+class FailingPowSchema final : public IPowSchema
+{
+public:
+  bool hash(const void*, size_t, uint64_t, const crypto::hash*, unsigned,
+    crypto::hash&) const override
+  {
+    return false;
+  }
+  const char* name() const override { return "FailingCoreTestSchema"; }
+};
+
+const FailingPowSchema g_failing_pow_schema{};
+} // namespace
+
+gen_block_pow_verifier_failure_base::gen_block_pow_verifier_failure_base(
+  size_t invalid_block_idx, uint64_t expected_height)
+  : m_invalid_block_idx(invalid_block_idx)
+  , m_expected_height(expected_height)
+{
+  REGISTER_CALLBACK("install_failing_pow_schema",
+    gen_block_pow_verifier_failure_base::install_failing_pow_schema);
+  REGISTER_CALLBACK("check_rejected_unproven",
+    gen_block_pow_verifier_failure_base::check_rejected_unproven);
+}
+
+gen_block_pow_verifier_failure_base::~gen_block_pow_verifier_failure_base()
+{
+  // Belt: an assertion failure between install and check must not leave the
+  // override installed for whatever test runs next in this binary.
+  set_pow_schema_override_for_tests(nullptr);
+}
+
+bool gen_block_pow_verifier_failure_base::install_failing_pow_schema(
+  cryptonote::core& /*c*/, size_t /*ev_index*/,
+  const std::vector<test_event_entry>& /*events*/)
+{
+  set_pow_schema_override_for_tests(&g_failing_pow_schema);
+  return true;
+}
+
+bool gen_block_pow_verifier_failure_base::check_rejected_unproven(
+  cryptonote::core& c, size_t /*ev_index*/,
+  const std::vector<test_event_entry>& /*events*/)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_pow_verifier_failure_base::check_rejected_unproven");
+  set_pow_schema_override_for_tests(nullptr);
+
+  // The bvc assertions only run if the candidate actually reached them; a
+  // harness change that stopped submitting it would otherwise pass here
+  // vacuously.
+  CHECK_TEST_CONDITION(m_saw_expected_rejection);
+  CHECK_EQ(m_expected_height, c.get_current_blockchain_height());
+  CHECK_EQ(0, c.get_pool_transactions_count());
+  return true;
+}
+
+bool gen_block_pow_verifier_failure_base::check_block_verification_context(
+  const cryptonote::block_verification_context& bvc, size_t event_idx,
+  const cryptonote::block& /*blk*/)
+{
+  if (event_idx != m_invalid_block_idx)
+    return !cryptonote::block_rejected(bvc);
+
+  // Rejected, and rejected as UNPROVEN: REJECTED_BAD_POW would attribute a
+  // local verifier failure to the sender.
+  m_saw_expected_rejection = cryptonote::block_rejected(bvc) && !cryptonote::block_bad_pow(bvc);
+  return m_saw_expected_rejection;
+}
+
+bool gen_block_pow_verifier_failure_main::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  DO_CALLBACK(events, "install_failing_pow_schema");
+
+  // A normal, fully valid block: mined against the real schema at generation
+  // time, so the verifier failure at submission is its only defect.
+  MAKE_NEXT_BLOCK(events, blk_1, blk_0, miner_account);
+
+  DO_CALLBACK(events, "check_rejected_unproven");
+
+  return true;
+}
+
+bool gen_block_pow_verifier_failure_alt::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  MAKE_NEXT_BLOCK(events, blk_1, blk_0, miner_account);
+  MAKE_NEXT_BLOCK(events, blk_2, blk_1, miner_account);
+
+  DO_CALLBACK(events, "install_failing_pow_schema");
+
+  // Forks from blk_1 while the tip is blk_2, so it takes
+  // handle_alternative_block. Mined to a second account so it differs from
+  // blk_2 by its miner tx alone -- same height, same parent, valid
+  // timestamp: the verifier failure is the only thing that can reject it.
+  GENERATE_ACCOUNT(alt_miner_account);
+  block blk_alt;
+  generator.construct_block_manually(blk_alt, blk_1, alt_miner_account, test_generator::bf_none);
+  events.push_back(blk_alt);
+
+  DO_CALLBACK(events, "check_rejected_unproven");
 
   return true;
 }

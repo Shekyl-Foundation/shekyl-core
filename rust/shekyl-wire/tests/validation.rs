@@ -8,9 +8,13 @@
 //! unlock_time block-height form, and `nbp == 1`. Chain-context rules (§13) are
 //! the consensus layer's and are not exercised here.
 
+mod common;
+use common::conforming_pqc_extra;
+
+use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{
     Block, BondPost, BondPostKind, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable,
-    ServeCredit, Transaction, TxPrefix,
+    Transaction, TxPrefix,
 };
 
 /// A minimal fee-only-shaped tx (no outputs, empty pqc, no prunable) wrapping a
@@ -35,6 +39,21 @@ fn fee_only_with(input: Input) -> Transaction {
             prunable: None,
         },
     }
+}
+
+/// An opaque kept-half blob of the retention codec's shape (this crate checks
+/// only tag and ceiling).
+fn kept_blob() -> Vec<u8> {
+    let mut b = vec![TAG_INPUT_SERVE_CREDIT];
+    b.extend_from_slice(&[0u8; 32]);
+    b.extend_from_slice(&[0, 0]);
+    b.extend_from_slice(&[0u8; 64]);
+    b
+}
+
+/// The pruned half of a pass record as an opaque blob, minimal but in bounds.
+fn pruned_record() -> Vec<u8> {
+    vec![0u8; 16]
 }
 
 fn out() -> Output {
@@ -78,7 +97,7 @@ fn spend(inputs: Vec<Input>, outputs: Vec<Output>, unlock_time: u64, nbp: usize)
             unlock_time,
             inputs,
             outputs,
-            extra: vec![],
+            extra: conforming_pqc_extra(n_out),
         },
         ct: Ct::Fcmp {
             fee: 0,
@@ -98,6 +117,7 @@ fn spend(inputs: Vec<Input>, outputs: Vec<Output>, unlock_time: u64, nbp: usize)
                 })
                 .collect(),
             prunable: Some(Prunable {
+                serve_credit_pruned: Vec::new(),
                 bulletproofs: (0..nbp).map(|_| bp(n_out)).collect(),
                 tree_depth: 1,
                 fcmp_proof: vec![],
@@ -233,7 +253,7 @@ fn bp_lr_undersize_for_output_count_rejected() {
 
 #[test]
 fn bp_lr_mismatch_rejected() {
-    // |L| != |R| is malformed regardless of the output count (rctTypes.cpp
+    // |L| != |R| is malformed regardless of the output count (ct_types.cpp
     // "Mismatched bulletproof L/R size").
     let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
     set_bp_lr(&mut tx, 7, 6);
@@ -244,7 +264,7 @@ fn bp_lr_mismatch_rejected() {
 #[test]
 fn bp_lr_out_of_range_rejected_on_parse() {
     // Parse-parity: the C++ deserializer fails on |L| outside 6..=10
-    // (n_bulletproof_plus_max_amounts returns 0 ⇒ serialize_rctsig_prunable
+    // (n_bulletproof_plus_max_amounts returns 0 ⇒ serialize_ctsig_prunable
     // fails), so the byte-level parser must reject too — write is faithful,
     // so serialize a hand-built out-of-range tx and re-parse.
     for (l_len, r_len) in [(11usize, 11usize), (5, 5), (7, 6)] {
@@ -333,46 +353,34 @@ fn pqc_auth_oversized_blob_rejected() {
     assert!(err.to_string().contains("public key"), "{err}");
 }
 
-#[test]
-fn serve_credit_oversized_signature_rejected() {
-    // validate() mirrors the read caps for the archival arms: an oversized
-    // hybrid_signature must reject (else it would serialize to unparseable bytes).
-    let sc = ServeCredit {
-        p_canonical_id: [0u8; 32],
-        shard_id: 0,
-        settlement_epoch: 0,
-        segment_subroot_rk: [0u8; 32],
-        leaf_index_in_segment: 0,
-        leaf_bytes: [0u8; 128],
-        c1_layers: vec![],
-        c2_layers: vec![],
-        hybrid_signature: vec![0u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_SIG_LEN + 1],
-    };
-    let err = fee_only_with(Input::ServeCredit(Box::new(sc)))
-        .validate()
-        .unwrap_err();
-    assert!(err.to_string().contains("hybrid_signature"), "{err}");
-}
+// `serve_credit_oversized_signature_rejected` was DELETED by RF-D2, and the
+// deletion is the point rather than a coverage loss.
+//
+// It asserted that an over-long `hybrid_signature: Vec<u8>` is refused by
+// `validate`. After the split the kept side carries
+// `ed25519_countersignature: [u8; 64]`, so an over-long value is not a case the
+// checker rejects -- it is **not a representable value of the type**. The test
+// cannot be written any more, because its subject does not exist.
+//
+// Rewriting it to construct an oversized array would have been the wrong
+// instinct: it would test the compiler, not the wire. The property it used to
+// guard -- that the encoded width cannot drift -- is now pinned directly in
+// `archival_arms_roundtrip.rs::serve_credit_kept_side_is_the_pinned_width`.
 
 #[test]
 fn serve_credit_must_not_mix_with_a_spend() {
     // §2.5: serve_credit is the entire tx. Mixed with a key-image spend it would
     // otherwise pass the spend branch's lenient pseudoOuts coupling — reject the shape.
-    let sc = ServeCredit {
-        p_canonical_id: [0u8; 32],
-        shard_id: 0,
-        settlement_epoch: 0,
-        segment_subroot_rk: [0u8; 32],
-        leaf_index_in_segment: 0,
-        leaf_bytes: [0u8; 128],
-        c1_layers: vec![],
-        c2_layers: vec![],
-        hybrid_signature: vec![],
-    };
+    let sc = kept_blob();
     let tx = Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
-            inputs: vec![Input::ServeCredit(Box::new(sc)), ki(1)],
+            inputs: vec![
+                Input::ServeCredit {
+                    canonical_bytes: sc,
+                },
+                ki(1),
+            ],
             outputs: vec![out()],
             extra: vec![],
         },
@@ -397,18 +405,8 @@ fn serve_credit_must_not_mix_with_a_spend() {
 fn multiple_serve_credits_allowed() {
     // The oracle allows *multiple* serve_credit inputs (it only rejects mixing with
     // other arms; check_inputs_types_supported). A 2-serve_credit fee-only tx validates.
-    let sc = || {
-        Input::ServeCredit(Box::new(ServeCredit {
-            p_canonical_id: [0u8; 32],
-            shard_id: 0,
-            settlement_epoch: 0,
-            segment_subroot_rk: [0u8; 32],
-            leaf_index_in_segment: 0,
-            leaf_bytes: [0u8; 128],
-            c1_layers: vec![],
-            c2_layers: vec![],
-            hybrid_signature: vec![],
-        }))
+    let sc = || Input::ServeCredit {
+        canonical_bytes: kept_blob(),
     };
     let tx = Transaction {
         prefix: TxPrefix {
@@ -426,7 +424,17 @@ fn multiple_serve_credits_allowed() {
                 commitments: vec![],
             },
             pqc_auths: vec![],
-            prunable: None,
+            // RF-D1: one pruned pass record per serve-credit vin. Two vins,
+            // two records -- which is also what makes this test the coupling's
+            // positive control, the negative one being
+            // `a_record_count_disagreeing_with_the_vin_count_is_refused`.
+            prunable: Some(Prunable {
+                bulletproofs: vec![],
+                tree_depth: 0,
+                fcmp_proof: vec![],
+                pseudo_outs: vec![],
+                serve_credit_pruned: vec![pruned_record(), pruned_record()],
+            }),
         },
     };
     tx.validate().expect("multiple serve_credits must validate");
@@ -531,3 +539,115 @@ fn block_rejects_non_coinbase_miner_tx() {
     let err = Block::from_bytes(&bad.serialize()).unwrap_err();
     assert!(err.to_string().contains("miner tx"), "{err}");
 }
+
+// ── CEN-I19: the tx_extra PQC field shape, at the validator ──────────────────
+//
+// The shape rule's own KATs call `check_pqc_field_shape` directly, so they stay
+// green whether or not `validate_context_free_pruned` invokes it. These are the
+// falsifier for the WIRING: each mutates an otherwise-valid spend and asserts
+// the validator refuses it, so deleting or bypassing that call turns these red.
+
+/// Rebuild a valid two-output spend, then replace its `tx_extra` wholesale.
+fn spend_with_extra(extra: Vec<u8>) -> Transaction {
+    let mut tx = spend(vec![ki(2), ki(1)], vec![out(), out()], 0, 1);
+    tx.prefix.extra = extra;
+    tx
+}
+
+fn pqc_fields(kem_len: usize, leaf_len: usize) -> Vec<u8> {
+    use shekyl_wire::tx_extra::{serialize, TxExtraField};
+    serialize(&[
+        TxExtraField::PqcKemCiphertext(vec![0x6a; kem_len]),
+        TxExtraField::PqcLeafHashes(vec![0x7b; leaf_len]),
+    ])
+    .expect("test tx_extra serializes")
+}
+
+#[test]
+fn validator_accepts_the_conforming_field_shape() {
+    spend_with_extra(conforming_pqc_extra(2))
+        .validate_context_free_pruned()
+        .expect("one 0x06 of 1120*n and one 0x07 of 32*n must validate");
+}
+
+#[test]
+fn validator_rejects_both_pqc_fields_absent() {
+    let err = spend_with_extra(Vec::new())
+        .validate_context_free_pruned()
+        .unwrap_err();
+    assert!(err.to_string().contains("0x06"), "{err}");
+}
+
+#[test]
+fn validator_rejects_a_duplicate_leaf_hash_field() {
+    use shekyl_wire::tx_extra::{serialize, TxExtraField, PQC_LEAF_HASH_BYTES};
+    let mut extra = conforming_pqc_extra(2);
+    extra.extend_from_slice(
+        &serialize(&[TxExtraField::PqcLeafHashes(vec![
+            0x7b;
+            PQC_LEAF_HASH_BYTES * 2
+        ])])
+        .expect("second 0x07 serializes"),
+    );
+    let err = spend_with_extra(extra)
+        .validate_context_free_pruned()
+        .unwrap_err();
+    assert!(err.to_string().contains("0x07"), "{err}");
+    assert!(err.to_string().contains("exactly one"), "{err}");
+}
+
+#[test]
+fn validator_rejects_a_leaf_hash_field_of_the_wrong_length() {
+    // 32*(n-1) — the shape the DB used to zero-fill into a leaf.
+    let err = spend_with_extra(pqc_fields(1120 * 2, 32))
+        .validate_context_free_pruned()
+        .unwrap_err();
+    assert!(err.to_string().contains("0x07"), "{err}");
+    assert!(err.to_string().contains("64 required"), "{err}");
+}
+
+/// An `extra` that does not parse is refused outright.
+///
+/// Restoring the old `if let Ok` wrapper around the shape check turns this
+/// red: `0x03` is retired, so it is simply unknown now.
+#[test]
+fn validator_rejects_an_unparseable_extra() {
+    // 0x03 was the merge-mining tag. It is retired, so it is simply unknown now.
+    let err = spend_with_extra(vec![0x03, 0x21, 0x00])
+        .validate_context_free_pruned()
+        .unwrap_err();
+    assert!(err.to_string().contains("tx_extra"), "{err}");
+}
+
+/// The positive limb of the flip: an attestation field is now in the grammar,
+/// so a coinbase-shaped `extra` carrying one still validates rather than being
+/// refused by the newly unconditional parse.
+#[test]
+fn validator_accepts_an_attestation_alongside_the_pqc_fields() {
+    use shekyl_wire::tx_extra::{serialize, TxExtraField};
+    let mut extra = conforming_pqc_extra(2);
+    extra.extend_from_slice(
+        &serialize(&[TxExtraField::ArchivalAttestation(vec![0xA7; 16])])
+            .expect("attestation field serializes"),
+    );
+    spend_with_extra(extra)
+        .validate_context_free_pruned()
+        .expect("an attestation field must not make a valid spend invalid");
+}
+
+#[test]
+fn validator_rejects_a_kem_field_of_the_wrong_length() {
+    let err = spend_with_extra(pqc_fields(1120, 32 * 2))
+        .validate_context_free_pruned()
+        .unwrap_err();
+    assert!(err.to_string().contains("0x06"), "{err}");
+}
+
+// The zero-output arm of the rule is NOT exercised here on purpose. Every
+// zero-output shape this validator accepts is a serve-credit fee-only
+// transaction, and that arm's own shape check ("serve_credit tx must be
+// fee-only …") refuses a mutated fixture before the field-shape rule is
+// reached — a test asserting rejection here would pass without the CEN-I19
+// wiring at all. The arm is covered where it is reachable: at C++ admission
+// (`tx_extra_pqc_field_shape.cpp`, which drives the real serve-credit parity
+// transaction) and by the rule's own KAT in `shekyl-wire::tx_extra`.

@@ -88,12 +88,11 @@
 //! handle, a `FeeEstimator` impl holding a non-`Send` RPC client)
 //! before the actor wrap forces the issue.
 //!
-//! # Visibility (`pub(crate)` until JSON-RPC cutover)
+//! # Visibility (`pub(crate)`)
 //!
-//! Per [`super`]'s visibility doc: traits ship `pub(crate)` until
-//! V3.2's JSON-RPC server cutover; consumers reach functionality
-//! via [`Engine<S>`](super::super::Engine)'s inherent methods, not
-//! via direct trait dispatch.
+//! Per [`super`]'s visibility doc: traits ship `pub(crate)`; consumers
+//! reach functionality via [`Engine<S>`](super::super::Engine)'s
+//! inherent methods, not via direct trait dispatch.
 //!
 //! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
 //! [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`]: ../../../../../docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md
@@ -389,7 +388,11 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     /// poisoning-`expect` on this path (eviction targets `in_flight`
     /// only, so it has no at-most-one collection-move branch to
     /// assert).
-    #[allow(dead_code)] // V3.x mempool-eviction surface; no production caller at C6.
+    // STAGED: consumer of record is the Stage-4 `MempoolMonitorActor`
+    // (STAGE_1_PR_5_PENDING_TX_ENGINE.md §5.6.10 G1; FOLLOWUPS
+    // "`MempoolMonitorActor` consumer actor", pre-genesis). Not the cadence
+    // driver's job — ENGINE_CADENCE_DRIVER.md §6.
+    #[allow(dead_code)]
     fn signal_mempool_evicted(&self, rid: ReservationId) -> Result<(), PendingTxError>;
 
     /// Total in-process reservations awaiting resolution. Sum of

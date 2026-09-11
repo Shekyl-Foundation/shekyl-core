@@ -100,104 +100,14 @@ fn test_version() {
 
 #[test]
 fn test_release_multiplier_ffi() {
-    let m = shekyl_calc_release_multiplier(100, 100, 800_000, 1_300_000);
+    let m = shekyl_calc_release_multiplier(100, 1, 100, 800_000, 1_300_000);
     assert_eq!(m, 1_000_000);
 }
 
-// ---- PR-E1: reward-emission membership-only + ML-DSA gate primitives ----
-
-#[test]
-fn emission_hybrid_auth_verify_positive_and_negatives() {
-    use shekyl_crypto_pq::derivation::hash_pqc_public_key;
-    use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
-
-    let (pk, sk) = HybridEd25519MlDsa.keypair_generate().unwrap();
-    let pk_bytes = pk.to_canonical_bytes().unwrap();
-    let leaf = hash_pqc_public_key(&pk_bytes);
-    let msg = b"shekyl-emission-auth-msg: payout + epoch binding".to_vec();
-    let sig_bytes = HybridEd25519MlDsa
-        .sign(&sk, &msg)
-        .unwrap()
-        .to_canonical_bytes()
-        .unwrap();
-
-    let call = |pk: &[u8], m: &[u8], sig: &[u8], leaf: &[u8; 32]| -> u8 {
-        unsafe {
-            shekyl_emission_hybrid_auth_verify(
-                pk.as_ptr(),
-                pk.len(),
-                m.as_ptr(),
-                m.len(),
-                sig.as_ptr(),
-                sig.len(),
-                leaf.as_ptr(),
-            )
-        }
-    };
-
-    // Positive.
-    assert_eq!(
-        call(&pk_bytes, &msg, &sig_bytes, &leaf),
-        SHEKYL_EMISSION_HYBRID_AUTH_OK,
-        "valid gate must accept"
-    );
-
-    // Negative: wrong leaf hash (auth over an unrelated key) — checked first.
-    assert_eq!(
-        call(&pk_bytes, &msg, &sig_bytes, &[0u8; 32]),
-        SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH
-    );
-
-    // Negative: signature valid but over a *different* message.
-    assert_eq!(
-        call(&pk_bytes, b"a different binding message", &sig_bytes, &leaf),
-        SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY,
-        "sig must not verify over a different message"
-    );
-
-    // Negative: tampered signature (leaf matches; verify or deser must reject).
-    let mut bad_sig = sig_bytes.clone();
-    *bad_sig.last_mut().unwrap() ^= 0x01;
-    let r = call(&pk_bytes, &msg, &bad_sig, &leaf);
-    assert!(
-        r == SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY
-            || r == SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER,
-        "tampered sig must reject, got {r}"
-    );
-
-    // Negative: null pointer with a nonzero length (len==0 is a valid empty slice,
-    // so the null guard only fires when a length is actually claimed).
-    let r = unsafe {
-        shekyl_emission_hybrid_auth_verify(
-            std::ptr::null(),
-            pk_bytes.len(),
-            msg.as_ptr(),
-            msg.len(),
-            sig_bytes.as_ptr(),
-            sig_bytes.len(),
-            leaf.as_ptr(),
-        )
-    };
-    assert_eq!(r, SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR);
-
-    // Negative: non-canonical pubkey / signature length is rejected up front (the FFI
-    // DoS guard) — before any hash or parse touches the oversized buffer. A too-long
-    // pubkey would otherwise fall through to a LEAF_HASH_MISMATCH after hashing it.
-    let mut long_pk = pk_bytes.clone();
-    long_pk.push(0);
-    assert_eq!(
-        call(&long_pk, &msg, &sig_bytes, &leaf),
-        SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER,
-        "non-canonical pubkey length must reject with PUBKEY_DESER"
-    );
-    let mut long_sig = sig_bytes.clone();
-    long_sig.push(0);
-    assert_eq!(
-        call(&pk_bytes, &msg, &long_sig, &leaf),
-        SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER,
-        "non-canonical signature length must reject with SIG_DESER"
-    );
-}
+// ---- PR-E1: reward-emission membership-only primitives ----
+// (The per-auth hybrid gate FFI was retired: C-1 verifies auth via the coarse
+// shekyl_emission_vin_verify, whose Rust body emission_vin_verify_auth pins the
+// leaf-gate-first order and per-role domains — see emission_verify_kat.rs.)
 
 /// The full-path FFI shares the membership-only hardening: matched-but-huge
 /// or over-cap counts reject with code 1 before any slice/allocation.
@@ -315,7 +225,7 @@ fn membership_only_verify_rejects_malformed_and_mismatched_inputs() {
     assert_eq!(r, 1, "oversized count must reject without dereferencing");
 
     // Boundary: a within-`usize`, matched count just over MAX_INPUTS must reject via the
-    // arity cap (mirrors shekyl_fcmp_prove) before allocating the per-input Vecs. Buffers
+    // arity cap before allocating the per-input Vecs. Buffers
     // are sized to the declared count so there is no out-of-bounds read on the reject path.
     let over = shekyl_fcmp::MAX_INPUTS + 1;
     let big = vec![3u8; over * 32];
@@ -475,8 +385,15 @@ fn test_burn_pct_ffi_matches_rust_impl() {
         ),
     ];
     for (txv, base, circ, total, rate, cap) in cases {
-        let ffi = shekyl_calc_burn_pct(txv, base, circ, total, rate, cap);
-        let direct = shekyl_economics::burn::calc_burn_pct(txv, base, circ, total, rate, cap);
+        let ffi = shekyl_calc_burn_pct(txv, 1, base, circ, total, rate, cap);
+        let direct = shekyl_economics::burn::calc_burn_pct(
+            shekyl_economics::TxVolume::per_block(txv),
+            base,
+            circ,
+            total,
+            rate,
+            cap,
+        );
         assert_eq!(ffi, direct);
     }
 }
@@ -674,6 +591,7 @@ fn test_frost_sal_get_rerand_null_returns_empty() {
 // parse_prove_witness (reader) agree byte-for-byte on all 8 header
 // fields, using locked vectors from docs/test_vectors/WITNESS_HEADER.json.
 
+#[cfg(feature = "multisig")]
 #[derive(serde::Deserialize)]
 struct WitnessHeaderVector {
     output_key: String,
@@ -686,11 +604,13 @@ struct WitnessHeaderVector {
     pseudo_out_blind: String,
 }
 
+#[cfg(feature = "multisig")]
 #[derive(serde::Deserialize)]
 struct WitnessHeaderFile {
     vectors: Vec<WitnessHeaderVector>,
 }
 
+#[cfg(feature = "multisig")]
 fn decode_32(hex_str: &str, label: &str, vec_idx: usize) -> [u8; 32] {
     let bytes = hex::decode(hex_str)
         .unwrap_or_else(|_| panic!("vector {vec_idx}: invalid hex for {label}"));
@@ -700,6 +620,7 @@ fn decode_32(hex_str: &str, label: &str, vec_idx: usize) -> [u8; 32] {
         .unwrap_or_else(|_| panic!("vector {vec_idx}: {label} not 32 bytes"))
 }
 
+#[cfg(feature = "multisig")]
 #[test]
 fn witness_header_build_then_parse_roundtrip() {
     let json = include_str!("../../../docs/test_vectors/WITNESS_HEADER.json");
@@ -883,4 +804,463 @@ fn label_plaintext_for_payment_uri_parse_fail_writes_sentinel() {
     let rc = unsafe { shekyl_label_plaintext_for_payment_uri(uri.as_ptr(), out.as_mut_ptr()) };
     assert_eq!(rc, -3);
     assert_eq!(out, sentinel_plaintext());
+}
+
+// ─── shekyl_block_reward — the boundary contract ────────────────────────────
+//
+// `block_reward_with_penalty`'s own tests cover the arithmetic. None of them
+// can cover what this entry point ADDS: the status mapping, the out-pointer
+// writes, and the null checks. Those only exist at the boundary, so they are
+// tested at the boundary — the gap Copilot raised on PR #518.
+
+/// The zone C++ passes in (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`).
+const ZONE: u64 = 300_000;
+/// A value no computed reward can equal, so "untouched" is distinguishable
+/// from "written with something plausible".
+const SENTINEL: u64 = 0xDEAD_BEEF_DEAD_BEEF;
+
+/// Baseline volume (M_r = 1): the M_r-neutral vector set below stays pinned
+/// to the pre-FL-R12′ values through the composition change.
+fn baseline_v() -> u64 {
+    shekyl_economics::EconomicParams::default().tx_volume_baseline
+}
+
+#[test]
+fn block_reward_ok_writes_both_out_params() {
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+    // Below the effective median: no penalty, so the base subsidy is returned.
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            0,
+            ZONE,
+            baseline_v(),
+            1,
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
+
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_OK);
+    assert_eq!(reward, shekyl_base_block_reward(0));
+    assert_eq!(limit, 2 * ZONE, "the limit is the doubled EFFECTIVE median");
+}
+
+#[test]
+fn block_reward_accepts_the_inclusive_limit_and_pays_zero() {
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+    // Exactly 2 * median is ACCEPTED, earning zero — the boundary the C++
+    // rejection message describes, which is why that message says "at most".
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            2 * ZONE,
+            0,
+            ZONE,
+            baseline_v(),
+            1,
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
+
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_OK);
+    assert_eq!(reward, 0);
+    assert_eq!(limit, 2 * ZONE);
+}
+
+#[test]
+fn block_reward_too_big_writes_the_limit_and_leaves_the_reward_untouched() {
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            2 * ZONE + 1,
+            0,
+            ZONE,
+            baseline_v(),
+            1,
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
+
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG);
+    assert!(status > 0, "rejection is positive; misuse is negative");
+    assert_eq!(
+        reward, SENTINEL,
+        "the reward must not be written on the reject path — C++ reads it \
+         only after checking the status, and a partial write would be a trap \
+         for any caller that does not"
+    );
+    assert_eq!(
+        limit,
+        2 * ZONE,
+        "the limit IS written on the reject path — it is the whole reason the \
+         out-param exists, so C++ can name the bound without recomputing the \
+         clamp that produced it"
+    );
+}
+
+#[test]
+fn block_reward_null_out_pointers_return_invalid_without_writing() {
+    // Each pointer null separately: a check that only covers the first
+    // argument passes while the second is still dereferenced.
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            0,
+            ZONE,
+            baseline_v(),
+            1,
+            std::ptr::null_mut(),
+            &raw mut limit,
+        )
+    };
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_INVALID);
+    assert!(
+        status < 0,
+        "caller misuse is negative; rejection is positive"
+    );
+    assert_eq!(
+        limit, SENTINEL,
+        "no write through the non-null pointer either"
+    );
+
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            0,
+            ZONE,
+            baseline_v(),
+            1,
+            &raw mut reward,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_INVALID);
+    assert_eq!(
+        reward, SENTINEL,
+        "no write through the non-null pointer either"
+    );
+
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            0,
+            ZONE,
+            baseline_v(),
+            1,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_INVALID);
+}
+
+#[test]
+fn block_reward_beyond_the_exact_domain_is_invalid_not_wrapped() {
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+    // A median around 2^48 puts `base * multiplicand` past 128 bits. The
+    // crate reports Overflow; the boundary maps it to INVALID and the block is
+    // rejected. Before this was checked it panicked across the FFI.
+    let m: u64 = 1 << 48;
+    let status = unsafe {
+        shekyl_block_reward(
+            m,
+            m + m / 2,
+            0,
+            ZONE,
+            baseline_v(),
+            1,
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
+
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_INVALID);
+    assert_eq!(
+        reward, SENTINEL,
+        "no reward is written for an out-of-domain input"
+    );
+}
+
+#[test]
+fn block_reward_past_the_asymptote_pays_the_tail() {
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+    // A past-asymptote accumulator is a legitimate perpetual-tail state,
+    // not a clamp and not an error (FL-R16a).
+    let status = unsafe {
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            u64::MAX,
+            ZONE,
+            baseline_v(),
+            1,
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
+
+    assert_eq!(status, SHEKYL_BLOCK_REWARD_OK);
+    assert_eq!(reward, shekyl_base_block_reward(u64::MAX));
+}
+
+/// The signed composition through the marshal, with M_r ≠ 1 (dormancy pins
+/// the multiplier at 0.8) and both tail-boundary values — the only test that
+/// would catch a marshal bug now that C++ computes nothing (FL-R12′).
+#[test]
+fn block_reward_marshals_the_signed_composition() {
+    let p = shekyl_economics::EconomicParams::default();
+    let s = p.emission_curve_asymptote;
+    let tail = shekyl_economics::tail_subsidy_per_block(&p).unwrap();
+    let mut reward = SENTINEL;
+    let mut limit = SENTINEL;
+
+    // Tail boundary under dormancy, no penalty: the floor pays TAIL whole
+    // (the pre-implementation red was 480,000,000 — M_r on the floored base).
+    let st = unsafe {
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            s - tail + 1,
+            ZONE,
+            0,
+            0,
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
+    assert_eq!(st, SHEKYL_BLOCK_REWARD_OK);
+    assert_eq!(reward, tail);
+
+    // Past the asymptote with x = 1/2: penalty AFTER the floor ⇒ TAIL·3/4
+    // (the pre-implementation reds were an error arm and 360,000,000).
+    let st = unsafe {
+        shekyl_block_reward(
+            ZONE,
+            ZONE + ZONE / 2,
+            s + tail,
+            ZONE,
+            0,
+            0,
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
+    assert_eq!(st, SHEKYL_BLOCK_REWARD_OK);
+    assert_eq!(reward, tail / 4 * 3);
+
+    // Mid-curve dormancy: the paid quantity carries M_r.
+    let st = unsafe {
+        shekyl_block_reward(
+            0,
+            ZONE / 2,
+            s / 2,
+            ZONE,
+            0,
+            0,
+            &raw mut reward,
+            &raw mut limit,
+        )
+    };
+    assert_eq!(st, SHEKYL_BLOCK_REWARD_OK);
+    assert_eq!(
+        reward,
+        shekyl_economics::effective_emission(s / 2, shekyl_economics::TxVolume::ZERO, &p).unwrap()
+    );
+}
+
+#[test]
+fn advance_already_generated_passes_the_asymptote() {
+    assert_eq!(shekyl_advance_already_generated(0, 100), 100);
+    // FL-R12′: through the asymptote (perpetual tail keeps accruing);
+    // the only saturation is the u64 rail, which keeps `remaining`
+    // floored at zero rather than un-saturated by a wrap (FL-R14).
+    let s = shekyl_economics::params::EMISSION_CURVE_ASYMPTOTE;
+    assert_eq!(shekyl_advance_already_generated(s, 1), s + 1);
+    assert_eq!(
+        shekyl_advance_already_generated(u64::MAX, u64::MAX),
+        u64::MAX
+    );
+}
+
+// ─── shekyl_corrected_fee_ladder / shekyl_fee_correction_quantized ──────────
+//
+// Same boundary rationale as `shekyl_block_reward` above: the crate tests
+// own the ladder arithmetic (shekyl-economics `fee.rs`); what only exists
+// here is the null check, the four out-writes, and the fact that the
+// marshal reaches the crate function unchanged. Written under the
+// no-test-exists-means-write-the-test rule: these exports crossed with the
+// FL-R12′ bundle and had no boundary pin of their own.
+
+/// Rule 40: a malformed boundary input must not panic across
+/// `extern "C"`. This export is documented "cannot fail", and it very
+/// nearly could: the scalars are caller-controlled, and `σ` at its own
+/// clamp (`SCALE - 1`) with a dormant volume drives the integer division
+/// to `C = 0`, which trips `quantize_pow2_ceil`'s loud in-range assert
+/// (PR #640 review). No chain state reaches it — the measured floor is
+/// ≈ 0.68 — but the ABI is not entitled to assume its caller.
+///
+/// The exact adversarial triple from the review is pinned, plus the
+/// neighbouring degenerate corners, so the boundary stays total.
+#[test]
+fn fee_correction_quantized_is_total_at_hostile_scalars() {
+    let scale = shekyl_economics::params::SCALE;
+    // The reported case: sigma at its clamp, no burn, dormant volume.
+    let cq = shekyl_fee_correction_quantized(0, 0, scale - 1, 0, 0);
+    assert!(cq > 0, "a total boundary must still return a usable step");
+
+    // The same state carried through the hysteresis band, and the
+    // saturating corners on both scalars.
+    for (v, sigma, burn, prev) in [
+        (0u64, scale - 1, 0u64, scale),
+        (0, u64::MAX, 0, 0),
+        (0, u64::MAX, u64::MAX, 0),
+        (u64::MAX, u64::MAX, u64::MAX, u64::MAX),
+        (u64::MAX, 0, u64::MAX, 0),
+    ] {
+        let out = shekyl_fee_correction_quantized(v, 1, sigma, burn, prev);
+        assert!(
+            out > 0,
+            "boundary returned an unusable value at (v={v}, sigma={sigma}, burn={burn}, prev={prev})"
+        );
+    }
+}
+
+#[test]
+fn corrected_fee_ladder_null_out_returns_minus_one() {
+    let st = unsafe {
+        shekyl_corrected_fee_ladder(
+            10_000_000_000,
+            300_000,
+            300_000,
+            300_000,
+            3_000,
+            shekyl_economics::params::SCALE,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(
+        st, -1,
+        "caller misuse is negative, mirroring the reward FFI"
+    );
+}
+
+/// Rule 40, the other export: `corrected_fee_ladder` forms
+/// `4·R·w_ref·C_q` in `u128`, which OVERFLOWS before any conversion
+/// fallback can see it once the bare-`u64` ABI is handed operands near
+/// `u64::MAX` — an abort in an overflow-checked build, wrapped fee
+/// values otherwise (PR #640 review). The i32 ABI already carries a
+/// failure shape, so the domain is checked and refused with `-2`.
+#[test]
+fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
+    let mut fees = [SENTINEL; 4];
+    for (base, mnw, mlw, zone, w, cq) in [
+        (u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX),
+        (u64::MAX, 300_000, 300_000, 300_000, 3_000, u64::MAX),
+        (u64::MAX, 300_000, 300_000, 300_000, u64::MAX, 1_000_000),
+        (1, u64::MAX, u64::MAX, u64::MAX, 3_000, 1_000_000),
+        // The PRIORITY rung, which is `2·R·C_q` and is the one rung that
+        // does not carry `w_ref`: a `w_ref` of zero makes every product
+        // that DOES carry it vanish, so a domain check written against a
+        // representative `w_ref`-bearing product passes this and then
+        // overflows forming `2·R·C_q` (PR #640 review, cycle 6). The
+        // rungs do not share an operand list, so the domain cannot be
+        // checked against one of them.
+        (u64::MAX, 300_000, 300_000, 300_000, 0, u64::MAX),
+    ] {
+        let st =
+            unsafe { shekyl_corrected_fee_ladder(base, mnw, mlw, zone, w, cq, fees.as_mut_ptr()) };
+        assert_eq!(
+            st, -2,
+            "out-of-domain scalars must be refused, not computed \
+             (base={base}, mnw={mnw}, mlw={mlw}, zone={zone}, w={w}, cq={cq})"
+        );
+        assert_eq!(fees, [SENTINEL; 4], "a refused call must not write");
+    }
+
+    // And the honest domain still computes: the refusal is not a blanket.
+    let st = unsafe {
+        shekyl_corrected_fee_ladder(
+            10_000_000_000,
+            300_000,
+            300_000,
+            300_000,
+            3_000,
+            shekyl_economics::params::SCALE,
+            fees.as_mut_ptr(),
+        )
+    };
+    assert_eq!(st, 0);
+    assert_eq!(fees, [340, 1400, 1400, 67_000]);
+}
+
+#[test]
+fn corrected_fee_ladder_marshals_the_heritage_vector() {
+    // 10 SKL reward, Mnw = Mlw = zone, C_q = 1: the FL-R17 signed shape over
+    // the heritage values — the same vector scaling_2021.cpp pins from the
+    // C++ side, so a drift in either marshal direction fails one of the two.
+    let mut fees = [SENTINEL; 4];
+    let st = unsafe {
+        shekyl_corrected_fee_ladder(
+            10_000_000_000,
+            300_000,
+            300_000,
+            300_000,
+            3_000,
+            shekyl_economics::params::SCALE,
+            fees.as_mut_ptr(),
+        )
+    };
+    assert_eq!(st, 0);
+    assert_eq!(fees, [340, 1400, 1400, 67_000]);
+}
+
+#[test]
+fn fee_correction_quantized_ffi_matches_the_crate() {
+    let p = shekyl_economics::EconomicParams::default();
+    let scale = shekyl_economics::params::SCALE;
+    // A decisive surge state (M_r pinned at 1.3, no sigma/burn, no previous
+    // value): C = 1.3 snaps up to the C_q = 2 step.
+    let v = 2 * p.tx_volume_baseline;
+    let got = shekyl_fee_correction_quantized(v, 1, 0, 0, 0);
+    assert_eq!(
+        got,
+        shekyl_economics::fee_correction_quantized(
+            shekyl_economics::TxVolume::per_block(v),
+            0,
+            0,
+            0,
+            &p
+        )
+    );
+    assert_eq!(got, 2 * scale);
+    // And the hysteresis argument is threaded, not dropped — asserted at a
+    // probe where held and fresh DIFFER (v = baseline + 1 puts raw C just
+    // past the 2^0 boundary, inside the 3% band): with the previous step it
+    // holds, without it it snaps up. A probe where both paths agree could
+    // not fail on a dropped argument.
+    let boundary_v = p.tx_volume_baseline + 1;
+    assert_eq!(
+        shekyl_fee_correction_quantized(boundary_v, 1, 0, 0, scale),
+        scale
+    );
+    assert_eq!(
+        shekyl_fee_correction_quantized(boundary_v, 1, 0, 0, 0),
+        2 * scale
+    );
 }

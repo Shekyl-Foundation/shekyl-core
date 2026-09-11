@@ -35,7 +35,7 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
 #include "profile_tools.h"
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 #include "shekyl/shekyl_ffi.h"
 
 #include "lmdb/db_lmdb.h"
@@ -50,33 +50,51 @@ namespace cryptonote
 
 bool matches_category(relay_method method, relay_category category) noexcept
 {
+  /* Neither switch has a `default:`, and that is the enforcement mechanism
+     rather than a style choice: `-Werror=switch` is a project-wide security
+     flag (CMakeLists.txt), so adding a `relay_category` or a `relay_method`
+     without classifying it here is a compile error in EVERY build, not only
+     where the unit tests are built. A `default:` would have silently given
+     the new member whichever arm it was grouped with.
+
+     The method table is nested inside the `broadcasted` arm so that both
+     switches can be exhaustive AND an out-of-domain CATEGORY still fails
+     closed. Flattened, a category byte from a bad cast would fall past its own
+     switch into the method table and answer `true` for a fluff -- "publicly
+     known" is the leaking direction and the one an invalid cast must never
+     produce. Nested, it reaches the `return false` below instead.
+
+     That guarantee is about the category, and about the method only under
+     `broadcasted`. `all` answers `true` for any method by definition, and
+     `relayable` answers `method != none`, so both would accept an
+     out-of-domain METHOD byte. Neither is a disclosure gate, and no such byte
+     exists to reach them: `get_relay_method` decodes an unknown bit state to
+     `fluff` rather than to a value outside the enum, and every caller here
+     comes through it. */
   switch (category)
   {
-    default:
-      return false;
     case relay_category::all:
       return true;
     case relay_category::relayable:
       return method != relay_method::none;
     case relay_category::broadcasted:
-    case relay_category::legacy:
+      // "The network already knows": block or fluff, nothing earlier. `none`
+      // is named in the false arm rather than left to a fallback, because it
+      // is the one member the deleted `legacy` category used to admit here
+      // and naming it is what makes the deletion reviewable.
+      switch (method)
+      {
+        case relay_method::none:
+        case relay_method::local:
+        case relay_method::stem:
+          return false;
+        case relay_method::block:
+        case relay_method::fluff:
+          return true;
+      }
       break;
   }
-  // check for "broadcasted" or "legacy" methods:
-  switch (method)
-  {
-    default:
-    case relay_method::local:
-    case relay_method::forward:
-    case relay_method::stem:
-      return false;
-    case relay_method::block:
-    case relay_method::fluff:
-      return true;
-    case relay_method::none:
-      break;
-  }
-  return category == relay_category::legacy;
+  return false;
 }
 
 void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
@@ -84,7 +102,7 @@ void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
   kept_by_block = 0;
   do_not_relay = 0;
   is_local = 0;
-  is_forwarding = 0;
+  observed_circulating = 0;
   dandelionpp_stem = 0;
 
   switch (method)
@@ -95,28 +113,39 @@ void txpool_tx_meta_t::set_relay_method(relay_method method) noexcept
     case relay_method::local:
       is_local = 1;
       break;
-    case relay_method::forward:
-      is_forwarding = 1;
-      break;
     case relay_method::stem:
       dandelionpp_stem = 1;
       break;
     case relay_method::block:
       kept_by_block = 1;
       break;
-    default:
     case relay_method::fluff:
+      // Fluff is the all-bits-clear state; the resets above already wrote it.
       break;
+    // No `default:` -- see `matches_category`. Here the mask mattered more: a
+    // new method grouped with `fluff` would encode as the all-clear state and
+    // read back BROADCASTED, so forgetting to encode a new pre-fluff class
+    // would have published it rather than failing.
   }
 }
 
 relay_method txpool_tx_meta_t::get_relay_method() const noexcept
 {
+  /* Bit 3 was `is_forwarding` and now carries `observed_circulating`. It is
+     left OUT of this sum rather than added as a zero term, so it cannot
+     decode to a class that no longer exists. An is_forwarding-only record —
+     the only shape `set_relay_method` ever wrote — now has state 0 and
+     returns fluff, which is the exit those entries were waiting to become.
+
+     Keeping it out of the sum matters MORE now than when it was padding: the
+     bit is live again, and a set `observed_circulating` must not shift a
+     `local` entry's decoded method. The relay class and "has it been seen
+     circulating" are independent facts about the same entry, and this decoder
+     answers only the first. */
   const uint8_t state =
     uint8_t(kept_by_block) +
     (uint8_t(do_not_relay) << 1) +
     (uint8_t(is_local) << 2) +
-    (uint8_t(is_forwarding) << 3) +
     (uint8_t(dandelionpp_stem) << 4);
 
   switch (state)
@@ -130,19 +159,58 @@ relay_method txpool_tx_meta_t::get_relay_method() const noexcept
       return relay_method::none;
     case 4:
       return relay_method::local;
-    case 8:
-      return relay_method::forward;
     case 16:
       return relay_method::stem;
   };
   return relay_method::fluff;
 }
 
+void txpool_tx_meta_t::set_origin_zone(epee::net_utils::zone zone) noexcept
+{
+  // THE MIGRATION-FREE CLAIM LIVES HERE. A record written before this field
+  // existed carries zero in these bits, and `zone::invalid == 0`, so it decodes
+  // to "origin unknown" with no migration step. If `invalid` ever stopped being
+  // zero, every pre-existing record would silently re-read as some real
+  // transport -- anonymity-arrived traffic could then be indistinguishable from
+  // clearnet in the direction that loses privacy. That is why this is a
+  // compile-time assertion and not a comment.
+  static_assert(
+    static_cast<uint8_t>(epee::net_utils::zone::invalid) == 0,
+    "zone::invalid must be 0: pre-upgrade txpool records rely on zeroed spare "
+    "bits decoding to 'origin unknown', and no migration exists to fix them");
+  static_assert(static_cast<uint8_t>(epee::net_utils::zone::public_) == 1,
+    "zone::public_ must stay 1 so the two-bit field maps 1:1");
+  static_assert(static_cast<uint8_t>(epee::net_utils::zone::i2p) == 2,
+    "zone::i2p must stay 2 so the two-bit field maps 1:1");
+  static_assert(static_cast<uint8_t>(epee::net_utils::zone::tor) == 3,
+    "zone::tor must stay 3 so the two-bit field maps 1:1");
+
+  // Exhaustive: -Werror=switch fails the build if a fifth enumerator is added.
+  // The two-bit field cannot hold it. A mask (`& 0x3`) would have silently
+  // aliased a new real zone onto an existing one — `5 → public_`, `6 → i2p` —
+  // which is the failure this function exists to refuse. An unrecognised value
+  // (a cast from outside the enumerators) leaves the field unchanged rather
+  // than inventing a transport.
+  switch (zone)
+  {
+    case epee::net_utils::zone::invalid:
+    case epee::net_utils::zone::public_:
+    case epee::net_utils::zone::i2p:
+    case epee::net_utils::zone::tor:
+      origin_zone = static_cast<uint8_t>(zone);
+      break;
+  }
+}
+
+epee::net_utils::zone txpool_tx_meta_t::get_origin_zone() const noexcept
+{
+  return static_cast<epee::net_utils::zone>(origin_zone);
+}
+
 bool txpool_tx_meta_t::upgrade_relay_method(relay_method method) noexcept
 {
   static_assert(relay_method::none < relay_method::local, "bad relay_method value");
-  static_assert(relay_method::local < relay_method::forward, "bad relay_method value");
-  static_assert(relay_method::forward < relay_method::stem, "bad relay_method value");
+  static_assert(relay_method::local < relay_method::stem, "bad relay_method value");
   static_assert(relay_method::stem < relay_method::fluff, "bad relay_method value");
   static_assert(relay_method::fluff < relay_method::block, "bad relay_method value");
 
@@ -176,14 +244,7 @@ void BlockchainDB::init_options(boost::program_options::options_description& des
   command_line::add_arg(desc, arg_db_salvage);
 }
 
-void BlockchainDB::pop_block()
-{
-  block blk;
-  std::vector<transaction> txs;
-  pop_block(blk, txs);
-}
-
-void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair<transaction, blobdata_ref>& txp, const crypto::hash* tx_hash_ptr, const crypto::hash* tx_prunable_hash_ptr)
+void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair<transaction, blobdata_ref>& txp, uint64_t block_height, const crypto::hash* tx_hash_ptr, const crypto::hash* tx_prunable_hash_ptr)
 {
   const transaction &tx = txp.first;
 
@@ -224,7 +285,13 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
     else if (std::holds_alternative<txin_archival_serve_credit_response>(tx_input))
     {
       const auto& resp = std::get<txin_archival_serve_credit_response>(tx_input);
-      set_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch);
+      crypto::hash p_id{}; uint64_t shard_id = 0, settlement_epoch = 0;
+      // Validated at admission; an unparseable blob here is a store/verify
+      // split and must be loud, never a silently skipped credit bit.
+      if (!get_archival_serve_credit_key(resp, p_id, shard_id, settlement_epoch))
+        throw DB_ERROR("serve-credit vin did not parse at DB add (validated at admission?)");
+      // PC-D4: the record is keyed by the block it rides in.
+      set_archival_serve_credit_bit(p_id, shard_id, settlement_epoch, block_height);
     }
     else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
     {
@@ -248,9 +315,9 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
           throw std::runtime_error("FATAL: total_bonded_atomic overflow on bond credit");
         set_total_bonded_atomic(bonded_total + bond.bond_credit);
       }
-      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Unbond))
+      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Release))
       {
-        // Unbond connect (gate-4 §4.3 "On confirm"): the single writer
+        // Release connect (gate-4 §4.3 "On confirm"): the single writer
         // journals the record pre-image, applies the Rust fold's write set
         // (Exited record + clean interval-close + counter debit, with the
         // per-post live-counter threading inside), and FATALs on any fold
@@ -289,7 +356,7 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
       else
       {
         throw std::runtime_error(
-          "FATAL: bond-post connect supports JoinMarket, Unbond, HoldingsUpdate, and Rebond only");
+          "FATAL: bond-post connect supports JoinMarket, Release, HoldingsUpdate, and Rebond only");
       }
     }
     else if (std::holds_alternative<txin_archival_reward_emission>(tx_input))
@@ -347,19 +414,19 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
     if (miner_tx || emission_tx)
     {
       cryptonote::tx_out vout = tx.vout[i];
-      CHECK_AND_ASSERT_THROW_MES(i < tx.rct_signatures.outPk.size(),
+      CHECK_AND_ASSERT_THROW_MES(i < tx.ct_signatures.outPk.size(),
         "tx outPk missing for output " + std::to_string(i));
-      rct::key commitment = tx.rct_signatures.outPk[i].mask;
+      ct::key commitment = tx.ct_signatures.outPk[i].mask;
       vout.amount = 0;
       amount_output_indices[i] = add_output(tx_hash, vout, i, tx.unlock_time,
         &commitment);
     }
     else
     {
-      CHECK_AND_ASSERT_THROW_MES(i < tx.rct_signatures.outPk.size(),
+      CHECK_AND_ASSERT_THROW_MES(i < tx.ct_signatures.outPk.size(),
         "tx outPk missing for output " + std::to_string(i));
       amount_output_indices[i] = add_output(tx_hash, tx.vout[i], i, tx.unlock_time,
-        &tx.rct_signatures.outPk[i].mask);
+        &tx.ct_signatures.outPk[i].mask);
     }
   }
   add_tx_amount_output_indices(tx_id, amount_output_indices);
@@ -394,7 +461,8 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
 
   uint64_t num_rct_outs = 0;
   blobdata miner_bd = tx_to_blob(blk.miner_tx);
-  add_transaction(blk_hash, std::make_pair(blk.miner_tx, blobdata_ref(miner_bd)));
+  // `prev_height` is the height this block occupies (the count before the add).
+  add_transaction(blk_hash, std::make_pair(blk.miner_tx, blobdata_ref(miner_bd)), prev_height);
   if (blk.miner_tx.version >= 2)
     num_rct_outs += blk.miner_tx.vout.size();
   int tx_i = 0;
@@ -402,7 +470,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   for (const std::pair<transaction, blobdata>& tx : txs)
   {
     tx_hash = blk.tx_hashes[tx_i];
-    add_transaction(blk_hash, tx, &tx_hash);
+    add_transaction(blk_hash, tx, prev_height, &tx_hash);
     // Emission reward vouts carry a plaintext amount but store as amount-0
     // RCT records with their outPk commitment (see add_transaction), so they
     // count as RCT outputs — same treatment as coinbase vouts above.
@@ -432,7 +500,6 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     const BlockHeight bh{block_height_raw};
     std::vector<uint8_t> leaf_data;
     uint64_t new_output_count = 0;
-    static constexpr uint8_t zero_pqc[32] = {};
 
     // Capture output count BEFORE add_transaction calls above added this block's outputs.
     // add_transaction has already run by this point, so we subtract back.
@@ -441,15 +508,40 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
       this_block_output_count += tx_pair.first.vout.size();
     uint64_t next_output_seq = get_num_outputs(0) - this_block_output_count;
 
+    // CEN-I19: the store applies the SAME shape rule admission applies -- one
+    // rule, one implementation (`check_tx_extra_pqc_field_shape`, over
+    // shekyl-wire's `check_pqc_field_shape`), so any path reaching add_block
+    // without admission fails closed instead of storing a leaf the rule
+    // forbids. Re-deriving parts of the rule here is what went wrong before:
+    // this backstop returned early on a zero-output transaction (accepting
+    // 0x06/0x07 fields the rule forbids there), took the FIRST 0x07 (accepting
+    // duplicates, which the rule rejects because the bytes would otherwise
+    // admit two readings), and never examined 0x06 at all -- three ways to
+    // disagree with the rule it exists to back up.
+    //
+    // Before CEN-I19 this returned {} on a parse failure, an absent field or a
+    // length that was not a multiple of 32, and collect_outputs then zero-filled
+    // h_pqc for every output past the end of the blob: the fail-open that stored
+    // leaves whose post-quantum binding was to nothing, invisibly. Everything
+    // below is unreachable for an admitted transaction and aborts rather than
+    // falling back (CEN-L11 pattern).
     auto extract_leaf_hashes = [](const transaction& tx) -> std::vector<uint8_t> {
+      std::string why;
+      if (!check_tx_extra_pqc_field_shape(tx, why))
+        throw DB_ERROR(("curve-tree leaf: " + why + " at DB add for tx "
+          + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+          + " (validated at admission?)").c_str());
+      // Rule-conformant and leafless: no outputs, therefore no fields, no leaf.
+      if (tx.vout.empty())
+        return {};
       std::vector<tx_extra_field> fields;
       if (!parse_tx_extra(tx.extra, fields))
-        return {};
+        throw DB_ERROR("curve-tree leaf: tx_extra parses for the shape check but not here (bug)");
       tx_extra_pqc_leaf_hashes lh;
       if (!find_tx_extra_field_by_type(fields, lh))
-        return {};
-      if (lh.blob.size() % PQC_LEAF_HASH_BYTES != 0)
-        return {};
+        throw DB_ERROR("curve-tree leaf: the shape check accepted a tx whose 0x07 field is absent (bug)");
+      // Exactly one field of exactly 32 * vout.size() bytes, per the rule just
+      // applied -- so the first match IS the only match.
       return std::vector<uint8_t>(lh.blob.begin(), lh.blob.end());
     };
 
@@ -457,14 +549,12 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     // Each output is tracked by its global output index for exact reversal.
     auto collect_outputs = [&](const transaction& tx, bool is_miner) {
       const auto leaf_hash_blob = extract_leaf_hashes(tx);
-      const size_t num_leaf_hashes = leaf_hash_blob.size() / PQC_LEAF_HASH_BYTES;
 
       for (uint64_t i = 0; i < tx.vout.size(); ++i) {
         const OutputIndex this_output{next_output_seq++};
         const auto& vout = tx.vout[i];
-        const uint8_t* h_pqc = (i < num_leaf_hashes)
-            ? (leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES)
-            : zero_pqc;
+        // extract_leaf_hashes pinned the blob to exactly one hash per output.
+        const uint8_t* h_pqc = leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES;
 
         crypto::public_key output_key;
         uint64_t maturity_raw;
@@ -484,21 +574,48 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
               : block_height_raw + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
         }
         else
-          continue;
+          // CEN-L11: unreachable — CEN-H12/F8 make txout_to_tagged_key the sole
+          // accepted output type on both the relay and connect paths. Reaching
+          // here means an unvalidated output arrived at the write path, and a
+          // `continue` would drop it from the curve tree: deterministically,
+          // permanently unspendable, with no verify-time twin to notice. Skips
+          // on this path are silent by construction, so it aborts instead.
+          throw DB_ERROR(("curve-tree leaf: unsupported output target (variant "
+            + std::to_string(vout.target.index()) + ") at vout index " + std::to_string(i)
+            + " of tx " + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+            + " at DB add (validated at admission?)").c_str());
 
-        if (i >= tx.rct_signatures.outPk.size())
-          continue;
-        rct::key commitment = tx.rct_signatures.outPk[i].mask;
+        if (i >= tx.ct_signatures.outPk.size())
+          // CEN-L11: unreachable — four `outPk.size() != vout.size()` gates
+          // cover coinbase and non-coinbase on both paths (cryptonote_core.cpp,
+          // cryptonote_format_utils.cpp, blockchain.cpp x2). Same reasoning.
+          throw DB_ERROR(("curve-tree leaf: outPk shorter than vout at DB add (vout index "
+            + std::to_string(i) + ", outPk size " + std::to_string(tx.ct_signatures.outPk.size())
+            + ", vout size " + std::to_string(tx.vout.size()) + ", tx "
+            + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+            + ") (validated at admission?)").c_str());
+        ct::key commitment = tx.ct_signatures.outPk[i].mask;
 
         const MaturityHeight mat{maturity_raw};
         uint8_t leaf[128];
-        if (shekyl_construct_curve_tree_leaf(
+        // CEN-L11: the verdict is checked, not discarded. construct_leaf fails
+        // only when the output key or the commitment is not a canonical,
+        // prime-order, non-identity point — and both are gated upstream on
+        // both paths (shekyl_check_output_keys via check_outs_valid;
+        // shekyl_check_commitment_masks via check_commitment_mask_valid, with
+        // the coinbase legs in prevalidate_miner_transaction). So this is
+        // unreachable, and it aborts rather than silently omitting the output.
+        if (!shekyl_construct_curve_tree_leaf(
               reinterpret_cast<const uint8_t*>(&output_key),
               commitment.bytes, h_pqc, leaf))
-        {
-          add_pending_tree_leaf(mat, this_output, leaf);
-          add_block_pending_addition(bh, this_output, mat);
-        }
+          throw DB_ERROR(("curve-tree leaf construction failed at DB add (vout index "
+            + std::to_string(i) + " of tx "
+            + epee::string_tools::pod_to_hex(get_transaction_hash(tx))
+            + "; output key or commitment is not a canonical prime-order point)"
+            " (validated at admission?)").c_str());
+
+        add_pending_tree_leaf(mat, this_output, leaf);
+        add_block_pending_addition(bh, this_output, mat);
       }
     };
 
@@ -589,8 +706,39 @@ void BlockchainDB::set_hard_fork(HardFork* hf)
   m_hardfork = hf;
 }
 
+bool BlockchainDB::pop_target_allowed(uint64_t target_tip_height) const
+{
+  const uint64_t watermark = get_archival_prune_watermark_epoch();
+  if (watermark == 0)
+    return true;
+  return target_tip_height >= shekyl_archival_epoch_open_height(watermark);
+}
+
 void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
 {
+  // C2-R1b-Q1c belt: the single funnel every pop writer traverses. Refuse
+  // any pop landing below the open height of the oldest fully-retained
+  // epoch -- past it, the retention prune has destroyed (un-journaled) the
+  // accrual rows a later re-close would range-sum, and the daemon would
+  // silently reconstruct wrong epoch state. The floor comes from the
+  // prune's own persisted receipt (get_archival_prune_watermark_epoch),
+  // never from the current tip: a tip-derived floor retreats with the tip
+  // and reopens the hole across iterated pops or a restart.
+  {
+    const uint64_t h = height();
+    const uint64_t resulting_tip = h >= 2 ? h - 2 : 0;
+    if (!pop_target_allowed(resulting_tip))
+    {
+      const uint64_t watermark = get_archival_prune_watermark_epoch();
+      throw DB_ERROR((std::string("pop refused at the prune watermark: popping to height ")
+        + std::to_string(resulting_tip) + " would cross below epoch "
+        + std::to_string(watermark) + "'s open height "
+        + std::to_string(shekyl_archival_epoch_open_height(watermark))
+        + ", where the retention prune has already destroyed the rows a "
+          "revert needs; remedy: resync this node").c_str());
+    }
+  }
+
   blk = get_top_block();
 
   // Capture the height of the block being removed BEFORE remove_block()
@@ -615,11 +763,11 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // the journal to N + 1 would shift the connect-side settled-epoch operand
   // off verify's at every epoch boundary.
   revert_archival_emission_claims_at_height(removed_block_height - 1);
-  // Unbond pre-image restore (gate-4 §3.5/§5): same journal-key convention
+  // Release pre-image restore (gate-4 §3.5/§5): same journal-key convention
   // as the emission claims (block index N = removed_block_height - 1), and
   // AFTER the slash revert above as a defensive ordering belt. Nothing can
   // actually trail the clean close (ratified 2026-07-12): slashability ends
-  // at the Unbond connect — the scheduler only challenges currently held
+  // at the Release connect — the scheduler only challenges currently held
   // shards and an Exited record holds none — so the pop fold's trailing
   // clean-close check holds unconditionally; a future violation surfaces
   // there as MISSING_CLEAN_CLOSE, loud. The restored fields (bonded_total,
@@ -685,7 +833,9 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
     if (!get_tx(h, tx) && !get_pruned_tx(h, tx))
       throw DB_ERROR("Failed to get pruned or unpruned transaction from the db");
     txs.push_back(std::move(tx));
-    remove_transaction(h);
+    // PC-D4: the block's INDEX, not the chain count. See the note at the
+    // miner-tx call below.
+    remove_transaction(h, removed_block_height - 1);
   }
   {
     const crypto::hash miner_h = get_transaction_hash(blk.miner_tx);
@@ -695,7 +845,19 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
       throw DB_ERROR("Attempted to pop a block with pruned transaction data");
     }
   }
-  remove_transaction(get_transaction_hash(blk.miner_tx));
+  // PC-D4: `remove_transaction` rebuilds the serve-credit ledger key, which
+  // `add_transaction` wrote with `prev_height` -- the block's INDEX N. The
+  // height convention documented at the top of this function applies here and
+  // cuts the other way from the slash/close hooks: those key on the chain
+  // height AFTER the block (`removed_block_height`), the ledger keys on N.
+  // `removed_block_height` is the count BEFORE the pop, so N is one below it.
+  //
+  // Passing the count instead built a key one above every row the add wrote,
+  // `mdb_del` answered MDB_NOTFOUND, and the tolerant delete swallowed it --
+  // so a popped pass SURVIVED its block. On a replacement branch that stale
+  // row then either rejects a legitimate record through the pair-epoch dedup
+  // or counts toward emission. Silent, and consensus-visible.
+  remove_transaction(get_transaction_hash(blk.miner_tx), removed_block_height - 1);
 
   // INVARIANT: pending, drain, output_to_leaf, leaf_to_output, block_pending_additions,
   // and curve_tree_* tables MUST be mutated within the same m_write_txn as the block pop.
@@ -762,7 +924,7 @@ bool BlockchainDB::is_open() const
   return m_open;
 }
 
-void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
+void BlockchainDB::remove_transaction(const crypto::hash& tx_hash, uint64_t block_height)
 {
   transaction tx = get_pruned_tx(tx_hash);
 
@@ -775,13 +937,18 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
     else if (std::holds_alternative<txin_archival_serve_credit_response>(tx_input))
     {
       const auto& resp = std::get<txin_archival_serve_credit_response>(tx_input);
-      remove_archival_serve_credit_bit(resp.p_canonical_id, resp.shard_id, resp.settlement_epoch);
+      crypto::hash p_id{}; uint64_t shard_id = 0, settlement_epoch = 0;
+      if (!get_archival_serve_credit_key(resp, p_id, shard_id, settlement_epoch))
+        throw DB_ERROR("serve-credit vin did not parse at DB remove");
+      // PC-D4: the SAME height the add path was given. The vin cannot supply
+      // it, so `pop_block` does.
+      remove_archival_serve_credit_bit(p_id, shard_id, settlement_epoch, block_height);
     }
     else if (std::holds_alternative<txin_archival_bond_post>(tx_input))
     {
       const auto& bond = std::get<txin_archival_bond_post>(tx_input);
       // Only JoinMarket pops here (vin-driven: the record is deleted whole).
-      // Unbond, HoldingsUpdate, and Rebond pop via the height-keyed pre-image
+      // Release, HoldingsUpdate, and Rebond pop via the height-keyed pre-image
       // journals in pop_block — the vin carries the post-connect state, so it
       // cannot drive the restore.
       if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))

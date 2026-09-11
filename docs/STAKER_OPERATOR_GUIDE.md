@@ -53,7 +53,7 @@ is the safest operating regime; almost every way to hurt yourself below requires
 
 1. **Collateral is locked, and freeing it is slow.** Each shard you hold is
    backed by a flat `ARCHIVAL_BOND_FLOOR` of collateral. When you voluntarily
-   release collateral (a full `Unbond`, or a partial-unbond via
+   release collateral (a full `Release`, or a partial-release via
    `HoldingsUpdate` that drops a shard), the freed collateral enters a
    **release cooldown of `RELEASE_COOLDOWN_EPOCHS = 2` epochs (20,000 blocks)**
    before it is spendable again. This is deliberate: it is the anti-dodge
@@ -78,7 +78,7 @@ is the safest operating regime; almost every way to hurt yourself below requires
 ## Footgun 1: the drop-to-reallocate capital strand
 
 **The mistake:** you drop a shard you are holding (a `HoldingsUpdate`
-partial-unbond) intending to immediately use the freed collateral to fund a
+partial-release) intending to immediately use the freed collateral to fund a
 *different* shard.
 
 **Why it hurts you:** the freed collateral is **frozen for the release cooldown
@@ -184,7 +184,31 @@ keep them that way.
 
 - **Let timing be the wallet's job.** Beyond the funding gap (Footgun 2), avoid
   introducing any deterministic timing relationship between your `P`'s on-chain
-  events and anything externally observable.
+  events and anything externally observable. This includes wallet *open*: the
+  wallet waits a randomized standoff before publishing your `P`'s onion, so that
+  the moment your principal wallet starts syncing does not predict the moment
+  your `P` reappears. Do not defeat it by scripting the two together.
+
+- **Run one staking wallet per machine.** This is a recommendation, not
+  something the software forces, and it is the one opsec rule you can break
+  without the wallet noticing.
+
+  Each staking wallet derives its own Tor data directory (`<wallet>.tor/`), so
+  each gets its own entry guards and its own tor process — the isolation is
+  correct *per wallet*. What no wallet can see is the machine: two staking
+  wallets open at once are two personas active from **one IP at the same time**,
+  which is co-activation at a level no per-wallet mechanism can observe, let
+  alone prevent.
+
+  If you want to serve several `P`s, serve them from **separate machines or
+  VMs**. Sharing a host is not forbidden and the software will not stop you; it
+  is simply not a posture that preserves the separation the rest of this guide
+  is about.
+
+  A corollary: never point two wallets at one Tor data directory to save disk.
+  A shared directory is a shared entry-guard set, which links every persona
+  served through it — the wallet derives the path precisely so this is not
+  something you can configure your way into.
 
 ---
 
@@ -221,12 +245,33 @@ discipline during the cold-start window, which this section is.
 | Independence *across* your funding events | **You** | Do not anchor multiple events to a common trigger |
 | Challenge traffic over anonymity transport | **Wallet/node** (loud refusal default) | Do not reconfigure it to allow clearnet |
 | `P` ↔ principal network isolation | **You** (transport config) | Keep separate circuits/guards/streams |
+| Fresh persona per bond, never reused | **Wallet** (automatic, monotone) | Nothing — you do not pick or manage personas; do not try to "reset" or reuse one |
 | Cold-start thin cover | **Time** (self-resolves) | Extra opsec discipline while early |
 
 The pattern: **the protocol protects what it can see and police; the residuals
 that live in operator behavior are routed here, to you, because consensus cannot
 reach them.** The good news is that all of them are avoided by the same posture
 -- set it up correctly and leave it alone.
+
+**On personas: the wallet never reuses one, and this is a refusal, not a
+setting.** Each time you bond, the wallet stands up a *fresh* persona and moves
+forward; it will not hand back a persona it has already retired. That refusal is
+deliberate. Reusing a retired persona would tie its new activity to its old
+activity, and -- because every one of your personas derives from your single
+wallet seed -- a linked pair of personas is a thread back to *you*, the same
+clustering fingerprint [Footgun 2](#footgun-2-the-shared-anchor-funding-tell)
+warns about, but self-inflicted. You do not manage this, cannot see a "slot
+number", and never need to: keep one wallet as the source of truth for your
+staking and back up its seed. Treat that wallet as the record of which personas
+you have used -- the same care you already give a wallet that holds funds.
+
+If you ever restore that wallet from its seed, a **full rescan** rediscovers
+your staking history along with your funds -- your bonds become reachable
+again and the no-reuse guarantee re-establishes itself automatically, with no
+staking-specific recovery step. One caveat, the same one your funds have: a
+rescan only sees what it scans. If you restored with a start height *later*
+than your staking activity, rescan again from an earlier height (or from the
+wallet's creation date) so the history is inside the scanned range.
 
 ---
 

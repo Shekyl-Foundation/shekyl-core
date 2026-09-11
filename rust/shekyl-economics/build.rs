@@ -54,13 +54,14 @@ fn main() {
          pub const GENERATED_STAKER_POOL_SHARE: u64 = {staker_pool_share};\n\
          pub const GENERATED_ESCALATION_KNEE_N: u64 = {escalation_knee_n};\n\
          pub const GENERATED_ESCALATION_ASYMPTOTE_SHARE: u64 = {escalation_asymptote};\n\
-         pub const GENERATED_MONEY_SUPPLY: u64 = {money_supply};\n\
+         pub const GENERATED_EMISSION_CURVE_ASYMPTOTE: u64 = {emission_curve_asymptote};\n\
          pub const GENERATED_EMISSION_SPEED_FACTOR_PER_MINUTE: u64 = {esf};\n\
          pub const GENERATED_FINAL_SUBSIDY_PER_MINUTE: u64 = {final_subsidy};\n\
          pub const GENERATED_DAA_TARGET_SECONDS: u64 = {daa_target};\n\
          pub const GENERATED_STAKER_EMISSION_SHARE: u64 = {staker_emission_share};\n\
          pub const GENERATED_STAKER_EMISSION_DECAY: u64 = {staker_emission_decay};\n\
-         pub const GENERATED_BLOCKS_PER_YEAR: u64 = {blocks_per_year};\n",
+         pub const GENERATED_BLOCKS_PER_YEAR: u64 = {blocks_per_year};\n\
+         pub const GENERATED_TX_VOLUME_WINDOW: u64 = {tx_volume_window};\n",
         scale = get_u64(&map, "shekyl_fixed_point_scale"),
         release_min = get_u64(&map, "shekyl_release_min"),
         release_max = get_u64(&map, "shekyl_release_max"),
@@ -70,13 +71,14 @@ fn main() {
         staker_pool_share = get_u64(&map, "shekyl_staker_pool_share"),
         escalation_knee_n = get_u64(&map, "shekyl_escalation_knee_n"),
         escalation_asymptote = get_u64(&map, "shekyl_escalation_asymptote_share"),
-        money_supply = get_u64(&map, "money_supply"),
+        emission_curve_asymptote = get_u64(&map, "emission_curve_asymptote"),
         esf = get_u64(&map, "emission_speed_factor_per_minute"),
         final_subsidy = get_u64(&map, "final_subsidy_per_minute"),
         daa_target = daa_target_seconds,
         staker_emission_share = get_u64(&map, "shekyl_staker_emission_share"),
         staker_emission_decay = get_u64(&map, "shekyl_staker_emission_decay"),
         blocks_per_year = get_u64(&map, "shekyl_blocks_per_year"),
+        tx_volume_window = get_u64(&map, "shekyl_tx_volume_window"),
     );
 
     fs::write(&out_file, output).expect("failed writing generated Rust economics params");

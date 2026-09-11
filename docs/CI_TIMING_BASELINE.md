@@ -224,4 +224,32 @@ follow-up PR after the `Swatinem/rust-cache@v2` deltas are observed:
   caching-related per se, but would shave 2m 34s on cold-cache runs.
   Independent improvement; orthogonal to the cache strategy.
 
+### `chore/ci-fanout-cut` graph change (2026-08-24)
+
+Not a cache-strategy capture: the PR job graph changed. Historical
+rows above remain valid for their SHAs. After this lands, a typical
+non-docs PR no longer runs:
+
+- Ubuntu 22.04 *and* 24.04 test rebuilds (24.04 tests consume the
+  build-job artifact; 22.04 is compile-only).
+- Arch Linux / Windows MSYS2 (weekly-os.yml, Mondays).
+- Six-target `depends.yml` (path-filtered to `contrib/depends` +
+  Makefile; ARM v8 qemu KATs are a separate workflow on the three
+  cross-arch crates; full matrix is nightly).
+- Eight one-runner-per-script grep workflows (bundled in
+  `grep-gates.yml`).
+- `rust-msrv-gate` (the rust-audit-test job already compiles at
+  `rust-toolchain.toml` 1.94).
+- `source archive` on PRs into `dev` (kept on PRs into `main` —
+  required check on the main ruleset).
+- CodeQL C++ and Python (weekly + dispatch; Rust stays on PR).
+- Push-to-`dev` double-run of `ci/gh-actions/cli` and
+  `ci/gh-actions/rust`.
+
+Wall-clock after the first PR on this branch should be appended here
+from `gh run view` (same methodology as the rows above). Do not
+invent the delta from the PR #550 timings that motivated the cut
+(Ubuntu tests 187.9 billed min with the rebuild; depends 124.1;
+rust 95.3).
+
 [workflow]: ../.github/workflows/build.yml

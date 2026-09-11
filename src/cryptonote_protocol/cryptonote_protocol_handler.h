@@ -49,6 +49,7 @@
 #include "net/levin_base.h"
 #include "p2p/net_node_common.h"
 #include "shekyl/shekyl_ffi.h"
+#include "cryptonote_basic/block_ingest.h"
 #include <boost/circular_buffer.hpp>
 
 PUSH_WARNINGS
@@ -57,6 +58,10 @@ DISABLE_VS_WARNINGS(4355)
 #define LOCALHOST_INT 2130706433
 #define CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT 100
 static_assert(CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT >= BLOCKS_SYNCHRONIZING_DEFAULT_COUNT_PRE_V4, "Invalid CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT");
+
+//! Test-only seam type; see the `friend` declaration in
+//! `t_cryptonote_protocol_handler` for what it exists for and when it retires.
+struct cryptonote_protocol_handler_test_seam;
 
 namespace cryptonote
 {
@@ -87,14 +92,13 @@ namespace cryptonote
     t_cryptonote_protocol_handler(t_core& rcore, nodetool::i_p2p_endpoint<connection_context>* p_net_layout, bool offline = false);
 
     BEGIN_INVOKE_MAP2(cryptonote_protocol_handler)
-      HANDLE_NOTIFY_T2(NOTIFY_NEW_BLOCK, &cryptonote_protocol_handler::handle_notify_new_block)
       HANDLE_NOTIFY_T2(NOTIFY_NEW_TRANSACTIONS, &cryptonote_protocol_handler::handle_notify_new_transactions)
       HANDLE_NOTIFY_T2(NOTIFY_REQUEST_GET_OBJECTS, &cryptonote_protocol_handler::handle_request_get_objects)
       HANDLE_NOTIFY_T2(NOTIFY_RESPONSE_GET_OBJECTS, &cryptonote_protocol_handler::handle_response_get_objects)
       HANDLE_NOTIFY_T2(NOTIFY_REQUEST_CHAIN, &cryptonote_protocol_handler::handle_request_chain)
       HANDLE_NOTIFY_T2(NOTIFY_RESPONSE_CHAIN_ENTRY, &cryptonote_protocol_handler::handle_response_chain_entry)
-      HANDLE_NOTIFY_T2(NOTIFY_NEW_FLUFFY_BLOCK, &cryptonote_protocol_handler::handle_notify_new_fluffy_block)			
-      HANDLE_NOTIFY_T2(NOTIFY_REQUEST_FLUFFY_MISSING_TX, &cryptonote_protocol_handler::handle_request_fluffy_missing_tx)						
+      HANDLE_NOTIFY_T2(NOTIFY_NEW_COMPACT_BLOCK, &cryptonote_protocol_handler::handle_notify_new_compact_block)			
+      HANDLE_NOTIFY_T2(NOTIFY_REQUEST_COMPACT_MISSING_TX, &cryptonote_protocol_handler::handle_request_compact_missing_tx)						
       HANDLE_NOTIFY_T2(NOTIFY_GET_TXPOOL_COMPLEMENT, &cryptonote_protocol_handler::handle_notify_get_txpool_complement)
     END_INVOKE_MAP2()
 
@@ -110,8 +114,27 @@ namespace cryptonote
     t_core& get_core(){return m_core;}
     virtual bool is_synchronized() const final { return !no_sync() && m_synchronized; }
     void log_connections();
-    std::list<connection_info> get_connections();
     const block_queue &get_block_queue() const { return m_block_queue; }
+
+    // Test seam -- deliberate, narrow, and temporary.
+    //
+    // The behavioural test for the anonymity-zone address-keying fix must
+    // inject a block-queue span whose origin is an anonymity-zone address.
+    // The queue is otherwise reachable only by driving
+    // `handle_response_get_objects` through validation arms that are not what
+    // the test asserts -- a test built that way fails mostly for reasons
+    // unrelated to its subject, which trains its own dismissal.
+    //
+    // A `friend` rather than a non-const accessor: it grants exactly one
+    // named type access, changes no public surface, and cannot be reached
+    // from production code, so the seam structurally cannot be used to
+    // bypass validation in the daemon.
+    //
+    // IT RETIRES WITH THIS CLASS. P2P-3 replaces the C++ protocol handler
+    // wholesale and the seam deletes with it: it is an affordance on code
+    // with a deletion date, not a pattern to widen. A second test wanting
+    // the queue is a signal to reconsider the seam, not to add an accessor.
+    friend struct ::cryptonote_protocol_handler_test_seam;
     void stop();
     void on_connection_close(cryptonote_connection_context &context);
     void set_max_out_peers(epee::net_utils::zone zone, unsigned int max) { CRITICAL_REGION_LOCAL(m_max_out_peers_lock); m_max_out_peers[zone] = max; }
@@ -133,20 +156,21 @@ namespace cryptonote
     bool needs_new_sync_connections(epee::net_utils::zone zone) const;
     bool is_busy_syncing();
 
+#ifndef IN_UNIT_TESTS
   private:
+#endif
     //----------------- commands handlers ----------------------------------------------
-    int handle_notify_new_block(int command, NOTIFY_NEW_BLOCK::request& arg, cryptonote_connection_context& context);
     int handle_notify_new_transactions(int command, NOTIFY_NEW_TRANSACTIONS::request& arg, cryptonote_connection_context& context);
     int handle_request_get_objects(int command, NOTIFY_REQUEST_GET_OBJECTS::request& arg, cryptonote_connection_context& context);
     int handle_response_get_objects(int command, NOTIFY_RESPONSE_GET_OBJECTS::request& arg, cryptonote_connection_context& context);
     int handle_request_chain(int command, NOTIFY_REQUEST_CHAIN::request& arg, cryptonote_connection_context& context);
     int handle_response_chain_entry(int command, NOTIFY_RESPONSE_CHAIN_ENTRY::request& arg, cryptonote_connection_context& context);
-    int handle_notify_new_fluffy_block(int command, NOTIFY_NEW_FLUFFY_BLOCK::request& arg, cryptonote_connection_context& context);
-    int handle_request_fluffy_missing_tx(int command, NOTIFY_REQUEST_FLUFFY_MISSING_TX::request& arg, cryptonote_connection_context& context);
+    int handle_notify_new_compact_block(int command, NOTIFY_NEW_COMPACT_BLOCK::request& arg, cryptonote_connection_context& context);
+    int handle_request_compact_missing_tx(int command, NOTIFY_REQUEST_COMPACT_MISSING_TX::request& arg, cryptonote_connection_context& context);
     int handle_notify_get_txpool_complement(int command, NOTIFY_GET_TXPOOL_COMPLEMENT::request& arg, cryptonote_connection_context& context);
 		
     //----------------- i_bc_protocol_layout ---------------------------------------
-    virtual bool relay_block(NOTIFY_NEW_FLUFFY_BLOCK::request& arg, cryptonote_connection_context& exclude_context);
+    virtual bool relay_block(NOTIFY_NEW_COMPACT_BLOCK::request& arg, cryptonote_connection_context& exclude_context);
     virtual bool relay_transactions(NOTIFY_NEW_TRANSACTIONS::request& arg, const boost::uuids::uuid& source, epee::net_utils::zone zone, relay_method tx_relay);
     //----------------------------------------------------------------------------------
     //bool get_payload_sync_data(HANDSHAKE_DATA::request& hshd, cryptonote_connection_context& context);
@@ -164,6 +188,7 @@ namespace cryptonote
     bool check_standby_peers();
     bool update_sync_search();
     int try_add_next_blocks(cryptonote_connection_context &context);
+    void request_chain_history(cryptonote_connection_context &context);
     void notify_new_stripe(cryptonote_connection_context &context, uint32_t stripe);
     size_t skip_unneeded_hashes(cryptonote_connection_context& context, bool check_block_queue) const;
     bool request_txpool_complement(cryptonote_connection_context &context);
@@ -184,7 +209,6 @@ namespace cryptonote
     epee::math_helper::once_a_time_seconds<8> m_idle_peer_kicker;
     epee::math_helper::once_a_time_milliseconds<100> m_standby_checker;
     epee::math_helper::once_a_time_seconds<101> m_sync_search_checker;
-    epee::math_helper::once_a_time_seconds<43> m_bad_peer_checker;
     std::unordered_map<epee::net_utils::zone, unsigned int> m_max_out_peers;
     mutable epee::critical_section m_max_out_peers_lock;
     tools::PerformanceTimer m_sync_timer, m_add_timer;
@@ -208,8 +232,6 @@ namespace cryptonote
     boost::mutex m_buffer_mutex;
     double get_avg_block_size();
     boost::circular_buffer<size_t> m_avg_buffer = boost::circular_buffer<size_t>(10);
-
-    boost::mutex m_bad_peer_check_lock;
 
     template<class t_parameter>
       bool post_notify(typename t_parameter::request& arg, cryptonote_connection_context& context)

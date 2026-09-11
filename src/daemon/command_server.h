@@ -53,16 +53,25 @@ private:
   bool m_is_rpc;
 
 public:
+  // `nettype` is this PROCESS's network, not the daemon's: the console's
+  // half of the VC-2 identity handshake compares it against what the daemon
+  // reports. It is load-bearing rather than cosmetic — the consensus-constant
+  // digest is generated from one JSON for every network, so a mainnet build
+  // and a testnet build carry the SAME digest and the same RPC version, and
+  // the network axis is the only one that can tell a wrong-network daemon
+  // apart.
   t_command_server(
       uint32_t ip
     , uint16_t port
-    , const std::optional<tools::login>& login
-    , const epee::net_utils::ssl_options_t& ssl_options
+    , cryptonote::network_type nettype
     , bool is_rpc = true
     , cryptonote::core_rpc_server* rpc_server = NULL
     );
 
   bool process_command_str(const std::string& cmd);
+
+  // RPC mode: whether a request issued by a processed command failed.
+  bool rpc_request_failed() const { return m_parser.rpc_request_failed(); }
 
   bool process_command_vec(const std::vector<std::string>& cmd);
 

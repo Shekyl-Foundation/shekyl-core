@@ -98,26 +98,13 @@ pub(super) fn build_output(
     kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
     kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
 
-    let enc_amount = {
-        let mut buf = [0u8; 9];
-        buf[..8].copy_from_slice(&constructed.enc_amount);
-        buf[8] = constructed.amount_tag;
-        buf
-    };
-    let enc_label = {
-        let mut buf = [0u8; 9];
-        buf[..8].copy_from_slice(&constructed.enc_label);
-        buf[8] = constructed.label_tag;
-        buf
-    };
-
     Ok(BuiltOutput {
         info: OutputInfo {
             dest_key: constructed.output_key,
             amount: AtomicUnits::from_raw(amount),
             commitment_mask: constructed.z,
-            enc_amount,
-            enc_label,
+            enc_amount: constructed.enc_amount_wire(),
+            enc_label: constructed.enc_label_wire(),
         },
         output_key: constructed.output_key,
         view_tag: Some(constructed.view_tag_prefilter),
@@ -589,10 +576,10 @@ mod tests {
             &constructed.kem_ciphertext_ml_kem,
             &constructed.output_key,
             &constructed.commitment,
-            &constructed.enc_amount,
-            constructed.amount_tag,
-            &constructed.enc_label,
-            constructed.label_tag,
+            &constructed.enc_amount_bytes(),
+            constructed.amount_tag(),
+            &constructed.enc_label_bytes(),
+            constructed.label_tag(),
             constructed.view_tag_prefilter,
             OUT_IDX,
         )
@@ -649,14 +636,11 @@ mod tests {
         // Recipient wallet: encode its primary address (Edwards view key on the
         // wire), then decode it exactly as `sign_tx` does.
         let recipient_keys = LocalKeys::from_test_seed(SEED);
-        let address = ShekylAddress::new(
-            Network::Mainnet,
-            *recipient_keys.keys.spend_pk.as_canonical_bytes(),
-            *recipient_keys.keys.view_pk.as_canonical_bytes(),
-            recipient_keys.keys.ml_kem_ek.to_vec(),
-        )
-        .encode()
-        .expect("encode recipient address");
+        let address = recipient_keys
+            .keys
+            .to_address(Network::Mainnet)
+            .encode()
+            .expect("encode recipient address");
         let decoded = decode_recipient(&address, Network::Mainnet).expect("decode recipient");
 
         // Sender-side mapping, exactly as the `sign_tx` payment loop does it.
@@ -686,10 +670,10 @@ mod tests {
             &constructed.kem_ciphertext_ml_kem,
             &constructed.output_key,
             &constructed.commitment,
-            &constructed.enc_amount,
-            constructed.amount_tag,
-            &constructed.enc_label,
-            constructed.label_tag,
+            &constructed.enc_amount_bytes(),
+            constructed.amount_tag(),
+            &constructed.enc_label_bytes(),
+            constructed.label_tag(),
             constructed.view_tag_prefilter,
             OUT_IDX,
         )
@@ -719,10 +703,10 @@ mod tests {
                 &wrong.kem_ciphertext_ml_kem,
                 &wrong.output_key,
                 &wrong.commitment,
-                &wrong.enc_amount,
-                wrong.amount_tag,
-                &wrong.enc_label,
-                wrong.label_tag,
+                &wrong.enc_amount_bytes(),
+                wrong.amount_tag(),
+                &wrong.enc_label_bytes(),
+                wrong.label_tag(),
                 wrong.view_tag_prefilter,
                 OUT_IDX,
             )

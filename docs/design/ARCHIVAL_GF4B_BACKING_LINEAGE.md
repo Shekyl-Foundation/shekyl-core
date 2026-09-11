@@ -1,5 +1,7 @@
 # GF-4b — Backing-lineage wiring: sweep, `MintLineageOutput`, `BackingSet`
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 > **Status: design round 1 + review round, 2026-07-08.** Review-round
 > findings GF4b-1…GF4b-6 (§6) are incorporated into §3.1–§3.6 and §5; the
 > ladder and sweep conversion were verified correct as designed and are

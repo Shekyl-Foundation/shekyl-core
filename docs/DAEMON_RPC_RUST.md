@@ -3,8 +3,12 @@
 Phase 1 of the epee-to-Rust migration replaces the daemon's HTTP transport layer
 with Axum while keeping all handler logic in C++. **Phase 1 is complete:** the
 epee HTTP listener, `--no-rust-rpc`, and inbound daemon `--rpc-login` /
-`--rpc-ssl*` surface are deleted. Phase 2 replaces epee KV serialization in the
-FFI dispatch path.
+`--rpc-ssl*` surface are deleted, and so (2026-08-21) is epee's HTTP **client**
+— `http_client.h`, digest auth (`http_auth`), `net_helper`, the abstract-invoke
+templates and the dead `http_server_impl_base` / `http_protocol_handler`
+parser that only its own unit test kept warm. epee has no HTTP surface left in
+this tree; what remains of it on the RPC path is KV serialization, which Phase
+2 replaces in the FFI dispatch path.
 
 ## Architecture
 
@@ -41,6 +45,8 @@ port — it is not part of this Phase 1 transport deletion.
 | `src/rpc/core_rpc_ffi.cpp` | Dispatch tables mapping URIs/methods to `on_*` handlers |
 | `rust/shekyl-daemon-rpc/` | Axum crate: server, routes, handlers, types |
 | `rust/shekyl-daemon-rpc/src/ffi_exports.rs` | `shekyl_daemon_rpc_start/stop` FFI exports (daemon-only) |
+| `rust/shekyl-daemon-rpc/src/ctl_client.rs` | `shekyl_daemon_ctl_post/free` — the `shekyld <command>` control client's transport (daemon-only) |
+| `src/daemon/rpc_client.h` | `tools::t_rpc_client`: request/response framing for the control client over that export |
 | `src/shekyl/shekyl_ffi.h` | C++ declarations for Rust FFI functions |
 | `src/daemon/daemon.cpp` | Daemon lifecycle: always starts Axum on the configured RPC port |
 | `src/rpc/rpc_args.cpp` | Shared CLI; daemon registers bind/CORS only (`include_listener_tls_auth=false`) |
@@ -52,10 +58,17 @@ port — it is not part of this Phase 1 transport deletion.
   - The legacy `/send_raw_transaction` + `/sendrawtransaction` pair was
     deleted (`design/DAEMON_SUBMIT_VERDICT.md` §9.3); transaction submit
     is the native `/submit_transaction` route below, not an FFI proxy
-- **1 native Rust** endpoint: `POST /submit_transaction` — served
-  directly by the Rust admission engine (`src/submit/`), never crossing
-  the C++ dispatch tables (`design/DAEMON_SUBMIT_VERDICT.md` §2–§3)
-- **Binary** endpoints (`/get_blocks.bin`, `/get_o_indexes.bin`, etc.)
+- **Natively served** routes answer from Rust without crossing the C++
+  dispatch tables. `POST /submit_transaction` was the first, served by the
+  Rust admission engine (`src/submit/`,
+  `design/DAEMON_SUBMIT_VERDICT.md` §2–§3); the KV cutover
+  (`design/DAEMON_RPC_KV_CUTOVER.md`) has been moving the read methods over
+  since, and the table under **RPC surface reachability** below is the list.
+  This bullet used to say "1 native Rust endpoint", which stopped being true
+  at RK-1 and stayed on the page for six slices — a count is a claim that
+  goes stale silently, so the table is the authority and this is a pointer
+  to it
+- **Binary** endpoints (`/get_o_indexes.bin`, `/get_blocks_by_height.bin`)
   - POST-only; return **400 Bad Request** on parse failure
 - **JSON-RPC 2.0** methods via `POST /json_rpc` (includes curve-tree and
   `get_archival_emission_claim_source`)
@@ -71,9 +84,140 @@ distribution. **Rule-21 reopen:** iff a live wallet path re-acquires a
 distribution consumer; re-evaluation shape: restore a typed Axum+FFI route
 with a named caller, never “keep epee.”
 
+### Deleted `.bin` pool-hashes sibling (no Axum route)
+
+`/get_transaction_pool_hashes.bin` and
+`COMMAND_RPC_GET_TRANSACTION_POOL_HASHES_BIN` are deleted. It is the binary
+spelling of `/get_transaction_pool_hashes`, which **is** called (the python
+framework's `daemon.py`); the `.bin` one was called by nothing. Both handlers
+performed the same two core reads and differed only in whether the hashes went
+out raw or hex, so the surviving JSON route keeps those reads and nothing else
+went callerless.
+
+Found by `ci/rpc-route-liveness` on its first run, and disposed of on the
+predicate already ruled for the batch-sync retirement below rather than
+carried as an exemption: an allowlist entry is a claim someone has to defend,
+and there was no defence to make.
+
+**Rule-21 reopen:** iff a named live consumer needs pool hashes in binary.
+Re-evaluation shape: a typed Rust route with that caller, not a restoration of
+the epee struct.
+
+### Deleted batch sync (no Axum route)
+
+`/get_blocks.bin` (+ `/getblocks.bin`) and `/get_hashes.bin` (+
+`/gethashes.bin`) are deleted, with `COMMAND_RPC_GET_BLOCKS_FAST` and
+`COMMAND_RPC_GET_HASHES_FAST`. They were wallet2's batch sync; `src/wallet/`
+is gone and no caller of any kind remained — not Rust, not C++, not
+`utils/python-rpc`, not `tests/functional_tests`. The Rust wallet fetches one
+block per height over `get_block` (native since RK-3b). Daemon-to-daemon sync
+is unaffected: it is Levin, through the 3-argument
+`find_blockchain_supplement` overload, which stays.
+
+The deletion also retires `core::get_pool_info` and, with it,
+`tx_memory_pool::m_removed_txs_by_time` — a timestamped in-memory record of
+when each transaction *left* the pool, each entry flagged sensitive or not.
+It existed only to serve incremental pool deltas to that batch sync, and it
+is the timing correlate the relay-privacy work spends effort denying. A
+structure of that kind must not outlive its only reader.
+
+**Rule-21 reopen:** iff a named live consumer needs batch block or hash sync
+over RPC. Re-evaluation shape: a design round against what FCMP++ scanning
+actually needs, emitting a typed Rust route with that named caller — never a
+restoration of the epee KV structs or of wallet2's API, whose contract was
+written for ring signatures.
+
+### Deleted bootstrap-daemon forward (no Axum route, no CLI flag)
+
+`--bootstrap-daemon-address` / `-login` / `-proxy`, the `set_bootstrap_daemon`
+RPC and console command, `bootstrap_daemon` / `bootstrap_node_selector`, and
+the `use_bootstrap_daemon_if_necessary` forward in front of 26 handlers are
+deleted (2026-08-21), together with the `get_info` fields that reported it
+(`bootstrap_daemon_address`, `height_without_bootstrap`,
+`was_bootstrap_ever_used`), the `untrusted` marker every response carried for
+it, and error code `CORE_RPC_ERROR_CODE_UNSUPPORTED_BOOTSTRAP`.
+
+**What it did.** While the local node was more than ten blocks behind, the
+daemon re-issued a wallet's queries — `/getblocks.bin` from its restore
+height, `/is_key_image_spent`, `/gettransactions` by hash,
+`get_output_histogram`, … — to a third-party node (one the operator named, or
+in `auto` mode one picked from the peer list's advertised RPC ports), and
+returned the answer flagged `untrusted=true`.
+
+**Why it goes** (mission hierarchy: privacy is the product;
+[`16-architectural-inheritance`](../.cursor/rules/16-architectural-inheritance.mdc):
+inherited flows that contradict the threat model are migrated, not
+rationalized). The forward inverts Shekyl's daemon posture — own node by
+default; a remote is the *wallet's* explicit, user-visible choice
+(`--daemon-address`, onion). It moved the wallet's most identifying query
+pattern to a node the user never chose, selected by the daemon from peer
+gossip, over clearnet unless a proxy was also configured, and flagged it with a
+field no wallet in this tree reads. The wallet can already do the honest
+version of this itself, visibly: point at a remote daemon while the local one
+syncs. A daemon-side silent forward adds no capability the user lacks; it
+removes their knowledge of where their queries went. Same shape as
+`get_output_distribution` above — an inherited surface whose only effect is to
+widen who sees the wallet.
+
+**Rule-21 reopen.** Evidence that IBD at the device floor
+([`76`](../.cursor/rules/76-device-provisioning-floor.mdc), Pi 4) leaves a
+fresh install without a usable wallet for longer than the failure-mode UX
+([`82`](../.cursor/rules/82-failure-mode-ux.mdc)) can carry, **and** a design
+that keeps the choice with the user: a wallet-side "use this remote until my
+node catches up" selection, explicit and visible — never a daemon-side forward.
+Re-evaluation lands in Rust on the wallet's daemon-selection surface, not as a
+restored C++ route.
+
+## RPC is operator-to-operator
+
+Every RPC leg is operator-to-operator: both endpoints are machines the same
+person controls. The adversary is the network path between those machines,
+never the peer. There is no recommended configuration in which a Shekyl
+wallet talks to a daemon someone else controls.
+
+This is an RPC posture, not a P2P posture. The P2P layer talks to strangers
+by construction — that is what a blockchain is — and Dandelion++ / Tor exist
+because those peers are untrusted. "Shekyl never talks to machines you don't
+control" would be false. Accurate form: **RPC is operator-to-operator; P2P is
+adversarial by design and hardened separately.**
+
+Consequences that follow from the one threat (someone on the wire between two
+machines you own), not from a public-remote-node model:
+
+- Mutual authentication is always available: both ends are provisionable.
+  There is no case that degrades to server-only (one-way) auth.
+- A CA answers a question this posture does not raise. Enrollment of devices
+  you physically hold is fingerprint-allowlist, not delegated trust. (The
+  reopen for in-daemon clearnet TLS below is unchanged: onion / reverse
+  proxy remains the remote-security story.)
+- `--public-node` (advertise restricted RPC over P2P so strangers' wallets
+  can find this node) is deleted, together with `/get_public_nodes` (the
+  discovery RPC whose only production consumer was the bootstrap-daemon
+  `auto` picker). A privacy-maximalist chain whose nodes advertise
+  themselves as public remote endpoints is building the Monero remote-node
+  ecosystem by default — the ecosystem where wallets routinely talk to
+  strangers' nodes. The affordance is what people reach for, regardless of
+  what the docs recommend.
+
+**Restricted RPC stays.** `--restricted-rpc` and `--rpc-restricted-bind-port`
+are an operator tool: admin console on loopback, view-only on a less-
+privileged port for *your* wallet (phone on LAN, a second machine you
+own). They are not a public-remote-node product. Advertising the port over
+P2P was the half that contradicted the posture; the second listener without
+advertising is still both-ends-yours.
+
+**Phone-only gap (deliberate product boundary).** Under operator-to-operator
+only, a user with no always-on machine has no supported configuration. That
+population is who drives public-remote-node use in Monero; Shekyl's answer
+is "run the daemon on a machine you own (desktop, Pi 4, a VPS you control)
+and reach it from the phone." **Rule-21 reopen:** a designed light-client
+protocol that does not restore foreign-daemon RPC. Disposition is never
+"ship `--public-node` as unsupported-but-possible."
+
 ## Restricted Mode
 
-In restricted mode (`--restricted-rpc` or a separate restricted bind port):
+In restricted mode (`--restricted-rpc` or a separate restricted bind port) —
+the operator's own view-only listener, not a public remote node:
 
 - JSON REST: admin-only routes are not registered in the Axum router.
 - JSON-RPC: admin-only methods are rejected with code `-32601` before C++.
@@ -85,10 +229,10 @@ maps — dual-list single-sourcing is a FOLLOWUPS item.
 
 | Context | Story |
 |---------|--------|
-| Local | Plaintext loopback (`127.0.0.1`). shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
-| Remote | Onion (address = key; `has_strong_verification` already) or a reverse proxy outside the daemon. |
-| Wallet-RPC | Keeps full `--rpc-login` / `--rpc-ssl*` (separate process). |
-| CLI outbound | `process_ssl` / `net_ssl` remain for `t_command_server` reaching a daemon. |
+| Local | Plaintext loopback (`127.0.0.1` or `::1`), and loopback only: a wildcard or a network bind is refused at the Rust bind seam (RT-1/RT-2; `--confirm-external-bind` retired). `--rpc-use-ipv6` binds `--rpc-bind-ipv6-address` on the same start. shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
+| Remote (your other machine) | Onion (address = key; `has_strong_verification` already) or a reverse proxy outside the daemon. Still operator-to-operator. |
+| Wallet-RPC | Separate Rust process. `--rpc-login` (HTTP Basic) on loopback; any non-loopback bind requires it and wildcard binds are refused; there is no `--rpc-ssl*` — the encrypted remote leg is pinned mutual TLS (`docs/design/RPC_TRANSPORT_POSTURE.md` RT-4). |
+| CLI outbound | `shekyld <command>` reaches the running daemon through `shekyl_daemon_ctl_post` (`shekyl-daemon-rpc/src/ctl_client.rs`, over `shekyl-rpc-transport`): plaintext loopback, no login, no TLS — the outbound half mirrors the inbound ruling. epee's `http_simple_client` is no longer on this path. |
 
 **Rule-21 reopen for in-daemon clearnet TLS / digest auth:** named production
 need + threat-model review. Disposition is never “implement Axum `--rpc-ssl`”
@@ -153,18 +297,37 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 
 | Surface | Axum | FFI | Live consumer | Disposition |
 |---------|------|-----|---------------|-------------|
-| JSON REST (info, height, txs, pool, …) | yes | yes | wallets / CLI | keep |
-| Binary sync (`/get_blocks.bin`, hashes, indexes) | yes | yes | wallet refresh | keep |
+| `/get_height` (+ `/getheight`), `get_version` | yes | **native Rust** (RK-1: `shekyl-daemon-rpc::methods` over `shekyl_rpc_chain_tip` / `shekyl_rpc_hardforks`) | wallets / console | migrated 2026-08-21 |
+| `get_block_count` (+ `getblockcount`), `on_get_block_hash` (+ `on_getblockhash`) | `/json_rpc` | **native Rust** (RK-2: over `shekyl_rpc_chain_tip` / `shekyl_rpc_block_hash_at`) | python-rpc, stressnet | migrated 2026-08-22 |
+| `get_block_header_by_height` (+ `getblockheaderbyheight`) | `/json_rpc` | **native Rust** (RK-3: over `shekyl_rpc_block_header_at`) | wallet (`shekyl-rpc-client`), python-rpc, stressnet | migrated 2026-08-23 |
+| `get_block` (+ `getblock`) | `/json_rpc` | **native Rust** (RK-3b: over `shekyl_rpc_block_at`) | console (`print_block_by_hash` / `_by_height`, both migrated with it), python-rpc, stressnet | migrated 2026-08-24 |
+| `/get_transactions` (+ `/gettransactions`), `/is_key_image_spent` | yes | **native Rust** (RK-4c: over `shekyl_rpc_transactions` / `shekyl_rpc_key_images_spent`) | wallet, console (`print_tx`, `is_key_image_spent`, both migrated with it), python-rpc | migrated 2026-08-28 |
+| `sync_info`, `get_connections` | `/json_rpc` | **native Rust** (RK-5a: over `shekyl_rpc_sync_spans` / `shekyl_rpc_connections`) — **admin-only**, refused on the restricted listener | console (`sync_info`, `print_cn`), python-rpc | migrated 2026-08-31 |
+| `/get_net_stats`, `/get_peer_list` | yes | **native Rust** (RK-5a: over `shekyl_rpc_net_stats` / `shekyl_rpc_peer_list`) — **admin-only**, not registered on the restricted listener | console (`print_net_stats`, `print_pl`, `print_pl_stats`), fleet scripts | migrated 2026-08-31 |
+| JSON REST (info, txs, pool, …) | yes | yes | wallets / CLI | keep (RK-2…RK-9) |
+| `/get_o_indexes.bin` | yes | **native Rust** (RK-4a: over `shekyl_rpc_tx_output_indices`, typed `.bin` map in `shekyl-rpc-types::bin_commands`) | wallet (`shekyl-rpc-client`) | migrated 2026-08-24 |
+| `/get_blocks_by_height.bin` (+ `/getblocks_by_height.bin`) | yes | **native Rust** (RK-4b: over `shekyl_rpc_blocks_by_height`) | the engine's timing rig (`daemon_observability.rs`) | migrated 2026-08-25 |
+| `/get_blocks.bin` (+ `/getblocks.bin`), `/get_hashes.bin` (+ `/gethashes.bin`) | **no** | **removed** | none (wallet2's batch sync; `src/wallet/` deleted) | deleted (RK-4x, below) |
 | JSON-RPC admin + query set | `/json_rpc` | yes | wallets / tools | keep |
 | `POST /submit_transaction` | native Rust | n/a | wallets | keep |
 | `get_archival_emission_claim_source` | `/json_rpc` | yes | claim-builder | keep |
 | `get_output_distribution` (+ `.bin`) | **no** | **removed** | none (`get_rct_distribution` deleted) | deleted |
+| Bootstrap-daemon forward (`use_bootstrap_daemon_if_necessary`, `/set_bootstrap_daemon`) | **no** | **removed** | none | deleted (privacy ruling above) |
+| `--public-node` P2P advertisement + `/get_public_nodes` | **no** | **removed** | none (bootstrap `auto` was the consumer) | deleted (operator-to-operator RPC) |
 | epee HTTP listener / `--no-rust-rpc` | n/a | n/a | none | deleted |
+| epee HTTP client (`http_client.h`, `http_auth`, `net_helper`, `http_abstract_invoke.h`) + dead server parser | n/a | n/a | none (control client → `shekyl_daemon_ctl_post`; bootstrap forward deleted) | deleted 2026-08-21 |
 
-## Phase 2 (KV serialization)
+## Phase 2 (KV cutover)
 
-Replace epee portable-storage in `core_rpc_ffi.cpp` with a Rust-native
-codec. Out of scope for the Phase 1 transport deletion.
+Specified in [`design/DAEMON_RPC_KV_CUTOVER.md`](design/DAEMON_RPC_KV_CUTOVER.md)
+(family `RK-`). The Phase-1 sentence "replace epee portable-storage in
+`core_rpc_ffi.cpp` with a Rust-native codec" was re-scoped there: a Rust
+codec cannot serialize C++ structs without a `#[repr(C)]` façade of every
+wire type (rule 40), so the wire type and the handler of each method move to
+Rust **together**, over coarse `shekyl_rpc_*_facts` FFI, with the console
+rendering following the method. epee KV leaves the RPC path method by method
+and `core_rpc_server.*` / `core_rpc_server_commands_defs.h` / the dispatch
+tables here are deleted at RK-X.
 
 ## Thread Safety
 

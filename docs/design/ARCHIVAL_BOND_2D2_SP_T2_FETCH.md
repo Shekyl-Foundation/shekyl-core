@@ -49,7 +49,7 @@ this round.
   the concrete `simple-request`/hyper impl.
 - **The circuit:** `PTorClient` (`shekyl-p-transport`, SP-T1) — a `ureq::Agent` bound to `P`'s
   per-`P` SOCKS username; `for_persona(...)` / `agent()`. The SOCKS endpoint comes from SP-T0's
-  `TorService` (`current_socks()` → `TorSocksEndpoint`).
+  `WalletTorControl` (`current_socks()` → `TorSocksEndpoint`).
 - **Consumers:** none yet — SP-T2 is the first real `BlockSource` consumer; the SP-5 scan loop is
   where the posture→impl selection lands.
 
@@ -156,15 +156,15 @@ and no code path constructs ③ from a failure of ①/② (a dead local node is 
 not a silent re-posture).
 
 *Audited at source (2026-07-02): the property holds today by absence* — every production default is
-loopback (CLI `--daemon-address` → `localhost:11028`, `main.rs:43`; GUI → `127.0.0.1:{port}` +
+loopback (CLI `--daemon-address` → `localhost:11028`, `main.rs:43` — as of 2026-08-23, RT-W7: the loopback daemon at `--network`'s RPC port, `ReplArgs::daemon_address`; GUI → `127.0.0.1:{port}` +
 detect-local-else-spawn-local sidecar, `daemon_manager.rs:92-160`; the engine library never picks a
 URL — `DaemonClient::new` wraps what the embedder passes); no public-node default, no
 auto-discovery, no localhost-else-remote fallback anywhere; `WalletPrefs` deliberately carries no
 daemon-address field. Two watch-items the build encodes: (a) the GUI's `DaemonMode
 {Managed, External, Unavailable}` classifies process *ownership*, not remoteness — it is not a
-posture enum and must not be mistaken for one; (b) the inherited C++ carries `get_public_nodes()`
-remote-node-discovery machinery (`wallet2.cpp:13374`) — a **pattern the Rust stack consciously does
-not inherit**; the no-silent-③ property is the standing refusal.
+posture enum and must not be mistaken for one; (b) `--public-node` and `/get_public_nodes` are
+deleted on the daemon (operator-to-operator RPC; see `docs/DAEMON_RPC_RUST.md`); the no-silent-③
+property is the standing refusal.
 
 ### DQ-T2.4 — `DaemonBlockSource` local-posture per-`P` connection (its own commit) — **and the enumeration tension**
 
@@ -408,7 +408,7 @@ place a slice could reintroduce what the round just closed; they are build-bindi
      call is not a cancellation point — on scan cancel / wallet close / `ctx.stop()` it runs to
      completion or its own timeout. So `PRpc` **must** set explicit, short-ish `ureq` connect+read
      timeouts (a stalled/building Tor circuit can hang a read far longer than a direct dial), and the
-     design accepts that in-flight fetches *drain* on shutdown. This couples to `TorService` teardown
+     design accepts that in-flight fetches *drain* on shutdown. This couples to `WalletTorControl` teardown
      ordering: the blocking fetches must drain **before or independently of** the control-connection
      teardown, or a fetch outlives the Tor it is fetching through — a shutdown-ordering constraint the
      selector/lifecycle slice owns.

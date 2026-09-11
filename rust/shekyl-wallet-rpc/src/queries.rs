@@ -14,20 +14,20 @@ use serde::Deserialize;
 use serde_json::Value;
 use shekyl_engine_state::{SendJournalBlock, TransferDetails};
 use shekyl_rpc_client::Rpc;
-use shekyl_scanner::LedgerBlockExt;
 use shekyl_types::TxHash;
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_optional_object, parse_required_object, require_empty_object};
 use crate::project::{
-    atomic_units_string, attribution_matches, outgoing_block_height, outgoing_transfer_state,
-    outgoing_transfer_view, parse_lookup_id, transfer_state, transfer_view, TransferLookupId,
+    atomic_units_string, attribution_matches, get_balance_result, outgoing_block_height,
+    outgoing_transfer_state, outgoing_transfer_view, parse_lookup_id, transfer_state,
+    transfer_view, TransferLookupId,
 };
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
-    capability_mode_str, GetBalanceResult, GetHeightResult, GetPrimaryAddressResult,
-    GetStakedBalanceResult, GetTransferByIdResult, GetTransfersResult, GetWalletInfoResult,
-    ReceiveAttributionFilter, StakingInfoResult, TransferDirection, TransferState, TransferView,
+    capability_mode_str, GetHeightResult, GetPrimaryAddressResult, GetStakedBalanceResult,
+    GetTransferByIdResult, GetTransfersResult, GetWalletInfoResult, ReceiveAttributionFilter,
+    StakingInfoResult, TransferDirection, TransferState, TransferView,
 };
 
 /// Optional filters for `get_transfers`.
@@ -99,6 +99,7 @@ fn below_since(block_height: Option<u64>, since: Option<u64>) -> bool {
 fn collect_transfers(
     ledger_rows: &[TransferDetails],
     journal: &SendJournalBlock,
+    tx_notes: &std::collections::BTreeMap<[u8; 32], String>,
     filters: &GetTransfersParams,
     since: Option<u64>,
 ) -> Result<Vec<TransferView>, WalletRpcError> {
@@ -111,13 +112,19 @@ fn collect_transfers(
 
     let mut rows: Vec<(TransferOrder, TransferView)> = Vec::new();
 
+    // Derive once for the whole projection (PR-SJ-1b).
+    let spend_locks = journal.spend_locks();
+
     if want_incoming {
         for td in ledger_rows {
             // Ledger rows are scanner-observed, so always mined.
             if below_since(Some(td.block_height), since) {
                 continue;
             }
-            if filters.state.is_some_and(|st| transfer_state(td) != st) {
+            if filters
+                .state
+                .is_some_and(|st| transfer_state(td, &spend_locks) != st)
+            {
                 continue;
             }
             if filters
@@ -126,7 +133,7 @@ fn collect_transfers(
             {
                 continue;
             }
-            let view = transfer_view(td);
+            let view = transfer_view(td, &spend_locks, tx_notes);
             rows.push((
                 TransferOrder {
                     block_height: view.block_height,
@@ -155,7 +162,7 @@ fn collect_transfers(
             if filters.attribution.is_some() {
                 continue;
             }
-            let view = outgoing_transfer_view(&TxHash::from_bytes(*txid), row)?;
+            let view = outgoing_transfer_view(&TxHash::from_bytes(*txid), row, tx_notes)?;
             rows.push((
                 TransferOrder {
                     block_height: view.block_height,
@@ -185,10 +192,14 @@ pub(crate) async fn get_balance(
     require_empty_object(params, "get_balance")?;
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
-    let ledger = engine.ledger();
-    let height = ledger.ledger.height();
-    let summary = ledger.ledger.balance(height);
-    let result = GetBalanceResult::from(&summary);
+    // The non-reentrant-lock choreography (snapshot under one ledger guard →
+    // drop it → sealed staking read) lives in the shared helper; an
+    // unreadable staking seal degrades to absent staking fields rather than
+    // blacking out the liquid balance, while a corrupt-total read (`?`) fails
+    // loud (`ledger_snapshot_with_staking` docs).
+    let (summary, (), staking_view) =
+        crate::staking::ledger_snapshot_with_staking(&engine, |_| ())?;
+    let result = get_balance_result(&summary, staking_view.as_ref().map(|v| &v.balance))?;
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize get_balance: {e}")))
 }
@@ -220,7 +231,11 @@ pub(crate) async fn get_wallet_info(
 ) -> Result<Value, WalletRpcError> {
     require_empty_object(params, "get_wallet_info")?;
 
-    let (name, shared) = {
+    // The serving posture rides out of this same tenant-lock block: it is
+    // the embedder's fact (the handle is parked here, not on the engine),
+    // and taking it now means the tenant lock is never re-entered under the
+    // engine guard below.
+    let (name, shared, serving_posture) = {
         let state = tenants.lock().await;
         let name = state
             .tenant
@@ -228,29 +243,22 @@ pub(crate) async fn get_wallet_info(
             .ok_or(WalletRpcError::WalletNotOpen)?
             .to_owned();
         let engine = state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?;
-        (name, engine)
+        (name, engine, state.tenant.serving_posture())
     };
 
     let (identity, balance, staking, wallet_height, restore_height, daemon) = {
         let engine = shared.read().await;
 
-        // Snapshot ledger fields, then drop the ledger guard before the
-        // sealed-file staking read. `staking_read_view` takes its own brief
-        // `ledger.read()` for `staking_enabled`; nesting that under a live
-        // `LedgerReadGuard` deadlocks on non-reentrant `std::sync::RwLock`.
-        // Pass the already-observed flag so the balance/enabled half of this
-        // aggregate stays coherent with the ledger snapshot above.
-        let (balance, wallet_height, restore_height, staking_enabled) = {
-            let wallet = engine.ledger();
-            let height = wallet.ledger.height();
-            let summary = wallet.ledger.balance(height);
-            let balance = GetBalanceResult::from(&summary);
-            let restore_height =
-                i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
-            let wallet_height = i64::try_from(height).unwrap_or(i64::MAX);
-            let staking_enabled = wallet.staking.staking_enabled;
-            (balance, wallet_height, restore_height, staking_enabled)
-        };
+        // The non-reentrant-lock choreography lives in the shared helper
+        // (`ledger_snapshot_with_staking`): heights ride the closure so they
+        // stay coherent with the balance summary under ONE ledger guard.
+        let (summary, (wallet_height, restore_height), staking_view) =
+            crate::staking::ledger_snapshot_with_staking(&engine, |wallet| {
+                let wallet_height = i64::try_from(wallet.ledger.height()).unwrap_or(i64::MAX);
+                let restore_height =
+                    i64::try_from(wallet.sync_state.restore_from_height).unwrap_or(i64::MAX);
+                (wallet_height, restore_height)
+            })?;
 
         let address = engine
             .primary_address()
@@ -264,8 +272,14 @@ pub(crate) async fn get_wallet_info(
         }
         .to_owned();
 
-        let staking_view = crate::staking::read_view_with_enabled(&engine, staking_enabled)?;
-        let staking = StakingInfoResult {
+        // WI-RPC-5: the one-glance balance projects its staking fields from
+        // the same authoritative view the staking block reads — the two
+        // surfaces of this aggregate cannot disagree, including in the
+        // degrade arm: an unreadable staking seal leaves BOTH the balance's
+        // staking fields and the `staking` block absent while the wallet's
+        // identity/height/liquid facts stay served.
+        let balance = get_balance_result(&summary, staking_view.as_ref().map(|v| &v.balance))?;
+        let staking = staking_view.map(|staking_view| StakingInfoResult {
             staking_enabled: staking_view.staking_enabled,
             balance: GetStakedBalanceResult {
                 bonded_principal_confirmed: atomic_units_string(
@@ -282,7 +296,9 @@ pub(crate) async fn get_wallet_info(
             pscan_synced_height: staking_view
                 .pscan_synced_height
                 .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
-        };
+            recovery_pending_reopen: staking_view.recovery_pending_reopen,
+            posture: crate::staking::posture_str(serving_posture),
+        });
 
         let daemon = engine.daemon().clone();
 
@@ -337,6 +353,7 @@ pub(crate) async fn get_transfers(
     let transfers = collect_transfers(
         ledger.ledger.transfers(),
         &ledger.send_journal,
+        ledger.tx_meta.notes(),
         &filters,
         since,
     )?;
@@ -377,12 +394,12 @@ pub(crate) async fn get_transfer_by_id(
             .transfers()
             .iter()
             .find(|td| td.tx_hash == tx_hash && td.internal_output_index == output_index)
-            .map(transfer_view),
+            .map(|td| transfer_view(td, &ledger.spend_locks(), ledger.tx_meta.notes())),
         TransferLookupId::Outgoing { tx_hash } => ledger
             .send_journal
             .rows
             .get(&tx_hash.to_bytes())
-            .map(|row| outgoing_transfer_view(&tx_hash, row))
+            .map(|row| outgoing_transfer_view(&tx_hash, row, ledger.tx_meta.notes()))
             .transpose()?,
     };
 
@@ -466,6 +483,12 @@ mod tests {
         views.iter().map(|v| v.id.as_str()).collect()
     }
 
+    /// Empty tx-note map for the collect-transfers tests that do not
+    /// exercise note projection.
+    fn no_notes() -> std::collections::BTreeMap<[u8; 32], String> {
+        std::collections::BTreeMap::new()
+    }
+
     /// The `direction` filter selects a *side*, and each side is only
     /// reachable from its own source. Inverting the two `want_*`
     /// predicates — the defect that made `direction: OUTGOING` a no-op
@@ -474,12 +497,14 @@ mod tests {
     fn direction_filter_selects_the_matching_source() {
         let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
 
-        let all = collect_transfers(&[], &block, &filters(None, None), None).expect("project");
+        let all = collect_transfers(&[], &block, &no_notes(), &filters(None, None), None)
+            .expect("project");
         assert_eq!(ids(&all), vec!["ab".repeat(32)]);
 
         let outgoing = collect_transfers(
             &[],
             &block,
+            &no_notes(),
             &filters(Some(TransferDirection::Outgoing), None),
             None,
         )
@@ -491,6 +516,7 @@ mod tests {
         let incoming = collect_transfers(
             &[],
             &block,
+            &no_notes(),
             &filters(Some(TransferDirection::Incoming), None),
             None,
         )
@@ -499,7 +525,7 @@ mod tests {
     }
 
     /// The `state` filter runs against the journal projection, so the
-    /// four send lifecycle states are each independently selectable.
+    /// five send lifecycle states are each independently selectable.
     #[test]
     fn state_filter_applies_to_journal_rows() {
         let block = journal(&[
@@ -507,6 +533,7 @@ mod tests {
             (0x02, SendState::Confirmed { height: 250 }),
             (0x03, SendState::TerminalRejected),
             (0x04, SendState::PresumedDead),
+            (0x05, SendState::Abandoned),
         ]);
 
         for (state, expected_seed) in [
@@ -514,9 +541,11 @@ mod tests {
             (TransferState::Confirmed, "02"),
             (TransferState::Failed, "03"),
             (TransferState::Dropped, "04"),
+            (TransferState::Abandoned, "05"),
         ] {
             let got =
-                collect_transfers(&[], &block, &filters(None, Some(state)), None).expect("project");
+                collect_transfers(&[], &block, &no_notes(), &filters(None, Some(state)), None)
+                    .expect("project");
             assert_eq!(
                 ids(&got),
                 vec![expected_seed.repeat(32)],
@@ -528,11 +557,32 @@ mod tests {
         let spent = collect_transfers(
             &[],
             &block,
+            &no_notes(),
             &filters(None, Some(TransferState::Spent)),
             None,
         )
         .expect("project");
         assert!(spent.is_empty());
+    }
+
+    /// A per-txid note (SJ-DQ-7) is looked up from `TxMetaBlock::notes` and
+    /// projected onto the transfer view; a row with no note carries none.
+    /// The note is keyed by the bare txid (arm 1: a note is about the
+    /// transaction), so the same lookup feeds both directions of a txid.
+    #[test]
+    fn note_projects_onto_the_transfer_view() {
+        let block = journal(&[(0xab, SendState::Confirmed { height: 250 })]);
+        let mut notes = no_notes();
+        notes.insert([0xab; 32], "rent".to_owned());
+
+        let with =
+            collect_transfers(&[], &block, &notes, &filters(None, None), None).expect("project");
+        assert_eq!(with.len(), 1);
+        assert_eq!(with[0].note.as_deref(), Some("rent"));
+
+        let without = collect_transfers(&[], &block, &no_notes(), &filters(None, None), None)
+            .expect("project");
+        assert_eq!(without[0].note, None);
     }
 
     /// Receive attribution exists on INCOMING rows only (WI-RPC-4), so
@@ -545,7 +595,7 @@ mod tests {
         let mut f = filters(None, None);
         f.attribution = Some(ReceiveAttributionFilter::Unattributed);
 
-        let got = collect_transfers(&[], &block, &f, None).expect("project");
+        let got = collect_transfers(&[], &block, &no_notes(), &f, None).expect("project");
         assert!(
             got.is_empty(),
             "a send matched a receive-attribution filter"
@@ -564,20 +614,27 @@ mod tests {
             (0x02, SendState::Confirmed { height: 250 }),
             (0x03, SendState::TerminalRejected),
             (0x04, SendState::PresumedDead),
+            (0x05, SendState::Abandoned),
         ]);
 
         // Watermark far above the dispatch height: the confirmed row is
-        // below it and drops out; the three unmined rows stay.
-        let got =
-            collect_transfers(&[], &block, &filters(None, None), Some(1_000)).expect("project");
+        // below it and drops out; the four unmined rows stay.
+        let got = collect_transfers(&[], &block, &no_notes(), &filters(None, None), Some(1_000))
+            .expect("project");
         assert_eq!(
             ids(&got),
-            vec!["01".repeat(32), "03".repeat(32), "04".repeat(32)]
+            vec![
+                "01".repeat(32),
+                "03".repeat(32),
+                "04".repeat(32),
+                "05".repeat(32)
+            ]
         );
 
         // At its own height the confirmed row is included (inclusive bound).
         let at_height =
-            collect_transfers(&[], &block, &filters(None, None), Some(250)).expect("project");
+            collect_transfers(&[], &block, &no_notes(), &filters(None, None), Some(250))
+                .expect("project");
         assert!(at_height.iter().any(|v| v.id == "02".repeat(32)));
     }
 
@@ -600,7 +657,7 @@ mod tests {
             },
         ];
 
-        let err = collect_transfers(&[], &block, &filters(None, None), None)
+        let err = collect_transfers(&[], &block, &no_notes(), &filters(None, None), None)
             .expect_err("overflowing recipient sum must not project");
         assert!(matches!(err, WalletRpcError::InternalError(_)), "{err:?}");
     }

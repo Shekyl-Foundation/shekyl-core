@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-15
+> **Last updated:** 2026-09-04 (§7 step 2 anchor source reconciled — CEN-I12; step 1 rationale's retired staked arm removed — CEN-L12)
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -84,8 +84,10 @@ curve equation inside its `on_curve` gadget. This means a single output's
 leaf data is exactly 4 field elements (128 bytes), not 6 or 8.
 
 The hash function for the 4th scalar uses Blake2b-512 with domain separator
-`shekyl-pqc-leaf`, implemented in `rust/shekyl-fcmp/src/lib.rs` and
-exposed via `shekyl_fcmp_pqc_leaf_hash()`.
+`shekyl-pqc-leaf`, implemented once in
+`rust/shekyl-crypto-pq/src/derivation.rs` (`hash_pqc_public_key`, the SA-3a
+single source; `shekyl_fcmp::leaf::PqcLeafScalar` wraps it) and exposed over
+FFI via `shekyl_fcmp_pqc_leaf_hash()`.
 
 ---
 
@@ -132,8 +134,9 @@ both to be compromised simultaneously.
 
 ### FCMP++ Membership Proof
 
-The proof blob (`fcmp_pp_proof` in `rctSigPrunable`) is an opaque byte
-array produced by the Rust `shekyl_fcmp_prove()` function. It encodes:
+The proof blob (`fcmp_pp_proof` in `CtSigPrunable`) is an opaque byte
+array produced by the Rust prover (`shekyl_fcmp::proof::prove`), reached in
+production through `shekyl_sign_fcmp_transaction`. It encodes:
 
 - Generalized Schnorr Protocol (GSP) transcripts for each input
 - Curve tree path commitments across Helios/Selene layers
@@ -166,18 +169,18 @@ The proof size scales with the number of inputs and the tree depth:
 
 ### CTTypeFcmpPlusPlusPqc (type = 1)
 
-Shekyl's only non-coinbase transaction type. Defined in `rctTypes.h`.
+Shekyl's only non-coinbase transaction type. Defined in `ct_types.h`.
 
 ```text
 TransactionV3 {
   prefix: TransactionPrefixV3
-  rct_signatures: rctSig {
+  ct_signatures: CtSig {
     type: CTTypeFcmpPlusPlusPqc   // = 1
     txnFee: u64
     ecdhInfo: [EcdhTuple]
     outPk: [key]
     referenceBlock: hash            // block hash anchoring curve tree snapshot
-    pseudoOuts: [key]               // in rctSigPrunable
+    pseudoOuts: [key]               // in CtSigPrunable
     bp_plus: [BulletproofPlus]      // range proofs (unchanged)
     curve_trees_tree_depth: u8      // tree depth at referenceBlock
     fcmp_pp_proof: bytes            // opaque FCMP++ proof blob
@@ -186,16 +189,16 @@ TransactionV3 {
 }
 ```
 
-**Only two CT type values exist.** The `rctTypes.h` enum contains
+**Only two CT type values exist.** The `ct_types.h` enum contains
 `CTTypeNull = 0` (coinbase only) and `CTTypeFcmpPlusPlusPqc = 1` (all
 non-coinbase spends). Legacy Monero types (`RCTTypeFull` through
 `RCTTypeBulletproofPlus`) are not defined; associated structs (`mgSig`,
 `clsag`, `rangeSig`, non-plus `Bulletproof`, `RCTConfig`, etc.) and ring /
 CLSAG signing and verification code have been removed from the codebase.
 
-The `rctSigBase` struct has no `mixRing` member. `rctSigPrunable` holds only
+The `CtSigBase` struct has no `mixRing` member. `CtSigPrunable` holds only
 `bulletproofs_plus`, `pseudoOuts`, `curve_trees_tree_depth`, and
-`fcmp_pp_proof`. The `serialize_rctsig_prunable` API has no `mixin`
+`fcmp_pp_proof`. The `serialize_ctsig_prunable` API has no `mixin`
 parameter.
 
 ### `tx_extra`: Hybrid KEM ciphertext tag (`0x06`)
@@ -220,11 +223,16 @@ in `tx_extra.h`). The payload is a single `blob` of **N × 32** bytes:
 order**.
 
 The curve tree insertion code (`collect_outputs` in `blockchain_db.cpp`)
-extracts these hashes and commits them as the 4th leaf scalar. If the tag
-is absent (pre-existing outputs before this feature), a 32-byte zero
-placeholder is used. This field is emitted by both `construct_miner_tx`
-(coinbase) and `create_claim_transaction` (claim), and by the regular
-wallet transfer path.
+extracts these hashes and commits them as the 4th leaf scalar. The field is
+**consensus-mandatory** (CEN-I19, ruled 2026-09-05): admission rejects any
+transaction with outputs that does not carry exactly one `0x07` of exactly
+`N × 32` bytes (and exactly one `0x06` of `N × 1120`), and the collector
+aborts rather than substituting a placeholder — on a v3-from-genesis chain
+there are no pre-feature outputs. (Until 2026-09-06 an absent or short field
+was zero-filled into the leaf: a leaf bound to nothing, unspendable, and a
+leaf set a faithful port would not have stored.) This field is emitted by
+both `construct_miner_tx` (coinbase) and `create_claim_transaction`
+(claim), and by the regular wallet transfer path.
 
 ### Coinbase KEM self-encapsulation
 
@@ -243,7 +251,7 @@ rederive per-output keys, sign with `pqc_auths` on the spend transaction).
 ### Transaction Hash Computation
 
 ```text
-tx_hash = cn_fast_hash(prefix_hash || base_rct_hash || pqc_auths_hash || prunable_hash)
+tx_hash = cn_fast_hash(prefix_hash || base_ct_hash || pqc_auths_hash || prunable_hash)
 ```
 
 `pqc_auths_hash` is `cn_fast_hash` of the canonical serialization of the full
@@ -259,8 +267,24 @@ The `prunable_hash` covers `fcmp_pp_proof`, `curve_trees_tree_depth`,
 ## 5. Block Header Commitment
 
 Each block header contains a `curve_tree_root` field (`crypto::hash`,
-32 bytes) that commits to the state of the curve tree after processing
-all transactions in the block.
+32 bytes) that commits to the state of the curve tree **at the block's own
+height** — after its parent connected and before the block's own drain: the
+state the block was built on, which the template reads at fill time, the
+node's per-height record stores under the block's height, the wallet client
+names as `drained_through = N − 1`, and the CT-2 KAT pins at height 61. The
+connect check compares the field against that state **at admission, before
+the block is added**; a mismatch rejects the block outright, never
+connect-then-pop.
+
+> **Ruled 2026-09-05 (fix authorized by Rick; census §7 #18).** This section
+> previously said "after processing all transactions in the block", a state
+> neither the template nor the client ever named, and the connect check
+> compared the field against the root read *after* the add — so the two
+> witnesses disagreed at every block where a leaf matures and every real
+> nettype would have halted at height 60 (the S1 of §7 #17). The check now
+> runs before the add against the tip root, on every nettype — the
+> FAKECHAIN skip around it was retired in the same PR once the test
+> generator computed real roots through the Rust curve-tree client.
 
 ### Serialization
 
@@ -281,8 +305,12 @@ A mismatch rejects the block.
 
 ### RPC Exposure
 
-The `block_header_response` RPC response includes `curve_tree_root` as a
-hex string.
+Every block-header reply carries `curve_tree_root` as a hex string. The wire
+type is `shekyl_rpc_types::BlockHeader` (`rust/shekyl-rpc-types/src/chain.rs`),
+shared by `get_block_header_by_height`, `get_block_header_by_hash`,
+`get_block_headers_range`, `get_last_block_header` and `get_block`. It
+replaced the C++ `block_header_response`, deleted in RK-5b — an implementer
+sent to that name would find nothing.
 
 ### `get_curve_tree_path` JSON-RPC
 
@@ -354,14 +382,14 @@ state:
 ```text
 signed_payload_i = cn_fast_hash(
     serialize(TransactionPrefixV3)
-    || serialize(RctSigningBody)
-    || H(serialize(RctSigPrunable))
+    || serialize(CtSigningBody)
+    || H(serialize(CtSigPrunable))
     || serialize(PqcAuthHeader_i)
     || H(pqc_pk_0) || H(pqc_pk_1) || ... || H(pqc_pk_{N-1})
 )
 ```
 
-`H(serialize(RctSigPrunable))` is `cn_fast_hash` of the serialized prunable
+`H(serialize(CtSigPrunable))` is `cn_fast_hash` of the serialized prunable
 data (`fcmp_pp_proof`, `pseudoOuts`, `curve_trees_tree_depth`,
 `BulletproofPlus`). This 32-byte digest directly binds the PQC signature
 to the FCMP++ proof, preventing an attacker from substituting different
@@ -376,12 +404,12 @@ other inputs' signatures.
 
 | Field | Covered via | Binding |
 |-------|-----------|---------|
-| `referenceBlock` | `RctSigningBody` (in `rctSigBase`) | Anchors the tree snapshot |
+| `referenceBlock` | `CtSigningBody` (in `CtSigBase`) | Anchors the tree snapshot |
 | All key images | `TransactionPrefixV3` (in `vin`) | Prevents key image substitution |
-| `fcmp_pp_proof` | `H(RctSigPrunable)` in signed payload | Direct proof binding |
-| `pseudoOuts` | `H(RctSigPrunable)` in signed payload | Pseudo-output binding |
-| `curve_trees_tree_depth` | `H(RctSigPrunable)` in signed payload | Tree depth binding |
-| `BulletproofPlus` | `H(RctSigPrunable)` in signed payload | Range proof binding |
+| `fcmp_pp_proof` | `H(CtSigPrunable)` in signed payload | Direct proof binding |
+| `pseudoOuts` | `H(CtSigPrunable)` in signed payload | Pseudo-output binding |
+| `curve_trees_tree_depth` | `H(CtSigPrunable)` in signed payload | Tree depth binding |
+| `BulletproofPlus` | `H(CtSigPrunable)` in signed payload | Range proof binding |
 | `H(pqc_pk)` values | `PqcAuthHeader_i` + all-inputs hash tail | Full PQC key binding |
 
 ### PqcAuthHeader Layout (Per-Input)
@@ -433,8 +461,9 @@ Constants from `cryptonote_config.h`:
 
 > **Design rationale (MIN_AGE = 5):** Maturity is enforced by universal
 > deferred tree insertion: outputs only enter the curve tree after their
-> type-specific maturity period (coinbase: 60 blocks, regular: 10 blocks,
-> staked: max(effective_lock_until, 10 blocks)).  MIN_AGE therefore only needs to
+> type-specific maturity period (coinbase: 60 blocks; every other output: 10
+> blocks — the claim-era "staked" arm was retired with the confidential-staking
+> cutover and never existed in code, CEN-L12).  MIN_AGE therefore only needs to
 > provide a reorg safety margin — 5 blocks (~10 minutes) is sufficient
 > to ensure the referenced tree state is stable.
 
@@ -449,9 +478,37 @@ Constants from `cryptonote_config.h`:
 The tree root and depth at `referenceBlock` height anchor the proof. A
 mismatch in `curve_trees_tree_depth` is a consensus failure.
 
-The per-block tree root is stored in the block header's `curve_tree_root`
-field. The `check_tx_inputs` code retrieves it via
-`m_db->get_block_header(rv.referenceBlock).curve_tree_root`.
+**What the anchor is (ruled 2026-09-04, CEN-I12).** The anchor is the
+curve-tree state **at chain height `ref_height`**: the tree as it stands
+after `referenceBlock`'s *parent* connects and before `referenceBlock`'s own
+drain — a property of chain state, not of any one place that state is
+written down. Every existing keying names that one state: the reference
+block's header `curve_tree_root` was filled from it at template time
+(`blockchain.cpp:2006`), the per-height record stores it under key
+`ref_height` (written by the parent's connect under post-add keying,
+`blockchain_db.cpp:636`), the wallet client names it `drained_through =
+ref_height − 1` (`shekyl-curve-tree/src/client.rs:908`), and the CT-2 KAT
+pins it at height 61. Two witnesses of it therefore exist — the header
+field (the block's *attestation*) and the node's own per-height record —
+and CEN-B5 is the consensus check that binds them (§5): at admission,
+before the block's own drain, the header must equal the tip root. Until
+2026-09-05 that binding held on no nettype — skipped on FAKECHAIN and,
+everywhere else, comparing the header against the root *after* the drain
+(census §7 #17, S1, fixed in §7 #18) — so the two witnesses agreed only
+because the template filled the header honestly. Today it holds on every
+nettype. One more reason
+the verifier reads its **own computed record**, never the header; a rewrite
+does the same in whatever form its store keeps that record. The prover holds no
+store and reads the header ([`CURVE_TREE_CLIENT.md`](design/CURVE_TREE_CLIENT.md) §3.3); today its only
+protection is its own leaf recompute against that header (`verify_root`
+refuses to build against a root it cannot reproduce), and B5 is the
+consensus-side binding of that header on every real nettype. The two reads
+name one value on every network, and B5 binds them on every one, so nothing
+makes the choice observable.
+
+*Reconciled 2026-09-04:* this paragraph previously narrated a header read
+the code stopped performing on 2026-04-13; the archaeology and the ruling
+are in [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) §7 #16.
 
 ### Step 3: Input Structural Checks (FCMP++ Specific)
 
@@ -510,8 +567,8 @@ from `pqc_auths` in the same code path.
 ### Step 7: Bulletproof+ Range Proof Verification
 
 Standard BulletproofPlus verification for output range proofs, handled by
-`verRctSemanticsSimple` (batch verification of BP+ and pseudo-output sum
-checks) called from `ver_mixed_rct_semantics` in `tx_verification_utils.cpp`.
+`verCtSemanticsSimple` (batch verification of BP+ and pseudo-output sum
+checks) called from `ver_mixed_ct_semantics` in `tx_verification_utils.cpp`.
 
 ---
 
@@ -538,9 +595,7 @@ rust/
 | C function | Rust source | Purpose |
 |-----------|-------------|---------|
 | `shekyl_sign_transaction()` | `shekyl-ffi/src/lib.rs` | Native Rust tx signing (BP+, FCMP++, ECDH, pseudo-outs) via `shekyl-tx-builder` |
-| `shekyl_fcmp_prove()` | `shekyl-ffi/src/lib.rs` | Generate FCMP++ proof (variable-length witness) |
-| `shekyl_fcmp_verify()` | `shekyl-ffi/src/lib.rs` | Verify FCMP++ proof |
-| `shekyl_fcmp_proof_len()` | `shekyl-ffi/src/lib.rs` | Estimate proof byte length |
+| `shekyl_fcmp_verify()` | `shekyl-ffi/src/legacy_fcmp.rs` | Verify FCMP++ proof |
 | `shekyl_fcmp_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Hash ML-DSA-65 pubkey for leaf |
 | `shekyl_derive_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Derive h_pqc from combined_ss (secret stays in Rust) |
 | `shekyl_derive_pqc_public_key()` | `shekyl-ffi/src/lib.rs` | Derive hybrid public key from combined_ss (secret stays in Rust) |
@@ -594,16 +649,21 @@ and must be preserved by any code that touches the FFI boundary.
    and depth 1 means "one Helios layer above Selene leaves." The upstream
    FCMP++ library's `layers` parameter is a 1-indexed count including the
    leaf layer. **C++ callers are responsible for the conversion:** they
-   must pass `static_cast<uint8_t>(lmdb_depth + 1)` to `shekyl_fcmp_prove`
-   and `shekyl_fcmp_verify`. The FFI functions accept `layers` directly
-   and do not adjust. For `shekyl_sign_fcmp_transaction`, the C++ wallet
-   passes LMDB depth; the Rust signing path converts internally.
+   must pass `static_cast<uint8_t>(lmdb_depth + 1)` to `shekyl_fcmp_verify`,
+   which accepts `layers` directly and does not adjust. For
+   `shekyl_sign_fcmp_transaction` the caller passes LMDB depth and the Rust
+   signing path converts internally. (`shekyl_fcmp_prove` was the third
+   function on this edge and was deleted 2026-08-22 with the legacy prove
+   seam; the multisig witness path carries the same convention in
+   `parse_prove_witness`.)
 
 2. **Branch assembly must include all layers up to and including the root.**
    For a tree with `depth = D`, the witness must contain branch data for
    layers 1 through D inclusive. The loop condition is `layer <= depth`,
-   not `layer < depth`. This applies to `genRctFcmpPlusPlus` (prover) and
-   `assemble_tree_path_for_output` (test/RPC path assembly).
+   not `layer < depth`. This applies to `assemble_tree_path_for_output`
+   (test/RPC path assembly) and to any witness built for the multisig
+   coordinator. (It also applied to `genRctFcmpPlusPlus`, deleted
+   2026-08-22.)
 
 3. **LMDB stores raw curve points; the witness needs cycle scalars.**
    Each LMDB layer stores 32-byte hashes that are points on the
@@ -650,7 +710,7 @@ The curve tree and related metadata are stored in five LMDB tables.
 
 | Table | Key | Value | Purpose |
 |-------|-----|-------|---------|
-| `txs_pruned` | `tx_id` (u64) | prefix + `rctSigBase` only | Canonical pruned prefix |
+| `txs_pruned` | `tx_id` (u64) | prefix + `CtSigBase` only | Canonical pruned prefix |
 | `txs_pqc_auths` | `tx_id` (u64) | `pqc_auths` bytes (optional) | Split from `txs_pruned` so pruning can delete PQC auth data |
 | `txs_prunable` | `tx_id` (u64) | Bulletproofs+, FCMP++, pseudoOuts | Deleted after tx-data pruning |
 
@@ -922,11 +982,14 @@ automatically triggered after each `save_curve_tree_checkpoint` call in
 
 ### Transaction Data Pruning
 
-`prune_tx_data(depth)` removes `txs_prunable`, `txs_prunable_hash`, and
-`txs_pqc_auths` for transactions in blocks below `height - depth`
-(default `depth`: `CRYPTONOTE_TX_PRUNE_DEPTH` = 5000 when `depth == 0`).
-It stores `output_pruning_metadata_t` for each affected output, then
-deletes verification data. For RCT coinbase outputs, output lookups use
+`prune_tx_data(depth)` removes `txs_prunable` for transactions in blocks
+below `height - depth` (default `depth`: `CRYPTONOTE_TX_PRUNE_DEPTH` = 5000
+when `depth == 0`). The prunable **hash** and the `txs_pqc_auths` slice stay:
+both are operands of the transaction's identity, and a pruned node that
+dropped them could no longer name what it kept. The complete body is served
+from shard archival (`docs/V3_STAKER_ARCHIVAL.md` set C), not from the pruned
+node. It stores `output_pruning_metadata_t` for each affected output, then
+deletes the prunable verification body. For RCT coinbase outputs, output lookups use
 amount `0` in the amount index (matching `add_transaction`), not the
 plaintext `vout.amount`. A `tx_prune_next_block` watermark in `m_properties`
 stores the first block height not yet processed (with one-time read of legacy
@@ -1026,7 +1089,7 @@ previously in the mempool) pay the full verification cost.
 ## 15. Staking and FCMP++
 
 **Genesis disposition (2026-06 — transfer-shaped admission).** The leading genesis
-staking form ([`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.4)
+staking form ([`design/PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md) §2.4)
 does **not** ship Decision **3C** below. Admission principal lives on the **main tree**
 as ordinary FCMP++ transfers (principal ↔ HKDF-derived **`P`** sub-wallet); only
 **bond** (gate 4) and **reward emission** are consensus-special. Cleartext
@@ -1037,7 +1100,7 @@ genesis — the subtree was **docs-only**, never implemented in production Rust/
 
 Staked outputs (`txout_to_staked_key`) were designed to live in a **separate staking
 subtree** with a **160-byte / 5-scalar** leaf (Decision 3C —
-[`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §2, §6.4.3). The **main tree**
+[`V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) §2, §6.4.3). The **main tree**
 (all non-staked outputs) keeps the **128-byte / 4-scalar** leaf, unchanged.
 
 ```text
@@ -1101,74 +1164,19 @@ Because `FCMP_REFERENCE_BLOCK_MIN_AGE` (5) is now a reorg safety margin
 only (not a maturity enforcement mechanism), the tree is guaranteed to
 contain only matured outputs.
 
-**Claim validation:** `txin_stake_claim` inputs are validated against
-the staked output's `effective_lock_until` (computed as
-`creation_height + tier_lock_blocks`), watermark, and computed reward (using
-128-bit integer arithmetic for precision). Claims are valid both during the
-lock period and after maturity; the constraint is
-`to_height <= min(current_height, effective_lock_until)`.
-Additionally, `check_stake_claim_input` verifies the staked output is
-present in the curve tree via `get_curve_tree_leaf_by_output_index()`,
-which performs a double lookup through the `output_to_leaf` mapping table.
-If the output has no mapping (deferred insertion still pending), the
-claim is rejected. After retrieval, the stored leaf is bytewise-compared
-to a recomputed leaf from the output's `(output_key, commitment, h_pqc)`
-to bind the claim to the actual output data in the tree.
+**Lock-tier claim validation (`txin_stake_claim`) is retired.** Genesis
+staking does not use lock-tier claims. Archival reward emission is specified
+in [`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) (membership-only
+backing + work payload; dedup on the bond record). FCMP++ membership proofs
+for ordinary spends are unchanged.
 
-**PQC ownership cross-check:** For staked outputs and claim inputs:
+**PQC ownership cross-check** for **regular** spends: `leaf[96:128] == shekyl_fcmp_pqc_leaf_hash(pqc_pk)`.
 
-1. Assert `h_pqc == shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)`.
-2. Assert `leaf[96:128] == h_pqc` (fourth scalar unchanged under **(C_tier)**).
-3. **(C_tier):** verify opened `C~` tier leg matches public claim `tier` via `C~_amt` path
-   (upstream §6.4.1) — not raw `h_stake_bind` unless **(C1)** fallback is active.
-
-For **regular** outputs, `leaf[96:128] == shekyl_fcmp_pqc_leaf_hash(pqc_pk)` unchanged.
-
-**Claim reward outputs must be indistinguishable from regular outputs.**
-Claim reward outputs MUST be regular `txout_to_tagged_key` outputs (not
-staked), use `CTTypeFcmpPlusPlusPqc` with Bulletproofs+ range proofs to
-hide the reward amount, and go through the standard KEM derivation so
-their PQC keys are unique and unlinkable. Once a reward output matures
-into the curve tree, spending it must be indistinguishable from spending
-any other output. Specifically:
-
-- Reward outputs use confidential amounts (Pedersen commitment + BP+
-  range proof), not plaintext amounts with `CTTypeNull`.
-- Per-output PQC keys are derived via the standard hybrid KEM path
-  (unclamped Montgomery DH + ML-KEM-768 → HKDF → ML-DSA-65 keypair),
-  with the ML-KEM ciphertext embedded in `tx_extra` under tag `0x06`.
-- Claim transactions include a dummy change output (amount = 0) to
-  match the 2-output structure of regular transactions, preventing
-  structural fingerprinting.
-- The `txin_stake_claim` input type is inherently distinguishable on
-  the input side (it references a global output index). This is an
-  accepted trade-off: the *claim action* is visible, but the *reward
-  output* that results from it must blend into the anonymity set once
-  it enters the curve tree.
-
-**Phase 4 implementation (completed):**
-
-1. Consensus: `check_tx_inputs` rejects `CTTypeNull` for all non-coinbase
-   v3 transactions. Claim transactions must use `CTTypeFcmpPlusPlusPqc`.
-   Within the FCMP++ handler, a dedicated claim sub-path verifies
-   pseudo-out determinism (`zeroCommit(claim_amount)`), PQC ownership
-   cross-check, and batch pool balance — while skipping membership proof
-   verification (not applicable to `txin_stake_claim` inputs).
-2. Wallet: `wallet2::create_claim_transaction()` uses `CTTypeFcmpPlusPlusPqc`
-   with BP+ range proofs, hybrid KEM derivation for per-output PQC keys,
-   ML-KEM ciphertext in `tx_extra` (`0x06`), `H(pqc_pk)` leaf hashes in
-   `tx_extra` (`0x07`), and a 2-output structure (reward + dummy change).
-3. Consensus: BP+ range proofs on claim tx outputs go through the standard
-   `verRctSemanticsSimple` batch verification path alongside regular
-   transaction outputs.
-
-**Batch pool balance check:** The total of all claim amounts in a
-transaction is summed and checked against `staker_pool_balance` once (in
-`check_tx_inputs`), rather than checking each claim individually. This
-prevents multiple claims in the same block from overdrawing the pool.
-
-**Sorted inputs:** Stake claim key images must be sorted in ascending
-order, enforced alongside the existing `txin_to_key` sort check.
+Lock-tier staked-output / `txin_stake_claim` PQC checks, claim-reward fingerprinting
+rules, claim sub-path in `check_tx_inputs`, `create_claim_transaction`, batch pool
+balance, and stake-claim input sorting are **retired** with the claim-era model.
+Do not reintroduce them. Archival emission is a different vin
+([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)).
 
 ---
 
@@ -1200,7 +1208,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | `FCMP_REFERENCE_BLOCK_MIN_AGE` | 5 (reorg safety margin) | `cryptonote_config.h` |
 | `FCMP_MAX_INPUTS_PER_TX` | 8 | `cryptonote_config.h` |
 | `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` | 10,000 | `cryptonote_config.h` |
-| `CTTypeFcmpPlusPlusPqc` | 1 | `rctTypes.h` |
+| `CTTypeFcmpPlusPlusPqc` | 1 | `ct_types.h` |
 | `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | 0x06 | `tx_extra.h` |
 | `TX_EXTRA_TAG_PQC_LEAF_HASHES` | 0x07 | `tx_extra.h` |
 | `ML_KEM_768_CT_BYTES` | 1088 | `tx_extra.h` |
@@ -1224,9 +1232,9 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Key image y-normalization check | **Done** | `blockchain.cpp` |
 | FCMP++ proof FFI call | **Done** | `blockchain.cpp` → `shekyl_fcmp_verify()` |
 | Verification caching (mempool FCMP++ hash) | **Done** | `tx_pool.cpp`, `blockchain.cpp` |
-| `genRctFcmpPlusPlus` (wallet-side proof) | **Deprecated** | `rctSigs.cpp` (test-only; production uses `shekyl_sign_fcmp_transaction`) |
-| Wallet tree-path precomputation | **Done** | `wallet2.cpp` |
-| PQC key rederivation from stored secret | **Done** (legacy C++ scan cache; deletion target at rewrite Phase 5) | `wallet2.cpp` |
+| `genRctFcmpPlusPlus` (wallet-side proof) | **Deleted 2026-08-22** | Had no caller; production uses `shekyl_sign_fcmp_transaction` |
+| Wallet tree-path precomputation | **Migrated to Rust** | `wallet2.cpp` was deleted 2026-08-19; the wallet stack is `shekyl-engine-*` / `shekyl-tx-builder` |
+| PQC key rederivation from stored secret | **Deleted 2026-08-19** with `wallet2.cpp` (it was the Phase-5 deletion target named here) | — |
 | Restore-from-seed PQC rederivation | **Done** (frozen v1 pipeline; `shekyl_account_rederive`) | `rust/shekyl-crypto-pq/src/account.rs` |
 | `prune_tx_data` + `txs_pqc_auths` split | **Done** | `db_lmdb.cpp`, `cryptonote_basic.h` |
 | `get_curve_tree_path` RPC | **Done** | `core_rpc_server.cpp` |
@@ -1236,7 +1244,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | CI: Determinism check + Bech32m tests | **Done** | `.github/workflows/build.yml` |
 | Hardware device FCMP++ stubs | **Done** | `device.hpp`, `device_default.cpp`, `device_ledger.cpp` |
 | Trezor protocol legacy RCT removal | **Done** | `protocol.cpp`, `protocol.hpp` |
-| Legacy RCT stripping (types 1-6, all structs, all src/) | **Done** | `rctTypes.h/cpp`, `rctSigs.h/cpp`, all consumers |
+| Legacy RCT stripping (types 1-6, all structs, all src/) | **Done** | `ct_types.h/cpp`, `ct_semantics.h/cpp`, all consumers |
 | Non-plus Bulletproof code removal | **Done** | `bulletproofs.h`, `bulletproofs.cc` |
 | `RCTConfig` parameter removal from tx construction | **Done** | `cryptonote_tx_utils.h/cpp`, `wallet2.h/cpp` |
 | RPC `low_mixin` field removal | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
@@ -1252,13 +1260,13 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Dead `expand_transaction_2` removal | **Done** | `blockchain.cpp`, `blockchain.h` |
 | PQC `auth_version`/`flags` consensus checks | **Done** | `tx_pqc_verify.cpp` |
 | Single-signer key size validation | **Done** | `tx_pqc_verify.cpp` |
-| Dead `verRctNonSemanticsSimple` / cache removal | **Done** | `rctSigs.h/cpp`, `tx_verification_utils.h/cpp` |
+| Dead `verRctNonSemanticsSimple` / cache removal | **Done** | `ct_semantics.h/cpp`, `tx_verification_utils.h/cpp` |
 | Universal deferred tree insertion | **Done** | `pending_tree_leaves` / `pending_tree_drain` / `block_pending_additions` / `output_to_leaf` / `leaf_to_output` DB tables, `blockchain_db.cpp`, `shekyl_types.h` |
 | Per-input `pqc_auths` field | **Done** | `cryptonote_basic.h` |
 | Per-input PQC signature verification | **Done** | `tx_pqc_verify.cpp` |
 | PQC signed payload binds prunable data + all H(pqc_pk) | **Done** | `tx_pqc_verify.cpp` |
 | `pqc_authentication` deserialization size bounds | **Done** | `cryptonote_basic.h` |
-| `pseudoOuts` gated in generic `rctSigBase` serializer | **Done** | `rctTypes.h` |
+| `pseudoOuts` gated in generic `CtSigBase` serializer | **Done** | `ct_types.h` |
 | `pop_block()` height symmetry fix | **Done** | `blockchain_db.cpp` |
 | Ring-based validation path removed (genesis-native) | **Done** | `blockchain.cpp` |
 | `tx_extra` KEM blob tag `0x06` (N × 1120 bytes hybrid ct) | **Done** | `tx_extra.h`, `cryptonote_format_utils.cpp` |
@@ -1280,7 +1288,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Fee estimation for FCMP++ proof size | **Done** | `wallet2.cpp` (`estimate_rct_tx_size`) |
 | GUI wallet QR code (full Bech32m address) | **Done** | `shekyl-gui-wallet` |
 | GUI wallet fee preview on Send page | **Done** | `shekyl-gui-wallet` |
-| `rct::key::operator!=` for key-vs-key comparison | **Done** | `rctTypes.h` |
+| `ct::key::operator!=` for key-vs-key comparison | **Done** | `ct_types.h` |
 | PQC secret keys eliminated from C++ wallet (sign via `shekyl_sign_pqc_auth`) | **Done** | `wallet2.cpp`, `wallet2_ffi.cpp` |
 | MSVC-compatible `binary_archive` construction | **Done** | `wallet2.cpp` |
 | Stressnet tooling (load gen, monitor, config) | **Done** | `tests/stressnet/` |
@@ -1306,17 +1314,17 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Staking tier edge-case tests (Rust) | **Done** | `rust/shekyl-staking/src/tiers.rs` |
 | Real `prove()` in `shekyl-fcmp` (SAL + FCMP circuit + pseudo-outs) | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
 | Real `verify()` in `shekyl-fcmp` (batch verifiers: Ed25519/Selene/Helios) | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
-| FFI `shekyl_fcmp_prove` returns `ShekylFcmpProveResult` with pseudo-outs | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
+| FFI `shekyl_fcmp_prove` returns `ShekylFcmpProveResult` with pseudo-outs | **Deleted 2026-08-22** | Export gone with the legacy prove seam; `ShekylFcmpProveResult` survives as the multisig coordinator's return type (`legacy_frost.rs`) |
 | FFI `shekyl_fcmp_verify` accepts `signable_tx_hash` parameter | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| C++ callers updated for new FFI signatures | **Done** | `rctSigs.cpp`, `blockchain.cpp`, `wallet2.cpp` |
+| C++ callers updated for new FFI signatures | **Done** | `ct_semantics.cpp`, `blockchain.cpp` (`wallet2.cpp` deleted 2026-08-19) |
 | Staking reward fuzz target | **Done** | `rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs` |
 | FROST SAL module (`frost_sal.rs`) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
 | `prove_with_sal()` for multisig proof construction | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
 | FROST DKG key management (`frost_dkg.rs`) | **Done** | `rust/shekyl-fcmp/src/frost_dkg.rs` |
 | FROST SAL FFI (session new/get_rerand/aggregate_and_prove/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
 | FROST DKG FFI (keys import/export/validate/group_key/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| FFI `shekyl_fcmp_prove` variable-length witness format | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| `genRctFcmpPlusPlus` accepts leaf chunk entries | **Deprecated** | `rctSigs.h/cpp` (test-only; production uses collapsed Rust signing) |
+| FFI `shekyl_fcmp_prove` variable-length witness format | **Deleted 2026-08-22** | The export is gone with the legacy prove seam; the witness format survives as `parse_prove_witness` / `shekyl_fcmp_build_witness_header` in `rust/shekyl-ffi/src/legacy_fcmp.rs` and `legacy_tx.rs`, both `#[cfg(feature = "multisig")]` and read by the FROST coordinator |
+| `genRctFcmpPlusPlus` accepts leaf chunk entries | **Deleted 2026-08-22** | Had no caller; production signing is `shekyl_sign_fcmp_transaction` (`CT_SURFACE_NAMING_PIN.md` §5 step 1) |
 | Daemon RPC `chunk_outputs_blob` in `get_curve_tree_path` | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
 | Wallet `fcmp_precomputed_path` stores `leaf_chunk_entries` | **Done** | `wallet2.h/cpp` |
 | C++ wallet FROST code removed | **Done** | `wallet2.h/cpp`, `wallet2_ffi.cpp`, `shekyl_ffi.h` (SHEKYL_MULTISIG blocks deleted) |
@@ -1343,7 +1351,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Wallet v3 scanner via `scan_output_recover` | **Done** | `wallet2.cpp` |
 | X25519-only view tag (sender + scanner) | **Done** | `output.rs`, `wallet2.cpp` |
 | `additional_tx_keys` removed for v3 | **Done** | `cryptonote_tx_utils.cpp` |
-| `CTTypeNull` serializes `outPk` + `enc_amounts` | **Done** | `rctTypes.h` |
+| `CTTypeNull` serializes `outPk` + `enc_amounts` | **Done** | `ct_types.h` |
 | On-chain `outPk` for v3+ coinbase | **Done** | `blockchain_db.cpp` |
 | `check_commitment_mask_valid` rejects z=0/z=1 | **Done** | `blockchain.cpp` |
 | PQC salt unified to `shekyl-output-derive-v1` | **Done** | `derivation.rs`, `output.rs` |
@@ -1406,6 +1414,14 @@ cd rust && cargo test --workspace
 
 ### Staking Tests
 
+Lock-tier `txin_stake_claim` / `txout_to_staked_key` unit and chaingen tests
+are **claim-era**. Do not treat them as a genesis gate. Archival emission and
+bond-post tests live with `REWARD_EMISSION_*` / `ARCHIVAL_*` and
+`tests/unit_tests/archival_*`.
+
+<details>
+<summary>Historical claim-era test inventory (do not implement from)</summary>
+
 #### C++ Unit Tests (`tests/unit_tests/staking.cpp`)
 
 - `txin_stake_claim` and `txout_to_staked_key` binary serialization round-trips (boundary values, all tiers)
@@ -1437,6 +1453,8 @@ cd rust && cargo test --workspace
 #### Rust Fuzz (`rust/shekyl-staking/fuzz/`)
 
 `fuzz_claim_reward`: generates random accrual records and stake parameters, verifies no overflow, reward ≤ pool, weight monotonicity, and cumulative bounds.
+
+</details>
 
 ### C++ Unit Tests
 
@@ -1738,7 +1756,7 @@ the legacy `ecdhInfo` (`ecdhTuple`):
 
 ### Encrypted Labels Wire Format (5-T, FA-11)
 
-Per-output logical labels use `enc_labels` in `rctSigBase` (9 bytes each),
+Per-output logical labels use `enc_labels` in `CtSigBase` (9 bytes each),
 serialized immediately after `enc_amounts` and before `outPk`:
 
 ```
@@ -1751,9 +1769,34 @@ serialized immediately after `enc_amounts` and before `outPk`:
 - `label_tag` is the first byte of HKDF-Expand(`shekyl-output-label-tag` ‖ index);
   verified at scan like `amount_tag` (integrity / fast-reject only — **not** a
   cleartext sentinel-vs-tag discriminator).
-- Included in `serialize_rctsig_base` (transaction binding / prehash). **Not** part of the FCMP++ leaf witness.
-- Label ciphertext has **no** Pedersen commitment backstop (unlike amounts). Prehash binding is the sole relay-tamper defense; AEAD is redundant once bound. CI: `fcmp.enc_label_binds_rctsig_base_prehash`.
-- `genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside fake/test device mode (stub builder must not reach production).
+- Included in `serialize_ctsig_base` (transaction binding / prehash). **Not** part of the FCMP++ leaf witness.
+- Label ciphertext has **no** Pedersen commitment backstop (unlike amounts). Prehash binding is the sole relay-tamper defense; AEAD is redundant once bound. CI: `fcmp.enc_label_binds_ctsig_base_prehash`.
+- ~~`genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside fake/test
+  device mode~~ — **superseded 2026-08-23 by a type; the guard itself was
+  deleted 2026-08-22 with its host.** Kept as a record because the invariant
+  outlived both.
+
+  Deleting the guard lost no coverage: `genRctFcmpPlusPlus` had no caller, so
+  the check was unreachable and enforced nothing. The invariant it *stated* was
+  real, though not for the obvious reason — an all-zero *plaintext* is
+  harmless, since `0x00…00 XOR k_label[..8]` is uniform and §5.7.10 holds for
+  it exactly as for the sentinel. What the guard was aimed at is a path that
+  writes the field **without encrypting it at all**
+  (`fill_construct_tx_rct_stub` value-initialises `enc_labels` and never calls
+  the label encryption), which puts a literal `00×9` on the wire, identical
+  across every output, with `label_tag` zero where a derived tag is uniform.
+
+  The Rust signing path *used to* carry the same shape: `enc_label` was a plain
+  `[u8; 9]` on `OutputInfo`, so an unencrypted value was representable there
+  too. It is not any longer. `EncryptedOutputField`
+  (`shekyl-crypto-pq/src/encrypted_output_field.rs`) has no public byte
+  constructor — in-process construction is `OutputData::enc_label_wire()` /
+  `enc_amount_wire()` (the value `construct_output` assembled at encryption),
+  and `Deserialize` serves the FFI JSON boundary — so on the in-process path
+  an unencrypted field is **unrepresentable**, not merely rejected. Deliberately not implemented as "reject zeros": that treats one
+  symptom, admits any other unencrypted constant, and can fire on a legitimate
+  ciphertext that happens to be zero.
+
 - KAT: `PQC_OUTPUT_SECRETS.json` includes `enc_label_sentinel` / `enc_label_sentinel_9` wire octets.
 - `construct_output` / wallet signing supply pre-computed 9-byte values parallel to `enc_amount`.
 - **Indistinguishability invariant (normative home: `SUBADDRESS_UNDER_PQC.md`
@@ -1796,7 +1839,7 @@ typed `ProveInputFields` `#[repr(C)]` struct, replacing raw `memcpy` calls.
   FROST group key), the FROST SAL path operates with a per-output T-component.
   Gate behind "requires two-component address scheme" until V4.
 - **Coinbase commitment mask**: `zeroCommit(amount) = G + amount*H`, so the
-  mask scalar is 1 (`rct::identity()`), not 0.
+  mask scalar is 1 (`ct::identity()`), not 0.
 
 ---
 
@@ -1956,6 +1999,6 @@ assert that `enc_amount` comes from chain lookup, not from the proof.
 - `docs/AUDIT_SCOPE.md` — 4-scalar leaf circuit security audit scope
 - `tests/stressnet/README.md` — stressnet operational guide (pre-audit gate)
 - `src/shekyl/shekyl_ffi.h` — FFI declarations
-- `src/fcmp/rctSigs.h` — `genRctFcmpPlusPlus` declaration
+- `src/fcmp/ct_semantics.h` — CT semantics verification declarations (`verCtSemantics*`, `get_tx_prehash`)
 - `rust/shekyl-fcmp/` — Rust FCMP++ proof implementation
 - `rust/shekyl-crypto-pq/` — PQC primitives, KEM, address encoding

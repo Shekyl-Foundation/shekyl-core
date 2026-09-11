@@ -1,12 +1,13 @@
 # shekyl-scanner
 
-Transaction scanner for the Shekyl protocol with FCMP++, PQC, and staking
-support.
+Transaction scanner for the Shekyl protocol with FCMP++ and hybrid PQC.
 
 ## Overview
 
-This crate provides output scanning functionality adapted from the
-monero-oxide wallet library, extended with Shekyl-specific features:
+This crate provides output scanning. Types it scans *into* live in
+`shekyl-engine-state`; this crate re-exports them and adds scanner-only
+extension traits. Further work here is Shekyl-native (FCMP++, hybrid PQC)
+— do not add oxide-shaped APIs.
 
 - **FCMP++**: Only `CTTypeFcmpPlusPlusPqc` transactions (no legacy ring
   signatures, no decoy selection)
@@ -14,13 +15,14 @@ monero-oxide wallet library, extended with Shekyl-specific features:
   with view-tag pre-filtering for fast output rejection
 - **PQC extra field parsing**: Parses tx_extra tag 0x06 (KEM ciphertext)
   and 0x07 (FCMP++ leaf hashes)
-- **Staking detection**: Identifies staked outputs with tier and lock period
-- **Balance breakdown**: Staking-aware balance computation (total, unlocked,
-  timelocked, staked matured/locked, frozen)
+- **Balance breakdown**: total, unlocked, timelocked, frozen, awaiting
+  confirmation. Staking accounting lives in `shekyl-engine-core`
+  (`StakeFacade` / sealed pscan), not here — `TransferDetails` does not
+  carry stake fields.
 
 The scanner is a pure scanning library: block fetch, daemon polling,
 reorg handling, and wallet-state mutation are owned by
-`shekyl-engine-core::Engine::refresh` (Phase 2a snapshot-merge driver).
+`shekyl-engine-core::Engine::refresh`.
 
 ## Architecture
 
@@ -33,14 +35,12 @@ shekyl-scanner
 ├── view_pair.rs     # ViewPair with X25519 + ML-KEM decapsulation keys
 ├── output.rs        # WalletOutput representation
 ├── transfer.rs      # Re-export shim for shekyl_engine_state::TransferDetails
-│                    # (canonical type, with staking + PQC + FCMP++ fields)
+│                    # (canonical type; PQC + FCMP++ fields, no stake fields)
 ├── ledger_ext.rs    # Scanner-side extension traits for LedgerBlock + LedgerIndexes
-│                    # (TransferDetailsExt, LedgerIndexesExt, LedgerBlockExt). The
+│                    # (TransferDetailsExt, LedgerIndexesExt, WalletLedgerExt). The
 │                    # canonical persisted/runtime split lives in shekyl-engine-state.
-├── balance.rs       # Balance computation with staking categories
-├── coin_select.rs   # Coin selection for transaction building
-├── staker_pool.rs   # Staker pool accrual data for reward estimation
-└── claim.rs         # Claimable reward info for staked outputs
+├── balance.rs       # Balance computation (timelock / frozen / awaiting confirmation)
+└── coin_select.rs   # Coin selection for transaction building
 ```
 
 ## Dependencies
@@ -63,10 +63,8 @@ GUI wallet's `wallet_bridge.rs`. It is not intended to be used directly
 by end users.
 
 ```rust
-use shekyl_scanner::{
-    LedgerBlock, LedgerBlockExt, LedgerIndexes, LedgerIndexesExt,
-    Scanner, ViewPair,
-};
+use shekyl_scanner::{LedgerIndexes, LedgerIndexesExt, Scanner, ViewPair, WalletLedgerExt};
+use shekyl_engine_state::WalletLedger;
 
 // Create a scanner from wallet keys (includes KEM secret keys for hybrid scanning)
 let view_pair = ViewPair::new(
@@ -81,16 +79,20 @@ let scanner = Scanner::new(view_pair, spend_secret);
 let outputs = scanner.scan(scannable_block)?;
 
 // Track outputs in the (LedgerBlock, LedgerIndexes) pair: persisted state
-// in `ledger`, runtime-only derived indexes in `indexes`.
-let mut ledger = LedgerBlock::empty();
+// in `wallet.ledger`, runtime-only derived indexes in `indexes`.
+let mut wallet = WalletLedger::empty();
 let mut indexes = LedgerIndexes::empty();
-indexes.process_scanned_outputs(&mut ledger, block_height, block_hash, outputs);
+indexes.process_scanned_outputs(&mut wallet.ledger, block_height, block_hash, outputs);
 
 // Detect spends from block inputs
-indexes.detect_spends(&mut ledger, block_height, &key_images_from_block);
+indexes.detect_spends(&mut wallet.ledger, block_height, &key_images_from_block);
 
-// Query balance (read-only against the persisted ledger)
-let balance = ledger.balance(current_height);
+// Query balance. Whole-wallet, not ledger-only: an output whose spend is
+// already on the wire is locked by the send journal, a sibling block the
+// scan-derived `LedgerBlock` cannot see (C7). `WalletLedger` owns both, so
+// there is no lock map to thread — or to forget.
+let balance = wallet.balance();          // at the wallet's synced height
+let historical = wallet.balance_at(current_height);
 ```
 
 ### Driving sync
@@ -115,8 +117,8 @@ refresh-driver split was designed to remove.
 | PQC extra field parsing (0x06, 0x07) | ✅ Complete |
 | View-tag pre-filtering | ✅ Inside `scan_output_recover` |
 | Native Rust key image computation | ✅ Via `compute_output_key_image` |
-| Transfer details with staking + PQC secrets | ✅ Complete, ZeroizeOnDrop |
+| Transfer details (public PQC residue; spend secrets re-derived in engine-core) | ✅ Complete; wipe via `Drop` + `Zeroize` |
 | Wallet state management | ✅ Complete with reorg handling |
-| Balance computation | ✅ Complete with staking breakdown |
+| Balance computation | ✅ Complete (no staking bucket; that is engine-core) |
 | Coin selection | ✅ Complete |
 | FCMP++ path precompute | ⬜ Needs daemon RPC for `/get_curve_tree_path` |

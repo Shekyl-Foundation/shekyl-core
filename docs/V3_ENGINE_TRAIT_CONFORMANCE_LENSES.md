@@ -251,7 +251,7 @@ n/a = lens does not apply (documented exemption); — = not yet audited
    `outstanding` panics on poisoning — the deliberate asymmetry is
    stated in the module-level rustdoc.
 3. CL-7 for `PendingTxEngine` / `PersistenceEngine` covers error/value
-   types defined **off** the trait file (`engine/error.rs`,
+   types defined **off** the trait file (`engine/error/`,
    `engine/pending.rs`), outside the doc-only trait-file scope of this
    conformance pass. The `#[non_exhaustive]` / unit-variant audit of
    those trait-owned types is a tracked deferral — see

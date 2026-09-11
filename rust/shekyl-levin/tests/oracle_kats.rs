@@ -3,16 +3,18 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Byte-identity KATs against the C++ `epee::levin` oracle.
+//! Byte-identity KATs against the gtest expectations in
+//! `tests/unit_tests/levin.cpp`.
 //!
-//! Each test mirrors a gtest in `tests/unit_tests/levin.cpp` (`make_noise.*`,
-//! `make_fragment.*`) assertion for assertion, so the two implementations are
-//! pinned to the same wire bytes. Removing these loses the cross-language
-//! byte-identity pin; they do NOT cover the read-side state machine (see
-//! `reader_stream.rs`).
+//! Each test mirrors a gtest (`make_noise.*`, `make_fragment.*`) assertion
+//! for assertion. After the emit cut those gtests execute this crate
+//! through the FFI, so these KATs are a same-language pin of the same
+//! bytes the gtests check across the boundary. `make_header` is still an
+//! independent C++ implementation. Removing these loses that pin; they do
+//! NOT cover the read-side state machine (see `reader_stream.rs`).
 //!
 //! Coverage boundary, stated so it is not mistaken for completeness: these
-//! pin `make_header`, `make_noise_notify` and `make_fragmented_notify`.
+//! pin `make_header`, `noise_notify` and `fragmented_notify`.
 //! `try_compress_message` is deliberately **not** byte-pinned — its framing
 //! is identical, but the compressed bytes come from whichever libzstd is
 //! linked, so a golden vector here would pin the codec build rather than the
@@ -24,7 +26,7 @@ use shekyl_levin::{
     fragmented_notify, noise_notify, BucketHead, Flags, HEADER_SIZE, LEVIN_SIGNATURE,
 };
 
-/// The full 33-byte header for `make_header(1, 0x100, LEVIN_PACKET_REQUEST,
+/// The full 29-byte header for `make_header(1, 0x100, LEVIN_PACKET_REQUEST,
 /// true)`, spelled out from the `docs/LEVIN_PROTOCOL.md` byte layout rather
 /// than re-derived through the encoder under test.
 #[test]
@@ -39,8 +41,6 @@ fn header_wire_bytes_match_spec_layout() {
         0x01,
         // command = 1 (u32 LE)
         0x01, 0x00, 0x00, 0x00,
-        // return code = 0 (i32 LE)
-        0x00, 0x00, 0x00, 0x00,
         // flags: Q (request)
         0x01, 0x00, 0x00, 0x00,
         // protocol version = 1 (u32 LE)
@@ -55,7 +55,7 @@ fn header_wire_bytes_match_spec_layout() {
     );
 }
 
-/// Mirrors gtest `make_noise.valid`: 1024-byte dummy = header(0, 991, B|E,
+/// Mirrors gtest `make_noise.valid`: 1024-byte dummy = header(0, 1024 − HEADER_SIZE, B|E,
 /// no-response) + zeroed body.
 #[test]
 fn noise_message_is_header_plus_zeros() {
@@ -91,7 +91,6 @@ fn small_message_pads_to_noise_size_unfragmented() {
 
 /// Mirrors gtest `make_fragment.multiple` byte for byte: a 2922-byte payload
 /// at noise size 1024 emits exactly three 1024-byte fragments — B / middle /
-/// E — whose bodies concatenate to the inner notification plus 18 zero bytes
 /// of padding.
 #[test]
 fn oversize_message_fragments_to_noise_sized_buckets() {
@@ -104,7 +103,7 @@ fn oversize_message_fragments_to_noise_sized_buckets() {
     let stream = fragmented_notify(1024, 114, &payload).unwrap();
     assert_eq!(stream.len(), 1024 * 3);
 
-    let body_space = 1024 - HEADER_SIZE; // 991
+    let body_space = 1024 - HEADER_SIZE;
 
     // Fragment 1: BEGIN header, then the inner header, then payload bytes.
     let mut head = BucketHead::make(0, u64::try_from(body_space).unwrap(), Flags::BEGIN, false);
@@ -118,13 +117,13 @@ fn oversize_message_fragments_to_noise_sized_buckets() {
     );
     assert_eq!(stream[HEADER_SIZE..HEADER_SIZE * 2], inner_head.write());
 
-    let frag1_payload_len = body_space - HEADER_SIZE; // 958
+    let frag1_payload_len = body_space - HEADER_SIZE;
     assert_eq!(
         &stream[HEADER_SIZE * 2..1024],
         &payload[..frag1_payload_len]
     );
 
-    // Fragment 2: middle header (no B/E), next 991 payload bytes.
+    // Fragment 2: middle header (no B/E), next body_space payload bytes.
     head.flags = Flags::from_bits(0);
     assert_eq!(stream[1024..1024 + HEADER_SIZE], head.write());
     assert_eq!(
@@ -132,7 +131,7 @@ fn oversize_message_fragments_to_noise_sized_buckets() {
         &payload[frag1_payload_len..frag1_payload_len + body_space]
     );
 
-    // Fragment 3: END header, remaining payload, 18 bytes of zero padding.
+    // Fragment 3: END header, remaining payload, zeros filling the bucket.
     head.flags = Flags::END;
     assert_eq!(stream[2048..2048 + HEADER_SIZE], head.write());
     let rest = &payload[frag1_payload_len + body_space..];
@@ -141,6 +140,6 @@ fn oversize_message_fragments_to_noise_sized_buckets() {
         rest
     );
     let padding = &stream[2048 + HEADER_SIZE + rest.len()..];
-    assert_eq!(padding.len(), 18);
+    assert_eq!(padding.len(), 1024 - HEADER_SIZE - rest.len());
     assert!(padding.iter().all(|&b| b == 0));
 }

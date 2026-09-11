@@ -1,5 +1,7 @@
 # Archival corpus fossil sweep (2026-06-08)
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 **Purpose:** Before the **8c retention-proof constructibility** pass, enumerate doc claims
 that still assume **superseded models** so feasibility work tests the **current** design,
 not ghosts from confidential staking, bundled emission, or pre-F1 timing rationale.
@@ -28,7 +30,7 @@ Reserve-DLEQ entitlement.
 
 | Location | Stale claim | Correct disposition |
 |----------|-------------|---------------------|
-| `PHASE_2B_SECTION7_DRAFT.md` §7 | "SEB is the structural F1 lever"; SEB reconsideration branch | SEB pinned; **not** F1 lever (`ta1_f1_seb_coarse`); portfolio axis is structural — see `ARCHIVAL_TIMING_CONSTANTS.md` §1.2 |
+| `design/PHASE_2B_FSM_RETOOL.md` §7 | "SEB is the structural F1 lever"; SEB reconsideration branch | SEB pinned; **not** F1 lever (`ta1_f1_seb_coarse`); portfolio axis is structural — see `ARCHIVAL_TIMING_CONSTANTS.md` §1.2 |
 | `PHASE_2B_FSM_RETOOL.md` checklist | "SEB structural lever" open | Closed — T-A1 v2 + timing pin |
 | `ARCHIVAL_FIREWALL_GATE6.md` §2.3, §3 table | `W` = "forfeiture vs decorrelation"; lapse > `W` = "acceptable decorrelation cost" | `W` = forfeiture/state bound only; lapse **without portfolio change does not decorrelate** (F1 T-A1) |
 | `V3_STAKER_ARCHIVAL.md` challenge interval | `MAX_CLAIM_AGE_W` trades state vs "gate-6 decorrelation" | State growth vs **forfeiture economics** |
@@ -38,13 +40,13 @@ Reserve-DLEQ entitlement.
 
 ## 2. FOSSIL — remaining (fix before implementation cut)
 
-| Location | Stale claim | Action |
-|----------|-------------|--------|
-| `ARCHIVAL_FIREWALL_GATE6.md` §3 rotation row | "Decorrelate timeline + shard-set adjacency" | Rewrite: portfolio leg primary; timeline channel empty at lean eq (T-A1) |
-| `ARCHIVAL_CONSENSUS_STATE.md` §2 honest residual | "Rotation (gate 6) is the named decorrelation tool" | Qualify: **portfolio-changing** rotation only; cosmetic `P_id` swap insufficient |
-| `PHASE_2B_SECTION7_DRAFT.md` T-A14 | "Lapse past `W` for decorrelation" | Reframe: forfeiture vs income UI; **not** a decorrelation tool |
-| `ARCHIVAL_FIREWALL_GATE6.md` §9.8 checklist | "Pin epoch-length jointly with gate-6 decorrelation" | SEB pinned; remaining = jitter/drain defaults (Round 3–4) |
-| `PHASE_2B_STAKE_LIFECYCLE.md` §3–§8 body | Live `G_S`, `N_S`, `EpochSet` u16, stake-claim nullifier reorg paths | **STRATUM** — see §4 below; do not implement wallet from this file without `PHASE_2B_FSM_RETOOL.md` |
+| Location | Stale claim | Action (2026-08-26) |
+|----------|-------------|---------------------|
+| `ARCHIVAL_FIREWALL_GATE6.md` §3 rotation row | "Decorrelate timeline + shard-set adjacency" | **Fixed** — portfolio leg primary; timeline empty at lean eq (T-A1) |
+| `ARCHIVAL_CONSENSUS_STATE.md` §2 honest residual | "Rotation (gate 6) is the named decorrelation tool" | **Fixed** (sentence absent at 2026-08-26 grep) |
+| `PHASE_2B_SECTION7_DRAFT.md` T-A14 | "Lapse past `W` for decorrelation" | **Deleted** with the draft (claim-era track) |
+| `ARCHIVAL_FIREWALL_GATE6.md` §9.8 checklist | "Pin epoch-length jointly with gate-6 decorrelation" | **Fixed** — SEB pinned; checklist no longer carries that FOSSIL |
+| `PHASE_2B_STAKE_LIFECYCLE.md` §3–§8 body | Live `G_S`, `N_S`, stake-claim paths | **Deleted** (claim-era). Living FSM: `PHASE_2B_FSM_RETOOL.md` |
 
 ---
 
@@ -64,7 +66,7 @@ These mention dissolved primitives **to reject** them:
 
 ## 4. STRATUM — implementation-dangerous historical body
 
-**`PHASE_2B_STAKE_LIFECYCLE.md`** (~1.9k lines) interleaves:
+**`design/PHASE_2B_FSM_RETOOL.md`** (~1.9k lines) interleaves:
 
 1. **Current** archival rebasing (§7 threat model, emission leg pointers, join-Market)
 2. **Retired** confidential-staking wallet design (§3.3 `EpochSet`, §4.7 `x·G_S` reorg,

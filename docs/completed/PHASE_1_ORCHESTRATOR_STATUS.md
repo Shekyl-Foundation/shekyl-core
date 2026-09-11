@@ -1,5 +1,7 @@
 # Phase 1 orchestrator — gap-audit status
 
+
+**Status:** CLOSED-as-record.
 Audited at `dev` tip, 2026-06-10; matrix updated through PR 5
 (`feat/phase1-closeout`) the same day. This is the done/open matrix for
 the Phase 1 deliverables in `WALLET_REWRITE_PLAN.md`, read with the

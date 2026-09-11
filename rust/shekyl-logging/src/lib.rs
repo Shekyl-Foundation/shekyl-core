@@ -79,17 +79,30 @@ use tracing_subscriber::reload;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Registry;
 
-/// Tracks whether [`init`] has installed a global subscriber.
+/// First-caller reservation for [`install_subscriber`].
 ///
-/// A process-global flag is correct here because
-/// `tracing::subscriber::set_global_default` is itself process-global.
-/// Guarding the call prevents the second-init panic path from leaking into
-/// binaries that accidentally call `init` twice.
+/// Flipped true at the *start* of an install attempt so a concurrent
+/// second caller gets [`InitError::AlreadyInitialized`] rather than
+/// racing `try_init`. Cleared if the attempt fails, so a later call
+/// can retry. This is not "the subscriber is live" — that is
+/// [`SUBSCRIBER_INSTALLED`]. The two facts have different lifetimes:
+/// a reservation can unwind, a successful `set_global_default` cannot.
 ///
 /// `pub(crate)` so the FFI init path in [`crate::ffi`] can coordinate
 /// against the same flag — only one subscriber per process, whether
 /// it was installed from Rust or from C.
 pub(crate) static INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// Whether [`install_subscriber_inner`] has successfully called `try_init`.
+///
+/// Set only after `try_init` returns Ok, and never cleared —
+/// `set_global_default` has no uninstall. FFI emit, enabled, and the
+/// tracing-forwarder pin consult this flag. Consulting [`INITIALIZED`]
+/// instead would treat the reservation window (filter parse, file
+/// open, `try_init`) as "already live" and dispatch WARNING+ against
+/// the still-empty default dispatcher, dropping the events the
+/// pre-init passthrough exists to keep audible.
+pub(crate) static SUBSCRIBER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// Handle for the process-global reload layer wrapping the `EnvFilter`.
 ///
@@ -198,8 +211,9 @@ pub fn init(config: Config) -> Result<LoggerGuard, InitError> {
 }
 
 /// Install the subscriber and hand back both the guard *and* the
-/// reload handle. The `INITIALIZED` flag coordination lives here so
-/// both [`init`] and the FFI path stay in lockstep.
+/// reload handle. Reservation ([`INITIALIZED`]) and successful
+/// install ([`SUBSCRIBER_INSTALLED`]) are coordinated here so both
+/// [`init`] and the FFI path stay in lockstep.
 pub(crate) fn install_subscriber(
     config: Config,
 ) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
@@ -210,12 +224,16 @@ pub(crate) fn install_subscriber(
         return Err(InitError::AlreadyInitialized);
     }
 
-    // Release the flag on hard failure so a follow-up init with a
-    // fixed config can succeed; on success the flag stays set for
-    // the process lifetime.
+    // Release the reservation on hard failure so a follow-up init
+    // with a fixed config can succeed. On success the reservation
+    // stays set for the process lifetime *and* we flip
+    // `SUBSCRIBER_INSTALLED` so emit/enabled/forwarder stop using
+    // the pre-init stderr passthrough.
     let result = install_subscriber_inner(config);
     if result.is_err() {
         INITIALIZED.store(false, Ordering::SeqCst);
+    } else {
+        SUBSCRIBER_INSTALLED.store(true, Ordering::SeqCst);
     }
     result
 }
@@ -266,12 +284,26 @@ fn install_subscriber_inner(
     }
 }
 
-/// Test-only hook: clear the init flag so a fresh `init` call can run.
+/// Test-only hook: raise the reservation flag without installing a subscriber.
 ///
-/// The global subscriber itself is *not* reset — tracing's
-/// `set_global_default` installs one for the process lifetime. This helper
-/// only lets tests exercise the guard-flag path independently of the
-/// subscriber path.
+/// This is the window inside [`install_subscriber`] after the first-caller
+/// CAS and before `try_init` returns. Pre-init emit / enabled / forwarder
+/// must stay on the stderr passthrough; if they consult [`INITIALIZED`]
+/// they silently drop WARNING+. Pair with [`__test_only_reset_init_flag`]
+/// before a real init or the reservation will make that init return
+/// [`InitError::AlreadyInitialized`].
+#[doc(hidden)]
+pub fn __test_only_reserve_init() {
+    INITIALIZED.store(true, Ordering::SeqCst);
+}
+
+/// Test-only hook: clear the reservation flag so a fresh `init` call can
+/// run the first-caller CAS.
+///
+/// Does **not** clear [`SUBSCRIBER_INSTALLED`] and does **not** uninstall
+/// the subscriber — `set_global_default` has no un-install. A follow-up
+/// `init` will still fail at `try_init` if a subscriber is already live;
+/// this helper only re-opens the reservation path.
 #[doc(hidden)]
 pub fn __test_only_reset_init_flag() {
     INITIALIZED.store(false, Ordering::SeqCst);

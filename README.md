@@ -32,7 +32,7 @@ Portions Copyright (c) 2012-2013 The Cryptonote developers.
 - Web: [shekyl.org](https://shekyl.org)
 - Mail: [dev@shekyl.org](mailto:dev@shekyl.org)
 - GitHub: [https://github.com/Shekyl-Foundation](https://github.com/Shekyl-Foundation)
-- Docs: [docs/](docs/)
+- Docs: [docs/README.md](docs/README.md)
 
 ## Vulnerability response
 
@@ -41,7 +41,9 @@ Portions Copyright (c) 2012-2013 The Cryptonote developers.
 
 ## Research
 
-Shekyl research and design notes are maintained in this repository under `docs/`, including:
+Shekyl research and design notes start at [`docs/README.md`](docs/README.md).
+That file is the reading order and document-class map. Operator and
+protocol contracts include:
 
 - `docs/DESIGN_CONCEPTS.md`
 - `docs/INSTALLATION_GUIDE.md`
@@ -686,7 +688,7 @@ These records are dumped as hex data, where the first line is the key and the se
 Because of the nature of socket-based protocols that drive decentralized nodes, certain protocol weaknesses are somewhat unavoidable at this time. Please consider the following precautions if you are a Shekyl node operator:
 
 - Run `shekyld` on a secured machine. At minimum, use a dedicated machine and avoid general web/email activity on that host.
-- If you plan on hosting a public remote node, start `shekyld` with `--restricted-rpc`. This is a must.
+- RPC is operator-to-operator: run `shekyld` on a machine you control. There is no public-remote-node product; `--restricted-rpc` is a view-only listener for *your* wallet, not an invitation for strangers.
 
 ### Blockchain-based
 

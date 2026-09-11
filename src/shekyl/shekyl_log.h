@@ -194,8 +194,14 @@ int32_t shekyl_log_install_tracing_forwarder(void);
 /// `normalize_target_accepts_empty` in
 /// `rust/shekyl-logging/src/ffi.rs` for the matching unit test.
 ///
-/// Returns `false` when the logger is not yet initialized or the
-/// target bytes are not valid UTF-8.
+/// Before the first successful `shekyl_log_init_*`, returns `true`
+/// for WARNING and above (the same floor `mlog_configure` uses as
+/// fallback) and `false` for INFO and below. That lets pre-init
+/// C++ `MERROR` / `MCLOG` calls reach stderr without installing
+/// the process-global subscriber — so a later `shekyl_log_init_file`
+/// still wins. After init, returns whether the event would pass
+/// the current filter. Invalid target bytes return `false` in
+/// either state (the matching emit drops them).
 bool shekyl_log_level_enabled(
     uint8_t level,
     const char* target_ptr,
@@ -214,6 +220,10 @@ bool shekyl_log_level_enabled(
 /// leaked `'static` callsite so `tracing`'s `EnvFilter` can match
 /// runtime-discovered categories. Unknown levels and non-UTF-8
 /// buffers are silently dropped.
+///
+/// Before init, WARNING and above are written to stderr and the
+/// subscriber is not installed. INFO and below are dropped. After
+/// init, the event is dispatched through the installed subscriber.
 void shekyl_log_emit(
     uint8_t level,
     const char* target_ptr,

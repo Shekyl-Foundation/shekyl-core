@@ -132,10 +132,10 @@ async fn active_persona_receive_address_is_recovered_by_p_dual_scan() {
         &constructed.kem_ciphertext_ml_kem,
         &constructed.output_key,
         &constructed.commitment,
-        &constructed.enc_amount,
-        constructed.amount_tag,
-        &constructed.enc_label,
-        constructed.label_tag,
+        &constructed.enc_amount_bytes(),
+        constructed.amount_tag(),
+        &constructed.enc_label_bytes(),
+        constructed.label_tag(),
         constructed.view_tag_prefilter,
         output_index,
     )
@@ -207,10 +207,10 @@ fn p_source_secrets_bundle_byte_identical_against_scan_chain() {
             &constructed.kem_ciphertext_ml_kem,
             &constructed.output_key,
             &constructed.commitment,
-            &constructed.enc_amount,
-            constructed.amount_tag,
-            &constructed.enc_label,
-            constructed.label_tag,
+            &constructed.enc_amount_bytes(),
+            constructed.amount_tag(),
+            &constructed.enc_label_bytes(),
+            constructed.label_tag(),
             constructed.view_tag_prefilter,
             output_index,
         )
@@ -325,6 +325,77 @@ async fn identity_is_deterministic_across_respawn() {
     );
 }
 
+// SH-2b-1: the actor hands out an onion **serving credential**, and it is the
+// one the pinned derivation says it should be.
+//
+// The oracle is derived independently — `derive_p_hs_id_seed` straight from the
+// master seed, then expanded — rather than read back off the same bundle the
+// actor used. Comparing the actor's answer to the bundle it holds would assert
+// only that a field was copied; going through the derivation asserts the
+// credential is the persona's, which is what a `.onion` address means.
+//
+// Compared on `service_id`, deliberately: that is the public half, it is what
+// tor publishes and what a client dials, and `OnionIdentity` gives no way to
+// read the expanded secret back out — which is the custody posture working, not
+// a gap in the test.
+#[tokio::test]
+async fn the_onion_credential_matches_the_pinned_derivation() {
+    let handle = spawn_over(&[0, 1], &[], None);
+
+    for slot in [0u32, 1] {
+        let minted = handle
+            .persona_onion_identity(PSlot::from_raw(slot))
+            .await
+            .expect("held slot yields a credential");
+
+        let seed = shekyl_crypto_pq::archival_p::derive_p_hs_id_seed(
+            &super::test_fixtures::TEST_SEED,
+            shekyl_crypto_pq::account::DerivationNetwork::Mainnet,
+            shekyl_crypto_pq::account::SeedFormat::Bip39,
+            slot,
+        );
+        let oracle = shekyl_tor_control_wallet::service::OnionIdentity::from_hs_id_seed(&seed);
+
+        assert_eq!(
+            minted.service_id(),
+            oracle.service_id(),
+            "slot {slot}: the actor must publish the persona's own onion"
+        );
+    }
+
+    // Distinct personas must not share an address — the sequential-rotation
+    // unlinkability the whole p_slot discipline exists for would be void if the
+    // serving identity collapsed across slots.
+    let a = handle
+        .persona_onion_identity(PSlot::from_raw(0))
+        .await
+        .expect("slot 0");
+    let b = handle
+        .persona_onion_identity(PSlot::from_raw(1))
+        .await
+        .expect("slot 1");
+    assert_ne!(
+        a.service_id(),
+        b.service_id(),
+        "two personas sharing one .onion would link them on the network"
+    );
+}
+
+// An unheld slot is the same domain error every other slot boundary reports —
+// the credential path must not be the one place that panics or invents a key.
+#[tokio::test]
+async fn onion_credential_for_an_unheld_slot_is_lookahead_exhausted() {
+    let handle = spawn_over(&[0], &[], None);
+    let err = handle
+        .persona_onion_identity(PSlot::from_raw(9))
+        .await
+        .expect_err("slot 9 is not held");
+    assert!(
+        matches!(err, StakeEngineError::LookaheadExhausted { requested } if requested == PSlot::from_raw(9)),
+        "expected LookaheadExhausted{{9}}, got {err:?}"
+    );
+}
+
 // Minting a handle for a slot outside the held derive-forward set is the
 // real domain error `LookaheadExhausted` (reopen to extend the lookahead) —
 // not a panic, not a can't-happen.
@@ -368,7 +439,7 @@ async fn activation_replaces_active_persona() {
 }
 
 // Typed contract #4 — activation wipes the retired *ephemeral* persona: after
-// moving away from an unbonded slot, that slot is no longer held, so a
+// moving away from a released slot, that slot is no longer held, so a
 // subsequent mint is `LookaheadExhausted`.
 #[tokio::test]
 async fn activation_wipes_ephemeral_retired() {
@@ -397,7 +468,7 @@ async fn activation_wipes_ephemeral_retired() {
 }
 
 // Typed contract #4 — activation keeps a retired *bonded* persona resident:
-// unbonding it later stays reachable, so it can be re-activated after a
+// releasing it later stays reachable, so it can be re-activated after a
 // activation that passed over it.
 #[tokio::test]
 async fn activation_keeps_bonded_retired() {
@@ -606,7 +677,7 @@ fn degeneracy_guard_passes_correct_rng() {
 /// S7(a) — `verify_credit_funding` rejects incorrect funding totals.
 ///
 /// Tests the builder-level funding invariant directly (the actor path would
-/// call `verify_credit_funding` after the `sign_bond` handler produces the
+/// call `verify_credit_funding` after the `plan_bond_post` handler produces the
 /// `JoinMarketVin`). Exercises both underflow and overflow cases.
 #[test]
 fn verify_credit_funding_rejects_wrong_total() {
@@ -619,8 +690,7 @@ fn verify_credit_funding_rejects_wrong_total() {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
-    let tx_prefix_hash = [0u8; 32];
-    let vin = build_join_market_vin(&bundle, holdings, &tx_prefix_hash)
+    let vin = build_join_market_vin(bundle.bond_post_keys(), holdings)
         .expect("build_join_market_vin succeeds for valid inputs");
 
     let fee = AtomicUnits::from_raw(100);
@@ -656,7 +726,7 @@ fn verify_credit_funding_rejects_wrong_total() {
 /// S7 slot-mismatch negative — a ticket for slot A with a handle for slot B
 /// produces [`StakeEngineError::SlotMismatch`], not a signing attempt.
 #[tokio::test]
-async fn sign_bond_slot_mismatch_is_rejected() {
+async fn plan_bond_post_slot_mismatch_is_rejected() {
     use crate::engine::stake_persist::PersistedBondTicket;
     use shekyl_archival_retention::{HoldingsDescriptor, HoldingsKind};
 
@@ -678,7 +748,7 @@ async fn sign_bond_slot_mismatch_is_rejected() {
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
     let err = handle
-        .sign_bond(h0, ticket_for_slot_1, holdings, [0u8; 32])
+        .plan_bond_post(h0, ticket_for_slot_1, holdings)
         .await
         .expect_err("slot mismatch must fail");
 
@@ -695,7 +765,7 @@ async fn sign_bond_slot_mismatch_is_rejected() {
 }
 
 /// GF-7 hooks-spec §6.2 (emission-complete for the 2c-2b surface) — a
-/// successful `sign_bond` emits exactly the draw-consumption and schedule
+/// successful `plan_bond_post` emits exactly the draw-consumption and schedule
 /// events to the **injected** observer, and the emitted payloads are
 /// internally consistent: the scheduled offset equals the drawn spread
 /// (causal — the post fires `spread` blocks after the private intent), and
@@ -704,7 +774,7 @@ async fn sign_bond_slot_mismatch_is_rejected() {
 /// window parameter on the draw event.
 #[cfg(feature = "gf7-hooks")]
 #[tokio::test]
-async fn sign_bond_emits_gf7_draw_and_schedule_events() {
+async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
     use std::sync::{Arc, Mutex};
 
     use crate::engine::stake_engine::types::StakeEngineArgs;
@@ -745,9 +815,9 @@ async fn sign_bond_emits_gf7_draw_and_schedule_events() {
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
     let post = handle
-        .sign_bond(h0, ticket, holdings, [0u8; 32])
+        .plan_bond_post(h0, ticket, holdings)
         .await
-        .expect("sign_bond succeeds for a held, matching slot");
+        .expect("plan_bond_post succeeds for a held, matching slot");
 
     let events = recorded.lock().expect("recorder lock");
     assert_eq!(
@@ -916,13 +986,13 @@ async fn actor_is_responsive_after_a_scan_step() {
 #[test]
 fn retirement_witness_fires_one_epoch_after_the_claim_window_closes() {
     let id = canonical_id(0);
-    let unbond = SettlementEpoch::from_raw(10);
+    let release = SettlementEpoch::from_raw(10);
     // settled = U + W: U is exactly the oldest claimable epoch → still claimable
     // → must NOT retire.
     assert!(
-        RetirementWitness::from_confirmed_unbond(
+        RetirementWitness::from_confirmed_release(
             id,
-            unbond,
+            release,
             SettlementEpoch::from_raw(10 + MAX_CLAIM_AGE_W),
         )
         .is_none(),
@@ -930,9 +1000,9 @@ fn retirement_witness_fires_one_epoch_after_the_claim_window_closes() {
     );
     // settled = U + W + 1: U has dropped below the window floor → retire.
     assert!(
-        RetirementWitness::from_confirmed_unbond(
+        RetirementWitness::from_confirmed_release(
             id,
-            unbond,
+            release,
             SettlementEpoch::from_raw(10 + MAX_CLAIM_AGE_W + 1),
         )
         .is_some(),
@@ -945,7 +1015,7 @@ fn retirement_witness_fires_one_epoch_after_the_claim_window_closes() {
 #[tokio::test]
 async fn retire_wipes_a_terminal_persona_and_is_idempotent() {
     let handle = spawn_over(&[0], &[0], None); // persona 0 bonded, not active
-    let witness = RetirementWitness::from_confirmed_unbond(
+    let witness = RetirementWitness::from_confirmed_release(
         canonical_id(0),
         SettlementEpoch::from_raw(0),
         SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
@@ -963,7 +1033,7 @@ async fn retire_wipes_a_terminal_persona_and_is_idempotent() {
     );
 
     // Gone now → a fresh witness for the same persona is a no-op.
-    let again = RetirementWitness::from_confirmed_unbond(
+    let again = RetirementWitness::from_confirmed_release(
         canonical_id(0),
         SettlementEpoch::from_raw(0),
         SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
@@ -987,7 +1057,7 @@ async fn retire_wipes_a_terminal_persona_and_is_idempotent() {
 async fn retire_defers_a_funded_persona_then_wipes_once_drained() {
     let handle = spawn_over(&[0], &[0], None); // persona 0 bonded, not active
     let witness = || {
-        RetirementWitness::from_confirmed_unbond(
+        RetirementWitness::from_confirmed_release(
             canonical_id(0),
             SettlementEpoch::from_raw(0),
             SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
@@ -1026,7 +1096,7 @@ async fn retire_defers_a_funded_persona_then_wipes_once_drained() {
 #[tokio::test]
 async fn retire_skips_the_active_persona() {
     let handle = spawn_over(&[0], &[0], Some(0)); // persona 0 bonded AND active
-    let witness = RetirementWitness::from_confirmed_unbond(
+    let witness = RetirementWitness::from_confirmed_release(
         canonical_id(0),
         SettlementEpoch::from_raw(0),
         SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
@@ -1049,7 +1119,7 @@ async fn retire_skips_the_active_persona() {
 async fn retire_an_unheld_persona_is_notheld() {
     let handle = spawn_over(&[0], &[0], None); // we hold persona 0
                                                // A witness for persona 1 (not held).
-    let witness = RetirementWitness::from_confirmed_unbond(
+    let witness = RetirementWitness::from_confirmed_release(
         canonical_id(1),
         SettlementEpoch::from_raw(0),
         SettlementEpoch::from_raw(MAX_CLAIM_AGE_W + 1),
@@ -1293,6 +1363,12 @@ mod emission_claim_assembly {
                 handle: h,
                 operands,
                 tree_ctx,
+                // Value gate disabled: this differential's subject is the
+                // daemon-side wire re-derivation, not the §4 floor (the
+                // fixture-family rewards sit below the production floor by
+                // construction; the gate has its own boundary test in
+                // `emission_claim.rs`).
+                fee_floor: 0,
             })
             .await
             .expect("emission-claim assembly completes end-to-end");

@@ -223,11 +223,11 @@ namespace
       CMD_RESET_STATISTICS::request req;
       ASSERT_TRUE(epee::net_utils::async_invoke_remote_command2<CMD_RESET_STATISTICS::response>(m_context, CMD_RESET_STATISTICS::ID, req,
         m_tcp_server.get_config_object(), [&](int code, const CMD_RESET_STATISTICS::response& rsp, const test_connection_context&) {
-          conn_status.store(code, std::memory_order_seq_cst);
+          conn_status.store(code < 0 ? -1 : 1, std::memory_order_seq_cst);
       }));
 
       EXPECT_TRUE(busy_wait_for(DEFAULT_OPERATION_TIMEOUT, [&]{ return 0 != conn_status.load(std::memory_order_seq_cst); })) << "reset statistics timed out";
-      ASSERT_LT(0, conn_status.load(std::memory_order_seq_cst));
+      ASSERT_EQ(1, conn_status.load(std::memory_order_seq_cst));
     }
 
     virtual void TearDown()
@@ -301,7 +301,7 @@ namespace
       CMD_GET_STATISTICS::request req;
       ASSERT_TRUE(epee::net_utils::async_invoke_remote_command2<CMD_GET_STATISTICS::response>(m_context, CMD_GET_STATISTICS::ID, req,
         m_tcp_server.get_config_object(), [&](int code, const CMD_GET_STATISTICS::response& rsp, const test_connection_context&) {
-          if (0 < code)
+          if (code >= 0)
           {
             statistics = rsp;
           }
@@ -309,7 +309,7 @@ namespace
           {
             LOG_ERROR("Get server statistics error: " << code);
           }
-          req_status.store(0 < code ? 1 : -1, std::memory_order_seq_cst);
+          req_status.store(code >= 0 ? 1 : -1, std::memory_order_seq_cst);
       }));
 
       EXPECT_TRUE(busy_wait_for(DEFAULT_OPERATION_TIMEOUT, [&]{ return 0 != req_status.load(std::memory_order_seq_cst); })) << "get_server_statistics timed out";
@@ -460,7 +460,7 @@ TEST_F(net_load_test_clt, a_lot_of_client_connections_and_connections_closed_by_
       CMD_DATA_REQUEST::request req;
       bool r = epee::net_utils::async_invoke_remote_command2<CMD_DATA_REQUEST::response>(ctx, CMD_DATA_REQUEST::ID, req,
         m_tcp_server.get_config_object(), [=](int code, const CMD_DATA_REQUEST::response& rsp, const test_connection_context&) {
-          if (code <= 0)
+          if (code < 0)
           {
             LOG_PRINT_L0("Failed to invoke CMD_DATA_REQUEST. code = " << code);
           }
@@ -550,7 +550,7 @@ TEST_F(net_load_test_clt, permament_open_and_close_and_connections_closed_by_ser
   req_start.max_opened_conn_count = MAX_OPENED_CONN_COUNT;
   ASSERT_TRUE(epee::net_utils::async_invoke_remote_command2<CMD_START_OPEN_CLOSE_TEST::response>(m_context, CMD_START_OPEN_CLOSE_TEST::ID, req_start,
     m_tcp_server.get_config_object(), [&](int code, const CMD_START_OPEN_CLOSE_TEST::response&, const test_connection_context&) {
-      test_state.store(0 < code ? 1 : -1, std::memory_order_seq_cst);
+      test_state.store(code >= 0 ? 1 : -1, std::memory_order_seq_cst);
   }));
 
   // Wait for server response
@@ -606,7 +606,7 @@ TEST_F(net_load_test_clt, permament_open_and_close_and_connections_closed_by_ser
       CMD_DATA_REQUEST::request req;
       bool r = epee::net_utils::async_invoke_remote_command2<CMD_DATA_REQUEST::response>(ctx, CMD_DATA_REQUEST::ID, req,
         m_tcp_server.get_config_object(), [=](int code, const CMD_DATA_REQUEST::response& rsp, const test_connection_context&) {
-          if (code <= 0)
+          if (code < 0)
           {
             LOG_PRINT_L0("Failed to invoke CMD_DATA_REQUEST. code = " << code);
           }

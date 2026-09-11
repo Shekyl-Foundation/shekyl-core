@@ -1510,8 +1510,27 @@ LWMA-1's properties depend on incoming-timestamp validation that is
 
 - **MTP rejection.** A new block's timestamp must be strictly
   greater than the median of the previous `MTP = 11` timestamps.
-  Already implemented in the inherited block-header validator;
-  preserved unchanged.
+  ~~Already implemented in the inherited block-header validator;
+  preserved unchanged.~~
+  **Correction (2026-09-01, refuted premise — not a superseded
+  decision).** The struck sentence's factual premise was false at the
+  tree: the inherited comparison this ratification believed it was
+  preserving was the *non-strict* one (`timestamp < median` was the
+  only reject; equality was accepted). The boundary was therefore
+  re-derived from zero and **re-ratified strict** by C2-R3-Q1
+  ([`CONSENSUS_C2_R3_TIMESTAMPS.md`](CONSENSUS_C2_R3_TIMESTAMPS.md)
+  §4), which also ruled the parts this bullet left to the inherited
+  code: the window is the **11 timestamps immediately preceding the
+  candidate on its own chain** (alt path included — the inherited alt
+  path medianed the whole alt chain), the median is **element index 5
+  (0-based) of the sorted window**, windows shorter than 11 are
+  right-padded with the genesis timestamp (C2-R3-Q2 — the inherited
+  bootstrap carve-out is deleted), and miner templates floor their
+  timestamp at `median + 1` (the Jagerman bump below is `median + 1`
+  under the strict boundary, not `median`). A future reader should
+  read this as: the *decision* ("strictly greater") stands on fresh
+  ground; only its original justification ("preserved unchanged")
+  died.
 - **FTL rejection.** A new block's timestamp must be at most
   `FTL = N * T / 20 = 540 s` ahead of the validator's local clock.
   The inherited FTL of 7200 s is replaced with this value at
@@ -1555,29 +1574,44 @@ b.timestamp = time(NULL);
 uint64_t median_ts;
 if (!check_block_timestamp(b, median_ts))
 {
-  b.timestamp = median_ts;
+  b.timestamp = median_ts + 1;
 }
 ```
 
 The pattern matches the Jagerman fix exactly (set to local clock,
-then bump to median if that would be rejected). The MTP window
+then bump to the smallest consensus-valid value if that would be
+rejected). **Correction note (2026-09-01):** the bump is
+`median_ts + 1`, not the `median_ts` this section originally quoted — under the
+strict boundary re-ratified by C2-R3-Q1 a template *at* the median is
+one the node itself rejects; C2-R3-Q1 sub-b ruled the `+ 1` floor as
+part of the rule (the original `median_ts` form was self-consistent
+only with the non-strict comparison the refuted premise above assumed).
+The floor additionally revalidates: when the window median sits **at or
+beyond** the local FTL deadline no timestamp satisfies both bounds, and
+template creation refuses loudly instead of issuing a self-rejecting
+template. Under a non-decreasing local clock that state is at most one
+second wide and self-heals on the next tick; a **backward clock step**
+of `Δ` can hold the median beyond the current deadline for up to `Δ`
+seconds, and the refusal then persists — correctly — until the clock
+re-passes `median − FTL` (the operator NTP-hygiene obligation above is
+the mitigation). See `CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3. The MTP window
 change from 60 to 11 (§9.6) preserves the patch's effectiveness;
 the patch is window-size-agnostic and works identically against
 either median size per jagerman's own commentary on the original
 PR. No Phase 4 work required to add or modify the Jagerman patch.
 
-A minor doc-vs-code drift exists at the cached-template path
-(`blockchain.cpp:1540`), where the comment reads "ensures it can't
-get below the median of the last few blocks" but the code only
-guards against `< time(NULL)`. The cached template's timestamp
-was already MTP-validated when the non-cached path created it
-(lines 1650–1656 above), and the cache is invalidated on every
-new block addition (the `prev_id` check at line 1537), so the
-MTP-staleness window is bounded by template-cache lifetime
-(seconds). The drift is not load-bearing for the patch's
-correctness but the comment is misleading and should be cleaned
-up; recorded as a `FOLLOWUPS.md` item, not a Phase 4 atomic-cutover
-work item.
+A minor doc-vs-code drift existed at the cached-template path
+(`blockchain.cpp:1540` at this document's writing), where the comment
+read "ensures it can't get below the median of the last few blocks"
+but the code only guarded against `< time(NULL)`.
+**Resolved (2026-09-01, C2-R3 PR):** a cache hit now raises the
+timestamp to `now` and then **revalidates it through the C2-R3 rule
+owner** — on failure (a backward clock step can leave the cached
+timestamp beyond the current FTL deadline, the one case the raise
+cannot repair) the cache is dropped and the template is rebuilt
+through the fresh path, whose own edge refusal decides loudly. The
+misleading comment is gone with the raise-only path; no follow-up
+remains.
 
 **Disposition on header-level `±7xT` timestamp limits (zawy12
 issue #24 item 9).** zawy12 retired the header-level `+7xT` limit

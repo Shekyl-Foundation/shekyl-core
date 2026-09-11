@@ -126,7 +126,7 @@ visitor. The closest existing shape is `txin_archival_bond_post` (carries
 
 - **`tx_verification_utils.cpp` `check_tx_semantics`** — RCT-semantics gate;
   has dedicated branches for serve-credit (fee-only) and bond-post
-  (`verRctSemanticsBondPost`), and a `skip_rct_semantics_batch` path for
+  (`verCtSemanticsBondPost`), and a `skip_rct_semantics_batch` path for
   stake-claim-only txs.
 - **`blockchain.cpp` `check_tx_inputs`** — tx-class detection
   (`is_stake_claim_only`, `is_archival_serve_credit_only`,
@@ -599,7 +599,7 @@ relay or sit in a mempool as an un-minable nuisance. E2 is inert unqualified.
 E3's verify body takes the auth result as an **unforgeable `AuthVerified` witness input it cannot
 construct itself** — nothing in E3 (or its KATs) can mint the witness, so E3 **physically cannot
 accept an authed emission**. C-1 does not flip a flag; it **supplies the real ML-DSA witness
-minter**. This is the same witness-typing discipline as `unbond(ExitedConfirmed)` — the stub is
+minter**. This is the same witness-typing discipline as `release(ExitedConfirmed)` — the stub is
 *unrepresentable-to-pass*, not a TODO someone can fill wrong. (Fail-closed by type is the pin
 that makes gate-last safe even mid-sequence.)
 
@@ -755,7 +755,10 @@ arithmetic and crypto never re-appear as C++ logic.
 7. **FCMP balance** — fee `txin_to_key` via existing `shekyl_fcmp_verify`.
 8. **Hybrid auth gate (§2, R1.A)** — recompute `H(pqc_pk)`, demand equality with the
    in-circuit leaf scalar, and verify the hybrid (Ed25519 + ML-DSA-65) auth(s) over
-   `emission_auth_msg` (R1.A binding) via `shekyl_emission_hybrid_auth_verify`.
+   `emission_auth_msg` (R1.A binding) via `emission_vin_verify_auth` inside the coarse
+   `shekyl_emission_vin_verify` call (the standalone PR-E1 per-auth FFI primitive
+   `shekyl_emission_hybrid_auth_verify` was retired in PR-SA-2 — it hardcoded the
+   backing domain and had no production caller once the coarse call landed).
 
 **C++ (thin shim):**
 1. **Structural pre-gate** — extend `check_inputs_types_supported` to accept

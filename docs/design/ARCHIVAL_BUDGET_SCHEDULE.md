@@ -262,7 +262,7 @@ accrual path references it, so a C-1-era edit to the emission split or
 coinbase validation is where it breaks without any budget test noticing.
 Standing assertions that hold it today:
 `tests/unit_tests/economics_c2a_prime.cpp`
-(`Layer1PerQuantityLegAComposesSplitAndCoinbase`: split conservation
+(`Layer1PerQuantityCallPathComposesSplitAndCoinbase`: split conservation
 `Q_miner_base + Q_staker_emission = Q_full` with the fee legs
 independently pinned to zero) and `tests/core_tests/economics_c2a_prime.cpp`
 (connect-path `already_generated` delta equals the *full* subsidy, with

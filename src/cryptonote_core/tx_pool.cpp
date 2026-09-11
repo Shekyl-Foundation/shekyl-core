@@ -48,10 +48,10 @@
 #include "misc_log_ex.h"
 #include "tx_verification_utils.h"
 #include "shekyl/shekyl_ffi.h"
+#include "cryptonote_basic/drop_verdict.h"
 #include "warnings.h"
 #include "common/perf_timer.h"
 #include "crypto/hash.h"
-#include "crypto/duration.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "txpool"
@@ -89,15 +89,64 @@ namespace cryptonote
     //! Max DB check interval for relayable txes
     constexpr const std::chrono::minutes max_relayable_check{2};
 
-    constexpr const std::chrono::seconds forward_delay_average{CRYPTONOTE_FORWARD_DELAY_AVERAGE};
 
-    // a kind of increasing backoff within min/max bounds
-    uint64_t get_relay_delay(time_t last_relay, time_t received)
+    /* A kind of increasing backoff within min/max bounds.
+       `base` is the first wait and the rounding grid; every later gap is the
+       entry's age rounded to it, capped at `MAX_RELAY_TIME`.
+
+       The base is a parameter rather than `MIN_RELAY_TIME` because the classes
+       on this branch no longer share one question. `fluff` and `block` are
+       already broadcast, so re-relaying them is a liveness nicety on an
+       inherited grid. A RE-BROADCAST by an origin is not: it asks "has my stem
+       probably completed?", which is a derived quantity
+       (`shekyl_dandelionpp_origin_retry_interval_seconds`), and at
+       `MIN_RELAY_TIME` it sat below the anonymity embargo's own median. See
+       `local_relay_base` for which entries actually ask that question.
+
+       The escalation SHAPE is unchanged for both. Repeated failure is a reason
+       to back off, and inventing a second schedule shape is not what the
+       defect asks for -- see DAEMON_RELAY_PRIVACY.md §92.5c item 3. */
+    uint64_t get_relay_delay(time_t last_relay, time_t received, time_t base)
     {
-      time_t d = (last_relay - received + MIN_RELAY_TIME) / MIN_RELAY_TIME * MIN_RELAY_TIME;
+      time_t d = (last_relay - received + base) / base * base;
       if (d > MAX_RELAY_TIME)
         d = MAX_RELAY_TIME;
       return d;
+    }
+
+    /*! The backoff base for a `relay_method::local` pool entry, in seconds.
+
+        Two entries wear `local` and they are asking different questions, so
+        one base cannot serve both.
+
+        NOT YET SENT (`relayed == false`): `insert_attested_tx` stamps this
+        state and names this loop its fallback if the engine's fire-and-forget
+        submit nudge misses (DAEMON_SUBMIT_VERDICT.md §4.3 / §5.2 item 1). No
+        stem was ever launched, so no embargo exists anywhere to complete, and
+        the derived interval would be provisioning against an event that cannot
+        have happened -- pure added latency on the first send. The inherited
+        `MIN_RELAY_TIME` is the answer to the question actually being asked,
+        which is "did the nudge miss?".
+
+        SENT AND STILL HERE (`relayed == true`): `originated_stays_in_zone`
+        pins an anonymity-zone ORIGIN at `local` permanently, so this entry
+        lives on this branch for its whole life, and its retry IS the origin
+        asking whether its stem completed. That is the derived quantity.
+
+        The zone read is the entry's recorded origin zone. Originated traffic
+        carries `invalid` -- it did not arrive over anything -- which the Rust
+        boundary resolves to the anonymity parameter class: correct, because a
+        surviving `local` record IS an anonymity origin, and fail-safe, because
+        it is the longer wait.
+
+        The Rust side caches per parameter class, so this is a lookup rather
+        than a survival-quantile solve per entry per pass. */
+    time_t local_relay_base(const txpool_tx_meta_t &meta)
+    {
+      if (!meta.relayed)
+        return MIN_RELAY_TIME;
+      const auto zone = static_cast<std::uint8_t>(meta.get_origin_zone());
+      return static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(zone));
     }
 
     uint64_t template_accept_threshold(uint64_t amount)
@@ -124,11 +173,34 @@ namespace cryptonote
 
   namespace detail
   {
-    std::time_t embargo_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs)
+    std::time_t relay_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs)
     {
-      // Cast: the FFI returns uint64_t; seconds::rep is signed, so list-init
-      // would be a narrowing conversion on some standard libraries.
-      const auto delay = std::chrono::seconds{static_cast<std::chrono::seconds::rep>(draw_secs)};
+      using rep = std::chrono::seconds::rep;
+
+      /* SATURATE, never wrap. The FFI returns `uint64_t` and `rep` is signed:
+         an out-of-range draw would cast to a NEGATIVE delay — a deadline in the
+         past — which SHORTENS the delay, and shortening is the privacy-losing
+         direction for both callers (a short embargo fluffs early; a short
+         forward delay gives back cover at the tor->clearnet bridge). Overflowing
+         `now + delay` past the clock's range is the same failure by another
+         route.
+
+         Saturating instead is liveness-visible: the transaction sits rather
+         than relaying early, and a stuck transaction gets noticed. That is the
+         same preference F-8b records for its cap of 0 — loud beats quiet when
+         the quiet direction is the unsafe one.
+
+         No shipped draw can reach this. Both tables are truncated orders of
+         magnitude below it, so this is a boundary guard on the FFI's DECLARED
+         type rather than a live path; it exists because the declared type is
+         what a future caller will read. */
+      const auto headroom = std::chrono::floor<std::chrono::seconds>(
+                              std::chrono::system_clock::time_point::max() - now)
+                            - std::chrono::seconds{1}; // margin for the ceil below
+      const std::uint64_t max_safe =
+        headroom.count() > 0 ? static_cast<std::uint64_t>(headroom.count()) : 0;
+
+      const auto delay = std::chrono::seconds{static_cast<rep>(std::min(draw_secs, max_safe))};
       // ceil, not to_time_t's truncation — the header explains why the direction
       // is a privacy decision rather than a formatting one.
       return std::chrono::system_clock::to_time_t(
@@ -137,23 +209,23 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   //---------------------------------------------------------------------------------
-  tx_memory_pool::tx_memory_pool(Blockchain& bchs): m_blockchain(bchs), m_cookie(0), m_txpool_max_weight(DEFAULT_TXPOOL_MAX_WEIGHT), m_txpool_weight(0), m_mine_stem_txes(false), m_next_check(std::time(nullptr))
+  tx_memory_pool::tx_memory_pool(Blockchain& bchs): m_blockchain(bchs), m_cookie(0), m_txpool_max_weight(DEFAULT_TXPOOL_MAX_WEIGHT), m_txpool_weight(0), m_mine_relayable_txes(false), m_next_check(std::time(nullptr))
   {
     // class code expects unsigned values throughout
     if (m_next_check < time_t(0))
       throw std::runtime_error{"Unexpected time_t (system clock) value"};
 
     m_added_txs_start_time = (time_t)0;
-    m_removed_txs_start_time = (time_t)0;
-    // We don't set these to "now" already here as we don't know how long it takes from construction
-    // of the pool until it "goes to work". It's safer to set when the first actual txs enter the
-    // corresponding lists.
+    // Not set to "now" here: we don't know how long it takes from construction
+    // of the pool until it "goes to work", so it is safer to set it when the
+    // first actual tx enters the list.
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::add_tx(transaction &tx, /*const crypto::hash& tx_prefix_hash,*/
     const crypto::hash &id, const cryptonote::blobdata &blob, size_t tx_weight,
     tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-    uint8_t version, uint8_t nic_verified_hf_version)
+    uint8_t version, epee::net_utils::zone origin_zone,
+    uint8_t nic_verified_hf_version)
   {
     const bool kept_by_block = (tx_relay == relay_method::block);
 
@@ -166,7 +238,7 @@ namespace cryptonote
     {
       LOG_PRINT_L1("transaction " << id << " failed non-input consensus rule checks");
       tvc.m_verifivation_failed = true; // should already be set, but just in case
-      return false;
+      return reject_form(tvc);
     }
 
     uint64_t fee;
@@ -178,13 +250,23 @@ namespace cryptonote
       fee = get_tx_fee(tx);
       fee_good = kept_by_block || m_blockchain.check_fee(tx_weight, fee);
     }
-    catch(...) {}
-    if (!fee_good) // if fee calculation failed or fee in relayed tx is too low...
+    catch (const std::exception &e)
+    {
+      MERROR("internal error computing tx fee: " << e.what());
+      tvc.m_verifivation_failed = true;
+      return reject_internal(tvc);
+    }
+    catch (...)
+    {
+      MERROR("internal error computing tx fee");
+      tvc.m_verifivation_failed = true;
+      return reject_internal(tvc);
+    }
+    if (!fee_good) // if fee in relayed tx is too low...
     {
       tvc.m_verifivation_failed = true;
       tvc.m_fee_too_low = true;
-      tvc.m_no_drop_offense = true;
-      return false;
+      return reject_state(tvc);
     }
 
     size_t tx_extra_size = tx.extra.size();
@@ -193,8 +275,7 @@ namespace cryptonote
       LOG_PRINT_L1("transaction tx-extra is too big: " << tx_extra_size << " bytes, the limit is: " << MAX_TX_EXTRA_SIZE);
       tvc.m_verifivation_failed = true;
       tvc.m_tx_extra_too_big = true;
-      tvc.m_no_drop_offense = true;
-      return false;
+      return reject_state(tvc);
     }
 
     if (!kept_by_block && tx.unlock_time)
@@ -202,8 +283,7 @@ namespace cryptonote
       LOG_PRINT_L1("transaction unlock time is not zero: " << tx.unlock_time);
       tvc.m_verifivation_failed = true;
       tvc.m_nonzero_unlock_time = true;
-      tvc.m_no_drop_offense = true;
-      return false;
+      return reject_state(tvc);
     }
 
     // if the transaction came from a block popped from the chain,
@@ -217,8 +297,7 @@ namespace cryptonote
         LOG_PRINT_L1("Transaction with id= "<< id << " used already spent key images");
         tvc.m_verifivation_failed = true;
         tvc.m_double_spend = true;
-        tvc.m_no_drop_offense = true;
-        return false;
+        return reject_state(tvc);
       }
     }
 
@@ -250,7 +329,11 @@ namespace cryptonote
         meta.double_spend_seen = have_tx_keyimges_as_spent(tx, id);
         meta.pruned = tx.pruned;
         meta.fcmp_verified = 0;
-        meta.bf_padding = 0;
+        // The zone the bytes actually arrived over, carried from the protocol
+        // handler rather than inferred from the relay method. `invalid` here
+        // means the caller had no arrival to report (block-sourced, or locally
+        // originated), which is a different statement from "clearnet".
+        meta.set_origin_zone(origin_zone);
         meta.fcmp_verification_hash = null_hash;
         memset(meta.padding, 0, sizeof(meta.padding));
         try
@@ -260,7 +343,7 @@ namespace cryptonote
           CRITICAL_REGION_LOCAL1(m_blockchain);
           LockedTXN lock(m_blockchain.get_db());
           if (!insert_key_images(tx, id, tx_relay))
-            return false;
+            return reject_internal(tvc);
 
           m_blockchain.add_txpool_tx(id, blob, meta);
           add_tx_to_transient_lists(id, fee / (double)(tx_weight ? tx_weight : 1), receive_time);
@@ -269,7 +352,7 @@ namespace cryptonote
         catch (const std::exception &e)
         {
           MERROR("Error adding transaction to txpool: " << e.what());
-          return false;
+          return reject_internal(tvc);
         }
         tvc.m_verifivation_impossible = true;
         tvc.m_added_to_pool = true;
@@ -303,16 +386,88 @@ namespace cryptonote
         else
           meta.set_relay_method(relay_method::none);
 
-        if (meta.upgrade_relay_method(tx_relay) || !existing_tx) // synchronize with embargo timer or stem/fluff out-of-order messages
+        /* §92's third clause, FIRST HALF: the origin mark is permanent.
+           An entry this node originated and kept at `local` does not leave
+           that class because its own transaction came back.
+
+           Without this the return DEFEATS the carve-out rather than closing
+           it. `upgrade_relay_method` moves the entry to `fluff`, and the two
+           selection arms differ in both axes: `local` re-broadcasts at the
+           derived 1148 s into `private_req` (`zone::invalid`, fail-closed
+           anonymity), while `fluff` re-broadcasts at MIN_RELAY_TIME's 300 s
+           into `public_req` (`zone::public_`). So the upgrade made the origin
+           re-emit its OWN transaction sooner and on the clear internet —
+           precisely what `originated_stays_in_zone` exists to prevent, and its
+           own note says so: "one record of Stem or Fluff moves the entry out
+           of Local permanently, and the next pool re-relay puts the user's own
+           transaction on the clear internet."
+
+           NARROW, and deliberately not a general suspension of monotonicity.
+           It refuses exactly one transition — out of `local` — and `local` is
+           set only by this node originating (`is_local`), never by an arrival.
+           So no peer can acquire the origin mark by relaying: the guard
+           protects a class nothing else can enter, which is what keeps the
+           mark unforgeable while making it permanent.
+
+           The SECOND half of that clause — when the re-broadcast RESPONSIBILITY
+           ends — is `observed_circulating`, set by the stem watch's F-10
+           verdict. Provenance is permanent; liveness is conditional. This
+           guard is that bit's precondition: without it the verdict is written
+           and erased in one call chain, because §46 records arrivals before
+           admission.
+
+           THE PIN HOLDS AGAINST A PEER'S ASSERTION AND YIELDS TO PROOF OF
+           WORK. Stated as a boundary rather than as "`block` is excluded",
+           because the class name does not carry the reason and an exception
+           invites removal where a boundary tells the next reader which side a
+           new arrival class belongs on.
+
+           A peer's assertion is free to make —
+           anyone can send us our own transaction as `stem` or `fluff`, which
+           is exactly why the mark must survive it. A `block` arrival is backed
+           by PROOF OF WORK, and it is neither free nor an assertion:
+           `handle_alternative_block` rejects on
+           `!check_hash(proof_of_work, current_diff)` (`blockchain.cpp:2347`)
+           before its pool supplement is ever offered here, so the arrival is
+           not something an observer can manufacture to strip the mark — and it
+           means the transaction reached a miner.
+
+           And once it has, holding the mark INVERTS. Every other node holding
+           that transaction admits at `block`, matches
+           `relay_category::broadcasted`, and re-relays on the ordinary grid. A
+           pinned entry does none of those: it sits on `private_req` at the
+           derived 1148 s on the anonymity zone, ALONE, after the transaction is
+           already public. That is a behavioural difference keyed on exactly the
+           fact the mark is meant to conceal — the absence-oracle shape — and it
+           appears at the moment the concealment has stopped being worth
+           anything.
+
+           It is also broken in the plain sense. The supplement path gates on
+           `have_tx(txid, relay_category::broadcasted)`, which a `local` entry
+           never matches, so every alt block carrying the transaction re-offers
+           it; and the entry never earns
+           `CRYPTONOTE_MEMPOOL_TX_FROM_ALT_BLOCK_LIVETIME`, the longer lifetime
+           that exists so an alt-chain transaction survives to be re-mined.
+
+           The two reorg paths that also pass `block` — `pop_block` and the
+           return of taken transactions — never reach this guard at all: the
+           transaction left the pool when the block was added, so they arrive
+           with `existing_tx == false`. */
+        const bool origin_pinned =
+          existing_tx && meta.get_relay_method() == relay_method::local &&
+          tx_relay != relay_method::block;
+
+        if ((!origin_pinned && meta.upgrade_relay_method(tx_relay)) || !existing_tx) // synchronize with embargo timer or stem/fluff out-of-order messages
         {
-          using clock = std::chrono::system_clock;
+          /* Q12-U2 deleted the bridge delay along with the class that used it.
+             The randomized hold existed to blur the moment an anonymity
+             arrival became clearnet-visible; under Q12-D3 the arrival does not
+             cross to clearnet at admission at all — it stems on the zone it
+             arrived over — so there is no bridge left here to delay. The
+             latency the path does cost is priced by the zone's own `hop`
+             (§89.2, `ANON_ZONE_TRANSIT_ASSUMPTION_MS`), which is where a
+             per-zone cost belongs. `set_relayed` adjusts the time later. */
           auto last_relayed_time = std::numeric_limits<decltype(meta.last_relayed_time)>::max();
-          if (tx_relay == relay_method::forward)
-          {
-            last_relayed_time = clock::to_time_t(clock::now() + crypto::random_poisson_seconds{forward_delay_average}());
-            set_if_less(m_next_check, time_t(last_relayed_time));
-          }
-          // else the `set_relayed` function will adjust the time accordingly later
 
           //update transactions container
           meta.last_relayed_time = last_relayed_time;
@@ -326,10 +481,16 @@ namespace cryptonote
           meta.relayed = relayed;
           meta.double_spend_seen = false;
           meta.pruned = tx.pruned;
-          meta.bf_padding = 0;
+          // First arrival wins. Origin is a fact about where the bytes first
+          // came from, not a routing decision: an upgrade (stem→fluff loop
+          // detection, out-of-order fluff) revises the method, not the
+          // provenance. Overwriting here would hand Q12-U3 the second peer's
+          // zone after a normal Dandelion++ re-delivery.
+          if (!existing_tx)
+            meta.set_origin_zone(origin_zone);
           memset(meta.padding, 0, sizeof(meta.padding));
 
-          if (tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc)
+          if (tx.ct_signatures.type == ct::CTTypeFcmpPlusPlusPqc)
           {
             meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(tx);
             meta.fcmp_verified = (meta.fcmp_verification_hash != null_hash) ? 1 : 0;
@@ -341,7 +502,7 @@ namespace cryptonote
           }
 
           if (!insert_key_images(tx, id, tx_relay))
-            return false;
+            return reject_internal(tvc);
 
           m_blockchain.remove_txpool_tx(id);
           m_blockchain.add_txpool_tx(id, blob, meta);
@@ -353,11 +514,18 @@ namespace cryptonote
       catch (const std::exception &e)
       {
         MERROR("internal error: error adding transaction to txpool: " << e.what());
-        return false;
+        return reject_internal(tvc);
       }
 
+      /* Q12-U2 removed the `tx_relay != relay_method::forward` conjunct that
+         used to sit here. It was the fifth link in the chain that held
+         coherence dormant: an anonymity arrival was classed `forward`, this
+         refused to propagate it into `tvc.m_relay`, the caller's batching
+         switch therefore dropped it, and `relay_transactions` was never
+         reached with an anonymity origin. The class is gone and so is the
+         suppression — an arrival now relays at arrival. */
       static_assert(unsigned(relay_method::none) == 0, "expected relay_method::none value to be zero");
-      if(meta.fee > 0 && tx_relay != relay_method::forward)
+      if(meta.fee > 0)
         tvc.m_relay = tx_relay;
     }
 
@@ -375,7 +543,8 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::add_tx(transaction &tx, tx_verification_context& tvc, relay_method tx_relay,
-    bool relayed, uint8_t version, uint8_t nic_verified_hf_version)
+    bool relayed, uint8_t version, epee::net_utils::zone origin_zone,
+    uint8_t nic_verified_hf_version)
   {
     crypto::hash h = null_hash;
     cryptonote::blobdata bl;
@@ -383,7 +552,7 @@ namespace cryptonote
     if (bl.size() == 0 || !get_transaction_hash(tx, h))
       return false;
     return add_tx(tx, h, bl, get_transaction_weight(tx, bl.size()), tvc, tx_relay, relayed, version,
-      nic_verified_hf_version);
+      origin_zone, nic_verified_hf_version);
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::insert_attested_tx(transaction &tx, const crypto::hash &id,
@@ -409,7 +578,7 @@ namespace cryptonote
     // is fire-and-forget (DAEMON_SUBMIT_VERDICT.md §4.3), and the periodic
     // relay loop is its stated fallback if the nudge misses (§5.2 item 1) —
     // but get_relayable_transactions skips a max()-stamped local tx forever:
-    // `now - max()` underflows to now+1 and get_relay_delay(max(), _) casts to
+    // `now - max()` underflows to now+1 and get_relay_delay(max(), ...) casts to
     // a negative time_t returned as a huge unsigned delay, so the entry never
     // becomes eligible. receive_time lets the loop relay it after
     // MIN_RELAY_TIME if the nudge missed, while a successful nudge's
@@ -433,12 +602,16 @@ namespace cryptonote
     meta.do_not_relay = 0;
     meta.double_spend_seen = false;
     meta.pruned = tx.pruned;
-    meta.bf_padding = 0;
+    // A locally originated transaction did not ARRIVE over anything, so
+    // `invalid` here is the permanent answer rather than a value awaiting the
+    // seam. Origin-unknown and origin-none are the same statement to every
+    // consumer: do not route this by a provenance it does not have.
+    meta.set_origin_zone(epee::net_utils::zone::invalid);
     memset(meta.padding, 0, sizeof(meta.padding));
 
     // §3.5 attestation: same derivation as the P2P path above. The
     // certificate gate lives in the (only) caller.
-    if (tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc)
+    if (tx.ct_signatures.type == ct::CTTypeFcmpPlusPlusPqc)
     {
       meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(tx);
       meta.fcmp_verified = (meta.fcmp_verification_hash != null_hash) ? 1 : 0;
@@ -624,7 +797,7 @@ namespace cryptonote
 
       const bool new_or_previously_private =
         kei_image_set.insert(id).second ||
-        !m_blockchain.txpool_tx_matches_category(id, relay_category::legacy);
+        !m_blockchain.txpool_tx_matches_category(id, relay_category::broadcasted);
       CHECK_AND_ASSERT_MES(new_or_previously_private, false, "internal error: try to insert duplicate iterator in key_image set");
     }
     ++m_cookie;
@@ -675,10 +848,14 @@ namespace cryptonote
     return ok;
   }
   //---------------------------------------------------------------------------------
-  bool tx_memory_pool::take_tx(const crypto::hash &id, transaction &tx, cryptonote::blobdata &txblob, size_t& tx_weight, uint64_t& fee, bool &relayed, bool &do_not_relay, bool &double_spend_seen, bool &pruned, const bool suppress_missing_msgs)
+  bool tx_memory_pool::take_tx(const crypto::hash &id, transaction &tx, cryptonote::blobdata &txblob, size_t& tx_weight, uint64_t& fee, bool &relayed, bool &do_not_relay, bool &double_spend_seen, bool &pruned, bool &fcmp_verification_cached, const bool suppress_missing_msgs)
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
+
+    // Defined on every exit path: a caller that gates verification on this
+    // must see false unless the cache affirmatively covers these bytes.
+    fcmp_verification_cached = false;
 
     bool sensitive = false;
     try
@@ -715,6 +892,11 @@ namespace cryptonote
       double_spend_seen = meta.double_spend_seen;
       pruned = meta.pruned;
       sensitive = !meta.matches(relay_category::broadcasted);
+      // Read the verification-cache verdict while the meta still exists: the
+      // flag alone is not enough — the recorded hash must match these parsed
+      // bytes (CEN-M8: the connect-path skip is hash-gated, never
+      // presence-gated).
+      fcmp_verification_cached = is_fcmp_verification_cached(meta, tx);
 
       // remove first, in case this throws, so key images aren't removed
       m_blockchain.remove_txpool_tx(id);
@@ -725,6 +907,9 @@ namespace cryptonote
     catch (const std::exception &e)
     {
       MERROR("Failed to remove tx from txpool: " << e.what());
+      // The verdict is only meaningful on success: a failure return must not
+      // leave a true value a caller could consume as a skip licence.
+      fcmp_verification_cached = false;
       return false;
     }
 
@@ -973,7 +1158,6 @@ namespace cryptonote
         switch (tx_relay)
         {
           case relay_method::stem:
-          case relay_method::forward:
             if (meta.last_relayed_time > now)
             {
               next_check = std::min(next_check, meta.last_relayed_time);
@@ -985,9 +1169,29 @@ namespace cryptonote
           case relay_method::none:
             return true;
           case relay_method::local:
+            /* DISARMED — the stem watch saw this transaction arrive from
+               somewhere other than the peer it was stemmed to (F-10, §49), so
+               it is circulating and the origin has nothing left to rescue.
+               §92.5c item 1.
+
+               This is a PREDICATE, not a timer, and that is the whole point:
+               the re-broadcast exists because an origin cannot see its own
+               stem, and the moment it can see it, the reason is gone. */
+            if (meta.observed_circulating)
+              return true; // continue to next tx
+
+            // An origin's re-broadcast is derived from the network's own
+            // full-travel confidence, not the inherited 300 s grid; an entry
+            // that has never been sent keeps the grid. `local_relay_base`
+            // carries the distinction.
+            if (now - meta.last_relayed_time
+                <= get_relay_delay(meta.last_relayed_time, meta.receive_time, local_relay_base(meta)))
+              return true; // continue to next tx
+            break;
           case relay_method::fluff:
           case relay_method::block:
-            if (now - meta.last_relayed_time <= get_relay_delay(meta.last_relayed_time, meta.receive_time))
+            if (now - meta.last_relayed_time
+                <= get_relay_delay(meta.last_relayed_time, meta.receive_time, MIN_RELAY_TIME))
               return true; // continue to next tx
             break;
         }
@@ -1020,7 +1224,8 @@ namespace cryptonote
          function is only called every ~2 minutes, so this resetting should be
          unnecessary, but is primarily a precaution against potential changes
 	 to the callback routines. */
-      elem.second.last_relayed_time = now + get_relay_delay(elem.second.last_relayed_time, elem.second.receive_time);
+      elem.second.last_relayed_time =
+        now + get_relay_delay(elem.second.last_relayed_time, elem.second.receive_time, MIN_RELAY_TIME);
       m_blockchain.update_txpool_tx(elem.first, elem.second);
     }
 
@@ -1029,7 +1234,42 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------------------------
-  void tx_memory_pool::set_relayed(const epee::span<const crypto::hash> hashes, const relay_method method, std::vector<bool> &just_broadcasted)
+  void tx_memory_pool::on_stem_propagated(const epee::span<const crypto::hash> hashes)
+  {
+    if (hashes.empty())
+      return;
+
+    CRITICAL_REGION_LOCAL(m_transactions_lock);
+    CRITICAL_REGION_LOCAL1(m_blockchain);
+    LockedTXN lock(m_blockchain.get_db());
+    for (const auto& hash : hashes)
+    {
+      try
+      {
+        txpool_tx_meta_t meta;
+        if (!m_blockchain.get_txpool_tx_meta(hash, meta))
+          continue;
+        /* `local` only — see the declaration. A relayed entry's propagation is
+           a real verdict about a real stem, and it is simply not this arm's
+           question. */
+        if (meta.get_relay_method() != relay_method::local)
+          continue;
+        if (meta.observed_circulating)
+          continue;
+        meta.observed_circulating = 1;
+        m_blockchain.update_txpool_tx(hash, meta);
+      }
+      catch (const std::exception &e)
+      {
+        MERROR("Failed to record stem propagation for a txpool entry: " << e.what());
+        // continue: a missed disarm costs a redundant re-broadcast, which is
+        // the direction that fails safe.
+      }
+    }
+    lock.commit();
+  }
+  //---------------------------------------------------------------------------------
+  void tx_memory_pool::set_relayed(const epee::span<const crypto::hash> hashes, const relay_method method, const epee::net_utils::zone zone, std::vector<bool> &just_broadcasted)
   {
     just_broadcasted.clear();
 
@@ -1055,7 +1295,7 @@ namespace cryptonote
           if (meta.dandelionpp_stem)
           {
             meta.last_relayed_time =
-              detail::embargo_deadline(now, shekyl_dandelionpp_embargo_draw_seconds());
+              detail::relay_deadline(now, shekyl_dandelionpp_embargo_draw_seconds(static_cast<std::uint8_t>(zone)));
             next_relay = std::min(next_relay, meta.last_relayed_time);
           }
           else
@@ -1120,80 +1360,6 @@ namespace cryptonote
     }, false, category);
   }
   //------------------------------------------------------------------
-  bool tx_memory_pool::get_pool_info(time_t start_time, bool include_sensitive, size_t max_tx_count, std::vector<std::pair<crypto::hash, tx_details>>& added_txs, std::vector<crypto::hash>& remaining_added_txids, std::vector<crypto::hash>& removed_txs, bool& incremental) const
-  {
-    CRITICAL_REGION_LOCAL(m_transactions_lock);
-    CRITICAL_REGION_LOCAL1(m_blockchain);
-
-    incremental = true;
-    if (start_time == (time_t)0)
-    {
-      // Giving no start time means give back whole pool
-      incremental = false;
-    }
-    else if ((m_added_txs_start_time != (time_t)0) && (m_removed_txs_start_time != (time_t)0))
-    {
-      if ((start_time <= m_added_txs_start_time) || (start_time <= m_removed_txs_start_time))
-      {
-        // If either of the two lists do not go back far enough it's not possible to
-        // deliver incremental pool info
-        incremental = false;
-      }
-      // The check uses "<=": We cannot be sure to have ALL txs exactly at start_time, only AFTER that time
-    }
-    else
-    {
-      // Some incremental info still missing completely
-      incremental = false;
-    }
-
-    added_txs.clear();
-    remaining_added_txids.clear();
-    removed_txs.clear();
-
-    std::vector<crypto::hash> txids;
-    if (!incremental)
-    {
-      LOG_PRINT_L2("Giving back the whole pool");
-      // Give back the whole pool in 'added_txs'; because calling 'get_transaction_info' right inside the
-      // anonymous method somehow results in an LMDB error with transactions we have to build a list of
-      // ids first and get the full info afterwards
-      get_transaction_hashes(txids, include_sensitive);
-      if (txids.size() > max_tx_count)
-      {
-        remaining_added_txids = std::vector<crypto::hash>(txids.begin() + max_tx_count, txids.end());
-        txids.erase(txids.begin() + max_tx_count, txids.end());
-      }
-      get_transactions_info(txids, added_txs, include_sensitive);
-      return true;
-    }
-
-    // Give back incrementally, based on time of entry into the map
-    for (const auto &pit : m_added_txs_by_id)
-    {
-      if (pit.second >= start_time)
-        txids.push_back(pit.first);
-    }
-    get_transactions_info(txids, added_txs, include_sensitive);
-    if (added_txs.size() > max_tx_count)
-    {
-      remaining_added_txids.reserve(added_txs.size() - max_tx_count);
-      for (size_t i = max_tx_count; i < added_txs.size(); ++i)
-        remaining_added_txids.push_back(added_txs[i].first);
-      added_txs.erase(added_txs.begin() + max_tx_count, added_txs.end());
-    }
-
-    std::multimap<time_t, removed_tx_info>::const_iterator rit = m_removed_txs_by_time.lower_bound(start_time);
-    while (rit != m_removed_txs_by_time.end())
-    {
-      if (include_sensitive || !rit->second.sensitive)
-      {
-        removed_txs.push_back(rit->second.txid);
-      }
-      ++rit;
-    }
-    return true;
-  }
   //------------------------------------------------------------------
   void tx_memory_pool::get_transaction_backlog(std::vector<tx_backlog_entry>& backlog, bool include_sensitive) const
   {
@@ -1552,7 +1718,7 @@ namespace cryptonote
       // See `insert_key_images`.
       if (1 < found->second.size() || *(found->second.cbegin()) != txid)
         return true;
-      return m_blockchain.txpool_tx_matches_category(txid, relay_category::legacy);
+      return m_blockchain.txpool_tx_matches_category(txid, relay_category::broadcasted);
     }
     return false;
   }
@@ -1590,7 +1756,7 @@ namespace cryptonote
   {
     if (!meta.fcmp_verified)
       return false;
-    if (tx.rct_signatures.type != rct::CTTypeFcmpPlusPlusPqc)
+    if (tx.ct_signatures.type != ct::CTTypeFcmpPlusPlusPqc)
       return false;
     const crypto::hash expected = Blockchain::compute_fcmp_verification_hash(tx);
     return expected != crypto::null_hash && expected == meta.fcmp_verification_hash;
@@ -1784,10 +1950,13 @@ namespace cryptonote
       else if (std::holds_alternative<txin_archival_serve_credit_response>(vin))
       {
         const auto& resp = std::get<txin_archival_serve_credit_response>(vin);
+        crypto::hash p_id{}; uint64_t shard_id = 0, settlement_epoch = 0;
+        if (!get_archival_serve_credit_key(resp, p_id, shard_id, settlement_epoch))
+          continue; // unparseable: admission rejects it; no pool key to reserve
         std::string key(1, 'S');
-        key.append(resp.p_canonical_id.data, sizeof(resp.p_canonical_id.data));
-        append_be64(key, resp.shard_id);
-        append_be64(key, resp.settlement_epoch);
+        key.append(p_id.data, sizeof(p_id.data));
+        append_be64(key, shard_id);
+        append_be64(key, settlement_epoch);
         tx_keys.push_back(std::move(key));
       }
     }
@@ -1887,10 +2056,10 @@ namespace cryptonote
     uint64_t best_coinbase = 0, coinbase = 0;
     total_weight = 0;
     fee = 0;
-    const uint64_t tx_volume_avg = m_blockchain.get_tx_volume_avg(block_height);
-    
+    const shekyl::tx_volume_window tx_volume = m_blockchain.get_tx_volume_window(block_height);
+
     //baseline empty block
-    if (!get_block_reward(median_weight, total_weight, already_generated_coins, best_coinbase, version, tx_volume_avg))
+    if (!get_block_reward(median_weight, total_weight, already_generated_coins, best_coinbase, version, tx_volume))
     {
       MERROR("Failed to get block reward for empty block");
       return false;
@@ -1921,7 +2090,28 @@ namespace cryptonote
       }
       LOG_PRINT_L2("Considering " << sorted_it->second << ", weight " << meta.weight << ", current block weight " << total_weight << "/" << max_total_weight << ", current coinbase " << print_money(best_coinbase) << ", relay method " << (unsigned)meta.get_relay_method());
 
-      if (!meta.matches(relay_category::legacy) && !(m_mine_stem_txes && meta.get_relay_method() == relay_method::stem))
+      // Broadcast-visible only, plus the FAKECHAIN opt-in for anything
+      // relayable. The opt-in (m_mine_relayable_txes, set from
+      // `m_nettype == FAKECHAIN` at init) exists so a single regtest node
+      // deterministically mines its own submissions: a typed-submit tx sits at
+      // `relay_method::local` under the Dandelion++ embargo
+      // (DAEMON_SUBMIT_VERDICT.md §5.2), so gating the template on
+      // `broadcasted` alone makes inclusion race the embargo/fluff timer --
+      // the e2e wallet gate caught exactly that flake. On mainnet the flag is
+      // off and embargoed own-txs stay out of own templates (mining an
+      // unfluffed self-tx is an origin fingerprint). The earlier shape of the
+      // opt-in admitted only `relay_method::stem` -- a peer's stem being
+      // relayed through us, which a peerless regtest node never holds -- and
+      // missed `local`, the only pre-broadcast method regtest produces.
+      //
+      // `relayable` (method != none) is the widest correct set: this site once
+      // asked the deleted `relay_category::legacy`, which also admitted
+      // `relay_method::none` -- mining a transaction whose whole meaning is
+      // "do not put this on the network". Unreachable in practice (nothing
+      // production-writes `none`), wrong on its face, and the reason the
+      // category went rather than being renamed. `relayable` keeps `none`
+      // excluded under the opt-in too.
+      if (!meta.matches(relay_category::broadcasted) && !(m_mine_relayable_txes && meta.matches(relay_category::relayable)))
       {
         LOG_PRINT_L2("  tx relay method is " << (unsigned)meta.get_relay_method());
         continue;
@@ -1945,7 +2135,7 @@ namespace cryptonote
         // If we're getting lower coinbase tx,
         // stop including more tx
         uint64_t block_reward;
-        if(!get_block_reward(median_weight, total_weight + meta.weight, already_generated_coins, block_reward, version, tx_volume_avg))
+        if(!get_block_reward(median_weight, total_weight + meta.weight, already_generated_coins, block_reward, version, tx_volume))
         {
           LOG_PRINT_L2("  would exceed maximum block weight");
           continue;
@@ -2047,8 +2237,6 @@ namespace cryptonote
     // Simply throw away incremental info, too difficult to update
     m_added_txs_by_id.clear();
     m_added_txs_start_time = (time_t)0;
-    m_removed_txs_by_time.clear();
-    m_removed_txs_start_time = (time_t)0;
 
     MINFO("Validating txpool contents for v" << (unsigned)version);
 
@@ -2079,12 +2267,18 @@ namespace cryptonote
         cryptonote::transaction tx;
         cryptonote::blobdata blob;
         bool relayed, do_not_relay, double_spend_seen, pruned;
-        if (!take_tx(e.txid, tx, blob, weight, fee, relayed, do_not_relay, double_spend_seen, pruned))
+        bool fcmp_cached_unused; // re-validation re-runs checks; the cache verdict is not consumed
+        if (!take_tx(e.txid, tx, blob, weight, fee, relayed, do_not_relay, double_spend_seen, pruned, fcmp_cached_unused))
           MERROR("Failed to get tx " << e.txid << " from txpool for re-validation");
 
         cryptonote::tx_verification_context tvc{};
         relay_method tx_relay = e.meta.get_relay_method();
-        if (!add_tx(tx, e.txid, blob, e.meta.weight, tvc, tx_relay, relayed, version))
+        // take_tx removed the entry, so add_tx sees a fresh insert and will
+        // write whatever origin we pass. First-writer-wins means this is the
+        // write. Passing `invalid` would replace a recorded anonymity origin
+        // with "unknown" at every hard-fork re-validation.
+        if (!add_tx(tx, e.txid, blob, e.meta.weight, tvc, tx_relay, relayed, version,
+              e.meta.get_origin_zone()))
         {
           MINFO("Failed to re-validate tx " << e.txid << " for v" << (unsigned)version << ", dropped");
           continue;
@@ -2136,10 +2330,6 @@ namespace cryptonote
     }
     m_txs_by_fee_and_receive_time.emplace(std::pair<double, time_t>(fee, receive_time), txid);
 
-    // Don't check for "resurrected" txs in case of reorgs i.e. don't check in 'm_removed_txs_by_time'
-    // whether we have that txid there and if yes remove it; this results in possible duplicates
-    // where we return certain txids as deleted AND in the pool at the same time which requires
-    // clients to process deleted ones BEFORE processing pool txs
     if (m_added_txs_start_time == (time_t)0)
     {
       m_added_txs_start_time = now;
@@ -2166,48 +2356,10 @@ namespace cryptonote
     {
       MDEBUG("Removing tx " << txid << " from tx pool, but it was not found in the map of added txs");
     }
-    track_removed_tx(txid, sensitive);
   }
   //---------------------------------------------------------------------------------
-  void tx_memory_pool::track_removed_tx(const crypto::hash& txid, bool sensitive)
-  {
-    time_t now = time(NULL);
-    m_removed_txs_by_time.insert(std::make_pair(now, removed_tx_info{txid, sensitive}));
-    MDEBUG("Transaction removed from pool: txid " << txid << ", total entries in removed list now " << m_removed_txs_by_time.size());
-    if (m_removed_txs_start_time == (time_t)0)
-    {
-      m_removed_txs_start_time = now;
-    }
-
-    // Simple system to make sure the list of removed ids does not swell to an unmanageable size: Set
-    // an absolute size limit plus delete entries that are x minutes old (which is ok because clients
-    // will sync with sensible time intervalls and should not ask for incremental info e.g. 1 hour back)
-    const int MAX_REMOVED = 20000;
-    if (m_removed_txs_by_time.size() > MAX_REMOVED)
-    {
-      auto erase_it = m_removed_txs_by_time.begin();
-      std::advance(erase_it, MAX_REMOVED / 4 + 1);
-      m_removed_txs_by_time.erase(m_removed_txs_by_time.begin(), erase_it);
-      m_removed_txs_start_time = m_removed_txs_by_time.begin()->first;
-      MDEBUG("Erased old transactions from big removed list, leaving " << m_removed_txs_by_time.size());
-    }
-    else
-    {
-      time_t earliest = now - (30 * 60);  // 30 minutes
-      std::map<time_t, removed_tx_info>::iterator from, to;
-      from = m_removed_txs_by_time.begin();
-      to = m_removed_txs_by_time.lower_bound(earliest);
-      int distance = std::distance(from, to);
-      if (distance > 0)
-      {
-        m_removed_txs_by_time.erase(from, to);
-        m_removed_txs_start_time = earliest;
-        MDEBUG("Erased " << distance << " old transactions from removed list, leaving " << m_removed_txs_by_time.size());
-      }
-    }
-  }
   //---------------------------------------------------------------------------------
-  bool tx_memory_pool::init(size_t max_txpool_weight, bool mine_stem_txes)
+  bool tx_memory_pool::init(size_t max_txpool_weight, bool mine_relayable_txes)
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
@@ -2216,8 +2368,6 @@ namespace cryptonote
     m_txs_by_fee_and_receive_time.clear();
     m_added_txs_by_id.clear();
     m_added_txs_start_time = (time_t)0;
-    m_removed_txs_by_time.clear();
-    m_removed_txs_start_time = (time_t)0;
     m_spent_key_images.clear();
     m_txpool_weight = 0;
     std::vector<crypto::hash> remove;
@@ -2267,7 +2417,7 @@ namespace cryptonote
       lock.commit();
     }
 
-    m_mine_stem_txes = mine_stem_txes;
+    m_mine_relayable_txes = mine_relayable_txes;
     m_cookie = 0;
 
     // Ignore deserialization error

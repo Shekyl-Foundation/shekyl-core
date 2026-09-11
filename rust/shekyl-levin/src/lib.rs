@@ -10,44 +10,57 @@
 //!
 //! # Scope (framing only)
 //!
-//! This crate owns the bottom layer of the p2p stack: the 33-byte bucket
+//! This crate owns the bottom layer of the p2p stack: the 29-byte bucket
 //! header, the five message flows (notification / request / response /
 //! fragmented / dummy), noise-shaped fragmentation for the white-noise
 //! feature, the optional zstd `COMPRESSED` path, and an incremental
 //! stream reader ([`BucketReader`]) that demultiplexes socket bytes into
 //! complete messages.
 //!
-//! **Wiring status (2026-08-06):** the compression half is
-//! **production-live** — the C++ `epee::levin` compression path is a
-//! marshaling shim over the `shekyl_levin_*` FFI
-//! (`rust/shekyl-ffi/src/levin_ffi.rs`), and the Rust-pinned libzstd is the
-//! binary's single zstd (the system-libzstd link and `HAVE_ZSTD` gate are
-//! gone). The seam is whole-message on the way out
-//! ([`compress_message`], which `epee::levin::try_compress_message`
-//! forwards to) and frame-level on the way in ([`inflated_size`] +
-//! [`decompress_into`], which `epee::levin::decompress_payload` forwards
-//! to). No compression policy is left in C++.
+//! **Wiring status (2026-08-13):** the **entire emit side and the
+//! compression path are production-live** through the `shekyl_levin_*` FFI
+//! (`rust/shekyl-ffi/src/levin_ffi.rs`):
 //!
-//! The framing half — builders and [`BucketReader`] — stays inert until the
-//! LV-3 cutover; the C++ path in `contrib/epee` remains the live framing
-//! implementation.
+//! - compression (2026-08-06): whole-message [`compress_message`] out,
+//!   frame-level [`inflated_size`] + [`decompress_into`] in; the
+//!   Rust-pinned libzstd is the binary's single zstd and no compression
+//!   policy is left in C++;
+//! - white-noise emit (2026-08-13): [`noise_notify`] and
+//!   [`fragmented_notify`] back `epee::levin::make_noise_notify` /
+//!   `make_fragmented_notify`, so the fragment-padding algorithm — the
+//!   privacy-load-bearing emit logic — has exactly one implementation,
+//!   and the byte-exact `make_fragment.*` gtests exercise this crate live.
+//!
+//! Still inert until LV-3: the read side ([`BucketReader`]) and the plain
+//! notification/request/response builders (the C++ `message_writer` keeps
+//! the hot finalize path). The **ingress policy** (PWD-B3 / PWD-B3a /
+//! PWD-B4) is live on the C++ `handle_recv` path via
+//! `shekyl_levin_ingress_admit` even while [`BucketReader`] itself is unwired
+//! — the command table is not daemon-only policy any more.
 //!
 //! Deliberate **non-goals** of this crate:
 //!
-//! - the epee `portable_storage` payload codec and the p2p/cryptonote
-//!   command schemas (handshake bodies, peerlist entries, …) — payloads
-//!   here are opaque bytes;
-//! - connection management, peerlists, timeouts, and invoke/response
-//!   correlation (the `async_protocol_handler` layer).
+//! - the epee `portable_storage` **codec** — that is
+//!   `shekyl-portable-storage` (LV-2a). This crate owns the typed Levin
+//!   maps on top of it (LV-2b): handshake / timed-sync /
+//!   support-flags (1001 / 1002 / 1007), `network_address`, and
+//!   notifies 2002–2004 / 2006–2010. Cryptonote blobs stay opaque bytes
+//!   (`shekyl-wire`); RPC maps stay out. Live `shekyld` dual-stack is
+//!   the `#[ignore]` harness `tests/dual_stack.rs` (`SHEKYLD_BIN`; no
+//!   daemon in default crate tests).
+//! - connection management, timeouts, and invoke/response correlation
+//!   (the `async_protocol_handler` layer).
 //!
 //! # Parity oracle
 //!
-//! The byte-level oracle is the C++ implementation:
-//! `epee::levin::{make_header, make_noise_notify, make_fragmented_notify}`
-//! (`contrib/epee/src/levin_base.cpp`) and the read-side state machine in
-//! `contrib/epee/include/net/levin_protocol_handler_async.h`
-//! (`handle_recv`). The tests mirror the `tests/unit_tests/levin.cpp`
-//! gtest expectations byte for byte, and a CI gate
+//! The remaining C++-side oracles are `epee::levin::make_header` (the hot
+//! `message_writer::finalize` path, still C++) and the read-side state
+//! machine in `contrib/epee/include/net/levin_protocol_handler_async.h`
+//! (`handle_recv`). `make_noise_notify` / `make_fragmented_notify` are
+//! forwarding shims over this crate and are no longer an independent
+//! implementation: the byte-level oracle for those emitters is the gtest
+//! *expectations* in `tests/unit_tests/levin.cpp` (`make_noise.*` /
+//! `make_fragment.*`), which now execute through the FFI. A CI gate
 //! (`.github/workflows/levin-constant-parity.yml`) fails the build if any
 //! wire constant here stops matching its C++ definition.
 //!
@@ -60,7 +73,8 @@
 //! Every entry is *stricter* than the oracle — none accepts something the
 //! C++ rejects — and each is unreachable for a conforming sender today.
 //! Two entries (4 and 6) stopped being divergences at the 2026-08-06
-//! compression cut and are kept as the record of how they closed; that is
+//! compression cut and a third (9) closed at the 2026-09-09 PWD-B3/B3a/B4
+//! ingress cut; they are kept as the record of how they closed. That is
 //! deliberate, because "the difference went away" is exactly the kind of
 //! claim that rots into folklore once the entry is deleted. Adding a
 //! blanket "no conforming sender" to this list without checking each entry
@@ -102,9 +116,10 @@
 //!    from keeping a malformed peer alive.
 //!
 //! Emit side. [`BucketHead::write`], [`notify`] / [`invoke`] / [`response`],
-//! [`noise_notify`] and [`fragmented_notify`] are byte-identical to the C++,
-//! pinned assertion-for-assertion by `tests/oracle_kats.rs`. Two caveats,
-//! neither of which those KATs cover:
+//! [`noise_notify`] and [`fragmented_notify`] are pinned assertion-for-
+//! assertion by `tests/oracle_kats.rs` and, for the wired emitters, by the
+//! `make_noise.*` / `make_fragment.*` gtests which now execute through the
+//! FFI. Three caveats, none of which those KATs cover:
 //!
 //! 6. **`try_compress_message` refuses malformed input** — *resolved
 //!    2026-08-06; no longer a divergence.* A buffer whose header signature
@@ -130,12 +145,33 @@
 //!    breaking on a routine dependency bump. What is guaranteed is what
 //!    actually matters on the wire: the frame format is stable, so any
 //!    zstd decodes any other's frames.
+//! 8. **emit refuses an oversize bucket** — [`noise_notify`] /
+//!    [`fragmented_notify`] reject when the bucket they would write has
+//!    `m_cb` above [`DEFAULT_MAX_PACKET_SIZE`] (the payload limit the
+//!    reader already enforces). Detected before any allocation. The
+//!    deleted C++ allocated first and left the peer to drop it. The bound
+//!    is on each on-wire body's `m_cb`, not on the inner payload that
+//!    fragmentation exists to split. Unreachable for a conforming sender
+//!    (production noise is 3 KiB).
+//! 9. **unknown flags / unknown dispatch commands rejected at ingress** —
+//!    *resolved 2026-09-09; no longer a divergence.* Both sides apply
+//!    [`ingress_payload_cap`]: unknown flag bits are fatal on every bucket;
+//!    a Q/S-flagged command that is not a [`DefinedCommand`] is fatal; a
+//!    noise/fragment bucket (neither Q nor S) is bounded only by the packet
+//!    limit so cover traffic with command 0 is not an unknown command. The
+//!    live C++ path is `handle_recv` → `get_max_bytes(command, flags)` →
+//!    `shekyl_levin_ingress_admit`. The codec still round-trips unknown bits
+//!    (PWC-A6); ingress is what refuses to process them. [`BucketReader`]
+//!    remains unwired until LV-3; this entry is about the *policy*, which
+//!    is shared.
 
 mod compress;
 mod error;
 mod fragment;
 mod header;
+mod ingress;
 mod message;
+mod payload;
 mod reader;
 
 pub use compress::{
@@ -149,5 +185,18 @@ pub use header::{
     BucketHead, Flags, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE,
     LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
 };
+pub use ingress::{ingress_payload_cap, DefinedCommand, FLAGS_DEFINED};
 pub use message::{invoke, notify, response};
+pub use payload::Error as PayloadError;
+pub use payload::{
+    BasicNodeData, BlockCompleteEntry, CoreSyncData, GetTxpoolComplement, HandshakeRequest,
+    HandshakeResponse, NetworkAddress, NewCompactBlock, NewTransactions, PeerlistEntry,
+    PortableMap, RequestChain, RequestCompactMissingTx, RequestGetObjects, ResponseChainEntry,
+    ResponseGetObjects, SupportFlags, SupportFlagsRequest, SupportFlagsResponse, TimedSyncRequest,
+    TimedSyncResponse, TxBlobEntry, ADDR_I2P, ADDR_IPV4, ADDR_IPV6, ADDR_TOR,
+    ATTESTATION_WITNESS_MAX_BYTES, COMMAND_HANDSHAKE, COMMAND_REQUEST_SUPPORT_FLAGS,
+    COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK,
+    NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_CHAIN, NOTIFY_REQUEST_COMPACT_MISSING_TX,
+    NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_RESPONSE_CHAIN_ENTRY, NOTIFY_RESPONSE_GET_OBJECTS,
+};
 pub use reader::{BucketReader, Received};

@@ -20,8 +20,10 @@ pub mod digest;
 pub mod emission;
 pub mod emission_share;
 pub mod escalation;
+pub mod fee;
 pub mod params;
 pub mod release;
+pub mod volume;
 
 pub use activity::{ActivityInvariantViolation, ActivityMetric};
 pub use burn::{
@@ -30,14 +32,22 @@ pub use burn::{
 };
 pub use digest::{params_digest, DIGEST_FORMAT_VERSION};
 pub use emission::{
-    base_block_reward, base_emission_at, projected_already_generated, EmissionError,
+    advance_already_generated, base_block_reward, base_emission_at, block_reward_with_penalty,
+    block_weight_limit, effective_emission, emission_speed_factor, paid_block_reward,
+    projected_already_generated, tail_subsidy_per_block, EmissionError,
 };
 pub use emission_share::{calc_effective_emission_share, split_block_emission};
 pub use escalation::{
     staker_pool_share_at, EscalationParams, EscalationShapeError, FrozenSegmentCount, ScaledShare,
 };
+pub use fee::{
+    checked_corrected_fee_ladder, corrected_fee_ladder, fee_correction_quantized, hysteresis_fold,
+    hysteresis_settled, hysteresis_step, quantize_pow2_ceil, round_money_up_2, FeeLadder,
+    EMISSION_CLAIM_FEE_FLOOR,
+};
 pub use params::{
     calc_stake_ratio, EconomicParams, EconomicParamsError, BLOCKS_PER_YEAR, CALIBRATION_GENERATION,
-    MONEY_SUPPLY, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    EMISSION_CURVE_ASYMPTOTE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 pub use release::calc_release_multiplier;
+pub use volume::TxVolume;

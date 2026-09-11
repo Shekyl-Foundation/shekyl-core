@@ -61,17 +61,17 @@ namespace
   TEST_F(block_reward_and_already_generated_coins, correctly_steps_from_2_to_1)
   {
     const uint64_t tail_per_block = FINAL_SUBSIDY_PER_MINUTE * (SHEKYL_DAA_TARGET_SECONDS / 60);
-    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY - ((2 << 20) + 1), tail_per_block);
-    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY -  (2 << 20)     , tail_per_block);
-    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY - ((2 << 20) - 1), tail_per_block);
+    TEST_ALREADY_GENERATED_COINS(SHEKYL_EMISSION_CURVE_ASYMPTOTE - ((2 << 20) + 1), tail_per_block);
+    TEST_ALREADY_GENERATED_COINS(SHEKYL_EMISSION_CURVE_ASYMPTOTE -  (2 << 20)     , tail_per_block);
+    TEST_ALREADY_GENERATED_COINS(SHEKYL_EMISSION_CURVE_ASYMPTOTE - ((2 << 20) - 1), tail_per_block);
   }
 
   TEST_F(block_reward_and_already_generated_coins, handles_max)
   {
     const uint64_t tail_per_block = FINAL_SUBSIDY_PER_MINUTE * (SHEKYL_DAA_TARGET_SECONDS / 60);
-    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY - ((1 << 20) + 1), tail_per_block);
-    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY -  (1 << 20)     , tail_per_block);
-    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY - ((1 << 20) - 1), tail_per_block);
+    TEST_ALREADY_GENERATED_COINS(SHEKYL_EMISSION_CURVE_ASYMPTOTE - ((1 << 20) + 1), tail_per_block);
+    TEST_ALREADY_GENERATED_COINS(SHEKYL_EMISSION_CURVE_ASYMPTOTE -  (1 << 20)     , tail_per_block);
+    TEST_ALREADY_GENERATED_COINS(SHEKYL_EMISSION_CURVE_ASYMPTOTE - ((1 << 20) - 1), tail_per_block);
   }
 
   //--------------------------------------------------------------------------------------------------------------------

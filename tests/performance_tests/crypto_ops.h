@@ -31,7 +31,7 @@
 #pragma once
 
 #include "crypto/crypto.h"
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 
 enum test_op
 {
@@ -72,12 +72,12 @@ public:
 
   bool init()
   {
-    scalar0 = rct::skGen();
-    scalar1 = rct::skGen();
-    scalar2 = rct::skGen();
-    point0 = rct::scalarmultBase(rct::skGen());
-    point1 = rct::scalarmultBase(rct::skGen());
-    point2 = rct::scalarmultBase(rct::skGen());
+    scalar0 = ct::skGen();
+    scalar1 = ct::skGen();
+    scalar2 = ct::skGen();
+    point0 = ct::scalarmultBase(ct::skGen());
+    point1 = ct::scalarmultBase(ct::skGen());
+    point2 = ct::scalarmultBase(ct::skGen());
     if (ge_frombytes_vartime(&p3_0, point0.bytes) != 0)
       return false;
     if (ge_frombytes_vartime(&p3_1, point1.bytes) != 0)
@@ -85,15 +85,15 @@ public:
     if (ge_frombytes_vartime(&p3_2, point2.bytes) != 0)
       return false;
     ge_p3_to_cached(&cached, &p3_0);
-    rct::precomp(precomp0, point0);
-    rct::precomp(precomp1, point1);
-    rct::precomp(precomp2, point2);
+    ct::precomp(precomp0, point0);
+    ct::precomp(precomp1, point1);
+    ct::precomp(precomp2, point2);
     return true;
   }
 
   bool test()
   {
-    rct::key key;
+    ct::key key;
     ge_cached tmp_cached;
     ge_p1p1 tmp_p1p1;
     ge_p2 tmp_p2;
@@ -110,34 +110,34 @@ public:
         break;
       }
       case op_ge_add_raw: ge_add(&tmp_p1p1, &p3_1, &cached); break;
-      case op_addKeys: rct::addKeys(key, point0, point1); break;
-      case op_scalarmultBase: rct::scalarmultBase(scalar0); break;
-      case op_scalarmultKey: rct::scalarmultKey(point0, scalar0); break;
-      case op_scalarmultH: rct::scalarmultH(scalar0); break;
-      case op_scalarmult8: rct::scalarmult8(point0); break;
-      case op_scalarmult8_p3: rct::scalarmult8(p3_0,point0); break;
+      case op_addKeys: ct::addKeys(key, point0, point1); break;
+      case op_scalarmultBase: ct::scalarmultBase(scalar0); break;
+      case op_scalarmultKey: ct::scalarmultKey(point0, scalar0); break;
+      case op_scalarmultH: ct::scalarmultH(scalar0); break;
+      case op_scalarmult8: ct::scalarmult8(point0); break;
+      case op_scalarmult8_p3: ct::scalarmult8(p3_0,point0); break;
       case op_ge_dsm_precomp: ge_dsm_precomp(dsmp, &p3_0); break;
       case op_ge_double_scalarmult_base_vartime: ge_double_scalarmult_base_vartime(&tmp_p2, scalar0.bytes, &p3_0, scalar1.bytes); break;
       case op_ge_triple_scalarmult_base_vartime: ge_triple_scalarmult_base_vartime(&tmp_p2, scalar0.bytes, scalar1.bytes, precomp1, scalar2.bytes, precomp2); break;
       case op_ge_double_scalarmult_precomp_vartime: ge_double_scalarmult_precomp_vartime(&tmp_p2, scalar0.bytes, &p3_0, scalar1.bytes, precomp0); break;
       case op_ge_triple_scalarmult_precomp_vartime: ge_triple_scalarmult_precomp_vartime(&tmp_p2, scalar0.bytes, precomp0, scalar1.bytes, precomp1, scalar2.bytes, precomp2); break;
       case op_ge_double_scalarmult_precomp_vartime2: ge_double_scalarmult_precomp_vartime2(&tmp_p2, scalar0.bytes, precomp0, scalar1.bytes, precomp1); break;
-      case op_addKeys2: rct::addKeys2(key, scalar0, scalar1, point0); break;
-      case op_addKeys3: rct::addKeys3(key, scalar0, point0, scalar1, precomp1); break;
-      case op_addKeys3_2: rct::addKeys3(key, scalar0, precomp0, scalar1, precomp1); break;
-      case op_addKeys_aGbBcC: rct::addKeys_aGbBcC(key, scalar0, scalar1, precomp1, scalar2, precomp2); break;
-      case op_addKeys_aAbBcC: rct::addKeys_aAbBcC(key, scalar0, precomp0, scalar1, precomp1, scalar2, precomp2); break;
-      case op_isInMainSubgroup: rct::isInMainSubgroup(point0); break;
-      case op_zeroCommitUncached: rct::zeroCommit(9001); break;
-      case op_zeroCommitCached: rct::zeroCommit(9000); break;
+      case op_addKeys2: ct::addKeys2(key, scalar0, scalar1, point0); break;
+      case op_addKeys3: ct::addKeys3(key, scalar0, point0, scalar1, precomp1); break;
+      case op_addKeys3_2: ct::addKeys3(key, scalar0, precomp0, scalar1, precomp1); break;
+      case op_addKeys_aGbBcC: ct::addKeys_aGbBcC(key, scalar0, scalar1, precomp1, scalar2, precomp2); break;
+      case op_addKeys_aAbBcC: ct::addKeys_aAbBcC(key, scalar0, precomp0, scalar1, precomp1, scalar2, precomp2); break;
+      case op_isInMainSubgroup: ct::isInMainSubgroup(point0); break;
+      case op_zeroCommitUncached: ct::zeroCommit(9001); break;
+      case op_zeroCommitCached: ct::zeroCommit(9000); break;
       default: return false;
     }
     return true;
   }
 
 private:
-  rct::key scalar0, scalar1, scalar2;
-  rct::key point0, point1, point2;
+  ct::key scalar0, scalar1, scalar2;
+  ct::key point0, point1, point2;
   ge_p3 p3_0, p3_1, p3_2;
   ge_cached cached;
   ge_dsmp precomp0, precomp1, precomp2;

@@ -32,11 +32,20 @@
 //! The residual — time from *now* until a stream's next emission — is the
 //! only quantity an observer holds at the moment a blackout ends.
 //!
-//! - Under the **bounded** family the daemon ships (`10 s + U[0, 5 s]`), the
-//!   residual is a function of elapsed-since-last: after 10 s of silence an
-//!   emission is certain within 5 s. Each stream therefore carries a *phase*,
-//!   and phase survives a short blackout. That is a per-stream feature to
-//!   match on.
+//! - Under the **bounded** family the daemon ships
+//!   (`NOISE_MIN_DELAY_MS + U[0, NOISE_DELAY_JITTER_MS]`, today
+//!   `3.333 s + U[0, 3.334 s]`), the residual is a function of
+//!   elapsed-since-last: once the minimum has passed, an emission is certain
+//!   within the jitter width. Each stream therefore carries a *phase*, and
+//!   phase survives a short blackout. That is a per-stream feature to match
+//!   on.
+//!
+//!   Written against the constants rather than their values because this
+//!   instrument grades the **shipped** law: a cadence change that left this
+//!   paragraph behind would leave the instrument describing a law it is no
+//!   longer measuring, which is the one failure a conformance harness cannot
+//!   afford. (It did, once — the 2026-08-28 cadence change, caught in
+//!   review.)
 //! - Under a **memoryless** family the residual is independent of elapsed
 //!   time by definition. There is no phase, so there is nothing that persists
 //!   across the blackout to match on.
@@ -107,15 +116,15 @@ fn log_density_k(shape: CadenceShape, delta_ms: f64, k: u32, mean_ms: f64) -> f6
             -(delta_ms - kf * mean_ms).abs()
         }
         CadenceShape::BoundedUniform => {
-            let lo = f64::from(crate::params::inherited::NOISE_MIN_DELAY_SECS) * 1_000.0;
-            let hi = lo + f64::from(crate::params::inherited::NOISE_DELAY_JITTER_SECS) * 1_000.0;
+            let lo = f64::from(crate::params::carrier::NOISE_MIN_DELAY_MS);
+            let hi = lo + f64::from(crate::params::carrier::NOISE_DELAY_JITTER_MS);
             // Outside the k-fold support the component contributes nothing —
             // that hard cutoff is most of the discriminating power at small k.
             if delta_ms < kf * lo || delta_ms > kf * hi {
                 return f64::NEG_INFINITY;
             }
             // `hi > lo` is guaranteed by the non-zero-jitter invariant asserted
-            // at `NOISE_DELAY_JITTER_SECS`, so `sd > 0` and neither the
+            // at `NOISE_DELAY_JITTER_MS`, so `sd > 0` and neither the
             // division nor `ln` below can degenerate. That invariant is
             // enforced where the constant lives rather than defended here:
             // at zero jitter this arm would not merely divide by zero, it
@@ -182,7 +191,8 @@ pub struct LinkageSummary {
 ///
 /// **The memoryless arm is shifted by one grid step.** An unshifted geometric
 /// has a ~2 % atom at zero, which would let that arm emit twice at the same
-/// instant — something the bounded (`min 10 s`) and metronome arms cannot do.
+/// instant — something the bounded arm (whose gaps start at
+/// `NOISE_MIN_DELAY_MS`) and the metronome arm cannot do.
 /// That is an asymmetry *between the arms*, not a property of memorylessness,
 /// and it would show up as a difference the shape question would then have to
 /// explain. The table is built for `mean − 1` so the shift leaves the mean
@@ -198,7 +208,7 @@ fn interval<R: RelayRng + ?Sized>(
         CadenceShape::Metronome => mean_ms,
         // Production path: the instrument must not re-derive the law it is
         // grading, or it measures its own copy (the shim-oracle failure).
-        CadenceShape::BoundedUniform => NoiseCadence::inherited().next_send(0, rng),
+        CadenceShape::BoundedUniform => NoiseCadence::shipped().next_send(0, rng),
         CadenceShape::Memoryless => {
             let t = table.expect("memoryless arm requires its table");
             (t.draw(rng) + 1) * MEMORYLESS_GRID_MS
@@ -313,14 +323,36 @@ pub fn simulate_cadence_linkage<R: RelayRng + ?Sized>(
 ) -> LinkageSummary {
     assert!(streams >= 2, "matching needs at least two streams");
     assert!(trials > 0, "trials must be non-zero");
-    let mean_ms = u64::from(crate::params::inherited::NOISE_MIN_DELAY_SECS) * 1_000
-        + u64::from(crate::params::inherited::NOISE_DELAY_JITTER_SECS) * 1_000 / 2;
+    let mean_ms = u64::from(crate::params::carrier::MEAN_CADENCE_MS);
 
-    // How many emissions the blackout could plausibly have hidden. Generous:
-    // an observer that truncated too early would be handicapped by the
-    // instrument rather than by the law.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let k_max = ((blackout_ms / mean_ms) as u32 + 8).max(4);
+    // How many emissions the blackout could plausibly have hidden.
+    //
+    // DERIVED FROM THE TAIL, NOT A CONSTANT MARGIN — and the 2026-08-28
+    // cadence change is what exposed why. The hidden count has mean
+    // `blackout / mean` and spread growing as its square root, so a fixed
+    // `+ 8` covered 2.3 sd at the 12.5 s mean and only **1.5 sd** at 5 s:
+    // ~7% of the count mass sat above the cutoff at the 150 s probe.
+    //
+    // Truncating there is not a neutral approximation. The memoryless
+    // likelihood is flat *because* every Erlang component is summed; dropping
+    // the tail leaves a delta-dependent remainder, which manufactures exactly
+    // the signal this arm exists to show is absent. A cutoff that scales with
+    // the mean but not its spread grades the instrument rather than the law —
+    // §56.5's own lesson, arriving through the observer's other side.
+    //
+    // `lambda + 8*sqrt(lambda)` is an 8 sd bound, whose tail is far below the
+    // `1/trials` resolution of any run this instrument does. The bounded and
+    // metronome arms self-truncate through their support check, so the extra
+    // components cost only time there.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    let k_max = {
+        let lambda = blackout_ms as f64 / mean_ms as f64;
+        ((lambda + 8.0 * lambda.sqrt()).ceil() as u32).max(4)
+    };
 
     // Built once, not per draw.
     let table = (shape == CadenceShape::Memoryless).then(|| {

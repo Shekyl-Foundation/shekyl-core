@@ -1,0 +1,34 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# A clearnet-only fleet node: shekyld, public zone, and NO tor.
+#
+# Separate from `skl-node@` because the two are genuinely different services,
+# not one service with an option. `skl-node@` declares `Requires=skl-tor@%i`,
+# which is what makes Q12-R8's ordering structural rather than a convention in
+# a start script -- and that dependency is exactly wrong here: the clearnet
+# detector set (Q12-R3) must have no tor at all. It is the instrument that
+# would notice anonymity traffic failing to reach the public zone, and giving
+# it an anonymity zone would destroy what it measures.
+#
+# `gen_host_configs.sh` emits no `tor-%i.torrc` for the clearnet role, so
+# starting one of these through `skl-node@` would activate a tor unit whose
+# config does not exist and the node would never start.
+#
+# Like `skl-node@`, deliberately no [Install]: the fleet starts these
+# explicitly, after the reachability gate has passed for the anonymity set.
+
+[Unit]
+Description=Shekyl stagenet fleet node %i (clearnet detector, no tor)
+PartOf=skl-fleet.target
+
+[Service]
+Type=simple
+User=shekyl
+Group=shekyl
+ExecStart=/usr/local/bin/shekyld --config-file /etc/shekyl-fleet/node-%i.conf --non-interactive
+Restart=on-failure
+RestartSec=10
+StateDirectory=shekyl-fleet/%i
+StateDirectoryMode=0750
+LogsDirectory=shekyl-fleet
+LogsDirectoryMode=0755

@@ -37,13 +37,15 @@
 //!
 //! - early connection-fatal signature check as soon as 8 bytes arrive;
 //! - per-header payload-length check against
-//!   `min(packet limit, per-command limit)`: the packet limit is 256 KiB
-//!   before the handshake and 100 MB after (the caller raises it with
-//!   [`BucketReader::complete_handshake`], as the C++ does at its three
-//!   handshake sites); the per-command half mirrors the C++
-//!   `connection_context::get_max_bytes` hook and is installed with
-//!   [`BucketReader::set_max_bytes_for_command`] (the daemon's command
-//!   table is cutover-layer policy, not framing);
+//!   `min(packet limit, per-command cap)` after the PWD-B3a flag-class
+//!   discriminator ([`crate::ingress_payload_cap`]): unknown flag bits are
+//!   rejected; a Q/S-flagged bucket whose command is not a
+//!   [`crate::DefinedCommand`] is rejected; a noise/fragment bucket (neither
+//!   Q nor S) is bounded only by the packet limit, so cover traffic with
+//!   command 0 is not treated as an unknown command. The packet limit is
+//!   256 KiB before the handshake and 100 MB after (the caller raises it
+//!   with [`BucketReader::complete_handshake`], as the C++ does at its
+//!   three handshake sites);
 //! - total buffered-bytes cap (cache + fragment buffer) against that limit;
 //! - noise/fragment class = header with **neither** `Q` nor `S` set: `B|E`
 //!   is a dummy (discarded), `B` restarts reassembly, `E` completes it and
@@ -67,6 +69,7 @@ use crate::error::Error;
 use crate::header::{
     signature_matches, BucketHead, Flags, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE, PROTOCOL_VERSION_1,
 };
+use crate::ingress;
 
 /// A complete message delivered by [`BucketReader::next_message`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,15 +92,13 @@ pub enum Received {
     Response {
         /// Command identifier (matches the request).
         command: u32,
-        /// Command-specific return code.
-        return_code: i32,
         /// Opaque payload bytes.
         payload: Vec<u8>,
     },
 }
 
 enum State {
-    /// Waiting for a complete 33-byte header.
+    /// Waiting for a complete 29-byte header.
     Head,
     /// Header parsed; waiting for `payload_len` bytes of body.
     Body(BucketHead),
@@ -114,18 +115,11 @@ pub struct BucketReader {
     fragment: Vec<u8>,
     state: State,
     max_packet_size: u64,
-    max_bytes_for_command: fn(u32) -> u64,
     /// Set by the first [`Error`]. Every framing error is connection-fatal in
     /// the oracle, where returning `false` *is* the disconnect; here the
     /// guard and the consequence are separate statements, so the reader
     /// latches instead of trusting the caller to close.
     failed: bool,
-}
-
-/// Default per-command limit: no per-command cap (the C++
-/// `get_max_bytes` returns `size_t` max for unknown commands).
-fn unlimited(_command: u32) -> u64 {
-    u64::MAX
 }
 
 impl Default for BucketReader {
@@ -145,7 +139,6 @@ impl BucketReader {
             fragment: Vec::new(),
             state: State::Head,
             max_packet_size: INITIAL_MAX_PACKET_SIZE,
-            max_bytes_for_command: unlimited,
             failed: false,
         }
     }
@@ -169,19 +162,11 @@ impl BucketReader {
         self.max_packet_size = post_handshake_limit;
     }
 
-    /// Install a per-command payload-size limit, mirroring the C++
-    /// `connection_context::get_max_bytes(command)` hook: a header's
-    /// `length` is checked against `min(packet limit, hook(command))`.
-    /// The command table itself is daemon policy and lives with the future
-    /// cutover layer; the default hook imposes no per-command cap.
-    pub fn set_max_bytes_for_command(&mut self, hook: fn(u32) -> u64) {
-        self.max_bytes_for_command = hook;
-    }
-
-    /// The limit in force for one command's payload.
-    fn limit_for(&self, command: u32) -> u64 {
-        self.max_packet_size
-            .min((self.max_bytes_for_command)(command))
+    /// The limit in force for one parsed header: packet limit and the
+    /// PWD-B3 command cap (or unlimited for the noise/fragment class).
+    fn limit_for(&self, command: u32, flags: Flags) -> Result<u64, Error> {
+        let admitted = ingress::ingress_payload_cap(command, flags)?;
+        Ok(self.max_packet_size.min(admitted))
     }
 
     /// Bytes still waiting to be parsed.
@@ -312,7 +297,7 @@ impl BucketReader {
                         .try_into()
                         .expect("static header slice");
                     let head = BucketHead::read(header_bytes)?;
-                    let limit = self.limit_for(head.command);
+                    let limit = self.limit_for(head.command, head.flags)?;
                     if head.payload_len > limit {
                         return Err(Error::OversizePacket {
                             claimed: head.payload_len,
@@ -371,7 +356,7 @@ impl BucketReader {
         // the same limit the header was checked against, so the delivered
         // payload can never exceed the packet limit this reader documents.
         let payload = if head.flags.contains(Flags::COMPRESSED) {
-            let inflated = decompress_payload(&payload, self.limit_for(head.command))?;
+            let inflated = decompress_payload(&payload, self.limit_for(head.command, head.flags)?)?;
             head.flags = head.flags.difference(Flags::COMPRESSED);
             inflated
         } else {
@@ -422,7 +407,7 @@ impl BucketReader {
             .expect("static header slice");
         // Divergence "inner-signature verify" (C++ memcpys unchecked).
         let inner = BucketHead::read(header_bytes)?;
-        let limit = self.limit_for(inner.command);
+        let limit = self.limit_for(inner.command, inner.flags)?;
         if inner.payload_len > limit {
             return Err(Error::OversizePacket {
                 claimed: inner.payload_len,
@@ -459,7 +444,6 @@ fn classify(head: &BucketHead, payload: Vec<u8>) -> Received {
     if head.protocol_version == PROTOCOL_VERSION_1 && head.flags.contains(Flags::RESPONSE) {
         Received::Response {
             command: head.command,
-            return_code: head.return_code,
             payload,
         }
     } else if head.expects_response() {

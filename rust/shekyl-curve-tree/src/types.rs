@@ -36,7 +36,7 @@ pub enum TargetKind {
 pub struct OutputIdentity {
     /// Compressed Ed25519 output public key (`O`).
     pub output_key: [u8; 32],
-    /// Amount commitment mask (`C = rct_signatures.outPk[i].mask`).
+    /// Amount commitment mask (`C = ct_signatures.outPk[i].mask`).
     /// `None` when the output has no commitment slot
     /// (`i >= outPk.size()`), which makes it leaf-ineligible (the C++
     /// skip (b)).
@@ -205,7 +205,7 @@ pub struct ChunkLeaf {
 /// `shekyl_tx_builder::types::TreeContext`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TreeContext {
-    /// Hash of the reference block (echoed into `rctSig.referenceBlock`).
+    /// Hash of the reference block (echoed into `CtSig.referenceBlock`).
     pub reference_block: [u8; 32],
     /// Header-committed curve-tree root at the reference height.
     pub tree_root: [u8; 32],
@@ -265,7 +265,7 @@ pub struct ReferenceBlock {
     pub curve_tree_root: [u8; 32],
     /// Hash of the block at [`Self::height`], echoed into
     /// [`TreeContext::reference_block`] for the eventual
-    /// `rctSig.referenceBlock`. A consensus value the caller holds from the
+    /// `CtSig.referenceBlock`. A consensus value the caller holds from the
     /// synced header alongside [`Self::curve_tree_root`].
     pub block_hash: [u8; 32],
 }

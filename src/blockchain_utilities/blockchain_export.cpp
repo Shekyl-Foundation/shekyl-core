@@ -28,7 +28,6 @@
 
 #include <filesystem>
 #include "bootstrap_file.h"
-#include "blocksdat_file.h"
 #include "common/command_line.h"
 #include "cryptonote_core/tx_pool.h"
 #include "cryptonote_core/cryptonote_core.h"
@@ -50,7 +49,6 @@ int main(int argc, char* argv[])
   uint32_t log_level = 0;
   uint64_t block_start = 0;
   uint64_t block_stop = 0;
-  bool blocks_dat = false;
 
   tools::on_startup();
 
@@ -62,7 +60,6 @@ int main(int argc, char* argv[])
   const command_line::arg_descriptor<std::string> arg_log_level  = {"log-level",  "0-4 or categories", ""};
   const command_line::arg_descriptor<uint64_t> arg_block_start = {"block-start", "Start at block number", block_start};
   const command_line::arg_descriptor<uint64_t> arg_block_stop = {"block-stop", "Stop at block number", block_stop};
-  const command_line::arg_descriptor<bool> arg_blocks_dat = {"blocksdat", "Output in blocks.dat format", blocks_dat};
 
 
   command_line::add_arg(desc_cmd_sett, cryptonote::arg_data_dir);
@@ -72,7 +69,6 @@ int main(int argc, char* argv[])
   command_line::add_arg(desc_cmd_sett, arg_log_level);
   command_line::add_arg(desc_cmd_sett, arg_block_start);
   command_line::add_arg(desc_cmd_sett, arg_block_stop);
-  command_line::add_arg(desc_cmd_sett, arg_blocks_dat);
 
   command_line::add_arg(desc_cmd_only, command_line::arg_help);
 
@@ -113,7 +109,6 @@ int main(int argc, char* argv[])
     std::cerr << "Can't specify more than one of --testnet and --stagenet" << std::endl;
     return 1;
   }
-  bool opt_blocks_dat = command_line::get_arg(vm, arg_blocks_dat);
 
   std::string m_config_folder;
 
@@ -165,7 +160,7 @@ int main(int argc, char* argv[])
   }
   r = core_storage->init(db, opt_testnet ? cryptonote::TESTNET : opt_stagenet ? cryptonote::STAGENET : cryptonote::MAINNET);
 
-  if (core_storage->get_blockchain_pruning_seed() && !opt_blocks_dat)
+  if (core_storage->get_blockchain_pruning_seed())
   {
     LOG_PRINT_L0("Blockchain is pruned, cannot export");
     return 1;
@@ -175,16 +170,8 @@ int main(int argc, char* argv[])
   LOG_PRINT_L0("Source blockchain storage initialized OK");
   LOG_PRINT_L0("Exporting blockchain raw data...");
 
-  if (opt_blocks_dat)
-  {
-    BlocksdatFile blocksdat;
-    r = blocksdat.store_blockchain_raw(core_storage, NULL, output_file_path, block_stop);
-  }
-  else
-  {
-    BootstrapFile bootstrap;
-    r = bootstrap.store_blockchain_raw(core_storage, NULL, output_file_path, block_start, block_stop);
-  }
+  BootstrapFile bootstrap;
+  r = bootstrap.store_blockchain_raw(core_storage, NULL, output_file_path, block_start, block_stop);
   CHECK_AND_ASSERT_MES(r, 1, "Failed to export blockchain raw data");
   LOG_PRINT_L0("Blockchain raw data exported OK");
   return 0;

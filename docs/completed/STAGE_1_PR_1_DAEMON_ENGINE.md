@@ -67,7 +67,7 @@ The trait spec ([`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDA
 
 ### Stage 0 internal phasing
 
-**Phase 0a — design doc (Stage 0 PR-1).** Apply the same discipline the spec used: multi-framing gap-check before drafting, rejection-with-reasoning for harness scope decisions. Location pinned: [`docs/design/STAGE_0_HARNESS.md`](../design/STAGE_0_HARNESS.md) (new file). If `docs/design/` does not yet exist, this PR creates it; future spec-implementation governance docs (Phase 2b `StakeEngine` design notes, etc.) inherit the location convention. The doc names decisions on:
+**Phase 0a — design doc (Stage 0 PR-1).** Apply the same discipline the spec used: multi-framing gap-check before drafting, rejection-with-reasoning for harness scope decisions. Location pinned: [`docs/design/STAGE_0_HARNESS.md`](STAGE_0_HARNESS.md) (new file). If `docs/design/` does not yet exist, this PR creates it; future spec-implementation governance docs (Phase 2b `StakeEngine` design notes, etc.) inherit the location convention. The doc names decisions on:
 
 1. **Benchmark selection.** The spec lists §3.3.1's hot paths at category-level ("the hot read paths"); the harness pins the specific bench list. Boundary: spec stays at category-level pinning; harness's specific path list is a harness-document concern. If harness work surfaces "we need to bench these specific six methods, not the four §3.3.1 categorically lists," that's a harness refinement — *not* a spec refinement that requires Round 6.
 2. **Baseline statistics.** Median? Mean? p99? Distribution? Pick one or several; commit to which numbers `PERFORMANCE_BASELINE.md` carries.
@@ -144,7 +144,7 @@ Inherited `Rpc` methods are *not* duplicated on `DaemonEngine`; consumers reach 
 - `Engine::daemon(&self) -> &D` (was `-> &DaemonClient`).
 - The default type parameter `D = DaemonClient` keeps every existing call site that names `Engine<S>` compiling unchanged.
 
-**4. Generic-ize lifecycle entry points.** [`rust/shekyl-engine-core/src/engine/lifecycle.rs`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs) — `create` and `open*` signatures (~5 sites at lines 381, 501, 602, 621, 639 per the pre-read) become generic over `D`. Default `D = DaemonClient` keeps callers compiling.
+**4. Generic-ize lifecycle entry points.** [`rust/shekyl-engine-core/src/engine/lifecycle/open.rs`](../../rust/shekyl-engine-core/src/engine/lifecycle/open.rs) — `create` and `open*` signatures (~5 sites at lines 381, 501, 602, 621, 639 per the pre-read) become generic over `D`. Default `D = DaemonClient` keeps callers compiling.
 
 **5. Refresh: replace `daemon.inner()` with trait-bound calls.** [`rust/shekyl-engine-core/src/engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs) — four `inner()` sites (lines ~1460, 1514, 1875, 1892 per pre-read) currently call `&SimpleRequestRpc` methods. Migrate to calling `Rpc` methods directly on `&D` (the `Rpc` supertrait bound makes the methods reachable). One clone site at ~1448 also needs to clone the generic `D` instead of `DaemonClient`.
 

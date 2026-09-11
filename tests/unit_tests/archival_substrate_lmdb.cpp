@@ -5,6 +5,8 @@
 
 #include "gtest/gtest.h"
 
+#include "pqc_spend_fixture.h"
+
 #include <boost/filesystem.hpp>
 #include <cstring>
 #include <fstream>
@@ -28,10 +30,38 @@ using namespace cryptonote;
 
 namespace {
 
+// A distinct, canonical, prime-order, non-identity output key per index:
+// (i+1)*G. Consensus admission accepts nothing weaker
+// (check_outs_valid -> shekyl_check_output_keys), and the curve-tree leaf
+// collector aborts on an output it cannot encode (CEN-L11), so fixtures must
+// carry real points rather than byte fills.
+crypto::public_key test_output_key_for_index(size_t i)
+{
+  // The (i+1)*G promise only holds while i+1 fits one scalar byte; past that
+  // a narrowing cast wraps (and at i+1 == 256 yields the zero scalar), so the
+  // bound is asserted rather than left as a reuse trap.
+  if (i + 1 > 255)
+    throw std::runtime_error("fixture: output index " + std::to_string(i)
+      + " exceeds the single-byte scalar this helper promises");
+  crypto::secret_key sk{};
+  sk.data[0] = static_cast<char>(static_cast<unsigned char>(i + 1));
+  crypto::public_key pk{};
+  // Throw rather than EXPECT_TRUE-and-return: a non-fatal expectation would
+  // hand back an unset key, which then fails downstream as a curve-tree abort
+  // or a mismatched output — noise pointing away from the real cause.
+  if (!crypto::secret_key_to_public_key(sk, pk))
+    throw std::runtime_error("fixture: secret_key_to_public_key failed for output index "
+      + std::to_string(i));
+  return pk;
+}
+
 // Shared archival-LMDB scaffolding (also driven by the claim-source RPC
 // tests — single-sourced so the fixtures cannot drift).
+using archival_test::kServeCreditTestBlockHeight;
 using archival_test::make_hash;
 using archival_test::EmissionSnapshotKat;
+using archival_test::append_minimal_blocks;
+using archival_test::connect_block_with_txs;
 using TempLMDB = archival_test::TempLMDB;
 
 /// Minimum-length bond LMDB value with a non-v6 version byte.
@@ -151,7 +181,7 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
   EXPECT_EQ(db.archival_bond_join_epoch(p_id), std::numeric_limits<uint64_t>::max());
 }
 
-// The Unbond clean interval-close (gate-4 §4.3 F3) is a ZERO-LENGTH interval
+// The Release clean interval-close (gate-4 §4.3 F3) is a ZERO-LENGTH interval
 // [E, E) appended to the interval log. Its safety has two halves: the verdict
 // half (good_through-inert) is KAT'd in Rust (bond_connect.rs); this pins the
 // storage half — the v4 codec, the production LMDB writer/reader, and the
@@ -159,12 +189,12 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
 // no validity path rejects the empty interval. A natural-looking "a valid
 // interval is non-empty" assertion added to any of them would fail here
 // loudly instead of stranding every exited record as undecodable.
-TEST(archival_substrate_lmdb, unbond_clean_close_marker_round_trips)
+TEST(archival_substrate_lmdb, release_clean_close_marker_round_trips)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
 
-  // The Exited record shape the Unbond connect writes: zero total,
+  // The Exited record shape the Release connect writes: zero total,
   // compact-and-empty holdings, the clean close [12, 12) trailing the log —
   // here after an open slash interval (the capital-flight case), so the
   // marker round-trips next to a real bad interval.
@@ -523,13 +553,13 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
   db.put_archival_shard_segment(1234, 100, make_hash(0x66), 26000);
 
-  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch);
-  db.set_archival_serve_credit_bit(p2, 7, settlement_epoch);
-  db.set_archival_serve_credit_bit(p2, 9, settlement_epoch);
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p2, 7, settlement_epoch, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p2, 9, settlement_epoch, kServeCreditTestBlockHeight);
   // Credit row without a bond record: gathered row is skipped, not fatal.
-  db.set_archival_serve_credit_bit(p_missing, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p_missing, 7, settlement_epoch, kServeCreditTestBlockHeight);
   // Credit row for a different epoch: filtered by the cursor pass.
-  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch + 1);
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch + 1, kServeCreditTestBlockHeight);
 
   // Non-boundary heights are no-ops.
   db.process_archival_epoch_close_at_height(close_height - 1);
@@ -569,6 +599,21 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   EXPECT_EQ(db.get_archival_sigma_work_milli(settlement_epoch), sigma);
 }
 
+TEST(archival_substrate_lmdb, serve_credit_key_is_pair_epoch_plus_height)
+{
+  const crypto::hash p = make_hash(0x11);
+  const shekyl::db::ArchivalPairEpochKey pair(
+    reinterpret_cast<const uint8_t*>(p.data), 7, 3);
+  const shekyl::db::ArchivalServeCreditKey sc(pair, 4100);
+  const MDB_val k = sc.as_mdb_val();
+  ASSERT_EQ(k.mv_size, shekyl::db::kArchivalServeCreditKeySize);
+  EXPECT_TRUE(pair.is_prefix_of(k.mv_data, k.mv_size));
+  EXPECT_EQ(shekyl::db::load_be64(static_cast<const uint8_t*>(k.mv_data) + 48), 4100u);
+  const shekyl::db::ArchivalPairEpochKey other(
+    reinterpret_cast<const uint8_t*>(p.data), 7, 4);
+  EXPECT_FALSE(other.is_prefix_of(k.mv_data, k.mv_size));
+}
+
 // ── M-2/Q7 emission snapshot identity KATs ──────────────────────────────────
 // (REWARD_EMISSION_E3_GATING_ROUND.md §3 item 2)
 //
@@ -589,6 +634,60 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
 // 3. Live-descriptor immunity (WS-1 §5): mutating tip holdings after the
 //    close — the M2-1 drop-after-serve mutation — leaves every snapshot
 //    output bit-identical. Holdings never enter the work channel.
+
+/// **`PC-D6`: the emission fold, and the test that fails when it is removed.**
+///
+/// `PC-D4` made the serve-credit ledger per-CHALLENGE — one pair-epoch can hold
+/// up to `CHALLENGES_PER_PAIR_PER_EPOCH` rows. Emission stays per-PAIR-epoch:
+/// three passes credit a pair ONCE.
+///
+/// The gather would push one `credit_pair` per row without the prefix skip, so
+/// the pair is paid per challenge. Nothing about that failure looks wrong:
+/// every row is legitimate, every index is correct, the arrays are well
+/// formed, and the only symptom is a number three times too large in a place
+/// no assertion was watching. That is why this test exists at all, and why it
+/// asserts on the pair COUNT rather than on a downstream reward figure.
+///
+/// The edit that makes this red is deleting the pair-epoch prefix skip in
+/// `gather_archival_epoch_rows_window`.
+TEST(archival_substrate_lmdb, emission_gather_folds_three_challenges_into_one_credit_pair)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t settlement_epoch = 3;
+  const uint64_t join_epoch = settlement_epoch - 1;
+  const crypto::hash p1 = make_hash(0x71);
+  const std::vector<uint8_t> pubkey = {0x01};
+
+  db.put_archival_bond_record(p1, pubkey, {}, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
+  db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
+
+  // CHALLENGES_PER_PAIR_PER_EPOCH rows for ONE pair-epoch, each from a
+  // different block — the state PC-D4's key makes representable and PC-D2
+  // makes legitimate. Distinct heights are the whole point: at one height
+  // these would collapse in the table and the fold would never be exercised.
+  const uint64_t kBlocks[] = {4100, 4250, 4390};
+  for (const uint64_t h : kBlocks)
+    db.set_archival_serve_credit_bit(p1, 7, settlement_epoch, h);
+
+  // The rows really are distinct — otherwise this test passes for the wrong
+  // reason, having never built the state it is about.
+  ASSERT_EQ(db.archival_serve_credit_pass_count(p1, 7, settlement_epoch), 3u);
+
+  ArchivalEmissionEpochSnapshot snap;
+  lmdb.gather_archival_emission_epoch_snapshot(p1, settlement_epoch, snap);
+
+  EXPECT_EQ(snap.bonds.size(), 1u);
+  EXPECT_EQ(snap.shards.size(), 1u);
+  EXPECT_EQ(snap.credit_pairs.size(), 1u)
+      << "three challenge rows produced " << snap.credit_pairs.size()
+      << " credit pairs: the pair is paid once per challenge instead of once "
+         "per epoch, and every row involved is individually valid";
+}
+
 TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity)
 {
   TempLMDB fixture;
@@ -817,7 +916,7 @@ TEST(archival_substrate_lmdb, zero_output_close_stored_shape_and_reorg_roundtrip
     2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
   db.put_archival_shard_segment(7, 0, make_hash(0x65), 26000);
-  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p1, 7, settlement_epoch, kServeCreditTestBlockHeight);
 
   db.process_archival_epoch_close_at_height(close_height);
   fixture.db.batch_stop();
@@ -1177,10 +1276,144 @@ TEST(archival_substrate_lmdb, epoch_prune_retires_witness_and_accrual_on_the_sam
     << "the prune reached into the retained epoch";
 }
 
-// Credit-wire (credit-wire CW-2): reset_and_set_genesis_block wipes the chain in place (BlockchainLMDB::reset
-// drops the block tables, keeps the env). Both witness tables MUST be dropped there — reset re-uses
-// heights and block hashes, so a surviving witness row at a re-used key would be read by a
-// re-added block. (The height-keyed table from credit-wire CW-1b-ii was omitted from reset() until this fix.)
+// The retention prune must visit the settlement table too.
+//
+// `prune_archival_epochs_before` is contracted to retire every epoch-scoped
+// archival table, and the settlement table was the one it did not visit — so
+// its rows would have accumulated for the life of the chain from the moment
+// the writer went live. That it is unreachable today (no production caller for
+// set_archival_settlement) is why the gap was invisible, not why it was safe:
+// a table this prune forgets stays forgotten after the writer is wired.
+//
+// The assertion is taken at the boundary epoch on BOTH sides, so a prune that
+// deletes too much fails as loudly as one that deletes nothing.
+TEST(archival_substrate_lmdb, epoch_prune_retires_settlement_rows_on_the_boundary)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  const uint64_t prune_below_epoch = 3;
+  const crypto::hash p = make_hash(0x8C);
+  const uint64_t shard = 7;
+
+  lmdb.set_archival_settlement(p, shard, prune_below_epoch - 1, /*passes=*/1, /*issued=*/3);
+  lmdb.set_archival_settlement(p, shard, prune_below_epoch, /*passes=*/2, /*issued=*/3);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  std::array<uint8_t, 3> row{};
+  ASSERT_TRUE(lmdb.get_archival_settlement(p, shard, prune_below_epoch - 1, row))
+    << "fixture premise: the retired epoch's row must exist before the prune";
+  ASSERT_TRUE(lmdb.get_archival_settlement(p, shard, prune_below_epoch, row));
+
+  lmdb.prune_archival_epochs_before(prune_below_epoch);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_FALSE(lmdb.get_archival_settlement(p, shard, prune_below_epoch - 1, row))
+    << "the retired epoch's settlement row survived the retention prune -- the "
+       "shared prune does not visit this table";
+  EXPECT_TRUE(lmdb.get_archival_settlement(p, shard, prune_below_epoch, row))
+    << "the prune reached into the retained epoch";
+}
+
+// reset() is enumeration-based: it empties every named table in the
+// environment except the keep-list (table_survives_chain_reset), so a
+// table added tomorrow cannot silently survive a chain wipe (FOLLOWUPS
+// "BlockchainLMDB::reset() drops an INCOMPLETE table set"). The oracle
+// is the environment itself (get_table_entry_counts), not a drop list.
+TEST(archival_substrate_lmdb, reset_leaves_every_table_fresh)
+{
+  TempLMDB fixture;
+  // Overrides are private on the concrete class: populate through the
+  // interface, and use the concrete `fixture.db` only for the
+  // LMDB-specific counts oracle / keep-list predicate.
+  BlockchainDB& db = fixture.db;
+  BlockchainLMDB& lmdb = fixture.db;
+
+  // Populate a representative row in tables the 2026-08-07 audit found
+  // surviving the old list: archival bond / segment / budget-accrual /
+  // witnesses, block burn, the curve-tree family, the pending tree.
+  db.put_archival_bond_value(make_hash(0x71), baseline_bond());
+  db.put_archival_shard_segment(42, 100, make_hash(0x72), 26000);
+  db.add_archival_budget_accrual(100, 700);
+  db.add_block_burn(100, 5);
+  db.store_archival_attestation_witness_at_height(500, std::string(50, 'h'));
+  crypto::hash alt = make_hash(0x73);
+  cryptonote::alt_block_data_t alt_data{};
+  db.add_alt_block(alt, alt_data, cryptonote::blobdata("\x01", 1));
+  db.store_archival_alt_attestation_witness(alt, std::string(60, 'a'));
+  std::vector<uint8_t> leaf(shekyl::db::kLeafSize, 0x11);
+  db.grow_curve_tree(leaf, 1);
+  db.add_pending_tree_leaf(shekyl::db::MaturityHeight{50},
+    shekyl::db::OutputIndex{7}, leaf.data());
+  db.add_pending_tree_drain_entry(shekyl::db::BlockHeight{100},
+    shekyl::db::OutputIndex{8}, shekyl::db::MaturityHeight{60}, leaf.data());
+
+  // Keep-list pin: populate both txpool tables so "survive" is observable.
+  // Without this, empty keep-list tables pass whether or not the keep
+  // predicate is wired.
+  {
+    const crypto::hash txid = make_hash(0x74);
+    cryptonote::txpool_tx_meta_t meta{};
+    meta.weight = 100;
+    meta.fee = 1;
+    meta.receive_time = 1;
+    const cryptonote::blobdata blob("\x02\x03", 2);
+    db.add_txpool_tx(txid, cryptonote::blobdata_ref{blob.data(), blob.size()}, meta);
+  }
+  fixture.db.batch_stop();
+
+  // Negative control: the oracle must SEE the populated rows, otherwise
+  // the all-empty assertion below would pass vacuously on a broken walk.
+  const auto pre = lmdb.get_table_entry_counts();
+  size_t populated = 0;
+  size_t keep_populated = 0;
+  for (const auto& entry : pre)
+  {
+    if (entry.second > 0)
+      ++populated;
+    if (BlockchainLMDB::table_survives_chain_reset(entry.first) && entry.second > 0)
+      ++keep_populated;
+  }
+  EXPECT_GE(populated, 10u)
+    << "oracle saw almost nothing before reset — populate or walk broken";
+  EXPECT_GE(keep_populated, 2u)
+    << "txpool keep-list tables must be populated before reset";
+
+  // reset() runs its own top-level txn, so it must be called outside an
+  // open batch.
+  db.reset();
+
+  // Fresh-database state: every table empty, except the version row in
+  // properties and the deliberately-kept txpool tables (same counts).
+  const auto post = lmdb.get_table_entry_counts();
+  EXPECT_EQ(post.size(), pre.size()) << "reset dropped a table handle";
+  for (const auto& entry : post)
+  {
+    const std::string& name = entry.first;
+    if (BlockchainLMDB::table_survives_chain_reset(name))
+    {
+      ASSERT_TRUE(pre.count(name)) << "keep-list table missing pre-reset: " << name;
+      EXPECT_EQ(entry.second, pre.at(name))
+        << "keep-list table was wiped or altered: " << name;
+      continue;
+    }
+    if (name == "properties")
+    {
+      EXPECT_EQ(entry.second, 1u) << "properties must hold exactly the version row";
+      continue;
+    }
+    EXPECT_EQ(entry.second, 0u) << "table survived reset: " << name;
+  }
+  fixture.db.batch_start();
+}
+
+// Credit-wire (credit-wire CW-2): reset() wipes chain state in place via
+// table enumeration (env kept). Both witness tables MUST be emptied —
+// reset re-uses heights and block hashes, so a surviving witness row at
+// a re-used key would be read by a re-added block.
 TEST(archival_substrate_lmdb, reset_drops_both_attestation_witness_tables)
 {
   TempLMDB fixture;
@@ -1662,83 +1895,8 @@ TEST(archival_substrate_lmdb, slash_revert_restores_complete_tree_demotion)
 
 namespace {
 
-/// Append `count` minimal miner-only blocks (heights `height()` upward).
-/// Each block carries a unique coinbase (txin_gen height) and no outputs, so
-/// the curve-tree path is a no-op and the per-block cost is a handful of LMDB
-/// puts — cheap enough to reach archival epoch heights (SEB = 10 000) in a
-/// unit test. add_block runs the production connect hooks, including
-/// process_archival_slash_at_height, which is the point: the slash KAT below
-/// exercises the scheduler at its production call site, not via a test shim.
-/// `accrual_per_block` rides into add_block as the redirected staker inflow
-/// (F-B1a): the DB layer writes the accrual row before the epoch-close hook,
-/// so the epoch-boundary KAT below can assert the close sums it.
-void append_minimal_blocks(BlockchainDB& db, uint64_t count, uint64_t accrual_per_block = 0)
-{
-  crypto::hash prev = db.height() == 0
-    ? crypto::null_hash : db.get_block_hash_from_height(db.height() - 1);
-  for (uint64_t i = 0; i < count; ++i)
-  {
-    const uint64_t height = db.height();
-    block blk{};
-    blk.major_version = 1;
-    blk.minor_version = 1;
-    blk.timestamp = 1500000000 + height;
-    blk.prev_id = prev;
-    blk.curve_tree_root = crypto::null_hash;
-    blk.nonce = 0;
-
-    transaction miner_tx{};
-    miner_tx.version = 1;
-    miner_tx.unlock_time = height + 60;
-    txin_gen gen{};
-    gen.height = height;
-    miner_tx.vin.push_back(gen);
-    blk.miner_tx = std::move(miner_tx);
-
-    db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-      height + 1, 0, accrual_per_block, {}, {});
-    prev = get_block_hash(blk);
-  }
-}
-
-// Connect one block at the current tip carrying `txs` through the real
-// add_block path (miner_tx + prev/height scaffolding that every bond-post /
-// emission connect KAT below otherwise open-codes identically). Returns the
-// connect height. Caller batch_stop/batch_start around it as needed.
-uint64_t connect_block_with_txs(BlockchainDB& db, const std::vector<transaction>& txs,
-  const blobdata& attestation_witness = {})
-{
-  const uint64_t connect_height = db.height();
-  block blk{};
-  blk.major_version = 1;
-  blk.minor_version = 1;
-  blk.timestamp = 1500000000 + connect_height;
-  // Guard the genesis case like append_minimal_blocks: height 0 has no
-  // predecessor to hash (connect_height - 1 would underflow).
-  blk.prev_id = connect_height == 0
-    ? crypto::null_hash : db.get_block_hash_from_height(connect_height - 1);
-  blk.curve_tree_root = crypto::null_hash;
-  blk.nonce = 0;
-  transaction miner_tx{};
-  miner_tx.version = 1;
-  miner_tx.unlock_time = connect_height + 60;
-  txin_gen gen{};
-  gen.height = connect_height;
-  miner_tx.vin.push_back(gen);
-  blk.miner_tx = std::move(miner_tx);
-
-  std::vector<std::pair<transaction, blobdata>> tx_blobs;
-  tx_blobs.reserve(txs.size());
-  for (const transaction& tx : txs)
-  {
-    blk.tx_hashes.push_back(get_transaction_hash(tx));
-    tx_blobs.emplace_back(tx, tx_to_blob(tx));
-  }
-
-  db.add_block(std::make_pair(blk, block_to_blob(blk)), 100, 100,
-    connect_height + 1, 0, 0, attestation_witness, tx_blobs);
-  return connect_height;
-}
+// append_minimal_blocks / connect_block_with_txs live in
+// archival_lmdb_test_helpers.h (shared with tx_extra_pqc_field_shape.cpp).
 
 } // namespace
 
@@ -1784,6 +1942,97 @@ TEST(archival_substrate_lmdb, attestation_witness_threaded_through_add_block)
 // block hash that never becomes an alt block, and the height-keyed retention prune
 // structurally cannot see it. The loop below is that scenario: N plain pops must
 // leave the detached table completely empty, not N orphans.
+/// **`PC-D4`: the pop must delete the ledger row the connect wrote.**
+///
+/// The serve-credit key carries the block, so `remove_transaction` rebuilds it
+/// from a height the caller supplies. `add_transaction` is given `prev_height`
+/// -- the block's INDEX N -- while `pop_block`'s other archival hooks key on
+/// `removed_block_height`, the chain COUNT after the block. Those are the same
+/// function's two conventions and they differ by one.
+///
+/// Passing the count built a key one above every row the connect wrote,
+/// `mdb_del` answered MDB_NOTFOUND, and the tolerant delete swallowed it, so a
+/// popped pass SURVIVED its block. On a replacement branch that stale row
+/// either rejects a legitimate record through the pair-epoch dedup or counts
+/// toward emission.
+///
+/// Nothing caught it: every other serve-credit test calls the ledger accessors
+/// directly and supplies its own height, so none of them ever ran the two
+/// production call sites against each other. This one connects a real block
+/// and pops it.
+///
+/// The edit that makes it red is passing `removed_block_height` (or any other
+/// height) to `remove_transaction` in `pop_block`.
+TEST(archival_substrate_lmdb, pop_deletes_the_serve_credit_row_the_connect_wrote)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  // The gate-2 integration vin: the only serve-credit blob whose kept half is
+  // authored by shekyl-wire, so this test cannot drift from the real encoding
+  // by hand-rolling one.
+  std::ifstream ifs(GATE2_KAT_FIXTURE_PATH);
+  ASSERT_TRUE(ifs.good()) << "missing gate-2 KAT fixture";
+  rapidjson::IStreamWrapper wrapper(ifs);
+  rapidjson::Document doc;
+  doc.ParseStream(wrapper);
+  ASSERT_FALSE(doc.HasParseError());
+  ASSERT_TRUE(doc.HasMember("integration"));
+  const auto& integ = doc["integration"];
+
+  std::string kept_bin;
+  ASSERT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(
+    integ["wire_hex"].GetString(), kept_bin));
+  std::string pruned_bin;
+  ASSERT_TRUE(epee::string_tools::parse_hexstr_to_binbuff(
+    integ["pruned_hex"].GetString(), pruned_bin));
+
+  transaction tx{};
+  tx.version = 3;
+  tx.unlock_time = 0;
+  txin_archival_serve_credit_response vin{};
+  vin.canonical_bytes.assign(kept_bin.begin(), kept_bin.end());
+  tx.vin.push_back(vin);
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.txnFee = 0;
+  tx.ct_signatures.p.curve_trees_tree_depth = 0;
+  tx.ct_signatures.p.serve_credit_pruned = {
+    std::vector<uint8_t>(pruned_bin.begin(), pruned_bin.end())};
+
+  crypto::hash p_id{};
+  uint64_t shard_id = 0, settlement_epoch = 0;
+  ASSERT_TRUE(get_archival_serve_credit_key(vin, p_id, shard_id, settlement_epoch))
+    << "fixture premise: the kept blob must parse, or the connect stores nothing "
+       "and the pop assertion below passes vacuously";
+
+  const uint64_t connect_index = db.height();
+  connect_block_with_txs(db, {tx});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // Premise AND the convention pin: the row is at the block's INDEX.
+  EXPECT_TRUE(db.has_archival_serve_credit_bit(p_id, shard_id, settlement_epoch, connect_index))
+    << "the connect did not write the row at the block index";
+  EXPECT_FALSE(db.has_archival_serve_credit_bit(p_id, shard_id, settlement_epoch, connect_index + 1))
+    << "negative control: the row must not sit at the chain COUNT -- that is the "
+       "off-by-one the pop path took";
+  ASSERT_EQ(db.archival_serve_credit_pass_count(p_id, shard_id, settlement_epoch), 1u);
+
+  block popped{};
+  std::vector<transaction> popped_txs;
+  db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  EXPECT_EQ(db.archival_serve_credit_pass_count(p_id, shard_id, settlement_epoch), 0u)
+    << "the popped block's serve-credit row survived its block: the pop rebuilt the "
+       "key at a different height than the connect wrote it, and the tolerant "
+       "delete swallowed the miss";
+}
+
 TEST(archival_substrate_lmdb, plain_pop_drops_the_witness_and_parks_no_detached_row)
 {
   TempLMDB fixture;
@@ -1933,7 +2182,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_absorbs_a_single_missed_challenge)
   db.put_archival_bond_value(p_served, seed);
   db.set_total_bonded_atomic(4 * floor);
   db.set_total_burned(0);
-  db.set_archival_serve_credit_bit(p_served, 7, settlement_epoch);
+  db.set_archival_serve_credit_bit(p_served, 7, settlement_epoch, kServeCreditTestBlockHeight);
 
   // Connect blocks through epoch 1's slash deadline. The deadline block's
   // connect hook processes the epoch-1 slash pass.
@@ -1959,7 +2208,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_absorbs_a_single_missed_challenge)
   ASSERT_LE(h_fire, h_close);
   EXPECT_TRUE(db.archival_bond_holds_shard(p_miss, 7, h_fire));
   // ... and it really was missed: no affirmative pass for (P_miss, 7, E=1).
-  EXPECT_FALSE(db.has_archival_serve_credit_bit(p_miss, 7, settlement_epoch));
+  EXPECT_FALSE(db.has_archival_serve_credit_bit(p_miss, 7, settlement_epoch, kServeCreditTestBlockHeight));
 
   // P_miss: one observed miss is not a durable absence (m = 11 of the last
   // n = 13 observations is). The scheduler ran the epoch past its deadline and
@@ -2052,7 +2301,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_slashes_sustained_absence_at_m_of_
   db.set_total_bonded_atomic(4 * floor);
   db.set_total_burned(0);
   for (uint64_t epoch = 1; epoch <= window.m; ++epoch)
-    db.set_archival_serve_credit_bit(p_served, 7, epoch);
+    db.set_archival_serve_credit_bit(p_served, 7, epoch, kServeCreditTestBlockHeight);
 
   // Walk to the deadline of epoch m-1: that is m-1 observed misses, one short
   // of the threshold.
@@ -2193,7 +2442,7 @@ TEST(archival_substrate_lmdb, slash_scheduler_spans_a_full_window_past_the_serve
   // reached only by counting the full window.
   const uint64_t decision_epoch = window.n;
   for (uint32_t i = 1; i <= window.serve_budget; ++i)
-    db.set_archival_serve_credit_bit(p_id, 7, decision_epoch - i);
+    db.set_archival_serve_credit_bit(p_id, 7, decision_epoch - i, kServeCreditTestBlockHeight);
 
   // One epoch short of the decision epoch the record must still be intact: the
   // misses so far are m - 1.
@@ -2308,7 +2557,7 @@ TEST(archival_substrate_lmdb, failure_window_recomputes_from_reverted_state_on_p
 
   const uint64_t answered_epoch = slash_epoch / 2;
   ASSERT_GE(answered_epoch, 1u);
-  db.set_archival_serve_credit_bit(p_id, 7, answered_epoch);
+  db.set_archival_serve_credit_bit(p_id, 7, answered_epoch, kServeCreditTestBlockHeight);
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -2640,23 +2889,276 @@ transaction make_connectable_emission_tx(const EmissionVinFixture& fx)
     tx_out vout{};
     vout.amount = amounts[i];
     txout_to_tagged_key tagged{};
-    memset(&tagged.key, 0x60 + static_cast<int>(i), sizeof(tagged.key));
+    // Distinct per output, but still a canonical prime-order point: scale the
+    // Ed25519 basepoint by (i+1). Arbitrary byte fills are not curve points,
+    // and the leaf collector now aborts on one it cannot encode (CEN-L11)
+    // rather than dropping the output silently.
+    tagged.key = test_output_key_for_index(i);
     tagged.view_tag.data = 0;
     vout.target = tagged;
     tx.vout.push_back(vout);
 
-    rct::ctkey out_pk{};
-    memset(out_pk.mask.bytes, 0x70 + static_cast<int>(i), sizeof(out_pk.mask.bytes));
-    tx.rct_signatures.outPk.push_back(out_pk);
-    // The rctSigBase serializer requires one enc_amounts/enc_labels entry per
+    ct::ctkey out_pk{};
+    // Commitment masks are the leaf builder's second point input, and
+    // check_commitment_mask_valid accepts only canonical prime-order
+    // encodings — so this must be a real point too (CEN-L11).
+    const crypto::public_key mask_pt = test_output_key_for_index(i + 16);
+    memcpy(out_pk.mask.bytes, &mask_pt, sizeof(out_pk.mask.bytes));
+    tx.ct_signatures.outPk.push_back(out_pk);
+    // The CtSigBase serializer requires one enc_amounts/enc_labels entry per
     // vout regardless of type; filler is fine, nothing decrypts them here.
-    tx.rct_signatures.enc_amounts.push_back({});
-    tx.rct_signatures.enc_labels.push_back({});
+    tx.ct_signatures.enc_amounts.push_back({});
+    tx.ct_signatures.enc_labels.push_back({});
   }
+  // CEN-I19: every transaction with outputs carries its 0x06/0x07 fields;
+  // the DB collector aborts otherwise (it used to zero-fill h_pqc).
+  shekyl_test_fixtures::append_pqc_fields(tx);
   return tx;
 }
 
 } // namespace
+
+// ─────────────────────────────────────────────────────────────────────────
+// CEN-L11: the leaf collector is FAIL-CLOSED, not silently skipping.
+//
+// The three arms are unreachable through admission — CEN-H12/F8 fix the
+// output type, four outPk.size() gates fix the length, and the canonical
+// prime-order point gates fix both leaf inputs. That is exactly why they need
+// a test that reaches them ANOTHER way: these fixtures call add_block below
+// admission, so they can present the malformed output a validated block never
+// carries, and assert the write refuses it.
+//
+// What each case actually proves is pinned per case, because two of the three
+// arms turn out to be refused EARLIER — a non-tagged-key target fails
+// add_transaction's output-key extraction, and a vout without its outPk entry
+// does not serialize at all. The fail-closed property CEN-L11 needs (such a
+// block cannot connect) holds in every case; only the construct-verdict arm is
+// reachable here, and both of its inputs are covered.
+//
+// The falsifier is direct for that arm: revert it to `continue` and both point
+// cases go green-with-a-connected-block, which is the original CEN-L11 defect —
+// an accepted output silently missing from the curve tree.
+// ─────────────────────────────────────────────────────────────────────────
+
+namespace
+{
+
+// The single-sourced well-formed v3 spend, which each case then damages in
+// exactly one field. Hand-rolling a tx here failed to serialize — and the
+// control below caught that the four refusal cases were consequently throwing
+// at hash calculation, never reaching the collector. Sharing the fixture keeps
+// the shape honest and the damage isolated.
+transaction make_single_output_tx()
+{
+  return shekyl_test_fixtures::make_pqc_spend();
+}
+
+// Connect `tx` below admission and report whether the DB refused it. Each
+// case asserts the refusal AND that the chain did not grow, so a throw that
+// left a half-written block behind would still fail.
+void expect_connect_refused(const transaction& tx, const char* what,
+  const char* expected_refuser)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+  append_minimal_blocks(db, 3);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // add_transaction writes the tx and its outputs BEFORE the leaf collector
+  // runs (blockchain_db.cpp :465/:473 vs :607), so a refused block leaves a
+  // partial write set inside the batch. Height alone would not notice: the
+  // block row is written later, so it stays unchanged either way. Snapshot the
+  // write set and mirror production's failure path, which ABORTS the batch
+  // (blockchain.cpp:773/:787/:6814) rather than committing it.
+  const uint64_t height_before = db.height();
+  const uint64_t tx_count_before = db.get_tx_count();
+  const uint64_t outputs_before = db.get_num_outputs(0);
+
+  bool threw = false;
+  std::string reason;
+  try
+  {
+    connect_block_with_txs(db, {tx});
+  }
+  catch (const std::exception& e)
+  {
+    threw = true;
+    reason = e.what();
+  }
+  fixture.db.batch_abort();
+
+  EXPECT_TRUE(threw) << what << ": the DB accepted an output the curve tree "
+                        "cannot hold — it would be permanently unspendable";
+  // Pin WHICH guard refuses it. Without this the cases pass on any throw,
+  // including one raised long before the collector — which is how the first
+  // draft of these tests was green while never reaching the code under test.
+  EXPECT_NE(reason.find(expected_refuser), std::string::npos)
+    << what << ": refused, but not by the expected guard (" << expected_refuser
+    << ") — got: " << reason;
+  EXPECT_EQ(height_before, db.height())
+    << what << ": the refused block still advanced the chain";
+  EXPECT_EQ(tx_count_before, db.get_tx_count())
+    << what << ": the refused block left its transaction behind";
+  EXPECT_EQ(outputs_before, db.get_num_outputs(0))
+    << what << ": the refused block left its outputs behind — they would be "
+       "spendable-looking rows with no curve-tree leaf";
+}
+
+} // namespace
+
+TEST(archival_substrate_lmdb, cen_l11_refuses_unsupported_output_target)
+{
+  transaction tx = make_single_output_tx();
+  // A target variant CEN-H12/F8 never admits AND the collector does not
+  // handle. (Not txout_to_key: the collector still has an arm for that legacy
+  // variant, so it would not reach the `else` at all — see the whitelist
+  // comment in cryptonote_format_utils.cpp.)
+  tx.vout[0].target = txout_to_script{};
+  // Refused before the collector: add_transaction's own output-key extraction
+  // rejects a variant it cannot read a public key from. The collector's arm is
+  // the second line for this case, not the first — recorded rather than
+  // over-claimed, since the property CEN-L11 needs is that the block cannot
+  // connect, and it cannot.
+  expect_connect_refused(tx, "unsupported output target",
+    "Could not get an output public key");
+}
+
+TEST(archival_substrate_lmdb, cen_l11_refuses_outpk_shorter_than_vout)
+{
+  transaction tx = make_single_output_tx();
+  // Second output with no matching outPk entry: the four size gates make this
+  // impossible through admission, and the collector used to skip it silently.
+  tx_out extra{};
+  extra.amount = 0;
+  txout_to_tagged_key tagged{};
+  tagged.key = test_output_key_for_index(9);
+  tagged.view_tag.data = 0;
+  extra.target = tagged;
+  tx.vout.push_back(extra);
+  tx.ct_signatures.enc_amounts.push_back({});
+  tx.ct_signatures.enc_labels.push_back({});
+  // Refused before the collector too: a vout without its outPk entry does not
+  // serialize, so the block cannot even be hashed. The collector's size arm is
+  // therefore unreachable from here as well — the fail-closed property still
+  // holds, by an earlier guard.
+  expect_connect_refused(tx, "outPk shorter than vout",
+    "Failed to calculate transaction hash");
+}
+
+TEST(archival_substrate_lmdb, cen_l11_refuses_output_key_the_leaf_builder_cannot_encode)
+{
+  transaction tx = make_single_output_tx();
+  // Not a decodable point: the leaf builder returns false and the collector
+  // used to discard the output on the unchecked verdict.
+  txout_to_tagged_key tagged = std::get<txout_to_tagged_key>(tx.vout[0].target);
+  memset(&tagged.key, 0xCC, sizeof(tagged.key));
+  tx.vout[0].target = tagged;
+  // This one DOES reach the collector: the shape is serializable and yields an
+  // output public key, so only the leaf builder can catch it.
+  expect_connect_refused(tx, "output key that is not a curve point",
+    "curve-tree leaf");
+}
+
+TEST(archival_substrate_lmdb, cen_l11_refuses_commitment_the_leaf_builder_cannot_encode)
+{
+  transaction tx = make_single_output_tx();
+  // The leaf builder's second point input, damaged the same way.
+  memset(tx.ct_signatures.outPk[0].mask.bytes, 0xCC,
+    sizeof(tx.ct_signatures.outPk[0].mask.bytes));
+  // Also reaches the collector, via the leaf builder's second point input.
+  expect_connect_refused(tx, "commitment mask that is not a curve point",
+    "curve-tree leaf");
+}
+
+// Control: the same shape, undamaged, must connect. Without this the four
+// cases above could pass because the fixture never connects anything.
+TEST(archival_substrate_lmdb, cen_l11_accepts_a_well_formed_output)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+  append_minimal_blocks(db, 3);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  const uint64_t height_before = db.height();
+  ASSERT_NO_THROW(connect_block_with_txs(db, {make_single_output_tx()}));
+  fixture.db.batch_stop();
+  EXPECT_EQ(height_before + 1, db.height());
+}
+
+// CEN-B5 keying pin. The header of block N commits to the tree state at chain
+// height N: the current root when N's template is filled (blockchain.cpp,
+// create_block_template), which is also the per-height record under key N,
+// written when block N-1 connected (blockchain_db.cpp, add_block keys the
+// record under prev_height + 1). Connecting block N runs N's drain, after
+// which the current root is the record under key N + 1 -- a different value
+// whenever a leaf matures at N. The consensus check therefore compares the
+// header against the tip root BEFORE add_block (blockchain.cpp,
+// handle_block_to_main_chain); comparing after it rejected every maturing
+// block (the CEN-B5 S1, fixed on this branch). This pin holds the two reads
+// apart on a real LMDB through the real add_block path so the keying cannot
+// drift back silently.
+TEST(archival_substrate_lmdb, cen_b5_header_root_is_the_tip_root_before_add_block_not_after)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+  append_minimal_blocks(db, 3);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  // The block at `creating_block` carries one well-formed output. Its stored
+  // maturity is (creating_block + 1) + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE, and
+  // the drain runs with current_height = prev_height + 1, so the leaf enters
+  // the tree when the block at index `maturity - 1` connects
+  // (CT2_DRAIN_ORDER.md §4, "the +1 terms cancel").
+  const uint64_t creating_block = connect_block_with_txs(db, {make_single_output_tx()});
+  ASSERT_EQ(creating_block, 3u);
+  const uint64_t maturity = (creating_block + 1) + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+  const uint64_t draining_block = maturity - 1;
+
+  // Advance the tip to chain height `draining_block`: every block below it
+  // connected, the draining block itself next. Fail fast rather than
+  // underflow the unsigned delta if the spendable age ever shrinks below the
+  // scaffolding height.
+  ASSERT_GE(draining_block, db.height());
+  append_minimal_blocks(db, draining_block - db.height());
+  fixture.db.batch_stop();
+  ASSERT_EQ(db.height(), draining_block);
+  ASSERT_EQ(db.get_curve_tree_leaf_count(), 0u);
+
+  // What the template for the draining block reads, and what the admission
+  // check compares the header against: the current root at chain height
+  // `draining_block`. It is also the per-height record under that key,
+  // written when the previous block connected.
+  const std::array<uint8_t, 32> header_source = db.get_curve_tree_root();
+  EXPECT_EQ(header_source, db.get_curve_tree_root_at_height(draining_block));
+
+  // Connect the draining block: the drain fires and the tree grows by one leaf.
+  fixture.db.batch_start();
+  append_minimal_blocks(db, 1);
+  fixture.db.batch_stop();
+  ASSERT_EQ(db.height(), draining_block + 1);
+  ASSERT_EQ(db.get_curve_tree_leaf_count(), 1u);
+
+  // The root after the add is the record under key `draining_block + 1`, not
+  // `draining_block`: a check reading it would reject the header it was
+  // filled from.
+  const std::array<uint8_t, 32> post_add_root = db.get_curve_tree_root();
+  EXPECT_NE(post_add_root, header_source);
+  EXPECT_EQ(post_add_root, db.get_curve_tree_root_at_height(draining_block + 1));
+  // The record the header was filled from is unchanged by the add.
+  EXPECT_EQ(header_source, db.get_curve_tree_root_at_height(draining_block));
+}
 
 TEST(archival_substrate_lmdb, emission_connect_pop_roundtrip_through_real_block_path)
 {
@@ -2773,9 +3275,9 @@ TEST(archival_substrate_lmdb, bond_post_connect_pop_roundtrip_through_real_block
   EXPECT_EQ(db.get_total_bonded_atomic(), 0u);
 }
 
-TEST(archival_substrate_lmdb, unbond_revert_value_round_trips)
+TEST(archival_substrate_lmdb, release_revert_value_round_trips)
 {
-  // Direct codec round-trip for the Unbond record pre-image journal value:
+  // Direct codec round-trip for the Release record pre-image journal value:
   // encode → decode reproduces every field (including a zero-length clean
   // close among the pre-image intervals), and an empty pre-image (bonded 0)
   // is rejected on both sides — connect can never journal it.
@@ -2826,14 +3328,14 @@ TEST(archival_substrate_lmdb, all_last_served_hop_scan_over_p_prefix)
   // P served shards 3 and 9 across several epochs; the max per shard is what
   // the anchor fold needs. Shard 5 is bordered by another P's rows on both
   // sides to prove the scan neither leaks across nor stops early.
-  db.set_archival_serve_credit_bit(p, 3, 10);
-  db.set_archival_serve_credit_bit(p, 3, 40);   // shard 3 max
-  db.set_archival_serve_credit_bit(p, 3, 25);
-  db.set_archival_serve_credit_bit(p, 9, 7);
-  db.set_archival_serve_credit_bit(p, 9, 33);   // shard 9 max
+  db.set_archival_serve_credit_bit(p, 3, 10, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p, 3, 40, kServeCreditTestBlockHeight);   // shard 3 max
+  db.set_archival_serve_credit_bit(p, 3, 25, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p, 9, 7, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(p, 9, 33, kServeCreditTestBlockHeight);   // shard 9 max
   // Another P interleaved in the shard key space: must not appear in P's scan.
-  db.set_archival_serve_credit_bit(other, 3, 99);
-  db.set_archival_serve_credit_bit(other, 9, 99);
+  db.set_archival_serve_credit_bit(other, 3, 99, kServeCreditTestBlockHeight);
+  db.set_archival_serve_credit_bit(other, 9, 99, kServeCreditTestBlockHeight);
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
@@ -2853,13 +3355,13 @@ TEST(archival_substrate_lmdb, all_last_served_hop_scan_over_p_prefix)
   EXPECT_EQ(per_shard, anchors);
 }
 
-// The Unbond connect/pop twin through the REAL block path (gate-4 §4.3/§5):
+// The Release connect/pop twin through the REAL block path (gate-4 §4.3/§5):
 // add_block drives the vin dispatch → apply_archival_unbond (pre-image
 // journal, Rust fold write set, per-post counter threading), pop_block drives
 // revert_archival_unbonds_at_height (pop fold consistency checks + pre-image
 // restore). Asserts the Exited shape, the clean interval-close appended AFTER
 // the seeded closed interval, the counter debit, and the byte-exact restore.
-TEST(archival_substrate_lmdb, unbond_connect_pop_roundtrip_through_real_block_path)
+TEST(archival_substrate_lmdb, release_connect_pop_roundtrip_through_real_block_path)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
@@ -2869,7 +3371,7 @@ TEST(archival_substrate_lmdb, unbond_connect_pop_roundtrip_through_real_block_pa
 
   append_minimal_blocks(db, kSeb + 3);
 
-  // Seed the bonded record the Unbond releases: two shards, a prior CLOSED
+  // Seed the bonded record the Release releases: two shards, a prior CLOSED
   // bad interval (proves the journal restores the interval log, not just
   // pops one entry), and a global counter larger than the record's balance
   // (proves decrement, not zeroing).
@@ -2888,13 +3390,13 @@ TEST(archival_substrate_lmdb, unbond_connect_pop_roundtrip_through_real_block_pa
     shekyl_archival_settlement_epoch_at_height(connect_height);
   ASSERT_GT(expected_epoch, 0u);
 
-  // The Unbond vin carries the POST-connect state (§3.5 debit-path pin).
+  // The Release vin carries the POST-connect state (§3.5 debit-path pin).
   transaction tx{};
   tx.version = 2;
   txin_archival_bond_post vin{};
   vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
   vin.p_canonical_id = p_id;
-  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
   vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
   vin.holdings.shard_ids = {};
   vin.bonded_total_atomic = 0;
@@ -2937,14 +3439,14 @@ TEST(archival_substrate_lmdb, unbond_connect_pop_roundtrip_through_real_block_pa
   EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded);
 }
 
-// Two different-P Unbonds in ONE block: the counter-threading obligation
+// Two different-P Releases in ONE block: the counter-threading obligation
 // armed (gate-4 §3.5). The fold returns the new total as an ABSOLUTE value,
 // so a dispatch that hoisted one counter read per block would compute both
 // debits from the same block-start total and lose one; the per-post
 // get→fold→set threading inside apply_archival_unbond must land both. (The
 // per-P uniqueness pass does not cover this case — different-P posts in one
 // block are legitimate.)
-TEST(archival_substrate_lmdb, unbond_two_p_one_block_threads_the_counter)
+TEST(archival_substrate_lmdb, release_two_p_one_block_threads_the_counter)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;
@@ -2968,13 +3470,13 @@ TEST(archival_substrate_lmdb, unbond_two_p_one_block_threads_the_counter)
   fixture.db.batch_stop();
   fixture.db.batch_start();
 
-  auto unbond_tx = [](const crypto::hash& p_id, uint64_t debit, uint8_t fill) {
+  auto release_tx = [](const crypto::hash& p_id, uint64_t debit, uint8_t fill) {
     transaction tx{};
     tx.version = 2;
     txin_archival_bond_post vin{};
     vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, fill);
     vin.p_canonical_id = p_id;
-    vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Unbond);
+    vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
     vin.holdings.kind = archival_holdings_kind::ShardSetCompact;
     vin.bonded_total_atomic = 0;
     vin.bond_credit = 0;
@@ -2982,8 +3484,8 @@ TEST(archival_substrate_lmdb, unbond_two_p_one_block_threads_the_counter)
     tx.vin.push_back(vin);
     return tx;
   };
-  const transaction tx_a = unbond_tx(p_a, bonded_a, 0x11);
-  const transaction tx_b = unbond_tx(p_b, bonded_b, 0x22);
+  const transaction tx_a = release_tx(p_a, bonded_a, 0x11);
+  const transaction tx_b = release_tx(p_b, bonded_b, 0x22);
 
   connect_block_with_txs(db, {tx_a, tx_b});
   fixture.db.batch_stop();
@@ -3258,7 +3760,7 @@ TEST(archival_substrate_lmdb, same_epoch_slashes_coalesce_one_open_interval)
 // Direct codec round-trip for the Rebond record pre-image journal value
 // (gate-4 §3.4; P2B-9): encode → decode reproduces every field.
 // pre_bonded_total == 0 is LEGAL here (terminal-slash reinstatement) — unlike
-// the Unbond/HoldingsUpdate journals; only the per-shard array length desync
+// the Release/HoldingsUpdate journals; only the per-shard array length desync
 // rejects at encode.
 TEST(archival_substrate_lmdb, rebond_revert_value_round_trips)
 {

@@ -42,7 +42,7 @@ fn test_state(auth: AuthConfig) -> Arc<AppState> {
                 proxy: None,
             },
         )),
-        auth,
+        auth: Arc::new(auth),
         kdf: test_kdf(),
         shutdown: Arc::new(Notify::new()),
     })
@@ -58,7 +58,7 @@ fn lifecycle_state(dir: &TempDir) -> Arc<AppState> {
                 proxy: None,
             },
         )),
-        auth: AuthConfig::Disabled,
+        auth: Arc::new(AuthConfig::Disabled),
         kdf: test_kdf(),
         shutdown: Arc::new(Notify::new()),
     })
@@ -87,6 +87,7 @@ async fn post_json(auth: AuthConfig, body: Value) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
@@ -103,6 +104,7 @@ async fn post_raw(auth: AuthConfig, body: &'static [u8]) -> (StatusCode, Value) 
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(body))
         .unwrap();
@@ -116,14 +118,14 @@ async fn post_raw(auth: AuthConfig, body: &'static [u8]) -> (StatusCode, Value) 
 async fn post_json_with_auth(user: &str, pass: &str, body: Value) -> (StatusCode, Value) {
     use base64::Engine as _;
     let cred = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
-    let state = test_state(AuthConfig::Basic {
-        username: user.to_owned(),
-        password: pass.to_owned(),
-    });
+    let state = test_state(AuthConfig::Basic(
+        shekyl_wallet_rpc::auth::BasicCredential::new(user, pass).expect("valid credential"),
+    ));
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .header("authorization", format!("Basic {cred}"))
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
@@ -140,6 +142,7 @@ async fn rpc(state: Arc<AppState>, body: Value) -> Value {
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
@@ -192,21 +195,24 @@ async fn get_version_omitted_params() {
     assert_eq!(json["id"], "abc");
 }
 
-/// A method the OpenAPI contract SPECIFIES but this build has not
-/// implemented still answers `-32601` over the real transport. Pinned at the
+/// A method name the OpenAPI contract RESERVES but this build has not
+/// implemented answers `-32601` over the real transport. Pinned at the
 /// HTTP layer (not only in the dispatch unit tests) because the wire code is
-/// what a conforming client branches on. `sign_message` is the current
-/// RESERVED stand-in; when it lands, retarget this at another RESERVED
-/// method rather than deleting the case — the property is about the
-/// SPECIFIED-but-unimplemented class, not about any one method.
+/// what a conforming client branches on. `match_transfer_to_request` is the
+/// current RESERVED stand-in (this case exercised `sign_message` until
+/// PR-SM-2 landed it, then `unstake` until PR-C landed the exit pair — each
+/// landing correctly turned this case red on the old name, per its own
+/// instruction); when it lands too, retarget at another RESERVED method
+/// rather than deleting the case — the property is about the
+/// RESERVED-but-unimplemented class, not about any one method.
 #[tokio::test]
-async fn method_not_found_for_unimplemented_specified() {
+async fn method_not_found_for_reserved_unimplemented() {
     let (status, json) = post_json(
         AuthConfig::Disabled,
         json!({
             "jsonrpc": "2.0",
             "id": 2,
-            "method": "sign_message",
+            "method": "match_transfer_to_request",
             "params": {}
         }),
     )
@@ -275,14 +281,14 @@ async fn invalid_id_type_responds_with_null_id() {
 
 #[tokio::test]
 async fn basic_auth_rejects_missing_header() {
-    let state = test_state(AuthConfig::Basic {
-        username: "alice".into(),
-        password: "secret".into(),
-    });
+    let state = test_state(AuthConfig::Basic(
+        shekyl_wallet_rpc::auth::BasicCredential::new("alice", "secret").expect("valid credential"),
+    ));
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
         .uri("/")
+        .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_vec(&json!({
@@ -313,6 +319,7 @@ async fn basic_auth_accepts_valid_credentials() {
     assert_eq!(json["result"]["api_version"], API_VERSION);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn spawn_in_process_serves_get_version_over_private_uds() {
     let handle = shekyl_wallet_rpc::spawn_in_process(
@@ -375,6 +382,71 @@ async fn spawn_in_process_serves_get_version_over_private_uds() {
     assert!(
         !dir.exists(),
         "private socket dir must be removed on shutdown"
+    );
+}
+
+/// The Windows twin of the test above: the secure default is an owner-only
+/// named pipe, dialled through the peer check. The dial is the shipping one
+/// (`open_verified`), so a pipe whose descriptor the check would refuse fails
+/// this test at connect rather than being read around.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_in_process_serves_get_version_over_the_verified_pipe() {
+    let handle = shekyl_wallet_rpc::spawn_in_process(
+        std::env::temp_dir(),
+        Network::Stagenet,
+        "http://127.0.0.1:1".into(),
+        None,
+    )
+    .await
+    .expect("spawn");
+    let name = handle
+        .pipe_name()
+        .expect("default spawn is a named pipe")
+        .to_owned();
+    assert!(
+        name.starts_with(shekyl_win_sec::PIPE_PREFIX),
+        "pipe name must carry the WP-D1 prefix"
+    );
+
+    let body = serde_json::to_vec(&json!({
+        "jsonrpc": "2.0",
+        "id": 42,
+        "method": "get_version"
+    }))
+    .unwrap();
+    let request = format!(
+        "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+
+    // The client side is synchronous by design (it is what shekyl-cli does);
+    // run it off the runtime threads the server needs.
+    let dial_name = name.clone();
+    let raw = tokio::task::spawn_blocking(move || {
+        use std::io::{Read, Write};
+        let mut pipe = shekyl_win_sec::open_verified(&dial_name).expect("open + peer check");
+        pipe.write_all(request.as_bytes()).unwrap();
+        pipe.write_all(&body).unwrap();
+        let mut buf = Vec::new();
+        pipe.read_to_end(&mut buf).unwrap();
+        buf
+    })
+    .await
+    .expect("client task");
+    let text = String::from_utf8_lossy(&raw);
+    let json: Value = serde_json::from_str(http_body(&text)).expect("parse body");
+    assert_eq!(json["result"]["api_version"], API_VERSION);
+    assert_eq!(json["id"], 42);
+
+    handle.shutdown().await.expect("shutdown");
+    // Nothing to unlink, but nothing may be left listening either.
+    let after = tokio::task::spawn_blocking(move || shekyl_win_sec::open_verified(&name))
+        .await
+        .expect("probe task");
+    assert!(
+        matches!(after, Err(shekyl_win_sec::DialError::NotFound)),
+        "shutdown must leave nothing listening at the pipe name"
     );
 }
 
@@ -982,4 +1054,153 @@ async fn open_during_inflight_close_is_refused_busy() {
     )
     .await;
     assert!(bal.get("error").is_none(), "restore failed: {bal}");
+}
+
+/// The browser boundary: a `text/plain` POST — what a web page can make a
+/// browser send cross-origin with no preflight — and a POST with no
+/// `Content-Type` at all are refused with 415 before the body or a
+/// credential is looked at, authentication enabled or not; the same body
+/// as `application/json` is served. The edit that turns this red is
+/// removing the JSON gate from `build_router`.
+#[tokio::test]
+async fn non_json_content_type_is_refused_before_anything_else() {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "get_version"
+    }))
+    .unwrap();
+    let configs = || {
+        [
+            AuthConfig::Disabled,
+            AuthConfig::Basic(
+                shekyl_wallet_rpc::auth::BasicCredential::new("alice", "secret")
+                    .expect("valid credential"),
+            ),
+        ]
+    };
+    for auth in configs() {
+        for content_type in [
+            Some("text/plain"),
+            Some("application/x-www-form-urlencoded"),
+            None,
+        ] {
+            let app = build_router(test_state(auth.clone()));
+            let mut req = Request::builder().method("POST").uri("/");
+            if let Some(ct) = content_type {
+                req = req.header("content-type", ct);
+            }
+            let response = app
+                .oneshot(req.body(Body::from(body.clone())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "{content_type:?} with {auth:?} must be refused by the JSON gate"
+            );
+        }
+    }
+    // The gate is outside the body limit: a non-JSON request declaring an
+    // oversize body is 415, not 413 — nothing else judges it first.
+    for auth in configs() {
+        let app = build_router(test_state(auth));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("host", "127.0.0.1")
+            .header("content-type", "text/plain")
+            .header("content-length", (10 * 1024 * 1024).to_string())
+            .body(Body::from(body.clone()))
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+    // The control: the same request as JSON reaches the handler (the
+    // Disabled config, so the outcome is the method's, not the credential's).
+    let app = build_router(test_state(AuthConfig::Disabled));
+    let req = Request::builder()
+        .method("POST")
+        .uri("/")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json; charset=utf-8")
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// The rebinding half of the browser boundary. Where authentication is
+/// disabled, a request addressed by a DNS name other than `localhost` is
+/// 421 — a page that rebound its hostname to this machine arrives exactly
+/// so — while the IP literals and `localhost` are served. Where
+/// authentication is enabled the credential is the gate: the same rebound
+/// request is the ordinary 401, and an operator's hostname works with a
+/// credential. The edit that turns this red is dropping the Host check
+/// from `browser_boundary`.
+#[tokio::test]
+async fn rebindable_host_is_refused_where_auth_is_disabled() {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "get_version"
+    }))
+    .unwrap();
+    async fn post(auth: AuthConfig, host: Option<&str>, body: Vec<u8>) -> StatusCode {
+        let app = build_router(test_state(auth));
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("content-type", "application/json");
+        if let Some(h) = host {
+            req = req.header("host", h);
+        }
+        app.oneshot(req.body(Body::from(body)).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+    for bad in [
+        Some("evil.example:29500"),
+        Some("localhost.evil.example"),
+        None,
+    ] {
+        assert_eq!(
+            post(AuthConfig::Disabled, bad, body.clone()).await,
+            StatusCode::MISDIRECTED_REQUEST,
+            "{bad:?} with auth disabled"
+        );
+    }
+    for ok in ["127.0.0.1:29500", "[::1]:29500", "localhost", "LOCALHOST"] {
+        assert_eq!(
+            post(AuthConfig::Disabled, Some(ok), body.clone()).await,
+            StatusCode::OK,
+            "{ok:?} with auth disabled"
+        );
+    }
+    let basic = AuthConfig::Basic(
+        shekyl_wallet_rpc::auth::BasicCredential::new("alice", "secret").expect("valid credential"),
+    );
+    assert_eq!(
+        post(basic, Some("evil.example:29500"), body).await,
+        StatusCode::UNAUTHORIZED,
+        "with authentication enabled the credential is the gate, not the Host"
+    );
+}
+
+/// The media-type half judges only requests that carry a body: a `GET /`
+/// has none, so the router's 405 is the answer, not a misleading 415. The
+/// rebinding half is method-independent — a rebound `GET` is still 421
+/// where authentication is disabled. The edit that turns the first half
+/// red is gating every method; the second, gating the Host check by method.
+#[tokio::test]
+async fn bodiless_methods_are_not_judged_by_media_type() {
+    let get = |host: &'static str| async move {
+        let app = build_router(test_state(AuthConfig::Disabled));
+        let req = Request::builder()
+            .method("GET")
+            .uri("/")
+            .header("host", host)
+            .body(Body::empty())
+            .unwrap();
+        app.oneshot(req).await.unwrap().status()
+    };
+    assert_eq!(get("127.0.0.1").await, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(get("evil.example").await, StatusCode::MISDIRECTED_REQUEST);
 }

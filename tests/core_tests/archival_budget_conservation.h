@@ -20,11 +20,18 @@
 // deleted per rule 60), so the expectations are unconditional: whole
 // inflow in the accrual row, zero in the burn row (fee-free fixture).
 //
-// The fork table still crosses v1 -> v2 mid-chain on purpose: the block's
-// major_version is a live operand of compute_emission_split /
-// compute_fee_burn (the F-B1b operand pin), and the pop/reconnect leg
-// replays the boundary through the rewound fork machinery — both remain
-// exercised even with the burn-vs-accrue branch gone.
+// The fork table still crosses v1 -> v2 mid-chain, but NOT for the reason it
+// used to. major_version is no longer an operand of compute_emission_split /
+// compute_fee_burn at all: the `hf_version < HF_VERSION_SHEKYL_NG` arm those
+// helpers opened with was unreachable on every network and has been deleted
+// along with the parameters it justified. The F-B1b operand pin is therefore
+// RETIRED — it pinned the threading of an operand that no longer exists, and
+// keeping the claim would misdescribe what this fixture guards.
+//
+// What the crossing still earns: the pop/reconnect leg replays a fork
+// boundary through the rewound hardfork machinery, so the reorg path is
+// exercised against a version transition rather than a flat chain. That is
+// the surviving justification, and it is the reason the crossing stays.
 //
 // Fee-leg coverage gap (disclosed): the fixture is fee-free, so only the
 // emission half of production's staker_inflow

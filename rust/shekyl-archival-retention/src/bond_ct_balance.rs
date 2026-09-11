@@ -9,7 +9,7 @@
 //! adds only the bond-specific term rigidity, and encodes it in a type: the
 //! [`BondTerm`] enum makes "exactly one of credit / debit" a compile-time
 //! property, so the verify function is total. Bulletproof+ verification remains
-//! in C++ (`rctSigs`).
+//! in C++ (`ct_semantics`).
 
 #![deny(unsafe_code)]
 

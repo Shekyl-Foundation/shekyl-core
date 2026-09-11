@@ -62,7 +62,7 @@ public:
 
       crypto::public_key tx_out_key;
       cryptonote::get_output_public_key(m_miner_txs[i].vout[0], tx_out_key);
-      output_entries.push_back(std::make_pair(i, rct::ctkey({rct::pk2rct(tx_out_key), rct::zeroCommit(m_miner_txs[i].vout[0].amount)})));
+      output_entries.push_back(std::make_pair(i, ct::ctkey({ct::pk2rct(tx_out_key), ct::zeroCommit(m_miner_txs[i].vout[0].amount)})));
       m_public_keys[i] = tx_out_key;
       m_public_key_ptrs[i] = &m_public_keys[i];
     }
@@ -75,7 +75,7 @@ public:
     source_entry.real_output_in_tx_index = 0;
     source_entry.outputs.swap(output_entries);
     source_entry.real_output = real_source_idx;
-    source_entry.mask = rct::identity();
+    source_entry.mask = ct::identity();
     source_entry.rct = false;
 
     m_sources.push_back(source_entry);

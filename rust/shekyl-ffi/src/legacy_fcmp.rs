@@ -176,25 +176,35 @@ pub unsafe extern "C" fn shekyl_derive_view_tag_prefilter(
     shekyl_crypto_pq::derivation::derive_view_tag_prefilter(&ss, output_index)
 }
 
-/// Compute the expected FCMP++ proof size given input count and tree depth.
-#[no_mangle]
-pub extern "C" fn shekyl_fcmp_proof_len(num_inputs: u32, tree_depth: u8) -> usize {
-    shekyl_fcmp::tree::proof_size(num_inputs as usize, tree_depth as usize)
-}
-
-/// Construct an FCMP++ proof from a variable-length witness blob.
+// Witness parsing exists for one consumer: the FROST multisig coordinator
+// in `legacy_frost`, whose entire surface is `feature = "multisig"`. The
+// same cfg here is the compiler-enforced statement of that: the default
+// build has no witness reader because nothing in it reads a witness.
+#[cfg(feature = "multisig")]
+/// Parse the serialized FCMP++ prove witness into typed prove inputs.
 ///
-/// `witness_ptr` / `witness_len`: the complete serialized witness for all inputs.
+/// This function owns the witness wire format. It is consumed by the FROST
+/// multisig coordinator (`shekyl_frost_coordinator_aggregate_and_prove`),
+/// which is the only remaining reader; the C-ABI writer for the fixed header
+/// is `shekyl_fcmp_build_witness_header`, and the two are pinned against each
+/// other by `witness_header_build_then_parse_roundtrip` over
+/// `docs/test_vectors/WITNESS_HEADER.json`.
 ///
 /// Wire format (all multi-byte integers are little-endian):
 ///
 /// ```text
 /// For each of `num_inputs` inputs, sequentially:
-///   Fixed header (224 bytes):
-///     [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32][pseudo_out_blind:32]
+///   Fixed header (SHEKYL_PROVE_WITNESS_HEADER_BYTES = 256 bytes, 8 fields):
+///     [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32][z:32][a:32]
 ///     O, I, C are compressed Ed25519 output points.
-///     pseudo_out_blind is the desired blinding factor a_i for this input's
-///     pseudo-out commitment (r_c = a_i - spend_y).
+///     z is the Pedersen commitment mask (C = z*G + amount*H).
+///     a is the desired blinding factor for this input's pseudo-out
+///       commitment. The rerandomization scalar is `r_c = a - z`, giving
+///       `C_tilde = (z + r_c)*G + amount*H = a*G + amount*H` — see
+///       `shekyl_fcmp::proof::ProveInput::pseudo_out_blind`, which computes
+///       it. It is `z`, never `spend_y`: the commitment mask is independent
+///       of the SAL output-key T-component (`FCMP_PLUS_PLUS.md`
+///       §"Commitment Mask Independence").
 ///   Leaf chunk (variable):
 ///     leaf_chunk_count: u32
 ///     For each entry (128 bytes):
@@ -211,80 +221,9 @@ pub extern "C" fn shekyl_fcmp_proof_len(num_inputs: u32, tree_depth: u8) -> usiz
 ///       siblings: sibling_count * 32 bytes (Helios scalars)
 /// ```
 ///
-/// `tree_root_ptr`: 32-byte curve tree root.
-/// `signable_tx_hash_ptr`: 32-byte transaction binding hash.
-///
-/// # Safety
-/// Caller must ensure all pointer arguments are valid or null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_fcmp_prove(
-    witness_ptr: *const u8,
-    witness_len: usize,
-    num_inputs: u32,
-    tree_root_ptr: *const u8,
-    tree_depth: u8,
-    signable_tx_hash_ptr: *const u8,
-) -> ShekylFcmpProveResult {
-    let fail = ShekylFcmpProveResult {
-        proof: ShekylBuffer::null(),
-        pseudo_outs: ShekylBuffer::null(),
-        success: false,
-    };
-
-    if witness_ptr.is_null() || tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() {
-        return fail;
-    }
-
-    let n = num_inputs as usize;
-    if n == 0 || n > shekyl_fcmp::MAX_INPUTS {
-        return fail;
-    }
-
-    let Some(witness) = (unsafe { slice_from_ptr(witness_ptr, witness_len) }) else {
-        return fail;
-    };
-    let tree_root: [u8; 32] = unsafe {
-        let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(tree_root_ptr, buf.as_mut_ptr(), 32);
-        buf
-    };
-    let signable_tx_hash: [u8; 32] = unsafe {
-        let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(signable_tx_hash_ptr, buf.as_mut_ptr(), 32);
-        buf
-    };
-
-    let Some(inputs) = parse_prove_witness(witness, n) else {
-        return fail;
-    };
-
-    // The `tree_depth` parameter is the upstream library's `layers` count:
-    // the total number of tree layers including the leaf layer. C++ callers
-    // are responsible for converting LMDB depth to layers (depth + 1) before
-    // calling this function. See FCMP_PLUS_PLUS.md §FFI Invariants.
-    //
-    //   layers 1 = single Selene root (degenerate, root IS the leaf hash).
-    //   layers 2 = Selene leaves → Helios root.
-    //   layers 3 = Selene leaves → Helios → Selene root.
-    //
-    //   Root curve parity: layers % 2 == 1 → C1 (Selene), == 0 → C2 (Helios).
-
-    match shekyl_fcmp::proof::prove(&inputs, &tree_root, tree_depth, signable_tx_hash) {
-        Ok(result) => {
-            let mut po_flat = Vec::with_capacity(n * 32);
-            for po in &result.pseudo_outs {
-                po_flat.extend_from_slice(po);
-            }
-            ShekylFcmpProveResult {
-                proof: ShekylBuffer::from_vec(result.proof.data),
-                pseudo_outs: ShekylBuffer::from_vec(po_flat),
-                success: true,
-            }
-        }
-        Err(_) => fail,
-    }
-}
-
+/// The field list is the authority for `ProveInputFields` and for the JSON
+/// vectors; all three must agree, and the round-trip test is what makes a
+/// disagreement fail rather than silently misalign every subsequent input.
 pub(crate) fn parse_prove_witness(
     data: &[u8],
     num_inputs: usize,
@@ -317,87 +256,9 @@ pub(crate) fn parse_prove_witness(
             .copy_from_slice(&data[offset + 224..offset + SHEKYL_PROVE_WITNESS_HEADER_BYTES]);
         offset += SHEKYL_PROVE_WITNESS_HEADER_BYTES;
 
-        // Leaf chunk
-        if offset + 4 > data.len() {
-            return None;
-        }
-        let chunk_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
-        offset += 4;
-
-        let mut leaf_chunk_outputs = Vec::with_capacity(chunk_count);
-        let mut leaf_chunk_h_pqc = Vec::with_capacity(chunk_count);
-        for _ in 0..chunk_count {
-            if offset + 128 > data.len() {
-                return None;
-            }
-            let mut lo = [0u8; 32];
-            let mut li = [0u8; 32];
-            let mut lc = [0u8; 32];
-            let mut lh = [0u8; 32];
-            lo.copy_from_slice(&data[offset..offset + 32]);
-            li.copy_from_slice(&data[offset + 32..offset + 64]);
-            lc.copy_from_slice(&data[offset + 64..offset + 96]);
-            lh.copy_from_slice(&data[offset + 96..offset + 128]);
-            leaf_chunk_outputs.push((lo, li, lc));
-            leaf_chunk_h_pqc.push(lh);
-            offset += 128;
-        }
-
-        // C1 (Selene) branch layers
-        if offset + 4 > data.len() {
-            return None;
-        }
-        let c1_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
-        offset += 4;
-
-        let mut c1_branch_layers = Vec::with_capacity(c1_count);
-        for _ in 0..c1_count {
-            if offset + 4 > data.len() {
-                return None;
-            }
-            let sib_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
-            offset += 4;
-            let needed = sib_count * 32;
-            if offset + needed > data.len() {
-                return None;
-            }
-            let mut siblings = Vec::with_capacity(sib_count);
-            for s in 0..sib_count {
-                let mut scalar = [0u8; 32];
-                scalar.copy_from_slice(&data[offset + s * 32..offset + (s + 1) * 32]);
-                siblings.push(scalar);
-            }
-            offset += needed;
-            c1_branch_layers.push(shekyl_fcmp::proof::BranchLayer { siblings });
-        }
-
-        // C2 (Helios) branch layers
-        if offset + 4 > data.len() {
-            return None;
-        }
-        let c2_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
-        offset += 4;
-
-        let mut c2_branch_layers = Vec::with_capacity(c2_count);
-        for _ in 0..c2_count {
-            if offset + 4 > data.len() {
-                return None;
-            }
-            let sib_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
-            offset += 4;
-            let needed = sib_count * 32;
-            if offset + needed > data.len() {
-                return None;
-            }
-            let mut siblings = Vec::with_capacity(sib_count);
-            for s in 0..sib_count {
-                let mut scalar = [0u8; 32];
-                scalar.copy_from_slice(&data[offset + s * 32..offset + (s + 1) * 32]);
-                siblings.push(scalar);
-            }
-            offset += needed;
-            c2_branch_layers.push(shekyl_fcmp::proof::BranchLayer { siblings });
-        }
+        let (leaf_chunk_outputs, leaf_chunk_h_pqc) = parse_leaf_chunks(data, &mut offset)?;
+        let c1_branch_layers = parse_branch_layers(data, &mut offset)?;
+        let c2_branch_layers = parse_branch_layers(data, &mut offset)?;
 
         inputs.push(shekyl_fcmp::proof::ProveInput {
             output_key,
@@ -416,6 +277,79 @@ pub(crate) fn parse_prove_witness(
     }
 
     Some(inputs)
+}
+
+#[cfg(feature = "multisig")]
+fn read_u32_le(data: &[u8], offset: &mut usize) -> Option<usize> {
+    let bytes = data.get(*offset..*offset + 4)?;
+    *offset += 4;
+    Some(u32::from_le_bytes(bytes.try_into().ok()?) as usize)
+}
+
+#[cfg(feature = "multisig")]
+type LeafChunkOutput = ([u8; 32], [u8; 32], [u8; 32]);
+
+#[cfg(feature = "multisig")]
+fn parse_leaf_chunks(
+    data: &[u8],
+    offset: &mut usize,
+) -> Option<(Vec<LeafChunkOutput>, Vec<[u8; 32]>)> {
+    let chunk_count = read_u32_le(data, offset)?;
+    let remaining = data.len() - *offset;
+    let mut outputs = bounded_capacity(chunk_count, 128, remaining)?;
+    let mut h_pqc = bounded_capacity(chunk_count, 128, remaining)?;
+    for _ in 0..chunk_count {
+        let chunk = data.get(*offset..*offset + 128)?;
+        let mut lo = [0u8; 32];
+        let mut li = [0u8; 32];
+        let mut lc = [0u8; 32];
+        let mut lh = [0u8; 32];
+        lo.copy_from_slice(&chunk[..32]);
+        li.copy_from_slice(&chunk[32..64]);
+        lc.copy_from_slice(&chunk[64..96]);
+        lh.copy_from_slice(&chunk[96..128]);
+        outputs.push((lo, li, lc));
+        h_pqc.push(lh);
+        *offset += 128;
+    }
+    Some((outputs, h_pqc))
+}
+
+/// C1 and C2 branch layers share a wire shape: a u32 layer count, then
+/// per layer a u32 sibling count and that many 32-byte scalars. One
+/// parser so the sibling-count reserve goes through [`bounded_capacity`].
+#[cfg(feature = "multisig")]
+fn parse_branch_layers(
+    data: &[u8],
+    offset: &mut usize,
+) -> Option<Vec<shekyl_fcmp::proof::BranchLayer>> {
+    let count = read_u32_le(data, offset)?;
+    // Protocol ceiling, not just a backing bound: a layer costs only a
+    // 4-byte header on the wire but a `BranchLayer` plus per-layer padding
+    // work in `prove` — so a genuinely BACKED blob could otherwise buy
+    // ~2.5M empty layers per 10 MiB (memory/CPU amplification). No valid
+    // witness has more branch layers per curve than the tree's maximum
+    // depth; the exact C1/C2 alternation split stays the proof library's
+    // contract (`prove` validates the path), not re-derived here.
+    if count > shekyl_fcmp::MAX_TREE_DEPTH as usize {
+        return None;
+    }
+    let remaining = data.len() - *offset;
+    let mut layers = bounded_capacity(count, 4, remaining)?;
+    for _ in 0..count {
+        let sib_count = read_u32_le(data, offset)?;
+        let remaining = data.len() - *offset;
+        let mut siblings = bounded_capacity(sib_count, 32, remaining)?;
+        for _ in 0..sib_count {
+            let bytes = data.get(*offset..*offset + 32)?;
+            let mut scalar = [0u8; 32];
+            scalar.copy_from_slice(bytes);
+            siblings.push(scalar);
+            *offset += 32;
+        }
+        layers.push(shekyl_fcmp::proof::BranchLayer { siblings });
+    }
+    Some(layers)
 }
 
 /// Verify an FCMP++ proof with batch verification.
@@ -487,9 +421,11 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
         buf
     };
 
-    // The `tree_depth` parameter is the upstream library's `layers` count.
-    // C++ callers convert LMDB depth to layers (depth + 1) before calling.
-    // See convention comment in shekyl_fcmp_prove.
+    // The `tree_depth` parameter is the upstream library's `layers` count,
+    // not the LMDB tree depth: callers convert with `layers = lmdb_depth + 1`
+    // before calling. Stated here rather than cross-referenced -- this was the
+    // convention's only remaining statement after the legacy prove entry point
+    // that used to document it was deleted.
 
     let proof = shekyl_fcmp::proof::ShekylFcmpProof {
         data: proof_bytes.to_vec(),
@@ -543,8 +479,9 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
 /// `5=UpstreamError`, `6=BatchVerificationFailed`, `7=TreeDepthTooLarge`,
 /// `8=InputCountMismatch` (`po_count != pqc_hash_count`, checked before any slicing). Never
 /// `4` (`KeyImageCountMismatch`) — this path has no key images. Anti-replay is the
-/// emission per-epoch dedup, not a key image; the ML-DSA leaf gate is the sibling
-/// [`shekyl_emission_hybrid_auth_verify`].
+/// emission per-epoch dedup, not a key image; the hybrid leaf-gated auth check is
+/// step 8 of the coarse `shekyl_emission_vin_verify` call
+/// (`shekyl_archival_retention::emission_verify::emission_vin_verify_auth`).
 ///
 /// # Safety
 /// Every pointer must be valid for its stated length; `tree_root_ptr` and
@@ -566,7 +503,7 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
     if po_count != pqc_hash_count {
         return 8; // VerifyError::InputCountMismatch
     }
-    // Cap the per-input arity at MAX_INPUTS, mirroring `shekyl_fcmp_prove`: a valid proof never
+    // Cap the per-input arity at MAX_INPUTS: a valid proof never
     // exceeds it, so this rejects an oversized attacker-controlled count before any allocation,
     // bounds the `.collect()`s below, and makes `po_count as u32` a lossless narrowing (no
     // truncation). `po_count == pqc_hash_count` is already established, so this bounds both.
@@ -648,95 +585,6 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
     }
 }
 
-/// Verify one reward-emission hybrid vin-auth (C-1 calls this per auth: Auth-B backing,
-/// Auth-P pseudonym). Given `P`'s canonical hybrid pubkey, the binding message, a
-/// canonical hybrid signature, and the in-circuit committed leaf hash:
-///  1. recompute `hash_pqc_public_key(pubkey)` and demand equality with `leaf_hash`
-///     — this binds the auth to the **proven leaf**, not merely *a* leaf (gate-6 §9.6);
-///  2. verify the hybrid signature (Ed25519 **and** ML-DSA-65) over `msg`.
-///
-/// **Leaf-hash input — do not get this wrong:** despite the `pqc_pk` naming,
-/// `hash_pqc_public_key` hashes the **full canonical hybrid** public key bytes
-/// (Ed25519 ‖ ML-DSA-65), exactly what curve-tree leaves commit
-/// (`shekyl_crypto_pq::derivation::derive_pqc_leaf_hash`). A caller hashing only the ML-DSA
-/// component computes a *different* `leaf_hash` and gets systematic `LEAF_HASH_MISMATCH`.
-///
-/// Because the leaf commits `H(full hybrid pubkey)` and step 2 exercises **both** halves,
-/// the auth binds `P` exactly as tightly as the leaf — no committed-vs-authenticated
-/// asymmetry, so soundness does not rest on any "Ed25519 non-distinguishing" invariant.
-/// Order matters: the leaf-hash equality is checked first so a signature over an
-/// unrelated (but valid) key cannot pass. Returns [`SHEKYL_EMISSION_HYBRID_AUTH_OK`] or an
-/// `SHEKYL_EMISSION_HYBRID_AUTH_ERR_*` discriminant. `pubkey_len` / `sig_len` must equal the
-/// canonical hybrid pubkey / signature lengths — a non-canonical length returns
-/// `PUBKEY_DESER` / `SIG_DESER` up front, before the buffer is read (an FFI DoS guard).
-///
-/// # Safety
-/// Every pointer must be valid for its stated length; `leaf_hash_ptr` must point to
-/// 32 readable bytes.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_emission_hybrid_auth_verify(
-    pubkey_ptr: *const u8,
-    pubkey_len: usize,
-    msg_ptr: *const u8,
-    msg_len: usize,
-    sig_ptr: *const u8,
-    sig_len: usize,
-    leaf_hash_ptr: *const u8,
-) -> u8 {
-    use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
-    use shekyl_crypto_pq::signature::{
-        HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
-    };
-
-    // FFI DoS guard: `scheme_id = 1` hybrid pubkey/signature are fixed-length canonical, so
-    // reject any other length up front — before slicing, hashing, or parsing an oversized
-    // untrusted buffer. Correct by contract (this function requires canonical encodings), and
-    // cheap: it bounds the subsequent `hash_pqc_public_key` and `from_canonical_bytes` to the
-    // fixed canonical size.
-    if pubkey_len != SINGLE_KEY_CANONICAL_LEN {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER;
-    }
-    if sig_len != SINGLE_SIG_CANONICAL_LEN {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER;
-    }
-
-    let Some(pubkey_bytes) = (unsafe { slice_from_ptr(pubkey_ptr, pubkey_len) }) else {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
-    };
-    let Some(msg) = (unsafe { slice_from_ptr(msg_ptr, msg_len) }) else {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
-    };
-    let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_ptr, sig_len) }) else {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
-    };
-    if leaf_hash_ptr.is_null() {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_NULL_PTR;
-    }
-    let leaf_hash: [u8; 32] = unsafe {
-        let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(leaf_hash_ptr, buf.as_mut_ptr(), 32);
-        buf
-    };
-
-    // (1) Leaf-binding first: the auth must be over the *proven leaf*'s pqc_pk.
-    if shekyl_crypto_pq::derivation::hash_pqc_public_key(pubkey_bytes) != leaf_hash {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_LEAF_HASH_MISMATCH;
-    }
-
-    let Ok(pubkey) = HybridPublicKey::from_canonical_bytes(pubkey_bytes) else {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_PUBKEY_DESER;
-    };
-    let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
-        return SHEKYL_EMISSION_HYBRID_AUTH_ERR_SIG_DESER;
-    };
-
-    // (2) Hybrid verify (Ed25519 && ML-DSA-65).
-    match SignatureScheme::verify(&HybridEd25519MlDsa, &pubkey, msg, &sig) {
-        Ok(true) => SHEKYL_EMISSION_HYBRID_AUTH_OK,
-        _ => SHEKYL_EMISSION_HYBRID_AUTH_ERR_VERIFY,
-    }
-}
-
 /// Convert raw output data into serialized 4-scalar leaves.
 ///
 /// `outputs_ptr`: packed tuples of `{O.x[32], I.x[32], C.x[32], pqc_pk_hash[32]}`,
@@ -748,7 +596,13 @@ pub extern "C" fn shekyl_fcmp_outputs_to_leaves(
     outputs_ptr: *const u8,
     count: usize,
 ) -> ShekylBuffer {
-    let total = count * 128;
+    // `count` is the ABI-declared element count of the caller's buffer; the
+    // multiply must not wrap (a wrap-scale count would desync the declared
+    // byte length from the element count below — the checked-mul guard every
+    // other ptr+len count in this crate already carries).
+    let Some(total) = count.checked_mul(128) else {
+        return ShekylBuffer::null();
+    };
     let Some(bytes) = (unsafe { slice_from_ptr(outputs_ptr, total) }) else {
         return ShekylBuffer::null();
     };
@@ -761,4 +615,100 @@ pub extern "C" fn shekyl_fcmp_outputs_to_leaves(
 
     let serialized = shekyl_fcmp::tree::leaves_to_bytes(&leaves);
     ShekylBuffer::from_vec(serialized)
+}
+
+// Both tests here exercise `parse_prove_witness`, so they carry its feature:
+// the hostile-count attack surface exists exactly where the parser does.
+#[cfg(all(test, feature = "multisig"))]
+mod tests {
+    use super::*;
+
+    /// A hostile count field must be refused BEFORE any reservation:
+    /// wire counts (`chunk_count`, `c1_count`, `c2_count`, and nested
+    /// `sib_count`) go through `bounded_capacity`. Pre-cap a 4-byte
+    /// `u32::MAX` drove `Vec::with_capacity` reservations of up to
+    /// ~412 GB — allocation failure aborts the whole C++ host process.
+    /// Post-cap, a count the remaining bytes cannot back is malformed
+    /// input and parses to `None` like every other truncation.
+    #[test]
+    fn hostile_witness_counts_are_refused_before_any_reservation() {
+        // Leaf-chunk count claims u32::MAX with zero backing bytes.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Valid empty leaf chunk, hostile C1 layer count.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Valid empty leaf chunk, one C1 layer, hostile sibling count.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Valid empty leaf chunk + C1, hostile C2 layer count.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Control: the same three counts at 0 with no further bytes parse
+        // (structurally empty input set is the caller's concern, not a
+        // truncation) — proves the caps refuse the COUNT, not the shape.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        assert!(parse_prove_witness(&blob, 1).is_some());
+    }
+
+    /// A layer count above `MAX_TREE_DEPTH` is refused even when every
+    /// 4-byte header is genuinely BACKED by blob bytes: a layer costs 4
+    /// wire bytes but a `BranchLayer` + per-layer prove work, so backing
+    /// alone still buys ~2.5M empty layers per 10 MiB (the amplification
+    /// this cap closes). Boundary-controlled: exactly `MAX_TREE_DEPTH`
+    /// empty layers (all zero sib counts, fully backed) still parse —
+    /// the cap is the protocol ceiling, not an off-by-one.
+    #[test]
+    fn backed_layer_counts_above_max_tree_depth_are_refused() {
+        let depth = u32::from(shekyl_fcmp::MAX_TREE_DEPTH);
+
+        // C1 leg: count = MAX_TREE_DEPTH + 1, every header backed.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes()); // chunk_count = 0
+        blob.extend_from_slice(&(depth + 1).to_le_bytes());
+        for _ in 0..=depth {
+            blob.extend_from_slice(&0u32.to_le_bytes()); // backed sib headers
+        }
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // C2 leg: valid empty C1, hostile-but-backed C2.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes()); // chunk_count = 0
+        blob.extend_from_slice(&0u32.to_le_bytes()); // c1_count = 0
+        blob.extend_from_slice(&(depth + 1).to_le_bytes());
+        for _ in 0..=depth {
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        assert!(parse_prove_witness(&blob, 1).is_none());
+
+        // Boundary control: exactly MAX_TREE_DEPTH backed empty layers on
+        // both curves parse.
+        let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+        blob.extend_from_slice(&0u32.to_le_bytes()); // chunk_count = 0
+        blob.extend_from_slice(&depth.to_le_bytes());
+        for _ in 0..depth {
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        blob.extend_from_slice(&depth.to_le_bytes());
+        for _ in 0..depth {
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        assert!(parse_prove_witness(&blob, 1).is_some());
+    }
 }

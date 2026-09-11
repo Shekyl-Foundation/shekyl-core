@@ -150,10 +150,10 @@ post-decap (or decap is universal).
 | Wire field | Location | Leg (today / target) | Derived from | Check order (scanner) | T6 (view-half / quantum `a`) | FA-6 disposition |
 |------------|----------|----------------------|--------------|------------------------|------------------------------|------------------|
 | **`view_tag`** (pre-filter) | `txout_to_tagged_key` | Classical → **hybrid** | `x25519_ss` → **`ml_kem_ss`** | **Pre-decap** (today) | **Leaks** | **Re-key** (`derive_view_tag_prefilter`) |
-| **`amount_tag`** | `rctSigBase` / `enc_amounts` pair | Hybrid | `combined_ss` (`prk` in `derive_output_secrets`) | **Post-decap** | Safe | **Verify** — no change |
-| **`enc_amount` (8 B)** | `rctSigBase` | Hybrid | `k_amount` from `combined_ss` | Post-decap decrypt | Opaque XOR; not a tag | **Verify** — no change |
-| **`label_tag`** (FA-11) | `rctSigBase` / `enc_labels` | Hybrid (spec) | `combined_ss` — same discipline as `amount_tag` (`SUBADDRESS_UNDER_PQC.md` §5.7.11) | **Post-decap** (must **not** be pre-decap) | Safe **iff** verified post-decap | **Verify** at FA-11 review — **do not assume**; ambiguity “before decrypt” = pre-decap filter → would require re-key |
-| **`enc_label` (8 B)** (FA-11) | `rctSigBase` | Hybrid | `k_label` from `combined_ss` | Post-decap decrypt | Opaque ciphertext | **Verify** — no change |
+| **`amount_tag`** | `CtSigBase` / `enc_amounts` pair | Hybrid | `combined_ss` (`prk` in `derive_output_secrets`) | **Post-decap** | Safe | **Verify** — no change |
+| **`enc_amount` (8 B)** | `CtSigBase` | Hybrid | `k_amount` from `combined_ss` | Post-decap decrypt | Opaque XOR; not a tag | **Verify** — no change |
+| **`label_tag`** (FA-11) | `CtSigBase` / `enc_labels` | Hybrid (spec) | `combined_ss` — same discipline as `amount_tag` (`SUBADDRESS_UNDER_PQC.md` §5.7.11) | **Post-decap** (must **not** be pre-decap) | Safe **iff** verified post-decap | **Verify** at FA-11 review — **do not assume**; ambiguity “before decrypt” = pre-decap filter → would require re-key |
+| **`enc_label` (8 B)** (FA-11) | `CtSigBase` | Hybrid | `k_label` from `combined_ss` | Post-decap decrypt | Opaque ciphertext | **Verify** — no change |
 | `view_tag_combined` | **Not on wire** | Hybrid | `combined_ss` | Internal only | N/A | No wire action |
 | KEM CTs (`R_eph`, ML-KEM) | `tx_extra` | Public / ciphertext | — | — | No clustering via tag alone | No FA-6 change |
 | `output_key`, commitment, `pqc_pk`, `h_pqc` | tx / RCT | Public | — | — | No | No FA-6 change |
@@ -697,6 +697,18 @@ reason to raise a ceiling or lower `O_per_block`.
 | `W_out` | **1,500 B** | **Stress lower bound** on marginal **scanned** bytes per v3 account output in a full block (pin-high-`O_per_block` direction per §8.3.1): hybrid KEM material **1,120 B** per output in `tx_extra` tag `0x06` (`docs/CHANGELOG.md`, `docs/POST_QUANTUM_CRYPTOGRAPHY.md`) plus `txout` + RCT row lower bound — **not** a measured prototype tx; revisit only via dated S5 amendment if FA-11 wire audit shows higher marginal |
 | `O_per_block` | **400** | `⌊ B_cap / W_out ⌋` = `⌊ 600,000 / 1,500 ⌋` |
 | `N_outputs` (scenario B) | **525,960,000** | `N_blocks × O_per_block` |
+
+> **Year convention (graded 2026-09-06, `CLIENT_VERSION_CONSTANTS_VALIDATION.md`
+> §3.12 (iii)).** `N_blocks` is derived on a 365.25-day year; the economics
+> authority uses 365 days (`config/economics_params.json`
+> `shekyl_blocks_per_year: 262800`, `DESIGN_CONCEPTS.md`'s `(60/2) × 24 × 365`),
+> so this horizon carries 180 blocks/year — 900 over the five years — that the
+> emission schedule does not. **The 365-day convention is authoritative for
+> anything touching emission, fee or staking arithmetic**, because it is the
+> value in the digested authority. This horizon is a security *margin*, where
+> 900 blocks in 1.3 million is noise, and keeps 365.25 deliberately; it is not
+> a second blocks-per-year constant (the implied 262,980 appears nowhere as a
+> literal, and must not be introduced as one).
 
 **Scenario A — incremental**
 

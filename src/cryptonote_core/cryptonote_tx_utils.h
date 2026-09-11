@@ -33,7 +33,7 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/utility.hpp>
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 
 namespace cryptonote
 {
@@ -43,11 +43,11 @@ namespace cryptonote
   // silently-wrong split the moment the asymptote is non-neutral, priced at
   // template build and refused at connect — a chain halt. Every call site must
   // state its n; production reads it via Blockchain::parent_frozen_segment_count.
-  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce = blobdata(), size_t max_outs = 999, uint8_t hard_fork_version = 1, uint64_t tx_volume_avg = 0, uint64_t circulating_supply = 0, uint64_t genesis_ng_height = 0);
+  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce = blobdata(), size_t max_outs = 999, uint8_t hard_fork_version = 1, shekyl::tx_volume_window tx_volume = {}, uint64_t circulating_supply = 0, uint64_t genesis_ng_height = 0);
 
   struct tx_source_entry
   {
-    typedef std::pair<uint64_t, rct::ctkey> output_entry;
+    typedef std::pair<uint64_t, ct::ctkey> output_entry;
 
     std::vector<output_entry> outputs;  //index + key + optional commitment
     uint64_t real_output;               //index in outputs vector of real output_entry
@@ -55,13 +55,13 @@ namespace cryptonote
     uint64_t real_output_in_tx_index;   //index in transaction outputs vector
     uint64_t amount;                    //money
     bool rct;                           //true if the output is rct
-    rct::key mask;                      //amount mask
+    ct::key mask;                      //amount mask
     crypto::secret_key ho{};            // v3: HKDF-derived output secret scalar; wiped on destruction
     bool v3_ho_valid = false;           // true when ho was populated from shekyl_scan_and_recover
 
     ~tx_source_entry() { memwipe(ho.data, sizeof(ho.data)); }
 
-    void push_output(uint64_t idx, const crypto::public_key &k, uint64_t amount) { outputs.push_back(std::make_pair(idx, rct::ctkey({rct::pk2rct(k), rct::zeroCommit(amount)}))); }
+    void push_output(uint64_t idx, const crypto::public_key &k, uint64_t amount) { outputs.push_back(std::make_pair(idx, ct::ctkey({ct::pk2rct(k), ct::zeroCommit(amount)}))); }
 
     BEGIN_SERIALIZE_OBJECT()
       FIELD(outputs)
@@ -127,8 +127,8 @@ namespace cryptonote
   //---------------------------------------------------------------
   crypto::public_key get_destination_view_key_pub(const std::vector<tx_destination_entry> &destinations, const std::optional<cryptonote::account_public_address>& change_addr);
   bool construct_tx(const account_keys& sender_account_keys, std::vector<tx_source_entry> &sources, const std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx);
-  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, bool rct = false, bool shuffle_outs = true, bool use_view_tags = false, uint8_t hf_version = 0, rct::keyV *out_commitment_masks = nullptr);
-  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, bool rct = false, bool use_view_tags = false, uint8_t hf_version = 0, rct::keyV *out_commitment_masks = nullptr);
+  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, bool rct = false, bool shuffle_outs = true, bool use_view_tags = false, uint8_t hf_version = 0, ct::keyV *out_commitment_masks = nullptr);
+  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, bool rct = false, bool use_view_tags = false, uint8_t hf_version = 0, ct::keyV *out_commitment_masks = nullptr);
   bool generate_genesis_block(
       block& bl
     , std::string const & genesis_tx
@@ -139,7 +139,7 @@ namespace cryptonote
   bool get_block_longhash(const Blockchain *pb, const blobdata& bd, crypto::hash& res, const uint64_t height, const int major_version, const crypto::hash *seed_hash, const int miners = 0);
   bool get_block_longhash(const Blockchain *pb, const block& b, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash = nullptr, const int miners = 0);
   crypto::hash get_block_longhash(const Blockchain *pb, const block& b, const uint64_t height, const crypto::hash *seed_hash = nullptr, const int miners = 0);
-  void get_altblock_longhash(const block& b, crypto::hash& res, const crypto::hash& seed_hash);
+  bool get_altblock_longhash(const block& b, crypto::hash& res, const crypto::hash& seed_hash);
 
 }
 

@@ -812,7 +812,7 @@ unchanged across the 9-commit archival drift.
 | --- | --- | --- |
 | Cargo `multisig` on engine-core / rpc / ffi | `default = []` | both |
 | Production wallet-rpc / cli | do not enable `multisig` | both |
-| Envelope `CAPABILITY_RESERVED_MULTISIG` | refused | both |
+| Envelope capability byte `0x04` (RESERVED; the `CAPABILITY_RESERVED_MULTISIG` constant was deleted 2026-09-07 per rule 23 — the byte is reserved in `WALLET_FILE_FORMAT_V1.md` §2.3, refused as `UnknownCapabilityMode`) | refused | both |
 | `EngineSignerKind` / `SoloSigner` | marker only; **zero associated items**; `MultisigSigner` type **absent** | both |
 | **`multisig/{dkg,group,signing}.rs`** | **Option A FROST fossil** — **DELETE** (R1-F-3 disposition) | **closed as delete** |
 | `multisig/v31/` | equal-participants scaffold; no `construction.rs` / `transport/` | both |
@@ -1200,9 +1200,9 @@ rust/shekyl-crypto-pq/src/multisig.rs:85-87  expected_blob_len = 3+n*2028
 rust/shekyl-crypto-pq/src/multisig.rs:198-201  sig = 1+M*3385+M
 
 # F-2 leaf / domain
-rust/shekyl-fcmp/src/leaf.rs:29-33
-rust/shekyl-fcmp/src/lib.rs:36 DOMAIN_PQC_LEAF
-rust/shekyl-crypto-pq/src/derivation.rs:27 DOMAIN_PQC_LEAF (duplicate)
+rust/shekyl-fcmp/src/leaf.rs:29-33 (SA-3a: now forwards to crypto-pq)
+rust/shekyl-crypto-pq/src/derivation.rs:32 DOMAIN_PQC_LEAF (SA-3a single
+  source; the shekyl-fcmp/src/lib.rs:36 duplicate this list pinned was deleted)
 
 # F-3 lineage
 rust/shekyl-engine-core/src/multisig/mod.rs  "FROST" + v31/

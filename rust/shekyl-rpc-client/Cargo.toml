@@ -53,6 +53,7 @@ shekyl-curve-io = { path = "../shekyl-curve-io", default-features = false }
 # matrix open).
 shekyl-rpc-types = { path = "../shekyl-rpc-types", default-features = false }
 
+
 [features]
 # NOTE: `std` here is aspirational while `shekyl-rpc-types` is a dependency
 # (see its comment above) — that crate has no `std` feature to wire in and

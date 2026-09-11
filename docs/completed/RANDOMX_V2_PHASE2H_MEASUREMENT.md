@@ -6,6 +6,8 @@ isProject: false
 
 # RandomX v2 — Phase 2h measurement methodology
 
+
+**Status:** CLOSED-as-record.
 ## 1. Purpose
 
 Phase 2h Round 3 (pre-implementation round) §11 entry names three

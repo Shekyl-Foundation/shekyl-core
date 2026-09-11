@@ -1,0 +1,29 @@
+{
+  "status": "OK",
+  "txs": [{
+    "as_hex": "0011223344",
+    "as_json": "",
+    "block_height": 1234567,
+    "block_timestamp": 1750000000,
+    "confirmations": 89,
+    "double_spend_seen": false,
+    "in_pool": false,
+    "output_indices": [7,8,4294967296],
+    "prunable_as_hex": "",
+    "prunable_hash": "0c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5",
+    "pruned_as_hex": "",
+    "tx_hash": "0b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4"
+  },{
+    "as_hex": "aabbcc",
+    "as_json": "",
+    "double_spend_seen": true,
+    "in_pool": true,
+    "prunable_as_hex": "",
+    "prunable_hash": "161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8ef",
+    "pruned_as_hex": "",
+    "received_timestamp": 1750000123,
+    "relayed": true,
+    "tx_hash": "151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7ee"
+  }],
+  "txs_as_hex": ["0011223344","aabbcc"]
+}

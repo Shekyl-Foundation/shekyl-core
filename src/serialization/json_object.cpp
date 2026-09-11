@@ -302,7 +302,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
   }
   {
     dest.Key("fcmp");
-    toJsonValue(dest, tx.rct_signatures, tx.pruned);
+    toJsonValue(dest, tx.ct_signatures, tx.pruned);
   }
   if (!tx.pqc_auths.empty())
   {
@@ -325,7 +325,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::transaction& tx)
   GET_FROM_JSON_OBJECT(val, tx.vin, inputs);
   GET_FROM_JSON_OBJECT(val, tx.vout, outputs);
   GET_FROM_JSON_OBJECT(val, tx.extra, extra);
-  GET_FROM_JSON_OBJECT(val, tx.rct_signatures, fcmp);
+  GET_FROM_JSON_OBJECT(val, tx.ct_signatures, fcmp);
 
   const auto& sigs = val.FindMember("signatures");
   if (sigs != val.MemberEnd())
@@ -339,7 +339,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::transaction& tx)
     fromJsonValue(pqc->value, tx.pqc_auths);
   }
 
-  const auto& rsig = tx.rct_signatures;
+  const auto& rsig = tx.ct_signatures;
   if (!cryptonote::is_coinbase(tx) && rsig.p.bulletproofs_plus.empty() && rsig.get_pseudo_outs().empty() && rsig.p.fcmp_pp_proof.empty() && sigs == val.MemberEnd())
     tx.pruned = true;
 }
@@ -569,82 +569,26 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_to_key& txin)
   GET_FROM_JSON_OBJECT(val, txin.k_image, key_image);
 }
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::archival_leaf_bytes& leaf)
-{
-  std::vector<uint8_t> bytes(leaf.data, leaf.data + ::config::ARCHIVAL_LEAF_BYTES);
-  toJsonValue(dest, bytes);
-}
-
-void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_leaf_bytes& leaf)
-{
-  std::vector<uint8_t> bytes;
-  fromJsonValue(val, bytes);
-  if (bytes.size() != ::config::ARCHIVAL_LEAF_BYTES)
-  {
-    const std::string expect = std::to_string(::config::ARCHIVAL_LEAF_BYTES) + " byte archival leaf";
-    throw WRONG_TYPE(expect.c_str());
-  }
-  memcpy(leaf.data, bytes.data(), ::config::ARCHIVAL_LEAF_BYTES);
-}
-
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::archival_segment_path_opening& path)
-{
-  dest.StartObject();
-  INSERT_INTO_JSON_OBJECT(dest, c1_layers, path.c1_layers);
-  INSERT_INTO_JSON_OBJECT(dest, c2_layers, path.c2_layers);
-  dest.EndObject();
-}
-
-void fromJsonValue(const rapidjson::Value& val, cryptonote::archival_segment_path_opening& path)
-{
-  if (!val.IsObject())
-    throw WRONG_TYPE("json object");
-  GET_FROM_JSON_OBJECT(val, path.c1_layers, c1_layers);
-  GET_FROM_JSON_OBJECT(val, path.c2_layers, c2_layers);
-  if (path.c1_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND
-    || path.c2_layers.size() > config::ARCHIVAL_MAX_PATH_LAYERS_PER_KIND)
-    throw WRONG_TYPE("archival segment path layer count exceeds bound");
-  for (const auto& branch : path.c1_layers)
-    if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
-      throw WRONG_TYPE("archival segment path branch width exceeds bound");
-  for (const auto& branch : path.c2_layers)
-    if (branch.size() > config::ARCHIVAL_MAX_BRANCH_SCALARS)
-      throw WRONG_TYPE("archival segment path branch width exceeds bound");
-}
-
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txin_archival_serve_credit_response& txin)
 {
   dest.StartObject();
-
-  INSERT_INTO_JSON_OBJECT(dest, p_canonical_id, txin.p_canonical_id);
-  INSERT_INTO_JSON_OBJECT(dest, shard_id, txin.shard_id);
-  INSERT_INTO_JSON_OBJECT(dest, settlement_epoch, txin.settlement_epoch);
-  INSERT_INTO_JSON_OBJECT(dest, segment_subroot_rk, txin.segment_subroot_rk);
-  INSERT_INTO_JSON_OBJECT(dest, leaf_index_in_segment, txin.leaf_index_in_segment);
-  INSERT_INTO_JSON_OBJECT(dest, leaf_bytes, txin.leaf_bytes);
-  INSERT_INTO_JSON_OBJECT(dest, path, txin.path);
-  INSERT_INTO_JSON_OBJECT(dest, hybrid_signature, txin.hybrid_signature);
-
+  INSERT_INTO_JSON_OBJECT(dest, canonical_bytes, txin.canonical_bytes);
   dest.EndObject();
 }
 
 void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_serve_credit_response& txin)
 {
   if (!val.IsObject())
-  {
     throw WRONG_TYPE("json object");
-  }
-
-  GET_FROM_JSON_OBJECT(val, txin.p_canonical_id, p_canonical_id);
-  GET_FROM_JSON_OBJECT(val, txin.shard_id, shard_id);
-  GET_FROM_JSON_OBJECT(val, txin.settlement_epoch, settlement_epoch);
-  GET_FROM_JSON_OBJECT(val, txin.segment_subroot_rk, segment_subroot_rk);
-  GET_FROM_JSON_OBJECT(val, txin.leaf_index_in_segment, leaf_index_in_segment);
-  GET_FROM_JSON_OBJECT(val, txin.leaf_bytes, leaf_bytes);
-  GET_FROM_JSON_OBJECT(val, txin.path, path);
-  GET_FROM_JSON_OBJECT(val, txin.hybrid_signature, hybrid_signature);
-  if (txin.hybrid_signature.size() > config::PQC_HYBRID_SINGLE_SIG_LEN)
-    throw WRONG_TYPE("archival serve-credit hybrid_signature exceeds single-signature bound");
+  GET_FROM_JSON_OBJECT(val, txin.canonical_bytes, canonical_bytes);
+  // Transport-shape bounds matching the binary serializer (cryptonote_basic.h):
+  // allocation cap + Rust wire-tag echo. Semantic validation is the Rust
+  // parser's alone (shekyl-archival-retention::wire) -- the JSON/RPC entrypoint
+  // must not admit blobs the binary path rejects.
+  if (txin.canonical_bytes.size() < 2 || txin.canonical_bytes.size() > config::ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES)
+    throw WRONG_TYPE("archival serve-credit canonical_bytes length out of bounds");
+  if (txin.canonical_bytes[0] != cryptonote::TXIN_ARCHIVAL_SERVE_CREDIT_WIRE_TAG)
+    throw WRONG_TYPE("archival serve-credit canonical_bytes wire tag mismatch");
 }
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest,
@@ -928,77 +872,6 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::tx_out& txout)
   }
 }
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::connection_info& info)
-{
-  dest.StartObject();
-
-  INSERT_INTO_JSON_OBJECT(dest, incoming, info.incoming);
-  INSERT_INTO_JSON_OBJECT(dest, localhost, info.localhost);
-  INSERT_INTO_JSON_OBJECT(dest, local_ip, info.local_ip);
-  INSERT_INTO_JSON_OBJECT(dest, address_type, info.address_type);
-
-  INSERT_INTO_JSON_OBJECT(dest, ip, info.ip);
-  INSERT_INTO_JSON_OBJECT(dest, port, info.port);
-  INSERT_INTO_JSON_OBJECT(dest, rpc_port, info.rpc_port);
-  INSERT_INTO_JSON_OBJECT(dest, rpc_credits_per_hash, info.rpc_credits_per_hash);
-
-  INSERT_INTO_JSON_OBJECT(dest, peer_id, info.peer_id);
-
-  INSERT_INTO_JSON_OBJECT(dest, recv_count, info.recv_count);
-  INSERT_INTO_JSON_OBJECT(dest, recv_idle_time, info.recv_idle_time);
-
-  INSERT_INTO_JSON_OBJECT(dest, send_count, info.send_count);
-  INSERT_INTO_JSON_OBJECT(dest, send_idle_time, info.send_idle_time);
-
-  INSERT_INTO_JSON_OBJECT(dest, state, info.state);
-
-  INSERT_INTO_JSON_OBJECT(dest, live_time, info.live_time);
-
-  INSERT_INTO_JSON_OBJECT(dest, avg_download, info.avg_download);
-  INSERT_INTO_JSON_OBJECT(dest, current_download, info.current_download);
-
-  INSERT_INTO_JSON_OBJECT(dest, avg_upload, info.avg_upload);
-  INSERT_INTO_JSON_OBJECT(dest, current_upload, info.current_upload);
-
-  dest.EndObject();
-}
-
-
-void fromJsonValue(const rapidjson::Value& val, cryptonote::connection_info& info)
-{
-  if (!val.IsObject())
-  {
-    throw WRONG_TYPE("json object");
-  }
-
-  GET_FROM_JSON_OBJECT(val, info.incoming, incoming);
-  GET_FROM_JSON_OBJECT(val, info.localhost, localhost);
-  GET_FROM_JSON_OBJECT(val, info.local_ip, local_ip);
-  GET_FROM_JSON_OBJECT(val, info.address_type, address_type);
-
-  GET_FROM_JSON_OBJECT(val, info.ip, ip);
-  GET_FROM_JSON_OBJECT(val, info.port, port);
-  GET_FROM_JSON_OBJECT(val, info.rpc_port, rpc_port);
-  GET_FROM_JSON_OBJECT(val, info.rpc_credits_per_hash, rpc_credits_per_hash);
-
-  GET_FROM_JSON_OBJECT(val, info.peer_id, peer_id);
-
-  GET_FROM_JSON_OBJECT(val, info.recv_count, recv_count);
-  GET_FROM_JSON_OBJECT(val, info.recv_idle_time, recv_idle_time);
-
-  GET_FROM_JSON_OBJECT(val, info.send_count, send_count);
-  GET_FROM_JSON_OBJECT(val, info.send_idle_time, send_idle_time);
-
-  GET_FROM_JSON_OBJECT(val, info.state, state);
-
-  GET_FROM_JSON_OBJECT(val, info.live_time, live_time);
-
-  GET_FROM_JSON_OBJECT(val, info.avg_download, avg_download);
-  GET_FROM_JSON_OBJECT(val, info.current_download, current_download);
-
-  GET_FROM_JSON_OBJECT(val, info.avg_upload, avg_upload);
-  GET_FROM_JSON_OBJECT(val, info.current_upload, current_upload);
-}
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::tx_blob_entry& tx)
 {
@@ -1144,8 +1017,6 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::r
   INSERT_INTO_JSON_OBJECT(dest, id, peer.id);
   INSERT_INTO_JSON_OBJECT(dest, ip, peer.ip);
   INSERT_INTO_JSON_OBJECT(dest, port, peer.port);
-  INSERT_INTO_JSON_OBJECT(dest, rpc_port, peer.rpc_port);
-  INSERT_INTO_JSON_OBJECT(dest, rpc_credits_per_hash, peer.rpc_credits_per_hash);
   INSERT_INTO_JSON_OBJECT(dest, last_seen, peer.last_seen);
   INSERT_INTO_JSON_OBJECT(dest, pruning_seed, peer.pruning_seed);
 
@@ -1163,8 +1034,6 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::rpc::peer& peer)
   GET_FROM_JSON_OBJECT(val, peer.id, id);
   GET_FROM_JSON_OBJECT(val, peer.ip, ip);
   GET_FROM_JSON_OBJECT(val, peer.port, port);
-  GET_FROM_JSON_OBJECT(val, peer.rpc_port, rpc_port);
-  GET_FROM_JSON_OBJECT(val, peer.rpc_credits_per_hash, rpc_credits_per_hash);
   GET_FROM_JSON_OBJECT(val, peer.last_seen, last_seen);
   GET_FROM_JSON_OBJECT(val, peer.pruning_seed, pruning_seed);
 }
@@ -1381,13 +1250,13 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::rpc::BlockHeaderResp
   GET_FROM_JSON_OBJECT(val, response.reward, reward);
 }
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& sig, const bool prune)
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const ct::CtSig& sig, const bool prune)
 {
   using boost::adaptors::transform;
 
   dest.StartObject();
 
-  const auto just_mask = [] (rct::ctkey const& key) -> rct::key const&
+  const auto just_mask = [] (ct::ctkey const& key) -> ct::key const&
   {
     return key.mask;
   };
@@ -1400,7 +1269,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
     INSERT_INTO_JSON_OBJECT(dest, enc_labels, sig.enc_labels);
   if (!sig.outPk.empty())
     INSERT_INTO_JSON_OBJECT(dest, commitments, transform(sig.outPk, just_mask));
-  if (sig.type == rct::CTTypeFcmpPlusPlusPqc)
+  if (sig.type == ct::CTTypeFcmpPlusPlusPqc)
   {
     INSERT_INTO_JSON_OBJECT(dest, fee, sig.txnFee);
     INSERT_INTO_JSON_OBJECT(dest, referenceBlock, sig.referenceBlock);
@@ -1408,7 +1277,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
 
   // prunable
   if (!prune && (!sig.p.bulletproofs_plus.empty() || !sig.get_pseudo_outs().empty()
-      || !sig.p.fcmp_pp_proof.empty()))
+      || !sig.p.fcmp_pp_proof.empty() || !sig.p.serve_credit_pruned.empty()))
   {
     dest.Key("prunable");
     dest.StartObject();
@@ -1417,6 +1286,8 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
     INSERT_INTO_JSON_OBJECT(dest, pseudo_outs, sig.get_pseudo_outs());
     INSERT_INTO_JSON_OBJECT(dest, curve_trees_tree_depth, sig.p.curve_trees_tree_depth);
     INSERT_INTO_JSON_OBJECT(dest, fcmp_pp_proof, sig.p.fcmp_pp_proof);
+    // RF-D1: pruned pass records, opaque per-vin blobs.
+    INSERT_INTO_JSON_OBJECT(dest, serve_credit_pruned, sig.p.serve_credit_pruned);
 
     dest.EndObject();
   }
@@ -1424,7 +1295,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
   dest.EndObject();
 }
 
-void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
+void fromJsonValue(const rapidjson::Value& val, ct::CtSig& sig)
 {
   using boost::adaptors::transform;
 
@@ -1442,7 +1313,7 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
     GET_FROM_JSON_OBJECT(val, sig.enc_labels, enc_labels);
   if (val.HasMember("commitments"))
     GET_FROM_JSON_OBJECT(val, sig.outPk, commitments);
-  if (sig.type == rct::CTTypeFcmpPlusPlusPqc)
+  if (sig.type == ct::CTTypeFcmpPlusPlusPqc)
   {
     GET_FROM_JSON_OBJECT(val, sig.txnFee, fee);
     if (val.HasMember("referenceBlock"))
@@ -1453,12 +1324,15 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
   const auto prunable = val.FindMember("prunable");
   if (prunable != val.MemberEnd())
   {
-    rct::keyV pseudo_outs = std::move(sig.get_pseudo_outs());
+    ct::keyV pseudo_outs = std::move(sig.get_pseudo_outs());
 
     GET_FROM_JSON_OBJECT(prunable->value, sig.p.bulletproofs_plus, bulletproofs_plus);
     GET_FROM_JSON_OBJECT(prunable->value, pseudo_outs, pseudo_outs);
     GET_FROM_JSON_OBJECT(prunable->value, sig.p.curve_trees_tree_depth, curve_trees_tree_depth);
     GET_FROM_JSON_OBJECT(prunable->value, sig.p.fcmp_pp_proof, fcmp_pp_proof);
+    // Required, matching the binary array: a missing key is not an empty
+    // spend. Spends carry `[]`; serve-credit carries one blob per vin.
+    GET_FROM_JSON_OBJECT(prunable->value, sig.p.serve_credit_pruned, serve_credit_pruned);
 
     sig.get_pseudo_outs() = std::move(pseudo_outs);
   }
@@ -1467,10 +1341,11 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
     sig.p.bulletproofs_plus.clear();
     sig.get_pseudo_outs().clear();
     sig.p.fcmp_pp_proof.clear();
+    sig.p.serve_credit_pruned.clear();
   }
 }
 
-void fromJsonValue(const rapidjson::Value& val, rct::ctkey& key)
+void fromJsonValue(const rapidjson::Value& val, ct::ctkey& key)
 {
   key.dest = {};
   fromJsonValue(val, key.mask);
@@ -1493,7 +1368,7 @@ void fromJsonValue(const rapidjson::Value& val, std::array<uint8_t, 9>& enc_amou
     throw WRONG_TYPE("valid hex for enc_amount");
 }
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::BulletproofPlus& p)
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const ct::BulletproofPlus& p)
 {
   dest.StartObject();
 
@@ -1510,7 +1385,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::Bulletpr
   dest.EndObject();
 }
 
-void fromJsonValue(const rapidjson::Value& val, rct::BulletproofPlus& p)
+void fromJsonValue(const rapidjson::Value& val, ct::BulletproofPlus& p)
 {
   if (!val.IsObject())
   {

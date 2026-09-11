@@ -28,7 +28,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "gtest/gtest.h"
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 #include "device/device_default.hpp"
 
 TEST(device, name)
@@ -66,24 +66,24 @@ TEST(device, open_close)
 TEST(device, ops)
 {
   hw::core::device_default dev;
-  rct::key resd, res;
+  ct::key resd, res;
   crypto::key_derivation derd, der;
-  rct::key sk, pk;
+  ct::key sk, pk;
   crypto::secret_key sk0, sk1;
   crypto::public_key pk0, pk1;
   crypto::ec_scalar ressc0, ressc1;
   crypto::key_image ki0, ki1;
 
-  rct::skpkGen(sk, pk);
-  rct::scalarmultBase((rct::key&)pk0, (rct::key&)sk0);
-  rct::scalarmultBase((rct::key&)pk1, (rct::key&)sk1);
+  ct::skpkGen(sk, pk);
+  ct::scalarmultBase((ct::key&)pk0, (ct::key&)sk0);
+  ct::scalarmultBase((ct::key&)pk1, (ct::key&)sk1);
 
   dev.scalarmultKey(resd, pk, sk);
-  rct::scalarmultKey(res, pk, sk);
+  ct::scalarmultKey(res, pk, sk);
   ASSERT_EQ(resd, res);
 
   dev.scalarmultBase(resd, sk);
-  rct::scalarmultBase(res, sk);
+  ct::scalarmultBase(res, sk);
   ASSERT_EQ(resd, res);
 
   dev.sc_secret_add((crypto::secret_key&)resd, sk0, sk1);
@@ -97,8 +97,8 @@ TEST(device, ops)
   // Removed: derivation_to_scalar, derive_secret_key, derive_public_key
   // no longer exist in Shekyl (v3 HKDF replaces them).
 
-  dev.secret_key_to_public_key(rct::rct2sk(sk), pk0);
-  crypto::secret_key_to_public_key(rct::rct2sk(sk), pk1);
+  dev.secret_key_to_public_key(ct::rct2sk(sk), pk0);
+  crypto::secret_key_to_public_key(ct::rct2sk(sk), pk1);
   ASSERT_EQ(pk0, pk1);
 
   dev.generate_key_image(pk0, sk0, ki0);

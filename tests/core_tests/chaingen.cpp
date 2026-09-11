@@ -34,6 +34,7 @@
 #include <sstream>
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <random>
 #include <fstream>
 
@@ -59,8 +60,8 @@
 extern "C" {
 #include "crypto/crypto-ops.h"
 }
-#include "fcmp/rctOps.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_ops.h"
+#include "fcmp/ct_semantics.h"
 #include "memwipe.h"
 #include "shekyl/economics.h"
 #include "shekyl/shekyl_ffi.h"
@@ -159,7 +160,6 @@ namespace
 
     virtual void grow_curve_tree(const std::vector<uint8_t>&, uint64_t) override {}
     virtual void trim_curve_tree(uint64_t) override {}
-    virtual std::array<uint8_t, 32> get_curve_tree_root() const override { return {}; }
     virtual uint8_t get_curve_tree_depth() const override { return 0; }
     virtual uint64_t get_curve_tree_leaf_count() const override { return 0; }
     virtual bool get_curve_tree_layer_hash(uint8_t, uint64_t, uint8_t*) const override { return false; }
@@ -167,7 +167,6 @@ namespace
     virtual bool get_curve_tree_leaf_by_output_index(uint64_t, uint8_t*) const override { return false; }
 
     virtual void store_curve_tree_root_at_height(uint64_t, const std::array<uint8_t, 32>&) override {}
-    virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t) const override { return {}; }
     virtual void remove_curve_tree_root_at_height(uint64_t) override {}
     virtual void store_archival_attestation_witness_at_height(uint64_t, const cryptonote::blobdata&) override {}
     virtual cryptonote::blobdata get_archival_attestation_witness_at_height(uint64_t) const override { return {}; }
@@ -222,7 +221,7 @@ static std::unique_ptr<cryptonote::Blockchain> init_blockchain(const std::vector
     bdb->add_block(*blk, 1, 1, 1, 0, 0, blk_hash);
   }
 
-  bool r = blockchain->init(bdb, nettype, true, test_options, 2, nullptr);
+  bool r = blockchain->init(bdb, nettype, true, test_options, 2);
   CHECK_AND_ASSERT_THROW_MES(r, "could not init blockchain from events");
   return bc;
 }
@@ -271,10 +270,213 @@ uint64_t test_generator::get_already_generated_coins(const cryptonote::block& bl
   return get_already_generated_coins(blk_hash);
 }
 
-void test_generator::add_block(const cryptonote::block& blk, size_t txs_weight, std::vector<size_t>& block_weights, uint64_t already_generated_coins, uint64_t block_reward, uint8_t hf_version)
+void test_generator::add_block(const cryptonote::block& blk, size_t txs_weight, std::vector<size_t>& block_weights, uint64_t already_generated_coins, uint64_t block_reward, uint8_t hf_version, const std::vector<cryptonote::transaction>& txs)
 {
   const size_t block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
-  m_blocks_info[get_block_hash(blk)] = block_info(blk.prev_id, already_generated_coins + block_reward, block_weight);
+  const crypto::hash id = get_block_hash(blk);
+  m_blocks_info[id] = block_info(blk.prev_id, already_generated_coins + block_reward, block_weight);
+  m_block_txs[id] = block_txs{blk.miner_tx, txs};
+}
+
+// ---------------------------------------------------------------------------
+// Curve-tree replica: the header-root oracle.
+//
+// A block's header commits to the curve-tree state at the block's own height
+// -- after its parent connected, before its own drain (FCMP_PLUS_PLUS.md §5,
+// CEN-I12) -- and the daemon checks that at admission on every nettype
+// (CEN-B5). The generator builds blocks before any store exists, so it replays
+// its own chain through the Rust CurveTreeClient (shekyl_curve_tree_replica_*),
+// whose parity with the daemon's store is KAT-pinned. The replica tracks which
+// block hashes it holds at which heights; a fork rolls it back to the common
+// prefix, a different genesis recreates it.
+// ---------------------------------------------------------------------------
+struct curve_tree_replica
+{
+  ShekylCurveTreeReplica* handle = nullptr;
+  std::vector<crypto::hash> chain; // ingested block hashes; index == height
+
+  curve_tree_replica() { reset(); }
+  ~curve_tree_replica() { shekyl_curve_tree_replica_free(handle); }
+  curve_tree_replica(const curve_tree_replica&) = delete;
+  curve_tree_replica& operator=(const curve_tree_replica&) = delete;
+
+  void reset()
+  {
+    shekyl_curve_tree_replica_free(handle);
+    handle = shekyl_curve_tree_replica_new();
+    chain.clear();
+    CHECK_AND_ASSERT_THROW_MES(handle != nullptr, "curve-tree replica: cannot create the Rust client");
+  }
+};
+
+namespace
+{
+  // One transaction's leaf inputs, owned here so the FFI view can point into it.
+  struct replica_tx_buffers
+  {
+    bool is_miner = false;
+    bool has_blob = false;
+    std::vector<uint8_t> blob;
+    std::vector<ShekylCurveTreeReplicaOutput> outputs;
+  };
+
+  // Mirrors the daemon's collect_outputs() inputs (blockchain_db.cpp): the
+  // 0x07 leaf-hash blob as parsed there, one entry per vout with its outPk
+  // commitment when present and its target kind. Maturity, h_pqc slicing and
+  // leaf eligibility are the client's to decide, not repeated here.
+  replica_tx_buffers to_replica_tx(const cryptonote::transaction& tx, bool is_miner)
+  {
+    replica_tx_buffers out;
+    out.is_miner = is_miner;
+    std::vector<cryptonote::tx_extra_field> fields;
+    cryptonote::tx_extra_pqc_leaf_hashes lh;
+    if (cryptonote::parse_tx_extra(tx.extra, fields) && cryptonote::find_tx_extra_field_by_type(fields, lh))
+    {
+      out.has_blob = true;
+      out.blob.assign(lh.blob.begin(), lh.blob.end());
+    }
+    out.outputs.reserve(tx.vout.size());
+    for (size_t i = 0; i < tx.vout.size(); ++i)
+    {
+      ShekylCurveTreeReplicaOutput o{};
+      const auto& target = tx.vout[i].target;
+      if (std::holds_alternative<cryptonote::txout_to_tagged_key>(target))
+      {
+        o.target_kind = 0;
+        memcpy(o.output_key, &std::get<cryptonote::txout_to_tagged_key>(target).key, 32);
+      }
+      else if (std::holds_alternative<cryptonote::txout_to_key>(target))
+      {
+        o.target_kind = 1;
+        memcpy(o.output_key, &std::get<cryptonote::txout_to_key>(target).key, 32);
+      }
+      else
+        o.target_kind = 2;
+      if (i < tx.ct_signatures.outPk.size())
+      {
+        o.has_commitment = 1;
+        memcpy(o.commitment, tx.ct_signatures.outPk[i].mask.bytes, 32);
+      }
+      out.outputs.push_back(o);
+    }
+    return out;
+  }
+
+  void replica_ingest(curve_tree_replica& replica, uint64_t height, const crypto::hash& id, const test_generator::block_txs& bt)
+  {
+    std::vector<replica_tx_buffers> buffers;
+    buffers.reserve(1 + bt.txs.size());
+    buffers.push_back(to_replica_tx(bt.miner_tx, true));
+    for (const auto& tx : bt.txs)
+      buffers.push_back(to_replica_tx(tx, false));
+    std::vector<ShekylCurveTreeReplicaTx> views;
+    views.reserve(buffers.size());
+    for (const auto& b : buffers)
+    {
+      ShekylCurveTreeReplicaTx v{};
+      v.is_miner = b.is_miner ? 1 : 0;
+      v.has_leaf_hash_blob = b.has_blob ? 1 : 0;
+      v.leaf_hash_blob = b.blob.data();
+      v.leaf_hash_blob_len = b.blob.size();
+      v.outputs = b.outputs.data();
+      v.n_outputs = b.outputs.size();
+      views.push_back(v);
+    }
+    CHECK_AND_ASSERT_THROW_MES(shekyl_curve_tree_replica_ingest_block(replica.handle, height, views.data(), views.size()),
+      "curve-tree replica: ingest of block " << id << " at height " << height << " failed (see the replica's log line)");
+    replica.chain.push_back(id);
+  }
+}
+
+void test_generator::fill_curve_tree_root(cryptonote::block& blk)
+{
+  // Ancestors of blk, genesis first. Every one was recorded by add_block with
+  // its transaction bodies.
+  std::vector<crypto::hash> ancestors;
+  for (crypto::hash cur = blk.prev_id; cur != null_hash; )
+  {
+    auto it = m_blocks_info.find(cur);
+    if (it == m_blocks_info.end())
+    {
+      // A parent the generator never built (gen_block_invalid_prev_id's
+      // deliberate bad prev_id): the daemon rejects the block on prev_id
+      // before the root is read, so the header only needs to be well-formed.
+      MDEBUG("fill_curve_tree_root: prev_id " << cur << " is not a generated block; header gets the empty-tree root");
+      shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&blk.curve_tree_root));
+      return;
+    }
+    ancestors.push_back(cur);
+    cur = it->second.prev_id;
+  }
+  std::reverse(ancestors.begin(), ancestors.end());
+
+  if (!m_replica)
+    m_replica = std::make_shared<curve_tree_replica>();
+  curve_tree_replica& replica = *m_replica;
+
+  // Reconcile the replica with this block's ancestry: keep the common prefix,
+  // roll back the rest, then ingest what is missing.
+  size_t common = 0;
+  while (common < ancestors.size() && common < replica.chain.size() && ancestors[common] == replica.chain[common])
+    ++common;
+  if (common < replica.chain.size())
+  {
+    if (common == 0)
+      replica.reset();
+    else
+    {
+      CHECK_AND_ASSERT_THROW_MES(shekyl_curve_tree_replica_rollback_to_fork(replica.handle, common - 1),
+        "curve-tree replica: rollback to height " << (common - 1) << " failed");
+      // A rollback onto a prefix that produced no leaf entry reports "nothing
+      // ingested" (the client's resume rule); replay from genesis then.
+      uint64_t tip = 0;
+      if (shekyl_curve_tree_replica_tip_height(replica.handle, &tip) && tip == common - 1)
+        replica.chain.resize(common);
+      else
+        replica.reset();
+    }
+    common = replica.chain.size();
+  }
+  for (size_t h = common; h < ancestors.size(); ++h)
+  {
+    auto bt = m_block_txs.find(ancestors[h]);
+    CHECK_AND_ASSERT_THROW_MES(bt != m_block_txs.end(), "curve-tree replica: no recorded transactions for block " << ancestors[h]);
+    replica_ingest(replica, h, ancestors[h], bt->second);
+  }
+
+  std::array<uint8_t, 32> root{};
+  CHECK_AND_ASSERT_THROW_MES(shekyl_curve_tree_replica_next_block_root(replica.handle, root.data()),
+    "curve-tree replica: next_block_root failed after " << ancestors.size() << " ancestors");
+  memcpy(&blk.curve_tree_root, root.data(), root.size());
+}
+
+std::vector<cryptonote::transaction> test_generator::find_txs_in_events(const std::vector<crypto::hash>& tx_hashes) const
+{
+  std::vector<cryptonote::transaction> found;
+  if (tx_hashes.empty())
+    return found;
+  std::unordered_map<crypto::hash, const cryptonote::transaction*> by_hash;
+  if (m_events != nullptr)
+  {
+    for (const auto& ev : *m_events)
+    {
+      if (const auto* tx = std::get_if<cryptonote::transaction>(&ev))
+        by_hash[get_transaction_hash(*tx)] = tx;
+      else if (const auto* txs = std::get_if<std::vector<cryptonote::transaction>>(&ev))
+        for (const auto& tx : *txs)
+          by_hash[get_transaction_hash(tx)] = &tx;
+    }
+  }
+  for (const auto& h : tx_hashes)
+  {
+    auto it = by_hash.find(h);
+    if (it != by_hash.end())
+      found.push_back(*it->second);
+    else
+      MWARNING("construct_block_manually: no body among the events for tx " << h
+        << "; the curve-tree replica omits its outputs, so a header built ten or more blocks later may mismatch");
+  }
+  return found;
 }
 
 bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, const crypto::hash& prev_id,
@@ -286,7 +488,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
   blk.minor_version = hf_ver ? *hf_ver : CURRENT_BLOCK_MINOR_VERSION;
   blk.timestamp = timestamp;
   blk.prev_id = prev_id;
-  shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&blk.curve_tree_root));
+  fill_curve_tree_root(blk);
   blk.attestation_root = cryptonote::empty_attestation_root();
 
   blk.tx_hashes.reserve(tx_list.size());
@@ -319,7 +521,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
     // must thread the real parent leaf-derived n here or its coinbase will be
     // refused at connect — which is the loud failure we want.
     if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), /*max_outs=*/1, hf_ver ? *hf_ver : 1,
-        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
+        /*tx_volume=*/{}, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
       return false;
 
     size_t actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
@@ -379,9 +581,10 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
   {
     get_block_reward(misc_utils::median(block_weights), target_block_weight,
                      already_generated_coins, accum_reward,
-                     hf_ver ? *hf_ver : 1, /*tx_volume_avg=*/0);
+                     hf_ver ? *hf_ver : 1, /*tx_volume=*/{});
   }
-  add_block(blk, txs_weight, block_weights, already_generated_coins, accum_reward, hf_ver ? *hf_ver : 1);
+  add_block(blk, txs_weight, block_weights, already_generated_coins, accum_reward, hf_ver ? *hf_ver : 1,
+    std::vector<cryptonote::transaction>(tx_list.begin(), tx_list.end()));
 
   return true;
 }
@@ -422,7 +625,7 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   blk.minor_version = actual_params & bf_minor_ver ? minor_ver : CURRENT_BLOCK_MINOR_VERSION;
   blk.timestamp     = actual_params & bf_timestamp ? timestamp : prev_block.timestamp + SHEKYL_DAA_TARGET_SECONDS; // Keep difficulty unchanged
   blk.prev_id       = actual_params & bf_prev_id   ? prev_id   : get_block_hash(prev_block);
-  shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&blk.curve_tree_root));
+  fill_curve_tree_root(blk);
   blk.attestation_root = cryptonote::empty_attestation_root();
   blk.tx_hashes     = actual_params & bf_tx_hashes ? tx_hashes : std::vector<crypto::hash>();
   // F-H harness conformance: the consensus coinbase output-count cap is 1, and
@@ -446,7 +649,7 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
     size_t current_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
     // TODO: This will work, until size of constructed block is less then CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE
     if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, current_block_weight, fees, /*frozen_segment_count=*/0, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), max_outs, hf_version,
-        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
+        /*tx_volume=*/{}, /*circulating_supply=*/already_generated_coins, /*genesis_ng_height=*/0))
       return false;
   }
 
@@ -462,8 +665,9 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   get_block_reward(misc_utils::median(block_weights),
                    txs_weight + get_transaction_weight(blk.miner_tx),
                    already_generated_coins, full_base_reward, hf_version,
-                   /*tx_volume_avg=*/0);
-  add_block(blk, txs_weight, block_weights, already_generated_coins, full_base_reward, hf_version);
+                   /*tx_volume=*/{});
+  add_block(blk, txs_weight, block_weights, already_generated_coins, full_base_reward, hf_version,
+    find_txs_in_events(blk.tx_hashes));
 
   return true;
 }
@@ -516,15 +720,15 @@ namespace
 }
 
 static bool try_v3_scan_output(const cryptonote::account_base& from, const transaction& tx,
-    size_t j, uint64_t& amount_out, rct::key& mask_out,
+    size_t j, uint64_t& amount_out, ct::key& mask_out,
     crypto::secret_key* ho_out = nullptr)
 {
     const auto& keys = from.get_keys();
     if (keys.m_ml_kem_decap_key.empty()) return false;
     if (tx.version < 3) return false;
-    if (j >= tx.rct_signatures.outPk.size()) return false;
-    if (j >= tx.rct_signatures.enc_amounts.size()) return false;
-    if (j >= tx.rct_signatures.enc_labels.size()) return false;
+    if (j >= tx.ct_signatures.outPk.size()) return false;
+    if (j >= tx.ct_signatures.enc_amounts.size()) return false;
+    if (j >= tx.ct_signatures.enc_labels.size()) return false;
 
     std::vector<tx_extra_field> extra_fields;
     if (!parse_tx_extra(tx.extra, extra_fields)) return false;
@@ -542,8 +746,8 @@ static bool try_v3_scan_output(const cryptonote::account_base& from, const trans
 
     auto vt_opt = cryptonote::get_output_view_tag(tx.vout[j]);
     uint8_t view_tag = vt_opt ? vt_opt->data : 0;
-    uint8_t amount_tag = tx.rct_signatures.enc_amounts[j][8];
-    uint8_t label_tag = tx.rct_signatures.enc_labels[j][8];
+    uint8_t amount_tag = tx.ct_signatures.enc_amounts[j][8];
+    uint8_t label_tag = tx.ct_signatures.enc_labels[j][8];
 
     uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_bprime[32];
     uint64_t recovered_amount = 0;
@@ -556,10 +760,10 @@ static bool try_v3_scan_output(const cryptonote::account_base& from, const trans
         keys.m_ml_kem_decap_key.size(),
         ct_ptr, ct_ptr + X25519_CT_BYTES, ML_KEM_CT_BYTES,
         reinterpret_cast<const uint8_t*>(&output_public_key),
-        tx.rct_signatures.outPk[j].mask.bytes,
-        tx.rct_signatures.enc_amounts[j].data(),
+        tx.ct_signatures.outPk[j].mask.bytes,
+        tx.ct_signatures.enc_amounts[j].data(),
         amount_tag,
-        tx.rct_signatures.enc_labels[j].data(),
+        tx.ct_signatures.enc_labels[j].data(),
         label_tag,
         view_tag,
         static_cast<uint64_t>(j),
@@ -623,7 +827,7 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
                     outs[amount_key][tx_global_idx].idx = tx_global_idx;
 
                     uint64_t recovered_amount = 0;
-                    rct::key recovered_mask{};
+                    ct::key recovered_mask{};
                     crypto::secret_key recovered_ho{};
                     if (try_v3_scan_output(from, tx, j, recovered_amount, recovered_mask, &recovered_ho))
                     {
@@ -650,9 +854,9 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
 {
     const auto& keys = from.get_keys();
     if (keys.m_ml_kem_decap_key.empty() || tx.version < 3) return false;
-    if (out_no >= tx.rct_signatures.outPk.size()) return false;
-    if (out_no >= tx.rct_signatures.enc_amounts.size()) return false;
-    if (out_no >= tx.rct_signatures.enc_labels.size()) return false;
+    if (out_no >= tx.ct_signatures.outPk.size()) return false;
+    if (out_no >= tx.ct_signatures.enc_amounts.size()) return false;
+    if (out_no >= tx.ct_signatures.enc_labels.size()) return false;
 
     std::vector<tx_extra_field> extra_fields;
     if (!parse_tx_extra(tx.extra, extra_fields)) return false;
@@ -670,8 +874,8 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
 
     auto vt_opt = cryptonote::get_output_view_tag(tx.vout[out_no]);
     uint8_t view_tag = vt_opt ? vt_opt->data : 0;
-    uint8_t amount_tag = tx.rct_signatures.enc_amounts[out_no][8];
-    uint8_t label_tag = tx.rct_signatures.enc_labels[out_no][8];
+    uint8_t amount_tag = tx.ct_signatures.enc_amounts[out_no][8];
+    uint8_t label_tag = tx.ct_signatures.enc_labels[out_no][8];
 
     uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_bprime[32];
     uint64_t recovered_amount = 0;
@@ -684,10 +888,10 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
         keys.m_ml_kem_decap_key.size(),
         ct_ptr, ct_ptr + X25519_CT_BYTES, ML_KEM_CT_BYTES,
         reinterpret_cast<const uint8_t*>(&output_public_key),
-        tx.rct_signatures.outPk[out_no].mask.bytes,
-        tx.rct_signatures.enc_amounts[out_no].data(),
+        tx.ct_signatures.outPk[out_no].mask.bytes,
+        tx.ct_signatures.enc_amounts[out_no].data(),
         amount_tag,
-        tx.rct_signatures.enc_labels[out_no].data(),
+        tx.ct_signatures.enc_labels[out_no].data(),
         label_tag,
         view_tag,
         static_cast<uint64_t>(out_no),
@@ -781,10 +985,10 @@ bool fill_output_entries(std::vector<output_index>& out_indices, size_t sender_o
 
     if (append)
     {
-      rct::key comm = oi.commitment();
+      ct::key comm = oi.commitment();
       crypto::public_key otk_key;
       CHECK_AND_ASSERT_MES(get_output_key_from_target(oi.out, otk_key), false, "Invalid output target type in fill_output_entries");
-      output_entries.push_back(tx_source_entry::output_entry(oi.idx, rct::ctkey({rct::pk2rct(otk_key), comm})));
+      output_entries.push_back(tx_source_entry::output_entry(oi.idx, ct::ctkey({ct::pk2rct(otk_key), comm})));
     }
   }
 
@@ -831,8 +1035,8 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
                 ts.mask = oi.v3_mask;
                 ts.ho = oi.v3_ho;
                 ts.v3_ho_valid = true;
-                rct::key C_check = rct::commit(ts.amount, ts.mask);
-                if (!rct::equalKeys(C_check, oi.p_tx->rct_signatures.outPk[oi.out_no].mask)) {
+                ct::key C_check = ct::commit(ts.amount, ts.mask);
+                if (!ct::equalKeys(C_check, oi.p_tx->ct_signatures.outPk[oi.out_no].mask)) {
                     LOG_ERROR("v3 recovered commitment mismatch for output " << oi.out_no
                         << " amount=" << ts.amount);
                     continue;
@@ -985,7 +1189,7 @@ void block_tracker::get_fake_outs(size_t num_outs, uint64_t amount, uint64_t glo
     if (used.find(oi_idx) != used.end())
       continue;
 
-    rct::key comm = oi.commitment();
+    ct::key comm = oi.commitment();
     auto item = std::make_tuple(oi.idx, oi_out_key, comm);
     outs.push_back(item);
     used.insert(oi_idx);
@@ -1029,7 +1233,7 @@ void block_tracker::dump_data(const std::string & fname)
 std::string dump_data(const cryptonote::transaction &tx)
 {
   ostringstream ss;
-  ss << "msg: " << dump_keys(tx.rct_signatures.message.bytes)
+  ss << "msg: " << dump_keys(tx.ct_signatures.message.bytes)
      << ", vin: ";
 
   for(auto & in : tx.vin){
@@ -1296,7 +1500,7 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     tx.vin.clear();
     tx.vout.clear();
     tx.extra.clear();
-    tx.rct_signatures = {};
+    tx.ct_signatures = {};
 
     add_tx_pub_key_to_extra(tx, txkey.pub);
     if (!sort_tx_extra(tx.extra, tx.extra))
@@ -1306,13 +1510,13 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     in.height = height;
 
     uint64_t block_reward;
-    if (!get_block_reward(median_block_weight, target_block_weight, already_generated_coins, block_reward, hf_version, 0))
+    if (!get_block_reward(median_block_weight, target_block_weight, already_generated_coins, block_reward, hf_version, /*tx_volume=*/{}))
       return false;
 
-    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0, hf_version);
+    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0);
     block_reward = em_split.miner_emission;
 
-    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, /*frozen_segment_count=*/0, hf_version);
+    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, shekyl::tx_volume_window{}, 0, /*frozen_segment_count=*/0);
     block_reward += burn.miner_fee_income;
 
     tx_extra_pqc_kem_ciphertext kem_field;
@@ -1320,9 +1524,9 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     tx_extra_pqc_leaf_hashes leaf_hash_field;
     leaf_hash_field.blob.reserve(PQC_LEAF_HASH_BYTES);
 
-    tx.rct_signatures.outPk.resize(1);
-    tx.rct_signatures.enc_amounts.resize(1);
-    tx.rct_signatures.enc_labels.resize(1);
+    tx.ct_signatures.outPk.resize(1);
+    tx.ct_signatures.enc_amounts.resize(1);
+    tx.ct_signatures.enc_labels.resize(1);
 
     ShekylOutputData od = shekyl_construct_output(
       reinterpret_cast<const uint8_t*>(&txkey.sec),
@@ -1340,11 +1544,11 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     cryptonote::set_tx_out(block_reward, out_key, true, vt, out);
     tx.vout.push_back(out);
 
-    memcpy(tx.rct_signatures.outPk[0].mask.bytes, od.commitment, 32);
-    memcpy(tx.rct_signatures.enc_amounts[0].data(), od.enc_amount, 8);
-    tx.rct_signatures.enc_amounts[0][8] = od.amount_tag;
-    memcpy(tx.rct_signatures.enc_labels[0].data(), od.enc_label, 8);
-    tx.rct_signatures.enc_labels[0][8] = od.label_tag;
+    memcpy(tx.ct_signatures.outPk[0].mask.bytes, od.commitment, 32);
+    memcpy(tx.ct_signatures.enc_amounts[0].data(), od.enc_amount, 8);
+    tx.ct_signatures.enc_amounts[0][8] = od.amount_tag;
+    memcpy(tx.ct_signatures.enc_labels[0].data(), od.enc_label, 8);
+    tx.ct_signatures.enc_labels[0][8] = od.label_tag;
 
     kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
     if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
@@ -1429,19 +1633,19 @@ bool append_v3_output_to_miner_tx(transaction& tx, const crypto::secret_key& txk
   cryptonote::set_tx_out(amount, out_key, true, vt, out);
   tx.vout.push_back(out);
 
-  rct::ctkey pk_entry;
+  ct::ctkey pk_entry;
   memcpy(pk_entry.mask.bytes, od.commitment, 32);
-  tx.rct_signatures.outPk.push_back(pk_entry);
+  tx.ct_signatures.outPk.push_back(pk_entry);
 
   std::array<uint8_t, 9> enc_amt{};
   memcpy(enc_amt.data(), od.enc_amount, 8);
   enc_amt[8] = od.amount_tag;
-  tx.rct_signatures.enc_amounts.push_back(enc_amt);
+  tx.ct_signatures.enc_amounts.push_back(enc_amt);
 
   std::array<uint8_t, 9> enc_label{};
   memcpy(enc_label.data(), od.enc_label, 8);
   enc_label[8] = od.label_tag;
-  tx.rct_signatures.enc_labels.push_back(enc_label);
+  tx.ct_signatures.enc_labels.push_back(enc_label);
 
   std::vector<tx_extra_field> extra_fields;
   CHECK_AND_ASSERT_MES(parse_tx_extra(tx.extra, extra_fields), false, "failed to parse tx.extra");
@@ -1573,7 +1777,7 @@ static uint64_t count_eligible_outputs(const cryptonote::transaction& tx, bool i
     else
       continue;
 
-    if (i >= tx.rct_signatures.outPk.size())
+    if (i >= tx.ct_signatures.outPk.size())
       continue;
 
     (void)maturity;
@@ -1622,7 +1826,7 @@ static uint64_t compute_leaf_count_at_height(
         else
           continue;
 
-        if (i >= tx.rct_signatures.outPk.size())
+        if (i >= tx.ct_signatures.outPk.size())
           continue;
 
         if (mat <= target_height)
@@ -2017,7 +2221,7 @@ bool test_chain_unit_base::verify(const std::string& cb_name, cryptonote::core& 
 
 bool test_chain_unit_base::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
 {
-  return !bvc.m_verifivation_failed;
+  return !cryptonote::block_rejected(bvc);
 }
 
 bool test_chain_unit_base::check_tx_verification_context(const cryptonote::tx_verification_context& tvc, bool /*tx_added*/, size_t /*event_index*/, const cryptonote::transaction& /*tx*/)

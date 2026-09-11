@@ -41,8 +41,13 @@
 //!   arm (transport-equivalent ambiguity, TTL-resubmit). A verdict the
 //!   client cannot name is not a verdict it can act on.
 //! - Unknown *fields* within known variants are tolerated (no
-//!   `deny_unknown_fields`), so additive daemon-side evolution does not
-//!   break older wallets.
+//!   `deny_unknown_fields`) — deliberately, and unlike the read types in
+//!   [`chain`] and [`transactions`], which now refuse them. The reason is not
+//!   network compatibility (there is no network): a verdict arrives mid-submit,
+//!   where a daemon and a wallet from different in-tree builds must still
+//!   agree on whether the transaction was accepted. Failing that parse turns an
+//!   informational field into an ambiguous submit, which is the outcome §2.3's
+//!   whole skew design exists to avoid. `skew_c` pins it.
 //!
 //! ## Schema-evolution rule (§2.3, F38 — binding on authors)
 //!
@@ -58,6 +63,48 @@
 #![deny(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
+
+pub mod bin_commands;
+pub mod chain;
+pub mod consensus_digest;
+pub mod hash;
+pub mod headers;
+pub mod identity;
+pub mod p2p;
+pub mod transactions;
+pub use bin_commands::{
+    BinError, BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
+    GetOIndexesResponse,
+};
+pub use chain::{
+    core_rpc_version_string, BlockHeader, GetBlockCountResponse, GetBlockHashParams,
+    GetBlockHeaderByHeightRequest, GetBlockHeaderByHeightResponse, GetBlockRequest,
+    GetBlockResponse, GetHeightResponse, GetVersionResponse, HardForkEntry, RestErrorEnvelope,
+    RpcStatus, CORE_RPC_ERROR_CODE_CORE_BUSY, CORE_RPC_ERROR_CODE_INTERNAL_ERROR,
+    CORE_RPC_ERROR_CODE_RESTRICTED, CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT,
+    CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION, CORE_RPC_VERSION_MAJOR,
+    CORE_RPC_VERSION_MINOR,
+};
+pub use consensus_digest::{
+    DaemonNetwork, CONSENSUS_CONSTANTS_DIGEST, CONSENSUS_CONSTANTS_DIGEST_HASH,
+};
+pub use hash::{HashHex, HashHexError};
+pub use headers::{
+    BlockHeaderSlot, FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
+    GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
+    GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
+    HardForkInfoRequest, HardForkInfoResponse,
+};
+pub use identity::{genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch};
+pub use p2p::{
+    ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
+    GetPeerListRequest, GetPeerListResponse, Peer, SyncInfoPeer, SyncInfoResponse, SyncSpan,
+};
+pub use transactions::{
+    GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
+    IsKeyImageSpentResponse, KeyImageStatus, KeyImageStatusError, TxEntry, TxEntryError,
+    TxLocation,
+};
 
 /// Request body for `POST /submit_transaction` (§2.4).
 ///

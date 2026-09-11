@@ -44,7 +44,6 @@ set(device_headers
   device.hpp
   device_io.hpp
   device_default.hpp
-  device_cold.hpp
   log.hpp
  )
 
@@ -78,5 +77,4 @@ target_link_libraries(device
     ${Boost_SERIALIZATION_LIBRARY}
   PRIVATE
     version
-    ${Blocks}
     ${EXTRA_LIBRARIES})

@@ -43,8 +43,8 @@ use crate::params::{
 use crate::project::atomic_units_string;
 use crate::tenant::{require_open_engine, DaemonEndpoint, TenantState};
 use crate::types::{
-    capability_mode_str, CheckReserveProofResult, CheckTxProofResult, GetReserveProofResult,
-    GetTxProofResult, TxProofOutputView,
+    CheckReserveProofResult, CheckTxProofResult, GetReserveProofResult, GetTxProofResult,
+    TxProofOutputView,
 };
 
 // ── Params (contract shapes) ─────────────────────────────────────────
@@ -98,12 +98,11 @@ pub(crate) async fn get_tx_proof(
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
     let address = decode_proof_address(&p.address, engine.network())?;
-    let capability = capability_mode_str(engine.capability());
 
     let generated = engine
         .get_tx_proof(TxHash::from_bytes(txid), &address, &p.message)
         .await
-        .map_err(|e| map_proofs_error(e, capability))?;
+        .map_err(map_proofs_error)?;
 
     let result = GetTxProofResult {
         proof: generated.proof,
@@ -132,12 +131,11 @@ pub(crate) async fn get_reserve_proof(
 
     let engine = require_open_engine(tenants).await?;
     let engine = engine.read().await;
-    let capability = capability_mode_str(engine.capability());
 
     let generated = engine
         .get_reserve_proof(amount, &p.message)
         .await
-        .map_err(|e| map_proofs_error(e, capability))?;
+        .map_err(map_proofs_error)?;
 
     let result = GetReserveProofResult {
         proof: generated.proof,
@@ -158,7 +156,7 @@ pub(crate) async fn check_tx_proof(
     // Wallet-less: only the tenant's network / daemon binding is read.
     let (network, endpoint) = network_and_daemon(tenants).await;
     let address = decode_proof_address(&p.address, network)?;
-    let daemon = make_daemon(&endpoint).await?;
+    let daemon = make_daemon(&endpoint, network).await?;
 
     let checked = proofs::check_tx_proof(&daemon, txid, &address, &p.message, &p.proof)
         .await
@@ -208,7 +206,7 @@ pub(crate) async fn check_reserve_proof(
 
     let (network, endpoint) = network_and_daemon(tenants).await;
     let address = decode_proof_address(&p.address, network)?;
-    let daemon = make_daemon(&endpoint).await?;
+    let daemon = make_daemon(&endpoint, network).await?;
 
     let checked = proofs::check_reserve_proof(&daemon, &address, &p.message, &p.proof)
         .await
@@ -280,20 +278,15 @@ fn decode_proof_address(s: &str, network: Network) -> Result<ShekylAddress, Wall
 }
 
 /// Map [`ProofsError`] onto the contract's error codes for the
-/// open-wallet generation methods. `capability` is the open wallet's
-/// mode string, reported when the refusal is capability-shaped
-/// (`get_reserve_proof` on a non-FULL wallet).
-fn map_proofs_error(e: ProofsError, capability: &str) -> WalletRpcError {
-    match e {
-        ProofsError::NotFullWallet => WalletRpcError::CapabilityForbids {
-            capability: capability.to_owned(),
-        },
-        other => map_walletless_error(other),
-    }
+/// open-wallet generation methods. Every wallet is FULL (rule 23), so
+/// there is no capability-shaped refusal; the mapping is the wallet-less
+/// taxonomy.
+fn map_proofs_error(e: ProofsError) -> WalletRpcError {
+    map_walletless_error(e)
 }
 
 /// Map [`ProofsError`] onto the contract's error codes for the
-/// wallet-less check methods (no capability context exists).
+/// wallet-less check methods.
 ///
 /// Detail-bearing variants log server-side and return the stable
 /// client message — the framing detail can echo client-controlled
@@ -313,11 +306,10 @@ fn map_walletless_error(e: ProofsError) -> WalletRpcError {
             tracing::info!(txid = %txid, "proof-named tx unknown to the daemon");
             WalletRpcError::ProofTxNotFound
         }
-        // Reachable only via `map_proofs_error`'s passthrough when the
-        // capability context was already consumed; map defensively.
-        ProofsError::NotFullWallet => WalletRpcError::CapabilityForbids {
-            capability: "FULL".to_owned(),
-        },
+        ProofsError::TxUnconfirmed(txid) => {
+            tracing::info!(txid = %txid, "reserve locator names a pooled (unconfirmed) tx");
+            WalletRpcError::ProofTxUnconfirmed
+        }
         ProofsError::InvalidRecipient => WalletRpcError::InvalidRecipient,
         ProofsError::AmountOverflow => {
             WalletRpcError::InternalError("proof amount sum overflow".into())
@@ -375,6 +367,7 @@ mod tests {
             shekyl_address::Network::Stagenet,
             [0xAA; 32],
             [0xBB; 32],
+            [0xEE; 48],
             vec![0xCC; 1184],
         )
     }
@@ -441,6 +434,10 @@ mod tests {
                 WalletRpcErrorCode::ProofTxNotFound,
             ),
             (
+                ProofsError::TxUnconfirmed("cd".repeat(32)),
+                WalletRpcErrorCode::ProofTxUnconfirmed,
+            ),
+            (
                 ProofsError::InvalidRecipient,
                 WalletRpcErrorCode::InvalidRecipient,
             ),
@@ -452,14 +449,6 @@ mod tests {
         for (e, code) in cases {
             assert_eq!(map_walletless_error(e).code(), code);
         }
-    }
-
-    #[test]
-    fn not_full_wallet_maps_to_capability_forbids_with_mode() {
-        let err = map_proofs_error(ProofsError::NotFullWallet, "VIEW_ONLY");
-        assert_eq!(err.code(), WalletRpcErrorCode::CapabilityForbids);
-        let data = err.data().expect("data");
-        assert_eq!(data["capability"], "VIEW_ONLY");
     }
 
     #[test]

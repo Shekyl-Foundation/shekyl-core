@@ -83,7 +83,7 @@ TEST(archival_credit_wire, attestation_root_defaults_to_empty_set_root)
 // a current archive stores class version 1, so loading it must NOT trip the
 // pre-V9 rejection, and attestation_root must ride the archive. (The stored
 // version is delivered to serialize() at load — the wallet cache's
-// `assert(ver == 4)` in wallet2.h relies on the same mechanism.)
+// `assert(ver == 4)` in the deleted wallet2.h relied on the same one.)
 TEST(archival_credit_wire, block_boost_archive_round_trips_attestation_root)
 {
   cryptonote::block bl{};
@@ -250,4 +250,37 @@ TEST(archival_credit_wire, bootstrap_block_package_refuses_an_oversized_attestat
   ASSERT_TRUE(::serialization::parse_binary(cryptonote::t_serializable_object_to_blob(at_cap_in), at_cap_out));
   EXPECT_EQ(at_cap_out.attestation_witness.size(),
             config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES);
+}
+
+// ── Cross-language grammar parity for the 0x0B tag ──────────────────────────
+//
+// The C++ variant and shekyl-wire now admit the same tx_extra tag set, which is
+// what lets the port's validator refuse an unparseable `extra` outright rather
+// than skipping the field-shape rule. That equality is a claim about two
+// encoders agreeing on bytes, and only a shared literal can test it: the
+// round-trip tests on each side prove each is self-consistent, which a pair of
+// mutually wrong encoders would also satisfy.
+//
+// The Rust leg asserts the same two literals in
+// rust/shekyl-wire/tests/tx_extra_roundtrip.rs. If either side's grammar moves,
+// exactly one of the two goes red.
+TEST(archival_credit_wire, attestation_field_bytes_match_the_port)
+{
+  // Non-empty: tag 0x0B, varint length 3, then the blob.
+  std::vector<uint8_t> extra;
+  ASSERT_TRUE(cryptonote::add_archival_attestation_to_tx_extra(extra, std::string("\x01\x02\x03", 3)));
+  const std::vector<uint8_t> expected{0x0B, 0x03, 0x01, 0x02, 0x03};
+  ASSERT_EQ(extra, expected)
+      << "the 0x0B encoding must match shekyl-wire's byte for byte";
+
+  // Empty blob: a present tag with a zero-length payload encodes as two bytes.
+  // That is a codec fact, not the reader's committed-empty-set — which is a
+  // successful parse with the tag absent (see
+  // attestation_reader_splits_absent_from_unreadable). Present-empty and absent
+  // both yield an empty blob at that API; they differ only on the wire.
+  std::vector<uint8_t> empty_extra;
+  ASSERT_TRUE(cryptonote::add_archival_attestation_to_tx_extra(empty_extra, std::string()));
+  const std::vector<uint8_t> expected_empty{0x0B, 0x00};
+  ASSERT_EQ(empty_extra, expected_empty)
+      << "a present-but-empty attestation is two bytes, not zero";
 }

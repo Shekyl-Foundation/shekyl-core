@@ -40,12 +40,12 @@
 #include "misc_log_ex.h"
 #include "bootstrap_file.h"
 #include "bootstrap_serialization.h"
-#include "blocks/blocks.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "serialization/binary_utils.h" // dump_binary(), parse_binary()
 #include "serialization/json_utils.h" // dump_json()
 #include "include_base_utils.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "cryptonote_basic/block_ingest.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "bcutil"
@@ -132,26 +132,6 @@ int check_flush(cryptonote::core &core, std::vector<block_complete_entry> &block
   if (!force && blocks.size() < db_batch_size)
     return 0;
 
-  // wait till we can verify a full HOH without extra, for speed
-  uint64_t new_height = core.get_blockchain_storage().get_db().height() + blocks.size();
-  if (!force && new_height % HASH_OF_HASHES_STEP)
-    return 0;
-
-  std::vector<crypto::hash> hashes;
-  for (const auto &b: blocks)
-  {
-    cryptonote::block block;
-    if (!parse_and_validate_block_from_blob(b.block, block))
-    {
-      MERROR("Failed to parse block: "
-          << epee::string_tools::buff_to_hex_nodelimer(b.block));
-      core.cleanup_handle_incoming_blocks();
-      return 1;
-    }
-    hashes.push_back(cryptonote::get_block_hash(block));
-  }
-  core.prevalidate_block_hashes(core.get_blockchain_storage().get_db().height(), hashes, {});
-
   std::vector<block> pblocks;
   if (!core.prepare_handle_incoming_blocks(blocks, pblocks))
   {
@@ -174,7 +154,9 @@ int check_flush(cryptonote::core &core, std::vector<block_complete_entry> &block
       tx_verification_context tvc = AUTO_VAL_INIT(tvc);
       CHECK_AND_ASSERT_THROW_MES(tx_blob.prunable_hash == crypto::null_hash,
         "block entry must not contain pruned txs");
-      core.handle_incoming_tx(tx_blob.blob, tvc, relay_method::block, true);
+      core.handle_incoming_tx(tx_blob.blob, tvc, relay_method::block, true,
+        // Imported from a block file: nothing arrived over a transport.
+        epee::net_utils::zone::invalid);
       if(tvc.m_verifivation_failed)
       {
         cryptonote::transaction transaction;
@@ -199,7 +181,7 @@ int check_flush(cryptonote::core &core, std::vector<block_complete_entry> &block
 
     core.handle_incoming_block(block_entry.block, pblocks.empty() ? NULL : &pblocks[blockidx++], bvc, connect, false); // <--- process block
 
-    if(bvc.m_verifivation_failed)
+    if (cryptonote::block_rejected(bvc))
     {
       cryptonote::block block;
       if (cryptonote::parse_and_validate_block_from_blob(block_entry.block, block))
@@ -209,7 +191,7 @@ int check_flush(cryptonote::core &core, std::vector<block_complete_entry> &block
       core.cleanup_handle_incoming_blocks();
       return 1;
     }
-    if(bvc.m_marked_as_orphaned)
+    if (cryptonote::block_orphaned(bvc))
     {
       MERROR("Block received at sync phase was marked as orphaned");
       core.cleanup_handle_incoming_blocks();
@@ -788,12 +770,7 @@ int main(int argc, char* argv[])
   try
   {
 
-#if defined(PER_BLOCK_CHECKPOINT)
-  const GetCheckpointsCallback& get_checkpoints = blocks::GetCheckpointsData;
-#else
-  const GetCheckpointsCallback& get_checkpoints = nullptr;
-#endif
-  if (!core.init(vm, nullptr, get_checkpoints))
+  if (!core.init(vm, nullptr))
   {
     std::cerr << "Failed to initialize core" << ENDL;
     return 1;

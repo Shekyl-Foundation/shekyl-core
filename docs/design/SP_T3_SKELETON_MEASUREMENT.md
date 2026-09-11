@@ -1,5 +1,17 @@
 # SP-T3 serving skeleton — the PD-F-2 dispersion measurement
 
+
+**Status:** measurement spike, opened 2026-08-03. SPIKE-F-1 **REFUTED AS
+STATED**; SPIKE-F-12 **CONFIRMS AN ACCEPTED RESIDUAL** (both in the §2
+substrate table, cited by id rather than line because this block's own
+insertion moves every line below it) — the
+tor entry-guard set is per-process/datadir, so one tor process means one guard
+set sees every stem successor (§21.1). **Status corrected 2026-09-01:** this
+line deferred to [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md), which
+carries no row for this spike — a dangling pointer found by the P2P-1 census
+archaeology sweep ([`P2P_1_WIRE_CENSUS.md`](P2P_1_WIRE_CENSUS.md) §1). The
+status is stated here instead, where the spike's own findings live.
+
 **Branch:** `spike/sp-t3-serving-skeleton` · **Base:** `dev@146c7a9`
 **Class:** measurement spike. Not TJ-B. Not consensus.
 **Opened:** 2026-08-03
@@ -61,7 +73,7 @@ The ratified position, verified at source:
 
 **The serving rule, for the record:** **one persona serves per wallet.**
 Multi-persona *holding* is real and necessary (retired personas' `bond_spend` keys
-must stay derivable to unbond). An operator wanting several *serving* personas
+must stay derivable to release). An operator wanting several *serving* personas
 uses **separate wallets**, and is advised to run them on **separate machines**
 (each with its own, default-configured tor). The rationale is linkability *and*, independently,
 **attack surface**: each co-served persona adds an inbound onion, intro points, a
@@ -658,7 +670,7 @@ forbids.
 
 **One persona serves per wallet.** Multi-persona *holding* is real and necessary
 (Model D — retired personas' bonds sit on chain and their `bond_spend` keys must
-remain derivable to unbond later), but **serving** is singular. An operator who
+remain derivable to release later), but **serving** is singular. An operator who
 wants several serving personas runs them **on separate wallets**, and is advised
 to run them on **separate machines**, each with its own default-configured tor.
 *(Separate machines, not two tor clients on one host — the latter is the
@@ -949,9 +961,22 @@ semantics* become consensus-critical and freeze at genesis; nothing here may be
 mistaken for that format. A reviewer who finds `x-spike/v0` cited in a design doc
 should treat it as a bug.
 
+> **Amendment (2026-08-11, PR-A of the §9.5 item-3 arc).** The spike's own
+> `serve.rs` is **deleted**. The production serving loop landed as
+> `shekyl-p-serve`, and the spike now drives it behind a fixture
+> `ShardProvider` instead of carrying a near-identical second copy — the two
+> had already diverged (accept-error backoff on one side only), which for a
+> measurement rig means measuring something other than what ships. The route
+> a re-run exercises is therefore `x-provisional/v0`, disclaimed in the same
+> terms and with the same standing in the format round: none. Everything this
+> section says about the spike's *disposability* is unchanged; what changed is
+> that the inbound-hardening shape it validated now has exactly one
+> implementation. The numbers already recorded in this document were taken on
+> the `x-spike/v0` route and are not restated.
+
 **Candidates to survive, having been *validated* here rather than designed here:**
 
-- **`shekyl_tor::control::onion`** (D1) — already production-shaped and living
+- **`shekyl_tor_control_client::control::onion`** (D1) — already production-shaped and living
   outside the spike crate. Typed arguments, `Detach` unrepresentable, `DEL_ONION`
   on the teardown path before the child is killed, redacting `Debug` on both the
   key and the service id.
@@ -978,7 +1003,7 @@ should treat it as a bug.
 > **Precision on what actually transfers for hop-latency.** This rig times an
 > *end-to-end 3.33 MB shard fetch* (rendezvous + transfer), which is **not**
 > per-hop or circuit-build RTT. The reusable core for *client-side circuit RTT*
-> is more the **control-port / `CircId` machinery already in `shekyl-tor`** (the
+> is more the **control-port / `CircId` machinery already in `shekyl-tor-control-wallet`** (the
 > DQ-T0.4 `STREAM`-event + attach-time CircID path) than the serve/fetch harness —
 > circuit-build timing is read from control-port `CIRC` events, not from a payload
 > transfer. Point the rig's *deployment shell* at that observable rather than
@@ -1072,7 +1097,7 @@ simpler than gating a capability, and it is the same posture as `Detach`.
 *(`docs/V3_STAKER_ARCHIVAL.md` previously described a clearnet fetch leg for the
 Foundation seeds; corrected 2026-08-03 — see that file's correction note.)*
 
-### Lever 1 — onion-service PoW (`shekyl_tor::control::onion::OnionPow`)
+### Lever 1 — onion-service PoW (`shekyl_tor_control_client::control::onion::OnionPow`)
 
 tor ships a defense for exactly this, and it was missing from the D1 type.
 `ADD_ONION` takes `PoWDefensesEnabled` / `PoWQueueRate` / `PoWQueueBurst`
@@ -1091,14 +1116,14 @@ service with `EnabledTuned` and asserts `250` — the same discipline that caugh
 (Flags → MaxStreams → PoW\* → Port) is pinned by ordinal assertion, because tor
 answers an out-of-order argument with a `512`.
 
-### Lever 2 — bounded in-flight connections (`serve::MAX_INFLIGHT`)
+### Lever 2 — bounded in-flight connections (`MAX_INFLIGHT`)
 
 PoW bounds arrival; it does not bound how many accepted connections are streaming
 at once. A semaphore caps concurrency, and an arrival past the cap is **closed
 immediately** rather than queued.
 
 **The refusal is a close, deliberately not a `503`.** A new status code would add
-a response shape to the `x-spike/v0` surface that §9.4 warns must never be
+a response shape to the provisional surface that §9.4 warns must never be
 mistaken for TJ-B's, and would hand a prober a free capacity oracle. A closed
 connection is indistinguishable from ordinary circuit failure — which, over Tor,
 is what a client already handles. `refused_count()` is the aggregate operator

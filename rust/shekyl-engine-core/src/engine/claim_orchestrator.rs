@@ -42,7 +42,8 @@
 //!    the sole `ClaimOperands` mint).
 //! 6. **Hand off** ([`StakeEngineHandle::assemble_emission_claim`]) — signing
 //!    stays inside the actor (CB-2); the reply is returned to the caller
-//!    unbroadcast (CB-3: dispatch is the GF-4 seam, not this builder).
+//!    unbroadcast (CB-3: dispatch is the `claim_dispatch` seam, driven by
+//!    the cadence epoch-claim leg — not this builder).
 //!
 //! ## Provability pre-filter
 //!
@@ -150,6 +151,15 @@ pub(crate) struct ClaimAssemblyContext<'a> {
     /// are structurally mandatory — the reward is fully consumed by the loud
     /// vout, so it cannot pay its own fee).
     pub fee: u64,
+    /// The value floor the assembly's value gate holds against
+    /// (`ENGINE_CADENCE_DRIVER.md` §4): policy, threaded — the production
+    /// choke point ([`Engine::submit_emission_claim`]) names
+    /// [`EMISSION_CLAIM_FEE_FLOOR`]; tests exercising other properties
+    /// pass `0` to stand the gate down.
+    ///
+    /// [`Engine::submit_emission_claim`]: super::Engine::submit_emission_claim
+    /// [`EMISSION_CLAIM_FEE_FLOOR`]: shekyl_economics::EMISSION_CLAIM_FEE_FLOOR
+    pub fee_floor: u64,
 }
 
 /// The last **confirmed** sweep height for `persona`: the highest bond-post
@@ -328,6 +338,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
             handle,
             operands,
             tree_ctx,
+            fee_floor: ctx.fee_floor,
         })
         .await?)
 }
@@ -634,6 +645,12 @@ mod tests {
                     reserved: &reserved,
                     p_canonical_id: p_id,
                     fee,
+                    // Value gate stood down: the KAT fixture's budget is
+                    // genesis-scale-small by design, and this test's subject
+                    // is the pipeline substrate, not the §4 floor policy
+                    // (which has its own gate-can-fail test in
+                    // `emission_claim`).
+                    fee_floor: 0,
                 },
                 |height| {
                     assert_eq!(height, expected_reference, "anchor per the two-sided gate");

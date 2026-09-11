@@ -61,14 +61,28 @@ fi
 #     second call reintroduces the c2 operand drift (an unmodulated staker
 #     leg, re-mintable through emission claims once accrued into
 #     budget(E): an inflation surface);
-#   - take its version operand from bl.major_version, the block's own
-#     consensus-checked version — no tip-relative get_current_version()
-#     and no table-only get_ideal_version(h) reads, which respectively
-#     resurrect F-B1b's boundary off-by-one under API-convention drift and
-#     ignore the vote threshold. (The burn-vs-accrue branch this operand
-#     originally selected is deleted — emission is a genesis fact — but the
-#     version still feeds compute_emission_split/compute_fee_burn, so the
-#     operand discipline is unchanged.)
+#   - read NO tip-relative get_current_version() and NO table-only
+#     get_ideal_version(h), which respectively resurrect F-B1b's boundary
+#     off-by-one under API-convention drift and ignore the vote threshold.
+#
+# F-B1b's operand discipline is RETIRED, and this comment previously said the
+# opposite. It read: "the version still feeds compute_emission_split /
+# compute_fee_burn, so the operand discipline is unchanged." That is no longer
+# true — those helpers take no version at all. Their hf_version gate compared
+# against a constant of 1 on a chain whose only fork entry is version 1, so it
+# could never be taken, and the gate went with the parameters that fed it.
+#
+# So there is no version operand here to take from the right place, and this
+# gate no longer demands bl.major_version be present — demanding it would force
+# a dead local back into consensus code to satisfy a tripwire, which is rule 15
+# backwards. What survives is narrower and still real:
+#
+#   * the F-B1c-c2 rule below (no second get_block_reward) is UNTOUCHED — it
+#     guards an inflation surface, not a version;
+#   * the two banned version reads stay banned, as a REINTRODUCTION guard. If
+#     version-dependence ever returns to this block, bl.major_version is still
+#     the only correct source, and whoever adds it should revisit this gate
+#     rather than discover F-B1b again.
 #
 # The block is extracted by its comment anchor and its m_db->add_block
 # terminator; comment lines are stripped before the negative checks (the
@@ -95,12 +109,19 @@ else
     echo "   version; see F-B1b in gating round §9.9)" >&2
     FAIL=1
   fi
-  if ! rg -q 'bl\.major_version' <<<"$ACCRUAL_CODE" \
-     || ! rg -q 'compute_emission_split' <<<"$ACCRUAL_CODE"; then
-    echo "FAIL: accrual-block anchors drifted (bl.major_version / compute_emission_split" >&2
-    echo "  not found in the extracted block) — re-anchor this tripwire to the moved code" >&2
-    FAIL=1
-  fi
+  # Anchors are the three symbols that MAKE this the accrual block: both legs
+  # of the staker inflow and the variable they sum into. Anchoring on an
+  # operand instead was the flaw the hf_version deletion exposed — an anchor
+  # must be something the block cannot lose without ceasing to be itself, or
+  # the tripwire fires on correct refactors and gets weakened to shut it up.
+  for anchor in 'compute_emission_split' 'compute_fee_burn' 'archival_budget_accrual'; do
+    if ! rg -q "$anchor" <<<"$ACCRUAL_CODE"; then
+      echo "FAIL: accrual-block anchor '${anchor}' not found in the extracted block" >&2
+      echo "  Either the block moved (re-anchor this tripwire to it), or a leg of the" >&2
+      echo "  staker inflow was removed (that is a consensus change — justify it)." >&2
+      FAIL=1
+    fi
+  done
 fi
 
 # Mint gate: no live emission vin crediting outputs (provisional bands).

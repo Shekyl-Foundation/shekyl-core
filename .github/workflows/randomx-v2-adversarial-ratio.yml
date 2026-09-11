@@ -147,10 +147,26 @@ jobs:
         # toolchain-sensitive; a silently-moving stable would shift
         # the measurement substrate under the baselined noise margin.
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Verify CMake + Ninja are present
+        # NO apt install. ubuntu-24.04 already ships CMake 3.31.6 and
+        # Ninja 1.13.2, so `apt-get install ninja-build` fetched an
+        # OLDER ninja (1.11.1) over the network for no benefit, and put
+        # an apt-mirror round-trip in front of a gate that needs none.
+        # Four jobs in this repo were killed by exactly that on
+        # 2026-08-18/19. Matches the same conversion in
+        # randomx-v2-differential.yml so the two RandomX workflows do
+        # not drift on their toolchain preconditions.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it. If the image" >&2
+              echo "  changed, install it here explicitly rather than assuming." >&2
+              exit 1
+            fi
+            "${tool}" --version
+          done
       - name: Configure + build randomx-v2 C reference
         # Composite action (.github/actions/build-randomx-v2-ref):
         # byte-identical librandomx.a by construction across every

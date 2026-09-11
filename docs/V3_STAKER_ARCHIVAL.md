@@ -5,7 +5,7 @@
 > "without this mechanism active." That framing is **superseded**: archival
 > pay-for-service is the **genesis (V3.0) staking model**. The confidential
 > claim/tier staking it would have replaced was retired pre-genesis
-> ([`design/LEGACY_CLAIM_ERA_RETIREMENT.md`](design/LEGACY_CLAIM_ERA_RETIREMENT.md)),
+> ([`design/LEGACY_CLAIM_ERA_RETIREMENT.md`](completed/LEGACY_CLAIM_ERA_RETIREMENT.md)),
 > the reward leg is specified "for genesis"
 > ([`design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)), and the
 > archival bond/claim stack is built and exercised as genesis-live (the
@@ -218,7 +218,7 @@ Foundation **seed nodes are seeds of the tree, not just of discovery:**
 > and the fetch is an **ordinary v3 rendezvous**, the same path every `P` serves
 > over. There is **no separate Foundation retrieval mechanism** and no clearnet
 > leg. (Non-anonymous serving is not merely unused: `ADD_ONION`'s `NonAnonymous`
-> flag is absent from `shekyl_tor::control::onion::OnionFlags`, so it is
+> flag is absent from `shekyl_tor_control_client::control::onion::OnionFlags`, so it is
 > unrepresentable.)
 
 each holds **complete sets B + C** (deep archival substrate and canonical
@@ -316,7 +316,7 @@ uniform holding + challenge + slash path**. Zero bond would require a
 `foundation → skip slash` branch in consensus-critical slash code;
 rejected. On failed challenge the **standard slash path runs** — see
 **`CompleteTree` slash semantics** below — removing the nominal bond and
-**unbonding** the `P` until it re-posts.
+**releasing** the `P` until it re-posts.
 
 **`CompleteTree` slash semantics (consensus chain — same code path, explicit
 post-slash state).** A market holder with `ShardSetCompact` failing shard *s*
@@ -327,7 +327,7 @@ failed retention challenge on **any** sampled shard:
 1. **Slashes the whole bond** (`ARCHIVAL_BOND_FLOOR` in full — not
    `FLOOR/shards`, which would be a no-op slash and **skip-slash in disguise**;
    rejected explicitly).
-2. **Clears the bonded holding** — `P` is **unbonded** (the state zero-bond
+2. **Clears the bonded holding** — `P` is **released** (the state zero-bond
    was designed to avoid).
 3. **Removes `P` from `durability_count`** until it **re-posts bond** and
    re-activates through the normal registration path.
@@ -396,7 +396,7 @@ because privilege is non-extractive and verifiable.
 Immutability of the enumerated set does **not** mean operational keys
 never rotate — compromise, hardware lifecycle, and handoff require it over
 a multi-decade horizon. A compromised operational identity **lingers** as a benign ghost (failing
-public challenges, **unbonded after slash**, absent from `durability_count`
+public challenges, **released after slash**, absent from `durability_count`
 until re-bond) — detectable, not revocable without a fork.
 
 **Pinned resolution: pure over-enumeration.** Genesis lists **more
@@ -440,10 +440,10 @@ use `market_R` under-count and behave incorrectly.
 | **`market_R(shard, E)`** | At epoch close: count of **market** archivers `P` with `serve_credit_bit(P,s,E) ∧ good_through(P,E)` — **derived** from the serve-credit ledger keyed by public `P_id` ([`design/ARCHIVAL_CONSENSUS_STATE.md`](design/ARCHIVAL_CONSENSUS_STATE.md) §3.3). **No** `ν = H(P, shard)` primitive — incompatible with form **C** per-`P` cap grouping. | **`CompleteTree` / foundation excluded from `Market`** — absent from count by membership rule, not a nullifier shortcut |
 | **`durability_count(shard)`** | Distinct **bonded-and-good-standing** archivers covering *s* | **`CompleteTree` + genesis-enumerated active slot → covers every shard**; market **`ShardSetCompact`** holders cover *s* iff set includes *s* |
 
-**Good standing:** bonded retention commitment posted; not **unbonded** after
+**Good standing:** bonded retention commitment posted; not **released** after
 slash; most recent challenged sample for the holder passed (or within grace
 per challenge cadence — exact window pinned at gate 4). A compromised ghost
-that keeps failing challenges is **unbonded or not good-standing** and **does
+that keeps failing challenges is **released or not good-standing** and **does
 not** inflate `durability_count`.
 
 **Every consumer must declare which count it reads** (spec-first; the
@@ -638,7 +638,7 @@ strong Bayesian evidence of their tier.** This is a tier-disclosure channel
 *entirely separate from* the confidential-staking claim wire — and it is the
 channel the share feature (`docs/V3_SHARD_VISUALIZATION.md`) gamifies stakers
 into advertising. Two consequences, analyzed in
-`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (finding **F-ARCHIVAL**): (1)
+`docs/V3_STAKER_ARCHIVAL.md` (this file; finding **F-ARCHIVAL**): (1)
 the claim-wire tier and this archival tier-weighting are **separable levers** —
 **whole-system tier privacy requires weakening both**, so de-tiering the claim
 alone would *not* close the tier leak while this coupling exists and portfolios
@@ -677,8 +677,8 @@ foundation-only archival, because trust is distributed across stakers
 **Second-order concern — self-advertisement bridges identity to the
 claim cohort (cross-track to staking privacy).** This is separate from
 query metadata. Two archival-side surfaces compose adversarially with
-the confidential-staking claim-cohort leak analyzed in
-`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (finding F0): (1) the
+the retired claim-era claim-cohort leak (finding F0; living surfaces
+`docs/design/PHASE_2B_FSM_RETOOL.md` and this file): (1) the
 **on-chain holder registry** candidate for "Query routing protocol"
 (below) publishes which staker holds which shard; and (2) a staker's
 **held shard-set is distinctive** for active rare-shard hunters. Because
@@ -691,7 +691,7 @@ leak `tier` for free. The mitigation is not more query anonymization;
 it is a **privacy review of the holder-registry shape and the share
 feature against claim-cohort linkage** before `ArchivalEngine` /
 `shekyl-shard-visual` ship. Tracked in `docs/FOLLOWUPS.md` under the
-F0 V3.1 entry. The query-routing design choice (DHT/registry vs. gossip,
+F0 pre-genesis residue, if any remains. The query-routing design choice (DHT/registry vs. gossip,
 below) should weigh registry-published holder presence as a privacy cost,
 not only a routing-efficiency tradeoff.
 
@@ -701,7 +701,7 @@ ratification.** The section above (and the V3 ship default) covers only *query
 metadata*. It does not, on its own, decide how the archival *commitment* — "I
 archive shard X, I earn the reward" — binds to identity, and that gap was the
 highest-value open privacy item in the staking/archival surface
-(`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3, finding **F-ARCHIVAL**). It is
+(`docs/V3_STAKER_ARCHIVAL.md`, finding **F-ARCHIVAL**). It is
 resolved below in *Pay-for-service rebasing and the firewalled-pseudonym identity
 model* — **private**, via a membership-proof-registered pseudonym, subject to the
 gate-list there. The remainder of this subsection records the question and the
@@ -774,7 +774,7 @@ Enumerating every candidate, the others are not services staking renders:
   Sybil resistance, block production, fork choice, and difficulty. Staking has no
   block-production role, no finality gadget, no fork-choice weight, no checkpoint
   authority — which is exactly why the classic-PoS attack family was retired
-  (`PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3). Staking contributes zero to the property
+  (`design/PHASE_2B_FSM_RETOOL.md` §7.5.3). Staking contributes zero to the property
   PoS systems invoke to justify staking.
 - **Capital-at-risk "security bond" — not a service, and weaker than the label.**
   A bond secures something only if it is *slashable for the misbehavior it bonds
@@ -840,7 +840,7 @@ spend/claim/principal identity, whose unavoidable public surface leaks nothing p
 "some pseudonym holds these shards."
 
 **Transfer-shaped admission (leading genesis form — see
-[`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.4).**
+[`design/PHASE_2B_FSM_RETOOL.md`](design/PHASE_2B_FSM_RETOOL.md) §2.4).**
 Replace `StakeEngine::is_active_staker(entity_id)` with firewalled **`P`** keyed off
 the **bond record** (gate 4), not a linkable stake lookup.
 
@@ -1165,11 +1165,11 @@ not a *security* one.)
 **Scope note (relation to existing sections).** This rebasing **replaces** the
 two-stream confidential-yield subsystem rather than extending it: the
 reserve-DLEQ entitlement, bounded-remainder range proof, and amount-scaled
-`tier_num · amount` reward (`CONFIDENTIAL_STAKING.md`; `rust/shekyl-staking/`
+`tier_num · amount` reward (`V3_STAKER_ARCHIVAL.md`; `rust/shekyl-staking/`
 `entitlement.rs` / `tiers.rs` / `rewards.rs`) are the *capital-bonded-yield*
 machinery and are obsoleted by it, not adapted. Pre-genesis that is the right
 trade — the audit-surface deletion is large and is exactly the convergence's
-benefit — but it is a **replacement**, and `CONFIDENTIAL_STAKING.md` is **not**
+benefit — but it is a **replacement**, and `V3_STAKER_ARCHIVAL.md` is **not**
 edited to match until the tier decision (gate 4) and the supply normalizer
 (gate 1) are settled, since that doc is the subsystem this would replace.
 
@@ -1531,7 +1531,9 @@ the dot-version, not the existence of the mechanism.
   archival routing client surface), V3.1 sibling-resolution entry for
   `assemble_tree_path_for_output` (FCMP++ historical-reference cutover
   via Stage 5 `ArchivalEngine`), V3.x Stage 5 `ArchivalEngine` native
-  build, V3.x no-tradeability invariant codification
+  build (the no-tradeability enforcement-point inventory closed
+  2026-09-04 — codified in `docs/V3_SHARD_VISUALIZATION.md`, *Not
+  tradeable*)
 - `docs/DESIGN_CONCEPTS.md` — V3 economic structure
   (`staker_pool_share`, `staker_emission_share`, lock tiers,
   Component 3 governance)
@@ -1540,5 +1542,5 @@ the dot-version, not the existence of the mechanism.
 - `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md` — legal disclosure draft
 - `docs/SEED_NODE_DEPLOYMENT.md` — foundation `--no-prune` archival
   policy
-- `docs/STAKER_REWARD_DISBURSEMENT.md` — existing reward distribution
-  mechanics that the V3.x archival stream layers atop
+- `docs/design/REWARD_EMISSION_LEG.md` — archival reward emission
+  (lock-tier disbursement is deleted)

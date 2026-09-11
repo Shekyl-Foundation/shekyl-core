@@ -25,9 +25,9 @@ use std::collections::BTreeSet;
 
 use shekyl_archival_retention::challenge::challenge_fire_height;
 use shekyl_archival_retention::serve_credit_decisions::{
-    serve_credit_block_key, serve_credit_block_unique, serve_credit_gate_decision,
-    serve_credit_key_be, serve_credit_preblock_duplicate, BlockUniqueVerdict, GateReject,
-    GateVerdict, ServeCreditGateInputs, SERVE_CREDIT_KEY_LEN,
+    pair_epoch_key_be, serve_credit_block_key, serve_credit_block_unique,
+    serve_credit_gate_decision, serve_credit_preblock_duplicate, BlockUniqueVerdict, GateReject,
+    GateVerdict, ServeCreditGateInputs, PAIR_EPOCH_KEY_LEN,
 };
 
 const KAT: &str = include_str!("fixtures/serve_credit_equivalence_kat_v1.json");
@@ -78,22 +78,12 @@ impl VectorInputs<'_> {
             .as_bool()
             .unwrap_or_else(|| panic!("field {field} must be bool"))
     }
-
-    fn usize_array(&self, field: &str) -> Vec<usize> {
-        self.get(field)
-            .as_array()
-            .unwrap_or_else(|| panic!("field {field} must be an array"))
-            .iter()
-            .map(|v| usize::try_from(v.as_u64().expect("count")).expect("usize"))
-            .collect()
-    }
 }
 
 fn reason_from_name(name: &str) -> GateReject {
     match name {
-        "PathLayerCountExceedsBound" => GateReject::PathLayerCountExceedsBound,
-        "C1BranchScalarCountExceedsBound" => GateReject::C1BranchScalarCountExceedsBound,
-        "C2BranchScalarCountExceedsBound" => GateReject::C2BranchScalarCountExceedsBound,
+        "VinUnparseable" => GateReject::VinUnparseable,
+        "PrunedRecordSizeOutOfBounds" => GateReject::PrunedRecordSizeOutOfBounds,
         "DuplicatePreBlock" => GateReject::DuplicatePreBlock,
         "BondSubstrateMissing" => GateReject::BondSubstrateMissing,
         "EpochBeforeEFirst" => GateReject::EpochBeforeEFirst,
@@ -103,10 +93,9 @@ fn reason_from_name(name: &str) -> GateReject {
         "SealHashUnavailable" => GateReject::SealHashUnavailable,
         "ShardNotHeldAtFire" => GateReject::ShardNotHeldAtFire,
         "ShardRegistryUnavailableAtFire" => GateReject::ShardRegistryUnavailableAtFire,
+        "LeafIndexDerivationRefused" => GateReject::LeafIndexDerivationRefused,
         "LeafIndexOutOfSegmentRange" => GateReject::LeafIndexOutOfSegmentRange,
         "LeafChunkReadFailed" => GateReject::LeafChunkReadFailed,
-        "VinSerializeFailed" => GateReject::VinSerializeFailed,
-        "UnexpectedVinWireTag" => GateReject::UnexpectedVinWireTag,
         "FfiVerifyFailed" => GateReject::FfiVerifyFailed,
         other => panic!("unknown expected_reason {other}"),
     }
@@ -144,28 +133,18 @@ fn gate_vectors_verdict_and_reason() {
             overrides: &vector["overrides"],
         };
 
-        let c1 = v.usize_array("c1_branch_scalar_counts");
-        let c2 = v.usize_array("c2_branch_scalar_counts");
         let seal_hash = if v.bool("seal_hash_available") {
             Some(hex32(v.get("seal_hash_hex")))
         } else {
             None
-        };
-        let wire_first_byte = {
-            let raw = v.get("wire_first_byte");
-            if raw.is_null() {
-                None
-            } else {
-                Some(u8::try_from(raw.as_u64().expect("byte")).expect("u8"))
-            }
         };
 
         let inputs = ServeCreditGateInputs {
             p_canonical_id: hex32(v.get("p_canonical_id_hex")),
             shard_id: v.u64("shard_id"),
             settlement_epoch: v.u64("settlement_epoch"),
-            c1_branch_scalar_counts: &c1,
-            c2_branch_scalar_counts: &c2,
+            vin_parsed: v.bool("vin_parsed"),
+            pruned_record_in_bounds: v.bool("pruned_record_in_bounds"),
             preblock_present: v.bool("preblock_present"),
             bond_substrate_present: v.bool("bond_substrate_present"),
             join_epoch: v.u64("join_epoch"),
@@ -176,10 +155,19 @@ fn gate_vectors_verdict_and_reason() {
             seal_hash,
             held_at_fire: v.bool("held_at_fire"),
             registry_present_at_fire: v.bool("registry_present_at_fire"),
-            leaf_index_in_segment: v.u64("leaf_index_in_segment"),
+            segment_leaf_count: v.u64("segment_leaf_count"),
+            // `PC-D3`. Read from the fixture rather than defaulted, so both
+            // legs are fed the SAME bytes -- but note that THESE VECTORS
+            // CANNOT CATCH IT IF THEY ARE NOT. The gate verdict is insensitive
+            // to this input: it feeds `challenge_leaf_index`, and every index
+            // the derivation can produce is in range, so
+            // `challenge_leaf_chunk_bounds` accepts regardless of which block
+            // it came from. A legs-disagree here is caught by gate-2's pinned
+            // index (`gate2_serve_credit_kat_v1.json`, asserted in
+            // `gate2_serve_credit_kat_vectors`), which is the named catcher --
+            // not by anything in this file.
+            prev_block_hash: hex32(v.get("prev_block_hash_hex")),
             leaf_chunk_ok: v.bool("leaf_chunk_ok"),
-            wire_serialize_ok: v.bool("wire_serialize_ok"),
-            wire_first_byte,
             verify_ok: v.bool("verify_ok"),
         };
 
@@ -207,14 +195,14 @@ fn dedup_vectors_verdict_and_key_pin() {
         let shard_id = vector["shard_id"].as_u64().unwrap();
         let epoch = vector["settlement_epoch"].as_u64().unwrap();
 
-        let key = serve_credit_key_be(&p, shard_id, epoch);
+        let key = pair_epoch_key_be(&p, shard_id, epoch);
         assert_eq!(
             key.to_vec(),
             hex_bytes(&vector["expected_key_be_hex"]),
             "vector {id}: BE key bytes"
         );
 
-        let preblock: BTreeSet<[u8; SERVE_CREDIT_KEY_LEN]> = vector["preblock_keys_hex"]
+        let preblock: BTreeSet<[u8; PAIR_EPOCH_KEY_LEN]> = vector["preblock_keys_hex"]
             .as_array()
             .expect("preblock keys")
             .iter()
@@ -274,9 +262,10 @@ fn block_unique_vectors_verdict_and_key_pin() {
 
 /// SCE-1 executable record, post-unify: the two decision paths (D-SC-A
 /// persistent, D-SC-C block-level) key the same logical `(P, shard, E)`
-/// triple with the *same* bytes — the unify commit re-pointed D-SC-C onto
-/// `ArchivalServeCreditKey` (audit doc §6). `expect_equal` is now `true` and
-/// load-bearing: a reintroduced encoding split fails here.
+/// triple with the *same* bytes — `ArchivalPairEpochKey` (audit doc §6;
+/// `PC-D4` left this width in place because the block is common-mode).
+/// `expect_equal` is now `true` and load-bearing: a reintroduced encoding
+/// split fails here.
 #[test]
 fn sce1_key_encoding_crosscheck() {
     let doc = fixture();
@@ -285,7 +274,7 @@ fn sce1_key_encoding_crosscheck() {
     let shard_id = x["shard_id"].as_u64().unwrap();
     let epoch = x["settlement_epoch"].as_u64().unwrap();
 
-    let key_be = serve_credit_key_be(&p, shard_id, epoch);
+    let key_be = pair_epoch_key_be(&p, shard_id, epoch);
     let key_block = serve_credit_block_key(&p, shard_id, epoch);
     assert_eq!(key_be.to_vec(), hex_bytes(&x["key_be_hex"]));
     assert_eq!(key_block.to_vec(), hex_bytes(&x["key_block_hex"]));
@@ -296,4 +285,120 @@ fn sce1_key_encoding_crosscheck() {
         expect_equal,
         "SCE-1 pin: the unified A/C key encoding must not re-split"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Regen writer (FOLLOWUP 2026-08-10: "serve-credit equivalence fixture needs a
+// regen writer") — the gate-4 pattern: re-derive the gate-2-mirrored substrate
+// mechanically, preserve the hand-authored columns.
+// ---------------------------------------------------------------------------
+
+/// Replace the value of the FIRST occurrence of `"key": <number>` in `doc`.
+/// The first occurrence of every mirrored scalar lives in `gate.base` (the
+/// vectors' overrides come later in the document), so first-match is the
+/// base-targeted edit that leaves override values untouched.
+fn replace_first_scalar(doc: &str, key: &str, new_value: u64) -> String {
+    let needle = format!("\"{key}\": ");
+    let start = doc
+        .find(&needle)
+        .unwrap_or_else(|| panic!("no {key} field"))
+        + needle.len();
+    let end = start
+        + doc[start..]
+            .find(|c: char| !c.is_ascii_digit())
+            .expect("number terminator");
+    assert!(
+        doc[start..end].chars().all(|c| c.is_ascii_digit()) && start < end,
+        "{key} is not a bare number"
+    );
+    format!("{}{}{}", &doc[..start], new_value, &doc[end..])
+}
+
+/// Rewrite `serve_credit_equivalence_kat_v1.json`'s gate-2-mirrored substrate
+/// from `gate2_serve_credit_kat_v1.json` — run after any gate-2 regen. The
+/// rewrite is **textual** on purpose: only the mechanical mirrors move (the
+/// `gate.base` scalars and every p_id-prefixed key encoding), and the
+/// hand-authored columns (`expected_verdict`, `expected_reason`, `overrides`,
+/// `cpp_setup`, notes, `substrate_commit`) plus the document's layout are
+/// preserved byte-for-byte. Re-author the reason column (and bump
+/// `substrate_commit`) only when the C++ substrate itself changes (§5).
+#[test]
+#[ignore = "rewrites tests/fixtures/serve_credit_equivalence_kat_v1.json from the gate-2 substrate"]
+fn regenerate_equivalence_fixture_from_gate2() {
+    use shekyl_archival_retention::wire::ArchivalServeCreditResponse;
+
+    let gate2: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/gate2_serve_credit_kat_v1.json"))
+            .expect("gate2 fixture parses");
+    let integ = &gate2["integration"];
+    let mut doc = KAT.to_owned();
+
+    let old_pid = fixture()["gate"]["base"]["p_canonical_id_hex"]
+        .as_str()
+        .expect("old p_id")
+        .to_owned();
+    let new_pid = integ["p_canonical_id_hex"]
+        .as_str()
+        .expect("new p_id")
+        .to_owned();
+    assert_eq!(old_pid.len(), 64);
+    assert_eq!(new_pid.len(), 64);
+
+    // Every occurrence of the old p_id is a gate-2 mirror: the base field and
+    // the dedup/block-unique key encodings, which are `p_id ‖ shard ‖ epoch`
+    // words — a prefix swap re-derives them exactly.
+    doc = doc.replace(&old_pid, &new_pid);
+
+    // `PC-D3`: the base must mirror gate-2's integration block, or the two
+    // legs derive the challenged index from different blocks.
+    let old_prev = fixture()["gate"]["base"]["prev_block_hash_hex"]
+        .as_str()
+        .expect("old prev block hash")
+        .to_owned();
+    let new_prev = integ["prev_block_hash_hex"]
+        .as_str()
+        .expect("gate-2 prev block hash")
+        .to_owned();
+    assert_eq!(old_prev.len(), 64);
+    assert_eq!(new_prev.len(), 64);
+    doc = doc.replace(&old_prev, &new_prev);
+
+    // The integration wire is the parse-authoritative source for the leaf
+    // index the base mirrors (and for the path shape asserted below).
+    let wire = hex_bytes(&integ["wire_hex"]);
+    // Parse-only assertion: the kept half must still parse. Nothing below
+    // reads it -- the index is the fixture's recorded derivation and the path
+    // is on the pruned half (RF-D1/RF-D6).
+    let _kept =
+        ArchivalServeCreditResponse::read(&mut wire.as_slice()).expect("integration wire parses");
+
+    for (key, value) in [
+        ("h_open", integ["h_open"].as_u64().expect("h_open")),
+        ("h_close", integ["h_close"].as_u64().expect("h_close")),
+        ("h_seal", integ["h_seal"].as_u64().expect("h_seal")),
+        ("h_fire", integ["h_fire"].as_u64().expect("h_fire")),
+        (
+            "current_height",
+            integ["current_height"].as_u64().expect("current_height"),
+        ),
+        // (`leaf_index_in_segment` is NOT mirrored. RF-D8 (`dd4d0ff59`) removed
+        // it from this fixture's base -- the index is verifier-derived on both
+        // legs -- but left this mirror step behind, so every run of this
+        // regenerator has panicked with "no leaf_index_in_segment field" since.
+        // Nothing noticed because the regenerator is `#[ignore]`d: an
+        // ignore-gated tool is only exercised when someone needs it, which is
+        // the worst moment to discover it is broken. Removed rather than
+        // repaired -- there is no field to mirror.)
+    ] {
+        doc = replace_first_scalar(&doc, key, value);
+    }
+
+    // (The base no longer mirrors the path shape: the path is inside the pruned
+    // record, which C++ does not read, so its bounds are no longer gate steps.)
+    let reparsed: serde_json::Value = serde_json::from_str(&doc).expect("rewritten doc parses");
+    let _ = &reparsed;
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/serve_credit_equivalence_kat_v1.json");
+    std::fs::write(&path, doc).expect("write");
+    eprintln!("wrote {}", path.display());
 }

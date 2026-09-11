@@ -99,20 +99,44 @@ namespace daemon_args
     "Network communication through proxy: [socks5://[user:pass@]]<socks-ip:port> i.e. \"127.0.0.1:9050\"",
     "",
   };
-  const command_line::arg_descriptor<bool> arg_public_node = {
-    "public-node"
-  , "Allow other users to use the node as a remote (restricted RPC mode, view-only commands) and advertise it over P2P"
-  , false
-  };
-
 
   // shekyld's local --non-interactive flag. This is the only surviving piece
-  // of the old daemonizer CLI on either binary: it suppresses the interactive
-  // readline command console without touching process lifecycle. The wallet
-  // RPC server declares its own separate copy of this flag in wallet_rpc_server.cpp.
+  // of the old daemonizer CLI: it suppresses the interactive readline command
+  // console without touching process lifecycle. It is now shekyld's alone —
+  // the C++ wallet RPC server, which declared its own separate copy, was
+  // deleted when the `shekyl-wallet-rpc` name went to the Rust binary.
   const command_line::arg_descriptor<bool> arg_non_interactive = {
     "non-interactive"
   , "Run non-interactive (suppress readline console; signals still work)"
+  , false
+  };
+
+  /*! HIDDEN, and it changes this node's network posture. Turns on the
+      Dandelion++ noise carrier, which `cryptonote::levin::set_carrier_development`
+      otherwise leaves off in every build.
+
+      **Why a flag exists at all.** `COVER_TRAFFIC_RESTORATION.md` §3.1c
+      pre-registers a measurement — actual carrier bytes against the
+      16 384 B/s ceiling — as the condition on a PROVISIONAL sign-off of the
+      ~42 GB/month posture. That measurement needs a real daemon on a real
+      transport, and until this flag the only callers of the opt-in were
+      gtests, so the reading could only ever have been one person's
+      unreproducible local patch. A pre-registered measurement that nobody
+      else can re-run is not a measurement.
+
+      **Why HIDDEN rather than documented.** §3.1 ruled the opt-in a
+      DEVELOPMENT switch and not a product one: armed, a node pays a sustained
+      ~42 GB/month it does not pay otherwise, and it does so on an encrypted
+      zone whose whole point is that its traffic profile is uniform. An
+      operator who finds this in `--help` and tries it has changed their
+      node's observable posture for no benefit they can see. It parses so the
+      measurement can run; it does not advertise.
+
+      Off unless passed. The daemon logs loudly when it is on — see
+      `main.cpp`, which is also the only place that reads it. */
+  const command_line::arg_descriptor<bool> arg_carrier_development = {
+    "carrier-development"
+  , "Arm the Dandelion++ noise carrier (DEVELOPMENT; changes network posture)"
   , false
   };
 

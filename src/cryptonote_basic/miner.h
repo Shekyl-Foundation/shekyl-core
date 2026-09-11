@@ -66,13 +66,17 @@ namespace cryptonote
     static void init_options(boost::program_options::options_description& desc);
     bool set_block_template(const block& bl, const difficulty_type& diffic, uint64_t height, uint64_t block_reward);
     bool on_block_chain_update();
-    bool start(const account_public_address& adr, size_t threads_count, bool do_background = false, bool ignore_battery = false);
+    // `adr_str` is the caller's original encoded address, retained for
+    // display: since the fork-(ii) address layout, an address cannot be
+    // re-encoded from `account_public_address` alone (no msg_sign_pk).
+    bool start(const account_public_address& adr, const std::string& adr_str, size_t threads_count, bool do_background = false, bool ignore_battery = false);
     uint64_t get_speed() const;
     uint32_t get_threads_count() const;
     void send_stop_signal();
     bool stop();
     bool is_mining() const;
     const account_public_address& get_mining_address() const;
+    const std::string& get_mining_address_str() const;
     bool on_idle();
     void on_synchronized();
     //synchronous analog (for fast calls)
@@ -136,6 +140,7 @@ namespace cryptonote
     i_miner_handler* m_phandler;
     get_block_hash_t m_gbh;
     account_public_address m_mine_address;
+    std::string m_mine_address_str;
     epee::math_helper::once_a_time_seconds<5> m_update_block_template_interval;
     epee::math_helper::once_a_time_seconds<2> m_update_merge_hr_interval;
     epee::math_helper::once_a_time_seconds<1> m_autodetect_interval;

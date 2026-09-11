@@ -31,6 +31,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/uuid/uuid.hpp>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "byte_slice.h"
@@ -66,6 +67,20 @@ namespace levin
 
   using connections = epee::levin::async_protocol_handler_config<detail::p2p_context>;
 
+  /*! Turn the noise carrier on for ENCRYPTED zones built after this call.
+      Development only; defaults off, and the default is shipped behaviour.
+
+      Runtime rather than `#ifdef` so the carrier's path is reachable by the
+      ordinary test suite: a compile-time gate makes the only configuration
+      that runs the carrier the one CI never builds. Not an operator switch —
+      `COVER_TRAFFIC_RESTORATION.md` §3.1 is the ruling, and enabling it under
+      today's embargo constants runs an encrypted zone's alpha below the
+      0.90 pin. Returns the previous value so a test can restore it. */
+  bool set_carrier_development(bool enabled) noexcept;
+
+  //! Whether the development carrier opt-in is currently set.
+  bool carrier_development_enabled() noexcept;
+
   //! Provides tx notification privacy
   class notify
   {
@@ -87,7 +102,7 @@ namespace levin
     {}
 
     //! Construct an instance with available notification `zones`.
-    explicit notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::byte_slice noise, epee::net_utils::zone zone, bool pad_txs, i_core_events& core);
+    explicit notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::zone zone, bool pad_txs, i_core_events& core);
 
     notify(const notify&) = delete;
     notify(notify&&) = default;
@@ -124,15 +139,24 @@ namespace levin
     void run_fluff();
 
     /*! Send txs using `cryptonote_protocol_defs.h` payload format wrapped in a
-        levin header. The message will be sent in a "discreet" manner if the
-        zone runs covert channels (`shekyl_relay_zone_covert_enabled` — the
-        zone's fact since §20.4, no longer the payload's emptiness) — then the
-        `command`/`payload` will be queued to send at the next available
-        covert interval. Otherwise, a Dandelion++ fluff algorithm will be
-        used.
+        levin header. Dandelion++ decides the phase on every zone, regardless
+        of whether the zone also runs noise channels
+        (`shekyl_relay_zone_noise_enabled`). Noise is a carrier, not a routing
+        verdict: it does not demote a stem, and it does not broadcast to every
+        channel.
 
-        \note Eventually Dandelion++ stem sending will be used here when
-          enabled.
+        SINCE 2026-08-29 THIS METHOD DOES QUEUE ONTO THE CARRIER. On a
+        noise-configured zone in a stem epoch it consumes
+        `plan_dispatch_with_refresh` and enqueues on the returned channel
+        instead of sending directly, so the cadence carries real transactions
+        rather than dummies alone. The pool is told a carrier-borne
+        transaction was relayed only when its terminal verdict says every
+        window was accepted by the transport — an enqueue is not a send
+        (`COVER_TRAFFIC_RESTORATION.md` §3.1a).
+
+        The zone must still be noise-configured, which needs the development
+        opt-in; without it the carrier is off and this method behaves as
+        before.
 
         \param txs The transactions that need to be serialized and relayed.
         \param source The source of the notification. `is_nil()` indicates this
@@ -167,12 +191,24 @@ namespace levin
     //! .cpp note.
     std::vector<stem_tally_row> stem_snapshot() const;
 
+    //! §18.4 diagnostic for the admin snapshot: false until the zone has
+    //! reported once. Never exposed on the public listener (§16.3).
+    bool floor_snapshot(std::uint32_t& achieved, std::uint32_t& floor, bool& below) const;
+
     //! §46: stem observations pending resolution. Reads a published atomic on
     //! the relay handle (same discipline as `live_stems` / get_status), so it
     //! is safe from any thread — including the gtest harness after it drains
     //! the strand.
     std::size_t stem_in_flight() const;
   };
+
+  //! One stem-tally JSON object, including the zone it was collected from.
+  //! Production `node_server::stem_tallies_json` and the unit table call this
+  //! so the label cannot drift from the merge. What edit reds the zone field:
+  //! omit `"zone"` here. `ShekylStemTallyRow` stays 40 bytes -- the zone is
+  //! known at C++ merge time, not on the FFI row.
+  std::string format_stem_tally_row_json(
+    const notify::stem_tally_row& row, epee::net_utils::zone z);
 
   //! §46/§48: canonical tx hashes for the stem-observation watch (F-9).
   //! Parsed once at the fan-out boundary; blob bytes are not a stable identity

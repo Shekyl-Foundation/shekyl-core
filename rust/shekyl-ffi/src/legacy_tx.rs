@@ -11,9 +11,12 @@ use super::legacy_util::*;
 /// Generate FCMP++ transaction proofs in a single call (BP+, FCMP++, ECDH,
 /// pseudo-outs).
 ///
-/// This replaces the old C++ → Rust → C++ → Rust round-trip through
+/// This replaced the old C++ → Rust → C++ → Rust round-trip through
 /// `genRctFcmpPlusPlus` + `shekyl_fcmp_prove` + `shekyl_pqc_sign` with a
-/// single FFI entry point.
+/// single FFI entry point. The first two of those no longer exist — they were
+/// deleted once this entry point had been the only production path for long
+/// enough that their last caller went away; `shekyl_pqc_sign` remains, still
+/// exercised by `tests/unit_tests/fcmp.cpp`.
 ///
 /// # Parameters
 ///
@@ -347,6 +350,11 @@ fn curve25519_scalar_from_bytes(bytes: &[u8; 32]) -> Option<curve25519_dalek::Sc
 
 // ─── Output Construction / Scanning / PQC Signing ────────────────────────────
 
+// Writer half of the witness seam. Its reader (`parse_prove_witness`) serves
+// only the multisig coordinator, so both sit under the same feature: a default
+// build exporting a writer would offer to produce bytes nothing in that build
+// can consume.
+#[cfg(feature = "multisig")]
 /// Build the 256-byte witness header from a typed struct.
 ///
 /// # Safety
@@ -431,10 +439,10 @@ pub unsafe extern "C" fn shekyl_construct_output(
             ShekylOutputData {
                 output_key: out.output_key,
                 commitment: out.commitment,
-                enc_amount: out.enc_amount,
-                amount_tag: out.amount_tag,
-                enc_label: out.enc_label,
-                label_tag: out.label_tag,
+                enc_amount: out.enc_amount_bytes(),
+                amount_tag: out.amount_tag(),
+                enc_label: out.enc_label_bytes(),
+                label_tag: out.label_tag(),
                 view_tag_prefilter: out.view_tag_prefilter,
                 kem_ciphertext_x25519: out.kem_ciphertext_x25519,
                 kem_ciphertext_ml_kem: ShekylBuffer::from_vec(kem_ciphertext_ml_kem),
@@ -517,10 +525,10 @@ pub unsafe extern "C" fn shekyl_construct_output_labeled(
             ShekylOutputData {
                 output_key: out.output_key,
                 commitment: out.commitment,
-                enc_amount: out.enc_amount,
-                amount_tag: out.amount_tag,
-                enc_label: out.enc_label,
-                label_tag: out.label_tag,
+                enc_amount: out.enc_amount_bytes(),
+                amount_tag: out.amount_tag(),
+                enc_label: out.enc_label_bytes(),
+                label_tag: out.label_tag(),
                 view_tag_prefilter: out.view_tag_prefilter,
                 kem_ciphertext_x25519: out.kem_ciphertext_x25519,
                 kem_ciphertext_ml_kem: ShekylBuffer::from_vec(kem_ciphertext_ml_kem),
@@ -874,7 +882,12 @@ pub unsafe extern "C" fn shekyl_sign_pqc_auth(
     };
 
     use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
-    match sign_pqc_auth_for_output(&ss, output_index, msg) {
+    match sign_pqc_auth_for_output(
+        &ss,
+        output_index,
+        shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+        msg,
+    ) {
         Ok(auth) => ShekylPqcAuthResult {
             hybrid_public_key: ShekylBuffer::from_vec(auth.hybrid_public_key),
             signature: ShekylBuffer::from_vec(auth.signature),

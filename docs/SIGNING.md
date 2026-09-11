@@ -337,6 +337,38 @@ git push origin vX.Y.Z-alpha.N
 | `verify-tag` shows a different fingerprint than expected | Tag was signed with the wrong key (commonly: personal key because `-u` was omitted). | `git tag -d` the local tag; retry from step 2 with `-u` explicit. |
 | `Signature counter` did not increment by exactly 1 | More or fewer card signatures were produced than expected. | Do not push. Investigate what else ran between step 1 and step 3. |
 
+## Release assets (the manifest ceremony)
+
+A signed tag authenticates the commit a release was cut from — **not the
+binaries a user downloads**. The asset half of the release is a signed
+`SHA256SUMS` manifest: the Foundation **signing subkey** (same key, same
+hardware-token ceremony as tags) signs one manifest of asset hashes;
+users verify the manifest signature, then check hashes. This composes
+with reproducible builds: independent builders reproduce the hashes, the
+Foundation signs the manifest of them.
+
+The ceremony is scripted and the script is the process — do not
+improvise it either:
+
+```sh
+# Release owner, token inserted, after the release job published assets:
+python3 scripts/release/sign_release_assets.py <tag> --download --upload
+
+# Anyone, verifying a published release:
+python3 scripts/release/sign_release_assets.py <tag> --download --verify-only
+```
+
+The script enforces this document's key hygiene mechanically before it
+will sign: the primary must be an offline stub (`sec#` — a bare `sec `
+is refused outright as the key-hygiene incident described above), the
+signing subkey must be an on-card stub, and the release tag itself must
+verify under a pinned Foundation fingerprint. It signs with exactly the
+signing subkey (`6914D74823DDA8DC!`), round-trip-verifies the signature
+and every hash before anything is uploaded, and refuses to overwrite a
+published manifest without an explicit `--clobber`. Because the subkey
+is hardware-token-held, this ceremony deliberately **cannot run in CI**
+— it is the release owner's local act, like the tag ceremony.
+
 ## Verifying a release (for downstream consumers)
 
 This is the procedure for anyone — user, distributor, auditor — who

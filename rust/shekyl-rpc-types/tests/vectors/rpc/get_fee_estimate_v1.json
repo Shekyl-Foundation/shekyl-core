@@ -1,0 +1,6 @@
+{
+  "fee": 10,
+  "fees": [10,20,30,40],
+  "quantization_mask": 8,
+  "status": "OK"
+}

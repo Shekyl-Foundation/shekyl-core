@@ -6,7 +6,7 @@
 //! Cross-check `verify_segment_path` against the CT-4 assembled-path KAT.
 
 use serde_json::Value;
-use shekyl_archival_retention::{verify_segment_path, SegmentPathOpening};
+use shekyl_archival_retention::{challenged_leaf_bytes, verify_segment_path, SegmentPathOpening};
 use shekyl_curve_tree::{
     AssembleInput, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, Gindex, RawOutput,
     ReferenceBlock, TargetKind, TxLeafInputs,
@@ -152,11 +152,15 @@ fn assembled_path_verifies_as_segment_opening() {
         "assembled path must echo the caller-supplied ReferenceBlock::block_hash",
     );
 
-    let cl = path
+    // RF-D8: the verifier selects the challenged leaf from its own chunk by
+    // offset; nothing about the leaf travels. The offset is where the founder
+    // sits in the chunk.
+    let leaf_offset = path
         .leaf_chunk
         .iter()
-        .find(|cl| cl.output_key == founder.output_key)
+        .position(|cl| cl.output_key == founder.output_key)
         .expect("founder in leaf chunk");
+    let cl = &path.leaf_chunk[leaf_offset];
     let leaf_bytes =
         construct_leaf(&cl.output_key, &cl.commitment, &cl.h_pqc).expect("construct 128-byte leaf");
 
@@ -165,10 +169,15 @@ fn assembled_path_verifies_as_segment_opening() {
         c2_layers: path.c2_layers.clone(),
     };
     let layer_scalars = leaf_layer_scalars(&path.leaf_chunk);
+    assert_eq!(
+        challenged_leaf_bytes(&layer_scalars, leaf_offset),
+        Some(leaf_bytes),
+        "the leaf selected by offset is the founder's constructed leaf"
+    );
 
     verify_segment_path(
-        &leaf_bytes,
         &layer_scalars,
+        leaf_offset,
         &opening,
         &reference.curve_tree_root,
     )
@@ -209,13 +218,11 @@ fn tj_f_forged_material_does_not_verify() {
     let path = client
         .assemble_path(&founder, &reference)
         .expect("assemble founder path");
-    let cl = path
+    let leaf_offset = path
         .leaf_chunk
         .iter()
-        .find(|cl| cl.output_key == founder.output_key)
+        .position(|cl| cl.output_key == founder.output_key)
         .expect("founder in leaf chunk");
-    let leaf_bytes =
-        construct_leaf(&cl.output_key, &cl.commitment, &cl.h_pqc).expect("construct 128-byte leaf");
     let opening = SegmentPathOpening {
         c1_layers: path.c1_layers.clone(),
         c2_layers: path.c2_layers.clone(),
@@ -227,7 +234,7 @@ fn tj_f_forged_material_does_not_verify() {
     let mut tampered = layer_scalars.clone();
     tampered[0][0] ^= 0x01;
     assert!(
-        verify_segment_path(&leaf_bytes, &tampered, &opening, &reference.curve_tree_root).is_err(),
+        verify_segment_path(&tampered, leaf_offset, &opening, &reference.curve_tree_root).is_err(),
         "tampered leaf-layer material must not verify"
     );
 
@@ -236,7 +243,7 @@ fn tj_f_forged_material_does_not_verify() {
     let mut wrong_rk = reference.curve_tree_root;
     wrong_rk[0] ^= 0x01;
     assert!(
-        verify_segment_path(&leaf_bytes, &layer_scalars, &opening, &wrong_rk).is_err(),
+        verify_segment_path(&layer_scalars, leaf_offset, &opening, &wrong_rk).is_err(),
         "coherent material against a non-committed R_k must not verify"
     );
 }

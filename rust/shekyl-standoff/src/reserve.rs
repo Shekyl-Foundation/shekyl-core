@@ -4,13 +4,13 @@
 // BSD-3-Clause
 
 //! The `P`-lane **exit-fee reserve** — the spend-time floor every mid-life
-//! `P` constructor leaves in the pool so the terminal `Unbond` stays fundable.
+//! `P` constructor leaves in the pool so the terminal `Release` stays fundable.
 //!
 //! `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2 rule 2: mid-life constructors (claim
 //! fee inputs, both `HoldingsUpdate` directions, `Rebond`, and — from
 //! `ARCHIVAL_DRAIN_SEND_FD2.md` DS-4 — a partial drain from a **live**
 //! persona) never spend the pool below [`EXIT_FEE_RESERVE_ATOMIC`]. A
-//! post-retirement sweep has no future `Unbond`, so the reserve is moot and a
+//! post-retirement sweep has no future `Release`, so the reserve is moot and a
 //! drain-all may take the pool to zero (the live/retired branch is the
 //! consumer's, e.g. the drain selector's — this module owns only the floor).
 //!
@@ -25,20 +25,27 @@ use crate::cover::COVER_RUNG_ATOMIC;
 /// The exit-fee reserve in atomic units (1 SKL = 1_000_000_000 atomic).
 ///
 /// **Pinned: `0.05 SKL = 50_000_000 atomic`** — one pessimistically-priced
-/// `Unbond` fee. Derivation (`ARCHIVAL_DRAIN_SEND_FD2.md` DS-4,
+/// `Release` fee. Derivation (`ARCHIVAL_DRAIN_SEND_FD2.md` DS-4,
 /// `ARCHIVAL_BOND_CONSTRUCTION.md` §7.2):
 ///
-/// - **Worst-case `Unbond` weight.** An `Unbond` spends the typed `P` pool
+/// - **Worst-case `Release` weight.** A `Release` spends the typed `P` pool
 ///   (cover + earnings) and pays out; bound by `MAX_INPUTS = 8` inputs, two
 ///   outputs, `MAX_TREE_DEPTH = 24`. The dominant term is the FCMP++ proof
-///   (`tx_fee_model::FCMP_PROOF_SIZE_KAT[8][24] = 33_600` bytes); with the
-///   per-input KEM/PQC-auth and per-output CT/KEM framing the whole tx is well
-///   under ~64_000 weight-bytes.
+///   (`FCMP_PROOF_SIZE_KAT[8][24] = 33_600` bytes); with the per-input
+///   KEM/PQC-auth and per-output CT/KEM framing the full structural weight is
+///   **80,456 bytes** — computed, not estimated, by engine-core's
+///   `p_lane_weight_ceiling_bytes()` (the same bound the P-lane floor fee is
+///   quoted over), and tied back to this constant by the
+///   `p_lane_ceiling_covers_the_heaviest_legal_shape` test. An earlier
+///   revision hand-estimated "well under ~64,000" here; the computed model
+///   corrected it upward.
 /// - **Pessimistic rate.** The economy floor rate is daemon-derived and
-///   historically ~1 atomic/weight-byte; this reserve provisions three orders
-///   of magnitude of head-room (~768 atomic/weight-byte), so
-///   `~64_000 × 768 ≈ 49.2M < 50M` covers a fee market far above any observed
-///   floor.
+///   historically ~1 atomic/weight-byte; this reserve provisions
+///   `>= 600 atomic/weight-byte` of head-room (`80_456 × 600 ≈ 48.3M < 50M`),
+///   covering a fee market ~600× above any observed floor. The engine-core
+///   ceiling test pins this 600 bound: a weight-model regeneration that grows
+///   the ceiling past `50M / 600` turns it red, forcing this derivation to be
+///   re-run rather than silently under-covering.
 ///
 /// **Bounds for safe adjustment** (rule 75). Must satisfy
 /// `0 < EXIT_FEE_RESERVE_ATOMIC < COVER_RUNG_ATOMIC` (asserted below).
@@ -54,11 +61,11 @@ use crate::cover::COVER_RUNG_ATOMIC;
 /// user top-up at funding time shrinks the corner further), and the
 /// below-reserve corner (until earnings accrue or a top-up) strands nothing —
 /// a cover-only pool has no earnings worth draining, the reserve releases at
-/// retirement, and a terminal `Unbond` over a destitute pool is funded by the
+/// retirement, and a terminal `Release` over a destitute pool is funded by the
 /// §7.2 zero-fee-input claim escape. **Raising** it strands more value on live
 /// personas (recoverable: it releases at retirement) and grows the
 /// blocked-fresh-drain fraction proportionally (`reserve/RUNG`). **Lowering**
-/// it risks an underfunded terminal `Unbond` under a fee spike — mitigated,
+/// it risks an underfunded terminal `Release` under a fee spike — mitigated,
 /// not fatal, by the same §7.2 destitute-corner escape.
 pub const EXIT_FEE_RESERVE_ATOMIC: u64 = 50_000_000;
 

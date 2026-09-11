@@ -1,5 +1,7 @@
 # RandomX v2 — mining floor-vs-ceiling asymmetry investigation (pre-genesis-seal security disposition)
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 ## Front-matter
 
 | Field | Value |

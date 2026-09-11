@@ -22,13 +22,13 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use shekyl_archival_retention::challenge;
+use shekyl_archival_retention::challenge_leaf_chunk_bounds;
+use shekyl_archival_retention::challenge_seal_on_chain;
 use shekyl_archival_retention::serve_credit_decisions::{
     serve_credit_gate_decision, GateReject, GateVerdict, ServeCreditGateInputs,
 };
-use shekyl_archival_retention::challenge_seal_on_chain;
 use shekyl_archival_retention::serve_credit_epoch_ok;
-use shekyl_archival_retention::wire::{MAX_BRANCH_SCALARS, MAX_PATH_LAYERS_PER_KIND};
-use shekyl_archival_retention::VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE;
 
 struct Cursor<'a> {
     data: &'a [u8],
@@ -61,32 +61,19 @@ impl Cursor<'_> {
         }
         out
     }
-
-    /// Length 0..=80 of counts 0..=300 — straddles both step-1 bounds
-    /// (`MAX_PATH_LAYERS_PER_KIND` = 64 layers, `MAX_BRANCH_SCALARS` = 256
-    /// scalars) from both sides; retune these ranges if those bounds move.
-    fn counts(&mut self) -> Vec<usize> {
-        let len = usize::from(self.u8()) % 81;
-        (0..len)
-            .map(|_| usize::from(self.u8()) + usize::from(self.u8() % 45))
-            .collect()
-    }
 }
 
 fuzz_target!(|data: &[u8]| {
     let mut c = Cursor { data, pos: 0 };
 
-    let c1 = c.counts();
-    let c2 = c.counts();
     let seal_hash = if c.bool() { Some(c.arr32()) } else { None };
-    let wire_first_byte = if c.bool() { Some(c.u8()) } else { None };
 
     let inputs = ServeCreditGateInputs {
         p_canonical_id: c.arr32(),
         shard_id: c.u64(),
         settlement_epoch: c.u64(),
-        c1_branch_scalar_counts: &c1,
-        c2_branch_scalar_counts: &c2,
+        vin_parsed: c.bool(),
+        pruned_record_in_bounds: c.bool(),
         preblock_present: c.bool(),
         bond_substrate_present: c.bool(),
         join_epoch: c.u64(),
@@ -97,10 +84,12 @@ fuzz_target!(|data: &[u8]| {
         seal_hash,
         held_at_fire: c.bool(),
         registry_present_at_fire: c.bool(),
-        leaf_index_in_segment: c.u64(),
+        segment_leaf_count: c.u64(),
+        // PC-D3: drawn from the corpus like every other input, so the fuzzer
+        // reaches the all-zero sentinel the gate refuses as well as the
+        // populated hashes it derives from.
+        prev_block_hash: c.arr32(),
         leaf_chunk_ok: c.bool(),
-        wire_serialize_ok: c.bool(),
-        wire_first_byte,
         verify_ok: c.bool(),
     };
 
@@ -122,26 +111,10 @@ fuzz_target!(|data: &[u8]| {
 /// (Only field-shaped predicates are checked; derivation-shaped ones —
 /// fire-height, chunk bounds — are covered by the mirror's unit tests and
 /// the standing KAT's authored vectors.)
-fn assert_reason_is_red(i: &ServeCreditGateInputs<'_>, reason: GateReject) {
+fn assert_reason_is_red(i: &ServeCreditGateInputs, reason: GateReject) {
     match reason {
-        GateReject::PathLayerCountExceedsBound => {
-            assert!(
-                i.c1_branch_scalar_counts.len() > MAX_PATH_LAYERS_PER_KIND
-                    || i.c2_branch_scalar_counts.len() > MAX_PATH_LAYERS_PER_KIND
-            );
-        }
-        GateReject::C1BranchScalarCountExceedsBound => {
-            assert!(i
-                .c1_branch_scalar_counts
-                .iter()
-                .any(|&n| n > MAX_BRANCH_SCALARS));
-        }
-        GateReject::C2BranchScalarCountExceedsBound => {
-            assert!(i
-                .c2_branch_scalar_counts
-                .iter()
-                .any(|&n| n > MAX_BRANCH_SCALARS));
-        }
+        GateReject::VinUnparseable => assert!(!i.vin_parsed),
+        GateReject::PrunedRecordSizeOutOfBounds => assert!(!i.pruned_record_in_bounds),
         GateReject::DuplicatePreBlock => assert!(i.preblock_present),
         GateReject::BondSubstrateMissing => assert!(!i.bond_substrate_present),
         GateReject::EpochBeforeEFirst => {
@@ -155,26 +128,47 @@ fn assert_reason_is_red(i: &ServeCreditGateInputs<'_>, reason: GateReject) {
         GateReject::SealHashUnavailable => assert!(i.seal_hash.is_none()),
         GateReject::ShardNotHeldAtFire => assert!(!i.held_at_fire),
         GateReject::ShardRegistryUnavailableAtFire => assert!(!i.registry_present_at_fire),
-        GateReject::LeafChunkReadFailed => assert!(!i.leaf_chunk_ok),
-        GateReject::VinSerializeFailed => assert!(!i.wire_serialize_ok),
-        GateReject::UnexpectedVinWireTag => {
-            assert_ne!(
-                i.wire_first_byte,
-                Some(VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE)
-            );
+        GateReject::LeafIndexDerivationRefused => {
+            // One reason, two red predicates: the gate reports zero geometry
+            // AND the all-zero prev-hash sentinel (PC-D3) through the single
+            // C++ "leaf index derivation refused" branch, so soundness here
+            // is the disjunction — at least one arm must be red.
+            assert!(i.segment_leaf_count == 0 || i.prev_block_hash == [0u8; 32]);
         }
+        GateReject::LeafIndexOutOfSegmentRange => {
+            // Derivation-shaped: assert through the production predicates,
+            // like the epoch-ok and seal-on-chain arms — a hand-derived
+            // necessary condition drifted here once already (it claimed
+            // `segment_leaf_count > SEGMENT_LEAF_COUNT`, missing the
+            // global-position u64 overflow arm a far-end `shard_id` trips).
+            // This still catches misattribution: any other red predicate
+            // reported under this reason fails the is_none below.
+            let leaf_index = challenge::challenge_leaf_index(
+                &i.p_canonical_id,
+                i.shard_id,
+                i.settlement_epoch,
+                &i.prev_block_hash,
+                i.segment_leaf_count,
+            );
+            assert!(challenge_leaf_chunk_bounds(i.shard_id, u64::from(leaf_index)).is_none());
+        }
+        GateReject::LeafChunkReadFailed => assert!(!i.leaf_chunk_ok),
         GateReject::FfiVerifyFailed => assert!(!i.verify_ok),
-        GateReject::LeafIndexOutOfSegmentRange => {}
     }
 }
 
 /// From an accepting input, each single red flip must reject with exactly
 /// that predicate's reason, and adding a *later* red flip must not displace
 /// an earlier one (first-failure ordering).
-fn single_flip_first_failure(green: &ServeCreditGateInputs<'_>) {
+fn single_flip_first_failure(green: &ServeCreditGateInputs) {
     // (mutator, expected reason), in gate order.
-    type Flip = (fn(&mut ServeCreditGateInputs<'_>), GateReject);
+    type Flip = (fn(&mut ServeCreditGateInputs), GateReject);
     let flips: &[Flip] = &[
+        (|i| i.vin_parsed = false, GateReject::VinUnparseable),
+        (
+            |i| i.pruned_record_in_bounds = false,
+            GateReject::PrunedRecordSizeOutOfBounds,
+        ),
         (|i| i.preblock_present = true, GateReject::DuplicatePreBlock),
         (
             |i| i.bond_substrate_present = false,
@@ -182,7 +176,7 @@ fn single_flip_first_failure(green: &ServeCreditGateInputs<'_>) {
         ),
         (|i| i.good_through = false, GateReject::NotGoodThrough),
         (
-            // h_close is only consumed at step 6 and later; steps 1–5 stay
+            // h_close is only consumed at step 6 and later; steps 0–5 stay
             // green, and the reject at step 6 shields the later consumers —
             // red regardless of the green input's heights.
             |i| {
@@ -196,15 +190,19 @@ fn single_flip_first_failure(green: &ServeCreditGateInputs<'_>) {
             |i| i.registry_present_at_fire = false,
             GateReject::ShardRegistryUnavailableAtFire,
         ),
+        (
+            |i| i.segment_leaf_count = 0,
+            GateReject::LeafIndexDerivationRefused,
+        ),
+        (
+            // PC-D3: the all-zero prev-hash sentinel is the refusal's second
+            // arm, checked by the gate right after the zero-geometry arm. An
+            // accepting input's hash is necessarily nonzero, so this is a
+            // genuine single red flip.
+            |i| i.prev_block_hash = [0u8; 32],
+            GateReject::LeafIndexDerivationRefused,
+        ),
         (|i| i.leaf_chunk_ok = false, GateReject::LeafChunkReadFailed),
-        (
-            |i| i.wire_serialize_ok = false,
-            GateReject::VinSerializeFailed,
-        ),
-        (
-            |i| i.wire_first_byte = None,
-            GateReject::UnexpectedVinWireTag,
-        ),
         (|i| i.verify_ok = false, GateReject::FfiVerifyFailed),
     ];
 

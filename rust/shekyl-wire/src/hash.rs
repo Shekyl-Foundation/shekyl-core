@@ -5,29 +5,30 @@
 
 //! Consensus hash identities (GENESIS_TX_WIRE_FORMAT.md §11).
 //!
-//! All hashing is `cn_fast_hash` (keccak-256, original 0x01 padding) via
-//! [`shekyl_crypto_hash::cn_fast_hash`] — byte-identical to the C++
-//! `cn_fast_hash`. This module owns the cross-cutting [`merkle_root`]; the
+//! All hashing is original-padding Keccak-256 (`0x01`, NOT SHA3-256's `0x06`) via
+//! [`shekyl_crypto_hash::keccak256`] — byte-identical to the C++ daemon's
+//! `cn_fast_hash` (the C++ symbol keeps the CryptoNote name). This module owns
+//! the cross-cutting [`merkle_root`]; the
 //! per-object tx/block hashes live on [`crate::Transaction`] / [`crate::Block`].
 
-use shekyl_crypto_hash::cn_fast_hash;
+use shekyl_crypto_hash::keccak256;
 
-/// `cn_fast_hash` over the concatenation of fixed 32-byte component hashes —
+/// `keccak256` over the concatenation of fixed 32-byte component hashes —
 /// the multi-part tx-hash combiner (§11).
 pub(crate) fn hash_concat(parts: &[[u8; 32]]) -> [u8; 32] {
     let mut buf = Vec::with_capacity(parts.len() * 32);
     for part in parts {
         buf.extend_from_slice(part);
     }
-    cn_fast_hash(&buf)
+    keccak256(&buf)
 }
 
-/// `cn_fast_hash(a ‖ b)` — the pairing step of the Merkle tree-hash.
+/// `keccak256(a ‖ b)` — the pairing step of the Merkle tree-hash.
 fn hash_pair(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
     let mut buf = [0u8; 64];
     buf[..32].copy_from_slice(a);
     buf[32..].copy_from_slice(b);
-    cn_fast_hash(&buf)
+    keccak256(&buf)
 }
 
 /// Monero `tree_hash` over a block's transaction hashes (`tree-hash.c`).

@@ -77,6 +77,10 @@ path = "src/bin/gen_parity_corpus.rs"
 [dependencies]
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx", features = ["test-internals"] }
 randomx-v2-sys = { path = "../randomx-v2-sys" }
+# Rotating-corpus seed derivation (§7.9 MR-R1): the house cSHAKE256
+# primitive, so the domain separator is registry-governed like every
+# other one rather than a local Keccak call.
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 rand_chacha = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }

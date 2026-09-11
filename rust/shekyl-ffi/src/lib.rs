@@ -5,13 +5,18 @@
 
 // FFI boundary code has structural patterns that trigger clippy lints:
 // - extern "C" functions take raw pointers (not_unsafe_ptr_arg_deref)
-// - C-compatible APIs require specific cast patterns
 // - Mathematical variable names follow cryptographic notation (non_snake_case)
+//
+// The cast lints are deliberately NOT allowed here (SA-6 untrusted-cast
+// ruling): this crate sits directly on the C++ trust boundary, which is
+// exactly where the workspace `cast_possible_truncation`/`cast_sign_loss`
+// denials earn their keep. A crate-root allow silently overrode the
+// workspace manifest deny and turned every site-level `#[allow(...)]` in
+// the crate into dead documentation; lossy casts now carry a site-level
+// allow with a rationale, or use `try_from`.
 #![allow(
     clippy::not_unsafe_ptr_arg_deref,
     clippy::missing_safety_doc,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
     clippy::manual_let_else,
     clippy::ptr_as_ptr,
     non_snake_case
@@ -58,33 +63,16 @@ compile_error!(
 // them.
 pub mod account_ffi;
 
-// Engine-file envelope (WALLET_FILE_FORMAT_V1) FFI surface. Six entry points
-// matching `shekyl_crypto_pq::wallet_envelope`:
-//   - shekyl_wallet_keys_inspect    (AAD-only header view)
-//   - shekyl_wallet_keys_seal       (create .wallet.keys)
-//   - shekyl_wallet_keys_open       (decrypt .wallet.keys)
-//   - shekyl_wallet_keys_rewrap_password (rotate wrapping password)
-//   - shekyl_engine_state_seal      (seal .wallet)
-//   - shekyl_engine_state_open      (open .wallet)
-// Each function follows the two-call sizing + zeroize-on-failure + narrow
-// error-code discipline documented in the module header. Consumed by
-// wallet2.cpp in the commit 2 slice.
-pub mod wallet_envelope_ffi;
-
-// Opaque high-level `ShekylWallet` handle wrapping `WalletFile` and
-// the loaded `WalletLedger`. Where `wallet_envelope_ffi` exposes the raw
-// envelope primitives so C++ can compose its own orchestration, this
-// module exposes a single lifecycle surface (create / open / save /
-// rotate / free) plus a non-secret metadata getter and a postcard ledger
-// export. Consumed by wallet2.cpp in the 2k/2l rewire slices.
-pub mod engine_file_ffi;
-
 // LWMA-1 difficulty-adjustment FFI export. Wraps `shekyl_difficulty::
 // lwma1_next` in a C-ABI surface using the `ShekylU128` two-u64
 // decomposition per `DAA_LWMA1.md` §6.1. Consumed by the Phase 2
 // cross-check harness (`tests/difficulty/lwma1_cross_check.cpp`) and
 // (Phase 3 onward) by the daemon's difficulty path.
 pub mod difficulty_ffi;
+
+// DRS-P0d layout-independent logical state digest v0. C++ walks
+// production LMDB; the hasher is shekyl-chain-store.
+pub mod chain_digest_ffi;
 
 // RandomX v2 light-cache PoW verification FFI. Wraps `shekyl_pow_randomx`
 // (`compute_hash` + `CacheStore`) in a C-ABI surface — the consensus
@@ -94,6 +82,19 @@ pub mod difficulty_ffi;
 // `rx_set_main_seedhash`) on the daemon block-verification boundary per
 // `docs/design/RANDOMX_V2_PHASE3_PLAN.md`.
 pub mod pow_randomx_ffi;
+
+// Curve-tree replica FFI: an ephemeral `shekyl_curve_tree::CurveTreeClient`
+// the C++ test generator (`tests/core_tests/chaingen.cpp`) drives to compute
+// the `curve_tree_root` every generated block header must carry, now that
+// the admission-time header-root check (CEN-B5) runs on every nettype.
+// Test-generator surface; the daemon does not call it.
+pub mod curve_tree_replica_ffi;
+
+// tx_extra PQC field shape rule (GENESIS_TX_WIRE_FORMAT.md §9.6a, CEN-I19):
+// exactly one 0x06 of 1120·n and one 0x07 of 32·n bytes when a transaction
+// has n > 0 outputs, neither when n == 0. The rule lives in shekyl-wire; the
+// daemon's admission path hands over its own parse's field lengths.
+pub mod tx_extra_ffi;
 
 // Archival serve-credit verification FFI (`ARCHIVAL_RETENTION_GATE2.md` §10).
 pub mod archival_ffi;
@@ -121,6 +122,16 @@ pub mod relay_zone_ffi;
 // `epee::levin` compression path is a marshaling shim over these exports;
 // the Rust-pinned libzstd is the single zstd implementation in the binary.
 pub mod levin_ffi;
+
+// Peer-attribution drop rule FFI — PWD-B7 (`SHEKYL_P2P_PROTOCOL.md`). The
+// classification is recorded by C++ as an opaque byte on the verification
+// context; whether that byte severs a connection is decided only here.
+pub mod peer_policy_ffi;
+
+// Daemon ephemeral-onion FFI — PWD-E7 piece 3
+// (`P2P_2_ENDPOINT_ROUND.md` PWD-E7/E9). `node_server::init` obtains the
+// per-boot overlay inbound (managed tor, in-memory key, DiscardPK) here.
+pub mod daemon_tor_ffi;
 
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
@@ -165,7 +176,7 @@ pub use legacy_types::*;
 #[allow(unused_imports)]
 pub use legacy_util::*;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "multisig"))]
 pub(crate) use legacy_fcmp::parse_prove_witness;
 
 #[cfg(test)]

@@ -1,0 +1,83 @@
+---
+description: A gate must assert that its own subject exists. Apply when adding, editing, or reviewing any CI gate, test filter, config-driven check, or skip-list — anywhere a clean result could mean "nothing was examined".
+globs:
+  - .github/workflows/**
+  - scripts/**
+  - "**/*.rs"
+---
+
+# A gate must assert its own subject exists
+
+**Absence of signal is not evidence of absence of defect. It is, first,
+evidence that the subject may be absent.**
+
+A gate that examines nothing reports the same green as a gate that
+examines everything and finds nothing wrong. Every instance below
+computed a *correct* answer about a surface that was not there, and
+reported it as a clean signal.
+
+## Where this has already bitten
+
+Promoted from the RandomX v2 T18 mutation-regime round
+([`docs/design/RANDOMX_V2_MUTATION_REGIME.md`](../../docs/design/RANDOMX_V2_MUTATION_REGIME.md)
+§13), which found six instances of the shape and three more in its own
+proposed fixes:
+
+| The surface that wasn't there | How it read |
+| --- | --- |
+| A job whose YAML header was severed by an edit | weekly cron green |
+| A config file at a path the tool never reads | discipline "enforced" |
+| Test scoping that excluded the judging crate | mutants "caught" |
+| An `assert_eq!` — macros are not mutation sites | survivor count clean |
+| A branch no test could reach | tests "passing" |
+| An `if:` whose operator precedence widened the trigger | job "gated" |
+
+The fixes are the tell. Three separate proposals shared the defect's
+shape: a setting written into a file nothing reads, an exclusion for a
+class that cannot occur, and a name-matched scope that would go green
+over an empty set. None was caught by noticing it was wrong on its own
+terms. Each was caught by asking **"does the thing this acts on
+exist?"** — which is cheap, mechanical, and was not part of the process
+until it had cost five sessions.
+
+## The rule
+
+When adding or reviewing a gate, ask what a green result would look like
+if its subject vanished. If green and vacuous are indistinguishable, the
+gate needs an assertion that its subject is present, and that assertion
+must fail loudly.
+
+Concrete forms already in this repo — these are instances of one rule,
+not separate tricks:
+
+- **Assert the population is non-empty.** A name- or path-filtered
+  selection (`--re`, `--file`, a ctest label) that matches nothing runs
+  clean. Pin a minimum count; `ctest --no-tests=error` is the same idea.
+- **Assert an exclusion excludes something.** A skip-list entry that
+  matches no real path is a silent no-op, and the next entry written in
+  the same style will be too.
+- **Assert the prerequisite is present**, rather than installing or
+  assuming it — and prefer verification to installation when the tool
+  is already there, so the check cannot be taken out by an unrelated
+  network failure.
+- **Read code, not prose.** A gate that greps un-stripped source can be
+  held green by a doc comment quoting the very literal whose definition
+  moved (the SA-3b domain-registry gate strips comments for exactly
+  this reason).
+- **Keep the verdict out of a pipe** — see
+  [`46-shell-gate-exits`](46-shell-gate-exits.mdc). A swallowed exit
+  status is this same failure at the last step: the gate ran, judged,
+  and the judgement never reached anyone.
+
+## Scope, and what this is not
+
+This is about a gate's *subject*, not its *strictness*. A gate that
+examines the right surface and is merely lenient is a coverage question,
+argued on its own merits. A gate that examines nothing is not lenient —
+it is absent, while appearing present, which is worse than having no
+gate at all: a missing gate is visible, and this one is not.
+
+The corollary for deletions: before removing a job, a trigger, or a
+config, check who else consumes it. The T18 round nearly deleted a cron
+that looked like one job's private trigger and was in fact what selected
+another job's full sweep.

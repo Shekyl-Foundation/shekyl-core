@@ -68,11 +68,10 @@ impl PersonaIsolatedTransport for PRpc {}
 /// (same connection pool, same circuit), so cloning a `PRpc` for the same
 /// persona keeps its traffic on one circuit — the correct isolation semantics.
 //
-// `allow(dead_code)`: transient — the non-test consumer is the posture selector
-// (DQ-T2.3) at the scan-loop wiring, a later slice. The proving test ships with
-// the enabler (it is not deferred).
+// Lint-visible: `PTransactionSubmitter` and `PBlockSource` construct these, so
+// no suppression applies. The DQ-T2.3 posture selector at the scan-loop wiring
+// is still the outstanding consumer.
 #[derive(Clone)]
-#[allow(dead_code)]
 pub(crate) struct PRpc {
     client: PTorClient,
     /// The daemon base URL (scheme + host + port, no trailing slash), e.g.
@@ -87,7 +86,6 @@ pub(crate) struct PRpc {
     base_url: String,
 }
 
-#[allow(dead_code)]
 impl PRpc {
     /// Wrap `P`'s circuit-bound transport as an [`Rpc`] against `base_url`.
     pub(crate) fn new(client: PTorClient, base_url: String) -> Self {
@@ -150,17 +148,15 @@ impl Rpc for PRpc {
 /// dial the same host. The pin binds the *type that made the posture
 /// argument*, not any transport that coincidentally resolves to loopback.
 //
-// `allow(dead_code)`: transient — consumed by the emission regtest e2e and,
-// when the DQ-T2.3 posture selector lands, by the scan-loop wiring.
+// Lint-visible: consumed by the emission regtest e2e, so no suppression
+// applies. The DQ-T2.3 posture selector will add the scan-loop consumer.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub(crate) struct LocalNodeRpc {
     inner: HttpRpc,
 }
 
 impl PersonaIsolatedTransport for LocalNodeRpc {}
 
-#[allow(dead_code)]
 impl LocalNodeRpc {
     /// Open a loopback transport against `url`, refusing non-loopback hosts.
     ///
@@ -197,15 +193,11 @@ impl LocalNodeRpc {
         } else {
             authority.rsplit_once(':').map_or(authority, |(h, _)| h)
         };
-        // The loopback pin proper: parse to an address and use the standard
-        // classifier (the `conn_limit.rs` idiom) — a literal allowlist would
-        // wrongly refuse legitimate loopback forms like `127.0.0.2`.
-        // `localhost` is the one accepted non-numeric form.
-        let is_loopback = host == "localhost"
-            || host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback());
-        if !is_loopback {
+        // The loopback pin proper: the one loopback predicate the tree has
+        // (`localhost`, and any literal the listen side classifies as
+        // loopback, IPv4-mapped spellings included) — a literal allowlist
+        // would wrongly refuse legitimate loopback forms like `127.0.0.2`.
+        if !shekyl_rpc_transport::network_posture::is_loopback_host(host) {
             return Err(RpcError::ConnectionError(format!(
                 "local-posture transport refuses non-loopback host {host:?} \
                  (the shared-network-identity argument only holds on the \
@@ -232,11 +224,10 @@ impl Rpc for LocalNodeRpc {
 /// loop surfaces a real bad-node/protocol problem instead of retrying it as an
 /// endless "connecting…". Never renders the SOCKS username — every
 /// [`RequestErrorKind`] `Display` is username-free (invariant (a)).
-// `dead_code` until the wiring slice consumes `PRpc` (whose `post` calls this).
+// Reached through `PRpc::post`, so this carries no dead-code suppression.
 // Owned `PTransportError` by design — this is a `.map_err(classify)` target, which
 // hands ownership of the error (the by-ref form would force `|e| classify(&e)`),
 // so `needless_pass_by_value` is a false positive here.
-#[allow(dead_code)]
 #[allow(clippy::needless_pass_by_value)]
 fn classify(e: PTransportError) -> RpcError {
     match e {

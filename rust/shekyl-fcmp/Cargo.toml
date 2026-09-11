@@ -32,7 +32,6 @@ ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"]
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
 # Crypto primitives
-blake2 = "0.10"
 zeroize = { workspace = true }
 rand_core = { version = "0.6", features = ["std"] }
 

@@ -883,7 +883,9 @@ mod tests {
     #[test]
     fn ffi_classical_address_bytes_matches_rust_authority() {
         assert_eq!(SHEKYL_CLASSICAL_ADDRESS_BYTES, CLASSICAL_ADDRESS_BYTES);
-        assert_eq!(SHEKYL_CLASSICAL_ADDRESS_BYTES, 1 + 32 + 32);
+        // Spelled-out layout: version + spend + view + msg_sign_pk
+        // (fork (ii) — the 48-byte SLH-DSA-192s anchor).
+        assert_eq!(SHEKYL_CLASSICAL_ADDRESS_BYTES, 1 + 32 + 32 + 48);
     }
 
     /// Pin the FFI re-export of `SEED_FORMAT_*` to the authoritative

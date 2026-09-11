@@ -113,7 +113,7 @@ Decision tree is genuinely **accept-and-harden** vs **reopen Form C**:
 
 **Quantitative T-A4 thresholds wait** on the timing-cluster value pass
 ([`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md)): `W`,
-`MAX_SETTLEMENT_EPOCHS_PER_EMISSION`, release cooldown, drain/Unbond spacing. Those set
+`MAX_SETTLEMENT_EPOCHS_PER_EMISSION`, release cooldown, drain/Release spacing. Those set
 *secondary* correlation cadences inside the lifetime window (emission drip rate, lapse
 forfeiture rhythm) but do not shorten `T_obs` below operator lifetime.
 
@@ -178,13 +178,13 @@ serving over `T_obs`?
 
 ### T-A4 — Firewall: timing
 
-**Question.** Emission batching + drain/Unbond spacing — standing correlation channel vs
+**Question.** Emission batching + drain/Release spacing — standing correlation channel vs
 principal spends over `T_obs`?
 
 | Demonstrate | Method |
 |-------------|--------|
 | Emission cadence does not create joinable timing signature across rotations | Batch cap + jitter defaults |
-| Drain/Unbond decorrelation sufficient vs principal spend graph | Min-delay / output-count if needed (feeds T-A5) |
+| Drain/Release decorrelation sufficient vs principal spend graph | Min-delay / output-count if needed (feeds T-A5) |
 
 **Pass:** timing channel does not bridge portfolio-tracked `P` lifetime to principal over
 `T_obs`.
@@ -196,7 +196,7 @@ principal spends over `T_obs`?
 
 ### T-A5 — Firewall: output graph
 
-**Question.** Reward receipts + Unbond refund + terminal drain — FCMP++ membership
+**Question.** Reward receipts + Release refund + terminal drain — FCMP++ membership
 sufficient, or pinned min-delay / output-count discipline needed for `T_obs`?
 
 | Demonstrate | Method |
@@ -326,7 +326,7 @@ under L16 posture. |
 | **Question** | Do emission/drain cadences bridge portfolio-tracked `P` lifetime to
 principal spends over `T_obs`? |
 | **Analysis** | **Standing events:** join-Market (unhideable), periodic emission batches
-(`SEB` × batch cap), occasional drains/Unbond. Over lifetime these produce many samples —
+(`SEB` × batch cap), occasional drains/Release. Over lifetime these produce many samples —
 rotation does **not** reset portfolio identity, so timing must not be a **joinable clock**
 between principal graph and `P` activity. **Mitigations (designed, not all numerically
 pinned):** settlement-epoch batching (not per-epoch drip); `MAX_SETTLEMENT_EPOCHS_PER_EMISSION
@@ -353,7 +353,7 @@ triggered. |
 ordinary FCMP++ transfer hygiene? |
 | **Analysis** | Rewards land in `P`-controlled stealth outputs (loud amounts; privacy is
 firewall not amount hiding). ~~Principal return uses **decorrelated** FCMP++ spends — not lump
-sweeps tying full reward history to one principal cluster in a single block. Unbond refund is
+sweeps tying full reward history to one principal cluster in a single block. Release refund is
 loud `bond_floor` into the public set — same discipline.~~ *(Struck 2026-07-16 — F-W10: the
 drain is not an identifiable transaction, so there is no lump sweep to avoid; and the refund
 is ordinary hidden vouts against a public `bond_debit` source term, not a loud output — gate-6

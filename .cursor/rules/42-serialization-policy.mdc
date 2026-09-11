@@ -208,3 +208,15 @@ Policy deviations require an amendment to
 - Mechanical checks outlive the humans who wrote them. "Remember to
   bump the constant" is a cultural invariant that erodes; "CI rejects
   your PR" is one that does not.
+
+## Envelope version vs payload version — name them apart
+
+A format has two version numbers with different jobs, and they must not
+share a name or a field: the **envelope/armoring version** (the prefix a
+parser dispatches on — never fed into any signed preimage) and the
+**payload/layout version** (the canonical byte inside the signed or
+persisted bytes — the security or schema boundary). SM-R-5 is the
+precedent: `shekylmsgsig1.`'s `1` is envelope; `layout_version` is the
+preimage's `sig_format_version`, one value appearing twice by
+construction. A name that could mean either (`version`, `v`) is the bug
+vector; qualify every version identifier with which of the two it is.

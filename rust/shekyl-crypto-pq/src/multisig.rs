@@ -9,7 +9,7 @@
 
 use crate::error::PqcVerifyError;
 use crate::signature::{HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme};
-use shekyl_crypto_hash::cn_fast_hash;
+use shekyl_crypto_hash::keccak256;
 
 /// Largest multisig group served (MSW-G, settled 2026-07-15: 2f+1 at f=2;
 /// withdrew the same-day MAX=8 pick). The value is the *correctness* cap —
@@ -322,12 +322,16 @@ pub const SPEND_AUTH_VERSION_ED25519: u8 = 0x02;
 /// leaf `h_pqc = H(blob)` already binds, so it was a self-referential tautology.
 /// The consensus caller (the `shekyl-daemon-rpc` submit verifier) and every other
 /// caller already passed `None`; the parameter is gone.
+///
+/// Returns `Ok(())` on success and `Err` on any failure — `Result<()>`, **not**
+/// `Result<bool>` (SA-R-1): there is no `Ok(false)` for a caller to mishandle.
+/// Do not restore a boolean return.
 pub fn verify_multisig(
     scheme_id: u8,
     key_blob: &[u8],
     sig_blob: &[u8],
     message: &[u8],
-) -> Result<bool, PqcVerifyError> {
+) -> Result<(), PqcVerifyError> {
     // Check 1: scheme match
     if scheme_id != HYBRID_SCHEME_ID_MULTISIG {
         return Err(PqcVerifyError::SchemeMismatch);
@@ -372,15 +376,21 @@ pub fn verify_multisig(
         .zip(sig_container.signer_indices.iter())
     {
         let pk = &key_container.keys[idx as usize];
-        let ok = scheme
-            .verify(pk, message, sig)
+        // Participants verify under the multisig-specific domain (SA-R-5): a
+        // single-signer signature over `message` is not a valid participant
+        // signature, and vice versa, even for a caller that passes a bare
+        // payload here — see `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`.
+        scheme
+            .verify(
+                pk,
+                crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
+                message,
+                sig,
+            )
             .map_err(|_| PqcVerifyError::CryptoVerifyFailed)?;
-        if !ok {
-            return Err(PqcVerifyError::CryptoVerifyFailed);
-        }
     }
 
-    Ok(true)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -397,7 +407,7 @@ pub fn multisig_pqc_leaf_hash(
     container: &MultisigKeyContainer,
 ) -> Result<[u8; 32], PqcVerifyError> {
     let canonical = container.to_canonical_bytes()?;
-    Ok(cn_fast_hash(&canonical))
+    Ok(keccak256(&canonical))
 }
 
 // ---------------------------------------------------------------------------
@@ -411,8 +421,14 @@ mod tests {
 
     fn gen_keypairs(n: usize) -> Vec<(HybridPublicKey, crate::signature::HybridSecretKey)> {
         let scheme = HybridEd25519MlDsa;
-        (0..n).map(|_| scheme.keypair_generate().unwrap()).collect()
+        (0..n)
+            .map(|_| scheme.generate_ephemeral_keypair_for_tests().unwrap())
+            .collect()
     }
+
+    /// Multisig participant signatures use the multisig-specific domain, so
+    /// they match what `verify_multisig` checks (SA-R-5).
+    const MSD: &[u8] = crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG;
 
     fn gen_spend_auth_pubkeys(n: usize) -> Vec<[u8; 32]> {
         use ed25519_dalek::SigningKey;
@@ -449,7 +465,7 @@ mod tests {
         let scheme = HybridEd25519MlDsa;
         let sigs: Vec<HybridSignature> = signer_indices
             .iter()
-            .map(|&idx| scheme.sign(&pairs[idx as usize].1, message).unwrap())
+            .map(|&idx| scheme.sign(&pairs[idx as usize].1, MSD, message).unwrap())
             .collect();
         MultisigSigContainer {
             sig_count: sigs.len() as u8,
@@ -500,8 +516,7 @@ mod tests {
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
-        let result = verify_multisig(2, &key_blob, &sig_blob, msg);
-        assert!(result.unwrap());
+        verify_multisig(2, &key_blob, &sig_blob, msg).unwrap();
     }
 
     #[test]
@@ -513,7 +528,46 @@ mod tests {
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
-        assert!(verify_multisig(2, &key_blob, &sig_blob, msg).unwrap());
+        verify_multisig(2, &key_blob, &sig_blob, msg).unwrap();
+    }
+
+    /// SA-R-5 cross-domain separation (the negative control): a signature made
+    /// under the **single-sig** domain (`SCHEME_DOMAIN_PQC_AUTH_TX`, what the
+    /// single-signer FFI produces) is **rejected** by `verify_multisig`, which
+    /// checks under `SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`. Without the distinct
+    /// domain a single-signer signature over `msg` would verify here — the
+    /// interchangeability this separation exists to remove.
+    #[test]
+    fn single_sig_domain_signature_rejected_as_multisig_participant() {
+        let pairs = gen_keypairs(1);
+        let kc = make_key_container(&pairs, 1);
+        let msg = b"cross-domain-separation";
+        // Sign under the SINGLE-SIG domain instead of the multisig one.
+        let scheme = HybridEd25519MlDsa;
+        let wrong_domain_sig = scheme
+            .sign(
+                &pairs[0].1,
+                crate::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                msg,
+            )
+            .unwrap();
+        let sc = MultisigSigContainer {
+            sig_count: 1,
+            sigs: vec![wrong_domain_sig],
+            signer_indices: vec![0],
+        };
+        let key_blob = kc.to_canonical_bytes().unwrap();
+        let sig_blob = sc.to_canonical_bytes().unwrap();
+
+        assert_eq!(
+            verify_multisig(2, &key_blob, &sig_blob, msg).unwrap_err(),
+            PqcVerifyError::CryptoVerifyFailed,
+            "a single-sig-domain signature must not verify as a multisig participant"
+        );
+        // And the converse: a correct multisig-domain container still verifies.
+        let good = sign_multisig(&pairs, &[0], msg);
+        let good_blob = good.to_canonical_bytes().unwrap();
+        verify_multisig(2, &key_blob, &good_blob, msg).unwrap();
     }
 
     #[test]
@@ -526,7 +580,7 @@ mod tests {
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
-        assert!(verify_multisig(2, &key_blob, &sig_blob, msg).unwrap());
+        verify_multisig(2, &key_blob, &sig_blob, msg).unwrap();
     }
 
     // MSW-1 cross-seam length KAT. The absence of a test that crossed the
@@ -731,8 +785,8 @@ mod tests {
         let sc = MultisigSigContainer {
             sig_count: 2,
             sigs: vec![
-                scheme.sign(&pairs[0].1, msg).unwrap(),
-                scheme.sign(&pairs[1].1, msg).unwrap(),
+                scheme.sign(&pairs[0].1, MSD, msg).unwrap(),
+                scheme.sign(&pairs[1].1, MSD, msg).unwrap(),
             ],
             signer_indices: vec![0, 3],
         };
@@ -754,8 +808,8 @@ mod tests {
         let sc = MultisigSigContainer {
             sig_count: 2,
             sigs: vec![
-                scheme.sign(&pairs[1].1, msg).unwrap(),
-                scheme.sign(&pairs[0].1, msg).unwrap(),
+                scheme.sign(&pairs[1].1, MSD, msg).unwrap(),
+                scheme.sign(&pairs[0].1, MSD, msg).unwrap(),
             ],
             signer_indices: vec![1, 0],
         };
@@ -784,8 +838,8 @@ mod tests {
         let sc = MultisigSigContainer {
             sig_count: 2,
             sigs: vec![
-                scheme.sign(&pairs[0].1, msg).unwrap(),
-                scheme.sign(&pairs[1].1, msg).unwrap(),
+                scheme.sign(&pairs[0].1, MSD, msg).unwrap(),
+                scheme.sign(&pairs[1].1, MSD, msg).unwrap(),
             ],
             signer_indices: vec![0, 1],
         };
@@ -822,8 +876,8 @@ mod tests {
         let sc = MultisigSigContainer {
             sig_count: 2,
             sigs: vec![
-                scheme.sign(&pairs[0].1, msg).unwrap(),
-                scheme.sign(&pairs[0].1, msg).unwrap(), // signed with key 0, but index says 1
+                scheme.sign(&pairs[0].1, MSD, msg).unwrap(),
+                scheme.sign(&pairs[0].1, MSD, msg).unwrap(), // signed with key 0, but index says 1
             ],
             signer_indices: vec![0, 1],
         };
@@ -836,23 +890,25 @@ mod tests {
         );
     }
 
-    // -- ML-DSA non-determinism test --
+    // -- Hedged / nested non-determinism test --
 
     #[test]
-    fn ml_dsa_hedged_signing_produces_different_sigs() {
+    fn nested_hedged_signing_produces_different_sigs() {
         let pairs = gen_keypairs(1);
         let msg = b"non-determinism";
         let scheme = HybridEd25519MlDsa;
-        let sig1 = scheme.sign(&pairs[0].1, msg).unwrap();
-        let sig2 = scheme.sign(&pairs[0].1, msg).unwrap();
-        // ML-DSA uses hedged signing: same message, same key -> different signature
-        // Ed25519 is deterministic so that component should match
-        assert_eq!(sig1.ed25519, sig2.ed25519);
-        // ML-DSA component should differ (overwhelmingly likely)
+        let sig1 = scheme.sign(&pairs[0].1, MSD, msg).unwrap();
+        let sig2 = scheme.sign(&pairs[0].1, MSD, msg).unwrap();
+        // ML-DSA uses hedged signing: same message, same key -> different σ_pq.
         assert_ne!(sig1.ml_dsa, sig2.ml_dsa);
-        // Both must verify
-        assert!(scheme.verify(&pairs[0].0, msg, &sig1).unwrap());
-        assert!(scheme.verify(&pairs[0].0, msg, &sig2).unwrap());
+        // Under the nested combiner the Ed25519 half signs `inner ‖ σ_pq`, so a
+        // hedged σ_pq makes the classical half differ too. This is the nesting
+        // binding the two halves — the v1 *parallel* construction left Ed25519
+        // deterministic here because it signed the bare message independently.
+        assert_ne!(sig1.ed25519, sig2.ed25519);
+        // Both must verify.
+        scheme.verify(&pairs[0].0, MSD, msg, &sig1).unwrap();
+        scheme.verify(&pairs[0].0, MSD, msg, &sig2).unwrap();
     }
 
     // -- Edge cases --
@@ -866,7 +922,7 @@ mod tests {
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
-        assert!(verify_multisig(2, &key_blob, &sig_blob, msg).unwrap());
+        verify_multisig(2, &key_blob, &sig_blob, msg).unwrap();
     }
 
     #[test]
@@ -878,7 +934,7 @@ mod tests {
         let key_blob = kc.to_canonical_bytes().unwrap();
         let sig_blob = sc.to_canonical_bytes().unwrap();
 
-        assert!(verify_multisig(2, &key_blob, &sig_blob, msg).unwrap());
+        verify_multisig(2, &key_blob, &sig_blob, msg).unwrap();
     }
 
     #[test]
@@ -893,11 +949,8 @@ mod tests {
         for subset in subsets {
             let sc = sign_multisig(&pairs, subset, msg);
             let sig_blob = sc.to_canonical_bytes().unwrap();
-            let result = verify_multisig(2, &key_blob, &sig_blob, msg);
-            assert!(
-                result.unwrap(),
-                "subset {subset:?} should verify successfully",
-            );
+            verify_multisig(2, &key_blob, &sig_blob, msg)
+                .unwrap_or_else(|e| panic!("subset {subset:?} should verify successfully: {e:?}"));
         }
     }
 

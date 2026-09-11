@@ -51,7 +51,7 @@
 //! 2. **Per-epoch re-scoring voids admission gaming.** Depress `r`, admit, restore
 //!    `r`: the position then scores zero at every subsequent close. All value
 //!    flows through per-epoch scoring, which admission timing cannot touch — the
-//!    attacker pays unbond/exit costs and bond churn to acquire *a registered
+//!    attacker pays release/exit costs and bond churn to acquire *a registered
 //!    zero*.
 //! 3. **Denial is capacity-priced and routable-around.** Inflating `r` to block
 //!    applicants is untargeted: the applicant picks other shards, or simply holds
@@ -78,7 +78,7 @@
 //! can reduce work and is left ungated *on purpose*: refusing an **entry** into a
 //! zero costs the applicant nothing (they never entered, and are free to pick a
 //! different holding), whereas refusing an **exit-ward** move would trap capital
-//! in a larger position than the holder wants and force a full `Unbond` where
+//! in a larger position than the holder wants and force a full `Release` where
 //! they asked for a partial one. The gate protects reach; it must not tax it.
 
 use core::ffi::CStr;
@@ -134,7 +134,7 @@ pub struct AdmissionShard {
 ///
 /// **The read-point is a ruling, and this type is how it is carried.** Evaluating
 /// against tip state would let intra-block ordering move the verdict: a bond post
-/// and an unbond in the *same* block could be sequenced to catch a transient `r`.
+/// and a release in the *same* block could be sequenced to catch a transient `r`.
 /// Reading parent state makes ordering irrelevant and makes every validator
 /// compute an identical verdict — the same discipline as the
 /// `frozen_segment_count` frontier-read and the M3-1 cached-counter drift ruling.
@@ -162,7 +162,7 @@ pub struct AdmissionShard {
 /// `age_milli` — and would tell the dispatch author to pass the wrong height.
 /// **Pass the parent height (`H − 1`), never the tip.**
 ///
-/// (Bonding right after a *genuine* mass unbond is not manipulation — that is
+/// (Bonding right after a *genuine* mass release is not manipulation — that is
 /// reading true state, and the admitted position really is viable at that state.)
 #[derive(Debug, Clone, Copy)]
 pub struct ParentStateHoldings<'a> {

@@ -9,9 +9,11 @@
 Shekyl is privacy-preserving, quantum-resistant money designed to last:
 hybrid post-quantum cryptography from genesis, FCMP++ membership-proof
 privacy, and a PoW chain with staking as an economic primitive. The node
-daemon and legacy wallet live in C++ under `src/`; the wallet stack is being
-actively rewritten as a native Rust workspace under `rust/`, and the rest of
-the codebase will follow. The long-term goal is an all-Rust stack, so editing
+daemon lives in C++ under `src/` (Rust-forward when touched); the live
+wallet is the Rust stack (`shekyl-cli`, `shekyl-wallet-rpc`,
+`shekyl-engine-core` and siblings under `rust/`). The C++ `wallet2` /
+`simplewallet` / `wallet_rpc_server` path was deleted in Phase 5
+(2026-08-19). The rest of the codebase will follow. The long-term goal is an all-Rust stack, so editing
 C++ is the exception, not the default: new code **and bug fixes** belong in
 Rust (with proper types), advancing the FFI boundary rather than thickening the
 C++ — patching C++ just re-creates debt the Rust rewrite must pay down again,
@@ -60,6 +62,7 @@ Foundations & process
 - [`90-commits`](.cursor/rules/90-commits.mdc) — commit message & PR discipline
 - [`91-documentation-after-plans`](.cursor/rules/91-documentation-after-plans.mdc) — docs update is the final task of a plan
 - [`94-tracking-index`](.cursor/rules/94-tracking-index.mdc) — `docs/design/IMPLEMENTATION_INDEX.md` is load-bearing; identifier families register at birth; Phase 3+ / Stage 3+ items start with an index row
+- [`95-documentation-lifecycle`](.cursor/rules/95-documentation-lifecycle.mdc) — document classes, status banners, archive-or-contract, FOLLOWUPS one-liners, CHANGELOG scope, three work-item targets
 - [`26-sub-pr-design-discipline`](.cursor/rules/26-sub-pr-design-discipline.mdc) — opt-in design-round process for multi-round/consensus/FFI sub-PRs
 
 Architecture & scope
@@ -70,8 +73,10 @@ Architecture & scope
 - [`19-validation-surface-discipline`](.cursor/rules/19-validation-surface-discipline.mdc) — bundle work by validation surface, not feature topic
 - [`21-reversion-clause-discipline`](.cursor/rules/21-reversion-clause-discipline.mdc) — reject-now-with-reopening-criteria over pre-provisioned flexibility
 - [`22-no-lazy-deferral`](.cursor/rules/22-no-lazy-deferral.mdc) — scoped work lands where scoped (always applies); deferral needs a named blocker, disclosed in the deferring commit
+- [`23-disposition-visibility`](.cursor/rules/23-disposition-visibility.mdc) — REJECTED / DEFERRED / STAGED / RESERVED each has a defined grep surface; zero code symbols unless staged; refused names stay in namespace contracts as structured statuses
 - [`60-no-monero-legacy`](.cursor/rules/60-no-monero-legacy.mdc) — v3-from-genesis, no Monero chain history; remove dead pre-genesis code
 - [`70-modular-consensus`](.cursor/rules/70-modular-consensus.mdc) — PoW consensus; staking is economic; no speculative consensus scaffolding
+- [`71-network-uniformity`](.cursor/rules/71-network-uniformity.mdc) — nettype selects data, never control flow, on the consensus surface; a behavioral divergence must be named, ratified, and loud
 - [`75-system-autonomy`](.cursor/rules/75-system-autonomy.mdc) — self-regulating design; minimize coordinated upgrades
 - [`76-device-provisioning-floor`](.cursor/rules/76-device-provisioning-floor.mdc) — stated minimum supported device (Pi 4); constants derived from work time are provisioned at the floor, never at the machine that was handy
 
@@ -84,6 +89,8 @@ Rust & FFI
 - [`40-ffi-discipline`](.cursor/rules/40-ffi-discipline.mdc) — FFI surface management
 - [`42-serialization-policy`](.cursor/rules/42-serialization-policy.mdc) — persisted-block wire change ⇒ version-constant bump (CI-enforced)
 - [`45-rust-lint-checks`](.cursor/rules/45-rust-lint-checks.mdc) — `cargo fmt` + `cargo clippy --all-targets -- -D warnings` before any Rust commit
+- [`46-shell-gate-exits`](.cursor/rules/46-shell-gate-exits.mdc) — gate verdicts never travel through a pipe; `PIPESTATUS`/unpiped exits; the pipefail SIGPIPE trap; `pgrep -f` matches the caller
+- [`47-gate-subject-assertion`](.cursor/rules/47-gate-subject-assertion.mdc) — a gate must assert its own subject exists; absence of signal is first evidence the subject is absent
 - [`93-legacy-symbol-migration`](.cursor/rules/93-legacy-symbol-migration.mdc) — rename `MONERO_*` → `SHEKYL_*` when touching code
 
 Cryptography & secrets
@@ -124,8 +131,8 @@ crypto primitives; the rest of that tree's application/protocol code is ours
 
 ```text
 shekyl-core/
-├── src/        # C++ core: daemon, wallet (legacy), p2p, crypto, rpc
-├── rust/       # Rust workspace: wallet stack rewrite + crypto/consensus crates
+├── src/        # C++ core: daemon, p2p, crypto, rpc (no wallet2)
+├── rust/       # Rust workspace: wallet stack + crypto/consensus crates
 ├── cmake/      # CMake modules and the Rust build bridge (BuildRust.cmake)
 ├── config/     # Economics/consensus parameters (build-script source of truth)
 ├── docs/       # Design docs, decision log, FOLLOWUPS, test vectors
@@ -141,9 +148,10 @@ Key Rust crates: `shekyl-engine-*` (wallet orchestrator/state/file), `shekyl-sca
 `shekyl-units` / `shekyl-types` (foundational newtypes), and the single FFI
 crate `shekyl-ffi`. See [`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc).
 
-Design history worth knowing: [`docs/V3_WALLET_DECISION_LOG.md`](docs/V3_WALLET_DECISION_LOG.md)
-(append-only binding decisions), [`docs/design/`](docs/design/), and
-[`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md).
+Documentation starts at [`docs/README.md`](docs/README.md). Binding
+history: [`docs/V3_WALLET_DECISION_LOG.md`](docs/V3_WALLET_DECISION_LOG.md).
+Identifier map: [`docs/design/IMPLEMENTATION_INDEX.md`](docs/design/IMPLEMENTATION_INDEX.md).
+Open residue: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md).
 
 ---
 

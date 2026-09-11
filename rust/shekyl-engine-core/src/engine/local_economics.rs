@@ -58,7 +58,6 @@ pub struct LocalEconomics {
     /// Build-time-resolved economic constants
     /// ([`EconomicParams::default`]). Immutable at V3.0.
     // R6: read only by the trait methods, which have zero V3.0 consumer (§5.5).
-    #[allow(dead_code)]
     params: EconomicParams,
 }
 
@@ -85,7 +84,6 @@ impl LocalEconomics {
 /// `u16`. Lossy by design — the snapshot is a display rulebook, not a
 /// consensus input.
 // R6: used only by `parameters_snapshot`, which has zero V3.0 consumer (§5.5).
-#[allow(dead_code)]
 fn scale_to_bp(value: u64) -> u16 {
     u16::try_from(value / 100).unwrap_or(u16::MAX)
 }
@@ -93,7 +91,6 @@ fn scale_to_bp(value: u64) -> u16 {
 /// Convert a fixed-point SCALE value to milli-units (`÷1000`), saturating
 /// into `u16`.
 // R6: used only by `parameters_snapshot`, which has zero V3.0 consumer (§5.5).
-#[allow(dead_code)]
 fn scale_to_milli_u16(value: u64) -> u16 {
     u16::try_from(value / 1000).unwrap_or(u16::MAX)
 }
@@ -101,7 +98,6 @@ fn scale_to_milli_u16(value: u64) -> u16 {
 /// Convert a fixed-point SCALE value to milli-units (`÷1000`), saturating
 /// into `u32` (release multipliers can exceed `1.0`).
 // R6: used only by `parameters_snapshot`, which has zero V3.0 consumer (§5.5).
-#[allow(dead_code)]
 fn scale_to_milli_u32(value: u64) -> u32 {
     u32::try_from(value / 1000).unwrap_or(u32::MAX)
 }
@@ -140,7 +136,7 @@ impl EconomicsEngine for LocalEconomics {
         EconomicsParametersSnapshot {
             emission_speed_factor: u8::try_from(p.emission_speed_factor_per_minute)
                 .unwrap_or(u8::MAX),
-            money_supply_atomic: p.money_supply,
+            emission_curve_asymptote_atomic: p.emission_curve_asymptote,
             final_subsidy_per_minute: p.final_subsidy_per_minute,
             tx_volume_baseline: p.tx_volume_baseline,
             release_min_milli: scale_to_milli_u32(p.release_min),

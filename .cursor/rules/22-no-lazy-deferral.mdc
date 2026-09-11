@@ -71,8 +71,84 @@ and quietly became "later"). Staging allows with named consumers are
 the marker of the first; allow comments whose named consumer shifted
 between commits without a plan change are the marker of the second.
 
+## A deferral's CONDITION can expire, and expiry looks exactly like pending
+
+A disclosed deferral is usually written as *"skip this if X lands first"*.
+That is the right shape. What it does not carry is a way to notice that
+**X never landed** — because a condition that has expired and a condition
+that is still pending read identically. The deferral just sits there, and
+the next reader takes "blocked" from a line that only ever said "blocked
+on X".
+
+Observed: `COVER_TRAFFIC_RESTORATION.md` §2.9 step 4 deferred wiring the
+carrier shim with *"or skip if step 5 lands first"*. Step 5 was then ruled
+blocked on a daemon/p2p cutover that has no design doc. Nobody re-read the
+skip, so a deferral taken on a condition that never fired became a permanent
+block on the mechanism — and "the carrier is blocked" was read off a line
+whose actual subject was *deleting the C++ relay path*, which is a different
+thing that really is blocked. (Corrected in that file's §3 status table,
+2026-08-25: the skip survives on an independent ground, and what the expiry
+left owed is named. Naming the instance without repairing it would have left
+the exact stale conclusion this section warns about.)
+
+### The operational form: name the falsifier, not just the blocker
+
+A blocker is **not adequately named until the entry says how a reader would
+discover it had lifted.** Write it as *"blocked on X — falsify by `<check>`"*.
+
+A falsifier may be a test to run, a command whose output would change, a PR or
+issue whose merge lifts it, or a named person's decision. It may **not** be a
+restatement of the blocker: *"blocked until the builder exists"* is the claim
+itself, not a check on it.
+
+**If no falsifier can be written, that is the finding.** It means nobody knows
+what would unblock the item, which puts it closer to REJECTED-with-reasoning
+(`23-disposition-visibility.mdc`) than to DEFERRED — a permanent rejection wearing a
+conditional's clothes, which is the shape the section above already names.
+
+Note the asymmetry, because it is why this one hides: an unfalsifiable
+**threshold** costs false confidence, and something eventually contradicts it.
+An unfalsifiable **blocker** costs *parked work*, and nothing ever contradicts
+it — no test fails, no gate goes red, the item simply sits. Same defect, opposite
+direction, and only the second is invisible.
+
+Observed (2026-09-07). `docs/FOLLOWUPS.md:38`, its `:39` `Target:` line
+inheriting the claim by reference, `docs/CHANGELOG.md:197` and
+`tests/unit_tests/txpool_ref_age.cpp:491` all carried "no daemon-accepted
+FCMP++ spend builder" from June 2026. The test that refutes it —
+`e2e_fcmp_spend_accepted_by_daemon`, `rust/shekyl-engine-core/src/engine/regtest_e2e.rs:798`
+— existed the whole time, and passes in about eighty seconds once the daemon is
+built (measured by the lane that finally ran it). Four surfaces asserted a block
+for two and a half months about something that worked, and what closed it was
+somebody running the thing. Had the entry read *"blocked — falsify by running
+`e2e_fcmp_spend_accepted_by_daemon`"*, any of several readers could have closed
+it in a minute, and the work it parked would not have been parked.
+
+**So:**
+
+- **State the condition as something that can be observed to have failed**,
+  not only to have succeeded. *"Skip if X lands first"* has no failure
+  reading; *"skip if X lands first; if X is still open when this file is
+  next touched, the skip is void"* does.
+- **A deferral is not discharged by the passage of time.** When you touch a
+  file carrying one, re-check its condition before you inherit its
+  conclusion — the condition, not the conclusion.
+- **Do not read a block off a neighbouring statement.** "Deleting A is
+  blocked" is not "A cannot run". Check what the blocked item's subject
+  actually is before scoping around it.
+
+Every `21-reversion-clause-discipline.mdc` reopening criterion has this
+shape, which is why the check belongs in the rule rather than in one
+document: a reopen criterion that nobody re-evaluates is a permanent
+rejection wearing a conditional's clothes.
+
 ## Interaction with existing rules
 
+- **`23-disposition-visibility.mdc`** — defines what each disposition leaves
+  visible; this rule decides what a DEFERRED one must contain and disclose. An
+  item that cannot name a blocker, or whose blocker carries no falsifier, is
+  not deferred at all — it is undisposed, sitting on the surface agents grep
+  to find deferred work.
 - **`15-deletion-and-debt.mdc`** — "while we're here" governs scope
   *additions*; this rule governs scope *sheddings*. Both move work
   across the PR boundary without review; both are named so the review

@@ -50,7 +50,9 @@ use shekyl_types::{BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::Input;
 
-use crate::engine::bond_assembly::{sweep_funding_outputs, SpentRecordsDurablyPruned};
+use crate::engine::bond_assembly::{
+    sweep_funding_outputs, SpentRecordsDurablyPruned, SweepOverflowPolicy,
+};
 use crate::engine::lifecycle::{Credentials, EngineCreateParams};
 use crate::engine::pscan::accrual::PScanAccrual;
 use crate::engine::pscan::exhaustiveness::verify_exhaustive;
@@ -220,6 +222,8 @@ pub async fn run_arm1_fire() -> Result<Arm1FireReport, String> {
         &BTreeSet::new(),
         AtomicUnits::from_raw(1),
         BlockHeight::from_raw(u64::MAX),
+        // The bond path's own policy: this harness drives the bond sweep.
+        SweepOverflowPolicy::RefuseTooMany,
     )
     .is_err();
 
@@ -361,9 +365,19 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
         .map_err(|e| format!("exhaustiveness: {e}"))?;
     let range =
         BlockRange::new(BlockHeight::from_raw(0), BlockHeight::from_raw(2)).ok_or("range")?;
+    // The persona rides BOTH extractor inputs, as `bonded_scan_inputs`
+    // produces them (one loop fills scanners and `known_personas` together —
+    // they cannot diverge in production). The pairing is load-bearing since
+    // the watch-floor provenance: `known_personas` is what records the
+    // persona as watched-over-this-coverage, and absence evidence gathered
+    // without it makes no claim (`OutsideCovered`) — a scanner-only harness
+    // shape would model a scan the reconcile rightly refuses to GC on.
+    let persona_id = crate::engine::stake_engine::persona_canonical_id(&keys)
+        .map_err(|e| format!("persona id: {e}"))?;
+    let known_personas = std::collections::BTreeMap::from([(persona_id, SLOT)]);
     let out = crate::engine::pscan::scan_step::run_dual_extractor(
         vec![(SLOT, scanner)],
-        &std::collections::BTreeMap::new(),
+        &known_personas,
         range,
         &blocks,
         &crate::engine::pscan::scan_step::KeyImageWatchSet::new(),

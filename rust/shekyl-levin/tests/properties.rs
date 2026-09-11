@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Round-trip properties (rule 50): whatever the builders emit, the reader
-//! must reconstruct — for arbitrary payloads, commands, return codes, chunk
+//! must reconstruct — for arbitrary payloads, commands, chunk
 //! boundaries, and noise sizes. These bite against builder/reader drift
 //! (e.g. an off-by-one in fragment padding or a mis-sliced header field);
 //! they do NOT pin C++ byte-identity (that is `oracle_kats.rs`).
@@ -13,6 +13,12 @@ use proptest::prelude::*;
 use shekyl_levin::{
     fragmented_notify, invoke, noise_notify, notify, response, BucketReader, Received, HEADER_SIZE,
 };
+
+/// After PWD-B3a, `notify` / `invoke` / `response` are dispatch (Q or S), so
+/// an arbitrary `u32` command is connection-fatal at ingress. Sample from
+/// defined commands whose table cap is above the generated payload sizes;
+/// 1007 (256) and 2003 (5056) would fail 0..8192.
+const WIDE_CAP_COMMANDS: &[u32] = &[2002, 2004, 2008];
 
 /// Feed a byte stream to a fresh reader in chunks of at most `chunk` bytes,
 /// pulling messages as they complete.
@@ -45,7 +51,7 @@ fn read_chunked(stream: &[u8], chunk: usize) -> Option<Received> {
 proptest! {
     #[test]
     fn notify_roundtrips_through_any_chunking(
-        command in any::<u32>(),
+        command in prop::sample::select(WIDE_CAP_COMMANDS),
         payload in proptest::collection::vec(any::<u8>(), 0..4096),
         chunk in 1usize..512,
     ) {
@@ -55,7 +61,7 @@ proptest! {
 
     #[test]
     fn invoke_roundtrips_as_request(
-        command in any::<u32>(),
+        command in prop::sample::select(WIDE_CAP_COMMANDS),
         payload in proptest::collection::vec(any::<u8>(), 0..4096),
         chunk in 1usize..512,
     ) {
@@ -64,16 +70,15 @@ proptest! {
     }
 
     #[test]
-    fn response_roundtrips_with_return_code(
-        command in any::<u32>(),
-        return_code in any::<i32>(),
+    fn response_roundtrips(
+        command in prop::sample::select(WIDE_CAP_COMMANDS),
         payload in proptest::collection::vec(any::<u8>(), 0..4096),
         chunk in 1usize..512,
     ) {
-        let got = read_chunked(&response(command, return_code, &payload), chunk);
+        let got = read_chunked(&response(command, &payload), chunk);
         prop_assert_eq!(
             got,
-            Some(Received::Response { command, return_code, payload })
+            Some(Received::Response { command, payload })
         );
     }
 
@@ -94,7 +99,7 @@ proptest! {
     /// bucket (`length` covers the padding in that case — C++ parity).
     #[test]
     fn fragmented_notify_roundtrips_at_noise_granularity(
-        command in any::<u32>(),
+        command in prop::sample::select(WIDE_CAP_COMMANDS),
         payload in proptest::collection::vec(any::<u8>(), 0..8192),
         noise_size in (HEADER_SIZE * 2)..2048usize,
         chunk in 1usize..512,

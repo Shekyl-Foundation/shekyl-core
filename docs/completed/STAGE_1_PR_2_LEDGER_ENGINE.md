@@ -46,7 +46,7 @@ propagation) is the in-flight commit.
 
 This document is the in-repo design contract that PR 2 implements.
 The structure mirrors
-[`docs/design/STAGE_0_HARNESS.md`](../design/STAGE_0_HARNESS.md): the trait
+[`docs/design/STAGE_0_HARNESS.md`](STAGE_0_HARNESS.md): the trait
 spec is the contract, this document is the implementation
 governance for the per-PR work that the contract already pins
 abstractly.
@@ -780,7 +780,7 @@ Per [`.cursor/rules/15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-a
 
 - [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.2, §3.1, §8.1 — the contract.
-- [`docs/design/STAGE_0_HARNESS.md`](../design/STAGE_0_HARNESS.md) — the
+- [`docs/design/STAGE_0_HARNESS.md`](STAGE_0_HARNESS.md) — the
   precedent for in-repo design contracts (Stage 0 PR-1's
   measurement harness governance) and §3.3 measurement-gate
   reference.

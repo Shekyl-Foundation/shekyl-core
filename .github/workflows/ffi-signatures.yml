@@ -18,7 +18,7 @@
 # cbindgen limitation (cross-crate constant re-exports); docs/FOLLOWUPS.md
 # tracks the extension.
 #
-# Structure mirrors consensus-invariants.yml: single job, single runner,
+# Structure mirrors grep-gates.yml: single job, single runner,
 # superseded-run cancellation.
 
 name: ci/ffi-signatures

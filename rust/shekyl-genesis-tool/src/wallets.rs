@@ -99,14 +99,10 @@ pub fn generate_wallets(net: Network) -> Result<Vec<GeneratedWallet>, GenesisToo
             }
         };
 
-        let address = ShekylAddress::new(
-            net,
-            *blob.spend_pk.as_canonical_bytes(),
-            *blob.view_pk.as_canonical_bytes(),
-            blob.ml_kem_ek.to_vec(),
-        )
-        .encode()
-        .map_err(|e| invalid(format!("wallet {index} address encode: {e:?}")))?;
+        let address = blob
+            .to_address(net)
+            .encode()
+            .map_err(|e| invalid(format!("wallet {index} address encode: {e:?}")))?;
 
         // Round-trip before anything is written: a wrong-network or truncated
         // address must fail here, not at chain launch.

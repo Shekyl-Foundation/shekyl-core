@@ -79,7 +79,7 @@ Review is **adversarial and source-anchored**. Reviewers:
   the type system over guarding against them at runtime.
 - Enforce **single source of truth**: no reimplementation of canonical
   arithmetic, no parallel definitions of consensus constants.
-- Treat any change to the frozen genesis tuple (see `GENESIS_STRATEGY.md`) as
+- Treat any change to the frozen genesis tuple (see `GENESIS_TRANSPARENCY.md`) as
   requiring a re-run of the testnet rehearsal — it is not a routine merge.
 - Require **named reopen criteria for every deferral**. Absence of a claim is
   not a claim of absence.

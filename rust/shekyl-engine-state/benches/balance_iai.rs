@@ -55,7 +55,6 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         spent: (seed & 0x7) == 0,
         spent_height: None,
         key_image: None,
-        awaiting_confirmation: None,
         spending_tx_hash: None,
         source_ciphertext: None,
         output_handle: None,
@@ -78,7 +77,17 @@ fn hot_path_bench_balance_compute(
     transfers: Vec<TransferDetails>,
 ) -> (BalanceSummary, Vec<TransferDetails>) {
     let h = 1_000 + (transfers.len() as u64) / 2;
-    let summary = black_box(BalanceSummary::compute(&transfers, h));
+    // PR-SJ-1b: locks are journal-derived and caller-supplied. Empty map =
+    // the baseline-comparable workload (the retired field was `None` on
+    // every fixture row); the per-row cost under measurement is the
+    // `contains_key` lookup that replaced the field read. Derivation cost
+    // is O(live sends), measured at its consumer, not per-row here.
+    let spend_locks = shekyl_engine_state::SendJournalBlock::empty().spend_locks();
+    let summary = black_box(BalanceSummary::compute(
+        &transfers,
+        h,
+        black_box(&spend_locks),
+    ));
     // Return the fixture: its zeroize-on-drop teardown must be charged to the
     // harness, not the measured region (see the module comment).
     (summary, transfers)

@@ -3,35 +3,35 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Release-cooldown gate for `Unbond` and `HoldingsUpdate`-drop (gate-4 §4.3/§4.4;
+//! Release-cooldown gate for `Release` and `HoldingsUpdate`-drop (gate-4 §4.3/§4.4;
 //! `PHASE_2B_FSM_RETOOL.md` P2B-8 Q1/Q2).
 //!
 //! The cooldown anchor is a persona's **last-served settlement epoch**, and it is
 //! *derived*, never stored (P2B-8 Q1/Q2 — "derive from the landed source of truth,
 //! don't add a mutable field"). The serve-credit table is keyed
-//! `P_id ‖ BE64(shard) ‖ BE64(epoch)` (a big-endian composite,
-//! `serve_credit_decisions::serve_credit_key_be`), so its byte-sort *is*
-//! `(P_id, shard, epoch)` ascending; shard `s`'s last-served epoch is therefore the
-//! max `E` carrying a bit — a single reverse-cursor seek over the `P_id ‖ BE64(shard)`
-//! prefix. That LMDB cursor I/O stays C++-side (the standing schema exception); the
-//! derived per-shard maxima arrive here as data, and this module owns the
-//! decisions on top: the whole-record anchor (max over shards, for `Unbond`), the
-//! cooldown predicate, and the slash-settlement predicate.
+//! `P_id ‖ BE64(shard) ‖ BE64(epoch) ‖ BE64(block_height)` (`PC-D4`); byte-sort
+//! *is* `(P_id, shard, epoch, height)` ascending, so shard `s`'s last-served
+//! epoch is the predecessor of the ceiling probe
+//! `P ‖ BE64(s) ‖ BE64(u64::MAX) ‖ BE64(u64::MAX)` — MAX in the appended
+//! height too. That LMDB cursor I/O stays C++-side; the derived per-shard
+//! maxima arrive here as data, and this module owns the decisions on top:
+//! the whole-record anchor (max over shards, for `Release`), the cooldown
+//! predicate, and the slash-settlement predicate.
 //!
 //! ## The guarantee (ratified 2026-07-12, maintainer)
 //!
 //! Together the two predicates ([`release_cooldown_elapsed`] and
-//! [`slashes_settled_through`]) guarantee: **at `Unbond` legality, every settlement
+//! [`slashes_settled_through`]) guarantee: **at `Release` legality, every settlement
 //! epoch up to and including the record's last-served anchor has passed its slash
 //! deadline and been processed by the deterministic slash scheduler** — any
 //! held-but-unserved failure at or before the last serve has already been slashed
 //! on still-bonded collateral. Epochs *after* the last serve (at most the cooldown
 //! window, unserved by definition, earning nothing) are **exit-forgiven by
-//! construction**: slashability ends at the `Unbond` connect, and the refund is
+//! construction**: slashability ends at the `Release` connect, and the refund is
 //! never clawed back. The epoch-distance predicate alone is not sufficient — the
 //! connect dispatch runs *before* the per-block slash fold
 //! (`BlockchainDB::add_block` ordering), so in the first block past the anchor
-//! epoch's slash deadline an `Unbond` would exit the record ahead of the fold that
+//! epoch's slash deadline a `Release` would exit the record ahead of the fold that
 //! settles the anchor epoch; [`slashes_settled_through`] closes exactly that
 //! one-block race by requiring the scheduler's settled watermark to have reached
 //! the anchor before the release verifies.
@@ -39,7 +39,7 @@
 use crate::bond_floor::RELEASE_COOLDOWN_EPOCHS;
 
 /// The whole-record last-served settlement epoch: the max over the record's current
-/// shards of each shard's last-served epoch (P2B-8 Q2 — the `Unbond` cooldown
+/// shards of each shard's last-served epoch (P2B-8 Q2 — the `Release` cooldown
 /// anchor). `None` when the persona has never served any shard.
 ///
 /// `per_shard_served` carries the reverse-cursor maximum of each **served** shard;
@@ -77,7 +77,7 @@ pub fn release_cooldown_elapsed(
         // `checked_add` keeps the documented predicate exactly: if the boundary epoch
         // `last + RELEASE_COOLDOWN_EPOCHS` overflows `u64` it is unreachable, so the
         // cooldown is reported not-elapsed (fail-closed) rather than saturating to a
-        // false "elapsed" that would let an `Unbond` dodge the slashing window.
+        // false "elapsed" that would let a `Release` dodge the slashing window.
         Some(last) => match last.checked_add(RELEASE_COOLDOWN_EPOCHS) {
             Some(boundary) => current_settlement_epoch >= boundary,
             None => false,
@@ -105,7 +105,7 @@ pub fn release_cooldown_elapsed(
 ///
 /// Settled iff the anchor is `None` (never served — nothing the exit could outrun
 /// beyond the exit-forgiven tail) or `watermark >= anchor`. Without this predicate,
-/// an `Unbond` in the exact first block past the anchor epoch's slash deadline
+/// a `Release` in the exact first block past the anchor epoch's slash deadline
 /// connects *before* that block's slash fold (`add_transaction` precedes
 /// `process_archival_slash_at_height` in `BlockchainDB::add_block`) and exits the
 /// record ahead of the fold that would have slashed a held-but-unserved shard at
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn cooldown_elapsed_at_the_boundary_epoch() {
-        // Anchor E: earliest Unbond epoch is E + COOLDOWN (inclusive).
+        // Anchor E: earliest Release epoch is E + COOLDOWN (inclusive).
         let e = 100;
         assert!(release_cooldown_elapsed(Some(e), e + COOLDOWN));
     }

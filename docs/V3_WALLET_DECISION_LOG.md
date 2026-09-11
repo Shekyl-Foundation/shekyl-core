@@ -421,6 +421,10 @@ explains the pattern.
 
 ## 2026-04-25 — Cold-wallet flow: kept, reshaped via typed bundles
 
+> **OVERTURNED 2026-09-07** — cold signing is NEVER; see the
+> 2026-09-07 entry "Cold signing is not a feature." This entry is
+> retained as history only.
+
 **Decision.** Air-gapped (offline-signing) wallets are a supported
 flow in the V3 wallet stack, distinct from hardware-offload mode.
 The export/import dance uses two typed file artifacts:
@@ -3622,7 +3626,7 @@ work. This entry only pins what Branch 2 ships now.
 
 **Decision.** The `PendingTxEngine` Stage 1 surface is pinned at
 the Round-3-closed shape per
-[`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
+[`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
 The corresponding amendment to
 [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
 §2.4 lands in PR 5 commit C0 (doc-only). Phase 1 implementation
@@ -3680,6 +3684,9 @@ survive the chat-log they were decided in.
   deterministic fields via `shekyl-crypto-hash::cn_fast_hash`
   (Keccak-256 with original padding) truncated to the first 128
   bits, domain-separated by the prefix `b"shekyl-snapshot-id-v1"`.
+  *(Superseded by the 2026-08-11 SA-3c entry later in this log:
+  the digest is now cSHAKE256 with `b"shekyl/snapshot-id-v1"` as
+  the customization.)*
   The hash-primitive choice is `cn_fast_hash` (revised from a
   prior `sha2`-based binding) per the
   [`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)
@@ -3973,7 +3980,7 @@ method). Phase 0c is **removed** (R12 (a) closure).
 - [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.4 — the PendingTxEngine trait-surface spec; PR 5 commit
   C0 lands the §2.4 amendment.
-- [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+- [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   — the full PR 5 design doc, including §4 (Phase 0a–0m
   binding-form enumeration), §5.0.1 (state-shape and Stage 4
   substrate), §5.0.2 (diagnostic stream + enum block),
@@ -4621,5 +4628,388 @@ fee-floor note; `rust/shekyl-archival-retention/src/bond_ct_balance.rs`;
 rider).
 
 ---
+
+## 2026-08-11 — SA-3c supersedes the snapshot-id hash-primitive selection
+
+**Supersedes** the segment-2g snapshot-id decision recorded earlier in this log
+(the `derive_snapshot_id` "domain-separated by the prefix `b"shekyl-snapshot-id-v1"`"
+selection). The snapshot-id digest is retargeted from `cn_fast_hash` (Keccak-256
+with a manually pre-pended domain *prefix*) to **cSHAKE256 with the domain as the
+customization** (`b"shekyl/snapshot-id-v1"`) — structural domain separation
+(SP 800-185), the house default for a new internal digest, and bucket-3 of the
+`cn_fast_hash` triage (internal digests → domained cSHAKE; consensus / content
+identity stays Keccak).
+
+**Why the byte change is permissible** (the SA through-line rule forbids
+*re-spelling* a live persisted domain). `SnapshotId` is a purely in-memory
+reservation-staleness token: it derives no `Serialize`/`Deserialize`, is absent
+from `shekyl-engine-file` (the persistence crate), has no manual byte
+serialization, and is never placed on the wire or shared cross-node — verified at
+the call graph before minting. Its only consumers compare two ids derived by the
+**same** code version within one wallet process. Nothing persisted or transmitted
+ever compares a pre- to a post-change id, so this is a **fresh mint, not a
+re-spelling**. No persisted-state change ⇒ no rule-42 (serialization-schema) bump.
+
+**Reference.** SA-3c (PR in flight, `feat/sa3c-snapshot-id-cshake`);
+`SIGNATURE_ALIGNMENT.md` §5 (the through-line rule) and §3 table;
+`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (mechanism 1);
+`rust/shekyl-engine-core/src/engine/refresh.rs` (`derive_snapshot_id`);
+`STAGE_1_PR_5_PENDING_TX_ENGINE.md` §segment-2g (marked superseded there too).
+
+---
+
+## 2026-08-16 — Fee sanity ceiling: three unreconciled specifications collapse to one interim ruling
+
+**Context.** The A3 audit found the named-tier fee sanity ceiling
+specified three times with three different shapes, and the code
+implementing none of them (`Custom`-only 100×-economy was the whole
+shipped check; `TxError::DaemonFeeUnreasonable` had zero construction
+sites):
+
+1. `WALLET_REWRITE_PLAN.md` "Fee priority" cross-cutting lock (the
+   oldest): refuse when the daemon's `priority` exceeds **10× the same
+   snapshot's `economy`** — intra-snapshot, no history needed.
+2. Decision 6 above (2026-04-25 vintage prose): cap any estimate at
+   **10× the previous block's median fee per byte** — needs last-block
+   fee data the wallet does not hold.
+3. The 2026-04-25 positional-mapping entry: **5× the 1000-block
+   historical median of `fees[3]`, hard cap 100,000 atomic units /
+   byte** — needs a wallet-side historical fee series that is precisely
+   the named substrate of the deferred V3.x `WalletSideEstimator`
+   (R16(c) declined its V3.0 lift).
+
+**Ruling (interim, superseded-by-design).** Implement now, from the one
+atomic snapshot the wallet already holds:
+
+- **tier-band monotonicity** (`economy ≤ standard ≤ priority`) — an
+  inverted band is a defect or a lie, not a market condition;
+- **priority ≤ 10× economy** — position 1, the original lock, verbatim;
+- **absolute cap on the effective weight-1 charge, provisioned at the
+  era maximum** — `round_money_up(Fh, 2)` at genesis conditions
+  (maximal reward `base_block_reward(0)`, both medians floored at the
+  penalty-free zone) = **14,000,000 atomic units per weight unit**, on
+  every tier including `Custom`. Derived from the economics crate and
+  the ported 2021-scaling folded formula, KAT-pinned — not a literal.
+  (Position 3's `100,000` was mid-regime provisioning: young-chain
+  `economy` alone is ~68,266 and `standard` is 4× that, so that number
+  would have refused every honest snapshot from block 1 — caught in
+  the 2026-08-17 review round. The `BLOCK_REWARD_OVERESTIMATE`
+  error-path placeholder is deliberately NOT covered: a daemon whose
+  own reward computation just failed is refused.)
+
+All three checks fire as `FeeEstimatorError::DaemonFeeUnreasonable`
+(new; the dead `TxError` twin is deleted), surfacing as JSON-RPC
+**`-29109 DAEMON_FEE_UNREASONABLE`** on both the build and
+`get_default_fee_priority` quote paths — distinct from `-29102` ("the
+query failed") because the remedies differ. `Custom`-rate band
+violations are re-classed as the caller's error
+(`CustomFeeOutOfRange` → `-32602`), not the daemon's.
+
+**What the interim form deliberately does not catch:** common-mode
+inflation of all tiers together below the absolute cap. That is the
+anomaly-vs-history job of positions 2/3, which are **not rejected but
+deferred as one item**: the median-multiple ceiling lands with the
+V3.x `WalletSideEstimator`, whose historical-fee accessor is its named
+substrate — building that accessor inside a finishing pass would have
+pulled a ruled-deferred item forward without the fingerprint-analysis
+and UX validation its own lift triggers require. **The interim ceiling
+names its successor**: when the `WalletSideEstimator` lands, the
+median-multiple check replaces (not joins) the 10×-economy check;
+the monotonicity and absolute-cap checks remain.
+
+**Also closed in the same pass** (Phase-2a §10 residuals): the
+"named buckets unchecked" FOLLOWUPS row; the
+`MARGINAL_INPUT_WEIGHT` proofless stub retired in favor of the landed
+`shekyl_tx_weight::marginal_input_weight_at_d_ref` (dust marginal
+weight 3457 → 9136 — the stub had understated the dust bar by the
+whole per-input FCMP proof increment); `STUB_FEE_ATOMIC_UNITS`
+`#[cfg(test)]`-gated with the `*_in_state` reference bodies it feeds.
+
+---
+
+## 2026-08-16 — Intra-snapshot 10×-economy lock withdrawn; well-formedness is a snapshot type
+
+**Context.** The same-day entry above implemented the original
+`WALLET_REWRITE_PLAN` 10×-economy lock *verbatim* as a snapshot
+refusal. That lock is incompatible with the daemon this wallet talks
+to. `shekyld` is 2021-scaling from genesis (`HF_VERSION_2021_SCALING
+= 1`); `tests/unit_tests/scaling_2021.cpp` pins `Fh / Fl` at 65×,
+197×, and 1077×. A 10× intra-snapshot check does not catch a lying
+daemon — it refuses an honest Priority tier, and because validation
+sat inside rate selection it also locked Custom and was skipped by
+the quote path.
+
+**Ruling.** The 10× intra-snapshot refusal is **withdrawn**. Snapshot
+well-formedness is monotonicity plus the absolute cap on the effective
+weight-1 charge (the derived era-maximum, `absolute_fee_rate_cap()` =
+14,000,000 atomic-units/weight — see the same-day re-provisioning
+amendment below), constructed once as `ValidatedFeeEstimates`
+at fetch (build *and* quote). Custom band-checks run against that
+type and are not gated on the Priority tier's ratio. The historical
+median-multiple ceiling remains the V3.x `WalletSideEstimator`'s
+named successor; it no longer "replaces" a live 10× check, because
+that check is gone.
+
+**Reference.** `rust/shekyl-engine-core/src/engine/fee_policy.rs`;
+PR #490 review.
+
+---
+
+## 2026-08-17 — The `Custom` relative ceiling falls to the same argument; the legacy scalar-fee ladder is deleted
+
+**Context.** The two entries above withdrew an *economy-anchored*
+relative lock from the named tiers, on the ground that economy is the
+market floor and honest 2021-scaling `Fh / Fl` reaches 1077×. The
+identical construction survived one surface: `Custom`'s "100× economy"
+ceiling. Its cost was concrete and one-sided against the user — on the
+pinned KAT row `(340, 1400, 67_000)` the ceiling is `34_000`, so
+`FeePriority::Custom(67_000)` was refused as **the caller's** error
+(`-32602`) while `FeePriority::Priority` returned that same `67_000`
+rate successfully. "Priority, plus a little" was inexpressible, and the
+wallet blamed the user's parameter for asking to pay what the daemon
+was quoting.
+
+**Ruling.** The `Custom` relative ceiling is **withdrawn**. `Custom`'s
+band is exactly the policy every named tier obeys and nothing more:
+at or above the snapshot's economy floor (below it the transaction
+does not clear — not paternalism), at or below the same derived
+era-maximum absolute cap (`absolute_fee_rate_cap()` = 14,000,000
+atomic-units/weight) on the same effective weight-1 basis. This
+brings the code to what the 2026-08-16 ruling already named as
+`Custom`'s bound; no third, `Custom`-only ceiling was ever ratified,
+and none is introduced. A ceiling anchored on `priority` was
+considered and **rejected**: the daemon's ladder spacing describes the
+tiers' relationship to each other, not how much headroom a user should
+have above the top tier, so any multiple would be a free parameter
+wearing a derivation's clothes (`21-reversion-clause-discipline`).
+
+**Reopening criterion.** If wallet telemetry or support traffic shows
+users overpaying by large multiples of `priority` through `custom`,
+the answer is a **confirmation prompt at the UX layer** (rule 82),
+where the user can see the SKL amount and say yes — not a refusal in
+the engine, which cannot distinguish a typo from intent.
+
+**Also deleted: the legacy scalar-`fee` multiplier ladder.**
+`fee_estimates_from_value` treated an absent `fees` array as a
+pre-2021-scaling daemon and synthesized tiers as `(fee×1, fee×5,
+fee×1000)`. That daemon cannot exist on this chain:
+`HF_VERSION_2021_SCALING` is `1` (`src/cryptonote_config.h`), so
+`core_rpc_server::on_get_base_fee_estimate` always takes the scaling
+branch and always answers with a four-element `fees` array — including
+a reply forwarded from a bootstrap daemon, which is itself a Shekyl
+daemon. The ladder was inherited Monero-lineage shape with no daemon
+behind it, and it was actively harmful: `×1000` put priority three
+orders of magnitude above economy, so any base fee over 100 exceeded
+the absolute cap and got the **whole snapshot** refused — Economy
+included — for a daemon charging nothing unusual, with the verdict
+depending on which response shape arrived rather than on what was
+charged. A missing `fees` array is now a malformed reply like any
+other missing field (rules 60 / 15 / 16).
+
+**Also closed: the P-lane bond fee was outside the ceiling.**
+`ValidatedFeeEstimates` was introduced as "the single constructor —
+quote and build both go through it." That was true of the two paths it
+named and false of a third: `bond_orchestrator::first_stake` (reachable
+through the `stake` RPC) read `estimates.economy` straight off the raw
+snapshot. The bypass matters more on this lane than on the send lane,
+not less — the bond fee is charged to persona working capital and
+carries **no user-facing fee control by design**, so an inflated rate is
+paid with nobody positioned to see it. The pinned vector charges
+6,553,600,000 atomic units. Routed through the same constructor, with
+the refusal given its own arm (`FirstStakeError::FeeUnreasonable` →
+`-29109`) rather than folded into the query-failed arm, because "check
+the connection and retry" is the wrong remedy when the query succeeded
+(rule 82). The whole snapshot is validated even though only `economy` is
+read: a bond path more permissive than the send path would be the
+incoherence, and a test asserts the two gates accept exactly the same
+snapshots. The fee derivation moved out of the 500-line `first_stake`
+body into `bond_fee_from_estimates` so the gate is visible and testable.
+
+**Standing rule this makes explicit.** A type introduced as "the single
+constructor" is a claim about *every* consumer, not about the consumers
+the introducing PR happened to touch. Enumerate them — the check is one
+grep for the underlying fetch — before writing the claim down.
+
+**Reference.** `rust/shekyl-engine-core/src/engine/{fee_policy,
+tx_fee_model,daemon,bond_orchestrator}.rs`;
+`rust/shekyl-wallet-rpc/src/lifecycle.rs`; PR #490 review round 2.
+
+---
+
+## 2026-08-19 — Phase 5 does not wait on staking: the C++ wallet never had it
+
+**Decision.** `unstake` and `claim` are **out of the Phase-4 completion
+gate**, and the Phase-5 deletion of the C++ wallet stack lands without
+them. Staking exit is built once, in Rust, after the deletion — not
+before it and not on both sides of the FFI.
+
+**Why.** `WALLET_REWRITE_PLAN.md` gates Phase 5 on "after Phase 4 lands,"
+and Phase 4's specified method list names `unstake` and `claim`, neither
+of which is routed in `shekyl-wallet-rpc`. Read literally, that made the
+deletion wait on a staking surface.
+
+It inverts on one fact, verified at source: **`wallet2` has never had a
+staking surface at all.** `grep -ci` for stake or bond over
+`src/wallet/wallet2.cpp`, `wallet2.h`, and
+`wallet_rpc_server_commands_defs.h` returns 0, 0, 0. So holding the
+deletion would have kept 13,360 lines of C++ compiling in order to serve
+a capability they never carried — and, while they compiled, invited more
+work to be built against them. That is the same dynamic that forced the
+C1/C2 install cutover to land inside its own PR rather than after it.
+
+The wallet-side unbond assembler is *already* Rust
+(`shekyl-engine-core/src/engine/bond_assembly.rs`), so cutting first
+strands nothing. It removes the C++ surface that Rust-only staking work
+would otherwise have had to stay compatible with.
+
+**What this does NOT decide.** The staking-exit gap itself is real and
+keeps its own deadline: no code in the tree produces an `Unbond` post,
+while `stake_engine/retire.rs` consumes one, and
+`bond_assembly.rs::wire_bond_post_input` refuses every non-JoinMarket
+post kind as "invalid at genesis" — which contradicts
+`ARCHIVAL_BOND_GATE4.md`, where `Unbond` has implemented consensus verify
+and both `HoldingsUpdate` arms are marked V3.0. That contradiction is
+**drift**, not a posture: it accumulated across concurrent plan rounds
+and was never ruled. It is filed as its own lane with a genesis deadline;
+this entry only removes it from Phase 5's critical path.
+
+**Reference.** `WALLET_REWRITE_PLAN.md` §Phase 5 (principle 3, single
+commit); the Phase-5 deletion commit message (dispositions D1/D2);
+`ARCHIVAL_BOND_GATE4.md` §3.4 allowed-terms table;
+`docs/CLI_PARITY_MATRIX.md` row 9.
+
+---
+
+## 2026-09-07 — Cold signing is not a feature: NEVER (overturns 2026-04-25 "Cold-wallet flow: kept" and A4's reopen clause)
+
+**Decision.** There is no cold signing. Not at genesis, not
+post-genesis, not as a kept capability. Air-gapped export/sign/import —
+`UnsignedTxBundle` / `SignedTxBundle`, `export_unsigned` /
+`sign_unsigned` / `submit_signed`, the simplewallet-era `sign_transfer`
+/ `submit_transfer` verbs — will **never** be implemented. All code
+symbols are deleted; the RPC names stay in
+`docs/api/wallet_rpc.yaml`'s `x-shekyl-method-registry` as
+`status: REJECTED`, and the `-29700..-29799` error range stays RESERVED
+unused, both as pure namespace protection (rule 23: a gone name is
+easier to re-mint than a recorded refusal).
+
+**Why.** An unsigned spend leaving a networked wallet, and a signed
+spend returning to it, is the opposite of Shekyl's secret-locality
+(rule 36) and verified-display requirements. The flow's security value
+rests entirely on product work (verified display on the offline device,
+an envelope-sealed bundle format) that A4 correctly called unstarted —
+but A4's framing treated a refused design as delayed product work. A
+half-form is not worse than none; the *whole form* is the hazard: the
+bundle handoff is a social-engineering and file-tamper surface aimed at
+exactly the users who believe they have opted into more security.
+Priority-1 (security) binds per `00-mission.mdc`.
+
+**What this overturns.** The 2026-04-25 entry "Cold-wallet flow: kept,
+reshaped via typed bundles" is overturned in full, including its
+rejected-alternatives reasoning ("drop air-gapped flow" was rejected
+then; it is the ruling now). A4 (2026-08-06)'s post-genesis deferral
+with reopen clause is closed **won't-fix**; its FOLLOWUPS row is
+removed. `IMPLEMENTATION_INDEX.md` Phase 2d stays DESCOPED.
+
+**What still exists and is legitimate: cold storage.** Generate, write
+the seed phrase down, receive, hold. Spending requires the seed on a
+machine that can talk to the network. That posture is deliberate and
+user-facing docs describe it without a "forthcoming" pointer at the
+refused flow.
+
+**No reopening clause.** This is a security rejection under the
+priority hierarchy, not a deferral. A future product round that wants
+offline signing starts from a fresh threat-model review, not from this
+entry.
+
+**Reference.** `docs/api/wallet_rpc.yaml` `x-shekyl-method-registry`;
+`.cursor/rules/23-disposition-visibility.mdc`; wallet-rewrite audit
+plan (2026-09-07).
+
+---
+
+## 2026-09-07 — ViewOnly capability: REJECTED (zero code, zero FOLLOWUPS)
+
+**Decision.** The ViewOnly wallet capability is rejected. All code
+symbols are deleted: `CapabilityContent::ViewOnly`,
+`Capability::ViewOnly`, `CAPABILITY_VIEW_ONLY`, constructors, named
+errors (`SignMessageError::ViewOnly`, extract-refusal arms), corpus and
+bench fixtures, and the `"VIEW_ONLY"` RPC wire label. The unused v1
+capability bytes are RESERVED in `WALLET_FILE_FORMAT_V1.md`'s
+discriminant table and are deliberately **not** labeled ViewOnly there.
+
+**Why.**
+
+1. **FCMP++ is not a chain window.** A view key that scans the chain
+   for incoming outputs is a CryptoNote-era concept; under FCMP++ the
+   membership proof hides exactly the linkage a view-only auditor
+   wallet would need to be useful as a third-party attestation.
+2. **Watching your own incoming is not a product.** The one thing a
+   ViewOnly wallet could do — show the owner their own incoming
+   transfers without spend authority — serves no user the Full wallet
+   does not serve better, and no third party at all (see 1).
+3. **View material cannot reconstruct the address.** `msg_sign_pk` is
+   seed-derived, so a view-material-only wallet cannot even re-derive
+   its own primary address; the capability was structurally partial
+   from the start.
+
+**Grep surface after this entry (rule 23).** Zero code symbols, zero
+FOLLOWUPS rows. The envelope open path refuses any capability byte
+other than `0x01` with a generic unsupported-capability error that
+names no future arm, and hand-crafted `0x02`/`0x03`/`0x04` files are
+fail-closed tests. Reserve-proof INBOUND (the "auditor wallet" use
+case formerly cited for ViewOnly) is served by the Full wallet's
+wallet-less `check_reserve_proof`.
+
+**Reference.** `docs/api/wallet_rpc.yaml` (CapabilityMode narrowed to
+FULL); `docs/WALLET_FILE_FORMAT_V1.md` discriminant table;
+`.cursor/rules/23-disposition-visibility.mdc`; wallet-rewrite audit
+plan (2026-09-07).
+
+## 2026-09-07 — Pinned wallet-envelope vectors regenerated: composition rebuild on a real derived address
+
+**Decision.** The `WALLET_FILE_FORMAT_V1` pinned vectors (`full.hex`,
+`state_for_full.hex`) are regenerated. This entry is the authorization
+the armed regenerator (`pinned_fixtures_regenerate`, gated on
+`SHEKYL_PINNED_REGEN_DECISION`) requires, and the **template** for every
+future regeneration: what moved, why, and what vouches for the new
+bytes.
+
+**What moved.**
+
+1. `expected_classical_address` was a counting pattern
+   (`0x01 ‖ 0xAA×32 ‖ 0xBB×32`) with no relation to the sealed seed. It
+   is now **derived**: the 65-byte `version ‖ spend_pk ‖ view_pk` prefix
+   of `rederive_account(master_seed, Mainnet, Bip39)` — the production
+   derivation the engine open path runs.
+2. `seed_format` was `0`, a wire byte `SeedFormat::from_u8` rejects — a
+   wallet that could not exist. It is now `0x01` (Bip39), valid with
+   `network = 0` (mainnet).
+
+**Why.** A format vector whose fields cannot co-exist in a real wallet
+exercises the sealing code but not the format's composition. The rebuilt
+fixture is internally consistent, so
+`pinned_fixture_address_derives_from_fixture_seed` (oracle: independent,
+tier 2 — the production account derivation) can check the composition
+property against the frozen bytes.
+
+**Containment note.** The doc-SSOT slice (same date) deliberately did
+*not* move these vectors — an unchanged `full.hex` was its proof that
+deleting the non-Full capability arms had no blast radius. This
+regeneration is a separate, documented format-vector rebuild, not a
+violation of that containment.
+
+**Oracle statement (rule per `50-testing.mdc`).** The vectors remain
+**self-pinned (tier 3)** drift tripwires — the sealing module vouches
+for the bytes. The composition property and the §2.6 wrap-key derivation
+carry independent (tier-2) checks alongside.
+
+**Regeneration citation used.**
+`SHEKYL_PINNED_REGEN_DECISION="2026-09-07 composition-vector rebuild on
+real derived address (KAT taxonomy PR)"`.
+
+**Reference.** `docs/test_vectors/WALLET_FILE_FORMAT_V1/manifest.json`;
+`rust/shekyl-crypto-pq/src/wallet_envelope.rs` tests module;
+`.cursor/rules/50-testing.mdc` §"Every vector declares its oracle".
 
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

@@ -57,6 +57,12 @@ namespace cryptonote
   bool parse_and_validate_tx_from_blob(const blobdata_ref& tx_blob, transaction& tx, crypto::hash& tx_hash);
   bool parse_and_validate_tx_from_blob(const blobdata_ref& tx_blob, transaction& tx);
   bool parse_and_validate_tx_base_from_blob(const blobdata_ref& tx_blob, transaction& tx);
+  // RF-D1 / rule 40: the three fields consensus indexes a serve-credit by,
+  // extracted from the opaque vin through the Rust codec (its only parser).
+  // The ONE site every C++ consumer (DB bit set/remove, pool key, block-unique
+  // key, admission) goes through; returns false if the blob does not parse.
+  bool get_archival_serve_credit_key(const txin_archival_serve_credit_response& vin,
+    crypto::hash& p_canonical_id, uint64_t& shard_id, uint64_t& settlement_epoch);
   bool is_v1_tx(const blobdata_ref& tx_blob);
   bool is_v1_tx(const blobdata& tx_blob);
 
@@ -83,7 +89,6 @@ namespace cryptonote
   inline std::vector<crypto::public_key> get_additional_tx_pub_keys_from_extra(const std::vector<uint8_t>&) { return {}; }
   inline std::vector<crypto::public_key> get_additional_tx_pub_keys_from_extra(const transaction_prefix&) { return {}; }
   bool add_extra_nonce_to_tx_extra(std::vector<uint8_t>& tx_extra, const blobdata& extra_nonce);
-  bool add_mm_merkle_root_to_tx_extra(std::vector<uint8_t>& tx_extra, const crypto::hash& mm_merkle_root, size_t mm_merkle_tree_depth);
   bool add_archival_attestation_to_tx_extra(std::vector<uint8_t>& tx_extra, const std::string& attestation_blob);
   // parse_* convention (same bool as parse_tx_extra): false ONLY on a tx_extra
   // parse failure (headers UNREADABLE); a successful parse with no attestation
@@ -96,6 +101,15 @@ namespace cryptonote
   bool get_encrypted_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash8& payment_id);
   void set_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const bool use_view_tags, const crypto::view_tag& view_tag, tx_out& out);
   bool check_output_types(const transaction& tx, const uint8_t hf_version);
+  /// The tx_extra PQC field shape rule (GENESIS_TX_WIRE_FORMAT.md §9.6a as
+  /// ruled 2026-09-05; census CEN-I19): with n = vout.size(), exactly one 0x06
+  /// KEM-ciphertext field of 1120·n bytes and exactly one 0x07 leaf-hash
+  /// field of 32·n bytes when n > 0, neither when n == 0, and tx_extra must
+  /// parse. Consensus on every path a transaction enters by (relay, block,
+  /// coinbase); the rule itself lives in shekyl-wire and is applied through
+  /// shekyl_tx_extra_pqc_field_shape on this parser's field lengths. On
+  /// failure `reason` says which field and what was found.
+  bool check_tx_extra_pqc_field_shape(const transaction& tx, std::string& reason);
   struct subaddress_receive_info
   {
     subaddress_index index;

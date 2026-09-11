@@ -84,6 +84,7 @@ using namespace epee;
 
 #include "miner.h"
 #include "crypto/hash.h"
+#include "cryptonote_basic/block_ingest.h"
 
 
 extern "C" void slow_hash_allocate_state();
@@ -330,6 +331,7 @@ namespace cryptonote
         return false;
       }
       m_mine_address = info.address;
+      m_mine_address_str = command_line::get_arg(vm, arg_start_mining);
       m_threads_total = 1;
       m_do_mining = true;
       if(command_line::has_arg(vm, arg_mining_threads))
@@ -364,14 +366,20 @@ namespace cryptonote
     return m_mine_address;
   }
   //-----------------------------------------------------------------------------------------------------
+  const std::string& miner::get_mining_address_str() const
+  {
+    return m_mine_address_str;
+  }
+  //-----------------------------------------------------------------------------------------------------
   uint32_t miner::get_threads_count() const {
     return m_threads_total;
   }
   //-----------------------------------------------------------------------------------------------------
-  bool miner::start(const account_public_address& adr, size_t threads_count, bool do_background, bool ignore_battery)
+  bool miner::start(const account_public_address& adr, const std::string& adr_str, size_t threads_count, bool do_background, bool ignore_battery)
   {
     m_block_reward = 0;
     m_mine_address = adr;
+    m_mine_address_str = adr_str;
     m_threads_total = static_cast<uint32_t>(threads_count);
     if (threads_count == 0)
     {
@@ -494,7 +502,7 @@ namespace cryptonote
   {
     if(m_do_mining)
     {
-      start(m_mine_address, m_threads_total, get_is_background_mining_enabled(), get_ignore_battery());
+      start(m_mine_address, m_mine_address_str, m_threads_total, get_is_background_mining_enabled(), get_ignore_battery());
     }
   }
   //-----------------------------------------------------------------------------------------------------
@@ -584,7 +592,7 @@ namespace cryptonote
         ++m_config.current_extra_message_index;
         MGINFO_GREEN("Found block " << get_block_hash(b) << " at height " << height << " for difficulty: " << local_diff);
         cryptonote::block_verification_context bvc;
-        if(!m_phandler->handle_block_found(b, bvc) || !bvc.m_added_to_main_chain)
+        if(!m_phandler->handle_block_found(b, bvc) || !cryptonote::block_added(bvc))
         {
           --m_config.current_extra_message_index;
         }else

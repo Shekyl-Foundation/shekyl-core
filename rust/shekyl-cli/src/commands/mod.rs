@@ -18,6 +18,7 @@ mod lifecycle;
 mod proofs;
 mod receiving;
 pub mod scripted;
+mod signing;
 mod staking;
 mod transfers;
 
@@ -25,6 +26,7 @@ use crate::daemon::DaemonClient;
 use crate::rpc_client::RpcSession;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use zeroize::Zeroizing;
 
 const HELP_TEXT: &str = "\
 Wallet lifecycle:
@@ -48,6 +50,13 @@ Transfers:
     [--no-confirm]                    Skip confirmation (non-TTY only)
   transfers                           Show recent transactions
   show_transfer <txid>                Show details for a transaction
+  get_tx_note <txid>                  Show the local note for a transaction
+  set_tx_note <txid> <note>           Attach a local note to a transaction
+                                      (the note is everything after the txid,
+                                      taken exactly as typed)
+  abandon <txid>                      Give up on a dispatched send (funds stay
+                                      locked until the network is confirmed to
+                                      have dropped it)
   fee [--inputs N] [--outputs N]      Show fee quotes and size estimate
 
 Receiving (payment requests):
@@ -60,9 +69,27 @@ Receiving (payment requests):
 
 Staking:
   stake                               Make this wallet a staker
+    [--complete-tree-foundation]      Foundation nodes only: serve EVERY
+                                      frozen shard, forever. Earns NOTHING
+                                      — outside the reward market by
+                                      design. States the terms and
+                                      requires a typed phrase.
   staked_balance                      Show the staked-balance breakdown
   staked_outputs                      List unspent staking-side outputs
   staking_info                        Show staking state and scan height
+  stake_in <amount>                   Add funds to the staking balance (an
+                                      ordinary transfer from this wallet;
+                                      prints a privacy note, then confirms)
+  drain_balance                       Show how much staking money can be
+                                      moved back to this wallet
+  drain <amount>                      Move staking funds back to this wallet
+                                      (fee and destination are automatic; no
+                                      flags exist)
+  unstake                             Post the permanent exit for the staked
+                                      bond (irreversible; confirms first)
+  collect_unstaked                    Collect the released exit funds back
+                                      into this wallet (one pass at a time;
+                                      the reply says what remains)
   chain_health                        Show daemon/chain health (separate conn)
 
 Proofs (multi-word [message] binds into the proof; the verifier must
@@ -82,6 +109,17 @@ supply the identical string — repeated spaces are collapsed to one):
                                       Verify a reserve proof (no wallet
                                       needed)
 
+Message signing (the message is everything after the command, taken
+exactly as typed — the verifier must supply the identical string; a
+message that spans multiple lines cannot be entered here, use the
+sign_message / verify_message RPC directly):
+  sign <message>                      Sign a message as this wallet's address
+                                      (takes a few seconds by design)
+  verify <address> <signature> <message>
+                                      Check a message signature (no wallet
+                                      needed; paste the signature as one
+                                      unbroken token, or @path to a file)
+
 Receiving history:
   history incoming --unattributed     List receives with no payment-request
                                       match (FA-8 UNATTRIBUTED)
@@ -90,25 +128,11 @@ Meta:
   engine_info                         Wallet summary (height, balance, address)
   version                             Show CLI and wallet-RPC versions
   help                                Show this help
-  exit / quit                         Exit shekyl-cli
-
-Not yet available (the RPC surface is designed but has not landed; see
-docs/FOLLOWUPS.md): message signing (sign/verify), and the offline
-cold-signing workflow (describe/sign/submit_transfer,
-transfer --do-not-relay).";
-
-/// RESERVED-surface refusal: the command is part of the target set, but the
-/// wallet-RPC method that would back it has not landed. Names the gate so
-/// the user (and the FOLLOWUPS reader) can tell it apart from a deletion.
-fn reserved(cmd: &str, gate: &str) {
-    eprintln!(
-        "{cmd}: not available yet — gated on {gate} (docs/FOLLOWUPS.md, WI-RPC-2b deferrals)."
-    );
-}
+  exit / quit                         Exit shekyl-cli";
 
 pub fn repl(
     rpc: RpcSession,
-    daemon_client: Option<DaemonClient>,
+    daemon_client: Option<&DaemonClient>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::resolve::{self, ResolvedCommand};
 
@@ -132,8 +156,8 @@ pub fn repl(
                 }
 
                 let first_token = line.split_whitespace().next().unwrap_or("");
-                if !crate::display::is_secret_command(first_token) {
-                    let _ = rl.add_history_entry(line);
+                if !crate::display::omit_from_history(first_token) {
+                    drop(rl.add_history_entry(line));
                 }
 
                 match resolve::parse(line) {
@@ -176,21 +200,22 @@ pub fn repl(
                         dest,
                         amount,
                         priority,
-                        do_not_relay,
                         no_confirm,
                     } => {
-                        if do_not_relay {
-                            reserved(
-                                "transfer --do-not-relay",
-                                "the offline cold-signing workflow",
-                            );
-                        } else {
-                            transfers::cmd_transfer(&rpc, amount, &dest, priority, no_confirm);
-                        }
+                        transfers::cmd_transfer(&rpc, amount, &dest, priority, no_confirm);
                     }
                     ResolvedCommand::Transfers => transfers::cmd_transfers(&rpc),
                     ResolvedCommand::ShowTransfer { txid } => {
                         transfers::cmd_show_transfer(&rpc, &txid);
+                    }
+                    ResolvedCommand::GetTxNote { txid } => {
+                        transfers::cmd_get_tx_note(&rpc, &txid);
+                    }
+                    ResolvedCommand::SetTxNote { txid, note } => {
+                        transfers::cmd_set_tx_note(&rpc, &txid, &note);
+                    }
+                    ResolvedCommand::Abandon { txid } => {
+                        transfers::cmd_abandon(&rpc, &txid);
                     }
 
                     // Receiving (WI-RPC-1 surface)
@@ -217,10 +242,19 @@ pub fn repl(
                     ResolvedCommand::ParseUri { uri } => receiving::cmd_parse_uri(&rpc, &uri),
 
                     // Staking (WI-RPC-1 surface)
-                    ResolvedCommand::Stake => staking::cmd_stake(&rpc),
+                    ResolvedCommand::Stake { foundation } => {
+                        staking::cmd_stake(&rpc, foundation);
+                    }
                     ResolvedCommand::StakedBalance => staking::cmd_staked_balance(&rpc),
                     ResolvedCommand::StakedOutputs => staking::cmd_staked_outputs(&rpc),
                     ResolvedCommand::StakingInfo => staking::cmd_staking_info(&rpc),
+
+                    // Archival principal staking actions (WI-RPC-5)
+                    ResolvedCommand::StakeIn { amount } => staking::cmd_stake_in(&rpc, amount),
+                    ResolvedCommand::DrainBalance => staking::cmd_drain_balance(&rpc),
+                    ResolvedCommand::Drain { amount } => staking::cmd_drain(&rpc, amount),
+                    ResolvedCommand::Unstake => staking::cmd_unstake(&rpc),
+                    ResolvedCommand::CollectUnstaked => staking::cmd_collect_unstaked(&rpc),
 
                     // Fees (WI-RPC-1 surface)
                     ResolvedCommand::Fee {
@@ -229,7 +263,7 @@ pub fn repl(
                     } => fees::cmd_fee(&rpc, n_inputs, n_outputs),
 
                     ResolvedCommand::ChainHealth => {
-                        chain::cmd_chain_health(daemon_client.as_ref());
+                        chain::cmd_chain_health(daemon_client);
                     }
 
                     // Proofs (WI-RPC-3 surface)
@@ -265,16 +299,14 @@ pub fn repl(
                         proofs::cmd_check_reserve_proof(&rpc, &address, &proof, message.as_deref());
                     }
 
-                    // Signing (RESERVED)
-                    ResolvedCommand::Sign { .. } | ResolvedCommand::Verify { .. } => {
-                        reserved(first_token, "the message-signing RPC surface");
-                    }
-
-                    // Offline signing (RESERVED)
-                    ResolvedCommand::DescribeTransfer { .. }
-                    | ResolvedCommand::SignTransfer { .. }
-                    | ResolvedCommand::SubmitTransfer { .. } => {
-                        reserved(first_token, "the offline cold-signing workflow");
+                    // Message signing (PR-SM-2 surface)
+                    ResolvedCommand::Sign { message } => signing::cmd_sign(&rpc, &message),
+                    ResolvedCommand::Verify {
+                        address,
+                        signature,
+                        message,
+                    } => {
+                        signing::cmd_verify(&rpc, &address, &signature, &message);
                     }
 
                     // Meta
@@ -299,7 +331,7 @@ pub fn repl(
         }
     }
 
-    let _ = rl.save_history(&hist);
+    drop(rl.save_history(&hist));
     // Closes any open wallet and stops the self-hosted server (removing its
     // private UDS socket directory).
     rpc.shutdown();
@@ -313,7 +345,10 @@ fn cmd_version(rpc: &RpcSession) {
     match rpc.call("get_version", serde_json::json!({})) {
         Ok(val) => {
             let server = val.get("version").and_then(|v| v.as_str()).unwrap_or("?");
-            let api = val.get("api_version").and_then(|v| v.as_i64()).unwrap_or(0);
+            let api = val
+                .get("api_version")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
             println!("shekyl-wallet-rpc {server} (api v{api})");
         }
         Err(e) => eprintln!("wallet RPC unreachable: {e}"),
@@ -327,12 +362,30 @@ fn cmd_version(rpc: &RpcSession) {
 /// Standard confirmation: "Type 'yes' to confirm: "
 pub(crate) fn confirm(prompt: &str) -> bool {
     eprint!("{prompt} Type 'yes' to confirm: ");
-    let _ = std::io::Write::flush(&mut std::io::stderr());
+    drop(std::io::Write::flush(&mut std::io::stderr()));
     let mut input = String::new();
     if std::io::stdin().read_line(&mut input).is_err() {
         return false;
     }
     input.trim() == "yes"
+}
+
+/// Confirmation for money-moving commands that ship no `--no-confirm`
+/// affordance (`stake_in`, `drain`): interactive "yes", and a loud refusal
+/// on non-interactive input. Reading [`confirm`] from a pipe would silently
+/// consume the next scripted line (or hit EOF) as the answer — automation
+/// would see funds "sent" that never moved, with no clear reason.
+/// `action` names the command in the refusal so a script's log says which
+/// step was blocked.
+pub(crate) fn confirm_interactive(prompt: &str, action: &str) -> bool {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!(
+            "Refusing to {action} without confirmation on non-interactive \
+             input; run interactively."
+        );
+        return false;
+    }
+    confirm(prompt)
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +395,7 @@ pub(crate) fn confirm(prompt: &str) -> bool {
 fn history_path() -> Option<String> {
     dirs::data_local_dir().map(|mut p| {
         p.push("shekyl-cli");
-        let _ = std::fs::create_dir_all(&p);
+        drop(std::fs::create_dir_all(&p));
         p.push("history.txt");
         p.to_string_lossy().into_owned()
     })
@@ -364,7 +417,14 @@ pub(crate) fn require_closed(rpc: &RpcSession) -> bool {
     true
 }
 
-pub(crate) fn read_password(prompt: &str) -> Option<String> {
+/// Prompt for a password, returning it in a wrapper that wipes on drop.
+///
+/// **`Zeroizing` rather than `String`, so the wipe is structural** (rule 35).
+/// The previous signature handed back a bare `String` and left every call
+/// site to remember `password.zeroize()` before each return path — a
+/// discipline that held only as long as nobody added an early `return`, and
+/// which said nothing about the copies the value was handed to.
+pub(crate) fn read_password(prompt: &str) -> Option<Zeroizing<String>> {
     match crate::prompt_password(prompt) {
         Ok(p) => Some(p),
         Err(e) => {
@@ -416,7 +476,7 @@ pub(crate) fn opt_amount(v: &serde_json::Value, key: &str) -> String {
 pub fn parse_amount(s: &str) -> Option<u64> {
     shekyl_units::AtomicUnits::from_skl_str(s)
         .ok()
-        .map(|a| a.to_raw())
+        .map(shekyl_units::AtomicUnits::to_raw)
 }
 
 #[cfg(test)]

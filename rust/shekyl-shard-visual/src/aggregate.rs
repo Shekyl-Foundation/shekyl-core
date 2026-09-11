@@ -2,7 +2,12 @@ use serde::{Deserialize, Serialize};
 
 /// Public chain properties that drive shard visual semantics.
 ///
-/// Mirrors the Python `ShardAggregate` used in the visualization explorer.
+/// Every field must satisfy the admissibility criterion in
+/// `docs/V3_SHARD_VISUALIZATION.md` (ruling A): a deterministic function
+/// of data any shard holder can read from the held block bytes, with no
+/// key, wallet state, or holder privilege. Adding a field here is a
+/// violation of the closed-world artifact property by default and
+/// requires re-ratifying that section.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ShardAggregate {
     pub shard_id: u64,
@@ -14,13 +19,6 @@ pub struct ShardAggregate {
     pub output_count: u64,
     pub coinbase_output_count: u64,
     pub time_range_seconds: u64,
-    pub coinbase_ratio: f64,
-    pub value_log_mean: f64,
-    pub value_log_variance: f64,
-    pub stake_events_created: u64,
-    pub stake_events_claimed: u64,
-    pub tier_distribution: [u64; 3],
-    pub dominant_regime: String,
 }
 
 /// Serde `with` module for a 32-byte hash encoded as lowercase hex on the

@@ -30,7 +30,7 @@ rewrite → P2B-6 §7 threat re-center → **this cluster's values** (sim-backed
 | `MAX_CLAIM_AGE_W` (`W`) | **26** | E-3 forfeiture horizon (settlement epochs); **hot prune** | Archival state §5 |
 | `RETENTION_HORIZON_BLOCKS` | **420_000** | Min block-span archival derived state survives before prune sweep | Archival state §5 |
 | `ARCHIVAL_REORG_DEPTH_BLOCKS` | **720** | Max processable reorg depth (blocks); `pop_block` + wallet refresh | Gate-4 §5, P2B-5 |
-| `RELEASE_COOLDOWN_EPOCHS` | **2** | Grace after last serve before `Unbond` (settlement epochs) | Gate-4 §3.4–§4.3 |
+| `RELEASE_COOLDOWN_EPOCHS` | **2** | Grace after last serve before `Release` (settlement epochs) | Gate-4 §3.4–§4.3 |
 | `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** (gate-2 interface) | Worst-case slash challenge window (blocks) | Gate-2 (interface) |
 | `BOND_DURATION_BASE_EPOCHS` | **4** (provisional¹) | Flat floor of per-shard retention-commitment horizon (settlement epochs) | Gate-4; sim L9/L10 |
 | `BOND_DURATION_AGE_SCALE` | **4** (provisional¹) | Age multiplier: `bond_duration(age) = BASE · (1 + SCALE·age)`, `age ∈ [0,1]` normalized shard age | Gate-4; sim L9/L10 |
@@ -119,7 +119,7 @@ is a separate, shallower UX finality knob — see §2.3.
 
 ### 1.2 SEB and F1 (emission cadence — not a structural F1 lever)
 
-[`PHASE_2B_SECTION7_DRAFT.md`](../completed/PHASE_2B_SECTION7_DRAFT.md) §7: retention fingerprint **F1**
+[`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §7: retention fingerprint **F1**
 has a fixed **shard** axis (per-`(P,s,E)` — not coarsenable without breaking Σwork / `R_market`)
 and an **epoch** axis at settlement granularity.
 
@@ -259,7 +259,7 @@ Unchanged — bond timing moves value between terms; it does not add supply.
 | **`W = 26`** | ~1 calendar year claim headroom at 13.9 d/settlement-epoch; bounds hot `ClaimedEpochSet` / retention state; F4 passes burst and slow catch-up. **Not** a decorrelation dial — lapse without portfolio change does not re-link (F1 T-A1); `W` bounds **forfeiture economics** and state growth. |
 | **`RETENTION_HORIZON_BLOCKS = 420_000`** | Tight §2.3 retention floor in blocks (`W×SEB + join + batch`). Governs minimum survival before prune **sweep**; distinct from reorg depth. |
 | **`ARCHIVAL_REORG_DEPTH_BLOCKS = 720`** | ~24 h at 120 s/block — PoW finality-scale processable reorg (`≪ SEB`). P2B-5 wallet archival refresh bound. |
-| **`RELEASE_COOLDOWN_EPOCHS = 2`** | Two settlement epochs (~28 d) > one SEB challenge window; `< W`; L16 + Unbond decorrelation headroom. |
+| **`RELEASE_COOLDOWN_EPOCHS = 2`** | Two settlement epochs (~28 d) > one SEB challenge window; `< W`; L16 + Release decorrelation headroom. |
 | **`CHALLENGE_RESOLUTION_BLOCKS = 10_000`** | One SEB; aligns slash challenge to settlement cadence; T-A16 transient-DoS margin (§2.2). |
 
 ### 6.2 Sim verification

@@ -12,11 +12,11 @@
 //! transaction-malleability surface that rule closes — is ratified in
 //! `GENESIS_TX_WIRE_FORMAT.md` §2.3.
 //!
-//! This is the Rust side of the `verRctSemanticsSimple` / `verRctSemanticsFeeOnly`
+//! This is the Rust side of the `verCtSemanticsSimple` / `verCtSemanticsFeeOnly`
 //! cutover (FOLLOWUPS V3.0). The export lands *ahead* of the C++ re-point so the
 //! pre-cutover differential corpus can exercise it against the C++ oracle; it is
 //! dormant (called by no consensus path) until the atomic cutover swaps
-//! `rctSigs.cpp`'s native `addKeys`/`equalKeys` block for this call.
+//! `ct_semantics.cpp`'s native `addKeys`/`equalKeys` block for this call.
 //!
 //! The module also exports the §2.3 **output-point validity** rule
 //! ([`shekyl_check_output_keys`] / [`shekyl_check_commitment_masks`], ratified

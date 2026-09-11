@@ -5,12 +5,85 @@
 
 //! Deterministic epoch challenge replay per
 //! [`ARCHIVAL_RETENTION_GATE2.md`](../../docs/design/ARCHIVAL_RETENTION_GATE2.md) §3.3–§3.4.
+//!
+//! **Mechanism status (2026-08-11, corrected 2026-08-23):** the fire-beacon
+//! shape this module implements (`H_seal`/`H_fire`, one challenge per
+//! pair-epoch) is **superseded by derived assignment** for *deciding which
+//! pairs get challenged* — `ARCHIVAL_CHALLENGE_MECHANISM.md` §2, implemented
+//! in [`crate::challenge_assignment`]: `assignment(h)` seeds from
+//! `block_hash(h−1)`, issues `CHALLENGES_PER_PAIR_PER_EPOCH = 3` per
+//! pair-epoch, and needs no seal lag. This module is **not dead code**: it is
+//! the live serve-credit admission path (through `shekyl-ffi` into
+//! `blockchain.cpp`'s serve-credit gate and `db_lmdb.cpp`'s slash-eligibility
+//! consumer).
+//!
+//! # The leaf-opening half IS deletion-bound — `RF-D8` (i) RETRACTED 2026-08-26
+//!
+//! This banner has now said both things, so the history matters. The
+//! 2026-08-11 wording said the module "deletes wholesale"; `RF-D8` ruling (i)
+//! (2026-08-21) then **kept** the ~1,920 B opening as the one element
+//! consensus verifies independently of the witness, and this banner was
+//! rewritten to call [`challenge_leaf_index`] permanent consensus code.
+//! **That ruling is retracted and the original wording was right.**
+//!
+//! The argument is recorded ONCE at `ARCHIVAL_RESPONSE_FORMAT.md` — **grep
+//! `RF-D8` (i)**. The one-line reason: the countersignature preimage **names
+//! the challenged leaf**, so `P` cannot sign it without learning that this
+//! request is a challenge and every other request is not, which is exactly
+//! the state `ARCHIVAL_CHALLENGE_MECHANISM.md` §9 ("the test IS a read")
+//! exists to prevent. Evidence strength was never the deciding axis, which is
+//! why arguing it twice produced two answers.
+//!
+//! **What this changes for a reader planning the deletion:** the cluster is
+//! back on `ARCHIVAL_CREDIT_WIRE.md` §2's deletion surface, and §2 is correct
+//! as written. It still spans three modules — [`challenge_leaf_index`] here,
+//! [`crate::challenge_leaf_chunk_bounds`] and
+//! [`crate::challenged_leaf_offset_in_chunk`] in `segment_freeze`, and
+//! [`crate::challenged_leaf_bytes`] in `path` — which is worth stating,
+//! because "the sampled-leaf path" reads like one module and it is not.
+//!
+//! **Nothing is deleted yet, and deleting it early would remove live
+//! consensus code.** Until the cutover lands, this derivation is still on the
+//! admission path and `PC-D3`'s block binding is what holds `TJ-1` closed in
+//! the interim. The removal belongs to the cutover, with the domain-registry
+//! rows and their count pins moving in the same change.
+//!
+//! **What is not settled here:** the beacon-timing cluster
+//! ([`challenge_seal_height`], [`challenge_seal_on_chain`],
+//! [`challenge_fire_height`]) is still beacon-shaped and still live as the
+//! admission window gate. Every public item in this module has production
+//! callers today, so nothing is delete-on-sight. Its disposition belongs to
+//! the settlement-writer round (`ARCHIVAL_SETTLEMENT_WRITER.md`), which
+//! replaces the settlement side — **it is deliberately not ruled by this
+//! comment.**
+//!
+//! Extend the *new* mechanism, never the beacon half.
 
 use crate::constants::CHALLENGE_BEACON_SEAL_BLOCKS;
 use crate::hash::cshake256_32;
 
-/// cSHAKE256 customization for leaf index derivation (§3.3).
-pub const CHALLENGE_LEAF_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-challenge-leaf-v1";
+/// cSHAKE256 customization for leaf index derivation (§3.3, `PC-D3`).
+///
+/// **`-v2` because the derivation changed, not because a version was due.**
+/// `PC-D3` added `block_hash(h−1)` to the preimage so each of a pair-epoch's
+/// three challenges samples an **independently drawn** leaf — independent
+/// draws, not guaranteed-distinct ones: two blocks can still land on the same
+/// leaf mod `segment_leaf_count`, and the test below tolerates exactly that.
+/// Under `-v1` the index was a function of `(P, s, E)` alone, so the three
+/// draws were never independent at all: three per-challenge records carried
+/// three genuinely distinct countersignatures over three **identical**
+/// openings — an artifact that looks like three tests and contains one.
+///
+/// The label moves with the function (rule 30). Pre-genesis there is nothing to
+/// migrate; the bump exists so **one label never names two functions**, which is
+/// the failure a second implementation would hit and not notice.
+pub const CHALLENGE_LEAF_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-challenge-leaf-v2";
+
+/// The retired `-v1` label, kept **only** so the negative control in this
+/// module's tests can assert the new derivation does not reproduce the old
+/// one. It has no caller outside those tests and must never acquire one.
+#[cfg(test)]
+const CHALLENGE_LEAF_CUSTOMIZATION_V1_RETIRED: &[u8] = b"shekyl/archival-serve-challenge-leaf-v1";
 
 /// cSHAKE256 customization for fire-time beacon (§3.4).
 pub const CHALLENGE_FIRE_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-challenge-fire-v1";
@@ -57,15 +130,26 @@ pub fn challenge_leaf_index(
     p_id: &[u8; 32],
     shard_id: u64,
     settlement_epoch: u64,
+    prev_block_hash: &[u8; 32],
     segment_leaf_count: u64,
 ) -> u32 {
     if segment_leaf_count == 0 {
         return 0;
     }
-    let mut input = Vec::with_capacity(32 + 8 + 8);
+    let mut input = Vec::with_capacity(32 + 8 + 8 + 32);
     input.extend_from_slice(p_id);
     input.extend_from_slice(&shard_id.to_le_bytes());
     input.extend_from_slice(&settlement_epoch.to_le_bytes());
+    // `PC-D3`: the challenge's block, as the HASH and not the height. A height
+    // is a reference a reorg can silently repoint at a different block; a hash
+    // names the block. And `RF-D5`'s nonce already binds this same
+    // `block_hash(h−1)`, so the record keeps ONE block reference rather than
+    // two that could disagree — a record carrying two references that can
+    // diverge has a state nobody has reasoned about.
+    //
+    // Appended last so the `(P, s, E)` prefix stays where every reader of this
+    // preimage already expects it.
+    input.extend_from_slice(prev_block_hash);
     let tau = cshake256_32(CHALLENGE_LEAF_CUSTOMIZATION, &input);
     let idx = uint64_from_hash(&tau) % segment_leaf_count;
     u32::try_from(idx).unwrap_or(u32::MAX)
@@ -109,20 +193,27 @@ pub fn challenge_fire_height(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::segment_freeze::SEGMENT_LEAF_COUNT;
+
+    /// A stand-in block for the tests that hold the block fixed while varying
+    /// something else. Named rather than inlined so it is visibly the SAME
+    /// block on both sides of a comparison: a test that varies the epoch is
+    /// only about the epoch if the block does not move with it.
+    const FIXED_BLOCK: [u8; 32] = [0x5Au8; 32];
 
     #[test]
     fn leaf_index_is_deterministic() {
         let p = [0x42u8; 32];
-        let a = challenge_leaf_index(&p, 7, 100, 26_000);
-        let b = challenge_leaf_index(&p, 7, 100, 26_000);
+        let a = challenge_leaf_index(&p, 7, 100, &FIXED_BLOCK, 26_000);
+        let b = challenge_leaf_index(&p, 7, 100, &FIXED_BLOCK, 26_000);
         assert_eq!(a, b);
     }
 
     #[test]
     fn leaf_index_changes_with_epoch() {
         let p = [0x42u8; 32];
-        let a = challenge_leaf_index(&p, 7, 100, 26_000);
-        let b = challenge_leaf_index(&p, 7, 101, 26_000);
+        let a = challenge_leaf_index(&p, 7, 100, &FIXED_BLOCK, 26_000);
+        let b = challenge_leaf_index(&p, 7, 101, &FIXED_BLOCK, 26_000);
         assert_ne!(a, b);
     }
 
@@ -130,7 +221,7 @@ mod tests {
     fn leaf_index_within_segment() {
         let p = [0x11u8; 32];
         let count = 26_000u64;
-        let idx = challenge_leaf_index(&p, 3, 50, count);
+        let idx = challenge_leaf_index(&p, 3, 50, &FIXED_BLOCK, count);
         assert!(u64::from(idx) < count);
     }
 
@@ -152,5 +243,147 @@ mod tests {
         let a = challenge_fire_height(500, 14_499, &hash, &p, 2, 9);
         let b = challenge_fire_height(500, 14_499, &hash, &p, 2, 9);
         assert_eq!(a, b);
+    }
+
+    // ── `PC-D3`: the block-bound leaf index ──────────────────────────────────
+
+    /// The property the whole round exists for: the block hash materially
+    /// affects the draw, so two challenges on the same pair-epoch draw their
+    /// leaves independently. NOT distinctness — the tolerance below admits
+    /// modulo collisions, and a collision is a valid outcome.
+    ///
+    /// Under `-v1` even independence was absent — the index was a function of
+    /// `(P, s, E)` alone, so three records carried three distinct
+    /// countersignatures over three identical openings. The edit that makes
+    /// this red is dropping `prev_block_hash` from the preimage.
+    #[test]
+    fn the_block_hash_materially_affects_the_draw() {
+        let p = [0x11u8; 32];
+        let mut differing = 0;
+        // Over a realistic segment, distinct blocks must land on distinct
+        // leaves in the overwhelming majority of draws. Asserting on a spread
+        // rather than one pair keeps this from passing on a lucky collision.
+        for i in 0..64u8 {
+            let mut h1 = [0u8; 32];
+            let mut h2 = [0u8; 32];
+            h1[0] = i;
+            h2[0] = i;
+            h1[1] = 0xAA;
+            h2[1] = 0xBB;
+            let a = challenge_leaf_index(&p, 7, 3, &h1, SEGMENT_LEAF_COUNT);
+            let b = challenge_leaf_index(&p, 7, 3, &h2, SEGMENT_LEAF_COUNT);
+            if a != b {
+                differing += 1;
+            }
+        }
+        assert!(
+            differing >= 60,
+            "only {differing}/64 block pairs sampled different leaves; the index is \
+             not meaningfully block-bound and three records would prove one fetch"
+        );
+    }
+
+    /// Same block, same everything ⇒ same index. Consensus must agree, so the
+    /// derivation is a pure function and not merely well-distributed.
+    #[test]
+    fn same_block_is_deterministic() {
+        let p = [0x22u8; 32];
+        let h = [0x5Au8; 32];
+        assert_eq!(
+            challenge_leaf_index(&p, 9, 4, &h, SEGMENT_LEAF_COUNT),
+            challenge_leaf_index(&p, 9, 4, &h, SEGMENT_LEAF_COUNT)
+        );
+    }
+
+    /// **The negative control on the domain separator.**
+    ///
+    /// A domain separator that ships is a consensus fact — it is the one
+    /// irreversible item in this round, and "it compiled and the tests passed"
+    /// cannot distinguish a correct derivation from a differently-wrong one.
+    /// So this asserts the new label does not reproduce the old one on the
+    /// same preimage: if someone reverts `-v2` to `-v1`, or a second
+    /// implementation keeps the retired label, this fails rather than
+    /// silently agreeing on a different function.
+    #[test]
+    fn the_v2_label_does_not_reproduce_the_retired_v1_derivation() {
+        let p = [0x33u8; 32];
+        let h = [0x77u8; 32];
+
+        let mut input = Vec::with_capacity(32 + 8 + 8 + 32);
+        input.extend_from_slice(&p);
+        input.extend_from_slice(&9u64.to_le_bytes());
+        input.extend_from_slice(&4u64.to_le_bytes());
+        input.extend_from_slice(&h);
+
+        let under_v2 = cshake256_32(CHALLENGE_LEAF_CUSTOMIZATION, &input);
+        let under_v1 = cshake256_32(CHALLENGE_LEAF_CUSTOMIZATION_V1_RETIRED, &input);
+
+        assert_ne!(
+            under_v2, under_v1,
+            "the -v2 label reproduced the -v1 derivation on the same preimage: the \
+             separator is not separating, so two implementations could disagree \
+             about which function a single label names"
+        );
+        assert_eq!(
+            CHALLENGE_LEAF_CUSTOMIZATION, b"shekyl/archival-serve-challenge-leaf-v2",
+            "the shipped label is a consensus fact; changing it is a re-pin, not an edit"
+        );
+    }
+
+    /// **Hand-derived vector: the `-v2` derivation checked against an
+    /// implementation that is not this one.**
+    ///
+    /// Everything else in this module compares `challenge_leaf_index` to
+    /// itself — determinism, spread, a label inequality. All of it passes just
+    /// as happily if the preimage is assembled in the wrong order, the shard
+    /// and epoch are byte-swapped, or the wrong eight bytes of `tau` are read.
+    /// "It compiled and the tests passed" cannot separate a correct derivation
+    /// from a differently-wrong one, and the separator is a consensus fact, so
+    /// the value below comes from outside.
+    ///
+    /// **Provenance.** Derived with an independent cSHAKE256 written from
+    /// FIPS 202 / SP 800-185 against `PC-D3`'s specified preimage — *not* by
+    /// transcribing this function — whose Keccak-f[1600] sponge was first
+    /// checked against `hashlib.shake_256` and whose customized path
+    /// reproduces NIST SP 800-185 cSHAKE256 Sample #3
+    /// (`D008828E2B80AC9D…281C8C`). The same oracle reproduces the
+    /// `gate2_serve_credit_kat_v1.json` indices (13125 and 14593).
+    ///
+    /// Inputs are the fixture's `synthetic_p42_epoch_100` case verbatim, so a
+    /// regen that moves the fixture without moving the derivation is caught
+    /// here rather than accepted as the new truth.
+    ///
+    /// The edit that makes this red is any change to the preimage byte order,
+    /// the integer widths, the `tau` slice, the endianness of either, or the
+    /// label.
+    #[test]
+    fn the_v2_derivation_matches_an_independently_computed_vector() {
+        // preimage = P[32] ‖ LE64(shard) ‖ LE64(epoch) ‖ block_hash(h−1)[32]
+        let p = [0x42u8; 32];
+        // Spelled out rather than computed: a KAT input built by a loop is a
+        // small reimplementation, and this vector exists precisely because a
+        // small reimplementation can be wrong.
+        let prev: [u8; 32] = [
+            0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D,
+            0x2E, 0x2F, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B,
+            0x3C, 0x3D, 0x3E, 0x3F,
+        ];
+        assert_eq!(
+            challenge_leaf_index(&p, 7, 100, &prev, 25_992),
+            13_125,
+            "the -v2 derivation disagrees with an independent implementation of \
+             its specification; one of the two is wrong and it is not \
+             necessarily this one"
+        );
+    }
+
+    /// A zero-length segment yields index 0 and does not divide by zero — the
+    /// pre-existing guard, re-asserted because the preimage grew around it.
+    #[test]
+    fn empty_segment_is_index_zero() {
+        assert_eq!(
+            challenge_leaf_index(&[0x44u8; 32], 1, 1, &[0x99u8; 32], 0),
+            0
+        );
     }
 }

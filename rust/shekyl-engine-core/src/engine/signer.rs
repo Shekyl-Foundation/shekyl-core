@@ -155,7 +155,6 @@ const _: () = {
 /// Zero-sized; the group's key material never lives on the marker.
 #[cfg(feature = "multisig")]
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code)] // constructed as `Engine<MultisigSignerV2>` in MS-5 S2
 pub struct MultisigSignerV2;
 
 #[cfg(feature = "multisig")]
@@ -229,7 +228,6 @@ impl shekyl_multisig::NonceCounterSink for MultisigNonceSink {
 pub struct TransferSigningContext {
     /// Populated signing message (§3.4 / §3.9). Phase 2a-3 consumes
     /// this in `LocalSigner::sign_transfer` via `KeyEngine::sign_transaction`.
-    #[allow(dead_code)] // read in 2a-3 `LocalSigner::sign_transfer`.
     pub(crate) tx: super::traits::key::TxToSign,
 }
 

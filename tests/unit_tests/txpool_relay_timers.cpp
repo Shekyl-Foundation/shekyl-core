@@ -6,12 +6,14 @@
 // RP-4 (docs/design/DAEMON_RELAY_PRIVACY.md §17.1): the embargo and
 // MIN_RELAY_TIME are disjoint timers, and that must stay true.
 //
-// get_relayable_transactions dispatches on relay *method*: stem/forward are
-// gated solely by `last_relayed_time > now` — which for a stemmed tx IS its
-// embargo deadline — while get_relay_delay/MIN_RELAY_TIME gates only
-// local/fluff/block. That disjointness is why lengthening the embargo from the
-// inherited 39s to the derived 144s cannot race the re-broadcast interval, even
-// though the origin-alone black-hole recovery p90 (~331s) now exceeds
+// get_relayable_transactions dispatches on relay *method*: stem is gated
+// solely by `last_relayed_time > now` — which for a stemmed tx IS its embargo
+// deadline — while get_relay_delay/MIN_RELAY_TIME gates only
+// local/fluff/block. (`forward` shared the stem arm until Q12-U2 deleted the
+// class; the disjointness this file guards is unchanged by that.)
+// That disjointness is why lengthening the embargo from the inherited 39s
+// to the derived 144s cannot race the re-broadcast interval, even though
+// the origin-alone black-hole recovery p90 (~331s) now exceeds
 // MIN_RELAY_TIME (300s).
 //
 // Armed here rather than left as prose because a future edit that folded stem
@@ -44,6 +46,8 @@
 // forward-declares it), needed by init_blockchain's fakechain options.
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_pool.h"
+#include "net/net_utils_base.h"
+#include "shekyl/shekyl_ffi.h"
 
 using namespace cryptonote;
 
@@ -161,7 +165,7 @@ bool init_blockchain(Blockchain& bc, BlockchainDB* db)
     std::make_pair(static_cast<uint8_t>(0), static_cast<uint64_t>(0)),
   };
   const cryptonote::test_options test_options = {hard_forks, 5000};
-  return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 1, nullptr);
+  return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 1);
 }
 
 crypto::hash make_txid(uint8_t fill)
@@ -214,12 +218,15 @@ struct RelayTimerFixture
 
   bool init() { return init_blockchain(bap.bc, db); }
 
-  void put(relay_method method, time_t receive_time, time_t last_relayed_time)
+  //! `relayed` defaults to the sent case; the unsent one is a `local`-only
+  //! state (`insert_attested_tx`) and the tests that drive it say so.
+  void put(relay_method method, time_t receive_time, time_t last_relayed_time,
+           bool relayed = true)
   {
     txpool_tx_meta_t meta = make_meta(100, receive_time);
     meta.set_relay_method(method);
     meta.last_relayed_time = last_relayed_time;
-    meta.relayed = true;
+    meta.relayed = relayed;
     db->add_txpool_tx(txid, {blob.data(), blob.size()}, meta);
   }
 
@@ -265,6 +272,181 @@ TEST(txpool_relay_timers, stem_under_embargo_is_held_however_old_the_tx_is)
     << "a stem tx must stay held until its embargo deadline passes";
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// §92.5c item 3: an ORIGIN's re-broadcast is derived, not `MIN_RELAY_TIME`.
+//
+// `originated_stays_in_zone` pins an anonymity-zone origin at `local`
+// permanently, so that entry lives on the re-broadcast branch for its whole
+// life. §15.4 cleared `MIN_RELAY_TIME` from the embargo's neighbourhood
+// because it "governs an already-fluffed transaction" — true when written, and
+// vacated by that predicate, which created a class that is never fluffed.
+//
+// At 300 s the origin re-emitted BELOW its own zone's embargo median (346 s).
+// The base is now the 1-in-10 survival quantile — the confidence the network
+// itself uses (`EMBARGO_FULL_TRAVEL_PROBABILITY`) — which is 1148 s.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(txpool_relay_timers, local_holds_past_min_relay_time)
+{
+  const time_t now = time(nullptr);
+  const time_t derived =
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
+      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+  ASSERT_GT(derived, 300) << "the derived origin retry must exceed MIN_RELAY_TIME, "
+                             "or this test cannot discriminate";
+
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+
+  // THE discriminating case: SENT, and last relayed 400 s ago — past
+  // MIN_RELAY_TIME (300 s), short of the derived interval. Reverting the base
+  // to MIN_RELAY_TIME turns this green→red, which is the whole point of the
+  // case. `relayed` is what separates it from
+  // `an_unsent_local_still_falls_back_at_min_relay_time`, which is the same
+  // 400 s and expects the opposite verdict.
+  fx.put(relay_method::local, now - 400, now - 400, /*relayed=*/true);
+  EXPECT_FALSE(fx.relayable())
+    << "an origin must not re-emit at MIN_RELAY_TIME: that is inside its own "
+       "zone's embargo median, so the retry fires while the stem is still "
+       "propagating normally";
+}
+
+TEST(txpool_relay_timers, local_is_released_after_the_derived_interval)
+{
+  const time_t now = time(nullptr);
+  const time_t derived =
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
+      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+
+  // The other side, so the hold above is not simply "local never relays".
+  fx.put(relay_method::local, now - (derived + 60), now - (derived + 60),
+         /*relayed=*/true);
+  EXPECT_TRUE(fx.relayable())
+    << "past the derived interval the origin's backstop must fire; a hold with "
+       "no release is not a backoff, it is a disarm nobody ruled on";
+}
+
+TEST(txpool_relay_timers, an_unsent_local_still_falls_back_at_min_relay_time)
+{
+  const time_t now = time(nullptr);
+
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+
+  // `insert_attested_tx`'s state: stamped `local`, never sent, this loop named
+  // as the fallback if the engine's fire-and-forget submit nudge missed. There
+  // is no stem to have completed and no embargo anywhere, so the derived
+  // interval provisions against an event that cannot have happened -- it would
+  // be 848 s of added latency on a FIRST send.
+  //
+  // Same 400 s as `local_holds_past_min_relay_time`, which is the point: the
+  // two cases differ only in `relayed`, so the base must discriminate on
+  // exactly that axis. Deleting the `!meta.relayed` arm of `local_relay_base`
+  // turns this green->red.
+  fx.put(relay_method::local, now - 400, now - 400, /*relayed=*/false);
+  EXPECT_TRUE(fx.relayable())
+    << "a local tx that was never sent must not inherit the origin's stem-"
+       "completion wait: the nudge-missed fallback is a liveness question, "
+       "not a privacy one";
+}
+
+// §92.5c item 1: the disarm predicate. F-10 already computes it — "this came
+// back from somewhere other than where I sent it" — and this is the consumer.
+//
+// The re-broadcast exists because an origin cannot observe its own stem. The
+// moment it can, the reason is gone, so the predicate retires the timer rather
+// than shortening it.
+
+// ONE `relayable()` CALL PER FIXTURE, and the reason is load-bearing.
+// `get_relayable_transactions` sets `m_next_check = now + 2 min` on every
+// call, so a second call in the same test returns false whatever the entry
+// says. A before/after pair inside one fixture therefore goes green on the
+// clock rather than on the subject — which is how the first draft of the
+// disarm test below passed while asserting nothing. Each case builds its own
+// pool and asks once.
+
+TEST(txpool_relay_timers, an_observed_local_stops_re_broadcasting)
+{
+  const time_t now = time(nullptr);
+  const time_t derived =
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
+      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+  // Past the derived interval, so the TIMER would release it — the disarm has
+  // to be what holds it, or this case proves nothing.
+  fx.put(relay_method::local, now - (derived + 60), now - (derived + 60), /*relayed=*/true);
+  fx.bap.txpool.on_stem_propagated(epee::to_span(std::vector<crypto::hash>{fx.txid}));
+
+  EXPECT_FALSE(fx.relayable())
+    << "an origin that has seen its transaction circulating has nothing left "
+       "to rescue; the re-broadcast must retire, not merely wait longer";
+}
+
+TEST(txpool_relay_timers, the_same_local_without_the_verdict_still_relays)
+{
+  const time_t now = time(nullptr);
+  const time_t derived =
+    static_cast<time_t>(shekyl_dandelionpp_origin_retry_interval_seconds(
+      static_cast<std::uint8_t>(epee::net_utils::zone::invalid)));
+
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+  // The control for the case above: same entry, same age, no verdict. Without
+  // this pair the disarm test cannot distinguish "the predicate fired" from
+  // "nothing was ever relayable".
+  fx.put(relay_method::local, now - (derived + 60), now - (derived + 60), /*relayed=*/true);
+
+  EXPECT_TRUE(fx.relayable())
+    << "past the derived interval and unobserved, the origin's backstop fires";
+}
+
+/* §92's third clause, first half — the origin mark surviving its own return —
+   is NOT covered here, and the reason is a fixture limit rather than a choice.
+
+   The guard sits in `add_tx`'s existing-entry branch, so a test has to get a
+   duplicate admitted. This fixture cannot: `get_tx_fee` fails on its synthetic
+   blob, so `add_tx` returns at the fee check long before the upgrade
+   (`fee_too_low`, observed). Passing `relay_method::block` clears the fee
+   check but then takes the failed-inputs branch, which force-sets the method
+   directly — a DIFFERENT path, and one that should upgrade, since a
+   transaction that reached a block is confirmed and the origin's re-broadcast
+   responsibility genuinely ends.
+
+   A first draft of this test asserted through `add_tx` and passed with the
+   guard REMOVED, because admission never reached the upgrade. It is deleted
+   rather than kept: a test green for a reason unrelated to its subject is
+   worse than none, because it reads as coverage.
+
+   Reaching it needs a real transaction and a chain that admits it — the
+   `t_core` arrival-leg harness already recorded as owed in FOLLOWUPS for the
+   same reason (§89.8's end-to-end arrival witness). The guard's argument is in
+   `tx_pool.cpp` at the site, and the bite check for it is that path, not this
+   file. */
+
+TEST(txpool_relay_timers, a_propagated_fluff_entry_is_not_disarmed)
+{
+  const time_t now = time(nullptr);
+
+  RelayTimerFixture fx;
+  ASSERT_TRUE(fx.init());
+  // The scoping check. The watch resolves observations for every stem this
+  // node placed, relayed ones included — and a relayed entry sits at `fluff`,
+  // where MIN_RELAY_TIME governs and nobody asked the origin's question.
+  // Letting a verdict reach that arm would silence a timer on a class that
+  // never armed a disarm.
+  fx.put(relay_method::fluff, now - 400, now - 400, /*relayed=*/true);
+  fx.bap.txpool.on_stem_propagated(epee::to_span(std::vector<crypto::hash>{fx.txid}));
+
+  EXPECT_TRUE(fx.relayable())
+    << "the disarm is the local arm's alone — a propagation verdict for a "
+       "relayed entry must leave its ordinary re-relay untouched";
+}
+
 TEST(txpool_relay_timers, fluff_still_obeys_min_relay_time)
 {
   const time_t now = time(nullptr);
@@ -300,37 +482,71 @@ namespace
   }
 }
 
-TEST(embargo_deadline, fractional_now_rounds_up_never_down)
+TEST(relay_deadline, fractional_now_rounds_up_never_down)
 {
   // The case the bug lived in: 1ms past the second, so truncation would return
   // 1000 + 144 and silently shorten the embargo by 999ms.
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(1000, 1), 144), 1145)
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(1000, 1), 144), 1145)
     << "a sub-second remainder must push the deadline to the next whole second";
   // Worst case for truncation.
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(1000, 999), 144), 1145);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(1000, 999), 144), 1145);
   // Anywhere in the interior rounds to the same next second.
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(1000, 500), 144), 1145);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(1000, 500), 144), 1145);
 }
 
-TEST(embargo_deadline, exact_second_is_not_padded)
+TEST(relay_deadline, exact_second_is_not_padded)
 {
   // On an exact boundary there is nothing to round: ceil must be the identity,
   // not an unconditional +1. Rounding up here would lengthen every embargo by a
   // second for no reason, which is a (smaller) drift in the other direction.
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(1000, 0), 144), 1144);
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(0, 0), 0), 0);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(1000, 0), 144), 1144);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(0, 0), 0), 0);
 }
 
-TEST(embargo_deadline, zero_draw_still_never_lands_in_the_past)
+TEST(relay_deadline, an_out_of_range_draw_saturates_forward_never_backward)
+{
+  /* The FFI declares `uint64_t` and `seconds::rep` is signed, so a value past
+     the signed range would cast NEGATIVE — a deadline in the past, which
+     shortens the delay. Shortening is the privacy-losing direction for both
+     callers, and it would be silent: the transaction relays early and nothing
+     reports it.
+
+     No shipped draw reaches here (both tables truncate far below), so this
+     guards the declared type rather than a live path — which is exactly the
+     kind of boundary a future caller reads and trusts. */
+  const auto now = at(1000, 0);
+  const std::time_t plain = cryptonote::detail::relay_deadline(now, 144);
+
+  for (const std::uint64_t absurd : {
+         std::uint64_t{1} << 62,
+         std::uint64_t{1} << 63,                       // exactly the sign bit
+         std::numeric_limits<std::uint64_t>::max(),
+       })
+  {
+    const std::time_t got = cryptonote::detail::relay_deadline(now, absurd);
+    EXPECT_GT(got, plain)
+      << "an absurd draw must saturate FORWARD, not wrap: got " << got
+      << " against " << plain << " for a normal 144 s draw";
+    EXPECT_GE(got, static_cast<std::time_t>(1000))
+      << "a saturated deadline must never land at or before `now`";
+  }
+
+  // Control: the guard must not disturb a normal draw. Without this, clamping
+  // everything to a constant would pass the assertions above.
+  EXPECT_EQ(cryptonote::detail::relay_deadline(now, 144), 1144);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(now, 0), 1000);
+}
+
+TEST(relay_deadline, zero_draw_still_never_lands_in_the_past)
 {
   // A 0s draw is legitimate (~0.17%: the memoryless geometric's support includes
   // 0). It must still not resolve to an already-past deadline when `now` is
   // mid-second, which is exactly what truncation would produce.
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(5000, 1), 0), 5001);
-  EXPECT_EQ(cryptonote::detail::embargo_deadline(at(5000, 0), 0), 5000);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(5000, 1), 0), 5001);
+  EXPECT_EQ(cryptonote::detail::relay_deadline(at(5000, 0), 0), 5000);
 }
 
-TEST(embargo_deadline, is_monotonic_in_the_draw)
+TEST(relay_deadline, is_monotonic_in_the_draw)
 {
   // A longer draw can never yield an earlier deadline, at any sub-second offset.
   for (const int frac : {0, 1, 250, 999})
@@ -338,7 +554,7 @@ TEST(embargo_deadline, is_monotonic_in_the_draw)
     std::time_t previous = std::numeric_limits<std::time_t>::min();
     for (std::uint64_t draw = 0; draw <= 300; ++draw)
     {
-      const std::time_t d = cryptonote::detail::embargo_deadline(at(1000, frac), draw);
+      const std::time_t d = cryptonote::detail::relay_deadline(at(1000, frac), draw);
       EXPECT_GE(d, previous) << "non-monotonic at frac=" << frac << " draw=" << draw;
       previous = d;
     }

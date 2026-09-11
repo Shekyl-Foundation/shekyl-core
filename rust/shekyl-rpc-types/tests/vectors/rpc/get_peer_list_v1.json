@@ -1,0 +1,24 @@
+{
+  "gray_list": [{
+    "host": "abcdefghijklmnop.onion:18080",
+    "id": 72623859790382856,
+    "ip": 0,
+    "last_seen": 1750000003,
+    "port": 0
+  }],
+  "status": "OK",
+  "white_list": [{
+    "host": "10.32.0.7",
+    "id": 1234605616436508552,
+    "ip": 117448714,
+    "last_seen": 1750000001,
+    "port": 18080
+  },{
+    "host": "2001:db8::1",
+    "id": 11072869122414935808,
+    "ip": 0,
+    "last_seen": 1750000002,
+    "port": 18081,
+    "pruning_seed": 384
+  }]
+}

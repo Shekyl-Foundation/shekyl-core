@@ -1,15 +1,20 @@
 # shekyl-cli / simplewallet Parity Matrix
 
-simplewallet registers **81** commands via `m_cmd_binder.set_handler`
-(verified by `grep -c m_cmd_binder.set_handler src/simplewallet/simplewallet.cpp` on the current tree).
+simplewallet registered **81** commands via `m_cmd_binder.set_handler`.
 
-Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-scope list has a tested equivalent in shekyl-cli, verified by this matrix.**
+**This matrix is a capability ledger, not a gate.** It was written as the
+Phase 3 deletion gate, and that gate is discharged: `src/simplewallet/` was
+deleted at `a36224bde`, so its verification recipe (`grep -c
+m_cmd_binder.set_handler src/simplewallet/simplewallet.cpp`) no longer
+resolves and the count above is historical. What the matrix tracks now is
+which capabilities `shekyl-cli` carries — so a **Planned** row is an open
+capability, never a blocker on deleting C++ that no longer exists.
 
 ## Legend
 
 - **Covered**: shekyl-cli has a working equivalent.
 - **Out of scope**: Command is Monero-inherited dead code or irrelevant to Shekyl. Reason documented.
-- **Planned**: Equivalent is designed but gated on an RPC surface that has not landed (RESERVED refusal in the CLI names the gate; carriers in `docs/FOLLOWUPS.md` §"WI-RPC-2b deferrals").
+- **Planned**: Equivalent is designed but not yet built in `shekyl-cli`. Usually that is because the RPC surface it needs has not landed (RESERVED refusal in the CLI names the gate; carriers in `docs/FOLLOWUPS.md` §"WI-RPC-2b deferrals"). Where the RPC *has* landed and only the CLI command is outstanding, the row's note says so — those are unblocked, not gated.
 
 > **Note (2026-07-19, WI-RPC-1).** Rows 1–4's `account` / `--subaddr-index` /
 > `address new` / `--subaddr-indices` language is **wallet2-era** and does not
@@ -39,19 +44,20 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 > refuses to print the seed to a non-TTY (pipe/redirect/log) rather than leak
 > it — so the `seed`-safety row's guarantee now holds on every path.
 
-## Parity matrix (24 covered, 6 planned, 51 out of scope)
+## Parity matrix (29 covered, 1 planned, 2 rejected, 49 out of scope)
 
 | # | simplewallet command | shekyl-cli equivalent | Status | Notes |
 |---|---|---|---|---|
 | 1 | `account` | N/A | Out of scope | Deleted-by-design (rule 60): no account model in Shekyl. Parse-time refusal points at payment requests |
 | 2 | `address` | `address` | Covered | Single primary `ShekylAddress`; `address new` deleted — payment requests (`request new`) replace subaddress attribution |
 | 3 | `balance` | `balance` | Covered | Native `get_balance`; `--account` flag deleted |
-| 4 | `transfer` | `transfer` | Covered | Native build→confirm→submit/discard flow (`build_pending_tx`/`submit_pending_tx`/`discard_pending_tx`); `--subaddr-indices` deleted; `--do-not-relay` is Planned (row 26 workflow) |
+| 4 | `transfer` | `transfer` | Covered | Native build→confirm→submit/discard flow (`build_pending_tx`/`submit_pending_tx`/`discard_pending_tx`); `--subaddr-indices` deleted; `--do-not-relay` is **not offered** — it was step 1 of the Monero cold-signing workflow (rejected permanently, rows 26–27); parse-time refusal, and the build→confirm flow already shows the tx before broadcast |
 | 5 | `show_transfers` | `transfers` | Covered | Native `get_transfers` |
 | 6 | `show_transfer` | `show_transfer` | Covered | Native `get_transfer_by_txid` |
 | 7 | `sweep_all` | N/A | Out of scope | Deleted-by-design: no Engine sweep surface; FOLLOWUPS "`sweep_all`" row carries the reopening criterion (Engine-level `build_sweep_tx`, specced contract-first) |
-| 8 | `stake` | `stake` | Covered | Native `stake` RPC (WI-RPC-1 entry; Full-gated, resume-aware) |
-| 9 | `unstake` | N/A | Planned | No native RPC surface yet; unbonding entry design pending (stake-lifecycle Phase 2b scope) |
+| 8 | `stake` | `stake` | Covered | Native `stake` RPC (WI-RPC-1 entry; Full-gated, resume-aware). Posture-aware: no flag ⇒ `posture: "market"` (today `-29505`, shard assignment unbuilt) |
+| 8a | `stake --complete-tree-foundation` | `stake` + `posture: "foundation_complete_tree"` + `acknowledge_non_earning_unbounded: true` | Covered | Foundation whole-corpus posture (COMPLETETREE_ACTIVATION D-2/D-4). CLI prints the terms verbatim and requires the typed phrase `serve without reward`; the RPC refuses `-29506` without the acknowledgment, and that refusal's body **is** the warning. Deliberately CLI-only by convention — the GUI never sends the field |
+| 9 | `unstake` | `unstake` | Covered | **Shipped with PR-C (2026-09-03)** — the reachability gate this row tracked since PR-P4 is lifted. No-argument grammar, by contract: the persona is engine-resolved (the wire never names a slot), the fee is the canonical P-lane floor, and the exit releases the whole bonded total (consensus's exact-debit rule). The CLI carries the irreversibility confirmation (CLI-side, never RPC-side) and, on success, the completion guidance: run `collect_unstaked` once the exit confirms. Its sibling `collect_unstaked` sweeps the released collateral back (one pass per call; the reply's remainder is the completion fact and the CLI says what remains). RESERVED→shipped reconciliation in `docs/api/wallet_rpc.yaml`'s PR-C census block |
 | 10 | `claim_rewards` | N/A | Out of scope | No manual claim step by design: emission claims are assembled and dispatched engine-side (WI-2/WI-3 orchestration); rewards surface in `staked_balance` |
 | 11 | `staking_info` | `staking_info` | Covered | Native `staking_info`, plus `staked_balance` / `staked_outputs` breakdowns (WI-RPC-1 reads) |
 | 12 | `chain_health` | `chain_health` | Covered | Via independent DaemonClient |
@@ -66,10 +72,10 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 21 | `check_tx_proof` | `check_tx_proof` | Covered | Wallet-less verification against the chain (WI-RPC-3); proof strings are kept out of readline history |
 | 22 | `get_reserve_proof` | `get_reserve_proof` | Covered | All-balance or amount-bounded (WI-RPC-3, FULL wallet). Grammar is `get_reserve_proof [amount] [message...]`: an amount-shaped first token binds as the bound, so the CLI echoes the bound amount and exact challenge message at generation; flag-shaped tokens (e.g. Monero's `--all`) are refused with a usage error rather than bound into the message. Prints the key-image-beacon warning |
 | 23 | `check_reserve_proof` | `check_reserve_proof` | Covered | Wallet-less verification with daemon spent-status reporting (WI-RPC-3) |
-| 24 | `sign` | RESERVED | Planned | Gated on the message-signing RPC surface (Phase 2c) |
-| 25 | `verify` | RESERVED | Planned | As row 24 |
-| 26 | `sign_transfer` | RESERVED | Planned | Gated on the Phase 2d offline cold-signing workflow (with `describe_transfer`, `submit_transfer`, `transfer --do-not-relay`) |
-| 27 | `submit_transfer` | RESERVED | Planned | As row 26 |
+| 24 | `sign` | `sign` | Covered | Native `sign_message` (PR-SM-2): the ratified nested hybrid (SLH-DSA-192s inner / spend-Schnorr outer, [`WALLET_MESSAGE_SIGNING.md`](design/WALLET_MESSAGE_SIGNING.md) §7). Multi-second by design (~4 s floor); the CLI prints the expectation before the call |
+| 25 | `verify` | `verify` | Covered | Native `verify_message` (PR-SM-2), **session-less** — works with no wallet open (SM-R-6). Signature pastes are kept out of readline history; `@path` reads a file so a mail-wrapped 21.7 KB line does not have to survive the REPL tokenizer. Live end to end since the fork-(ii) address layout landed (2026-08-15): every address carries the 48-byte signing anchor |
+| 26 | `sign_transfer` | N/A | Rejected (permanent) | Cold signing is rejected **permanently** (decision log 2026-09-07, superseding the A4 post-genesis deferral): an FCMP++ membership witness needs the live curve tree, so the offline half cannot deliver the isolation the workflow claims. Cold *storage* is the seed phrase. Parse-time refusal in the CLI; `export_unsigned`/`submit_signed` stay `status: REJECTED` in [`wallet_rpc.yaml`](api/wallet_rpc.yaml)'s method registry so the names cannot be re-minted |
+| 27 | `submit_transfer` | N/A | Rejected (permanent) | As row 26 |
 | 28 | `password` | `password` | Covered | Native `change_password` flow, old-first |
 | 29 | `rescan_bc` | `rescan` | Covered | Native `rescan_blockchain` via `Engine::start_rescan` (Phase 4c). `hard` is accepted for wallet2 muscle memory and reported as equivalent — Shekyl has one rescan, which already rebuilds every scan-derived fact |
 | 30 | `refresh` | `refresh` | Covered | Native `refresh` |
@@ -87,31 +93,31 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 42 | `apropos` | N/A | Out of scope | Help search, low value |
 | 43 | `donate` | N/A | Out of scope | Monero donation address |
 | 44 | `encrypted_seed` | N/A | Out of scope | Encrypted seed export not needed with display.rs safety |
-| 45 | `export_outputs` | N/A | Out of scope | Output export for multisig, not supported |
+| 45 | `export_outputs` | N/A | Out of scope | Removed by construction: the cold-coordination flow it served is rejected permanently with cold signing (decision log 2026-09-07), and FCMP++ membership proofs need no per-wallet output export |
 | 46 | `export_transfers` | N/A | Out of scope | CSV export, low priority |
-| 47 | `freeze` | N/A | Out of scope | Output freezing, Monero-specific feature |
-| 48 | `frozen` | N/A | Out of scope | List frozen outputs |
+| 47 | `freeze` | N/A | Out of scope | Removed by construction (rule 60): freezing exists to keep a poisoned decoy out of a ring. FCMP++ has no decoy selection, so the hazard has no referent |
+| 48 | `frozen` | N/A | Out of scope | As row 47 — nothing can be frozen |
 | 49 | `get_description` | N/A | Out of scope | Wallet description, trivial metadata |
-| 50 | `get_tx_note` | N/A | Out of scope | Transaction notes, trivial metadata |
+| 50 | `get_tx_note` | `get_tx_note` | Covered | Native `get_tx_note` (PR-SA-4 / SJ-DQ-7); CLI landed WI-RPC-5. An absent note is also the answer for an unknown txid — the note store carries no existence claim |
 | 51 | `hw_key_images_sync` | N/A | Out of scope | Hardware wallet, not supported |
 | 52 | `hw_reconnect` | N/A | Out of scope | Hardware wallet, not supported |
-| 53 | `import_outputs` | N/A | Out of scope | Output import for multisig, not supported |
+| 53 | `import_outputs` | N/A | Out of scope | As row 45 |
 | 54 | `integrated_address` | N/A | Out of scope | Shekyl uses different addressing |
 | 55 | `lock` | N/A | Out of scope | Wallet locking, low priority |
 | 56 | `net_stats` | N/A | Out of scope | Network stats, daemon concern |
 | 57 | `payment_id` | N/A | Out of scope | Payment IDs deprecated |
 | 58 | `payments` | N/A | Out of scope | Payment ID lookup, deprecated |
-| 59 | `public_nodes` | N/A | Out of scope | Public node discovery, daemon concern |
+| 59 | `public_nodes` | N/A | Deleted | Daemon `/get_public_nodes` removed (operator-to-operator RPC; `docs/DAEMON_RPC_RUST.md`) |
 | 60 | `rescan_spent` | N/A | Out of scope | Spent output rescan; folds into the row-29 rescan surface when it lands |
 | 61 | `rpc_payment_info` | N/A | Out of scope | RPC payment, Monero feature removed |
 | 62 | `save_bc` | N/A | Out of scope | Blockchain save, daemon concern |
-| 63 | `save_watch_only` | N/A | Out of scope | Watch-only export, future follow-up |
+| 63 | `save_watch_only` | N/A | Rejected (permanent) | ViewOnly wallets are REJECTED (decision log 2026-09-07): FCMP++ is not a chain window, watching your own incoming is not a product, and view material cannot reconstruct the address (`msg_sign_pk` is seed-derived). Reserve proofs serve the auditor use case |
 | 64 | `scan_tx` | N/A | Out of scope | Single-tx scan, low priority |
 | 65 | `set` | N/A | Out of scope | Runtime settings, replaced by CLI flags |
 | 66 | `set_description` | N/A | Out of scope | Wallet description, trivial metadata |
 | 67 | `set_log` | N/A | Out of scope | Log level, use RUST_LOG env var |
 | 68 | `set_tx_key` | N/A | Out of scope | Manual tx key injection, niche |
-| 69 | `set_tx_note` | N/A | Out of scope | Transaction notes, trivial metadata |
+| 69 | `set_tx_note` | `set_tx_note` | Covered | Native `set_tx_note` (PR-SA-4 / SJ-DQ-7); CLI landed WI-RPC-5. The note is the verbatim line remainder; a missing note is a usage error, never a silent clear (the wire's empty-note clear stays RPC-only). 4096-UTF-8-byte ceiling |
 | 70 | `show_qr_code` | N/A | Out of scope | QR display, GUI concern |
 | 71 | `start_mining` | N/A | Out of scope | Mining, daemon concern |
 | 72 | `start_mining_for_rpc` | N/A | Out of scope | RPC mining, removed |
@@ -121,6 +127,21 @@ Phase 3 deletion gate: **every simplewallet command not in the explicit out-of-s
 | 76 | `sweep_below` | N/A | Out of scope | Dust sweeping, niche |
 | 77 | `sweep_single` | N/A | Out of scope | Single output sweep, niche |
 | 78 | `sweep_unmixable` | N/A | Out of scope | Monero mixin rules, not applicable |
-| 79 | `thaw` | N/A | Out of scope | Unfreeze outputs, not supported |
+| 79 | `thaw` | N/A | Out of scope | As row 47 |
 | 80 | `unspent_outputs` | N/A | Out of scope | UTXO listing, low priority |
 | 81 | `welcome` | N/A | Out of scope | Interactive tutorial, replaced by help |
+
+## Shekyl-native commands with no simplewallet ancestor
+
+Capabilities `shekyl-cli` carries that the wallet2-era CLI never had. Same
+legend; numbered `S<n>` so the 81 historical rows stay stable.
+
+| # | shekyl-cli command | RPC method | Status | Notes |
+|---|---|---|---|---|
+| S1 | `request new` / `requests list` / `make_uri` / `parse_uri` | `create_payment_request` etc. | Covered | The payment-request receive-attribution surface (WI-RPC-1); replaces accounts/subaddresses per the 2026-07-19 note above |
+| S2 | `abandon <txid>` | `abandon_tx` | Covered | Give up on a dispatched send (PR-SJ-3); CLI landed WI-RPC-5. The copy states that input locks stay held until confirmed-absent evidence releases them, and a late confirmation flips the row back to CONFIRMED |
+| S3 | `stake_in <amount>` | `stake_in` | Covered | Fund the staking balance with an ordinary principal transfer (WI-RPC-5). Amount-only grammar — cover is system-drawn, no `P` address on the wire. Prints the GF-7 change-co-presence disclosure before confirming (residual carried in [`FOLLOWUPS.md`](FOLLOWUPS.md)) and the bounded-cover line in the summary: the debit exceeds the amount by a system-drawn privacy cover under 0.75 SKL that lands in the staking balance (bound rendered from the enforcing constant; the exact draw is never shown pre-send) |
+| S4 | `drain_balance` | `get_drain_balance` | Covered | Aggregate drainable staking amount (WI-RPC-5), scoped to what a `drain` can spend right now (the active persona's pool); two-armed — while syncing it says so and never prints a zero that would lie (rule 82 / F-D2) |
+| S5 | `drain <amount>` | `drain` | Covered | Move staking funds back to this wallet (WI-RPC-5). No fee/destination/slot grammar exists, by contract: fee is the canonical P-lane floor, destination is engine-pinned to this wallet (T-DS-3); flag-shaped tokens are refused at parse, and a zero amount is refused locally before the confirm prompt |
+| S6 | `unstake` | `unstake` | Covered | Post the permanent exit for the staked bond (PR-C). No arguments, by contract; the CLI states the irreversibility and confirms interactively before firing (a non-interactive stdin refuses loudly rather than consuming a scripted line) |
+| S7 | `collect_unstaked` | `collect_unstaked` | Covered | Collect the released exit collateral back into this wallet, one pass per call (PR-C). No arguments; the engine computes the exact sweep (`Σ selected − fee`, zero change — what lets the funded retirement gate finally fire) and the CLI renders `swept` plus the remainder line: "0 remains" is the completion fact, a nonzero remainder says to run it again after this pass confirms |

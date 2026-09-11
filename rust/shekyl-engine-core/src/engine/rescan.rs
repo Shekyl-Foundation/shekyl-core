@@ -19,28 +19,47 @@
 //! that is supposed to restore it never writes it.
 //!
 //! **Preserve (RESCAN-SURVIVING — not reconstructible from chain):**
-//! - `sync_state.restore_from_height`, `creation_anchor_hash`, prefs
+//! - `sync_state.restore_from_height`, `creation_anchor_hash`
 //! - `tx_meta.tx_keys` (+ `pending_tx_hashes` — I-2 live set with keys)
-//! - `tx_meta.tx_notes`, `attributes`
+//! - `tx_meta.tx_notes`
 //! - bookkeeping rows (primary label, address book, payment-request
 //!   **records** — matches are unwound so replay can re-match)
-//! - `staking.staking_enabled`, `p_slot`, **and `bonded_slots`**.
-//!   `bonded_slots` is a durable bond record, not a scan hint: its only
-//!   writer is [`Engine::persist_bond_record`](super::Engine) at bond-commit
-//!   time, and the scan path never adds a slot
-//!   ([`reconcile_phantom_bonded_slots`](super::stake_persist::reconcile_phantom_bonded_slots)
-//!   only *removes* confirmed-absent ones). Clearing it would orphan a live
-//!   on-chain bond from the wallet's record with no path back — every later
-//!   `stake` would refuse `WrongSlot` against an empty set while the burned
-//!   monotone cursor forbids re-adopting the slot. Phantom GC stays where it
-//!   belongs: the open-time sweep, which is `absence-≠-unscanned` gated.
+//! - `staking.staking_enabled`, `p_slot`, `bonded_slots`, **and the bond
+//!   watch's `persona_id_cache` / `bond_sightings`**. `bonded_slots` is a
+//!   durable bond record whose writers are all *additive from real
+//!   evidence*: [`Engine::persist_bond_record`](super::Engine) at
+//!   bond-commit time, and — since the SA-R-6 bond watch — the scan merge,
+//!   which **adopts** a slot when it observes that slot's bond post
+//!   on-chain (`merge::adopt_bond_sightings`; positive evidence only, so
+//!   the replay this reset triggers can only re-add what the chain
+//!   actually shows). Clearing any of them would orphan a live on-chain
+//!   bond from the wallet's record — every later `stake` would refuse
+//!   `WrongSlot` against an empty set while the burned monotone cursor
+//!   forbids re-adopting the slot — and clearing the sightings would drop
+//!   the bridge that keeps a probe-adopted bond safe from the phantom GC
+//!   until the P-scan corroborates it. The id cache is derive-once state
+//!   (a pure function of the seed): clearing it would force a reopen to
+//!   re-pay W PQ keygens for identical bytes, and the very rescan this
+//!   reset starts is the bond watch's main consumer. Phantom GC stays
+//!   where it belongs: the open-time sweep, which is
+//!   `absence-≠-unscanned` gated, sighting-height gated for probe-adopted
+//!   slots, and **per-persona watch-floor gated** — the P-scan seal this
+//!   reset deliberately leaves untouched may hold coverage gathered before
+//!   a rescan-adopted persona ever entered the scan union, and that
+//!   coverage makes no absence claim about it
+//!   (`PReconcileSet::reconcile`'s provenance gate). The symmetric corner
+//!   — a sighting whose post was reorged out while the wallet was closed,
+//!   which this replay therefore cannot re-sight OR invalidate (no old tip
+//!   means no rewind, and "replayed and unseen" is not absence: the scan
+//!   floor may sit above the row) — is retained in the same funds-safe
+//!   direction until the pscan absence oracle clears it; the named
+//!   FOLLOWUPS residual on the watch-floor backfill covers both paths.
 //!
 //! **Clear / reset (scan-derived — the replay rebuilds all of it):**
 //! - the whole [`LedgerBlock`] (transfers, tip, reorg window) — replaced
 //!   wholesale rather than field-by-field, so a scan-derived field added
 //!   later is reset by construction instead of by remembering this function
 //! - runtime `LedgerIndexes`
-//! - `sync_state.scan_completed`
 //! - `tx_meta.scanned_pool_txs`
 //! - payment-request match fields (via attribution rewind, classified
 //!   against the **pre-reset** height)
@@ -89,7 +108,6 @@ pub(crate) fn reset_scan_derived_state(wallet: &mut WalletLedger, indexes: &mut 
     wallet.ledger = LedgerBlock::empty();
     *indexes = LedgerIndexes::empty();
 
-    wallet.sync_state.scan_completed = false;
     wallet.tx_meta.scanned_pool_txs.clear();
 
     // Preserve payment-request *rows*; unwind matches against the emptied
@@ -287,7 +305,6 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image: None,
-            awaiting_confirmation: None,
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
@@ -303,10 +320,7 @@ mod tests {
         let mut wallet = WalletLedger::empty();
         wallet.sync_state.restore_from_height = 42;
         wallet.sync_state.creation_anchor_hash = Some([7u8; 32]);
-        wallet.sync_state.scan_completed = true;
         wallet.sync_state.pending_tx_hashes.push([9u8; 32]);
-        wallet.sync_state.confirmations_required = 10;
-        wallet.sync_state.trusted_daemon = true;
 
         wallet.ledger.transfers.push(sample_transfer(1));
         wallet.ledger.tip = BlockchainTip::new(50, [1u8; 32]);
@@ -348,12 +362,9 @@ mod tests {
         reset_scan_derived_state(&mut wallet, &mut indexes);
 
         assert_unscanned(&wallet.ledger);
-        assert!(!wallet.sync_state.scan_completed);
         assert_eq!(wallet.sync_state.restore_from_height, 42);
         assert_eq!(wallet.sync_state.creation_anchor_hash, Some([7u8; 32]));
         assert_eq!(wallet.sync_state.pending_tx_hashes, vec![[9u8; 32]]);
-        assert_eq!(wallet.sync_state.confirmations_required, 10);
-        assert!(wallet.sync_state.trusted_daemon);
         assert!(wallet.tx_meta.tx_keys.contains_key(&txid));
         assert!(wallet.tx_meta.scanned_pool_txs.is_empty());
         assert!(wallet.staking.staking_enabled);
@@ -549,7 +560,6 @@ mod start_rescan_integration_tests {
         let engine = arc.write().await;
         let mut guard = engine.ledger.write();
         guard.ledger.ledger.tip = BlockchainTip::new(500, [0xAB; 32]);
-        guard.ledger.sync_state.scan_completed = true;
         500
     }
 
@@ -600,10 +610,6 @@ mod start_rescan_integration_tests {
             engine.ledger.synced_height(),
             seeded,
             "a refused rescan must not reset the ledger"
-        );
-        assert!(
-            engine.ledger.read().ledger.sync_state.scan_completed,
-            "a refused rescan must not clear scan_completed"
         );
         assert!(
             !engine.refresh_slot.is_claimed(),

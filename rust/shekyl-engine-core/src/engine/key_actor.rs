@@ -43,8 +43,9 @@
 //! `STAGE_2_KEY_ENGINE_ACTOR.md` §6), [`LocalSigner`](super::signer::LocalSigner)
 //! holds a handle clone, and the merge post-pass reads
 //! [`HandleDerivationViewSecret`] (the 6-i construction-time projection). The
-//! `#[allow(dead_code)]` on [`SignTransaction`] and related items marks surfaces
-//! that remain cold until PR 5 / signing-engine work — not "unwired."
+//! [`SignTransaction`] and related items are reached from non-test code and
+//! carry no dead-code suppression; some stay cold until PR 5 / signing-engine
+//! work, which is not the same as "unwired."
 //!
 //! [`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`]: ../../../../../docs/design/STAGE_2_KEY_ENGINE_ACTOR.md
 //! [`AllKeysBlob`]: shekyl_crypto_pq::account::AllKeysBlob
@@ -84,7 +85,6 @@ use super::traits::key::{
 ///
 /// Mirrors [`LocalKeys`](super::local_keys::LocalKeys)'s owned key material.
 /// The actor's single-threaded message loop serializes access to `keys`.
-#[allow(dead_code)] // Stage 2 wires the handle into Engine in a later step; today: tests only.
 pub(crate) struct KeyActor {
     /// Wallet key material and derived scalars for signing.
     local: LocalKeys,
@@ -137,7 +137,6 @@ impl Actor for KeyActor {
 /// Carries the owned per-output detection context. The handle clones the
 /// trait's `&OutputDetectionInput` into this owned message (the input is all
 /// public on-chain data; the clone is cheap and secret-free).
-#[allow(dead_code)] // constructed by the handle; today exercised by tests only.
 pub(crate) struct ClaimOutput {
     pub input: OutputDetectionInput,
 }
@@ -240,6 +239,36 @@ impl Message<SignTransaction> for KeyActor {
     }
 }
 
+/// Actor message for the classical half of a wallet message signature
+/// (PR-SM-1). `outer` is `preimage ‖ σ_pq` — **public bytes**, length
+/// fixed by type ([`OUTER_MSG_LEN`](shekyl_crypto_pq::message_signing::OUTER_MSG_LEN))
+/// — so nothing secret crosses into or out of the mailbox: the master
+/// seed stays at the engine (its transient borrow never reaches the
+/// actor, the same posture the stake personas pin), and the spend
+/// scalar never leaves the actor. Wrong-shape payloads cannot be
+/// constructed; the type is the signing-oracle gate.
+pub(crate) struct SignMessageOuter {
+    pub outer: Box<[u8; shekyl_crypto_pq::message_signing::OUTER_MSG_LEN]>,
+}
+
+impl Message<SignMessageOuter> for KeyActor {
+    type Reply = Result<[u8; shekyl_crypto_pq::message_signing::CLASSICAL_SIG_LEN], KeyEngineError>;
+
+    async fn handle(
+        &mut self,
+        msg: SignMessageOuter,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        shekyl_crypto_pq::message_signing::sign_outer_with_spend_scalar(
+            self.local.keys.spend_sk.as_canonical_bytes(),
+            msg.outer.as_ref(),
+        )
+        .map_err(|_| KeyEngineError::Primitive {
+            detail: "spend-scalar Schnorr signing failed",
+        })
+    }
+}
+
 /// Actor message for INBOUND tx-proof generation (WI-RPC-3). The request
 /// carries public data only (stored ciphertexts, vout indices, address
 /// bytes, challenge message); the actor signs with its view secret and
@@ -290,7 +319,6 @@ impl Message<GenerateReserveProof> for KeyActor {
 /// [`KeyEngine::account_public_address`]. `Clone + Debug` is sound because
 /// it carries no secret bytes.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // read by the handle; today exercised by tests only.
 pub(crate) struct KeyPublicProjection {
     /// Cached account-level public address material; the source of the
     /// `&`-return from [`KeyEngine::account_public_address`].
@@ -314,7 +342,6 @@ pub(crate) struct KeyPublicProjection {
 /// [`KeyPublicProjection`], so the type system forbids the "it's just a view
 /// secret, I'll clone/reuse it" mistake. Non-`Clone`, no `Debug`, wipe-on-drop.
 #[derive(Zeroize)]
-#[allow(dead_code)] // read by `Engine::apply_scan_result`; today exercised by tests only.
 pub(crate) struct HandleDerivationViewSecret {
     /// View secret `view_sk` canonical bytes, fed to `populate_engine_handle_fields`.
     view_sk: Zeroizing<[u8; 32]>,
@@ -323,7 +350,6 @@ pub(crate) struct HandleDerivationViewSecret {
 impl HandleDerivationViewSecret {
     /// Project the merge view-secret out of `&keys` at construction time,
     /// before the blob is consumed by [`KeyEngineHandle::spawn`].
-    #[allow(dead_code)] // constructed in `assemble`; today exercised by tests only.
     pub(crate) fn from_keys(keys: &AllKeysBlob) -> Self {
         Self {
             view_sk: Zeroizing::new(*keys.view_sk.as_canonical_bytes()),
@@ -331,7 +357,6 @@ impl HandleDerivationViewSecret {
     }
 
     /// Borrow the view-secret canonical bytes for handle derivation.
-    #[allow(dead_code)] // read by `Engine::apply_scan_result`; today: tests only.
     pub(crate) fn as_canonical_bytes(&self) -> &[u8; 32] {
         &self.view_sk
     }
@@ -361,12 +386,25 @@ impl ZeroizeOnDrop for HandleDerivationViewSecret {}
 /// RPC tier; that confinement is the control (§3.2 / §7 T9), made a compile-
 /// time guarantee by the visibility bound.
 #[derive(Clone)]
-#[allow(dead_code)] // constructed once Engine wiring lands; today: tests only.
 pub(crate) struct KeyEngineHandle {
     /// Strong reference to the key actor's mailbox. `Clone + Send + Sync`.
     actor: ActorRef<KeyActor>,
     /// Public-only projection (account address).
     public: Arc<KeyPublicProjection>,
+    /// Single-flight permit for the message-signing PQ half (the
+    /// multi-second SLH-DSA keygen + sign). Lives on the handle — the
+    /// wallet session's signing authority, shared across clones — for the
+    /// same reason `LocalPendingTx` owns its `build_permit`: every
+    /// embedder inherits the serialization, so a burst of `sign_message`
+    /// calls queues one CPU-bound blocking job at a time instead of
+    /// exhausting the blocking pool with concurrent multi-second signs.
+    /// `Arc` so the acquired permit can ride *into* the `spawn_blocking`
+    /// closure — a caller that goes away (request cancelled) keeps its
+    /// job's permit held until the job actually exits, and cannot
+    /// over-admit the next one. The actor's mailbox already serializes
+    /// the cheap classical outer half; this covers the expensive PQ half
+    /// in front of it.
+    sign_permit: Arc<tokio::sync::Semaphore>,
 }
 
 impl KeyEngineHandle {
@@ -394,7 +432,6 @@ impl KeyEngineHandle {
     ///   (`#[tokio::test]` / run inside a runtime) so a missing-runtime caller
     ///   fails loudly at the call site rather than via `kameo`'s lower-level
     ///   "no reactor running" panic.
-    #[allow(dead_code)] // Stage 2 wires this into Engine in a later step; today: tests only.
     pub(crate) fn spawn(keys: AllKeysBlob) -> Self {
         assert!(
             tokio::runtime::Handle::try_current().is_ok(),
@@ -419,7 +456,17 @@ impl KeyEngineHandle {
         // construction property).
         let actor = KeyActor::spawn(keys);
 
-        Self { actor, public }
+        Self {
+            actor,
+            public,
+            sign_permit: Arc::new(tokio::sync::Semaphore::new(1)),
+        }
+    }
+
+    /// The wallet's message-signing single-flight permit — see the field
+    /// docs for ownership and the ride-into-the-blocking-task contract.
+    pub(crate) fn sign_permit(&self) -> &Arc<tokio::sync::Semaphore> {
+        &self.sign_permit
     }
 
     /// Generate an INBOUND tx proof inside the actor (WI-RPC-3).
@@ -448,6 +495,20 @@ impl KeyEngineHandle {
     ) -> Result<Vec<u8>, KeyEngineError> {
         self.actor
             .ask(GenerateReserveProof { req })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Sign the classical half of a wallet message signature (PR-SM-1).
+    /// Same inherent-method disposition as the proof methods above: one
+    /// production caller, no `LocalKeys` equivalence oracle to abstract.
+    /// Outer length is compile-time fixed — see [`SignMessageOuter`].
+    pub(crate) async fn sign_message_outer(
+        &self,
+        outer: Box<[u8; shekyl_crypto_pq::message_signing::OUTER_MSG_LEN]>,
+    ) -> Result<[u8; shekyl_crypto_pq::message_signing::CLASSICAL_SIG_LEN], KeyEngineError> {
+        self.actor
+            .ask(SignMessageOuter { outer })
             .await
             .map_err(collapse_send_error)
     }
@@ -589,10 +650,10 @@ mod tests {
             output_key: constructed.output_key,
             commitment: constructed.commitment,
             view_tag: ViewTag([constructed.view_tag_prefilter]),
-            enc_amount: constructed.enc_amount,
-            amount_tag_on_chain: constructed.amount_tag,
-            enc_label: constructed.enc_label,
-            label_tag_on_chain: constructed.label_tag,
+            enc_amount: constructed.enc_amount_bytes(),
+            amount_tag_on_chain: constructed.amount_tag(),
+            enc_label: constructed.enc_label_bytes(),
+            label_tag_on_chain: constructed.label_tag(),
             output_index,
             tx_hash,
         }

@@ -6,7 +6,7 @@
 hardening — cadence-injectable, SP-6 coverage, cover-discovery split, DQ8 union-shrink) +
 ROUND 3 (threat-model cross-check vs `ARCHIVAL_FIREWALL_THREATS.md` — SP-7 funding-side gate
 closes `TM-3`; cross-reference table marks what 2d-1 can/can't address) — for review; no code. Round-2's source-verification items are **resolved at source**: DQ8's
-terminal-bond predicate exists (`Unbond` + Full-retirement) with `W` single-sourced from
+terminal-bond predicate exists (`Release` + Full-retirement) with `W` single-sourced from
 config for production; the cover output's *form* is verified-covered (no recovery carve-out;
 FA-6 false-negative-free modulo negligible KEM decap) and its sender corrected to the
 **principal**. Rounds accrete in this one doc. **Process rule:** `26-sub-pr-design-discipline.mdc`
@@ -289,17 +289,17 @@ residency, its funding outputs out of the re-scan set. Two things to pin:
    bond" (which a transport gap or a stale source also produces). A persona wrongly retired on
    absence stops scanning *live* collateral — the funds-loss mirror of SP-6's wrongful GC.
 2. **The terminal predicate exists — use it (resolved at source).** Archival bonds are
-   **not** permanent: `BondPostKind::Unbond` (`bond_wire.rs:34`) is the terminal post kind —
+   **not** permanent: `BondPostKind::Release` (`bond_wire.rs:34`) is the terminal post kind —
    after exit + the release cooldown it zeroes the persona's `bonded_total_atomic`
    (`ARCHIVAL_BOND_GATE4.md` §4.3). Settlement-epoch / `claimed_epochs` machinery is **reward
    accounting, *not* bond termination** — orthogonal. And the retirement predicate is already
    named in design: **"Full retirement = bond released ∧ backlog exhausted/lapsed; then
    `p_slot` burn"** (`PHASE_2B_FSM_RETOOL.md:209`). So a persona is wipe-eligible when its bond
-   is **Unbonded** *and* its reward **backlog window `W` has lapsed** (it can still claim for up
-   to `W` epochs after Unbond, so it must keep scanning until then) *and* both are
+   is **Released** *and* its reward **backlog window `W` has lapsed** (it can still claim for up
+   to `W` epochs after Release, so it must keep scanning until then) *and* both are
    **finality-deep**. **Resolution:** the union shrinks to **active bonds + the `W` backlog
    tail**, not lifetime bonds — DQ5's "bounded by bonded slots" bound is now *real*, anchored on
-   the existing Unbond + Full-retirement predicate, retired on positive confirmation per (1).
+   the existing Release + Full-retirement predicate, retired on positive confirmation per (1).
 3. **SP-5's retirement predicate must read the consensus `W`, not a re-literal.** The
    predicate and consensus's claim-window must agree on `W` *exactly* — retire a persona at a
    shorter `W` than consensus allows claims for, and the scan stops watching a persona that can
@@ -388,7 +388,8 @@ designs these alongside the per-SP work, not as a cleanup pass after.
   read-side; it never broadcasts, so it does **not** depend on the daemon-accept gate
   (`e2e_fcmp_spend_accepted_by_daemon`) *functionally* — which is why the **design** could and
   did proceed in parallel. The **implementation**, however, branches off `dev` only **after
-  PR #193 lands** (the north-star: "first daemon-accepted FCMP++ spend"). PR #193's own scope
+  PR #193 lands** (the north-star: "first daemon-accepted FCMP++ spend") — **which it did on
+  2026-06-27 (`1829a15d9e`), so this condition is discharged and no longer gates the SP-0 build.** PR #193's own scope
   unblocks 2d (a bond-post *is* an FCMP++ spend) and reworks the **engine / prover / scanner**
   surfaces SP-0..SP-7 sit on (witness `x = ho + b`, the per-`(tx_hash, output_index)` bundle
   cache, strict vin sorting, the refresh-scan path). Branching 2d-1 before it lands would force
@@ -948,7 +949,7 @@ The retire's last absence-inference dissolves once the wallet keeps an **authori
 done-side record**. Today's hazard is the GC reasoning "persona done" from *not seeing*
 activity on a chain a source could forge — absence-driven, the reason canonicity arose. But
 retirement is **presence-and-own-records-driven**: the wallet *bonded* slot N (its own recorded
-action), *observed* the `Unbond` (presence, not absence), and the claim window *expired* (a
+action), *observed* the `Release` (presence, not absence), and the claim window *expired* (a
 clock, not a chain-absence). Driving retirement from that record **removes** the
 absence-inference failure mode — it doesn't recover from a wrong GC, it stops the GC from
 guessing. **Canonicity shrinks to corroboration:** `covered` confirms the presence-events the
@@ -963,19 +964,19 @@ half of the lifecycle. The frozen objection was the *absence of retirement statu
 authoritative **retired**-record supplies exactly that: the thing that says "**stop deriving
 slot N**," the fix the forever-derive problem was waiting for. **Authoritative-for-done
 completes hint-for-live; opposite ends of one lifecycle, never in conflict.** It is not new
-architecture — it is the formalization of `pending_unbonds` (PR-B) + SP-6's durable removal into
+architecture — it is the formalization of `pending_releases` (PR-B) + SP-6's durable removal into
 **one coherent done-side ledger**, retirement records-driven rather than re-inferred from
 absence each open.
 
 **Placement makes the line a *physical file boundary*, not just a sentence.** The done-side
 ledger (retired-records + the high-water mark) rides in **`PScanState` (`.wallet.pscan`)** with
-`pending_unbonds` — its done-side sibling — while the **live** `bonded_slots`/`p_slot` stay in
+`pending_releases` — its done-side sibling — while the **live** `bonded_slots`/`p_slot` stay in
 `StakingBlock` (`.wallet`, hint). So `StakingBlock`/`.wallet` = live = hint and
 `PScanState`/`.wallet.pscan` = done = authoritative: the split is enforced by the file boundary,
 which is what keeps the next reader from collapsing "authoritative for done" into "authoritative
 for live." Both region-2-sealed (slot indices are "public" only in the *not-a-zeroize-key* sense
 of `staking_block.rs:87` — sealed either way; the done ledger is derivable-but-worth-persisting,
-P-isolated for the same firewall discipline as `pending_unbonds`).
+P-isolated for the same firewall discipline as `pending_releases`).
 
 **Mechanism.** `spawn_stake_engine_if_staker` (derives `bonded_slots ∪ lookahead` from
 `StakingBlock` at open) must also read the `PScanState` retired-record and **subtract** retired
@@ -985,7 +986,7 @@ replacement for absence-driven GC of the live hint.
 
 **Crisp caution — authoritative about *itself*, not the *chain*.** The ledger makes retirement
 safe from the wallet's own records; it does **not** make the wallet authoritative about chain
-state. The presence-events it still reads — the `Unbond` observation and the claim-window clock
+state. The presence-events it still reads — the `Release` observation and the claim-window clock
 against the *settled tip* — keep their existing trust model (exhaustiveness/tip-honesty do not
 vanish). The ledger removes the *absence-inference*, not the dependence on honest *presence*
 data; do not oversell it to "retirement needs no chain."
@@ -1067,7 +1068,7 @@ frontier hash untouched, nothing sealed).
 
 **Schema — bump without migration (two gates, not one).** `PSCAN_CURSOR_VERSION` and
 `PSCAN_STATE_VERSION` went `1 → 2` with regenerated snapshots. The decision separates into two
-independent gates that the `pending_unbonds` precedent only *looked* fused:
+independent gates that the `pending_releases` precedent only *looked* fused:
 
 - *Migration code* is gated on **forward-persistence** — and there is none. The `.wallet.pscan`
   writer (`start_pscan` / the scan task) was dead-code-unwired at decision time (WI-1's engine
@@ -1077,7 +1078,7 @@ independent gates that the `pending_unbonds` precedent only *looked* fused:
   wallet (RC tags included) has ever persisted
   a v1 `.wallet.pscan`, so nothing reads v1 forward → **no migration code**.
 - *The version number* is gated on **rule-42's snapshot guard** — a post-merge `.snap` diff forces
-  the paired constant to move in the same PR (mechanical, persistence-independent). `pending_unbonds`
+  the paired constant to move in the same PR (mechanical, persistence-independent). `pending_releases`
   needed no bump only because it rode v1's *creating* PR (a fresh `+` const line — a new, not a
   changed, version); this is a post-merge amend, so the bump is **forced**. It also honestly marks
   the real `height → verified-frontier` shape change. No rule-42 escape was taken: suppressing the
@@ -1106,7 +1107,7 @@ a height the scan did not cover. This unblocks 2d-2 SP-R0 (which was gated on th
 **Durable, because in-memory can't reach the consumer.** The matches persist in `PScanState`
 (`bond_post_matches`, schema bump **`PSCAN_STATE_VERSION` 2 → 3**, snapshot regenerated, no
 migration — the writer is still unwired). This is *forced*, not a preference: Design B never
-re-scans below the cursor, and SP-R0 corroborates an `Unbond` ~`MAX_CLAIM_AGE_W` epochs (~270k
+re-scans below the cursor, and SP-R0 corroborates a `Release` ~`MAX_CLAIM_AGE_W` epochs (~270k
 blocks) after it was observed — by which point the block is far behind the cursor and gone. An
 in-memory, per-session match set would be structurally absent exactly when SP-R0 needs it. Durable
 is also the *superset*: it supports corroboration at observation-time **or** retire-time, so it

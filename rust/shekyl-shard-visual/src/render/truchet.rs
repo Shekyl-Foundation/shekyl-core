@@ -7,8 +7,8 @@ const BASE_GRID: i32 = 8;
 
 /// Per-algorithm SHAKE256 namespace (see `entropy.rs`). The per-cell `Sha256`
 /// draws below are already domain-separated by the `"truchet"` tag and the
-/// cell indices, so they stay; only the top-level foreground tone moves onto
-/// this dedicated stream.
+/// cell indices, so they stay; the top-level foreground tone and stroke
+/// width draw from this dedicated stream.
 const NS: &str = "shard.v1.render.truchet";
 
 pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
@@ -24,8 +24,7 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
     let mut image = RgbImage::from_pixel(size, size, Rgb([bg.0, bg.1, bg.2]));
     let cells_per_side = BASE_GRID;
     let cell_size = size as f64 / cells_per_side as f64;
-    let line_width_base =
-        ((cell_size / 6.0 * (0.6 + 1.4 * f.tier_skew_high)).round() as i32).max(2);
+    let line_width_base = ((cell_size / 6.0 * (0.6 + 1.4 * ent.unit(1))).round() as i32).max(2);
 
     #[allow(clippy::too_many_arguments)]
     fn draw_cell(

@@ -189,7 +189,7 @@ caller-side `B'` lookup (`output.rs:631-636`).
 ### 3.3 Round 2 substrate pin — no output label / memo field
 
 Per-output confidential data on wire is **`enc_amounts` only** (9 bytes per
-output in `rctSigBase`; amount XOR + `amount_tag` — no label slot).
+output in `CtSigBase`; amount XOR + `amount_tag` — no label slot).
 `tx_extra` hybrid fields: KEM ciphertext (`0x06`), PQC leaf hashes (`0x07`)
 — no encrypted memo tag in `ExtraField` (`rust/shekyl-scanner/src/extra.rs`).
 Payment-request labels are **net-new** surface; transport is **5-T**
@@ -207,7 +207,7 @@ amount-matching underpins confidence tiers 2–3.
 | No `StakeEngine` trait or impl in `rust/` yet | Phase 2b is design-only (`V3_ENGINE_TRAIT_BOUNDARIES.md` §10.5.1). |
 | `TransferDetails` stake fields (`staked`, `stake_tier`, `stake_lock_until`) | Stake state is per-output on the same ledger row as normal receives — no `SubaddressIndex` in staking paths (`shekyl-engine-state/src/transfer.rs`). |
 | `StakerPoolState` / stake grep in `shekyl-engine-state` | No subaddress coupling. |
-| `STAKER_REWARD_DISBURSEMENT.md` | No subaddress requirement. |
+| `design/REWARD_EMISSION_LEG.md` | No subaddress requirement. |
 
 **Disposition for Phase 2b:** Design `StakeEngine` against **primary-address
 receive + account-level scan** (End-state 5). Reward disbursement credits
@@ -549,6 +549,14 @@ counterexample today.**
 | **Compromise isolation** | `subaddress_keys`: `m_i = f(view_secret, i)`; spend `b_i = b + m_i`. View or spend secret compromise → **full wallet**. | One-subaddress compromise = full compromise today. |
 | **V3.1 multisig / V4 threshold** | `RESERVED_MULTISIG` mode placeholder; `PQC_MULTISIG_V3_1_ANALYSIS.md` models per-signer sessions, not per-subaddress view delegation. `WALLET_REWRITE_PLAN.md`: exchange isolation → **separate wallet files**. | No roadmap item for per-subaddress selective view disclosure. |
 
+**UPDATE 2026-09-07.** The substrate moved further from the
+counterexample: the view-only capability was REJECTED outright
+(decision log 2026-09-07; rule 23 — the `0x02` envelope byte is
+retired, no view-delegation surface of any scope exists). The rows
+above record the 2026-05-31 substrate; the verdict is unchanged and
+strictly stronger. The R1-F6 reopening criterion below is unaffected —
+it was always conditioned on a *future* design landing.
+
 **Reopening criterion (R1-F6).** Re-evaluate End-state 1's "attribution
 only" disposition if a **future** design lands **per-subaddress view
 delegation** (a view capability scoped to `{i}` without the account view
@@ -886,7 +894,7 @@ read as calm ("Received 12.5 SHEKYL") instead of alarming.
 **Substrate confirmation (Round 2).** There is **no encrypted-memo / label
 field on outputs today.** Per-output confidential payload is
 `enc_amounts` (9 bytes: 8-byte XOR-encrypted amount + 1-byte `amount_tag`;
-`rctSigBase`, `rctTypes.h`). `tx_extra` carries hybrid KEM (`0x06`) and PQC
+`CtSigBase`, `ct_types.h`). `tx_extra` carries hybrid KEM (`0x06`) and PQC
 leaf hashes (`0x07`) only (`rust/shekyl-scanner/src/extra.rs`). The payment-
 request `label` is therefore **net-new wire surface** — which makes **where
 the label rides** the load-bearing Round-3 decision, not an afterthought (§
@@ -1368,7 +1376,7 @@ empty/omitted slots — emptiness **is** the fingerprint. The Priority-2-clean
 property **is** the cost; they are the same property.
 
 **Ecosystem obligation (FA-10 cost ledger).** Mandatory uniform wire means
-consensus and `serialize_rctsig_base` enforce **presence and exact size** (9
+consensus and `serialize_ctsig_base` enforce **presence and exact size** (9
 bytes per output: 8-byte `enc_label` + 1-byte `label_tag`) alongside
 `enc_amounts`. They **do not** validate plaintext content (sentinel vs
 `REQUEST` is opaque ciphertext). Every tx-producing implementation — full
@@ -1425,8 +1433,8 @@ not "unattributed" — only possible if wire were optional (rejected).
   (R2-F8 flag retired 2026-06-15, see *Gate retirement* above). GUI tooling
   emitting `rid` URIs is the de-facto feature boundary.
 - [x] `k_label` / `label_tag` HKDF labels in `POST_QUANTUM_CRYPTOGRAPHY.md` + `derivation.rs`.
-- [x] `enc_label` wire field in `rctSigBase` (+ 1-byte `label_tag` parallel to amount).
-- [x] Tx-hash binding via `serialize_rctsig_base`; FCMP++ leaf explicitly excluded.
+- [x] `enc_label` wire field in `CtSigBase` (+ 1-byte `label_tag` parallel to amount).
+- [x] Tx-hash binding via `serialize_ctsig_base`; FCMP++ leaf explicitly excluded.
 - [x] Output serialization + verifier + `PQC_OUTPUT_SECRETS.json` KAT vectors (FA-11 landing).
 
 #### 5.7.11 Logical tag system (5-T wire + wallet mapping)
@@ -1553,7 +1561,7 @@ walkthroughs **cannot** detect violations of these rules.
   imply content integrity.
 - Unlike amounts (Pedersen commitment self-check after decrypt), **labels have no
   commitment backstop**. Integrity of the on-wire label octets comes **only**
-  from inclusion in `serialize_rctsig_base` → the second component of
+  from inclusion in `serialize_ctsig_base` → the second component of
   `get_tx_prehash`. A relay that bit-flips `enc_label` without breaking the
   prehash cannot reach consensus — tampering is impossible, not merely
   detectable.
@@ -1567,11 +1575,38 @@ walkthroughs **cannot** detect violations of these rules.
   matches the amount discipline (XOR + prehash, commitment where available).
 - **CI obligation:** flip one byte of `enc_label` on a signed tx fixture and
   assert verification fails (`tests/unit_tests/fcmp.cpp`:
-  `enc_label_binds_rctsig_base_prehash`). Prehash wiring without this test is
+  `enc_label_binds_ctsig_base_prehash`). Prehash wiring without this test is
   inspection-only; the test makes the binding durable across refactors.
-- **Stub prohibition:** `fill_construct_tx_rct_stub` zero-fills `enc_labels`
-  (uniformity break if it reached production). `genRctFcmpPlusPlus` rejects
-  all-zero `enc_labels` outside `TRANSACTION_CREATE_FAKE` device mode.
+- **Stub prohibition — enforced by type since 2026-08-23.** On the in-process
+  Rust path an `enc_label` can only come from `OutputData::enc_label_wire()`
+  (`EncryptedOutputField`, `shekyl-crypto-pq/src/encrypted_output_field.rs`),
+  which returns the value `construct_output` assembled at encryption, so bytes
+  that never went through `encrypt_label_plaintext` are **unrepresentable**
+  rather than merely rejected. The one exception is the type's `Deserialize`
+  impl — the `shekyl_sign_fcmp_transaction` JSON boundary, whose byte
+  constructor is private to the defining module, whose only non-test caller is
+  the C++ `construct_tx*` chain, and which dies with the consensus-oracle
+  harness. Note the check was deliberately *not* implemented as "reject
+  all-zero": that treats one symptom, admits any other unencrypted constant,
+  and can fire on a legitimate ciphertext that happens to be zero. Historical
+  note follows.
+- **Stub prohibition — the state this replaced (2026-08-22).**
+  `fill_construct_tx_rct_stub` zero-fills `enc_labels`; those bytes never went
+  through `encrypt_label_plaintext`, so they are a literal constant on the wire
+  rather than a ciphertext, and they would break §5.7.10 uniformity for exactly
+  the outputs carrying them. The stated enforcement was that
+  `genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside
+  `TRANSACTION_CREATE_FAKE` device mode; **that function was deleted 2026-08-22
+  and nothing replaced the check.** No live exposure follows — the stub's zeros
+  are placeholders that `construct_tx_with_tx_key` overwrites from
+  `v3_rct_data`, on a branch that is always taken pre-genesis
+  (`HF_VERSION_FCMP_PLUS_PLUS_PQC` is 1 and Shekyl is v3-from-genesis) — but
+  the *window* is real and the invariant now rests on that overwrite rather
+  than on any assertion. Tracked in `FOLLOWUPS.md`, where the fix named is a
+  type whose only constructor is the encryption, so an unencrypted label is
+  unrepresentable rather than rejected after the fact. Note the check must not
+  be re-added as "reject zeros": that admits any other unencrypted constant and
+  can fire on a legitimate ciphertext that happens to be zero.
 - **KAT obligation:** `PQC_OUTPUT_SECRETS.json` records `enc_label_sentinel`
   and `enc_label_sentinel_9` (on-wire octets for sentinel plaintext) so
   independent implementations reproduce byte-exact wire encoding, not just HKDF
@@ -1961,7 +1996,7 @@ V4 removes hybrid KEM from addresses entirely.
 | FA-8 | Payment URI + ledger (Round 3 PR) | **5-T:** `enc_label` + §5.7.11; **launch = sentinel-only**; `rid`/`REQUEST` + §5.7.9 UI behind flag; R2-F2 gates |
 | FA-9 | [`docs/THREAT_MODEL_WALLET.md`](../THREAT_MODEL_WALLET.md) | **Closed** (2026-06-09): §4.6–§4.8, R2-F9 (§5.7.12), T6 post-FA-6 framing, pit-of-success vs adversary |
 | FA-10 | [`POST_QUANTUM_CRYPTOGRAPHY.md`](../POST_QUANTUM_CRYPTOGRAPHY.md) §Cooperative attribution foundation pin | **Closed** (2026-06-09): §6.4 pin prose propagated |
-| FA-11 | Output / RCT spec + verifier | §5.7.10: `enc_label` layout; sentinel encrypt-per-output; bind in tx hash, **not** FCMP++ leaf; amend `rctSigBase` / consensus docs |
+| FA-11 | Output / RCT spec + verifier | §5.7.10: `enc_label` layout; sentinel encrypt-per-output; bind in tx hash, **not** FCMP++ leaf; amend `CtSigBase` / consensus docs |
 
 ---
 
@@ -2002,7 +2037,7 @@ must not be confused with reopening genesis wire.
 | **FA-6 perf (faster decap, reduce-N, §8.5.2 e2e bench)** | Consensus-invisible; V3.1+ / community; see close-out §4 |
 | **CT-2 Round 1** | **Closed** (2026-06-06, PR [#116](https://github.com/Shekyl-Foundation/shekyl-core/pull/116)). Tier A reconstruct-root KAT + close-out: [`CT2_ROUND1_CLOSEOUT.md`](../completed/CT2_ROUND1_CLOSEOUT.md). Ungates 2A bootstrap spend (coinbase-only tree); CT-5 engine wiring remains parallel. |
 | **2A send-path** | `PHASE_2A_SEND_PATH_AUDIT.md` PF-track sub-PRs |
-| **2B stake lifecycle** | Parallel design; **joint scan budget** with FA-6 at bench time (`PHASE_2B_STAKE_LIFECYCLE.md` §8.4.1); watch CONFIDENTIAL_STAKING Decision 3C (second tree) for CT coupling |
+| **2B stake lifecycle** | Parallel design; **joint scan budget** with FA-6 at bench time (`design/PHASE_2B_FSM_RETOOL.md` §8.4.1); claim-era Decision 3C / second tree is deleted |
 
 **Round 4 definition of done:** **Met** (2026-06-09). FA-9 + FA-10 landed;
 FA-4 closed at design layer (FA-7); §11 checkbox closed; no genesis wire item

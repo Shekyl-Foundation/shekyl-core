@@ -40,8 +40,8 @@ use serde::{Deserialize, Serialize};
 use shekyl_economics::params::{EconomicParams, SCALE};
 use shekyl_economics::{
     base_block_reward, base_emission_at, calc_burn_pct_from_activity,
-    calc_effective_emission_share, calc_release_multiplier, compute_burn_split_at, params_digest,
-    release::apply_release_multiplier, split_block_emission, FrozenSegmentCount,
+    calc_effective_emission_share, calc_release_multiplier, compute_burn_split_at,
+    effective_emission, params_digest, split_block_emission, FrozenSegmentCount, TxVolume,
 };
 
 use crate::engine::SimParams;
@@ -154,7 +154,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         burn_base_rate: sim.burn_base_rate,
         burn_cap: sim.burn_cap,
         staker_pool_share: sim.staker_pool_share,
-        money_supply: sim.money_supply,
+        emission_curve_asymptote: sim.emission_curve_asymptote,
         emission_speed_factor_per_minute: sim.emission_speed_factor_per_minute,
         final_subsidy_per_minute: sim.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
@@ -165,7 +165,6 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
 
     let blocks_per_year = sim.blocks_per_year;
     let total_blocks = blocks_per_year * config.sim_years;
-    let money_supply = sim.money_supply as u128;
     let samples = sample_heights(blocks_per_year, config.sim_years);
 
     let mut already_generated: u128 = 0;
@@ -175,10 +174,9 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         // `already_generated` at the start of this block is the
         // `base_block_reward` input — capture before mutating.
         let ag_start = already_generated.min(u128::from(u64::MAX)) as u64;
-        let remaining = money_supply.saturating_sub(already_generated);
 
         let base_reward = base_block_reward(ag_start, &params)
-            .expect("sim neutral trajectory stays within supply bounds");
+            .expect("sim neutral trajectory stays within the arithmetic domain");
 
         let tx_volume = (config.volume.get_volume)(block, blocks_per_year);
         // `circulating_supply` is the consensus burn-site quantity:
@@ -191,17 +189,15 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         let stake_ratio = (config.stake.get_stake_ratio)(block, blocks_per_year, circulating);
 
         let multiplier = calc_release_multiplier(
-            tx_volume,
+            TxVolume::per_block(tx_volume),
             sim.tx_volume_baseline,
             sim.release_min,
             sim.release_max,
         );
 
-        let mut effective_reward = apply_release_multiplier(base_reward, multiplier);
-        let remaining_u64 = remaining.min(u128::from(u64::MAX)) as u64;
-        if effective_reward > remaining_u64 {
-            effective_reward = remaining_u64;
-        }
+        let effective_reward =
+            effective_emission(ag_start, TxVolume::per_block(tx_volume), &params)
+                .expect("sim paid emission stays within the arithmetic domain");
 
         let emission_share = calc_effective_emission_share(
             block + config.genesis_height_offset,
@@ -224,8 +220,12 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         // `LocalEconomics::burn_amount`'s composition (Bug-2 class). Burn no
         // longer consumes stake (F-D); `total_staked` is recorded below as a
         // scenario observable only.
-        let burn_pct =
-            calc_burn_pct_from_activity(tx_volume, sim.tx_volume_baseline, circulating, &params);
+        let burn_pct = calc_burn_pct_from_activity(
+            TxVolume::per_block(tx_volume),
+            sim.tx_volume_baseline,
+            circulating,
+            &params,
+        );
         let total_fees = (u128::from(tx_volume) * u128::from(config.fee_per_tx))
             .min(u128::from(u64::MAX)) as u64;
         let fee_split =
@@ -254,9 +254,6 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         }
 
         already_generated += u128::from(effective_reward);
-        if already_generated > money_supply {
-            already_generated = money_supply;
-        }
     }
 
     let neutral_milestones = [

@@ -22,8 +22,9 @@ different readiness, so it splits:
   submitter accepts real wire bytes, maps a transport failure to
   `DaemonAmbiguous`, and never leaks the SOCKS username. Its *real* consumer —
   the discretionary `_spread`/`_bond_first` entry/bond-post broadcast — is
-  **not wired here** and cannot be: the bond vin is built + signed today
-  (`build_join_market_vin`) and the anchor-free draw exists
+  **not wired here** and cannot be: the bond vin is constructed today
+  (`build_join_market_vin`; no on-vin signature — SA-2b, surface-A signing
+  rides the assemble path) and the anchor-free draw exists
   (`draw_entry_gap_guarded`), but the submission needs tx-assembly + a
   submitter/posture/scheduler in `StakeEngine`, all gated on **2c-2a/2c-2b**
   (`TODO(2d)`, `stake_engine.rs`). So the seam ships as the **prerequisite** that
@@ -69,11 +70,13 @@ Everything SP-T4a builds on is landed on `dev`:
   the wallet-side `AlreadyKnown` heuristic this doc originally named was
   retired with the cutover); the path **never rebuilds on retry**.
 - **The real consumer.** `build_join_market_vin` (in `shekyl-archival-bond-builder`)
-  returns a signed `JoinMarketVin`; `draw_entry_gap_guarded` returns `(spread,
+  returns a constructed, unsigned `JoinMarketVin` (SA-2b — surface-A signing
+  rides the assemble path); `draw_entry_gap_guarded` returns `(spread,
   bond_first)` — since 2c-2b (PR #255) consumed into `plan_entry_seam` and
-  carried in the `SignBond` reply (`SignedBondPost`); the submission is the open
-  `TODO(2d)` — all at the bond-post handler in `stake_engine.rs` (line numbers
-  omitted; they drift).
+  carried in the `PlanBondPost` reply (`BondPostPlacement`, né `SignBond` /
+  `SignedBondPost`); the submission is the open
+  `TODO(2d)` — all at the bond-post handler in `stake_engine/persona.rs` (line
+  numbers omitted; they drift).
 - **The read-side enforcement template.** `PBlockSource`
   (`pscan/block_source.rs:196`) — constructible **only** from `PTorClient`, no
   principal path, no `Default`; `Posture`/`select` no-silent-③ selector
@@ -123,7 +126,11 @@ correlation no circuit isolation touches. The mitigation primitive exists but is
   **[Update 2026-07-05: the 2c-2b placement wiring landed (PR #255) — the draw
   is consumed into `plan_entry_seam` and carried as `SignedBondPost` (both the
   delay and the order-coin, by construction). What remains open is carrying the
-  plan to the *wire* (2c-2a assemble / 2d dispatch) — see §4.]**
+  plan to the *wire* (2c-2a assemble / 2d dispatch) — see §4. SA-2b note: the
+  reply is now `BondPostPlacement` (unsigned vin + `bond_post_offset_blocks`;
+  the entry-seam plan/order-coin was retired in the GF-7 coin retirement, and
+  on-vin signing was deleted — the 2d dispatch consumer must route through
+  `AssembleBond` for surface-A authorization).]**
 - **What SP-T4a explicitly does NOT close (the GF-7 residual — §4).** The
   broader **principal-timeline** correlation (does `P`'s broadcast timing track
   the principal's lifecycle activity?) is **GF-7**, which GATE6 §10.12 flags
@@ -361,7 +368,7 @@ circuit" must be provably the same persona.
 
 | Holder | Site | Mis-pairing exposure under §3.1 as frozen |
 | --- | --- | --- |
-| **H1 — assemble/sign path** | `StakeEngine` (`stake_engine.rs`): `sign_bond` → `build_join_market_vin` composition — the only site that *knows* which persona's slot keys signed the bytes | **Closed.** Bytes are born here; wrapping at birth carries ground truth. Choke-point equality check + enum exhaustiveness make both mis-pairings (`P1`→`P2`-circuit; persona→principal) unreachable. |
+| **H1 — assemble/sign path** | `StakeEngine` (`stake_engine/bond.rs`): the `AssembleBond` → `build_join_market_vin` → surface-A `pqc_auths` composition (SA-2b: the vin itself is unsigned; `plan_bond_post` constructs only) — the only site that *knows* which persona's slot keys signed the bytes | **Closed.** Bytes are born here; wrapping at birth carries ground truth. Choke-point equality check + enum exhaustiveness make both mis-pairings (`P1`→`P2`-circuit; persona→principal) unreachable. |
 | **H2 — F31 status-query resubmit** | resubmit-same-bytes from the held record — today `local_pending_tx.rs:204` stores `tx_bytes: Vec<u8>`, persona-unbound | **Open as frozen.** If the held record stores raw bytes, the resubmit path must *re-wrap* them into a `PBoundBytes` at probe time — and the choke-point check then validates the **wrapper's claim**, not the bytes' provenance. A re-wrap site that attaches the wrong persona (or routes to `Local`) passes every §3.1 check. |
 | **H3 — watchdog resubmit rung** | `submit_watchdog.rs` `ProbeResubmitSameBytes` — the kernel decides the probe; the driving actor re-sends the held bytes | **Same exposure as H2** (it executes H2's re-send). The ladder's privacy-neutrality claim ("identical bytes, same txid") is about the *network* artifact; it says nothing about which *circuit* carries the probe — a probe for `P`'s tx sent over the principal connection is precisely the first-seen-origin correlation the firewall exists to prevent, now on the retry axis instead of the first-send axis. |
 
@@ -379,7 +386,8 @@ do not alter the frozen shape):
    the pairing is ground truth rather than a claim. Everywhere else in the
    codebase, a `PBoundBytes` can be *held* or *moved* but never *created*,
    so possession is proof of provenance (the same possession-is-proof shape
-   as the `sign_bond` by-value token, §"contract #1" in `stake_engine.rs`).
+   as the `plan_bond_post` by-value token, §"contract #1" in
+   `stake_engine/types.rs`).
 2. **P-2 — carry-through pin.** The held/pending record for a `P`-bound tx
    stores the **`PBoundBytes` value itself**, not `Vec<u8>` (the principal
    tx's held record keeps raw bytes as today — the type distinction is the
@@ -462,7 +470,10 @@ itself remains the sim's, after the scheduler exists.
 **The wiring landed (PR #255, 2026-07-05) — all five §6 criteria.** The draw is
 now *consumed*, not just drawn: `plan_entry_seam` (`shekyl-standoff/src/plan.rs`)
 single-sources the `(spread, bond_first)` → block-offset placement, the
-`SignBond` handler replies with `SignedBondPost` (vin + plan, never decoupled),
+`SignBond` handler replies with `SignedBondPost` (vin + plan, never decoupled
+— since renamed `PlanBondPost` / `BondPostPlacement` with an *unsigned* vin,
+SA-2b; the plan carrier is now the bare `bond_post_offset_blocks` after the
+GF-7 coin retirement),
 and the injected observer seam emits the three-axis timeline events behind the
 non-default `gf7-hooks` feature (CI-guarded no-emit,
 `.github/workflows/gf7-no-emit-guard.yml`). §4's blockquote above remains

@@ -3,8 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Daemon inbound RPC surface: no `--rpc-login` / `--rpc-ssl*` (Axum plaintext).
-//! Wallet-RPC keeps the full listener TLS/auth option set.
+//! Daemon inbound RPC surface: no `--rpc-login` / `--rpc-ssl*` (Axum plaintext),
+//! and no `--confirm-external-bind` — the binds it confirmed are refused now
+//! (RPC_TRANSPORT_POSTURE.md RT-1/RT-2, at the Rust bind seam). Wallet-RPC
+//! keeps the full listener TLS/auth option set.
 
 #include "gtest/gtest.h"
 
@@ -28,8 +30,15 @@ TEST(RpcArgsDaemonSurface, DaemonOmitsLoginAndSslFlags)
   cryptonote::rpc_args::init_options(desc, /*any_cert_option=*/false, /*include_listener_tls_auth=*/false);
 
   EXPECT_TRUE(has_option(desc, "rpc-bind-ip"));
+  EXPECT_TRUE(has_option(desc, "rpc-bind-ipv6-address"));
+  EXPECT_TRUE(has_option(desc, "rpc-use-ipv6"));
   EXPECT_TRUE(has_option(desc, "rpc-access-control-origins"));
-  EXPECT_TRUE(has_option(desc, "confirm-external-bind"));
+  // Retired with RT-W2: confirmation is not refusal. The flag now reaches
+  // the removed-flags shim, which refuses it by name.
+  EXPECT_FALSE(has_option(desc, "confirm-external-bind"));
+  // Retired with it: the flag parsed into a field nothing read, and a loopback
+  // bind failing is a refusal, not something to ignore.
+  EXPECT_FALSE(has_option(desc, "rpc-ignore-ipv4"));
 
   EXPECT_FALSE(has_option(desc, "rpc-login"));
   EXPECT_FALSE(has_option(desc, "rpc-ssl"));

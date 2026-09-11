@@ -1,0 +1,65 @@
+[package]
+name = "shekyl-win-sec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The wallet's Windows platform calls, sited here because the crates that need them deny unsafe: owner-only security descriptors, current-user and logon SID, peer owner/integrity checks, and the disk-headroom probe (WP-D2)"
+publish = false
+
+# Everything here is `cfg(windows)`. On every other target the crate compiles to
+# nothing, which is deliberate: callers `use` it unconditionally and gate at the
+# call site, so a missing `cfg` shows up as an unresolved item rather than as a
+# silently absent security check.
+[target.'cfg(windows)'.dependencies]
+# Already in Cargo.lock before this crate existed (the WP-D9 disk probe pinned
+# it), so this adds no new supply-chain surface. `windows-link` is its only
+# dependency.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Memory",
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    # `WaitNamedPipeW`, for the client's bounded busy-wait (WP-W2).
+    "Win32_System_Pipes",
+] }
+# The self-hosted listener (WP-W2) is built on tokio's named-pipe support, so
+# the crate that holds the `unsafe` `create_with_security_attributes_raw` call
+# is the crate that depends on it. `net` only; the runtime is the caller's.
+tokio = { version = "1", features = ["net"] }
+
+[features]
+# Exposes `sid_for_testing`, which builds a `SidString` from an arbitrary
+# string. OFF by default and never enabled in production: the type's guarantee
+# is that a `SidString` came from this process's token or from a descriptor
+# read, and a public constructor would let a caller compare a peer's owner
+# against a value they invented.
+test-utils = []
+
+# These two examples reference `test-utils`-gated probe helpers (the SID readers
+# and `without_label_for_testing`), and their `cfg(windows)` bodies are active on
+# a Windows host — so without this guard `cargo build --examples` / `cargo test`
+# with default features fails to compile them there. `required-features` makes
+# cargo skip them unless `test-utils` is on; `windows_probe.ps1` always passes
+# it. `print_sid` is deliberately absent: it uses only `current_user_sid`, which
+# is not gated, so gating it would skip a probe that needs no feature.
+[[example]]
+name = "p12_low_il_probe"
+required-features = ["test-utils"]
+
+[[example]]
+name = "p17_ipc_logon_sid_probe"
+required-features = ["test-utils"]
+
+[target.'cfg(windows)'.dev-dependencies]
+# The probe suite drives real pipes under a runtime; the runtime features are
+# test-only, the `net` half is the transport's own dependency above.
+tokio = { version = "1", features = ["net", "rt", "macros"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[lints]
+workspace = true

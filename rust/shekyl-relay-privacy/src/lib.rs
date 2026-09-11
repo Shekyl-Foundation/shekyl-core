@@ -145,10 +145,11 @@
 //! now — and doing it before the removal would buy the seam and pay for it until
 //! the C++ leaves.
 //!
-//! Cuprate's `net/levin` and `net/epee-encoding` are a genuinely different
-//! question — they would remove the single largest obstacle to ever moving the
-//! *full* relay path into Rust, which is that this workspace has no epee or
-//! levin implementation. That belongs to a later decision, not to this crate.
+//! Cuprate's `net/levin` and `net/epee-encoding` were a genuinely different
+//! question. The levin half is LV-1 (`shekyl-levin`). The epee half is LV-2
+//! (`docs/design/LV2_PORTABLE_STORAGE.md`): first-party `shekyl-portable-storage`,
+//! Cuprate as reference-not-dependency. Do not re-open vendoring from this
+//! crate.
 //!
 //! # Scope boundary
 //!
@@ -167,6 +168,7 @@ pub mod rng;
 pub mod schedule;
 pub mod stem_map;
 pub mod verify_cost;
+pub mod zone;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
@@ -177,7 +179,7 @@ pub use derive::{
 pub use geometric::GeometricTable;
 pub use params::{
     divert_to_anonymity_zone, DandelionParams, StemGraph, EMBARGO_FULL_TRAVEL_PROBABILITY,
-    MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS,
+    MIXED_ELIGIBILITY_PCT_HUNDREDTHS,
 };
 pub use poisson::PoissonTable;
 pub use rng::{bernoulli, bounded_uniform, RelayRng, SplitMix64};
@@ -187,9 +189,10 @@ pub use schedule::{
     DelayFamily, EmbargoTimer, Epoch, EpochScheduler, FluffScheduler, Millis, NoiseCadence,
     PeerDirection, DEFAULT_EMBARGO_TICK_MILLIS,
 };
-pub use stem_map::{ConnectionId, SourceId, StemMap, StemSetChange};
+pub use stem_map::{ConnectionId, SlotIndex, SourceId, StemMap, StemSetChange};
 pub use verify_cost::{
     adopted_hop_ms, Provenance, SpecVerifyCost, TreeBasis, VerifyCell, VerifyCostRefusal,
     ADOPTED_TRANSIT_ASSUMPTION_MS, GENESIS_TREE_DEPTH, MAX_TABLE_DEPTH, MAX_TABLE_INPUTS,
     SPEC_VERIFY_COST,
 };
+pub use zone::{LinkSecrecy, RelayZone};

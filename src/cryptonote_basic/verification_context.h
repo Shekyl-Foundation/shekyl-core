@@ -30,6 +30,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "cryptonote_protocol/enums.h"
 
 namespace cryptonote
@@ -42,12 +44,12 @@ namespace cryptonote
     static_assert(unsigned(relay_method::none) == 0, "default m_relay initialization is not to relay_method::none");
 
     relay_method m_relay; // gives indication on how tx should be relayed (if at all)
-    bool m_verifivation_failed; //bad tx, tx should not enter mempool and connection should be dropped unless m_no_drop_offense
-    // Do not add to mempool, do not relay, but also do not punish the peer for sending or drop
-    // connections to them. Used for low fees, tx_extra too big, "relay-only rules". Not to be
-    // confused with breaking soft fork rules, because tx could be later added to the chain if mined
-    // because it does not violate consensus rules.
-    bool m_no_drop_offense;
+    bool m_verifivation_failed; //bad tx, tx should not enter mempool. Whether the connection is ALSO dropped is m_drop_verdict's question, not this flag's
+    // PWD-B7. Opaque SHEKYL_DROP_VERDICT_* byte. Write through classify_drop /
+    // reject_*; read through shekyl_drop_verdict_severs /
+    // shekyl_drop_verdict_is_internal_failure. Zero is Unclassified and does
+    // not sever (shekyl-peer-policy).
+    uint8_t m_drop_verdict = 0;
     bool m_verifivation_impossible; //the transaction is related with an alternative blockchain
     bool m_added_to_pool; 
     bool m_double_spend;
@@ -63,11 +65,13 @@ namespace cryptonote
 
   struct block_verification_context
   {
-    bool m_added_to_main_chain;
-    bool m_verifivation_failed; //bad block, should drop connection
-    bool m_marked_as_orphaned;
-    bool m_already_exists;
-    bool m_bad_pow; // if bad pow, ban peer outright for DoS protection
-    bool m_missing_txs; // set if, during verif, we don't have all the necessary txs available
+    // Opaque SHEKYL_BLOCK_INGEST_* byte. Write non-reject arms through
+    // record_block_ingest; rejections through reject_block_* (Rust pairs
+    // the drop slot). P2P asks block_announce_action / block_sync_action,
+    // not these bytes. Zero is Unclassified: not added, not rejected.
+    uint8_t m_outcome = 0;
+    // PWD-B7. Opaque SHEKYL_DROP_VERDICT_* byte. Write through reject_block_*
+    // (paired) or classify_drop. Zero does not sever.
+    uint8_t m_drop_verdict = 0;
   };
 }

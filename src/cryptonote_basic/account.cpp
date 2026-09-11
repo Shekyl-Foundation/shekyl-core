@@ -86,6 +86,12 @@ DISABLE_VS_WARNINGS(4244 4345)
     // which is identical by the Edwards→Montgomery birational map. The
     // ML-KEM decapsulation key is stored in m_ml_kem_decap_key under
     // mlock + madvise(DONTDUMP); it is rederived, never persisted.
+    void clear_msg_sign_pk(account_keys &keys)
+    {
+      std::memset(keys.m_msg_sign_pk, 0, sizeof(keys.m_msg_sign_pk));
+      keys.m_has_msg_sign_pk = false;
+    }
+
     void populate_account_from_blob(account_keys &keys, ShekylAllKeysBlob &blob)
     {
       // --- public side ------------------------------------------------------
@@ -95,6 +101,14 @@ DISABLE_VS_WARNINGS(4244 4345)
       keys.m_account_address.m_pqc_public_key.assign(
           blob.pqc_public_key,
           blob.pqc_public_key + SHEKYL_PQC_PUBLIC_KEY_BYTES);
+
+      // Fourth classical field — public, from the blob the Rust derive
+      // already paid for. Encode paths read this; they must not invent it.
+      std::memcpy(
+          keys.m_msg_sign_pk,
+          blob.classical_address_bytes + SHEKYL_CLASSICAL_ADDRESS_PREFIX_BYTES,
+          SHEKYL_MSG_SIGN_PK_BYTES);
+      keys.m_has_msg_sign_pk = true;
 
       // --- classical scalar secrets ----------------------------------------
       // Write through the `data` array rather than the mlocked wrapper so we
@@ -373,65 +387,6 @@ DISABLE_VS_WARNINGS(4244 4345)
     // were — rederivation is a read-only operation on the seed.
   }
   //-----------------------------------------------------------------
-  void account_base::load_from_shkw1(
-      const uint8_t master_seed_64[SHEKYL_MASTER_SEED_BYTES],
-      uint8_t seed_format,
-      network_type nettype)
-  {
-    CHECK_AND_ASSERT_THROW_MES(master_seed_64 != nullptr,
-        "account_base::load_from_shkw1: null master_seed_64 pointer");
-    CHECK_AND_ASSERT_THROW_MES(
-        seed_format == SHEKYL_SEED_FORMAT_BIP39 ||
-            seed_format == SHEKYL_SEED_FORMAT_RAW32,
-        "account_base::load_from_shkw1: unknown seed_format "
-            << static_cast<int>(seed_format));
-
-    // Clear every prior secret before installing the new master seed, so a
-    // failed rederive leaves the account in set_null() state rather than a
-    // half-populated one. set_null() already scrubs m_master_seed_64 /
-    // m_ml_kem_decap_key / spend_sk / view_sk under mlock.
-    set_null();
-
-    install_master_seed(m_keys, master_seed_64, seed_format);
-
-    // Rederive the full account (spend_sk, view_sk, ml_kem_dk,
-    // account_address) from the just-installed master seed. On failure
-    // rethrow -- the caller is expected to propagate to its FFI error
-    // path, which returns a typed refusal to wallet2.
-    try {
-      rederive_from_master_seed(nettype);
-    } catch (...) {
-      // Do not leave a half-populated account on exception; set_null()
-      // wipes m_master_seed_64 + every derived field under mlock.
-      set_null();
-      throw;
-    }
-
-    // NB: m_creation_timestamp intentionally untouched -- SHKW1 carries
-    // its own authoritative value in the AAD and wallet2::load_keys
-    // threads it through set_createtime() separately.
-  }
-  //-----------------------------------------------------------------
-  void account_base::forget_master_seed()
-  {
-    // Option β (2k.a design pin 12): scrub the pre-derivation input so
-    // the ShekylWallet handle remains the single in-memory source of
-    // truth for the master seed. Every derived key (spend_sk, view_sk,
-    // ml_kem_dk, account_address) stays intact; this function is a
-    // strict subset of forget_spend_key() (which would additionally
-    // wipe the spend scalar).
-    if (!m_keys.m_master_seed_64.empty()) {
-      shekyl_memwipe(m_keys.m_master_seed_64.data(), m_keys.m_master_seed_64.size());
-      shekyl_munlock(m_keys.m_master_seed_64.data(), m_keys.m_master_seed_64.size());
-    }
-    m_keys.m_master_seed_64.clear();
-    m_keys.m_master_seed_present = false;
-    // m_keys.m_seed_format stays; it is a metadata bit (BIP-39 vs raw-32)
-    // consumed by UX code that displays the seed-type to the user, not a
-    // pre-derivation input. Rederivation is no longer possible from this
-    // account instance by design.
-  }
-  //-----------------------------------------------------------------
   crypto::secret_key account_base::generate(
       const crypto::secret_key& recovery_key,
       bool recover,
@@ -520,6 +475,10 @@ DISABLE_VS_WARNINGS(4244 4345)
     }
     m_keys.m_master_seed_64.clear();
     m_keys.m_master_seed_present = false;
+    // Spend/view restore cannot reconstruct msg_sign_pk. Drop any leftover
+    // from a prior blob fill so get_public_address_str cannot encode a
+    // chimeric address (new spend/view + old signing key).
+    clear_msg_sign_pk(m_keys);
 
     struct tm timestamp = {0};
     timestamp.tm_year = 2014 - 1900;  // year 2014
@@ -557,6 +516,7 @@ DISABLE_VS_WARNINGS(4244 4345)
       // For v1 we ship with device wallets as "classical signing only" and
       // will teach device_ledger.cpp the master-seed export path in a
       // follow-up (see docs/POST_QUANTUM_CRYPTOGRAPHY.md §Hardware).
+      clear_msg_sign_pk(m_keys);
     } catch (const std::exception &e){
       hwdev.disconnect();
       throw;
@@ -587,7 +547,38 @@ DISABLE_VS_WARNINGS(4244 4345)
   //-----------------------------------------------------------------
   std::string account_base::get_public_address_str(network_type nettype) const
   {
-    return get_account_address_as_str(nettype, false, m_keys.m_account_address);
+    // Encode from the blob-derived public material. Struct-only
+    // `get_account_address_as_str` cannot: `account_public_address`
+    // does not carry msg_sign_pk (rule 20).
+    if (!m_keys.m_has_msg_sign_pk)
+    {
+      LOG_PRINT_L0("get_public_address_str: no msg_sign_pk (account was not filled from a keys blob)");
+      return {};
+    }
+    uint8_t net = 0;
+    switch (nettype)
+    {
+      case MAINNET:
+      case FAKECHAIN: net = 0; break;
+      case TESTNET:   net = 1; break;
+      case STAGENET:  net = 2; break;
+      default:        return {};
+    }
+    const std::vector<uint8_t>& pq = m_keys.m_account_address.m_pqc_public_key;
+    if (pq.size() != SHEKYL_PQC_PUBLIC_KEY_BYTES)
+      return {};
+    ShekylBuffer buf = shekyl_address_encode(
+        net,
+        reinterpret_cast<const uint8_t*>(m_keys.m_account_address.m_spend_public_key.data),
+        reinterpret_cast<const uint8_t*>(m_keys.m_account_address.m_view_public_key.data),
+        m_keys.m_msg_sign_pk,
+        pq.data() + SHEKYL_X25519_PK_BYTES,
+        SHEKYL_ML_KEM_768_EK_BYTES);
+    if (!buf.ptr || buf.len == 0)
+      return {};
+    std::string result(reinterpret_cast<const char*>(buf.ptr), buf.len);
+    shekyl_buffer_free(buf.ptr, buf.len);
+    return result;
   }
   //-----------------------------------------------------------------
   std::string account_base::get_public_integrated_address_str(const crypto::hash8 &payment_id, network_type nettype) const

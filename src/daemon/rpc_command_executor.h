@@ -38,11 +38,9 @@
 
 #pragma once
 
-#include <optional>
-
 #include "common/common_fwd.h"
-#include "common/rpc_client.h"
 #include "cryptonote_basic/cryptonote_basic.h"
+#include "daemon/rpc_client.h"
 #include "rpc/core_rpc_server.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -55,20 +53,32 @@ private:
   tools::t_rpc_client* m_rpc_client;
   cryptonote::core_rpc_server* m_rpc_server;
   bool m_is_rpc;
+  // This process's network, for the VC-2 identity handshake. See
+  // command_server.h for why the network axis is the load-bearing one here.
+  cryptonote::network_type m_nettype;
 
 public:
   t_rpc_command_executor(
       uint32_t ip
     , uint16_t port
-    , const std::optional<tools::login>& user
-    , const epee::net_utils::ssl_options_t& ssl_options
+    , cryptonote::network_type nettype
     , bool is_rpc = true
     , cryptonote::core_rpc_server* rpc_server = NULL
     );
 
   ~t_rpc_command_executor();
 
-  bool print_peer_list(bool white = true, bool gray = true, size_t limit = 0, bool pruned_only = false, bool publicrpc_only = false);
+  // In RPC mode: whether any request issued so far failed. Command handlers
+  // return true for "command recognized" whether or not the daemon answered;
+  // this is the signal the `shekyld <command>` exit status is derived from.
+  bool rpc_request_failed() const { return m_rpc_client != NULL && m_rpc_client->failed(); }
+
+private:
+  bool run_rust_console(const std::vector<std::string>& argv);
+
+public:
+
+  bool print_peer_list(bool white = true, bool gray = true, size_t limit = 0, bool pruned_only = false);
 
   bool print_peer_list_stats();
 
@@ -106,7 +116,10 @@ public:
 
   bool print_transaction_pool_stats();
 
-  bool start_mining(cryptonote::account_public_address address, uint64_t num_threads, cryptonote::network_type nettype, bool do_background_mining = false, bool ignore_battery = false);
+  // `address` is the user's original encoded string, passed through
+  // verbatim (the parsed struct cannot be re-encoded since the fork-(ii)
+  // address layout); the caller validates it before calling.
+  bool start_mining(const std::string& address, uint64_t num_threads, cryptonote::network_type nettype, bool do_background_mining = false, bool ignore_battery = false);
 
   bool stop_mining();
 
@@ -161,12 +174,6 @@ public:
   bool print_net_stats();
 
   bool version();
-
-  bool set_bootstrap_daemon(
-    const std::string &address,
-    const std::string &username,
-    const std::string &password,
-    const std::string &proxy);
 
   bool flush_cache(bool invalid_blocks);
 };

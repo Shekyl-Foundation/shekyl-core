@@ -58,16 +58,42 @@ pub(crate) enum Posture {
     /// leaves the box.
     Local,
     /// ② Your own node on your own remote server, reached over `P`'s Tor circuit.
+    ///
+    /// **This must be a daemon you control, on your own network.** The wallet
+    /// cannot check that — an address carries no proof of ownership, and the
+    /// wallet is not the operator's network architect: it cannot see NAT, VPN
+    /// routing, a proxy, or who owns a given host. So this is a *user
+    /// assertion*, and the choice site must say what is being asserted rather
+    /// than a type pretending to verify it.
+    ///
+    /// **For a staking wallet the stake is higher than privacy.** Pointing
+    /// this at someone else's node means trusting them for the block
+    /// visibility your **bond** depends on: a source that withholds or lies
+    /// (TM-3) is *unreachable* under ① and *dissolves by trust* under a
+    /// genuinely-own ②, but it is live against a third party — and the failure
+    /// is silent until the slash
+    /// (`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §4).
+    ///
+    /// A future wallet↔daemon authentication would make part of this
+    /// checkable — client auth proves you *provisioned* the endpoint, which is
+    /// a narrower and answerable claim than "is this network yours". Until
+    /// then this stays a disclosure, and calling it anything stronger would be
+    /// a false guarantee layered on an unverifiable assertion.
     OwnRemote { base_url: String },
     /// ③ A **third-party** daemon over Tor. **Discouraged** — reachable only by
     /// being *named* here (never inferred/defaulted). The choice site (config /
     /// UX) must surface the §5 residuals at the point of selection.
+    ///
+    /// Staking against one is discouraged for a **second** reason the §5
+    /// privacy residuals do not cover: the fetch-③ allowance was argued on the
+    /// leak being *continuous, statistical and unavoidable* (you cannot
+    /// not-scan), and none of that applies to TM-3, where the exposure is
+    /// chosen and the loss is capital rather than information.
     ThirdParty { base_url: String },
 }
 
 /// Why a posture could not be resolved.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum PostureError {
     /// No posture was chosen **and** the local node is unreachable. The system
     /// **refuses** here — it does not fall back to a remote/third-party daemon.
@@ -155,7 +181,6 @@ pub(crate) enum BroadcastPosture {
 
 /// Why a broadcast posture could not be resolved.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum BroadcastPostureError {
     /// No posture was chosen **and** the local node is unreachable. The system
     /// **refuses** — it never falls back to a remote node the user did not name,

@@ -14,7 +14,7 @@ mutations and first-emission bond-record creation per emission leg §6).
 
 **Out of scope here:** retention-proof **construction** wire (prover bytes); gate 6
 off-chain firewall; gate 4 bond post/slash **wire** (except fields this contract reads);
-wallet FSM ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §3–§7 retool).
+wallet FSM ([`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §3–§7 retool).
 
 **Upstream:** [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*Pay-for-service
 rebasing*, loud 8c; [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) §4–§6.
@@ -159,7 +159,7 @@ P_id → ArchivalBondRecord
 ```
 
 Per-shard bond posture, `holdings` descriptor, and data to derive **`good_through(P, E)`**
-per settlement epoch. Gate 4 owns slash/unbond mutations; emission reads the result.
+per settlement epoch. Gate 4 owns slash/release mutations; emission reads the result.
 
 **Genesis pin (read requirement):** `good_through(P, E)` must be **derivable at epoch
 close** from bond state — not merely a current `good_standing` flag. See emission leg
@@ -167,8 +167,21 @@ close** from bond state — not merely a current `good_standing` flag. See emiss
 
 **Encoding (F3, 2026-06-07):** **Bonded/slashed event log with interval semantics**
 evaluated at `E`-close — **not** a scalar `slash_epoch` cutoff (`slash_epoch > E` is
-wrong). Re-bond is a first-class lifecycle event (CompleteTree resume; market "replace
-shard bond"); good-standing is an **interval set**, not a monotone cutoff. Example:
+wrong). Re-bond is a first-class lifecycle event (market "replace shard bond";
+post-slash reinstatement); good-standing is an **interval set**, not a monotone cutoff.
+
+> **Corrected 2026-08-16 (F-2, [`COMPLETETREE_ACTIVATION.md`](COMPLETETREE_ACTIVATION.md)).**
+> This line previously read "CompleteTree resume", which names a transition
+> the code does not have. The coded ladder: a slash on a `CompleteTree`
+> record **demotes** it — kind flips to `ShardSetCompact` and holdings are
+> cleared atomically — so what Re-bond reinstates is a **market**
+> participant, never the foundation posture. Returning to `CompleteTree`
+> requires a **fresh foundation bond under a new persona** (`RecordExists`
+> blocks the slashed slot; matches `FOUNDATION_GENESIS_IDENTITY_SET.md`
+> reserve-activation). Re-bond remains first-class here; only the
+> "CompleteTree resumes as CompleteTree" reading was drift.
+
+Example:
 good in `[0,10]`, slashed at `11`, re-bonded at `20` — `good_through(25)` must be true
 while `good_through(8)` stays true (E-3: slash at `11` does not retroactively void
 honestly-earned epochs in `[0,10]`). Verifier at close: `good_through(P,E) ⇔` no slash
@@ -359,7 +372,10 @@ recompute, bond-record integration tests, 8c verifier hookup.
 - [x] Gate-3 dissolution disposition — derived `R_market`, no ν primitive.
 - [x] Pin serve-credit-ledger key `(P_id, shard_id, E)` — `archival_serve_credit` LMDB
       (`P_id[32] \|\| BE(shard_id) \|\| BE(E)`; `LMDB_SCHEMA.md`). `ShardId` wire pin still
-      gate-4-owned.
+      gate-4-owned. **Widened by `PC-D4` (2026-08-26):** `\|\| BE(block_height)`
+      appended — 56 B, one row per challenge; the 48-byte pair-epoch form
+      survives as `ArchivalPairEpochKey`
+      (`ARCHIVAL_PER_CHALLENGE_RECORD.md` §`PC-D4`).
 - [x] Pin `R_market` snapshot at epoch close (count with `serve_credit_bit ∧ good_through`).
       LMDB `archival_r_market`; sweep in `process_archival_epoch_close_at_height` —
       gather/store only; arithmetic in Rust `epoch_close_compute`
@@ -403,7 +419,7 @@ servo/emission-cadence need + privacy review — not F1 portfolio axis.
 | Doc | Relationship |
 |-----|----------------|
 | [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) | Consumer; owns `Σwork` arithmetic and dedup |
-| [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) | Wallet FSM; gate 2 registration shape |
+| [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) | Wallet FSM; gate 2 registration shape |
 | [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) | §3–§7 retool disposition (P2B-1–6) |
 | [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) | Economics; two-count table; honest residual |
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; participation attractor |

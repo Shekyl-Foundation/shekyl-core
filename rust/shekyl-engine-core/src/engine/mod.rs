@@ -41,12 +41,16 @@
 //!   at index 0. Exchanges that need stronger isolation use multiple wallet
 //!   files (separate keys are a strictly stronger boundary than shared keys).
 //! - **The `export_outputs` / `import_outputs` / `export_key_images` /
-//!   `import_key_images` four-call dance.** Air-gapped flows use two
-//!   typed bundle types (`UnsignedTxBundle`, `SignedTxBundle`) — see
-//!   Phase 2d.
+//!   `import_key_images` four-call dance — and cold signing itself.**
+//!   Air-gapped signing is REJECTED, permanently (decision log
+//!   2026-09-07: an FCMP++ witness needs the live curve tree, so the
+//!   "offline" half of a cold-signing flow cannot exist without
+//!   shipping chain state to the cold device — the isolation the flow
+//!   claims to buy is not delivered). Cold *storage* is the seed
+//!   phrase. No bundle types exist; do not add them.
 //! - **A god-object `Engine` with hundreds of public members.** Every
 //!   [`Engine`] member's mutability and locking discipline is explicit;
-//!   the type is *composition*, not *inheritance*.
+//!   the type is *composition*, not *inheritance*. Staking product API is [`Engine::stake`] / [`stake_facade::StakeFacade`].
 //! - **Background-sync as a wallet-internal feature.** Refresh is
 //!   `tokio::spawn`'d by the caller; cancellation is RAII via
 //!   `RefreshHandle` (lands in a follow-up commit).
@@ -90,11 +94,9 @@
 //! lifecycle methods on `Engine<SoloSigner>`. [`Engine::create`] and
 //! [`Engine::open_full`] ship end-to-end against the
 //! [`shekyl_engine_file::WalletFile`] envelope and the
-//! [`shekyl_crypto_pq::account::AllKeysBlob`] re-derivation path;
-//! [`Engine::open_view_only`] and [`Engine::open_hardware_offload`]
-//! ship as signature stubs that return
-//! [`OpenError::CapabilityNotYetImplemented`](error::OpenError::CapabilityNotYetImplemented)
-//! pending the matching `shekyl-crypto-pq` constructors.
+//! [`shekyl_crypto_pq::account::AllKeysBlob`] re-derivation path.
+//! FULL is the only capability (rule 23; decision log 2026-09-07) —
+//! there are no non-FULL openers.
 //! [`Engine::change_password`] and [`Engine::close`] ship for every
 //! signer kind. The struct is composition over field type — every
 //! member's purpose, mutability discipline, and ownership are
@@ -154,14 +156,14 @@
 //! - **Address** — [`Engine::primary_address`] returns the wallet's
 //!   one reusable [`ShekylAddress`] (End-state 5; no subaddresses).
 //!   Render with `.encode()` / `.encode_classical_display()`.
-//! - **Balance** — borrow the ledger and project the scanner-derived
-//!   [`LedgerBlock`](shekyl_engine_state::LedgerBlock) through the
-//!   scanner's extension trait:
+//! - **Balance** — borrow the wallet and project it through the
+//!   scanner's extension trait — whole-wallet by design (PR-SJ-1b),
+//!   because balance needs the journal's F14 locks too:
 //!
 //!   ```ignore
-//!   use shekyl_scanner::LedgerBlockExt;
+//!   use shekyl_scanner::WalletLedgerExt;
 //!   let guard = engine.ledger(); // derefs to &WalletLedger
-//!   let balance = guard.ledger.balance(guard.ledger.height());
+//!   let balance = guard.balance();
 //!   drop(guard);
 //!   ```
 //!
@@ -176,8 +178,8 @@
 //! "where is `Engine::balance()`?": a thin wrapper would freeze a
 //! signature before the Phase 2 filtered-query design settles, so the
 //! pattern is documented instead (reopen at Phase 2 ops).
-
 pub mod capability;
+pub mod local_ledger_ops;
 // CT-5 curve-tree actor + handle (`docs/design/CT5_ENGINE_WIRING.md` §3.1).
 // Mirrors `key_actor`: a `kameo` actor owns the wallet's `CurveTreeClient`
 // (redb single-writer), and `Engine` holds a `Clone` `CurveTreeHandle`.
@@ -206,10 +208,19 @@ pub(crate) mod bond_assembly;
 /// WI-2 §3.3 Engine-side `assemble_bond_post` orchestrator (public halves +
 /// persist-before-return via an independent `PendingPostStore`).
 pub(crate) mod bond_orchestrator;
+/// SA-R-6 bond watch: shared `Input::BondPost` lift + merge sighting adoption.
+pub(crate) mod bond_watch;
+/// The engine cadence driver (`ENGINE_CADENCE_DRIVER.md`): the one
+/// engine-owned loop scheduling the non-interactive maintenance legs
+/// (submit lifecycle, serving liveness, per-epoch claim, terminal-reject
+/// prune/resubmit). Chain-progress tick base + wall-clock watchdog;
+/// `Weak` upgrade per tick so close is never blocked.
+pub(crate) mod cadence;
 /// PR-4's CB-3 dispatch seam (`EMISSION_CLAIM_BUILDER.md` §8): the Engine-side
 /// emission-claim **request path** — activate the claimant slot, assemble via
 /// `claim_orchestrator`, dispatch through the audited posture→submitter choke
-/// point. Scheduling policy stays external (the GF-4 seam).
+/// point. Scheduling policy is the cadence driver's epoch-claim leg
+/// (`ENGINE_CADENCE_DRIVER.md` §4).
 pub(crate) mod claim_dispatch;
 /// PR-3's Engine-side emission-claim orchestration (`EMISSION_CLAIM_BUILDER.md`
 /// §8): the fetch → designate → fee-sweep → path-assembly →
@@ -238,6 +249,12 @@ pub(crate) mod drain_assembly;
 /// `PendingDrain` before any send, dispatch through the persona-transport
 /// choke point (T-DS-2). Scheduling stays external.
 pub(crate) mod drain_dispatch;
+/// WI-RPC-5: the **public** drain façade over the CB-3 dispatch seam — one
+/// embedder-callable `drain_to_principal(payment)` with no slot / fee /
+/// destination parameters (type-level active-persona restriction; the
+/// canonical P-lane floor fee and the SP-R0 witness are quoted/minted
+/// internally). The wallet-RPC `drain` handler is the production caller.
+pub(crate) mod drain_facade;
 /// F-D1 projection / drain trust boundary (`ARCHIVAL_FIREWALL_GATE6.md`
 /// §12.3): the sole drain-path site holding the funding records, projecting
 /// them into the aggregate scalar + stripped candidate operands the guarded
@@ -294,6 +311,7 @@ pub(crate) mod fault_injecting_pending_tx;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_refresh;
 pub mod fee_estimator;
+pub(crate) mod fee_policy;
 // WI-RPC-1: read-only fee/weight query projection for the wallet-RPC surface.
 pub mod fee_query;
 pub(crate) mod fee_snapshot;
@@ -320,15 +338,20 @@ pub mod local_pending_tx;
 pub(crate) mod local_persistence;
 pub(crate) mod local_refresh;
 pub mod merge;
+pub mod message_signing;
 pub mod network;
 pub mod output_selector;
 pub mod payment_requests;
 pub mod pending;
+/// Pending-post family coordination: the seal write lock + the foreground
+/// gauge the epoch-claim leg yields to (`ENGINE_CADENCE_DRIVER.md` §3).
+pub(crate) mod pending_post_gate;
 pub(crate) mod principal_stake;
 /// WI-RPC-3 proof-generation bridge: the crypto bodies behind the
 /// [`key_actor::KeyActor`]'s inbound-tx-proof and reserve-proof messages.
 pub(crate) mod proof_bridge;
 pub mod proofs;
+pub(crate) mod proofs_chain_facts;
 pub(crate) mod pscan;
 pub mod refresh;
 /// Per-engine single-flight slot shared by `start_refresh` / `start_rescan`.
@@ -340,6 +363,8 @@ pub(crate) mod refresh_slot;
 mod regtest_e2e;
 /// Full-wallet rescan: reset scan-derived ledger state (Phase 4c).
 pub(crate) mod rescan;
+#[cfg(test)]
+mod retire_walk;
 pub(crate) mod scan_floor;
 pub(crate) mod sealing_keys;
 pub(crate) mod sign_bridge;
@@ -351,9 +376,10 @@ pub(crate) mod signing_assembly;
 /// only; the `assemble()` spawn and the JoinMarket request path (2c-2b) wire it
 /// into the lifecycle.
 pub(crate) mod stake_engine;
+pub mod stake_facade;
 /// PR 2c-2a (`ARCHIVAL_BOND_CONSTRUCTION.md` §10.2, typed contract #1): the
 /// `PersistedBondTicket` persist-before-use typestate and its sole producer
-/// `Engine::persist_bond_record`. Inert until 2c-2b's `sign_bond` consumes the
+/// `Engine::persist_bond_record`. Inert until 2c-2b's `plan_bond_post` consumes the
 /// ticket; produced here so the cross-split contract is an unforgeable type.
 pub(crate) mod stake_persist;
 /// Bond-PR 2c-2b (Round 2): typed timing-seam newtypes — `BlockSpan`, `SebSpan`,
@@ -365,15 +391,21 @@ pub(crate) mod stake_timing;
 /// Transfer / pending-tx workflow (extracted from the former monofile
 /// `local_pending_tx.rs` — see `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`).
 pub mod transfer;
+/// PR-C: the composed `unstake` — two named actions on `StakeFacade`.
+pub mod unstake_facade;
 // WI-RPC-1: read-only staked-balance/staked-output aggregation over the
 // authoritative sealed pscan/pending records, for the wallet-RPC surface.
+/// The `submit_release` dispatch seam (PR-P4): seal a `PendingRelease`, then
+/// the persona-transport choke point; driven by `StakeFacade::unstake` (PR-C).
+pub(crate) mod release_dispatch;
 pub mod staking_read;
 /// `docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3: the submit lifecycle
 /// driver — the wallet-side actor that lifts the [`submit_watchdog`]
 /// kernel (projection → escape ladder → resubmit-same-bytes probe →
 /// outcome) and executes the F40 targeted re-scan with its R2
-/// fruitless-rescan breaker. Thin scheduler around audited kernel
-/// decisions; cadence is owned by the embedding runtime (`tick()`).
+/// fruitless-rescan breaker. Thin per-tick step around audited kernel
+/// decisions; cadence is owned by the engine cadence driver
+/// ([`cadence`] leg 1, `ENGINE_CADENCE_DRIVER.md`).
 pub(crate) mod submit_lifecycle;
 /// PR-4 (`docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3): the submit
 /// watchdog's pure decision kernel — F14-lock-keyed held tracking, the
@@ -390,6 +422,8 @@ pub(crate) mod submit_watchdog;
 /// identified"; two were).
 #[cfg(test)]
 pub(crate) mod synthetic_tree;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub(crate) mod traits;
 pub(crate) mod transaction_submitter;
 pub(crate) mod tx_counts;
@@ -398,11 +432,8 @@ pub(crate) mod tx_fee_model;
 mod tx_weight_kat;
 pub mod view_material;
 
-#[cfg(test)]
-pub(crate) mod test_support;
-
 pub use capability::Capability;
-pub use daemon::DaemonClient;
+pub use daemon::{DaemonClient, DaemonExpectation, FakechainPolicy};
 pub use diagnostics::{
     BuildErrorKind, BuildRequestSummary, DaemonOp, DiagnosticSink, DiscardReason, MalformedKind,
     NoopDiagnosticSink, PendingTxDiagnostic, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,
@@ -413,6 +444,11 @@ pub use error::{
     RefreshError, SendError, SubmitError, TxError,
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
+// `ValidatedFeeEstimates` is the type of `FeeEstimationContext`'s public
+// `fee_snapshot` field, and `absolute_fee_rate_cap()` is the `bound` an
+// RPC consumer reads out of a `-29109` payload: both were reachable
+// through public API while unnameable, so neither could be documented.
+pub use fee_policy::{absolute_fee_rate_cap, ValidatedFeeEstimates};
 pub use fee_query::{FeeTierQuote, TxShapeEstimate};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 pub use local_economics::LocalEconomics;
@@ -442,12 +478,18 @@ pub use pending::{
 // re-exported so embedders holding the `PScanHandle` (the module keeps the
 // handle embedder-held, not engine-held — see `pscan::start`'s docs) can name
 // the types without reaching into the `pub(crate)` pscan internals.
-pub use bond_orchestrator::{FirstStakeError, FirstStakeOutcome};
+pub use bond_orchestrator::{FirstStakeError, FirstStakeOutcome, StakePosture};
 // F-D2 aggregate drain-balance read error: two-armed (transient "syncing" vs.
 // non-transient state fault), re-exported flat so the wallet/GUI can match on
 // the arm across the command boundary without reaching into the `pub(crate)`
 // drain-read module (mirrors the `FirstStakeError` re-export just above).
 pub use drain_read::DrainBalanceReadError;
+// WI-RPC-5 archival principal staking actions, re-exported flat for the
+// wallet-RPC layer (the same shape as `FirstStakeError` above): the public
+// drain façade's outcome/error pair and the `stake_in` error the handler
+// matches on for its refusal codes.
+pub use drain_facade::{DrainOutcome, DrainToPrincipalError};
+pub use principal_stake::StakeInError;
 pub use pscan::start::{PScanHandle, PScanStartError, DEFAULT_PSCAN_CADENCE};
 pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
@@ -460,6 +502,7 @@ pub use signer::{
     EngineSignerKind, LocalSigner, SignedTransfer, Signer, SoloSigner, TransferSigningContext,
 };
 pub use staking_read::{StakedBalance, StakedOutput, StakingReadError, StakingReadView};
+pub use unstake_facade::{CollectOutcome, CollectUnstakedError, UnstakeError, UnstakeOutcome};
 pub use view_material::ViewMaterial;
 
 use std::marker::PhantomData;
@@ -498,20 +541,13 @@ use crate::engine::traits::{
 ///
 /// - [`Engine::create`] — fresh wallet (BIP-39 seed for mainnet/stagenet,
 ///   raw 32-byte seed for testnet/fakechain).
-/// - [`Engine::open_full`] — open an existing `Capability::Full`
-///   wallet with the user's password.
-/// - [`Engine::open_view_only`] — open an existing `Capability::ViewOnly`
-///   wallet (no spend material).
-/// - [`Engine::open_hardware_offload`] — open an existing
-///   `Capability::HardwareOffload` wallet (signing happens out-of-band).
+/// - [`Engine::open_full`] — open an existing wallet with the user's
+///   password. Every wallet is `Capability::Full` (rule 23); the
+///   envelope refuses any other capability byte at open.
 /// - [`Engine::change_password`] — rotate the user-supplied password
 ///   without rederiving the master seed.
 /// - [`Engine::close`] — flush state to disk and release the advisory
 ///   lock; refuses if any [`PendingTx`] is in flight.
-///
-/// All six methods land in the lifecycle commit; this commit defines
-/// the struct shape and the read-only accessor surface that those
-/// methods produce.
 ///
 /// # Locking discipline
 ///
@@ -534,18 +570,17 @@ use crate::engine::traits::{
 /// [`PendingTx`]: error::PendingTxError
 // `D: DaemonEngine` and `L: LedgerEngine` are more private than this
 // `pub` item: per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2 preamble,
-// the Stage 1 trait surfaces are `pub(crate)` for V3.0 and revisable
-// to `pub` at V3.2 alongside the JSON-RPC server cutover. External
-// callers reach the daemon and ledger surfaces via inherent methods
-// on `Engine<S>` (the defaults `D = DaemonClient` and
-// `L = LocalLedger` plug in transparently); they cannot name `D` or
-// `L` themselves and never need to. Stage 4's trait promotion
-// deletes this allow attribute together with the sibling annotations
-// (mod.rs inherent impls; lifecycle.rs's `OpenedEngine` / its
-// inherent impl / signer-agnostic `Engine` impl; merge.rs /
-// pending.rs / refresh.rs inherent impls) in a single sweep —
-// they're all the same architectural relationship surfacing at each
-// `pub` site.
+// Stage 1 traits ship `pub(crate)`. JSON-RPC cutover (the original
+// promotion trigger) landed; traits stay crate-local until a second
+// in-tree production crate must construct a workflow without `Engine`
+// (rule 21). External callers use inherent methods on `Engine<S>`
+// (defaults `D = DaemonClient`, `L = LocalLedger`); they cannot name
+// `D` or `L`. Trait-`pub` (if that reopen fires) deletes this allow
+// together with the sibling annotations (mod.rs inherent impls;
+// lifecycle.rs's `OpenedEngine` / its inherent impl / signer-agnostic
+// `Engine` impl; merge.rs / pending.rs / refresh.rs inherent impls)
+// in a single sweep — same architectural relationship at each `pub`
+// site.
 #[allow(private_bounds)]
 pub struct Engine<
     S: EngineSignerKind,
@@ -589,13 +624,9 @@ pub struct Engine<
     /// the type-system signal that the orchestrator no longer owns key
     /// material (§6 step 3(c)).
     //
-    // `#[allow(dead_code)]`: at Stage 2 the field is held but not *read* on
-    // the production path — its load-bearing role is ownership (its `Drop`
-    // stops the actor and zeroizes the blob; `LocalSigner` carries a clone).
-    // Read sites land when the orchestrator routes key operations through the
-    // handle (Stage 4, per `STAGE_2_KEY_ENGINE_ACTOR.md` §8). The allow is
-    // reopened for deletion then, per `21-reversion-clause-discipline.mdc`.
-    #[allow(dead_code)]
+    // The field is read on the production path now, so it carries no
+    // suppression. Its other load-bearing role is ownership: its `Drop` stops
+    // the actor and zeroizes the blob (`LocalSigner` carries a clone).
     key: KeyEngineHandle,
 
     /// Handle to the wallet's [`CurveTreeActor`](super::curve_tree_actor::CurveTreeActor),
@@ -712,12 +743,10 @@ pub struct Engine<
     network: Network,
 
     /// Cached from `file.capability()` for O(1) accessor speed. Same
-    /// stability argument as `network`. Used by the lifecycle
-    /// constructors to decide which `open_*` is appropriate (mismatched
-    /// capability surfaces as
-    /// [`OpenError::CapabilityMismatch`](error::OpenError::CapabilityMismatch))
-    /// and by call sites that gate spend operations on
-    /// [`Capability::can_spend_locally`].
+    /// stability argument as `network`. Always [`Capability::Full`] —
+    /// the only capability (rule 23) — kept as a typed field because it
+    /// is the parse-boundary proof that the envelope validated the
+    /// capability byte at open/create.
     capability: Capability,
 
     /// Single-flight slot for [`Engine::start_refresh`]. Held by the
@@ -735,25 +764,23 @@ pub struct Engine<
     /// task exit (RAII).
     refresh_slot: refresh::RefreshSlot,
 
-    /// Single-flight slot for the 2d-1 `P`-scan task — independent of
-    /// `refresh_slot`. The running task holds a
-    /// [`PScanSlotGuard`](pscan::task::PScanSlotGuard) that releases it on exit
-    /// (RAII), so [`start_pscan`](Self::start_pscan) enforces one scan task per
-    /// wallet (no two tasks racing the `.wallet.pscan` seal).
-    pscan_slot: pscan::task::PScanSlot,
+    /// Single-flight slots for the embedder-held open-span tasks (P-scan +
+    /// serving). One field so a third task does not spend a `FIELDS_CEILING`
+    /// slot; the two flags are independent. Serving reuses [`RefreshSlot`]
+    /// rather than a third copy of the same primitive.
+    open_slots: refresh_slot::OpenTaskSlots,
 
-    /// Per-wallet write lock over the `.wallet.pending` sibling seal (WI-3
-    /// §3.3 writer discipline). The pending seal legitimately has **two**
-    /// writers — the WI-2 assemble path (append) and the WI-3 dispatch driver
-    /// (transition/remove) — on two cadences; a shared async mutex around
-    /// load→modify→seal is what makes them safe against read-modify-seal
-    /// races. Held here (not inside the ephemeral dispatch driver) so both
-    /// writers serialize against **one** mutex per wallet: the driver clones
-    /// it into its [`PendingPostStore`](pscan::dispatch::PendingPostStore) at
-    /// spawn, and the assemble path takes the same clone. A bare `Arc<Mutex>`
-    /// (no back-reference to the engine), so — unlike the running task's
+    /// Per-wallet coordination gate for the pending-post family
+    /// ([`pending_post_gate::PendingPostGate`]): the write lock over the
+    /// `.wallet.pending` sibling seal (WI-3 §3.3 writer discipline — the
+    /// WI-2 assemble path and the WI-3 dispatch driver serialize their
+    /// load→modify→seal cycles on the one mutex per wallet) **plus** the
+    /// foreground-operation gauge the cadence driver's epoch-claim leg
+    /// yields to (`ENGINE_CADENCE_DRIVER.md` §3, "user work always wins").
+    /// Every store and facade takes a clone of this one `Arc`. No
+    /// back-reference to the engine, so — unlike the running task's
     /// engine-arc — it introduces no ownership cycle.
-    pending_write_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    pending_gate: std::sync::Arc<pending_post_gate::PendingPostGate>,
 
     /// Producer-side [`RefreshEngine`] implementor.
     ///
@@ -843,20 +870,18 @@ pub struct Engine<
     /// that has staked (`StakingBlock::staking_enabled`); `None` for the
     /// overwhelming majority of wallets, which derive and hold no personas.
     ///
+    /// Homonym: `self.stake` is this field; [`Engine::stake`](Self::stake) is
+    /// the product façade (always a view — [`Self::has_stake_engine`] is the
+    /// handle predicate).
+    ///
     /// Spawned in [`assemble`](Self::assemble) over the derive-forward set —
     /// `{persisted bonded slots} ∪ {p_slot ..= p_slot + lookahead}` — derived
     /// there while the master seed is transiently borrowed, so the seed never
     /// reaches the actor and is dropped at the caller exactly as in the
     /// non-staker path. The actor's `Drop` (last handle clone) stops it and
     /// wipes the held bundles (`ZeroizeOnDrop`), mirroring `key`.
-    //
-    // `#[allow(dead_code)]`: held but not yet *read* on any production path —
-    // the consumer (the JoinMarket bond request that mints a `PersonaHandle`
-    // and consumes a `PersistedBondTicket`) lands in 2c-2b. Its load-bearing
-    // role here is ownership: spawning the actor at open for stakers and
-    // wiping the bundles at close. The allow is reopened for deletion when
-    // 2c-2b's read sites land, per `21-reversion-clause-discipline.mdc`.
-    #[allow(dead_code)]
+    // Ownership: spawn-at-open / wipe-at-close. JoinMarket PersonaHandle +
+    // PersistedBondTicket still lands in 2c-2b.
     pub(crate) stake: Option<StakeEngineHandle>,
 
     /// Compile-time signer-kind dispatch. The actual key material lives
@@ -927,7 +952,8 @@ impl<
             .field("network", &self.network)
             .field("capability", &self.capability)
             .field("refresh_running", &self.refresh_slot.is_claimed())
-            .field("pscan_running", &self.pscan_slot.is_claimed())
+            .field("pscan_running", &self.open_slots.pscan.is_claimed())
+            .field("serving_running", &self.open_slots.serving.is_claimed())
             .field("refresh", &"<redacted: RefreshEngine>")
             .field("refresh_kind", &std::any::type_name::<R>())
             .field("economics_kind", &std::any::type_name::<E>())
@@ -999,9 +1025,11 @@ impl<
         self.network
     }
 
-    /// Capability mode of this wallet (full / view-only /
-    /// hardware-offload). Cached from [`WalletFile`]'s region 1 at
-    /// construction; stable for the life of the open wallet.
+    /// Capability mode of this wallet — always [`Capability::Full`],
+    /// the only capability (rule 23; ViewOnly REJECTED,
+    /// hardware-offload DEFERRED with zero symbols). Cached from
+    /// [`WalletFile`]'s region 1 at construction; stable for the life
+    /// of the open wallet.
     pub fn capability(&self) -> Capability {
         self.capability
     }
@@ -1025,23 +1053,10 @@ impl<
     pub fn primary_address(&self) -> ShekylAddress {
         use crate::engine::traits::key::KeyEngine;
 
-        let addr = self.key.account_public_address();
-
-        // `classical_address_bytes` is `version || spend_pk || view_pk`
-        // (65 bytes) and `pqc_public_key` is `x25519_pk || ml_kem_ek`
-        // (32 + 1184 bytes), both byte-identical to the `AllKeysBlob`
-        // fields they were projected from at `KeyEngineHandle::spawn`
-        // (see `shekyl_crypto_pq::account::AllKeysBlob`). The encoded
-        // address format carries the 1184-byte ML-KEM encapsulation
-        // key only (`shekyl_address::PQC_PAYLOAD_LEN`); the leading
-        // 32-byte x25519 public key is not part of the address.
-        let mut spend_key = [0u8; 32];
-        spend_key.copy_from_slice(&addr.classical_address_bytes[1..33]);
-        let mut view_key = [0u8; 32];
-        view_key.copy_from_slice(&addr.classical_address_bytes[33..65]);
-        let ml_kem_encap_key = addr.pqc_public_key[32..].to_vec();
-
-        ShekylAddress::new(self.network, spend_key, view_key, ml_kem_encap_key)
+        self.key
+            .account_public_address()
+            .to_shekyl_address(self.network)
+            .expect("key-actor projection is a well-formed classical segment + ek")
     }
 
     /// Borrow the [`PersistenceEngine`] implementor.
@@ -1085,9 +1100,9 @@ impl<
     }
 
     /// Whether a StakeEngine actor is resident (a staker open, or an
-    /// open-with-first-stake-intent). The embedder-facing predicate the
-    /// `stake` entry uses to decide whether the SA-R1-a intent reopen is
-    /// needed; deliberately a bool — the handle itself stays crate-private.
+    /// open-with-first-stake-intent). Embedder-facing handle predicate
+    /// (SA-R1-a intent reopen); [`Self::stake`] is a view either way.
+    /// Deliberately a bool — the handle itself stays crate-private.
     pub fn has_stake_engine(&self) -> bool {
         self.stake.is_some()
     }
@@ -1182,8 +1197,8 @@ impl<
             network,
             capability,
             refresh_slot,
-            pscan_slot,
-            pending_write_lock,
+            open_slots,
+            pending_gate,
             refresh: _old,
             economics,
             stake,
@@ -1204,8 +1219,8 @@ impl<
             network,
             capability,
             refresh_slot,
-            pscan_slot,
-            pending_write_lock,
+            open_slots,
+            pending_gate,
             refresh: std::sync::Arc::new(refresh),
             economics,
             stake,
@@ -1241,8 +1256,8 @@ impl<
             network,
             capability,
             refresh_slot,
-            pscan_slot,
-            pending_write_lock,
+            open_slots,
+            pending_gate,
             refresh,
             economics,
             stake,
@@ -1263,8 +1278,8 @@ impl<
             network,
             capability,
             refresh_slot,
-            pscan_slot,
-            pending_write_lock,
+            open_slots,
+            pending_gate,
             refresh,
             economics,
             stake,
@@ -1292,17 +1307,17 @@ impl<
     /// [`WatchdogHost`](submit_lifecycle::WatchdogHost)) and the daemon
     /// to the driver for the duration of the tick.
     ///
-    /// # Cadence is the embedding runtime's, not the Engine's (§5.3)
+    /// # Cadence is the engine cadence driver's (`ENGINE_CADENCE_DRIVER.md`)
     ///
-    /// "Cadence is role policy; termination is not." This method is the
-    /// **entry point**, not a scheduler — the owner of the `Engine`
-    /// (the wallet binary / RPC server; Stage 4: the actor runtime)
-    /// decides *when* to call it. The natural call site is after each
-    /// completed refresh cycle, since the held projection and
-    /// `synced_height` only move on refresh / ledger writes; it must
-    /// **not** be called while a merge write-lock is held, because the
-    /// tick issues daemon round-trips and holding the ledger lock across
-    /// them would block the merge it depends on.
+    /// This method is the **entry point**, not a scheduler. Its production
+    /// caller is the cadence driver's submit-lifecycle leg
+    /// ([`cadence`] leg 1), which fires it on observed chain advance —
+    /// §5.3's original "the embedding runtime decides when" posture is
+    /// overturned per the design doc §1 (premise refuted: no embedder ever
+    /// scheduled it). The one call-site constraint stands: it must **not**
+    /// be called while a merge write-lock is held, because the tick issues
+    /// daemon round-trips and holding the ledger lock across them would
+    /// block the merge it depends on.
     ///
     /// Available only when the pending-tx engine is the production
     /// [`LocalPendingTx`](local_pending_tx::LocalPendingTx) (the
@@ -1388,168 +1403,9 @@ impl<
     }
 }
 
-// ── Bench-internals helpers (gated; see `lib.rs`'s `__bench_internals`)
-//
-// These free functions live in this module so they can name the
-// otherwise-private `Engine.ledger` field; they are re-exported through
-// `crate::__bench_internals` for `engine_trait_bench_ledger_balance{,_iai}.rs`
-// without widening the field's production visibility. The pattern is
-// the same one PR 1 uses for `LedgerSnapshot::from_ledger_for_bench`:
-// the hot-path code stays in its production module while the bench
-// surface is unlocked with a focused feature flag.
-
-/// Borrow the engine's [`LocalLedger`] field directly. See
-/// [`crate::__bench_internals::engine_local_ledger_for_bench`] for the
-/// public-facing wrapper and the use-site rationale.
+/// Bench-internals helpers (gated) — split from this file per the
+/// decomposition ratchet; re-exported so `crate::__bench_internals` paths hold.
 #[cfg(feature = "bench-internals")]
-pub fn engine_local_ledger_for_bench(
-    engine: &Engine<SoloSigner, DaemonClient, LocalLedger>,
-) -> &LocalLedger {
-    &engine.ledger
-}
-
-/// Project the wallet's balance through the
-/// [`LedgerEngine::balance`](traits::LedgerEngine::balance) trait
-/// method, dispatched on `engine.ledger`. See
-/// [`crate::__bench_internals::engine_balance_for_bench`] for the
-/// public-facing wrapper and the use-site rationale.
-///
-/// The trait surface is `pub(crate)`, so this thin wrapper performs
-/// the trait call inside the crate (where the trait is visible) and
-/// surfaces the [`shekyl_scanner::BalanceSummary`] result across the
-/// bench-target boundary.
+pub(crate) mod bench_support;
 #[cfg(feature = "bench-internals")]
-pub fn engine_balance_for_bench(
-    engine: &Engine<SoloSigner, DaemonClient, LocalLedger>,
-) -> shekyl_scanner::BalanceSummary {
-    use crate::engine::traits::LedgerEngine;
-    engine.ledger.balance()
-}
-
-/// Project a wallet's account public address through the
-/// `KeyEngine::account_public_address` trait method (the trait is
-/// `pub(crate)` so rustdoc intra-doc links to it from a `pub`
-/// item would render as private-link warnings; plain backticks
-/// throughout match the convention used in the bench files'
-/// module-level docstrings), dispatched on a standalone
-/// [`local_keys::LocalKeys`] fixture. See
-/// [`crate::__bench_internals::engine_account_public_address_for_bench`]
-/// for the public-facing wrapper and the use-site rationale.
-///
-/// # Why this takes `&LocalKeys` and not `&Engine<...>`
-///
-/// Since Stage 2 (`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §6) the
-/// `Engine` holds `key: KeyEngineHandle` — a handle to the `KeyActor`
-/// that owns the `AllKeysBlob`. Its `KeyEngine::account_public_address`
-/// resolves synchronously from a projection, but the secret-touching
-/// surface routes through the actor mailbox. This bench deliberately
-/// measures the **synchronous in-process** trait dispatch over a
-/// standalone [`local_keys::LocalKeys`] fixture (the same crypto bodies
-/// the actor replicates), isolating the trait-call cost from the actor
-/// task / mailbox overhead. Benchmarking through `&Engine` would
-/// conflate the two; the standalone `LocalKeys` fixture is the correct
-/// measurement substrate. `LocalKeys` is retained as the `KeyEngine`
-/// implementor for exactly this in-process bench/oracle use
-/// (`#[allow(dead_code)]` on the production path).
-///
-/// Given the substrate, the bench fixture is a standalone
-/// `Box<LocalKeys>` rather than the unified
-/// `(Box<Engine<SoloSigner, DaemonClient, LocalLedger>>, TempDir)`
-/// shape the LedgerEngine bench uses. This divergence from the
-/// canonical `engine_trait_bench_*` fixture shape is forced by the
-/// substrate, not chosen for convenience; it is documented in the
-/// bench module's file-level docstring and in the close-out PR's
-/// pre-flight §1.2.
-///
-/// The bench still classifies under the `engine_trait_bench_*`
-/// threshold class via the function-name routing discipline (per
-/// `STAGE_0_HARNESS.md` §3.3.1's `classify()` rule, which routes on
-/// the `#[library_benchmark]` function name, not on fixture shape).
-///
-/// # Why this returns `usize` rather than `&AccountPublicAddress`
-///
-/// The natural return type of the trait method is
-/// `&AccountPublicAddress`, but that type is `pub(crate)` — exposing
-/// it through this `pub fn`'s signature would widen the crate's
-/// public API beyond the `bench-internals` gate. The helper instead
-/// returns a `usize` summary (the sum of both field byte-lengths),
-/// which is a primitive `pub` type. The trait call itself is
-/// preserved against compiler elision by the internal
-/// `std::hint::black_box(...)` around the address reference; the
-/// returned length sum is a small additional load (two `Vec::len()`
-/// metadata reads — the field bytes themselves are not touched) that
-/// gives the criterion / gungraun bench loops something
-/// observable to consume so the bench function's overall result is
-/// not elided. The measurement surface is unchanged from the natural
-/// shape; only the API-widening footprint differs (zero added types
-/// in `__bench_internals`).
-#[cfg(feature = "bench-internals")]
-pub fn engine_account_public_address_for_bench(keys: &local_keys::LocalKeys) -> usize {
-    use crate::engine::traits::key::KeyEngine;
-    let addr = std::hint::black_box(keys.account_public_address());
-    addr.pqc_public_key.len() + addr.classical_address_bytes.len()
-}
-
-/// Project `base_emission_at(height)` through the `EconomicsEngine`
-/// trait method (the trait is `pub(crate)`, so this thin wrapper
-/// performs the trait call inside the crate where the trait is
-/// visible), dispatched on the engine's `economics` field. See
-/// [`crate::__bench_internals::engine_economics_base_emission_at_for_bench`]
-/// for the public-facing wrapper and the use-site rationale.
-///
-/// # Workload class — state-independent compute, O(height)
-///
-/// `base_emission_at` is a pure projection that does **not** read
-/// `ChainEconomicsSource`; under interpretation (A) it iterates
-/// `projected_already_generated(height)` block-by-block from genesis
-/// (`shekyl-economics::emission`), so per-call cost is **O(height)**,
-/// not a trivial pure-read. The bench drives a representative height
-/// (`ECONOMICS_BENCH_HEIGHT` in the bench `common` module) so the loop
-/// dominates; if a hot consumer ever lands, the FOLLOWUPS checkpoint-table
-/// disposition (§5.2 B.6) replaces the naive loop with an O(1)
-/// checkpoint lookup. The `Err` arm is overflow-only (B.7) and the
-/// neutral trajectory does not overflow at the bench height, so the
-/// `expect` is unreachable in practice.
-#[cfg(feature = "bench-internals")]
-pub fn engine_economics_base_emission_at_for_bench(
-    engine: &Engine<SoloSigner, DaemonClient, LocalLedger>,
-    height: u64,
-) -> u64 {
-    use crate::engine::traits::EconomicsEngine;
-    engine
-        .economics
-        .base_emission_at(height)
-        .expect("neutral-trajectory base_emission_at does not overflow at the bench height")
-}
-
-/// Project `parameters_snapshot()` through the `EconomicsEngine` trait
-/// method, dispatched on the engine's `economics` field. See
-/// [`crate::__bench_internals::engine_economics_parameters_snapshot_for_bench`]
-/// for the public-facing wrapper and the use-site rationale.
-///
-/// # Why this returns `u64` rather than `EconomicsParametersSnapshot`
-///
-/// The natural return type is `pub(crate)`
-/// `EconomicsParametersSnapshot`; surfacing it through this `pub fn`
-/// would widen the crate's public API beyond the `bench-internals`
-/// gate. The helper returns the snapshot's `money_supply_atomic`
-/// (`u64`, a primitive `pub` type) instead — the same API-narrowing
-/// pattern the `KeyEngine` bench's `usize`-summary uses. The trait
-/// call is preserved against compiler elision by the internal
-/// `black_box` around the snapshot before the field is read.
-///
-/// # Workload class — pure compute with a digest
-///
-/// `parameters_snapshot` rebuilds the snapshot fresh on every call
-/// (§6.3 G5, no process-wide cache) and computes a Blake2b-256
-/// `params_digest` over the fixed-width parameter layout — it is
-/// **not** a trivial pure-read; the digest is the dominant per-call
-/// cost. `parameters_snapshot` does not read `ChainEconomicsSource`.
-#[cfg(feature = "bench-internals")]
-pub fn engine_economics_parameters_snapshot_for_bench(
-    engine: &Engine<SoloSigner, DaemonClient, LocalLedger>,
-) -> u64 {
-    use crate::engine::traits::EconomicsEngine;
-    let snapshot = std::hint::black_box(engine.economics.parameters_snapshot());
-    snapshot.money_supply_atomic
-}
+pub use bench_support::*;

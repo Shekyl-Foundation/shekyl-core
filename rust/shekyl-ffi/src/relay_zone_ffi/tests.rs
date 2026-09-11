@@ -6,6 +6,17 @@
 use super::*;
 use std::cell::RefCell;
 
+/// Zone byte for the cases that do not exercise the per-zone parameter split.
+/// Spelled out rather than `1` so a change to the discriminant cannot silently
+/// re-point every fixture at a different transport.
+const PUBLIC: u8 = RelayZone::Public.as_u8();
+/// A noise carrier only exists on an encrypted zone, so covert fixtures build
+/// on tor rather than on the cleartext default. Both flags travel together for
+/// the same reason: the pair is what production forms at `make_relay_zone`.
+const TOR: u8 = RelayZone::Tor.as_u8();
+const NOISE_ON_ENCRYPTED: u32 =
+    SHEKYL_RELAY_ZONE_NOISE_ENABLED | SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
+
 // The "C++ side", simulated: recording callbacks that capture exactly what
 // crosses the boundary. This is the Effect seam test §18.4a asks for, and it
 // runs without a daemon build — which is what lets the transparency check
@@ -13,9 +24,9 @@ use std::cell::RefCell;
 #[derive(Default)]
 struct Recorder {
     fluffed: Vec<([u8; 16], Vec<Vec<u8>>)>,
-    unbinds: Vec<usize>,
     /// `(channel, peer)` — peer bytes are the marshalling half of CV-2.
-    covert: Vec<(usize, [u8; 16])>,
+    /// (channel, peer, the emitted bytes). Full payload — see `rec_noise`.
+    noise: Vec<(usize, [u8; 16], Vec<u8>)>,
 }
 
 thread_local! {
@@ -30,10 +41,6 @@ extern "C" fn rec_fluff(_: *mut c_void, peer: *const u8, blobs: *const ShekylRel
         .map(|b| unsafe { slice::from_raw_parts(b.ptr, b.len) }.to_vec())
         .collect();
     REC.with(|r| r.borrow_mut().fluffed.push((p, batch)));
-}
-
-extern "C" fn rec_unbind(_: *mut c_void, channel: usize) {
-    REC.with(|r| r.borrow_mut().unbinds.push(channel));
 }
 
 // The outbound-gather side of `poll`, simulated. `poll` pulls the connection
@@ -68,10 +75,65 @@ extern "C" fn rec_gather(_: *mut c_void, out_n: *mut usize) -> *const u8 {
     })
 }
 
-extern "C" fn rec_covert(_: *mut c_void, channel: usize, peer: *const u8) {
+thread_local! {
+    /// `(token, sent)` in resolution order — the producer's own oracle.
+    static RESOLVED: std::cell::RefCell<Vec<(u64, bool, [u8; 16])>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+extern "C" fn rec_resolved(_: *mut c_void, token: u64, sent: bool, peer: *const u8) {
+    // The peer is recorded, not ignored: it is the whole point of the
+    // parameter, and a recorder that dropped it could not tell a verdict
+    // charged to the right successor from one charged to the wrong one.
+    // Through the crate's FFI-read seam, not a raw `from_raw_parts`: SA-R-7's
+    // ratchet counts test sites, and it is right to — a recorder reading a
+    // boundary pointer has the same null and `isize::MAX` obligations as the
+    // production reader beside it. `rec_noise` says the same thing two
+    // functions up, which is where this should have been copied from.
+    let mut p = [0u8; 16];
+    if let Some(bytes) = unsafe { crate::legacy_util::slice_from_ptr(peer, 16) } {
+        p.copy_from_slice(bytes);
+    }
+    RESOLVED.with(|r| r.borrow_mut().push((token, sent, p)));
+}
+
+fn take_resolved() -> Vec<(u64, bool, [u8; 16])> {
+    RESOLVED.with(|r| std::mem::take(&mut *r.borrow_mut()))
+}
+
+extern "C" fn rec_noise(
+    _: *mut c_void,
+    channel: usize,
+    peer: *const u8,
+    bytes: *const u8,
+    len: usize,
+) -> bool {
     let mut p = [0u8; 16];
     unsafe { p.copy_from_slice(slice::from_raw_parts(peer, 16)) };
-    REC.with(|r| r.borrow_mut().covert.push((channel, p)));
+    // The emission is recorded IN FULL, and the earlier refusal to do so was
+    // a misreading of CV-4. CV-4 constrains what the SCHEDULER may see, so a
+    // cadence cannot react to traffic. This callback is the transport, after
+    // the cadence has already chosen; a test observing it learns nothing the
+    // scheduler could act on.
+    //
+    // Recording only the length made the boundary untestable in exactly the
+    // ways that matter: always sending the dummy, or reversing the
+    // `sent`/`failed` resolution, both stayed green.
+    // Through the crate's FFI-read seam, not a raw `from_raw_parts` — SA-R-7's
+    // ratchet counts test sites too, and it is right to: a recorder that reads
+    // a boundary pointer has the same `isize::MAX` and null obligations as the
+    // production reader beside it.
+    let payload = unsafe { crate::legacy_util::slice_from_ptr(bytes, len) }
+        .map(<[u8]>::to_vec)
+        .unwrap_or_default();
+    REC.with(|r| r.borrow_mut().noise.push((channel, p, payload)));
+    NOISE_DELIVERS.with(std::cell::Cell::get)
+}
+
+thread_local! {
+    /// What `rec_noise` reports back — the token's resolution. `false` drives
+    /// the `failed` arm, which is otherwise unreachable from a test.
+    static NOISE_DELIVERS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 fn reset() {
@@ -89,7 +151,7 @@ fn id(byte: u8) -> [u8; 16] {
 fn fluff_effects_cross_with_peer_and_payload_intact() {
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
         let blob = [0xAB, 0xCD, 0xEF];
         let batch = [ShekylRelayBlob {
@@ -133,7 +195,7 @@ fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
     //    every peer downstream.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
         // Offered high-to-low, with a repeat: order and duplication both
         // have to be removed for the assertion below to hold.
@@ -160,7 +222,7 @@ fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
     });
 }
 
-/// A due channel with an unbound slot crosses as a `CovertUnbind` at its own
+/// A due channel with an unbound slot crosses as a `NoiseUnbind` at its own
 /// channel index, at every due tick — the marshalling half of the property
 /// whose decision half lives in `shekyl-relay`'s
 /// `a_due_channel_with_an_unbound_slot_clears_at_every_tick`.
@@ -174,13 +236,13 @@ fn a_peers_batch_crosses_as_one_call_sorted_and_deduplicated() {
 /// sourcing discipline the seal established.
 ///
 /// Negative-controlled: an off-by-one injected into `dispatch`'s
-/// `CovertUnbind` arm (`unbind(ctx, channel + 1)`) fails the index assertion.
+/// `NoiseUnbind` arm (`unbind(ctx, channel + 1)`) fails the index assertion.
 #[test]
-fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
+fn an_unbound_slots_due_ticks_cross_as_noise_unbind_at_its_index() {
     reset();
     unsafe {
         let peers: Vec<u8> = [id(1), id(2)].concat();
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
         shekyl_relay_zone_on_handshake(h, id(2).as_ptr(), false);
         shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
@@ -210,10 +272,7 @@ fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
         // gather-call count is asserted zero below to prove no rollover
         // rewrote the fixture mid-drive.
         for _ in 0..12 {
-            let done = REC.with(|r| {
-                let r = r.borrow();
-                2 <= r.unbinds.len() && !r.covert.is_empty()
-            });
+            let done = REC.with(|r| 2 <= r.borrow().noise.len());
             if done {
                 break;
             }
@@ -224,8 +283,8 @@ fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
                 std::ptr::null_mut(),
                 rec_gather,
                 rec_fluff,
-                rec_unbind,
-                rec_covert,
+                rec_noise,
+                rec_resolved,
             );
         }
         shekyl_relay_zone_free(h);
@@ -233,29 +292,29 @@ fn an_unbound_slots_due_ticks_cross_as_covert_unbind_at_its_index() {
         // `keep` must outlive the recorder check below.
         REC.with(|r| {
             let rec = r.borrow();
+            // The unbind no longer crosses the boundary — it is consumed in
+            // Rust by `NoiseQueues::unbind`. What that CANNOT change is CV-2,
+            // and CV-2 is observable from the sends alone: an unbound slot
+            // emits nothing. So the property is asserted where it now lives.
             assert!(
-                2 <= rec.unbinds.len(),
-                "the unbound channel's clear crosses at EVERY due tick — zero \
-                 means it never crossed, one means the emission became \
-                 transition-shaped and lossy"
-            );
-            assert!(
-                rec.unbinds.iter().all(|&c| c == 0),
-                "every unbind names the unbound channel's own index — 1 in \
-                 {:?} is the off-by-one defect",
-                rec.unbinds
-            );
-            assert!(
-                !rec.covert.is_empty(),
+                !rec.noise.is_empty(),
                 "the bound channel really sent — liveness"
             );
-            for &(channel, peer) in &rec.covert {
+            for (channel, peer, bytes) in &rec.noise {
+                let (channel, peer, len) = (*channel, *peer, bytes.len());
                 assert_eq!(
                     (channel, peer),
                     (1, keep),
-                    "CovertSend must cross with the slot's own peer at its own \
-                     index — a wrong peer slice is invisible if only the \
+                    "NoiseSend must cross with the slot's own peer at its own \
+                     index, and the UNBOUND channel 0 must never appear here \
+                     (CV-2). A wrong peer slice is invisible if only the \
                      channel index is recorded"
+                );
+                assert_eq!(
+                    len,
+                    shekyl_relay_privacy::params::carrier::WINDOW_BYTES,
+                    "every emission is one window — a short one would let an \
+                     observer read the real payload's size off the frame"
                 );
             }
         });
@@ -276,7 +335,7 @@ fn live_stems_atomic_tracks_the_derived_value_after_every_mutation() {
     // kind of mutation — a second writer, or a missed publish, shows here.
     unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         assert_eq!(shekyl_relay_zone_live_stems(h), 0, "fresh zone");
 
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
@@ -308,7 +367,7 @@ fn the_three_plan_outcomes_stay_distinct_across_the_boundary() {
     // somewhere — but it changes which `relay_method` event is emitted and
     // whether a recoverable stem is abandoned.
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         let mut out = [0u8; 16];
 
         assert_eq!(
@@ -367,7 +426,7 @@ fn the_nil_uuid_means_locally_originated_which_is_what_cpp_actually_sends() {
     // the null-source path does.
     unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_update_stems(h, peers.as_ptr(), 3);
 
         let mut rolls = 0;
@@ -408,7 +467,7 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
     // agree was due and nothing in the tree would notice.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
 
         let blob = [0x5Au8];
@@ -443,8 +502,8 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
                 std::ptr::null_mut(),
                 rec_gather,
                 rec_fluff,
-                rec_unbind,
-                rec_covert,
+                rec_noise,
+                rec_resolved,
             );
             REC.with(|r| assert!(r.borrow().fluffed.is_empty(), "not due yet"));
         }
@@ -455,8 +514,8 @@ fn polling_at_the_reported_wake_time_releases_the_batch() {
             std::ptr::null_mut(),
             rec_gather,
             rec_fluff,
-            rec_unbind,
-            rec_covert,
+            rec_noise,
+            rec_resolved,
         );
         shekyl_relay_zone_free(h);
     }
@@ -489,7 +548,7 @@ fn polling_across_the_epoch_boundary_gathers_and_rebuilds() {
     // epoch deadline, so polling there is a rollover.
     reset();
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         assert!(!h.is_null(), "these params build a zone");
 
         // The set the rollover will draw its two slots from.
@@ -502,8 +561,8 @@ fn polling_across_the_epoch_boundary_gathers_and_rebuilds() {
             std::ptr::null_mut(),
             rec_gather,
             rec_fluff,
-            rec_unbind,
-            rec_covert,
+            rec_noise,
+            rec_resolved,
         );
 
         GATHER.with(|g| {
@@ -528,11 +587,11 @@ fn a_zone_that_would_spin_is_refused_rather_than_built() {
     // re-arm in the past forever. Refusing construction turns a silent
     // busy-loop in the p2p reactor into a loud startup failure.
     assert!(
-        shekyl_relay_zone_new(0, 2, 0, 30, 0).is_null(),
+        shekyl_relay_zone_new(0, PUBLIC, 2, 0, 30, 0).is_null(),
         "zero epoch"
     );
     assert!(
-        shekyl_relay_zone_new(0, usize::MAX, 600, 30, 0).is_null(),
+        shekyl_relay_zone_new(0, PUBLIC, usize::MAX, 600, 30, 0).is_null(),
         "unrepresentable stem width"
     );
 }
@@ -563,6 +622,28 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
             ),
             SHEKYL_RELAY_PLAN_NO_ROUTE,
         );
+        let mut carrier = 0xFFu8;
+        let mut channel = 0xFFFF_FFFFu32;
+        out.fill(0xAA);
+        assert_eq!(
+            shekyl_relay_zone_plan_dispatch_with_refresh(
+                null,
+                id(1).as_ptr(),
+                true,
+                std::ptr::null(),
+                0,
+                out.as_mut_ptr(),
+                &raw mut carrier,
+                &raw mut channel,
+            ),
+            SHEKYL_RELAY_PLAN_NO_ROUTE,
+        );
+        assert_eq!(out, NIL, "null handle must nil-write out_dest");
+        assert_eq!(
+            carrier, SHEKYL_RELAY_CARRIER_ORDINARY,
+            "null handle must not leave a stale covert carrier"
+        );
+        assert_eq!(channel, 0, "null handle must not leave a stale slot");
         shekyl_relay_zone_update_stems(null, std::ptr::null(), 0);
         shekyl_relay_zone_force_epoch(null, 0, std::ptr::null(), 0);
         shekyl_relay_zone_poll(
@@ -571,8 +652,8 @@ fn a_null_handle_is_a_safe_no_op_on_every_export() {
             std::ptr::null_mut(),
             rec_gather,
             rec_fluff,
-            rec_unbind,
-            rec_covert,
+            rec_noise,
+            rec_resolved,
         );
         shekyl_relay_zone_free(null);
     }
@@ -586,7 +667,7 @@ fn plan_relay_with_refresh_fills_an_empty_map() {
     reset();
     unsafe {
         let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         let mut out = [0u8; 16];
         let plan = shekyl_relay_zone_plan_relay_with_refresh(
             h,
@@ -606,12 +687,71 @@ fn plan_relay_with_refresh_fills_an_empty_map() {
     }
 }
 
+/// The dispatch crossing is additive: same plan as `plan_relay_with_refresh`,
+/// plus a carrier. Covert-on + local origin (RD-4: always stems) so the
+/// epoch cannot make this vacuous. This bites against a seam that starts
+/// re-deciding the phase, and against a covert-on stem that forgets to
+/// name a slot inside the stem width.
+#[test]
+fn dispatch_with_refresh_attaches_a_carrier_without_redeciding_the_plan() {
+    reset();
+    unsafe {
+        let peers: Vec<u8> = [id(1), id(2), id(3)].concat();
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(
+            shekyl_relay_zone_noise_enabled(h),
+            "fixture must actually have covert on or the carrier cell is vacuous"
+        );
+
+        let mut dest_plan = [0u8; 16];
+        let via_plan = shekyl_relay_zone_plan_relay_with_refresh(
+            h,
+            std::ptr::null(),
+            true,
+            peers.as_ptr(),
+            3,
+            dest_plan.as_mut_ptr(),
+        );
+
+        shekyl_relay_zone_free(h);
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        let mut dest_dispatch = [0u8; 16];
+        let mut carrier = 0xFFu8;
+        let mut channel = 0xFFFF_FFFFu32;
+        let via_dispatch = shekyl_relay_zone_plan_dispatch_with_refresh(
+            h,
+            std::ptr::null(),
+            true,
+            peers.as_ptr(),
+            3,
+            dest_dispatch.as_mut_ptr(),
+            &raw mut carrier,
+            &raw mut channel,
+        );
+
+        assert_eq!(
+            via_dispatch, via_plan,
+            "dispatch must not re-decide the phase"
+        );
+        assert_eq!(via_dispatch, SHEKYL_RELAY_PLAN_STEM, "RD-4: origin stems");
+        assert_eq!(
+            carrier, SHEKYL_RELAY_CARRIER_NOISE,
+            "covert is on and this is a stem"
+        );
+        assert!(
+            (channel as usize) < 2,
+            "channel is the stem slot (§20.3); {channel} is outside the width"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}
+
 #[test]
 fn queue_fluff_rejects_a_null_ptr_with_nonzero_len() {
     // Contract: empty blobs may pass a null ptr; non-empty must not. Fail
     // closed on the whole batch so a bad span cannot drop a sibling silently.
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), true);
         let bad = [ShekylRelayBlob {
             ptr: std::ptr::null(),
@@ -646,9 +786,9 @@ fn queue_fluff_rejects_a_null_ptr_with_nonzero_len() {
     }
 }
 
-/// The zone-flag bits do not transpose, and the covert bit round-trips.
+/// The zone-flag bits do not transpose, and the noise bit round-trips.
 ///
-/// This test is the *reason* [`SHEKYL_RELAY_ZONE_COVERT_ENABLED`] is a named bit
+/// This test is the *reason* [`SHEKYL_RELAY_ZONE_NOISE_ENABLED`] is a named bit
 /// rather than a second `bool` parameter, so it must be able to fail if the two
 /// bits were ever swapped. It is written as a **negative control on
 /// transposition**: each bit is set *alone*, so a swap flips both assertions
@@ -679,46 +819,105 @@ fn zone_flag_bits_do_not_transpose() {
         "ABI value; `shekyl_ffi.h` hardcodes 1u"
     );
     assert_eq!(
-        SHEKYL_RELAY_ZONE_COVERT_ENABLED, 2,
+        SHEKYL_RELAY_ZONE_NOISE_ENABLED, 2,
         "ABI value; `shekyl_ffi.h` hardcodes 2u"
     );
 
     unsafe {
-        // Covert bit ALONE. A swap makes this read the fluff bit → false.
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, SHEKYL_RELAY_ZONE_COVERT_ENABLED);
-        assert!(
-            shekyl_relay_zone_covert_enabled(h),
-            "covert bit set alone must read back as covert-enabled; \
-             reading false here means the bits are transposed"
-        );
-        shekyl_relay_zone_free(h);
+        /* Noise bit ALONE on the CLEARTEXT zone byte. Refused because the
+        zone is cleartext, not because the fluff-reach bit is missing —
+        secrecy is the discriminant, reach is a different axis.
 
-        // Fluff bit ALONE. A swap makes this read the covert bit → true.
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY);
+        The negative control survives and is strictly sharper. Under a
+        transposition this call would decode as *fluff-only*, which is a
+        perfectly ordinary zone and would build — so a swap turns this
+        null into a handle, and the assertion flips. The refusal is the
+        observation; a readback is no longer available here because the
+        zone does not exist to be read. */
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_NOISE_ENABLED);
         assert!(
-            !shekyl_relay_zone_covert_enabled(h),
-            "outbound-fluff bit set alone must NOT enable covert; \
+            h.is_null(),
+            "noise bit set alone on the cleartext zone is refused; a handle \
+             here means the bits are transposed and this decoded as the \
+             harmless fluff-only zone"
+        );
+
+        // Fluff bit ALONE. A swap makes this read the noise bit → refused
+        // on this cleartext zone, so the handle would be null and BOTH
+        // assertions below would fail.
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY);
+        assert!(
+            !h.is_null(),
+            "an outbound-fluff-only zone is ordinary and builds"
+        );
+        assert!(
+            !shekyl_relay_zone_noise_enabled(h),
+            "outbound-fluff bit set alone must NOT enable noise; \
              reading true here means the bits are transposed"
         );
         shekyl_relay_zone_free(h);
 
         // Neither, and both — the two ends, so an always-true or always-false
         // decode cannot pass the set above by accident.
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
-        assert!(!shekyl_relay_zone_covert_enabled(h), "no flags ⇒ no covert");
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        assert!(!shekyl_relay_zone_noise_enabled(h), "no flags ⇒ no noise");
         shekyl_relay_zone_free(h);
 
-        let both = SHEKYL_RELAY_ZONE_COVERT_ENABLED | SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY;
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, both);
+        /* Both flags, on an ENCRYPTED zone — the only configuration a noise
+        carrier is allowed in. Swap-blind by construction (both bits set),
+        so it is the positive readback and not part of the control. */
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
         assert!(
-            shekyl_relay_zone_covert_enabled(h),
-            "both flags ⇒ covert on"
+            shekyl_relay_zone_noise_enabled(h),
+            "both flags on an encrypted zone ⇒ noise on"
+        );
+        shekyl_relay_zone_free(h);
+
+        /* An OUT-OF-DOMAIN zone byte with noise flags — refused. The two
+        fail-safe directions point opposite ways on purpose: an unknown zone
+        draws the *anonymity* parameters (the longer embargo, the safe
+        direction there), but it is not presumed *encrypted*, so it earns no
+        noise. Pinned because an asymmetry that is not stated reads as an
+        accident, and the next reader "fixing" it would silently hand a
+        noise carrier to a link nobody could identify. */
+        let h = shekyl_relay_zone_new(0, 0xFF, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(
+            h.is_null(),
+            "an unknown link is not presumed encrypted and earns no noise"
+        );
+
+        /* Both flags on a CLEARTEXT zone — refused. This pins the axis split
+        the flags used to hide: outbound-only fluff does not imply an
+        encrypted link. It is a real configuration (§25.5 keeps
+        outbound-only fluff on clearnet open) and it is still cleartext, so
+        it earns no noise. Before secrecy was read from the zone byte this
+        case built a zone, because reach was standing in for encryption. */
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(
+            h.is_null(),
+            "outbound-only fluff is not encryption; a cleartext zone earns no \
+             noise however its fluff reach is configured"
+        );
+
+        /* Noise bit ALONE on an ENCRYPTED zone — builds. Missing the fluff
+        bit is not "noise on cleartext": secrecy comes from TOR, reach
+        defaults to EveryPeer, and that pairing is the case the axis exists
+        for. A comment that treated the flag pair as the encryption proxy
+        would refuse this. */
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, SHEKYL_RELAY_ZONE_NOISE_ENABLED);
+        assert!(
+            !h.is_null(),
+            "noise on an encrypted zone is not refused for lack of the fluff bit"
+        );
+        assert!(
+            shekyl_relay_zone_noise_enabled(h),
+            "encrypted + noise, reach = every peer — the axis split, built"
         );
         shekyl_relay_zone_free(h);
 
         // A null handle answers false rather than aborting: a caller that lost
-        // its zone has no covert channels by construction.
-        assert!(!shekyl_relay_zone_covert_enabled(std::ptr::null()));
+        // its zone has no noise channels by construction.
+        assert!(!shekyl_relay_zone_noise_enabled(std::ptr::null()));
     }
 }
 
@@ -735,7 +934,7 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         shekyl_relay_privacy::stem_map::ConnectionId::from_bytes(id(byte))
     }
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(9).as_ptr(), true);
 
         let mut hashes = [0u8; 64]; // two packed 32-byte canonical tx hashes
@@ -753,13 +952,38 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
         );
 
         // First id returns: resolved as propagated.
-        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(9).as_ptr());
+        let mut verdicts = [0u8; 32];
+        let echoed = shekyl_relay_zone_record_arrival(
+            h,
+            hashes.as_ptr(),
+            1,
+            id(9).as_ptr(),
+            verdicts.as_mut_ptr(),
+        );
         assert_eq!(
             shekyl_relay_zone_stem_in_flight(h),
             2,
             "F-10: an echo from the charged successor resolves nothing"
         );
-        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(3).as_ptr());
+        assert_eq!(
+            echoed, 0,
+            "F-10 again, at the disarm seam: an echo that resolves nothing must \
+             report nothing, or the origin disarms on the dropper's own reply"
+        );
+        let resolved = shekyl_relay_zone_record_arrival(
+            h,
+            hashes.as_ptr(),
+            1,
+            id(3).as_ptr(),
+            verdicts.as_mut_ptr(),
+        );
+        assert_eq!(resolved, 1, "a return from elsewhere IS the predicate");
+        assert_eq!(
+            &verdicts[..],
+            &hashes[..32],
+            "the verdict carries the transaction's own id — a disarm keyed on \
+             anything else would clear the wrong pool entry"
+        );
         let t = h
             .as_ref()
             .expect("live zone")
@@ -778,8 +1002,8 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
             std::ptr::null_mut(),
             rec_gather,
             rec_fluff,
-            rec_unbind,
-            rec_covert,
+            rec_noise,
+            rec_resolved,
         );
         let t = h
             .as_ref()
@@ -803,7 +1027,13 @@ fn record_stem_and_arrival_cross_the_boundary_into_the_watch() {
             std::ptr::null(),
             0,
         );
-        shekyl_relay_zone_record_arrival(h, std::ptr::null(), 1, std::ptr::null());
+        shekyl_relay_zone_record_arrival(
+            h,
+            std::ptr::null(),
+            1,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+        );
         assert_eq!(
             shekyl_relay_zone_stem_in_flight(h),
             0,
@@ -849,7 +1079,7 @@ fn an_overflowing_batch_length_trips_the_guard_not_the_multiply() {
 #[test]
 fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         let mut hashes = [0u8; 32];
         hashes[0] = 0xA1;
 
@@ -879,13 +1109,77 @@ fn a_nil_successor_arms_no_observation_but_a_real_one_does() {
     }
 }
 
+/// The zone byte selects the transport-bound parameters, and the stem
+/// observation window is where that shows.
+///
+/// §89.2 makes `hop` per-zone, but the handle was still built from
+/// `DandelionParams::adopted()` for every zone — so an anonymity zone armed a
+/// clearnet 190 s observation against the 499 s embargo its own successor
+/// draws. Every honest i2p/tor peer would age into `silent` before it was even
+/// allowed to re-relay, and `stem_tallies` would report the whole anonymity
+/// peer set as withholding.
+///
+/// Sampled rather than pinned: the deadline is a geometric draw on `OsRng`.
+/// The epoch is set far past both means so `next_wake` reports the observation
+/// rather than the epoch roll. The means differ by ~2.6x, so a 1.5x threshold
+/// cannot flake.
+#[test]
+fn the_zone_byte_selects_the_observation_window() {
+    const ROUNDS: u32 = 200;
+    const EPOCH_BEYOND_BOTH_MEANS_SECS: u32 = 1_000_000;
+
+    let mean_wake = |zone: u8| -> f64 {
+        let mut total = 0f64;
+        for _ in 0..ROUNDS {
+            unsafe {
+                let h = shekyl_relay_zone_new(0, zone, 2, EPOCH_BEYOND_BOTH_MEANS_SECS, 0, 0);
+                let mut hashes = [0u8; 32];
+                hashes[0] = 0xA1;
+                shekyl_relay_zone_record_stem(
+                    h,
+                    hashes.as_ptr(),
+                    1,
+                    id(9).as_ptr(),
+                    std::ptr::null(),
+                    0,
+                );
+                // Lossless rather than an `as` cast with a precision allow:
+                // these deadlines are milliseconds well under `u32::MAX`
+                // (~49 days), so a value that does not fit is a defect worth
+                // failing on rather than rounding.
+                let wake = u32::try_from(shekyl_relay_zone_next_wake(h))
+                    .expect("an embargo deadline in ms fits u32 at this epoch length");
+                total += f64::from(wake);
+                shekyl_relay_zone_free(h);
+            }
+        }
+        total / f64::from(ROUNDS)
+    };
+
+    let clearnet = mean_wake(PUBLIC);
+    let anonymity = mean_wake(RelayZone::Tor.as_u8());
+    assert!(
+        anonymity > clearnet * 1.5,
+        "the anonymity zone must arm a longer observation window than clearnet \
+         (§89.2): clearnet {clearnet:.0} ms vs anonymity {anonymity:.0} ms"
+    );
+
+    // Negative control: two samples of the SAME zone must not separate, or the
+    // assertion above would pass on any source of variance at all.
+    let clearnet_again = mean_wake(PUBLIC);
+    assert!(
+        clearnet_again < clearnet * 1.5 && clearnet < clearnet_again * 1.5,
+        "two clearnet samples must not separate: {clearnet:.0} vs {clearnet_again:.0} ms"
+    );
+}
+
 /// The §55 telemetry readout crosses the boundary as fixed rows, and its
 /// two-call sizing contract holds: a short buffer writes nothing and reports
 /// the needed row count.
 #[test]
 fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
     unsafe {
-        let h = shekyl_relay_zone_new(0, 2, 600, 30, 0);
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
         shekyl_relay_zone_on_handshake(h, id(9).as_ptr(), true);
 
         // Empty zone: zero rows, not an error.
@@ -896,7 +1190,13 @@ fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
         let mut hashes = [0u8; 32];
         hashes[0] = 0xA1;
         shekyl_relay_zone_record_stem(h, hashes.as_ptr(), 1, id(9).as_ptr(), std::ptr::null(), 0);
-        shekyl_relay_zone_record_arrival(h, hashes.as_ptr(), 1, id(3).as_ptr());
+        shekyl_relay_zone_record_arrival(
+            h,
+            hashes.as_ptr(),
+            1,
+            id(3).as_ptr(),
+            std::ptr::null_mut(),
+        );
 
         let need = shekyl_relay_zone_stem_snapshot(h, std::ptr::null_mut(), 0);
         assert_eq!(need, 1, "a resolved observation must produce one row");
@@ -923,6 +1223,560 @@ fn stem_snapshot_reports_row_count_and_writes_only_when_it_fits() {
         assert_eq!(
             rows[0].distinct_sources, 1,
             "local origin (null source) is still one distinct source key"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}
+
+/// The zone-route byte policy, exercised through the REAL exports — the C++
+/// static_asserts pin known values, so these pin what happens OUTSIDE them.
+///
+/// The load-bearing arm is the inverted one: for `originated_stays_in_zone`
+/// an unknown ZONE byte on a `local` origin must return `true`, because
+/// `false` lets the record upgrade to `stem`/`fluff` and the next pool
+/// re-relay puts an anonymity-origin transaction on clearnet (§30.5). A
+/// future zone added on the C++ side before this crate learns its byte must
+/// fail toward liveness loss, never toward the leak.
+#[test]
+fn zone_route_unknown_bytes_fail_toward_refusal_never_clearnet() {
+    const LOCAL: u8 = 1;
+    const STEM: u8 = 2;
+    const TOR: u8 = 3;
+    const UNKNOWN_ZONE: u8 = 4; // first byte a future zone would claim
+    const UNKNOWN_METHOD: u8 = 9;
+    const FAIL_CLOSED: u8 = 1;
+
+    // The inverted arm: local + undecodable zone keeps `local`.
+    assert!(shekyl_relay_zone_originated_stays_in_zone(
+        LOCAL,
+        UNKNOWN_ZONE
+    ));
+    // No `local` claim is invented for an undecodable method…
+    assert!(!shekyl_relay_zone_originated_stays_in_zone(
+        UNKNOWN_METHOD,
+        TOR
+    ));
+    // …and a relayed class on an unknown zone keeps its own record.
+    assert!(!shekyl_relay_zone_originated_stays_in_zone(
+        STEM,
+        UNKNOWN_ZONE
+    ));
+
+    // The send-path decision on any undecodable input is fail-closed — send
+    // nothing is the one default that cannot leak.
+    assert_eq!(
+        shekyl_relay_zone_once_at_origin_route(STEM, UNKNOWN_ZONE),
+        FAIL_CLOSED
+    );
+    assert_eq!(
+        shekyl_relay_zone_once_at_origin_route(UNKNOWN_METHOD, TOR),
+        FAIL_CLOSED
+    );
+
+    // No coherence claim is invented for a zone that does not decode; the
+    // fail-closed token above is what actually guards the send.
+    assert!(!shekyl_relay_zone_r1_coherence_keeps_origin(
+        STEM,
+        UNKNOWN_ZONE
+    ));
+    assert!(!shekyl_relay_zone_is_pre_fluff_relay(UNKNOWN_METHOD));
+}
+
+/// The composed roll export returns only the two zone bytes the contract
+/// names — whichever way the draw lands, the byte is `invalid` (0) or
+/// `public_` (1), never a third value and never an anonymity zone directly
+/// (the zone map resolves `invalid`; that indirection is the fail-closed
+/// design, §30.5).
+#[test]
+fn roll_originated_zone_returns_only_the_two_contract_bytes() {
+    for _ in 0..64 {
+        let z = shekyl_relay_zone_roll_originated_zone();
+        assert!(z == 0 || z == 1, "roll returned byte {z}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The carrier caller (COVER_TRAFFIC_RESTORATION.md §3, "§2.9 step 2" row).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// §2.9b made structural: the crossing takes ONE transaction, so a batch is
+/// not sayable rather than refused.
+///
+/// What edit reds it: give `shekyl_relay_zone_noise_enqueue` a blob count, or
+/// let it take a vector — at which point two transactions share one window,
+/// one slot and one successor, which is the pairwise linkage the stem denies.
+#[test]
+fn the_enqueue_crossing_cannot_express_a_batch() {
+    // A compile-time property, asserted by taking the function's type: the
+    // signature has a single (ptr, len) pair for ONE blob, not a count.
+    let f: unsafe extern "C" fn(*mut RelayZoneHandle, usize, *const u8, usize, u64) -> bool =
+        shekyl_relay_zone_noise_enqueue;
+    let _ = f;
+}
+
+/// A zone without the carrier refuses to enqueue rather than allocating a
+/// queue on demand — the flag decides, not the caller.
+///
+/// What edit reds it: make `noise` lazily constructed on first enqueue.
+#[test]
+fn a_zone_without_the_carrier_refuses_to_enqueue() {
+    // SAFETY: constructed here, freed below, not shared.
+    unsafe {
+        let h = shekyl_relay_zone_new(0, PUBLIC, 2, 600, 30, 0);
+        assert!(!h.is_null());
+        let tx = [7u8; 32];
+        assert!(
+            !shekyl_relay_zone_noise_enqueue(h, 0, tx.as_ptr(), tx.len(), 1),
+            "a cleartext zone has no carrier, so nothing may be enqueued on it"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}
+
+/// The carrier zone accepts one transaction and frames it to a whole number
+/// of windows — the queue's own rule, applied to bytes Rust produced.
+///
+/// What edit reds it: drop the framing and enqueue the bare blob, which is not
+/// a window multiple and the queue refuses.
+/// Bind both slots and poll until exactly one more noise send has crossed.
+///
+/// # Safety
+/// `h` must be a live zone handle.
+unsafe fn drive_one_noise_send(h: *mut RelayZoneHandle) {
+    let peers: Vec<u8> = [id(1), id(2)].concat();
+    shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
+    shekyl_relay_zone_on_handshake(h, id(2).as_ptr(), false);
+    shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
+
+    let before = REC.with(|r| r.borrow().noise.len());
+    // Covert ticks average 5 s (3.333 s + U[0, 3.334 s]) and the epoch minimum
+    // here is 600 s, so a handful of wakes stays well inside one epoch.
+    for _ in 0..16 {
+        if REC.with(|r| r.borrow().noise.len()) > before {
+            return;
+        }
+        let due = shekyl_relay_zone_next_wake(h);
+        shekyl_relay_zone_poll(
+            h,
+            due,
+            std::ptr::null_mut(),
+            rec_gather,
+            rec_fluff,
+            rec_noise,
+            rec_resolved,
+        );
+    }
+    panic!("fixture: no noise send crossed in 16 wakes");
+}
+
+/// The emission must be a LEVIN FRAME, dummy included.
+///
+/// This is the test whose absence let the carrier ship a dummy of raw zero
+/// bytes: the right length, not a message. A peer rejects the zero signature
+/// and closes the connection, so the failure is invisible locally and drops
+/// every peer in production.
+///
+/// What edit reds it: build the dummy as `vec![0; WINDOW_BYTES]` again.
+#[test]
+fn every_emission_is_a_levin_frame_even_the_dummy() {
+    reset();
+    // SAFETY: constructed here, freed below, not shared.
+    unsafe {
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(!h.is_null());
+        drive_one_noise_send(h);
+        shekyl_relay_zone_free(h);
+    }
+    REC.with(|r| {
+        let rec = r.borrow();
+        let (_, _, bytes) = rec.noise.first().expect("a carrier tick emitted");
+        assert_eq!(
+            bytes.len(),
+            shekyl_relay_privacy::params::carrier::WINDOW_BYTES,
+            "every emission is one window"
+        );
+        // The signature is the first field of a levin header, and it is what a
+        // peer checks before anything else. Zeros fail it.
+        let mut sig = [0u8; 8];
+        sig.copy_from_slice(&bytes[..8]);
+        assert_eq!(
+            u64::from_le_bytes(sig),
+            shekyl_levin::LEVIN_SIGNATURE,
+            "an idle carrier tick must be a discardable FRAME, not zero bytes: \
+             a peer rejects the zero signature and closes the connection"
+        );
+    });
+}
+
+/// The token's two resolutions, on a MULTI-WINDOW message.
+///
+/// `take_for_send` is non-destructive, so `sent` advancing and `failed`
+/// restarting is the whole contract of the widened callback. With the
+/// recorder reporting a constant `true`, reversing the two arms was
+/// invisible.
+///
+/// **Multi-window on purpose.** A single-window message makes "restart the
+/// channel" and "retry this fragment" indistinguishable, so the one-window
+/// version of this test encoded the narrower behaviour as the contract — the
+/// exact over-reading the header doc had. At >1 window a failure must return
+/// the FIRST fragment, not the one that failed.
+///
+/// What edit reds it: swap `send.sent(q)` and `send.failed(q)` in `dispatch`.
+#[test]
+fn a_failed_send_restarts_the_message_from_its_first_fragment() {
+    reset();
+    // Comfortably over one window (20,480 B) and under `MAX_FRAGMENTS`.
+    let real = vec![7u8; 40_000];
+    // SAFETY: constructed here, freed below, not shared.
+    unsafe {
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(!h.is_null());
+        assert!(shekyl_relay_zone_noise_enqueue(
+            h,
+            0,
+            real.as_ptr(),
+            real.len(),
+            3
+        ));
+
+        // Compared PER CHANNEL: `due_noise_channel` serves whichever channel
+        // is due, so consecutive ticks alternate and the un-enqueued channel
+        // only ever carries the dummy. Comparing "the last two emissions"
+        // would compare a fragment against a dummy and fail for a reason that
+        // has nothing to do with the token.
+        let on_zero = || {
+            REC.with(|r| {
+                r.borrow()
+                    .noise
+                    .iter()
+                    .filter(|(c, _, _)| *c == 0)
+                    .map(|(_, _, b)| b.clone())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        // Fail every send until channel 0 has been served once.
+        NOISE_DELIVERS.with(|d| d.set(false));
+        while on_zero().is_empty() {
+            drive_one_noise_send(h);
+        }
+        let first = on_zero().last().expect("channel 0 emitted").clone();
+
+        // Then succeed, and channel 0's next emission must be the SAME
+        // fragment — the failed send resolved nothing.
+        NOISE_DELIVERS.with(|d| d.set(true));
+        let seen = on_zero().len();
+        while on_zero().len() == seen {
+            drive_one_noise_send(h);
+        }
+        let second = on_zero().last().expect("channel 0 emitted again").clone();
+
+        assert_eq!(
+            first, second,
+            "a failed send RESTARTS the channel, so the next emission is the \
+             message's FIRST fragment again — not the fragment that failed, \
+             and not the next one. A partly sent message must not be \
+             completed to whatever successor the slot holds later."
+        );
+        // And the restart is a real restart: with >1 window enqueued, a
+        // SUCCEEDING send must then advance, or "restart" would be
+        // indistinguishable from "stuck".
+        let after = on_zero().len();
+        while on_zero().len() == after {
+            drive_one_noise_send(h);
+        }
+        let third = on_zero()
+            .last()
+            .expect("channel 0 emitted a third time")
+            .clone();
+        assert_ne!(
+            second, third,
+            "after a successful send the channel must advance to the next \
+             fragment; equal bytes here would mean the queue never moves"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}
+
+#[test]
+fn a_carrier_zone_accepts_one_framed_transaction() {
+    // SAFETY: constructed here, freed below, not shared.
+    unsafe {
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(!h.is_null(), "an encrypted zone may carry");
+        let tx = vec![9u8; 4_096];
+        assert!(
+            shekyl_relay_zone_noise_enqueue(h, 0, tx.as_ptr(), tx.len(), 2),
+            "one transaction, framed by Rust, must be a whole number of windows"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}
+
+/// **The producer's precondition, at the boundary.** A message reports SENT
+/// across the FFI only once the transport has accepted every window, and
+/// reports it with the token the enqueuer minted.
+///
+/// This is what lets `record_relayed` and the stem-watch observation fire where
+/// a send is known to have happened. Without it the C++ producer would have to
+/// record at enqueue, which claims a relay for a message that may never leave
+/// and charges an observation to a peer that may never receive it.
+///
+/// What edit reds this: reporting from the send arm instead of after the effect
+/// loop, or resolving on the first fragment rather than the last.
+#[test]
+fn a_carrier_message_resolves_sent_across_the_boundary_with_its_token() {
+    reset();
+    let _ = take_resolved();
+    // Over one window so the completion cannot coincide with the first send.
+    let real = vec![3u8; 40_000];
+    // SAFETY: constructed here, freed below, not shared.
+    unsafe {
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(!h.is_null());
+        NOISE_DELIVERS.with(|d| d.set(true));
+        assert!(shekyl_relay_zone_noise_enqueue(
+            h,
+            0,
+            real.as_ptr(),
+            real.len(),
+            0xABCD
+        ));
+
+        let on_zero = || REC.with(|r| r.borrow().noise.iter().filter(|(c, _, _)| *c == 0).count());
+
+        // Drive until channel 0 has emitted twice: the message is two windows,
+        // so the first emission must NOT resolve it.
+        while on_zero() < 1 {
+            drive_one_noise_send(h);
+        }
+        assert!(
+            take_resolved().is_empty(),
+            "the first window resolved a message that is still in the queue"
+        );
+
+        while on_zero() < 2 {
+            drive_one_noise_send(h);
+        }
+        let done = take_resolved();
+        assert_eq!(done.len(), 1, "exactly one message completed");
+
+        /* THE PEER IS ASSERTED, not merely recorded. The recorder captures it
+        because F-10 charges an observation to the peer a stem was given to,
+        and the whole reason this callback reports the peer is that the
+        enqueuer cannot know it. An assertion that compared only
+        `(token, sent)` would stay green against a null peer or the wrong
+        one — which is exactly the defect the parameter was added to
+        prevent, so leaving it unchecked would have made the fix
+        unguarded. */
+        let accepted_for = REC.with(|r| {
+            r.borrow()
+                .noise
+                .iter()
+                .filter(|(c, _, _)| *c == 0)
+                .map(|(_, p, _)| *p)
+                .next_back()
+                .expect("channel 0 emitted")
+        });
+        assert_eq!(
+            done[0],
+            (0xABCD, true, accepted_for),
+            "the verdict must name the enqueuer's token, sent = true, and the \
+             peer channel 0's final emission actually went to"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}
+
+/// The failure arm crosses too: a discarded message reports `sent = false`.
+///
+/// Driven through `unbind`, which is what an unbound stem slot produces — the
+/// case where a transaction leaves the queue having never reached a peer. A
+/// producer that saw only completions would wait forever here, and the pool
+/// would hold `relayed = false` on a transaction it never hears about again.
+#[test]
+fn a_discarded_carrier_message_resolves_not_sent_across_the_boundary() {
+    reset();
+    let _ = take_resolved();
+    let real = vec![5u8; 40_000];
+    // SAFETY: constructed here, freed below, not shared.
+    unsafe {
+        let h = shekyl_relay_zone_new(0, TOR, 2, 600, 30, NOISE_ON_ENCRYPTED);
+        assert!(!h.is_null());
+        assert!(shekyl_relay_zone_noise_enqueue(
+            h,
+            0,
+            real.as_ptr(),
+            real.len(),
+            0x1234
+        ));
+        assert!(take_resolved().is_empty(), "enqueue resolves nothing");
+
+        // An unbound slot: no outbound peers, so the driver produces
+        // `NoiseUnbind` rather than `NoiseSend`, and the queue clears.
+        // No outbound peers: the stem slots have nothing to bind to, so the
+        // driver emits `NoiseUnbind` rather than `NoiseSend`, and the queue
+        // clears what the channel held.
+        GATHER.with(|g| g.borrow_mut().supply.clear());
+        let mut fired = Vec::new();
+        for tick in 1..=40u64 {
+            shekyl_relay_zone_poll(
+                h,
+                tick * 1_000,
+                std::ptr::null_mut(),
+                rec_gather,
+                rec_fluff,
+                rec_noise,
+                rec_resolved,
+            );
+            fired.extend(take_resolved());
+            if !fired.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(
+            fired.iter().map(|(t, s, _)| (*t, *s)).collect::<Vec<_>>(),
+            vec![(0x1234, false)],
+            "an unbound channel discards what it held, and the discard must \
+             cross as sent = false — silence here is the record that never fires"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}
+
+/// Poll exactly one wake, keeping both stem slots fed.
+///
+/// `drive_one_noise_send` loops until an emission lands, which hides the wake
+/// an epoch rolls on. This one advances a single step so a caller can watch
+/// `GATHER.calls` cross.
+///
+/// The peers fed here MUST also appear in `GATHER.supply`: a roll rebuilds the
+/// map from the gathered set, and a slot that lands on no peer unbinds and
+/// discards what it held. Tests that care about surviving a roll depend on
+/// that overlap, so it is a precondition and not a coincidence.
+unsafe fn drive_one_wake(h: *mut RelayZoneHandle) {
+    let peers: Vec<u8> = [id(1), id(2)].concat();
+    shekyl_relay_zone_on_handshake(h, id(1).as_ptr(), false);
+    shekyl_relay_zone_on_handshake(h, id(2).as_ptr(), false);
+    shekyl_relay_zone_update_stems(h, peers.as_ptr(), 2);
+    let due = shekyl_relay_zone_next_wake(h);
+    shekyl_relay_zone_poll(
+        h,
+        due,
+        std::ptr::null_mut(),
+        rec_gather,
+        rec_fluff,
+        rec_noise,
+        rec_resolved,
+    );
+}
+
+/// **An epoch roll discards nothing that is queued.**
+///
+/// Written because the opposite was asserted, in six places, for as long as
+/// the budget existed: that accepting more than an epoch delivers was safe
+/// because "CV-1 discards the surplus at the roll". It does not. A rollover
+/// rebuilds the stem map and never touches `NoiseQueues`; the only drain is
+/// `unbind`, which needs a slot to resolve to NO peer at its due tick, and
+/// CV-1 restarts an in-flight run without dropping anything from `pending`.
+///
+/// The claim survived unchallenged because nothing observed this axis — every
+/// carrier test stays inside one epoch. That is what makes the budget the ONLY
+/// bound on growth rather than a tidier-up after one, so it is worth a gate.
+///
+/// The slots stay bound across the roll on purpose (`drive_one_wake` re-feeds
+/// the same two peers): an unbound slot is the one case that DOES discard, and
+/// hitting it here would test the opposite arm by accident.
+///
+/// What edit reds this: make the epoch branch of `Driver::poll` push
+/// `Effect::NoiseUnbind` for each channel on a rebuild.
+#[test]
+fn a_queued_message_survives_an_epoch_roll() {
+    reset();
+    let _ = take_resolved();
+    const W: usize = shekyl_relay_privacy::params::carrier::WINDOW_BYTES;
+    let msg = vec![0xA7u8; W];
+
+    // SAFETY: constructed here, freed below, not shared.
+    unsafe {
+        // 60 s still affords a full-size message, and rolls an order of
+        // magnitude sooner than the 600 s the other cases use, so the boundary
+        // arrives inside a bounded loop.
+        let h = shekyl_relay_zone_new(0, TOR, 2, 60, 30, NOISE_ON_ENCRYPTED);
+        assert!(!h.is_null(), "60 s affords MAX_FRAGMENTS windows");
+        GATHER.with(|g| g.borrow_mut().supply = vec![id(1), id(2), id(3)]);
+
+        // Bind the slots BEFORE enqueueing. Into an empty stem map the first
+        // due tick is an unbind, which would discard the backlog for a reason
+        // that has nothing to do with the roll.
+        drive_one_wake(h);
+
+        // The channel is TOPPED UP each wake rather than filled once. A full
+        // budget is one epoch of windows counted at the slowest cadence, so it
+        // drains in about three quarters of an epoch — filling once and waiting
+        // empties the channel before the boundary and tests nothing.
+        let mut next_token = 100u64;
+        let mut enqueued = 0usize;
+        let mut rolled = false;
+        let mut resolved_at_roll = 0usize;
+        for _ in 0..2000 {
+            while shekyl_relay_zone_noise_enqueue(h, 0, msg.as_ptr(), msg.len(), next_token) {
+                next_token += 1;
+                enqueued += 1;
+            }
+            let before = GATHER.with(|g| g.borrow().calls);
+            drive_one_wake(h);
+            if GATHER.with(|g| g.borrow().calls) > before {
+                // SENT, not merely resolved: a discard resolves too, so
+                // counting both would let the discard-at-roll defect satisfy
+                // this guard and fail the vacuity check instead of the
+                // assertion that names the property.
+                resolved_at_roll =
+                    RESOLVED.with(|r| r.borrow().iter().filter(|(_, sent, _)| *sent).count());
+                rolled = true;
+                break;
+            }
+        }
+        assert!(rolled, "the epoch rolled inside the loop");
+        assert_eq!(
+            shekyl_relay_zone_live_stems(h),
+            2,
+            "both slots stayed bound across the roll — an unbound slot is the \
+             one case that DOES discard, and hitting it here would test the \
+             opposite arm by accident"
+        );
+
+        assert!(
+            resolved_at_roll < enqueued,
+            "the roll must land on a non-empty channel or this proves nothing: \
+             {resolved_at_roll} of {enqueued} had already been sent"
+        );
+
+        // Stop topping up; everything already queued still drains to the
+        // transport.
+        for _ in 0..2000 {
+            if RESOLVED.with(|r| r.borrow().len()) == enqueued {
+                break;
+            }
+            drive_one_wake(h);
+        }
+
+        let out = take_resolved();
+        assert_eq!(
+            out.len(),
+            enqueued,
+            "every message resolves; a roll strands none"
+        );
+        assert!(
+            out.iter().all(|(_, sent, _)| *sent),
+            "a roll discards nothing, so no verdict may say sent = false"
+        );
+        let mut tokens: Vec<u64> = out.iter().map(|(t, _, _)| *t).collect();
+        tokens.sort_unstable();
+        assert_eq!(
+            tokens,
+            (100..next_token).collect::<Vec<u64>>(),
+            "each enqueued token resolves exactly once"
         );
         shekyl_relay_zone_free(h);
     }

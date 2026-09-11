@@ -22,26 +22,43 @@
 #     otherwise.
 #   - Amounts are atomic units only, encoded as u64 DECIMAL STRINGS (JSON
 #     numbers lose precision past 2^53). No floats, no coin-name units.
-#   - Capability mode ("FULL" | "VIEW_ONLY" | "HARDWARE_OFFLOAD") is carried
+#   - Capability mode ("FULL" — the only capability; ViewOnly is REJECTED
+#     and hardware-offload is DEFERRED with zero code, rule 23) is carried
 #     explicitly on every wallet-handle response — never inferred.
 #   - Hybrid PQC signatures are structured: {"ed25519": hex, "ml_dsa_65": hex}.
 #     Never a single opaque signature blob.
 #   - CTTypeFcmpPlusPlusPqc is the only transaction type; no "ct_type"
 #     field exists anywhere in this API.
 #
-# Method registry status. Every planned method is listed in one of two
-# states:
+# Method registry status. The STATUS OF RECORD is the machine-readable
+# `x-shekyl-method-registry` vendor extension below (rule 23: contract
+# entries are structured data a checker can read, not header prose). It is
+# CI-ENFORCED in both directions by scripts/ci/check_wallet_rpc_liveness.sh
+# (.github/workflows/wallet-rpc-liveness.yml): SPECIFIED ⇒ dispatch arm +
+# production consumer; REJECTED/RESERVED ⇒ no arm; every arm ⇒ a registry
+# row. This header block is RATIONALE — the reasoning behind each status —
+# and the per-status meaning is:
 #   SPECIFIED — full request/response schemas below; implementable now.
 #   RESERVED  — name + error-code range allocated; full schemas land in the
 #               sub-PR that implements the method, gated on the named
 #               engine-layer prerequisite (rule 21 reversion shape: the
 #               reopening criterion for each reserved method is the landing
 #               of its named prerequisite on dev, verified per rule 94).
+#   REJECTED  — name refused, never to be implemented as shaped; the entry
+#               stays so the namespace cannot be silently re-minted. Each
+#               carries a rule-21 reopening clause in its rationale.
 #
 #   SPECIFIED (this commit):
 #     create_wallet, open_wallet, close_wallet, change_password,
 #     get_balance, get_primary_address,
 #     build_pending_tx, submit_pending_tx, discard_pending_tx,
+#     abandon_tx                                   (PR-SJ-3 — the P3-4
+#                                                   user-authored abandon)
+#     set_tx_note, get_tx_note                     (PR-SA-4 — SJ-DQ-7
+#                                                   per-txid annotation;
+#                                                   the reader is the only
+#                                                   way to read a note whose
+#                                                   tx is not yet scanned)
 #     get_transfers, get_transfer_by_id,
 #     refresh, rescan_blockchain,
 #     get_height, get_version,
@@ -78,28 +95,135 @@
 #     get_transfers.attribution filter +           (FA-8 unattributed
 #       Transfer.attribution                        receives; CLI history
 #                                                   incoming --unattributed)
-#   RESERVED (prerequisite in parentheses):
-#     unstake, claim, get_stakes                   (Stage 3 StakeEngine +
-#                                                   Phase 2b orchestrator;
-#                                                   reward path blocked on
-#                                                   REWARD_EMISSION_LEG.md
-#                                                   PR-E1..E3 / C-1)
+#   SPECIFIED (WI-RPC-5 — archival principal staking actions):
+#     stake_in                                     (PR-P2 principal→P funding
+#                                                   leg over Engine::stake_in;
+#                                                   an ordinary transfer
+#                                                   through the pending-tx
+#                                                   confirm/submit path. Ships
+#                                                   with the GF-7
+#                                                   change-co-presence
+#                                                   disclosure — see
+#                                                   StakeInParams)
+#     get_drain_balance                            (F-D2 aggregate drainable
+#                                                   read; two-armed result —
+#                                                   never "0" while syncing)
+#     drain                                        (DS-PR-2 P→principal drain
+#                                                   send. Amount only:
+#                                                   fee / destination / slot
+#                                                   are engine-resolved,
+#                                                   never parameters — the
+#                                                   P-lane CONTRACT PIN below
+#                                                   applied)
+#   SPECIFIED (PR-C — the composed exit; SHIPPED 2026-09-03):
+#     unstake                                      (the irreversible Release
+#                                                   POST for the first
+#                                                   live-bonded persona. No
+#                                                   parameters — persona,
+#                                                   fee, and amount are all
+#                                                   engine-resolved; see
+#                                                   UnstakeParams)
+#     collect_unstaked                             (the terminal sweep of
+#                                                   the released collateral
+#                                                   to principal, one capped
+#                                                   pass per call; the
+#                                                   reply carries the
+#                                                   two-part completion
+#                                                   fact — see
+#                                                   CollectUnstakedResult)
+#
+#     RESERVED→SHIPPED RECONCILIATION (read before assuming drift): the
+#     reservation said "`unstake` is the composed release() = post + a
+#     decorrelated drain". The shipped shape discharges that composition
+#     ACROSS TWO NAMED ACTIONS rather than inside one method, and the
+#     departure is deliberate, not drift:
+#       1. The composition cannot be synchronous — the sweep can only spend
+#          payouts that have confirmed and matured, epochs after the post.
+#       2. A single overloaded verb was REJECTED for irreversible-step
+#          mis-selection: a verb overload is an ergonomics question until
+#          its resolution ladder can fall through to an irreversible
+#          action — with persona A exited (payouts immature) and persona B
+#          still bonded, a "finish A" call would fall through and post B's
+#          irreversible exit, firing exactly when the caller's mental model
+#          and engine state have diverged. Multi-bonded is a routine state
+#          (rotation-while-bonded), so the fallback is a trap, not an edge.
+#       3. The sweep could not land on `drain`: its active-persona
+#          resolution is a FIREWALL pin, and the persona being collected is
+#          routinely not the active one — routing the sweep through it
+#          would have quietly deleted that pin. `collect_unstaked` is
+#          therefore a contract ADDITION beyond the reserved name, with
+#          engine-side exited-persona resolution.
+#       "Decorrelated" post-F-W10 is structural: two separate, user-timed,
+#       FCMP-private transactions — never machinery.
+#
+#     THE FINDING THIS SHIPMENT DISCHARGES (recorded 2026-09-03, PR-C):
+#     the funded retirement gate had PASSING COVERAGE AND ZERO PRODUCTION
+#     REACH — emptying a slot needs a payment of exactly `spendable − fee`,
+#     the fee is an internal quote never exposed by any read, and
+#     get_drain_balance is gross-of-fee, so no user path could produce the
+#     zero the gate fires on; the retire engine walk observed it fire only
+#     on synthetically constructed states. A test that constructs a gate's
+#     trigger state proves the gate works and says nothing about whether
+#     the state is reachable. collect_unstaked's engine-computed exact
+#     sweep (`Σ selected − fee`, zero change) is what makes the gate
+#     reachable; the composed-arc regtest walk now retires a persona from
+#     states produced only by the shipped verbs.
+#
+#     WIRE-ACTIVITY PIN (carried from the reservation, now owned here): a
+#     wallet HOLDS many personas and activates one; the exit pair is
+#     deliberately NOT active-scoped — bonded personas stay resident
+#     precisely so a rotated-away one can still be released
+#     (ARCHIVAL_BOND_CONSTRUCTION.md keeps the bonded union; "bricks
+#     releasing otherwise"). What the firewall requires is NO SIMULTANEOUS
+#     WIRE ACTIVITY, and the per-persona one-live-exit / one-live-drain
+#     seals own that serialization on this path.
 #       CONTRACT PIN (P-lane fee uniformity, ratified 2026-07-19,
-#       V3_WALLET_DECISION_LOG.md "P-lane fees"): when these schemas land
-#       they carry NO fee parameter — no FeePriority, no amount, no
-#       cover-amount input. Every P-lane tx pays the canonical weight-priced
-#       floor fee from persona working capital (cover + earnings); a
-#       user-visible fee control would be a wallet-fingerprint channel in a
-#       cleartext field on P-attributed transactions. Unbonding is an
-#       autonomous first-class process: the surfaced method is at most a
-#       trigger plus read-only progress, never a parameterized action.
-#     match_transfer_to_request                    (Phase 2c orchestrator
-#                                                   wrapper over the FA-8
-#                                                   engine substrate; the
-#                                                   create/list/URI half
-#                                                   landed with WI-RPC-1)
+#       V3_WALLET_DECISION_LOG.md "P-lane fees"): both schemas carry NO fee
+#       parameter — no FeePriority, no amount, no cover input. Every P-lane
+#       tx pays the canonical weight-priced floor fee; a user-visible fee
+#       control would be a wallet-fingerprint channel in a cleartext field
+#       on P-attributed transactions. (The reservation-era text survives at
+#       the git history of this entry; the gate's four conditions and their
+#       narrowing history are preserved in PRINCIPAL_STAKE_LIFECYCLE.md's
+#       PR-P4 row.)
+#
+#   RESERVED: none at present. (sign_message / verify_message shipped with
+#     PR-SM-2; match_transfer_to_request was re-ruled REJECTED 2026-09-07 —
+#     see below.)
 #
 #   REJECTED (rule 21 reversion shape — removed from RESERVED, not landed):
+#     match_transfer_to_request                    (RESERVED→REJECTED
+#       2026-09-07, wallet-rewrite audit. The rewrite plan already makes
+#       inbound reconciliation auto-applied during scan/merge — attribution
+#       is automatic, and `get_transfers.attribution` plus CLI
+#       `history incoming --unattributed` are the read surface. This name
+#       was a leftover from when matching was going to be a user step; an
+#       explicit match method would imply a manual attribution workflow
+#       that does not exist. Reopen when: a merchant product round
+#       demonstrates after-the-fact attach is required; the re-evaluation
+#       shape is a fresh contract sub-PR citing this note.)
+#     claim                                        (WI-RPC-5, 2026-08-26.
+#       Emission claims are engine-side automation, not a user action: the
+#       claim assembly/dispatch path (EMISSION_CLAIM_BUILDER.md) runs inside
+#       the Engine's staking machinery, and the CLI parity matrix already
+#       carries claims as "Out of scope" for the user surface. A user RPC
+#       named `claim` would imply a manual entitlement-collection step that
+#       does not exist in the archival design — the claim-era mental model
+#       PRINCIPAL_STAKE_LIFECYCLE.md §0 rejects by construction. Reopen
+#       when: a named operator emerges who needs a manual claim trigger
+#       (e.g. a recovery tool for a wedged claim), with the trigger-only
+#       shape the unstake CONTRACT PIN mandates; the re-evaluation shape is
+#       a fresh contract sub-PR citing this note.)
+#     get_stakes                                   (WI-RPC-5, 2026-08-26.
+#       PRINCIPAL_STAKE_LIFECYCLE.md §0/§firewall: `principal_stakes()` is
+#       RPC-FORBIDDEN — a per-stake enumeration is the principal↔P edge the
+#       archival firewall exists to keep dark, and any method shaped like
+#       "list my stakes with their personas" reconstructs it. The
+#       replacement surface already exists and is aggregate-only:
+#       get_staked_balance / get_staked_outputs / staking_info (WI-RPC-1)
+#       plus get_drain_balance (WI-RPC-5, F-D2 aggregate scalar). Reopen
+#       when: never as an enumeration; a new aggregate read gets its own
+#       method and contract round instead.)
 #     get_tx_key, check_tx_key                     (WI-RPC-3, 2026-07-23;
 #       rationale corrected 2026-07-24. Exporting the raw per-tx secret as
 #       a naked hex string is the wallet2-era mechanism. The OUTBOUND tx
@@ -140,11 +264,32 @@
 #       threat-model review accepting the key-image disclosure; the
 #       re-evaluation shape is a fresh contract sub-PR citing this
 #       note.)
-#     sign, verify                                 (Phase 2 sign_message /
-#                                                   verify_message on the
-#                                                   orchestrator)
-#     export_unsigned, submit_signed               (Phase 2d UnsignedTxBundle
-#                                                   / SignedTxBundle)
+#     export_unsigned, submit_signed               (Cold signing is NOT a
+#       feature — settled 2026-09-07, superseding A4's "post-genesis,
+#       named blocker" framing (decision log). An unsigned spend leaving a
+#       networked wallet and a signed spend returning is the opposite of
+#       Shekyl's secret-locality and verified-display requirements. Cold
+#       STORAGE (seed custody) ships; cold SIGNING never will. The names
+#       stay here as REJECTED because a gone name is easier to re-mint
+#       than a recorded refusal; the -29700..-29799 error range stays
+#       RESERVED unused so no client can pin a meaning we later reassign.
+#       No reopening clause: this is a security rejection under the
+#       00-mission hierarchy, not a deferral.)
+#     claim_rewards                                (alias-shape of `claim`;
+#       rejected with it 2026-09-07 so the same surface cannot return
+#       under a synonym. Same rationale and reopening clause as `claim`.)
+#   SPECIFIED (PR-SM-2 — message-signing projection; formerly the
+#   "sign, verify" RESERVED entry, which sat ambiguously below the
+#   REJECTED block — it was reserved, never rejected):
+#     sign_message, verify_message                 (A2 nested-hybrid message
+#                                                   signing per
+#                                                   docs/design/WALLET_MESSAGE_SIGNING.md
+#                                                   §7; verify is
+#                                                   SESSION-LESS (SM-R-6).
+#                                                   Live end to end since the
+#                                                   fork-(ii) address layout
+#                                                   landed — see the Message
+#                                                   signing section)
 #
 # Error-code allocation (stable ranges; per-method codes land alongside each
 # method, ranges are fixed from this first commit — WALLET_REWRITE_PLAN.md
@@ -156,10 +301,30 @@
 #   -29200..-29299           refresh / rescan
 #   -29300..-29399           proofs (RESERVED range)
 #   -29400..-29499           transfers / history queries
-#   -29500..-29599           staking (RESERVED range)
+#   -29500..-29599           staking (-29500..-29506 and -29512 live on
+#                            `stake`; -29507..-29511 live on `drain`
+#                            (WI-RPC-5); -29513..-29522 and -29528 live on
+#                            `unstake` and -29523..-29527 and -29529 on
+#                            `collect_unstaked` (PR-C; -29513 is shared by
+#                            the exit pair); rest reserved — never reuse an
+#                            allocated code)
 #   -29600..-29699           payment requests (RESERVED range)
-#   -29700..-29799           air-gapped bundles (RESERVED range)
-#   -29800..-29899           sign / verify message (RESERVED range)
+#   -29700..-29799           air-gapped bundles (RESERVED, UNUSED — and
+#                            NOT pending work. Cold signing was rejected
+#                            outright 2026-09-07 (decision log; supersedes
+#                            A4's 2026-08-06 "descoped from V3.0" framing
+#                            and its reopen-later clause). The range is
+#                            held purely as namespace protection: no code
+#                            in it will ever be allocated, and holding it
+#                            means no client can pin a meaning we later
+#                            reassign and no future PR can silently reuse
+#                            the numbers)
+#   -29800..-29899           sign / verify message (PR-SM-2:
+#                            -29800..-29802 allocated; -29803
+#                            ADDRESS_UNBOUND was allocated for the
+#                            R6-a-gated interim and RETIRED unused when
+#                            the fork-(ii) address layout landed — never
+#                            reuse the number; rest reserved)
 #   -29900..-29999           server / transport / tenancy
 #
 # Codes allocated in this commit are enumerated in
@@ -168,7 +333,36 @@
 openapi: 3.1.0
 info:
   title: Shekyl Wallet RPC
-  version: 0.1.0
+  # Contract-document semver. Bumped with each SPECIFIED-surface tranche
+  # (additive minor); the wire-compat integer clients branch on is
+  # GetVersionResult.api_version, which stays 1 pre-genesis (rule 16).
+  # 0.2.0: WI-RPC-5 — stake_in / get_drain_balance / drain, get_balance
+  # staked/claimable_rewards semantics (live values; absent — never "0" —
+  # over an unreadable staking seal, with get_wallet_info.staking degrading
+  # alongside), the stake_in bounded-cover disclosure, -29511 data.cause,
+  # zero-drain -32602, claim-era RESERVED→REJECTED rewrite.
+  # 0.3.0: PR-C — the composed exit: unstake / collect_unstaked (the
+  # RESERVED unstake entry became the shipped contract; reconciliation in
+  # the census), codes -29513..-29528, the {swept, remainder} completion
+  # contract (CollectUnstakedResult is oneOf: SWEPT requires remainder),
+  # and the released-vs-held dispatch dispositions.
+  # 0.3.1: PR-C review — collect_unstaked gains -29529
+  # COLLECT_DAEMON_UNREACHABLE, so a pre-seal daemon outage while preparing
+  # the sweep is retryable ("check the daemon") rather than an opaque
+  # internal -32603; the analogous unstake failure joins the existing
+  # -29520 UNSTAKE_RETRY_TRANSIENT on data.cause "daemon". SWEPT gains
+  # required another_pool_remains (the lane-wide half of the completion
+  # fact: a per-persona remainder "0" must not read as lane-wide
+  # completion while another exited persona's pool is uncollected).
+  # 0.4.0: wallet-rewrite audit step 1 (rule 23) — machine-readable
+  # x-shekyl-method-registry / x-shekyl-error-ranges become the status of
+  # record (header prose stays as rationale); match_transfer_to_request
+  # RESERVED→REJECTED; export_unsigned / submit_signed re-rationalized as
+  # NEVER (cold signing rejected outright, superseding A4); claim_rewards
+  # added REJECTED as an alias-shape of claim; CapabilityMode narrowed to
+  # FULL (ViewOnly REJECTED / hardware-offload DEFERRED, symbols deleted
+  # tree-wide).
+  version: 0.4.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -179,9 +373,96 @@ info:
 
 servers:
   - url: "uds:///run/user/{uid}/shekyl.sock"
-    description: Recommended — Unix domain socket, filesystem-permission auth.
+    description: >-
+      Recommended — Unix domain socket, filesystem-permission auth. Unix only:
+      on Windows the wallet RPC is self-hosted in-process by shekyl-cli over an
+      owner-only named pipe that no URL names, and uds:// is refused at parse
+      (docs/design/WINDOWS_WALLET_SUPPORT.md §8.1).
   - url: "http://127.0.0.1:29500"
-    description: Loopback HTTP with basic auth, for tooling compatibility.
+    description: >-
+      Loopback HTTP with basic auth, for tooling compatibility. The server
+      refuses to start on a wildcard address (0.0.0.0, ::) and refuses a
+      non-loopback TCP/IP bind without --rpc-login (a uds:// socket or the
+      Windows pipe carry their authorization in the transport). Design record:
+      docs/design/RPC_TRANSPORT_POSTURE.md, RT-1 and RT-2.
+
+# ── Method registry (STATUS OF RECORD — rule 23) ──────────────────────────
+# Machine-readable disposition per method name. The wallet RPC liveness gate
+# reads this table: every SPECIFIED method must have a dispatch arm and a
+# production consumer; every REJECTED or RESERVED name must have NO dispatch
+# arm. JsonRpcRequest.method.enum must equal the SPECIFIED set exactly.
+# Rationale for each non-SPECIFIED status lives in the header comment block
+# at the top of this file; this table is the status, the header is the why.
+x-shekyl-method-registry:
+  create_wallet: { status: SPECIFIED }
+  restore_wallet: { status: SPECIFIED }
+  open_wallet: { status: SPECIFIED }
+  close_wallet: { status: SPECIFIED }
+  change_password: { status: SPECIFIED }
+  get_balance: { status: SPECIFIED }
+  get_primary_address: { status: SPECIFIED }
+  build_pending_tx: { status: SPECIFIED }
+  submit_pending_tx: { status: SPECIFIED }
+  discard_pending_tx: { status: SPECIFIED }
+  abandon_tx: { status: SPECIFIED }
+  set_tx_note: { status: SPECIFIED }
+  get_tx_note: { status: SPECIFIED }
+  get_transfers: { status: SPECIFIED }
+  get_transfer_by_id: { status: SPECIFIED }
+  get_wallet_info: { status: SPECIFIED }
+  refresh: { status: SPECIFIED }
+  rescan_blockchain: { status: SPECIFIED }
+  get_height: { status: SPECIFIED }
+  get_version: { status: SPECIFIED }
+  stake: { status: SPECIFIED }
+  create_payment_request: { status: SPECIFIED }
+  list_payment_requests: { status: SPECIFIED }
+  make_uri: { status: SPECIFIED }
+  parse_uri: { status: SPECIFIED }
+  estimate_tx_size_and_weight: { status: SPECIFIED }
+  get_default_fee_priority: { status: SPECIFIED }
+  get_staked_balance: { status: SPECIFIED }
+  get_staked_outputs: { status: SPECIFIED }
+  staking_info: { status: SPECIFIED }
+  stake_in: { status: SPECIFIED }
+  get_drain_balance: { status: SPECIFIED }
+  drain: { status: SPECIFIED }
+  unstake: { status: SPECIFIED }
+  collect_unstaked: { status: SPECIFIED }
+  get_tx_proof: { status: SPECIFIED }
+  check_tx_proof: { status: SPECIFIED }
+  get_reserve_proof: { status: SPECIFIED }
+  check_reserve_proof: { status: SPECIFIED }
+  sign_message: { status: SPECIFIED }
+  verify_message: { status: SPECIFIED }
+  match_transfer_to_request: { status: REJECTED }
+  claim: { status: REJECTED }
+  claim_rewards: { status: REJECTED }
+  get_stakes: { status: REJECTED }
+  get_tx_key: { status: REJECTED }
+  check_tx_key: { status: REJECTED }
+  get_spend_proof: { status: REJECTED }
+  check_spend_proof: { status: REJECTED }
+  export_unsigned: { status: REJECTED }
+  submit_signed: { status: REJECTED }
+
+# ── Error-code ranges (STATUS OF RECORD — rule 23) ────────────────────────
+# SPECIFIED ranges carry allocated codes (enumerated in WalletRpcErrorCode);
+# RESERVED ranges carry none and a PR allocating into one without flipping
+# its status here is a contract violation. The -29700 range is RESERVED
+# permanently: cold signing is REJECTED (never work), and the range is held
+# only so the numbers cannot be silently reused.
+x-shekyl-error-ranges:
+  - { start: -29000, end: -29099, subject: wallet lifecycle, status: SPECIFIED }
+  - { start: -29100, end: -29199, subject: send / build / submit / discard, status: SPECIFIED }
+  - { start: -29200, end: -29299, subject: refresh / rescan, status: SPECIFIED }
+  - { start: -29300, end: -29399, subject: proofs, status: SPECIFIED }
+  - { start: -29400, end: -29499, subject: transfers / history, status: SPECIFIED }
+  - { start: -29500, end: -29599, subject: staking, status: SPECIFIED }
+  - { start: -29600, end: -29699, subject: payment requests, status: RESERVED }
+  - { start: -29700, end: -29799, subject: air-gapped bundles (refused namespace), status: RESERVED }
+  - { start: -29800, end: -29899, subject: sign / verify message, status: SPECIFIED }
+  - { start: -29900, end: -29999, subject: server / transport / tenancy, status: SPECIFIED }
 
 paths:
   /:
@@ -190,6 +471,14 @@ paths:
       summary: JSON-RPC 2.0 envelope; the `method` member selects the operation.
       requestBody:
         required: true
+        description: >-
+          `application/json` is the only accepted Content-Type; any other
+          (or none) is refused with HTTP 415 before authentication. This is
+          the browser boundary: a non-JSON POST is one a web page can make
+          a browser send cross-origin without a preflight. Where the server
+          runs without authentication, the `Host` must be an IP literal or
+          `localhost` (421 otherwise): a hostname can be rebound to the
+          machine by a web page.
         content:
           application/json:
             schema:
@@ -236,6 +525,9 @@ components:
             - build_pending_tx
             - submit_pending_tx
             - discard_pending_tx
+            - abandon_tx
+            - set_tx_note
+            - get_tx_note
             - get_transfers
             - get_transfer_by_id
             - get_wallet_info
@@ -253,10 +545,17 @@ components:
             - get_staked_balance
             - get_staked_outputs
             - staking_info
+            - stake_in
+            - get_drain_balance
+            - drain
+            - unstake
+            - collect_unstaked
             - get_tx_proof
             - check_tx_proof
             - get_reserve_proof
             - check_reserve_proof
+            - sign_message
+            - verify_message
         params:
           description: Per-method params object; see `*Params` schemas.
           type: object
@@ -317,7 +616,13 @@ components:
         - -29002   # WALLET_FILE_EXISTS
         - -29003   # WALLET_FILE_NOT_FOUND
         - -29004   # INVALID_PASSWORD
-        - -29005   # CAPABILITY_FORBIDS
+        # -29005 CAPABILITY_FORBIDS is RETIRED (never reuse): FULL is the
+        # only capability (rule 23; decision log 2026-09-07), so no
+        # operation can be refused on capability grounds. The number stays
+        # out of the enum — emitting it is a conformance failure — and
+        # stays recorded here so it is never reallocated with a new
+        # meaning.
+        - -29006   # WALLET_SESSION_ENDED
         - -29100   # INVALID_RECIPIENT
         - -29101   # INSUFFICIENT_FUNDS
         - -29102   # FEE_ESTIMATION_FAILED
@@ -326,6 +631,8 @@ components:
         - -29105   # CONTENT_GEN_MISMATCH
         - -29106   # SUBMIT_REJECTED
         - -29107   # SUBMIT_AMBIGUOUS
+        - -29108   # ABANDON_STATE_FORBIDS
+        - -29109   # DAEMON_FEE_UNREASONABLE
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29202   # RESCAN_BLOCKED
@@ -334,10 +641,41 @@ components:
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
         - -29303   # PROOF_TX_NOT_FOUND
+        - -29304   # PROOF_TX_UNCONFIRMED
         - -29400   # UNKNOWN_TRANSFER_ID
         - -29500   # STAKE_NOT_READY
         - -29501   # STAKE_IN_FLIGHT
         - -29502   # ALREADY_STAKED
+        - -29503   # STAKE_RECORD_MOVED
+        - -29504   # STAKE_RECOVERED_PENDING_REOPEN
+        - -29505   # STAKE_NO_SHARDS_AVAILABLE
+        - -29506   # STAKE_FOUNDATION_UNACKNOWLEDGED
+        - -29507   # DRAIN_NOT_STAKER
+        - -29508   # DRAIN_NO_ACTIVE_PERSONA
+        - -29509   # DRAIN_RESERVE_BREACHED
+        - -29510   # DRAIN_UNANCHORABLE
+        - -29511   # DRAIN_IN_FLIGHT
+        - -29512   # STAKE_FUNDING_FRAGMENTED
+        - -29513   # UNSTAKE_NOT_STAKER
+        - -29514   # UNSTAKE_NOTHING_STAKED
+        - -29515   # UNSTAKE_BOND_CONFIRMING
+        - -29516   # UNSTAKE_EXIT_IN_PROGRESS
+        - -29517   # UNSTAKE_NOT_READY
+        - -29518   # UNSTAKE_NO_BOND_RECORD
+        - -29519   # UNSTAKE_NOT_FUNDABLE
+        - -29520   # UNSTAKE_RETRY_TRANSIENT
+        - -29521   # UNSTAKE_REFUSED_RELEASED
+        - -29522   # UNSTAKE_FATE_UNKNOWN
+        - -29523   # COLLECT_NO_EXIT
+        - -29524   # COLLECT_NOT_SPENDABLE_YET
+        - -29525   # COLLECT_DUST_REMAINDER
+        - -29526   # COLLECT_PASS_IN_FLIGHT
+        - -29527   # COLLECT_SYNCING
+        - -29528   # UNSTAKE_LOCAL_NODE_REQUIRED
+        - -29529   # COLLECT_DAEMON_UNREACHABLE
+        - -29800   # MSG_SIG_VERIFY_FAILED
+        - -29801   # MSG_SIG_CORRUPTED
+        - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
         - -29900   # TENANT_UNAVAILABLE
       description: |
         Allocated codes (this commit). Per-method additions extend this enum
@@ -348,8 +686,18 @@ components:
           -29002 WALLET_FILE_EXISTS       create: refusing to overwrite
           -29003 WALLET_FILE_NOT_FOUND    open: no such wallet file
           -29004 INVALID_PASSWORD         open/change_password: MAC failure
-          -29005 CAPABILITY_FORBIDS       operation requires FULL capability
-                                          (data: {"capability": "..."})
+          -29005 (RETIRED — never reuse)  was CAPABILITY_FORBIDS. FULL is
+                                          the only capability, so the
+                                          refusal is unreachable; the
+                                          number is retired, not freed
+          -29006 WALLET_SESSION_ENDED     the open wallet's session ended
+                                          (key actor stopped, key material
+                                          wiped): terminal for the session —
+                                          close and reopen the wallet, then
+                                          retry. Emitted by sign_message;
+                                          any future key-actor method maps
+                                          its stopped-actor failure here
+
           -29100 INVALID_RECIPIENT        build/proofs: address parse or
                                           network check failed
           -29101 INSUFFICIENT_FUNDS       build: spendable balance too low
@@ -367,6 +715,45 @@ components:
           -29107 SUBMIT_AMBIGUOUS         submit: transport-level RpcError;
                                           resubmit-of-held-bytes is the
                                           status query
+          -29108 ABANDON_STATE_FORBIDS    abandon_tx: the send's state
+                                          forbids abandoning (CONFIRMED is
+                                          on chain; FAILED never relayed).
+                                          data: {"state": "..."} in
+                                          get_transfers vocabulary. There
+                                          is no force override (P3-4)
+          -29109 DAEMON_FEE_UNREASONABLE  build / get_default_fee_priority /
+                                          stake: the daemon ANSWERED the fee
+                                          query and the wallet refused the
+                                          answer —
+                                          non-monotonic tier band, or a
+                                          tier whose effective weight-1
+                                          charge (mask rounding included)
+                                          exceeds the era-maximum
+                                          legitimate fee — the
+                                          daemon-rounded genesis-condition
+                                          Fh, 14,000,000
+                                          atomic-units/weight, derived from
+                                          the economics parameters and
+                                          KAT-pinned
+                                          (data: {"reason","rate","bound"}).
+                                          Distinct from -29102 (the query
+                                          itself failed) by rule 82: the
+                                          remedies differ — retry vs. stop
+                                          trusting this daemon. The
+                                          intra-snapshot 10×-economy lock is
+                                          withdrawn (honest 2021-scaling
+                                          Fh/Fl exceeds 10×), as is the
+                                          custom-only 100×-economy ceiling.
+                                          The historical median-multiple
+                                          ceiling lands with the V3.x
+                                          wallet-side estimator.
+                                          On `stake` this refuses the BOND
+                                          fee, which is charged to persona
+                                          working capital and has no fee
+                                          control of its own — so this is
+                                          the only place the operator learns
+                                          the daemon quoted an absurd rate.
+                                          Nothing durable is written (W1)
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs: daemon RPC
                                           failed (proof methods dial the
@@ -437,6 +824,12 @@ components:
                                           request (or embedded in a reserve
                                           proof's locators) is unknown to
                                           the daemon
+          -29304 PROOF_TX_UNCONFIRMED     proofs: a reserve-proof locator
+                                          names a tx the daemon holds only
+                                          in its pool; unconfirmed money
+                                          cannot back a reserve claim —
+                                          wait for confirmation and
+                                          regenerate the proof
           -29400 UNKNOWN_TRANSFER_ID      get_transfer_by_id: a well-formed
                                           id naming no row (a malformed id
                                           is -32602, not this)
@@ -445,13 +838,307 @@ components:
                                           stake_in and/or let the persona
                                           scan catch up, then retry;
                                           data: {"detail": "..."} — never
-                                          amounts)
+                                          amounts). Also stake_in's refusal
+                                          when there is no persona to fund
+                                          (not a staker, or no active
+                                          persona) — stake_in mints no new
+                                          codes (WI-RPC-5 F-2 pin)
           -29501 STAKE_IN_FLIGHT          stake: a signed bond post is
                                           already sealed awaiting its
                                           scheduled broadcast
           -29502 ALREADY_STAKED           stake: a confirmed bond exists
                                           for a bonded persona (idempotent
                                           refusal)
+          -29503 STAKE_RECORD_MOVED       stake: the wallet's own staking
+                                          record was reconciled during the
+                                          credentialed reopen (a phantom slot
+                                          collected, or the cursor burned past
+                                          a retired persona), so the slot
+                                          picked before it is stale; nothing
+                                          durable was written — call stake
+                                          again (no payload: persona
+                                          numbering is wallet-internal).
+                                          A reconcile that ADOPTS a
+                                          chain-proven bond returns -29502
+                                          instead, not this code
+          -29504 STAKE_RECOVERED_PENDING_REOPEN
+                                          stake: this session's scan recovered
+                                          a staked slot; staking becomes
+                                          operational at the next wallet
+                                          open — close and reopen, then retry
+          -29505 STAKE_NO_SHARDS_AVAILABLE
+                                          stake: market staking assigns a
+                                          shard automatically, and shard
+                                          assignment is not available yet;
+                                          nothing was written. Kept off
+                                          -29500 because "fund and retry"
+                                          is the wrong sentence for a wallet
+                                          whose funding is fine
+          -29506 STAKE_FOUNDATION_UNACKNOWLEDGED
+                                          stake: posture
+                                          "foundation_complete_tree" was
+                                          requested without
+                                          acknowledge_non_earning_unbounded.
+                                          The refusal MESSAGE IS THE WARNING
+                                          (D-4): every client, including a
+                                          third-party wrapper, must
+                                          round-trip the acknowledgment, so
+                                          the terms are seen or deliberately
+                                          echoed. Nothing was written
+          -29507 DRAIN_NOT_STAKER         drain: this wallet runs no stake
+                                          engine — it is not an archival
+                                          staker, and the drain path does
+                                          not exist here (stake_in's
+                                          equivalent refusal is -29500)
+          -29508 DRAIN_NO_ACTIVE_PERSONA  drain: the wallet is a staker but
+                                          no persona is currently active.
+                                          The drain façade resolves the
+                                          LIVE active persona from actor
+                                          state — there is no p_slot
+                                          parameter to point elsewhere
+                                          (type-level active-persona
+                                          restriction)
+          -29509 DRAIN_RESERVE_BREACHED   drain: the payment would spend a
+                                          LIVE persona's pool below the
+                                          exit-fee reserve (DS-4,
+                                          EXIT_FEE_RESERVE_ATOMIC) —
+                                          draining it there strands the
+                                          future terminal Release. Lower the
+                                          amount. Sweep-to-zero exists only
+                                          for a retired persona, which this
+                                          method cannot select. Scalar-free:
+                                          neither the payment nor the pool
+                                          magnitude is named
+          -29510 DRAIN_UNANCHORABLE       drain: the send-path reference
+                                          anchor is not yet available
+                                          (curve-tree ingest lagging, chain
+                                          shorter than the anchor age) —
+                                          transient; sync and retry. This is
+                                          the SEND-attempt mapping of the
+                                          syncing condition; get_drain_balance
+                                          renders the same condition as its
+                                          `status: syncing` result
+                                          discriminant, never this error
+          -29512 STAKE_FUNDING_FRAGMENTED stake: the persona's spendable
+                                          funding is fragmented across more
+                                          outputs than one bond post can
+                                          carry (the consensus vin cap
+                                          counts the post's own bond input,
+                                          so the funding headroom is 7).
+                                          W1-clean; the funding is intact —
+                                          neither -29500's "fund and retry"
+                                          (funding more worsens it) nor an
+                                          internal fault. No consolidation
+                                          verb exists yet for un-bonded
+                                          persona funding; avoid splitting
+                                          persona funding across more
+                                          stake_in transfers than the
+                                          headroom
+          -29511 DRAIN_IN_FLIGHT          drain: a live pending drain already
+                                          exists for this persona (one live
+                                          drain per persona — the sealed
+                                          record IS the in-flight input
+                                          reservation). The SUCCESS path now
+                                          releases the seal: once the drain's
+                                          reserved inputs have left the wallet's
+                                          live funding set — its own verified
+                                          scan, at the reorg depth every other
+                                          confirmation uses — the record and its
+                                          reservation are released in one seal
+                                          and this lane reopens.
+                                          Two failure routes still hold this
+                                          refusal, and neither is wired: a
+                                          TERMINAL REJECTION, and an AMBIGUOUS
+                                          SUBMIT — the drain is sealed before a
+                                          single submit and a transport error
+                                          deliberately keeps the record, because
+                                          the bytes may already have reached the
+                                          network. If they did not, nothing
+                                          resubmits them (the driver resubmits
+                                          bond posts only), so the inputs stay
+                                          live and this refusal persists exactly
+                                          as in the terminal case. Both legs are
+                                          FOLLOWUPS "Drain/claim dispatch
+                                          driver", target V3.0 pre-genesis. A
+                                          stall alarm names such a drain in the
+                                          log rather than leaving it silent.
+                                          Also the refusal when this drain's
+                                          inputs stopped being current between
+                                          snapshot and seal — either another
+                                          live record (a bond post or an
+                                          emission claim, of ANY persona) now
+                                          reserves one, or a reservation was
+                                          released mid-assembly. Nothing is
+                                          sealed either way; that arm is
+                                          transient; retry. The two arms
+                                          share the code but carry a
+                                          structured discriminant:
+                                          error.data.cause is "pending"
+                                          (sealed drain live; retrying
+                                          cannot help until its record is
+                                          retired) or "raced" (nothing was
+                                          sealed; plain retry). Automation
+                                          MUST branch on data.cause, never
+                                          by parsing the message prose
+          -29513 UNSTAKE_NOT_STAKER       unstake/collect_unstaked: this
+                                          wallet runs no stake engine — the
+                                          exit lane does not exist here
+                                          (shared by the exit pair: one lane)
+          -29514 UNSTAKE_NOTHING_STAKED   unstake: no persona holds a live
+                                          confirmed bond and nothing is
+                                          mid-exit — nothing to unstake
+          -29515 UNSTAKE_BOND_CONFIRMING  unstake: the only bond activity is
+                                          an in-flight bond post; its connect
+                                          sets the balance the exit must
+                                          debit exactly — wait for it to
+                                          confirm, then unstake
+          -29516 UNSTAKE_EXIT_IN_PROGRESS unstake: an exit is already in
+                                          progress (dispatched, or confirmed
+                                          and awaiting collection) — wait,
+                                          then collect_unstaked; never a
+                                          second post (one live exit per
+                                          persona; the exit debits the whole
+                                          bonded total, so a second is doomed
+                                          by construction)
+          -29517 UNSTAKE_NOT_READY        unstake: consensus's own readiness
+                                          predicates refuse for now (release
+                                          cooldown, slash-settlement
+                                          watermark, interval log);
+                                          data.detail carries the predicate's
+                                          own operands — WHEN the refusal
+                                          lifts, not just that it applies.
+                                          One code for the family: the
+                                          remedy class is "wait" for all arms
+          -29518 UNSTAKE_NO_BOND_RECORD   unstake: the daemon holds no bond
+                                          record for the resolved persona —
+                                          the wallet and chain disagree
+                                          about this stake; resync and retry
+          -29519 UNSTAKE_NOT_FUNDABLE     unstake: the exit's floor fee
+                                          cannot be funded from the persona
+                                          pool yet (nothing spendable, an
+                                          output mid-drain, or a shortfall
+                                          data.detail names) — wait for
+                                          outputs to mature or land, then
+                                          retry
+          -29520 UNSTAKE_RETRY_TRANSIENT  unstake: a transient condition
+                                          refused BEFORE anything was sealed
+                                          or sent — data.cause is "syncing"
+                                          (reference view lagging; sync and
+                                          retry) or "raced" (a concurrent
+                                          operation took an input; plain
+                                          retry). Automation MUST branch on
+                                          data.cause, never message prose
+          -29521 UNSTAKE_REFUSED_RELEASED unstake: the daemon refused the
+                                          exit with a DEFINITE first-send
+                                          verdict and the sealed record was
+                                          RELEASED — nothing propagated;
+                                          address data.detail's refusal and
+                                          retry at will. Distinct from
+                                          -29522 because the two demand
+                                          OPPOSITE client behavior
+          -29522 UNSTAKE_FATE_UNKNOWN     unstake: the dispatch failed with
+                                          no definite verdict (or a
+                                          retryable one) — the bytes may
+                                          have reached the network, so the
+                                          sealed record is HELD funds-safe
+                                          and the one-live-exit lane stays
+                                          shut until it settles or the
+                                          recovery slice (FOLLOWUPS
+                                          dispatch-driver prune+resubmit)
+                                          disposes of it. Do NOT re-fire
+                                          blindly; a stall alarm names the
+                                          record in the operator log
+          -29523 COLLECT_NO_EXIT          collect_unstaked: no confirmed
+                                          exit awaits collection — unstake
+                                          first, or wait for the exit to
+                                          confirm and the wallet's own scan
+                                          to observe it
+          -29524 COLLECT_NOT_SPENDABLE_YET collect_unstaked: the exit is
+                                          observed but nothing in the pool
+                                          is spendable yet (payouts, or the
+                                          last pass's residue, not yet
+                                          mature at the reference height) —
+                                          wait and retry
+          -29525 COLLECT_DUST_REMAINDER   collect_unstaked: the spendable
+                                          residue is too small to move — it
+                                          cannot fund the fee plus the
+                                          2-atomic-unit minimum the
+                                          two-output payment can carry.
+                                          The NAMED dust residual:
+                                          it stays in the persona's pool
+                                          (and holds the funded retirement
+                                          gate) until further value matures
+                                          into the slot or the fee floor
+                                          moves. Scalar-free by the drain
+                                          path's contract
+          -29526 COLLECT_PASS_IN_FLIGHT   collect_unstaked: one live drain
+                                          per persona — a previous pass (or
+                                          another drain) is still sealed
+                                          (data.cause "pending": wait for it
+                                          to settle) or this pass's inputs
+                                          raced (data.cause "raced": plain
+                                          retry). The -29511 discriminant
+                                          discipline applies
+          -29527 COLLECT_SYNCING          collect_unstaked: no submittable
+                                          reference can be anchored yet —
+                                          transient; sync and retry (the
+                                          -29510 sibling for the sweep)
+          -29528 UNSTAKE_LOCAL_NODE_REQUIRED unstake: the exit's record
+                                          fetch rides the wallet's OWN node
+                                          over loopback only (the local
+                                          transport posture; remote-daemon
+                                          support for the exit arrives with
+                                          transport-posture selection,
+                                          DQ-T2.3) — this server's daemon
+                                          address is not loopback.
+                                          Operator-actionable configuration
+                                          (repoint the wallet server at a
+                                          local node), deliberately NOT
+                                          -32603: every other verb works
+                                          over a remote daemon, so an
+                                          internal-category answer on
+                                          exactly this one would be
+                                          undiagnosable from the client
+                                          side. data.detail carries the
+                                          transport constructor's refusal
+          -29529 COLLECT_DAEMON_UNREACHABLE collect_unstaked: a daemon query
+                                          needed to prepare the sweep (the
+                                          dispatch-tip clock read) failed
+                                          before anything was sealed — the
+                                          daemon is unreachable. Retryable
+                                          ("check the daemon"), distinct from
+                                          -29527 ("wait for sync") and NOT
+                                          -32603: a reachable daemon outage
+                                          is operator-diagnosable, not an
+                                          internal fault. The analogous
+                                          unstake failure joins -29520 on
+                                          data.cause "daemon". data.detail
+                                          carries the transport's reason
+          -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
+                                          checksum-intact, and NOT a valid
+                                          signature by that address over
+                                          this message on this network.
+                                          The method's honest negative
+                                          answer (SM-R-6), never conflated
+                                          with a shape error (-32602) or a
+                                          damaged paste (-29801)
+          -29801 MSG_SIG_CORRUPTED        verify_message: the armored
+                                          string's 4-byte checksum failed —
+                                          the paste was damaged in transit.
+                                          Remedy: re-copy the signature.
+                                          The checksum is NOT security
+                                          (verification is the integrity
+                                          check); it exists exactly so this
+                                          sentence and -29800 stay apart
+                                          (rule 82)
+          -29802 MSG_SIG_UNSUPPORTED_SCHEME
+                                          verify_message: the scheme byte
+                                          names a signature scheme this
+                                          build does not implement — "this
+                                          wallet is too old to check it",
+                                          the append-only forward-compat
+                                          outcome (SM-R-5).
+                                          data: {"scheme": <byte>}
           -29900 TENANT_UNAVAILABLE       server: wallet-dir tenancy (reserved
                                           for the multi-tenant sub-PR)
 
@@ -467,7 +1154,10 @@ components:
       type: string
       pattern: "^[1-9][0-9]*$"
       description: >
-        Nonzero feerate in atomic units per byte, decimal string. Mirrors the
+        Nonzero feerate in atomic units per **weight** unit, decimal string.
+        Per weight, NOT per byte: the two diverge by the Bulletproofs+
+        clawback once a transaction has more than two outputs, so sizing a
+        rate against the serialized length pins the wrong number. Mirrors the
         `NonZeroU64` inside `shekyl_engine_core::FeePriority::Custom` — a rate,
         NOT an amount, so it is distinct from `AtomicUnits` and forbids "0"
         (the pattern excludes zero and leading zeros).
@@ -479,18 +1169,33 @@ components:
 
     CapabilityMode:
       type: string
-      enum: [FULL, VIEW_ONLY, HARDWARE_OFFLOAD]
+      enum: [FULL]
       description: >
         Typed projection of the wallet envelope capability
         (`shekyl_engine_file::Capability`). Carried explicitly on every
-        wallet-handle response; never inferred by the client.
+        wallet-handle response; never inferred by the client. FULL is the
+        only capability: ViewOnly is REJECTED and hardware-offload is
+        DEFERRED with zero code (rule 23; decision log 2026-09-07). The
+        envelope capability byte is still validated at open — any byte
+        other than 0x01 refuses with the generic unsupported-capability
+        error — so the one-variant enum is a parse boundary, not a
+        formality.
 
     FeePriority:
       description: >
         Mirrors `shekyl_engine_core::FeePriority`. Named tiers resolve to a
         feerate via the daemon fee estimate at build time — never hardcoded
-        multipliers. `custom` pins atomic-units-per-byte and bypasses the
-        daemon estimate (and its sanity checks) entirely.
+        multipliers — and the snapshot must be well-formed (monotonic
+        tiers, no named tier above the era-maximum absolute cap;
+        -29109 otherwise).
+        `custom` pins atomic units per weight unit (see `Feerate` — per
+        weight, not per byte), bypassing the named tiers
+        but not the policy they obey: it must sit at or above the
+        snapshot's economy floor and at or below the same absolute cap
+        (-32602 otherwise — a `custom` rate is the caller's parameter,
+        not a daemon defect). There is no `custom`-only relative
+        ceiling, so `custom` can always express the snapshot's own
+        `PRIORITY` rate, or a little more.
       oneOf:
         - type: string
           enum: [ECONOMY, STANDARD, PRIORITY]
@@ -669,6 +1374,17 @@ components:
     StakeParams:
       type: object
       required: [password]
+      description: >
+        First-stake continuation. The engine entry is posture-mandatory,
+        and this surface offers both: `posture` selects which obligation
+        the bond takes on, and omitting it means market staking — so every
+        caller written before the parameter existed keeps its exact
+        behaviour. The foundation posture is reachable ONLY by also
+        setting `acknowledge_non_earning_unbounded`; without it the call
+        refuses -29506 and the refusal message is the full warning (D-4).
+        Market staking today refuses -29505: shard assignment is its own
+        round, so a well-funded wallet is told so rather than silently
+        owing the corpus.
       properties:
         password:
           type: string
@@ -679,6 +1395,53 @@ components:
             against the sealed envelope BEFORE the reopen closes anything,
             so a wrong password refuses (-29004) with the wallet still
             open. Crosses a local transport only.
+        posture:
+          type: string
+          enum: [market, foundation_complete_tree]
+          default: market
+          description: >
+            Which archival obligation this bond takes on. `market` is an
+            ordinary per-shard staking position inside the reward market.
+            `foundation_complete_tree` is the whole-corpus archival
+            backstop: permanently excluded from the reward market by
+            holdings shape, unbounded and monotone in disk, and fully
+            inside the penalty economy. Absent means `market`, which is
+            what makes this parameter additive rather than breaking.
+            A posture, never a shard set and never a raw holdings kind —
+            there is no select-all affordance on this API.
+        acknowledge_non_earning_unbounded:
+          type: boolean
+          default: false
+          description: >
+            Required to be `true` for posture
+            `foundation_complete_tree`; ignored for `market`. Its absence
+            is not a validation nicety — it is the warning gate (D-4):
+            the -29506 refusal body carries the full statement of terms,
+            so a client either shows the operator those terms or
+            deliberately echoes an acknowledgment it was handed. The
+            wallet GUI never sends this field, which is what keeps the
+            foundation posture off that surface by construction.
+
+    FoundationPostureWarning:
+      type: string
+      description: |
+        The verbatim body of a -29506 refusal, and the text the CLI prints
+        before it will accept the typed phrase. Published here because the
+        contract is what a client implementer reads: a wrapper that wants
+        to render the terms itself must render THESE terms. The server
+        constant and this block are compared whitespace-normalized by
+        `foundation_warning_matches_the_published_contract`, so the two
+        cannot drift apart silently.
+      example: |
+        Foundation CompleteTree posture — read before confirming.
+        This bond declares your node a whole-corpus archival backstop. It is not a staking product:
+        1. It never earns. CompleteTree holdings are excluded from the reward market by holdings shape, permanently. This is not a phase or a promotion path.
+        2. The obligation grows forever. You commit to storing and serving every frozen shard the chain ever produces. Disk consumption is unbounded and monotone. Your drive space is your commitment.
+        3. The penalty side is fully live. You are challenged like any archiver, over the entire frozen corpus. Missed service inside the tolerance window is absorbed; crossing it slashes your collateral, clears your holdings, and demotes this record to an ordinary market position. Reinstatement from there is as a market participant. Returning to CompleteTree posture requires a fresh foundation bond under a new persona.
+        4. Capital is locked at zero yield. The bond floor is nominal, but it is collateral against the largest possible obligation.
+        5. Durability credit is genesis-gated. Unless your identity is in the genesis foundation enumeration, this node also receives no durability_count credit — it is a pure donation to the network. Donations are welcome and genuinely valuable; they are simply not compensated.
+        To proceed, confirm that you are choosing a non-earning, unbounded-storage service posture.
+        CLI: type exactly: `serve without reward` — RPC: set `acknowledge_non_earning_unbounded: true`.
 
     StakeResult:
       type: object
@@ -712,21 +1475,43 @@ components:
 
     GetBalanceResult:
       type: object
-      required: [liquid, staked, unlocked, claimable_rewards, pending]
+      required: [liquid, unlocked, pending]
       description: >
-        Staking is first-class (locked JSON shape). `staked` and
-        `claimable_rewards` are "0" until the Stage 3 stake methods land;
-        the fields are present from the first release so the shape never
-        changes under clients.
+        Staking is first-class (locked JSON shape). As of WI-RPC-5 the
+        staking fields carry live values projected from the same
+        authoritative staking view `get_staked_balance` reads — never the
+        StakingBlock hint. For a non-staker wallet all staking fields are
+        genuinely "0" (there is nothing staked), which is a true zero, not
+        a placeholder. `staked` and `claimable_rewards` are ABSENT
+        (never "0") when the wallet's sealed staking state cannot be
+        read: the liquid fields stay authoritative while the staking
+        projection degrades, and absence is structurally distinct from a
+        zero — a client must render "staking unavailable", not
+        "nothing staked".
       properties:
         liquid:
           $ref: "#/components/schemas/AtomicUnits"
         staked:
           $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Bond principal under confirmed live bonds PLUS principal
+            committed by in-flight sealed posts — the sum of
+            `get_staked_balance`'s two bonded legs. The legs stay separate
+            on that method; this scalar exists for the one-glance balance
+            surface. Absent when the staking seal is unreadable (see the
+            schema description).
         unlocked:
           $ref: "#/components/schemas/AtomicUnits"
         claimable_rewards:
           $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Emission-reward money received and still unspent in
+            staking-side outputs — the same quantity as
+            `get_staked_balance.rewards_received_unspent`. NOT a claim-era
+            "accrued but unclaimed" entitlement; no such user-visible
+            quantity exists in the archival design (claims are engine-side
+            automation). Absent exactly when `staked` is (unreadable
+            staking seal — degrade, never a fabricated zero).
         pending:
           $ref: "#/components/schemas/AtomicUnits"
 
@@ -839,6 +1624,110 @@ components:
         Empty object. Idempotent — discarding an unknown handle succeeds
         (cross-cutting lock 4).
 
+    AbandonTxParams:
+      type: object
+      required: [tx_hash]
+      description: >
+        `abandon_tx` (WALLET_SEND_RECORD.md P3-4 / SJ-DQ-8): give up on a
+        dispatched send. The send record moves to ABANDONED and its
+        retention reference migrates off the live pending set; the
+        retained per-tx secret is kept, so `get_tx_proof` OUTBOUND still
+        works for the abandoned txid. Input locks are NOT released by
+        intent: an abandoned-but-still-landable send keeps its spent-input
+        locks until the watchdog's confirmed-absent evidence releases them
+        (the self-link defence), and a late confirmation flips the row to
+        CONFIRMED loudly. Idempotent: re-abandoning an ABANDONED row
+        succeeds with the same result. Refusals: unknown txid -29400;
+        CONFIRMED / FAILED rows -29108 (no force override — deleting a row
+        from view is the deletion surface's job, not abandon's).
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+
+    AbandonTxResult:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [ABANDONED]
+          description: The row's resulting state (always ABANDONED).
+
+    SetTxNoteParams:
+      type: object
+      required: [tx_hash, note]
+      description: >
+        `set_tx_note` (WALLET_SEND_RECORD.md SJ-DQ-7): attach or clear a
+        user-authored note on a transaction. The note is keyed by the bare
+        txid, so it annotates the transaction rather than one output — it
+        surfaces on every `get_transfers` / `get_transfer_by_id` row for
+        that txid, both the INCOMING change row and the OUTGOING row of a
+        self-send. Purely local wallet UX state: never on the wire, never in
+        a proof. A non-empty note is accepted only for a **transaction this
+        wallet is a party to** — received, spent, pending, or seen in the
+        pool; a note on an unknown txid is refused with -32602 ("no such
+        transaction in this wallet"). An **empty `note` clears** any existing
+        note (there is no separate delete method — "unset" and "set-empty"
+        are the same state) and is always allowed, even for an unknown txid,
+        so a note orphaned by a reorg can be removed. A note longer than 4096
+        UTF-8 bytes is rejected with -32602 (byte length, not character
+        count); the refusal reports byte counts only, never the note text.
+        The same ceilings are enforced on the wallet write path so every
+        caller shares the invariant.
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        note:
+          type: string
+          description: >
+            The note text (UTF-8). Empty string clears the note. Hard limit is
+            4096 **UTF-8 bytes** (not Unicode scalar count) — OpenAPI has no
+            byte-length constraint, so clients must measure `len(utf8)` and
+            not character count; the server refuses over-length notes with
+            -32602 reporting byte counts only.
+
+    SetTxNoteResult:
+      type: object
+      required: [tx_hash]
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        note:
+          type: string
+          description: >
+            The note as stored after the write. Omitted when the note was
+            cleared (empty input).
+
+    GetTxNoteParams:
+      type: object
+      required: [tx_hash]
+      description: >
+        `get_tx_note` (WALLET_SEND_RECORD.md SJ-DQ-7): read back the note
+        stored for a txid. This is the paired reader for `set_tx_note`, and it
+        is the ONLY way to read a note whose transaction has no history row
+        yet: a note can be set on any txid the wallet is a party to, including
+        an outgoing tx still pending confirmation or one seen only in the pool,
+        but `TransferView.note` can only annotate rows that exist — so until
+        the transaction lands in scanned history the note appears on no history
+        row. An unknown txid is NOT an error: it answers with `note` omitted,
+        exactly as a cleared note does (a read makes no existence claim about
+        the transaction).
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+
+    GetTxNoteResult:
+      type: object
+      required: [tx_hash]
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        note:
+          type: string
+          description: >
+            The stored note. Omitted when there is none — which is also the
+            answer for a txid the wallet has never seen.
+
     # ── History ──────────────────────────────────────────────────────
     ReceiveAttributionKind:
       type: string
@@ -904,14 +1793,15 @@ components:
           description: >
             Inclusion height — the height the transaction was mined at.
             **Absent** exactly when the transaction is not on chain: an
-            OUTGOING row in `PENDING`, `FAILED` or `DROPPED`. The wallet
+            OUTGOING row in `PENDING`, `FAILED`, `DROPPED` or
+            `ABANDONED`. The wallet
             knows the height it dispatched at, but that is a local sync
             counter, not an inclusion height; emitting it here would put
             a plausible block number beside a send that was never mined.
             INCOMING rows are scanner-observed and always carry it.
         state:
           type: string
-          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED]
+          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED, ABANDONED]
           description: >
             PENDING = unsettled (receive awaiting confirmation, or send
             still in flight). CONFIRMED = on-chain. SPENT = receive
@@ -921,13 +1811,18 @@ components:
             network no longer holds the send and released its input
             locks (`PresumedDead`), so the funds are spendable again and
             the send can be re-made — a late confirmation still flips
-            such a row to CONFIRMED.
+            such a row to CONFIRMED. ABANDONED = OUTGOING only: the user
+            gave up on the send (`abandon_tx`); unlike DROPPED the
+            release claim is intent, not evidence, so the input locks
+            may still be held until the watchdog resolves — and a late
+            confirmation still flips such a row to CONFIRMED.
 
 
             Each value is a distinct situation and none collapses into
             another: a DROPPED send reported as PENDING would say the
             wallet is still waiting while the same wallet reports those
-            funds available.
+            funds available; an ABANDONED send reported as DROPPED would
+            claim evidence the wallet never observed.
         spent_height:
           type: integer
           format: int64
@@ -939,6 +1834,13 @@ components:
             which payment request a receive arrived against, which has no
             meaning for a row the wallet sent, so an OUTGOING row omits
             the field rather than carrying an invented `UNATTRIBUTED`.
+        note:
+          type: string
+          description: >
+            User-authored note for this transaction (SJ-DQ-7), set via
+            `set_tx_note`. Keyed by the bare txid, so it annotates the
+            transaction, not one output: both directions of a self-send
+            surface the same note. Omitted when no note is set.
 
     GetTransfersParams:
       type: object
@@ -949,7 +1851,7 @@ components:
           enum: [INCOMING, OUTGOING]
         state:
           type: string
-          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED]
+          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED, ABANDONED]
         since_height:
           type: integer
           format: int64
@@ -967,7 +1869,8 @@ components:
 
 
             Bounds *inclusion* height only: a row with no `block_height`
-            (an OUTGOING send in `PENDING`, `FAILED` or `DROPPED`) has
+            (an OUTGOING send in `PENDING`, `FAILED`, `DROPPED` or
+            `ABANDONED`) has
             nothing to compare against and is **always** returned. This
             is what makes the filter usable as a polling watermark —
             a never-mined row could never rise above a rising bound, so
@@ -1031,12 +1934,17 @@ components:
         - address
         - wallet_height
         - balance
-        - staking
         - restore_height
       description: >
         One-round-trip wallet summary for CLI `engine_info` (WI-RPC-4).
         Composes `get_balance` / height / address / staking_info; no new
-        Engine API.
+        Engine API. `staking` is ABSENT (not required) exactly when the
+        wallet's sealed staking state cannot be read: the identity /
+        height / liquid-balance facts stay served while the staking
+        projection degrades, alongside the absent
+        `balance.staked` / `balance.claimable_rewards` — never a
+        whole-surface -32603 for a staking-side seal fault, and never
+        zeros over a bad seal.
       properties:
         name:
           type: string
@@ -1321,7 +2229,7 @@ components:
 
     # ── Fees — WI-RPC-1 ──────────────────────────────────────────────
     # Scope: the PRINCIPAL send surface only. The P lane (bond posts,
-    # unbond, emission claims) pays the canonical weight-priced floor fee
+    # release, emission claims) pays the canonical weight-priced floor fee
     # from persona working capital with no tier and no knob (P-lane fee
     # uniformity, V3_WALLET_DECISION_LOG.md "P-lane fees", 2026-07-19) —
     # these estimate/priority methods never apply to it.
@@ -1381,8 +2289,11 @@ components:
         [default_priority, economy_fee, standard_fee, priority_fee, tree_depth]
       description: >
         One daemon fee snapshot + the same converge fixpoint the build path
-        runs, per named tier. A failed snapshot is -29102 (the same code
-        the build path uses).
+        runs, per named tier. The quote is gated by the same snapshot
+        checks the build path applies, so a quote never reports a
+        snapshot a build would refuse: a fee query that *failed* is
+        -29102, and a snapshot that answered but was *refused* is
+        -29109 (both the same codes the build path uses).
       properties:
         default_priority:
           type: string
@@ -1399,8 +2310,10 @@ components:
     # ── Staking reads — WI-RPC-1 ─────────────────────────────────────
     # Read-only projections of the authoritative staking view (reconcile
     # evidence + sealed pending posts + funding outputs). NEVER derived
-    # from the StakingBlock `bonded_slots` hint. The staking ACTION surface
-    # (unstake, claim) remains RESERVED.
+    # from the StakingBlock `bonded_slots` hint. Staking ACTIONS: stake_in
+    # and drain landed with WI-RPC-5, the exit pair unstake / collect_unstaked
+    # with PR-C (schemas below); claim / get_stakes are REJECTED (header
+    # registry).
     StakedBalance:
       type: object
       required:
@@ -1502,6 +2415,301 @@ components:
           description: >
             The staking scan's sealed frontier height. Absent when the
             wallet has never scanned as a staker.
+        posture:
+          type: string
+          description: >
+            What this wallet's serving host is currently obligated to
+            serve. **Absent means no host is running** — a non-staker, a
+            staker still inside its launch standoff, or a wallet whose
+            serving path failed — and renders as "not serving" rather than
+            as either posture.
+
+            Values defined at this contract version: `market`,
+            `foundation_complete_tree`.
+
+            **Deliberately an open string, not a closed enum.** A serving
+            posture is added by a later round, and a *response* enum would
+            make an older validator reject the whole `staking_info` reply
+            over one display field it did not recognise — breaking a
+            client's balance and scan readings to protect a status line.
+            Clients must therefore treat an unknown value as an opaque
+            posture name and render it as-is, which is exactly what the
+            wallet CLI does; treating it as "not serving" would be a false
+            negative about a node that is serving. The set above is the
+            documentation, and adding to it is a contract change like any
+            other.
+
+            Read-only and derived from the LIVE serving witness, never
+            from a stored setting: no posture is durable wallet-side, and
+            the connected bond record lives daemon-side, so this answers
+            "what is being served now" rather than "what was intended".
+            Consequently it can be absent for a wallet that is bonded —
+            which is the honest reading, not a gap.
+
+    # ── Archival principal staking actions — WI-RPC-5 ────────────────
+    # The principal↔P money legs that already exist in Engine: stake_in
+    # (PR-P2 funding leg), get_drain_balance (F-D2 aggregate read), drain
+    # (DS-PR-2 P→principal send). All three params schemas carry
+    # `additionalProperties: false`, and the server enforces it with
+    # `#[serde(deny_unknown_fields)]` — an unknown key is -32602, never
+    # silently dropped. That is load-bearing on `drain`: fee, destination,
+    # and persona slot are engine-resolved by design (P-lane fee
+    # uniformity CONTRACT PIN, T-DS-3 destination pinning, type-level
+    # active-persona scoping), so a client that believes it is steering
+    # them must be told it is not.
+    StakeInParams:
+      type: object
+      required: [amount]
+      additionalProperties: false
+      description: >
+        Fund the active persona's staking pool from principal (liquid)
+        balance. This is an ORDINARY principal transfer through the same
+        pending-tx confirm/submit path as `build_pending_tx`: the result
+        is a reservation the client confirms with `submit_pending_tx` or
+        abandons with `discard_pending_tx`. The structured cover amount is
+        system-drawn — never a parameter — and no P-address appears on
+        the wire in either direction.
+
+        GF-7 change-co-presence disclosure (clients MUST surface this
+        before confirm): this transaction also creates a change output
+        back to this wallet in the same tx as the staking-fund output.
+        An observer who later links that change output to this wallet can
+        correlate the staking fund with it. This residual linkage is open
+        (bond-funding separation is the named carrier); staking privacy
+        is not degraded beyond this co-presence.
+      properties:
+        amount:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Principal amount to move into the staking pool. User intent
+            only — the fee is priced by the send path as usual and is NOT
+            part of this amount. The funded transfer carries amount PLUS a
+            system-drawn privacy cover, strictly positive and strictly
+            under 0.75 SKL (the cover rung): the principal debit exceeds
+            `amount` by that cover, and the cover credits the staking
+            balance as working capital (it is not a cost). Clients MUST
+            disclose the bounded cover before confirmation — the CLI
+            summary does — and the exact per-draw figure is deliberately
+            never returned (a rebuild loop could otherwise steer the
+            submitted cover distribution). Zero is a valid amount (no
+            floor, DQ1); the cover still applies on top.
+
+    StakeInResult:
+      $ref: "#/components/schemas/BuildPendingTxResult"
+
+    GetDrainBalanceParams:
+      type: object
+      additionalProperties: false
+      description: No parameters. Extra keys are -32602 (F-1).
+
+    GetDrainBalanceResult:
+      description: >
+        Two-armed by contract (F-D2 / rule 82): a wallet that cannot yet
+        anchor the drainable set answers `syncing`, NEVER `"0"` — a zero
+        while syncing would be a lie a client cannot distinguish from an
+        empty pool. `spendable` is the aggregate drainable scalar across
+        the active persona's pool — the same slot-scoped set a `drain`
+        can actually spend, so an amount at or under the figure is never
+        refused as unaffordable for scope reasons; a wallet-wide sum
+        would advertise dormant held personas' funds `drain` cannot
+        move. A staker with no active persona reads a true `ready` "0":
+        nothing is drainable right now (`drain` itself would refuse
+        -29508). There is deliberately no per-epoch or per-output
+        breakdown (the aggregate is the firewall-safe read).
+      oneOf:
+        - type: object
+          required: [status, spendable]
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+              const: ready
+            spendable:
+              $ref: "#/components/schemas/AtomicUnits"
+        - type: object
+          required: [status, detail]
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+              const: syncing
+            detail:
+              type: string
+              description: >
+                Human-readable transient condition (e.g. curve-tree ingest
+                behind the anchor age). Scalar-free: no amounts, no
+                indices.
+
+    DrainParams:
+      type: object
+      required: [amount]
+      additionalProperties: false
+      description: >
+        Move staking funds back to this wallet's own principal balance.
+        `amount` is the ONLY parameter, and that is a contract property,
+        not a first-draft economy: the fee is the canonical P-lane floor
+        quoted inside the Engine (P-lane fee uniformity CONTRACT PIN — a
+        user fee control would be a wallet fingerprint in a cleartext
+        field), the destination is engine-pinned to this wallet's primary
+        address (T-DS-3), and the persona is the live active persona
+        resolved from actor state (there is no slot parameter to point at
+        another persona, and a live persona is never treated as retired —
+        the exit-fee reserve gate stays on). A request carrying `fee`,
+        `destination`, or `p_slot` is -32602, enforced by
+        `deny_unknown_fields`, not by prose. `amount` is user intent and
+        is never pre-filled from a reward vector (F-D2).
+      properties:
+        amount:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Amount to drain to principal; MUST be greater than zero (a
+            zero amount is -32602 at the params boundary — "lower the
+            payment" is no remedy for a request that moves nothing). The
+            canonical floor fee is paid FROM the pool on top of this; a
+            live persona refuses -29509 rather than dip below the
+            exit-fee reserve.
+
+    DrainResult:
+      type: object
+      required: [tx_hash, verdict]
+      description: >
+        The drain was durably sealed BEFORE dispatch (persist-then-send:
+        a crash between the two leaves a sealed record, never a lost
+        send) and then submitted. There is no confirm step — the drain
+        pipeline seals and dispatches in one call; the one-live-drain
+        seal (-29511) is the in-flight brake.
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        verdict:
+          type: string
+          enum: [BROADCAST, ALREADY_IN_CHAIN]
+          description: >
+            Success projection of the engine submit outcome. BROADCAST is
+            the normal arm; ALREADY_IN_CHAIN means a previously-sealed
+            identical drain was found confirmed at submit time.
+        confirmed_height:
+          type: integer
+          format: int64
+          description: Present iff verdict is ALREADY_IN_CHAIN.
+
+
+
+    # ── Composed exit — PR-C ─────────────────────────────────────────
+    UnstakeParams:
+      type: object
+      additionalProperties: false
+      description: >
+        Post the terminal Release exit for the first live-bonded persona.
+        THE IRREVERSIBLE STEP: once the exit connects, the bond debits to
+        zero and the persona can never re-bond on this record. NO
+        parameters, and that is the contract: the persona is
+        engine-resolved (first live-bonded slot — the wire never names a
+        slot; a multi-bonded wallet exits one persona per invocation and
+        re-invokes), the fee is the canonical P-lane floor (CONTRACT PIN),
+        the exit pays the persona's OWN base address (the P↔principal edge
+        is drawn only by collect_unstaked's later, separate sweep), and
+        the released amount is the record's whole bonded total (consensus
+        requires the exact debit). A request carrying `p_slot`, `amount`,
+        or `fee` is -32602 via deny_unknown_fields. Confirmation prompts
+        are CLI-side, never RPC-side: this method fires on call.
+      properties: {}
+
+    UnstakeResult:
+      type: object
+      required: [tx_hash, verdict]
+      description: >
+        The exit was durably sealed BEFORE dispatch (persist-then-send)
+        and then submitted; the DrainResult dispatch-verdict shape. When
+        the network confirms it, collect_unstaked completes the arc.
+        Failure dispositions are first-class here because the path is
+        irreversible: -29521 means the seal was RELEASED (retry at will);
+        -29522 means it is HELD funds-safe (do not re-fire) — see the
+        code table.
+      properties:
+        tx_hash:
+          $ref: "#/components/schemas/Hex32"
+        verdict:
+          type: string
+          enum: [BROADCAST, ALREADY_IN_CHAIN]
+          description: >
+            BROADCAST is the normal arm; ALREADY_IN_CHAIN means a
+            previously-sealed identical exit was found confirmed at
+            submit time.
+        confirmed_height:
+          type: integer
+          format: int64
+          description: Present iff verdict is ALREADY_IN_CHAIN.
+
+    CollectUnstakedParams:
+      type: object
+      additionalProperties: false
+      description: >
+        Sweep one pass of the released exit collateral to this wallet's
+        own principal balance. NO parameters: the persona is
+        engine-resolved (first slot with an observed confirmed exit and a
+        nonempty pool), and the pass's payment is an OUTPUT OF SELECTION —
+        `Σ selected − fee`, exactly zero change — because the funded
+        retirement gate needs the slot at zero and no caller-supplied
+        amount can express that (the fee is an internal quote; this is
+        the reachability finding recorded in the census above). One pass
+        spends at most the consensus input cap; re-invoke per the
+        remainder. The pin against caller steering is
+        deny_unknown_fields, as everywhere on this surface.
+      properties: {}
+
+    CollectUnstakedResult:
+      description: >
+        Internally tagged (status). A SWEPT reply alone is NOT completion
+        — the completion fact is TWO required fields on that arm.
+        `remainder` is the SWEPT PERSONA's half: "0" means nothing remains
+        on that persona beyond this pass; nonzero means call again once
+        the residue matures or this pass confirms. `another_pool_remains`
+        is the LANE's half: true means another exited persona (a
+        dust-skipped slot included) still holds an uncollected pool — call
+        collect_unstaked again — so a per-persona "0" can never read as
+        lane-wide completion (normally false: one persona stakes at a
+        time, and true only as rotation residue). The engine knows both
+        and the caller cannot infer either from any payment figure, which
+        is why they are on the wire rather than implied. NOTHING_LEFT
+        means no exited pool holds anything: the collection is complete
+        and the funded-gated retirement proceeds engine-side on its own
+        (an active persona retires after its next rotation).
+      oneOf:
+        - type: object
+          required: [status, tx_hash, swept, remainder, another_pool_remains]
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+              const: SWEPT
+            tx_hash:
+              $ref: "#/components/schemas/Hex32"
+              description: The pass's transaction hash.
+            swept:
+              $ref: "#/components/schemas/AtomicUnits"
+              description: What this pass moves to principal.
+            remainder:
+              $ref: "#/components/schemas/AtomicUnits"
+              description: >
+                What the swept persona's pool still holds beyond this
+                pass (immature payouts plus mature overflow past the
+                input cap). "0" is THAT PERSONA's completion; see
+                another_pool_remains for the lane.
+            another_pool_remains:
+              type: boolean
+              description: >
+                Whether any OTHER exited persona still holds an
+                uncollected pool (dust-skipped slots count). false plus
+                remainder "0" = the exit lane is fully collected; true =
+                call collect_unstaked again.
+        - type: object
+          required: [status]
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+              const: NOTHING_LEFT
 
     # ── Proofs — WI-RPC-3 (Phase 2c) ─────────────────────────────────
     # DLEQ-based payment and reserve proofs over rust/shekyl-proofs. Two
@@ -1634,11 +2842,10 @@ components:
         raw strings — Bech32m admits an all-uppercase encoding of the
         same address, and a string compare would silently misroute
         INBOUND to OUTBOUND and fail -29301 on correct-looking input.
-        Capability: INBOUND requires only view material and is permitted
-        on VIEW_ONLY wallets (the auditor-wallet use case, deliberate);
-        OUTBOUND is not capability-gated — it needs the retained tx
-        secret, not spend material, and a view-only wallet answers
-        -29301 naturally because it never sent.
+        Capability: neither direction is capability-gated (FULL is the
+        only capability). INBOUND needs only view material; OUTBOUND
+        needs the retained tx secret, not spend material, and a wallet
+        that did not send the tx answers -29301 naturally.
         OUTBOUND PREREQUISITE (in-scope for WI-RPC-3, its own commit
         ordered before the proof wrapper): the send path must persist
         the per-tx secret into TxMetaBlock.tx_keys — the schema exists
@@ -1810,9 +3017,10 @@ components:
         bounds the holder's forward-linkage surface — revisit if a
         caller emerges that needs value-under-surveillance minimized
         instead.
-        Requires an open FULL wallet (-29005 otherwise; the proof signs
-        with the spend key). -29302 when the wallet has no eligible
-        outputs or the unspent total is below `amount`.
+        Requires an open wallet (-29001 otherwise; the proof signs with
+        the spend key, which every wallet holds — FULL is the only
+        capability). -29302 when the wallet has no eligible outputs or
+        the unspent total is below `amount`.
       properties:
         amount:
           $ref: "#/components/schemas/AtomicUnits"
@@ -1901,3 +3109,111 @@ components:
         output_count:
           type: integer
           format: int64
+
+    # ── Message signing — PR-SM-2 (A2 / Phase 2c residue) ────────────
+    # Transferable attestations binding a message to a Shekyl address:
+    # the nested hybrid ratified in docs/design/WALLET_MESSAGE_SIGNING.md
+    # §7 (SLH-DSA-SHA2-192s inner, spend-scalar Schnorr outer, cSHAKE256
+    # domain-separated preimage binding the address's bound classical
+    # segment, the network, and a mode byte).
+    #
+    # The armored signature is a single line, `shekylmsgsig1.` +
+    # unpadded canonical-strict base64url — about 21.7 KB (16,295
+    # canonical bytes) for the one shipping scheme. Decode enforces a
+    # 64 KB ceiling on the ENCODED length before any decoding.
+    #
+    # sign_message needs the open FULL wallet (the signing identity is
+    # derived on demand from the master seed) and is MULTI-SECOND BY
+    # DESIGN: ~4.3 s per call on the smallest supported device (Pi 4
+    # floor, SM-R-8 — signing is a rare, deliberate act; verification
+    # is ~3.4 ms there). Clients should present the wait as expected
+    # work, never as a hang (rule 82).
+    #
+    # verify_message is SESSION-LESS (SM-R-6): message, signature, and
+    # address are all public caller-supplied inputs, so it is callable
+    # with no wallet open, never touches wallet state, and never dials
+    # the daemon. It is constant-time with respect to NOTHING — every
+    # input is public; do not add timing hardening here.
+    #
+    # Error taxonomy (the contract-level fact of this section): shape
+    # errors are -32602 (malformed signature string, undecodable or
+    # classical-only address — shape-first, the get_transfer_by_id
+    # precedent); every other outcome is an ANSWER with its own code:
+    # -29800 not-by-that-address, -29801 corrupted paste, -29802
+    # unknown scheme. The signature string is judged BEFORE the
+    # address, so the paste taxonomy is a property of the paste alone.
+    #
+    # REACH: verification is live end to end — every address carries the
+    # 48-byte SLH-DSA key as its fourth classical field (fork (ii)), so
+    # the SignerIdentity extraction that gated the R6-a interim is total.
+    # (-29803 ADDRESS_UNBOUND, the interim refusal, was retired unused.)
+
+    SignMessageParams:
+      type: object
+      required: [message]
+      description: >
+        Sign `message` as the open wallet's address (spend-tier mode).
+        Requires an open wallet (-29001 otherwise; -29006 if the
+        session's key actor has stopped — close and reopen).
+        Multi-second by design — see the section header.
+        Single-flight per wallet: concurrent calls queue FIFO behind the
+        engine's sign permit rather than running in parallel.
+      properties:
+        message:
+          type: string
+          description: >
+            The exact string to sign, bound byte-for-byte (UTF-8). The
+            verifier must supply the identical string.
+
+    SignMessageResult:
+      type: object
+      required: [signature]
+      properties:
+        signature:
+          type: string
+          description: >
+            Single-line armored signature (`shekylmsgsig1.` + unpadded
+            base64url, ~21.7 KB). Not secret — it is a transferable
+            attestation; anyone holding message + signature + address
+            can verify it.
+
+    VerifyMessageParams:
+      type: object
+      required: [address, message, signature]
+      description: >
+        SESSION-LESS verification of a message signature against an
+        address. Works with no wallet open; reads only the server's
+        network binding (the address must belong to it). Requires the
+        FULL address form — the classical-only display form cannot
+        reconstruct the bound segment the signature covers (-32602).
+      properties:
+        address:
+          type: string
+          description: The claimed signer's full Shekyl address.
+        message:
+          type: string
+          description: The exact string the signer claims to have signed.
+        signature:
+          type: string
+          description: >
+            The armored `shekylmsgsig1.` string. Decode tolerates
+            embedded whitespace (mail clients wrap 21.7 KB lines) but is
+            otherwise canonical-strict.
+
+    VerifyMessageResult:
+      type: object
+      required: [verified]
+      description: >
+        SUCCESS-ONLY by contract: every negative outcome is one of the
+        -29800-band error codes, because the taxonomy needs four
+        distinct sentences (mismatch / corruption / unknown scheme /
+        unbound address) that a `valid: false` boolean cannot carry.
+        This deliberately diverges from CheckTxProofResult's
+        `valid: false` shape, which predates the SM-R-6 ruling.
+      properties:
+        verified:
+          const: true
+          description: >
+            The signature verifies for the address, message, and
+            network. Present so scripted callers read a self-describing
+            field rather than inferring success from an empty object.

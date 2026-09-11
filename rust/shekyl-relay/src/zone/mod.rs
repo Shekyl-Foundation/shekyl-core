@@ -7,21 +7,27 @@
 //!
 //! A zone is the unit the inherited C++ calls `detail::zone` — public,
 //! or i2p/tor. This type owns the state §18.5's inventory assigned to Rust:
-//! peer fluff queues, the stem map, the epoch role, and the covert **schedule**
-//! (enable bit, cadence, per-channel deadlines). Covert **buffers** and
-//! transport (framing, padding, the socket) stay C++ permanently, so a
-//! transaction body crosses the boundary only as an opaque blob. See
+//! peer fluff queues, the stem map, the epoch role, and the noise **schedule**
+//! (enable bit, cadence, per-channel deadlines). Noise **buffers** live in
+//! [`crate::NoiseQueues`] (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2).
+//! C++ is transport, and since the 2026-08-27 development opt-in it CAN
+//! enable the carrier — `make_relay_zone` sets the noise bit when
+//! `set_carrier_development(true)`. It remains transport only: Rust decides
+//! whether and when channels fire. A transaction body is still an opaque blob
+//! here. See
 //! `DAEMON_RELAY_PRIVACY.md` §20.2 / §20.4 for the post-RP-3b inventory.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::sync::Arc;
 
-use shekyl_relay_privacy::params::{inherited, DandelionParams};
+use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
 use shekyl_relay_privacy::rng::RelayRng;
 use shekyl_relay_privacy::schedule::{
     DelayFamily, EmbargoTimer, EpochScheduler, FluffScheduler, Millis, NoiseCadence, PeerDirection,
 };
-use shekyl_relay_privacy::stem_map::{ConnectionId, StemMap};
+use shekyl_relay_privacy::stem_map::{ConnectionId, SlotIndex, StemMap};
+use shekyl_relay_privacy::LinkSecrecy;
 
 use crate::stem_watch::{StemTally, StemTallySnapshot, StemWatch, TxId};
 
@@ -97,6 +103,58 @@ pub enum RelayPlan {
     FluffEpoch,
 }
 
+/// Why [`Zone::new`] refused a configuration.
+///
+/// Three refusals, three variants — collapsing them to `None` would be the
+/// same axis-merge this type exists to prevent. The FFI maps every variant
+/// to a null handle; a future in-process caller matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneNewError {
+    /// Noise conceals packet sizing. On a cleartext link the observer reads
+    /// the contents outright, so padding sizes conceals nothing.
+    NoiseOnCleartext,
+    /// `stems` doubles as the channel count. Noise is
+    /// [`inherited::NOISE_CHANNELS`] wide; a mismatch sizes the schedule
+    /// against a width the rest of the stack does not share.
+    NoiseChannelCount {
+        /// The stem/channel count that was requested.
+        got: usize,
+    },
+    /// The epoch cannot carry a full-size message, so the message may never
+    /// arrive: it cannot finish within one epoch, and any roll that hands its
+    /// slot to a different peer restarts it from the first fragment (CV-1).
+    ///
+    /// Budget is [`carrier::noise_windows_in_epoch`] against
+    /// [`carrier::MAX_FRAGMENTS`]. Runtime, not `const`, because the
+    /// epoch crosses as `min_epoch_secs`.
+    NoiseCannotCrossOneEpoch {
+        /// Windows a full-size message needs.
+        needs: u32,
+        /// Windows the epoch affords.
+        affords: u32,
+    },
+}
+
+impl fmt::Display for ZoneNewError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoiseOnCleartext => {
+                write!(f, "noise carrier requires an encrypted link")
+            }
+            Self::NoiseChannelCount { got } => write!(
+                f,
+                "noise channel count must equal inherited::NOISE_CHANNELS (got {got})"
+            ),
+            Self::NoiseCannotCrossOneEpoch { needs, affords } => write!(
+                f,
+                "noise epoch carries {affords} windows but a full message needs \
+                 {needs}; a roll that rebinds the slot restarts it from the first \
+                 fragment, so it may never finish"
+            ),
+        }
+    }
+}
+
 /// Which peers a fluff batch may reach in this zone.
 ///
 /// A zone-lifetime policy, not a per-batch choice, which is why it is set at
@@ -107,16 +165,58 @@ pub enum FluffReach {
     EveryPeer,
     /// Outbound connections only — **i2p/tor**.
     ///
-    /// The inherited rule, one line in `fluff_notify` under the comment *"When
-    /// i2p/tor, only fluff to outbound connections"*. It is why noise-mode
-    /// networks can substitute for Dandelion++'s sybil resistance at all: an
-    /// inbound connection on a hidden service is an unauthenticated stranger who
-    /// dialled *us*, so relaying to it hands a transaction to a peer we did not
-    /// choose. Only outbound connections are ones this node selected.
+    /// The mechanism is inherited — one line in `fluff_notify` under *"When
+    /// i2p/tor, only fluff to outbound connections"* — but **its Shekyl
+    /// justification is not, and the inherited one was wrong.**
+    ///
+    /// > **Retracted rationale (2026-08-17).** This doc previously read *"it is
+    /// > why noise-mode networks can substitute for Dandelion++'s sybil
+    /// > resistance at all"*. That is the sybil-substitution fallacy §64
+    /// > already named, and it conflates two different observers: **noise**
+    /// > masks the node↔proxy wire against an *external* observer, while
+    /// > **Dandelion++** defends against an *internal* adversarial peer.
+    /// > Neither substitutes for the other, and minting onion addresses is
+    /// > free, so the anonymity network never supplied sybil resistance —
+    /// > this rule did.
+    ///
+    /// Two justifications, both standing on their own:
+    ///
+    /// 1. **A node relays only to peers it chose.** An inbound connection on a
+    ///    hidden service is an unauthenticated stranger who dialled *us*, so
+    ///    relaying to it hands a transaction to a peer we did not select. That
+    ///    is a genuine partial sybil mitigation and it needs no cover traffic
+    ///    to be true.
+    /// 2. **It is the leg that makes anonymity-zone emit attribution
+    ///    impossible** (§91.4). To receive a fluff from node `Y`, an adversary
+    ///    must be `Y`'s *outbound* — i.e. `Y` dialled it — which is exactly the
+    ///    direction where the adversary holds `tor_address::unknown()` and
+    ///    **no node identifier at all**. On the reverse link, where the
+    ///    adversary does know `Y`'s onion because it chose it, this rule skips
+    ///    the send. **There is no direction carrying both the emit and the
+    ///    name**, and §91 (Design A) now depends on that.
+    ///
+    /// Point 2 makes this rule load-bearing rather than merely inherited:
+    /// widening the reach to inbound peers would hand an active marker the
+    /// attribution it currently cannot obtain. Do not relax it without
+    /// reopening §91.4.
+    ///
+    /// **The identifier is gone from the wire (PWD-I1, landed), so this
+    /// clause cites its absence rather than a constant.** It used to name
+    /// `ANON_ZONE_SENTINEL_PEER_ID`, which pinned the announced value to `1`
+    /// and supplied one half of "no distinguishing identifier on the emit
+    /// direction"; `tor_address::unknown()` on inbound supplied the other.
+    /// `basic_node_data` now carries no identifier of any kind and
+    /// `peerlist_entry` none either, so the half that needed a pinned
+    /// constant needs nothing — the argument got shorter, not wider.
+    ///
+    /// **Removing the field does not extend Point 2 to clearnet**: a clearnet
+    /// counterparty still holds the connection's IP address, and this spec
+    /// concedes that clearnet gives confidentiality and integrity, not
+    /// anonymity (PW-3a). The leg was never unsatisfied in between.
     OutboundOnly,
 }
 
-/// Covert-channel schedule for a zone — or its deliberate absence.
+/// Noise-channel schedule for a zone — or its deliberate absence.
 ///
 /// One type so "enabled" and "has deadlines" cannot disagree: a disabled zone
 /// has no schedule; an enabled zone always has one deadline per stem slot.
@@ -129,10 +229,10 @@ pub enum FluffReach {
 /// scheduler, an epoch rollover, or another channel coming due must leave every
 /// other entry untouched. Re-drawing on a foreign wake resamples
 /// `min + U(0, jitter)` and keeps the minimum, which biases the effective
-/// covert interval **short** — a privacy defect no count assertion and no
+/// noise interval **short** — a privacy defect no count assertion and no
 /// goodness-of-fit grade can see (§20.2a).
 #[derive(Debug)]
-enum CovertSchedule {
+enum NoiseSchedule {
     Off,
     On {
         cadence: NoiseCadence,
@@ -141,9 +241,9 @@ enum CovertSchedule {
     },
 }
 
-impl CovertSchedule {
+impl NoiseSchedule {
     fn on<R: RelayRng + ?Sized>(channels: usize, now: Millis, rng: &mut R) -> Self {
-        let cadence = NoiseCadence::inherited();
+        let cadence = NoiseCadence::shipped();
         let deadlines = (0..channels).map(|_| cadence.next_send(now, rng)).collect();
         Self::On { cadence, deadlines }
     }
@@ -222,18 +322,19 @@ pub struct Zone {
     params: DandelionParams,
     /// Configured stem width — how many slots the map keeps.
     ///
-    /// When covert is enabled this is also the covert channel count (channel
+    /// When noise is enabled this is also the noise channel count (channel
     /// `i` ↔ slot `i`). Production pins it to [`inherited::NOISE_CHANNELS`].
     stems: usize,
     /// Which peers a fluff batch may reach. See [`FluffReach`].
     reach: FluffReach,
-    /// Covert schedule (enable + cadence + per-channel deadlines), or off.
+    /// Noise schedule (enable + cadence + per-channel deadlines), or off.
     ///
     /// **Single owner of the enable fact** (§20.4). Before RP-3b it lived only
     /// in C++, encoded as `!zone::noise.empty()` — the byte payload doing
-    /// double duty as its own enable flag. C++ still holds the payload buffers;
-    /// Rust owns *whether* and *when* channels fire.
-    covert: CovertSchedule,
+    /// double duty as its own enable flag. The payload buffers moved to
+    /// [`crate::NoiseQueues`] with the executor port, as this module's own
+    /// header says; Rust owns the buffers, *whether* and *when*.
+    noise: NoiseSchedule,
     /// Per-successor stem outcomes — §12.11's signal, **derived here rather
     /// than imported from `tx_pool`** (§38.1). Records; never judges.
     stem_watch: StemWatch,
@@ -249,38 +350,105 @@ pub struct Zone {
 }
 
 impl Zone {
-    /// Open a zone at `now` with no connections yet.
+    /// Open a zone at `now` with no connections yet, or [`Err`] when the
+    /// requested configuration is one the design forbids.
     ///
     /// The first epoch is drawn immediately, matching the inherited
     /// `start_epoch` running once at construction.
     ///
-    /// When `covert_enabled`, `stems` is also the covert channel count and
-    /// must equal [`inherited::NOISE_CHANNELS`] in production (C++ sizes its
-    /// channel deque from `CRYPTONOTE_NOISE_CHANNELS`). A mismatch is a
-    /// debug assertion here and a silent OOB drop on the C++ side.
+    /// # Refusals
+    ///
+    /// **A noise carrier requires an encrypted zone** (ruling of 2026-08-19).
+    /// Noise conceals *packet sizing*, and sizing is the only thing left for a
+    /// network observer to read once the link is encrypted. On a cleartext
+    /// link that observer reads the contents, so padding the sizes conceals
+    /// nothing and the bandwidth buys nothing. This is a refusal rather than a
+    /// silent downgrade to carrier-off, because a node configured
+    /// for a protection it is not getting is the failure mode worth being loud
+    /// about.
+    ///
+    /// The predicate is [`LinkSecrecy`] and nothing else. It is **not** reach,
+    /// and it is **not** anonymity: reach says who receives a fluff, anonymity
+    /// says who can be identified, and neither is the question. Encrypting
+    /// ordinary internet traffic would make a clearnet zone eligible for noise
+    /// without making it anonymous, and `RelayZone::is_encrypted` is the one
+    /// place that would change. [`LinkSecrecy`] can only be constructed from a
+    /// [`shekyl_relay_privacy::RelayZone`], so a caller cannot mint "encrypted"
+    /// beside a cleartext identity. This constructor still takes secrecy as a
+    /// **parameter**, not a [`shekyl_relay_privacy::RelayZone`]: Design A is
+    /// that transport is a parameter, not a topology, and handing the
+    /// scheduler the overlay identity would recouple the axes this type exists
+    /// to keep apart. The FFI derives params, reach, and secrecy from one
+    /// discriminant at the adapter; the carrier caller does the same — it
+    /// exists as of 2026-08-29, and hits `Self::new`'s refusal notes because
+    /// it forms the pair in Rust.
+    ///
+    /// **A noise carrier's channel count must equal
+    /// [`inherited::NOISE_CHANNELS`]** — `stems` doubles as the channel count
+    /// and the schedule is that wide. This was a `debug_assert!`, which
+    /// compiles out in release and therefore let the mismatched zone be
+    /// built in exactly the configuration that ships.
+    ///
+    /// **A noise epoch must carry a full-size message** — otherwise it cannot
+    /// finish inside one epoch, and any roll that rebinds its slot restarts it
+    /// from the first fragment (CV-1), so it may never arrive. The budget is
+    /// [`carrier::noise_windows_in_epoch`] against
+    /// [`carrier::MAX_FRAGMENTS`]; the epoch is a runtime argument, so
+    /// this is a refusal rather than a `const` assertion.
+    ///
+    /// The three refusals are distinct [`ZoneNewError`] variants. The FFI
+    /// maps every one to null because that is the only channel a C ABI has;
+    /// an in-process caller after the daemon cutover matches.
+    ///
+    /// # Who can reach the refusals
+    ///
+    /// C++ sets the noise flag only behind the development opt-in, which
+    /// defaults off, so no SHIPPED construction hits these. Tests and
+    /// development builds do.
+    ///
+    /// The carrier is complete as of 2026-08-29 — executor, join, boundary,
+    /// enqueue crossing and its producer — so a development-flag zone carries
+    /// real transactions rather than dummies alone. The producer hits these
+    /// refusals, because it forms the pair in Rust and does not route it
+    /// through `make_relay_zone` — which is why the checks are here and not at
+    /// FFI edge. Building it is not the daemon cutover's to provide
+    /// (`COVER_TRAFFIC_RESTORATION.md` §3's status table, the row headed
+    /// "§2.9 step 2 — covert executor", corrected 2026-08-25); C++ keeps
+    /// performing transport.
     pub fn new<R: RelayRng + ?Sized>(
         params: DandelionParams,
         stems: usize,
         reach: FluffReach,
-        covert_enabled: bool,
+        secrecy: LinkSecrecy,
+        noise_enabled: bool,
         now: Millis,
         rng: &mut R,
-    ) -> Self {
-        debug_assert!(
-            !covert_enabled || stems == inherited::NOISE_CHANNELS,
-            "covert channel count must equal inherited::NOISE_CHANNELS \
-             (CRYPTONOTE_NOISE_CHANNELS); got stems={stems}"
-        );
+    ) -> Result<Self, ZoneNewError> {
+        if noise_enabled {
+            if !secrecy.is_encrypted() {
+                return Err(ZoneNewError::NoiseOnCleartext);
+            }
+            if stems != inherited::NOISE_CHANNELS {
+                return Err(ZoneNewError::NoiseChannelCount { got: stems });
+            }
+            let affords = carrier::noise_windows_in_epoch(params.min_epoch_secs);
+            if affords < carrier::MAX_FRAGMENTS {
+                return Err(ZoneNewError::NoiseCannotCrossOneEpoch {
+                    needs: carrier::MAX_FRAGMENTS,
+                    affords,
+                });
+            }
+        }
         let epoch = EpochScheduler::new(params).start(now, rng);
-        let covert = if covert_enabled {
-            CovertSchedule::on(stems, now, rng)
+        let noise = if noise_enabled {
+            NoiseSchedule::on(stems, now, rng)
         } else {
-            CovertSchedule::Off
+            NoiseSchedule::Off
         };
         // Observation window shares the zone's params, not a second
         // `DandelionParams::inherited()` rebuild at the FFI edge.
         let observation_timer = EmbargoTimer::adopted(&params);
-        Self {
+        Ok(Self {
             stem_watch: StemWatch::default(),
             observation_timer,
             contexts: BTreeMap::new(),
@@ -295,45 +463,45 @@ impl Zone {
             params,
             stems,
             reach,
-            covert,
-        }
+            noise,
+        })
     }
 
-    /// The earliest covert send deadline, or `None` when covert is disabled.
-    pub fn covert_deadline(&self) -> Option<Millis> {
-        self.covert.earliest()
+    /// The earliest noise send deadline, or `None` when noise is disabled.
+    pub fn noise_deadline(&self) -> Option<Millis> {
+        self.noise.earliest()
     }
 
     /// The single earliest channel due at `now`, re-armed from `now` (CV-3).
     ///
-    /// See [`CovertSchedule::due_one`]: at most one channel per call so a late
+    /// See [`NoiseSchedule::due_one`]: at most one channel per call so a late
     /// poll cannot emit a multi-channel burst.
-    pub fn due_covert_channel<R: RelayRng + ?Sized>(
+    pub fn due_noise_channel<R: RelayRng + ?Sized>(
         &mut self,
         now: Millis,
         rng: &mut R,
     ) -> Option<usize> {
-        self.covert.due_one(now, rng)
+        self.noise.due_one(now, rng)
     }
 
     /// A channel's armed deadline, for CV-3's witness.
     #[cfg(test)]
-    pub(crate) fn covert_deadline_at(&self, channel: usize) -> Option<Millis> {
-        self.covert.deadline_at(channel)
+    pub(crate) fn noise_deadline_at(&self, channel: usize) -> Option<Millis> {
+        self.noise.deadline_at(channel)
     }
 
-    /// Whether this zone runs covert (noise) channels.
+    /// Whether this zone runs noise channels.
     ///
     /// The single owner of the fact (§20.4). C++ reads it back through
-    /// `shekyl_relay_zone_covert_enabled` rather than re-deriving it from the
+    /// `shekyl_relay_zone_noise_enabled` rather than re-deriving it from the
     /// payload it happens to hold, so there is exactly one place the answer
     /// comes from.
     #[must_use]
-    pub fn covert_enabled(&self) -> bool {
-        self.covert.enabled()
+    pub fn noise_enabled(&self) -> bool {
+        self.noise.enabled()
     }
 
-    /// Configured stem width (slot count). When covert is on, also the channel
+    /// Configured stem width (slot count). When noise is on, also the channel
     /// count — channel `i` follows slot `i`.
     #[must_use]
     pub fn stem_width(&self) -> usize {
@@ -397,7 +565,7 @@ impl Zone {
     /// function of the same clock every other relay decision uses — no second
     /// reactor. The earliest pending deadline is also folded into
     /// [`crate::Driver::next_wake`], so the asio timer wakes for silences on
-    /// time rather than only when fluff/epoch/covert happen to fire. Returns
+    /// time rather than only when fluff/epoch/noise happen to fire. Returns
     /// how many resolved, so a witness can assert the drive ran.
     pub fn expire_stem_observations(&mut self, now: Millis) -> usize {
         self.stem_watch.expire(now)
@@ -416,10 +584,29 @@ impl Zone {
     ///
     /// This is the *only* input the outcome needs from outside, and it is
     /// **data, not a decision** (§38.1).
-    pub fn record_arrival(&mut self, txs: &[TxId], from: Option<ConnectionId>) {
+    /// Returns the subset of `txs` whose observation this arrival RESOLVED as
+    /// propagated — the transactions for which *"it came back from somewhere
+    /// other than where I sent it"* just became true.
+    ///
+    /// **A decision leaving, not an input crossing.** The caller does not get
+    /// the watch, the pending map, or a query surface over them; it gets the
+    /// verdicts that fired on this call and nothing else. The alternative —
+    /// retaining a per-transaction outcome for a consumer to poll — would put
+    /// a second copy of a fact the txpool already owns beside the txpool, with
+    /// no invalidation tied to the pool entry's own lifetime. That is the
+    /// shape that produced the `transit_for` literal and the `DEGRADED_FLOOR`
+    /// pin: a duplicate nothing forces to agree, going stale in silence.
+    ///
+    /// Usually empty, and allocating only when it is not: an arrival that
+    /// resolves nothing is the common case.
+    pub fn record_arrival(&mut self, txs: &[TxId], from: Option<ConnectionId>) -> Vec<TxId> {
+        let mut propagated = Vec::new();
         for tx in txs {
-            self.stem_watch.seen(tx, from);
+            if self.stem_watch.seen(tx, from) {
+                propagated.push(*tx);
+            }
         }
+        propagated
     }
 
     /// Every successor with resolved observations — the §55 telemetry
@@ -475,7 +662,9 @@ impl Zone {
     pub fn update_stems<R: RelayRng + ?Sized>(&mut self, outbound: Vec<ConnectionId>, rng: &mut R) {
         // `StemMap::update` still returns `StemSetChange` for its own callers
         // and tests; the zone no longer surfaces it — nothing re-points on push.
-        let _ = self.map.update(outbound, rng);
+        // Named bind: the value is `Copy + must_use`, so neither `drop` nor
+        // `let _ =` is available under the workspace lint table.
+        let _change = self.map.update(outbound, rng);
     }
 
     /// Draw a wholly new stem set over `outbound` — what an epoch rollover does.
@@ -717,8 +906,8 @@ impl Zone {
     /// The stem slots in index order, `None` for an emptied slot.
     ///
     /// Owned here; never pushed as an array and never pulled by C++ on its own
-    /// schedule. Post-§20.3 the binding travels with each [`crate::Effect::CovertSend`]
-    /// (or [`crate::Effect::CovertUnbind`] when unbound). A caller-initiated
+    /// schedule. Post-§20.3 the binding travels with each [`crate::Effect::NoiseSend`]
+    /// (or [`crate::Effect::NoiseUnbind`] when unbound). A caller-initiated
     /// read would race this zone's mutations — §18.5 finding 3.
     pub fn stem_slots(&self) -> &[Option<ConnectionId>] {
         self.map.slots()
@@ -742,6 +931,114 @@ impl Zone {
     /// A peer's pending batch, if the zone knows the peer.
     pub fn peer(&self, id: &ConnectionId) -> Option<&PeerFluff> {
         self.contexts.get(id)
+    }
+}
+
+/// Which wire carries a planned batch.
+///
+/// **§42.3's split, as a type.** Noise channels carry the **stem phase**;
+/// fluff takes the zone's ordinary connection. The inherited C++ chose a
+/// carrier *instead of* a phase — the covert branch sat above the phase switch
+/// and downgraded a stem to `local` (§42.5a) — so carrier and phase were
+/// mutually exclusive answers to the same question. Here the carrier is a
+/// **function of** the phase, which is what makes the two composable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayCarrier {
+    /// The zone's ordinary connection.
+    Ordinary,
+    /// A noise channel, bound to the stem slot the plan chose.
+    ///
+    /// `channel` **is** the slot index: `NoiseSchedule` binds channel `i` to
+    /// stem slot `i` (§20.3). Carried as [`SlotIndex`] so a crate-boundary
+    /// caller cannot swap it with a walk cursor — the property the newtype
+    /// exists for. The send loop must respect that binding rather than
+    /// broadcasting to every channel (§42.5a).
+    Noise { channel: SlotIndex },
+}
+
+/// A plan together with the wire that carries it — the whole answer in one
+/// value.
+///
+/// Returned as a unit so a caller cannot obtain a phase and then choose a
+/// carrier for it independently, which is the shape that let the covert branch
+/// substitute one for the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelayDispatch {
+    /// Stem (with destination), no-route, or fluff epoch.
+    pub plan: RelayPlan,
+    /// The wire.
+    pub carrier: RelayCarrier,
+}
+
+impl Zone {
+    /// Attach a carrier to a plan, per §42.3.
+    ///
+    /// Noise carries a **stem** and only a stem, and only when noise is
+    /// enabled on this zone. A fluff epoch and a no-route both take the
+    /// ordinary connection: fluff by §42.3's design, no-route because there is
+    /// nothing to carry.
+    ///
+    /// The slot lookup is consistent by construction — the destination came
+    /// from this same map in this same call, so `slot_of` cannot miss it, and
+    /// the `None` arm is unreachable rather than a fallback.
+    ///
+    /// **What it does when reached, stated exactly.** It `debug_assert!`s, and
+    /// in release it returns [`RelayCarrier::Ordinary`] — so the stem still
+    /// goes out, over the ordinary connection. That is a **cover** degradation,
+    /// not a routing one, and it is deliberate: §92.4's rule is that carrier
+    /// unavailability must never travel as a routing verdict. Dropping the send
+    /// would convert a map inconsistency into a routing failure, which is the
+    /// inversion the inherited covert branch made in the other direction —
+    /// keeping the carrier and degrading the phase (§42.5a).
+    fn carrier_for(&self, plan: RelayPlan) -> RelayCarrier {
+        match plan {
+            RelayPlan::Stem(destination) if self.noise_enabled() => {
+                match self.map.slot_of(destination) {
+                    Some(slot) => RelayCarrier::Noise { channel: slot },
+                    None => {
+                        debug_assert!(
+                            false,
+                            "planned a stem to a peer with no slot: the destination came from \
+                             this map in this call, so this is map corruption, not a posture"
+                        );
+                        RelayCarrier::Ordinary
+                    }
+                }
+            }
+            _ => RelayCarrier::Ordinary,
+        }
+    }
+
+    /// [`Self::plan_relay`] plus the carrier that serves it (§42.3).
+    pub fn plan_dispatch<R: RelayRng + ?Sized>(
+        &mut self,
+        source: Option<ConnectionId>,
+        local_origin: bool,
+        rng: &mut R,
+    ) -> RelayDispatch {
+        let plan = self.plan_relay(source, local_origin, rng);
+        RelayDispatch {
+            carrier: self.carrier_for(plan),
+            plan,
+        }
+    }
+
+    /// [`Self::plan_relay_with_refresh`] plus the carrier that serves it.
+    ///
+    /// The production shape: **one** call yielding phase *and* carrier *and*
+    /// slot, per rule 40's coarse-call rule.
+    pub fn plan_dispatch_with_refresh<R: RelayRng + ?Sized>(
+        &mut self,
+        source: Option<ConnectionId>,
+        local_origin: bool,
+        outbound: Vec<ConnectionId>,
+        rng: &mut R,
+    ) -> RelayDispatch {
+        let plan = self.plan_relay_with_refresh(source, local_origin, outbound, rng);
+        RelayDispatch {
+            carrier: self.carrier_for(plan),
+            plan,
+        }
     }
 }
 

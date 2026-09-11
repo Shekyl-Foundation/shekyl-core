@@ -30,7 +30,7 @@
 
 #pragma once
 
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 #include "fcmp/bulletproofs_plus.h"
 
 template<bool a_verify, size_t n_amounts>
@@ -43,7 +43,7 @@ public:
 
   bool init()
   {
-    proof = rct::bulletproof_plus_PROVE(std::vector<uint64_t>(n_amounts, 749327532984), rct::skvGen(n_amounts));
+    proof = ct::bulletproof_plus_PROVE(std::vector<uint64_t>(n_amounts, 749327532984), ct::skvGen(n_amounts));
     return true;
   }
 
@@ -51,14 +51,14 @@ public:
   {
     bool ret = true;
     if (verify)
-      ret = rct::bulletproof_plus_VERIFY(proof);
+      ret = ct::bulletproof_plus_VERIFY(proof);
     else
-      rct::bulletproof_plus_PROVE(std::vector<uint64_t>(n_amounts, 749327532984), rct::skvGen(n_amounts));
+      ct::bulletproof_plus_PROVE(std::vector<uint64_t>(n_amounts, 749327532984), ct::skvGen(n_amounts));
     return ret;
   }
 
 private:
-  rct::BulletproofPlus proof;
+  ct::BulletproofPlus proof;
 };
 
 template<bool batch, size_t start, size_t repeat, size_t mul, size_t add, size_t N>
@@ -73,7 +73,7 @@ public:
     for (size_t n = 0; n < N; ++n)
     {
       for (size_t i = 0; i < repeat; ++i)
-        proofs.push_back(rct::bulletproof_plus_PROVE(std::vector<uint64_t>(o, 749327532984), rct::skvGen(o)));
+        proofs.push_back(ct::bulletproof_plus_PROVE(std::vector<uint64_t>(o, 749327532984), ct::skvGen(o)));
       o = o * mul + add;
     }
     return true;
@@ -83,17 +83,17 @@ public:
   {
     if (batch)
     {
-        return rct::bulletproof_plus_VERIFY(proofs);
+        return ct::bulletproof_plus_VERIFY(proofs);
     }
     else
     {
-      for (const rct::BulletproofPlus &proof: proofs)
-        if (!rct::bulletproof_plus_VERIFY(proof))
+      for (const ct::BulletproofPlus &proof: proofs)
+        if (!ct::bulletproof_plus_VERIFY(proof))
           return false;
       return true;
     }
   }
 
 private:
-  std::vector<rct::BulletproofPlus> proofs;
+  std::vector<ct::BulletproofPlus> proofs;
 };

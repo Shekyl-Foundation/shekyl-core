@@ -76,19 +76,6 @@ class Daemon(object):
         }
         return self.rpc.send_json_rpc_request(calc_pow)
 
-    def add_aux_pow(self, blocktemplate_blob, aux_pow, client = ""):
-        add_aux_pow = {
-            'method': 'add_aux_pow',
-            'params': {
-                'blocktemplate_blob': blocktemplate_blob,
-                'aux_pow' : aux_pow,
-                'client' : client,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(add_aux_pow)
-
     def submit_transaction(self, tx_as_hex):
         # Native typed submit route (DAEMON_SUBMIT_VERDICT.md sec. 2.4): the
         # response body is the serde-tagged SubmitVerdict. Transport-level
@@ -124,27 +111,32 @@ class Daemon(object):
         return self.rpc.send_json_rpc_request(getblock)
     get_block = getblock
 
-    def getlastblockheader(self, client = ""):
+    def getlastblockheader(self, fill_pow_hash = False):
+        params = {}
+        if fill_pow_hash:
+            params['fill_pow_hash'] = True
         getlastblockheader = {
             'method': 'getlastblockheader',
-            'params': {
-                'client': client,
-            },
-            'jsonrpc': '2.0', 
+            'params': params,
+            'jsonrpc': '2.0',
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(getlastblockheader)
     get_last_block_header = getlastblockheader
 
-    def getblockheaderbyhash(self, hash = "", hashes = [], client = ""):
+    def getblockheaderbyhash(self, hash = "", hashes = None, fill_pow_hash = False):
+        # The wire dropped the singular `hash` in 3.27; keep the Python
+        # argument as a convenience that becomes `hashes`.
+        requested = list(hashes) if hashes else []
+        if hash:
+            requested = [hash] + requested
+        params = {'hashes': requested}
+        if fill_pow_hash:
+            params['fill_pow_hash'] = True
         getblockheaderbyhash = {
             'method': 'getblockheaderbyhash',
-            'params': {
-                'client': client,
-                'hash': hash,
-                'hashes': hashes,
-            },
-            'jsonrpc': '2.0', 
+            'params': params,
+            'jsonrpc': '2.0',
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(getblockheaderbyhash)
@@ -163,16 +155,17 @@ class Daemon(object):
         return self.rpc.send_json_rpc_request(getblockheaderbyheight)
     get_block_header_by_height = getblockheaderbyheight
 
-    def getblockheadersrange(self, start_height, end_height, fill_pow_hash = False, client = ""):
+    def getblockheadersrange(self, start_height, end_height, fill_pow_hash = False):
+        params = {
+            'start_height': start_height,
+            'end_height': end_height,
+        }
+        if fill_pow_hash:
+            params['fill_pow_hash'] = True
         getblockheadersrange = {
             'method': 'getblockheadersrange',
-            'params': {
-                'client': client,
-                'start_height': start_height,
-                'end_height': end_height,
-                'fill_pow_hash': fill_pow_hash,
-            },
-            'jsonrpc': '2.0', 
+            'params': params,
+            'jsonrpc': '2.0',
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(getblockheadersrange)
@@ -199,15 +192,16 @@ class Daemon(object):
         return self.rpc.send_json_rpc_request(get_info)
     getinfo = get_info
 
-    def hard_fork_info(self, client = ""):
+    def hard_fork_info(self, version = None):
+        params = {}
+        if version is not None:
+            params['version'] = version
         hard_fork_info = {
             'method': 'hard_fork_info',
-            'params': {
-                'client': client,
-            },
+            'params': params,
             'jsonrpc': '2.0',
             'id': '0'
-        }    
+        }
         return self.rpc.send_json_rpc_request(hard_fork_info)
 
     def generateblocks(self, address, blocks=1, prev_block = "", starting_nonce = 0):
@@ -327,21 +321,6 @@ class Daemon(object):
             'id': '0'
         }
         return self.rpc.send_json_rpc_request(banned)
-
-    def set_bootstrap_daemon(self, address, username = '', password = ''):
-        set_bootstrap_daemon = {
-            'address': address,
-            'username': username,
-            'password': password,
-        }
-        return self.rpc.send_request('/set_bootstrap_daemon', set_bootstrap_daemon)
-
-    def get_public_nodes(self, gray = False, white = True):
-        get_public_nodes = {
-            'gray': gray,
-            'white': white,
-        }
-        return self.rpc.send_request('/get_public_nodes', get_public_nodes)
 
     def get_transactions(self, txs_hashes = [], decode_as_json = False, prune = False, split = False, client = ""):
         get_transactions = {
@@ -517,8 +496,11 @@ class Daemon(object):
     getblockcount = get_block_count
 
     def get_block_hash(self, height):
+        # The daemon registers this method as `on_get_block_hash` (and
+        # `on_getblockhash`); it has never answered a bare `get_block_hash`,
+        # so this client had always received -32601.
         get_block_hash = {
-            'method': 'get_block_hash',
+            'method': 'on_get_block_hash',
             'params': [height],
             'jsonrpc': '2.0', 
             'id': '0'

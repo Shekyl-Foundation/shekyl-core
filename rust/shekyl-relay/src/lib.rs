@@ -39,15 +39,20 @@
 //! maintains rather than a check it passed once:
 //!
 //! - Zone state — peer fluff queues, the stem map, the epoch role, and the
-//!   covert schedule — is owned **here**, mutated only through `&mut Zone`.
+//!   noise schedule — is owned **here**, mutated only through `&mut Zone`.
 //!   C++ connection events do not mutate it; they arrive as calls into the
-//!   owner. Covert buffers stay C++ (§20.2 / §20.4).
+//!   owner. Noise **schedule** is owned here. Noise **buffers** live here
+//!   (`NoiseQueues`) as the §2.9 step-2 executor. C++ enables the carrier
+//!   only behind a development opt-in that defaults off, and performs its
+//!   transport — as it does for stem and fluff — until step 5 deletes that
+//!   file. The inherited covert branch in `send_txs` is already deleted
+//!   (§2.9 step 4).
 //! - `connection_count` was the one genuine straddle in the inherited code
 //!   (*"only update in strand, can be read at any time"*). It stays derived
 //!   here and is published by the boundary as a single-writer atomic.
 //! - Stem bindings never cross as an array. Post-§20.3 each
-//!   [`Effect::CovertSend`] carries its peer, and an unbound slot clears via
-//!   [`Effect::CovertUnbind`] at its own cadence. C++ never pulls the map: a
+//!   [`Effect::NoiseSend`] carries its peer, and an unbound slot clears via
+//!   [`Effect::NoiseUnbind`] at its own cadence. C++ never pulls the map: a
 //!   caller-initiated read would race this crate's mutations (§18.5 finding 3).
 //!
 //! Any new shared state is a new inventory line that must resolve to
@@ -63,9 +68,22 @@
 //! wall-clock dependence.
 
 pub mod driver;
+pub mod floor_diag;
+mod noise_queue;
 pub mod stem_watch;
 pub mod zone;
+pub mod zone_route;
 
 pub use driver::{Driver, Effect};
+pub use floor_diag::{AchievedOutConnections, FloorSnapshot, FloorTransition, FloorWatch};
+pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
+pub use shekyl_relay_privacy::{LinkSecrecy, SlotIndex};
 pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
-pub use zone::{FluffReach, PeerFluff, RelayPlan, TxBlob, Zone};
+pub use zone::{
+    FluffReach, PeerFluff, RelayCarrier, RelayDispatch, RelayPlan, TxBlob, Zone, ZoneNewError,
+};
+pub use zone_route::{
+    is_pre_fluff_relay, once_at_origin_route, originated_stays_in_zone,
+    originated_zone_from_anonymity_roll, r1_coherence_keeps_origin, NetZone, RelayMethod,
+    ZoneRouteDecision,
+};

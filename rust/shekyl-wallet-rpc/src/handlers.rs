@@ -13,11 +13,14 @@ use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use crate::error::WalletRpcError;
 use crate::fees;
 use crate::lifecycle;
+use crate::message_signing;
+use crate::notes;
 use crate::proofs;
 use crate::queries;
 use crate::receiving;
 use crate::send;
 use crate::staking;
+use crate::staking_actions;
 use crate::sync;
 use crate::tenant::TenantState;
 use crate::types::{GetVersionResult, API_VERSION};
@@ -52,20 +55,30 @@ pub async fn dispatch(
         "stake" => lifecycle::stake(tenants, params).await,
         "submit_pending_tx" => send::submit_pending_tx(tenants, params).await,
         "discard_pending_tx" => send::discard_pending_tx(tenants, params).await,
+        "abandon_tx" => send::abandon_tx(tenants, params).await,
+        "set_tx_note" => notes::set_tx_note(tenants, params).await,
+        "get_tx_note" => notes::get_tx_note(tenants, params).await,
         // WI-RPC-1 receiving (FA-8d projection; `rid` on the URI — no
         // subaddress/account model exists in Shekyl).
         "create_payment_request" => receiving::create_payment_request(tenants, params).await,
         "list_payment_requests" => receiving::list_payment_requests(tenants, params).await,
         "make_uri" => receiving::make_uri(tenants, params).await,
-        "parse_uri" => receiving::parse_uri(tenants, params).await,
+        "parse_uri" => receiving::parse_uri(tenants, params),
         // WI-RPC-1 fees (projection of the one Phase-2a byte/fee model).
         "estimate_tx_size_and_weight" => fees::estimate_tx_size_and_weight(tenants, params).await,
         "get_default_fee_priority" => fees::get_default_fee_priority(tenants, params).await,
         // WI-RPC-1 staking reads (authoritative pscan/pending aggregation —
-        // never the `bonded_slots` hint). Staking actions stay `-32601`.
+        // never the `bonded_slots` hint).
         "get_staked_balance" => staking::get_staked_balance(tenants, params).await,
         "get_staked_outputs" => staking::get_staked_outputs(tenants, params).await,
         "staking_info" => staking::staking_info(tenants, params).await,
+        // WI-RPC-5 archival principal staking actions + PR-C exit pair.
+        // `unstake` / `collect_unstaked` shipped; the wire never names a slot.
+        "stake_in" => staking_actions::stake_in(tenants, params).await,
+        "get_drain_balance" => staking_actions::get_drain_balance(tenants, params).await,
+        "drain" => staking_actions::drain(tenants, params).await,
+        "unstake" => staking_actions::unstake(tenants, params).await,
+        "collect_unstaked" => staking_actions::collect_unstaked(tenants, params).await,
         // WI-RPC-3 proofs. The `get_*` pair requires an open wallet; the
         // `check_*` pair is WALLET-LESS by contract (a verifier checks
         // someone else's proof against the chain).
@@ -73,6 +86,11 @@ pub async fn dispatch(
         "check_tx_proof" => proofs::check_tx_proof(tenants, params).await,
         "get_reserve_proof" => proofs::get_reserve_proof(tenants, params).await,
         "check_reserve_proof" => proofs::check_reserve_proof(tenants, params).await,
+        // PR-SM-2 message signing. `sign_message` requires the open
+        // wallet; `verify_message` is SESSION-LESS by contract (SM-R-6) —
+        // all its inputs are public and caller-supplied.
+        "sign_message" => message_signing::sign_message(tenants, params).await,
+        "verify_message" => message_signing::verify_message(tenants, params).await,
         other => Err(WalletRpcError::MethodNotFound(other.to_owned())),
     }
 }
@@ -175,17 +193,83 @@ mod tests {
         assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
     }
 
-    /// A SPECIFIED-but-unimplemented method still falls through to
+    /// A RESERVED-but-unimplemented method still falls through to
     /// `MethodNotFound`. Kept alongside the rescan case above: routing
-    /// `rescan_blockchain` must not blur the line between "designed but not
-    /// built" (`-32601`) and "built, but the call is refused".
+    /// new methods must not blur the line between "designed but not
+    /// built" (`-32601`) and "built, but the call is refused". (The
+    /// example was `sign_message` until PR-SM-2 implemented it, then
+    /// `unstake` until PR-C did — each lift correctly turned this test red
+    /// on the old name, which is the reachability gate observed flipping.)
     #[tokio::test]
-    async fn unimplemented_specified_method_is_method_not_found() {
+    async fn unimplemented_reserved_method_is_method_not_found() {
         let tenants = test_tenants();
-        let err = dispatch(&tenants, "sign_message", &json!({}), KdfParams::default())
-            .await
-            .unwrap_err();
+        let err = dispatch(
+            &tenants,
+            "match_transfer_to_request",
+            &json!({}),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::MethodNotFound);
+    }
+
+    /// The inverse of the RESERVED fallthrough, pinned at the moment it
+    /// flipped: `unstake` and `collect_unstaked` are ROUTED — with no
+    /// wallet open the answer is the wallet gate, never `-32601`. This is
+    /// PR-C's reachability lift as a wire observable.
+    #[tokio::test]
+    async fn exit_verbs_are_routed_not_reserved() {
+        let tenants = test_tenants();
+        for method in ["unstake", "collect_unstaked"] {
+            let err = dispatch(&tenants, method, &json!({}), KdfParams::default())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err.code(),
+                WalletRpcErrorCode::WalletNotOpen,
+                "{method} must hit the wallet gate, not MethodNotFound"
+            );
+        }
+    }
+
+    /// `sign_message` is routed: with no wallet open the answer is the
+    /// wallet gate, never the `-32601` fallthrough. Params must be valid —
+    /// parsing runs ahead of the gate.
+    #[tokio::test]
+    async fn sign_message_without_open_wallet_is_wallet_not_open() {
+        let tenants = test_tenants();
+        let err = dispatch(
+            &tenants,
+            "sign_message",
+            &json!({ "message": "m" }),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
+    }
+
+    /// `verify_message` is SESSION-LESS (SM-R-6): with no wallet open it
+    /// must never answer `WalletNotOpen`. A malformed signature string is
+    /// the shape-first `-32602` refusal.
+    ///
+    /// Deliberately the default (current-thread) test flavor: the
+    /// handler moves the verify pipeline through `spawn_blocking`, which
+    /// works on every runtime flavor — this annotation is the pin that
+    /// no flavor-sensitive primitive (`block_in_place`) creeps back in.
+    #[tokio::test]
+    async fn verify_message_is_session_less_and_shape_gates_first() {
+        let tenants = test_tenants();
+        let err = dispatch(
+            &tenants,
+            "verify_message",
+            &json!({ "address": "x", "message": "m", "signature": "junk" }),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::InvalidParams);
     }
 
     #[tokio::test]
@@ -241,6 +325,90 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code(), WalletRpcErrorCode::InvalidRecipient);
+    }
+
+    /// Both note methods are routed, not RESERVED.
+    ///
+    /// The pin that matters is `WalletNotOpen` rather than `MethodNotFound`:
+    /// dropping either arm from the table above sends the call to the
+    /// `other =>` fallthrough, and every client loses the ability to annotate
+    /// or read back a transaction while the crate's tests stay green. The
+    /// `set_tx_note` params must be *valid* — parsing and the length bound run
+    /// ahead of the wallet gate, so junk params would answer `InvalidParams`
+    /// and pin nothing about routing.
+    #[tokio::test]
+    async fn tx_note_methods_without_open_wallet_are_wallet_not_open() {
+        let tenants = test_tenants();
+
+        let err = dispatch(
+            &tenants,
+            "set_tx_note",
+            &json!({ "tx_hash": "ab".repeat(32), "note": "rent" }),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
+
+        let err = dispatch(
+            &tenants,
+            "get_tx_note",
+            &json!({ "tx_hash": "ab".repeat(32) }),
+            KdfParams::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen);
+    }
+
+    /// The three WI-RPC-5 staking actions are routed, not RESERVED: with no
+    /// wallet open the answer is the wallet gate, never the `-32601`
+    /// fallthrough. Params must be valid — parsing runs ahead of the gate.
+    #[tokio::test]
+    async fn staking_actions_without_open_wallet_are_wallet_not_open() {
+        let tenants = test_tenants();
+        for (method, params) in [
+            ("stake_in", json!({ "amount": "5" })),
+            ("get_drain_balance", json!({})),
+            ("drain", json!({ "amount": "5" })),
+            ("unstake", json!({})),
+            ("collect_unstaked", json!({})),
+        ] {
+            let err = dispatch(&tenants, method, &params, KdfParams::default())
+                .await
+                .unwrap_err();
+            assert_eq!(err.code(), WalletRpcErrorCode::WalletNotOpen, "{method}");
+        }
+    }
+
+    /// F-1 at the dispatch surface: a client steering `drain` with `fee` /
+    /// `destination` / `p_slot` (or `stake_in` with `fee`, or any key at all
+    /// on `get_drain_balance`) is refused `-32602` — the extra key is never
+    /// silently dropped, and the refusal fires ahead of the wallet gate.
+    #[tokio::test]
+    async fn staking_action_extra_fields_are_invalid_params() {
+        let tenants = test_tenants();
+        for (method, params) in [
+            ("stake_in", json!({ "amount": "5", "fee": "1" })),
+            ("drain", json!({ "amount": "5", "fee": "1" })),
+            ("drain", json!({ "amount": "5", "destination": "shekyl1x" })),
+            ("drain", json!({ "amount": "5", "p_slot": 0 })),
+            ("get_drain_balance", json!({ "p_slot": 0 })),
+            ("unstake", json!({ "p_slot": 0 })),
+            ("unstake", json!({ "amount": "5" })),
+            ("unstake", json!({ "fee": "1" })),
+            ("collect_unstaked", json!({ "p_slot": 0 })),
+            ("collect_unstaked", json!({ "amount": "all" })),
+        ] {
+            let err = dispatch(&tenants, method, &params, KdfParams::default())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err.code(),
+                WalletRpcErrorCode::InvalidParams,
+                "{method} {params}"
+            );
+        }
     }
 
     #[tokio::test]

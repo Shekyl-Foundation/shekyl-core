@@ -9,19 +9,21 @@
 //! the seed once on screen — automation (Ansible, CI) cannot drive that. These
 //! subcommands are the deliberate, auditable alternative: the password comes
 //! from a file or stdin, and `create` writes the one-time seed backup to an
-//! explicit `--seed-out` path (0600) instead of a terminal or a redirect. This
-//! is the ONLY sanctioned way for the seed to reach a file — the interactive
-//! path refuses non-TTY output rather than leak it.
+//! explicit `--seed-out` path — owner-only from its first instant: `0600` on
+//! Unix, an owner-only DACL set at `CreateFile` on Windows
+//! (`WINDOWS_WALLET_SUPPORT.md` WP-D8) — instead of a terminal or a redirect.
+//! This is the ONLY sanctioned way for the seed to reach a file — the
+//! interactive path refuses non-TTY output rather than leak it.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
+#[cfg(unix)]
+use std::fs::OpenOptions;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
 use zeroize::Zeroizing;
 
-use crate::rpc_client::RpcSession;
+use crate::rpc_client::{params, RpcSession};
 
 type BoxErr = Box<dyn std::error::Error>;
 
@@ -79,14 +81,17 @@ pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> Result<(), BoxErr> {
 
     let result = rpc.call(
         "create_wallet",
-        json!({ "name": args.name, "password": password.as_str() }),
+        params::NamedPassword {
+            name: &args.name,
+            password: &password,
+        },
     );
     drop(password);
 
     let val = match result {
         Ok(v) => v,
         Err(e) => {
-            let _ = std::fs::remove_file(&args.seed_out);
+            drop(std::fs::remove_file(&args.seed_out));
             return Err(format!("create_wallet failed: {e}").into());
         }
     };
@@ -100,7 +105,7 @@ pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> Result<(), BoxErr> {
             .to_owned(),
     );
     if let Err(e) = write_seed(&mut seed_file, &backup) {
-        let _ = std::fs::remove_file(&args.seed_out);
+        drop(std::fs::remove_file(&args.seed_out));
         return Err(format!("failed to write seed to {}: {e}", args.seed_out.display()).into());
     }
 
@@ -122,12 +127,12 @@ pub fn run_restore(rpc: &RpcSession, args: &RestoreArgs) -> Result<(), BoxErr> {
 
     let result = rpc.call(
         "restore_wallet",
-        json!({
-            "name": args.name,
-            "password": password.as_str(),
-            "mnemonic": seed.trim(),
-            "restore_height": args.restore_height.unwrap_or(0),
-        }),
+        params::Restore {
+            name: &args.name,
+            password: &password,
+            mnemonic: seed.trim(),
+            restore_height: args.restore_height.unwrap_or(0),
+        },
     );
     drop(password);
     drop(seed);
@@ -180,19 +185,32 @@ fn strip_one_trailing_newline(s: &mut String) {
 
 /// Open the seed-out path 0600 with O_EXCL semantics: refuse to overwrite an
 /// existing file and refuse to follow a symlink on the final component.
+#[cfg(unix)]
 fn open_seed_out(path: &Path) -> Result<File, BoxErr> {
+    use std::os::unix::fs::OpenOptionsExt;
     OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(path)
-        .map_err(|e| {
-            format!(
-                "cannot create seed file {} (it must not already exist): {e}",
-                path.display()
-            )
-            .into()
-        })
+        .map_err(|e| seed_out_error(path, &e))
+}
+
+/// Open the seed-out path owner-only with `CREATE_NEW` semantics — the same
+/// contract as the Unix arm, with the DACL applied at creation rather than a
+/// mode. The Win32 call lives in `shekyl-win-sec` (WP-D2: this crate holds
+/// no `unsafe`); what is here is the call and the error text.
+#[cfg(windows)]
+fn open_seed_out(path: &Path) -> Result<File, BoxErr> {
+    shekyl_win_sec::create_owner_only_file(path).map_err(|e| seed_out_error(path, &e))
+}
+
+fn seed_out_error(path: &Path, cause: &dyn std::fmt::Display) -> BoxErr {
+    format!(
+        "cannot create seed file {} (it must not already exist): {cause}",
+        path.display()
+    )
+    .into()
 }
 
 fn write_seed(file: &mut File, seed: &str) -> Result<(), std::io::Error> {

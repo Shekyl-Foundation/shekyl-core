@@ -13,9 +13,9 @@ namespace cryptonote
 {
 
 /// Build the signed payload for v3 PQC verification for input \p input_index.
-/// Payload = serialize(prefix) || serialize(rct_signing_body) || H(rct_prunable)
+/// Payload = serialize(prefix) || serialize(rct_signing_body) || H(ct_prunable)
 ///         || serialize(pqc_auth_header_i) || H(pqc_pk_0) || ... || H(pqc_pk_{N-1})
-/// H(rct_prunable) is cn_fast_hash of the serialized prunable data (fcmp_pp_proof,
+/// H(ct_prunable) is cn_fast_hash of the serialized prunable data (fcmp_pp_proof,
 /// pseudoOuts, curve_trees_tree_depth, Bulletproofs+), binding the PQC signature
 /// to the FCMP++ proof and preventing prunable data substitution.
 /// The concatenation of all inputs' PQC public-key hashes binds each signature

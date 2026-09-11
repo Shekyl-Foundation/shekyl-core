@@ -34,11 +34,11 @@
 //! by the caller. Concurrent reads of the cached `OpenedKeysFile`
 //! metadata are safe (all fields are immutable bytes). Two handles
 //! against the same wallet pair cannot coexist in the same process by
-//! construction: the advisory lock will refuse the second `acquire`.
+//! construction: the keys-file lock will refuse the second `acquire`.
 //!
 //! # Backup and quiescent copy (G4)
 //!
-//! Do not copy the wallet directory while the advisory lock on the keys file
+//! Do not copy the wallet directory while the lock on the keys file
 //! (`<base>.keys`, where `base` is the `.wallet` path) is held (for example
 //! during an open wallet-RPC session). Use [`Self::close`] (or process shutdown that runs the
 //! close flush) and copy from the filesystem, or [`Self::save_as`] to a
@@ -72,7 +72,7 @@ use shekyl_engine_state::{
     BookkeepingBlock, LedgerBlock, StakingBlock, SyncStateBlock, TxMetaBlock, WalletLedger,
 };
 
-use crate::atomic::atomic_write_file;
+use crate::atomic::{atomic_write_file, atomic_write_file_with};
 use crate::capability::Capability;
 use crate::error::WalletFileError;
 use crate::lock::KeysFileLock;
@@ -103,12 +103,12 @@ use crate::payload::{decode_payload, encode_payload, PayloadKind};
 /// # Why not merge into `WalletLedger`?
 ///
 /// We could overload by returning just `WalletLedger` and letting the
-/// caller check `sync_state.scan_completed == false`. We don't,
-/// because "scan_completed == false on a fresh empty ledger" is
-/// indistinguishable from "scan_completed == false because this wallet
-/// is still doing its initial sync". The discriminator here is
-/// structural (did we load state from disk, or seed it?), not
-/// state-derived.
+/// caller infer "did this come from disk?" from the ledger's contents.
+/// We don't, because a freshly-seeded empty ledger and a persisted
+/// wallet still at height 0 are value-indistinguishable — no field of
+/// `WalletLedger` separates them. The discriminator here is structural
+/// (did we load state from disk, or seed it?), not state-derived, so it
+/// belongs in the return type, not in a field the caller must interpret.
 #[derive(Debug)]
 pub enum OpenOutcome {
     /// `.wallet` was present and decoded successfully. The ledger is
@@ -196,15 +196,48 @@ pub struct CreateParams<'a> {
     pub initial_ledger: &'a WalletLedger,
 }
 
+/// A point-in-time copy of an open wallet's sealed `.wallet.keys` bytes,
+/// from [`WalletFile::sealed_keys_envelope`]. Ciphertext as it sits on
+/// disk — Argon2id-sealed, not a key, but an offline guessing target — that
+/// can verify a password without the handle, the file, or any lock. It
+/// wipes on drop, like the handle's own copy, and is deliberately not
+/// `Clone`: a second copy is a second snapshot, taken when it is needed.
+pub struct SealedKeysEnvelope(Zeroizing<Vec<u8>>);
+
+impl SealedKeysEnvelope {
+    /// Verify `password` against the envelope: the full KDF + AEAD auth
+    /// check, after which the opened material drops (zeroize-on-drop). A
+    /// wrong password surfaces as the same envelope error
+    /// [`WalletFile::open`] would produce.
+    ///
+    /// The intended caller is a credentialed close-and-reopen choreography
+    /// (the RPC first-stake entry), which must refuse a wrong password
+    /// **before** tearing down the open wallet it is about to reopen —
+    /// verify-then-close, so a mistyped password can never log the user
+    /// out. Read-only: nothing is created, written, or locked.
+    pub fn verify_password(&self, password: &[u8]) -> Result<(), WalletFileError> {
+        let _opened = open_keys_file(password, &self.0)?;
+        Ok(())
+    }
+}
+
 /// Opaque handle representing one opened wallet pair. Drop releases
-/// the advisory lock.
+/// the keys-file lock.
 ///
 /// Mutable on-disk coordination: keys-file bytes updated by
 /// [`rotate_password`](WalletFile::rotate_password). Held behind a
 /// [`Mutex`] so trait-shaped `&self` saves and rotation can serialize
 /// (PR 6 / §2.6 Round 3 note).
 struct WalletFileState {
-    keys_file_bytes: Vec<u8>,
+    /// The sealed envelope as read under the lock; wiped on drop — not a
+    /// key, but an offline guessing target, and redacted from `Debug` for
+    /// the same reason.
+    keys_file_bytes: Zeroizing<Vec<u8>>,
+    /// The keys-file lock. Under the same mutex as the bytes because a
+    /// password rotation replaces both together: the lock is held on an
+    /// inode, rotation replaces the inode, so the lock on the staged file
+    /// is swapped in with the cache update, in one critical section.
+    lock: KeysFileLock,
 }
 
 /// `Debug` is hand-rolled to redact the cached keys-file bytes so the
@@ -243,8 +276,6 @@ pub struct WalletFile {
     /// HKDF-derived region-2 wrap key, cached for the session so
     /// [`Self::save_state`] does not re-run Argon2id.
     wrap_key_region_2: Zeroizing<[u8; FILE_KEK_BYTES]>,
-    /// Held for Drop semantics; not read after construction.
-    _lock: KeysFileLock,
 }
 
 impl std::fmt::Debug for WalletFile {
@@ -261,7 +292,6 @@ impl std::fmt::Debug for WalletFile {
             .field("overrides", &self.overrides)
             .field("prefs_hmac_key", &self.prefs_hmac_key)
             .field("wrap_key_region_2", &"<redacted>")
-            .field("_lock", &self._lock)
             .finish()
     }
 }
@@ -300,7 +330,7 @@ impl WalletFile {
     ///
     /// 1. Refuse if the keys file already exists.
     /// 2. Seal the keys file in memory and write it atomically.
-    /// 3. Acquire the advisory lock on the newly-written keys file.
+    /// 3. Acquire the lock on the newly-written keys file.
     /// 4. Seal the initial state file (keys bytes + SWSP-framed
     ///    postcard payload) and write it atomically.
     ///
@@ -392,7 +422,8 @@ impl WalletFile {
             pscan_path,
             pending_path,
             state: Mutex::new(WalletFileState {
-                keys_file_bytes: keys_bytes,
+                keys_file_bytes: Zeroizing::new(keys_bytes),
+                lock,
             }),
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
@@ -401,7 +432,6 @@ impl WalletFile {
             overrides: SafetyOverrides::none(),
             prefs_hmac_key,
             wrap_key_region_2,
-            _lock: lock,
         })
     }
 
@@ -455,9 +485,11 @@ impl WalletFile {
         let pscan_path = pscan_state_path_from(base_path);
         let pending_path = pending_post_path_from(base_path);
 
-        let lock = KeysFileLock::acquire(&keys_path)?;
-
-        let keys_bytes = std::fs::read(&keys_path)?;
+        // One handle: the read goes through the handle that holds the lock.
+        // On Windows the lock is mandatory for the locked byte, so a
+        // `std::fs::read(&keys_path)` here — a second handle — failed every
+        // open with `ERROR_LOCK_VIOLATION` (see `lock.rs`).
+        let (lock, keys_bytes) = KeysFileLock::acquire_and_read(&keys_path)?;
         let opened = open_keys_file(password, &keys_bytes)?;
 
         // Network-mismatch refusal happens BEFORE `.wallet` is touched
@@ -528,6 +560,7 @@ impl WalletFile {
             pending_path,
             state: Mutex::new(WalletFileState {
                 keys_file_bytes: keys_bytes,
+                lock,
             }),
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
@@ -535,28 +568,36 @@ impl WalletFile {
             overrides,
             prefs_hmac_key,
             wrap_key_region_2,
-            _lock: lock,
         };
         Ok((handle, outcome))
     }
 
-    /// Verify `password` against the sealed keys envelope at `base_path`
-    /// **without** opening the wallet: reads `.wallet.keys` and runs the
-    /// full KDF + AEAD auth check, then drops the opened material
-    /// (zeroize-on-drop). A wrong password surfaces as the same envelope
-    /// error [`Self::open`] would produce.
+    /// The sealed keys envelope as this open handle holds it: the bytes it
+    /// read under its lock at open, kept current by
+    /// [`Self::rotate_password`] — exactly the envelope a fresh open would
+    /// see, without re-reading the file. A snapshot, so a rotation after
+    /// it is taken is not reflected; take it when it is needed.
     ///
-    /// Deliberately does **not** take the keys-file lock, so it is callable
-    /// while another handle holds the wallet open. The intended caller is a
-    /// credentialed close-and-reopen choreography (the RPC first-stake
-    /// entry), which must refuse a wrong password **before** tearing down
-    /// the open wallet it is about to reopen — verify-then-close, so a
-    /// mistyped password can never log the user out. Read-only: no file is
-    /// created, written, or locked.
-    pub fn verify_password(base_path: &Path, password: &[u8]) -> Result<(), WalletFileError> {
-        let keys_bytes = std::fs::read(keys_path_from(base_path))?;
-        let _opened = open_keys_file(password, &keys_bytes)?;
-        Ok(())
+    /// Handed out as a value rather than verified in place for two reasons
+    /// `lock.rs` records. On Windows the lock this handle holds is
+    /// mandatory for the locked byte, so a path read — a second handle —
+    /// fails with `ERROR_LOCK_VIOLATION` for every password, right or
+    /// wrong; the first version of password verification did exactly that,
+    /// reachable only from the RPC first-stake entry, so the bug was "stake
+    /// is impossible on Windows". And the verification is an Argon2id
+    /// derivation: a caller that reaches this handle through a lock of its
+    /// own (the RPC's engine lock) takes the snapshot under that lock and
+    /// verifies after releasing it, so the KDF never holds the handle's
+    /// other users up.
+    #[must_use]
+    pub fn sealed_keys_envelope(&self) -> SealedKeysEnvelope {
+        SealedKeysEnvelope(
+            self.state
+                .lock()
+                .expect("wallet file mutex poisoned")
+                .keys_file_bytes
+                .clone(),
+        )
     }
 
     /// Rewrite `.wallet` with the given ledger state. Does **not**
@@ -746,8 +787,19 @@ impl WalletFile {
         let mut state = self.state.lock().expect("wallet file mutex poisoned");
         let new_keys_bytes =
             rewrap_keys_file_password(old_password, new_password, &state.keys_file_bytes, new_kdf)?;
-        atomic_write_file(&self.keys_path, &new_keys_bytes)?;
-        state.keys_file_bytes = new_keys_bytes;
+        // The lock must follow the inode. The atomic write replaces the file
+        // at `keys_path` with a fresh one, and a lock on the old inode guards
+        // nothing once the path names another — a second `open` after
+        // rotation used to succeed. The staged file is locked before it is
+        // renamed into place, so from the instant the path names it, it is
+        // already ours; the old lock drops when `state.lock` is replaced,
+        // on an inode the path no longer names.
+        let (new_lock, _durability) =
+            atomic_write_file_with(&self.keys_path, &new_keys_bytes, |staged| {
+                KeysFileLock::acquire_staged(staged, &self.keys_path)
+            })?;
+        state.keys_file_bytes = Zeroizing::new(new_keys_bytes);
+        state.lock = new_lock;
         Ok(())
     }
 
@@ -771,7 +823,7 @@ impl WalletFile {
     /// 3. Pre-encode the state file (preflight invariants + postcard +
     ///    SWSP frame + AEAD seal) so a failure here leaves the original
     ///    pair untouched.
-    /// 4. `rename(self.keys_path, new_keys_path)`. Atomic. The advisory
+    /// 4. `rename(self.keys_path, new_keys_path)`. Atomic. The keys-file
     ///    lock follows the open file description through the rename
     ///    (POSIX `flock(2)` is per-OFD, Windows `LockFileEx` is per-
     ///    handle), so we do **not** need to release-and-reacquire.
@@ -980,7 +1032,7 @@ impl WalletFile {
         self.state
             .lock()
             .expect("wallet file mutex poisoned")
-            .keys_file_bytes = bytes;
+            .keys_file_bytes = Zeroizing::new(bytes);
     }
 
     /// Zeroize transient `file_kek` after HKDF session subkeys are cached
@@ -997,11 +1049,10 @@ impl WalletFile {
         self.network
     }
 
-    /// Capability profile of this wallet (`Full` / `ViewOnly` /
-    /// `HardwareOffload`). Decoded once at open/create time. Callers
-    /// driving UX should use [`Capability::can_spend_locally`] instead
-    /// of matching against `Capability::Full` directly, so future
-    /// capability variants do not silently disable the spend path.
+    /// Capability profile of this wallet. Always [`Capability::Full`] —
+    /// the only capability (rule 23; decision log 2026-09-07) — but
+    /// decoded through the typed parse boundary at open/create time so
+    /// "capability was validated" stays a type-level fact.
     pub fn capability(&self) -> Capability {
         self.capability
     }
@@ -1162,28 +1213,22 @@ fn is_cross_device_error(e: &io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN;
     use shekyl_engine_state::WalletLedger;
 
-    /// Build a reasonable `CreateParams`-input bundle. `view_sk`,
-    /// `ml_kem_dk`, `spend_pk` are arbitrary bytes: the envelope layer
-    /// does not interpret the capability content for VIEW_ONLY, so
-    /// this is sufficient for orchestrator-level tests. End-to-end
-    /// cryptographic correctness is covered by the envelope's own
-    /// tests.
+    /// Build a reasonable `CreateParams`-input bundle. `master_seed` is
+    /// arbitrary bytes: the envelope layer does not interpret the FULL
+    /// capability content beyond its length, so this is sufficient for
+    /// orchestrator-level tests. End-to-end cryptographic correctness
+    /// is covered by the envelope's own tests.
     struct Fixture {
-        view_sk: [u8; 32],
-        ml_kem_dk: [u8; ML_KEM_768_DK_LEN],
-        spend_pk: [u8; 32],
+        master_seed: [u8; 64],
         address: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
     }
 
     impl Fixture {
         fn new() -> Self {
             Self {
-                view_sk: [0x11; 32],
-                ml_kem_dk: [0x22; ML_KEM_768_DK_LEN],
-                spend_pk: [0x33; 32],
+                master_seed: [0x11; 64],
                 address: {
                     let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
                     a[0] = 0x01; // version byte
@@ -1193,10 +1238,8 @@ mod tests {
         }
 
         fn capability(&self) -> CapabilityContent<'_> {
-            CapabilityContent::ViewOnly {
-                view_sk: &self.view_sk,
-                ml_kem_dk: &self.ml_kem_dk,
-                spend_pk: &self.spend_pk,
+            CapabilityContent::Full {
+                master_seed_64: &self.master_seed,
             }
         }
 
@@ -1278,7 +1321,7 @@ mod tests {
             let params = make_params(&fx, &base, b"correct horse battery staple", &ledger, &cap);
             WalletFile::create(&params).expect("create")
         };
-        // Drop the handle so the advisory lock is released for open.
+        // Drop the handle so the keys-file lock is released for open.
         drop(handle);
 
         let (handle2, outcome) = WalletFile::open(
@@ -1504,17 +1547,35 @@ mod tests {
         let cap = fx.capability();
         let ledger = WalletLedger::empty();
 
-        let handle = {
+        let keys_path = {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-            WalletFile::create(&params).expect("create")
+            let handle = WalletFile::create(&params).expect("create");
+            handle.keys_path().to_path_buf()
         };
 
-        let keys_before = std::fs::read(handle.keys_path()).unwrap();
+        // Both reads happen with NO wallet handle open, and that is the whole
+        // shape of this oracle. The keys-file lock is mandatory on Windows
+        // (`LockFileEx` covers byte 0), so `std::fs::read` on the path while a
+        // handle is live fails with `ERROR_LOCK_VIOLATION` — the platform fact
+        // pinned by `lock::tests::path_read_while_locked_is_platform_dependent`.
+        // Reading the handle's cached envelope instead would be worse than
+        // wrong: it would make this test blind to exactly the on-disk rewrite
+        // it exists to detect. So the handle is closed around each read.
+        //
+        // Re-opening between them is sound because `open` only *reads* the
+        // keys file (`KeysFileLock::acquire_and_read`); its sole writers are
+        // `create`, `rotate_password` and `save_as`.
+        let keys_before = std::fs::read(&keys_path).expect("read .wallet.keys unlocked");
+
+        let (handle, _) =
+            WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none()).expect("reopen");
         let wk = *handle.session_wrap_key_region_2();
         for _ in 0..8 {
             handle.save_state(&wk, &ledger).expect("save");
         }
-        let keys_after = std::fs::read(handle.keys_path()).unwrap();
+        drop(handle);
+
+        let keys_after = std::fs::read(&keys_path).expect("read .wallet.keys unlocked");
         assert_eq!(
             keys_before, keys_after,
             "`.wallet.keys` bytes MUST be byte-identical across auto-saves"
@@ -1529,20 +1590,29 @@ mod tests {
         let cap = fx.capability();
         let ledger = WalletLedger::empty();
 
-        let handle = {
+        let (keys_path, state_path) = {
             let params = make_params(&fx, &base, b"old", &ledger, &cap);
-            WalletFile::create(&params).expect("create")
+            let handle = WalletFile::create(&params).expect("create");
+            (
+                handle.keys_path().to_path_buf(),
+                handle.state_path().to_path_buf(),
+            )
         };
 
-        let state_before = std::fs::read(handle.state_path()).unwrap();
-        let keys_before = std::fs::read(handle.keys_path()).unwrap();
+        // Read with no handle open — see `save_state_never_rewrites_keys_file`
+        // for why the cached envelope is not an acceptable substitute here.
+        let state_before = std::fs::read(&state_path).expect("read .wallet unlocked");
+        let keys_before = std::fs::read(&keys_path).expect("read .wallet.keys unlocked");
 
+        let (handle, _) =
+            WalletFile::open(&base, b"old", TEST_NETWORK, SafetyOverrides::none()).expect("reopen");
         handle
             .rotate_password(b"old", b"new", None)
             .expect("rotate");
+        drop(handle);
 
-        let keys_after = std::fs::read(handle.keys_path()).unwrap();
-        let state_after = std::fs::read(handle.state_path()).unwrap();
+        let keys_after = std::fs::read(&keys_path).expect("read .wallet.keys unlocked");
+        let state_after = std::fs::read(&state_path).expect("read .wallet unlocked");
 
         // Wrap layer changes; region 1 (nonce + ct + tag) stays.
         assert_ne!(
@@ -1560,13 +1630,66 @@ mod tests {
             "`.wallet` must be untouched by rotation"
         );
 
-        // Drop the write-holding handle before re-opening.
-        drop(handle);
+        // The write-holding handle was already dropped above, for the read.
         // Old password now rejected.
         assert!(WalletFile::open(&base, b"old", TEST_NETWORK, SafetyOverrides::none()).is_err());
         // New password works.
         let (_, _) = WalletFile::open(&base, b"new", TEST_NETWORK, SafetyOverrides::none())
             .expect("open-with-new-pw");
+    }
+
+    /// The envelope snapshot answers from the bytes the open handle holds:
+    /// the open password passes, a wrong one is the envelope error `open`
+    /// gives (the RPC maps it to `InvalidPassword`), and a snapshot taken
+    /// after a rotation moves the answer with it, without a reopen — while
+    /// the snapshot taken before it still answers for the old password,
+    /// which is what "point in time" means. No path is involved, so there
+    /// is no second handle to collide with the mandatory lock on Windows;
+    /// that property is the signature's, not something this Linux-run test
+    /// observes — the first version read the path and was found by the
+    /// Windows scouting run, not by a test. The edit that turns this red
+    /// is `rotate_password` not updating the cached bytes.
+    #[test]
+    fn sealed_keys_envelope_verifies_through_the_open_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+        let handle = {
+            let params = make_params(&fx, &base, b"old", &ledger, &cap);
+            WalletFile::create(&params).expect("create")
+        };
+
+        let before = handle.sealed_keys_envelope();
+        before
+            .verify_password(b"old")
+            .expect("the open password verifies");
+        assert!(
+            matches!(
+                before.verify_password(b"wrong"),
+                Err(WalletFileError::Envelope(_))
+            ),
+            "a wrong password must be the envelope error the RPC maps to InvalidPassword"
+        );
+
+        handle
+            .rotate_password(b"old", b"new", None)
+            .expect("rotate");
+        let after = handle.sealed_keys_envelope();
+        after
+            .verify_password(b"new")
+            .expect("the rotated password verifies through the same handle");
+        assert!(
+            matches!(
+                after.verify_password(b"old"),
+                Err(WalletFileError::Envelope(_))
+            ),
+            "the pre-rotation password must no longer verify"
+        );
+        before
+            .verify_password(b"old")
+            .expect("a snapshot is a point in time: the earlier one still answers for then");
     }
 
     #[test]
@@ -1630,6 +1753,41 @@ mod tests {
         }
     }
 
+    /// The lock must follow the keys file across a password rotation: the
+    /// rotation replaces the inode at the path (tmp → fsync → rename), and
+    /// a lock left on the old inode guards nothing once the path names a
+    /// new one — a second `open` would succeed and two handles would mutate
+    /// one wallet. The staged file is therefore locked before it is renamed
+    /// into place. Observed red before that fix: the second open succeeded.
+    /// The edit that turns this red again is locking after the rename (or
+    /// not at all) in `rotate_password`.
+    #[test]
+    fn second_open_after_rotation_is_still_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+        let handle = {
+            let params = make_params(&fx, &base, b"old", &ledger, &cap);
+            WalletFile::create(&params).expect("create")
+        };
+        handle
+            .rotate_password(b"old", b"new", None)
+            .expect("rotate");
+
+        let err = WalletFile::open(&base, b"new", TEST_NETWORK, SafetyOverrides::none())
+            .expect_err("a second open after rotation must still be refused");
+        assert!(
+            matches!(err, WalletFileError::AlreadyLocked { .. }),
+            "expected AlreadyLocked after rotation, got {err:?}"
+        );
+
+        drop(handle);
+        let (_, _) = WalletFile::open(&base, b"new", TEST_NETWORK, SafetyOverrides::none())
+            .expect("once the first handle drops, the rotated wallet opens");
+    }
+
     /// Recovery path per spec §4.5: `.wallet.keys` is intact but
     /// `.wallet` is missing. We should return `StateLost` with a
     /// fresh empty ledger whose `restore_from_height` matches the
@@ -1671,7 +1829,6 @@ mod tests {
                 assert!(ledger.ledger.transfers.is_empty());
                 assert!(ledger.tx_meta.tx_keys.is_empty());
                 assert!(ledger.bookkeeping.primary_label.is_none());
-                assert!(!ledger.sync_state.scan_completed);
             }
             OpenOutcome::StateLoaded(_) => panic!("expected StateLost for missing .wallet"),
         }
@@ -1818,13 +1975,11 @@ mod tests {
         }
     }
 
-    /// 2i-errors / capability dispatch: a `ViewOnly` wallet (the
-    /// default fixture) must expose `Capability::ViewOnly` via the
-    /// accessor, and `can_spend_locally()` must return `false`. This
-    /// pins the contract that the FFI "should I show a send button?"
-    /// predicate relies on.
+    /// Capability accessor contract: a freshly created wallet exposes
+    /// `Capability::Full` (the only capability, rule 23) through the
+    /// typed accessor, alongside the other decoded-once metadata.
     #[test]
-    fn handle_exposes_view_only_capability_and_network() {
+    fn handle_exposes_capability_and_network() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("x.wallet");
         let fx = Fixture::new();
@@ -1835,25 +1990,11 @@ mod tests {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
             WalletFile::create(&params).expect("create")
         };
-        assert_eq!(handle.capability(), Capability::ViewOnly);
-        assert!(!handle.capability().can_spend_locally());
+        assert_eq!(handle.capability(), Capability::Full);
         assert_eq!(handle.network(), TEST_NETWORK);
         assert_eq!(handle.creation_timestamp(), 0x6000_0000);
         assert_eq!(handle.restore_height_hint(), 0);
         assert_eq!(handle.expected_classical_address()[0], 0x01);
-    }
-
-    /// Capability dispatch entry point: `can_spend_locally` must be
-    /// the single source of truth for "is this wallet allowed to
-    /// produce a signature on-device?" Future capability variants
-    /// (multisig quorum, offload devices, hardware signers) must
-    /// extend this predicate instead of forcing every call site to
-    /// pattern-match raw variants.
-    #[test]
-    fn can_spend_locally_is_the_dispatch_predicate() {
-        assert!(Capability::Full.can_spend_locally());
-        assert!(!Capability::ViewOnly.can_spend_locally());
-        assert!(!Capability::HardwareOffload.can_spend_locally());
     }
 
     /// 2k.2 contract: when `open` receives `SafetyOverrides::none()`

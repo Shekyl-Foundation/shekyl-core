@@ -7,6 +7,7 @@
 //! and the four §3 divergences of the old shekyl-oxide encoder are gone with it.
 
 use shekyl_bulletproofs::Bulletproof;
+use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth as WirePqcAuth, Prunable, Transaction, TxPrefix,
@@ -33,14 +34,14 @@ pub struct WireEncodeInput {
     /// ordinary FCMP++ spend). Non-zero only for the emission-claim reward vouts,
     /// which are *loud* by consensus: the daemon reads `tx.vout[i].amount` directly
     /// to form the reward-commit set and the `total_reward` operand of
-    /// `verCtSemanticsEmission` (`blockchain.cpp:3926`, `rctSigs.cpp:348`). Arity
+    /// `verCtSemanticsEmission` (`blockchain.cpp:3926`, `ct_semantics.cpp:348`). Arity
     /// is pinned to `output_keys` at build.
     pub output_amounts: Vec<u64>,
     pub view_tags: Vec<Option<u8>>,
     pub tx_extra: Vec<u8>,
     pub fee: u64,
-    pub enc_amounts: Vec<[u8; 9]>,
-    pub enc_labels: Vec<[u8; 9]>,
+    pub enc_amounts: Vec<EncryptedOutputField>,
+    pub enc_labels: Vec<EncryptedOutputField>,
     pub out_commitments: Vec<[u8; 32]>,
     pub pseudo_outs: Vec<[u8; 32]>,
     pub bulletproof: Bulletproof,
@@ -227,8 +228,16 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
             fee: input.fee,
             reference_block: input.reference_block,
             base: CtBase {
-                enc_amounts: input.enc_amounts.clone(),
-                enc_labels: input.enc_labels.clone(),
+                // The provenance type ends here, deliberately. `CtBase` is
+                // `shekyl-wire`'s representation, shared with the *parse*
+                // direction, where the nine bytes came off the network and no
+                // one in this process vouches for them. Wrapping those in
+                // `EncryptedOutputField` would launder unverified data into a
+                // type whose whole meaning is "this crate or the FFI boundary
+                // computed these". So the send path stays typed right up to
+                // this private assembly and unwraps only as it becomes wire.
+                enc_amounts: input.enc_amounts.iter().map(|f| f.to_bytes()).collect(),
+                enc_labels: input.enc_labels.iter().map(|f| f.to_bytes()).collect(),
                 commitments: input.out_commitments.clone(),
             },
             pqc_auths,
@@ -242,6 +251,11 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
                 tree_depth: curve_trees_tree_depth,
                 fcmp_proof: input.fcmp_proof.clone(),
                 pseudo_outs: input.pseudo_outs.clone(),
+                // Empty, and structurally so: this builder constructs wallet
+                // *spends*, and a serve-credit vin cannot co-reside with one
+                // (the all-or-none mixing rule, §2.5). Pass records are built
+                // by the archival path, never here.
+                serve_credit_pruned: Vec::new(),
             }),
         },
     })
@@ -377,8 +391,8 @@ mod tests {
             view_tags: vec![Some(3)],
             tx_extra: vec![1, 2, 3],
             fee: 1_000,
-            enc_amounts: vec![[0u8; 9]],
-            enc_labels: vec![[0u8; 9]],
+            enc_amounts: vec![crate::tests::enc_field_fixture([0u8; 9])],
+            enc_labels: vec![crate::tests::enc_field_fixture([0u8; 9])],
             out_commitments: vec![[4u8; 32]],
             pseudo_outs: vec![[5u8; 32]],
             bulletproof: Bulletproof::prove_plus(
@@ -454,10 +468,11 @@ mod tests {
     }
 
     #[test]
-    fn cn_fast_hash_equals_oxide_keccak256() {
-        // The migration replaces the tx-builder's `shekyl_oxide::keccak256` with
-        // shekyl-wire's `cn_fast_hash`. Pin that they are the same primitive (original
-        // Keccak-256) so the signing-hash bytes are preserved.
+    fn crypto_hash_keccak256_equals_curve_primitives_keccak256() {
+        // Two public keccak256s exist (crypto-hash + curve-primitives) — same
+        // original Keccak-256, different crate homes. Pin they agree so
+        // signing-hash bytes are preserved regardless of which is used.
+        // Collapse onto one home is tracked in FOLLOWUPS (dual-keccak).
         use shekyl_curve_primitives::keccak256;
         for input in [
             &b""[..],
@@ -466,9 +481,9 @@ mod tests {
             &vec![0xABu8; 5000][..],
         ] {
             assert_eq!(
-                shekyl_crypto_hash::cn_fast_hash(input),
+                shekyl_crypto_hash::keccak256(input),
                 keccak256(input),
-                "cn_fast_hash must equal shekyl-oxide keccak256"
+                "shekyl_crypto_hash::keccak256 must equal shekyl_curve_primitives::keccak256"
             );
         }
     }
@@ -666,7 +681,9 @@ mod tests {
         // A per-output base array out of step with the output count must fail at the
         // boundary, not serialize a tx the daemon later rejects.
         let mut input = minimal_input();
-        input.enc_amounts.push([0u8; 9]); // 2 enc_amounts vs 1 output
+        input
+            .enc_amounts
+            .push(crate::tests::enc_field_fixture([0u8; 9])); // 2 enc_amounts vs 1 output
         assert!(matches!(
             encode_final_tx(&input),
             Err(TxBuilderError::WireError(_))

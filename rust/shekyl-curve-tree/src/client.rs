@@ -53,10 +53,15 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
-use crate::recon::{collect_block_leaves, extract_leaf_hashes, per_output_h_pqc, TxOutputs};
-use crate::store::{LeafStore, StoreError};
+use crate::recon::{
+    assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, per_output_h_pqc,
+    root_from_scalars, TxOutputs,
+};
+use crate::store::{LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError};
 use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
+use shekyl_fcmp::tree::selene_hash_init;
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
 /// **before** `h_pqc` resolution. The client resolves `h_pqc` from the
@@ -244,7 +249,14 @@ impl ClientError {
 /// store errors propagate and there is no silent replay-oracle fallback.
 #[derive(Debug)]
 pub struct CurveTreeClient {
-    store: LeafStore,
+    /// Behind an `Arc` so the read-only [`ServingReader`] can share the
+    /// open database rather than opening a second one (redb takes an
+    /// exclusive file lock, so a second open would simply be refused).
+    /// The `Arc` leaves this client only as that read-only wrapper, or
+    /// inside a [`WriterRecovery`] — so a fail-stop recovery does not open
+    /// a second database beside a serving host that is still holding the
+    /// first, and the read-only wrapper stays unable to mint a writer.
+    store: Arc<LeafStore>,
     // `pub(crate)` so the sibling `assemble` module and unit tests read leaf
     // candidates. Drained leaves are mirrored into `store` on each ingest.
     pub(crate) entries: Vec<LeafEntry>,
@@ -262,10 +274,89 @@ pub struct CurveTreeClient {
     /// Set when [`Self::rollback_to_fork`] commits the store rollback but
     /// fails before rebuilding in-memory state, leaving memory inconsistent
     /// with the authoritative store. While set, load-bearing public methods
-    /// fail fast with [`ClientError::Poisoned`]; the only recovery is
-    /// drop-and-reopen ([`Self::open`]). See the `rollback_to_fork` poison
-    /// contract.
+    /// fail fast with [`ClientError::Poisoned`]; the only recovery is to
+    /// drop this client and [`WriterRecovery::resume`] over the same store
+    /// (or [`Self::open`] a path when nothing else holds it). See the
+    /// `rollback_to_fork` poison contract.
     poisoned: bool,
+}
+
+/// The authority to rebuild the single writer over an already-open store —
+/// the fail-stop recovery capability, separate from the serving read.
+///
+/// # Why this is not a [`ServingReader`]
+///
+/// Both wrap the same open database, and it is tempting to recover from the
+/// reader the actor handle is already holding. That would make
+/// [`ServingReader`] *write-minting*: it is `Clone`, and copies of it are
+/// handed to the persona serving crates, which would then each be one call
+/// away from a second, unsynchronized writer on a store whose single writer
+/// is the whole point of the actor layer. The read-only guarantee
+/// [`CurveTreeClient::serving_reader`] documents would become a convention.
+///
+/// So recovery is its own capability, and the boundary is **obtainability**:
+/// the only way to get one is [`CurveTreeClient::writer_recovery`], which
+/// needs a `&CurveTreeClient` — a thing no serving crate has or can build,
+/// because nothing hands one out. `Clone` is deliberately left on: copying a
+/// recovery mints no writer (only [`Self::resume`] does), so restricting it
+/// would be ceremony rather than a guarantee, and the actor handle needs to
+/// be `Clone` anyway.
+///
+/// # Why recovery does not reopen the path
+///
+/// [`CurveTreeClient::open`] opens a *new* database. Once a serving host
+/// holds a [`ServingReader`] on the live one, a second open is redb's
+/// `DatabaseAlreadyOpen` for the host's whole life — and if it ever did
+/// succeed it would be a *different* store, so pins applied through the
+/// recovered writer would not cover the bytes the host is serving. Recovery
+/// therefore keeps the `Arc` and rebuilds only the in-memory writer state.
+#[derive(Clone)]
+pub struct WriterRecovery {
+    store: Arc<LeafStore>,
+}
+
+impl WriterRecovery {
+    /// Rebuild a write client over the held store.
+    ///
+    /// # Errors
+    ///
+    /// The same resume refusals `CurveTreeClient::open` surfaces
+    /// ([`ClientError::ResumeFromPrunedStore`],
+    /// [`ClientError::ResumeFromCorruptStore`], store I/O) — the store's
+    /// contents are re-read, so a store that has become unreadable is
+    /// reported here rather than at the next write.
+    ///
+    /// # One writer at a time — the caller's obligation, not this type's
+    ///
+    /// `resume` mints a writer; it does **not** retire the previous one. redb
+    /// serializes the transactions themselves, so two live clients cannot
+    /// corrupt the file — but they carry independent in-memory tree state, and
+    /// the loser's view of the accumulator is wrong from the first write the
+    /// winner makes. Retirement is the caller's to pay.
+    ///
+    /// Today's only production reach pays it: `CurveTreeHandle::respawn` kills
+    /// the actor and awaits its shutdown — which drops the sole
+    /// [`CurveTreeClient`], since the actor owns it — before resuming, and the
+    /// single path that reaches `respawn` runs under the engine's per-refresh
+    /// single-flight slot, so two respawns cannot interleave.
+    ///
+    /// That is a fact about callers, not a property of this function, and it is
+    /// stated here because this is where the next caller will look. A second
+    /// recovery path outside that slot must bring its own mutual exclusion.
+    /// Enforcement was deliberately not put here: "the previous writer is gone"
+    /// is a fact about a task's lifetime that this type cannot observe, so a
+    /// flag maintained on this side would be asserting something it cannot
+    /// check — and would fail open exactly when a task aborted, which is the
+    /// case recovery exists for.
+    pub fn resume(&self) -> Result<CurveTreeClient, ClientError> {
+        CurveTreeClient::resume(Arc::clone(&self.store))
+    }
+}
+
+impl std::fmt::Debug for WriterRecovery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WriterRecovery").finish_non_exhaustive()
+    }
 }
 
 /// In-memory state reconstructed from a [`LeafStore`] snapshot.
@@ -286,7 +377,7 @@ impl CurveTreeClient {
     /// Open an empty client backed by an ephemeral store.
     pub fn try_new() -> Result<Self, ClientError> {
         Ok(Self {
-            store: LeafStore::open_ephemeral().map_err(ClientError::from)?,
+            store: Arc::new(LeafStore::open_ephemeral().map_err(ClientError::from)?),
             entries: Vec::new(),
             next_gindex: 0,
             drained_through_counts: Vec::new(),
@@ -315,7 +406,105 @@ impl CurveTreeClient {
     /// case (F8): resume yields an empty client ready for genesis ingest.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ClientError> {
         let store = LeafStore::open(path).map_err(ClientError::from)?;
-        Self::resume(store)
+        Self::resume(Arc::new(store))
+    }
+
+    /// A read-only handle on this client's store, for the persona serving
+    /// loop (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5 item 3).
+    ///
+    /// Serving reads run concurrently with block ingest — a shard body is
+    /// held open for the seconds a 3.33 MB rendezvous transfer takes, and
+    /// stalling ingest behind it is not an option. redb readers are MVCC
+    /// snapshots, so that concurrency is free; what is *not* free is
+    /// letting the serving side write, because this client is the single
+    /// writer the actor layer serializes. [`ServingReader`] is how both
+    /// hold true at once: same open database, no write reachable.
+    #[must_use]
+    pub fn serving_reader(&self) -> ServingReader {
+        ServingReader::new(Arc::clone(&self.store))
+    }
+
+    /// Pin every member of a persona's serve-set so [`LeafStore::prune_frozen`]
+    /// cannot discard bytes it is bonded to serve — the silent-slash hazard
+    /// (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6 item 4).
+    ///
+    /// **Reachable here rather than on the serving side**, even though it is
+    /// the serving side that cares, because pinning is a store *write*: it
+    /// must run on the object the actor owns, or it is a second writer
+    /// beside the one whose message loop is the serialization. The serving
+    /// host holds only [`Self::serving_reader`] and reaches this through the
+    /// actor. Pure forward to [`LeafStore::pin_serve_set`] — the per-member
+    /// contract lives there.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping [`LeafStore::pin_serve_set`]'s.
+    pub fn pin_serve_set(&self, shard_ids: &[u64]) -> Result<Vec<(u64, SegmentPin)>, ClientError> {
+        self.store
+            .pin_serve_set(shard_ids)
+            .map_err(ClientError::from)
+    }
+
+    /// Every shard id currently pinned — the reconcile input for release.
+    ///
+    /// Pure forward to [`LeafStore::pinned_shard_ids`]; the reason it exists
+    /// lives there.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping the store's.
+    pub fn pinned_shard_ids(&self) -> Result<Vec<u64>, ClientError> {
+        self.store.pinned_shard_ids().map_err(ClientError::from)
+    }
+
+    /// Declare the prune-disabled posture, reporting what the store found.
+    ///
+    /// A store **write**, same as [`Self::pin_serve_set`]: the method is a
+    /// pure forward, so a holder of this client *can* call it directly.
+    /// The engine does not — production declaration rides
+    /// `PinCompleteTreePrefix` so it serializes with ingest / pin /
+    /// rollback on the actor that owns the client. A caller outside that
+    /// actor is a second writer and owns the interleaving. Pure forward to
+    /// [`LeafStore::set_prune_disabled`], including the parts that matter
+    /// most: the declaration is one-way with no clear path, and the
+    /// returned [`PostureDeclaration`] is the loss detector a re-declaring
+    /// refresh reads (`COMPLETETREE_ACTIVATION.md` RR-2).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping the store's.
+    pub fn set_prune_disabled(&self) -> Result<PostureDeclaration, ClientError> {
+        self.store.set_prune_disabled().map_err(ClientError::from)
+    }
+
+    /// The store's burial-gated freeze cursor — the CompleteTree prefix
+    /// obligation `[0, k)`.
+    ///
+    /// Pure forward to [`LeafStore::next_freeze_seg`]; the prefix invariant
+    /// and the deliberate non-collision with
+    /// `shekyl_archival_retention::frozen_segment_count` live there.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping the store's.
+    pub fn next_freeze_seg(&self) -> Result<u64, ClientError> {
+        self.store.next_freeze_seg().map_err(ClientError::from)
+    }
+
+    /// Release pins so the prune can reclaim those segments.
+    ///
+    /// A store **write**, so it runs on the actor's object for the same reason
+    /// pinning does. Pure forward to [`LeafStore::release_pins`] — including
+    /// the part that matters most: the store does not enforce the finality
+    /// gate, and the caller owns it.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] wrapping the store's.
+    pub fn release_pins(&self, shard_ids: &[u64]) -> Result<usize, ClientError> {
+        self.store
+            .release_pins(shard_ids)
+            .map_err(ClientError::from)
     }
 
     /// Rebuild the in-memory client state from a store's persisted tables.
@@ -373,7 +562,7 @@ impl CurveTreeClient {
     /// `leaf_count` — cannot arise from pruning and is reported distinctly
     /// as [`ClientError::ResumeFromCorruptStore`] so a corrupt store is
     /// not misdiagnosed as a pruned one.
-    fn resume(store: LeafStore) -> Result<Self, ClientError> {
+    fn resume(store: Arc<LeafStore>) -> Result<Self, ClientError> {
         let rebuilt = Self::rebuild_from_store(&store)?;
 
         Ok(Self {
@@ -385,6 +574,21 @@ impl CurveTreeClient {
             ingested_tip_height: rebuilt.ingested_tip_height,
             poisoned: false,
         })
+    }
+
+    /// The authority to rebuild this client's writer after a fail-stop, as
+    /// a value that can be held somewhere the client itself cannot be.
+    ///
+    /// The actor's handle needs to survive its own actor: when the actor
+    /// fail-stops, the [`CurveTreeClient`] dies with the task, and recovery
+    /// must rebuild a writer over the **same** open database. Handing the
+    /// handle a [`ServingReader`] for that would have been the wrong
+    /// capability — see [`WriterRecovery`] for why.
+    #[must_use]
+    pub fn writer_recovery(&self) -> WriterRecovery {
+        WriterRecovery {
+            store: Arc::clone(&self.store),
+        }
     }
 
     /// Rebuild the in-memory state from the store's drained and pending
@@ -795,6 +999,47 @@ impl CurveTreeClient {
         let root = self.store.root_at_count(n).map_err(ClientError::from)?;
         let depth = shekyl_fcmp::tree::layer_count_for_leaves(n);
         Ok((root, depth))
+    }
+
+    /// The root a block built on the current tip commits to
+    /// (`FCMP_PLUS_PLUS.md` §5): the tree state at chain height `tip + 1`,
+    /// after the tip's own drain — what the daemon's `get_curve_tree_root()`
+    /// reports once the tip has connected, and what [`Self::root_at`]`(tip + 1)`
+    /// returns once that next block is ingested. For a fresh client (no
+    /// blocks) it is the empty-tree sentinel, i.e. the genesis header.
+    ///
+    /// [`Self::root_at`] refuses heights beyond the ingested tip because a
+    /// *verifier* must never anchor on a state it has not replayed. A
+    /// *producer* of the next header needs exactly that state, so this is
+    /// the one read that looks one block past the tip; `n` is the count
+    /// drained through the tip.
+    ///
+    /// The store is verifier-shaped: ingesting block `h` drains the bucket
+    /// that matures at `h − 1`, so it holds the state through `tip − 1` and
+    /// serves `root_at(tip)` from cache. The one-block-ahead read this method
+    /// makes needs the bucket maturing at `tip` as well, which enters the
+    /// store only when block `tip + 1` is ingested. Only when that bucket is
+    /// empty does the store path answer; on any chain with coinbases a bucket
+    /// matures at every height past the first window, so past height 60 the
+    /// common case rebuilds the root from the in-memory entries in canonical
+    /// drain order with the same layer builder (`recon::root_from_scalars`,
+    /// the oracle the store KATs are pinned to) — linear in the drained
+    /// leaves per call. A producer-side read (test generator, template
+    /// construction on a store-less node), not the verify hot path.
+    pub fn next_block_root(&self) -> Result<[u8; 32], ClientError> {
+        self.ensure_live()?;
+        let Some(tip) = self.ingested_tip_height else {
+            return Ok(selene_hash_init());
+        };
+        let n = self.drained_leaf_count_at(tip);
+        let stored = self.store.leaf_count().map_err(ClientError::from)?;
+        if n <= stored {
+            return self.store.root_at_count(n).map_err(ClientError::from);
+        }
+        Ok(root_from_scalars(&assemble_leaf_stream(
+            &self.entries,
+            tip.0,
+        )))
     }
 
     /// Integrity gate (§3.3): the reconstructed root at `reference.height`
@@ -1728,7 +1973,7 @@ mod tests {
                 BlockHeight(70),
             )
             .unwrap();
-        let err = CurveTreeClient::resume(store).unwrap_err();
+        let err = CurveTreeClient::resume(Arc::new(store)).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -1751,7 +1996,7 @@ mod tests {
         store.append_drained(&entries, BlockHeight(10_000)).unwrap();
         store.prune_frozen(&[]).unwrap();
 
-        let err = CurveTreeClient::resume(store).unwrap_err();
+        let err = CurveTreeClient::resume(Arc::new(store)).unwrap_err();
         match err {
             ClientError::ResumeFromPrunedStore { stored, readable } => {
                 assert_eq!(stored, e + 1);

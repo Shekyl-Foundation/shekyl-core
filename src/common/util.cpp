@@ -69,7 +69,10 @@ using namespace epee;
 #include "util.h"
 #include "stack_trace.h"
 #include "memwipe.h"
-#include "net/http_client.h"                        // epee::net_utils::...
+#include "net/net_parse_helpers.h"                  // epee::net_utils::parse_url
+#include "string_tools.h"                           // epee::string_tools
+#include "string_tools_lexical.h"                   // epee::string_tools::get_xtype_from_string
+#include <openssl/ssl.h>                            // OPENSSL_init_ssl
 #include "readline_buffer.h"
 
 #ifdef WIN32
@@ -673,33 +676,6 @@ std::string get_nix_version_display_string()
     return res;
   }
 
-  std::error_code replace_file(const std::string& old_name, const std::string& new_name)
-  {
-    int code;
-#if defined(WIN32)
-    // Maximizing chances for success
-    std::wstring wide_replacement_name;
-    try { wide_replacement_name = string_tools::utf8_to_utf16(old_name); }
-    catch (...) { return std::error_code(GetLastError(), std::system_category()); }
-    std::wstring wide_replaced_name;
-    try { wide_replaced_name = string_tools::utf8_to_utf16(new_name); }
-    catch (...) { return std::error_code(GetLastError(), std::system_category()); }
-
-    DWORD attributes = ::GetFileAttributesW(wide_replaced_name.c_str());
-    if (INVALID_FILE_ATTRIBUTES != attributes)
-    {
-      ::SetFileAttributesW(wide_replaced_name.c_str(), attributes & (~FILE_ATTRIBUTE_READONLY));
-    }
-
-    bool ok = 0 != ::MoveFileExW(wide_replacement_name.c_str(), wide_replaced_name.c_str(), MOVEFILE_REPLACE_EXISTING);
-    code = ok ? 0 : static_cast<int>(::GetLastError());
-#else
-    bool ok = 0 == std::rename(old_name.c_str(), new_name.c_str());
-    code = ok ? 0 : errno;
-#endif
-    return std::error_code(code, std::system_category());
-  }
-
   bool sanitize_locale()
   {
     // std::filesystem may throw for "invalid" locales, such as en_US.UTF-8, or kjsdkfs,
@@ -790,7 +766,25 @@ std::string get_nix_version_display_string()
 
   bool on_startup()
   {
-    mlog_configure("", true);
+    // NO LOGGING INIT HERE. This used to call `mlog_configure("", true)`, which
+    // was harmless under easylogging++ because `mlog_configure` RECONFIGURED an
+    // existing logger. The tracing subscriber behind it installs ONCE and the
+    // first caller wins, so an unconditional stderr-only init here silently
+    // defeated every later `mlog_configure(<path>)` in the same process --
+    // `--log-file`, `--max-log-file-size` and `--max-log-files` all became
+    // inert on the daemon, the wallet, and all eight `blockchain_*` tools, with
+    // no file and no diagnostic. Inherited code is not inherited architecture
+    // (.cursor/rules/16-architectural-inheritance.mdc): the call was correct for
+    // the backend it was written against and wrong for the one underneath it.
+    //
+    // Every entry point now initialises logging exactly once, with its FINAL
+    // configuration. Callers that genuinely want stderr only say so themselves
+    // (cn_deserialize.cpp, object_sizes.cpp, gen_ssl_cert.cpp).
+    //
+    // M*/MC* calls before that final init (the glibc warning below, the
+    // wallet missing-config MERROR, the daemon FAT32 MERROR) reach stderr
+    // through shekyl_log_emit's pre-init passthrough. They do not install
+    // the subscriber, so they cannot recreate the inert `--log-file` bug.
 
     setup_crash_dump();
 

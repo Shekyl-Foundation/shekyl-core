@@ -14,24 +14,23 @@
 //! tracked as a known gap in the manifest
 //! (`docs/benchmarks/shekyl_rust_v0.manifest.md` §6.1).
 //!
-//! **Determinism note (§6.3 of the manifest).** This bench intentionally
-//! **bypasses `HybridEd25519MlDsa::sign`** and inlines the two sign
-//! steps with deterministic RNG sources, because the production
-//! wrapper calls `fips204::ml_dsa_65::PrivateKey::try_sign` which
-//! internally draws from `OsRng` for the ML-DSA-65 rejection-sampling
-//! loop. The number of rejection iterations is variance-heavy across
-//! runs (observed ~16% instruction-count drift on a clean machine),
-//! which violates the gungraun exit criterion from
-//! `docs/MID_REWIRE_HARDENING.md` §3.2 ("two runs back-to-back agree
-//! to the instruction"). FIPS 204 permits a deterministic-seed
-//! variant (`try_sign_with_seed`) that exercises the same code path
-//! with a fixed rejection-sampling trajectory; using it here gives
-//! instruction-level stability at the cost of not measuring the
-//! OsRng call itself (a rand_core::fill_bytes, negligible against the
-//! multi-MI cost of the signer). The criterion sibling keeps the
-//! production path (`scheme.sign(..)`) because wall-clock averaging
-//! absorbs the variance; only the instruction-count metric needs
-//! this treatment. The BP+ side is deterministic by construction
+//! **Determinism note (§6.3 of the manifest).** This bench calls
+//! `HybridEd25519MlDsa::sign_with_ml_dsa_seed` — the deterministic-ML-DSA-seed
+//! variant of the production `sign`, which shares the same domained `preimage`
+//! and the same PQ-inner / Ed25519-outer nesting (SA-R-1), so the measured
+//! construction cannot drift from production. It exists because the production
+//! `sign` calls `fips204::ml_dsa_65::PrivateKey::try_sign`, which draws from
+//! `OsRng` for the ML-DSA-65 rejection-sampling loop; the number of rejection
+//! iterations is variance-heavy across runs (observed ~16% instruction-count
+//! drift on a clean machine), violating the gungraun exit criterion from
+//! `docs/MID_REWIRE_HARDENING.md` §3.2 ("two runs back-to-back agree to the
+//! instruction"). FIPS 204's `try_sign_with_seed` exercises the same code path
+//! with a fixed rejection-sampling trajectory, giving instruction-level
+//! stability at the cost of not measuring the OsRng call itself (a
+//! `rand_core::fill_bytes`, negligible against the multi-MI cost of the
+//! signer). The criterion sibling keeps the production path (`scheme.sign(..)`)
+//! because wall-clock averaging absorbs the variance; only the instruction-count
+//! metric needs this treatment. The BP+ side is deterministic by construction
 //! (no rejection sampling), but also uses a seeded RNG here as
 //! defense in depth — so both gungraun sub-benches are hermetic.
 
@@ -39,14 +38,14 @@ use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
 use curve25519_dalek::scalar::Scalar;
-use ed25519_dalek::{Signer as _, SigningKey, SECRET_KEY_LENGTH as ED25519_SECRET_KEY_LENGTH};
+use ed25519_dalek::{SigningKey, SECRET_KEY_LENGTH as ED25519_SECRET_KEY_LENGTH};
 use fips204::ml_dsa_65;
-use fips204::traits::{SerDes as _, Signer as _};
+use fips204::traits::SerDes as _;
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
 
 use shekyl_bulletproofs::Bulletproof;
-use shekyl_crypto_pq::signature::{HybridSecretKey, HybridSignature, ML_DSA_65_SECRET_KEY_LENGTH};
+use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, SCHEME_DOMAIN_PQC_AUTH_TX};
 use shekyl_curve_primitives::Commitment;
 
 /// Fixed seed for all deterministic RNG draws in this bench. The
@@ -73,7 +72,7 @@ fn fresh_2out_commitments() -> Vec<Commitment> {
 }
 
 /// Produce a deterministic hybrid secret key in the same byte layout
-/// that `HybridEd25519MlDsa::keypair_generate` emits
+/// that `HybridEd25519MlDsa::generate_ephemeral_keypair_for_tests` emits
 /// (`ed25519 = 32 B raw secret`, `ml_dsa = ML_DSA_65_SECRET_KEY_LENGTH B`),
 /// paired with the 32-byte message under sign.
 ///
@@ -118,34 +117,19 @@ fn crypto_bench_bulletproofs_plus_2_outputs(commitments: Vec<Commitment>) {
 fn crypto_bench_hybrid_sign_1_input(state: (HybridSecretKey, [u8; 32])) {
     let (sk, message) = state;
 
-    // ── Ed25519 (deterministic by construction: RFC 8032 §5.1.6 derives
-    //    the nonce from SHA-512 of the secret key + message, no RNG
-    //    draw) ────────────────────────────────────────────────────────
-    let ed25519_secret: [u8; ED25519_SECRET_KEY_LENGTH] = sk
-        .ed25519
-        .as_slice()
-        .try_into()
-        .expect("ed25519 secret length");
-    let signing_key = SigningKey::from_bytes(&ed25519_secret);
-    let ed25519_signature = signing_key.sign(&message);
-
-    // ── ML-DSA-65 (deterministic variant; see top-of-file docstring
-    //    for why we bypass `HybridEd25519MlDsa::sign` here) ──────────
-    let ml_dsa_secret: [u8; ML_DSA_65_SECRET_KEY_LENGTH] = sk
-        .ml_dsa
-        .as_slice()
-        .try_into()
-        .expect("ml-dsa secret length");
-    let ml_dsa_private =
-        ml_dsa_65::PrivateKey::try_from_bytes(ml_dsa_secret).expect("ml-dsa sk decode");
-    let ml_dsa_signature = ml_dsa_private
-        .try_sign_with_seed(black_box(&BENCH_SEED), black_box(&message), &[])
-        .expect("ml-dsa sign");
-
-    let sig = HybridSignature {
-        ed25519: ed25519_signature.to_bytes().to_vec(),
-        ml_dsa: ml_dsa_signature.to_vec(),
-    };
+    // Measure the REAL nested combiner (SA-R-1), single-sourced through
+    // `HybridEd25519MlDsa::sign_with_ml_dsa_seed` — a deterministic-ML-DSA-seed
+    // variant of `sign` that shares the same `preimage` and nesting order, so
+    // this bench cannot drift from production. The fixed seed keeps the
+    // ML-DSA rejection-sampling path stable for iai instruction counts.
+    let sig = HybridEd25519MlDsa
+        .sign_with_ml_dsa_seed(
+            black_box(&sk),
+            SCHEME_DOMAIN_PQC_AUTH_TX,
+            black_box(&message),
+            black_box(&BENCH_SEED),
+        )
+        .expect("hybrid nested sign");
     black_box(sig);
 }
 

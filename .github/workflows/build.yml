@@ -2,18 +2,14 @@ name: ci/gh-actions/cli
 
 on:
   push:
-    # dev/main only. PR branches are covered by the pull_request event
-    # (which tests the PR merged into its base — the stronger signal);
-    # an unrestricted push trigger double-runs every job on each push
-    # to an open PR. Branches without a PR get CI by opening a draft PR.
-    branches: [dev, main]
-    paths-ignore:
-      - 'docs/**'
-      - '**/README.md'
+    # `main` only. PRs are covered by `pull_request` (the merge commit into
+    # the base — the stronger signal). A push-to-dev trigger used to
+    # double-run this workflow on every merge (~the OS matrix plus the
+    # Ubuntu test rebuild). Branches without a PR get CI by opening a
+    # draft PR. The weekly Arch / MSYS2 matrix lives in
+    # `.github/workflows/weekly-os.yml`.
+    branches: [main]
   pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - '**/README.md'
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
@@ -32,7 +28,15 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # ARCH="default" (not "native") ensures, that a different execution host can execute binaries compiled elsewhere.
   BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl'
+  # clang + libclang-dev: the live-daemon gates step runs
+  # `cargo test -p shekyl-engine-core --lib`, and lib tests build the crate's
+  # dev-dependencies -- which include gungraun with `client_requests`, whose
+  # `valgrind-requests` build script runs bindgen. bindgen needs libclang AND
+  # clang's own resource headers (a bare container fails with
+  # "stdbool.h file not found" otherwise). GitHub-hosted runners ship clang,
+  # which is why the Rust workflow never needed this; these jobs run in bare
+  # ubuntu containers, which do not.
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -44,8 +48,77 @@ env:
     ccache --set-config=compression=true
 
 jobs:
+  # Change scope, computed once and consumed by every job below.
+  #
+  # WHY THIS EXISTS RATHER THAN A `paths-ignore` ON THE WORKFLOW. A path filter
+  # suppresses the WORKFLOW, so on a docs-only PR no check is created at all --
+  # and branch protection waits forever for a context nobody will report. That
+  # is a required check that CANNOT PASS: loud, but a hard deadlock. A job-level
+  # `if:` instead produces a check that reports "skipping", which protection
+  # accepts -- the same shape `codeql.yml`'s `analyze-cpp` / `analyze-python`
+  # already rely on for two other required contexts in this repo.
+  #
+  # No third-party action: `git diff` against the base does this, and a
+  # change-detection action would be a new supply-chain surface in CI (rule 17).
+  #
+  # FAILS CLOSED. If the file list cannot be computed for any reason, the output
+  # is `false` and every job runs. A wrong `true` silently skips the real matrix
+  # on a source change; a wrong `false` costs runner minutes. Only one of those
+  # merges broken code.
+  changes:
+    name: 'Change scope'
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        run: |
+          set -u
+          base=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          head="${{ github.sha }}"
+
+          # Any failure below leaves docs_only=false -> everything runs.
+          files=""
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$head" 2>/dev/null || true)"
+          fi
+
+          if [ -z "$files" ]; then
+            echo "scope: no computable file list -- running everything (fail-closed)"
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          docs_only=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            # The domain registry lives under docs/ but IS a code input:
+            # shekyl-crypto-pq's tests/domain_registry.rs include_str!s it, so a
+            # TSV-only change must still run the Rust suite. Carve-out preserved
+            # from rust-audit-test.yml's own `paths` list.
+            case "$f" in
+              docs/design/CRYPTO_DOMAIN_REGISTRY.tsv) docs_only=false; break ;;
+              docs/*|*/README.md|README.md) ;;
+              *) docs_only=false; break ;;
+            esac
+          done <<< "$files"
+
+          echo "scope: docs_only=$docs_only over $(printf '%s' "$files" | wc -l) changed file(s)"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   lint-rust-debug-macros:
     name: 'Lint: no debug macros in production Rust'
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -142,6 +215,8 @@ jobs:
 
   build-macos:
     name: 'macOS (brew)'
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: macOS-latest
     env:
       CCACHE_TEMPDIR: /tmp/.ccache-temp
@@ -186,93 +261,41 @@ jobs:
           ${{env.CCACHE_SETTINGS}}
           make -j${{env.MAKE_JOB_COUNT}}
 
-  build-windows:
-    name: 'Windows (MSYS2)'
-    runs-on: windows-latest
-    env:
-      CCACHE_TEMPDIR: C:\Users\runneradmin\.ccache-temp
-      CCACHE_DIR: C:\Users\runneradmin\.ccache
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-      - uses: actions/cache@v5
-        with:
-          path: C:\Users\runneradmin\.ccache
-          key: ccache-${{ runner.os }}-build-${{ github.sha }}
-          restore-keys: ccache-${{ runner.os }}-build-
-      - uses: msys2/setup-msys2@v2
-        with:
-          update: true
-          install: mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-ccache mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-protobuf mingw-w64-x86_64-abseil-cpp mingw-w64-x86_64-libusb mingw-w64-x86_64-rust git
-      - uses: ./.github/actions/set-make-job-count
-      - name: build
-        run: |
-          ${{env.CCACHE_SETTINGS}}
-          make release-static-win64 -j${{env.MAKE_JOB_COUNT}}
-
-  build-arch:
-    name: 'Arch Linux'
-    runs-on: ubuntu-latest
-    container:
-      image: archlinux:latest
-    steps:
-      - name: install dependencies
-        run: pacman -Syyu --noconfirm base-devel git cmake boost boost-libs openssl libsodium readline gtest python3 doxygen graphviz hidapi libusb protobuf abseil-cpp rust
-      # WORKAROUND (2026-07-10, Arch gcc 16.1.1-3): the gcc-libs →
-      # libgcc/libstdc++ package split dropped the `libstdc++.so` symlink
-      # from GCC's internal search dir (which now carries only
-      # `libstdc++.a`, files dated 2026-07-09). ld stops at the first
-      # search dir containing the library in either form and the internal
-      # dir precedes /usr/lib, so every `-lstdc++` link silently goes
-      # STATIC — colliding with the dynamic-only `__cxa_throw` hook in
-      # `src/common/stack_trace.cpp` ("multiple definition of
-      # `__cxa_throw`", first seen linking shekyl-gen-ssl-cert).
-      # Reproduced distro-side with zero Shekyl code: on this image,
-      # `ldd` on a g++ hello-world shows no libstdc++ dependency at all.
-      # Restoring the symlink reinstates the historical layout; `ln -sf`
-      # is a no-op once Arch ships it again. REMOVE when a stock
-      # container passes `ldd`-shows-dynamic-libstdc++ (the sanity check
-      # below fails loudly if the workaround itself ever stops working).
-      - name: restore dynamic libstdc++ (Arch gcc 16.1.1-3 packaging regression)
-        run: |
-          for d in /usr/lib/gcc/x86_64-pc-linux-gnu/*/; do
-            if [ -f "$d/libstdc++.a" ] && [ ! -e "$d/libstdc++.so" ]; then
-              ln -sf /usr/lib/libstdc++.so "$d/libstdc++.so"
-              echo "restored $d/libstdc++.so -> /usr/lib/libstdc++.so"
-            fi
-          done
-          printf '#include <string>\nint main(){ return std::string("x").size() == 1 ? 0 : 1; }\n' > /tmp/dynlink_check.cpp
-          g++ /tmp/dynlink_check.cpp -o /tmp/dynlink_check
-          ldd /tmp/dynlink_check | grep -q 'libstdc++\.so' \
-            || { echo '::error::libstdc++ still links statically after the symlink workaround'; exit 1; }
-      - name: configure git
-        run: git config --global --add safe.directory '*'
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-      - uses: ./.github/actions/set-make-job-count
-      - name: build
-        env:
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: ${{env.BUILD_DEFAULT_LINUX}}
+  # Windows MSYS2 and Arch Linux moved to `.github/workflows/weekly-os.yml`.
+  # PR Windows coverage is the MSVC daemon job below (the only runner that
+  # can compile `shekyl-win-sec`); depends.yml still cross-compiles Win64
+  # when contrib/depends changes. Two Windows compiles on every PR was the
+  # third of three (MSVC + MSYS2 + depends Win64).
 
   build-ubuntu:
     name: ${{ matrix.name }}
+    needs: changes
+    # NO JOB-LEVEL `if:` HERE, deliberately, and it is not an oversight.
+    #
+    # `Ubuntu 22.04` and `Ubuntu 24.04` are required contexts and they come from
+    # `${{ matrix.name }}`. A job-level `if:` is evaluated BEFORE the matrix
+    # expands, so a skipped job has no `matrix.name` to interpolate and cannot
+    # emit checks under those names — protection would keep waiting, which is
+    # the very deadlock this workflow change exists to remove. The other jobs
+    # here carry literal names and gate at the job level safely; this one must
+    # run so the legs exist, and gates its WORK at the step level instead.
+    #
+    # Cost on a docs-only PR: two runner allocations that finish in seconds.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Minimum supported Ubuntu LTS (Boost >= 1.74)
+          # Minimum supported Ubuntu LTS (Boost >= 1.74). Compile-only —
+          # the test job consumes the 24.04 artifact (same Release
+          # BUILD_TESTS=ON tree) rather than rebuilding twice.
           - name: Ubuntu 22.04
             container: ubuntu:22.04
+            pack_ctest: false
 
           - name: Ubuntu 24.04
             container: ubuntu:24.04
+            pack_ctest: true
     container:
       image: ${{ matrix.container }}
       env:
@@ -281,17 +304,23 @@ jobs:
         CCACHE_DIR: ~/.ccache
     steps:
       - name: set apt conf
+        if: needs.changes.outputs.docs_only != 'true'
         run: ${{env.APT_SET_CONF}}
       - name: update apt
+        if: needs.changes.outputs.docs_only != 'true'
         run: apt update
       - name: install build dependencies
+        if: needs.changes.outputs.docs_only != 'true'
         run: ${{env.APT_INSTALL_LINUX}}
       - name: configure git
+        if: needs.changes.outputs.docs_only != 'true'
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           submodules: recursive
       - name: install Rust
+        if: needs.changes.outputs.docs_only != 'true'
         # Composite action (.github/actions/install-rust): the one
         # hardened download-then-run recipe, installing the
         # rust-toolchain.toml pin + components up front so the daemon
@@ -302,36 +331,95 @@ jobs:
         # the runner until the repo is checked out.
         uses: ./.github/actions/install-rust
       - uses: actions/cache@v5
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           path: ~/.ccache
           key: ccache-${{ matrix.container }}-build-${{ github.sha }}
           restore-keys: ccache-${{ matrix.container }}-build-
       - uses: ./.github/actions/set-make-job-count
+        if: needs.changes.outputs.docs_only != 'true'
       - name: build
+        if: needs.changes.outputs.docs_only != 'true'
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
         run: |
           ${{env.CCACHE_SETTINGS}}
           ${{env.BUILD_DEFAULT_LINUX}}
+      # Armed #[ignore]d regtest_e2e gates against the shekyld just built.
+      # Runs here rather than in the test job because that job installs no
+      # Rust by design, and here the binary and the toolchain already coexist.
+      #
+      # 14 gates, each <= ~3.5 min, ~20 min total (measured 2026-09-08 local
+      # Release; a runner is slower). The two heavy consensus gates (depth-3
+      # spend, emission claim; 13 + 19 min) run nightly instead — GATE_LANE=
+      # slow in nightly-live-daemon-slow.yml, same script, red pushed to a
+      # tracking issue (the visibility route #660's ruling required of any
+      # cost tier). Either way this is not the critical path: depends.yml
+      # (74-113 min) and randomx (90 min) already run longer, concurrently.
+      - name: live-daemon gates
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
+        # `shell: bash` like the CTest-artifact step below, and for the same
+        # reason: the job's default shell in this container is dash, which
+        # rejects `set -o pipefail` outright — the script dies on line 1
+        # before running anything.
+        shell: bash
+        run: scripts/ci/run_live_daemon_gates.sh
+
+      # Pack the CTest tree for the 24.04 test job. Same shape as
+      # economics-c2a-prime.yml: Release defaults BUILD_SHARED_LIBS OFF
+      # (CMakeLists.txt), so test binaries are statically linked against
+      # in-tree libraries and the tar can drop *.o / *.a / CMakeFiles.
+      # They still need SYSTEM libraries (boost, ssl, sodium, unwind)
+      # that the test job installs. CMake bakes absolute paths into
+      # CTestTestfile.cmake; both jobs use container ubuntu:24.04 +
+      # actions/checkout, so github.workspace is `/__w/shekyl-core/shekyl-core`
+      # on both sides. tests/data/ is repo-tracked — the test job reads
+      # it from checkout, not this tarball.
+      - name: Pack CTest tree
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
+        run: |
+          tar --exclude='**/CMakeFiles' --exclude='**/*.o' --exclude='**/*.a' \
+            -czf ubuntu-24.04-ctest.tar.gz build/
+      - name: Verify CTest artifact
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          listing="$(tar tzf ubuntu-24.04-ctest.tar.gz)"
+          if ! grep -qx 'build/CTestTestfile.cmake' <<< "$listing"; then
+            echo "FATAL: ubuntu-24.04-ctest.tar.gz missing build/CTestTestfile.cmake" >&2
+            echo "tar tf (first 40 entries):" >&2
+            head -40 <<< "$listing" >&2
+            exit 1
+          fi
+          # Fail closed if the GNU tar excludes above silently missed
+          # (rule 47: absence of CTestTestfile is not the only signal;
+          # CMakeFiles/*.o/*.a must also be absent). Same exclude set
+          # as economics-c2a-prime.yml; this assertion is the check
+          # that they took effect, not a rewrite of the pack command.
+          leaked="$(grep -E '(^|/)CMakeFiles(/|$)|\.(o|a)$' <<< "$listing" || true)"
+          if [ -n "$leaked" ]; then
+            echo "FATAL: ubuntu-24.04-ctest.tar.gz still contains CMakeFiles/*.o/*.a" >&2
+            echo "$leaked" | head -20 >&2
+            exit 1
+          fi
+          echo "OK: artifact contains CTestTestfile.cmake and excludes CMakeFiles/*.o/*.a"
+      - uses: actions/upload-artifact@v4
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
+        with:
+          name: ubuntu-24.04-ctest
+          path: ubuntu-24.04-ctest.tar.gz
+          retention-days: 1
 
   test-ubuntu:
-    name: "${{ matrix.name }} (tests)"
-    needs: build-ubuntu
+    name: "Ubuntu 24.04 (tests)"
+    needs: [changes, build-ubuntu]
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Ubuntu 22.04
-            container: ubuntu:22.04
-          - name: Ubuntu 24.04
-            container: ubuntu:24.04
     container:
-      image: ${{ matrix.container }}
+      image: ubuntu:24.04
       env:
         DEBIAN_FRONTEND: noninteractive
-        CCACHE_TEMPDIR: /tmp/.ccache-temp
-        CCACHE_DIR: ~/.ccache
       # Setting up a loop device (losetup) requires additional capabilities.
       # tests/create_test_disks.sh
       options: --privileged
@@ -340,38 +428,39 @@ jobs:
         run: ${{env.APT_SET_CONF}}
       - name: update apt
         run: apt update
-      - name: install build dependencies
-        run: ${{env.APT_INSTALL_LINUX}}
-      - name: install Python dependencies
-        run: apt install -y python3-requests python3-psutil python3-monotonic python3-deepdiff
+      - name: install runtime + test dependencies
+        # No compiler, no cmake rebuild, no Rust. APT_INSTALL_LINUX is the
+        # same package set the 24.04 build job used, so the DT_NEEDED
+        # system libraries the statically-linked-against-in-tree binaries
+        # still require are present. Python packages are for functional
+        # tests that ctest launches.
+        run: |
+          ${{env.APT_INSTALL_LINUX}}
+          apt install -y python3-requests python3-psutil python3-monotonic python3-deepdiff
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
           submodules: recursive
-      - name: install Rust
-        # Composite action (.github/actions/install-rust), after
-        # checkout — see the build job's step comment.
-        uses: ./.github/actions/install-rust
-      - uses: actions/cache@v5
+      - uses: actions/download-artifact@v4
         with:
-          path: ~/.ccache
-          key: ccache-${{ matrix.container }}-build-${{ github.sha }}
-          restore-keys: ccache-${{ matrix.container }}-build-
+          name: ubuntu-24.04-ctest
+      - name: Unpack CTest tree
+        run: tar -xzf ubuntu-24.04-ctest.tar.gz
       - name: create dummy disk drives for testing
         run: tests/create_test_disks.sh >> $GITHUB_ENV
-      - uses: ./.github/actions/set-make-job-count
       - name: tests
         env:
           CTEST_OUTPUT_ON_FAILURE: ON
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: |
-          ${{env.CCACHE_SETTINGS}}
-          ${{env.BUILD_DEFAULT_LINUX}}
-          cmake --build build --target test
+        # ctest, not `cmake --build --target test`: the latter would
+        # notice unpacked timestamps and try to rebuild. The build job
+        # already compiled everything.
+        run: ctest --test-dir build --output-on-failure
 
   build-windows-msvc:
-    name: 'Windows (MSVC, daemon+wallet+wallet-rpc)'
+    name: 'Windows (MSVC, daemon)'
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v5
@@ -379,7 +468,175 @@ jobs:
           submodules: recursive
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
+      #
+      # `components: clippy` is required for the WP-W1 clippy step below: the
+      # action installs a minimal toolchain, and without it the step dies with
+      # "'cargo-clippy.exe' is not installed for the toolchain". Declared here
+      # rather than in rust-toolchain.toml on purpose — that file explains why
+      # it carries no components (parallel cargo processes would race to
+      # auto-install into a shared dir during the daemon build).
       - uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          components: clippy
+      # WP-W1: the Windows security crate must compile for Windows, and this
+      # is the only runner where that can be BLOCKING — the Linux boxes have no
+      # C cross-compiler, so anything whose graph reaches `ring` (i.e. anything
+      # that can speak HTTPS) cannot be cross-checked there.
+      #
+      # `shekyl-win-sec` itself has no such dependency and is verified locally
+      # too (cargo check --target x86_64-pc-windows-gnu), so a failure here is a
+      # real regression, not an environment artifact.
+      - name: "WP-W1: shekyl-win-sec compiles for Windows"
+        shell: pwsh
+        working-directory: rust
+        # `--features test-utils` because the probe suite needs it, and
+        # `--all-targets` builds that suite: without the feature this step
+        # fails on a missing `sid_for_testing`, which is exactly how it
+        # failed on the first run of this PR. The clippy step below always
+        # had the feature; this one did not, so local verification and CI
+        # were not running the same thing.
+        run: cargo check --locked -p shekyl-win-sec --features test-utils --all-targets
+
+      # Clippy for a WINDOWS target, which the workspace gate on Linux cannot
+      # do: this crate is cfg(windows), so the Linux run sees an empty crate
+      # and passes. That is not hypothetical — the first Windows-target clippy
+      # run on this code found 18 errors including a genuine SOUNDNESS bug (a
+      # `Vec<u8>` buffer cast to a `TOKEN_USER`, which needs 8-byte alignment).
+      # A gate that cannot see its subject is the defect this round keeps
+      # finding; this is the fix for it.
+      - name: "WP-W1: clippy -D warnings (Windows target)"
+        shell: pwsh
+        working-directory: rust
+        run: cargo clippy --locked -p shekyl-win-sec --features test-utils --all-targets -- -D warnings
+
+      # The rustdoc gate for this crate lives HERE, not in rust-audit-test.yml's
+      # persona-serving list, and the reason is the point: that list runs on
+      # Linux, where `shekyl-win-sec` compiles to nothing. Adding it there would
+      # document an empty crate and pass forever — a gate checking nothing,
+      # which is precisely the defect the preceding follow-up round existed to
+      # remove. Its docs carry the WP-D4/WP-D5 security contracts and the safety
+      # arguments for every `unsafe` block, so they are worth gating; they just
+      # have to be gated where they exist.
+      - name: "WP-W1: rustdoc -D warnings (shekyl-win-sec)"
+        shell: pwsh
+        working-directory: rust
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --no-deps --lib -p shekyl-win-sec
+
+      # The pre-registered probes (docs/design/WINDOWS_WALLET_PROBE_SHEET.md).
+      # BLOCKING, and that is the point of writing them down first: each probe
+      # carries a prediction made before any Windows machine ran it, and the
+      # sheet names the DECISION a failure revisits. A red here is a finding
+      # about the design, not a flaky test.
+      #
+      # `-CiOnly` skips exactly the two probes §3 pre-declares as needing an
+      # interactive logon. It is a switch rather than auto-detection so a CI run
+      # cannot silently skip more than was pre-registered — the skips are
+      # printed and are not passes.
+      - name: "WP probes: pre-registered Windows behaviour"
+        shell: pwsh
+        run: ./scripts/ci/windows_probe.ps1 -CiOnly
+
+      # WP-W5 SCOUTING STEP — informational by design, and NOT a gate.
+      #
+      # `WINDOWS_WALLET_SUPPORT.md` §7 plans one deliberate run whose only job
+      # is to drain the remaining Windows error list, because §2's blocking
+      # surface was produced by grep and a compile stops at the first error per
+      # crate. This is that run, made continuous and cheap rather than
+      # one-shot.
+      #
+      # It does not fail the build, and that is a decision rather than an
+      # oversight: the port is incomplete on purpose (WP-D10 keeps the build
+      # gate on until WP-W5), so a red here would mean "still unported", which
+      # is already known and recorded. WP-W5 flips `continue-on-error` off in
+      # the same slice that makes it pass — that flip is the gate, and until
+      # then this step's output is read by a human, not by CI.
+      #
+      # What it observes as of WP-W2: the `cfg(windows)` arms of
+      # `shekyl-wallet-rpc` and `shekyl-cli` — the named-pipe listener seam
+      # and the verified dial — which no Linux box can compile (their graphs
+      # reach `ring`), plus the two end-to-end tests, which run in the same
+      # step regardless of whether the check or each other passed (see
+      # REPORTING below). Coverage as of the rotation fix: BOTH end-to-end
+      # tests have now executed here. The wallet-rpc half found the
+      # mandatory-lock bug (WINDOWS_WALLET_PROBE_SHEET.md §4.3), and the
+      # shekyl-cli half first ran green on 2026-08-24 once the run-everything
+      # change stopped the step aborting before it. They are informational
+      # for the same reason as the check and end the same way — WP-W5 turns
+      # the wallet test lane blocking.
+      #
+      # `shekyl-engine-file` joined the list with that rotation fix, and the
+      # reason is the point: it owns the atomic write, the keys-file lock and
+      # password rotation — every Windows-specific file primitive the wallet
+      # has — and it was covered by NOTHING here. The two crates above only
+      # reach it through the RPC surface, so `rotate_password` failing on
+      # Windows for every wallet arrived as an opaque `-32603` from a
+      # lifecycle test rather than as the four red tests in the crate that
+      # actually owns the defect. A crate whose whole job is platform file
+      # behaviour is the last one that should be tested only by proxy.
+      #
+      # REPORTING (2026-08-21). A `continue-on-error` step shows
+      # `conclusion: success` on the run page whatever its command did; the
+      # first real Windows-only wallet bug (the mandatory keys-file lock,
+      # WINDOWS_WALLET_PROBE_SHEET.md §4.3) was found ~8,000 log lines deep
+      # under a green tick. So: every command runs regardless of the earlier
+      # ones (a compile stops at the first error per crate; this step must
+      # not stop at the first error per command), each exit code lands in a
+      # table on the job summary, and the step fails — still non-blocking —
+      # when any of them did. Exit codes are read directly from
+      # $LASTEXITCODE, never through a pipe (rule 46).
+      - name: "WP-W5 scouting: remaining Windows errors + pipe e2e (informational)"
+        shell: pwsh
+        working-directory: rust
+        continue-on-error: true
+        run: |
+          # Commands are argument arrays invoked through the call operator,
+          # not strings through Invoke-Expression: no quoting to reason about,
+          # and nothing that becomes code execution if an argument ever stops
+          # being a constant. The step's exit is the FIRST non-zero code — with
+          # run-everything semantics the earliest failure is the informative
+          # one (a failed check makes the test results moot); every command's
+          # own code is in the table regardless.
+          #
+          # A non-zero cargo exit is DATA here, not an error: it has to reach
+          # $LASTEXITCODE and the table. The daemon-binary step below records
+          # that on this runner $PSNativeCommandUseErrorActionPreference has
+          # promoted expected non-zero native exits into terminating errors
+          # before $LASTEXITCODE could be read; under $ErrorActionPreference
+          # 'Stop' (the Actions pwsh default) that would end this block at
+          # the first failing command and skip the remaining commands, the
+          # table, the summary and the explicit exit. Turning the preference
+          # off for this block is the direct control; `cmd /c` isolation
+          # would work too but would put the commands back into strings.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $results = @()
+          $first_failure = 0
+          foreach ($argv in @(
+            @('cargo', 'check', '--locked', '-p', 'shekyl-engine-core', '-p', 'shekyl-wallet-rpc', '-p', 'shekyl-cli'),
+            @('cargo', 'test', '--locked', '-p', 'shekyl-engine-file'),
+            @('cargo', 'test', '--locked', '-p', 'shekyl-wallet-rpc', '--test', 'http_get_version'),
+            @('cargo', 'test', '--locked', '-p', 'shekyl-cli', '--test', 'rpc_session_e2e')
+          )) {
+            $shown = $argv -join ' '
+            Write-Host "::group::$shown"
+            & $argv[0] @($argv[1..($argv.Length - 1)])
+            $code = $LASTEXITCODE
+            Write-Host "::endgroup::"
+            $results += [pscustomobject]@{ Command = $shown; Exit = $code }
+            if ($code -ne 0 -and $first_failure -eq 0) { $first_failure = $code }
+          }
+          $lines = @('## WP-W5 scouting (informational, Windows)', '', '| Command | Exit |', '|---|---|')
+          foreach ($r in $results) {
+            $mark = if ($r.Exit -eq 0) { 'PASS' } else { "FAIL ($($r.Exit))" }
+            $lines += "| ``$($r.Command)`` | $mark |"
+          }
+          $lines += ''
+          $lines += 'Non-blocking until WP-W5 flips it; a FAIL here is a finding to read, not a flake to rerun.'
+          $lines -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $results | Format-Table -AutoSize | Out-String | Write-Host
+          exit $first_failure
+
       - name: restore vcpkg cache
         uses: actions/cache/restore@v5
         id: vcpkg-cache
@@ -418,17 +675,46 @@ jobs:
             -DUSE_DEVICE_TREZOR=OFF `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
-      - name: build daemon, wallet, and wallet-rpc
+      # Daemon only. The C++ wallet stack was deleted at Phase 5, and the
+      # Rust wallet binaries are not built for Windows targets — see
+      # docs/design/WINDOWS_WALLET_SUPPORT.md. The Windows wallet gap is
+      # neither caused nor widened here: the `wallet` target built a binary
+      # that has not shipped since the C1/C2 install cutover (#500). Slice
+      # WP-W5 of that design round owns renaming this job back.
+      - name: build daemon
         shell: pwsh
         run: |
-          cmake --build build --config Release --target daemon wallet wallet_rpc_server --parallel 2
+          # mdb_copy rides along (one vendored C file): the daemon's prune
+          # warning names shekyl-mdb-copy, so its MSVC compile-fit is gated
+          # here rather than discovered by the first Windows operator.
+          cmake --build build --config Release --target daemon mdb_copy --parallel 2
       - name: smoke-test daemonizer removal
         shell: pwsh
-        # After the V3.1 daemonizer removal, shekyld.exe and
-        # shekyl-wallet-rpc.exe must (a) link cleanly on MSVC without the
-        # src/daemonizer/ subsystem, (b) run without invoking the removed
-        # POSIX fork() / Windows SCM code paths, and (c) intercept the
-        # retired CLI flags via src/common/removed_flags.{h,cpp}. --help
+        # After the V3.1 daemonizer removal, shekyld.exe must (a) link
+        # cleanly on MSVC without the src/daemonizer/ subsystem, (b) run
+        # without invoking the removed POSIX fork() / Windows SCM code
+        # paths, and (c) intercept the retired CLI flags via
+        # src/common/removed_flags.{h,cpp}.
+        #
+        # The removed-flag assertions cover shekyld alone. They used to
+        # cover the C++ wallet-rpc too, but that binary is deleted (its
+        # name and install slot went to the Rust shekyl-wallet-rpc in the
+        # C1/C2 cutover). They cannot transfer to the Rust binary: the
+        # migration message they grep for comes from
+        # src/common/removed_flags.{h,cpp}, and clap answers "unexpected
+        # argument" instead. The shim's wallet-side caller
+        # (src/wallet/wallet_args.cpp) was deleted with wallet2 at Phase 5,
+        # so shekyld is now the shim's only caller.
+        #
+        # No wallet binary is checked on Windows because none is built
+        # there — `BuildRust.cmake` skips them, tracked in docs/FOLLOWUPS.md
+        # under "Rust wallet stack: no Windows support". Not because the
+        # stack is Unix-only: that stopped being true on 2026-08-25, when
+        # both binaries were observed compiling and linking for
+        # x86_64-pc-windows-msvc with their end-to-end tests passing. What
+        # is unverified is the CMake path, staging, install and archive
+        # layout, so WP-W5 removes the gate deliberately rather than as a
+        # side effect. This job is the daemon's MSVC gate until then. --help
         # exits 0 after printing the option list, which exercises the full
         # argument-parsing + logger-init path without waiting on a network
         # port. --detach is expected to exit nonzero with the V3.1
@@ -449,7 +735,6 @@ jobs:
           # "Select-String on a file," which are the well-behaved parts.
           $ErrorActionPreference = 'Stop'
           $daemon = 'build\bin\Release\shekyld.exe'
-          $wrpc   = 'build\bin\Release\shekyl-wallet-rpc.exe'
 
           function Assert-HelpOk([string]$exe, [string]$label) {
             cmd /c "`"$exe`" --help > NUL 2>&1"
@@ -476,9 +761,7 @@ jobs:
           }
 
           Assert-HelpOk $daemon 'shekyld'
-          Assert-HelpOk $wrpc   'shekyl-wallet-rpc'
-          Assert-RemovedFlag $daemon 'shekyld'           '--detach'
-          Assert-RemovedFlag $wrpc   'shekyl-wallet-rpc' '--pidfile=C:\temp\x'
+          Assert-RemovedFlag $daemon 'shekyld' '--detach'
 
           # Both Assert-RemovedFlag calls deliberately leave $LASTEXITCODE
           # nonzero — that's exactly what we're asserting on. GitHub Actions'
@@ -493,6 +776,14 @@ jobs:
 
   source-archive:
     name: "source archive"
+    # Required status check on `main` (ruleset 15215246). Keep it on the
+    # release PR (base = main) and on pushes to main. Drop it from every
+    # PR into `dev` — gitian on tags is the release archive; this job was
+    # ~1 min itself but occupied a runner in the same pool as the 15-workflow
+    # PR fan-out.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || (github.event_name == 'pull_request' && github.base_ref == 'main')
     runs-on: ubuntu-latest
     container:
       image: ubuntu:22.04
@@ -530,23 +821,3 @@ jobs:
         with:
           name: ${{ env.OUTPUT }}
           path: ${{ env.OUTPUT }}
-
-  rust-msrv-gate:
-    name: "Rust: MSRV gate (1.94)"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-      - uses: dtolnay/rust-toolchain@1.94.0
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust -> target
-      - name: cargo check at declared MSRV
-        working-directory: rust
-        # Compiles every workspace crate except the differential harness,
-        # which needs a CMake-built C RandomX install and has its own
-        # workflow. Same exclusion shape as `rust-audit-and-test`'s test
-        # step — the MSRV gate asserts the declared floor builds, not
-        # that every integration test runs at MSRV.
-        run: cargo check --locked --workspace --exclude shekyl-randomx-differential

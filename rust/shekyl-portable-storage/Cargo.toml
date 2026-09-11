@@ -1,0 +1,14 @@
+[package]
+name = "shekyl-portable-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Binary portable_storage codec (epee KV). See docs/PORTABLE_STORAGE.md and docs/design/LV2_PORTABLE_STORAGE.md."
+
+[dependencies]
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

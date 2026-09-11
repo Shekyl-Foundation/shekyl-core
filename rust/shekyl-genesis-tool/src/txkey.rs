@@ -17,10 +17,11 @@
 //! M = varint(len(net)) ‖ net_ascii            net ∈ {"mainnet","testnet","stagenet"}
 //!     ‖ varint(n_recipients)
 //!     ‖ for each recipient, in file order:
-//!         varint(len(addr)) ‖ addr_utf8       canonical full three-segment address
+//!         spend_pk(32) ‖ view_pk(32)
+//!         ‖ varint(len(ek)) ‖ ek              ML-KEM-768 encap key
 //!         ‖ amount_atomic as u64 LE (8 bytes)
 //!
-//! seed      = cSHAKE256-32(customization = "shekyl/genesis-txkey-v1", input = M)
+//! seed      = cSHAKE256-32(customization = "shekyl/genesis-txkey-v2", input = M)
 //! tx_secret = seed reduced mod ℓ  (Scalar::from_bytes_mod_order, ≡ C++ sc_reduce32)
 //! tx_pub    = tx_secret · G       (compressed Ed25519; the tx_extra 0x01 field)
 //! ```
@@ -49,7 +50,12 @@ use shekyl_wire::varint::write_varint;
 use crate::recipients::{network_str, Recipient};
 
 /// cSHAKE256 customization string for the genesis tx-key derivation.
-pub const GENESIS_TXKEY_CUSTOMIZATION: &[u8] = b"shekyl/genesis-txkey-v1";
+///
+/// v2 remints the preimage onto **payment identity** (spend/view/ek +
+/// amount), not the Bech32m spelling. v1 hashed the canonical address
+/// string, so a layout correction rotated the founding tx; that coupling
+/// is deleted pre-genesis. The `v1` literal is retired unused.
+pub const GENESIS_TXKEY_CUSTOMIZATION: &[u8] = b"shekyl/genesis-txkey-v2";
 
 /// Derive the deterministic genesis tx secret scalar (canonical 32-byte form)
 /// for `net` over the validated recipients, per the module-doc spec.
@@ -64,9 +70,11 @@ pub fn derive_genesis_tx_secret(net: Network, recipients: &[Recipient]) -> [u8; 
     m.extend_from_slice(net_str);
     write_varint(recipients.len(), &mut m).expect("writing to a Vec is infallible");
     for r in recipients {
-        let addr = r.canonical.as_bytes();
-        write_varint(addr.len(), &mut m).expect("writing to a Vec is infallible");
-        m.extend_from_slice(addr);
+        m.extend_from_slice(&r.address.spend_key);
+        m.extend_from_slice(&r.address.view_key);
+        let ek = &r.address.ml_kem_encap_key;
+        write_varint(ek.len(), &mut m).expect("writing to a Vec is infallible");
+        m.extend_from_slice(ek);
         m.extend_from_slice(&r.amount.to_le_bytes());
     }
 

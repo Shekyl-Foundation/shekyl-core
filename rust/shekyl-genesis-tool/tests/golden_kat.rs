@@ -13,7 +13,7 @@
 //! loudly here.
 
 use sha2::{Digest, Sha256};
-use shekyl_address::{Network, ShekylAddress};
+use shekyl_address::Network;
 use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
 use shekyl_genesis_tool::builder::{build_genesis_tx, genesis_block};
 use shekyl_genesis_tool::recipients::{parse_and_validate, Recipient};
@@ -24,14 +24,14 @@ use shekyl_wire::tx_extra::{self, TxExtraField, HYBRID_KEM_CT_BYTES, PQC_LEAF_HA
 /// but nothing here depends on the config).
 const KAT_NONCE: u32 = 10101;
 
-// --- pinned vectors (captured 2026-08-04 on the v9-header branch) -----------
-const KAT_TX_SECRET_HEX: &str = "0627c9785d7773ffd1ff2a3576c8a4bedb2271bf435201cf2fc0d8ceddf90208";
-const KAT_TX_PUB_HEX: &str = "f3d404a553faf70bc3032b1615af856f26eb6249e53df583f99146ed3a15a8d0";
+// --- pinned vectors (recaptured 2026-08-16: genesis-txkey-v2 payment identity) ---
+const KAT_TX_SECRET_HEX: &str = "f5c1a3a255f52bdb04fe23448d941ed4ec70fea47a9eee658f4468f79617a602";
+const KAT_TX_PUB_HEX: &str = "6e78259c37b956a355c36e67c72037279170d260a4ea0e6ebbc8c3a7d711eac1";
 const KAT_BLOB_LEN: usize = 6263;
 const KAT_BLOB_SHA256_HEX: &str =
-    "289b191cf6b94a993f3699f87ea844e4b2ac93ece18228c7aaa6dbb13df1b18f";
-const KAT_TX_HASH_HEX: &str = "c32ebf44f29719b5063757ed762a5730d7983afd6cd76c5ceecc592722b0a636";
-const KAT_BLOCK_ID_HEX: &str = "7e4c06d94d2b96f419dff2f4839ef8f5331b22cbd01973df8eb7b2eece927dde";
+    "05783d331507994ea7459777f0f281be89a0635deb8f7544aac1dc986b7cda73";
+const KAT_TX_HASH_HEX: &str = "80be1fd3fc0dee9d402eeafd35af0111446b35a2ae8ac8931371a66b07a135ec";
+const KAT_BLOCK_ID_HEX: &str = "c91b2e335074202ff64a35338e4d0aa5cb792136a8f11cd4cc5b272a6b0d8130";
 // ----------------------------------------------------------------------------
 
 fn fixture_recipients() -> Vec<Recipient> {
@@ -40,14 +40,10 @@ fn fixture_recipients() -> Vec<Recipient> {
             let seed = [i; 32];
             let (_master, blob) = generate_account_from_raw_seed(&seed, DerivationNetwork::Testnet)
                 .expect("fixture account");
-            let address = ShekylAddress::new(
-                Network::Testnet,
-                *blob.spend_pk.as_canonical_bytes(),
-                *blob.view_pk.as_canonical_bytes(),
-                blob.ml_kem_ek.to_vec(),
-            )
-            .encode()
-            .expect("fixture address");
+            let address = blob
+                .to_address(Network::Testnet)
+                .encode()
+                .expect("fixture address");
             serde_json::json!({
                 "label": format!("KAT fixture {i}"),
                 "address": address,

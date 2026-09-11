@@ -19,6 +19,7 @@ use shekyl_types::{PCanonicalId, SettlementEpoch};
 use crate::engine::bond_assembly::BondAssemblyError;
 use crate::engine::drain_assembly::DrainAssemblyError;
 use crate::engine::emission_claim::EmissionClaimError;
+use crate::engine::emission_source::{ServeAnchor, SlashWatermark};
 use crate::engine::pscan::persona_scanner::PersonaScanError;
 use crate::engine::pscan::scan_step::DualExtractError;
 
@@ -40,7 +41,7 @@ pub(crate) use shekyl_types::PSlot;
 ///
 /// `k` is the one tuning knob of Model D. The derive-forward set at open is
 /// `{persisted bonded slots} ∪ {cursor ..= cursor + k}`: the bonded slots are
-/// reachable for unbonding, and the `k`-slot window covers activations that
+/// reachable for releasing, and the `k`-slot window covers activations that
 /// happen *during* the session without re-acquiring the seed. Activation is
 /// sequential (`i → i+1`), so a window of `k` future slots covers `k` in-session
 /// activations before the lookahead is exhausted and the wallet must be reopened
@@ -58,11 +59,40 @@ pub(crate) use shekyl_types::PSlot;
 ///   against this rationale.
 pub(crate) const ARCHIVAL_PERSONA_LOOKAHEAD: u32 = 2;
 
+/// The bond watch's **probe window** (SA-R-6 from-seed reconstruction): how
+/// many slots past the monotone cursor get a persona canonical id derived
+/// into `StakingBlock::persona_id_cache` at open, so the principal
+/// refresh/rescan can sight on-chain bond posts for slots the wallet's
+/// record has lost.
+///
+/// Distinct knob from [`ARCHIVAL_PERSONA_LOOKAHEAD`], different cost model:
+/// a lookahead slot is a **resident key bundle** (memory + a full keygen per
+/// open for stakers); a probe slot is a **32-byte cached public id** derived
+/// once per slot for the wallet's life (the cache never invalidates), so the
+/// steady-state cost of the window is a map load. The one-time derivation
+/// (~W PQ keygens) is paid at wallet create / first open after upgrade — a
+/// moment that already runs full PQ account keygen, sized to stay small at
+/// the rule-76 device floor.
+///
+/// - **Width.** A restore-from-seed recovers at most `W` slots of staking
+///   history per open+rescan cycle (`ceil(depth / W)` cycles for deeper
+///   histories — each cycle's merge raises the cursor, and the next open
+///   derives the window above it). Bonds are epoch-scale and sequential, so
+///   realistic depths are far below `32`; one cycle is the expected case.
+/// - Must exceed the lookahead: the watch must at minimum cover every slot
+///   the wallet could bind in-session (compile-checked below).
+pub(crate) const ARCHIVAL_PERSONA_PROBE_WINDOW: u32 = 32;
+
+const _: () = assert!(
+    ARCHIVAL_PERSONA_PROBE_WINDOW > ARCHIVAL_PERSONA_LOOKAHEAD,
+    "the bond watch must cover at least every slot bindable in-session"
+);
+
 /// A held persona bundle tagged by whether it carries a **live bond**.
 ///
 /// This is **typed contract #4** ([`ARCHIVAL_BOND_CONSTRUCTION.md`] §10.2):
 /// activation-wipe must wipe only personas with *no* live bond, because a
-/// retired-but-bonded persona's `bond_spend` key is needed to unbond it later
+/// retired-but-bonded persona's `bond_spend` key is needed to release it later
 /// and — under Model D, with the seed gone after `assemble()` — a wiped persona
 /// is unreachable for the wallet's life. Rather than guard that with a runtime
 /// check, the wipe path ([`wipe_ephemeral`]) accepts only an [`EphemeralPersona`]
@@ -74,17 +104,15 @@ pub(crate) const ARCHIVAL_PERSONA_LOOKAHEAD: u32 = 2;
 /// hint, not consensus truth (2d reconciles it against actual bond state).
 ///
 /// [`ARCHIVAL_BOND_CONSTRUCTION.md`]: ../../../../../docs/design/ARCHIVAL_BOND_CONSTRUCTION.md
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) enum HeldPersona {
     /// Carries at least one live bond (`consumer_held` or posted). Never wiped
-    /// while bonded — its `bond_spend` key must stay reachable to unbond.
+    /// while bonded — its `bond_spend` key must stay reachable to release.
     Bonded(BondedPersona),
     /// A pre-derived lookahead persona with no live bond. The *only* variant
     /// the activation-wipe path accepts.
     Ephemeral(EphemeralPersona),
 }
 
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 impl HeldPersona {
     /// Borrow the underlying derived bundle (read-only; the secret never
     /// escapes — callers project the public [`PersonaIdentity`] out of it).
@@ -99,11 +127,9 @@ impl HeldPersona {
 /// A held persona that carries a live bond. The wipe path cannot accept this
 /// type (typed contract #4), so a bonded persona is never zeroized while a bond
 /// depends on its `bond_spend` key.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct BondedPersona(pub(crate) ArchivalPKeys);
 
 /// A held persona with no live bond — the only thing [`wipe_ephemeral`] accepts.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys);
 
 /// Wipe a retired ephemeral persona.
@@ -113,7 +139,6 @@ pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys);
 /// uncallable. The bundle's per-field `ZeroizeOnDrop` runs at the drop here; the
 /// explicit `drop` makes the wipe a named operation rather than an implicit
 /// scope-end.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) fn wipe_ephemeral(persona: EphemeralPersona) {
     drop(persona);
 }
@@ -124,9 +149,8 @@ pub(crate) fn wipe_ephemeral(persona: EphemeralPersona) {
 /// Takes a [`BondedPersona`] by value. It is the *only* path that wipes a bonded
 /// persona, and it is reached only through the witness-gated retire handler
 /// ([`RetireBondedPersona`]) — so a bonded persona is wiped **only** on
-/// positively-confirmed terminal evidence (`Unbond` + `W`-lapse + finality-deep),
+/// positively-confirmed terminal evidence (`Release` + `W`-lapse + finality-deep),
 /// never on absence. The bundle's per-field `ZeroizeOnDrop` runs at the drop.
-#[allow(dead_code)] // transient — the SP-5 retire path is the consumer.
 pub(crate) fn wipe_bonded(persona: BondedPersona) {
     drop(persona);
 }
@@ -141,19 +165,17 @@ pub(crate) fn wipe_bonded(persona: BondedPersona) {
 /// [`PersonaHandle`] evidence-typestate pattern. The discipline is the same
 /// positive-confirmation, never-absence rule as SP-6's GC and SP-7's
 /// `AbsentVerified`: a *wrong* retire wipes a still-live persona's `bond_spend`
-/// key → can't unbond → **stuck funds**, the exact mirror of a wrongful GC, which
+/// key → can't release → **stuck funds**, the exact mirror of a wrongful GC, which
 /// the conservative predicate guards against.
-#[allow(dead_code)] // transient — the SP-5 scan task builds it; the retire handler consumes it.
 pub(crate) struct RetirementWitness {
     /// The cleartext canonical id of the persona to retire (from its confirmed
-    /// `Unbond` bond-post). The actor matches it against the bonded union.
+    /// `Release` bond-post). The actor matches it against the bonded union.
     pub(crate) p_canonical_id: PCanonicalId,
 }
 
-#[allow(dead_code)] // transient — the SP-5 scan task is the lib consumer.
 impl RetirementWitness {
     /// Build a witness **iff** the persona is retire-eligible: a *confirmed*
-    /// `Unbond` whose **last creditable epoch has fallen out of the consensus
+    /// `Release` whose **last creditable epoch has fallen out of the consensus
     /// claim window**. Returns `None` otherwise — never retire a persona that can
     /// still claim, which would wipe its `bond_spend` key while live reward
     /// collateral remains (stuck funds).
@@ -165,11 +187,11 @@ impl RetirementWitness {
     /// epoch can't be used by accident (`settled_epoch` is a *finalized* epoch).
     ///
     /// `e_last` is the persona's last creditable epoch; the scan passes the
-    /// **conservative** `e_last = unbond_epoch` (a late retire only wastes a little
+    /// **conservative** `e_last = release_epoch` (a late retire only wastes a little
     /// scan work, an early one is stuck funds, so round toward later). **Finality**
     /// is guaranteed upstream — the scan surfaces bond-posts only from behind the
-    /// cursor's reorg horizon, so a witnessed `Unbond` is already finality-deep.
-    pub(crate) fn from_confirmed_unbond(
+    /// cursor's reorg horizon, so a witnessed `Release` is already finality-deep.
+    pub(crate) fn from_confirmed_release(
         p_canonical_id: PCanonicalId,
         e_last: SettlementEpoch,
         settled_epoch: SettlementEpoch,
@@ -182,7 +204,6 @@ impl RetirementWitness {
 /// What the witness-gated retire ([`RetireBondedPersona`]) did. All outcomes are
 /// valid (no error): the retire is **idempotent** — re-handing the same witness
 /// after the persona is gone is a no-op ([`Self::NotHeld`]).
-#[allow(dead_code)] // transient — the SP-5 scan task is the lib consumer.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RetireOutcome {
     /// The bonded persona was found and wiped from the union.
@@ -262,13 +283,11 @@ impl std::fmt::Debug for FundedSlots {
 /// caller emerges that provably needs to drive two actor operations from one
 /// mint, with documented justification.
 #[derive(Debug, PartialEq, Eq)]
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct PersonaHandle {
     pub(crate) p_slot: PSlot,
     pub(crate) generation: u64,
 }
 
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 impl PersonaHandle {
     /// The slot this handle authorizes.
     #[must_use]
@@ -280,9 +299,9 @@ impl PersonaHandle {
 /// Always-on compile-time guard: the two operation capability tokens
 /// ([`PersonaHandle`], [`PersistedBondTicket`]) must remain **single-use** —
 /// neither `Clone` nor `Copy`. Their single-use-ness is what makes "use an
-/// unheld persona" (typed contract #2) and "sign before persist" (typed
-/// contract #1) unrepresentable: a token is consumed *by value* by `sign_bond`
-/// and cannot be duplicated to bypass the consumption.
+/// unheld persona" (typed contract #2) and "construct before persist" (typed
+/// contract #1) unrepresentable: a token is consumed *by value* by
+/// `plan_bond_post` and cannot be duplicated to bypass the consumption.
 ///
 /// This replaces the originally-planned `trybuild` compile-fail tests for S7(c)
 /// (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` §4 R0-D# finding): `trybuild` compiles
@@ -304,7 +323,6 @@ const _: fn() = || {
         fn token_must_stay_single_use() {}
     }
     impl<T> AmbiguousIfImpl<()> for T {}
-    #[allow(dead_code)]
     struct Invalid;
     impl<T: Clone> AmbiguousIfImpl<Invalid> for T {}
 
@@ -323,7 +341,6 @@ const _: fn() = || {
 /// `HybridPublicKey` has no secret field. `Clone + Debug` is sound for the same
 /// reason.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // inert until PR 2c wiring
 pub(crate) struct PersonaIdentity {
     /// The slot this persona was derived for.
     pub p_slot: PSlot,
@@ -331,7 +348,6 @@ pub(crate) struct PersonaIdentity {
     pub bond_id: HybridPublicKey,
 }
 
-#[allow(dead_code)] // inert until PR 2c wiring
 impl PersonaIdentity {
     /// Project the public identity out of a (secret) persona bundle.
     pub(crate) fn from_keys(keys: &ArchivalPKeys) -> Self {
@@ -346,9 +362,87 @@ impl PersonaIdentity {
 // Errors
 // ---------------------------------------------------------------------------
 
+/// Why a bonded record cannot exit yet.
+///
+/// One variant per record-state arm of `verify_release_bond_post`, carrying the
+/// operands the condition turned on — so a refusal can tell the user *when* it
+/// lifts, not merely that it applies. Every predicate behind these is
+/// consensus's own function, called rather than restated.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub(crate) enum ReleaseNotReady {
+    /// The record has no bonded balance, so there is nothing to exit.
+    ///
+    /// First, because it is first at the verifier (`verify_release_bond_post`
+    /// checks it before the interval log). `build_release_vin` refuses the same
+    /// state as its own constructor invariant; this arm exists so the *reason*
+    /// a caller is given matches the reason the chain would give, which a
+    /// later-firing check would not.
+    #[error("the record has no bonded balance; there is nothing to release")]
+    NothingToRelease,
+
+    /// The record's interval log is at `MAX_BOND_BAD_INTERVALS`, so the
+    /// connect's clean interval-close could not append. Verify rejects this for
+    /// the same reason: a tx that verifies but cannot connect is a
+    /// deterministic halt, so both sides enforce one bound.
+    #[error("interval log is full ({count}/{max}); the clean close cannot append")]
+    IntervalLogFull {
+        /// The record's current interval-log length.
+        count: usize,
+        /// The genesis-frozen bound.
+        max: usize,
+    },
+
+    /// The release cooldown has not elapsed past the record's last served
+    /// epoch. The grace window is sized so every epoch up to the anchor reaches
+    /// its slash deadline before a release can verify.
+    #[error(
+        "release cooldown has not elapsed: last served {last_served}, \
+         current settlement epoch {current_settlement_epoch}"
+    )]
+    CooldownNotElapsed {
+        /// The whole-record anchor the cooldown runs from, carried in the form
+        /// it was read in.
+        ///
+        /// Typed rather than a `u64` because this arm is only reachable for a
+        /// served record — `release_cooldown_elapsed(None, _)` is `true` — and
+        /// the obvious way to spend that reasoning is to unwrap the operand
+        /// here. That would put `0` in the message for both a record served at
+        /// epoch 0 and a record with no anchor at all, which is the exact
+        /// collapse [`ServeAnchor`] exists to prevent, one layer further out.
+        /// Carrying the anchor costs nothing and reports whatever was actually
+        /// read — so if the predicate's absent arm ever moves, the refusal says
+        /// `never` instead of quietly saying `0`.
+        last_served: ServeAnchor,
+        /// The daemon's settled epoch at the read view.
+        current_settlement_epoch: u64,
+    },
+
+    /// The slash scheduler has not settled every epoch through the anchor.
+    ///
+    /// Distinct from the cooldown, and not implied by it: the cooldown alone
+    /// leaves a one-block connect-ordering race open, because a `Release` in the
+    /// first block past the anchor's slash deadline connects *before* that
+    /// block's slash fold. `watermark` is [`SlashWatermark::NothingSettled`]
+    /// when nothing has settled at all — the fail-closed reading, and the one
+    /// case where an absent operand is restrictive rather than permissive.
+    #[error(
+        "slash settlement is pending through {last_served} \
+         (watermark: {watermark})"
+    )]
+    SlashSettlementPending {
+        /// The anchor that must be covered. Typed for the reason given on
+        /// [`Self::CooldownNotElapsed`].
+        last_served: ServeAnchor,
+        /// The scheduler's watermark. Typed as well, so `NothingSettled` names
+        /// itself instead of arriving as a `Debug`-rendered `None` — this is
+        /// the operand whose absence is *restrictive*, and a refusal that turns
+        /// on it should say so in words.
+        watermark: SlashWatermark,
+    },
+}
+
 /// Errors surfaced by the StakeEngine handle.
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) enum StakeEngineError {
     /// The StakeEngine actor has stopped (fail-stop after a handler panic, or a
     /// clean stop). Terminal and non-retryable — the persona secrets went with
@@ -383,7 +477,7 @@ pub(crate) enum StakeEngineError {
     StaleHandle,
 
     /// The OS entropy source failed to supply bytes for the entry-gap timing draw
-    /// (`SignBond`, S5 / Round 3). A bond-timing draw requires a functional CSPRNG;
+    /// (`PlanBondPost`, S5 / Round 3). A bond-timing draw requires a functional CSPRNG;
     /// a source failure is fail-loud and terminal for this request — no silent
     /// fallback to a weaker source. The cause may be **transient** (very early
     /// boot, before the entropy pool is seeded) or **persistent** (a sandbox /
@@ -398,7 +492,7 @@ pub(crate) enum StakeEngineError {
     )]
     RngSourceFailed(#[source] rand_core::Error),
 
-    /// The entry-gap timing draw was statistically degenerate (`SignBond`, S5 /
+    /// The entry-gap timing draw was statistically degenerate (`PlanBondPost`, S5 /
     /// Round 3 — double-jitter-trap detection). Two consecutive draws from the
     /// same RNG produced identical spreads, which is the signature of a stuck
     /// or non-random source. The draw is rejected; a correct CSPRNG produces
@@ -411,12 +505,12 @@ pub(crate) enum StakeEngineError {
     )]
     RngDegeneracy,
 
-    /// The [`PersonaHandle`] and [`PersistedBondTicket`] passed to [`SignBond`]
+    /// The [`PersonaHandle`] and [`PersistedBondTicket`] passed to [`PlanBondPost`]
     /// name different persona slots. A ticket witnesses the durable persist for a
-    /// *specific* slot; it cannot authorize signing for any other slot.
+    /// *specific* slot; it cannot authorize a bond operation for any other slot.
     /// Non-terminal: ensure both are obtained for the same `p_slot`.
     #[error(
-        "sign-bond slot mismatch: handle names slot {handle_slot:?}, \
+        "bond-post slot mismatch: handle names slot {handle_slot:?}, \
          ticket names slot {ticket_slot:?}; both must name the same persona slot"
     )]
     SlotMismatch {
@@ -424,19 +518,46 @@ pub(crate) enum StakeEngineError {
         ticket_slot: PSlot,
     },
 
+    /// The record cannot support a full exit yet — a **producer-side refusal**,
+    /// not a construction failure.
+    ///
+    /// These are the `verify_release_bond_post` arms no vin construction can
+    /// satisfy, so the alternative to refusing is assembling a well-formed post
+    /// the daemon then rejects. On the exit path that alternative is worse than
+    /// it sounds: the confirmation of a `Release` is what fires the irreversible
+    /// persona-key wipe, so a wallet that reports success and fails at the chain
+    /// has misled the user about an operation they cannot take back. The cause
+    /// is named so the wallet can say which condition, and when it lifts.
+    #[error("record is not ready to exit: {0}")]
+    ReleaseNotReady(#[from] ReleaseNotReady),
+
+    /// The record facts describe a different persona than the handle does.
+    ///
+    /// A handle proves its slot is held; it says nothing about *whose* record
+    /// was read. The two arrive as independent values, so a `Release` that
+    /// paired one persona's balance and cooldown anchors with another's keys
+    /// would answer readiness from the wrong record and then build a post for
+    /// the right one. Not a user-facing condition — it is a caller bug, and the
+    /// message says so rather than suggesting a remedy the user does not have.
+    #[error(
+        "internal error: the bond record and the persona handle name different personas; \
+         the exit was not assembled"
+    )]
+    RecordPersonaMismatch,
+
     /// Bond construction failed after the actor validated the handle and ticket
-    /// (`SignBond`, S2). The persona bundle was available but
+    /// (`PlanBondPost`, S2). The persona bundle was available but
     /// [`build_join_market_vin`] returned an error — see the wrapped
     /// [`BondBuildError`] for the specific cause (`BondFloorZero`,
-    /// `IdentityEncode`, or `Sign`).
+    /// `IdentityEncode`, or `BondSpendEncode`).
     #[error("bond construction failed: {0}")]
     BondBuild(#[from] BondBuildError),
 
     /// A WI-2 [`AssembleBond`] pipeline step failed — funding arithmetic,
     /// spend-bundle derivation, output construction, proving, PQC auth
-    /// signing, wire encoding, or the A-1 prefix↔vin invariant. The wrapped
-    /// [`BondAssemblyError`] names the §3.6 failure mode; in every arm
-    /// nothing was persisted and no funding was reserved.
+    /// signing, or wire encoding. The wrapped [`BondAssemblyError`] names the
+    /// §3.6 failure mode; in every arm nothing was persisted and no funding
+    /// was reserved.
     #[error("bond assembly failed: {0}")]
     Assembly(#[from] BondAssemblyError),
 
@@ -514,7 +635,6 @@ pub(crate) enum ScanSetupError {
 /// Under Model D the actor receives **pre-derived** bundles (the orchestrator
 /// derived them at `assemble()` while the seed was transiently borrowed, then
 /// dropped the seed). The actor never sees the seed.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct StakeEngineArgs {
     /// The derive-forward set — pre-derived `ArchivalPKeys` keyed by slot:
     /// `{personas with live bonds} ∪ {p_slot ..= p_slot+k}`. Each is `!Clone` +

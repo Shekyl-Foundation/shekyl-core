@@ -91,63 +91,79 @@ namespace cryptonote {
   }
   //-----------------------------------------------------------------------------------------------
   bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version) {
-    // Base subsidy curve (0h) is canonical in Rust (`shekyl-economics`); this
-    // delegates to the `shekyl_base_block_reward` FFI rather than recomputing
-    // the ESF formula in C++ (STAGE_1_PR_7 §5.8, C2c cutover). Only the weight
-    // penalty below stays in C++.
-    uint64_t base_reward = shekyl::base_subsidy_before_penalty(already_generated_coins);
-
-    uint64_t full_reward_zone = get_min_block_weight(version);
-
-    //make it soft
-    if (median_weight < full_reward_zone) {
-      median_weight = full_reward_zone;
-    }
-
-    if (current_block_weight <= median_weight) {
-      reward = base_reward;
-      return true;
-    }
-
-    if(current_block_weight > 2 * median_weight) {
-      MERROR("Block cumulative weight is too big: " << current_block_weight << ", expected less than " << 2 * median_weight);
-      return false;
-    }
-
-    uint64_t product_hi;
-    // BUGFIX: 32-bit saturation bug (e.g. ARM7), the result was being
-    // treated as 32-bit by default.
-    uint64_t multiplicand = 2 * median_weight - current_block_weight;
-    multiplicand *= current_block_weight;
-    uint64_t product_lo = mul128(base_reward, multiplicand, &product_hi);
-
-    uint64_t reward_hi;
-    uint64_t reward_lo;
-    div128_64(product_hi, product_lo, median_weight, &reward_hi, &reward_lo, NULL, NULL);
-    div128_64(reward_hi, reward_lo, median_weight, &reward_hi, &reward_lo, NULL, NULL);
-    assert(0 == reward_hi);
-    assert(reward_lo < base_reward);
-
-    reward = reward_lo;
-    return true;
+    // The M_r-NEUTRAL view: baseline volume pins the release multiplier at
+    // exactly 1, so this equals the pre-FL-R12' unmodulated reward
+    // bit-for-bit for every state at or below the emission-curve asymptote.
+    // Production consumers are the fee/relay floors that must not track
+    // demand (CEN-M3's held machinery); everything reward-paying calls the
+    // volume-aware overload below.
+    return get_block_reward(median_weight, current_block_weight, already_generated_coins, reward, version, shekyl::tx_volume_window{SHEKYL_TX_VOLUME_BASELINE, 1});
   }
   //-----------------------------------------------------------------------------------------------
-  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version, uint64_t tx_volume_avg)
+  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version, shekyl::tx_volume_window tx_volume)
   {
-    if (!get_block_reward(median_weight, current_block_weight, already_generated_coins, reward, version))
-      return false;
+    // Marshaling shim for THE one owner of the paid reward
+    // (shekyl-economics `paid_block_reward`, FL-R12' signed composition):
+    //
+    //   paid = max(M_r * curve(remaining), TAIL) * penalty(x)
+    //
+    // The ordering is the ruling's most easily lost detail, so it is
+    // stated here from the DESIGN, not the code: the release multiplier
+    // applies to the CURVE (at a perpetual tail there is nothing to pace,
+    // so the floor is not modulated — a multiplied floor would pay least
+    // exactly when fees are lowest), and the weight penalty applies to the
+    // PAID quantity, after the floor (floors belong to emission; penalties
+    // apply to the paid quantity — a penalty composed before the floor
+    // would be dead at the tail permanently, and there is no post-tail
+    // era). Reversing either pair still compiles and still passes most
+    // tests; the terminal_reward_legs_agree oracle and the FFI marshal
+    // pins are what go red.
+    //
+    // There is no C++-side multiplier, supply cap, or flag path any more:
+    // the former SHEKYL_TX_VOLUME_BASELINE > 0 gate silently flipped
+    // terminal emission policy from a pacing knob (FL-V9) and the retired
+    // cap encoded the losing side of FL-V8's twin clamps. C++ computes
+    // nothing here.
+    //
+    // Values are pinned across the boundary by the 81-vector KAT asserted
+    // from BOTH languages (M_r-neutral vectors, unchanged by FL-R12') and
+    // the signed-composition marshal pins (M_r != 1 and both tail
+    // boundaries).
+    uint64_t computed = 0;
+    uint64_t weight_limit = 0;
+    const int32_t status = shekyl_block_reward(
+        median_weight,
+        current_block_weight,
+        already_generated_coins,
+        get_min_block_weight(version),
+        tx_volume.tx_count_sum,
+        tx_volume.blocks,
+        &computed,
+        &weight_limit);
 
-    if (SHEKYL_TX_VOLUME_BASELINE > 0)
+    if (status == SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG)
     {
-      uint64_t multiplier = shekyl_calc_release_multiplier(
-          tx_volume_avg, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
-      reward = shekyl_apply_release_multiplier(reward, multiplier);
-
-      uint64_t remaining = MONEY_SUPPLY - already_generated_coins;
-      if (reward > remaining)
-        reward = remaining;
+      // weight_limit is the doubled EFFECTIVE median, written by the same call
+      // that made the rejection — the message cannot disagree with the
+      // decision, which a locally recomputed clamp could.
+      //
+      // "at most", not the inherited "less than": the limit is INCLUSIVE.
+      // A block at exactly 2*median is accepted and earns a zero reward
+      // (pinned by the 2m rows of the weight-penalty KAT); only above it is
+      // rejected. The old wording named a bound one byte off from the rule it
+      // described, which is a bad thing for an operator to read while
+      // debugging a rejected block.
+      MERROR("Block cumulative weight is too big: " << current_block_weight << ", expected at most " << weight_limit);
+      return false;
     }
 
+    if (status != SHEKYL_BLOCK_REWARD_OK)
+    {
+      MERROR("shekyl_block_reward rejected its arguments (status " << status << ")");
+      return false;
+    }
+
+    reward = computed;
     return true;
   }
   //------------------------------------------------------------------------------------
@@ -157,42 +173,20 @@ namespace cryptonote {
     , account_public_address const & adr
     )
   {
-    uint8_t net = nettype_to_ffi_network(nettype);
-    // Canonical m_pqc_public_key layout is pinned at SHEKYL_PQC_PUBLIC_KEY_BYTES
-    // (X25519_pub[32] || ML-KEM-768_ek[1184]) by a static_assert in shekyl_ffi.h
-    // and by get_account_address_from_str, which is the only v1 assembler. Any
-    // other length is a programming error — we fall through and let the
-    // bech32m encoder refuse a malformed input rather than silently patch up
-    // legacy 1184-byte blobs that predate the freeze. The old "ML-KEM-only"
-    // fallback was a footgun: it let partially-initialized addresses round-
-    // trip through the encoder with the X25519 prefix missing and no check on
-    // the other side.
-    const std::vector<uint8_t>& pq = adr.m_pqc_public_key;
-    const uint8_t* ml_ptr = nullptr;
-    size_t ml_len = 0;
-    if (pq.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES)
-    {
-      ml_ptr = pq.data() + SHEKYL_X25519_PK_BYTES;
-      ml_len = SHEKYL_ML_KEM_768_EK_BYTES;
-    }
-    else if (!pq.empty())
-    {
-      LOG_PRINT_L1("Refusing to encode address with non-canonical m_pqc_public_key size "
-          << pq.size() << " (expected " << SHEKYL_PQC_PUBLIC_KEY_BYTES
-          << " or zero for legacy address-only wallets)");
-      return {};
-    }
-    ShekylBuffer buf = shekyl_address_encode(
-        net,
-        reinterpret_cast<const uint8_t*>(adr.m_spend_public_key.data),
-        reinterpret_cast<const uint8_t*>(adr.m_view_public_key.data),
-        ml_ptr,
-        ml_len);
-    if (!buf.ptr || buf.len == 0)
-      return {};
-    std::string result(reinterpret_cast<const char*>(buf.ptr), buf.len);
-    shekyl_buffer_free(buf.ptr, buf.len);
-    return result;
+    // Struct-only re-encode is gone: `account_public_address` does not
+    // carry `msg_sign_pk`, and we will not thicken the C++ struct to
+    // hold a field the Rust address crate owns (rule 20). Live daemon
+    // paths retain the caller's original encoded string (miner
+    // start/status). Wallet-owned encode of *this* account is
+    // `account_base::get_public_address_str` (blob-derived pk, same
+    // `shekyl_address_encode` the mining RPC/FFI already call). Remaining
+    // wallet2 display callers that only have a destination struct are
+    // the Phase-5 deletion surface — they get an empty string, not a
+    // theatrical FFI call that cannot succeed.
+    (void)nettype;
+    (void)adr;
+    LOG_PRINT_L0("get_account_address_as_str: cannot encode from account_public_address (no msg_sign_pk); pass the original address string");
+    return {};
   }
   //-----------------------------------------------------------------------
   // Shekyl has no integrated (payment-id) addresses; this is a compatibility

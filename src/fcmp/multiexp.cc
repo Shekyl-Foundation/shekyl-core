@@ -36,7 +36,7 @@ extern "C"
 #include "crypto/crypto-ops.h"
 }
 #include "common/aligned.h"
-#include "rctOps.h"
+#include "ct_ops.h"
 #include "multiexp.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -99,10 +99,10 @@ extern "C"
 //     Cached Straus/Pippenger cross at 232
 //
 
-namespace rct
+namespace ct
 {
 
-static inline bool operator<(const rct::key &k0, const rct::key&k1)
+static inline bool operator<(const ct::key &k0, const ct::key&k1)
 {
   for (int n = 31; n >= 0; --n)
   {
@@ -114,9 +114,9 @@ static inline bool operator<(const rct::key &k0, const rct::key&k1)
   return false;
 }
 
-static inline rct::key div2(const rct::key &k)
+static inline ct::key div2(const ct::key &k)
 {
-  rct::key res;
+  ct::key res;
   int carry = 0;
   for (int n = 31; n >= 0; --n)
   {
@@ -127,15 +127,15 @@ static inline rct::key div2(const rct::key &k)
   return res;
 }
 
-static inline rct::key pow2(size_t n)
+static inline ct::key pow2(size_t n)
 {
   CHECK_AND_ASSERT_THROW_MES(n < 256, "Invalid pow2 argument");
-  rct::key res = rct::zero();
+  ct::key res = ct::zero();
   res[n >> 3] |= 1<<(n&7);
   return res;
 }
 
-static inline int test(const rct::key &k, size_t n)
+static inline int test(const ct::key &k, size_t n)
 {
   if (n >= 256) return 0;
   return k[n >> 3] & (1 << (n & 7));
@@ -155,7 +155,7 @@ static inline void add(ge_p3 &p3, const ge_p3 &other)
   add(p3, cached);
 }
 
-rct::key bos_coster_heap_conv(std::vector<MultiexpData> data)
+ct::key bos_coster_heap_conv(std::vector<MultiexpData> data)
 {
   MULTIEXP_PERF(PERF_TIMER_START_UNIT(bos_coster, 1000000));
   MULTIEXP_PERF(PERF_TIMER_START_UNIT(setup, 1000000));
@@ -198,7 +198,7 @@ rct::key bos_coster_heap_conv(std::vector<MultiexpData> data)
     MULTIEXP_PERF(PERF_TIMER_PAUSE(sub));
 
     MULTIEXP_PERF(PERF_TIMER_RESUME(push));
-    if (!(data[index1].scalar == rct::zero()))
+    if (!(data[index1].scalar == ct::zero()))
     {
       heap.push_back(index1);
       std::push_heap(heap.begin(), heap.end(), Comp);
@@ -215,18 +215,18 @@ rct::key bos_coster_heap_conv(std::vector<MultiexpData> data)
   MULTIEXP_PERF(PERF_TIMER_STOP(loop));
 
   MULTIEXP_PERF(PERF_TIMER_START_UNIT(end, 1000000));
-  //return rct::scalarmultKey(data[index1].point, data[index1].scalar);
+  //return ct::scalarmultKey(data[index1].point, data[index1].scalar);
   std::pop_heap(heap.begin(), heap.end(), Comp);
   size_t index1 = heap.back();
   heap.pop_back();
   ge_p2 p2;
   ge_scalarmult(&p2, data[index1].scalar.bytes, &data[index1].point);
-  rct::key res;
+  ct::key res;
   ge_tobytes(res.bytes, &p2);
   return res;
 }
 
-rct::key bos_coster_heap_conv_robust(std::vector<MultiexpData> data)
+ct::key bos_coster_heap_conv_robust(std::vector<MultiexpData> data)
 {
   MULTIEXP_PERF(PERF_TIMER_START_UNIT(bos_coster, 1000000));
   MULTIEXP_PERF(PERF_TIMER_START_UNIT(setup, 1000000));
@@ -236,12 +236,12 @@ rct::key bos_coster_heap_conv_robust(std::vector<MultiexpData> data)
   heap.reserve(points);
   for (size_t n = 0; n < points; ++n)
   {
-    if (!(data[n].scalar == rct::zero()) && !ge_p3_is_point_at_infinity_vartime(&data[n].point))
+    if (!(data[n].scalar == ct::zero()) && !ge_p3_is_point_at_infinity_vartime(&data[n].point))
       heap.push_back(n);
   }
   points = heap.size();
   if (points == 0)
-    return rct::identity();
+    return ct::identity();
 
   auto Comp = [&](size_t e0, size_t e1) { return data[e0].scalar < data[e1].scalar; };
   std::make_heap(heap.begin(), heap.end(), Comp);
@@ -252,7 +252,7 @@ rct::key bos_coster_heap_conv_robust(std::vector<MultiexpData> data)
     size_t index1 = heap.back();
     ge_p2 p2;
     ge_scalarmult(&p2, data[index1].scalar.bytes, &data[index1].point);
-    rct::key res;
+    ct::key res;
     ge_tobytes(res.bytes, &p2);
     return res;
   }
@@ -283,13 +283,13 @@ rct::key bos_coster_heap_conv_robust(std::vector<MultiexpData> data)
     MULTIEXP_PERF(PERF_TIMER_RESUME(div));
     while (1)
     {
-      rct::key s1_2 = div2(data[index1].scalar);
+      ct::key s1_2 = div2(data[index1].scalar);
       if (!(data[index2].scalar < s1_2))
        break;
       if (data[index1].scalar.bytes[0] & 1)
       {
         data.resize(data.size()+1);
-        data.back().scalar = rct::identity();
+        data.back().scalar = ct::identity();
         data.back().point = data[index1].point;
         heap.push_back(data.size() - 1);
         std::push_heap(heap.begin(), heap.end(), Comp);
@@ -312,7 +312,7 @@ rct::key bos_coster_heap_conv_robust(std::vector<MultiexpData> data)
     MULTIEXP_PERF(PERF_TIMER_PAUSE(sub));
 
     MULTIEXP_PERF(PERF_TIMER_RESUME(push));
-    if (!(data[index1].scalar == rct::zero()))
+    if (!(data[index1].scalar == ct::zero()))
     {
       heap.push_back(index1);
       std::push_heap(heap.begin(), heap.end(), Comp);
@@ -329,13 +329,13 @@ rct::key bos_coster_heap_conv_robust(std::vector<MultiexpData> data)
   MULTIEXP_PERF(PERF_TIMER_STOP(loop));
 
   MULTIEXP_PERF(PERF_TIMER_START_UNIT(end, 1000000));
-  //return rct::scalarmultKey(data[index1].point, data[index1].scalar);
+  //return ct::scalarmultKey(data[index1].point, data[index1].scalar);
   std::pop_heap(heap.begin(), heap.end(), Comp);
   size_t index1 = heap.back();
   heap.pop_back();
   ge_p2 p2;
   ge_scalarmult(&p2, data[index1].scalar.bytes, &data[index1].point);
-  rct::key res;
+  ct::key res;
   ge_tobytes(res.bytes, &p2);
   return res;
 }
@@ -443,7 +443,7 @@ size_t straus_get_cache_size(const std::shared_ptr<straus_cached_data> &cache)
   return sz;
 }
 
-rct::key straus(const std::vector<MultiexpData> &data, const std::shared_ptr<straus_cached_data> &cache, size_t STEP)
+ct::key straus(const std::vector<MultiexpData> &data, const std::shared_ptr<straus_cached_data> &cache, size_t STEP)
 {
   CHECK_AND_ASSERT_THROW_MES(cache == NULL || cache->size >= data.size(), "Cache is too small");
   MULTIEXP_PERF(PERF_TIMER_UNIT(straus, 1000000));
@@ -458,7 +458,7 @@ rct::key straus(const std::vector<MultiexpData> &data, const std::shared_ptr<str
   MULTIEXP_PERF(PERF_TIMER_START_UNIT(skip, 1000000));
   std::vector<uint8_t> skip(data.size());
   for (size_t i = 0; i < data.size(); ++i)
-    skip[i] = data[i].scalar == rct::zero() || ge_p3_is_point_at_infinity_vartime(&data[i].point);
+    skip[i] = data[i].scalar == ct::zero() || ge_p3_is_point_at_infinity_vartime(&data[i].point);
   MULTIEXP_PERF(PERF_TIMER_STOP(skip));
 #endif
 
@@ -487,7 +487,7 @@ rct::key straus(const std::vector<MultiexpData> &data, const std::shared_ptr<str
     for (size_t i = 0; i < 256; ++i)
       digits[j*256+i] = ((bytes[i>>3] | (bytes[(i>>3)+1]<<8)) >> (i&7)) & mask;
 #else
-    rct::key shifted = data[j].scalar;
+    ct::key shifted = data[j].scalar;
     for (size_t i = 0; i < 256; ++i)
     {
       digits[j*256+i] = shifted.bytes[0] & 0xf;
@@ -497,7 +497,7 @@ rct::key straus(const std::vector<MultiexpData> &data, const std::shared_ptr<str
   }
   MULTIEXP_PERF(PERF_TIMER_STOP(digits));
 
-  rct::key maxscalar = rct::zero();
+  ct::key maxscalar = ct::zero();
   for (size_t i = 0; i < data.size(); ++i)
     if (maxscalar < data[i].scalar)
       maxscalar = data[i].scalar;
@@ -554,7 +554,7 @@ skipfirst:
     ge_p1p1_to_p3(&res_p3, &p1);
   }
 
-  rct::key res;
+  ct::key res;
   ge_p3_tobytes(res.bytes, &res_p3);
   return res;
 }
@@ -603,7 +603,7 @@ size_t pippenger_get_cache_size(const std::shared_ptr<pippenger_cached_data> &ca
   return cache->size * sizeof(*cache->cached);
 }
 
-rct::key pippenger(const std::vector<MultiexpData> &data, const std::shared_ptr<pippenger_cached_data> &cache, size_t cache_size, size_t c)
+ct::key pippenger(const std::vector<MultiexpData> &data, const std::shared_ptr<pippenger_cached_data> &cache, size_t cache_size, size_t c)
 {
   if (cache != NULL && cache_size == 0)
     cache_size = cache->size;
@@ -619,7 +619,7 @@ rct::key pippenger(const std::vector<MultiexpData> &data, const std::shared_ptr<
   std::shared_ptr<pippenger_cached_data> local_cache = cache == NULL ? pippenger_init_cache(data) : cache;
   std::shared_ptr<pippenger_cached_data> local_cache_2 = data.size() > cache_size ? pippenger_init_cache(data, cache_size) : NULL;
 
-  rct::key maxscalar = rct::zero();
+  ct::key maxscalar = ct::zero();
   for (size_t i = 0; i < data.size(); ++i)
   {
     if (maxscalar < data[i].scalar)
@@ -700,7 +700,7 @@ rct::key pippenger(const std::vector<MultiexpData> &data, const std::shared_ptr<
     }
   }
 
-  rct::key res;
+  ct::key res;
   ge_p3_tobytes(res.bytes, &result);
   return res;
 }

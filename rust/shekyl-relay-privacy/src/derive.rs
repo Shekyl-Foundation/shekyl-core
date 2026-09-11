@@ -260,6 +260,91 @@ pub fn derive_embargo(
     })
 }
 
+/// Distance to the next hop at which [`derive_embargo`] changes its answer,
+/// and by how much — searched, not modelled.
+///
+/// Returns `(distance_ms, delta_secs)` for the first hop above
+/// `params.time_between_hop_ms` whose derived embargo differs, or `None` if it
+/// is stable for the whole `search_ms` window.
+///
+/// # The mechanism this measures
+///
+/// [`full_travel_probability`] accumulates `div_ceil(h * hop + F, tick)` over
+/// every `h` in the stem-length sum. Each `h` steps when `h * hop + F` crosses
+/// a tick boundary. Normally those crossings are scattered; **when many `h`
+/// cross together the embargo jumps.** At `tick = 250` ms and the inherited
+/// `F`, the largest jumps are +11/+12 s at hop 251/501/751 against +4-5 s
+/// elsewhere, with smaller +5 s and +3 s families between them.
+///
+/// # Why this searches instead of computing a grid
+///
+/// A first version returned the distance to `n * tick + 1`, and it was wrong
+/// three ways. It modelled **only** the `h = 1` family, missing the +5 s and
+/// +3 s harmonics at `tick / 2`, `tick / 3` and `tick / 6` that come from
+/// larger `h`. It **ignored `F`**, which shifts every boundary — moving `F` by
+/// 125 ms relocates the whole structure (376/626/876 instead of
+/// 251/501/751). And its arithmetic truncated, so a hop just *below* a
+/// boundary was assigned the boundary it had already passed and reported the
+/// distance to the far side: **the smallest true clearance produced the
+/// largest reported one**, which is maximally wrong in the one case the
+/// function exists to detect.
+///
+/// Searching removes all three. `derive_embargo` is a binary search over a
+/// closed form, so calling it per millisecond is cheap, and the answer is
+/// exact for whatever `params` actually holds — no grid to keep in sync with
+/// the solver, no threshold deciding what counts as a resonance.
+///
+/// # Why the grid is 250 ms, and what coarsening the tick would cost
+///
+/// [`crate::schedule::DEFAULT_EMBARGO_TICK_MILLIS`] is 250 for a reason
+/// unrelated to resonances: the inherited embargo ticked in **whole seconds**,
+/// too coarse against a stem completing in ~700 ms — at a one-second tick,
+/// *fires within the first tick* collapses to *fires at zero*, and a
+/// measurable share of draws preempt instantly for no reason but rounding.
+///
+/// **That choice also made the steps four times denser.** Anyone proposing to
+/// coarsen the tick for efficiency is proposing to quadruple the spacing
+/// between them — which sounds like an improvement and is not: it re-breaks
+/// the instant-preemption problem 250 ms exists to fix, and moves every
+/// shipped hop onto a different grid.
+///
+/// # Why this is exported
+///
+/// **A sensitivity table built by interpolating [`derive_embargo`] is wrong
+/// near a step.** The re-derivation round must call it at the actual hop
+/// rather than scaling a nearby result, and when a re-measurement lands, this
+/// says whether the landing sits somewhere the value moves smoothly.
+///
+/// # Procedure, not advice — verify the input before the pins move
+///
+/// "Review the output" is the natural default. The 40,000× step (`4 ms` of
+/// hop → `12 s` of embargo) is a diff nobody should have to reason about in
+/// the same commit as its cause. Same shape as the design-doc-first PR
+/// ordering, applied to a numerical dependency: the re-derivation PR lands
+/// the input value and its provenance in a commit that moves **no** derived
+/// constant, then moves the pins in a second commit whose diff is entirely
+/// mechanical. `DAEMON_RELAY_PRIVACY.md` §94.10.
+#[must_use]
+pub fn next_embargo_step(
+    params: &DandelionParams,
+    tick_millis: u64,
+    search_ms: u32,
+    target: f64,
+) -> Option<(u32, i64)> {
+    let here = derive_embargo(params, tick_millis, target)?.mean_secs();
+    for d in 1..=search_ms {
+        let probe = DandelionParams {
+            time_between_hop_ms: params.time_between_hop_ms.checked_add(d)?,
+            ..*params
+        };
+        let there = derive_embargo(&probe, tick_millis, target)?.mean_secs();
+        if there != here {
+            return Some((d, i64::from(there) - i64::from(here)));
+        }
+    }
+    None
+}
+
 /// Integer ceiling division.
 const fn div_ceil(numerator: u64, denominator: u64) -> u64 {
     numerator.div_ceil(denominator)

@@ -1,0 +1,157 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Windows security primitives for the wallet transport (**WP-D2**).
+//!
+//! [`WINDOWS_WALLET_SUPPORT.md`] rules the Shape-B transport to a named pipe
+//! with an owner-only security descriptor. Two sides need the same Win32
+//! token/SID machinery to make that mean anything: the **server** builds the
+//! descriptor at `CreateNamedPipe`, and the **client** verifies who owns the
+//! pipe before it sends a passphrase. The server lives in
+//! `shekyl-wallet-rpc`, which is `#![deny(unsafe_code)]`; the client lives in
+//! `shekyl-cli`. Same primitives, two crates, one of which forbids `unsafe` —
+//! which is exactly the condition WP-D2 named for promoting this from a module
+//! to a crate rather than duplicating it.
+//!
+//! # What this crate is defending, and what it is not
+//!
+//! Per `WINDOWS_WALLET_SUPPORT.md` §6, a compromised same-user process at
+//! **Medium integrity or above** — and any Administrator/SYSTEM compromise —
+//! is **out of scope**. Such a process already holds the wallet file, the
+//! CLI's memory, and the keystrokes; a transport check against it is theatre.
+//!
+//! What this crate defends is the **OS's own sandbox boundary**. A
+//! Low-integrity or AppContainer process running as the same user *cannot*
+//! read the wallet file or the CLI's memory — the OS blocks it — but it *can*
+//! create a pipe name. A same-SID check that ignored integrity would convert
+//! "sandboxed, no access" into "holds your wallet password": escalation **up**
+//! to user trust by something that started below it. [`PeerCheck`] exists for
+//! that case and only that case.
+//!
+//! # Why SDDL rather than hand-assembled ACLs
+//!
+//! Every descriptor here is built by handing a **string** to
+//! `ConvertStringSecurityDescriptorToSecurityDescriptorW`. Assembling ACLs by
+//! hand means `InitializeAcl` / `AddAccessAllowedAce` / `SetSecurityDescriptorDacl`
+//! with manual size arithmetic — a long unsafe sequence whose failure mode is a
+//! descriptor that is *wrong* rather than one that fails to build. SDDL moves
+//! that work into the OS, so our `unsafe` reduces to one call plus a
+//! `LocalFree`, and the security policy becomes a reviewable string.
+//!
+//! # What lives here, as of WP-W2
+//!
+//! - [`OwnerOnlyDescriptor`], [`current_user_sid`], [`current_logon_sid`] —
+//!   the descriptor and the identities it is built from (WP-W1).
+//! - [`PeerCheck`] — the client-side owner + integrity check (WP-D4/D5).
+//! - [`OwnerOnlyPipeListener`] and [`open_verified`] — the self-hosted
+//!   transport's two ends (WP-W2). The dial returns a handle only *after* the
+//!   peer check passes, which is how `WINDOWS_WALLET_SUPPORT.md` §8.1's
+//!   containment argument becomes a type rather than a call-site rule.
+//! - [`create_owner_only_file`] — the seed file's `0600` equivalent (WP-D8).
+//! - [`free_bytes_available`] — the disk probe's Windows half (WP-D9).
+//!
+//! # Verification status
+//!
+//! Type-checked, clippy'd and documented for `x86_64-pc-windows-gnu` on the
+//! pinned toolchain (the §7 local gate), and the pre-registered probes run
+//! blocking on the Windows CI job. What the probes do **not** cover is the
+//! transport end to end — that is `shekyl-cli`'s `rpc_session_e2e`, which the
+//! Windows runner executes informationally until WP-W5 — so claims here about
+//! how a served pipe behaves under axum are claims about documented behaviour
+//! until that test has been observed.
+//!
+//! [`WINDOWS_WALLET_SUPPORT.md`]: https://github.com/Shekyl-Foundation/shekyl-core/blob/dev/docs/design/WINDOWS_WALLET_SUPPORT.md
+
+#![cfg_attr(not(windows), allow(unused))]
+
+#[cfg(windows)]
+mod disk;
+#[cfg(windows)]
+mod file;
+#[cfg(windows)]
+mod peer;
+#[cfg(windows)]
+mod pipe;
+#[cfg(windows)]
+mod sddl;
+#[cfg(windows)]
+mod sid;
+
+#[cfg(windows)]
+pub use disk::free_bytes_available;
+#[cfg(windows)]
+pub use file::{create_owner_only_file, FileCreateError};
+#[cfg(all(windows, feature = "test-utils"))]
+pub use file::{file_owner_for_testing, file_sddl_for_testing};
+#[cfg(all(windows, feature = "test-utils"))]
+pub use peer::label_from_sacl_for_testing;
+#[cfg(windows)]
+pub use peer::{IntegrityLevel, PeerCheck, PeerCheckError};
+#[cfg(windows)]
+pub use pipe::{
+    open_verified, self_hosted_pipe_name, ConnectedPipe, DialError, OwnerOnlyPipeListener,
+    PipeBindError, VerifiedPipe,
+};
+#[cfg(windows)]
+pub use sddl::{OwnerOnlyDescriptor, SddlError};
+#[cfg(windows)]
+pub use sid::{current_logon_sid, current_user_sid, SidError, SidString};
+
+/// Build a [`SidString`] from an arbitrary string, for probes only.
+///
+/// Behind `test-utils` because the type's guarantee is that a `SidString` came
+/// from this process's token or from a descriptor read. P-6 needs a
+/// well-known SID that is definitively *not* us (LocalSystem) in order to
+/// assert that the peer check **refuses** — and a check that is never
+/// exercised against a mismatch is the fail-open shape this crate exists to
+/// avoid, so the probe is worth the narrow door.
+#[cfg(all(windows, feature = "test-utils"))]
+pub fn sid_for_testing(s: &str) -> SidString {
+    SidString::from_raw(s.to_owned())
+}
+
+/// [`current_logon_sid`]'s reader pointed at an **arbitrary** token, for
+/// probes only.
+///
+/// Behind `test-utils` because production never needs it: the wallet reads
+/// only its own token. P-17's server reads the logon SID off an
+/// **impersonation** token — the thread token adopted from a genuine remote
+/// caller arriving over `IPC$`. The method first assumed such a caller would
+/// carry a *different* logon SID; the run (probe sheet §4.8) found it carries
+/// **none at all** — a network logon has no logon-SID group, so this returns
+/// [`SidError::NoLogonSid`] — and that absence is what attributes the refusal
+/// to the logon-SID ACE. Safe rather than `unsafe`: a stale or wrong handle makes
+/// `GetTokenInformation` fail, it does not corrupt memory.
+#[cfg(all(windows, feature = "test-utils"))]
+pub fn logon_sid_of_token_for_testing(
+    token: *mut core::ffi::c_void,
+) -> Result<SidString, SidError> {
+    sid::logon_sid_of(token)
+}
+
+/// [`current_user_sid`]'s reader pointed at an **arbitrary** token, for probes
+/// only. See [`logon_sid_of_token_for_testing`]: P-17's server reads both off
+/// the caller's impersonation token — the user SID is present exactly where the
+/// logon SID is absent, and that pairing is what makes the refusal attributable
+/// (§4.8).
+#[cfg(all(windows, feature = "test-utils"))]
+pub fn user_sid_of_token_for_testing(token: *mut core::ffi::c_void) -> Result<SidString, SidError> {
+    sid::user_sid_of(token)
+}
+
+/// The pipe-name prefix. The SID goes in literally (WP-D1), so the client can
+/// compare the owner it reads back against the SID it derived the name from.
+#[cfg(windows)]
+pub const PIPE_PREFIX: &str = r"\\.\pipe\shekyl-wallet-";
+
+/// The mandatory-label component granting no-write-up at Medium integrity.
+///
+/// `ML` = mandatory label, `NW` = no-write-up, `ME` = medium integrity level.
+/// Objects with **no** label are already treated as Medium by the OS, so this
+/// is an assertion rather than a gap being closed — WP-D4 states it explicitly
+/// because a default is not a decision, and a future edit that adds a label
+/// should have to change this string rather than silently lower it.
+#[cfg(windows)]
+pub(crate) const MEDIUM_INTEGRITY_SACL: &str = "S:(ML;;NW;;;ME)";

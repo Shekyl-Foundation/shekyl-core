@@ -29,7 +29,9 @@
 #pragma once
 
 #include "cryptonote_basic/blobdatatype.h"
+#include "crypto/hash.h"
 #include "cryptonote_protocol/enums.h"
+#include "net/enums.h"
 #include "span.h"
 
 namespace cryptonote
@@ -41,6 +43,52 @@ namespace cryptonote
 
     virtual uint64_t get_current_blockchain_height() const = 0;
     virtual bool is_synchronized() const = 0;
-    virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay) = 0;
+
+    /*! Is `txid` still held by the txpool?
+
+        Added for the noise carrier, which is the first relay path that can
+        hold a transaction for a long time before sending it. A stem or fluff
+        send is decided and performed in the same call, so the pool cannot
+        change underneath it; the carrier accepts a message and emits its
+        windows over the following cadence ticks, up to about a full epoch
+        later (`COVER_TRAFFIC_RESTORATION.md` §3.1e). In that window the
+        transaction can be mined and removed by `tx_memory_pool::take_tx`.
+
+        Applying a verdict to a transaction the pool no longer holds is not
+        merely useless: arming an F-10 stem observation for it charges the
+        successor with a `Silent` when the expected re-arrival never comes,
+        because a block removal produces no arrival event. That is a WRONG
+        entry in the tallies rather than a missing one — the same failure the
+        successor-at-enqueue argument was written against.
+
+        `relay_category::all`: the question is pool MEMBERSHIP, not relay
+        class. A transaction that is still held but has changed class is
+        still ours to record; one that is gone is gone. `core::pool_has_tx`
+        already answered exactly this question for compact-block
+        reconstruction and carries the same reasoning. */
+    virtual bool pool_has_tx(const crypto::hash &txid) const = 0;
+    /*! \param zone The relay zone the transactions went out on.
+
+        Carried alongside `tx_relay` rather than stored on the txpool entry.
+        The embargo is drawn per-zone (§89.2) at exactly one site,
+        `tx_memory_pool::set_relayed`, and every path to it is synchronous with
+        a relay event — so the zone needs to be *told*, not *remembered*. An
+        earlier draft reserved two bits on `txpool_tx_meta_t` for it; that
+        bought an LMDB record change and a pre-upgrade decode question for a
+        value nothing reads back. */
+    virtual void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, relay_method tx_relay, epee::net_utils::zone zone) = 0;
+
+    /*! The stem watch resolved these transactions as PROPAGATED — each was
+        seen arriving from somewhere other than the peer it was stemmed to
+        (F-10, §49).
+
+        Hashes rather than blobs: the verdict's join key is the canonical hash
+        (F-9), the watch already holds it, and re-deriving it from bytes at
+        this seam would re-introduce the identity F-9 exists to avoid.
+
+        A relay-layer FACT, not a pool instruction. What the pool does with it
+        — today, disarm the origin's re-broadcast for `local` entries — is the
+        pool's decision, made where the entry's class is known. */
+    virtual void on_stem_propagated(epee::span<const crypto::hash> txids) = 0;
   };
 }

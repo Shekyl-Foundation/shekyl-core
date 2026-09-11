@@ -39,7 +39,6 @@ set(performance_tests_headers
   generate_key_image.h
   generate_keypair.h
   signature.h
-  subaddress_expand.h
   bulletproof_plus.h
   crypto_ops.h
   sc_reduce32.h
@@ -55,7 +54,6 @@ monero_add_minimal_executable(performance_tests
   ${performance_tests_headers})
 target_link_libraries(performance_tests
   PRIVATE
-    wallet
     cryptonote_core
     common
     cncrypto

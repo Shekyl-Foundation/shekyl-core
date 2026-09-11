@@ -1,6 +1,11 @@
 .DS_Store
 /doc
-/build
+# Root-anchored CMake build trees, generalized (third accidental-tracking
+# occurrence: build-deb/build-portable via 7a8d14b2e, then build-aarch64 on
+# bench/gap7-block-verify-shape) - directories only (spares */build.rs),
+# root-anchored (spares contrib/depends/builders/, utils/health/
+# build-scripts/). Nested trees stay covered by **/build/ below.
+/build*/
 /Doxyfile
 /tags
 log/
@@ -92,6 +97,19 @@ bin/
 # al.) that are part of the crate's tracked source tree, not build
 # artifacts.
 !rust/shekyl-randomx-differential/src/bin/
+# Cargo's conventional binary location, un-ignored for EVERY crate.
+#
+# The bare `bin/` above targets build output, but it also swallows
+# `<crate>/src/bin/` -- where Cargo expects binary targets. That bit once
+# already (SPIKE-F-9): a source file that builds locally and vanishes in CI,
+# with no error at the point of the mistake.
+#
+# The line above it fixed that ONE crate. This fixes the class: without it,
+# every future crate with a `src/bin/` silently loses its sources until
+# somebody notices and adds a fourth per-crate exception. A rule that needs
+# re-application per crate is rot that regenerates -- the same reason the
+# push gate became a script rather than a habit.
+!**/src/bin/
 tmp/
 *.tmp
 *.bak
@@ -133,6 +151,13 @@ __pycache__/
 /target/
 **/target/
 
+# cargo-mutants working directories. It writes `mutants.out/` next to the
+# workspace and rotates the previous run to `mutants.out.old/`, so a
+# `git add -A` after a local mutation run sweeps in tens of generated
+# diffs and JSON. 65 such files reached a PR before review caught them.
+**/mutants.out/
+**/mutants.out.old/
+
 # Additional CMake/Ninja generated files
 cmake-build-*/
 compile_commands.json
@@ -147,7 +172,13 @@ CTestTestfile.cmake
 
 # Local packaging/release outputs
 artifacts/
+# the asset-signing ceremony's working directory (downloaded release
+# binaries + the manifest being produced) — scripts/release/
+release-assets/
 release/
+# ...but the release-ceremony tooling is source, not build output
+# (the blanket `release/` above exists for build trees).
+!scripts/release/
 *.tar.gz
 *.sha256
 # ...except the vendored-crypto content manifest: a tracked source-of-truth (the
@@ -158,16 +189,9 @@ release/
 .env
 .env.*
 
-# Nested build trees (eg tools/genesis_builder/build)
+# Nested build trees (eg tools/genesis_builder/build) — deliberately NOT
+# subsumed by the root-anchored /build*/ at the top of this file.
 **/build/
-build-sync/
-# Phase 2g RandomX v2 Rust/C differential test harness out-of-tree
-# build directory (CMake -B build-randomx-v2-diff per
-# RANDOMX_V2_PHASE2G_PLAN.md §5.4.2 + R6-D3).
-build-randomx-v2-diff/
-# Local BUILD_RANDOMX_V2_MINER_LIB=ON Release tree used to exercise the
-# Phase 3a parity gate + symbol-isolation script outside CI.
-build-parity-rel/
 
 # Claude settings
 .claude/

@@ -14,22 +14,9 @@ use super::error::PersistenceError;
 use super::lifecycle::Credentials;
 use super::sealing_keys::StateWrapKey;
 use super::traits::PersistenceEngine;
-use super::Capability;
 
 impl PersistenceEngine for WalletFile {
     type Error = PersistenceError;
-
-    fn base_path(&self) -> &std::path::Path {
-        WalletFile::base_path(self)
-    }
-
-    fn network(&self) -> shekyl_address::Network {
-        WalletFile::network(self)
-    }
-
-    fn capability(&self) -> Capability {
-        WalletFile::capability(self)
-    }
 
     fn save_state(
         &self,

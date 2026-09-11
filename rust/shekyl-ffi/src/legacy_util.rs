@@ -44,7 +44,47 @@ pub(crate) unsafe fn slice_from_ptr<'a>(ptr: *const u8, len: usize) -> Option<&'
     if ptr.is_null() {
         return None;
     }
+    // `from_raw_parts` has a LANGUAGE-LEVEL precondition that the byte
+    // length not exceed `isize::MAX` — violating it is UB even if the
+    // caller really provided that much memory. This helper is the
+    // crate's FFI-read seam for that bound; sites that still call
+    // `from_raw_parts` directly re-own it (SA-R-7 conventions-tail
+    // residual).
+    if len > isize::MAX as usize {
+        return None;
+    }
     Some(std::slice::from_raw_parts(ptr, len))
+}
+
+/// Read a fixed-size **public** array through [`slice_from_ptr`].
+/// One typed construction on top of the seam: null / zero-length /
+/// `isize::MAX` are the helper's, the `N`-byte conversion is this
+/// layer's.
+///
+/// # Safety
+/// Same as [`slice_from_ptr`]: a non-null pointer must address at
+/// least `N` bytes. That allocation-size precondition is the
+/// caller's `# Safety` contract — no read idiom can check it.
+pub(crate) unsafe fn array_from_ptr<const N: usize>(ptr: *const u8) -> Option<[u8; N]> {
+    let slice = unsafe { slice_from_ptr(ptr, N) }?;
+    Some(slice.try_into().expect("slice length is N by construction"))
+}
+
+/// Reserve `count` slots only if `remaining` bytes can back that many
+/// `stride`-byte elements. Wire-embedded counts must go through this;
+/// a raw `with_capacity(wire_count)` is the host-abort class SA-R-7
+/// clause 2 names. `stride == 0` is a caller bug and refuses.
+// Ratchet-mandated allocation path (`tests/ffi_boundary_ratchet.rs`), so it stays
+// ungated and available to any future wire parser. Its only non-test callers today
+// are the multisig witness parsers, so allow dead code exactly in the build where
+// that is true — the allow disappears under `--features multisig`, where a genuine
+// disuse would still fail the build.
+#[cfg_attr(not(feature = "multisig"), allow(dead_code))]
+pub(crate) fn bounded_capacity<T>(count: usize, stride: usize, remaining: usize) -> Option<Vec<T>> {
+    if stride == 0 || count > remaining / stride {
+        return None;
+    }
+    Some(Vec::with_capacity(count))
 }
 
 // ─── Generic Buffer Helpers ──────────────────────────────────────────────────
@@ -98,5 +138,37 @@ pub unsafe extern "C" fn shekyl_buffer_free(ptr: *mut u8, len: usize) {
         use zeroize::Zeroize;
         std::slice::from_raw_parts_mut(ptr, len).zeroize();
         drop(Vec::from_raw_parts(ptr, len, len));
+    }
+}
+
+#[cfg(test)]
+mod slice_from_ptr_tests {
+    use super::*;
+
+    /// The `isize::MAX` byte bound is refused BEFORE `from_raw_parts` is
+    /// reached (the guard returns `None` without constructing the slice,
+    /// so the dangling pointer is never dereferenced or blessed).
+    #[test]
+    fn oversized_len_is_refused_before_slice_construction() {
+        let dangling = std::ptr::NonNull::<u8>::dangling().as_ptr();
+        let too_big = (isize::MAX as usize) + 1;
+        assert!(unsafe { slice_from_ptr(dangling, too_big) }.is_none());
+        // Control: a small length over real bytes still works.
+        let bytes = [7u8; 4];
+        assert_eq!(
+            unsafe { slice_from_ptr(bytes.as_ptr(), 4) },
+            Some(&bytes[..])
+        );
+    }
+
+    #[test]
+    fn bounded_capacity_refuses_unbacked_and_zero_stride() {
+        let v: Option<Vec<u8>> = bounded_capacity(3, 32, 96);
+        assert_eq!(v.map(|x| x.capacity()), Some(3));
+        assert!(bounded_capacity::<u8>(4, 32, 96).is_none());
+        assert!(bounded_capacity::<u8>(1, 0, 96).is_none());
+        // Exact fit is allowed; one byte short is not.
+        assert!(bounded_capacity::<u8>(1, 128, 128).is_some());
+        assert!(bounded_capacity::<u8>(1, 128, 127).is_none());
     }
 }

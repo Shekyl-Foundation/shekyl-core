@@ -32,7 +32,7 @@
 //!   (`stake.is_some()`) gets its firewalled `P`-scan started, a non-staker gets
 //!   `Ok(None)` and pays nothing. Auto-start is the recommended default
 //!   (`ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` SP-5): the `P`-scan is load-bearing for
-//!   funding discovery and unbond/retire reconcile, so a staker wallet that never
+//!   funding discovery and release/retire reconcile, so a staker wallet that never
 //!   scans silently accrues nothing and never retires.
 //! - [`Engine::start_pscan`] — the **on-demand** entry mirroring
 //!   [`Engine::start_refresh`]'s shape, for embedders that manage the start
@@ -103,7 +103,7 @@ use crate::engine::Engine;
 /// **Bounds.** Anything in [10 s, 600 s] is safe: below that only wastes RPC on
 /// no-op sweeps (nothing new finalizes that fast); above it the scan still keeps
 /// up trivially (each sweep clears the whole backlog) but funding-output discovery
-/// and unbond/retire reconcile latency degrade for no benefit. The value is not
+/// and release/retire reconcile latency degrade for no benefit. The value is not
 /// embedder-tunable (per `81-no-protocol-knowledge.mdc`); tests inject their own
 /// cadence through [`Engine::start_pscan_with`].
 ///
@@ -124,6 +124,13 @@ pub enum PScanStartError {
     /// [`StakeEngine`]: crate::engine::stake_engine::StakeEngine
     #[error("no archival-bond stake engine is running; nothing to scan as P")]
     NoStakeEngine,
+    /// The bond watch recovered a staked slot this session; the persona is
+    /// derivable only at open (Model D), so the staking scan can start only
+    /// after the wallet is closed and reopened.
+    #[error(
+        "staking recovered this session: close and reopen the wallet, then the staking scan starts"
+    )]
+    RecoveredPendingReopen,
     /// A `P`-scan task is already running for this wallet — the single-flight slot
     /// ([`PScanSlot`](super::task::PScanSlot)) is held. Two tasks would race the
     /// read-modify-seal of the same `.wallet.pscan`.
@@ -328,7 +335,7 @@ where
 }
 
 /// Construct an independent [`PendingPostStore`] over the engine's pending
-/// seal + the shared `pending_write_lock` (WI-2 F-1).
+/// seal + the shared `pending_gate` (WI-2 F-1).
 ///
 /// Mirrors the `start_pscan_with` construction (`WalletFilePendingSealStore`
 /// plus lock clone into [`PendingPostStore::new`]) so the assemble path
@@ -339,7 +346,7 @@ where
 #[allow(clippy::type_complexity)]
 pub(crate) fn pending_post_store_for_engine<S, D, L, E, R, P>(
     engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
-    write_lock: Arc<tokio::sync::Mutex<()>>,
+    gate: Arc<crate::engine::pending_post_gate::PendingPostGate>,
 ) -> PendingPostStore<WalletFilePendingSealStore<S, D, L, E, R, P>>
 where
     S: EngineSignerKind + Send + Sync + 'static,
@@ -350,7 +357,7 @@ where
     P: PendingTxEngine,
     Engine<S, D, L, E, R, P, WalletFile>: Send + Sync,
 {
-    PendingPostStore::new(WalletFilePendingSealStore { engine }, write_lock)
+    PendingPostStore::new(WalletFilePendingSealStore { engine }, gate)
 }
 
 /// Load the sealed [`PScanState`] for assemble (funding records), reusing the
@@ -662,11 +669,22 @@ where
         // Brief read borrow: clone the spawn inputs + claim the single-flight slot.
         // Stake is checked first so a non-staker never claims-then-releases; the
         // slot guard is RAII, so any error below releases it on the early return.
-        let (daemon, stake, pending_write_lock, slot_guard) = {
+        let (daemon, stake, pending_gate, slot_guard) = {
             let g = self_arc.read().await;
-            let stake = g.stake_handle().ok_or(PScanStartError::NoStakeEngine)?;
+            let stake = match g.stake_handle() {
+                Some(stake) => stake,
+                // `staking_enabled` with no resident actor = the mid-session
+                // bond-watch recovery state (rule 82: name the reopen remedy,
+                // not a generic "not a staker" over a wallet that just
+                // recovered its staking history).
+                None if g.ledger.staking_enabled() => {
+                    return Err(PScanStartError::RecoveredPendingReopen);
+                }
+                None => return Err(PScanStartError::NoStakeEngine),
+            };
             let slot_guard = g
-                .pscan_slot
+                .open_slots
+                .pscan
                 .try_claim()
                 .ok_or(PScanStartError::AlreadyRunning)?;
             // The per-wallet pending-seal write lock (§3.3): the dispatch driver
@@ -675,7 +693,7 @@ where
             (
                 g.daemon().clone(),
                 stake,
-                g.pending_write_lock.clone(),
+                g.pending_gate.clone(),
                 slot_guard,
             )
         };
@@ -734,8 +752,7 @@ where
             None => (dispatch_config, None),
         };
 
-        let dispatch =
-            DispatchDriver::new(pending_seal, broadcast, dispatch_config, pending_write_lock);
+        let dispatch = DispatchDriver::new(pending_seal, broadcast, dispatch_config, pending_gate);
         #[cfg(all(test, feature = "gf7-hooks"))]
         let dispatch = match sealing_observer {
             Some(observer) => {
@@ -776,32 +793,18 @@ mod tests {
 
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_engine_state::pscan_cursor::PScanCursor;
-    use shekyl_rpc_transport::HttpRpc;
     use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
     use shekyl_units::AtomicUnits;
     use tempfile::TempDir;
 
     use crate::engine::signer::SoloSigner;
-    use crate::engine::{Credentials, DaemonClient, EngineCreateParams};
+    use crate::engine::{Credentials, EngineCreateParams};
 
-    /// A `DaemonClient` that never connects — the wiring tests touch the
-    /// `WalletFile` + the start precondition, never the network. (Same shape as the
-    /// lifecycle suite's helper; replicated because that one is test-private.)
-    fn dummy_daemon() -> DaemonClient {
-        let rpc = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(HttpRpc::new("http://127.0.0.1:1".to_string()))
-        })
-        .expect("construct HttpRpc (no actual connection attempted)");
-        DaemonClient::new(rpc)
-    }
+    use crate::engine::test_support::dummy_daemon;
 
+    /// This suite's deterministic seed (multiplier 7).
     fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
-        let mut s = [0u8; MASTER_SEED_BYTES];
-        for (i, b) in s.iter_mut().enumerate() {
-            *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(7);
-        }
-        s
+        crate::engine::test_support::fixed_seed(7)
     }
 
     /// Build a real `WalletFile`-backed full engine on a fresh tempdir. Returns the
@@ -876,6 +879,16 @@ mod tests {
             ],
             Vec::new(),
             Vec::new(),
+            std::collections::BTreeMap::from([
+                (
+                    PCanonicalId::from_bytes([0xAB; 32]),
+                    BlockHeight::from_raw(0),
+                ),
+                (
+                    PCanonicalId::from_bytes([0xCD; 32]),
+                    BlockHeight::from_raw(0),
+                ),
+            ]),
         );
         store.save(&state_a).await.expect("save A");
         assert!(pscan_path.exists(), ".wallet.pscan written by the seal");
@@ -893,6 +906,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            std::collections::BTreeMap::new(),
         );
         store.save(&state_b).await.expect("save B");
         assert_eq!(
@@ -938,7 +952,7 @@ mod tests {
 
         // Nothing claimed the single-flight slot: the quiet path really did nothing.
         assert!(
-            !arc.read().await.pscan_slot.is_claimed(),
+            !arc.read().await.open_slots.pscan.is_claimed(),
             "the quiet path must not claim the P-scan slot"
         );
     }
@@ -998,7 +1012,7 @@ mod tests {
             .expect("staker auto-start succeeds")
             .expect("a staker gets a P-scan handle");
         assert!(
-            arc.read().await.pscan_slot.is_claimed(),
+            arc.read().await.open_slots.pscan.is_claimed(),
             "the running task holds the single-flight slot"
         );
 
@@ -1018,7 +1032,7 @@ mod tests {
         // Shutdown: the task exits, releasing the slot and its engine-arc clone.
         handle.shutdown().await;
         assert!(
-            !arc.read().await.pscan_slot.is_claimed(),
+            !arc.read().await.open_slots.pscan.is_claimed(),
             "shutdown releases the single-flight slot"
         );
 

@@ -24,7 +24,8 @@ memory-disclosure scenarios that AAD does not address.
 
 **Amend v1 in place.** No `file_version` bump. On-disk **layout** unchanged;
 **ciphertext** from raw-`file_kek` AEAD does not decrypt under this prescription.
-Pre-genesis: regenerate KATs; `rm -rf ~/.shekyl` for local wallets.
+Pre-genesis: regenerate the pinned format vectors; `rm -rf ~/.shekyl` for
+local wallets.
 
 ## 3. Normative derivation
 
@@ -95,9 +96,11 @@ separately on the orchestrator solely for re-derivation.
 ## 5. Implementation checklist
 
 - [x] `wallet_envelope.rs` — `derive_wrap_key_region_{1,2}` per §3
-- [x] Tier-3 KAT regeneration
+- [x] Pinned format-vector (then "Tier-3 KAT") regeneration — renamed
+  self-pinned tripwires per `50-testing.mdc`'s vector-oracle taxonomy,
+  2026-09-07
 - [x] Stage 1 PR 6 — `StateWrapKey`, session cache, F5(b) zeroization
-  (substrate pins in [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](STAGE_1_PR_6_PERSISTENCE_ENGINE.md))
+  (substrate pins in [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](../completed/STAGE_1_PR_6_PERSISTENCE_ENGINE.md))
 
 ## 6. Reversion clause
 

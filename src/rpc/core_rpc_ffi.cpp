@@ -48,6 +48,49 @@ using namespace cryptonote;
 
 namespace {
 
+// The origin every bridged request carries.
+//
+// A handler asks `ctx` two questions: `m_restricted && ctx` — is this a
+// restricted listener answering a remote caller — and `ctx != NULL`, does
+// this request have an RPC origin at all. Both are true of everything that
+// reaches this bridge. It is the HTTP listener's only path into the
+// handlers, and the one caller that legitimately has no RPC origin is the
+// in-process console, which calls `core_rpc_server::on_*` directly and never
+// comes through here.
+//
+// Passing `nullptr` made both expressions false on every JSON and JSON-RPC
+// route, so no restricted policy in any bridged handler could fire: not the
+// request caps, and not the pool reads' `include_sensitive`, which decides
+// whether a transaction that has not been broadcast is disclosed at all.
+// Single-sourced here so there is one place to be wrong: every dispatcher
+// names this and nothing else. The guard that it keeps answering non-null is
+// `restricted_listener_applies_request_caps_through_the_ffi_bridge`
+// (rust/shekyl-engine-core/src/engine/regtest_e2e.rs) — a live daemon, a
+// restricted listener, and real requests over the caps: REST ones through
+// `dispatch_json`, JSON-RPC ones through `dispatch_jsonrpc_we`, so both
+// templates are held separately rather than one standing in for the other.
+// It has to be there rather than beside this file: a C++ test of this helper
+// cannot see whether the dispatchers call it, so reverting one of them would
+// leave such a test green. Those go red.
+//
+// "Every" includes the two hand-written ones, `dispatch_submitblock` and
+// `dispatch_calcpow`. Neither handler reads `ctx` today, so those two calls
+// change nothing — they are converted because a bridge rule with silent
+// exceptions is how this defect survived in the first place, and because a
+// `restricted` check added to either handler later would otherwise be born
+// dead exactly as the eleven were.
+//
+// The address is left default-constructed. `network_address::is_blockable()`
+// is false for one, which keeps `add_host_fail`'s per-host RPC ban scoring
+// the no-op it has always been on this path: this context asserts "an RPC
+// client asked", never "this particular peer asked", and a context shared by
+// every caller must not accumulate a ban score against one empty address.
+const core_rpc_server::connection_context* rpc_origin()
+{
+    static const core_rpc_server::connection_context ctx{};
+    return &ctx;
+}
+
 // JSON endpoint: deserialize request from JSON, call handler, serialize response to JSON.
 template<typename COMMAND>
 char* dispatch_json(core_rpc_server& rpc,
@@ -61,69 +104,14 @@ char* dispatch_json(core_rpc_server& rpc,
         epee::serialization::load_t_from_json(static_cast<typename COMMAND::request_t&>(req), std::string(body_json));
     }
 
-    (rpc.*handler)(req, res, nullptr);
+    (rpc.*handler)(req, res, rpc_origin());
 
     std::string out;
     epee::serialization::store_t_to_json(static_cast<const typename COMMAND::response_t&>(res), out);
     return strdup(out.c_str());
 }
 
-// Binary endpoint: deserialize request from binary, call handler, serialize response to binary.
-// Returns: 0 = success, -1 = bad request (parse failure), -2 = internal error.
-template<typename COMMAND>
-int dispatch_bin(core_rpc_server& rpc,
-    bool (core_rpc_server::*handler)(const typename COMMAND::request&, typename COMMAND::response&, const core_rpc_server::connection_context*),
-    const uint8_t* body, size_t body_len,
-    uint8_t** out_buf, size_t* out_len)
-{
-    typename COMMAND::request req{};
-    typename COMMAND::response res{};
-
-    // Always attempt deserialization, matching epee's MAP_URI_AUTO_BIN2 behavior.
-    // Empty or missing body will fail to parse -> 400 Bad Request.
-    epee::span<const uint8_t> blob(body, body_len);
-    if (!epee::serialization::load_t_from_binary(static_cast<typename COMMAND::request_t&>(req), blob))
-        return -1;
-
-    (rpc.*handler)(req, res, nullptr);
-
-    epee::byte_slice out = epee::serialization::store_t_to_binary(static_cast<typename COMMAND::response_t&>(res));
-
-    *out_len = out.size();
-    *out_buf = static_cast<uint8_t*>(malloc(out.size()));
-    if (!*out_buf) return -2;
-    memcpy(*out_buf, out.data(), out.size());
-    return 0;
-}
-
-// JSON-RPC: handler without error_resp (MAP_JON_RPC).
-template<typename COMMAND>
-char* dispatch_jsonrpc(core_rpc_server& rpc,
-    bool (core_rpc_server::*handler)(const typename COMMAND::request&, typename COMMAND::response&, const core_rpc_server::connection_context*),
-    const char* params_json)
-{
-    typename COMMAND::request req{};
-    typename COMMAND::response res{};
-
-    if (params_json && params_json[0]) {
-        epee::serialization::load_t_from_json(static_cast<typename COMMAND::request_t&>(req), std::string(params_json));
-    }
-
-    bool ok = (rpc.*handler)(req, res, nullptr);
-
-    std::string result_json;
-    epee::serialization::store_t_to_json(static_cast<const typename COMMAND::response_t&>(res), result_json);
-
-    std::ostringstream oss;
-    if (ok) {
-        oss << R"({"ok":true,"result":)" << result_json << "}";
-    } else {
-        oss << R"({"ok":false,"error_code":-32603,"error_message":"Internal error"})";
-    }
-    return strdup(oss.str().c_str());
-}
-
-// JSON-RPC: handler with error_resp (MAP_JON_RPC_WE).
+// JSON-RPC: handler with error_resp.
 template<typename COMMAND>
 char* dispatch_jsonrpc_we(core_rpc_server& rpc,
     bool (core_rpc_server::*handler)(const typename COMMAND::request&, typename COMMAND::response&, epee::json_rpc::error&, const core_rpc_server::connection_context*),
@@ -137,7 +125,7 @@ char* dispatch_jsonrpc_we(core_rpc_server& rpc,
         epee::serialization::load_t_from_json(static_cast<typename COMMAND::request_t&>(req), std::string(params_json));
     }
 
-    bool ok = (rpc.*handler)(req, res, error_resp, nullptr);
+    bool ok = (rpc.*handler)(req, res, error_resp, rpc_origin());
 
     std::ostringstream oss;
     if (ok && error_resp.code == 0) {
@@ -163,22 +151,11 @@ char* dispatch_jsonrpc_we(core_rpc_server& rpc,
 
 // Dispatch table types
 using json_fn = std::function<char*(core_rpc_server&, const char*)>;
-using bin_fn = std::function<int(core_rpc_server&, const uint8_t*, size_t, uint8_t**, size_t*)>;
 using jsonrpc_fn = std::function<char*(core_rpc_server&, const char*)>;
 
 #define DJSON(uri, handler, cmd) \
     {uri, [](core_rpc_server& rpc, const char* body) -> char* { \
         return dispatch_json<cmd>(rpc, &core_rpc_server::handler, body); \
-    }}
-
-#define DBIN(uri, handler, cmd) \
-    {uri, [](core_rpc_server& rpc, const uint8_t* body, size_t len, uint8_t** out, size_t* olen) -> int { \
-        return dispatch_bin<cmd>(rpc, &core_rpc_server::handler, body, len, out, olen); \
-    }}
-
-#define DJRPC(method, handler, cmd) \
-    {method, [](core_rpc_server& rpc, const char* params) -> char* { \
-        return dispatch_jsonrpc<cmd>(rpc, &core_rpc_server::handler, params); \
     }}
 
 #define DJRPC_WE(method, handler, cmd) \
@@ -190,15 +167,8 @@ using jsonrpc_fn = std::function<char*(core_rpc_server&, const char*)>;
 
 const std::unordered_map<std::string, json_fn>& get_json_table() {
     static const std::unordered_map<std::string, json_fn> t = {
-        DJSON("/get_height",                        on_get_height,                   COMMAND_RPC_GET_HEIGHT),
-        DJSON("/getheight",                         on_get_height,                   COMMAND_RPC_GET_HEIGHT),
-        DJSON("/get_transactions",                  on_get_transactions,             COMMAND_RPC_GET_TRANSACTIONS),
-        DJSON("/gettransactions",                   on_get_transactions,             COMMAND_RPC_GET_TRANSACTIONS),
         DJSON("/get_alt_blocks_hashes",             on_get_alt_blocks_hashes,        COMMAND_RPC_GET_ALT_BLOCKS_HASHES),
-        DJSON("/is_key_image_spent",                on_is_key_image_spent,           COMMAND_RPC_IS_KEY_IMAGE_SPENT),
-        DJSON("/get_public_nodes",                  on_get_public_nodes,             COMMAND_RPC_GET_PUBLIC_NODES),
         DJSON("/get_transaction_pool",              on_get_transaction_pool,         COMMAND_RPC_GET_TRANSACTION_POOL),
-        DJSON("/get_transaction_pool_hashes.bin",   on_get_transaction_pool_hashes_bin, COMMAND_RPC_GET_TRANSACTION_POOL_HASHES_BIN),
         DJSON("/get_transaction_pool_hashes",       on_get_transaction_pool_hashes,  COMMAND_RPC_GET_TRANSACTION_POOL_HASHES),
         DJSON("/get_transaction_pool_stats",        on_get_transaction_pool_stats,   COMMAND_RPC_GET_TRANSACTION_POOL_STATS),
         DJSON("/get_info",                          on_get_info,                     COMMAND_RPC_GET_INFO),
@@ -209,73 +179,16 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
         DJSON("/stop_mining",                       on_stop_mining,                  COMMAND_RPC_STOP_MINING),
         DJSON("/mining_status",                     on_mining_status,                COMMAND_RPC_MINING_STATUS),
         DJSON("/save_bc",                           on_save_bc,                      COMMAND_RPC_SAVE_BC),
-        DJSON("/get_peer_list",                     on_get_peer_list,                COMMAND_RPC_GET_PEER_LIST),
         DJSON("/set_log_hash_rate",                 on_set_log_hash_rate,            COMMAND_RPC_SET_LOG_HASH_RATE),
         DJSON("/set_log_level",                     on_set_log_level,                COMMAND_RPC_SET_LOG_LEVEL),
         DJSON("/set_log_categories",                on_set_log_categories,           COMMAND_RPC_SET_LOG_CATEGORIES),
-        DJSON("/set_bootstrap_daemon",              on_set_bootstrap_daemon,         COMMAND_RPC_SET_BOOTSTRAP_DAEMON),
         DJSON("/stop_daemon",                       on_stop_daemon,                  COMMAND_RPC_STOP_DAEMON),
-        DJSON("/get_net_stats",                     on_get_net_stats,                COMMAND_RPC_GET_NET_STATS),
         DJSON("/set_limit",                         on_set_limit,                    COMMAND_RPC_SET_LIMIT),
         DJSON("/out_peers",                         on_out_peers,                    COMMAND_RPC_OUT_PEERS),
         DJSON("/in_peers",                          on_in_peers,                     COMMAND_RPC_IN_PEERS),
         DJSON("/pop_blocks",                        on_pop_blocks,                   COMMAND_RPC_POP_BLOCKS),
     };
     return t;
-}
-
-const std::unordered_map<std::string, bin_fn>& get_bin_table() {
-    static const std::unordered_map<std::string, bin_fn> t = {
-        DBIN("/get_blocks.bin",            on_get_blocks,                  COMMAND_RPC_GET_BLOCKS_FAST),
-        DBIN("/getblocks.bin",             on_get_blocks,                  COMMAND_RPC_GET_BLOCKS_FAST),
-        DBIN("/get_blocks_by_height.bin",  on_get_blocks_by_height,        COMMAND_RPC_GET_BLOCKS_BY_HEIGHT),
-        DBIN("/getblocks_by_height.bin",   on_get_blocks_by_height,        COMMAND_RPC_GET_BLOCKS_BY_HEIGHT),
-        DBIN("/get_hashes.bin",            on_get_hashes,                  COMMAND_RPC_GET_HASHES_FAST),
-        DBIN("/gethashes.bin",             on_get_hashes,                  COMMAND_RPC_GET_HASHES_FAST),
-        DBIN("/get_o_indexes.bin",         on_get_indexes,                 COMMAND_RPC_GET_TX_GLOBAL_OUTPUTS_INDEXES),
-    };
-    return t;
-}
-
-// Specialized dispatch for GETBLOCKHASH: request=vector<uint64_t>, response=string
-char* dispatch_getblockhash(core_rpc_server& rpc, const char* params_json) {
-    COMMAND_RPC_GETBLOCKHASH::request req;
-    COMMAND_RPC_GETBLOCKHASH::response res;
-    epee::json_rpc::error error_resp{};
-
-    if (params_json && params_json[0]) {
-        // params is a JSON array of uint64_t, e.g. [12345]
-        // Parse manually since it's not a KV-serializable struct
-        epee::serialization::portable_storage ps;
-        if (ps.load_from_json(std::string(params_json))) {
-            // The JSON-RPC spec sends params as array
-        }
-        // Fallback: try parsing as JSON array directly
-        std::string s(params_json);
-        // Remove [ ] if present
-        auto start = s.find('[');
-        auto end = s.rfind(']');
-        if (start != std::string::npos && end != std::string::npos) {
-            std::string inner = s.substr(start + 1, end - start - 1);
-            std::istringstream iss(inner);
-            std::string token;
-            while (std::getline(iss, token, ',')) {
-                try { req.push_back(std::stoull(token)); } catch (...) {}
-            }
-        }
-    }
-
-    bool ok = rpc.on_getblockhash(req, res, error_resp, nullptr);
-    std::ostringstream oss;
-    if (ok && error_resp.code == 0) {
-        oss << R"({"ok":true,"result":")" << res << R"("})";
-    } else {
-        int code = error_resp.code ? error_resp.code : -32603;
-        std::string msg = error_resp.message.empty() ? "Internal error" : error_resp.message;
-        oss << R"({"ok":false,"error_code":)" << code
-            << R"(,"error_message":")" << msg << R"("})";
-    }
-    return strdup(oss.str().c_str());
 }
 
 // Specialized dispatch for SUBMITBLOCK: request=vector<string>, response has response_t
@@ -302,7 +215,7 @@ char* dispatch_submitblock(core_rpc_server& rpc, const char* params_json) {
         }
     }
 
-    bool ok = rpc.on_submitblock(req, res, error_resp, nullptr);
+    bool ok = rpc.on_submitblock(req, res, error_resp, rpc_origin());
     std::ostringstream oss;
     if (ok && error_resp.code == 0) {
         std::string result_json;
@@ -327,7 +240,7 @@ char* dispatch_calcpow(core_rpc_server& rpc, const char* params_json) {
         epee::serialization::load_t_from_json(static_cast<COMMAND_RPC_CALCPOW::request_t&>(req), std::string(params_json));
     }
 
-    bool ok = rpc.on_calcpow(req, res, error_resp, nullptr);
+    bool ok = rpc.on_calcpow(req, res, error_resp, rpc_origin());
     std::ostringstream oss;
     if (ok && error_resp.code == 0) {
         oss << R"({"ok":true,"result":")" << res << R"("})";
@@ -340,63 +253,27 @@ char* dispatch_calcpow(core_rpc_server& rpc, const char* params_json) {
     return strdup(oss.str().c_str());
 }
 
-// Specialized dispatch for GETBLOCKCOUNT: request=list<string>, response has response_t
-char* dispatch_getblockcount(core_rpc_server& rpc, const char* /*params_json*/) {
-    COMMAND_RPC_GETBLOCKCOUNT::request req;
-    COMMAND_RPC_GETBLOCKCOUNT::response res;
-    bool ok = rpc.on_getblockcount(req, res, nullptr);
-    std::ostringstream oss;
-    if (ok) {
-        std::string result_json;
-        epee::serialization::store_t_to_json(static_cast<const COMMAND_RPC_GETBLOCKCOUNT::response_t&>(res), result_json);
-        oss << R"({"ok":true,"result":)" << result_json << "}";
-    } else {
-        oss << R"({"ok":false,"error_code":-32603,"error_message":"Internal error"})";
-    }
-    return strdup(oss.str().c_str());
-}
-
 const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
     static const std::unordered_map<std::string, jsonrpc_fn> t = {
         // Non-standard request/response commands: manual dispatch
-        {"get_block_count",  [](core_rpc_server& rpc, const char* p) { return dispatch_getblockcount(rpc, p); }},
-        {"getblockcount",    [](core_rpc_server& rpc, const char* p) { return dispatch_getblockcount(rpc, p); }},
-        {"on_get_block_hash",  [](core_rpc_server& rpc, const char* p) { return dispatch_getblockhash(rpc, p); }},
-        {"on_getblockhash",    [](core_rpc_server& rpc, const char* p) { return dispatch_getblockhash(rpc, p); }},
         {"submit_block",       [](core_rpc_server& rpc, const char* p) { return dispatch_submitblock(rpc, p); }},
         {"submitblock",        [](core_rpc_server& rpc, const char* p) { return dispatch_submitblock(rpc, p); }},
         {"calc_pow",           [](core_rpc_server& rpc, const char* p) { return dispatch_calcpow(rpc, p); }},
-        // Standard MAP_JON_RPC_WE
+        // Handlers with error_resp
         DJRPC_WE("get_block_template",      on_getblocktemplate,          COMMAND_RPC_GETBLOCKTEMPLATE),
         DJRPC_WE("getblocktemplate",         on_getblocktemplate,          COMMAND_RPC_GETBLOCKTEMPLATE),
         DJRPC_WE("get_miner_data",          on_getminerdata,              COMMAND_RPC_GETMINERDATA),
-        DJRPC_WE("add_aux_pow",            on_add_aux_pow,                COMMAND_RPC_ADD_AUX_POW),
         DJRPC_WE("generateblocks",          on_generateblocks,             COMMAND_RPC_GENERATEBLOCKS),
         DJRPC_WE("inject_archival_serve_credit", on_inject_archival_serve_credit, COMMAND_RPC_INJECT_ARCHIVAL_SERVE_CREDIT),
-        DJRPC_WE("get_last_block_header",  on_get_last_block_header,      COMMAND_RPC_GET_LAST_BLOCK_HEADER),
-        DJRPC_WE("getlastblockheader",     on_get_last_block_header,      COMMAND_RPC_GET_LAST_BLOCK_HEADER),
-        DJRPC_WE("get_block_header_by_hash", on_get_block_header_by_hash, COMMAND_RPC_GET_BLOCK_HEADER_BY_HASH),
-        DJRPC_WE("getblockheaderbyhash",   on_get_block_header_by_hash,   COMMAND_RPC_GET_BLOCK_HEADER_BY_HASH),
-        DJRPC_WE("get_block_header_by_height", on_get_block_header_by_height, COMMAND_RPC_GET_BLOCK_HEADER_BY_HEIGHT),
-        DJRPC_WE("getblockheaderbyheight", on_get_block_header_by_height, COMMAND_RPC_GET_BLOCK_HEADER_BY_HEIGHT),
-        DJRPC_WE("get_block_headers_range", on_get_block_headers_range,   COMMAND_RPC_GET_BLOCK_HEADERS_RANGE),
-        DJRPC_WE("getblockheadersrange",   on_get_block_headers_range,    COMMAND_RPC_GET_BLOCK_HEADERS_RANGE),
-        DJRPC_WE("get_block",              on_get_block,                   COMMAND_RPC_GET_BLOCK),
-        DJRPC_WE("getblock",               on_get_block,                   COMMAND_RPC_GET_BLOCK),
-        DJRPC_WE("get_connections",         on_get_connections,            COMMAND_RPC_GET_CONNECTIONS),
         DJRPC_WE("get_info",               on_get_info_json,              COMMAND_RPC_GET_INFO),
-        DJRPC_WE("hard_fork_info",         on_hard_fork_info,             COMMAND_RPC_HARD_FORK_INFO),
         DJRPC_WE("set_bans",              on_set_bans,                    COMMAND_RPC_SETBANS),
         DJRPC_WE("get_bans",              on_get_bans,                    COMMAND_RPC_GETBANS),
         DJRPC_WE("banned",                on_banned,                      COMMAND_RPC_BANNED),
         DJRPC_WE("flush_txpool",          on_flush_txpool,                COMMAND_RPC_FLUSH_TRANSACTION_POOL),
         DJRPC_WE("get_output_histogram",   on_get_output_histogram,       COMMAND_RPC_GET_OUTPUT_HISTOGRAM),
-        DJRPC_WE("get_version",            on_get_version,                COMMAND_RPC_GET_VERSION),
         DJRPC_WE("get_coinbase_tx_sum",    on_get_coinbase_tx_sum,        COMMAND_RPC_GET_COINBASE_TX_SUM),
-        DJRPC_WE("get_fee_estimate",       on_get_base_fee_estimate,      COMMAND_RPC_GET_BASE_FEE_ESTIMATE),
         DJRPC_WE("get_alternate_chains",   on_get_alternate_chains,       COMMAND_RPC_GET_ALTERNATE_CHAINS),
         DJRPC_WE("relay_tx",              on_relay_tx,                    COMMAND_RPC_RELAY_TX),
-        DJRPC_WE("sync_info",             on_sync_info,                   COMMAND_RPC_SYNC_INFO),
         DJRPC_WE("get_txpool_backlog",     on_get_txpool_backlog,         COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG),
         DJRPC_WE("prune_blockchain",       on_prune_blockchain,           COMMAND_RPC_PRUNE_BLOCKCHAIN),
         DJRPC_WE("flush_cache",            on_flush_cache,                COMMAND_RPC_FLUSH_CACHE),
@@ -438,12 +315,6 @@ void core_rpc_ffi_destroy(core_rpc_handle* h)
     delete h;
 }
 
-bool core_rpc_ffi_is_restricted(const core_rpc_handle* h)
-{
-    if (!h || !h->rpc) return true;
-    return h->rpc->is_restricted();
-}
-
 char* core_rpc_ffi_stem_tallies(core_rpc_handle* h)
 {
     if (!h || !h->rpc) return nullptr;
@@ -470,23 +341,6 @@ char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
     }
 }
 
-int core_rpc_ffi_bin_endpoint(core_rpc_handle* h,
-    const char* uri,
-    const uint8_t* body, size_t body_len,
-    uint8_t** out_buf, size_t* out_len)
-{
-    if (!h || !h->rpc || !uri || !out_buf || !out_len) return -1;
-    const auto& table = get_bin_table();
-    auto it = table.find(uri);
-    if (it == table.end()) return -1;
-    try {
-        return it->second(*h->rpc, body, body_len, out_buf, out_len);
-    } catch (const std::exception& e) {
-        MERROR("core_rpc_ffi_bin_endpoint(" << uri << "): " << e.what());
-        return -1;
-    }
-}
-
 char* core_rpc_ffi_json_rpc(core_rpc_handle* h,
     const char* method, const char* params_json)
 {
@@ -505,6 +359,5 @@ char* core_rpc_ffi_json_rpc(core_rpc_handle* h,
 }
 
 void core_rpc_ffi_free_string(char* s) { free(s); }
-void core_rpc_ffi_free_buf(uint8_t* buf) { free(buf); }
 
 } // extern "C"

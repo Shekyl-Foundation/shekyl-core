@@ -1,5 +1,7 @@
 # Archival bond construction — PR 2 sub-chain arc (Bond-PR 2a → 2d)
 
+
+**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 **This is the index/arc doc** for the wallet-side archival bond-post
 construction PR-2 sub-chain. It maps every sub-PR, records the landed ones, and
 nests the full per-PR plan docs for the unstarted ones. It is the **single
@@ -19,7 +21,7 @@ Two independent schemes both used the tokens `2a / 2b / 2c / 2d`:
 
 | Scheme | Tokens | Meaning | Docs |
 | --- | --- | --- | --- |
-| **Engine layer** (`WALLET_REWRITE_PLAN.md`) | **Phase 2a–2d** | 2a send path, 2b stake lifecycle, 2c addresses/proofs, 2d cold bundles | `PHASE_2A_SEND_PATH.md`, `PHASE_2B_STAKE_LIFECYCLE.md` (+ `_AUDIT`) |
+| **Engine layer** (`WALLET_REWRITE_PLAN.md`) | **Phase 2a–2d** | 2a send path, 2b stake lifecycle, 2c addresses/proofs, 2d cold bundles | `PHASE_2A_SEND_PATH.md`, `design/PHASE_2B_FSM_RETOOL.md` (+ `_AUDIT`) |
 | **Bond construction** (this chain) | **Bond-PR 2a–2d** | 2a KAT, 2b StakeEngine actor, 2c-1/2c-2a/2c-2b, 2d transport | this arc + nested plans |
 
 **Resolution (decided 2026-06-19): the bond construction sub-chain is prefixed
@@ -56,8 +58,8 @@ new prose uses the prefix.
 | **2c-1** | `feat/archival-bond-realtree-kat` #158 | **landed** | Real-tree composition KAT (prove half; verify half now **live** — CT-5 closed #162) | §3.3 (record) |
 | **2c-2a** | `feat/archival-stake-wiring` | **landed inert** | **Model D** wiring (seed-free actor + typed contracts + `StakingBlock`) | §3.4 (record) |
 | **2c-2b** | `feat/archival-bond-request` #163 (archived) | **landed inert** | JoinMarket bond request path (wired + KAT-exercised, not user-invocable until 2d) | [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md) + S6 follow-on §3.5.1 + GF-7 placement/seam follow-on §3.5.2 (landed #255) |
-| **2d-1** | — | **not started — prerequisite** | **`P`-scan layer**: `P.view_sk` sweep over the chain (scan-layer firewall, StakeEngine owns `P.view_sk`). **Two readers**: steady-state funding-output discovery (2c-2b SP-2.e) **and** the 2d-2 reconciliation | §3.6 (foundation) |
-| **2d-2** | — | **not started** | `P`-isolated Arti transport + broadcast/re-anchor + full-scan `bonded_slots`/`p_slot` reconcile — **depends on 2d-1** (cannot reconcile bonds it has not scanned for) | §3.6 |
+| **2d-1** | WI-1 | **wired 2026-07-18** | **`P`-scan layer**: `P.view_sk` sweep over the chain (scan-layer firewall, StakeEngine owns `P.view_sk`). **Two readers**: steady-state funding-output discovery (2c-2b SP-2.e) **and** the 2d-2 reconciliation. SP-0…SP-7 landed via PR-A / PR-B; embedder in `shekyl-wallet-rpc` lifecycle. | §3.6 (foundation) |
+| **2d-2** | — | **partial — in progress** | `P`-isolated Arti transport + broadcast/re-anchor + full-scan `bonded_slots`/`p_slot` reconcile — **depends on 2d-1** (cannot reconcile bonds it has not scanned for). SP-T1 / SP-T4a already landed; remaining is transport/broadcast completion. | §3.6 |
 
 ---
 
@@ -84,11 +86,12 @@ derivation, atomic slot rotation, **re-derive-on-restart**, fail-stop
 
 ### 3.3 Bond-PR 2c-1 — real-tree composition KAT (landed #158)
 
-`local_pending_tx::join_market_bond_post_signs_and_verifies_over_real_tree`
+`local_pending_tx::join_market_bond_post_verifies_over_real_tree` (né
+`…signs_and_verifies…`; SA-2b deleted on-vin signing and its signature legs)
 drives the bond's cleartext `credit_term` through `sign_transaction_with_terms`
 over a **real depth-2 `assemble_path` tree** (the `funded_ledger_and_tree`
 fixture), asserting BP+, the RCT balance over prover-emitted commitments, and
-vin/signature accept+reject. The **construct→prove half over genuine branch
+constructed-vin accept+reject. The **construct→prove half over genuine branch
 layers is proved**; the FCMP++ **verify-accept half is now live** —
 `join_market_bond_post_fcmp_verify_over_real_tree`
 (`local_pending_tx.rs:3709`) runs as a normal `#[tokio::test]` (the `#[ignore]`
@@ -98,7 +101,7 @@ zero-padding branch chunks to circuit width in `shekyl_fcmp::proof::prove`).
 planned.)
 
 > **Fossil note (2026-06-20):** the sibling comment in
-> `join_market_bond_post_signs_and_verifies_over_real_tree`
+> `join_market_bond_post_verifies_over_real_tree` (né `…signs_and_verifies…`)
 > (`local_pending_tx.rs:3404–3408`) still describes the verify KAT as the
 > "`#[ignore]`d sibling … gated on CT-5." That is stale — fold a one-line comment
 > correction into the next PR touching that crate (S6).
@@ -123,7 +126,8 @@ path**. Substrate: `stake_engine.rs`, `stake_persist.rs`,
 
 Full plan: [`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`](ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md).
 Consumes the 2c-2a inert surface (`PersistedBondTicket`, `PersonaHandle`); adds
-the parallel request type, `sign_bond`, funding selection with decorrelation
+the parallel request type, `plan_bond_post` (né `sign_bond`, renamed with
+SA-2b), funding selection with decorrelation
 defaults, `CoverAmount`, the two typed timing seams, the live RNG degeneracy
 guard, and the **request-path composition** milestone KAT (§5). Design rounds
 1–6 + impl-time pre-flight (`R0-D1`–`R0-D4`) closed. Branches off `dev` after
@@ -149,7 +153,9 @@ follow-on PR (off `dev`, **after #163 merges** — it consumes #163's
 The entry-gap draw 2c-2b left on `_`-prefixed locals is now **consumed**:
 `plan_entry_seam` (`shekyl-standoff/src/plan.rs`) single-sources the
 `(spread, bond_first)` → block-offset placement, and the `SignBond` reply is
-`SignedBondPost` (vin + `EntrySeamPlan`, never decoupled). The same PR lands
+`SignedBondPost` (vin + `EntrySeamPlan`, never decoupled — since renamed
+`PlanBondPost` / `BondPostPlacement` with an *unsigned* vin, SA-2b; the plan
+carrier is now the bare `bond_post_offset_blocks`). The same PR lands
 the GF-7 measurement seam per
 [`ARCHIVAL_BOND_2C_GF7_HOOKS.md`](ARCHIVAL_BOND_2C_GF7_HOOKS.md) (all five §6
 acceptance criteria): the injected `BroadcastTimelineObserver` + three-axis
@@ -218,10 +224,11 @@ sealed `StakingBlock`, and the generation-counter handle invalidation.
 | --- | --- | --- | --- | --- |
 | Synthetic-tree round-trip | 2a (#156) | synthetic | construct ↔ verify over a synthetic balance witness | none |
 | Real-tree composition | 2c-1 (#158) | **real** depth-2 `assemble_path` | construct→**prove** over genuine branch layers; BP+ + RCT balance | verify half **live** (CT-5 closed #162) |
-| **Request-path composition** | **2c-2b (#163)** | (composition, not a new prover path) | mint handle → `persist_bond_record` → `sign_bond` → `build_join_market_vin` → verify accept | none new (real-tree verify now live; on-chain bond gated on **2d** broadcast/transport) |
+| **Request-path composition** | **2c-2b (#163)** | (composition, not a new prover path) | mint handle → `persist_bond_record` → `plan_bond_post` → `build_join_market_vin` → verify accept | none new (real-tree verify now live; on-chain bond gated on **2d** broadcast/transport) |
 
 2c-2b's "milestone KAT" is the **request-path composition** — it exercises the
-*orchestration seam* (handle + ticket + request → signed vin → verify), **not** a
+*orchestration seam* (handle + ticket + request → constructed vin → verify;
+unsigned since SA-2b), **not** a
 new prover round-trip; the prover round-trips are already closed by 2a/2c-1. With
 CT-5 closed (#162), the real-tree verify half is live; the **on-chain** bond now
 remains gated on **2d** (broadcast + `P`-isolated transport), **not** CT-5.

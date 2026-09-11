@@ -107,3 +107,13 @@ the FFI signature is wrong — fix the signature.
   Rust, `/dev/urandom` or equivalent in C++. Never seed from time, PID, or
   user input.
 - Never log, serialize to plaintext, or expose key material in error messages.
+
+## One domain string separates one context (SA-R-2)
+
+A domain-separation string does exactly one job. Two layers — a scheme
+and a surface, an inner customization and an outer preimage — are two
+contexts and get two strings; reusing one string for both is dual-duty,
+and dual-duty is how a signature minted in one context verifies in
+another. Mint `…-v2` alongside a migration; never edit a live string in
+place (a live domain's bytes are state, not style — see
+SIGNATURE_ALIGNMENT §5 and the domain registry gate).

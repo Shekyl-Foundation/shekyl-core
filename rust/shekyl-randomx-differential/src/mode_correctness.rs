@@ -84,7 +84,7 @@ use std::fmt;
 use shekyl_pow_randomx::Seedhash;
 
 use crate::adversarial_corpus::{iter_adversarial_data, iter_adversarial_seedhashes};
-use crate::c_oracle::{COracleError, COracleSession};
+use crate::c_oracle::{COracleError, COracleSession, RANDOMX_HASH_SIZE};
 use crate::cache_precondition::{
     assert_equivalent, byte_diff, ByteDivergence, PreconditionMismatch,
 };
@@ -327,16 +327,12 @@ pub fn run(
         // saving, `assert_equivalent` can return the agreed SHA
         // on `Ok`; the change is local to `cache_precondition.rs`.
         let actual_sha = c.cache_sha256();
-        if let Some(canonical_sha) = CANONICAL_CACHE_SHAS.get(nightly_seedhash_index) {
-            if actual_sha != *canonical_sha {
-                return Err(CorrectnessError::CanonicalCacheMismatch {
-                    seedhash,
-                    nightly_seedhash_index,
-                    actual_sha,
-                    canonical_sha: *canonical_sha,
-                });
-            }
-        }
+        cache_canonical_verdict(
+            seedhash,
+            nightly_seedhash_index,
+            actual_sha,
+            CANONICAL_CACHE_SHAS.get(nightly_seedhash_index).copied(),
+        )?;
         // (else: canonical index out of bounds — only possible if
         // NIGHTLY_SEEDHASH_COUNT diverges from CANONICAL_CACHE_SHAS
         // length, which `canonical_arrays_match_nightly_sizing`
@@ -346,25 +342,14 @@ pub fn run(
         for &(canonical_index, ref pair) in this_seedhash_pairs {
             let rust_hash = rust.compute_hash(&pair.data);
             let c_hash = c.calculate_hash(&pair.data);
-            if rust_hash != c_hash {
-                return Err(CorrectnessError::HashMismatch {
-                    seedhash,
-                    canonical_index,
-                    data_len: pair.data.len(),
-                    rust_hash,
-                    c_hash,
-                });
-            }
-            if let Some(canonical_hash) = CANONICAL_RANDOM_HASHES.get(canonical_index) {
-                if rust_hash != *canonical_hash {
-                    return Err(CorrectnessError::CanonicalHashMismatch {
-                        seedhash,
-                        canonical_index,
-                        actual_hash: rust_hash,
-                        canonical_hash: *canonical_hash,
-                    });
-                }
-            }
+            three_leg_verdict(
+                seedhash,
+                canonical_index,
+                pair.data.len(),
+                rust_hash,
+                c_hash,
+                CANONICAL_RANDOM_HASHES.get(canonical_index).copied(),
+            )?;
             random_pairs_checked += 1;
         }
 
@@ -386,23 +371,13 @@ pub fn run(
         for (_data_class_tag, data) in iter_adversarial_data() {
             let rust_hash = rust.compute_hash(data);
             let c_hash = c.calculate_hash(data);
-            if rust_hash != c_hash {
-                return Err(CorrectnessError::HashMismatch {
-                    seedhash,
-                    // Adversarial pairs use a sentinel canonical
-                    // index (the random corpus owns canonical
-                    // indices 0..1024); the C9 failure-output
-                    // schema distinguishes adversarial pairs by
-                    // the absent canonical lookup. The post-2g
-                    // adversarial-corpus design round lands a
-                    // class-indexed canonical table per §3.18
-                    // R6-D4 adversarial-corpus paragraph.
-                    canonical_index: usize::MAX,
-                    data_len: data.len(),
-                    rust_hash,
-                    c_hash,
-                });
-            }
+            // Adversarial pairs use a sentinel canonical index (the
+            // random corpus owns canonical indices 0..1024) and carry
+            // no canonical pin; the C9 failure-output schema
+            // distinguishes them by the absent canonical lookup. The
+            // post-2g adversarial-corpus design round lands a
+            // class-indexed canonical table per §3.18 R6-D4.
+            three_leg_verdict(seedhash, usize::MAX, data.len(), rust_hash, c_hash, None)?;
             adversarial_pairs_checked += 1;
         }
     }
@@ -427,9 +402,261 @@ fn hex_lower(bytes: &[u8]) -> String {
     s
 }
 
+/// The T16 cache-leg **verdict**, as a pure function.
+///
+/// `canonical_sha` is `None` when the seedhash's nightly index falls
+/// outside [`CANONICAL_CACHE_SHAS`] — only possible if
+/// `NIGHTLY_SEEDHASH_COUNT` diverges from the array's length, which
+/// `canonical_arrays_match_nightly_sizing` catches at test time. A
+/// `None` canonical is **not** a failure here; it is an absent pin.
+///
+/// # Coverage boundary
+///
+/// Bites against a weakened canonical-cache comparison. Does **not**
+/// cover whether `actual_sha` was computed correctly, nor whether the
+/// pinned canonical is itself right — the latter is a regeneration-PR
+/// review question per §4.6 M1.
+#[must_use = "the canonical-cache verdict must be propagated, not discarded"]
+pub(crate) fn cache_canonical_verdict(
+    seedhash: Seedhash,
+    nightly_seedhash_index: usize,
+    actual_sha: [u8; 32],
+    canonical_sha: Option<[u8; 32]>,
+) -> Result<(), CorrectnessError> {
+    match canonical_sha {
+        Some(canonical_sha) if actual_sha != canonical_sha => {
+            Err(CorrectnessError::CanonicalCacheMismatch {
+                seedhash,
+                nightly_seedhash_index,
+                actual_sha,
+                canonical_sha,
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The three-leg **verdict** for one `(seedhash, data)` pair, as a
+/// pure function of the three hashes.
+///
+/// Legs, in the order §5.1.10 pins them:
+///
+/// 1. **T1** — `rust_hash == c_hash`. The differential proper.
+/// 2. **T16 leg-3** — `rust_hash == canonical_hash`, when a canonical
+///    is pinned for this index. `None` means no pin (adversarial pairs
+///    use the `usize::MAX` sentinel index and have no canonical until
+///    the post-2g adversarial-corpus round lands a class-indexed
+///    table).
+///
+/// Leg 1 is evaluated first and short-circuits, so a genuine rust/C
+/// divergence is never reported as a canonical mismatch.
+///
+/// # Why this is a separate function
+///
+/// Per `RANDOMX_V2_MUTATION_REGIME.md` MR-F10, this comparison lived
+/// inline in a loop over live sessions, so exercising any failing
+/// branch required a full 256-MiB derive plus a linked C oracle — and
+/// no negative test for it existed. §4.5 T-A1 names *this* assertion
+/// first ("`assert_eq!(rust_hash, c_hash)` → `assert!(true)`"), so it
+/// is the primary surface the threat model asks to be enforced.
+///
+/// # Coverage boundary
+///
+/// Bites against a weakened, vacuous, transposed, or leg-reordered
+/// comparison. Does **not** cover hash *computation* on either side —
+/// two identically-wrong implementations agree and this verdict
+/// correctly returns `Ok`; that residual is what the canonical leg and
+/// §4.5 T-A9's corpus-growth argument address.
+#[must_use = "the three-leg verdict must be propagated, not discarded"]
+pub(crate) fn three_leg_verdict(
+    seedhash: Seedhash,
+    canonical_index: usize,
+    data_len: usize,
+    rust_hash: [u8; RANDOMX_HASH_SIZE],
+    c_hash: [u8; RANDOMX_HASH_SIZE],
+    canonical_hash: Option<[u8; RANDOMX_HASH_SIZE]>,
+) -> Result<(), CorrectnessError> {
+    if rust_hash != c_hash {
+        return Err(CorrectnessError::HashMismatch {
+            seedhash,
+            canonical_index,
+            data_len,
+            rust_hash,
+            c_hash,
+        });
+    }
+    match canonical_hash {
+        Some(canonical_hash) if rust_hash != canonical_hash => {
+            Err(CorrectnessError::CanonicalHashMismatch {
+                seedhash,
+                canonical_index,
+                actual_hash: rust_hash,
+                canonical_hash,
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- MR-F10 / item 1: induced-divergence negative tests for the
+    // three-leg verdict. §4.5 T-A1 names this assertion FIRST; before
+    // this block it lived inline in a loop over live sessions and had
+    // no negative test at any cost. See
+    // `docs/design/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 1.
+
+    const SH: [u8; 32] = [0x55; 32];
+
+    fn sh() -> Seedhash {
+        Seedhash::from_bytes(SH)
+    }
+
+    /// Baseline: all three legs agreeing is accepted.
+    ///
+    /// Bites against an inverted comparison. Does NOT cover hash
+    /// computation.
+    #[test]
+    fn three_leg_accepts_full_agreement() {
+        let h = [0x7Au8; RANDOMX_HASH_SIZE];
+        assert!(three_leg_verdict(sh(), 0, 64, h, h, Some(h)).is_ok());
+    }
+
+    /// Leg 1: a rust/C divergence is reported as `HashMismatch` with
+    /// both operands and the pair's identity intact.
+    ///
+    /// Bites against `rust_hash != c_hash` weakened to a constant, a
+    /// length comparison, or a self-comparison — the exact shapes
+    /// §4.5 T-A1 enumerates. Does NOT cover the caller's propagation.
+    #[test]
+    fn three_leg_reports_rust_c_divergence_with_operands() {
+        let rust_hash = [0x01u8; RANDOMX_HASH_SIZE];
+        let c_hash = [0x02u8; RANDOMX_HASH_SIZE];
+        let err = three_leg_verdict(sh(), 7, 64, rust_hash, c_hash, None)
+            .expect_err("a rust/C divergence must not be accepted");
+        match err {
+            CorrectnessError::HashMismatch {
+                seedhash,
+                canonical_index,
+                data_len,
+                rust_hash: r,
+                c_hash: c,
+            } => {
+                assert_eq!(seedhash, sh());
+                assert_eq!(canonical_index, 7);
+                assert_eq!(data_len, 64);
+                assert_eq!(r, rust_hash, "rust operand must not be transposed");
+                assert_eq!(c, c_hash, "c operand must not be transposed");
+            }
+            other => panic!("expected HashMismatch, got {other}"),
+        }
+    }
+
+    /// Leg 2: rust and C agree but disagree with the pinned canonical.
+    ///
+    /// Bites against a dropped canonical leg — the T16 shape where the
+    /// differential still passes but both sides have drifted from the
+    /// committed output. Does NOT cover whether the canonical is
+    /// itself correct.
+    #[test]
+    fn three_leg_reports_canonical_divergence_when_rust_and_c_agree() {
+        let agreed = [0x03u8; RANDOMX_HASH_SIZE];
+        let canonical = [0x04u8; RANDOMX_HASH_SIZE];
+        let err = three_leg_verdict(sh(), 9, 32, agreed, agreed, Some(canonical))
+            .expect_err("canonical divergence must not be accepted");
+        match err {
+            CorrectnessError::CanonicalHashMismatch {
+                actual_hash,
+                canonical_hash,
+                ..
+            } => {
+                assert_eq!(actual_hash, agreed);
+                assert_eq!(canonical_hash, canonical);
+            }
+            other => panic!("expected CanonicalHashMismatch, got {other}"),
+        }
+    }
+
+    /// Leg ordering: when BOTH legs would fail, leg 1 wins.
+    ///
+    /// Bites against a reordering that would report a genuine rust/C
+    /// divergence as a canonical-pin staleness — which routes triage
+    /// to a regeneration PR instead of to the consensus escalation
+    /// §7.3 requires. This is the discriminating case: a verdict that
+    /// evaluates the canonical leg first passes every other test here.
+    #[test]
+    fn three_leg_short_circuits_on_rust_c_divergence_before_canonical() {
+        let rust_hash = [0x11u8; RANDOMX_HASH_SIZE];
+        let c_hash = [0x22u8; RANDOMX_HASH_SIZE];
+        let canonical = [0x33u8; RANDOMX_HASH_SIZE];
+        let err = three_leg_verdict(sh(), 1, 8, rust_hash, c_hash, Some(canonical))
+            .expect_err("must fail");
+        assert!(
+            matches!(err, CorrectnessError::HashMismatch { .. }),
+            "leg 1 must short-circuit; reporting a canonical mismatch here \
+             would send a real divergence to the wrong triage path, got {err}"
+        );
+    }
+
+    /// An absent canonical pin is not a failure.
+    ///
+    /// Bites against a verdict that treats `None` as a mismatch, which
+    /// would red every adversarial pair (they carry no canonical until
+    /// the post-2g class-indexed table lands).
+    #[test]
+    fn three_leg_absent_canonical_is_not_a_failure() {
+        let h = [0x09u8; RANDOMX_HASH_SIZE];
+        assert!(three_leg_verdict(sh(), usize::MAX, 16, h, h, None).is_ok());
+    }
+
+    /// Single-bit sensitivity in the final byte of each leg.
+    ///
+    /// Bites against a prefix-truncated comparison (the §4.5 T-A3
+    /// shape applied to hashes rather than caches).
+    #[test]
+    fn three_leg_is_sensitive_to_the_final_byte() {
+        let base = [0x00u8; RANDOMX_HASH_SIZE];
+        let mut tail = base;
+        tail[RANDOMX_HASH_SIZE - 1] = 0x01;
+        assert!(
+            three_leg_verdict(sh(), 0, 1, base, tail, None).is_err(),
+            "final-byte divergence on leg 1 must be reported"
+        );
+        assert!(
+            three_leg_verdict(sh(), 0, 1, base, base, Some(tail)).is_err(),
+            "final-byte divergence on the canonical leg must be reported"
+        );
+    }
+
+    /// Cache leg: a canonical-cache divergence is reported; an absent
+    /// pin is not a failure.
+    ///
+    /// Bites against a weakened or dropped canonical-cache comparison.
+    /// Does NOT cover fingerprint computation.
+    #[test]
+    fn cache_canonical_verdict_reports_divergence_and_tolerates_absent_pin() {
+        let actual = [0xAAu8; 32];
+        let canonical = [0xBBu8; 32];
+        assert!(cache_canonical_verdict(sh(), 3, actual, None).is_ok());
+        assert!(cache_canonical_verdict(sh(), 3, actual, Some(actual)).is_ok());
+        let err = cache_canonical_verdict(sh(), 3, actual, Some(canonical))
+            .expect_err("cache-canonical divergence must not be accepted");
+        match err {
+            CorrectnessError::CanonicalCacheMismatch {
+                nightly_seedhash_index,
+                actual_sha,
+                canonical_sha,
+                ..
+            } => {
+                assert_eq!(nightly_seedhash_index, 3);
+                assert_eq!(actual_sha, actual);
+                assert_eq!(canonical_sha, canonical);
+            }
+            other => panic!("expected CanonicalCacheMismatch, got {other}"),
+        }
+    }
     use crate::corpus_random::NIGHTLY_SEEDHASH_COUNT;
 
     /// Sanity: the `NIGHTLY_*` constants match the canonical

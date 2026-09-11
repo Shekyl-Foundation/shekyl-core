@@ -28,7 +28,14 @@ fn tor_collapses_the_supernode_diffusion_observer() {
     // 8 -> 12 `peers` pin (§69.2) silently re-parameterised this measurement
     // while the header still claimed 8, so §6.5's recorded table stopped
     // matching the test it names with nothing failing (§70).
-    let params = FloodParams::default();
+    let params = FloodParams {
+        nodes: 512,
+        peers: 12,
+        reach: shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+        transit_ms: shekyl_relay_privacy::conformance::transit_for(
+            shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+        ),
+    };
     println!(
         "\nSupernode diffusion observer: clearnet vs Tor ({} nodes, {} peers)",
         params.nodes, params.peers
@@ -43,7 +50,14 @@ fn tor_collapses_the_supernode_diffusion_observer() {
         let phi = phi_pct as f64 / 100.0;
         let mut clear = SplitMix64::new(0x707 + phi_pct);
         let c = simulate_transport_observation(
-            FloodParams::default(),
+            FloodParams {
+                nodes: 512,
+                peers: 12,
+                reach: shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+                transit_ms: shekyl_relay_privacy::conformance::transit_for(
+                    shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+                ),
+            },
             20,
             DelayFamily::Geometric,
             phi,
@@ -53,7 +67,14 @@ fn tor_collapses_the_supernode_diffusion_observer() {
         );
         let mut tor = SplitMix64::new(0x707 + phi_pct + 9973);
         let t = simulate_transport_observation(
-            FloodParams::default(),
+            FloodParams {
+                nodes: 512,
+                peers: 12,
+                reach: shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+                transit_ms: shekyl_relay_privacy::conformance::transit_for(
+                    shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+                ),
+            },
             20,
             DelayFamily::Geometric,
             phi,
@@ -90,7 +111,14 @@ fn tor_collapses_the_supernode_diffusion_observer() {
     let mut a = SplitMix64::new(1);
     let mut b = SplitMix64::new(2);
     let lo = simulate_transport_observation(
-        FloodParams::default(),
+        FloodParams {
+            nodes: 512,
+            peers: 12,
+            reach: shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+            transit_ms: shekyl_relay_privacy::conformance::transit_for(
+                shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+            ),
+        },
         20,
         DelayFamily::Geometric,
         0.05,
@@ -99,7 +127,14 @@ fn tor_collapses_the_supernode_diffusion_observer() {
         &mut a,
     );
     let hi = simulate_transport_observation(
-        FloodParams::default(),
+        FloodParams {
+            nodes: 512,
+            peers: 12,
+            reach: shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+            transit_ms: shekyl_relay_privacy::conformance::transit_for(
+                shekyl_relay_privacy::conformance::FloodReach::EveryPeer,
+            ),
+        },
         20,
         DelayFamily::Geometric,
         0.30,

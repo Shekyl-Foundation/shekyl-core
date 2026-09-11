@@ -4,9 +4,12 @@ mod budget_scenarios;
 mod burden;
 mod calibration;
 mod cartel;
+mod challenge_coverage;
 mod distribution;
 mod engine;
 mod escalation;
+mod fee_floor;
+mod fee_ladder;
 mod mn_feasibility;
 mod population;
 mod proxy;
@@ -49,6 +52,44 @@ fn main() {
 
     if std::env::args().any(|a| a == "--fb1c-c2") {
         run_fb1c_c2(&params);
+        return;
+    }
+
+    // FL instrument (`docs/design/FEE_LADDER_DERIVATION.md` §1.9): the fee
+    // ladder derivation round's registered measurement set. The module
+    // renders; this binary target performs the writes (stage2 precedent —
+    // JSON to stdout, summary to stderr).
+    if std::env::args().any(|a| a == "--fee-ladder") {
+        let report = fee_ladder::report();
+        let mut summary = String::new();
+        fee_ladder::render_summary(&report, &mut summary);
+        eprint!("{summary}");
+        println!("{}", fee_ladder::render_json(&report));
+        return;
+    }
+
+    // §11 confirmation set (`FEE_LADDER_DERIVATION.md` §11.5, FL-E1…FL-E3):
+    // the relay floor's per-block slew on raw `C` under both SMA
+    // resolutions, and FL-C7's loop through the FL-R20 served map.
+    if std::env::args().any(|a| a == "--fee-floor") {
+        let report = fee_floor::report();
+        let mut summary = String::new();
+        fee_floor::render_summary(&report, &mut summary);
+        eprint!("{summary}");
+        println!("{}", fee_floor::render_json(&report));
+        return;
+    }
+
+    if std::env::args().any(|a| a == "--challenge-coverage") {
+        // Fork-1 evidence set (ARCHIVAL_CHALLENGE_MECHANISM.md §7.1/§8):
+        // urn wave-tail exposure, issued-count histograms, capped regime.
+        // The module renders; this binary target performs the writes
+        // (stage2 precedent — JSON to stdout, summary to stderr).
+        let runs = challenge_coverage::evidence_runs();
+        let mut summary = String::new();
+        challenge_coverage::render_summary(&mut summary, &runs).expect("String sink is infallible");
+        eprint!("{summary}");
+        println!("{}", challenge_coverage::evidence_json(&runs));
         return;
     }
 

@@ -47,6 +47,15 @@ use zeroize::Zeroizing;
 use shekyl_curve_primitives::keccak256_to_scalar;
 
 /// Domain-separation tag for `m_i` derivation. Genesis-locked; do not change.
+///
+/// The **trailing `\0` is load-bearing**: it is one of the hashed input bytes
+/// (`keccak256_to_scalar` consumes the full slice), NOT a C-string terminator or
+/// stray padding. Dropping it — or "cleaning up" the literal to
+/// `b"shekyl-subaddr-v1"` — changes every derived `m_i` scalar and silently forks
+/// output-claim derivation. This is the SA through-line rule
+/// (`docs/design/SIGNATURE_ALIGNMENT.md` §5) in miniature; the byte is pinned in
+/// the domain registry (`CRYPTO_DOMAIN_REGISTRY.tsv`, mechanism 5) and by the
+/// index-sensitivity KATs.
 const CLAIM_DERIVATION_DOMAIN: &[u8] = b"shekyl-subaddr-v1\0";
 
 /// Little-endian encoding of the primary claim index (`0`). No V3.0 production

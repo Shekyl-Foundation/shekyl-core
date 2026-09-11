@@ -53,9 +53,10 @@ use super::types::*;
 ///
 /// No [`PersistedBondTicket`](crate::engine::stake_persist::PersistedBondTicket) and
 /// no entry-seam plan: the claim consumes no funding-entry seam (the bond is
-/// already on-chain), and claim-broadcast timing is the GF-4 dispatch seam,
-/// deliberately outside this builder (same return-bytes-only posture as the
-/// bond path).
+/// already on-chain), and claim-broadcast timing belongs to the cadence
+/// driver's epoch-claim leg (through the `claim_dispatch` seam,
+/// `ENGINE_CADENCE_DRIVER.md` §4), deliberately outside this builder (same
+/// return-bytes-only posture as the bond path).
 ///
 /// Assembly order is forced by the F-C1c hash structure (verified at
 /// `blockchain.cpp:3857-3868`): fee inputs + vouts + extra → **signable
@@ -76,6 +77,14 @@ pub(crate) struct AssembleEmissionClaim {
     pub operands: ClaimOperands,
     /// The curve-tree reference context all paths were assembled against.
     pub tree_ctx: TreeContext,
+    /// The §4 value floor the assembly's Σreward must clear
+    /// (`ENGINE_CADENCE_DRIVER.md`): the sole production sender — the
+    /// claim orchestrator — passes
+    /// [`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`]; a message field
+    /// rather than a handler constant for the same reason
+    /// `assemble_claims` takes its size budget — so the gate is testable
+    /// at exact boundaries without scaling the differential fixtures.
+    pub fee_floor: u64,
 }
 
 /// Reply of [`AssembleEmissionClaim`]: the persona-bound wire bytes (minted
@@ -87,8 +96,8 @@ pub(crate) struct AssembleEmissionClaim {
 // lib-target field readers arrive with the RPC stake entry (rule-21, the same
 // retirement condition as the seam's allow); the orchestrator e2e KAT reads
 // every field today.
-#[allow(dead_code)]
 #[derive(Debug)]
+#[allow(dead_code)] // 2c: the field readers land with the RPC stake entry (rule-21) / the wallet-side emission-claim builder (EMISSION_CLAIM_BUILDER.md).
 pub(crate) struct AssembledEmissionClaim {
     /// The fully-signed, wire-encoded emission-claim transaction.
     pub bound_tx: PBoundBytes,
@@ -150,7 +159,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
                     "emission claim derivation: window epochs not selected"
                 );
             }
-            assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET)?
+            assemble_claims(&derived, EMISSION_CLAIMS_SIZE_BUDGET, msg.fee_floor)?
         };
         let total_reward = claims.total_reward;
 
@@ -320,8 +329,13 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         let auth_msgs = vin
             .auth_msgs(&reward_commits, &signable_tx_hash)
             .map_err(|e| BondAssemblyError::build("auth binding message", e))?;
-        let auth_b = sign_pqc_auth_for_output(&backing_combined, backing_index, &auth_msgs.backing)
-            .map_err(|e| BondAssemblyError::build("backing auth signing", e))?;
+        let auth_b = sign_pqc_auth_for_output(
+            &backing_combined,
+            backing_index,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
+            &auth_msgs.backing,
+        )
+        .map_err(|e| BondAssemblyError::build("backing auth signing", e))?;
         if auth_b.hybrid_public_key != backing_pubkey {
             // Same derivation, same inputs — divergence is a build defect.
             debug_assert!(
@@ -336,7 +350,11 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         }
         vin.auth_backing = auth_b.signature;
         let claim_sig = HybridEd25519MlDsa
-            .sign(&keys.hybrid_sign_sk, &auth_msgs.claim)
+            .sign(
+                &keys.hybrid_sign_sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_CLAIM,
+                &auth_msgs.claim,
+            )
             .map_err(|e| BondAssemblyError::build("claim auth signing", e))?;
         vin.auth_claim = claim_sig
             .to_canonical_bytes()
@@ -363,7 +381,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // included, + FCMP over the fee spends) with `total_reward` as the
         // INPUT-side cleartext term — the daemon's balance is
         // `Σ pseudoOuts + total_reward·H = Σ out_masks + fee·H`
-        // (`verCtSemanticsEmission`, rctSigs.cpp:364). The build-time
+        // (`verCtSemanticsEmission`, ct_semantics.cpp:364). The build-time
         // backing self-check (CPU-bound verify) rides the same closure.
         let mut spend_inputs = Vec::with_capacity(prepared.len());
         let mut pqc_pubkeys = Vec::with_capacity(prepared.len());
@@ -483,7 +501,11 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             .map_err(|e| BondAssemblyError::build("pqc auth signing", e))?;
         let emission_payload_hash = payload_hashes[spend_inputs.len()];
         let emission_sig = HybridEd25519MlDsa
-            .sign(&keys.hybrid_sign_sk, &emission_payload_hash)
+            .sign(
+                &keys.hybrid_sign_sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                &emission_payload_hash,
+            )
             .map_err(|e| BondAssemblyError::build("emission pqc auth signing", e))?;
         pqc_auths.push(PqcAuth {
             auth_version: 1,

@@ -1,5 +1,7 @@
 # Staking-sim economics verdict — banded PL repair (PR 0)
 
+
+**Status:** CLOSED-as-record.
 **Date:** 2026-06-09 (PR 0); 2026-06-13 (PR 1.5 integer-sweep gate)  
 **Verdict:** `pass` — banded float `Curve` preserves iteration-1 attractor / margin
 findings (PR 0); the canonical **integer** `Curve` preserves network homeostasis

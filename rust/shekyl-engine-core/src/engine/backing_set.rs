@@ -45,7 +45,7 @@ use shekyl_units::AtomicUnits;
 
 use crate::engine::bond_assembly::{
     sweep_funding_outputs, BondAssemblyError, FundingInputContext, FundingSelection,
-    SpentRecordsDurablyPruned,
+    SpentRecordsDurablyPruned, SweepOverflowPolicy,
 };
 use crate::engine::emission_source::EmissionClaimSource;
 
@@ -329,6 +329,8 @@ impl DesignatedBacking {
 
         let mut excluded = reserved.clone();
         excluded.insert(self.record.gindex);
+        // RefuseTooMany: consume-everything semantics + the claim's own
+        // emission vin in the cap — see `MAX_RETENTION_FUNDING_INPUTS`.
         let selection = sweep_funding_outputs(
             pruning_landed,
             records,
@@ -336,6 +338,7 @@ impl DesignatedBacking {
             &excluded,
             fee,
             self.reference_height,
+            SweepOverflowPolicy::RefuseTooMany,
         )
         .map_err(|err| match err {
             // The sweep's typed empty-eligible-set refusal IS the structural
@@ -557,7 +560,9 @@ pub(crate) enum ClaimFundingError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::bond_assembly::{sweep_funding_outputs, SpentRecordsDurablyPruned};
+    use crate::engine::bond_assembly::{
+        sweep_funding_outputs, SpentRecordsDurablyPruned, SweepOverflowPolicy,
+    };
     use crate::engine::emission_claim::test_fixtures::source_at_count;
     use crate::engine::test_support::funding_record;
     use shekyl_types::BlockHeight;
@@ -668,8 +673,7 @@ mod tests {
 
     /// The zero-pre-bond-output test (GF-4b §3.4 definition, §4 item 3) —
     /// state-level, against the sweep + the funding-record set (the
-    /// bond-post path's data plane; `AssembleBond` stays dead code, so no
-    /// end-to-end tx is built).
+    /// bond-post path's data plane; this test builds no end-to-end tx).
     ///
     /// One persona slot, mixed lineage: raw funding (rung 3) plus a
     /// `BondPostChange` record from a prior post. Asserts, in order:
@@ -710,6 +714,7 @@ mod tests {
             &Default::default(),
             shekyl_units::AtomicUnits::from_raw(required),
             reference_height,
+            SweepOverflowPolicy::RefuseTooMany,
         )
         .expect("sweep succeeds");
 
@@ -953,6 +958,7 @@ mod tests {
             &reserved,
             AtomicUnits::ZERO,
             reference_height,
+            SweepOverflowPolicy::RefuseTooMany,
         )
         .expect("plain sweep succeeds");
         assert!(

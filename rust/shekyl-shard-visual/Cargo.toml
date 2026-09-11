@@ -9,6 +9,7 @@ description = "Deterministic shard identity visuals (candidate.v1 compositor)"
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
+png = "0.18"
 imageproc = "0.25"
 serde = { workspace = true, features = ["derive"] }
 sha3 = "0.10"

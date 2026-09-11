@@ -10,12 +10,87 @@ use shekyl_archival_retention::{
     as_of_e_served_work, epoch_close_compute, epoch_close_height,
     p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin, BadInterval, CreditPair,
     EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, RewardCommit, ShardSet, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
+    HoldingsKind, LastServedScan, RewardCommit, ShardSet, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI,
     HYBRID_PUBKEY_CANONICAL_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W,
     SETTLEMENT_EPOCH_BLOCKS,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
+use shekyl_peer_policy::DropVerdict;
 use std::ptr;
+
+#[test]
+fn emission_vin_drop_verdict_classifies_form_and_does_not_sever_on_our_state() {
+    assert!(DropVerdict::from_byte(shekyl_emission_vin_drop_verdict(
+        SHEKYL_EMISSION_VIN_ERR_WIRE
+    ))
+    .severs());
+    assert!(DropVerdict::from_byte(shekyl_emission_vin_drop_verdict(
+        SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED
+    ))
+    .severs());
+    assert!(!DropVerdict::from_byte(shekyl_emission_vin_drop_verdict(
+        SHEKYL_EMISSION_VIN_ERR_BOND_MISSING
+    ))
+    .severs());
+    assert!(DropVerdict::from_byte(shekyl_emission_vin_drop_verdict(
+        SHEKYL_EMISSION_VIN_ERR_MARSHAL
+    ))
+    .is_internal_failure());
+    assert!(!DropVerdict::from_byte(shekyl_emission_vin_drop_verdict(255)).severs());
+}
+
+#[test]
+fn serve_credit_and_bond_post_drop_verdicts_do_not_sever_on_our_state() {
+    assert!(DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE
+    ))
+    .severs());
+    assert!(!DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_CREDIT_DEADLINE
+    ))
+    .severs());
+    assert!(DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR
+    ))
+    .is_internal_failure());
+    assert!(
+        DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
+        ))
+        .severs()
+    );
+    assert!(
+        !DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING
+        ))
+        .severs()
+    );
+    assert!(!DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_ZERO_GEOMETRY
+    ))
+    .severs());
+    assert!(!DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH
+    ))
+    .severs());
+    assert!(DropVerdict::from_byte(shekyl_archival_verify_drop_verdict(
+        SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE
+    ))
+    .is_internal_failure());
+    assert!(
+        !DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE
+        ))
+        .severs()
+    );
+    assert!(
+        !DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE
+        ))
+        .severs()
+    );
+    assert!(!DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(255)).severs());
+}
 
 #[test]
 fn ffi_constants_match_timing_cluster() {
@@ -26,7 +101,46 @@ fn ffi_constants_match_timing_cluster() {
 
 #[test]
 fn ffi_rejects_null_context() {
-    let code = unsafe { shekyl_archival_verify_serve_credit_vin(ptr::null(), 0, ptr::null()) };
+    let code = unsafe {
+        shekyl_archival_verify_serve_credit_vin(ptr::null(), 0, ptr::null(), 0, ptr::null())
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR);
+}
+
+#[test]
+fn extract_empty_slice_is_wire_not_null() {
+    // A Rust empty slice has a non-null `as_ptr()`; length 0 is a parse
+    // failure, not a call-site pointer bug.
+    let empty: [u8; 0] = [];
+    let mut p_id = [0u8; 32];
+    let mut shard = 0u64;
+    let mut epoch = 0u64;
+    let code = unsafe {
+        shekyl_archival_serve_credit_extract(
+            empty.as_ptr(),
+            0,
+            p_id.as_mut_ptr(),
+            &raw mut shard,
+            &raw mut epoch,
+        )
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE);
+}
+
+#[test]
+fn extract_null_ptr_is_null() {
+    let mut p_id = [0u8; 32];
+    let mut shard = 0u64;
+    let mut epoch = 0u64;
+    let code = unsafe {
+        shekyl_archival_serve_credit_extract(
+            ptr::null(),
+            0,
+            p_id.as_mut_ptr(),
+            &raw mut shard,
+            &raw mut epoch,
+        )
+    };
     assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR);
 }
 
@@ -210,7 +324,7 @@ fn bond_post_ffi_maps_each_reject_reason() {
 }
 
 #[test]
-fn unbond_ffi_folds_cooldown_and_maps_verdicts() {
+fn release_ffi_folds_cooldown_and_maps_verdicts() {
     use shekyl_archival_retention::{
         BondPostKind, HoldingsKind, ARCHIVAL_BOND_FLOOR_ATOMIC, RELEASE_COOLDOWN_EPOCHS,
     };
@@ -225,7 +339,7 @@ fn unbond_ffi_folds_cooldown_and_maps_verdicts() {
     let settled_ok = 100u64;
 
     // (current, settled, debit, total, holdings_len, record_exists); the post
-    // is a ShardSetCompact `Unbond` with credit 0 and holdings shard 7 when
+    // is a ShardSetCompact `Release` with credit 0 and holdings shard 7 when
     // present.
     let verify = |current: u64,
                   settled: u64,
@@ -234,8 +348,8 @@ fn unbond_ffi_folds_cooldown_and_maps_verdicts() {
                   holdings_len: usize,
                   record_exists: u8| unsafe {
         let shard = 7u64;
-        shekyl_archival_verify_unbond_bond_post(
-            BondPostKind::Unbond as u8,
+        shekyl_archival_verify_release_bond_post(
+            BondPostKind::Release as u8,
             HoldingsKind::ShardSetCompact as u8,
             if holdings_len == 0 {
                 std::ptr::null()
@@ -243,7 +357,7 @@ fn unbond_ffi_folds_cooldown_and_maps_verdicts() {
                 std::ptr::from_ref(&shard)
             },
             holdings_len,
-            std::ptr::null(), // bond_spend_pk (§9.11: never on Unbond)
+            std::ptr::null(), // bond_spend_pk (§9.11: never on Release)
             0,
             total,
             0, // credit
@@ -288,12 +402,12 @@ fn unbond_ffi_folds_cooldown_and_maps_verdicts() {
     // Non-empty holdings with zero post-total → floor mismatch.
     assert_eq!(
         verify(ok_current, settled_ok, record_bonded, 0, 1, 1),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_FLOOR_MISMATCH
     );
     // Consistent post-state but non-zero total → partial, not full exit.
     assert_eq!(
         verify(ok_current, settled_ok, floor, floor, 1, 1),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_RELEASE
     );
     // Debit != the record's current bonded_total.
     assert_eq!(
@@ -307,12 +421,12 @@ fn unbond_ffi_folds_cooldown_and_maps_verdicts() {
     // NULL_PTR. (The closure always passes a valid `served` slice, so this
     // precedence case is exercised directly.)
     let record_missing_null_cooldown = unsafe {
-        shekyl_archival_verify_unbond_bond_post(
-            BondPostKind::Unbond as u8,
+        shekyl_archival_verify_release_bond_post(
+            BondPostKind::Release as u8,
             HoldingsKind::ShardSetCompact as u8,
             std::ptr::null(), // shard_ids_ptr (empty holdings)
             0,                // shard_ids_len
-            std::ptr::null(), // bond_spend_pk_ptr (§9.11: never on Unbond)
+            std::ptr::null(), // bond_spend_pk_ptr (§9.11: never on Release)
             0,                // bond_spend_pk_len
             0,                // bonded_total_atomic
             0,                // bond_credit
@@ -331,14 +445,14 @@ fn unbond_ffi_folds_cooldown_and_maps_verdicts() {
         SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING
     );
 
-    // §9.11 coupling at the marshaler: an Unbond vin carrying ANY
+    // §9.11 coupling at the marshaler: a Release vin carrying ANY
     // bond_spend_pk bytes refuses — even the canonical length that would
     // satisfy JoinMarket (the field is JoinMarket-coupled, not
     // length-gated).
     let stray_key = vec![0xC7u8; HYBRID_PUBKEY_CANONICAL_BYTES];
-    let unbond_with_stray_key = unsafe {
-        shekyl_archival_verify_unbond_bond_post(
-            BondPostKind::Unbond as u8,
+    let release_with_stray_key = unsafe {
+        shekyl_archival_verify_release_bond_post(
+            BondPostKind::Release as u8,
             HoldingsKind::ShardSetCompact as u8,
             std::ptr::null(),
             0,
@@ -357,20 +471,20 @@ fn unbond_ffi_folds_cooldown_and_maps_verdicts() {
         )
     };
     assert_eq!(
-        unbond_with_stray_key,
+        release_with_stray_key,
         SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
     );
 }
 
 #[test]
-fn unbond_ffi_rejects_len_overflow() {
+fn release_ffi_rejects_len_overflow() {
     use shekyl_archival_retention::{BondPostKind, HoldingsKind};
     let dummy = 7u64;
     // A shard_ids length whose byte span overflows isize::MAX must reject
     // (LEN_OVERFLOW) rather than reach from_raw_parts with an unsound length.
     let shard_overflow = unsafe {
-        shekyl_archival_verify_unbond_bond_post(
-            BondPostKind::Unbond as u8,
+        shekyl_archival_verify_release_bond_post(
+            BondPostKind::Release as u8,
             HoldingsKind::ShardSetCompact as u8,
             std::ptr::from_ref(&dummy),
             usize::MAX,
@@ -391,8 +505,8 @@ fn unbond_ffi_rejects_len_overflow() {
     assert_eq!(shard_overflow, SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW);
     // Same guard on the bond_spend_pk byte slice.
     let spend_pk_overflow = unsafe {
-        shekyl_archival_verify_unbond_bond_post(
-            BondPostKind::Unbond as u8,
+        shekyl_archival_verify_release_bond_post(
+            BondPostKind::Release as u8,
             HoldingsKind::ShardSetCompact as u8,
             std::ptr::null(),
             0,
@@ -416,8 +530,8 @@ fn unbond_ffi_rejects_len_overflow() {
     );
     // Same guard on the serve-credit anchor array (reached once the record exists).
     let served_overflow = unsafe {
-        shekyl_archival_verify_unbond_bond_post(
-            BondPostKind::Unbond as u8,
+        shekyl_archival_verify_release_bond_post(
+            BondPostKind::Release as u8,
             HoldingsKind::ShardSetCompact as u8,
             std::ptr::null(),
             0,
@@ -439,7 +553,7 @@ fn unbond_ffi_rejects_len_overflow() {
 }
 
 #[test]
-fn unbond_ffi_rejects_oversize_holdings_masquerading_as_empty() {
+fn release_ffi_rejects_oversize_holdings_masquerading_as_empty() {
     use shekyl_archival_retention::{BondPostKind, HoldingsKind};
     // The FFI marshal is a second decoder for the wire object, so it
     // enforces the wire decoder's MAX_HOLDINGS_SHARDS (4096) bound at the
@@ -449,12 +563,12 @@ fn unbond_ffi_rejects_oversize_holdings_masquerading_as_empty() {
     // pinned by bond_post.rs's rejects_oversize_shard_set_masquerading_as_empty).
     let shards = vec![0u64; 4097];
     let code = unsafe {
-        shekyl_archival_verify_unbond_bond_post(
-            BondPostKind::Unbond as u8,
+        shekyl_archival_verify_release_bond_post(
+            BondPostKind::Release as u8,
             HoldingsKind::ShardSetCompact as u8,
             shards.as_ptr(),
             shards.len(),
-            std::ptr::null(), // bond_spend_pk (§9.11: never on Unbond)
+            std::ptr::null(), // bond_spend_pk (§9.11: never on Release)
             0,
             0, // bonded_total_atomic (post-connect full exit)
             0, // bond_credit
@@ -531,7 +645,7 @@ fn bond_post_ffi_rejects_duplicate_holdings_at_the_marshal_boundary() {
 }
 
 #[test]
-fn unbond_connect_ffi_folds_effect_and_pop_restores() {
+fn release_connect_ffi_folds_effect_and_pop_restores() {
     use shekyl_archival_retention::{HoldingsKind, ARCHIVAL_BOND_FLOOR_ATOMIC};
 
     let record_bonded = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC;
@@ -546,7 +660,7 @@ fn unbond_connect_ffi_folds_effect_and_pop_restores() {
     let mut close_end = u64::MAX;
     let mut new_total = u64::MAX;
     let rc = unsafe {
-        shekyl_archival_unbond_connect(
+        shekyl_archival_release_connect(
             record_bonded,
             HoldingsKind::ShardSetCompact as u8,
             shards.len() as u64,
@@ -562,18 +676,18 @@ fn unbond_connect_ffi_folds_effect_and_pop_restores() {
             &raw mut new_total,
         )
     };
-    assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_OK);
+    assert_eq!(rc, SHEKYL_ARCHIVAL_RELEASE_APPLY_OK);
     assert_eq!(post_bonded, 0);
     assert_eq!(post_kind, HoldingsKind::ShardSetCompact as u8);
     assert_eq!(post_count, 0);
-    // The clean interval-close is zero-length at the unbond epoch.
+    // The clean interval-close is zero-length at the release epoch.
     assert_eq!((close_start, close_end), (epoch, epoch));
     assert_eq!(new_total, total_bonded - record_bonded);
 
     // Pop twin restores the counter exactly (§5).
     let mut restored = u64::MAX;
     let rc = unsafe {
-        shekyl_archival_unbond_pop(
+        shekyl_archival_release_pop(
             post_bonded,
             post_count,
             1,
@@ -585,12 +699,12 @@ fn unbond_connect_ffi_folds_effect_and_pop_restores() {
             &raw mut restored,
         )
     };
-    assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_OK);
+    assert_eq!(rc, SHEKYL_ARCHIVAL_RELEASE_APPLY_OK);
     assert_eq!(restored, total_bonded);
 }
 
 #[test]
-fn unbond_connect_ffi_maps_fatal_arms() {
+fn release_connect_ffi_maps_fatal_arms() {
     use shekyl_archival_retention::{
         HoldingsKind, ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_BOND_BAD_INTERVALS,
     };
@@ -605,7 +719,7 @@ fn unbond_connect_ffi_maps_fatal_arms() {
         let mut close_end = 0u64;
         let mut new_total = 0u64;
         let rc = unsafe {
-            shekyl_archival_unbond_connect(
+            shekyl_archival_release_connect(
                 record_total,
                 HoldingsKind::ShardSetCompact as u8,
                 shards.len() as u64,
@@ -626,21 +740,21 @@ fn unbond_connect_ffi_maps_fatal_arms() {
 
     assert_eq!(
         connect(record_bonded, 0, 0, record_bonded).0,
-        SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_ZERO
+        SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_DEBIT_ZERO
     );
     assert_eq!(
         connect(record_bonded, 0, record_bonded - 1, record_bonded).0,
-        SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL
+        SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL
     );
     // 3×FLOOR bonded over 2 shards breaks the §3.2 equality.
     let corrupt = 3 * ARCHIVAL_BOND_FLOOR_ATOMIC;
     assert_eq!(
         connect(corrupt, 0, corrupt, corrupt).0,
-        SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT
+        SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_FLOOR_INVARIANT
     );
     assert_eq!(
         connect(record_bonded, 0, record_bonded, record_bonded - 1).0,
-        SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_UNDERFLOW
+        SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_UNDERFLOW
     );
     assert_eq!(
         connect(
@@ -650,12 +764,12 @@ fn unbond_connect_ffi_maps_fatal_arms() {
             record_bonded
         )
         .0,
-        SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_INTERVAL_LOG_FULL
+        SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_INTERVAL_LOG_FULL
     );
 
     // Null out-pointer rejects before any write.
     let rc = unsafe {
-        shekyl_archival_unbond_connect(
+        shekyl_archival_release_connect(
             record_bonded,
             HoldingsKind::ShardSetCompact as u8,
             shards.len() as u64,
@@ -671,14 +785,14 @@ fn unbond_connect_ffi_maps_fatal_arms() {
             std::ptr::null_mut(),
         )
     };
-    assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR);
+    assert_eq!(rc, SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_NULL_PTR);
     // A hostile over-cap shard count cannot satisfy the floor invariant
     // (bond_floor_of returns 0 past MAX_HOLDINGS_SHARDS), so it maps to the
     // record-corruption arm rather than needing a pointer-length guard.
     let mut sink = 0u64;
     let mut kind_sink = 0u8;
     let rc = unsafe {
-        shekyl_archival_unbond_connect(
+        shekyl_archival_release_connect(
             record_bonded,
             HoldingsKind::ShardSetCompact as u8,
             u64::MAX,
@@ -694,31 +808,32 @@ fn unbond_connect_ffi_maps_fatal_arms() {
             &raw mut sink,
         )
     };
-    assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT);
+    assert_eq!(rc, SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_FLOOR_INVARIANT);
 }
 
 #[test]
-fn unbond_pop_ffi_maps_desync_arms() {
+fn release_pop_ffi_maps_desync_arms() {
     let mut out = 0u64;
     // Record not in the exited state.
-    let rc = unsafe { shekyl_archival_unbond_pop(1, 0, 1, 42, 42, 42, 10, 0, &raw mut out) };
-    assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_NOT_EXITED);
+    let rc = unsafe { shekyl_archival_release_pop(1, 0, 1, 42, 42, 42, 10, 0, &raw mut out) };
+    assert_eq!(rc, SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_NOT_EXITED);
     // No trailing interval at all.
-    let rc = unsafe { shekyl_archival_unbond_pop(0, 0, 0, 0, 0, 42, 10, 0, &raw mut out) };
-    assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_MISSING_CLEAN_CLOSE);
+    let rc = unsafe { shekyl_archival_release_pop(0, 0, 0, 0, 0, 42, 10, 0, &raw mut out) };
+    assert_eq!(rc, SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_MISSING_CLEAN_CLOSE);
     // Trailing interval is open, not the zero-length clean close.
-    let rc = unsafe { shekyl_archival_unbond_pop(0, 0, 1, 42, u64::MAX, 42, 10, 0, &raw mut out) };
-    assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_MISSING_CLEAN_CLOSE);
+    let rc = unsafe { shekyl_archival_release_pop(0, 0, 1, 42, u64::MAX, 42, 10, 0, &raw mut out) };
+    assert_eq!(rc, SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_MISSING_CLEAN_CLOSE);
     // Journaled pre-image is empty.
-    let rc = unsafe { shekyl_archival_unbond_pop(0, 0, 1, 42, 42, 42, 0, 0, &raw mut out) };
-    assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_PRE_IMAGE_EMPTY);
+    let rc = unsafe { shekyl_archival_release_pop(0, 0, 1, 42, 42, 42, 0, 0, &raw mut out) };
+    assert_eq!(rc, SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_PRE_IMAGE_EMPTY);
     // Re-credit overflow.
-    let rc = unsafe { shekyl_archival_unbond_pop(0, 0, 1, 42, 42, 42, 10, u64::MAX, &raw mut out) };
-    assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_OVERFLOW);
+    let rc =
+        unsafe { shekyl_archival_release_pop(0, 0, 1, 42, 42, 42, 10, u64::MAX, &raw mut out) };
+    assert_eq!(rc, SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_OVERFLOW);
     // Null out-pointer.
     let rc =
-        unsafe { shekyl_archival_unbond_pop(0, 0, 1, 42, 42, 42, 10, 0, std::ptr::null_mut()) };
-    assert_eq!(rc, SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR);
+        unsafe { shekyl_archival_release_pop(0, 0, 1, 42, 42, 42, 10, 0, std::ptr::null_mut()) };
+    assert_eq!(rc, SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_NULL_PTR);
 }
 
 #[test]
@@ -809,20 +924,73 @@ fn ffi_rejects_leaf_layer_scalar_count_not_multiple_of_four() {
         block_hash_at_seal: [0u8; 32],
         registry_segment_subroot_rk: [0u8; 32],
         segment_leaf_count: 1,
+        // Non-zero on purpose: an all-zero hash is the PC-D3 unpopulated
+        // sentinel, refused ahead of the scalar-shape check. Leaving it zero
+        // would make this test pass on the WRONG code and stop testing the
+        // scalar shape at all.
+        prev_block_hash: [0x6D; 32],
         pqc_pubkey_ptr: pubkey.as_ptr(),
         pqc_pubkey_len: pubkey.len(),
         leaf_layer_scalars_ptr: scalars.as_ptr(),
         leaf_layer_scalars_len: scalars.len(),
     };
     let payload = [0u8];
+    // Shape checks on the ctx precede both parses, so a dummy pruned slice
+    // is never read here -- the assertion is on the ORDER of the checks.
     let code = unsafe {
         shekyl_archival_verify_serve_credit_vin(
+            payload.as_ptr(),
+            payload.len(),
             payload.as_ptr(),
             payload.len(),
             std::ptr::from_ref(&ctx),
         )
     };
     assert_eq!(code, SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE);
+}
+
+/// `PC-D3`'s red side: an unpopulated `prev_block_hash` is refused, and refused
+/// **before** anything the prover controls is parsed.
+///
+/// The vin and pruned slices here are deliberate garbage. If the refusal ever
+/// moves below the parses, this returns a wire error instead and goes red --
+/// which is the point: a caller-wiring defect that only surfaces when the
+/// prover happens to send a well-formed vin is a defect that a hostile prover
+/// decides whether the operator ever sees.
+///
+/// The edit that makes this red is deleting the zero-hash guard, or moving it
+/// after `ArchivalServeCreditResponse::read_exact`.
+#[test]
+fn ffi_refuses_an_unpopulated_prev_block_hash_before_parsing_the_vin() {
+    let pubkey = [0u8; 32];
+    let scalars = [0u8; 128];
+    let ctx = ShekylArchivalVerifyCtx {
+        current_height: 1,
+        settlement_epoch: 0,
+        block_hash_at_seal: [0xAB; 32],
+        registry_segment_subroot_rk: [0u8; 32],
+        segment_leaf_count: 25_992,
+        prev_block_hash: [0u8; 32],
+        pqc_pubkey_ptr: pubkey.as_ptr(),
+        pqc_pubkey_len: pubkey.len(),
+        leaf_layer_scalars_ptr: scalars.as_ptr(),
+        leaf_layer_scalars_len: scalars.len(),
+    };
+    let garbage = [0xFFu8; 4];
+    let code = unsafe {
+        shekyl_archival_verify_serve_credit_vin(
+            garbage.as_ptr(),
+            garbage.len(),
+            garbage.as_ptr(),
+            garbage.len(),
+            std::ptr::from_ref(&ctx),
+        )
+    };
+    assert_eq!(
+        code, SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED,
+        "an unpopulated ctx block was not refused ahead of the vin parse; a \
+         prover can now mask the node's own misconfiguration with garbage"
+    );
 }
 
 #[test]
@@ -1259,6 +1427,8 @@ fn epoch_close_compute_ffi_rejects_bad_indices_and_zeroes_outputs() {
 
 #[test]
 fn claimed_epochs_check_and_set_ffi_write_back_and_polarity() {
+    // Value-preserving: MAX_CLAIMED_EPOCH_ENTRIES is const-asserted == 32.
+    #[allow(clippy::cast_possible_truncation)]
     const CAP: usize = MAX_CLAIMED_EPOCH_ENTRIES as usize;
     let mut buf = [0u64; CAP];
     let mut len: usize = 0;
@@ -1455,8 +1625,12 @@ impl EmissionFfiFixture {
         assert!(reward > 0, "fixture reward must be wire-encodable (>0)");
 
         let scheme = HybridEd25519MlDsa;
-        let (p_pk, p_sk) = scheme.keypair_generate().expect("P keypair");
-        let (b_pk, b_sk) = scheme.keypair_generate().expect("backing keypair");
+        let (p_pk, p_sk) = scheme
+            .generate_ephemeral_keypair_for_tests()
+            .expect("P keypair");
+        let (b_pk, b_sk) = scheme
+            .generate_ephemeral_keypair_for_tests()
+            .expect("backing keypair");
         let mut vin = ArchivalRewardEmissionVin {
             p_pubkey: p_pk.to_canonical_bytes().expect("canonical P pubkey"),
             holdings: HoldingsDescriptor {
@@ -1494,12 +1668,20 @@ impl EmissionFfiFixture {
         let tx_hash = [0x5F; 32];
         let msgs = vin.auth_msgs(&commits, &tx_hash).expect("role messages");
         vin.auth_backing = scheme
-            .sign(&b_sk, &msgs.backing)
+            .sign(
+                &b_sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
+                &msgs.backing,
+            )
             .expect("backing sign")
             .to_canonical_bytes()
             .expect("canonical backing sig");
         vin.auth_claim = scheme
-            .sign(&p_sk, &msgs.claim)
+            .sign(
+                &p_sk,
+                shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_CLAIM,
+                &msgs.claim,
+            )
             .expect("claim sign")
             .to_canonical_bytes()
             .expect("canonical claim sig");
@@ -1835,5 +2017,146 @@ fn emission_vin_verify_ffi_rejects_bad_marshaling() {
             role: EmissionAuthRole::Backing
         }),
         SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED
+    );
+}
+
+/// The exported fold must distinguish "nothing has served yet" from "a value
+/// arrived", because the two consensus predicates that consume the anchor treat
+/// absence as *permissive* (`release_cooldown_elapsed`, `slashes_settled_through`
+/// both return `true` on `None`). A marshaling caller that could not tell an
+/// absent anchor from an unmarshaled one would route "we don't know" into the
+/// permissive branch and report an exit as ready on a value it never received.
+#[test]
+fn whole_record_fold_reports_absence_rather_than_leaving_it_inferred() {
+    let mut present = 7u8; // pre-poisoned: OK must overwrite both outputs
+    let mut epoch = 99u64;
+
+    // Empty slice = record exists, no shard has served. Absent, not epoch 0 —
+    // and epoch 0 is a real settlement epoch, so the flag is the only thing
+    // that separates them.
+    let code = unsafe {
+        shekyl_archival_whole_record_last_served(
+            ptr::null(),
+            0,
+            ptr::from_mut(&mut present),
+            ptr::from_mut(&mut epoch),
+        )
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_POST_OK);
+    assert_eq!(present, 0, "never-served folds to absent");
+    assert_eq!(epoch, 0, "the epoch slot is written, never left stale");
+
+    // Served shards fold to the max, matching `whole_record_last_served`.
+    let served = [4u64, 9, 7];
+    let code = unsafe {
+        shekyl_archival_whole_record_last_served(
+            served.as_ptr(),
+            served.len(),
+            ptr::from_mut(&mut present),
+            ptr::from_mut(&mut epoch),
+        )
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_POST_OK);
+    assert_eq!(present, 1);
+    assert_eq!(
+        epoch, 9,
+        "the whole-record anchor is the max over served shards"
+    );
+
+    // A served shard at epoch 0 is present, not absent — the case a
+    // zero-means-absent encoding would silently turn permissive.
+    let zero = [0u64];
+    let code = unsafe {
+        shekyl_archival_whole_record_last_served(
+            zero.as_ptr(),
+            zero.len(),
+            ptr::from_mut(&mut present),
+            ptr::from_mut(&mut epoch),
+        )
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_POST_OK);
+    assert_eq!(present, 1, "served-at-epoch-0 is a value, not an absence");
+    assert_eq!(epoch, 0);
+}
+
+#[test]
+fn whole_record_fold_rejects_null_outputs_and_bad_spans() {
+    let mut present = 0u8;
+    let mut epoch = 0u64;
+    let served = [1u64];
+
+    assert_eq!(
+        unsafe {
+            shekyl_archival_whole_record_last_served(
+                served.as_ptr(),
+                served.len(),
+                ptr::null_mut(),
+                ptr::from_mut(&mut epoch),
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
+    );
+    assert_eq!(
+        unsafe {
+            shekyl_archival_whole_record_last_served(
+                served.as_ptr(),
+                served.len(),
+                ptr::from_mut(&mut present),
+                ptr::null_mut(),
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
+    );
+    // Null input pointer with a positive len is a caller marshaling bug, not an
+    // empty fold — the shared slice helper's contract.
+    assert_eq!(
+        unsafe {
+            shekyl_archival_whole_record_last_served(
+                ptr::null(),
+                1,
+                ptr::from_mut(&mut present),
+                ptr::from_mut(&mut epoch),
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
+    );
+}
+
+#[test]
+fn last_served_scan_is_the_holdings_kind_decision() {
+    let mut scan = 7u8;
+    assert_eq!(
+        unsafe {
+            shekyl_archival_last_served_scan(
+                HoldingsKind::ShardSetCompact as u8,
+                ptr::from_mut(&mut scan),
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_OK
+    );
+    assert_eq!(scan, LastServedScan::HeldShards as u8);
+
+    assert_eq!(
+        unsafe {
+            shekyl_archival_last_served_scan(
+                HoldingsKind::CompleteTree as u8,
+                ptr::from_mut(&mut scan),
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_OK
+    );
+    assert_eq!(scan, LastServedScan::AllShards as u8);
+
+    // Unknown kind: fail closed, do not write.
+    scan = 7;
+    assert_eq!(
+        unsafe { shekyl_archival_last_served_scan(99, ptr::from_mut(&mut scan)) },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND
+    );
+    assert_eq!(scan, 7, "a rejected kind must not write a scan");
+
+    assert_eq!(
+        unsafe { shekyl_archival_last_served_scan(0, ptr::null_mut()) },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
     );
 }

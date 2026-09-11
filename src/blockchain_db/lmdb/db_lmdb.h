@@ -28,11 +28,12 @@
 
 #include <atomic>
 #include <functional>
+#include <map>
 #include <unordered_map>
 
 #include "blockchain_db/blockchain_db.h"
 #include "cryptonote_basic/blobdatatype.h" // for type blobdata
-#include "fcmp/rctTypes.h"
+#include "fcmp/ct_types.h"
 #include <boost/thread/tss.hpp>
 
 #include <lmdb.h>
@@ -216,6 +217,21 @@ public:
 
   virtual void reset();
 
+  //! True for named tables that `reset()` deliberately leaves alone.
+  //! The sole hand-maintained residual of the enumeration-based wipe
+  //! (txpool tables: mempool lifecycle is `tx_memory_pool`'s). Shared
+  //! with the reset test so the keep-list cannot drift from production.
+  static bool table_survives_chain_reset(const std::string& name);
+
+  //! `mdb_stat.ms_entries` of every named table, keyed by table name
+  //! (unnamed main DB keys). Counts data items, including each
+  //! key/value pair on `MDB_DUPSORT` tables — not unique keys only.
+  //! LMDB-concrete diagnostic, not part of `BlockchainDB`; gives the
+  //! reset test an environment-level oracle instead of a hand-written
+  //! table list. Opens its own read snapshot: call with no batch active
+  //! (or after `batch_stop`) to see committed state.
+  std::map<std::string, uint64_t> get_table_entry_counts() const;
+
   virtual std::vector<std::string> get_filenames() const;
 
   virtual bool remove_data_file(const std::string& folder) const;
@@ -361,6 +377,19 @@ public:
 
   virtual void pop_block(block& blk, std::vector<transaction>& txs);
 
+  uint64_t get_archival_prune_watermark_epoch() const override;
+
+  /**
+   * @brief monotonic watermark writer — the prune's receipt (C2-R1b-Q1c)
+   *
+   * Requires an active write txn; refuses to lower (a lower value is a
+   * no-op, never an error — re-running an old prune must not regress the
+   * floor). Public as the unit-test seam; the one production caller is
+   * `prune_archival_epochs_before`, same txn as the deletions it receipts.
+   */
+  void note_archival_prune_watermark_epoch(uint64_t prune_below_epoch);
+
+
   virtual bool can_thread_bulk_indices() const { return true; }
 
   /**
@@ -408,7 +437,7 @@ private:
       const tx_out& tx_output,
       const uint64_t& local_index,
       const uint64_t unlock_time,
-      const rct::key *commitment
+      const ct::key *commitment
       );
 
   virtual void add_tx_amount_output_indices(const uint64_t tx_id,
@@ -418,8 +447,6 @@ private:
   void remove_tx_outputs(const uint64_t tx_id, const transaction& tx);
 
   void remove_output(const uint64_t amount, const uint64_t& out_index);
-
-  virtual void prune_outputs(uint64_t amount);
 
   virtual void add_spent_key(const crypto::key_image& k_image);
 
@@ -460,11 +487,14 @@ private:
   virtual uint64_t get_settlement_epoch_blocks_pin() const override;
 
   virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) const override;
+    uint64_t settlement_epoch, uint64_t block_height) const override;
   virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) override;
+    uint64_t settlement_epoch, uint64_t block_height) override;
   virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) override;
+    uint64_t settlement_epoch, uint64_t block_height) override;
+  virtual uint32_t archival_serve_credit_pass_count(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const override;
+
 
   virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
     std::vector<uint8_t>& out_pubkey) const override;
@@ -633,7 +663,7 @@ private:
   bool load_archival_bond_value(const crypto::hash& p_id,
     shekyl::db::ArchivalBondValue& out) const;
 
-  // Overrides the BlockchainDB virtual (Unbond release verify marshals it as
+  // Overrides the BlockchainDB virtual (Release release verify marshals it as
   // the slash-settled watermark); also called internally by the slash
   // scheduler. Private override — reached via the base pointer from
   // Blockchain, and as a member here.
@@ -687,12 +717,62 @@ private:
     uint64_t settlement_epoch, ArchivalSealHashCache* seal_cache = nullptr) const;
 
 public:
+  // DRS-P0d: layout-independent logical state digest v0 against this
+  // LMDB (core chain hashes + spent_keys set + live curve-tree root).
+  // Archival journals are excluded (§7.1.1). Not a BlockchainDB virtual:
+  // the oracle is LMDB-specific until DRS-E1. Public on BlockchainLMDB
+  // (same shape as apply_archival_slash_one below) so DRS-C and the
+  // walker tests can call it; BlockchainDB overrides stay private.
+  std::array<uint8_t, 32> logical_state_digest_v0() const;
+
+  // spent_keys writes are BlockchainDB-private (add_transaction). The
+  // digest walker tests mutate that family without a spend tx; these
+  // two are that door. Not BlockchainDB virtuals.
+  void digest_v0_add_spent_key(const crypto::key_image& k_image);
+  void digest_v0_remove_spent_key(const crypto::key_image& k_image);
+
   // Single-slash load-modify-store helper. Production caller is the private
   // process_archival_slash_for_epoch; exposed here so the bond field-preservation
   // regression test can drive the load-modify-store path directly
   // (REWARD_EMISSION_VIN_PLAN.md §1.5 F-S1).
   void apply_archival_slash_one(uint64_t block_height, uint32_t& seq, const crypto::hash& p_id,
     uint64_t shard_id, uint64_t settlement_epoch, uint64_t slashed_amount);
+
+  // ─── Settlement outcomes (SO-D2/SO-D6) ──────────────────────────────────
+  //
+  // Public for the same reason apply_archival_slash_one above is: the
+  // production caller is process_archival_slash_for_epoch, a member, and these
+  // are exposed so the table's KATs can drive the path directly. Deliberately
+  // NOT virtual on BlockchainDB. The only writer is
+  // process_archival_slash_for_epoch and the only reverter is
+  // revert_archival_slashes_at_height, both BlockchainLMDB members, so the
+  // dispatch would buy nothing and would break every BlockchainDB test double
+  // for a surface none of them can implement.
+
+  /// Fold (passes, issued) through the Rust encoder and store the row for
+  /// (P_id, shard, E). Refuses rather than storing if the fold refuses.
+  void set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch, uint32_t passes, uint32_t issued);
+
+  /// Read a settlement row. Returns false when absent — which SO-D1 defines as
+  /// "never issued", not "missed".
+  bool get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch, std::array<uint8_t, 3>& out_row) const;
+
+  /// Drop every settlement row for one epoch — the SO-D6 revert.
+  ///
+  /// A full-table scan filtering the epoch field, because SO-D2's key puts the
+  /// epoch LAST so the outer-window walk can range-scan a pair's epochs in
+  /// order. That trade is inherited, not invented:
+  /// delete_archival_serve_credit_before_epoch scans the same way for the same
+  /// reason. Both callers are rare — a prune, and a reorg crossing a fold.
+  void delete_archival_settlement_for_epoch(uint64_t settlement_epoch);
+
+  /// Retention prune for the settlement table — every row strictly below
+  /// `prune_below_epoch`. Called from `prune_archival_epochs_before`, which
+  /// is contracted to visit every epoch-scoped archival table and was
+  /// missing this one.
+  void delete_archival_settlement_before_epoch(uint64_t prune_below_epoch);
 
   /// As-of-E consensus snapshot gather — see the BlockchainDB base
   /// declaration (blockchain_db.h) for the soundness argument and the
@@ -702,8 +782,9 @@ public:
 
   /// Windowed snapshot gather: one snapshot per epoch in
   /// `[epoch_lo, epoch_hi)`, all rows collected in a SINGLE serve-credit
-  /// table pass (the epoch is the key suffix, so a per-epoch range seek is
-  /// impossible — the windowed pass is what bounds the unauthenticated
+  /// table pass (the epoch is an interior key component at offset 40 —
+  /// `p_id | shard | epoch | height` since PC-D4 — so a per-epoch range seek
+  /// is impossible; the windowed pass is what bounds the unauthenticated
   /// claim-source RPC to one scan per request instead of one per window
   /// epoch).
   virtual void gather_archival_emission_window_snapshots(const crypto::hash& p_id,
@@ -744,6 +825,7 @@ private:
   void delete_archival_sigma_work_for_epoch(uint64_t settlement_epoch);
   void delete_archival_sigma_work_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_serve_credit_before_epoch(uint64_t prune_below_epoch);
+
   void delete_archival_budget_for_epoch(uint64_t settlement_epoch);
   void delete_archival_budget_before_epoch(uint64_t prune_below_epoch);
   void delete_archival_budget_accrual_before_height(uint64_t prune_below_height);
@@ -862,13 +944,27 @@ private:
   MDB_dbi m_properties;
 
   MDB_dbi m_block_burn;
-  MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E) [48B] -> uint8_t 0x01 flag
+  MDB_dbi m_archival_serve_credit;    // P_id[32]||BE(shard)||BE(E)||BE(height) [56B] -> uint8_t 0x01 flag
+  // Settlement outcomes (SO-D2). Keyed by ArchivalPairEpochKey [48B]: SO-D2
+  // ruled this key byte-identical to m_archival_serve_credit's so one key
+  // probed both tables, and PC-D4 then widened THAT key to 56 B while this
+  // table stayed per-pair-epoch (SO-D1: one row per pair with issued >= 1).
+  // The shared-key rationale is therefore RETIRED, not broken -- the two
+  // tables answer at different granularities, evidence per challenge and
+  // verdict per pair-epoch. Value is 3 bytes (outcome||passes||issued) rather
+  // than a presence flag. The two
+  // tables cannot be merged: this one records a NEGATIVE (Missed), and every
+  // consumer of m_archival_serve_credit reads key-presence as "pay this pair"
+  // (old-vin dedup, slash-window walk, fast-path miss, emission gather -- a
+  // pure presence cursor-walk with no value-byte gate), so a Missed cell there
+  // would corrupt vin-dedup and emission at once (SO-D4.3).
+  MDB_dbi m_archival_settlement;      // P_id[32]||BE(shard)||BE(E) [48B, ArchivalPairEpochKey] -> outcome||passes||issued [3B]
   MDB_dbi m_archival_bond;            // P_id[32] -> ArchivalBondValue blob
   MDB_dbi m_archival_shard_segment;   // BE(shard_id) -> segment metadata
   MDB_dbi m_archival_slash_applied;   // P_id||shard||E -> slash idempotency bit
   MDB_dbi m_archival_slash_log;       // BE(height)||BE(seq) -> revert journal
   MDB_dbi m_archival_emission_claim_log; // BE(height)||BE(seq) -> claimed-set pre-image journal
-  MDB_dbi m_archival_bond_unbond_log; // BE(height)||BE(seq) -> Unbond record pre-image journal
+  MDB_dbi m_archival_bond_unbond_log; // BE(height)||BE(seq) -> Release record pre-image journal
   MDB_dbi m_archival_bond_holdings_update_log; // BE(height)||BE(seq) -> HoldingsUpdate record pre-image journal
   MDB_dbi m_archival_bond_rebond_log; // BE(height)||BE(seq) -> Rebond record pre-image journal
   MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)

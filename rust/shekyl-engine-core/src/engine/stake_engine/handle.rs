@@ -15,6 +15,7 @@ use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_scanner::ScannableBlock;
 #[cfg(feature = "gf7-hooks")]
 use shekyl_standoff::gf7::NoOpObserver;
+use shekyl_tor_control_wallet::service::OnionIdentity;
 use shekyl_tx_builder::TreeContext;
 use shekyl_types::PCanonicalId;
 
@@ -22,9 +23,10 @@ use super::actor::StakeEngine;
 use super::bond::{AssembleBond, AssembledBondPost};
 use super::claim::{AssembleEmissionClaim, AssembledEmissionClaim};
 use super::persona::{
-    ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, MintPersonaHandle,
-    PersonaIdentityOf, SignBond, SignedBondPost,
+    ActivatePersona, ActivePersona, ActivePersonaReceiveAddress, BondPostPlacement,
+    MintPersonaHandle, PersonaIdentityOf, PersonaOnionIdentityOf, PlanBondPost,
 };
+use super::release::{AssembleRelease, AssembledReleasePost};
 use super::retire::{ProjectPersonaCanonicalId, RetireBondedPersona};
 use super::types::*;
 use crate::engine::bond_assembly::FundingInputContext;
@@ -41,13 +43,11 @@ use crate::engine::{Network, ShekylAddress};
 /// tier; that confinement is the control, made a compile-time guarantee by the
 /// visibility bound (mirrors [`KeyEngineHandle`](super::key_actor::KeyEngineHandle)).
 #[derive(Clone)]
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct StakeEngineHandle {
     /// Strong reference to the stake actor's mailbox.
     pub(crate) actor: ActorRef<StakeEngine>,
 }
 
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 impl StakeEngineHandle {
     /// Spawn the StakeEngine over the pre-derived derive-forward set.
     ///
@@ -158,6 +158,7 @@ impl StakeEngineHandle {
 
     /// Activate the persona named by `handle` and return its public identity.
     /// Activation (with ephemeral-only wipe) when a different slot is active.
+    #[allow(dead_code)] // 2c-2a: the production caller lands with the assemble wiring; today's callers are all `cfg(test)`.
     pub(crate) async fn activate_persona(
         &self,
         handle: PersonaHandle,
@@ -190,8 +191,8 @@ impl StakeEngineHandle {
     }
 
     /// The public identity of the held persona at `p_slot` — a pure
-    /// projection: no activation, no activation, no generation advance (see
-    /// [`PersonaIdentityOf`]).
+    /// projection: no activation, no retired-slot wipe, no generation advance
+    /// (see [`PersonaIdentityOf`]).
     pub(crate) async fn persona_identity(
         &self,
         p_slot: PSlot,
@@ -202,15 +203,33 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
-    /// Build and sign a JoinMarket archival bond post for the persona named by
-    /// `handle` (Bond-PR 2c-2b, S1/S2), returning the signed vin **paired
-    /// with** its block-timed placement plan ([`SignedBondPost`]).
+    /// The onion serving credential for the held persona at `p_slot` — the
+    /// SH-2b handoff into `PersonaServingHost`.
+    ///
+    /// Yields an `OnionIdentity` and never the seed: see
+    /// [`PersonaOnionIdentityOf`] for the §7.2(iii) custody ruling that decides
+    /// which secret is allowed to cross into a serving role.
+    pub(crate) async fn persona_onion_identity(
+        &self,
+        p_slot: PSlot,
+    ) -> Result<OnionIdentity, StakeEngineError> {
+        self.actor
+            .ask(PersonaOnionIdentityOf { p_slot })
+            .await
+            .map_err(collapse_send_error)
+    }
+
+    /// Construct a JoinMarket archival bond-post vin for the persona named by
+    /// `handle` (Bond-PR 2c-2b), returning the constructed vin **paired with**
+    /// its block-timed placement plan ([`BondPostPlacement`]). No on-vin
+    /// signature (SA-2b); surface-A signing is the assemble path.
     ///
     /// Consumes both `handle` (operation-scoped capability, typed contract #2)
     /// and `ticket` (persist-before-use witness, typed contract #1) by value,
-    /// so "sign before persist" and "sign for an unheld persona" are uncallable.
+    /// so "construct before persist" and "construct for an unheld persona" are
+    /// uncallable.
     ///
-    /// See [`SignBond`] for the full caller workflow.
+    /// See [`PlanBondPost`] for the full caller workflow.
     ///
     /// # Errors
     ///
@@ -220,25 +239,23 @@ impl StakeEngineHandle {
     ///   `StaleHandle` in `validate_handle` (a wipe advances the generation, so a
     ///   stale-generation handle and a no-longer-held slot are the same failure).
     ///   `LookaheadExhausted` is *not* reachable here — it is a `mint_handle`
-    ///   error; signing only validates an already-minted handle.
+    ///   error; construction only validates an already-minted handle.
     /// - [`StakeEngineError::SlotMismatch`] — `handle.p_slot != ticket.p_slot`.
     /// - [`StakeEngineError::RngSourceFailed`] — OS entropy source unavailable.
     /// - [`StakeEngineError::RngDegeneracy`] — timing draw degenerate; retry.
     /// - [`StakeEngineError::BondBuild`] — bond construction failed (see inner).
-    #[allow(dead_code)] // inert until 2c-2b request path is wired end-to-end
-    pub(crate) async fn sign_bond(
+    #[allow(dead_code)] // 2c-2b: the production caller lands with the request path; today's callers are all `cfg(test)`.
+    pub(crate) async fn plan_bond_post(
         &self,
         handle: PersonaHandle,
         ticket: crate::engine::stake_persist::PersistedBondTicket,
         holdings: HoldingsDescriptor,
-        tx_prefix_hash: [u8; 32],
-    ) -> Result<SignedBondPost, StakeEngineError> {
+    ) -> Result<BondPostPlacement, StakeEngineError> {
         self.actor
-            .ask(SignBond {
+            .ask(PlanBondPost {
                 handle,
                 ticket,
                 holdings,
-                tx_prefix_hash,
             })
             .await
             .map_err(collapse_send_error)
@@ -246,9 +263,9 @@ impl StakeEngineHandle {
 
     /// Ask the actor to assemble the full, broadcast-ready JoinMarket bond
     /// (`AssembleBond`). Engine-side caller is [`Engine::assemble_bond_post`]
-    /// (WI-2 §3.3). Dead_code allow retires only when **both** SP-R0 / 2d-1
-    /// pruning **and** the RPC stake entry land — neither alone (half (a)
-    /// landed 2026-07-18 with SP-R0 arm #1; half (b) remains).
+    /// (WI-2 §3.3), so this carries no suppression. Go-live still needs
+    /// **both** SP-R0 / 2d-1 pruning **and** the RPC stake entry — neither
+    /// alone (half (a) landed 2026-07-18 with SP-R0 arm #1; half (b) remains).
     pub(crate) async fn assemble_bond(
         &self,
         handle: PersonaHandle,
@@ -271,10 +288,37 @@ impl StakeEngineHandle {
             .map_err(collapse_send_error)
     }
 
+    /// Ask the actor to assemble the full `Release` exit transaction
+    /// ([`AssembleRelease`]) — the persona-bound wire bytes, not the vin. It
+    /// returned a bare `ReleaseVin` before slice 2b; callers get
+    /// [`AssembledReleasePost`] now.
+    ///
+    /// **`pub(crate)`; user-reachable through the exit lane as of PR-C.**
+    /// The reachability gate's history: slice 3's engine walk, PR-B's
+    /// dispatch seam ([`Engine::submit_release`]) and its daemon walk each
+    /// landed without making anything user-callable; PR-C's
+    /// `StakeFacade::unstake` (wallet-RPC + CLI) is what lifted the last
+    /// two conditions (no RPC method, no CLI verb). The path's protections
+    /// now live on the path itself — the readiness refusal, engine-side
+    /// persona resolution, CLI confirmation, funds-safe seal semantics
+    /// (`unstake_facade` module docs).
+    /// This is also the seam an actor-level test uses to prove the handler's
+    /// persona-binding refusal is reachable, which a unit test on
+    /// `ReleaseRecordState` cannot do.
+    ///
+    /// [`Engine::submit_release`]: crate::engine::Engine::submit_release
+    pub(crate) async fn assemble_release(
+        &self,
+        msg: AssembleRelease,
+    ) -> Result<AssembledReleasePost, StakeEngineError> {
+        self.actor.ask(msg).await.map_err(collapse_send_error)
+    }
+
     /// Assemble the full, broadcast-ready emission-claim transaction
     /// ([`AssembleEmissionClaim`]) — the emission sibling of the bond
-    /// assembly path. Return-bytes-only: broadcast timing is the GF-4
-    /// dispatch seam, outside this builder.
+    /// assembly path. Return-bytes-only: broadcast timing is the cadence
+    /// driver's epoch-claim leg (through the `claim_dispatch` seam),
+    /// outside this builder.
     pub(crate) async fn assemble_emission_claim(
         &self,
         msg: AssembleEmissionClaim,
@@ -288,9 +332,9 @@ impl StakeEngineHandle {
     /// the pending-drain record are the orchestrator's (DS-PR-2), outside this
     /// builder.
     ///
-    /// Dead_code allow: the assembly is wired; the Engine orchestrator entry
-    /// (DS-PR-2) and the RPC drain entry are the remaining consumers (rule-21).
-    #[allow(dead_code)]
+    /// The assembly is wired, so this carries no suppression; the Engine
+    /// orchestrator entry (DS-PR-2) and the RPC drain entry are the remaining
+    /// consumers (rule-21).
     pub(crate) async fn assemble_drain(
         &self,
         msg: AssembleDrain,
@@ -306,7 +350,6 @@ impl StakeEngineHandle {
     /// driving P-scan task (PR-B) calls this once per bounded batch, advancing the
     /// cursor over the returned range. `blocks[i]` must be the block at
     /// `range.start + i`.
-    #[allow(dead_code)] // transient — the driving task (PR-B / SP-5) is the non-test consumer.
     pub(crate) async fn scan_step(
         &self,
         range: BlockRange,
@@ -324,14 +367,13 @@ impl StakeEngineHandle {
     }
 
     /// Retire a now-terminal bonded persona from the scan union (DQ8), wiping its
-    /// key. The `witness` proves eligibility (`Unbond` + `W`-lapse + finality-deep)
+    /// key. The `witness` proves eligibility (`Release` + `W`-lapse + finality-deep)
     /// — the actor cannot re-verify, so the witness is the guard. `funded_slots`
     /// carries the caller's set of slots still holding unspent funding: the actor
     /// resolves the witness to a slot and, if funded, defers the wipe
     /// ([`RetireOutcome::SkippedFunded`], the funded-gate) rather than strand the
     /// funds. Idempotent: a persona already gone returns [`RetireOutcome::NotHeld`].
     /// The SP-5 task calls this when it confirms a persona is terminal.
-    #[allow(dead_code)] // transient — the driving task (PR-B / SP-5) is the non-test consumer.
     pub(crate) async fn retire_bonded_persona(
         &self,
         witness: RetirementWitness,
@@ -364,7 +406,6 @@ impl StakeEngineHandle {
 /// live transient. **Reversion clause:** if PR 2c+ introduces a bounded mailbox
 /// or an ask-timeout, that arm becomes reachable and must split into its own
 /// *retryable* `StakeEngineError` variant rather than collapse here.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 fn collapse_send_error<M>(err: SendError<M, StakeEngineError>) -> StakeEngineError {
     match err {
         SendError::HandlerError(e) => e,

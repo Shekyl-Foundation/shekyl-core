@@ -96,7 +96,10 @@ layer.]**
 | `VerifiedRange` / `PReconcileSet` (SP-6) | **landed 2026-06-29** (`pscan/reconcile.rs:67` / `exhaustiveness.rs:64`; `82870235b` + PR #211 review) *(row corrected 2026-07-18; previously "0 files — design-level, future")* | Consume for half (B) — **gate CLEARED**; the consumer is SP-R0 **arm #2** ([`ARCHIVAL_BOND_SP_R0_PLAN.md`](ARCHIVAL_BOND_SP_R0_PLAN.md)) |
 | `CoverDiscovery` (SP-7) — re-fund takes `AbsentVerified` only | **landed with the 2d-1 slices** (`pscan/cover_discovery.rs`) *(row corrected 2026-07-18; previously "0 files")* | Honor it; no auto-escalation of `Incomplete` |
 | `tip_height()` = "this source's *claimed* tip" (TM-3) | concept (in the plan) | Resolved by **posture**, not multi-source machinery (§4) |
-| `spread` / `bond_first` broadcast placement | **drawn AND consumed** (2c-2b PR #255): `plan_entry_seam` turns the draw into an `EntrySeamPlan` (block offsets for both events), carried in the `SignBond` reply (`SignedBondPost`); the write-side *seam* it will feed is built (SP-T4a `PTransactionSubmitter` + `BroadcastPosture`), but the plan is **not** yet wired into any broadcast | Carry the `EntrySeamPlan` to the wire over the per-`P` circuit (§5) — gated on the 2c-2a assemble / 2d dispatch wiring, not the seam or the plan |
+| `spread` / `bond_first` broadcast placement | **drawn AND consumed** (2c-2b PR #255): `plan_entry_seam` turns the draw into an `EntrySeamPlan` (block offsets for both events), carried in the `SignBond` reply (`SignedBondPost` — since renamed
+`PlanBondPost` / `BondPostPlacement` with an *unsigned* vin, SA-2b, and the
+plan reduced to the bare `bond_post_offset_blocks` in the GF-7 coin
+retirement); the write-side *seam* it will feed is built (SP-T4a `PTransactionSubmitter` + `BroadcastPosture`), but the plan is **not** yet wired into any broadcast | Carry the `EntrySeamPlan` to the wire over the per-`P` circuit (§5) — gated on the 2c-2a assemble / 2d dispatch wiring, not the seam or the plan |
 
 **Implication for 2d-2 half (B) (corrected 2026-07-18):** the reconcile's SP-6 and
 driving-task gates are **both cleared** (see the corrected rows above and the §12 SP-R0
@@ -522,7 +525,7 @@ Detail for the load-bearing SPs; the rest carry their §12 contract.
 
 **SP-T0 — bundled-Tor lifecycle.** *(Round 0:
 [`ARCHIVAL_BOND_2D2_SP_T0_TOR.md`](ARCHIVAL_BOND_2D2_SP_T0_TOR.md) — the buildable plan: the
-control-port-client dependency call (lean roll-our-own), the `TorService` lifecycle + bootstrap
+control-port-client dependency call (lean roll-our-own), the `WalletTorControl` lifecycle + bootstrap
 gate, the measured circuit-ID test that closes the keystone, reuse-not-own packaging.)* A managed
 child process with a wallet-private
 `SocksPort`/`ControlPort`; health-gate readiness before any `PTorClient` is handed out; shut down
@@ -580,7 +583,7 @@ ledger expects.
   `ingest` only appends (`accrual.rs`), nothing prunes — correct for SP-6 (a match must survive until
   SP-R0 corroborates it, ~`MAX_CLAIM_AGE_W`≈270k blocks later), but it means **SP-R0's durable removal
   must prune a persona's matches when it retires the slot**, in the *same atomic step* that drops the
-  `bonded_slots` entry (and the `pending_unbonds` entry). Otherwise the persisted `bond_post_matches`
+  `bonded_slots` entry (and the `pending_releases` entry). Otherwise the persisted `bond_post_matches`
   set grows unbounded over the wallet's life. The seal-cost comment already flags the per-post growth
   profile; the **bound on that growth is this retire-time prune** — it belongs with the slot-ledger
   removal, not as a separate pass.

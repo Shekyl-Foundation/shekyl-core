@@ -6,12 +6,13 @@
 > described a **passive lock-tier PoS** staking model ("lock SHEKYL for a duration
 > tier, earn by `staked_amount × duration_multiplier`") that was **retired before
 > genesis** with the confidential-staking sweep
-> (`docs/design/LEGACY_CLAIM_ERA_RETIREMENT.md`;
+> (`docs/completed/LEGACY_CLAIM_ERA_RETIREMENT.md`;
 > `rust/shekyl-economics/src/lib.rs`). Genesis staking is **archival
 > pay-for-service**: stakers post on-chain bonds, join the archival market, and
 > earn reward emission recomputed from **public serve-work** — there is no
 > duration tier, no `staked_amount × duration_multiplier` weighting, and no
-> claim/unstake wire. Component 3 and the participant lifecycle below have been
+> claim wire (the exit is the `Release` bond-post kind, reachable via
+> `unstake` since PR-C). Component 3 and the participant lifecycle below have been
 > rewritten to the live model. The canonical archival specs are
 > [`docs/V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) (mechanism) and
 > [`docs/design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md)
@@ -36,7 +37,7 @@ answers: *are the coefficients economically right on testnet?* Stressnet answers
 *does the stack survive load?* Exit criteria differ.
 
 Implementation and tests for economics surfaces are split per
-[`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md):
+[`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](completed/STAGE_1_PR_7_ECONOMICS_ENGINE.md):
 generation-invariant differential tests (engine vs `shekyl-economics-sim` on the
 shared primitive) vs calibration-tagged value vectors (expected to churn each
 generation). See that doc for `CALIBRATION-PENDING` code markers and the
@@ -79,7 +80,7 @@ Shekyl monetary policy should satisfy six constraints at once:
 5. **Demand-responsive emission**
    - The rate at which coins are released should reflect real network usage.
    - High transaction activity accelerates emission; low activity conserves supply.
-   - Total supply remains fixed — only the release timeline is elastic.
+   - Gross issuance remains anchored to the curve's asymptote plus the perpetual tail — only the release timeline is elastic, and net supply is bounded in practice by the fee burn (FL-R12′).
 
 6. **Self-regulating economic balance**
    - Miners, stakers, and transactors should form interlocking constituencies with complementary incentives.
@@ -92,7 +93,11 @@ Shekyl monetary policy should satisfy six constraints at once:
 
 Historical constants from the original chain configuration:
 
-- `MONEY_SUPPLY = 2^32`
+- `MONEY_SUPPLY = 2^32` (the inherited name; semantically the emission curve's
+  asymptote, not a hard supply — gross issuance passes it under the perpetual
+  tail, FL-R12′. FL-R15 renamed it to `SHEKYL_EMISSION_CURVE_ASYMPTOTE` in the
+  Shekyl tree, so the name in this historical row names the original
+  chain's constant, not one this codebase declares.)
 - `COIN = 10^12`
 - `CRYPTONOTE_DISPLAY_DECIMAL_POINT = 12`
 - `FINAL_SUBSIDY_PER_MINUTE = 3 * 10^11` atomic units (**historical Monero
@@ -105,15 +110,24 @@ units (0.3 SHEKYL/min) per the parameter tables below and
 `config/economics_params.json`. The `3 × 10¹¹` figure above is inherited Monero
 baseline prose; do not use it for fixtures, KATs, or `EconomicsParametersSnapshot`.
 
-In Cryptonote-family code, `MONEY_SUPPLY` is interpreted in **atomic units**, not whole coins. Therefore:
+In Cryptonote-family code, the inherited `MONEY_SUPPLY` — the constant this
+tree renamed above — is interpreted in **atomic units**, not whole coins.
+Therefore:
 
-- Current effective whole-coin supply is `2^32 / 10^12 = 0.004294967296` SHEKYL.
-- This is not economically meaningful for a production chain.
+- The **historical** 12-decimal interpretation of those constants yielded
+  `2^32 / 10^12 = 0.004294967296` SHEKYL — not economically meaningful, and
+  **not** the live genesis supply. Live denomination is 9 decimals
+  (`config/economics_params.json`: `"display_decimal_point": 9`,
+  `"coin": 1000000000`); see §3.
 
-Reward logic in `src/cryptonote_basic/cryptonote_basic_impl.cpp`:
+Reward logic is **Rust-owned**, in `shekyl-economics::emission`.
+`src/cryptonote_basic/cryptonote_basic_impl.cpp` is a marshal-only shim
+that computes nothing (#640):
 
-- `base_reward = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor`
-- `base_reward` is clamped to a minimum via `FINAL_SUBSIDY_PER_MINUTE`
+- `curve = (SHEKYL_EMISSION_CURVE_ASYMPTOTE - already_generated_coins) >> emission_speed_factor`, saturating at zero
+- the paid reward is the FL-R12′ signed composition `max(M_r·curve, TAIL)·penalty(x)` — the release multiplier applies to the **curve**, the tail floors the modulated result, and the weight penalty applies **last**, to the paid quantity
+- so the tail is a floor on the composition, **not** a clamp staged onto `base_reward`: multiplying an already-floored reward is the shape FL-R12′ retired, because at a perpetual tail there is nothing left to pace and a multiplied floor pays least exactly when fees are lowest
+- there is no remaining-supply cap; the accumulator runs *through* the curve's asymptote, which is a landmark rather than an end
 
 Given the mismatch above, the original chain effectively entered minimum-subsidy behavior immediately.
 
@@ -124,15 +138,15 @@ fee-pool share, and the archival reward-budget curve inputs) are read from the s
 JSON so wallet and node stay aligned with the economics file. The retired lock-tier
 constants (`TIERS`, `MAX_CLAIM_RANGE`, `shekyl_stake_max_claim_range`) belong to the
 superseded claim-era staking model and are being removed
-(`docs/design/LEGACY_CLAIM_ERA_RETIREMENT.md`); genesis staking is archival bonds,
+(`docs/completed/LEGACY_CLAIM_ERA_RETIREMENT.md`); genesis staking is archival bonds,
 which carry no duration tier.
 
 ### Technical limit with `uint64_t`
 
 If the target is `2^32` **whole coins**, then with atomic accounting:
 
-- `MONEY_SUPPLY_ATOMIC = 2^32 * 10^decimals`
-- Must satisfy `MONEY_SUPPLY_ATOMIC <= 2^64 - 1`
+- `SHEKYL_EMISSION_CURVE_ASYMPTOTE = 2^32 * 10^decimals`
+- Must satisfy `SHEKYL_EMISSION_CURVE_ASYMPTOTE <= 2^64 - 1`
 
 For `2^32` whole supply, the maximum safe decimal precision under `uint64_t` is:
 
@@ -160,7 +174,7 @@ So `2^32` whole + 12 decimals is not representable in `uint64_t`.
 
 ### `uint64_t` safety verification
 
-- `MONEY_SUPPLY_ATOMIC = 2^32 * 10^9 = 4,294,967,296,000,000,000`
+- `SHEKYL_EMISSION_CURVE_ASYMPTOTE = 2^32 * 10^9 = 4,294,967,296,000,000,000`
 - `uint64_t max = 18,446,744,073,709,551,615`
 - Headroom factor: ~4.3x
 - Sufficient for all intermediate arithmetic including reward calculations
@@ -169,31 +183,32 @@ So `2^32` whole + 12 decimals is not representable in `uint64_t`.
 
 ## 4) The Four-Component Economic System
 
-The Shekyl economic model consists of four interlocking mechanisms operating on a single fixed supply constraint:
+The Shekyl economic model consists of four interlocking mechanisms operating on a single emission-curve constraint (asymptotic issuance plus a perpetual tail; net supply governed by the burn — FL-R12′):
 
 ### Component 1: Transaction-Responsive Release Rate
 
-Transaction volume controls how quickly the CryptoNote emission curve releases coins from the fixed `2^32` supply. This does NOT create additional coins — it adjusts the timeline of the predetermined emission schedule.
+Transaction volume controls how quickly the CryptoNote emission curve releases coins toward the `2^32` asymptote. It adjusts the timeline of the curve, never the tail: the perpetual 0.6/block floor is deliberately outside the multiplier's reach (a paced floor would pay least exactly when fees are lowest — FL-R12′).
 
 #### Mechanism
 
-The standard CryptoNote block reward formula:
+The paid block reward composes as (FL-R12′, signed):
 
 ```
-base_reward = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor
+curve = (SHEKYL_EMISSION_CURVE_ASYMPTOTE - already_generated_coins) >> emission_speed_factor
+                                          // saturating at zero past the asymptote
+paid  = max(release_multiplier * curve, TAIL) * weight_penalty
 ```
 
-Is modified to:
+The multiplier applies to the CURVE and the tail floors the result; the
+weight penalty applies LAST, to the paid quantity — floors belong to
+emission, penalties to what is paid, so block-size governance never dies,
+tail era included.
 
-```
-effective_reward = base_reward * release_multiplier
-```
-
-Where `release_multiplier` is derived from a rolling average of transaction volume over the previous 720 blocks (~1 day):
+Where `release_multiplier` is derived from the exact rolling mean of transaction volume over the previous 720 blocks (~1 day) — the sum and the window length cross into the economics crate as a pair and are divided once against the baseline, so the operand is never an integer-floored mean (FL-R24):
 
 ```
 release_multiplier = clamp(
-    tx_volume_avg / tx_volume_baseline,
+    tx_count_sum / (tx_volume_baseline * blocks),
     RELEASE_MIN,       // e.g., 0.8
     RELEASE_MAX        // e.g., 1.3
 )
@@ -259,7 +274,9 @@ earns reward emission. There are no votes, proposals, or governance forums — t
 protocol reads aggregate staking participation as a confidence signal and adjusts
 the burn rate algorithmically. Staking is **not** a passive lock: there is no
 duration tier, no `staked_amount × duration_multiplier` weighting, and no
-claim/unstake transaction. The mechanism is specified in
+claim transaction — rewards arrive by consensus emission, never a user
+claim cycle (exiting is the single permanent `unstake`, not a recurring
+obligation). The mechanism is specified in
 [`docs/V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) (design home) and
 [`docs/design/REWARD_EMISSION_LEG.md`](design/REWARD_EMISSION_LEG.md) (consensus
 reward leg).
@@ -298,7 +315,9 @@ market participation rather than a duration lock.
   service was actually performed.
 - **Liquidity:** Funds at `P` may be spent freely between settlement epochs — the
   bond, not a protocol lock, is the honesty anchor. A misbehaving staker is
-  slashable against the bond (gate 4). There is no unstake lock to wait out.
+  slashable against the bond (gate 4). Earned funds carry no unstake lock;
+  the bond itself releases via the permanent `unstake` exit (a served
+  position first waits out the slash-settlement watermark).
 - **Compensation:** Two streams — (1) a share of the fee burn pool (Component 2),
   and (2) a decaying share of block emission (Component 4) — flow into a staker
   reward pool distributed by **verified serve-work** (below).
@@ -561,8 +580,8 @@ If this design is adopted:
 4. **RPC and API compatibility**
    - Ensure all amount fields remain atomic-unit based.
    - Add explicit metadata for display precision in docs and client SDKs.
-   - Expose new fields: `release_multiplier`, `burn_pct`, `stake_ratio`, `staker_pool_balance`, `staker_emission_share_effective`, `staker_yield_annualized`.
-     - **Implemented:** `stake_ratio` and `staker_pool_balance` are wired to live chain state in `/get_info`. The dedicated `/get_staking_info` RPC returns all staking metrics.
+   - Expose new fields: `release_multiplier`, `burn_pct`, `stake_ratio`, `staker_emission_share_effective`, `staker_yield_annualized`.
+     - **Design targets, not current state.** The whole staking-RPC surface named here went with the claim-era wire: `get_staking_info` and `estimate_claim_reward` were removed, and `get_info` dropped `stake_ratio` and `staker_pool_balance` ([`LEGACY_CLAIM_ERA_RETIREMENT.md`](completed/LEGACY_CLAIM_ERA_RETIREMENT.md) §RPC). Verified at source 2026-09-07 by DRS-P0b: `stake_ratio`, `staker_pool_balance` and `get_staking_info` have **zero occurrences** in `src/`, and the `properties` key's accessors are gone too — which is why P0b removed the matching row from [`LMDB_SCHEMA.md`](LMDB_SCHEMA.md). Re-exposing any of these is a new design, not a restoration: a reader who finds the fields listed above should not infer they once shipped and regressed.
    - Document the reboot-only PQ transaction format separately in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
 
 5. **Test coverage**
@@ -654,8 +673,8 @@ The harness uses the same formulas as the production `shekyl-economics` crate, d
 
 Adopt the **Four-Component Model**:
 
-1. **Fixed `2^32` whole SHEKYL supply** with 9-decimal atomic precision.
-2. **Transaction-responsive release rate** that accelerates or slows the emission curve based on real network usage, without ever exceeding the fixed supply ceiling.
+1. **`2^32` whole SHEKYL as the emission curve's ASYMPTOTE**, with 9-decimal atomic precision — not a hard cap: the curve approaches it and the perpetual 0.6/block tail continues past it (FL-R12′). Item 2 states the same thing from the release side; they agree.
+2. **Transaction-responsive release rate** that accelerates or slows the emission curve based on real network usage, with gross issuance anchored to the curve's asymptote (plus the perpetual 0.6/block tail — there is no hard cutoff; FL-R12′).
 3. **Adaptive fee burn** driven algorithmically by transaction volume, chain maturity, and aggregate staking behavior — with a portion of the burn funding staker yields.
 4. **Decaying staker emission share** that bootstraps meaningful staker yields from launch, funded by redirecting a small, declining fraction of block emission from miners to stakers.
 5. **Implicit staker governance** where the act of locking coins is the sole governance input, eliminating the need for voting mechanisms.
@@ -710,7 +729,7 @@ burn_pct = min(BURN_CAP, BURN_BASE_RATE × √(tx_volume / baseline) × (circula
 | Reward basis | Verified serve-work | Recomputed from public archival state; no duration tier |
 | Reward division | Anti-concentration curve (form C), `g` band `[1.5, 2.5]`, target ≈ 2 | Caps whale share; see `REWARD_EMISSION_LEG.md` |
 | Principal liquidity | Spendable between settlement epochs | Bond (not a lock) is the honesty anchor; slashable on misbehavior |
-| Admission | Transfer-shaped (`txin_archival_bond_post`) | No separate stake-output type, no claim/unstake wire |
+| Admission | Transfer-shaped (`txin_archival_bond_post`) | No separate stake-output type, no claim wire; the exit is a bond-post kind (`Release`), reachable via `unstake` since PR-C — not a bespoke wire class |
 
 ### Staker emission share (Component 4)
 

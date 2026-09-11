@@ -49,6 +49,7 @@
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_basic/verification_context.h"
 #include "cryptonote_protocol/enums.h"
+#include "net/enums.h"
 #include "blockchain_db/blockchain_db.h"
 #include "crypto/hash.h"
 #include "rpc/core_rpc_server_commands_defs.h"
@@ -60,20 +61,33 @@ namespace cryptonote
 
   namespace detail
   {
-    /*! The whole-second deadline at which a stem transaction's embargo expires.
+    /*! The whole-second deadline at which a Rust-drawn relay delay expires.
+
+        Used by BOTH delays the pool schedules — the stem embargo and the
+        i2p/tor -> clearnet forward delay. Renamed from `embargo_deadline` when
+        the forward delay became its second caller: the cast and the rounding
+        direction below are policy for any FFI-sourced delay, and duplicating
+        them per call site is how one copy silently acquires a different
+        rounding rule.
 
         `now` carries a sub-second remainder and `last_relayed_time` is a
         whole-second `time_t`, so the conversion has to round — and the direction
-        is a privacy decision, not a formatting one. Under-provisioning the
-        embargo fluffs early (the D-5 asymmetry), so this rounds **away from
-        now**: the returned deadline is never earlier than `now + draw_secs`.
-        Truncating instead would hand back up to ~999ms of every embargo, undoing
-        one layer down what the Rust side's `div_ceil` does one layer up.
+        is a privacy decision, not a formatting one. Under-provisioning either
+        delay is the privacy-losing direction: a short embargo fluffs early (the
+        D-5 asymmetry), and a short forward delay hands back cover at the
+        tor->clearnet bridge. So this rounds **away from now**: the returned
+        deadline is never earlier than `now + draw_secs`. Truncating instead
+        would give back up to ~999 ms of every draw, undoing one layer down what
+        the Rust side's `div_ceil` does one layer up.
+
+        The cast is load-bearing too: the FFI returns `uint64_t` and
+        `seconds::rep` is signed, so list-initialising from it is a narrowing
+        conversion and ill-formed on some standard libraries.
 
         Extracted from `set_relayed` so the rounding is testable on a synthetic
         `now` rather than only on whatever fraction the system clock happens to
-        hold. See docs/design/DAEMON_RELAY_PRIVACY.md sec 17. */
-    std::time_t embargo_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs);
+        hold. See docs/design/DAEMON_RELAY_PRIVACY.md sec 17 and sec 22.2. */
+    std::time_t relay_deadline(std::chrono::system_clock::time_point now, std::uint64_t draw_secs);
   }
   /************************************************************************/
   /*                                                                      */
@@ -135,7 +149,8 @@ namespace cryptonote
      */
     bool add_tx(transaction &tx, const crypto::hash &id, const cryptonote::blobdata &blob,
       size_t tx_weight, tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-      uint8_t version, uint8_t nic_verified_hf_version = 0);
+      uint8_t version, epee::net_utils::zone origin_zone,
+      uint8_t nic_verified_hf_version = 0);
 
     /**
      * @brief add a transaction to the transaction pool
@@ -161,7 +176,8 @@ namespace cryptonote
      * @return true if the transaction passes validations, otherwise false
      */
     bool add_tx(transaction &tx, tx_verification_context& tvc, relay_method tx_relay, bool relayed,
-      uint8_t version, uint8_t nic_verified_hf_version = 0);
+      uint8_t version, epee::net_utils::zone origin_zone,
+      uint8_t nic_verified_hf_version = 0);
 
     /**
      * @brief RPC-submit commit tail: insert an engine-verified transaction
@@ -220,11 +236,16 @@ namespace cryptonote
      * @param do_not_relay return-by-reference is transaction not to be relayed to the network?
      * @param double_spend_seen return-by-reference was a double spend seen for that transaction?
      * @param pruned return-by-reference is the tx pruned
+     * @param fcmp_verification_cached return-by-reference does the pool's
+     *   verification cache affirmatively cover these bytes (`fcmp_verified`
+     *   set AND the recorded hash matching the parsed
+     *   proof/referenceBlock/key images)? False on every failure return —
+     *   never gate a verification skip on pool presence alone (CEN-M8)
      * @param suppress_missing_msgs suppress warning msgs when txid is missing (optional, defaults to `false`)
      *
      * @return true unless the transaction cannot be found in the pool
      */
-    bool take_tx(const crypto::hash &id, transaction &tx, cryptonote::blobdata &txblob, size_t& tx_weight, uint64_t& fee, bool &relayed, bool &do_not_relay, bool &double_spend_seen, bool &pruned, bool suppress_missing_msgs = false);
+    bool take_tx(const crypto::hash &id, transaction &tx, cryptonote::blobdata &txblob, size_t& tx_weight, uint64_t& fee, bool &relayed, bool &do_not_relay, bool &double_spend_seen, bool &pruned, bool &fcmp_verification_cached, bool suppress_missing_msgs = false);
 
     /**
      * @brief checks if the pool has a transaction with the given hash
@@ -300,11 +321,17 @@ namespace cryptonote
      * @brief loads pool state (if any) from disk, and initializes pool
      *
      * @param max_txpool_weight the max weight in bytes
-     * @param mine_stem_txes whether to mine txes in stem relay mode
+     * @param mine_relayable_txes whether block templates admit every relayable
+     *   pool tx (relay method != none) rather than broadcast-visible ones only.
+     *   Set from `m_nettype == FAKECHAIN`: a single regtest node's own
+     *   submissions sit at `relay_method::local` under the Dandelion++ embargo
+     *   and would otherwise race the fluff timer into the template. Off on
+     *   every real network -- mining an unfluffed self-tx is an origin
+     *   fingerprint.
      *
      * @return true
      */
-    bool init(size_t max_txpool_weight = 0, bool mine_stem_txes = false);
+    bool init(size_t max_txpool_weight = 0, bool mine_relayable_txes = false);
 
     /**
      * @brief attempts to save the transaction pool state to disk
@@ -454,7 +481,23 @@ namespace cryptonote
      * @param just_broadcasted true if a tx was just broadcasted
      *
      */
-    void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, std::vector<bool> &just_broadcasted);
+    void set_relayed(epee::span<const crypto::hash> hashes, relay_method tx_relay, epee::net_utils::zone zone, std::vector<bool> &just_broadcasted);
+
+    /*! Record that the stem watch resolved these transactions as PROPAGATED —
+        seen arriving from somewhere other than the peer they were stemmed to
+        (F-10's predicate, §49).
+
+        Disarms the origin's re-broadcast for `relay_method::local` entries and
+        NOTHING ELSE. The scoping is at this end deliberately: the watch
+        resolves observations for every stem this node placed, relayed ones
+        included, and a relayed entry sits at `stem` or `fluff` where the
+        ordinary re-relay path governs. Letting a propagation verdict for one
+        of those reach a disarm would silence a timer that never asked the
+        question — so the arm that consumes the fact is the arm that names it.
+
+        Hashes with no pool entry, or an entry outside `local`, are ignored;
+        both are ordinary rather than errors. */
+    void on_stem_propagated(epee::span<const crypto::hash> hashes);
 
     /**
      * @brief get the total number of transactions in the pool
@@ -570,12 +613,6 @@ namespace cryptonote
      */
     bool get_complement(const std::vector<crypto::hash> &hashes, std::vector<cryptonote::blobdata> &txes) const;
 
-    /**
-     * @brief get info necessary for update of pool-related info in a wallet, preferably incremental
-     *
-     * @return true on success, false on error
-     */
-    bool get_pool_info(time_t start_time, bool include_sensitive, size_t max_tx_count, std::vector<std::pair<crypto::hash, tx_details>>& added_txs, std::vector<crypto::hash>& remaining_added_txids, std::vector<crypto::hash>& removed_txs, bool& incremental) const;
 
 // Same test-visibility idiom as blockchain.h: unit tests drive the private
 // sweep/readiness surface (remove_stuck_transactions,
@@ -693,7 +730,6 @@ namespace cryptonote
 
     void add_tx_to_transient_lists(const crypto::hash& txid, double fee, time_t receive_time);
     void remove_tx_from_transient_lists(const cryptonote::sorted_tx_container::iterator& sorted_it, const crypto::hash& txid, bool sensitive);
-    void track_removed_tx(const crypto::hash& txid, bool sensitive);
 
     //TODO: confirm the below comments and investigate whether or not this
     //      is the desired behavior
@@ -733,19 +769,12 @@ private:
     // Info at what time the pool started to track the adding of transactions
     time_t m_added_txs_start_time;
 
-    struct removed_tx_info
-    {
-      crypto::hash txid;
-      bool sensitive;
-    };
-
-    // Info about transactions that were removed from the pool, ordered by the time
-    // of deletion
-    std::multimap<time_t, removed_tx_info> m_removed_txs_by_time;
-
-    // Info how far back in time the list of removed tx ids currently reaches
-    // (it gets shorted periodically to prevent overflow)
-    time_t m_removed_txs_start_time;
+    // No record is kept of transactions LEAVING the pool. A timestamped
+    // departure history existed here to serve incremental pool deltas to
+    // wallet2's batch sync; that endpoint is gone (RK-4x), and a standing
+    // record of when each transaction left is the timing correlate the relay
+    // privacy work exists to deny. It is not to be reintroduced for a
+    // convenience: see the reopen clause in docs/DAEMON_RPC_RUST.md.
 
     /**
      * @brief get an iterator to a transaction in the sorted container
@@ -767,7 +796,7 @@ private:
 
     size_t m_txpool_max_weight;
     size_t m_txpool_weight;
-    bool m_mine_stem_txes;
+    bool m_mine_relayable_txes;
 
     mutable std::unordered_map<crypto::hash, std::tuple<bool, tx_verification_context, uint64_t, crypto::hash>> m_input_cache;
 

@@ -40,10 +40,32 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+/// What a wallet requires of the `shekyld --regtest` daemon these tests spawn.
+///
+/// **The only place `FakechainPolicy::Accept` is selected outside unit tests**
+/// (`VC-R3`): the harness constructs the client in-process, so the affordance
+/// needs no operator surface and none ships. A `fakechain` daemon reports
+/// mainnet's genesis hash and mainnet's constants digest — it is the same
+/// build — so `nettype` is the only axis that distinguishes it, which is
+/// exactly why the acceptance has to be explicit here rather than implied by
+/// a lever somewhere else.
+///
+/// These wallets are `Network::Mainnet` because fakechain shares mainnet's
+/// address format and the address enum has no fourth variant
+/// (`V3_WALLET_DECISION_LOG.md` :1397).
+fn regtest_expectation() -> super::DaemonExpectation {
+    super::DaemonExpectation {
+        network: shekyl_address::Network::Mainnet,
+        fakechain: super::FakechainPolicy::Accept,
+    }
+}
+
 use serde::Deserialize;
 use serde_json::json;
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_transport::HttpRpc;
+use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse};
+use shekyl_types::TxHash;
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 /// `cargo test` runs tests in parallel; spawning multiple daemons concurrently
@@ -76,6 +98,10 @@ pub(super) struct RegtestDaemon {
     data_dir: PathBuf,
     rpc_port: u16,
     rpc: HttpRpc,
+    /// Base URL of the second, restricted listener, when one was
+    /// asked for. `None` for the ordinary spawn, so no existing test grows a
+    /// listener it did not ask for.
+    restricted_url: Option<String>,
     /// Held for the daemon's lifetime to serialize e2e tests; released on drop.
     _serial: OwnedMutexGuard<()>,
 }
@@ -88,6 +114,9 @@ struct GetInfoResp {
     /// `mine_until_pool_empty`).
     #[serde(default)]
     tx_pool_size: u64,
+    /// Daemon version string — provenance for the live-oracle spend capture.
+    #[serde(default)]
+    version: String,
     /// Cumulative destroyed atomic units — `compute_fee_burn`'s
     /// `actually_destroyed` term only (`blockchain.cpp` feeds it
     /// `block_burn_amount` and rolls it back on pop). The sibling
@@ -132,6 +161,30 @@ impl RegtestDaemon {
         Self::start_with_settlement_epoch_blocks(None).await
     }
 
+    /// Spawn the daemon with a second, restricted listener, so one daemon serves
+    /// both postures and a test can put the same request to each.
+    ///
+    /// The second listener comes from `--rpc-restricted-bind-port`, which binds
+    /// an additional server with `restricted = true` fixed
+    /// (`src/daemon/daemon.cpp`). That is deliberately *not* `--restricted-rpc`,
+    /// which would flip the posture of the main listener instead — and the main
+    /// listener has to stay unrestricted here, both because the harness drives
+    /// mining through it and because it is the blast-radius control.
+    ///
+    /// The restricted listener is opt-in rather than always-on: this harness is
+    /// `#[ignore]`d, so CI would not catch a regression it introduced into the
+    /// spawn that every other e2e test shares.
+    /// Spawn the daemon with its interactive console live, so a test can put
+    /// commands to the **in-process** arm. Opt-in: without `--non-interactive`
+    /// the daemon exits on stdin EOF, which every other spawn relies on.
+    pub(super) async fn start_with_console() -> RegtestDaemon {
+        Self::start_inner(None, false, true).await
+    }
+
+    pub(super) async fn start_with_restricted_listener() -> RegtestDaemon {
+        Self::start_inner(None, true, false).await
+    }
+
     /// Spawn the daemon with an optional `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`
     /// override on the child's environment (the fakechain-only regtest
     /// lever the daemon arms at startup — the SEB gate at the top of
@@ -141,6 +194,14 @@ impl RegtestDaemon {
     /// arithmetic when it assembles a claim, and gates on the lever —
     /// `lifecycle.rs`). `None` runs the genesis-pinned schedule.
     pub(super) async fn start_with_settlement_epoch_blocks(seb: Option<u64>) -> RegtestDaemon {
+        Self::start_inner(seb, false, false).await
+    }
+
+    async fn start_inner(
+        seb: Option<u64>,
+        restricted_listener: bool,
+        console: bool,
+    ) -> RegtestDaemon {
         // Serialize across this test binary so no two in-process daemons race on
         // a port. Each instance uses a unique ephemeral port + temp datadir and
         // kills its own child (+ removes its datadir) on Drop, so no global daemon
@@ -160,7 +221,6 @@ impl RegtestDaemon {
         cmd.args([
             "--regtest",
             "--offline",
-            "--non-interactive",
             "--no-igd",
             "--fixed-difficulty",
             "1",
@@ -172,10 +232,44 @@ impl RegtestDaemon {
             data_dir.to_str().expect("utf8 data dir"),
             "--log-level",
             "0",
-        ])
-        .stdout(Stdio::from(log.try_clone().expect("clone log")))
-        .stderr(Stdio::from(log))
-        .stdin(Stdio::null());
+        ]);
+        // Distinct from the main port. Both probes bind :0 and release
+        // immediately, so the kernel is free to hand back the same number
+        // twice — and the daemon would then try to bind both listeners to it
+        // and die at startup, intermittently. (The pre-existing TOCTOU window
+        // between releasing a probe and the daemon binding is unchanged; this
+        // only removes the self-collision, which is the part we create.)
+        // `--non-interactive` unless the test drives the daemon's own console:
+        // the console is what reads stdin, and suppressing it is what makes
+        // the in-process arm unreachable.
+        if !console {
+            cmd.arg("--non-interactive");
+        }
+        let restricted_port = restricted_listener.then(|| {
+            let mut port = Self::free_port();
+            for _ in 0..64 {
+                if port != rpc_port {
+                    return port;
+                }
+                port = Self::free_port();
+            }
+            panic!("could not obtain a restricted port distinct from {rpc_port}");
+        });
+        if let Some(port) = restricted_port {
+            // A second listener on the same daemon. This flag binds an extra
+            // server with `restricted = true` fixed; the main listener keeps
+            // whatever posture it had, which here is unrestricted. Same
+            // handlers behind both — only the posture differs, which is the
+            // whole point: one process, two answers.
+            cmd.args(["--rpc-restricted-bind-port", &port.to_string()]);
+        }
+        cmd.stdout(Stdio::from(log.try_clone().expect("clone log")))
+            .stderr(Stdio::from(log))
+            // Piped, not null: the daemon's *own* console is a second arm of
+            // every ported console command — the one that reaches the core
+            // in-process rather than over HTTP. RK-4c shipped that arm broken
+            // because only the remote arm was ever exercised.
+            .stdin(Stdio::piped());
         // The SEB lever rides the child env (the daemon reads it at startup,
         // arms on fakechain, refuses loudly on a bad value). `None` must
         // scrub the variable, not merely skip setting it: the child inherits
@@ -209,6 +303,7 @@ impl RegtestDaemon {
             data_dir,
             rpc_port,
             rpc,
+            restricted_url: restricted_port.map(|p| format!("http://127.0.0.1:{p}")),
             _serial: serial,
         };
         daemon.await_ready().await;
@@ -254,6 +349,19 @@ impl RegtestDaemon {
             .height
     }
 
+    /// The accepting daemon's own version string (`get_info.version`).
+    ///
+    /// Recorded into the live-oracle capture as provenance: a chain-attested
+    /// fixture is only as meaningful as the identity of the node that attested
+    /// it, and this crate's version is not that identity.
+    pub(super) async fn version(&self) -> String {
+        self.rpc
+            .json_rpc_call::<GetInfoResp>("get_info", None)
+            .await
+            .expect("get_info")
+            .version
+    }
+
     /// Transactions currently in the daemon's pool — the drain loop's
     /// condition and the pop legs' return-to-pool observable.
     pub(super) async fn tx_pool_size(&self) -> u64 {
@@ -262,6 +370,37 @@ impl RegtestDaemon {
             .await
             .expect("get_info")
             .tx_pool_size
+    }
+
+    /// Non-coinbase transaction hashes carried by the block named by `hash`
+    /// (lowercase hex, as `generateblocks` returns them).
+    ///
+    /// Keyed by hash rather than by height on purpose: `generateblocks` hands
+    /// back the hashes of the blocks it actually connected, so this asks about
+    /// *that* block instead of re-deriving its index from a chain height that
+    /// counts blocks (tip index = `height() - 1`) and would be one off.
+    ///
+    /// Uses the production [`GetBlockResponse`] — the same type
+    /// `block_fetch` already deserializes — so a renamed `tx_hashes` field
+    /// fails here the same way it fails the wallet, instead of defaulting to
+    /// an empty vec and looking like "a block connected without the spend".
+    pub(super) async fn block_tx_hashes(&self, hash: &str) -> Vec<shekyl_rpc_types::HashHex> {
+        let res: GetBlockResponse = self
+            .rpc
+            .json_rpc_call(
+                "get_block",
+                Some(
+                    serde_json::to_value(GetBlockRequest {
+                        hash: hash.to_owned(),
+                        height: 0,
+                        fill_pow_hash: false,
+                    })
+                    .expect("encode get_block request"),
+                ),
+            )
+            .await
+            .expect("get_block");
+        res.tx_hashes
     }
 
     /// Cumulative `total_burned` — the destroyed half of the §9.5 fee
@@ -307,6 +446,50 @@ impl RegtestDaemon {
         self.rpc_port
     }
 
+    /// The harness's RPC client, for tests that drive the daemon directly.
+    pub(super) fn rpc(&self) -> &HttpRpc {
+        &self.rpc
+    }
+
+    /// Run one command in the daemon's **own** console — the in-process arm,
+    /// which reaches the core directly rather than over HTTP — and return what
+    /// it printed.
+    ///
+    /// Reads the delta of the captured log rather than a pipe, because the
+    /// console writes through the daemon's message writers into the same
+    /// stdout the harness already captures.
+    pub(super) fn console(&mut self, command: &str) -> String {
+        use std::io::Write;
+        let log_path = self.data_dir.join("daemon.log");
+        let before = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+        {
+            let stdin = self.child.stdin.as_mut().expect("daemon stdin is piped");
+            writeln!(stdin, "{command}").expect("write console command");
+            stdin.flush().expect("flush console command");
+        }
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(200));
+            let text = std::fs::read_to_string(&log_path).unwrap_or_default();
+            let start = usize::try_from(before).expect("log length fits usize");
+            if text.len() > start {
+                let fresh = &text[start..];
+                if fresh.contains("msgwriter") {
+                    return fresh.to_owned();
+                }
+            }
+        }
+        panic!("console command {command:?} produced no output within 20s");
+    }
+
+    /// Base URL of the restricted listener, for a daemon spawned by
+    /// [`RegtestDaemon::start_with_restricted_listener`].
+    pub(super) fn restricted_url(&self) -> &str {
+        self.restricted_url
+            .as_deref()
+            .expect("daemon was not spawned with a restricted listener")
+    }
+
     /// Mine `n` blocks to `address` (FAKECHAIN-gated daemon RPC).
     pub(super) async fn generate_blocks(&self, n: u64, address: &str) -> GenerateBlocksResp {
         try_generate_blocks(&self.rpc, n, address)
@@ -332,6 +515,112 @@ impl Drop for RegtestDaemon {
         drop(self.child.wait());
         drop(std::fs::remove_dir_all(&self.data_dir));
     }
+}
+
+/// A fresh accept, not `AlreadyInPool` / `AlreadyInChain`. Those also return
+/// `Ok`, and either would mean this run proved nothing about the bytes it
+/// just built — the daemon would be reporting on something it already had.
+fn require_fresh_accept(outcome: super::pending::SubmitOutcome, what: &str) -> TxHash {
+    match outcome {
+        super::pending::SubmitOutcome::Accepted { hash } => hash,
+        other => panic!("the daemon must freshly accept {what}, got {other:?}"),
+    }
+}
+
+/// Mine one block and assert that block carries `txid`.
+///
+/// Three observables, three assertions. `generate_blocks` only `.expect`s
+/// that the *RPC* succeeded, so on its own it cannot tell a block that
+/// carried the spend from a block that excluded it at template time, nor
+/// from no block at all.
+///
+/// The order is load-bearing. Height is checked first so that "no block
+/// appeared" fails here and stops; inclusion is checked second so that "a
+/// block appeared without the spend" is reported as exactly that. Checking
+/// inclusion first would report a missing spend for both faults, which is
+/// one assertion wearing two names.
+///
+/// The pool check is corroborating, never sufficient: the pool also empties
+/// when a transaction is *dropped*, so this distinguishes nothing on its
+/// own.
+async fn assert_tx_confirmed(daemon: &RegtestDaemon, address: &str, txid: TxHash) -> u64 {
+    let before = daemon.height().await;
+    let mined = daemon.generate_blocks(1, address).await;
+    let after = daemon.height().await;
+
+    assert_eq!(
+        mined.blocks.len(),
+        1,
+        "generateblocks must report the one block it connected, got {:?}",
+        mined.blocks
+    );
+    assert_eq!(
+        after,
+        before + 1,
+        "the chain must advance by exactly one block ({before} -> {after})"
+    );
+
+    let carried = daemon.block_tx_hashes(&mined.blocks[0]).await;
+    assert!(
+        carried.iter().any(|h| h.as_bytes() == txid.as_bytes()),
+        "the accepted spend {txid} must be carried by the block that \
+         connected at height {after}; that block carries {carried:?}"
+    );
+
+    assert_eq!(
+        daemon.tx_pool_size().await,
+        0,
+        "the mined spend must leave the pool"
+    );
+
+    eprintln!("spend confirmed in the block that connected at height {after}");
+    after
+}
+
+/// Opt-in live-oracle capture. Ordinary runs of the north-star gate assert
+/// without rewriting a committed fixture; set `SHEKYL_CAPTURE_SPEND_KAT` to
+/// regenerate `shekyl-wire`'s `live_oracle_spend_v1.json`.
+///
+/// Only the bytes and the txid are recorded. Every other identity in the
+/// parity legs (the prunable digest, the `serialize_base` framing) is
+/// *derived* from these bytes by each language's production code —
+/// recording them here as well would let a fixture disagree with itself,
+/// and would pin values this test never independently checked.
+async fn maybe_capture_live_oracle(
+    daemon: &RegtestDaemon,
+    tx_bytes: &[u8],
+    txid: TxHash,
+    connected_at_height: u64,
+) {
+    if std::env::var_os("SHEKYL_CAPTURE_SPEND_KAT").is_none() {
+        return;
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../shekyl-wire/tests/fixtures/live_oracle_spend_v1.json");
+    let json = serde_json::json!({
+        "description":
+            "Live-oracle FCMP++/PQC spend KAT: the exact bytes a running shekyld \
+             accepted (consensus verify) and then connected in a block. Sibling to \
+             pruned_tx_hash_parity_v1.json, which is hand-built, deterministic and \
+             daemon-free and binds Rust to C++; this one binds both to a chain. \
+             Neither subsumes the other — do not consolidate them. Regenerate with \
+             SHEKYL_CAPTURE_SPEND_KAT=1 and SHEKYLD_BIN set, running \
+             engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon --ignored.",
+        "format_version": 1,
+        // The daemon's own version string, read from the node that accepted
+        // these bytes — not this crate's version, which says nothing about
+        // the binary that did the accepting.
+        "accepted_by_daemon_version": daemon.version().await,
+        "connected_at_height": connected_at_height,
+        "tx_hash_hex": txid.to_string(),
+        "tx_hex": hex::encode(tx_bytes),
+    });
+    std::fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string_pretty(&json).unwrap()),
+    )
+    .expect("write live-oracle spend fixture");
+    eprintln!("captured live-oracle spend KAT -> {}", path.display());
 }
 
 /// Mine `n` blocks to `address` over `rpc` (FAKECHAIN-gated `generateblocks`),
@@ -376,7 +665,7 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
         .expect("wallet rpc");
-    let daemon_client = DaemonClient::new(rpc);
+    let daemon_client = DaemonClient::verifying(rpc, regtest_expectation());
 
     let tmp = tempfile::tempdir().expect("wallet tempdir");
     let wallet_path = tmp.path().join("wallet");
@@ -486,7 +775,8 @@ async fn e2e_get_curve_tree_path_returns_valid_path() {
         prefs: WalletPrefs::default(),
     };
     let wallet =
-        Engine::<SoloSigner>::create(params, DaemonClient::new(rpc)).expect("create wallet");
+        Engine::<SoloSigner>::create(params, DaemonClient::verifying(rpc, regtest_expectation()))
+            .expect("create wallet");
     let address = wallet.primary_address().encode().expect("encode address");
 
     // get_curve_tree_info answers non-404 even on a fresh tree — proves the *info*
@@ -592,7 +882,7 @@ async fn e2e_get_curve_tree_path_returns_valid_path() {
 async fn e2e_refresh_scans_coinbase_balance() {
     use super::refresh::RefreshOptions;
     use super::{DaemonClient, Engine, SoloSigner};
-    use shekyl_scanner::LedgerBlockExt;
+    use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
 
     let daemon = RegtestDaemon::start().await;
@@ -624,7 +914,8 @@ async fn e2e_refresh_scans_coinbase_balance() {
         prefs: shekyl_engine_prefs::WalletPrefs::default(),
     };
     let wallet =
-        Engine::<SoloSigner>::create(params, DaemonClient::new(rpc)).expect("create wallet");
+        Engine::<SoloSigner>::create(params, DaemonClient::verifying(rpc, regtest_expectation()))
+            .expect("create wallet");
     let address = wallet.primary_address().encode().expect("encode address");
 
     // Mine in batches past coinbase maturity, refreshing after each batch. The
@@ -648,7 +939,7 @@ async fn e2e_refresh_scans_coinbase_balance() {
             let g = arc.read().await;
             let ledger = g.ledger();
             total_height = ledger.ledger.height();
-            unlocked = ledger.ledger.balance(total_height).unlocked;
+            unlocked = ledger.balance_at(total_height).unlocked;
         }
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -672,52 +963,49 @@ async fn e2e_refresh_scans_coinbase_balance() {
 /// against the C++ daemon (no other test crosses the wallet→daemon spend boundary).
 ///
 /// NORTH STAR (gated) — committed as the acceptance gate for the end-to-end
-/// wallet→daemon spend. The two migrations it once waited on have both landed: (1)
+/// wallet→daemon spend: open (from disk, via an explicit close → `open_full`) →
+/// refresh → build → submit → confirm, so the arc starts where every production
+/// spend session starts. The two migrations it once waited on have both landed: (1)
 /// the §8 step-4 scanner block-parsing migration onto the daemon-KAT'd `shekyl-wire`
 /// parser, and (2) the tx-builder→`shekyl-wire` spend-format migration (the
 /// `shekyl-oxide` serializers that originally diverged are dissolved). It remains
 /// `#[ignore]`d on the live-daemon harness (`SHEKYLD_BIN` + a running regtest
-/// daemon), which CI does not provide; run with a built daemon to exercise the full
-/// wallet→daemon spend boundary.
+/// daemon). CI provides that binary in the live-daemon gates step and runs this
+/// test there; a local run still needs `SHEKYLD_BIN`.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 north-star spend gate; needs SHEKYLD_BIN + a running regtest daemon (the scanner/tx-builder shekyl-wire migrations have landed)"]
 async fn e2e_fcmp_spend_accepted_by_daemon() {
     use super::pending::{FeePriority, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::{DaemonClient, Engine, SoloSigner};
-    use shekyl_scanner::LedgerBlockExt;
+    use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
 
     let daemon = RegtestDaemon::start().await;
 
-    // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree test).
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc");
-    let tmp = tempfile::tempdir().expect("wallet tempdir");
-    let wallet_path = tmp.path().join("wallet");
+    // Create the wallet (FAKECHAIN = mainnet address format; see the get_curve_tree
+    // test), close it, and reopen from disk — the same shape as `staker_wallet`. The
+    // arc this gate carries is open → refresh → build → submit → confirm: a spend from
+    // the still-in-memory created engine would skip the open path (envelope decrypt,
+    // ledger load, scan-state restore) that every production spend session starts from.
     let seed = [0x33u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
     let creds = super::lifecycle::Credentials::password_only(b"track2-spend");
-    let params = super::lifecycle::EngineCreateParams {
-        base_path: &wallet_path,
-        credentials: &creds,
-        network: shekyl_address::Network::Mainnet,
-        capability: super::lifecycle::CapabilityInput::Full {
-            master_seed_64: &seed,
-            seed_format: shekyl_crypto_pq::account::SeedFormat::Bip39,
-        },
-        creation_timestamp: 0,
-        restore_height_hint: 0,
-        kdf: shekyl_crypto_pq::wallet_envelope::KdfParams {
-            m_log2: 0x08,
-            t: 1,
-            p: 1,
-        },
-        overrides: shekyl_engine_file::SafetyOverrides::none(),
-        prefs: shekyl_engine_prefs::WalletPrefs::default(),
-    };
-    let wallet =
-        Engine::<SoloSigner>::create(params, DaemonClient::new(rpc)).expect("create wallet");
+    let (created, tmp) = create_wallet(daemon.rpc_port, &seed, b"track2-spend").await;
+    let wallet_path = tmp.path().join("wallet");
+    created.close(&creds).expect("close created wallet");
+
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+        .await
+        .expect("wallet rpc (reopen)");
+    let wallet = Engine::<SoloSigner>::open_full(
+        &wallet_path,
+        &creds,
+        shekyl_address::Network::Mainnet,
+        DaemonClient::verifying(rpc, regtest_expectation()),
+        shekyl_engine_file::SafetyOverrides::none(),
+    )
+    .expect("reopen wallet from disk")
+    .into_wallet();
     let address = wallet.primary_address().encode().expect("encode address");
 
     // Fund: mine in batches past coinbase maturity + tree drain so an output is spendable.
@@ -739,7 +1027,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
         unlocked = {
             let g = arc.read().await;
             let ledger = g.ledger();
-            ledger.ledger.balance(ledger.ledger.height()).unlocked
+            ledger.balance().unlocked
         };
         if unlocked > AtomicUnits::ZERO {
             break;
@@ -805,18 +1093,17 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
 
     // Submit to the live daemon. Ok == the daemon's consensus verify ACCEPTED the spend
     // (FCMP++ proof + PQC auths + CT balance + wire format). This is the §1.1 proof.
-    let tx_hash = {
+    let outcome = {
         let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the FCMP++ spend (consensus verify)")
     };
-    eprintln!("daemon accepted spend: {tx_hash:?}");
+    let accepted = require_fresh_accept(outcome, "the FCMP++ spend");
+    eprintln!("daemon accepted spend: {accepted}");
 
-    // Block-accept: mine one block; the spend must confirm (separate verify path).
-    daemon.generate_blocks(1, &address).await;
-    let after = daemon.height().await;
-    eprintln!("mined confirming block; height now {after}");
+    let after = assert_tx_confirmed(&daemon, &address, accepted).await;
+    maybe_capture_live_oracle(&daemon, &pending.tx_bytes, accepted, after).await;
 }
 
 /// Mainnet [`EngineCreateParams`](super::lifecycle::EngineCreateParams) for the
@@ -877,8 +1164,11 @@ async fn create_wallet(
     let wallet_path = tmp.path().join("wallet");
     let creds = super::lifecycle::Credentials::password_only(password);
     let params = mainnet_params(&wallet_path, &creds, seed);
-    let wallet = super::Engine::<super::SoloSigner>::create(params, super::DaemonClient::new(rpc))
-        .expect("create wallet");
+    let wallet = super::Engine::<super::SoloSigner>::create(
+        params,
+        super::DaemonClient::verifying(rpc, regtest_expectation()),
+    )
+    .expect("create wallet");
     (wallet, tmp)
 }
 
@@ -908,7 +1198,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     use super::pending::{FeePriority, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::Engine;
-    use shekyl_scanner::LedgerBlockExt;
+    use shekyl_scanner::WalletLedgerExt;
     use shekyl_units::AtomicUnits;
 
     // The daemon's `get_curve_tree_depth` reports `fcmp_layers − 1`
@@ -969,7 +1259,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     let unlocked = {
         let g = arc.read().await;
         let ledger = g.ledger();
-        ledger.ledger.balance(ledger.ledger.height()).unlocked
+        ledger.balance().unlocked
     };
     assert!(
         unlocked > AtomicUnits::ZERO,
@@ -1030,14 +1320,15 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
         pending.tx_bytes.len()
     );
 
-    let tx_hash = {
+    let outcome = {
         let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
             .expect("daemon must accept the FCMP++ spend over a depth-3 tree (consensus verify)")
     };
-    eprintln!("daemon accepted depth-{tree_depth} spend: {tx_hash:?}");
-    daemon.generate_blocks(1, &address).await;
+    let accepted = require_fresh_accept(outcome, "the FCMP++ spend over a depth-3 tree");
+    eprintln!("daemon accepted depth-{tree_depth} spend: {accepted}");
+    assert_tx_confirmed(&daemon, &address, accepted).await;
 }
 
 /// Trim (reorg) self-consistency: popping the chain back to an earlier height must
@@ -1355,10 +1646,10 @@ async fn refresh(arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>) {
 async fn unlocked_balance(
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
 ) -> shekyl_units::AtomicUnits {
-    use shekyl_scanner::LedgerBlockExt;
+    use shekyl_scanner::WalletLedgerExt;
     let g = arc.read().await;
     let ledger = g.ledger();
-    ledger.ledger.balance(ledger.ledger.height()).unlocked
+    ledger.balance().unlocked
 }
 
 // ---------------------------------------------------------------------------
@@ -1403,7 +1694,7 @@ pub(super) async fn staker_wallet(
         &base_path,
         &creds,
         shekyl_address::Network::Mainnet,
-        super::DaemonClient::new(rpc),
+        super::DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )
     .expect("reopen staker wallet");
@@ -1429,14 +1720,9 @@ pub(super) fn persona_address(
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     let keys = derive_archival_p_keys(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
         .expect("derive persona keys");
-    shekyl_address::ShekylAddress::new(
-        shekyl_address::Network::Mainnet,
-        *keys.spend_pk.as_canonical_bytes(),
-        *keys.view_pk.as_canonical_bytes(),
-        keys.ml_kem_ek.to_vec(),
-    )
-    .encode()
-    .expect("encode persona address")
+    keys.to_address(shekyl_address::Network::Mainnet)
+        .encode()
+        .expect("encode persona address")
 }
 
 /// Run the production P-scan (tight cadence + the shallow
@@ -1520,16 +1806,17 @@ async fn pscan_until(
     }
 }
 
-/// Mine in `blocks_per_batch` batches until the tx pool drains — the
-/// locally-submitted tx's only route into a block on this offline daemon.
+/// Mine in `blocks_per_batch` batches until the tx pool drains.
 ///
 /// The submit path inserts at `relay_method::local` under the Dandelion++
-/// embargo, and the miner only includes broadcast-visible txs
-/// (`fill_block_template`'s `matches(relay_category::legacy)` gate); the
-/// stem cannot send here, so inclusion waits for the embargo to expire and
-/// fluff. Mining in batches rather than assuming one batch suffices. Pass
-/// `blocks_per_batch = 1` when the caller needs the tx's block to be the
-/// tip at return (the emission e2e's depth-1 pop leg pops exactly it).
+/// embargo. On FAKECHAIN the template admits every *relayable* pool tx
+/// (`fill_block_template`'s `m_mine_relayable_txes` opt-in), so a
+/// locally-submitted tx is includable immediately and the pool normally
+/// drains on the first batch; the loop stays as the fill-policy-agnostic
+/// shape (a tx skipped by a readiness check retries rather than failing the
+/// caller). Pass `blocks_per_batch = 1` when the caller needs the tx's block
+/// to be the tip at return (the emission e2e's depth-1 pop leg pops exactly
+/// it).
 async fn mine_until_pool_drains(
     daemon: &RegtestDaemon,
     principal: &str,
@@ -1548,8 +1835,9 @@ async fn mine_until_pool_drains(
             "{what} never left the pool (embargo/template gap?)"
         );
         daemon.generate_blocks(blocks_per_batch, principal).await;
-        // The Dandelion++ embargo is wall-clock, not block-height: pause
-        // between attempts rather than spinning the miner.
+        // A tx deferred by a wall-clock condition (not block height) would
+        // spin the miner without this pause; retries are not expected under
+        // the FAKECHAIN relayable-template opt-in, but stay cheap.
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
@@ -1631,8 +1919,8 @@ async fn stake_persona_to_confirmed_bond(
     stake_entry: FixtureStake,
 ) -> ConfirmedBondFixture {
     use super::bond_assembly::{BondAssemblyError, PBoundBytes, SpentRecordsDurablyPruned};
+    use super::bond_orchestrator::p_lane_weight_ceiling_bytes;
     use super::bond_orchestrator::FirstStakeError;
-    use super::bond_orchestrator::BOND_SIZE_CEILING_BYTES;
     use super::pscan::start::pending_post_store_for_engine;
     use super::stake_engine::{PSlot, StakeEngineError};
     use super::traits::DaemonEngine;
@@ -1665,7 +1953,7 @@ async fn stake_persona_to_confirmed_bond(
             .expect("daemon fee estimates");
         estimates
             .economy
-            .calculate_fee_from_weight(BOND_SIZE_CEILING_BYTES)
+            .calculate_fee_from_weight(p_lane_weight_ceiling_bytes())
     };
     eprintln!("bond fee from daemon estimate: {bond_fee}");
 
@@ -1721,7 +2009,7 @@ async fn stake_persona_to_confirmed_bond(
     eprintln!("pscan discovered {pre_post_discovered} persona funding output(s)");
 
     // The stake entry (both arms end at the same `.wallet.pending` seal —
-    // `assemble_bond_post`'s push_post — so everything downstream is
+    // `assemble_bond_post`'s seal_post — so everything downstream is
     // shared). The funding must be spendable at the anchored REFERENCE
     // block (tip − REF_ANCHOR_AGE), which lags tip maturity, so each arm
     // retries its typed not-ready refusals while mining.
@@ -1734,7 +2022,19 @@ async fn stake_persona_to_confirmed_bond(
         FixtureStake::FirstStake => {
             let mut outcome = None;
             for _ in 0..MAX_MINE_BATCHES {
-                match super::Engine::first_stake(arc.clone(), slot_raw).await {
+                // The fixture drives the production entry exactly as the RPC
+                // does, and states its posture explicitly (D-3): this lane
+                // exercises the Foundation CompleteTree bond. The
+                // acknowledgment D-4 requires is an RPC-layer fact and is
+                // deliberately not an engine parameter, so it has no place
+                // here.
+                match super::Engine::first_stake(
+                    arc.clone(),
+                    slot_raw,
+                    super::StakePosture::FoundationCompleteTree,
+                )
+                .await
+                {
                     Ok(o) => {
                         outcome = Some(o);
                         break;
@@ -1848,8 +2148,8 @@ async fn stake_persona_to_confirmed_bond(
     // comes due (see the module docs for why the driver's decorrelation
     // timing is deliberately not exercised here).
     let post = {
-        let pending_write_lock = { arc.read().await.pending_write_lock.clone() };
-        let store = pending_post_store_for_engine(arc.clone(), pending_write_lock);
+        let pending_gate = { arc.read().await.pending_gate.clone() };
+        let store = pending_post_store_for_engine(arc.clone(), pending_gate);
         store
             .read(|block| block.posts().first().cloned())
             .await
@@ -1888,14 +2188,24 @@ async fn stake_persona_to_confirmed_bond(
     let state = pscan_until(
         &arc,
         &pscan_seal,
-        "the bond-post match + BondPostChange change funding",
+        "the bond-post match + BondPostChange change funding + swept-record prune",
         |s| {
+            // The swept-prune leg makes the wait deterministic: the arm-1
+            // prune can land a seal batch AFTER the match does, and a
+            // fixture snapshot taken between the two would carry the swept
+            // pre-post record alongside the change — a phantom extra row
+            // that would flake any consumer counting the slot's records
+            // (the bond e2e's own prune assertion included). Wait for all
+            // three writes before snapshotting.
             s.bond_post_matches()
                 .iter()
                 .any(|m| m.p_canonical_id == persona_id)
                 && s.funding_outputs()
                     .iter()
                     .any(|r| r.p_slot == slot && r.lineage == MintLineageOutput::BondPostChange)
+                && s.funding_outputs()
+                    .iter()
+                    .all(|r| !swept_gindexes.contains(&r.gindex.to_raw()))
         },
     )
     .await;
@@ -2044,12 +2354,17 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// `staker_emission + staker_pool_amount` (blockchain.cpp) summed over the
 /// epoch, i.e. the staker-inflow identity over real RPC. At regtest e2e
 /// activity the fee-pool half is **genuinely zero by the law**, and the
-/// test pins that executably: `get_tx_volume_avg` is an integer per-block
-/// mean over `SHEKYL_TX_VOLUME_WINDOW`, a handful of e2e txs floors it to
-/// 0, and a zero volume operand zeroes `burn_pct` — so `compute_burn_split`
-/// legitimately yields `staker_pool_amount = 0` (asserted via
-/// `total_burned == 0`, the tied observable). Driving the pool half
-/// positive needs a sustained ≥ 1 tx/block average — infeasible in an e2e;
+/// test pins that executably. Since FL-R24 the volume operand is the exact
+/// window `tx_count_sum : blocks` (no longer floored to whole tx/block), so
+/// a handful of e2e txs gives a small but NONZERO `sqrt(V/B)` — the arm that
+/// used to zero the burn is gone. What zeroes `burn_pct` here is the supply
+/// ratio: `calc_burn_pct` forms `circulating · 10⁶ / asymptote` in SCALE
+/// fixed point, which is 0 until ~4.3e15 has been emitted (≈ 2 600+ blocks
+/// of the young curve), and this e2e closes epoch 1 at ~1 100 blocks. So
+/// `compute_burn_split` legitimately yields `staker_pool_amount = 0`
+/// (asserted via `total_burned == 0`, the tied observable) — and the
+/// assertion is the falsifier: a longer chain or a fatter curve moves it.
+/// Driving the pool half positive needs supply an e2e cannot reach;
 /// the positive-pool split coverage is the B5 unit KAT family. The claim
 /// itself still carries real `ToKey` fee inputs (`fee_gindexes`
 /// non-empty), not the Q11 zero-fee form, so the fee-subset battery leg
@@ -2682,10 +2997,14 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     use shekyl_wire::{Ct, Input, Transaction};
 
     const SLOT: u32 = 0;
-    /// The persona's `BondPostChange` record ≈ this cushion; sized well above
-    /// `payment + fee + reserve` so a PARTIAL drain selects the single record
-    /// and leaves change ≥ the exit-fee reserve (both txs stay 1-in/2-out).
-    const FUNDING_CUSHION: u64 = 12_000_000_000;
+    /// The bond's change — ≈ this cushion — returns to `P` as **two** split
+    /// halves (`bond.rs` `change_lo`/`change_hi`: every tx carries two
+    /// nonzero outputs, and the bond post's non-change vout is the bond vin's
+    /// side, not a spendable output). Sized so the LARGER half alone covers
+    /// `payment + fee + reserve`: largest-first selection then takes exactly
+    /// one input and the drain stays a 1-in/2-out partial — the shape the
+    /// byte-diff below compares against the 1-in/2-out transfer.
+    const FUNDING_CUSHION: u64 = 40_000_000_000;
 
     let daemon = RegtestDaemon::start().await;
     // Schedule guard (serial lock now held): a sibling e2e that armed the SEB
@@ -2709,8 +3028,15 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     .await;
     let principal = fixture.principal.clone();
 
-    // The confirmed sweep-all bond leaves exactly one persona funding record
-    // (the `BondPostChange` change) — the drain's single input.
+    // The confirmed sweep-all bond leaves exactly TWO persona funding
+    // records — the change's split halves (`change_lo`/`change_hi`). This
+    // assertion said "exactly one" from its birth (2026-07-21) against an
+    // assembly that has split the change since 2026-07-05, so the count it
+    // pinned was never this fixture's real state — the mismatch surfaced
+    // only when this walk was next run (2026-09-03, the PR-C battery).
+    // Corrected to the assembly's actual invariant; the 1-in/2-out drain
+    // shape below is preserved by the cushion sizing (the larger half alone
+    // covers payment + fee, so largest-first selection takes one input).
     let persona_records = fixture
         .state
         .funding_outputs()
@@ -2718,8 +3044,9 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
         .filter(|r| r.p_slot == slot)
         .count();
     assert_eq!(
-        persona_records, 1,
-        "the confirmed sweep-all bond must leave exactly one persona funding record to drain"
+        persona_records, 2,
+        "the confirmed sweep-all bond must leave exactly the two split \
+         change halves as persona funding records"
     );
 
     // ── A real 1-in/2-out transfer: capture its build-time wire bytes ──
@@ -2783,19 +3110,21 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
         estimates.economy.calculate_fee_from_weight(32_768)
     };
     let drain_payment = AtomicUnits::from_raw(2_000_000_000);
+    // The 1-input guarantee: the LARGER change half (≥ cushion/2) must alone
+    // cover payment + fee (+ the reserve headroom the whole pool keeps).
     assert!(
-        FUNDING_CUSHION > drain_payment.to_raw() + drain_fee + EXIT_FEE_RESERVE_ATOMIC,
+        FUNDING_CUSHION / 2 > drain_payment.to_raw() + drain_fee + EXIT_FEE_RESERVE_ATOMIC,
         "fixture must keep the partial drain's change ≥ the exit-fee reserve \
          (payment {} + fee {drain_fee} + reserve {EXIT_FEE_RESERVE_ATOMIC} < cushion \
          {FUNDING_CUSHION})",
         drain_payment.to_raw(),
     );
     let mut receipt = None;
-    for attempt in 0..4 {
+    for attempt in 0..24 {
         match super::Engine::submit_drain(
             fixture.arc.clone(),
             slot,
-            drain_payment,
+            super::drain_orchestrator::DrainIntent::Payment(drain_payment),
             AtomicUnits::from_raw(drain_fee),
             &super::bond_assembly::SpentRecordsDurablyPruned::for_test(),
         )
@@ -2805,12 +3134,20 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
                 receipt = Some(r);
                 break;
             }
-            // Resync-and-retry: the tree or header window lags the tip.
+            // Resync-and-retry: the tree or header window lags the tip, OR
+            // the change halves are not yet mature/provable at the anchored
+            // reference — the aggregate the affordability check reads is the
+            // MATURE subset, so `Unaffordable` is transient here exactly
+            // like the reference lag (the same maturity ladder every other
+            // walk stage runs).
             Err(DrainRequestError::Drain(
-                e @ DrainOrchestrationError::ReferenceUnanchorable { .. },
+                e @ (DrainOrchestrationError::ReferenceUnanchorable { .. }
+                | DrainOrchestrationError::Plan(
+                    super::drain_orchestrator::DrainError::Unaffordable,
+                )),
             )) => {
-                eprintln!("drain attempt {attempt}: {e}; resyncing");
-                daemon.generate_blocks(1, &principal).await;
+                eprintln!("drain attempt {attempt}: {e}; mining and resyncing");
+                daemon.generate_blocks(3, &principal).await;
                 refresh(&fixture.arc).await;
             }
             Err(e) => panic!("submit_drain: {e}"),
@@ -2883,6 +3220,491 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     eprintln!(
         "T-DS-6 ∧ T-DS-7 e2e: a real drain is byte-identical to a real transfer \
          (normalized skeleton), both daemon-accepted"
+    );
+}
+
+/// The **daemon walk** (`PRINCIPAL_STAKE_LIFECYCLE.md` PR-P4; the FOLLOWUPS
+/// registration this discharges): the byte-level proposition the engine walk
+/// (`retire_walk.rs`) structurally cannot judge — *the `Release` bytes the
+/// wallet assembles are the bytes consensus accepts*. Before this test,
+/// nothing had ever put a `Release` on a wire; `RF-D9` is the precedent for
+/// why that is a proposition only building can settle (a serve-credit wire
+/// that round-tripped in Rust and had never been through the C++ oracle
+/// failed on first contact, twice, with misattributed errors).
+///
+/// The walk drives the **production dispatch seam**
+/// ([`Engine::submit_release`]) — never a test shim: record fetch over the
+/// persona-isolated transport, readiness via consensus's own predicates,
+/// sweep-all funding, `AssembleRelease` in the actor, the `PendingRelease`
+/// persist-before-dispatch seal, and the posture→submitter choke point —
+/// against a real daemon over real RPC. Two assertions ARE the proposition:
+///
+/// - **submit-accept**: native `/submit_transaction` (the §8.7.1.1 UB
+///   battery, `verify_release_bond_post` — the same function the block path
+///   calls) admits the wallet-built exit;
+/// - **block-connect**: after mining, the daemon's bond-record row is
+///   **present with `bonded_total == 0`** — presence plus zero, the
+///   connect's own write (`apply_archival_release` preserves the row and
+///   zeroes the balance; the debit arm's terminal fact is the *balance*,
+///   never row absence), observed as a transition from the pre-submit
+///   read's positive balance.
+///
+/// **The cooldown predicates are vacuous on this walk, by design.** The
+/// persona never serves (serve credit exists only via the explicit
+/// `inject_serve_credit` lever, which this walk never calls), so
+/// `release_cooldown_elapsed(None, _)` and `slashes_settled_through(_, None)`
+/// are both `true`, and the walk runs on the **genesis schedule** — no
+/// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` lever, no arming. This is not a
+/// shortcut but the only faithful cheap point: a *served* persona's exit
+/// waits on the slash watermark, which advances `CHALLENGE_RESOLUTION_BLOCKS`
+/// (10 000, block-denominated — the lever never shortens it) past the
+/// anchor epoch's close, and at a levered SEB the L16 pin
+/// (`RELEASE_COOLDOWN_EPOCHS · SEB > CHALLENGE_RESOLUTION_BLOCKS`) inverts,
+/// so a levered served-exit run would exercise a regime the real chain
+/// cannot reach. The served-exit arms (cooldown, watermark, interval log)
+/// are PR-A's unit battery (`submit_verifier.rs`), NOT this walk — "the
+/// walk ran" must never be read as "the served-exit arc is covered".
+///
+/// Reachability history: when this walk landed (PR-B) the seam's only
+/// caller was this test and wallet-RPC `unstake` was RESERVED; PR-C's
+/// composed verb (`StakeFacade::unstake` / `collect_unstaked`) lifted that
+/// gate, and the composed-arc walk below
+/// (`e2e_unstake_collect_retire_composed_arc`) drives those product
+/// façades end-to-end. This walk keeps the seam-level byte proposition:
+/// it exists so a façade-layer regression can never mask a wire one.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "PR-B daemon walk; needs SHEKYLD_BIN + a built regtest daemon"]
+async fn e2e_release_accepted_and_connected() {
+    use super::bond_assembly::{BondAssemblyError, SpentRecordsDurablyPruned};
+    use super::emission_source::fetch_claim_source_for;
+    use super::prpc::LocalNodeRpc;
+    use super::release_dispatch::ReleaseRequestError;
+    use super::stake_engine::{PSlot, StakeEngineError};
+    use shekyl_archival_retention::bond_floor;
+
+    const SLOT: u32 = 0;
+    const SHARD_ID: u64 = 0;
+    /// Persona funding above `floor + bond fee`: becomes the sweep-all bond's
+    /// `BondPostChange` change output — the funding record the exit then
+    /// sweeps (its fee is covered by the released collateral, so the cushion
+    /// only needs to exist, not to price anything).
+    const FUNDING_CUSHION: u64 = 12_000_000_000;
+
+    let daemon = RegtestDaemon::start().await;
+    let seed = [0x66u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let slot = PSlot::from_raw(SLOT);
+
+    // A MARKET bond (the ordinary staker shape); the persona never serves,
+    // so its exit is cooldown-vacuous (doc comment) and the record's bonded
+    // total is exactly the holdings floor.
+    let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
+        kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
+        shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
+            .expect("one-shard holdings"),
+    };
+    let expected_bonded = bond_floor(&market_holdings);
+    let fixture = stake_persona_to_confirmed_bond(
+        &daemon,
+        &seed,
+        SLOT,
+        FUNDING_CUSHION,
+        FixtureStake::MarketBond(market_holdings),
+    )
+    .await;
+
+    // Pre-read: the daemon's bond-record row over the persona-isolated
+    // transport — the SAME fetch the seam rides. The positive balance here
+    // is what makes the post-connect zero an observed *transition* rather
+    // than a state that could have held all along.
+    let release_rpc = LocalNodeRpc::new(
+        format!("http://127.0.0.1:{}", daemon.rpc_port),
+        Duration::from_secs(10),
+    )
+    .await
+    .expect("loopback exit transport");
+    let before = fetch_claim_source_for(&release_rpc, fixture.persona_id)
+        .await
+        .expect("pre-submit record fetch");
+    let bonded_before = before
+        .source()
+        .bond
+        .as_ref()
+        .expect("the confirmed bond must have a daemon-side record")
+        .bonded_total_atomic;
+    assert_eq!(
+        bonded_before, expected_bonded,
+        "the confirmed market bond's record must hold exactly the holdings floor"
+    );
+
+    // Dispatch through the production seam, with the bond path's own
+    // reference-spendability retry ladder (the BondPostChange output must be
+    // in the curve tree at the anchored reference, which lags the tip).
+    let pruning_landed = SpentRecordsDurablyPruned::for_test();
+    let mut receipt = None;
+    for attempt in 0..24 {
+        match super::Engine::submit_release(
+            fixture.arc.clone(),
+            &release_rpc,
+            slot,
+            &pruning_landed,
+        )
+        .await
+        {
+            Ok(r) => {
+                receipt = Some(r);
+                break;
+            }
+            Err(ReleaseRequestError::Stake(StakeEngineError::Assembly(
+                e @ (BondAssemblyError::ReferenceResyncing { .. }
+                | BondAssemblyError::NoSpendableFunding
+                | BondAssemblyError::OutputNotYetDrained { .. }
+                | BondAssemblyError::InsufficientFunding { .. }),
+            ))) => {
+                eprintln!("release attempt {attempt}: {e}; mining more");
+                daemon.generate_blocks(10, &fixture.principal).await;
+                refresh(&fixture.arc).await;
+            }
+            Err(e) => panic!("submit_release: {e}"),
+        }
+    }
+    let receipt = receipt.expect("the exit must assemble and dispatch within the retry budget");
+    eprintln!(
+        "release exit ACCEPTED by the daemon submit engine: {} B, {} funding input(s), {:?}",
+        receipt.release.bound_tx.bytes().len(),
+        receipt.release.funding_gindexes.len(),
+        receipt.submit,
+    );
+
+    // Block-connect: mine the accepted exit out of the pool, then read the
+    // terminal fact back from the daemon. Pool-drain alone proves only that
+    // the tx LEFT the pool (a terminal reject leaves it too); the
+    // discriminating observable is the connect's own write.
+    mine_until_pool_drains(&daemon, &fixture.principal, "accepted release exit", 1).await;
+    let after = fetch_claim_source_for(&release_rpc, fixture.persona_id)
+        .await
+        .expect("post-connect record fetch");
+    let bond_after = after
+        .source()
+        .bond
+        .as_ref()
+        .expect("the exit PRESERVES the record row — presence plus zero, never absence");
+    assert_eq!(
+        bond_after.bonded_total_atomic, 0,
+        "block-connect must zero the record's bonded total (apply_archival_release); \
+         a positive balance here means the exit left the pool WITHOUT connecting"
+    );
+    eprintln!(
+        "release exit CONNECTED: bonded total {bonded_before} → 0, row preserved — \
+         the assembled bytes are the bytes consensus accepts (the RF-D9 proposition \
+         for the exit wire)"
+    );
+}
+
+/// The **composed-arc walk** (PR-C): the retire-on-a-real-chain arm the
+/// PR-B ruling deferred here by its recorded conditional, driven through
+/// the PRODUCT façades — [`StakeFacade::unstake`] posts the exit,
+/// [`StakeFacade::collect_unstaked`]'s terminal sweep empties the slot, and
+/// the pscan task's funded-gated retirement fires on **real-chain
+/// evidence**. Until PR-C that gate had passing coverage and zero
+/// production reach (the engine walk #575 constructed its trigger states
+/// synthetically; no user path could produce the exact-zero pool) — this
+/// walk is the reachability check the synthetic one structurally could not
+/// be: every state it retires from was produced by the shipped verbs
+/// against a real daemon.
+///
+/// The `SHEKYL_SETTLEMENT_EPOCH_BLOCKS = 2` lever is what makes the claim
+/// window affordable (`MAX_CLAIM_AGE_W` = 26 epochs ⇒ ~54 blocks; at the
+/// genesis SEB the wait would be tens of thousands) — legitimate here
+/// because the persona never serves: the cooldown predicates are vacuous
+/// exactly as on the PR-B walk, and the claim-window expiry the retire
+/// waits on is epoch-denominated (the lever's own unit), not the
+/// block-denominated slash watermark the PR-B doc warns the lever cannot
+/// faithfully shorten. Run in its own process (the schedule latch is
+/// irreversible; sibling e2es guard the genesis pin).
+///
+/// Sequenced observables, each a distinct write:
+/// 1. `unstake` → Broadcast; an immediate second `unstake` refuses
+///    `ExitInProgress` (the one-live-exit lane, through the public verb).
+/// 2. Connect: the daemon row reads back present with `bonded_total == 0`.
+/// 3. The production P-scan observes the exit (`pending_releases`) and the
+///    payout pair as slot funding.
+/// 4. `collect_unstaked` → `Swept` with **`remainder == 0`** (the pool is
+///    exactly the payout pair, one pass) and a nonzero `swept`.
+/// 5. After the pass confirms and its spent rows prune, `collect_unstaked`
+///    again → `NothingLeft` (the completion contract, end-to-end).
+/// 6. Active moves away (slot 1 activation — retirement skips the active
+///    slot by design), the claim window expires on-chain, and the sweep
+///    retires the persona: `pending_releases` empties into
+///    `retired_records`, and the wipe is observed through a DIFFERENT
+///    handler (`persona_canonical_id` refuses) — never graded by the
+///    retire call's own return.
+/// 7. The daemon row is STILL present with `bonded_total == 0`:
+///    retirement is a wallet-side act; the chain record outlives it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "PR-C composed-arc walk; needs SHEKYLD_BIN + a built regtest daemon"]
+async fn e2e_unstake_collect_retire_composed_arc() {
+    use super::emission_source::fetch_claim_source_for;
+    use super::prpc::LocalNodeRpc;
+    use super::stake_engine::PSlot;
+    use super::unstake_facade::{
+        CollectOutcome, CollectUnstakedError, UnstakeError, UnstakeOutcome,
+    };
+    use crate::StakeFacade;
+    use shekyl_archival_retention::bond_floor;
+
+    const SLOT: u32 = 0;
+    const SHARD_ID: u64 = 0;
+    const SEB: u64 = 2;
+    /// Cushion above `floor + bond fee` (the PR-B walk's shape): becomes the
+    /// bond's `BondPostChange` output, which the exit sweeps.
+    const FUNDING_CUSHION: u64 = 12_000_000_000;
+
+    // Arm the levered schedule BEFORE any wallet-side epoch arithmetic (the
+    // claim e2e's arming shape, and its containment caveats verbatim: the
+    // latch is irreversible and per-process — run this walk alone).
+    let daemon = RegtestDaemon::start_with_settlement_epoch_blocks(Some(SEB)).await;
+    std::env::set_var("SHEKYL_SETTLEMENT_EPOCH_BLOCKS", SEB.to_string());
+    let armed = shekyl_archival_retention::arm_settlement_epoch_override_for_regtest()
+        .expect("the SEB lever must arm before any epoch arithmetic latches the schedule");
+    assert_eq!(armed, SEB, "armed schedule must be the lever value");
+
+    let seed = [0x77u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
+    let slot = PSlot::from_raw(SLOT);
+    let market_holdings = shekyl_archival_retention::HoldingsDescriptor {
+        kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
+        shard_ids: shekyl_archival_retention::ShardSet::new(vec![SHARD_ID])
+            .expect("one-shard holdings"),
+    };
+    let expected_bonded = bond_floor(&market_holdings);
+    let fixture = stake_persona_to_confirmed_bond(
+        &daemon,
+        &seed,
+        SLOT,
+        FUNDING_CUSHION,
+        FixtureStake::MarketBond(market_holdings),
+    )
+    .await;
+    let daemon_address = format!("http://127.0.0.1:{}", daemon.rpc_port);
+
+    // Pre-read: the positive balance that makes the post-connect zero a
+    // transition (the PR-B walk's discipline).
+    let record_rpc = LocalNodeRpc::new(daemon_address.clone(), Duration::from_secs(10))
+        .await
+        .expect("loopback record transport");
+    let before = fetch_claim_source_for(&record_rpc, fixture.persona_id)
+        .await
+        .expect("pre-unstake record fetch");
+    assert_eq!(
+        before
+            .source()
+            .bond
+            .as_ref()
+            .expect("confirmed bond row")
+            .bonded_total_atomic,
+        expected_bonded,
+        "fixture must start at the holdings floor"
+    );
+
+    // 1. The PRODUCT verb posts the exit, with the bond path's own
+    //    reference-spendability retry ladder (mining until the wallet's
+    //    reference view can prove the funding).
+    let mut posted = None;
+    for attempt in 0..24 {
+        match StakeFacade::unstake(fixture.arc.clone(), &daemon_address).await {
+            Ok(outcome) => {
+                posted = Some(outcome);
+                break;
+            }
+            Err(e @ (UnstakeError::Resyncing { .. } | UnstakeError::ExitNotFundable { .. })) => {
+                eprintln!("unstake attempt {attempt}: {e}; mining more");
+                daemon.generate_blocks(3, &fixture.principal).await;
+                refresh(&fixture.arc).await;
+            }
+            Err(e) => panic!("unstake: {e}"),
+        }
+    }
+    let posted = posted.expect("unstake must post within the retry ladder");
+    let (UnstakeOutcome::Broadcast { tx_hash: exit_hash }
+    | UnstakeOutcome::AlreadyInChain {
+        tx_hash: exit_hash, ..
+    }) = posted;
+    eprintln!("unstake POSTED via the product facade: {exit_hash:?}");
+
+    // The one-live-exit lane, observed through the public verb: a second
+    // unstake refuses with guidance, never a second irreversible post.
+    match StakeFacade::unstake(fixture.arc.clone(), &daemon_address).await {
+        Err(UnstakeError::ExitInProgress) => {}
+        other => panic!("a second unstake must refuse ExitInProgress, got {other:?}"),
+    }
+
+    // 2. Connect: presence + zero (the PR-B observable, now behind the verb).
+    mine_until_pool_drains(&daemon, &fixture.principal, "posted exit", 1).await;
+    let after = fetch_claim_source_for(&record_rpc, fixture.persona_id)
+        .await
+        .expect("post-connect record fetch");
+    assert_eq!(
+        after
+            .source()
+            .bond
+            .as_ref()
+            .expect("the exit PRESERVES the record row")
+            .bonded_total_atomic,
+        0,
+        "block-connect must zero the bonded total"
+    );
+
+    // 3. The production P-scan observes the exit and the payout pair.
+    daemon
+        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &fixture.principal)
+        .await;
+    refresh(&fixture.arc).await;
+    let state = pscan_until(
+        &fixture.arc,
+        &fixture.pscan_seal,
+        "the observed exit + payout funding",
+        |s| {
+            s.pending_releases().contains_key(&fixture.persona_id)
+                && s.funding_outputs().iter().any(|r| r.p_slot == slot)
+        },
+    )
+    .await;
+    let payout_rows = state
+        .funding_outputs()
+        .iter()
+        .filter(|r| r.p_slot == slot)
+        .count();
+    eprintln!("exit observed by pscan; {payout_rows} payout funding row(s) on the slot");
+
+    // 4. The terminal sweep, through the product verb, with its own
+    //    maturity ladder (payouts must enter the reference tree).
+    let mut swept_outcome = None;
+    for attempt in 0..24 {
+        match StakeFacade::collect_unstaked(fixture.arc.clone()).await {
+            Ok(outcome) => {
+                swept_outcome = Some(outcome);
+                break;
+            }
+            Err(
+                e @ (CollectUnstakedError::NothingSpendableYet
+                | CollectUnstakedError::Unanchorable { .. }),
+            ) => {
+                eprintln!("collect attempt {attempt}: {e}; mining more");
+                daemon.generate_blocks(3, &fixture.principal).await;
+                refresh(&fixture.arc).await;
+            }
+            Err(e) => panic!("collect_unstaked: {e}"),
+        }
+    }
+    let CollectOutcome::Swept {
+        tx_hash: sweep_hash,
+        swept,
+        remainder,
+        another_pool_remains,
+    } = swept_outcome.expect("collect must sweep within the ladder")
+    else {
+        panic!("the first collection over a funded exited pool must be Swept");
+    };
+    assert!(!swept.is_zero(), "the sweep moves the released collateral");
+    assert!(
+        remainder.is_zero(),
+        "the pool is exactly the payout pair: one pass collects everything, \
+         and the reply's remainder — the completion fact — must say 0"
+    );
+    assert!(
+        !another_pool_remains,
+        "one persona exited: the lane-wide half of the completion fact must \
+         say no other exited pool remains"
+    );
+    eprintln!("collect SWEPT {swept:?} to principal ({sweep_hash:?}), remainder 0");
+
+    // 5. Pass confirms; spent rows prune; the completion arm answers.
+    mine_until_pool_drains(&daemon, &fixture.principal, "sweep pass", 1).await;
+    daemon
+        .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &fixture.principal)
+        .await;
+    refresh(&fixture.arc).await;
+    pscan_until(
+        &fixture.arc,
+        &fixture.pscan_seal,
+        "the swept rows pruned (empty slot)",
+        |s| !s.funding_outputs().iter().any(|r| r.p_slot == slot),
+    )
+    .await;
+    match StakeFacade::collect_unstaked(fixture.arc.clone()).await {
+        Ok(CollectOutcome::NothingLeft) => {}
+        other => panic!("an emptied exited pool must answer NothingLeft, got {other:?}"),
+    }
+
+    // 6. Move active away (retirement skips the active slot by design),
+    //    expire the claim window on-chain, and let the production sweep
+    //    retire the persona on real evidence.
+    {
+        let g = fixture.arc.read().await;
+        let stake = g.stake_handle().expect("staker fixture");
+        let h = stake
+            .mint_handle(PSlot::from_raw(1))
+            .await
+            .expect("slot 1 within the lookahead");
+        stake
+            .activate_persona(h)
+            .await
+            .expect("activate the successor persona");
+    }
+    // MAX_CLAIM_AGE_W (26) epochs past the exit epoch, plus settlement lag
+    // and the pscan horizon; at SEB=2 this is cheap — the recorded
+    // conditional that routed this arm to PR-C.
+    let window_blocks =
+        (shekyl_archival_retention::MAX_CLAIM_AGE_W + 4) * SEB + PSCAN_TEST_REORG_DEPTH + 4;
+    daemon
+        .generate_blocks(window_blocks, &fixture.principal)
+        .await;
+    refresh(&fixture.arc).await;
+    let retired_state = pscan_until(
+        &fixture.arc,
+        &fixture.pscan_seal,
+        "the funded-gated retirement on real-chain evidence",
+        |s| {
+            s.retired_records()
+                .iter()
+                .any(|r| r.p_canonical_id == fixture.persona_id)
+        },
+    )
+    .await;
+    assert!(
+        !retired_state
+            .pending_releases()
+            .contains_key(&fixture.persona_id),
+        "retirement must move the exit out of pending_releases"
+    );
+
+    // The wipe, observed through a DIFFERENT handler than the retire path
+    // (the retire_walk discipline): the slot no longer resolves an id.
+    {
+        let g = fixture.arc.read().await;
+        let stake = g.stake_handle().expect("staker fixture");
+        assert!(
+            stake.persona_canonical_id(slot).await.is_err(),
+            "the retired slot's persona must be wiped from the held union"
+        );
+    }
+
+    // 7. Retirement is wallet-side: the chain record outlives it.
+    let final_read = fetch_claim_source_for(&record_rpc, fixture.persona_id)
+        .await
+        .expect("post-retire record fetch");
+    assert_eq!(
+        final_read
+            .source()
+            .bond
+            .as_ref()
+            .expect("the record row persists past wallet retirement")
+            .bonded_total_atomic,
+        0,
+    );
+    eprintln!(
+        "composed arc COMPLETE: unstake -> connect -> collect (remainder 0) -> \
+         NothingLeft -> funded-gated retire on real-chain evidence — the gate \
+         that had coverage without reach is now reached by the shipped verbs"
     );
 }
 
@@ -2972,7 +3794,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
         &tmp.path().join("wallet"),
         &creds,
         shekyl_address::Network::Mainnet,
-        super::DaemonClient::new(rpc),
+        super::DaemonClient::verifying(rpc, regtest_expectation()),
         shekyl_engine_file::SafetyOverrides::none(),
     )
     .expect("reopen after the scan sealed confirmed absence")
@@ -3109,4 +3931,380 @@ fn capture_block(
         "curve_tree_root": hex::encode(block.header.curve_tree_root),
         "txs": txs,
     })
+}
+
+/// The restricted RPC posture reaches the C++ handlers behind the FFI bridge.
+///
+/// This is the regression guard for the bridge's origin context. Until
+/// 2026-08-26 the dispatchers passed `nullptr` for the handler's
+/// `connection_context*`, so `m_restricted && ctx` was false at every site and
+/// a restricted listener behaved as an unrestricted one — no request caps,
+/// and, on the pool paths, disclosure of transactions the node had not
+/// broadcast.
+///
+/// **Every leg here crosses the bridge, and only those legs are here.** RK-4c
+/// migrated `/get_transactions` and `/is_key_image_spent` to native Rust, so
+/// their cap assertions stopped saying anything about the bridge while still
+/// passing under a name that claimed they did — six green assertions where the
+/// bridge had three. They now live in
+/// `native_handlers_apply_their_own_request_caps`, which is what they actually
+/// test. What remains: `/get_info`'s field trimming on `dispatch_json`, and
+/// two `dispatch_jsonrpc_we` refusals, one per answer shape.
+///
+/// Both listeners come from one daemon, so the postures are compared against
+/// the same chain in the same process, and the unrestricted rows are the
+/// blast-radius check: the fix must not narrow the admin listener.
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
+    /// `RESTRICTED_BLOCK_COUNT`, the cap on `get_block_header_by_hash`.
+    const BLOCK_CAP: usize = 1000;
+
+    let daemon = RegtestDaemon::start_with_restricted_listener().await;
+    let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
+        .await
+        .expect("restricted rpc client");
+    let unrestricted = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
+        .await
+        .expect("unrestricted rpc client");
+
+    // Hashes that resolve to nothing: a cap is a request-shape refusal and
+    // fires before any lookup, so the chain's contents are irrelevant.
+    let hashes = |n: usize| -> Vec<String> { (0..n).map(|i| format!("{i:064x}")).collect() };
+
+    // ── the bridge's REST template ──────────────────────────────────────
+    //
+    // The two capped routes above are native as of RK-4c, so they no longer
+    // reach `dispatch_json`. `/get_info` still does, and its restricted arm is
+    // the same `caller_is_restricted(ctx)` at core_rpc_server.cpp:209 — with
+    // `start_time` forced to 0 and `free_space` to u64::MAX, both observable
+    // without a populated chain. If a dispatcher stops passing the origin,
+    // these two answers become the admin ones.
+    let admin_info: serde_json::Value = unrestricted
+        .rpc_call("get_info", None::<serde_json::Value>)
+        .await
+        .expect("admin get_info");
+    let restricted_info: serde_json::Value = restricted
+        .rpc_call("get_info", None::<serde_json::Value>)
+        .await
+        .expect("restricted get_info");
+    assert_eq!(
+        restricted_info
+            .get("start_time")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
+        "a restricted listener must not disclose the node's start time; if this \
+         is the real start time the handler saw a null connection context"
+    );
+    assert_eq!(
+        restricted_info
+            .get("free_space")
+            .and_then(serde_json::Value::as_u64),
+        Some(u64::MAX),
+        "a restricted listener must not disclose free space"
+    );
+    assert!(
+        admin_info
+            .get("start_time")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            > 0,
+        "the admin listener must still report the start time — otherwise the \
+         assertions above would hold for a daemon that reports nothing to anyone"
+    );
+
+    // ── The other template ──────────────────────────────────────────────
+    //
+    // Everything above is REST, which reaches the handlers through
+    // `dispatch_json`. JSON-RPC goes through `dispatch_jsonrpc_we`, a separate
+    // template that could regress on its own, so it needs its own assertions —
+    // and it has two answer shapes, both worth crossing:
+    //
+    //   * a refusal written into `error_resp`  -> the error envelope
+    //   * a refusal written into `res.status`  -> the result envelope
+    //
+    // `get_block_header_by_hash` takes the first path, `get_output_histogram`
+    // the second. (After this branch deleted the unused `DJRPC` macro and its
+    // template, these two are the only JSON-RPC dispatcher left.)
+    let json_rpc = |method: &str, params: serde_json::Value| json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params });
+
+    // Over the block cap: refused into `error_resp`, so the reply is an error
+    // envelope and `result` never appears.
+    let hdr: serde_json::Value = restricted
+        .rpc_call(
+            "json_rpc",
+            Some(json_rpc(
+                "get_block_header_by_hash",
+                json!({ "hashes": hashes(BLOCK_CAP + 1) }),
+            )),
+        )
+        .await
+        .expect("restricted get_block_header_by_hash over cap");
+    assert_eq!(
+        hdr.pointer("/error/message").and_then(|m| m.as_str()),
+        Some("Too many block headers requested in restricted mode"),
+        "a restricted listener must refuse more than {BLOCK_CAP} block hashes; \
+         if this succeeds the JSON-RPC template stopped passing the origin"
+    );
+
+    // The whole-chain histogram: refused into `res.status`, so the reply is a
+    // *result* envelope carrying a non-OK status. Same gate, other shape.
+    let hist: serde_json::Value = restricted
+        .rpc_call(
+            "json_rpc",
+            Some(json_rpc("get_output_histogram", json!({ "amounts": [] }))),
+        )
+        .await
+        .expect("restricted get_output_histogram with no amounts");
+    assert_eq!(
+        hist.pointer("/result/status").and_then(|s| s.as_str()),
+        Some(
+            "Restricted RPC will not serve histograms on the whole blockchain. Use your own node."
+        ),
+        "a restricted listener must refuse the whole-chain histogram"
+    );
+
+    // And the same JSON-RPC request on the admin listener is served, so the
+    // JSON-RPC half has its blast-radius control too.
+    let admin_hist: serde_json::Value = unrestricted
+        .rpc_call(
+            "json_rpc",
+            Some(json_rpc("get_output_histogram", json!({ "amounts": [] }))),
+        )
+        .await
+        .expect("unrestricted get_output_histogram with no amounts");
+    assert_eq!(
+        admin_hist
+            .pointer("/result/status")
+            .and_then(|s| s.as_str()),
+        Some("OK"),
+        "the unrestricted listener must still serve the whole-chain histogram"
+    );
+}
+
+/// The native handlers apply their own request caps.
+///
+/// These three legs were part of the bridge guard until RK-4c served
+/// `/get_transactions` and `/is_key_image_spent` from Rust. They are still
+/// worth asserting — the caps moved to Rust with the methods and nothing else
+/// checks them — but they no longer cross `dispatch_json`, so reverting a
+/// dispatcher to `nullptr` leaves them green. Split out under a name that says
+/// what they cover, because a reviewer counting assertions under the bridge
+/// guard's name would otherwise credit the bridge with subjects it does not
+/// have.
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn native_handlers_apply_their_own_request_caps() {
+    /// `RESTRICTED_TRANSACTIONS_COUNT`, now enforced by the native handler.
+    const TX_CAP: usize = 100;
+    /// `RESTRICTED_SPENT_KEY_IMAGES_COUNT`, likewise.
+    const KI_CAP: usize = 5000;
+
+    let daemon = RegtestDaemon::start_with_restricted_listener().await;
+    let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
+        .await
+        .expect("restricted rpc client");
+    let unrestricted = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
+        .await
+        .expect("unrestricted rpc client");
+
+    // Hashes that resolve to nothing: the cap is a request-shape refusal and
+    // fires before any lookup, so the chain's contents are irrelevant.
+    let hashes = |n: usize| -> Vec<String> { (0..n).map(|i| format!("{i:064x}")).collect() };
+
+    let status = |v: &serde_json::Value| -> String {
+        v.get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("<missing status>")
+            .to_owned()
+    };
+
+    // Over the cap, restricted: refused. This is the REST half — it goes red if
+    // `dispatch_json` stops passing the origin. The JSON-RPC template has its
+    // own assertions further down; neither holds the other.
+    let over: serde_json::Value = restricted
+        .rpc_call(
+            "get_transactions",
+            Some(json!({ "txs_hashes": hashes(TX_CAP + 1) })),
+        )
+        .await
+        .expect("restricted /get_transactions over cap");
+    assert_eq!(
+        status(&over),
+        "Too many transactions requested in restricted mode",
+        "a restricted listener must refuse more than {TX_CAP} hashes; if this \
+         says OK the handler saw a null connection context and the restricted \
+         gate is inert again"
+    );
+
+    // At the cap, restricted: served. Pins the boundary rather than "refuses
+    // everything", which a broken-in-the-other-direction change would pass.
+    let at: serde_json::Value = restricted
+        .rpc_call(
+            "get_transactions",
+            Some(json!({ "txs_hashes": hashes(TX_CAP) })),
+        )
+        .await
+        .expect("restricted /get_transactions at cap");
+    assert_eq!(
+        status(&at),
+        "OK",
+        "exactly {TX_CAP} hashes is within the cap"
+    );
+
+    // The key-image cap is a second, independently-numbered site.
+    let ki_over: serde_json::Value = restricted
+        .rpc_call(
+            "is_key_image_spent",
+            Some(json!({ "key_images": hashes(KI_CAP + 1) })),
+        )
+        .await
+        .expect("restricted /is_key_image_spent over cap");
+    assert_eq!(
+        status(&ki_over),
+        "Too many key images queried in restricted mode",
+        "a restricted listener must refuse more than {KI_CAP} key images"
+    );
+
+    // Blast radius: the same over-cap request on the admin listener is served.
+    // `m_restricted` is false there, so the expression was false before the fix
+    // and is false after it — nothing about the admin listener narrowed.
+    let admin: serde_json::Value = unrestricted
+        .rpc_call(
+            "get_transactions",
+            Some(json!({ "txs_hashes": hashes(TX_CAP + 1) })),
+        )
+        .await
+        .expect("unrestricted /get_transactions over cap");
+    assert_eq!(
+        status(&admin),
+        "OK",
+        "the unrestricted listener must still serve an over-cap request; the \
+         caps are the restricted posture, not a global limit"
+    );
+}
+
+/// The ported console commands answer on the daemon's **own** console.
+///
+/// `print_tx` and `is_key_image_spent` render in Rust on two arms: over HTTP
+/// when invoked as `shekyld <command>`, and in-process when typed into the
+/// running daemon's console. Only the first was ever exercised, and RK-4c
+/// shipped the second broken — the live arm reached the methods by *route
+/// name* through `json_endpoint`, and the routes had just been deleted from
+/// the C++ dispatch table, so both commands answered "no reply".
+///
+/// The live arm now calls the facts path and the projection directly, which
+/// makes that particular breakage a compile error rather than a runtime one.
+/// This test is here for the part a compile error cannot cover: that the arm
+/// actually produces the right answer against a real core.
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn ported_console_commands_answer_on_the_in_process_arm() {
+    let mut daemon = RegtestDaemon::start_with_console().await;
+
+    // The genesis coinbase is the one transaction a fresh regtest chain has,
+    // and it is reachable without mining or spending.
+    let header: serde_json::Value = daemon
+        .rpc()
+        .json_rpc_call("get_block", Some(json!({ "height": 0 })))
+        .await
+        .expect("get_block");
+    let txid = header
+        .pointer("/block_header/miner_tx_hash")
+        .and_then(|v| v.as_str())
+        .expect("genesis header carries a miner_tx_hash")
+        .to_owned();
+
+    let out = daemon.console(&format!("print_tx {txid}"));
+    assert!(
+        out.contains("Found in blockchain at height 0"),
+        "the in-process print_tx must locate the genesis coinbase; got:\n{out}"
+    );
+    assert!(
+        !out.contains("no reply"),
+        "the live arm must not be reaching a deleted C++ route; got:\n{out}"
+    );
+
+    let out = daemon.console(&format!("print_tx {txid} +meta"));
+    assert!(
+        out.contains("Size:") && out.contains("Weight:"),
+        "+meta must print size and weight, which the live arm computes from \
+         the body it fetched; got:\n{out}"
+    );
+
+    let out = daemon.console(
+        "is_key_image_spent 0000000000000000000000000000000000000000000000000000000000000003",
+    );
+    assert!(
+        out.contains("unspent"),
+        "the in-process is_key_image_spent must answer; got:\n{out}"
+    );
+}
+
+/// The five p2p console commands answer on the daemon's **own** console.
+///
+/// RK-5a's half of the gate above. Four of them read only this slice's
+/// methods and now render entirely in Rust; the fifth, `print_net_stats`,
+/// also reads `/get_limit`, which is RK-8's and is still served from the C++
+/// dispatch table.
+///
+/// **That bridged leg is why this test exists in this shape.** §2.1.1 permits
+/// a mixed command on two conditions: the leg names a route the C++ table
+/// really serves, and the command is covered here — so the slice that deletes
+/// the route turns this red instead of leaving `print_net_stats` answering a
+/// failure forever. RK-4c shipped exactly that failure, silently, because
+/// nothing exercised the in-process arm.
+///
+/// An idle regtest node has no peers, no connections and no download queue,
+/// so what these assertions pin is the part that is *not* the data: that each
+/// command reaches a live core, renders, and produces its own headings rather
+/// than a transport failure.
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
+    let mut daemon = RegtestDaemon::start_with_console().await;
+
+    let out = daemon.console("sync_info");
+    assert!(
+        out.contains("Height: 1") && out.contains("0 peers") && out.contains("0 spans"),
+        "sync_info must render against the live core; got:\n{out}"
+    );
+
+    let out = daemon.console("print_cn");
+    assert!(
+        out.contains("Remote Host") && out.contains("Livetime(sec)"),
+        "print_connections must render its header; got:\n{out}"
+    );
+
+    let out = daemon.console("print_pl");
+    assert!(
+        !out.contains("no reply") && !out.contains("failed"),
+        "print_peer_list must answer, even with an empty peerlist; got:\n{out}"
+    );
+
+    let out = daemon.console("print_pl_stats");
+    assert!(
+        out.contains("White list size: 0/") && out.contains("Gray list size: 0/"),
+        "print_pl_stats must report both capacities, which come from the C++ \
+         p2p constants over the FFI; got:\n{out}"
+    );
+    assert!(
+        !out.contains("size: 0/0"),
+        "a zero capacity means the constants export answered with nothing; \
+         got:\n{out}"
+    );
+
+    // The bridged leg. `/get_limit` is still C++; when RK-8 migrates it, this
+    // is the assertion that notices if the leg is left naming a dead route.
+    let out = daemon.console("print_net_stats");
+    assert!(
+        out.contains("Received") && out.contains("bytes") && out.contains("of the limit of"),
+        "print_net_stats must render both lines, which needs /get_limit as \
+         well as /get_net_stats; got:\n{out}"
+    );
+    assert!(
+        !out.contains("no reply from /get_limit"),
+        "the bridged /get_limit leg must name a route the C++ table serves; \
+         got:\n{out}"
+    );
 }

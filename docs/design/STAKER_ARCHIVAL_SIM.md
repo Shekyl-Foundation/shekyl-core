@@ -243,7 +243,7 @@ This is the gate-7 instrument for the pay-for-service / firewalled-pseudonym
 rebasing. The model it simulates is canonical in
 [`../V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*Pay-for-service rebasing and
 the firewalled-pseudonym identity model*; the finding-side summary and gate-list are
-in [`PHASE_2B_STAKE_LIFECYCLE.md`](./PHASE_2B_STAKE_LIFECYCLE.md) §7.5.3. This doc
+in [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §7.5.3. This doc
 does **not** restate the model — it specifies how to *test* it.
 
 ## Why a sim, and why coverage first
@@ -538,13 +538,13 @@ smallest `MIN` whose trajectory differs measurably from arm A).
   — an admission lock that does no measurable macro work is pure optionality debt and the
   smaller consensus surface wins.
 
-**Severity:** same as close-condition (ii), per `PHASE_2B_STAKE_LIFECYCLE.md` §2.4 — gate 7
+**Severity:** same as close-condition (ii), per `design/PHASE_2B_FSM_RETOOL.md` §2.4 — gate 7
 is not optional resilience; Stage 3 emission code stays gated on it.
 
 **Deliverables:** `gate7_*` scenarios in `shekyl-economics-sim` (gated; legacy scenarios
 byte-identical per the iteration-3 discipline); a §*Gate 7 iteration-5* findings section in
 this doc + a gate-7 ledger row; dispositions recorded in emission §10.2 (branch kept or
-deleted), `PHASE_2B_STAKE_LIFECYCLE.md` §2.4 (iii) + §6 admission row, and gate-6 §2.5
+deleted), `design/PHASE_2B_FSM_RETOOL.md` §2.4 (iii) + §6 admission row, and gate-6 §2.5
 (bond-funding obligation references the surviving arm).
 
 ### Gate 7 iteration-5 — results (2026-06-11)
@@ -619,7 +619,7 @@ drops the `admission_proof` branch (emission §10.2), `ADMISSION_MIN_ATOMIC` los
 consensus role, and gate-6 §2.5 subsequently pinned **no wallet-policy minimum either**
 (no funding minimum at any layer; shape/timing hygiene only). The
 cross-doc spec edits (emission §10.2 + `admission_proof`/§7.4 deletion,
-`PHASE_2B_STAKE_LIFECYCLE.md` §2.4 (iii) + staking-form admission row, gate-6 §2.5
+`design/PHASE_2B_FSM_RETOOL.md` §2.4 (iii) + staking-form admission row, gate-6 §2.5
 sole-owner note, `V3_STAKER_ARCHIVAL.md` admission bullet) **landed 2026-06-11 on
 maintainer sign-off** of this disposition, per `05-system-thinking.mdc` (the criteria
 were named in advance; the structural edit got a human eye before the branch was deleted).
@@ -2418,7 +2418,7 @@ chain — fall in two groups: **missing model elements** and **the two far ends 
    (jurisdiction/ASN/implementation), not just actor-count Gini — privacy-compatible diversity
    measurement is itself a research question (mission priority 2).
 6. **Bond lifecycle.** Slashing conditions (a failed challenge?), graceful-exit return —
-   **spec'd:** [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §4.3 `Unbond` + release
+   **spec'd:** [`ARCHIVAL_BOND_GATE4.md`](ARCHIVAL_BOND_GATE4.md) §4.3 `Release` + release
    cooldown vs `W` backlog; sim still unmodeled,
    partial slashing, and the capital-lockup opportunity cost over the duration are abstracted
    to a flat seating cost. The duration knob's *real* cost/benefit lives here.
@@ -3378,7 +3378,7 @@ blank page. Each item names the **evidence** (sim finding), the **disposition**
 where a decision is provisional.
 
 **Genesis staking shape (2026-06).** Leading form is **transfer-shaped admission**
-([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4). Round 3–4
+([`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §2.4). Round 3–4
 ratification requires three sim/design close-conditions at **equal severity**: **(ii)**
 per-reward backing-proof aggregate at target `N_P` × settlement-epoch cadence; **(iii)**
 admission-principal decision with **gate 7** locked-supply re-pricing when bonds become
@@ -3527,7 +3527,7 @@ The window/inversion/draw *shape* is right and the standoff sits off the trilemm
 but four things bound the result; the first two change the meaning, not just the value:
 
 1. **The cap is anti-griefing, not privacy.** A "max announce↔bond ≤ 600" rule is a *liveness
-   ceiling* (don't let announced-but-unbonded `P`s linger), not a privacy floor — privacy wants the
+   ceiling* (don't let announced-but-released `P`s linger), not a privacy floor — privacy wants the
    separation large and random. The privacy-load-bearing controls are a **minimum effective spread**
    and the **uniform-independent draw**, and both are **wallet-only and consensus-unenforceable**:
    consensus sees neither the FCMP++-hidden funding source nor the principal's off-chain activity, so
@@ -3617,7 +3617,7 @@ but four things bound the result; the first two change the meaning, not just the
     `population_anchor_independence_disperses_shared_trigger_clusters`.
   - **Serial independence across a `P`'s repeated draws (now load-bearing).** A marginal GoF cannot
     see autocorrelation; a weak PRNG can produce a beautiful uniform marginal with correlated
-    successive draws. This was moot when a `P` drew one gap in its life, but **rebond / partial-unbond
+    successive draws. This was moot when a `P` drew one gap in its life, but **rebond / partial-release
     / re-entry at genesis** make a `P` draw several gaps over its lifetime — and a conformant-but-weak
     wallet's correlated successive gaps make those recurring bond ops linkable to each other (exactly
     the recurring-surface exposure). For a *cross-wallet* vector (different implementations, different
@@ -3639,15 +3639,15 @@ but four things bound the result; the first two change the meaning, not just the
 - **The 600 is *per seam*; the symmetric ±600 envelope is the entry seam only.** The entry standoff
   (announce↔bond) is order-symmetric and inversion-eligible: ±600 around the bond-post, 1200-block
   adversary search width, 600-block max entry latency (caveat geometry above). The **exit seam**
-  (terminal drain, and now the *recurring* partial-unbond `HoldingsUpdate`) is a **separate standoff
+  (terminal drain, and now the *recurring* partial-release `HoldingsUpdate`) is a **separate standoff
   with its own envelope and its own latency budget** — and it differs structurally on two axes:
   (i) it is **one-sided** (no inversion: collateral is not spendable before the **20_000-block
-  release cooldown**, so the drain cannot precede the unbond), so a 600-block exit window buys a
+  release cooldown**, so the drain cannot precede the release), so a 600-block exit window buys a
   600-block search width, *not* 1200 — the exit seam is inherently weaker cover per unit latency than
   the entry seam; (ii) its latency lands on **funds availability measured from cooldown expiry, not
-  from the unbond event**, because the cooldown already pins the earliest spend deterministically — so
+  from the release event**, because the cooldown already pins the earliest spend deterministically — so
   the exit standoff's job is specifically to **break that deterministic fixed-offset tell** (without
-  it, the drain fires at exactly cooldown-expiry, trivially linkable to the unbond). Cost: ≤ 600
+  it, the drain fires at exactly cooldown-expiry, trivially linkable to the release). Cost: ≤ 600
   blocks *on top of* the 20_000-block cooldown = **0.06 epoch of additional availability latency**,
   free on its own seam. Symmetric entry/exit protection is therefore **two independent 600-block
   draws**, each free on its own seam — but the exit one must be stated explicitly; "±600 envelope"
@@ -3663,11 +3663,11 @@ but four things bound the result; the first two change the meaning, not just the
 
 ## L18 — `HoldingsUpdate` release-cooldown freeze (R-3 reconciliation, 2026-06-16)
 
-**Why.** `HoldingsUpdate` (voluntary partial-unbond / rebond) is promoted to genesis
+**Why.** `HoldingsUpdate` (voluntary partial-release / rebond) is promoted to genesis
 (V3.0). The prior layers modeled mobility as *frictionless* re-allocation: an actor
 could shed a deep shard and re-deploy that capital the same epoch. The FSM
 ([`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md), pins P2B-7) does not permit that —
-collateral released by a voluntary drop inherits the **Unbond release cooldown** and is
+collateral released by a voluntary drop inherits the **Release release cooldown** and is
 frozen for `RELEASE_COOLDOWN` before it can re-bond. This layer reconciles the sim's
 mobility model with that friction and **re-derives whether the genesis redundancy floor
 `r_target_deep` must rise to absorb it.** This is the R-3 reconciliation: its value is
@@ -3698,7 +3698,7 @@ sweep was trusted:
    compound.
 
 Escrow scope (the three forks, resolved against source): **voluntary drops only** — §4.5
-slash moves `bonded → burned` (forfeited, never cooled), and a clean `Unbond` requires the
+slash moves `bonded → burned` (forfeited, never cooled), and a clean `Release` requires the
 cooldown to have *already elapsed* (§3.2/§4.3), so the exit→re-entry path is not
 re-frozen (`deactivate` clears `cooling`, no double-count). The drop-and-re-add **2× capital
 bite** (P2B-7 Pin 3 anti-dodge) is faithful: the per-shard cooldown is keyed on released
@@ -3804,7 +3804,7 @@ detectors are complementary, not redundant:
   discovers A's capital frozen and leaves B under-covered for the 2-epoch window — exactly the
   transient the sim precludes. So the transient is *reachable, just not by an optimizing
   agent*; that residual is routed to operator-education and a wallet-conformance guard (see
-  Disposition), and is the mechanism by which the reopen clause's named rebond/unbond churn
+  Disposition), and is the mechanism by which the reopen clause's named rebond/release churn
   would erode the band — which is why "precluded under optimization" (consistent with a reopen
   path) is the correct framing and "by construction" (which would contradict it) is not.
 - *Detector validation owed and delivered (the triangular-trap discipline).* To distinguish
@@ -3847,7 +3847,7 @@ emergent slack underneath.** "Buffered arms settle to exactly `r_target_deep`" m
 **no self-correcting cushion** below the provisioned floor. The reopen clause is widened
 accordingly (see Disposition): it fires on *any* newly-discovered friction that erodes the
 deep band, not only on "the freeze pushes under `+1`", because there is nothing beneath to
-absorb a new bite. The rebond/unbond recurring surface and the cooldown-anchor edge case are
+absorb a new bite. The rebond/release recurring surface and the cooldown-anchor edge case are
 both live candidates.
 
 **5. Under compounding stress (`lag2`), the committed floor survives; only serving
@@ -3891,7 +3891,7 @@ cushion beneath it** (findings 4, 6), the reopen trigger is **any newly-discover
 that erodes the deep band** — not only "the freeze pushes under `+1`". Named live candidates:
 (a) a `RELEASE_COOLDOWN` increase past `~3` epochs (the faithful arm approaches the `0.10`
 ceiling); (b) `BOND_DURATION_AGE_SCALE` sealed at/near `0` in the joint cluster pass (flat
-becomes faithful → the cliff moves into the realistic arm); (c) the rebond/unbond
+becomes faithful → the cliff moves into the realistic arm); (c) the rebond/release
 recurring-surface friction (R-2/R-3) consuming margin; (d) the cooldown last-served-anchor
 edge case if actors hold-but-don't-serve before dropping. Any of these re-opens the floor
 question via a fresh `--axis=holdingsupdate_cooldown` sweep at the new parameters; on a
@@ -3949,7 +3949,7 @@ ordered by leverage — the seal call is made cleanly only when the run reports 
 **Retracted (not a fourth note) — "the cooldown taxes persona rotation."** A draft fourth note
 claimed `RELEASE_COOLDOWN` carries an unpriced privacy cost by taxing persona rotation. **Withdrawn
 on the merits (2026-07-12):** there is no "persona rotation" mechanism — a persona is a keypair +
-bond, and "pseudonym rotation" is just *retire `P_old` (`Unbond` + drain) + create `P_new`
+bond, and "pseudonym rotation" is just *retire `P_old` (`Release` + drain) + create `P_new`
 (fresh `JoinMarket`)*, two independent lifecycle operations with no linkage and no bond-migration
 (S-5). The claimed privacy benefit was already retired by **T-A1 / S-5** (rotation is portfolio-bound,
 re-linkable, and long-lived `P` is the committed architecture — cosmetic rotation does not

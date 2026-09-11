@@ -199,6 +199,28 @@ fn run_tier1(v: &Tier1Vector) {
             };
             let exp = v.expected.out_hex.as_deref().expect("out_hex");
             assert_eq!(hex::encode(out.as_slice()), exp, "{}", v.id);
+
+            // SH-2: the persona bundle now CARRIES `hs_id_seed` (the master is
+            // gone after derivation under Model D, so "rederive on each serve"
+            // is not reachable). Two producers of one value is exactly the
+            // drift shape this file exists to stop, so the bundle's field is
+            // asserted against the same pinned vector rather than trusted to
+            // agree with the free function beside it.
+            //
+            // This does NOT touch `ARCHIVAL_P_DERIVE_V1`'s frozen surface: no
+            // new label, no new vector, no corpus rotation — the value was
+            // already pinned cross-arch here. A bundle-shape change, not a
+            // frozen-surface change.
+            if v.kind == "hs_id_seed" {
+                let bundle = derive_archival_p_keys(&master, net, fmt, v.p_slot)
+                    .expect("bundle derives for a pinned vector");
+                assert_eq!(
+                    hex::encode(bundle.hs_id_seed.as_slice()),
+                    exp,
+                    "{}: bundle hs_id_seed diverged from the pinned vector",
+                    v.id
+                );
+            }
         }
         "hs_id_pubkey" => {
             // The GF-9 serving key's Ed25519 PUBLIC key is the v3 `.onion`

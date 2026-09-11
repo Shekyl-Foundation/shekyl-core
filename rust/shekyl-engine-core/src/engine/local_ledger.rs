@@ -82,7 +82,7 @@
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use shekyl_engine_state::{LedgerIndexes, WalletLedger};
-use shekyl_scanner::{BalanceSummary, LedgerBlockExt};
+use shekyl_scanner::{BalanceSummary, WalletLedgerExt};
 
 use super::{error::LedgerError, refresh::LedgerSnapshot, traits::LedgerEngine};
 
@@ -105,6 +105,15 @@ pub(crate) struct LedgerState {
     /// `ledger` under the write guard; rebuilt on every
     /// `Engine::open*`.
     pub(crate) indexes: LedgerIndexes,
+    /// Slots the bond watch adopted into `bonded_slots` **this session**
+    /// (SA-R-6). Session-scoped, never persisted: Model D drops the seed
+    /// after `assemble`, so a mid-session adoption cannot derive its
+    /// persona or reach the StakeEngine actor's spawn-time held set — the
+    /// recovered bond becomes operational only at the next open, and this
+    /// set is what lets the staking status surface say so (rule 82)
+    /// instead of leaving the wallet claiming staker-hood while every
+    /// staking op fails. Empties naturally at reopen (fresh state).
+    pub(crate) slots_adopted_this_session: std::collections::BTreeSet<u32>,
 }
 
 /// Stage 1 implementor of [`LedgerEngine`](super::traits::LedgerEngine).
@@ -127,16 +136,14 @@ pub(crate) struct LedgerState {
 /// (also `pub` for the same reason it serves as `D`'s default).
 ///
 /// The trait [`LedgerEngine`](super::traits::LedgerEngine) itself
-/// stays `pub(crate)` per the design doc §1.4 visibility policy —
+/// stays `pub(crate)` per the design doc §2 visibility pin
+/// (re-anchored 2026-09-02): the JSON-RPC cutover that was the
+/// original promotion trigger landed; reopen when a second in-tree
+/// production crate must construct a workflow without `Engine`.
 /// `LocalLedger`'s implementor type is the only piece that needs
 /// `pub` for the default to resolve. Stage 4's actor swap-in
 /// retires `LocalLedger` regardless; the visibility lift here does
 /// not change the deletion target.
-///
-/// V3.2 promotes the trait alongside the JSON-RPC server cutover,
-/// at which point external callers constructing an `Engine` choose
-/// between [`LocalLedger`] (the default) and `ActorRef<LedgerActor>`
-/// (Stage 4) by naming the trait directly.
 pub struct LocalLedger {
     state: RwLock<LedgerState>,
 }
@@ -150,7 +157,11 @@ impl LocalLedger {
     /// freshly-loaded persisted state.
     pub(crate) fn new(ledger: WalletLedger, indexes: LedgerIndexes) -> Self {
         Self {
-            state: RwLock::new(LedgerState { ledger, indexes }),
+            state: RwLock::new(LedgerState {
+                ledger,
+                indexes,
+                slots_adopted_this_session: std::collections::BTreeSet::new(),
+            }),
         }
     }
 
@@ -289,9 +300,9 @@ impl LocalLedger {
     /// The bench measures per-call cost over a fixed transfer count;
     /// the indexes are not consulted on the `balance` read path
     /// (per `local_ledger.rs`'s implementor — the read body
-    /// projects `ledger.balance(ledger.height())` directly), so
-    /// resetting them to empty keeps the fixture aligned with the
-    /// `balance` workload alone.
+    /// projects balance through the journal-derived lock map under
+    /// one guard), so resetting them to empty keeps the fixture
+    /// aligned with the `balance` workload alone.
     ///
     /// Bench fixtures that exercise index-touching paths (e.g., a
     /// future `claimable_rewards` bench) populate indexes through
@@ -340,8 +351,12 @@ impl LedgerEngine for LocalLedger {
 
     fn balance(&self) -> BalanceSummary {
         let guard = self.read();
-        let ledger = &guard.ledger.ledger;
-        ledger.balance(ledger.height())
+        // One guard: journal-derived F14 locks + ledger summary (PR-SJ-1b).
+        guard.ledger.balance()
+    }
+
+    fn staking_enabled(&self) -> bool {
+        self.read().ledger.staking.staking_enabled
     }
 }
 
@@ -358,5 +373,9 @@ impl<L: LedgerEngine> LedgerEngine for std::sync::Arc<L> {
 
     fn balance(&self) -> BalanceSummary {
         (**self).balance()
+    }
+
+    fn staking_enabled(&self) -> bool {
+        (**self).staking_enabled()
     }
 }

@@ -30,11 +30,35 @@ requests + URIs (no subaddresses).
 
 Phase 4b SPECIFIED methods, WI-RPC-1 (receiving / fees / staking reads),
 WI-RPC-2a (`restore_wallet`), WI-RPC-3 (proofs), Phase 4c
-(`rescan_blockchain` via `Engine::start_rescan`), and WI-RPC-4
+(`rescan_blockchain` via `Engine::start_rescan`), WI-RPC-4
 (`get_wallet_info` + `Transfer.attribution` / `get_transfers.attribution`
-filter) are live. RESERVED methods (`unstake` / `claim` / `sign` /
-`verify` / air-gapped bundles / `match_transfer_to_request`) remain
-Engine-gated — see the OpenAPI header registry and `docs/FOLLOWUPS.md`.
+filter), PR-SM-2 (`sign_message` / `verify_message`), PR-SJ-3
+(`abandon_tx`), SJ-DQ-7 (`get_tx_note` / `set_tx_note`), and WI-RPC-5
+(archival principal staking actions: `stake_in`, `get_drain_balance`,
+`drain`), and PR-C (the composed exit: `unstake`, `collect_unstaked`;
+`get_balance.staked` / `claimable_rewards` are live projections,
+no longer hardcoded zeros — and structurally absent, never `"0"`, when
+the staking seal is unreadable, with `get_wallet_info.staking` degrading
+alongside while the liquid fields stay served) are live. `stake_in`
+builds under a read lock like `build_pending_tx` (one funding build never
+stalls the read RPCs), and `get_drain_balance` reports the active
+persona's own drainable pool — the set a `drain` can actually spend.
+
+One RESERVED method remains Engine-gated: `match_transfer_to_request`
+(gated on an Engine match method). **`unstake` shipped with PR-C
+(2026-09-03), and its reachability gate — held since PR-P4 and narrowed
+by every intervening landing without lifting — is LIFTED**: the composed
+exit landed as two named actions (`unstake` posts the irreversible exit;
+`collect_unstaked` sweeps the released collateral, its reply carrying the
+two-part completion fact), with the RESERVED→shipped reconciliation recorded in
+the OpenAPI census (a single overloaded verb was rejected for
+irreversible-step mis-selection; the sweep could not ride `drain`'s
+firewall-pinned active-persona shape). Codes `-29513..-29529`; the two
+dispatch dispositions (`-29521` released / `-29522` held) are distinct
+because they demand opposite client behavior. The claim-era names `claim`
+and `get_stakes` are REJECTED, not pending (emission claims are
+engine-side; `principal_stakes()` is RPC-forbidden as the P↔principal
+edge). See the OpenAPI header registry and `docs/FOLLOWUPS.md`.
 
 Honest `OUTGOING` transfer history landed with PR-SJ-2 (send-journal
 projection), closing the Phase 4b `get_transfers` OUTGOING-filter
@@ -49,6 +73,21 @@ a correlated burst of segment fetches an unanonymized segment server can
 count). `build_pending_tx` itself no longer stalls read RPCs — it runs
 under a read lock, serialized by that engine-owned permit.
 
-Beyond Phase 4b, `abandon_tx` is design-gated to Phase 4d (PR-SJ-3).
-See `docs/FOLLOWUPS.md` for both, and `docs/design/WALLET_SEND_RECORD.md`
-for the send-journal design round.
+The WI-RPC-5 caveat here — `drain`'s receipt being a dispatch fact rather
+than a settlement fact — is **half retired (2026-08-27)**. A drain that
+confirms now releases its seal: the pscan driver retires the record once
+the inputs it reserved leave the wallet's live funding set, so the
+one-live-drain lane reopens on its own. What remains is the failure
+path, by two routes: a drain the network **rejects terminally**, and a
+drain whose submit was **ambiguous** (a transport error leaves the
+sealed record live on purpose, because the bytes may already have
+reached the network — and if they did not, nothing resubmits them; the
+driver resubmits bond posts only). Either way the inputs are never
+spent, so the drain never settles and the lane stays shut until
+terminal-reject prune and byte-identical resubmit land (named FOLLOWUPS
+items). A stall alarm names such a drain in the operator log rather than
+leaving it silent. That makes the wait **visible, not finite**: the driver
+holds the record deliberately and nothing in the wallet clears it, so an
+operator who sees this alarm should not sit waiting for a confirmation
+that is not coming. See `docs/FOLLOWUPS.md`, and
+`docs/design/WALLET_SEND_RECORD.md` for the send-journal design round.

@@ -31,8 +31,8 @@ construction are shared FFI, a failure is almost certainly in the one surface th
 shared code does **not** cover: the **tx-blob serialize↔parse round-trip** (Rust
 serializes the FCMP++ proof + reference into the tx; C++ `cryptonote_basic`
 parses it and hands bytes back to verify) and the **independently-computed PQC
-prehash** (`serialize(TransactionPrefixV3) || serialize(RctSigningBody) ||
-H(serialize(RctSigPrunable))` on each side). Look there first.
+prehash** (`serialize(TransactionPrefixV3) || serialize(CtSigningBody) ||
+H(serialize(CtSigPrunable))` on each side). Look there first.
 
 This unblocks CT-2 Tier-B (`recon_tier_b.rs`'s 5 `#[ignore]`d tests need a real
 regtest spend path) and the depth-3+ verify validation deferred by #162.
@@ -84,7 +84,7 @@ reference, so they otherwise never fire):
 ### Phase 1b — Bond gate (separate, after the transfer keystone is green)
 The bond-post path is `O~`-exposed (vin-layer ML-DSA equality is unlanded
 C-1/C-2), so a bond failure can be orthogonal to parity. **Confirm the daemon's
-bond-post verify dispatch (`verRctSemanticsBondPost` / membership-only) is
+bond-post verify dispatch (`verCtSemanticsBondPost` / membership-only) is
 landed+stable on current dev before running**, and never let bond block the
 transfer milestone. Requires rebasing the worktree onto current dev (#163
 archival-bond merged).

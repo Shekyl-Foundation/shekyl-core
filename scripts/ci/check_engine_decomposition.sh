@@ -25,6 +25,8 @@
 # Exit 0 = clean. Non-zero = at least one of:
 #   - Engine<...> grew past PARAMS_MAX generics
 #   - Engine grew past FIELDS_CEILING top-level fields
+#   - Engine pub inherent methods grew past METHODS_CEILING
+#   - Engine pub inherent methods dropped >METHODS_BAND below the ceiling
 #   - a baselined file regressed above its ceiling
 #   - a baselined file dropped >BAND below its ceiling (tighten it)
 #   - a non-baselined engine/*.rs crossed NEW_FILE_CAP (new god-file)
@@ -45,6 +47,7 @@ note() { echo "  - $1"; }
 
 # --- parse the conf ----------------------------------------------------------
 PARAMS_MAX=0; FIELDS_CEILING=0; NEW_FILE_CAP=0; BAND=0
+METHODS_CEILING=0; METHODS_BAND=0
 declare -A FILE_CEIL; declare -A EXCLUDE
 while read -r key a b _rest; do
   case "${key}" in
@@ -53,6 +56,8 @@ while read -r key a b _rest; do
     FIELDS_CEILING)  FIELDS_CEILING="${a}" ;;
     NEW_FILE_CAP)    NEW_FILE_CAP="${a}" ;;
     BAND)            BAND="${a}" ;;
+    METHODS_CEILING) METHODS_CEILING="${a}" ;;
+    METHODS_BAND)    METHODS_BAND="${a}" ;;
     FILE)            FILE_CEIL["${a}"]="${b}" ;;
     EXCLUDE)         EXCLUDE["${a}"]=1 ;;
     *)               echo "FATAL: unknown conf key '${key}'"; exit 2 ;;
@@ -95,6 +100,49 @@ fields="$(awk '
 if [ "${fields}" -gt "${FIELDS_CEILING}" ]; then
   echo "FAIL: Engine has ${fields} top-level fields (ceiling ${FIELDS_CEILING})."
   note "Group into identity / caps / runtime sub-structs (§5) rather than widening the root."
+  fail=1
+fi
+
+# --- 2b. Engine pub inherent method count ------------------------------------
+# Subject assertion (rule 47): the helper and a positive count must exist.
+# Absence of signal is first evidence the subject is absent — do not treat
+# a missing helper or a zero as "no methods, therefore under ceiling."
+COUNT_PY="${REPO_ROOT}/scripts/ci/count_engine_pub_methods.py"
+if [ ! -f "${COUNT_PY}" ]; then
+  echo "FATAL: method-count helper missing at ${COUNT_PY}"
+  note "METHODS_CEILING has no subject without scripts/ci/count_engine_pub_methods.py."
+  exit 2
+fi
+if ! python3 "${COUNT_PY}" --self-test >/dev/null; then
+  echo "FATAL: ${COUNT_PY} --self-test failed."
+  note "METHODS_CEILING cannot freeze a counter that mis-attributes StakeFacade / where Engine<...> impls."
+  exit 2
+fi
+if [ "${METHODS_CEILING}" -eq 0 ] || [ "${METHODS_BAND}" -eq 0 ]; then
+  echo "FATAL: METHODS_CEILING/METHODS_BAND missing or zero in ${CONF}"
+  note "The inherent-API freeze is not optional; restore both keys."
+  exit 2
+fi
+# Walk crate src (not only engine/): inherent `impl Engine` can live in
+# lib.rs / scan.rs / … in the same defining crate. Passing src/engine is
+# a subject-assertion failure in the counter (rule 47).
+CRATE_SRC="${REPO_ROOT}/rust/shekyl-engine-core/src"
+methods="$(python3 "${COUNT_PY}" "${CRATE_SRC}")"
+if ! [[ "${methods}" =~ ^[0-9]+$ ]]; then
+  echo "FATAL: ${COUNT_PY} did not print an integer (got: ${methods})"
+  exit 2
+fi
+if [ "${methods}" -eq 0 ]; then
+  echo "FATAL: method-count helper reported 0 pub inherent Engine methods."
+  note "Absence of signal is evidence the counter (or Engine impls) disappeared."
+  fail=1
+elif [ "${methods}" -gt "${METHODS_CEILING}" ]; then
+  echo "FAIL: Engine has ${methods} pub inherent methods (ceiling ${METHODS_CEILING})."
+  note "New staking / fee / daemon-transport behavior lands on a façade, not Engine::."
+  fail=1
+elif [ "${methods}" -lt "$(( METHODS_CEILING - METHODS_BAND ))" ]; then
+  echo "FAIL: Engine has ${methods} pub inherent methods, >${METHODS_BAND} under ceiling ${METHODS_CEILING} — tighten it."
+  note "Lower METHODS_CEILING in engine_decomposition_ratchet.conf to lock the win in."
   fail=1
 fi
 
@@ -243,4 +291,4 @@ if [ "${fail}" -ne 0 ]; then
   echo "check_engine_decomposition: FAILED"
   exit 1
 fi
-echo "check_engine_decomposition: clean (params=${params}, fields=${fields})"
+echo "check_engine_decomposition: clean (params=${params}, fields=${fields}, methods=${methods})"

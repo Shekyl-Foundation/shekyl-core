@@ -20,6 +20,7 @@ static SAMPLE_MAINNET_ADDR: LazyLock<String> = LazyLock::new(|| {
         Network::Mainnet,
         [0xaa; 32],
         [0xbb; 32],
+        [0xee; 48],
         vec![0xcc; PQC_PAYLOAD_LEN],
     )
     .encode()

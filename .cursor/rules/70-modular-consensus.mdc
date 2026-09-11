@@ -16,8 +16,9 @@ globs:
 - **Staking is an economic primitive**, not a consensus proof. Stake-ratio
   governance signals, staker emission share with decay, and lock-based
   participant alignment all live in `shekyl-economics` and influence
-  emission/burn — not block validity. See `STAKER_REWARD_DISBURSEMENT.md`
-  and `DESIGN_CONCEPTS.md`.
+  emission/burn — not block validity. See `DESIGN_CONCEPTS.md` and
+  archival staking: `V3_STAKER_ARCHIVAL.md`,
+  `docs/design/REWARD_EMISSION_LEG.md`.
 
 This split is deliberate: staking gives small holders economic alignment
 without making them gatekeepers of consensus, and keeps consensus

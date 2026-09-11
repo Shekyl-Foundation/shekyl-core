@@ -88,7 +88,7 @@ bool get_output_distribution(uint64_t amount, uint64_t from, uint64_t to, uint64
     get_test_options():hard_forks{std::make_pair((uint8_t)1, (uint64_t)0), std::make_pair((uint8_t)0, (uint64_t)0)}{}
   } opts;
   cryptonote::Blockchain *blockchain = bc.get();
-  bool r = blockchain->init(new TestDB(test_distribution_size), cryptonote::FAKECHAIN, true, &opts.test_options, 0, NULL);
+  bool r = blockchain->init(new TestDB(test_distribution_size), cryptonote::FAKECHAIN, true, &opts.test_options, 0);
   return r && bc->get_output_distribution(amount, from, to, start_height, distribution, base);
 }
 

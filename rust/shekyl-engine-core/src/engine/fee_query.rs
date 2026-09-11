@@ -16,6 +16,7 @@ use shekyl_tx_builder::MAX_TREE_DEPTH;
 use shekyl_units::AtomicUnits;
 
 use super::error::FeeEstimatorError;
+use super::fee_policy::ValidatedFeeEstimates;
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
@@ -125,24 +126,30 @@ impl<
     ///
     /// [`FeeEstimatorError::DaemonUnreachable`] /
     /// [`FeeEstimatorError::DaemonResponseInvalid`] when the snapshot cannot
-    /// be fetched or is unusable — the same mapping the build path applies.
+    /// be fetched or is unusable;
+    /// [`FeeEstimatorError::DaemonFeeUnreasonable`] when the snapshot
+    /// fails well-formedness — the same [`ValidatedFeeEstimates`]
+    /// constructor the build path applies, so a quote never reports a
+    /// snapshot the build would refuse.
     pub async fn quote_fee_tiers(
         &self,
         n_in: InputCount,
         n_out: OutputCount,
     ) -> Result<FeeTierQuote, FeeEstimatorError> {
-        let snapshot = self
+        let raw = self
             .daemon()
             .get_fee_estimates()
             .await
             .map_err(map_daemon_engine_fee_error)?;
+        let snapshot = ValidatedFeeEstimates::try_new(raw)?;
         let tree_depth = self.estimate_tree_depth().await;
 
-        let quote_at = |rate| AtomicUnits::from_raw(converge_fee(rate, n_in, n_out, tree_depth, 0));
+        let quote_at =
+            |rate| AtomicUnits::from_raw(converge_fee(&rate, n_in, n_out, tree_depth, 0));
         Ok(FeeTierQuote {
-            economy_fee: quote_at(&snapshot.economy),
-            standard_fee: quote_at(&snapshot.standard),
-            priority_fee: quote_at(&snapshot.priority),
+            economy_fee: quote_at(snapshot.economy()),
+            standard_fee: quote_at(snapshot.standard()),
+            priority_fee: quote_at(snapshot.priority()),
             tree_depth,
         })
     }

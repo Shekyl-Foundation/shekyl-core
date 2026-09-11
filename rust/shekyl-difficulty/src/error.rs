@@ -28,6 +28,13 @@ pub enum Error {
     /// would themselves be rejected at the consumer's invariant
     /// checks). Maps to `ERR_OVERFLOW` (-3) at the FFI boundary.
     Overflow,
+    /// [`crate::alt_window_plan`]'s preconditions failed: a height-0
+    /// candidate (alternative genesis is structurally impossible), or an
+    /// alt ancestry that is not contiguous with the candidate
+    /// (`first_alt_height + alt_len != bei_height` — the CEN-D5 linkage
+    /// precondition, failed closed instead of silently mis-windowed).
+    /// Maps to `SHEKYL_DIFFICULTY_ERR_WINDOW` (-5) at the FFI boundary.
+    Window,
 }
 
 impl core::fmt::Display for Error {
@@ -38,6 +45,10 @@ impl core::fmt::Display for Error {
                 "consensus invariant violation or arithmetic overflow \
                  (non-monotonic cumulative difficulty or u128 wrap during \
                  next-difficulty computation)"
+            }
+            Self::Window => {
+                "alt-window preconditions failed (height-0 candidate, or alt \
+                 ancestry not contiguous with the candidate)"
             }
         };
         f.write_str(s)

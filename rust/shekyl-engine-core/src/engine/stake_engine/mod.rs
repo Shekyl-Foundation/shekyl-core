@@ -8,16 +8,45 @@
 //! Message handlers are split by family; the actor core keeps secrets (rule 36)
 //! behind `pub(crate)` fields reachable only inside this tree.
 //!
+//! # Re-checking the `#[allow(dead_code)]` markers in this tree
+//!
+//! Each marker carries its own trailing reason naming the consumer that retires
+//! it (CL-6). Those reasons are prose and can go stale silently — 32 of them did,
+//! and one was misread as evidence that a *sender* had not landed when it was
+//! describing a consumer that had. So the authority is the compiler, not the
+//! comments, and checking it takes three steps in this order:
+//!
+//! 1. **Strip every `#[allow(dead_code)]`** under `engine/stake_engine/`. This
+//!    step is not optional and is the whole procedure: while a marker is in
+//!    place it suppresses exactly the warning that would prove it stale, so
+//!    running clippy first proves nothing.
+//! 2. `cargo clippy -p shekyl-engine-core --all-targets -- -D warnings`, and
+//!    `cargo clippy -p shekyl-engine-core -- -D warnings` for the lib-only view.
+//!    Both must be run: the second strips test readers, so an item alive only
+//!    under `cfg(test)` shows up there and nowhere else.
+//! 3. **Restore only the sites clippy named**, and no others.
+//!
+//! `#[expect(dead_code)]` would do step 1–3 automatically, since it fails the
+//! build the moment an item becomes used. It cannot be used for the markers in
+//! this tree: their items *are* read by this crate's tests, so the expectation
+//! is fulfilled without `cfg(test)` and unfulfilled with it, and CI builds
+//! `--all-targets`. Observed as `this lint expectation is unfulfilled` on all
+//! six clippy lanes. Prefer `expect` for any *new* marker whose item is unused
+//! in every configuration.
+//!
 //! | Module | Role |
 //! |--------|------|
 //! | [`types`] | Domain values, errors, spawn args |
 //! | [`helpers`] | Shared funding/vout prep, P-secrets, entry-gap draw |
+//! | [`bond_post_assemble`] | Shared prove/sign/encode tail for JoinMarket and Release |
 //! | [`actor`] | `StakeEngine` struct, spawn, inherent methods, Actor |
-//! | [`persona`] | Mint / activate / identity / SignBond |
-//! | [`bond`] | AssembleBond |
+//! | [`persona`] | Mint / activate / identity / PlanBondPost |
+//! | [`bond`] | AssembleBond (credit policy + identity-key slot) |
+//! | [`release`] | AssembleRelease (debit policy + `bond_spend_sk` slot) |
 //! | [`drain`] | AssembleDrain shell |
 //! | [`claim`] | AssembleEmissionClaim |
 //! | [`scan`] | ScanStep |
+//! | [`serve_set_source`] | Serve-set derivation from the connected bond record (SH-2) |
 //! | [`retire`] | Retire / project-id |
 //! | [`handle`] | `StakeEngineHandle` |
 //!
@@ -46,6 +75,7 @@ compile_error!(
 
 mod actor;
 mod bond;
+mod bond_post_assemble;
 mod claim;
 mod drain;
 mod handle;
@@ -53,6 +83,13 @@ mod helpers;
 mod persona;
 mod retire;
 mod scan;
+pub(crate) mod serve_set_source;
+// SH-2b-2: the serving host's lifecycle — the §10.9-independent launch, the
+// refresh cadence, and the ordered teardown. Lives under `stake_engine/`
+// because the host's identity and its serve-set both come from persona state,
+// and because `engine/mod.rs` sits at its decomposition ceiling.
+mod release;
+pub(crate) mod serving;
 mod types;
 
 #[cfg(test)]
@@ -70,6 +107,10 @@ mod tests;
 // `#[allow(unused_imports)]`: a re-export that stops being consumed must fail
 // rule 45's `-D warnings` gate, which is the only thing that keeps the
 // statement true as handlers come and go.
+// The open path derives ids via the cache-first identity-only route
+// (`derive_archival_p_identity_pk`); the remaining in-crate consumers of this
+// re-export are the arm-#3 fire harness (production-compiled `__test_helpers`)
+// and the bond-watch producer tests.
 pub(crate) use actor::persona_canonical_id;
 pub(crate) use bond::AssembledBondPost;
 pub(crate) use claim::{AssembleEmissionClaim, AssembledEmissionClaim};
@@ -109,7 +150,8 @@ pub(crate) use actor::StakeEngine;
     )
 )]
 pub(crate) use helpers::derive_p_source_secrets_bundle;
+pub(crate) use release::{AssembleRelease, AssembledReleasePost, ReleaseRecordState};
 pub(crate) use types::{
     FundedSlots, PSlot, PersonaHandle, RetireOutcome, RetirementWitness, StakeEngineError,
-    ARCHIVAL_PERSONA_LOOKAHEAD,
+    ARCHIVAL_PERSONA_LOOKAHEAD, ARCHIVAL_PERSONA_PROBE_WINDOW,
 };

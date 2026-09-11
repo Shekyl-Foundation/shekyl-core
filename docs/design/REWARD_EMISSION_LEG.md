@@ -1,7 +1,7 @@
 # Reward emission leg — consensus specification (genesis)
 
 **Status:** Design spec — **Layer 1 structural core closed** for
-[`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 close-condition **(i)**.
+[`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §2.4 close-condition **(i)**.
 **Pinned:** form **C** (§4.0); state dedup (§6); lagged §4.4 read (§4.5 collapsed).
 **Un-implementable until:** [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
 (archival read contract + `MAX_CLAIM_AGE_W`) — emission **consumes** archival state it does not define.
@@ -23,7 +23,7 @@ budget schedule source; gate 2 retention-proof **construction** bytes (interface
 §3 — **unblocked**, retool in parallel).
 
 **Upstream:** [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §*Pay-for-service
-rebasing*; [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4;
+rebasing*; [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §2.4;
 [`FOUNDATION_GENESIS_IDENTITY_SET.md`](FOUNDATION_GENESIS_IDENTITY_SET.md) §4
 (`HoldingsDescriptor`).
 
@@ -181,7 +181,7 @@ gate 6 firewall rigor; V3 form **C** reconciliation.
 
 | Constant | Value (genesis pin) | Role |
 |----------|---------------------|------|
-| `SETTLEMENT_EPOCH_BLOCKS` | **10_000** | Global boundary; inherited from confidential-staking epoch table ([`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §5) until migrated to `config/consensus_constants.json` |
+| `SETTLEMENT_EPOCH_BLOCKS` | **10_000** | Global boundary; inherited from confidential-staking epoch table ([`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §5) until migrated to `config/consensus_constants.json` |
 | `settlement_epoch(height)` | `height / SETTLEMENT_EPOCH_BLOCKS` | Integer division; boundaries are chain-wide |
 | `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` | **15** | Max epochs batched in one emission vin; bounds work vector and dedup batch size (same envelope as retired `MAX_EPOCHS_PER_CLAIM`) |
 
@@ -434,8 +434,10 @@ binding messages** (not one signature checked twice):
 - **`auth_backing`** — binds the **`P`-that-staked** to the bond: the hybrid (Ed25519 +
   ML-DSA-65) attestation over the backing leaf's committed `H(pqc_pk)` (the leaf-bound
   spend-authority gate, §7 / §9.6 / [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md)
-  §7). This is the **C-1 hard gate**; recompute-`H(pqc_pk)`-equals-leaf-then-verify is the built
-  primitive `shekyl_emission_hybrid_auth_verify` (PR-E1). Because the leaf commits the **full
+  §7). This is the **C-1 hard gate**; recompute-`H(pqc_pk)`-equals-leaf-then-verify was built
+  as the PR-E1 primitive `shekyl_emission_hybrid_auth_verify`, since retired (PR-SA-2): the
+  check now lives Rust-side in `emission_verify::emission_vin_verify_auth`, step 8 of the
+  single coarse `shekyl_emission_vin_verify` FFI call. Because the leaf commits the **full
   hybrid** pubkey and the auth exercises both halves, it binds `P` exactly as tightly as the leaf.
 - **`auth_claim`** — binds the **`P`-that-claims** to *this specific emission*: its binding
   message commits to the **payout output(s) minted and the `settlement_epochs`**, so a valid
@@ -518,7 +520,7 @@ P_canonical_id = cSHAKE256(
 )[0..32]
 ```
 
-(Same discipline as `StakeId` / foundation pubkey commitments — [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §3.3.3.)
+(Same discipline as `StakeId` / foundation pubkey commitments — [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §3.3.3.)
 
 ### 6.2 `ArchivalBondRecord` (consensus)
 
@@ -1020,9 +1022,9 @@ amounts), bond post/slash reaction.
 
 | Doc | Relationship |
 |-----|----------------|
-| [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.4 | Parent shape |
+| [`design/PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) §2.4 | Parent shape |
 | [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) | Economics + `P` model |
-| [`CONFIDENTIAL_STAKING.md`](CONFIDENTIAL_STAKING.md) §5–§6 | **Retired** claim wire; §5 epoch length still authoritative until constant migrated |
+| [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) §5–§6 | **Retired** claim wire; §5 epoch length still authoritative until constant migrated |
 | [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) | **Critical path** — gate 2/3 schema + `W` |
 | [`ARCHIVAL_FIREWALL_GATE6.md`](ARCHIVAL_FIREWALL_GATE6.md) | Gate 6 — `P`↔principal firewall (parallel) |
 | [`STAKER_ARCHIVAL_SIM.md`](STAKER_ARCHIVAL_SIM.md) | Layer 2 margin-robustness; (ii) byte sweep |

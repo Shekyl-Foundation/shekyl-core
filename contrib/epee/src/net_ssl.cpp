@@ -39,7 +39,6 @@
 #include <openssl/ssl.h>
 #include <openssl/pem.h>
 #include "misc_log_ex.h"
-#include "net/net_helper.h"
 #include "net/net_ssl.h"
 #include "file_io_utils.h"
 #include "shekyl/shekyl_ffi.h"

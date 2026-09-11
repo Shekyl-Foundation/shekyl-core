@@ -83,6 +83,25 @@ pub struct LeafChunkBounds {
     pub leaf_count: u64,
 }
 
+/// Where the challenged leaf sits inside its chunk, as an index into the
+/// chunk's leaves: `(shard · SEGMENT_LEAF_COUNT + leaf_index) − first_leaf_position`.
+///
+/// One home for this arithmetic (RF-D8). `first_leaf_position` is a GLOBAL
+/// tree position while `leaf_index_in_segment` is segment-relative, and
+/// subtracting them directly is the mistake a first FFI draft made -- it
+/// selected leaf 0 of every chunk for every shard past the first, so every
+/// signature verified against the wrong leaf and the C++ end-to-end path
+/// rejected what the Rust KATs (which had the arithmetic right, locally)
+/// accepted. `None` if the index is outside the segment.
+#[must_use]
+pub fn challenged_leaf_offset_in_chunk(shard_id: u64, leaf_index_in_segment: u64) -> Option<usize> {
+    let bounds = challenge_leaf_chunk_bounds(shard_id, leaf_index_in_segment)?;
+    let global = shard_id
+        .checked_mul(SEGMENT_LEAF_COUNT)?
+        .checked_add(leaf_index_in_segment)?;
+    usize::try_from(global.checked_sub(bounds.first_leaf_position)?).ok()
+}
+
 /// Derive the leaf-layer chunk backing challenged index
 /// `leaf_index_in_segment` of frozen shard `shard_id`.
 ///
@@ -90,7 +109,9 @@ pub struct LeafChunkBounds {
 /// the chunk is `[⌊global / W⌋ * W, +W)` with `W = SELENE_CHUNK_WIDTH`.
 /// Returns `None` when `leaf_index_in_segment` is out of segment range
 /// or the global position overflows `u64` — both are verifier-input
-/// rejections, not panics (the challenged index is untrusted wire input).
+/// rejections, not panics. After RF-D6 the index is **verifier-derived**
+/// (`challenge_leaf_index`), never a wire field; an out-of-range value is
+/// a geometry disagreement with the registry, not a prover-chosen index.
 #[must_use]
 pub fn challenge_leaf_chunk_bounds(
     shard_id: u64,

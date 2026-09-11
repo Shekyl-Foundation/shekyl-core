@@ -12,11 +12,21 @@
 //! `transfer/transfer_pending_tx_tests.rs` pattern).
 
 use super::*;
+// Named rather than inherited through `use super::*`: these are wire types
+// the fixtures build with, not workflow items, and the proofs module no
+// longer imports them now that the chain-facing half owns that work.
+use shekyl_wire::{Ct, Transaction};
 
 use shekyl_address::Network;
 
 fn test_address() -> ShekylAddress {
-    ShekylAddress::new(Network::Mainnet, [0xAA; 32], [0xBB; 32], vec![0xCC; 1184])
+    ShekylAddress::new(
+        Network::Mainnet,
+        [0xAA; 32],
+        [0xBB; 32],
+        [0xEE; 48],
+        vec![0xCC; 1184],
+    )
 }
 
 // ── canonical address bytes ──────────────────────────────────────
@@ -281,44 +291,101 @@ mod check_workflows {
         height: usize,
         /// Number of `get_transactions` requests served.
         get_transactions_calls: Arc<AtomicUsize>,
+        /// txid hexes the daemon reports from its POOL rather than the
+        /// chain — the reserve path must refuse these, the tx-proof
+        /// path must report them honestly.
+        pooled: Arc<std::collections::BTreeSet<String>>,
     }
 
     impl Rpc for MockRpc {
         async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
             let reply = match route {
+                // Built from the wire type for the same reason `get_height`
+                // below is — and this one is the proof the reason is real. It
+                // was a `json!` literal until RK-4c, and the moment the reader
+                // became typed the literal stopped decoding: it named four
+                // fields where the contract has nine. A double that cannot
+                // express the reply is a double that was never checked against
+                // it.
                 "get_transactions" => {
                     self.get_transactions_calls.fetch_add(1, Ordering::SeqCst);
-                    let req: Value = serde_json::from_slice(&body).expect("request body is JSON");
-                    let hashes = req["txs_hashes"]
-                        .as_array()
-                        .expect("txs_hashes is an array");
+                    let req: shekyl_rpc_types::GetTransactionsRequest =
+                        serde_json::from_slice(&body).expect("request decodes");
                     let mut txs = Vec::new();
                     let mut missed = Vec::new();
-                    for h in hashes {
-                        let h = h.as_str().expect("txid is a hex string");
-                        match self.txs.get(h) {
-                            Some(body_hex) => txs.push(json!({
-                                "tx_hash": h,
-                                "pruned_as_hex": body_hex,
-                                "in_pool": false,
-                                "block_height": TX_BLOCK_HEIGHT,
-                            })),
-                            None => missed.push(h.to_string()),
+                    for h in &req.txs_hashes {
+                        match self.txs.get(h.as_str()) {
+                            Some(body_hex) => txs.push(shekyl_rpc_types::TxEntry {
+                                tx_hash: shekyl_rpc_types::HashHex::from_hex(h)
+                                    .expect("txid is 32 bytes of hex"),
+                                as_hex: String::new(),
+                                pruned_as_hex: (*body_hex).clone(),
+                                prunable_as_hex: String::new(),
+                                prunable_hash: shekyl_rpc_types::HashHex::ZERO,
+                                as_json: String::new(),
+                                pruned: false,
+                                double_spend_seen: false,
+                                location: if self.pooled.contains(h.as_str()) {
+                                    shekyl_rpc_types::TxLocation::Pooled {
+                                        relayed: true,
+                                        received_timestamp: 1,
+                                    }
+                                } else {
+                                    shekyl_rpc_types::TxLocation::Mined {
+                                        block_height: TX_BLOCK_HEIGHT,
+                                        // Derived, not invented: the daemon
+                                        // computes this against the tip it
+                                        // read for the whole gather, so a
+                                        // double that hard-codes it disagrees
+                                        // with its own heights and only
+                                        // passed while the wallet recomputed
+                                        // the value instead of reading it.
+                                        confirmations: CHAIN_HEIGHT as u64 - TX_BLOCK_HEIGHT,
+                                        block_timestamp: 0,
+                                        output_indices: Vec::new(),
+                                    }
+                                },
+                            }),
+                            None => missed.push(
+                                shekyl_rpc_types::HashHex::from_hex(h)
+                                    .expect("txid is 32 bytes of hex"),
+                            ),
                         }
                     }
-                    json!({ "txs": txs, "missed_tx": missed })
+                    serde_json::to_value(shekyl_rpc_types::GetTransactionsResponse {
+                        status: shekyl_rpc_types::RpcStatus::ok(),
+                        txs,
+                        missed_tx: missed,
+                    })
+                    .expect("wire type serializes")
                 }
-                "get_height" => json!({ "height": self.height }),
+                // Built from the daemon's own wire type, not a JSON literal:
+                // the compiler holds this double to the contract's field set
+                // (a hand-written `{"height": ..}` once drifted and was only
+                // caught when the typed reader refused it).
+                "get_height" => serde_json::to_value(shekyl_rpc_types::GetHeightResponse {
+                    status: shekyl_rpc_types::RpcStatus::ok(),
+                    height: self.height as u64,
+                    hash: shekyl_rpc_types::HashHex::ZERO,
+                })
+                .expect("wire type serializes"),
                 "is_key_image_spent" => {
-                    let req: Value = serde_json::from_slice(&body).expect("request body is JSON");
-                    let n = req["key_images"]
-                        .as_array()
-                        .expect("key_images is an array")
-                        .len();
-                    let statuses: Vec<u64> = (0..n)
-                        .map(|i| self.spent_status.get(i).copied().unwrap_or(0))
+                    let req: shekyl_rpc_types::IsKeyImageSpentRequest =
+                        serde_json::from_slice(&body).expect("request decodes");
+                    let statuses: Vec<shekyl_rpc_types::KeyImageStatus> = (0..req.key_images.len())
+                        .map(|i| {
+                            let raw = self.spent_status.get(i).copied().unwrap_or(0);
+                            shekyl_rpc_types::KeyImageStatus::try_from(
+                                u8::try_from(raw).expect("fixture status is 0..2"),
+                            )
+                            .expect("fixture status is a defined state")
+                        })
                         .collect();
-                    json!({ "spent_status": statuses })
+                    serde_json::to_value(shekyl_rpc_types::IsKeyImageSpentResponse {
+                        status: shekyl_rpc_types::RpcStatus::ok(),
+                        spent_status: statuses,
+                    })
+                    .expect("wire type serializes")
                 }
                 other => panic!("mock daemon received unexpected route {other}"),
             };
@@ -332,15 +399,6 @@ mod check_workflows {
         txid: [u8; 32],
         outputs: Vec<OutputData>,
         rpc: MockRpc,
-    }
-
-    /// `value[8] ‖ tag[1]` — the wire's 9-byte encrypted-amount /
-    /// encrypted-label form over `construct_output`'s split fields.
-    fn join9(value: [u8; 8], tag: u8) -> [u8; 9] {
-        let mut out = [0u8; 9];
-        out[..8].copy_from_slice(&value);
-        out[8] = tag;
-        out
     }
 
     fn ciphertext_of(od: &OutputData) -> HybridCiphertext {
@@ -375,13 +433,19 @@ mod check_workflows {
         // One concatenated hybrid KEM blob (x25519 ‖ ml_kem per
         // output, vout order) in a single 0x06 extra field — the
         // layout `on_chain_outputs_of` slices at the scanner's
-        // offsets.
+        // offsets — plus the 0x07 leaf hashes the same transaction must
+        // carry (CEN-I19: one field of each, 1120·n and 32·n). The KEM
+        // payloads are the real per-output ciphertexts this test needs;
+        // the leaf hashes are filler, since nothing here reads them.
         let mut kem_blob = Vec::new();
+        let mut leaf_blob = Vec::new();
         for od in &outputs {
             kem_blob.extend_from_slice(&od.kem_ciphertext_x25519);
             kem_blob.extend_from_slice(&od.kem_ciphertext_ml_kem);
+            leaf_blob.extend_from_slice(&[0x7bu8; 32]);
         }
-        let extra = ExtraField::PqcKemCiphertext(kem_blob).serialize();
+        let mut extra = ExtraField::PqcKemCiphertext(kem_blob).serialize();
+        extra.extend_from_slice(&ExtraField::PqcLeafHashes(leaf_blob).serialize());
 
         let tx = Transaction {
             prefix: TxPrefix {
@@ -407,11 +471,11 @@ mod check_workflows {
                 base: CtBase {
                     enc_amounts: outputs
                         .iter()
-                        .map(|od| join9(od.enc_amount, od.amount_tag))
+                        .map(|od| od.enc_amount_wire().to_bytes())
                         .collect(),
                     enc_labels: outputs
                         .iter()
-                        .map(|od| join9(od.enc_label, od.label_tag))
+                        .map(|od| od.enc_label_wire().to_bytes())
                         .collect(),
                     commitments: outputs.iter().map(|od| od.commitment).collect(),
                 },
@@ -420,19 +484,18 @@ mod check_workflows {
             },
         };
 
-        // The pruned form is associated by the daemon's `tx_hash`
-        // label, not by re-hashing (`parse_tx_batch`'s contract), so
-        // a fixed txid keeps the fixture simple.
-        let txid = [0x77u8; 32];
+        // The txid is DERIVED from the body, not chosen. `parse_tx_batch`
+        // used to associate a pruned reply by the daemon's `tx_hash` label
+        // alone, and this fixture's previous `[0x77; 32]` was simple only
+        // because of it — a body under a label that was not its own is the
+        // substitution a hostile daemon performs, and the proofs path is
+        // exactly where it lands. The mock serves `prunable_hash: ZERO`, so
+        // that is the digest the identity mixes.
+        let txid = tx.hash_with_supplied_prunable([0u8; 32]);
         let mut txs = BTreeMap::new();
         txs.insert(hex::encode(txid), hex::encode(tx.serialize()));
 
-        let address = ShekylAddress::new(
-            Network::Testnet,
-            *keys.spend_pk.as_canonical_bytes(),
-            *keys.view_pk.as_canonical_bytes(),
-            keys.ml_kem_ek.to_vec(),
-        );
+        let address = keys.to_address(Network::Testnet);
 
         CheckFixture {
             address,
@@ -443,6 +506,7 @@ mod check_workflows {
                 spent_status: Arc::new(spent_status),
                 height: CHAIN_HEIGHT,
                 get_transactions_calls: Arc::new(AtomicUsize::new(0)),
+                pooled: Arc::new(std::collections::BTreeSet::new()),
             },
             local,
         }
@@ -605,12 +669,7 @@ mod check_workflows {
 
         // A different wallet's address: same network, wrong keys.
         let other = LocalKeys::from_test_seed([0x5C; 32]);
-        let wrong = ShekylAddress::new(
-            Network::Testnet,
-            *other.keys.spend_pk.as_canonical_bytes(),
-            *other.keys.view_pk.as_canonical_bytes(),
-            other.keys.ml_kem_ek.to_vec(),
-        );
+        let wrong = other.keys.to_address(Network::Testnet);
 
         let checked = check_tx_proof(&fx.rpc, fx.txid, &wrong, MSG, &proof)
             .await
@@ -733,14 +792,27 @@ mod check_workflows {
         // resolve in chunked batched get_transactions calls, not
         // one awaited call per unique txid.
         let mut fx = make_fixture(vec![]);
-        // Serve the same pruned body under a second txid (the
-        // pruned form is associated by the daemon's tx_hash label,
-        // not by re-hashing) so the locators span two txids whose
-        // on-chain outputs still match the proof entries.
-        let txid2 = [0x78u8; 32];
-        let body = fx.rpc.txs[&hex::encode(fx.txid)].clone();
+        // A SECOND, genuinely different transaction under its own hash, so
+        // the locators span two txids. Serving one body under a borrowed
+        // second label is what `parse_tx_batch` now refuses — the association
+        // is the body's identity, not the daemon's label. Only `unlock_time`
+        // differs, so the outputs the proof entries reference are unchanged
+        // and the subject of this test stays the batching.
+        let base: Transaction = {
+            let hex_body = fx.rpc.txs[&hex::encode(fx.txid)].clone();
+            Transaction::read(
+                &mut hex::decode(hex_body)
+                    .expect("fixture body is hex")
+                    .as_slice(),
+            )
+            .expect("fixture body parses")
+        };
+        let mut second = base.clone();
+        second.prefix.unlock_time = 1;
+        let txid2 = second.hash_with_supplied_prunable([0u8; 32]);
+        assert_ne!(txid2, fx.txid, "the second body must be a different tx");
         let mut txs = (*fx.rpc.txs).clone();
-        txs.insert(hex::encode(txid2), body);
+        txs.insert(hex::encode(txid2), hex::encode(second.serialize()));
         fx.rpc.txs = Arc::new(txs);
 
         let decoded = decode_proof_payload(&reserve_proof_string(&fx), HRP_RESERVE_PROOF)
@@ -763,20 +835,36 @@ mod check_workflows {
         // 250 unique txids must resolve in ceil(250 / 100) = 3
         // batched calls (TXS_PER_REQUEST = 100), not 250.
         let fx = make_fixture(vec![]);
-        let body = fx.rpc.txs[&hex::encode(fx.txid)].clone();
+        // 250 DISTINCT bodies, each under the hash its own bytes produce.
+        // Synthesising ids against one shared body is no longer expressible:
+        // `parse_tx_batch` binds the body to the requested hash, so one body
+        // has one identity. `unlock_time` is the cheapest field to vary that
+        // the pruned validator still accepts.
+        let base: Transaction = {
+            let hex_body = fx.rpc.txs[&hex::encode(fx.txid)].clone();
+            Transaction::read(
+                &mut hex::decode(hex_body)
+                    .expect("fixture body is hex")
+                    .as_slice(),
+            )
+            .expect("fixture body parses")
+        };
         let mut txs = BTreeMap::new();
         let mut ids: Vec<[u8; 32]> = Vec::with_capacity(250);
-        for i in 0..250u32 {
-            let mut id = [0u8; 32];
-            id[..4].copy_from_slice(&i.to_le_bytes());
+        for i in 0..250u64 {
+            let mut tx = base.clone();
+            tx.prefix.unlock_time = i;
+            let id = tx.hash_with_supplied_prunable([0u8; 32]);
             ids.push(id);
-            txs.insert(hex::encode(id), body.clone());
+            txs.insert(hex::encode(id), hex::encode(tx.serialize()));
         }
+        assert_eq!(ids.len(), 250, "each body must have produced its own id");
         let rpc = MockRpc {
             txs: Arc::new(txs),
             spent_status: Arc::new(vec![]),
             height: CHAIN_HEIGHT,
             get_transactions_calls: Arc::new(AtomicUsize::new(0)),
+            pooled: Arc::new(std::collections::BTreeSet::new()),
         };
 
         let bodies = fetch_proof_txs(&rpc, &ids).await.expect("all txs served");
@@ -803,6 +891,30 @@ mod check_workflows {
         match err {
             ProofsError::TxNotFound(hex) => assert_eq!(hex, hex::encode(unknown)),
             other => panic!("expected TxNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn check_reserve_proof_pooled_locator_txid_is_tx_unconfirmed() {
+        // A reserve proof is a claim about CONFIRMED funds, and
+        // `CheckedReserveProof` has no pool dimension — so a locator
+        // naming a tx the daemon serves from its pool must refuse
+        // loudly, carrying the txid, rather than let an unconfirmed
+        // output (still erasable by a competing spend) count into
+        // `total - spent` as live reserve. The refusal fires even
+        // though the very same proof verifies once the tx confirms:
+        // the fixture below is the standard valid fixture, with the
+        // daemon's answer — not the proof — moved to the pool.
+        let mut fx = make_fixture(vec![]);
+        fx.rpc.pooled = Arc::new(std::collections::BTreeSet::from([hex::encode(fx.txid)]));
+        let proof = reserve_proof_string(&fx);
+
+        let err = check_reserve_proof(&fx.rpc, &fx.address, MSG, &proof)
+            .await
+            .expect_err("a pooled locator tx refuses");
+        match err {
+            ProofsError::TxUnconfirmed(hex) => assert_eq!(hex, hex::encode(fx.txid)),
+            other => panic!("expected TxUnconfirmed, got {other:?}"),
         }
     }
 
@@ -862,5 +974,40 @@ mod check_workflows {
         )
         .expect("with-secrets proof verifies");
         assert_eq!(verified.len(), 2);
+    }
+}
+
+/// **`confirmations` is carried, not recomputed.**
+///
+/// The round-trip test above cannot tell the two apart: its mock is
+/// self-consistent, so reading the daemon's number and re-deriving it from
+/// a second `get_height` both yield 8. This pins the contract directly —
+/// the value the daemon computed under its gather lock is the value the
+/// caller sees, unaltered — by handing the reader a number that no height
+/// subtraction available to the wallet would produce.
+///
+/// The regression it guards is a silent one: re-deriving would still look
+/// right on a quiet chain and drift only when a block lands between the two
+/// requests, which is exactly when a confirmations count is being watched.
+mod confirmations_are_read_not_recomputed {
+    use crate::engine::proofs_chain_facts::{confirmations_of, TxChainState};
+
+    #[test]
+    fn a_mined_tx_reports_the_daemons_own_count() {
+        let (in_pool, confirmations) = confirmations_of(&TxChainState::Mined {
+            confirmations: 4_242,
+        });
+        assert!(!in_pool);
+        assert_eq!(
+            confirmations, 4_242,
+            "the daemon's gather-lock count must reach the caller unaltered"
+        );
+    }
+
+    #[test]
+    fn a_pooled_tx_reports_zero_and_no_depth() {
+        let (in_pool, confirmations) = confirmations_of(&TxChainState::Pooled);
+        assert!(in_pool);
+        assert_eq!(confirmations, 0, "a pooled tx has no depth");
     }
 }

@@ -41,7 +41,7 @@ pub(crate) struct PreparedInput {
 /// output-construction loop of [`AssembleBond`] (two confidential change
 /// vouts) and [`AssembleEmissionClaim`] (loud reward + two change vouts):
 /// per output, `construct_output` → KEM blob layout → leaf-hash blob →
-/// `[u8; 9]` enc-amount/enc-label packing → tx-builder `OutputInfo`. Both
+/// `enc_amount_wire()` / `enc_label_wire()` → tx-builder `OutputInfo`. Both
 /// change vouts return to `P`'s base spend key (the pscan
 /// `GuaranteedScanner` claims against `spend_pk` directly), so change
 /// re-enters the funding set on the next sweep.
@@ -93,18 +93,8 @@ pub(crate) fn construct_vouts_to_base(
             dest_key: constructed.output_key,
             amount: AtomicUnits::from_raw(amount),
             commitment_mask: constructed.z,
-            enc_amount: {
-                let mut enc = [0u8; 9];
-                enc[..8].copy_from_slice(&constructed.enc_amount);
-                enc[8] = constructed.amount_tag;
-                enc
-            },
-            enc_label: {
-                let mut enc = [0u8; 9];
-                enc[..8].copy_from_slice(&constructed.enc_label);
-                enc[8] = constructed.label_tag;
-                enc
-            },
+            enc_amount: constructed.enc_amount_wire(),
+            enc_label: constructed.enc_label_wire(),
         });
     }
     Ok(vouts)
@@ -280,7 +270,6 @@ pub(crate) fn prepare_funding_inputs(
 /// [`LocalKeys::derive_primary_source_secrets_bundle`]: crate::engine::local_keys::LocalKeys
 /// [`recover_combined_ss`]: shekyl_crypto_pq::output::recover_combined_ss
 /// [`derive_output_secrets`]: shekyl_crypto_pq::derivation::derive_output_secrets
-#[allow(dead_code)] // transient — consumed by the WI-2 `AssembleBond` handler as it lands.
 pub(crate) fn derive_p_source_secrets_bundle(
     keys: &ArchivalPKeys,
     source_ciphertext: &HybridCiphertext,
@@ -379,7 +368,7 @@ pub(crate) fn key_image_from_spend_key_x(
 /// 0.17 % — rare enough to fire on a stuck RNG without triggering excessive
 /// retries on a correct one.
 ///
-/// **False-positive handling:** the caller (the `SignBond` handler) surfaces
+/// **False-positive handling:** the caller (the `PlanBondPost` handler) surfaces
 /// `RngDegeneracy` and the user retries. A single false positive in 601 bond
 /// requests is acceptable; multiple consecutive false positives signal a
 /// broken entropy source.

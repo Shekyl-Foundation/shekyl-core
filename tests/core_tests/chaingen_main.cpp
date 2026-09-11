@@ -32,7 +32,6 @@
 #include "chaingen_tests_list.h"
 #include "common/util.h"
 #include "common/command_line.h"
-#include "tx_pool.h"
 #include "transaction_tests.h"
 
 #include <boost/regex.hpp>
@@ -117,8 +116,16 @@ int main(int argc, char* argv[])
     // Block verification tests
     GENERATE_AND_PLAY(gen_block_big_major_version);
     GENERATE_AND_PLAY(gen_block_big_minor_version);
-    GENERATE_AND_PLAY(gen_block_ts_not_checked);
+    GENERATE_AND_PLAY(gen_block_ts_below_median_in_bootstrap);
+    GENERATE_AND_PLAY(gen_block_ts_at_genesis_in_deep_bootstrap);
     GENERATE_AND_PLAY(gen_block_ts_in_past);
+    GENERATE_AND_PLAY(gen_block_ts_at_median);
+    GENERATE_AND_PLAY(gen_block_alt_ts_above_ftl);
+    GENERATE_AND_PLAY(gen_block_pow_verifier_failure_main);
+    GENERATE_AND_PLAY(gen_block_pow_verifier_failure_alt);
+    GENERATE_AND_PLAY(gen_block_alt_ts_window_truncation);
+    GENERATE_AND_PLAY(gen_reorg_watermark_refused_switch);
+    GENERATE_AND_PLAY(gen_checkpoint_conflict_rollback);
     GENERATE_AND_PLAY(gen_block_ts_in_future);
     GENERATE_AND_PLAY(gen_block_invalid_prev_id);
     GENERATE_AND_PLAY(gen_block_invalid_attestation_root);
@@ -140,7 +147,7 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_miner_tx_out_has_no_view_tag_from_hf_view_tags);
     GENERATE_AND_PLAY(gen_block_miner_tx_out_has_view_tag_before_hf_view_tags);
     GENERATE_AND_PLAY(gen_block_miner_tx_out_has_view_tag_from_hf_view_tags);
-    GENERATE_AND_PLAY(gen_block_has_invalid_tx);
+    GENERATE_AND_PLAY(gen_block_missing_tx);
     GENERATE_AND_PLAY(gen_block_is_too_big);
     // Disabled: no "late v1 coinbase" era in Shekyl (1 = 1 = genesis)
     // GENERATE_AND_PLAY(gen_block_late_v1_coinbase_tx);

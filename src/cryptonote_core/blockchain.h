@@ -58,6 +58,7 @@
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "cryptonote_basic/difficulty.h"
+#include "shekyl/tx_volume_window.h"
 #include "cryptonote_tx_utils.h"
 #include "tx_verification_utils.h"
 #include "cryptonote_basic/verification_context.h"
@@ -83,15 +84,6 @@ namespace cryptonote
     db_async, //!< handle syncing calls instead of the backing db, asynchronously
     db_nosync //!< Leave syncing up to the backing db (safest, but slowest because of disk I/O)
   };
-
-  /** 
-   * @brief Callback routine that returns checkpoints data for specific network type
-   * 
-   * @param network network type
-   * 
-   * @return checkpoints data, empty span if there ain't any checkpoints for specific network type
-   */
-  typedef std::function<const epee::span<const unsigned char>(cryptonote::network_type network)> GetCheckpointsCallback;
 
   typedef boost::function<void(std::vector<txpool_event>)> TxpoolNotifyCallback;
   typedef boost::function<void(uint64_t /* height */, epee::span<const block> /* blocks */)> BlockNotifyCallback;
@@ -135,11 +127,10 @@ namespace cryptonote
      * @param offline true if running offline, else false
      * @param test_options test parameters
      * @param fixed_difficulty fixed difficulty for testing purposes; 0 means disabled
-     * @param get_checkpoints if set, will be called to get checkpoints data
      *
      * @return true on success, false if any initialization steps fail
      */
-    bool init(BlockchainDB* db, const network_type nettype = MAINNET, bool offline = false, const cryptonote::test_options *test_options = NULL, difficulty_type fixed_difficulty = 0, const GetCheckpointsCallback& get_checkpoints = nullptr);
+    bool init(BlockchainDB* db, const network_type nettype = MAINNET, bool offline = false, const cryptonote::test_options *test_options = NULL, difficulty_type fixed_difficulty = 0);
 
     /**
      * @brief Initialize the Blockchain state
@@ -252,10 +243,12 @@ namespace cryptonote
      *
      * @param blocks_entry a list of incoming blocks
      * @param blocks the parsed blocks
+     * @param drop_verdict out: why this call failed (SHEKYL_DROP_VERDICT_*).
+     *   Null if the caller has no peer to attribute (importer, miner).
      *
      * @return false on erroneous blocks, else true
      */
-    bool prepare_handle_incoming_blocks(const std::vector<block_complete_entry>  &blocks_entry, std::vector<block> &blocks);
+    bool prepare_handle_incoming_blocks(const std::vector<block_complete_entry>  &blocks_entry, std::vector<block> &blocks, uint8_t *drop_verdict = nullptr);
 
     /**
      * @brief prepare the blockchain for handling an incoming block, without performing preprocessing
@@ -348,22 +341,6 @@ namespace cryptonote
     difficulty_type get_difficulty_for_next_block();
 
     /**
-     * @brief check currently stored difficulties against difficulty checkpoints
-     *
-     * @return {flag, height} flag: true if all difficulty checkpoints pass, height: the last checkpoint height before the difficulty drift bug starts
-     */
-    std::pair<bool, uint64_t> check_difficulty_checkpoints() const;
-
-    /**
-     * @brief recalculate difficulties for blocks after the last difficulty checkpoints to circumvent the annoying 'difficulty drift' bug
-     *
-     * @param start_height: if omitted, starts recalculation from the last difficulty checkpoint
-     *
-     * @return number of blocks whose difficulties got corrected
-     */
-    size_t recalculate_difficulties(std::optional<uint64_t> start_height = std::nullopt);
-
-    /**
      * @brief adds a block to the blockchain
      *
      * Adds a new block to the blockchain.  If the block's parent is not the
@@ -420,7 +397,17 @@ namespace cryptonote
      * @return true if block template filled in successfully, else false
      */
     bool get_miner_data(uint8_t& major_version, uint64_t& height, crypto::hash& prev_id, crypto::hash& seed_hash, difficulty_type& difficulty, uint64_t& median_weight, uint64_t& already_generated_coins, std::vector<tx_block_template_backlog_entry>& tx_backlog);
-    uint64_t get_tx_volume_avg(uint64_t height) const;
+    /**
+     * @brief the transaction-volume operand at @p height, as the exact window
+     *
+     * Counts transactions over the trailing SHEKYL_TX_VOLUME_WINDOW blocks
+     * below @p height and returns the pair (tx_count_sum, blocks). It does
+     * NOT divide: since FL-R24 the ratio is formed Rust-side, in one
+     * division with the baseline, so the operand the reward and the fee
+     * floor see is the exact mean and not its integer floor. Memoized per
+     * (tip, height); see the definition.
+     */
+    shekyl::tx_volume_window get_tx_volume_window(uint64_t height) const;
 
     /**
      * @brief checks if a block is known about with a given hash
@@ -507,25 +494,6 @@ namespace cryptonote
      */
     bool find_blockchain_supplement(const std::list<crypto::hash>& qblock_ids, uint64_t& starter_offset) const;
 
-    /**
-     * @brief get recent blocks for a foreign chain
-     *
-     * This function gets recent blocks relative to a foreign chain, starting either at
-     * a requested height or whatever height is the most recent ours and the foreign
-     * chain have in common.
-     *
-     * @param req_start_block if non-zero, specifies a start point (otherwise find most recent commonality)
-     * @param qblock_ids the foreign chain's "short history" (see get_short_chain_history)
-     * @param blocks return-by-reference the blocks and their transactions
-     * @param total_height return-by-reference our current blockchain height
-     * @param start_height return-by-reference the height of the first block returned
-     * @param pruned whether to return full or pruned tx blobs
-     * @param max_block_count the max number of blocks to get
-     * @param max_tx_count the max number of txes to get (it can get overshot by the last block's number of txes minus 1)
-     *
-     * @return true if a block found in common or req_start_block specified, else false
-     */
-    bool find_blockchain_supplement(const uint64_t req_start_block, const std::list<crypto::hash>& qblock_ids, std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::pair<crypto::hash, cryptonote::blobdata> > > >& blocks, uint64_t& total_height, uint64_t& start_height, bool pruned, bool get_miner_tx_hash, size_t max_block_count, size_t max_tx_count) const;
 
     /**
      * @brief retrieves a set of blocks and their transactions, and possibly other transactions
@@ -568,21 +536,6 @@ namespace cryptonote
     crypto::public_key get_output_key(uint64_t amount, uint64_t global_index) const;
 
     /**
-     * @brief gets specific outputs to mix with
-     *
-     * This function takes an RPC request for outputs to mix with
-     * and creates an RPC response with the resultant output indices.
-     *
-     * Outputs to mix with are specified in the request.
-     *
-     * @param req the outputs to return
-     * @param res return-by-reference the resultant output indices and keys
-     *
-     * @return true
-     */
-    bool get_outs(const COMMAND_RPC_GET_OUTPUTS_BIN::request& req, COMMAND_RPC_GET_OUTPUTS_BIN::response& res) const;
-
-    /**
      * @brief gets an output's key and unlocked state
      *
      * @param amount in - the output amount
@@ -591,7 +544,7 @@ namespace cryptonote
      * @param key out - the output's key
      * @param unlocked out - the output's unlocked state
      */
-    void get_output_key_mask_unlocked(const uint64_t& amount, const uint64_t& index, crypto::public_key& key, rct::key& mask, bool& unlocked) const;
+    void get_output_key_mask_unlocked(const uint64_t& amount, const uint64_t& index, crypto::public_key& key, ct::key& mask, bool& unlocked) const;
 
     /**
      * @brief gets per block distribution of outputs of a given amount
@@ -676,20 +629,29 @@ namespace cryptonote
     static uint64_t get_dynamic_base_fee(uint64_t block_reward, size_t median_block_weight, uint8_t version);
 
     /**
-     * @brief get dynamic per kB or byte fee estimate for the next few blocks
+     * @brief the four-tier estimate with its inputs supplied rather than read
      *
-     * The dynamic fee is based on the block weight in a past window, and
-     * the current block reward. It is expressed by kB before v8, and
-     * per byte from v8.
-     * This function calculates an estimate for a dynamic fee which will be
-     * valid for the next grace_blocks
+     * Same computation as the overload below, for a caller that already holds
+     * the block reward and the two weight medians.
      *
      * @param grace_blocks number of blocks we want the fee to be valid for
-     *
-     * @return the fee estimate
+     * @param base_reward the M_r-NEUTRAL total reward to price against
+     *   (`max(curve(remaining), TAIL)`) — the round-8 amendment's operand;
+     *   `M_r` lives inside `c_q`, so passing a modulated reward here would
+     *   double-count it
+     * @param Mnw the median of the short-term weight window
+     * @param Mlw the penalty-free zone the wallet sees
+     * @param c_q the whole volume-dependent correction scalar
+     *   `Q_ceil((1-sigma)*M_r/(1-b))`, in SHEKYL_FIXED_POINT_SCALE units
+     *   (SCALE = 1.0x); derived from chain state, never remembered
+     * @param fees out: FOUR SLOTS carrying THREE tiers (FL-R17) —
+     *   [0] economy, [1] standard, [2] == [1], [3] priority. Slot 2 is the
+     *   RK-5 wire bridge: the retired `Fm` rung keeps the vector shape until
+     *   the RPC cutover, and mirrors standard so wallet2-transliterated
+     *   `Elevated` callers land in the largest anonymity set rather than on
+     *   a rung of their own. The CALLER clamps [0] up to the relay floor.
      */
-    uint64_t get_dynamic_base_fee_estimate(uint64_t grace_blocks) const;
-    void get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, std::vector<uint64_t> &fees) const;
+    void get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, uint64_t c_q, std::vector<uint64_t> &fees) const;
 
     /**
      * @brief get four levels of dynamic per byte fee estimate for the next few blocks
@@ -812,8 +774,6 @@ namespace cryptonote
     bool get_transactions_blobs(const std::vector<crypto::hash>& txs_ids, std::vector<cryptonote::blobdata>& txs, std::vector<crypto::hash>& missed_txs, bool pruned = false) const;
     bool get_transactions_blobs(const std::vector<crypto::hash>& txs_ids, std::vector<tx_blob_entry>& txs, std::vector<crypto::hash>& missed_txs, bool pruned = false) const;
     template<class t_ids_container, class t_tx_container, class t_missed_container>
-    bool get_split_transactions_blobs(const t_ids_container& txs_ids, t_tx_container& txs, t_missed_container& missed_txs) const;
-    template<class t_ids_container, class t_tx_container, class t_missed_container>
     bool get_transactions(const t_ids_container& txs_ids, t_tx_container& txs, t_missed_container& missed_txs, bool pruned = false) const;
 
     //debug functions
@@ -826,7 +786,28 @@ namespace cryptonote
      *
      * @param points the checkpoints to check against
      */
-    void check_against_checkpoints(const checkpoints& points);
+    /**
+     * @brief validate the local chain against loaded checkpoints
+     *
+     * @return false iff a conflict exists that could not be resolved by
+     * rollback (the target sits below the prune watermark) — the caller
+     * fail-stops (C2-R1b F-1(b)); true otherwise (no conflict, or the
+     * rollback was applied).
+     */
+    bool check_against_checkpoints(const checkpoints& points);
+
+    /**
+     * @brief sticky degraded-following flag (C2-R1b F-1(a))
+     *
+     * Set when a network-driven chain switch is refused at the prune
+     * watermark: the node is knowingly NOT following the heaviest chain
+     * it has seen. Process-lifetime sticky, re-armed on recurrence; never
+     * cleared (alt blocks drop at restart, so a restarted node re-degrades
+     * only if peers re-send the heavier chain — self-correcting, not a
+     * clear-on-restart bug). Surfaced on get_info; migrates into RK-5c's
+     * node-state hub when that lands.
+     */
+    bool is_following_degraded() const { return m_following_degraded.load(std::memory_order_relaxed); }
 
     /**
      * @brief loads new checkpoints from a file
@@ -847,10 +828,9 @@ namespace cryptonote
      * @param sync_on_blocks whether to sync based on blocks or bytes
      * @param sync_threshold number of blocks/bytes to cache before syncing to database
      * @param sync_mode the ::blockchain_db_sync_mode to use
-     * @param fast_sync sync using built-in block hashes as trusted
      */
     void set_user_options(uint64_t maxthreads, bool sync_on_blocks, uint64_t sync_threshold,
-        blockchain_db_sync_mode sync_mode, bool fast_sync);
+        blockchain_db_sync_mode sync_mode);
 
     /**
      * @brief sets a txpool notify object to call for every new tx used to add a new block
@@ -1106,8 +1086,6 @@ namespace cryptonote
     bool for_all_txpool_txes(std::function<bool(const crypto::hash&, const txpool_tx_meta_t&, const cryptonote::blobdata_ref*)>, bool include_blob = false, relay_category tx_category = relay_category::broadcasted) const;
     bool txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category);
 
-    bool is_within_compiled_block_hash_area() const { return is_within_compiled_block_hash_area(m_db->height()); }
-    uint64_t prevalidate_block_hashes(uint64_t height, const std::vector<crypto::hash> &hashes, const std::vector<uint64_t> &weights);
     uint32_t get_blockchain_pruning_seed() const { return m_db->get_blockchain_pruning_seed(); }
     bool prune_blockchain(uint32_t pruning_seed = 0);
     bool update_blockchain_pruning();
@@ -1128,22 +1106,17 @@ namespace cryptonote
      *
      * @param nblocks number of blocks to be removed
      */
-    void pop_blocks(uint64_t nblocks);
-
     /**
-     * @brief checks whether a given block height is included in the precompiled block hash area
+     * @brief removes blocks from the top of the blockchain
      *
-     * @param height the height to check for
+     * @return false on either failure arm — a prune-watermark refusal
+     * (nothing was popped; C2-R1b F-1) or a mid-pop exception (SOME
+     * blocks may already be popped: the failure path is not atomic, and
+     * the resulting height tells the caller how far it got). Callers
+     * surface an explicit error either way, never a silent success with
+     * an unchanged height.
      */
-    bool is_within_compiled_block_hash_area(uint64_t height) const;
-
-    /**
-     * @brief checks whether we have known weights for the given block heights
-     *
-     * @param height the start height to check for
-     * @param nblocks how many blocks to check from that height
-     */
-    bool has_block_weights(uint64_t height, uint64_t nblocks) const;
+    bool pop_blocks(uint64_t nblocks);
 
     /**
      * @brief flush the invalid blocks set
@@ -1176,15 +1149,24 @@ namespace cryptonote
      */
     static crypto::hash compute_fcmp_verification_hash(const transaction& tx);
 
+    // RF-D1: a pass record is checked as a pair -- the vin's opaque kept half
+    // and this vin's pruned record from CtSig.p.serve_credit_pruned.
+    // `prev_block_hash` is `block_hash(h-1)` for the slot being validated
+    // (PC-D3) -- on the block path the validated block's `prev_id`, on the
+    // pool path the current tip. It is a VERIFIER-supplied operand: under
+    // PC-D2 the block is implicit, so nothing on the wire names it and there
+    // is no prover-chosen value here to check.
     bool check_archival_serve_credit_input(const txin_archival_serve_credit_response& resp,
-      uint64_t current_height) const;
+      const std::vector<uint8_t>& pruned_record, uint64_t current_height,
+      const crypto::hash& prev_block_hash, tx_verification_context *tvc = nullptr) const;
 
     // `auth_pubkey` is the bond input's pqc auth key
     // (`tx.pqc_auths[bond_index].hybrid_public_key`); the §3.5 step-5
     // selection is pinned inside — identity key on credit paths, the record's
     // committed GF-1 `bond_spend_pk` on debit paths (never the identity key).
     bool check_archival_bond_post_input(const txin_archival_bond_post& bond,
-      const std::vector<uint8_t>& auth_pubkey, uint64_t chain_height) const;
+      const std::vector<uint8_t>& auth_pubkey, uint64_t chain_height,
+      tx_verification_context *tvc = nullptr) const;
 
     /**
      * @brief FAKECHAIN-only: inject an archival serve-credit bit directly.
@@ -1208,6 +1190,14 @@ namespace cryptonote
      *
      * @return false unless nettype is FAKECHAIN.
      */
+    /// The injected row is attributed to the tip's block index (PC-D4), read
+    /// inside the method under `m_blockchain_lock` — the same critical
+    /// section as the write, so a concurrent mine/pop cannot move the tip
+    /// between attribution and write. There is deliberately no height
+    /// parameter: a caller-supplied snapshot is pre-lock by construction,
+    /// and the "not block-owned" warning stays literal — nothing pops the
+    /// bit, so a later pop below the attributed height strands a row that
+    /// claims a block it did not come from.
     bool regtest_inject_archival_serve_credit(const crypto::hash& p_canonical_id,
       uint64_t shard_id, uint64_t settlement_epoch);
 
@@ -1252,12 +1242,8 @@ namespace cryptonote
     std::unordered_map<crypto::hash, std::unordered_map<crypto::key_image, std::vector<output_data_t>>> m_scan_table;
     std::unordered_map<crypto::hash, crypto::hash> m_blocks_longhash_table;
 
-    // Keccak hashes for each block and for fast pow checking
-    std::vector<std::pair<crypto::hash, crypto::hash>> m_blocks_hash_of_hashes;
-    std::vector<std::pair<crypto::hash, uint64_t>> m_blocks_hash_check;
-
+    std::atomic<bool> m_following_degraded{false}; //!< C2-R1b F-1(a): switch refused at the prune watermark
     blockchain_db_sync_mode m_db_sync_mode;
-    bool m_fast_sync;
     bool m_show_time_stats;
     bool m_db_default_sync;
     bool m_db_sync_on_blocks;
@@ -1278,6 +1264,15 @@ namespace cryptonote
     epee::critical_section m_difficulty_lock;
     crypto::hash m_difficulty_for_next_block_top_hash;
     difficulty_type m_difficulty_for_next_block;
+
+    // Memo for get_tx_volume_window, keyed on (top block hash, height) so
+    // it is a memoization of a pure function of chain state and never a
+    // held value two nodes could disagree on. See the function for why it
+    // is needed.
+    mutable epee::critical_section m_tx_volume_window_lock;
+    mutable crypto::hash m_tx_volume_window_top_hash;
+    mutable uint64_t m_tx_volume_window_height;
+    mutable shekyl::tx_volume_window m_tx_volume_window_value;
 
     boost::asio::io_context m_async_service;
     boost::thread_group m_async_pool;
@@ -1308,6 +1303,15 @@ namespace cryptonote
     crypto::hash m_btc_seed_hash;
     uint64_t m_btc_seed_height;
     bool m_btc_valid;
+
+    //! Block 0's timestamp — the C2-R3 padding value. Written by exactly
+    //! the two paths that (re)install block 0: Blockchain::init and
+    //! reset_and_set_genesis_block (reorgs never touch block 0, so it is
+    //! otherwise immutable). The timestamp-rule shim passes it to the FFI
+    //! unconditionally so the pad-or-not decision lives wholly in the
+    //! Rust rule owner (no duplicated short-window threshold on this side
+    //! of the boundary).
+    uint64_t m_genesis_timestamp;
 
 
     bool m_batch_success;
@@ -1365,13 +1369,13 @@ namespace cryptonote
      * @param tx_prefix_hash the transaction prefix hash, for caching organization
      * @param sig the input signature
      * @param output_keys return-by-reference the public keys of the outputs in the input set
-     * @param rct_signatures the FCMP++ signatures, which are only valid if tx version > 1
+     * @param ct_signatures the FCMP++ signatures, which are only valid if tx version > 1
      * @param pmax_related_block_height return-by-pointer the height of the most recent block in the input set
      * @param hf_version the consensus rules version to use
      *
      * @return false if any output is not yet unlocked, or is missing, otherwise true
      */
-    bool check_tx_input(size_t tx_version,const txin_to_key& txin, const crypto::hash& tx_prefix_hash, const std::vector<crypto::signature>& sig, const rct::rctSig &rct_signatures, std::vector<rct::ctkey> &output_keys, uint64_t* pmax_related_block_height, uint8_t hf_version) const;
+    bool check_tx_input(size_t tx_version,const txin_to_key& txin, const crypto::hash& tx_prefix_hash, const std::vector<crypto::signature>& sig, const ct::CtSig &ct_signatures, std::vector<ct::ctkey> &output_keys, uint64_t* pmax_related_block_height, uint8_t hf_version) const;
 
     /**
      * @brief validate a transaction's inputs and their keys
@@ -1622,18 +1626,17 @@ namespace cryptonote
     bool add_block_as_invalid(const block_extended_info& bei, const crypto::hash& h);
 
     /**
-     * @brief checks a block's timestamp
+     * @brief checks a block's timestamp against the main chain (C2-R3 rule)
      *
-     * This function grabs the timestamps from the most recent <n> blocks,
-     * where n = SHEKYL_DAA_MTP_WINDOW.  If there are not those many
-     * blocks in the blockchain, the timestamp is assumed to be valid.  If there
-     * are, this function returns:
-     *   true if the block's timestamp is not less than the timestamp of the
-     *       median of the selected blocks
-     *   false otherwise
+     * Builds the window of the up-to-11 newest main-chain timestamps and
+     * applies the Rust rule (`shekyl_difficulty_check_timestamp_rule`,
+     * the FFI over shekyl-difficulty's `check_timestamp_rule`):
+     * strict MTP + FTL, with short windows genesis-padded so the rule
+     * runs from block 1 — there is no bootstrap carve-out.
      *
      * @param b the block to be checked
-     * @param median_ts return-by-reference the median of timestamps
+     * @param median_ts return-by-reference the window median (always set;
+     *   the miner-template caller reads it on the failure arm)
      *
      * @return true if the block's timestamp is valid, otherwise false
      */
@@ -1641,18 +1644,21 @@ namespace cryptonote
     bool check_block_timestamp(const block& b) const { uint64_t median_ts; return check_block_timestamp(b, median_ts); }
 
     /**
-     * @brief checks a block's timestamp
+     * @brief checks a block's timestamp against a caller-built window (C2-R3 rule)
      *
-     * If the block is not more recent than the median of the recent
-     * timestamps passed here, it is considered invalid.
+     * Marshals into `shekyl_difficulty_check_timestamp_rule` — FTL
+     * included, so what the
+     * main path refuses, alt admission refuses too (C2-R3-Q3).
      *
-     * @param timestamps a list of the most recent timestamps to check against
+     * @param timestamps the <= 11 timestamps immediately preceding the
+     *   candidate, any order (callers with deeper history keep the newest
+     *   11 — C2-R3-Q1 sub-a); not mutated
      * @param b the block to be checked
      *
      * @return true if the block's timestamp is valid, otherwise false
      */
-    bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b, uint64_t& median_ts) const;
-    bool check_block_timestamp(std::vector<uint64_t>& timestamps, const block& b) const { uint64_t median_ts; return check_block_timestamp(timestamps, b, median_ts); }
+    bool check_block_timestamp(const std::vector<uint64_t>& timestamps, const block& b, uint64_t& median_ts) const;
+    bool check_block_timestamp(const std::vector<uint64_t>& timestamps, const block& b) const { uint64_t median_ts; return check_block_timestamp(timestamps, b, median_ts); }
 
     /**
      * @brief verifies a block's archival attestation (ARCHIVAL_CREDIT_WIRE.md §3-§4)
@@ -1721,17 +1727,6 @@ namespace cryptonote
     bool check_for_double_spend(const transaction& tx, key_images_container& keys_this_block) const;
 
     /**
-     * @brief loads block hashes from compiled-in data set
-     *
-     * A (possibly empty) set of block hashes can be compiled into the
-     * monero daemon binary.  This function loads those hashes into
-     * a useful state.
-     * 
-     * @param get_checkpoints if set, will be called to get checkpoints data
-     */
-    void load_compiled_in_block_hashes(const GetCheckpointsCallback& get_checkpoints);
-
-    /**
      * @brief invalidates any cached block template
      */
     void invalidate_block_template_cache();
@@ -1753,4 +1748,5 @@ namespace cryptonote
      */
     void send_miner_notifications(uint64_t height, const crypto::hash &seed_hash, const crypto::hash &prev_id, uint64_t already_generated_coins);
   };
+
 }  // namespace cryptonote

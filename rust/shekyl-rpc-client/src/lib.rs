@@ -11,7 +11,7 @@
 #![deny(unsafe_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use core::{fmt::Debug, future::Future};
+use core::{fmt::Debug, future::Future, num::NonZeroU64};
 use std_shims::{
     alloc::format,
     io,
@@ -29,7 +29,13 @@ use shekyl_curve_io::*;
 // Number of blocks the fee estimate will be valid for
 // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c
 //   /src/wallet/wallet2.cpp#L121
-const GRACE_BLOCKS_FOR_FEE_ESTIMATE: u64 = 10;
+/// Grace-block horizon for the daemon's `get_fee_estimate` JSON-RPC:
+/// the daemon estimates a rate expected to stay above the relay floor
+/// for this many blocks. `pub` because this crate is the single owner
+/// of the value (inherited from wallet2's constant of the same intent);
+/// `shekyl-engine-core`'s snapshot path imports it rather than keeping
+/// a shadow copy that could drift.
+pub const GRACE_BLOCKS_FOR_FEE_ESTIMATE: u64 = 10;
 
 /// Phase 2a canonical dust threshold (§3.10.2).
 pub mod tx_fee;
@@ -77,12 +83,40 @@ pub struct FeeRate {
 }
 
 impl FeeRate {
-    /// Construct a new fee rate.
-    pub fn new(per_weight: u64, mask: u64) -> Result<FeeRate, RpcError> {
-        if (per_weight == 0) || (mask == 0) {
-            Err(RpcError::InvalidFee)?;
+    /// Construct a fee rate whose non-zero invariants the caller's own
+    /// types already carry.
+    ///
+    /// Total, so a caller holding the proof — a `Custom` rate that
+    /// arrived as [`NonZeroU64`], against the mask of an
+    /// already-validated snapshot — gets no unreachable error arm to
+    /// misclassify. [`Self::new`] is the fallible edge, for the bare
+    /// `u64` fields that come off the daemon wire.
+    #[must_use]
+    pub const fn from_nonzero(per_weight: NonZeroU64, mask: NonZeroU64) -> FeeRate {
+        FeeRate {
+            per_weight: per_weight.get(),
+            mask: mask.get(),
         }
-        Ok(FeeRate { per_weight, mask })
+    }
+
+    /// Construct a new fee rate, rejecting a zero rate or zero mask.
+    pub fn new(per_weight: u64, mask: u64) -> Result<FeeRate, RpcError> {
+        match (NonZeroU64::new(per_weight), NonZeroU64::new(mask)) {
+            (Some(per_weight), Some(mask)) => Ok(Self::from_nonzero(per_weight, mask)),
+            _ => Err(RpcError::InvalidFee),
+        }
+    }
+
+    /// Atomic units charged per weight unit, before mask rounding.
+    #[must_use]
+    pub fn per_weight(&self) -> u64 {
+        self.per_weight
+    }
+
+    /// Quantization mask the fee is rounded up to.
+    #[must_use]
+    pub fn mask(&self) -> u64 {
+        self.mask
     }
 
     /// Write the FeeRate.
@@ -170,6 +204,24 @@ impl FeePriority {
             FeePriority::Priority => 4,
             FeePriority::Custom { priority, .. } => *priority,
         }
+    }
+}
+
+/// Which fee tier a caller's priority buys.
+///
+/// The mapping the local index arithmetic encoded, named: priority `0` and
+/// `1` both take the lowest tier (the old code reached that by
+/// `saturating_sub(1)` on a `u32`), `2` and `3` step up, and anything `>= 4`
+/// — including a `Custom` priority of a million — takes the highest. Every
+/// `u32` maps to a tier, so the out-of-range `InvalidPriority` this function
+/// used to be able to return is not merely unused: it is unreachable, which
+/// is why the bounds check went with the index.
+fn fee_tier_for(priority: FeePriority) -> shekyl_rpc_types::FeeTier {
+    match priority.fee_priority() {
+        0 | 1 => shekyl_rpc_types::FeeTier::Low,
+        2 => shekyl_rpc_types::FeeTier::Normal,
+        3 => shekyl_rpc_types::FeeTier::Medium,
+        _ => shekyl_rpc_types::FeeTier::High,
     }
 }
 
@@ -302,38 +354,57 @@ pub trait Rpc: Sync + Clone {
     /// This is specifically the major version within the most recent block header.
     fn get_hardfork_version(&self) -> impl Send + Future<Output = Result<u8, RpcError>> {
         async move {
-            #[derive(Debug, Deserialize)]
-            struct HeaderResponse {
-                major_version: u8,
+            // The shared wire type, for the reason `get_fee_rate` gives: a
+            // locally-declared reply struct is invisible to the daemon's
+            // oracle vectors and parity tests, which is how a removed field
+            // reached a runtime parse failure once already. This one read a
+            // two-field subset, so it would not have *broken* — it would have
+            // kept working while quietly disagreeing about what a header is.
+            let reply: shekyl_rpc_types::GetLastBlockHeaderResponse =
+                self.json_rpc_call("get_last_block_header", None).await?;
+            // **A non-OK status is a refusal, whatever the header holds**, and
+            // this is the exact trap that made the daemon side of this slice
+            // refuse rather than answer `BUSY`: `CHECK_CORE_READY()` returned
+            // `status = BUSY` with a *default-constructed* header, and reading
+            // `major_version` straight through reported fork version 0.
+            //
+            // The daemon this ships with no longer does that — it refuses with
+            // `CORE_BUSY`, which arrives here as a JSON-RPC error. This guard
+            // is for every *other* daemon: an older build, or one this wallet
+            // was merely pointed at. Fixing the producer and trusting every
+            // peer to be the fixed producer is not a fix. Same shape as
+            // `get_height` and `get_block_hash` below.
+            if !reply.status.is_ok() {
+                return Err(RpcError::InvalidNode(format!(
+                    "get_last_block_header returned status {}",
+                    reply.status.0
+                )));
             }
-
-            #[derive(Debug, Deserialize)]
-            struct LastHeaderResponse {
-                block_header: HeaderResponse,
-            }
-
-            Ok(self
-                .json_rpc_call::<LastHeaderResponse>("get_last_block_header", None)
-                .await?
-                .block_header
-                .major_version)
+            Ok(reply.block_header.major_version)
         }
     }
 
-    /// Get the height of the Monero blockchain.
+    /// Get the height of the Shekyl blockchain.
     ///
     /// The height is defined as the amount of blocks on the blockchain. For a blockchain with only
     /// its genesis block, the height will be 1.
     fn get_height(&self) -> impl Send + Future<Output = Result<usize, RpcError>> {
         async move {
-            #[derive(Debug, Deserialize)]
-            struct HeightResponse {
-                height: usize,
+            // The wire type is `shekyl-rpc-types`'s (RK-D1): one definition for
+            // the daemon that serves it and the wallet that reads it.
+            let reply = self
+                .rpc_call::<Option<()>, shekyl_rpc_types::GetHeightResponse>("get_height", None)
+                .await?;
+            // A non-OK status is a refusal, whatever the other fields hold —
+            // the same rule the daemon's own console applies to this reply.
+            if !reply.status.is_ok() {
+                return Err(RpcError::InvalidNode(format!(
+                    "get_height refused: {}",
+                    reply.status.0
+                )));
             }
-            let res = self
-                .rpc_call::<Option<()>, HeightResponse>("get_height", None)
-                .await?
-                .height;
+            let res = usize::try_from(reply.height)
+                .map_err(|_| RpcError::InvalidNode("height does not fit usize".to_string()))?;
             if res == 0 {
                 Err(RpcError::InvalidNode(
                     "node responded with 0 for the height".to_string(),
@@ -352,22 +423,22 @@ pub trait Rpc: Sync + Clone {
         number: usize,
     ) -> impl Send + Future<Output = Result<[u8; 32], RpcError>> {
         async move {
-            #[derive(Debug, Deserialize)]
-            struct BlockHeaderResponse {
-                hash: String,
-            }
-            #[derive(Debug, Deserialize)]
-            struct BlockHeaderByHeightResponse {
-                block_header: BlockHeaderResponse,
-            }
-
-            let header: BlockHeaderByHeightResponse = self
+            // The wire type is `shekyl-rpc-types`'s (RK-D1).
+            let reply: shekyl_rpc_types::GetBlockHeaderByHeightResponse = self
                 .json_rpc_call(
                     "get_block_header_by_height",
                     Some(json!({ "height": number })),
                 )
                 .await?;
-            hash_hex(&header.block_header.hash)
+            if !reply.status.is_ok() {
+                return Err(RpcError::InvalidNode(format!(
+                    "get_block_header_by_height refused: {}",
+                    reply.status.0
+                )));
+            }
+            // No re-parse: the wire type already validated the hex on the
+            // way in (RK-3's `HashHex`), so the edge is just naming the bytes.
+            Ok(reply.block_header.hash.to_bytes())
         }
     }
 
@@ -376,65 +447,47 @@ pub trait Rpc: Sync + Clone {
     /// This may be manipulated to unsafe levels and MUST be sanity checked.
     ///
     /// This MUST NOT be expected to be deterministic in any way.
+    ///
+    /// NOTE (2026-08-16): parallel, older consumer path — the engine's
+    /// build/quote surfaces use `DaemonClient::get_fee_estimates` (one
+    /// atomic snapshot, interim-ceiling-guarded). The remaining
+    /// consumer is `shekyl-mobile-wallet`; consolidate onto the
+    /// snapshot path when that wallet re-wires against
+    /// `shekyl-wallet-rpc`.
     fn get_fee_rate(
         &self,
         priority: FeePriority,
     ) -> impl Send + Future<Output = Result<FeeRate, RpcError>> {
         async move {
-            #[derive(Debug, Deserialize)]
-            struct FeeResponse {
-                status: String,
-                fees: Option<Vec<u64>>,
-                fee: u64,
-                quantization_mask: u64,
-            }
-
-            let res: FeeResponse = self
+            // **The shared wire type, not a local mirror.** This function
+            // used to declare its own `FeeResponse` with a required scalar
+            // `fee`, and RK-5b's removal of that field from the wire broke it
+            // at runtime while everything compiled — the crate already
+            // depends on `shekyl-rpc-types` precisely so "wallet and daemon
+            // cannot skew", and a hand-rolled duplicate is how the skew got
+            // in. Reading the shared type makes the next wire change a
+            // compile error here.
+            let res: shekyl_rpc_types::GetFeeEstimateResponse = self
                 .json_rpc_call(
                     "get_fee_estimate",
                     Some(json!({ "grace_blocks": GRACE_BLOCKS_FOR_FEE_ESTIMATE })),
                 )
                 .await?;
 
-            if res.status != "OK" {
+            if !res.status.is_ok() {
                 Err(RpcError::InvalidFee)?;
             }
 
-            if let Some(fees) = res.fees {
-                // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c/
-                // src/wallet/wallet2.cpp#L7615-L7620
-                let priority_idx = usize::try_from(if priority.fee_priority() >= 4 {
-                    3
-                } else {
-                    priority.fee_priority().saturating_sub(1)
-                })
-                .map_err(|_| RpcError::InvalidPriority)?;
-
-                if priority_idx >= fees.len() {
-                    Err(RpcError::InvalidPriority)
-                } else {
-                    FeeRate::new(fees[priority_idx], res.quantization_mask)
-                }
-            } else {
-                // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c/
-                //   src/wallet/wallet2.cpp#L7569-L7584
-                // https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c/
-                //   src/wallet/wallet2.cpp#L7660-L7661
-                let priority_idx = usize::try_from(if priority.fee_priority() == 0 {
-                    1
-                } else {
-                    priority.fee_priority() - 1
-                })
-                .map_err(|_| RpcError::InvalidPriority)?;
-                let multipliers = [1, 5, 25, 1000];
-                if priority_idx >= multipliers.len() {
-                    // though not an RPC error, it seems sensible to treat as such
-                    Err(RpcError::InvalidPriority)?;
-                }
-                let fee_multiplier = multipliers[priority_idx];
-
-                FeeRate::new(res.fee * fee_multiplier, res.quantization_mask)
-            }
+            // The pre-2021-scaling fallback is gone with the field it read.
+            // It multiplied the scalar by one of `[1, 5, 25, 1000]` when the
+            // daemon sent no `fees` array — a Monero wallet2 path for a
+            // daemon Shekyl has never had, since the estimator resizes to
+            // exactly four tiers on every network and `FeeTiers` is a fixed
+            // `[u64; 4]`, so "no tiers" is now unrepresentable rather than
+            // merely unreachable (rule 60). It also carried the only
+            // unchecked multiply in this function, on a daemon-supplied
+            // number.
+            FeeRate::new(res.fees.get(fee_tier_for(priority)), res.quantization_mask)
         }
     }
 
@@ -513,197 +566,95 @@ pub trait Rpc: Sync + Clone {
     }
 
     /// Get the output indexes of the specified transaction.
+    ///
+    /// Built through the shared `.bin` command map (RK-4a) rather than
+    /// assembled here: this used to hand-roll a `Section` and walk the reply
+    /// for `status` and `o_indexes`, which is a second definition of a wire
+    /// the daemon also defines. A missing `o_indexes` still reads as an
+    /// empty list — epee drops an empty sequence — but that rule now lives
+    /// in one place, pinned against epee's own bytes.
     fn get_o_indexes(
         &self,
         hash: [u8; 32],
     ) -> impl Send + Future<Output = Result<Vec<u64>, RpcError>> {
         async move {
-            // Given the immaturity of Rust epee libraries, this is a homegrown one which is only
-            // validated to work against this specific function
-
-            // Header for EPEE, an 8-byte magic and a version
-            const EPEE_HEADER: &[u8] = b"\x01\x11\x01\x01\x01\x01\x02\x01\x01";
-
-            // Read an EPEE VarInt, distinct from the VarInts used throughout the rest of the protocol
-            fn read_epee_vi<R: io::Read>(reader: &mut R) -> io::Result<u64> {
-                let vi_start = read_byte(reader)?;
-                let len = match vi_start & 0b11 {
-                    0 => 1,
-                    1 => 2,
-                    2 => 4,
-                    3 => 8,
-                    _ => unreachable!(),
-                };
-                let mut vi = u64::from(vi_start >> 2);
-                for i in 1..len {
-                    vi |= u64::from(read_byte(reader)?) << (((i - 1) * 8) + 6);
-                }
-                Ok(vi)
+            let request = shekyl_rpc_types::GetOIndexesRequest { txid: hash }
+                .to_bin()
+                .map_err(|e| RpcError::InternalError(e.to_string()))?;
+            let buf = self.bin_call("get_o_indexes.bin", request).await?;
+            let reply = shekyl_rpc_types::GetOIndexesResponse::from_bin(&buf)
+                .map_err(|e| RpcError::InvalidNode(format!("invalid binary response: {e}")))?;
+            if !reply.status.is_ok() {
+                return Err(RpcError::InvalidNode(format!(
+                    "get_o_indexes refused: {}",
+                    reply.status.0
+                )));
             }
-
-            let mut request = EPEE_HEADER.to_vec();
-            // Number of fields (shifted over 2 bits as the 2 LSBs are reserved for metadata)
-            request.push(1 << 2);
-            // Length of field name
-            request.push(4);
-            // Field name
-            request.extend(b"txid");
-            // Type of field
-            request.push(10);
-            // Length of string, since this byte array is technically a string
-            request.push(32 << 2);
-            // The "string"
-            request.extend(hash);
-
-            let indexes_buf = self.bin_call("get_o_indexes.bin", request).await?;
-            let mut indexes = indexes_buf.as_slice();
-
-            (|| {
-                let mut res = None;
-                let mut has_status = false;
-
-                if read_bytes::<_, { EPEE_HEADER.len() }>(&mut indexes)? != EPEE_HEADER {
-                    Err(io::Error::other("invalid header"))?;
-                }
-
-                let read_object = |reader: &mut &[u8]| -> io::Result<Vec<u64>> {
-                    // Read the amount of fields
-                    let fields = read_byte(reader)? >> 2;
-
-                    for _ in 0..fields {
-                        // Read the length of the field's name
-                        let name_len = read_byte(reader)?;
-                        // Read the name of the field
-                        let name = read_raw_vec(read_byte, name_len.into(), reader)?;
-
-                        let type_with_array_flag = read_byte(reader)?;
-                        // The type of this field, without the potentially set array flag
-                        let kind = type_with_array_flag & (!0x80);
-                        let has_array_flag = type_with_array_flag != kind;
-
-                        // Read this many instances of the field
-                        let iters = if has_array_flag {
-                            read_epee_vi(reader)?
-                        } else {
-                            1
-                        };
-
-                        // Check the field type
-                        {
-                            #[allow(clippy::match_same_arms)]
-                            let (expected_type, expected_array_flag) = match name.as_slice() {
-                                b"o_indexes" => (5, true),
-                                b"status" => (10, false),
-                                b"untrusted" => (11, false),
-                                b"credits" => (5, false),
-                                b"top_hash" => (10, false),
-                                // On-purposely prints name as a byte vector to prevent printing arbitrary strings
-                                // This is a self-describing format so we don't have to error here, yet we don't
-                                // claim this to be a complete deserialization function
-                                // To ensure it works for this specific use case, it's best to ensure it's limited
-                                // to this specific use case (ensuring we have less variables to deal with)
-                                _ => Err(io::Error::other(format!(
-                                    "unrecognized field in get_o_indexes: {name:?}"
-                                )))?,
-                            };
-                            if (expected_type != kind) || (expected_array_flag != has_array_flag) {
-                                let fmt_array_bool =
-                                    |array_bool| if array_bool { "array" } else { "not array" };
-                                Err(io::Error::other(format!(
-                                    "field {name:?} was {kind} ({}), expected {expected_type} ({})",
-                                    fmt_array_bool(has_array_flag),
-                                    fmt_array_bool(expected_array_flag)
-                                )))?;
-                            }
-                        }
-
-                        let read_field_as_bytes = match kind {
-                            /*
-                            // i64
-                            1 => |reader: &mut &[u8]| read_raw_vec(read_byte, 8, reader),
-                            // i32
-                            2 => |reader: &mut &[u8]| read_raw_vec(read_byte, 4, reader),
-                            // i16
-                            3 => |reader: &mut &[u8]| read_raw_vec(read_byte, 2, reader),
-                            // i8
-                            4 => |reader: &mut &[u8]| read_raw_vec(read_byte, 1, reader),
-                            */
-                            // u64
-                            5 => |reader: &mut &[u8]| read_raw_vec(read_byte, 8, reader),
-                            /*
-                            // u32
-                            6 => |reader: &mut &[u8]| read_raw_vec(read_byte, 4, reader),
-                            // u16
-                            7 => |reader: &mut &[u8]| read_raw_vec(read_byte, 2, reader),
-                            // u8
-                            8 => |reader: &mut &[u8]| read_raw_vec(read_byte, 1, reader),
-                            // double
-                            9 => |reader: &mut &[u8]| read_raw_vec(read_byte, 8, reader),
-                            */
-                            // string, or any collection of bytes
-                            10 => |reader: &mut &[u8]| {
-                                let len = read_epee_vi(reader)?;
-                                read_raw_vec(
-                                    read_byte,
-                                    len.try_into().map_err(|_| {
-                                        io::Error::other("u64 length exceeded usize")
-                                    })?,
-                                    reader,
-                                )
-                            },
-                            // bool
-                            11 => |reader: &mut &[u8]| read_raw_vec(read_byte, 1, reader),
-                            /*
-                            // object, errors here as it shouldn't be used on this call
-                            12 => {
-                              |_: &mut &[u8]| Err(io::Error::other("node used object in reply to get_o_indexes"))
-                            }
-                            // array, so far unused
-                            13 => |_: &mut &[u8]| Err(io::Error::other("node used the unused array type")),
-                            */
-                            _ => |_: &mut &[u8]| Err(io::Error::other("node used an invalid type")),
-                        };
-
-                        let mut bytes_res = vec![];
-                        for _ in 0..iters {
-                            bytes_res.push(read_field_as_bytes(reader)?);
-                        }
-
-                        let mut actual_res = Vec::with_capacity(bytes_res.len());
-                        match name.as_slice() {
-                            b"o_indexes" => {
-                                for o_index in bytes_res {
-                                    actual_res.push(read_u64(&mut o_index.as_slice())?);
-                                }
-                                res = Some(actual_res);
-                            }
-                            b"status" => {
-                                if bytes_res
-                                    .first()
-                                    .ok_or_else(|| io::Error::other("status was a 0-length array"))?
-                                    .as_slice()
-                                    != b"OK"
-                                {
-                                    Err(io::Error::other("response wasn't OK"))?;
-                                }
-                                has_status = true;
-                            }
-                            b"untrusted" | b"credits" | b"top_hash" => continue,
-                            _ => Err(io::Error::other("unrecognized field in get_o_indexes"))?,
-                        }
-                    }
-
-                    if !has_status {
-                        Err(io::Error::other("response didn't contain a status"))?;
-                    }
-
-                    // If the Vec was empty, it would've been omitted, hence the unwrap_or
-                    Ok(res.unwrap_or(vec![]))
-                };
-
-                read_object(&mut indexes)
-            })()
-            .map_err(|e| RpcError::InvalidNode(format!("invalid binary response: {e:?}")))
+            Ok(reply.o_indexes)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fee_tier_for, FeePriority};
+    use shekyl_rpc_types::FeeTier;
+
+    /// Every priority maps to the tier the deleted index arithmetic gave it.
+    ///
+    /// The old code computed `if p >= 4 { 3 } else { p.saturating_sub(1) }`
+    /// and indexed a `Vec`. Naming the tiers removes the index, and this is
+    /// what says the rename changed no answer: `0` and `1` share the lowest
+    /// tier because `saturating_sub` floored them together, and every value
+    /// at or above `4` — a `Custom` priority has no upper bound — takes the
+    /// highest, which is why the out-of-range refusal went with the index
+    /// rather than being kept as defence.
+    #[test]
+    fn every_priority_maps_to_the_tier_the_index_arithmetic_gave_it() {
+        let custom = |priority| FeePriority::Custom { priority };
+        assert_eq!(fee_tier_for(custom(0)), FeeTier::Low);
+        assert_eq!(fee_tier_for(FeePriority::Unimportant), FeeTier::Low);
+        assert_eq!(fee_tier_for(custom(1)), FeeTier::Low);
+        assert_eq!(fee_tier_for(FeePriority::Normal), FeeTier::Normal);
+        assert_eq!(fee_tier_for(custom(2)), FeeTier::Normal);
+        assert_eq!(fee_tier_for(FeePriority::Elevated), FeeTier::Medium);
+        assert_eq!(fee_tier_for(custom(3)), FeeTier::Medium);
+        assert_eq!(fee_tier_for(FeePriority::Priority), FeeTier::High);
+        assert_eq!(fee_tier_for(custom(4)), FeeTier::High);
+        assert_eq!(fee_tier_for(custom(u32::MAX)), FeeTier::High);
+    }
+
+    /// An `Elevated` caller pays the STANDARD rate, and that is the point
+    /// of the RK-5 bridge rather than an accident of the mapping.
+    ///
+    /// `Elevated` maps to [`FeeTier::Medium`], which indexes slot 2 — the
+    /// old `Fm`. FL-R17 signed three tiers, and the daemon keeps the
+    /// vector four wide until the RPC cutover by serving slot 2 as a
+    /// mirror of standard. So a wallet2-transliterated `Elevated` caller
+    /// is priced with the majority instead of self-marking on a rung of
+    /// its own, which is the anonymity-set claim the bridge exists to
+    /// make.
+    ///
+    /// Asserted end to end — mapping *and* slot semantics — because each
+    /// half is separately true and harmless while together they carry the
+    /// claim. The producer's side is pinned in `shekyl-economics`
+    /// (`FeeLadder::as_slots`) and at the FFI boundary; this is the
+    /// consumer's.
+    #[test]
+    fn an_elevated_caller_is_priced_at_the_standard_rate_by_the_bridge() {
+        // A reply shaped as the daemon emits it: slot 2 mirrors slot 1.
+        let served = shekyl_rpc_types::FeeTiers([10, 20, 20, 40]);
+        let elevated = served.get(fee_tier_for(FeePriority::Elevated));
+        let standard = served.get(fee_tier_for(FeePriority::Normal));
+        assert_eq!(
+            elevated, standard,
+            "the bridge must price Elevated with standard; a distinct slot-2 \
+             rate would put those callers in a cohort of their own"
+        );
+        assert_ne!(
+            elevated,
+            served.get(fee_tier_for(FeePriority::Priority)),
+            "and it must not silently become the priority rate either"
+        );
     }
 }

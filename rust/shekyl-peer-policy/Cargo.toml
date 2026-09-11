@@ -1,0 +1,13 @@
+[package]
+name = "shekyl-peer-policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Peer-attribution policy: drop verdicts, block-ingest outcomes, and P2P ingest actions (PWD-B7)"
+
+[dependencies]
+
+[lints]
+workspace = true

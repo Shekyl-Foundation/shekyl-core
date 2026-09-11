@@ -62,6 +62,15 @@ hold** (Gate-6 §12.4 build notes, verified at source 2026-07-19):
    remainder is now the **GUI wiring** — `EngineSession::drain_balance()`
    + `get_drain_balance` command + the "Drainable (P)" render — carried
    by DS-PR-3 PR-B in `shekyl-gui-wallet`.)*
+   *(UPDATE 2026-08-26, WI-RPC-5 review round: the aggregate is now
+   **scoped to the live active persona's slot** — the same
+   `r.p_slot == slot` scope the drain's own planning applies — because a
+   wallet-wide sum advertised dormant held personas' funds a `drain`
+   cannot spend, so a figure at or under the display could still refuse
+   as unaffordable. No stake engine / no active persona short-circuits
+   to an honest `Ok(0)` before any file or anchor work. The GUI's
+   `EngineSession::drain_balance()` inherits the corrected semantics
+   through the same accessor.)*
 2. **A drain tx-assembly path** — `plan_drain` returns a `DrainPlan`
    (amount, input gindices, change), not a signed/broadcast transaction;
    the assemble→sign→broadcast follow-on (the claim-assembly analog) is
@@ -369,10 +378,10 @@ unrepresentable — DS-1's re-map is the drain-side face of the same
 hygiene); (iii) the **`EXIT_FEE_RESERVE_ATOMIC` spend-floor** applies to
 "every mid-life constructor" — whether a *partial* drain from a live
 persona is a mid-life constructor in that sense (it should be: draining
-the pool below the exit reserve strands the `Unbond`) vs. a
+the pool below the exit reserve strands the `Release`) vs. a
 post-retirement sweep (reserve moot) needs one sentence of disposition
 when DS-PR-1 lands the assembly. Carried into the DS-PR-1 scope cell;
-the fee-uniformity rider itself rides the `Unbond` constructor family
+the fee-uniformity rider itself rides the `Release` constructor family
 and is not blocked on this round. *(UPDATE 2026-07-21, DS-PR-2 impl:
 disposition landed — a partial live-persona drain reserves
 `EXIT_FEE_RESERVE_ATOMIC` (`shekyl-standoff`, `50_000_000` atomic),
@@ -637,10 +646,10 @@ composite arm's final leg, all on `shekyl-core`:
   is **enforced in the orchestrator**: a **partial** drain from a **live**
   persona is a mid-life constructor and may not spend the pool below the
   reserve (refused with `DrainOrchestrationError::ReserveBreached`); a
-  **retired** persona's sweep is reserve-moot (the `Unbond` already fired),
+  **retired** persona's sweep is reserve-moot (the `Release` already fired),
   so it may drain to zero. The `retired` flag rides `DrainCtx`, resolved
-  engine-side from `PScanState::pending_unbonds` (the authoritative "no future
-  `Unbond` owed" signal) — deliberately not `retired_records`, which is
+  engine-side from `PScanState::pending_releases` (the authoritative "no future
+  `Release` owed" signal) — deliberately not `retired_records`, which is
   funded-gated and omits a persona throughout the drain-all that empties its
   slot, deadlocking the reserve gate against the sweep.
 - **T-DS-2 transport arm (self-grep, now live).** `submit_drain`
@@ -918,7 +927,7 @@ sub-PR lands.
   - **DS-4 exit-reserve disposition (the one sentence owed)** — a **partial
     drain from a live persona IS a mid-life constructor**: it MUST leave
     `EXIT_FEE_RESERVE_ATOMIC` in the `P` pool (draining below it would strand
-    the future `Unbond`); a **post-retirement sweep** has no future `Unbond`,
+    the future `Release`); a **post-retirement sweep** has no future `Release`,
     so the reserve is **moot** and drain-all may take the pool to zero. The
     reserve is a **funding-selection** constraint (Engine-side, DS-PR-2:
     `assemble_drain_tx` consumes an already-selected `payment_amount`/`fee`),

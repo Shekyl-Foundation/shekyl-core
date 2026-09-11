@@ -23,6 +23,8 @@ pub mod error;
 pub mod fees;
 pub mod handlers;
 pub mod lifecycle;
+pub mod message_signing;
+pub mod notes;
 pub mod params;
 pub mod project;
 pub mod proofs;
@@ -31,12 +33,13 @@ pub mod receiving;
 pub mod send;
 pub mod server;
 pub mod staking;
+pub mod staking_actions;
 pub mod sync;
 pub mod tenant;
 pub mod types;
 
 pub use auth::AuthConfig;
-pub use error::{WalletRpcError, WalletRpcErrorCode};
+pub use error::{WalletRpcError, WalletRpcErrorCode, FOUNDATION_POSTURE_WARNING};
 pub use server::{
     build_router, run_server, spawn_in_process, spawn_in_process_with, AppState, InProcessHandle,
     InProcessListen, ListenAddr, ServerConfig,
@@ -44,6 +47,11 @@ pub use server::{
 // Re-exported so in-process hosts (shekyl-cli) can name the network a
 // spawned server binds to without a direct shekyl-engine-core dependency.
 pub use shekyl_engine_core::Network;
+// Part of the `stake_in` contract surface: the funded transfer carries
+// `amount + cover` with the cover strictly under this bound. Clients that
+// disclose the debit before confirmation (the CLI does; wrappers should)
+// render the bound from this constant, never a hardcoded twin.
+pub use shekyl_engine_core::COVER_RUNG_ATOMIC;
 pub use tenant::{DaemonEndpoint, SharedEngine, Tenant, TenantState};
 pub use types::{GetVersionResult, JsonRpcRequest, JsonRpcResponse, WalletHandle, API_VERSION};
 

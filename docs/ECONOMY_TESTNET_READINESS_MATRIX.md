@@ -22,7 +22,7 @@ Drift labels:
 
 ## Core Economy Model
 
-1. **Constants source of truth (`money_supply`, `coin`, decimal point, burn/release/staking params)**
+1. **Constants source of truth (`emission_curve_asymptote`, `coin`, decimal point, burn/release/staking params)**
    - Docs intent: canonical economics constants define testnet economics behavior.
    - Code: generated from `config/economics_params.json` into build-time headers (`src/cryptonote_config.h` includes generated params).
    - Status: `implemented`
@@ -72,7 +72,7 @@ Drift labels:
    - `gen_block_reward` test re-enabled and rewritten to verify miner
      outputs against the four-component formula (release multiplier +
      emission split + fee burn). `chaingen.cpp` test generator now passes
-     explicit `circulating_supply`, `tx_volume_avg`, `stake_ratio`, and
+     explicit `circulating_supply`, `tx_volume` (the FL-R24 window pair), `stake_ratio`, and
      `genesis_ng_height` to `construct_miner_tx` for parameter parity
      with the validator.
    - Status: `implemented` (80/80 core_tests pass)
@@ -104,7 +104,7 @@ Drift labels:
   - `TESTNET_REHEARSAL_CHECKLIST.md` said "post-HF17 rules" for v3 tx checks.
   - Shekyl reboot policy is HF1-only.
   - Drift label: resolved (docs updated to HF1 across V3_ROLLOUT, PQC,
-    PQC_MULTISIG, and STAKER_REWARD_DISBURSEMENT)
+    PQC_MULTISIG, and REWARD_EMISSION_LEG)
 
 ## Immediate Pre-Testnet Blockers
 

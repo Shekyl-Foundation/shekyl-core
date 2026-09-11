@@ -118,7 +118,8 @@ pub struct WorkEpochClaim {
 /// `backing_pubkey` rides the wire for the Auth-B leaf gate: verify recomputes
 /// `hash_pqc_public_key(backing_pubkey)` and demands equality with
 /// `pqc_pk_hash`, then verifies `auth_backing` under it
-/// (`shekyl_emission_hybrid_auth_verify`, PR-E1).
+/// (`emission_verify::emission_vin_verify_auth`, step 8 of the coarse
+/// `shekyl_emission_vin_verify` FFI call).
 ///
 /// **Reveal scope (§8.0.3 / §7.3):** the pubkey is per-output **one-time**, so
 /// this reveal deterministically identifies exactly one backing output and

@@ -37,11 +37,10 @@ use super::types::*;
 /// The single-threaded message loop serializes access to `held`/`active`, so a
 /// activation (install-new-active, then wipe-retired-iff-ephemeral) is atomic with
 /// respect to other messages.
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 pub(crate) struct StakeEngine {
     /// The held derive-forward set, keyed by slot and tagged bonded/ephemeral.
     /// Activation wipes only the ephemeral retired slot; bonded personas stay
-    /// resident so unbonding remains reachable.
+    /// resident so releasing remains reachable.
     pub(crate) held: BTreeMap<PSlot, HeldPersona>,
     /// The currently-active slot, or `None` when idle. Always a key of `held`
     /// when `Some`.
@@ -73,7 +72,6 @@ pub(crate) struct StakeEngine {
     pub(crate) observer: Box<dyn BroadcastTimelineObserver>,
 }
 
-#[allow(dead_code)] // inert until 2c-2a assemble wiring / 2c-2b request path
 impl StakeEngine {
     /// Validate a presented handle: it must be from the current generation and
     /// name a still-held slot. A generation mismatch means an activation occurred
@@ -103,7 +101,7 @@ impl StakeEngine {
         Ok(())
     }
 
-    /// Steps 1–5 shared verbatim by the [`SignBond`] and [`AssembleBond`]
+    /// Steps 1–5 shared verbatim by the [`PlanBondPost`] and [`AssembleBond`]
     /// handlers: validate the handle, cross-check it against the ticket's slot,
     /// preflight the OS entropy source, draw the guarded entry gap, plan the
     /// entry seam, and emit the GF-7 hooks. Returns the validated handle slot and
@@ -200,12 +198,12 @@ impl StakeEngine {
 
     /// Project the held persona at `slot` into its public
     /// [`ShekylAddress`](shekyl_address::ShekylAddress) — built **in-actor**,
-    /// from the already-live bundle (never re-derived), from only the public
-    /// spend/view pubs + ML-KEM-768 encap key. The reply type is structurally
-    /// public-only (an address cannot carry a secret), so **no `P` secret leaves
-    /// the actor** (rule 36). The orchestrator uses this only to address a
-    /// funding transfer *to* `P` (`Engine::stake_in`), where `P` is a public
-    /// recipient. `network` is the principal wallet's network (the actor is
+    /// from the already-live bundle (never re-derived). The reply type is
+    /// structurally public-only (an address cannot carry a secret), so
+    /// **no `P` secret leaves the actor** (rule 36). The orchestrator
+    /// uses this only to address a funding transfer *to* `P`
+    /// (`Engine::stake_in`), where `P` is a public recipient. `network`
+    /// is the principal wallet's network (the actor is
     /// network-agnostic; the address's network is the sender's).
     pub(crate) fn receive_address_of(&self, slot: PSlot, network: Network) -> ShekylAddress {
         let keys = self
@@ -213,12 +211,7 @@ impl StakeEngine {
             .get(&slot)
             .expect("receive_address_of called for a held slot")
             .keys();
-        ShekylAddress::new(
-            network,
-            *keys.spend_pk.as_canonical_bytes(),
-            *keys.view_pk.as_canonical_bytes(),
-            keys.ml_kem_ek.to_vec(),
-        )
+        keys.to_address(network)
     }
 
     /// Wipe the retired slot iff it is ephemeral; a bonded persona is left
@@ -340,7 +333,7 @@ impl StakeEngine {
     /// Quarantine, **not** a step error: the derivation is deterministic
     /// (same record, same vault ⇒ same failure), so failing the step would
     /// permanently wedge the scan pipeline on one bad record — frontier
-    /// frozen, balances, bond-post matches, and unbond processing all
+    /// frozen, balances, bond-post matches, and release processing all
     /// stalled. Skipping only this record keeps the wallet syncing, and is
     /// sound for the [`SpentRecordsDurablyPruned`] attestation: assemble
     /// re-derives the same bundle (`derive_spend_parts`) and fails the same

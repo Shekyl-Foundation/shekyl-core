@@ -67,7 +67,11 @@ namespace epee
       stg.store_to_binary(to_send.buffer);
 
       int res = transport.invoke(command, std::move(to_send), buff_to_recv, conn_id);
-      if( res <=0 )
+      // PWD-B5: a RESPONSE delivers LEVIN_OK (0) — the reply body is in
+      // buff_to_recv. Negative is a local transport error (timeout,
+      // destroyed). `<= 0` was the inherited test for a handler int of 1
+      // on the deleted return_code field. Do not restore it.
+      if( res < 0 )
       {
         LOG_PRINT_L1("Failed to invoke command " << command << " return code " << res);
         return false;
@@ -94,7 +98,11 @@ namespace epee
       int res = transport.invoke_async(command, std::move(to_send), conn_id, [cb, command](int code, const epee::span<const uint8_t> buff, typename t_transport::connection_context& context)->bool
       {
         t_result result_struct = AUTO_VAL_INIT(result_struct);
-        if( code <=0 )
+        // PWD-B5: a RESPONSE delivers LEVIN_OK (0) — a reply arrived.
+        // Negative codes are local transport errors. `<= 0` expected the
+        // handler's positive 1 from the deleted header field; decoding
+        // would never run. Do not restore it.
+        if( code < 0 )
         {
           if (!buff.empty())
             on_levin_traffic(context, true, false, true, buff.size(), command);
@@ -121,6 +129,8 @@ namespace epee
         cb(code, result_struct, context);
         return true;
       }, inv_timeout);
+      // Queueing result, not a RESPONSE: 1 = request sent (bool true);
+      // 0 / negative = not sent. Distinct from the callback's LEVIN_OK.
       if( res <=0 )
       {
         LOG_PRINT_L1("Failed to invoke command " << command << " return code " << res);

@@ -1,8 +1,10 @@
 # Engine composition: making it less of a monolith
 
+**Status:** LIVING CONTRACT. Last verified 2026-09-09 (refresh module tree + local_keys test split — `refresh.rs` FILE baseline retired into `engine/refresh/{mod,types,handle,task,driver}.rs`; `local_keys.rs` baseline retired). Landing inventory: [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
+
 | Field | Value |
 |-------|--------|
-| **Date** | 2026-07-19 |
+| **Date** | 2026-07-19 (StakeFacade + inherent-API freeze: 2026-09-02; crate-wide walk: 2026-09-03) |
 | **Context** | Follow-up to `WALLET_DAEMON_HOSTILE_AUDIT_2026-07-19.md` — finding that `Engine` remains a large composition hub despite Stage 1 traits and Stage 2 actors |
 | **Audience** | Wallet rewrite owners deciding how to decompose without fighting the staged actor migration |
 
@@ -17,7 +19,7 @@ It is not “you forgot modules.” Looking at the tree:
 | 7 Stage‑1 traits | Composition root with **7 type params + ~15 fields** |
 | `KeyActor` / `CurveTreeActor` | **Inherent API surface** for almost every user action |
 | Local* implementors | **Cross-domain orchestration** (refresh ↔ merge ↔ pending ↔ submit ↔ stake ↔ pscan) |
-| File / prefs / units crates | **God-files**: `local_pending_tx` ~5.4k, `stake_engine` ~4.6k, `refresh` ~4.3k, `lifecycle` ~2.6k |
+| File / prefs / units crates | **Remaining FILE-baselined modules** (over `NEW_FILE_CAP` 1200): `pscan/scan_step` ~1.9k, `transfer/engine` ~1.8k, `engine/mod` ~1.4k, `local_refresh` ~1.3k, `backing_set` ~1.3k. Carved: `local_pending_tx`, `stake_engine`, `lifecycle`, `refresh`, `local_keys`, `merge`. |
 
 So modularization moved **implementation** out; **identity, wiring, and workflow ownership** stayed on `Engine`. That is normal at Stage 1–2. The next step is not “`Engine<8,9,10 params>`” — it is **stop treating Engine as the place workflows live**.
 
@@ -119,7 +121,7 @@ Today callers think in `engine.everything()`. Prefer façade objects that only e
 ```rust
 impl SoloEngine {
     pub fn transfer(&self) -> TransferFacade<'_> { ... }
-    pub fn stake(&self) -> Option<StakeFacade<'_>> { ... }  // None if no stake engine
+    pub fn stake(&self) -> StakeFacade<'_> { ... }  // always a view; has_stake_engine() is the handle predicate
     pub fn scan(&self) -> ScanFacade<'_> { ... }
     pub fn account(&self) -> AccountFacade<'_> { ... }     // address, capability, network
 }
@@ -129,7 +131,7 @@ Benefits:
 
 - **Compile-time and review-time scoping** — stake code cannot casually call transfer-only helpers if they’re not on the facet (or only via shared Caps traits).
 - RPC/CLI map cleanly: wallet-rpc “send” only takes `TransferFacade`.
-- Matches capability reality (`can_spend_locally`, view-only stubs) better than dumping methods on `Engine`.
+- Matches workflow reality (send, staking, refresh are distinct surfaces) better than dumping methods on `Engine`. *(This bullet originally cited `can_spend_locally` and the view-only stubs; both were deleted 2026-09-07 when capability collapsed to `Full`-only — the facet argument stands on workflow separation alone.)*
 
 Under the hood still one process, one ledger lock discipline — facets are **views**, not separate processes (until Stage 4).
 
@@ -231,20 +233,73 @@ coverage of the send pipeline.
 
 **Status:** landed (`engine/stake_engine/` directory module, per-message-family
 carve included) + the decomposition ratchet scans every `engine/` subdirectory.
+**Product door (2026-09-02):** [`StakeFacade`](../../rust/shekyl-engine-core/src/engine/stake_facade.rs)
+via `Engine::stake() -> StakeFacade<'_>` (always a view, including for
+non-stakers). New staking / drain / claim behavior lands on the façade, not as
+a new inherent `Engine::` method. Inherent methods that already existed keep
+their bodies in the workflow modules; the façade **forwards** so GUI/CLI keep
+compiling. Thinning those to one-liners is a later cut, not claimed done.
+`unstake` / `collect_unstaked` landed on `StakeFacade` with PR-C
+(2026-09-03, `engine/unstake_facade.rs`) — the freeze held: the exit verbs
+are façade methods, never inherent `Engine::` ones.
 
 | Claim | Detail |
 |-------|--------|
 | **The stake workflow is** | `engine/stake_engine/` — `StakeEngine` actor + handle + types + spend helpers |
-| **Engine's role** | Owns `Option<StakeEngineHandle>`; may expose thin delegates only |
+| **Engine's role** | Owns `Option<StakeEngineHandle>`; exposes `stake()` as the product view. Pre-façade inherent methods (`first_stake`, `stake_in`, `staking_read_view`, drain, `start_*_if_staker`) still hold the bodies (GUI/CLI); `StakeFacade` forwards. Handle predicate is `has_stake_engine()`, not `stake().is_some()` |
 | **Layout** | `types.rs` domain values; `helpers.rs` shared funding/vout prep + P-secrets; `actor.rs` the actor struct, spawn, inherent methods and `Actor` impl; `handle.rs` `StakeEngineHandle`; one file per message family (`persona.rs`, `bond.rs`, `claim.rs`, `drain.rs`, `scan.rs`, `retire.rs`); `test_fixtures` + tests EXCLUDE'd |
 | **Do not** | Re-inflate bond/claim/drain assembly into top-level monofiles or Engine inherent soup — and do **not** add a `stake_engine/engine.rs`: actor, messages and handle are deliberately three concerns, not one file |
 | **Module surface** | `mod.rs` re-exports exactly what `crate::engine::…` consumes. Siblings and the in-tree suite import from siblings directly. No `#[allow(unused_imports)]` on the facade: a re-export that stops being consumed must fail rule 45's gate, which is what keeps the list a true statement |
-| **Mechanical pin** | `check_engine_decomposition.sh` sweeps `engine/**/*.rs`; `NEW_FILE_CAP` / FILE baselines apply |
+| **Mechanical pin** | `check_engine_decomposition.sh` FILE / `NEW_FILE_CAP` ceilings still sweep `engine/**/*.rs`; **`METHODS_CEILING`** is a **count** freeze of `pub` inherent methods on `Engine` across `shekyl-engine-core/src` (not only `engine/` — inherent impls can live in `lib.rs` / `scan.rs` / …). Impl-item macros fail closed (this lexer does not expand them). Not a category allowlist — see below |
 
-**Deferred:** `StakeFacade` / `engine.stake()` and renaming to `StakeWorkflow`.
-Named blocker: both are call-site renames across every `stake_handle()`
-consumer, which is a validation surface of its own (rule 19) and shares nothing
-with the file carve.
+**Deferred:** renaming to `StakeWorkflow`. Named blocker: call-site rename
+across every `stake_handle()` consumer, which is a validation surface of its
+own (rule 19) and shares nothing with the file carve. `TransferFacade` /
+`engine.scan()` wait until a product surface wants the same cut.
+
+### Inherent `Engine` API — allowed categories
+
+`Engine` may grow **only** in these categories (and each new `pub fn` still
+has to fit `METHODS_CEILING`):
+
+1. **Lifecycle** — create / open / close / password.
+2. **Capability accessors** — network, capability, address, ledger, prefs, daemon, `has_stake_engine`.
+3. **Façade constructors** — `stake()` (and later `transfer()` / `scan()`).
+4. **Supervisor start/stop** that is not staking-specific (refresh/rescan).
+5. **Pre-freeze inherent names** that already existed (`first_stake`, `stake_in`,
+   `staking_read_view*`, drain, `start_*_if_staker`, …). Growing those *bodies*
+   with new staking behavior is the reconstitution the freeze does not count.
+   New behavior lands on `StakeFacade`. Thinning a pre-freeze method to a
+   one-line `self.stake().…` delegate is allowed and does not raise the count.
+
+`METHODS_CEILING` counts methods; it does not encode this list. Adding
+`Engine::unstake` while deleting another `pub fn`, or bumping the ceiling in
+`engine_decomposition_ratchet.conf`, still compiles against the number. The
+allowlist is **review-only**; a new inherent method that is not in categories
+1–5 requires both review here and a conf diff. The helper's `--self-test`
+(where-clause / `impl Trait for Engine` / `pub(crate)`) runs from
+`check_engine_decomposition.sh`.
+
+New staking, fee-policy, or daemon-transport **behavior** does not get a new
+inherent method. Put it on `StakeFacade` (or the fee/daemon module, called
+through an existing Engine method).
+
+### Rejected hoists (rule 21)
+
+These were considered in the 2026-08-28 state-of-the-code review and
+**rejected now**:
+
+- **`shekyl-stake-engine` crate.** No second consumer that cannot use `Engine`.
+  Reopen when GUI, a serving-only binary, or economics-sim must link staking
+  orchestration without the spend wallet.
+- **Stage 1 traits `pub`.** Reopen when a second in-tree crate must construct
+  a workflow without `Engine` (not tests). See `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.
+- **Hoist `fee_policy` / estimator / snapshot.** Weight already left
+  (`shekyl-tx-weight`). Reopen when a second *production* crate needs
+  `ValidatedFeeEstimates` without linking engine-core.
+- **Move `DaemonClient` into `shekyl-rpc-client`.** The wrapper insulates
+  Engine from transport. Reopen if the production type alias hides `D`
+  entirely and that insulation job is gone.
 
 ---
 
@@ -259,7 +314,8 @@ with the file carve.
 4. **Introduce `TransferCtx`** only when a new feature needs it — stop new send-path code from taking `&Engine` as a habit, not as a big-bang rename.
 5. **Façade methods** (`engine.transfer()`, `engine.scan()`) for RPC/CLI when those surfaces want a clean cut.
 6. **`StakeWorkflow` / StakeEngine** as a real subsystem (optional field), not more inherent methods on Engine.
-   **Done** (`chore/ffi-and-engine-size-debt`): monofile → `engine/stake_engine/` as `{types,helpers,actor,handle}.rs` plus one file per message family (`persona`, `bond`, `claim`, `drain`, `scan`, `retire`) + tests/fixtures; the ratchet now sweeps every `engine/` subdirectory rather than a hand-kept list of arms. `StakeFacade` / the `StakeWorkflow` rename stay open (see the ownership section's deferral).
+   **Done** (`chore/ffi-and-engine-size-debt`): monofile → `engine/stake_engine/` as `{types,helpers,actor,handle}.rs` plus one file per message family (`persona`, `bond`, `claim`, `drain`, `scan`, `retire`) + tests/fixtures; the ratchet now sweeps every `engine/` subdirectory rather than a hand-kept list of arms.
+   **Done (2026-09-02):** `StakeFacade` + `Engine::stake()` (always a view) + `METHODS_CEILING` count freeze. The `StakeWorkflow` rename stays open (see the ownership section's deferral).
 7. **PScan supervisor** already modular — stop growing it via Engine glue; give it a single start/stop API.
 8. Only then Stage 4 actor swaps per trait, with services already isolated.
 
@@ -301,5 +357,5 @@ That is the same architecture already halfway in — finished, instead of “sev
 | | |
 |--|--|
 | **Location** | `shekyl-core/docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md` |
-| **Status** | Living design + partial enforcement (transfer extract + ownership pin) |
-| **Follow-up** | Optional: `TransferCtx` / façades when product needs them; stake test extract + ratchet-down when that file is quiet |
+| **Status** | LIVING CONTRACT (transfer extract + ownership pin + StakeFacade + crate-wide `METHODS_CEILING` + refresh module tree + local_keys test split; last verified 2026-09-09) |
+| **Follow-up** | Optional: `TransferCtx` / `TransferFacade` / `ScanFacade` when product needs them; `StakeWorkflow` rename |

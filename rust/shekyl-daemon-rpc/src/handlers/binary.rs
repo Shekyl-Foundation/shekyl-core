@@ -35,35 +35,172 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use std::sync::Arc;
 
-async fn dispatch_bin(state: Arc<AppState>, uri: &'static str, body: Bytes) -> impl IntoResponse {
-    let core = state.core.clone();
-    let body_vec = body.to_vec();
-    let result = tokio::task::spawn_blocking(move || core.bin_endpoint(uri, &body_vec)).await;
+/// The restricted listener's block cap. Handler policy, single-sourced here
+/// (RK-D6) rather than in the facts export, which answers what it is asked.
+///
+/// **This is a behaviour fix, not parity.** The C++ gated the cap on
+/// `m_restricted && ctx`, and the bridge that reached it — `dispatch_bin` —
+/// always passed `ctx == nullptr`. So `restricted` was false on every call
+/// through it and the cap never fired: a restricted listener accepted a
+/// request for any number of heights. The constant and the check were both
+/// there; only the argument made them dead. Serving it as intended is the
+/// safer reading of unambiguous intent, and pre-genesis there is no client
+/// relying on the gap.
+const RESTRICTED_BLOCK_COUNT: usize = 1000;
 
-    match result {
-        Ok(Ok(data)) => (
+/// `/get_blocks_by_height.bin` (+ `/getblocks_by_height.bin`) — served
+/// natively (RK-4b).
+///
+/// Every refusal keeps the *shape* the C++ gave, which on this endpoint means
+/// a **200 carrying a non-OK `status`** rather than a transport error, with
+/// the wording unchanged. A height the chain cannot produce also keeps the
+/// blocks read before it, as the C++ did. The one deliberate difference is
+/// that the restricted cap now fires — see [`RESTRICTED_BLOCK_COUNT`].
+pub async fn get_blocks_by_height(
+    State(state): State<Arc<AppState>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let Ok(request) = shekyl_rpc_types::GetBlocksByHeightRequest::from_bin(&body) else {
+        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+    };
+    if state.restricted && restricted_cap_refuses(request.heights.len()) {
+        return bin_status("Too many blocks requested in restricted mode");
+    }
+    let core = state.core.clone();
+    let out = tokio::task::spawn_blocking(move || core.blocks_by_height(&request.heights)).await;
+    let reply = match out {
+        Ok(Ok((blocks, failed))) => shekyl_rpc_types::GetBlocksByHeightResponse {
+            // A failure names its height and still carries the blocks read
+            // before it — the reply the C++ produced, where the prefix and
+            // the error travel together.
+            status: failed.map_or_else(shekyl_rpc_types::RpcStatus::ok, |height| {
+                shekyl_rpc_types::RpcStatus(format!("Error retrieving block at height {height}"))
+            }),
+            blocks,
+        },
+        Ok(Err(_)) | Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "facts unavailable").into_response()
+        }
+    };
+    octet_stream(reply.to_bin())
+}
+
+/// Inclusive-at-the-cap: 1000 heights are served, 1001 are not.
+fn restricted_cap_refuses(count: usize) -> bool {
+    count > RESTRICTED_BLOCK_COUNT
+}
+
+/// A 200 carrying only a non-OK `status`, which is how this endpoint reports
+/// a refusal — the wallet and the engine branch on the status, so a
+/// transport error here would be a different reply, not a tidier one.
+fn bin_status(status: &str) -> axum::response::Response {
+    let reply = shekyl_rpc_types::GetBlocksByHeightResponse {
+        status: shekyl_rpc_types::RpcStatus(status.to_owned()),
+        blocks: Vec::new(),
+    };
+    octet_stream(reply.to_bin())
+}
+
+fn octet_stream(encoded: Result<Vec<u8>, shekyl_rpc_types::BinError>) -> axum::response::Response {
+    match encoded {
+        Ok(bytes) => (
             StatusCode::OK,
             [("content-type", "application/octet-stream")],
-            data,
+            bytes,
         )
             .into_response(),
-        Ok(Err(-1)) => (StatusCode::BAD_REQUEST, "Bad request").into_response(),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, "FFI dispatch failed").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "encode failed").into_response(),
     }
 }
 
-macro_rules! bin_handler {
-    ($fn_name:ident, $uri:expr) => {
-        pub async fn $fn_name(
-            State(state): State<Arc<AppState>>,
-            body: Bytes,
-        ) -> impl IntoResponse {
-            dispatch_bin(state, $uri, body).await
+/// `/get_o_indexes.bin` — served natively (RK-4a), not dispatched to C++.
+///
+/// The first `.bin` method to answer from Rust. Every refusal keeps the
+/// shape the C++ gave: an unreadable request is a 400, and a transaction
+/// the store does not have is a **200 carrying a non-OK `status`**, because
+/// that is what the handler did (`res.status = "Failed"; return true`) and
+/// what the wallet client reads.
+pub async fn get_o_indexes(State(state): State<Arc<AppState>>, body: Bytes) -> impl IntoResponse {
+    let Ok(request) = shekyl_rpc_types::GetOIndexesRequest::from_bin(&body) else {
+        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+    };
+    let core = state.core.clone();
+    let out = tokio::task::spawn_blocking(move || core.tx_output_indices(&request.txid)).await;
+    let reply = match out {
+        Ok(Ok((o_indexes, true))) => shekyl_rpc_types::GetOIndexesResponse {
+            status: shekyl_rpc_types::RpcStatus::ok(),
+            o_indexes,
+        },
+        // No such transaction. The C++ answered 200 with `status: "Failed"`,
+        // and the wallet client branches on that; a transport-level error
+        // here would be a different reply, not a tidier one.
+        Ok(Ok((_, false))) => shekyl_rpc_types::GetOIndexesResponse {
+            status: shekyl_rpc_types::RpcStatus("Failed".to_owned()),
+            o_indexes: Vec::new(),
+        },
+        Ok(Err(_)) | Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "facts unavailable").into_response()
         }
     };
+    octet_stream(reply.to_bin())
 }
 
-bin_handler!(get_blocks, "/get_blocks.bin");
-bin_handler!(get_blocks_by_height, "/get_blocks_by_height.bin");
-bin_handler!(get_hashes, "/get_hashes.bin");
-bin_handler!(get_o_indexes, "/get_o_indexes.bin");
+#[cfg(test)]
+mod tests {
+    use super::{bin_status, restricted_cap_refuses, RESTRICTED_BLOCK_COUNT};
+    use axum::http::StatusCode;
+    use shekyl_rpc_types::{GetBlocksByHeightRequest, GetBlocksByHeightResponse};
+
+    /// This bites against changing `bin_status` to a transport error (4xx)
+    /// or dropping the octet-stream type. It does NOT cover the handler
+    /// wiring `state.restricted && restricted_cap_refuses` — naming that
+    /// handler pulls the C++ FFI archive into the unit-test link set
+    /// (`server::handler_for`).
+    #[tokio::test]
+    async fn the_restricted_cap_refuses_in_the_reply_status_not_the_transport() {
+        let response = bin_status("Too many blocks requested in restricted mode");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(axum::http::header::CONTENT_TYPE),
+            Some(&axum::http::HeaderValue::from_static(
+                "application/octet-stream"
+            ))
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let back = GetBlocksByHeightResponse::from_bin(&bytes).expect("decode");
+        assert!(!back.status.is_ok(), "the refusal travels in `status`");
+        assert_eq!(
+            back.status.0,
+            "Too many blocks requested in restricted mode"
+        );
+        assert!(back.blocks.is_empty());
+    }
+
+    /// The boundary itself: at the cap a request is served, one past it is
+    /// not. Changing `>` to `>=`, or the constant, turns this red. Vector
+    /// length vs the constant is not a check — `restricted_cap_refuses` is
+    /// the production comparison the handler calls.
+    #[test]
+    fn the_cap_is_a_thousand_heights_and_the_boundary_is_inclusive() {
+        assert_eq!(RESTRICTED_BLOCK_COUNT, 1000);
+        assert!(
+            !restricted_cap_refuses(RESTRICTED_BLOCK_COUNT),
+            "at the cap: served"
+        );
+        assert!(
+            restricted_cap_refuses(RESTRICTED_BLOCK_COUNT + 1),
+            "one past the cap: refused"
+        );
+        // Both still encode — the cap is the handler's decision, not the
+        // wire's, so a large request is well-formed and simply declined.
+        let at = GetBlocksByHeightRequest {
+            heights: vec![0; RESTRICTED_BLOCK_COUNT],
+        };
+        let over = GetBlocksByHeightRequest {
+            heights: vec![0; RESTRICTED_BLOCK_COUNT + 1],
+        };
+        assert!(at.to_bin().is_ok() && over.to_bin().is_ok());
+    }
+}

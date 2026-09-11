@@ -42,7 +42,19 @@ fn accumulate(bucket: AtomicUnits, amount: AtomicUnits) -> AtomicUnits {
 
 impl BalanceSummary {
     /// Compute balance from a set of transfer details at the given height.
-    pub fn compute(transfers: &[TransferDetails], current_height: u64) -> Self {
+    ///
+    /// `spend_locks` is the journal-derived awaiting-confirmation lock map
+    /// (`SendJournalBlock::spend_locks`, PR-SJ-1b): a row whose
+    /// `global_output_index` is locked is committed to a network-exposed
+    /// spend, so it counts in `total` but never `unlocked`. Spent rows
+    /// are excluded before the lock is consulted — confirmed evidence
+    /// supersedes a lock, the same precedence the retired field's merge
+    /// reconciler applied.
+    pub fn compute(
+        transfers: &[TransferDetails],
+        current_height: u64,
+        spend_locks: &shekyl_engine_state::InFlightSpendLocks,
+    ) -> Self {
         let mut summary = BalanceSummary::default();
 
         for td in transfers {
@@ -53,7 +65,7 @@ impl BalanceSummary {
             let amount = td.amount();
             summary.total = accumulate(summary.total, amount);
 
-            if td.awaiting_confirmation.is_some() {
+            if spend_locks.contains(td.global_output_index) {
                 summary.awaiting_confirmation = accumulate(summary.awaiting_confirmation, amount);
                 continue;
             }
@@ -97,7 +109,6 @@ mod tests {
             spent: false,
             spent_height: None,
             key_image: None,
-            awaiting_confirmation: None,
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
@@ -108,9 +119,35 @@ mod tests {
         }
     }
 
+    /// A journal with one in-flight send carrying `gindex`, derived into
+    /// the lock set the consumer sees. Building the *journal* rather than
+    /// the map is the point: `InFlightSpendLocks` has one constructor, so a test
+    /// fixture and production read the same derivation rule.
+    fn locks_over(gindex: u64, txid: [u8; 32]) -> shekyl_engine_state::InFlightSpendLocks {
+        use shekyl_engine_state::{SendInputRef, SendJournalBlock};
+
+        let mut journal = SendJournalBlock::empty();
+        journal.record_dispatched(
+            txid,
+            90,
+            0,
+            Vec::new(),
+            vec![SendInputRef { gindex, amount: 0 }],
+        );
+        assert!(journal.stamp_lock_baseline(&txid, 90));
+        journal.spend_locks()
+    }
+
+    /// No live sends: an empty journal derives an empty lock set.
+    /// Spelled through the derivation because `InFlightSpendLocks` has no other
+    /// constructor — see its type docs for why.
+    fn no_locks() -> shekyl_engine_state::InFlightSpendLocks {
+        shekyl_engine_state::SendJournalBlock::empty().spend_locks()
+    }
+
     #[test]
     fn empty_balance() {
-        let summary = BalanceSummary::compute(&[], 100);
+        let summary = BalanceSummary::compute(&[], 100, &no_locks());
         assert_eq!(summary.total, AtomicUnits::ZERO);
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
     }
@@ -118,7 +155,7 @@ mod tests {
     #[test]
     fn basic_unlocked_balance() {
         let transfers = vec![make_td(1000, 50), make_td(2000, 60)];
-        let summary = BalanceSummary::compute(&transfers, 100);
+        let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
         assert_eq!(summary.total, AtomicUnits::from_raw(3000));
         assert_eq!(summary.unlocked, AtomicUnits::from_raw(3000));
     }
@@ -126,7 +163,7 @@ mod tests {
     #[test]
     fn timelocked_outputs() {
         let transfers = vec![make_td(1000, 95)];
-        let summary = BalanceSummary::compute(&transfers, 100);
+        let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
         assert_eq!(summary.total, AtomicUnits::from_raw(1000));
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
         assert_eq!(summary.locked_by_timelock, AtomicUnits::from_raw(1000));
@@ -137,22 +174,36 @@ mod tests {
         let mut td = make_td(1000, 50);
         td.spent = true;
         let transfers = vec![td];
-        let summary = BalanceSummary::compute(&transfers, 100);
+        let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
         assert_eq!(summary.total, AtomicUnits::ZERO);
     }
 
+    /// A journal-locked output (PR-SJ-1b: lock derived from the send
+    /// journal, keyed by gindex) counts in `total` but never `unlocked`.
     #[test]
     fn awaiting_confirmation_excluded_from_unlocked() {
         let mut td = make_td(1000, 50);
-        td.awaiting_confirmation = Some(shekyl_engine_state::AwaitingConfirmation {
-            tx_hash: shekyl_types::TxHash::from_bytes([7u8; 32]),
-            accepted_at_height: 90,
-        });
+        td.global_output_index = 77;
+        let locks = locks_over(77, [7u8; 32]);
         let transfers = vec![td];
-        let summary = BalanceSummary::compute(&transfers, 100);
+        let summary = BalanceSummary::compute(&transfers, 100, &locks);
         assert_eq!(summary.total, AtomicUnits::from_raw(1000));
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
         assert_eq!(summary.awaiting_confirmation, AtomicUnits::from_raw(1000));
+    }
+
+    /// A spent row never lands in the awaiting bucket even when the
+    /// journal still carries its gindex — confirmed evidence supersedes
+    /// the lock (the reconciler precedence, now consumer-side).
+    #[test]
+    fn spent_row_supersedes_its_journal_lock() {
+        let mut td = make_td(1000, 50);
+        td.global_output_index = 78;
+        td.spent = true;
+        let locks = locks_over(78, [8u8; 32]);
+        let summary = BalanceSummary::compute(&[td], 100, &locks);
+        assert_eq!(summary.total, AtomicUnits::ZERO);
+        assert_eq!(summary.awaiting_confirmation, AtomicUnits::ZERO);
     }
 
     #[test]
@@ -160,7 +211,7 @@ mod tests {
         let mut td = make_td(1000, 50);
         td.frozen = true;
         let transfers = vec![td];
-        let summary = BalanceSummary::compute(&transfers, 100);
+        let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
         assert_eq!(summary.total, AtomicUnits::from_raw(1000));
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
         assert_eq!(summary.frozen, AtomicUnits::from_raw(1000));

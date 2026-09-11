@@ -13,7 +13,7 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
     let mut ent = params.entropy(NS);
     let omega = ent.unit(0);
     let k_base = 0.62 + 0.33 * ent.unit(1);
-    let k_jitter = 0.20 * (f.value_dispersion - 0.5);
+    let k_jitter = 0.20 * (ent.unit(5) - 0.5);
     let k = (k_base + k_jitter).clamp(0.0, 2.0);
 
     let plasma_freq = 6.0 + 8.0 * f.coinbase_ratio;

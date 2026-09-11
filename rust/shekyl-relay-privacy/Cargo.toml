@@ -35,6 +35,15 @@ shekyl-relay-privacy = { path = ".", features = ["conformance"] }
 # checked by `proof::verify`, which is the call the surface times, so it is the
 # anchor with the shortest path to the number.
 shekyl-fcmp = { path = "../shekyl-fcmp" }
+# TEST-ONLY, same rule: the default build stays dependency-free. These two are
+# what let `carrier::WINDOW_BYTES` be ENFORCED rather than performed. The
+# window has to hold a real `NOTIFY_NEW_TRANSACTIONS` carrying a real
+# transaction, so the test asks the two crates that own those facts instead of
+# re-typing either — `predict_size_and_weight` for the transaction and `notify`
+# for the envelope. A build-time derivation would absorb a proof-size change
+# silently and shift the window; a test reds with the constant named.
+shekyl-tx-weight = { path = "../shekyl-tx-weight" }
+shekyl-levin = { path = "../shekyl-levin" }
 
 [lints]
 workspace = true

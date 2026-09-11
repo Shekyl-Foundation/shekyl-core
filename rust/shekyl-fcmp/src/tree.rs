@@ -490,10 +490,18 @@ pub fn ed25519_point_to_selene_scalar(compressed: &[u8; 32]) -> Option<[u8; 32]>
 /// and PQC key hash.
 ///
 /// Computes Hp(O) (Monero's hash-to-curve), then extracts the Wei25519
-/// x-coordinates of O, Hp(O), and C.  The 4th scalar is `h_pqc` (the
-/// domain-separated Blake2b-512 hash of the hybrid PQC public key, reduced
-/// to a Selene scalar).  Pass `&[0u8; 32]` for outputs that have no PQC
-/// key commitment (e.g. coinbase before self-encapsulation is wired).
+/// x-coordinates of O, Hp(O), and C. The 4th scalar is `h_pqc: &[u8; 32]` —
+/// the consensus leaf-hash **bytes**. Produce them via the SA-3a single source:
+///
+/// ```no_run
+/// # let (o, c, pqc_pk) = ([0u8; 32], [0u8; 32], vec![0u8; 1952]);
+/// let h = shekyl_fcmp::leaf::PqcLeafScalar::from_pqc_public_key(&pqc_pk);
+/// let leaf = shekyl_fcmp::construct_leaf(&o, &c, &h.0);
+/// // or: shekyl_crypto_pq::derivation::hash_pqc_public_key(&pqc_pk)
+/// ```
+///
+/// Pass `&[0u8; 32]` for outputs that have no PQC key commitment (e.g. coinbase
+/// before self-encapsulation is wired).
 pub fn construct_leaf(
     output_key: &[u8; 32],
     commitment: &[u8; 32],

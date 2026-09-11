@@ -26,6 +26,9 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <cstdint>
+#include <optional>
+
 #include "include_base_utils.h"
 #include "file_io_utils.h"
 #include "net/net_utils_base.h"
@@ -54,7 +57,7 @@ namespace
   {
     static constexpr int handshake_command() noexcept { return 1001; }
     static constexpr bool handshake_complete() noexcept { return true; }
-    size_t get_max_bytes(int command) const { return LEVIN_DEFAULT_MAX_PACKET_SIZE; }
+    std::optional<size_t> get_max_bytes(uint32_t, uint32_t, int32_t* = nullptr) const { return LEVIN_DEFAULT_MAX_PACKET_SIZE; }
   };
 
   typedef epee::levin::async_protocol_handler_config<test_levin_connection_context> test_levin_protocol_handler_config;
@@ -237,7 +240,6 @@ namespace
   {
   public:
     static const int expected_command = 5615871;
-    static const int expected_return_code = 782546;
 
     test_levin_protocol_handler__hanle_recv_with_invalid_data()
       : m_expected_invoke_out_buf(512, 'y')
@@ -256,11 +258,9 @@ namespace
       m_req_head.m_cb = m_in_data.size();
       m_req_head.m_have_to_return_data = true;
       m_req_head.m_command = expected_command;
-      m_req_head.m_return_code = LEVIN_OK;
       m_req_head.m_flags = LEVIN_PACKET_REQUEST;
       m_req_head.m_protocol_version = LEVIN_PROTOCOL_VER_1;
 
-      m_commands_handler.return_code(expected_return_code);
       m_commands_handler.invoke_out_buf(m_expected_invoke_out_buf);
     }
 
@@ -294,7 +294,6 @@ BEGIN_SIMPLE_FUZZER()
   req_head.m_command = 2000;
   req_head.m_flags = LEVIN_PACKET_REQUEST;
   req_head.m_protocol_version = LEVIN_PROTOCOL_VER_1;
-  req_head.m_return_code = 0;
   FILE *f=fopen("/tmp/out.levin", "w");
   fwrite(&req_head,sizeof(req_head),1, f);
   fclose(f);
@@ -306,7 +305,5 @@ BEGIN_SIMPLE_FUZZER()
     m_handler_config.set_handler(m_pcommands_handler, [](epee::levin::levin_commands_handler<test_levin_connection_context> *handler) { delete handler; });
     std::unique_ptr<test_connection> conn(new test_connection(io_service, m_handler_config));
     conn->start();
-    //m_commands_handler.invoke_out_buf(expected_out_data);
-    //m_commands_handler.return_code(expected_return_code);
     conn->m_protocol_handler.handle_recv(buf, len);
 END_SIMPLE_FUZZER()

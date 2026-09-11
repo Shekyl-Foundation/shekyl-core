@@ -14,8 +14,8 @@ This is dev tooling. It is *not* run in CI — its output
 Regenerate only when the consensus leaf/root rules change (see README).
 
 Why daemon JSON rather than a Rust block decode: Shekyl's coinbase
-serializes a real `outPk` under `CTTypeNull` (`rctTypes.h`
-`serialize_rctsig_base`), which `shekyl-oxide`'s coinbase model
+serializes a real `outPk` under `CTTypeNull` (`ct_types.h`
+`serialize_ctsig_base`), which `shekyl-oxide`'s coinbase model
 (`proofs: None`) does not parse. Until that gap closes (FOLLOWUPS),
 the authoritative leaf inputs come from the daemon's structured block
 JSON, which serializes `outPk`/vout/extra correctly.
@@ -195,12 +195,16 @@ def _read_varint(buf: bytes, pos: int) -> tuple[int, int]:
 def extract_leaf_hash_blob(extra: bytes) -> bytes:
     """Walk tx_extra and return the single 0x07 leaf-hash blob.
 
-    Mirrors the field framing in `shekyl-scanner::extra::ExtraField::read`
-    so the generator records exactly the bytes `recon::extract_leaf_hashes`
-    consumes. Raises on an unknown tag rather than guessing.
+    Mirrors the genesis tag set in `shekyl-wire` (`GENESIS_TX_WIRE_FORMAT.md`
+    §9.6a) so the generator records exactly the bytes
+    `recon::extract_leaf_hashes` consumes. Raises on an unknown tag rather
+    than guessing. Inherited merge-mining (`0x03`) and minergate (`0xDE`)
+    are not in the grammar.
     """
     pos = 0
     n = len(extra)
+    # Length-prefixed blob tags: tag · V(len) · blob.
+    blob_tags = {0x02, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B}
     while pos < n:
         tag = extra[pos]
         pos += 1
@@ -209,13 +213,13 @@ def extract_leaf_hash_blob(extra: bytes) -> bytes:
                 pos += 1
         elif tag == 0x01:  # tx public key: 32 bytes
             pos += 32
-        elif tag == 0x03:  # merge mining: varint + 32-byte hash
-            _, pos = _read_varint(extra, pos)
-            pos += 32
         elif tag == 0x04:  # additional pubkeys: varint count + count*32
             count, pos = _read_varint(extra, pos)
             pos += count * 32
-        elif tag in (0x02, 0x06, 0x07, 0xDE):  # varint length + payload
+        elif tag == 0x05:  # PQC ownership: varint count + count×{u8,u8,[32]}
+            count, pos = _read_varint(extra, pos)
+            pos += count * (1 + 1 + 32)
+        elif tag in blob_tags:
             length, pos = _read_varint(extra, pos)
             payload = extra[pos : pos + length]
             pos += length

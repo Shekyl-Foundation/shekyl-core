@@ -33,7 +33,6 @@
 #include <string>
 
 #include "cryptonote_basic/cryptonote_basic_impl.h"
-#include "cryptonote_basic/merge_mining.h"
 
 namespace
 {
@@ -72,7 +71,7 @@ TEST(Crypto, Ostream)
   EXPECT_TRUE(is_formatted<crypto::signature>());
   EXPECT_TRUE(is_formatted<crypto::key_derivation>());
   EXPECT_TRUE(is_formatted<crypto::key_image>());
-  EXPECT_TRUE(is_formatted<rct::key>());
+  EXPECT_TRUE(is_formatted<ct::key>());
 }
 
 TEST(Crypto, null_keys)
@@ -295,17 +294,4 @@ TEST(Crypto, tree_branch)
 
   // five, not found
   ASSERT_FALSE(crypto::tree_branch((const char(*)[32])inputs, 5, crypto::null_hash.data, (char(*)[32])branch, &depth, &path));
-
-  // depth encoding roundtrip
-  for (uint32_t n_chains = 1; n_chains <= 65; ++n_chains)
-  {
-    for (uint32_t nonce = 0; nonce < 1024; ++nonce)
-    {
-      const uint32_t depth = cryptonote::encode_mm_depth(n_chains, nonce);
-      uint32_t n_chains_2, nonce_2;
-      ASSERT_TRUE(cryptonote::decode_mm_depth(depth, n_chains_2, nonce_2));
-      ASSERT_EQ(n_chains, n_chains_2);
-      ASSERT_EQ(nonce, nonce_2);
-    }
-  }
 }

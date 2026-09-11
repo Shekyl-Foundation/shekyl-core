@@ -13,6 +13,6 @@ pub enum VerifyError {
     LeafNotInOpening,
     #[error("recomputed sub-root does not match R_k")]
     SubrootMismatch,
-    #[error("leaf index {got} does not match epoch challenge index {expected}")]
-    LeafIndexMismatch { got: u32, expected: u32 },
+    // `LeafIndexMismatch` DELETED by RF-D6: the index is verifier-derived, never
+    // transported, so there is no wire value left to mismatch.
 }

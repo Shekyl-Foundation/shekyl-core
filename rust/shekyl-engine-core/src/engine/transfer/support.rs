@@ -11,10 +11,8 @@ use super::super::curve_tree_actor::CurveTreeHandleError;
 use super::super::diagnostics::{
     emit_pending_tx_diagnostic, BuildErrorKind, DiagnosticSink, PendingTxDiagnostic,
 };
-use super::super::error::{
-    FeeEstimatorError, IoError, OutputSelectorError, SendError, SignerError,
-};
-use super::super::pending::{ReservationId, TxHash};
+use super::super::error::{FeeEstimatorError, OutputSelectorError, SendError, SignerError};
+use super::super::pending::ReservationId;
 
 use super::types::{PendingTxState, ReanchorError};
 
@@ -108,6 +106,9 @@ pub(super) fn map_handle_err_to_reanchor(err: &CurveTreeHandleError) -> Reanchor
 pub(super) fn build_error_kind(err: &SendError) -> BuildErrorKind {
     match err {
         SendError::InvalidRecipient { .. } | SendError::Tx(_) => BuildErrorKind::InvalidRecipient,
+        SendError::Fee(
+            FeeEstimatorError::DaemonFeeUnreasonable(_) | FeeEstimatorError::CustomFeeOutOfRange(_),
+        ) => BuildErrorKind::FeeRefused,
         SendError::InsufficientFunds { .. } => BuildErrorKind::InsufficientFunds,
         SendError::SpendUnavailableRebuilding { .. } => BuildErrorKind::RebuildingMembershipData,
         SendError::OutputNotYetSpendable { .. } => BuildErrorKind::OutputNotYetSpendable,
@@ -120,7 +121,7 @@ pub(super) fn build_error_kind(err: &SendError) -> BuildErrorKind {
         SendError::CannotSign { .. } => BuildErrorKind::SignerUnavailable,
         // A curve-tree actor that cannot be queried is an infrastructure
         // outage indistinguishable, to the caller, from the daemon being down.
-        SendError::CurveTreeUnavailable { .. } | SendError::Io(_) => {
+        SendError::CurveTreeUnavailable { .. } | SendError::Io(_) | SendError::Fee(_) => {
             BuildErrorKind::DaemonUnavailable
         }
         SendError::SubmitLoopBreakerTripped { .. } => BuildErrorKind::SubmitLoopBreakerTripped,
@@ -157,9 +158,7 @@ pub(super) fn map_output_selector_error(err: &OutputSelectorError) -> SendError 
 }
 
 pub(super) fn map_fee_estimator_error(err: &FeeEstimatorError) -> SendError {
-    SendError::Io(IoError::Daemon {
-        detail: err.to_string(),
-    })
+    SendError::Fee(*err)
 }
 
 pub(super) fn map_signer_error(err: &SignerError) -> SendError {
@@ -169,10 +168,4 @@ pub(super) fn map_signer_error(err: &SignerError) -> SendError {
         },
         SignerError::RemoteFailure { reason } => SendError::CannotSign { reason },
     }
-}
-
-pub(super) fn phase1_tx_hash(id: ReservationId) -> TxHash {
-    let mut bytes = [0u8; 32];
-    bytes[..8].copy_from_slice(&id.raw().to_le_bytes());
-    TxHash::from_bytes(bytes)
 }

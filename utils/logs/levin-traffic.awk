@@ -12,14 +12,14 @@ commands["command-1004"] = "REQUEST_STAT_INFO"
 commands["command-1005"] = "REQUEST_NETWORK_STATE"
 commands["command-1006"] = "REQUEST_PEER_ID"
 commands["command-1007"] = "REQUEST_SUPPORT_FLAGS"
-commands["command-2001"] = "NOTIFY_NEW_BLOCK"
+commands["command-2001"] = "NOTIFY_NEW_BLOCK (deleted)"
 commands["command-2002"] = "NOTIFY_NEW_TRANSACTIONS"
 commands["command-2003"] = "REQUEST_GET_OBJECTS"
 commands["command-2004"] = "RESPONSE_GET_OBJECTS"
 commands["command-2006"] = "NOTIFY_REQUEST_CHAIN"
 commands["command-2007"] = "RESPONSE_CHAIN_ENTRY"
-commands["command-2008"] = "NOTIFY_NEW_FLUFFY_BLOCK"
-commands["command-2009"] = "NOTIFY_REQUEST_FLUFFY_MISSING_TX"
+commands["command-2008"] = "NOTIFY_NEW_COMPACT_BLOCK"
+commands["command-2009"] = "NOTIFY_REQUEST_COMPACT_MISSING_TX"
 }
 
 /	net.p2p.traffic	/ {

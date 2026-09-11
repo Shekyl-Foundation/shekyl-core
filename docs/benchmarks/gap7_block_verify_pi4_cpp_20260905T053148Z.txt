@@ -1,0 +1,30 @@
+# GAP-7 floor capture — worst-case cold-block connect verification
+# phase=cpp
+# captured_utc=20260905T053148Z
+# host=skl-pi  uname=Linux skl-pi 7.0.0-1017-raspi #17-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 16:13:24 UTC 2026 aarch64 GNU/Linux
+# device_row: Raspberry Pi 4 Model B, 4 GB, active cooling, USB3 SSD (PERFORMANCE_BASELINE.md §8.2)
+# git_rev=aa63f4ce996d3b8f12547db51ca60a8fb69cd84a
+# rustc=NA
+# RUSTFLAGS=<unset> (pin -C target-cpu=cortex-a72 per FA-6 §8.2)
+# randomx_mode=light/cache BY CONSTRUCTION — not a configuration that can drift between runs: shekyl-pow-randomx is a cache+VM substrate with no dataset arm (rust/shekyl-pow-randomx/src/lib.rs:46-72)
+# storage_deviation: run from SD (mmcblk0p2); §8.2 row's USB3 SSD present but unmounted — not mounted deliberately; measured path is CPU-bound and in-memory, so the deviation does not enter verify_floor
+# ram_as_found: 8 GB (Rev 1.4 board) vs the June row's 4 GB — rule 76 names the MODEL and Model B matches; RandomX is light/cache (~256 MB) and the FCMP terms are CPU-bound, so 8 vs 4 GB cannot bind HERE — a future floor measurement that IS memory-sensitive must not inherit this row's device as 'the floor'
+# thermal_start: temp_mC=53069 clock_kHz=1800000
+[2m2026-09-05T05:31:48.398007Z[0m [32m INFO[0m [2mlogging[0m[2m:[0m New log categories: warn,net=error,net::http=error,net::ssl=error,net::p2p=error,net::cn=error,daemon::rpc=error,global=info,verify=error,serialization=error,daemon::rpc::payment=error,stacktrace=info,logging=info,msgwriter=info
+Note: Google Test filter = gap7_bp_bench.*
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from gap7_bp_bench
+[ RUN      ] gap7_bp_bench.shipped_verifier_cost
+# thermal 05:31:48 temp_mC=53556 clock_kHz=1800000
+[gap7_bp_bench] shipped single-proof VERIFY, 2 outputs: median 13594.6 us over 21 runs (SHAPE datum — record the machine beside this number, rule 76)
+[gap7_bp_bench] shipped single-proof VERIFY, 16 outputs: median 71834.9 us over 21 runs (SHAPE datum — record the machine beside this number, rule 76)
+[gap7_bp_bench] shipped batched VERIFY, 46 x 2-output proofs: median 80281.6 us total, 1745.3 us/proof amortized (SHAPE datum — record the machine, rule 76)
+[       OK ] gap7_bp_bench.shipped_verifier_cost (4619 ms)
+[----------] 1 test from gap7_bp_bench (4619 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (4619 ms total)
+[  PASSED  ] 1 test.
+# thermal_end: temp_mC=54043 clock_kHz=1600000
+# done_utc=20260905T053153Z

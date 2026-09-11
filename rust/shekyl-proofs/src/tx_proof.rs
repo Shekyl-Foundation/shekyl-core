@@ -39,18 +39,15 @@
 #![deny(unsafe_code)]
 
 use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_POINT as G_POINT,
-    edwards::{CompressedEdwardsY, EdwardsPoint},
-    scalar::Scalar,
+    constants::ED25519_BASEPOINT_POINT as G_POINT, edwards::CompressedEdwardsY, scalar::Scalar,
 };
-use sha2::{Digest, Sha512};
-use zeroize::Zeroize;
 
 use shekyl_curve_generators::{H as H_POINT_LAZY, T as T_LAZY};
 
 use crate::error::ProofError;
 use shekyl_crypto_pq::kem::SharedSecret;
 use shekyl_crypto_pq::output::{derive_proof_secrets, rederive_combined_ss, ProofSecrets};
+use shekyl_crypto_pq::schnorr;
 
 pub const CURRENT_PROOF_VERSION: u8 = 1;
 
@@ -105,57 +102,13 @@ fn check_strictly_increasing(prev: Option<u32>, next: u32) -> Result<(), ProofEr
     Ok(())
 }
 
-// ── Schnorr signature (Ed25519 key, SHA-512 challenge) ──────────────
-
-fn schnorr_challenge(
-    domain: &[u8],
-    public_key: &EdwardsPoint,
-    r_point: &EdwardsPoint,
-    msg: &[u8],
-) -> Scalar {
-    let mut hasher = Sha512::new();
-    hasher.update(domain);
-    hasher.update(public_key.compress().as_bytes());
-    hasher.update(r_point.compress().as_bytes());
-    hasher.update(msg);
-    Scalar::from_hash(hasher)
-}
-
-/// 64-byte Schnorr signature: R (32 compressed point) + s (32 scalar).
-fn schnorr_sign(
-    domain: &[u8],
-    secret_key: &Scalar,
-    public_key: &EdwardsPoint,
-    msg: &[u8],
-) -> [u8; 64] {
-    let mut k = Scalar::random(&mut rand_core::OsRng);
-    let r_point = k * G_POINT;
-    let c = schnorr_challenge(domain, public_key, &r_point, msg);
-    let s = k - c * secret_key;
-    k.zeroize();
-
-    let mut sig = [0u8; 64];
-    sig[..32].copy_from_slice(r_point.compress().as_bytes());
-    sig[32..].copy_from_slice(&s.to_bytes());
-    sig
-}
-
-fn schnorr_verify(domain: &[u8], public_key: &EdwardsPoint, msg: &[u8], sig: &[u8; 64]) -> bool {
-    let r_compressed = CompressedEdwardsY::from_slice(&sig[..32]);
-    let Some(r_point) = r_compressed.ok().and_then(|c| c.decompress()) else {
-        return false;
-    };
-    let mut s_arr = [0u8; 32];
-    s_arr.copy_from_slice(&sig[32..]);
-    let s: Scalar = match Option::from(Scalar::from_canonical_bytes(s_arr)) {
-        Some(s) => s,
-        None => return false,
-    };
-
-    let c = schnorr_challenge(domain, public_key, &r_point, msg);
-    let check = s * G_POINT + c * public_key;
-    check == r_point
-}
+// ── Schnorr signature ───────────────────────────────────────────────
+//
+// The construction lives in `shekyl_crypto_pq::schnorr`, which owns it
+// for every in-tree surface that signs with a raw scalar. It used to be
+// copied here, in `reserve_proof`, and in wallet message signing; the
+// hedged nonce that protects against RNG failure was added to one copy
+// and not the others, which is what copies of a signing routine do.
 
 // ── Message assembly (bound into Schnorr) ───────────────────────────
 
@@ -280,7 +233,7 @@ pub fn generate_outbound_proof_with_secrets(
     )?;
     let pk_point = sk_scalar * G_POINT;
 
-    let sig = schnorr_sign(OUTBOUND_DOMAIN, &sk_scalar, &pk_point, &msg);
+    let sig = schnorr::sign(OUTBOUND_DOMAIN, &sk_scalar, &pk_point, &msg);
 
     let mut proof = Vec::with_capacity(OUTBOUND_HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
@@ -372,7 +325,7 @@ pub fn verify_outbound_proof(
     )?;
     let pk_point = sk_scalar * G_POINT;
 
-    if !schnorr_verify(OUTBOUND_DOMAIN, &pk_point, &msg, &sig) {
+    if !schnorr::verify(OUTBOUND_DOMAIN, &pk_point, &msg, &sig) {
         return Err(ProofError::SignatureFailed);
     }
 
@@ -515,7 +468,7 @@ pub fn generate_inbound_proof(
     )?;
     let pk_point = sk_scalar * G_POINT;
 
-    let sig = schnorr_sign(INBOUND_DOMAIN, &sk_scalar, &pk_point, &msg);
+    let sig = schnorr::sign(INBOUND_DOMAIN, &sk_scalar, &pk_point, &msg);
 
     let mut proof = Vec::with_capacity(INBOUND_HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
@@ -587,7 +540,7 @@ pub fn verify_inbound_proof(
 
     let msg = assemble_proof_message(txid, address_bytes, user_message, per_output_blob);
 
-    if !schnorr_verify(INBOUND_DOMAIN, &view_pk, &msg, &sig) {
+    if !schnorr::verify(INBOUND_DOMAIN, &view_pk, &msg, &sig) {
         return Err(ProofError::SignatureFailed);
     }
 

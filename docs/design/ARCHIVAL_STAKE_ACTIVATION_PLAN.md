@@ -49,8 +49,9 @@ This is not a bullet; it is a real derive-boundary round. The knot:
 - `spawn_stake_engine_if_staker` derives personas **only if `staking_enabled`** (`lifecycle.rs:894`).
 - `staking_enabled` is set **only by `persist_bond_record`** (`stake_persist.rs:147`), atomically
   with the first `bonded_slots` entry.
-- `persist_bond_record` follows a **signed** bond (`PersistedBondTicket` persist-before-use,
-  consumed by 2c-2b `sign_bond`), which needs a **derived persona**.
+- `persist_bond_record` precedes bond construction (`PersistedBondTicket`
+  persist-before-use, consumed by 2c-2b `plan_bond_post`, né `sign_bond` — the
+  vin is unsigned since SA-2b), which needs a **derived persona**.
 - …which needs the engine spawned — back to the top.
 
 **The break (source-anchored, not new architecture).** `spawn_stake_engine_if_staker` already
@@ -188,11 +189,13 @@ with the seed live**, in this order:
 - **Surface.** One arm in the flat `handlers::dispatch` match (`handlers.rs:24-52`); no
   `stake`/`bond` method exists today. It mirrors `send::build_pending_tx`: `require_open_engine`
   → engine call. **No wallet-rpc restricted-mode exists** (that mechanism is the *daemon* RPC,
-  `DAEMON_RPC_RUST.md:76-115`, a separate process); wallet-rpc gates fund-moving methods by
-  **`Capability::Full`** (`engine.capability()`, `mod.rs:943`; wallet-rpc opens FULL only,
-  `lifecycle.rs:143`). So `stake` is FULL-gated + an explicit `CapabilityForbids` (-29005) check,
-  **not** an allowlist. *(Round-0's "restricted-method list" pin is corrected here: the analog is
-  capability-gating, since wallet-rpc has no restricted map.)*
+  `DAEMON_RPC_RUST.md:76-115`, a separate process). *(Round-0's "restricted-method list" pin is
+  corrected here: wallet-rpc has no restricted map.)* **UPDATE 2026-09-07:** the capability-gate
+  half of this pin is void — capability collapsed to `Full`-only (rule 23; decision log
+  2026-09-07), the `CapabilityForbids` code `-29005` is RETIRED in `wallet_rpc.yaml`, and the
+  explicit gate this bullet prescribed was removed from `lifecycle.rs`. `stake` needs **no**
+  capability check: every open wallet is `Full` by construction (`from_envelope_byte` refuses
+  any other mode byte before an engine exists).
 - **Seed re-materialization = the reopen.** The method takes the **password** because first-stake
   needs the transient seed; it drives a credentialed (re)open carrying a first-stake intent, reusing
   the WI-1 `Tenant` lifecycle (close → open-with-intent). The reopen-friction removal is the V3.x
@@ -375,7 +378,16 @@ Landed exactly as ratified, plus one composition fact §5.0 left implicit:
   (`-29005` otherwise), password consumed into `Zeroizing` and crossing only the local
   transport; drives the close→reopen-with-intent Tenant dance; refusal taxonomy
   `-29500 StakeNotReady` (W1-clean) / `-29501 StakeInFlight` (W3) / `-29502
-  AlreadyStaked`, mid-flow failures name the W2 resume in their message (rule 82).
+  AlreadyStaked` / `-29503 StakeRecordMoved` (PR-SA-5: the slot is read from the
+  open engine BEFORE the credentialed reopen, whose SP-R0 reconcile may GC that
+  slot as a phantom (arm #3) or burn the cursor past it for a retired persona
+  (arm #2) — `first_stake` then refuses `WrongSlot` fail-closed. An arm #4
+  adoption lands on `-29502` instead, correctly: the already-staked scan sees
+  the adopted slot's bond post first. Nothing durable is written
+  and a re-invoke reads the reconciled record, so it is a domain refusal, never
+  the `-32603` internal fault it was first mapped to; no slot index rides the
+  payload, rule 81), mid-flow failures name the W2 resume in their message
+  (rule 82).
 - **Retired:** the GF4b rule-21 dead-code half **(b)** on all five witness consumers
   (and the arm-#1 witness constructor's own allow) — the entry chain is their
   production caller; the compiler re-adjudicated every site.
@@ -424,8 +436,11 @@ regression test:
   value can mint or re-activate).
 - **Verify-then-close (`stake` RPC).** The intent reopen closed the wallet before the
   password was ever checked — a mistyped password logged the user out. Now the
-  password is verified against the sealed envelope (`WalletFile::verify_password`,
-  lock-free read) and the daemon connected **before** the close; post-close reopen
+  password is verified against a snapshot of the sealed envelope taken from the
+  open handle (`WalletFile::sealed_keys_envelope`: the keys bytes that handle read
+  under its lock, because on Windows the lock is mandatory and a second handle
+  cannot read the file; verified after the engine lock is released so the KDF
+  blocks nothing) and the daemon connected **before** the close; post-close reopen
   faults attempt a best-effort plain restore reopen. The close is also name-bound
   (`take_and_close_tenant(expected_name)`), and the continuation runs on the exact
   engine arc inspected/installed — no tenant re-acquire a concurrent open could swap.
@@ -460,5 +475,6 @@ regression test:
   `Zeroizing` immediately after parse (the continue path and every early error
   previously dropped a plain `String`).
 - **Spec caught up.** `docs/api/wallet_rpc.yaml` now specifies `stake` (params,
-  result, `-29500..-29502`) — the code's error-code enum claims the yaml as its
-  source of truth, and the method had landed without it.
+  result, `-29500..-29502`; extended to `-29503` by PR-SA-5) — the code's
+  error-code enum claims the yaml as its source of truth, and the method had
+  landed without it.

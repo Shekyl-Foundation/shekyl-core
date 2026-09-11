@@ -1,0 +1,18 @@
+{
+  "status": "OK",
+  "txs": [{
+    "as_hex": "",
+    "as_json": "",
+    "block_height": 100,
+    "block_timestamp": 1750000001,
+    "confirmations": 1,
+    "double_spend_seen": false,
+    "in_pool": false,
+    "prunable_as_hex": "0607",
+    "prunable_hash": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+    "pruned": true,
+    "pruned_as_hex": "0102030405",
+    "tx_hash": "1f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8"
+  }],
+  "txs_as_hex": [""]
+}

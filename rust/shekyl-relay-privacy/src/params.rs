@@ -54,103 +54,93 @@
 /// the design round can move it and watch the embargo follow.
 pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 
-/// R-1 mixed eligibility: the **per-hop** chance a *relayed* transaction is
-/// diverted onto the anonymity zone instead of the public one, in hundredths
-/// of a percent (so `100` = 1.00 %).
+/// The false-retry rate for an **origin's** re-broadcast, as `1 / one_in` —
+/// derived from [`EMBARGO_FULL_TRAVEL_PROBABILITY`], not chosen beside it.
 ///
-/// # What this fixes
+/// # Why the origin's retry is the network's question asked by a different actor
 ///
-/// Without it, `net_node`'s routing sends every relayed transaction to
-/// clearnet and every *originated* one to the anonymity zone — so a peer on
-/// that zone knows everything it sees is the sender's own. That is F-6's
-/// origin oracle (§29), and it is the half configuration B's deletion did
-/// **not** close (§58.3).
+/// `EMBARGO_FULL_TRAVEL_PROBABILITY` pins the confidence at which a *relaying*
+/// node decides a stem has probably completed: at `alpha = 0.90`, a node's
+/// embargo is solved so that 9 stems in 10 finish before any node on the path
+/// fires. An origin re-broadcasting its own transaction is asking the same
+/// question — *has this stem probably completed?* — so it should ask it at the
+/// same confidence. The residual `1 - alpha` IS the rate at which retrying is
+/// premature, so `one_in = 1 / (1 - alpha)`.
 ///
-/// *"Onto the anonymity zone", not "onto its stem": the zone has no stem.
-/// `dandelionpp_notify` dispatches only when `nzone == public_`, so an
-/// anonymity zone **diffuses** to its outbound set instead — which is why
-/// F-6's oracle reached every outbound peer rather than one slot-holder, and
-/// why diverting costs a stem hop (§63).*
+/// Deriving rather than choosing is the point (§94.8's argument, one layer
+/// down): if `alpha` moves, this follows automatically instead of decoupling
+/// silently, and there is no self-invented bar to defend. The alternative on
+/// offer was a point inside a bracket, which is a bar of exactly that kind.
 ///
-/// # Per-hop, and the distinction is not cosmetic
+/// # What it replaces, and why the shipped value was a defect rather than a
+/// tuning question
 ///
-/// Every node that receives a relayed transaction over clearnet rolls
-/// independently, so over a stem of `1/q ≈ 5` hops the **network-level**
-/// diversion rate is `1 − (1 − p)^5`, not `p`:
+/// The inherited `MIN_RELAY_TIME` (300 s) governs the pool's re-broadcast loop
+/// for `local`, `fluff` and `block`. §15.4 cleared it from the embargo's
+/// neighbourhood on the ground that it *"governs an already-fluffed
+/// transaction, a different state from the embargo"* — true when written, and
+/// **vacated** by `originated_stays_in_zone`, which pins an anonymity-zone
+/// origin at `Local` permanently and so created a class that is never fluffed
+/// and lives on that branch for its whole life.
 ///
-/// | per-hop | network-level |
-/// | --- | --- |
-/// | 0.01 | 0.049 |
-/// | **0.02** | **0.096** |
-/// | 0.05 | 0.226 |
-///
-/// **This constant is the per-hop figure.** Reading it as the network rate
-/// overstates diversion fivefold; reading the network rate as this one
-/// understates it the same way.
-///
-/// # Why 2 %, and what it does NOT achieve
-///
-/// **Re-graded at §60 after R-1 landed; the original justification quoted
-/// precision figures that do not describe what ships.** Those figures
-/// (~2.4 % at a network-level 1 %, ~0.5 % at 5 %) were computed against
-/// *all relayed traffic* as the eligible set. What ships diverts
-/// **pre-fluff traffic only** — the `still_stemming` test at the routing
-/// site — which is ~20 transactions per node per day against ~20 000. Three
-/// orders of magnitude.
-///
-/// **Against the shipped eligible set, `p = 2 %` gives ~71 % precision,
-/// uniformly across the zone's outbound set.** Pre-R-1 it was 100 %. So this
-/// constant buys a real reduction and **not** the `C1 ≈ f` floor §58.3
-/// predicted.
-///
-/// *(§60.2 originally quoted a worse ~83 % on the `in_mapping_[nil]` slot.
-/// **Retracted at §63.4:** `in_mapping_` is Dandelion++ state and the
-/// anonymity zone does not run D++ — it diffuses to its whole outbound set —
-/// so there is no such slot and precision does not vary across peers. The
-/// unfavourable half of that correction belongs to F-6 rather than here: the
-/// pre-R-1 oracle was the entire outbound set, ~12 peers, not one
-/// slot-holder.)*
-///
-/// Reaching ~10 % against the pre-fluff set needs `p ≈ 45 %`, which is a
-/// different regime rather than a tweak — and **§63.5 prices it**: because a
-/// diverted transaction is diffused rather than stemmed, raising `p` shortens
-/// the D++ stem by `(1−q)p / (q + (1−q)p)`, which is 7.4 % here but **64 % at
-/// `p ≈ 45 %`** (mean stem 5.00 → 1.79). On present evidence that rules the
-/// raise out.
-///
-/// The alternative is widening eligibility to fluff-phase relays — what the
-/// original figures assumed. §61.1 called it dominated because an adversary
-/// could partition on `dandelionpp_fluff`; **§63.7 reverses that** — the flag
-/// does not vary on this zone, so the added traffic dilutes the same bucket.
-/// It remains a design change owed a bandwidth and F-7 review, not a constant
-/// change. **§60.3 leaves the choice to the constants round; this value is
-/// the conservative one until it is made.**
-///
-/// **State the eligible population's SIZE beside any rate that reads from
-/// it.** "2 % of relayed transactions" and "2 % of pre-fluff forwards" look
-/// alike and differ by 1000× — the same failure this comment already
-/// documents once for per-hop versus network-level, one level down.
-///
-/// **Set against an origination rate of one transaction per node per day**
-/// (§34's Monero-like envelope). If that assumption moves, this moves with
-/// it — the quantity that matters is diverted-relayed volume *relative to*
-/// originated volume on the zone, and only the numerator is set here.
-pub const MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS: u32 = 200;
+/// At 300 s that origin re-emits **below the anonymity embargo's median**
+/// (346 s): more than half the embargoes along its own stem are still running,
+/// so the retry fires while the transaction is propagating normally. That is
+/// the under-provisioning direction, on the origination path, where the thing
+/// being protected is the fact of origination.
+#[must_use]
+pub fn origin_retry_one_in() -> u64 {
+    // Rounded, then checked in `origin_retry_rate_is_the_reciprocal_of_alpha`:
+    // an `alpha` that is not of the form `1 - 1/N` cannot be expressed as an
+    // integer rate, and the test reds rather than this silently asking a
+    // different question than the network does.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let one_in = (1.0 / (1.0 - EMBARGO_FULL_TRAVEL_PROBABILITY)).round() as u64;
+    one_in
+}
 
-/// Should this *relayed* transaction be diverted onto the anonymity zone's
-/// stem? One roll, at entry.
+/// R-1 mixed eligibility: the chance an *originated* transaction takes the
+/// anonymity zone instead of the public one, in hundredths of a percent
+/// (so `100` = 1.00 %, `5000` = 50 %). One roll, at origination (Q12-D5a).
+/// Relayed traffic does not consult this; it inherits its arrival zone.
 ///
-/// **The roll is at entry only, and that is what makes R-1 work rather than
-/// a second decision.** A transaction already travelling the anonymity zone's
-/// stem must stay on it — re-rolling per hop would send it back to clearnet
-/// after one step, leaving the zone carrying originated traffic only, which
-/// is the oracle R-1 exists to remove. Coherence is not a separate policy;
-/// it is the absence of a second roll.
+/// **This is an indifference point on a linear trade, not a measured
+/// optimum.** Transport privacy gained and propagation latency paid are
+/// both linear in `p` with no threshold on either side, so the midpoint
+/// is the point of indifference. Precision is `q/(1+q)` at every value
+/// (Q12-D4's cancellation, which holds under once-at-origin and only
+/// there), so nothing about privacy varies with `p`.
 ///
-/// Callers own the pre-fluff test: this answers *whether to divert*, not
-/// *whether the transaction is still stemming*. Once it fluffs it leaves the
-/// zone, which is what keeps a transaction that entered over Tor reaching the
-/// public network at all.
+/// **What would replace it:** a measured asymmetry in either term —
+/// latency that is not linear in `p`, or a privacy cost that appears on
+/// one side of some threshold. Until that measurement exists, do not
+/// re-derive this number from prose. Four prior derivations in this arc
+/// reasoned about a code path that was dormant.
+///
+/// **Fixed, not operator-configurable.** A per-operator `p` is weakly
+/// observable to peers (the fraction of that node's originations that
+/// arrive on each zone) and would partition the node population into
+/// distinguishable classes. That is *privacy is never a setting* in a
+/// new place.
+///
+/// Formerly `MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS = 200`. The name
+/// described the deleted per-arrival divert; the 2 % was conservative
+/// under a stem-shortening cost that no longer applies. History:
+/// `DAEMON_RELAY_PRIVACY.md` §59–§64 / §89,
+/// `Q12_FORWARD_DELAY_AND_ZONE_FIELD.md`.
+pub const MIXED_ELIGIBILITY_PCT_HUNDREDTHS: u32 = 5000;
+
+/// Should this *originated* transaction take the anonymity zone?
+///
+/// **Once-at-origin (Q12-D5a).** The origin rolls; no node re-rolls.
+/// Relayed traffic inherits its arrival zone and coherence holds it.
+/// Re-rolling per arrival plus coherence was the one-way absorbing
+/// process that destroyed Q12-D4's cancellation.
+///
+/// Callers own the pre-fluff test: this answers *whether to take
+/// anonymity*, not *whether the transaction is still stemming*. Once it
+/// fluffs it leaves the zone, which is what keeps a transaction that
+/// entered over Tor reaching the public network at all.
 #[must_use]
 pub fn divert_to_anonymity_zone<R: crate::rng::RelayRng + ?Sized>(rng: &mut R) -> bool {
     // `bounded_uniform` rather than `% 10_000` for consistency with every
@@ -159,7 +149,7 @@ pub fn divert_to_anonymity_zone<R: crate::rng::RelayRng + ?Sized>(rng: &mut R) -
     // samples to observe. Stated rather than implied, because a comment
     // claiming a bias defence invites a test that cannot fail — one was
     // written here and deleted for exactly that reason.
-    crate::rng::bounded_uniform(rng, 9_999) < u64::from(MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS)
+    crate::rng::bounded_uniform(rng, 9_999) < u64::from(MIXED_ELIGIBILITY_PCT_HUNDREDTHS)
 }
 
 /// Outbound connections a node opens per zone by default — the deployed
@@ -243,6 +233,8 @@ impl StemGraph {
         }
     }
 }
+
+pub use crate::zone::RelayZone;
 
 /// The complete Dandelion++ parameter set, expressed as design inputs.
 ///
@@ -377,16 +369,15 @@ impl DandelionParams {
             // measure 2500 vs 2250 ms — the direction constraint costs
             // nothing; halving the usable degree is what costs (§40.1).
             //
-            // One process-wide value serves both zones because the embargo
-            // draw is a singleton, and it is set to the WORST zone's F. §44.3
-            // prices what that costs the over-provisioned zone: this constant's
-            // only production consumer is the embargo derivation, so
-            // over-estimating F *lengthens* the embargo — which *reduces* the
-            // §6.7 prefix-fire leak (measured) and pays only in black-hole
-            // recovery latency (p90 ~439 s vs ~331 s on clearnet). Privacy-safe
-            // on both axes; per-zone F would buy recovery latency, not privacy.
-            // Under the *inherited* Poisson delay the same instrument gives
-            // ~13.75 s — see F-5.
+            // One process-wide F for every zone: a fluff wave returns over
+            // whatever network the *node* is on, so there is no per-zone F to
+            // pick (§63.2's keeper; restated at §89.2). Set to the WORST zone's
+            // p90. §44.3 prices the over-provisioned zone: this constant's only
+            // production consumer is the embargo derivation, so over-estimating
+            // F *lengthens* the embargo — which *reduces* the §6.7 prefix-fire
+            // leak and pays only in black-hole recovery latency. Privacy-safe
+            // on both axes. Under the *inherited* Poisson delay the same
+            // instrument gives ~13.75 s — see F-5.
             fluff_return_ms: 3_250,
             // CRYPTONOTE_DANDELIONPP_STEMS = 2.
             graph: StemGraph::QuasiFourRegular,
@@ -407,8 +398,11 @@ impl DandelionParams {
     /// ~80 ms Monero-era verification figure plus one ocean crossing), and
     /// re-deriving its shape with our verification cost lands on the same
     /// milliseconds. So the cutover from `inherited()` moved **provenance,
-    /// not behaviour**: the embargo stays 190 s, the wallet timeout 874 s,
-    /// and every pin downstream of them holds.
+    /// not behaviour on clearnet**: the clearnet embargo stays 190 s.
+    /// (Anonymity zones take a longer hop — see [`Self::adopted_for`]. The
+    /// wallet failed-send wait is a separate interim at the *worst* zone's
+    /// quantile, currently 2297 s — `ADOPTED_PROPAGATION_TIMEOUT_SECS` —
+    /// and is a deletion target per §89.6.)
     ///
     /// Every other field carries its own already-recorded disposition:
     /// `fluff_return_ms` is F-7's measurement (worst-zone p90 at degree 12),
@@ -425,15 +419,14 @@ impl DandelionParams {
     /// measurement lands it replaces this floor; until then the floor with
     /// stated provenance supersedes a comment about a 2019 laptop.
     ///
-    /// # Global scalar, modal shape — an interim the doc prices
+    /// # Modal shape — an interim the doc prices
     ///
-    /// The embargo draw is a process-wide singleton today, so this uses the
-    /// **modal shape** (1 input, genesis tree). §83.1 prices the choice: the
-    /// modal embargo is effectively constant across the whole depth range
-    /// (~3 s of drift), while the tail rows are where per-shape derivation
-    /// pays (245 s at 8 inputs vs 190 s modal, at the assumed transit).
-    /// Per-shape consumption is the next RP cut and is blocked on
-    /// recovering the full 48-cell surface (`docs/FOLLOWUPS.md`).
+    /// Per-zone embargo timers still use the **modal shape** (1 input, genesis
+    /// tree) for each zone's hop. §83.1 prices the choice: the modal embargo
+    /// is effectively constant across the whole depth range (~3 s of drift),
+    /// while the tail rows are where per-shape derivation pays. Per-shape
+    /// consumption is the next RP cut and is blocked on recovering the full
+    /// 48-cell surface (`docs/FOLLOWUPS.md`).
     ///
     /// # Panics
     ///
@@ -442,8 +435,82 @@ impl DandelionParams {
     /// and the test suite asserts it.
     #[must_use]
     pub fn adopted() -> Self {
-        let hop = crate::verify_cost::adopted_hop_ms(1, crate::verify_cost::GENESIS_TREE_DEPTH)
-            .expect("the modal genesis cell is a pinned §85.3 measurement");
+        Self::adopted_for(RelayZone::Public)
+    }
+
+    /// How many *distinct* adopted parameter sets exist across all zones.
+    ///
+    /// Only `time_between_hop_ms` varies by zone, and it takes exactly two
+    /// values — the clearnet transit assumption and the anonymity one — so the
+    /// four `RelayZone`s partition into two classes. Callers that cache a built
+    /// artefact per parameter set size on this rather than on the zone count:
+    /// the process-wide embargo tables are ~443 KB each, and one table per zone
+    /// would build and hold three byte-identical anonymity copies for the life
+    /// of the daemon, on a floor rule 76 pins at a Raspberry Pi 4.
+    pub const ADOPTED_CLASSES: usize = 2;
+
+    /// Transit assumption per adopted class, in class order.
+    const TRANSIT_BY_CLASS: [f64; Self::ADOPTED_CLASSES] = [
+        crate::verify_cost::ADOPTED_TRANSIT_ASSUMPTION_MS,
+        crate::verify_cost::ANON_ZONE_TRANSIT_ASSUMPTION_MS,
+    ];
+
+    /// One representative zone per adopted class, in class order.
+    ///
+    /// Lets a caller build exactly one artefact per class without naming the
+    /// partition a second time. `zone_classes_partition_the_parameter_sets`
+    /// pins that these are in class order and that every zone agrees with its
+    /// representative.
+    pub const CLASS_REPRESENTATIVES: [RelayZone; Self::ADOPTED_CLASSES] =
+        [RelayZone::Public, RelayZone::Tor];
+
+    /// Which of [`Self::ADOPTED_CLASSES`] parameter sets `zone` draws.
+    ///
+    /// The single owner of the zone→parameters partition: [`Self::adopted_for`]
+    /// is defined in terms of it, so a cache indexed by this value cannot fall
+    /// out of step with the parameters it caches. Adding a third class is one
+    /// edit here plus two compile-visible array lengths.
+    #[must_use]
+    pub const fn adopted_class(zone: RelayZone) -> usize {
+        if zone.is_clearnet() {
+            0
+        } else {
+            1
+        }
+    }
+
+    /// The adopted parameter set **for one relay zone** (§89.2).
+    ///
+    /// §89 ruled the embargo per-zone rather than one global provisioned at
+    /// the worst zone. F-7's precedent does not transfer, by §63.2's keeper:
+    /// `fluff_return_ms` crosses transports because a fluff wave returns over
+    /// whatever network the node is on, so there is no per-zone value to pick;
+    /// `time_between_hop_ms` cannot cross, because the stem it spaces only
+    /// ever runs on one transport — and §59's coherence guarantees that, since
+    /// a transaction entering the anonymity zone's stem stays there until it
+    /// fluffs. The quantity is well-defined per zone in a way `F` is not.
+    ///
+    /// Only `time_between_hop_ms` varies. `fluff_return_ms` stays the single
+    /// worst-zone value F-7 measured — correctly, for the reason just given —
+    /// and `q`, the epoch pair and the graph are network-wide constants
+    /// (verified: `relay_zone_params` carries stems and epoch only, and
+    /// nothing zone-parameterises the fluff probability).
+    ///
+    /// # `Invalid` takes the longest embargo, not the shortest
+    ///
+    /// Out-of-domain FFI bytes and unknown-origin cases resolve to
+    /// [`RelayZone::Invalid`], which is provisioned as the anonymity hop.
+    /// Under-estimating shortens the embargo (privacy-losing); the cost of
+    /// the longer wait is recovery latency only.
+    #[must_use]
+    pub fn adopted_for(zone: RelayZone) -> Self {
+        let transit = Self::TRANSIT_BY_CLASS[Self::adopted_class(zone)];
+        let hop = crate::verify_cost::adopted_hop_ms_with_transit(
+            1,
+            crate::verify_cost::GENESIS_TREE_DEPTH,
+            transit,
+        )
+        .expect("the modal genesis cell is a pinned §85.3 measurement");
         Self {
             time_between_hop_ms: hop,
             ..Self::inherited()
@@ -576,57 +643,41 @@ pub mod inherited {
     /// λ for the inbound fluff draw, in quarter-seconds.
     pub const FLUFF_AVERAGE_IN_QUARTER_SECS: u32 = 20;
 
-    /// `CRYPTONOTE_NOISE_MIN_DELAY`, in seconds.
-    ///
-    /// The epoch pair (`CRYPTONOTE_NOISE_MIN_EPOCH` / `_EPOCH_RANGE`) is
-    /// deliberately NOT mirrored here: those values are C++-owned and cross
-    /// the FFI as `shekyl_relay_zone_new` arguments. Rust mirrors of them
-    /// existed briefly with zero consumers and were deleted (Q-11 Unit 0) —
-    /// a dead duplicate of a C++-owned fact is the delete-don't-synchronize
-    /// class, not documentation.
-    pub const NOISE_MIN_DELAY_SECS: u32 = 10;
-    /// `CRYPTONOTE_NOISE_DELAY_RANGE`, in seconds.
-    ///
-    /// **Must stay non-zero, and the reason is §56 rather than arithmetic.**
-    /// At zero the cadence has no width: `next_send` returns exactly
-    /// `NOISE_MIN_DELAY_SECS` every time, and the covert channel becomes a
-    /// **metronome** — the one shape Q-11 Unit 2 disqualified, at a 1.000
-    /// re-identification rate, because a fixed period is a permanent
-    /// per-stream identifier.
-    ///
-    /// The build fails rather than the daemon degrading, because the failure
-    /// is silent in both places it would land: the daemon would emit a
-    /// perfectly periodic carrier while still calling it jittered, and the
-    /// Unit 2 sweep would run its `BoundedUniform` and `Metronome` arms on the
-    /// *same law under two names* — a reader seeing those columns agree would
-    /// conclude the shapes are equivalent, which is the opposite of what §56
-    /// found.
-    pub const NOISE_DELAY_JITTER_SECS: u32 = 5;
-    const _: () = assert!(
-        NOISE_DELAY_JITTER_SECS > 0,
-        "covert cadence jitter must be non-zero: at zero the carrier is a \
-         metronome, which Q-11 Unit 2 (§56) disqualified at a 1.000 \
-         re-identification rate"
-    );
+    // The covert cadence and its epoch-window budget MOVED to `super::carrier`
+    // on 2026-08-28, with `_SECS` becoming `_MS`.
+    //
+    // They were mirrors of `CRYPTONOTE_NOISE_MIN_DELAY` and
+    // `CRYPTONOTE_NOISE_DELAY_RANGE`; both `#define`s had zero readers and are
+    // deleted by the same change. This module is the mirror of the
+    // `cryptonote_config.h` relay block, so a value that mirrors nothing does
+    // not belong here — and the carrier module is where the ceiling those
+    // numbers now have to satisfy can be asserted against `WINDOW_BYTES`.
+
     /// `CRYPTONOTE_NOISE_CHANNELS` — max outbound connections per zone used
     /// for covert sending.
     pub const NOISE_CHANNELS: usize = 2;
 }
+
+pub mod carrier;
 
 #[cfg(test)]
 mod r1_tests {
     use super::*;
     use crate::rng::SplitMix64;
 
-    /// The roll fires at the configured per-hop rate, and the *network-level*
-    /// rate it implies is the one that must be quoted.
+    /// Pins the indifference point and that production's sampler uses it.
     ///
-    /// Both arms matter. The first pins the constant's meaning; the second
-    /// pins the thing that is easy to state wrongly — a per-hop 2 % is a
-    /// ~10 % network-level diversion over a `1/q ≈ 5` stem, and a reader who
-    /// takes 2 % as the network figure is off by five.
+    /// What edit reds the value: change `MIXED_ELIGIBILITY_PCT_HUNDREDTHS`.
+    /// What edit reds the sampler: make `divert_to_anonymity_zone` ignore
+    /// the constant (hardcode a different threshold). Deleting this test
+    /// is not the edit that reds either.
     #[test]
-    fn the_roll_is_per_hop_and_the_network_rate_is_five_times_it() {
+    fn the_roll_matches_the_indifference_point() {
+        assert_eq!(
+            MIXED_ELIGIBILITY_PCT_HUNDREDTHS, 5000,
+            "p = 0.5 is the indifference point; do not re-derive from prose"
+        );
+
         const N: u32 = 200_000;
         let mut rng = SplitMix64::new(0x5211);
         let mut hits = 0_u32;
@@ -635,19 +686,57 @@ mod r1_tests {
                 hits += 1;
             }
         }
-        let per_hop = f64::from(hits) / f64::from(N);
-        let target = f64::from(MIXED_ELIGIBILITY_PER_HOP_PCT_HUNDREDTHS) / 10_000.0;
+        let observed = f64::from(hits) / f64::from(N);
+        let target = f64::from(MIXED_ELIGIBILITY_PCT_HUNDREDTHS) / 10_000.0;
         assert!(
-            (per_hop - target).abs() < 0.002,
-            "per-hop rate {per_hop:.4} should be {target:.4}"
+            (observed - target).abs() < 0.01,
+            "sampler rate {observed:.4} should be {target:.4}"
         );
+    }
 
-        // 1 - (1-p)^5 at p = 0.02 is ~0.096.
-        let network = 1.0 - (1.0 - target).powi(5);
+    /// The shipped epoch still carries a full-size message, with named slack
+    /// rather than a tautology on integer division.
+    ///
+    /// The historical 300 s / 20-window coincidence (`MAX_FRAGMENTS` was set
+    /// equal to `noise_windows_in_epoch(300)`) is not the derivation. What
+    /// this pins is the live relationship: the inherited epoch is 600 s and
+    /// the derived cap of 5 sits well under what it affords.
+    ///
+    /// # The 300 s tripwire fired, on purpose, and is retired here
+    ///
+    /// The final assertion used to read `noise_windows_in_epoch(300) == 20`,
+    /// kept — in its own words — *"so a cadence change that would have moved
+    /// that coincidence reds here"*. The 2026-08-28 cadence change is that
+    /// change, and it did red here. The coincidence it was watching is now
+    /// **gone rather than moved**: 300 s affords 44 windows against a cap of
+    /// 5, so there is no longer a number for `MAX_FRAGMENTS` to be silently
+    /// equal to. Re-pinning it at 44 would keep a tripwire whose subject has
+    /// been dismantled, so what is asserted instead is the property that
+    /// actually matters — the epoch affords the cap with room, and the cap is
+    /// not the ceiling.
+    #[test]
+    fn the_shipped_epoch_carries_a_full_noise_message_with_named_slack() {
+        let per_send_ms = carrier::NOISE_MIN_DELAY_MS + carrier::NOISE_DELAY_JITTER_MS;
+        let shipped = DandelionParams::inherited().min_epoch_secs;
+        assert_eq!(shipped, 600, "CRYPTONOTE_DANDELIONPP_MIN_EPOCH");
+        assert_eq!(
+            carrier::noise_windows_in_epoch(shipped),
+            (shipped * 1_000) / per_send_ms,
+            "the epoch-window budget is integer division of the shipped epoch"
+        );
+        let affords = carrier::noise_windows_in_epoch(shipped);
         assert!(
-            (0.09..0.11).contains(&network),
-            "network-level rate {network:.3} — this is the figure to quote, \
-             not the per-hop one"
+            affords >= carrier::MAX_FRAGMENTS,
+            "a {shipped} s epoch affords {affords} windows; the cap is {} — \
+             slack is {affords} − {}, not a coincidence with the cap",
+            carrier::MAX_FRAGMENTS,
+            carrier::MAX_FRAGMENTS,
+        );
+        assert!(
+            affords > carrier::MAX_FRAGMENTS,
+            "the cap must sit STRICTLY under the epoch ceiling: at equality \
+             the cap would again be a restatement of the epoch rather than a \
+             bound derived from the transactions it carries"
         );
     }
 }
@@ -751,6 +840,105 @@ mod tests {
     #[test]
     fn adopted_params_change_provenance_not_behaviour() {
         assert_eq!(DandelionParams::adopted(), DandelionParams::inherited());
+    }
+
+    #[test]
+    fn the_clearnet_zone_is_unmoved_by_going_per_zone() {
+        // §89.2 changes what the anonymity zones get. It must change nothing
+        // on clearnet, which carries the overwhelming majority of traffic —
+        // if this moves, per-zone provisioning has become the global-at-worst-
+        // zone posture §89.2 rejected, wearing a different shape.
+        assert_eq!(
+            DandelionParams::adopted(),
+            DandelionParams::adopted_for(RelayZone::Public),
+            "adopted() must remain exactly the clearnet set"
+        );
+        assert_eq!(
+            DandelionParams::adopted_for(RelayZone::Public).time_between_hop_ms,
+            175,
+            "the clearnet hop moved off its §88 value"
+        );
+    }
+
+    #[test]
+    fn the_anonymity_zones_take_the_longer_interim_hop() {
+        let anon = DandelionParams::adopted_for(RelayZone::Tor);
+        assert_eq!(
+            anon,
+            DandelionParams::adopted_for(RelayZone::I2p),
+            "i2p and tor are both rendezvous-addressed; nothing distinguishes them here"
+        );
+        // §63.2's own worst case — "ten times clearnet latency" — reproduced
+        // as verification floor + the labelled rendezvous assumption.
+        assert_eq!(anon.time_between_hop_ms, 1_750);
+        assert!(
+            anon.time_between_hop_ms > DandelionParams::adopted().time_between_hop_ms,
+            "the anonymity hop must exceed clearnet's: a rendezvous path is six \
+             relays where clearnet is one direct connection. If this ever \
+             inverts, the interim has been edited to the privacy-losing side"
+        );
+    }
+
+    #[test]
+    fn an_unknown_origin_takes_the_longer_embargo_not_the_shorter() {
+        // Invalid/out-of-domain must be the longer hop — under-estimating
+        // shortens the embargo (§65, §66).
+        assert_eq!(
+            DandelionParams::adopted_for(RelayZone::Invalid).time_between_hop_ms,
+            DandelionParams::adopted_for(RelayZone::Tor).time_between_hop_ms,
+            "an unknown origin must be provisioned as the worst case it could be"
+        );
+        assert!(!RelayZone::Invalid.is_clearnet());
+    }
+
+    /// The class partition is the single owner of "which zones share a
+    /// parameter set", and a cache sized on it must be able to trust three
+    /// things: the representatives are in class order, every zone agrees with
+    /// its own representative, and the classes are genuinely distinct.
+    ///
+    /// Without the last one a collapsed partition (both representatives
+    /// clearnet, say) would still satisfy the first two and quietly hand every
+    /// anonymity zone the clearnet embargo — the §89.2 regression this
+    /// partition exists to make impossible.
+    #[test]
+    fn zone_classes_partition_the_parameter_sets() {
+        for (class, zone) in DandelionParams::CLASS_REPRESENTATIVES.iter().enumerate() {
+            assert_eq!(
+                DandelionParams::adopted_class(*zone),
+                class,
+                "representatives must be listed in class order"
+            );
+        }
+
+        for zone in [
+            RelayZone::Invalid,
+            RelayZone::Public,
+            RelayZone::I2p,
+            RelayZone::Tor,
+        ] {
+            let representative =
+                DandelionParams::CLASS_REPRESENTATIVES[DandelionParams::adopted_class(zone)];
+            assert_eq!(
+                DandelionParams::adopted_for(zone).time_between_hop_ms,
+                DandelionParams::adopted_for(representative).time_between_hop_ms,
+                "{zone:?} must draw exactly its class representative's parameters, \
+                 or a per-class cache hands it the wrong embargo"
+            );
+        }
+
+        let hops: Vec<_> = DandelionParams::CLASS_REPRESENTATIVES
+            .iter()
+            .map(|zone| DandelionParams::adopted_for(*zone).time_between_hop_ms)
+            .collect();
+        assert_eq!(
+            hops.len(),
+            DandelionParams::ADOPTED_CLASSES,
+            "one representative per class"
+        );
+        assert!(
+            hops[0] < hops[1],
+            "the classes must stay distinct and clearnet-first: {hops:?}"
+        );
     }
 
     #[test]

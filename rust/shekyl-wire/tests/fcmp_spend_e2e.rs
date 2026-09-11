@@ -57,6 +57,9 @@
 //! is now a single on-wire FCMP++ spend layout; this test validates that serializer
 //! against real crypto-valued fields.
 
+mod common;
+use common::conforming_pqc_extra;
+
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT, edwards::CompressedEdwardsY, scalar::Scalar,
 };
@@ -388,18 +391,12 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     )
     .expect("construct change output");
     let pack_output_info = |out: &OutputData, amount: u64| -> OutputInfo {
-        let mut enc_amount = [0u8; 9];
-        enc_amount[..8].copy_from_slice(&out.enc_amount);
-        enc_amount[8] = out.amount_tag;
-        let mut enc_label = [0u8; 9];
-        enc_label[..8].copy_from_slice(&out.enc_label);
-        enc_label[8] = out.label_tag;
         OutputInfo {
             dest_key: out.output_key,
             amount: AtomicUnits::from_raw(amount),
             commitment_mask: out.z,
-            enc_amount,
-            enc_label,
+            enc_amount: out.enc_amount_wire(),
+            enc_label: out.enc_label_wire(),
         }
     };
     let outputs = [
@@ -567,14 +564,17 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
                     view_tag: change.view_tag_prefilter,
                 },
             ],
-            extra: Vec::new(),
+            extra: conforming_pqc_extra(2),
         },
         ct: Ct::Fcmp {
             fee,
             reference_block: signed.reference_block,
             base: CtBase {
-                enc_amounts: signed.enc_amounts.clone(),
-                enc_labels: signed.enc_labels.clone(),
+                // Same unwrap the private `build_wire_tx` does, at the same
+                // boundary and for the same reason: this is where the send
+                // path stops being provenance-typed and becomes wire.
+                enc_amounts: signed.enc_amounts.iter().map(|f| f.to_bytes()).collect(),
+                enc_labels: signed.enc_labels.iter().map(|f| f.to_bytes()).collect(),
                 commitments: signed.commitments.clone(),
             },
             pqc_auths: pqc_auths
@@ -588,6 +588,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
                 })
                 .collect(),
             prunable: Some(Prunable {
+                serve_credit_pruned: Vec::new(),
                 bulletproofs: vec![bp_plus_from_blob(&signed.bulletproof_plus)],
                 // Consensus `curve_trees_tree_depth` is the LMDB depth = layer
                 // count − 1 (the daemon reconstructs `fcmp_layers = depth + 1`).
@@ -639,7 +640,10 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
             Some(payment.view_tag_prefilter),
             Some(change.view_tag_prefilter),
         ],
-        tx_extra: Vec::new(),
+        // Same conforming 0x06/0x07 fields the hand-assembled tx above carries:
+        // the two encoders are asserted byte-identical, so both sides must build
+        // the transaction consensus would actually accept (CEN-I19).
+        tx_extra: conforming_pqc_extra(2),
         fee,
         enc_amounts: signed.enc_amounts.clone(),
         enc_labels: signed.enc_labels.clone(),

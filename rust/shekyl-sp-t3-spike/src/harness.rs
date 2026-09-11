@@ -37,14 +37,22 @@ use std::time::{Duration, Instant};
 use kameo::actor::Spawn as _;
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
 use shekyl_p_transport::{PTorClient, PTransportError, RequestErrorKind, TorSocksEndpoint};
-use shekyl_tor::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId};
-use shekyl_tor::control::{BootstrapReadiness, BootstrapState, Command, EventSink, TorControl};
-use shekyl_tor::control::{ManagedTor, SocksPort, TorControlConfig, TorLaunch};
+use shekyl_tor_control_client::control::onion::{
+    AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId,
+};
+use shekyl_tor_control_client::control::{
+    BootstrapReadiness, BootstrapState, Command, EventSink, TorControlClient,
+};
+use shekyl_tor_control_client::control::{
+    ManagedTor, SocksPort, TorControlClientConfig, TorLaunch,
+};
 use shekyl_types::{PCanonicalId, PSlot};
 
+use shekyl_p_serve::{PServeEndpoint, ShardBody, ROUTE_PREFIX};
+
+use crate::fixture::FixtureShardProvider;
 use crate::measure::{FailureKind, Observation};
 use crate::onion_key::derive_onion_identity;
-use crate::serve::{ServeEndpoint, ROUTE_PREFIX};
 
 /// Ceiling on a single fetch before the harness calls it a timeout.
 ///
@@ -89,8 +97,10 @@ pub struct Persona {
     pub id: PCanonicalId,
     /// Its published onion.
     pub service_id: ServiceId,
-    /// The loopback endpoint tor forwards to.
-    pub endpoint: ServeEndpoint,
+    /// The loopback endpoint tor forwards to — the **production** serving
+    /// loop (`shekyl_p_serve`), driven here with a fixture provider. The
+    /// spike measures what ships, not a lookalike.
+    pub endpoint: PServeEndpoint,
 }
 
 impl Persona {
@@ -109,10 +119,23 @@ impl Persona {
 
 /// A running measurement apparatus: a managed tor plus its published personas.
 pub struct Apparatus {
-    control: kameo::actor::ActorRef<TorControl>,
+    control: kameo::actor::ActorRef<TorControlClient>,
     socks: TorSocksEndpoint,
     /// The published personas, in slot order.
     pub personas: Vec<Persona>,
+    /// The body length every fetch is checked against — **derived, never
+    /// passed in.**
+    ///
+    /// Computed once at bring-up from the payload, through the production
+    /// serving contract ([`shekyl_p_serve::ShardBody::header`]), so it is
+    /// the length the endpoint will actually write: `RF-D4`'s frame header
+    /// plus the leaf bytes. Before this field existed every caller passed the
+    /// raw fixture length, and when the frame landed that number went stale
+    /// at four call sites at once — each reachability probe rejected until
+    /// timeout, each timed fetch classified `Truncated`. A number a caller
+    /// supplies is a number that drifts when the wire moves; a number the
+    /// apparatus derives from the same code that writes the wire cannot.
+    expected_len: usize,
 }
 
 /// Why the apparatus could not be brought up. Every arm is an *apparatus*
@@ -132,6 +155,13 @@ pub enum ApparatusError {
     Bind(std::io::Error),
     /// No persona became reachable within [`PUBLISH_TIMEOUT`].
     NotReachable,
+    /// The payload cannot be served at all: not a whole number of leaves, or
+    /// more than one segment. Refused at bring-up, because an apparatus that
+    /// serves a 404 for every shard measures nothing.
+    Unframeable {
+        /// The offending payload length.
+        bytes: usize,
+    },
 }
 
 impl std::fmt::Display for ApparatusError {
@@ -143,6 +173,11 @@ impl std::fmt::Display for ApparatusError {
             Self::NoServiceId => write!(f, "ADD_ONION reply carried no service id"),
             Self::Bind(e) => write!(f, "serve endpoint bind failed: {e}"),
             Self::NotReachable => write!(f, "no persona became reachable before the deadline"),
+            Self::Unframeable { bytes } => write!(
+                f,
+                "payload of {bytes} bytes is not servable (not a whole number of leaves, or \
+                 more than one segment)"
+            ),
         }
     }
 }
@@ -205,7 +240,7 @@ impl Apparatus {
         tor_binary: std::path::PathBuf,
         data_dir: std::path::PathBuf,
         persona_count: u32,
-        payload: Arc<Vec<u8>>,
+        payload: Arc<[u8]>,
     ) -> Result<Self, ApparatusError> {
         Self::bring_up_with_pow(
             tor_binary,
@@ -228,15 +263,15 @@ impl Apparatus {
         tor_binary: std::path::PathBuf,
         data_dir: std::path::PathBuf,
         persona_count: u32,
-        payload: Arc<Vec<u8>>,
+        payload: Arc<[u8]>,
         pow: OnionPow,
     ) -> Result<Self, ApparatusError> {
         let socks_port = free_port();
         let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
-        let verified = shekyl_tor::binary::discover_and_verify_at(&tor_binary)
+        let verified = shekyl_tor_control_client::binary::discover_and_verify_at(&tor_binary)
             .map_err(|e| ApparatusError::Control(e.to_string()))?;
-        let control = TorControl::spawn(TorControlConfig {
+        let control = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Managed(ManagedTor {
                 tor_binary: verified,
                 data_dir,
@@ -261,6 +296,18 @@ impl Apparatus {
                 .ok();
         }
 
+        // The expected body length, derived through the production contract
+        // BEFORE any persona is bound: the same `ShardBody::flat` the fixture
+        // provider will call per request, so what the probes compare against
+        // is what the endpoint will write — frame header included.
+        let expected_len = ShardBody::flat(Arc::clone(&payload))
+            .ok_or(ApparatusError::Unframeable {
+                bytes: payload.len(),
+            })?
+            .header()
+            .framed_len();
+        let expected_len = usize::try_from(expected_len).expect("framed length fits usize");
+
         let mut personas = Vec::new();
         for slot in 0..persona_count {
             let slot = PSlot::from_raw(slot);
@@ -274,16 +321,17 @@ impl Apparatus {
                 slot,
             );
             let service_id = identity.service_id().clone();
-            let endpoint = ServeEndpoint::bind(Arc::clone(&payload))
-                .await
-                .map_err(ApparatusError::Bind)?;
+            let endpoint =
+                PServeEndpoint::bind(Arc::new(FixtureShardProvider::new(Arc::clone(&payload))))
+                    .await
+                    .map_err(ApparatusError::Bind)?;
             let port = OnionPort::loopback(80, endpoint.addr())
-                .expect("ServeEndpoint always binds loopback");
+                .expect("PServeEndpoint always binds loopback");
             // MaxStreams is pinned conservatively here; see SPIKE-PIN-1 in the
             // measurement report. A shard read is one stream per connection and
             // the harness never opens more, so 8 leaves headroom without letting
             // one client hold many streams on a rendezvous circuit.
-            let request = AddOnion::new(identity.into_onion_key(), port, 8)
+            let request = AddOnion::new(identity.mint_onion_key(), port, 8)
                 .with_flags(OnionFlags { discard_pk: true })
                 .with_pow(pow);
             let reply = control
@@ -293,8 +341,9 @@ impl Apparatus {
             if reply.status() != 250 {
                 return Err(ApparatusError::AddOnion(reply.status()));
             }
-            let published = shekyl_tor::control::onion::parse_service_id(reply.lines())
-                .ok_or(ApparatusError::NoServiceId)?;
+            let published =
+                shekyl_tor_control_client::control::onion::parse_service_id(reply.lines())
+                    .ok_or(ApparatusError::NoServiceId)?;
             // The address tor published must be the address the derivation
             // predicted — otherwise the client leg would dial a service that
             // exists but is not this persona's, and every fetch would fail for a
@@ -314,7 +363,16 @@ impl Apparatus {
             control,
             socks: TorSocksEndpoint::loopback(socks_port),
             personas,
+            expected_len,
         })
+    }
+
+    /// The body length every fetch is checked against: frame header plus
+    /// shard, as the endpoint writes it. Exposed so operators and logs can
+    /// print the number a remote reader should expect.
+    #[must_use]
+    pub fn expected_body_len(&self) -> usize {
+        self.expected_len
     }
 
     /// Block until at least one persona answers, so the measurement does not
@@ -324,14 +382,14 @@ impl Apparatus {
     /// every arm: publication happens once when the persona comes online, not
     /// once per challenge, so folding it into the fetch distribution would
     /// inflate the tail with a cost a real drawn miner never pays.
-    pub async fn await_reachable(&self, expected_len: usize) -> Result<Duration, ApparatusError> {
+    pub async fn await_reachable(&self) -> Result<Duration, ApparatusError> {
         let started = Instant::now();
         let persona = self.personas.first().ok_or(ApparatusError::NotReachable)?;
         let url = persona.shard_url(0);
         while started.elapsed() < PUBLISH_TIMEOUT {
             let probe = PCanonicalId::from_bytes(persona_probe_id(PSlot::from_raw(u32::MAX)));
             if let Ok(bytes) = self.fetch_once(&probe, &url).await {
-                if bytes == expected_len {
+                if bytes == self.expected_len {
                     return Ok(started.elapsed());
                 }
             }
@@ -362,18 +420,14 @@ impl Apparatus {
         }
     }
 
-    /// Time one fetch of `expected_len` bytes from `persona` as `client_id`.
+    /// Time one fetch of the full served body from `persona` as `client_id`.
     ///
     /// The clock starts before the client is constructed and stops after the last
     /// byte, so circuit build is inside the timed path (§6.2) for a cold client
     /// and outside it for a warm one — which is exactly the difference the two
-    /// arms report.
-    pub async fn timed_fetch(
-        &self,
-        client_id: &PCanonicalId,
-        persona_index: usize,
-        expected_len: usize,
-    ) -> Observation {
+    /// arms report. Success means the body was exactly
+    /// [`Self::expected_body_len`] bytes; anything shorter is `Truncated`.
+    pub async fn timed_fetch(&self, client_id: &PCanonicalId, persona_index: usize) -> Observation {
         let Some(persona) = self.personas.get(persona_index) else {
             return Observation::failure(Duration::ZERO, FailureKind::Transport);
         };
@@ -384,7 +438,7 @@ impl Apparatus {
         match outcome {
             // A short body is an apparatus failure, not a fast success — the
             // distinction the `Truncated` class exists to keep visible.
-            Ok(len) if len == expected_len => Observation::success(elapsed),
+            Ok(len) if len == self.expected_len => Observation::success(elapsed),
             Ok(_) => Observation::failure(elapsed, FailureKind::Truncated),
             Err(kind) => Observation::failure(elapsed, kind),
         }
@@ -395,12 +449,12 @@ impl Apparatus {
     pub fn served_total(&self) -> u64 {
         self.personas
             .iter()
-            .map(|p| p.endpoint.request_count())
+            .map(|p| p.endpoint.served_count())
             .sum()
     }
 
     /// Total connections shed for exceeding the in-flight cap
-    /// ([`MAX_INFLIGHT`](crate::serve::MAX_INFLIGHT)).
+    /// ([`MAX_INFLIGHT`](shekyl_p_serve::MAX_INFLIGHT)).
     ///
     /// The signal that `SPIKE-PIN-2` is binding: a non-zero value during a
     /// SPIKE-F-11 sweep means the **cap**, not the transport, is shaping the
@@ -521,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn shard_url_targets_the_spike_route_on_the_onion() {
+    fn shard_url_targets_the_serving_route_on_the_onion() {
         let id = ServiceId::parse(&"a".repeat(56)).expect("valid id");
         let persona = Persona {
             slot: PSlot::from_raw(0),
@@ -533,13 +587,15 @@ mod tests {
                     .enable_all()
                     .build()
                     .expect("runtime");
-                rt.block_on(ServeEndpoint::bind(Arc::new(vec![0u8; 1])))
-                    .expect("bind")
+                rt.block_on(PServeEndpoint::bind(Arc::new(FixtureShardProvider::new(
+                    Arc::from(vec![0u8; 1].into_boxed_slice()),
+                ))))
+                .expect("bind")
             },
         };
         assert_eq!(
             persona.shard_url(7),
-            format!("http://{}.onion/x-spike/v0/shard/7", "a".repeat(56))
+            format!("http://{}.onion{ROUTE_PREFIX}7", "a".repeat(56))
         );
     }
 

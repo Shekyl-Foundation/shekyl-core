@@ -1,7 +1,7 @@
 use std::f64::consts::PI;
 
 use image::{Rgb, RgbImage};
-use imageproc::drawing::draw_polygon_mut;
+use imageproc::drawing::{draw_hollow_polygon_mut, draw_polygon_mut};
 use imageproc::point::Point;
 
 use crate::params::RenderParameters;
@@ -12,8 +12,9 @@ const MAX_DEPTH: i32 = 6;
 
 /// Per-algorithm SHAKE256 namespace (see `entropy.rs`). Before this stream
 /// existed the tiling drew zero hash entropy — identical feature vectors
-/// produced identical geometry. The rosette rotation and spread jitter below
-/// give every shard a distinct orientation and palette cut.
+/// produced identical geometry. The structural draws below (rosette
+/// rotation, palette spread, edge strength) give every shard a distinct
+/// orientation and palette cut.
 const NS: &str = "shard.v1.render.aperiodic_tile";
 
 #[derive(Clone, Copy)]
@@ -60,19 +61,23 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
     let cx_off = (size as f64 - (x_hi - x_lo) * scale) / 2.0 - x_lo * scale;
     let cy_off = (size as f64 - (y_hi - y_lo) * scale) / 2.0 - y_lo * scale;
 
-    let spread = (0.4 + 0.5 * f.value_dispersion + 0.1 * (ent.unit(1) - 0.5)).clamp(0.1, 0.95);
+    let spread = (0.4 + 0.5 * ent.unit(2) + 0.1 * (ent.unit(1) - 0.5)).clamp(0.1, 0.95);
     let margin_t = (1.0 - spread) / 2.0;
     let sharp_t = margin_t;
     let robust_t = margin_t + spread;
     let sharp_color = params.palette.sample(sharp_t);
     let robust_color = params.palette.sample(robust_t);
-    let edge_strength = 0.3 + 0.7 * f.tier_skew_high;
-    let _edge_color = params.palette.sample(if (sharp_t + robust_t) / 2.0 < 0.5 {
+    let edge_strength = 0.3 + 0.7 * ent.unit(3);
+    // Edge colour is the palette extreme away from the majority fill, per
+    // the Python reference renderer; the original port computed both edge
+    // values and never drew them (review #617), silently dropping the
+    // outlines candidate.v1 was chosen with.
+    let edge_color = params.palette.sample(if (sharp_t + robust_t) / 2.0 < 0.5 {
         0.95
     } else {
         0.05
     });
-    let _edge_width = (edge_strength * 1.5).round() as i32;
+    let edge_width = (edge_strength * 1.5).round().max(0.0) as i32;
 
     let bg = params.palette.sample(0.04);
     let mut image = RgbImage::from_pixel(size, size, Rgb([bg.0, bg.1, bg.2]));
@@ -106,6 +111,34 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
             Point::new(poly[2].0, poly[2].1),
         ];
         draw_polygon_mut(&mut image, &points, Rgb([fill.0, fill.1, fill.2]));
+        if edge_width > 0 {
+            // Approximate the reference's stroked outline: hollow polygons
+            // stepped toward the centroid, one ring per pixel of width.
+            let cx = (poly[0].0 + poly[1].0 + poly[2].0) as f64 / 3.0;
+            let cy = (poly[0].1 + poly[1].1 + poly[2].1) as f64 / 3.0;
+            for k in 0..edge_width {
+                let ring: Vec<Point<f32>> = poly
+                    .iter()
+                    .map(|&(x, y)| {
+                        let dx = cx - f64::from(x);
+                        let dy = cy - f64::from(y);
+                        let n = (dx * dx + dy * dy).sqrt().max(1e-9);
+                        Point::new(
+                            (f64::from(x) + dx / n * f64::from(k)) as f32,
+                            (f64::from(y) + dy / n * f64::from(k)) as f32,
+                        )
+                    })
+                    .collect();
+                if ring[0] == ring[1] || ring[1] == ring[2] || ring[0] == ring[2] {
+                    continue;
+                }
+                draw_hollow_polygon_mut(
+                    &mut image,
+                    &ring,
+                    Rgb([edge_color.0, edge_color.1, edge_color.2]),
+                );
+            }
+        }
     }
 
     image
@@ -175,4 +208,40 @@ fn deflate(tris: &[Triangle]) -> Vec<Triangle> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixtures;
+    use crate::params::parameters_from_aggregate;
+
+    /// The outlines must actually reach the canvas: the original port
+    /// computed edge colour and width and never drew them (review #617).
+    /// Across the nine fixtures at least one shard draws a visible ring
+    /// (edge_width is 0 only for unit(3) < ~0.05), so a render that never
+    /// paints the edge colour means the outline path is severed again.
+    #[test]
+    fn edge_outlines_reach_the_canvas() {
+        let mut edge_pixels = 0usize;
+        for fixture in fixtures::all() {
+            let params = parameters_from_aggregate(&fixture.aggregate);
+            let mut ent = params.entropy(NS);
+            let spread = (0.4 + 0.5 * ent.unit(2) + 0.1 * (ent.unit(1) - 0.5)).clamp(0.1, 0.95);
+            let margin_t = (1.0 - spread) / 2.0;
+            let edge = params
+                .palette
+                .sample(if (margin_t + margin_t + spread) / 2.0 < 0.5 {
+                    0.95
+                } else {
+                    0.05
+                });
+            let image = render(&params, 96);
+            edge_pixels += image
+                .pixels()
+                .filter(|p| p.0 == [edge.0, edge.1, edge.2])
+                .count();
+        }
+        assert!(edge_pixels > 0, "no fixture rendered a single edge pixel");
+    }
 }

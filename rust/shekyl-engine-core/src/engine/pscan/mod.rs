@@ -48,5 +48,6 @@ pub(crate) mod exhaustiveness;
 pub(crate) mod persona_scanner;
 pub(crate) mod reconcile;
 pub(crate) mod scan_step;
+pub(crate) mod seal_basis;
 pub(crate) mod start;
 pub(crate) mod task;

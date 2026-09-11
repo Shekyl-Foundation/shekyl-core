@@ -21,7 +21,7 @@ use shekyl_curve_tree::{
     ReferenceBlock,
 };
 use shekyl_engine_file::WalletFile;
-use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState};
+use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState, SealAdmission};
 use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_types::{BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
@@ -31,22 +31,120 @@ use shekyl_curve_tree::ClientError;
 
 use super::bond_assembly::{
     sweep_funding_outputs, BondAssemblyError, FundingInputContext, FundingSelection,
-    SpentRecordsDurablyPruned,
+    SpentRecordsDurablyPruned, SweepOverflowPolicy,
 };
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
+use super::fee_policy::{CeilingViolation, FeeEstimatorError, ValidatedFeeEstimates};
+use super::pending_post_gate::{ForegroundSession, UserPendingPost};
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::dispatch::PendingPostStore;
+use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::{
     load_pscan_state_for_engine, pending_post_store_for_engine, WalletFilePendingSealStore,
 };
 
-/// Size ceiling for the first-stake bond-fee derivation: the single-input
-/// bond post is far under this, so a fee baked at assembly over this weight
-/// clears the daemon's per-byte floor even as estimates move (overpaying is a
-/// miner transfer, never a conservation term). Promoted from the PR-4 regtest
-/// harness (which now references this constant) to the production seam the
-/// WI-2 addendum reserved for the stake entry.
-pub(crate) const BOND_SIZE_CEILING_BYTES: usize = 32 * 1024;
+/// Structural weight ceiling for the `P`-lane fee derivation: the maximum
+/// predicted weight of any legal `P`-lane spend — up to
+/// [`shekyl_tx_builder::MAX_INPUTS`] funding inputs, up to two outputs
+/// (payment/bond + change), any tree depth up to
+/// [`shekyl_tx_weight::MAX_TREE_DEPTH`], worst-case fee varint. A fee baked
+/// at assembly over this weight clears the daemon's per-byte floor even as
+/// estimates move (overpaying is a miner transfer, never a conservation
+/// term), and every `P`-lane spend quoting the same ceiling keeps the fee
+/// uniform across the lane's tx shapes.
+///
+/// Until 2026-08-26 this was a hardcoded `32 * 1024`, sized for the
+/// single-input bond post — but the drain path spends up to `MAX_INPUTS`
+/// funding outputs, and the depth-24 8-input FCMP++ proof **alone** is
+/// 33,600 bytes, so a legal multi-input drain weighed more than the ceiling
+/// and its quoted fee undercut the daemon's per-byte floor (a relay
+/// refusal, and — until the drain lifecycle driver lands — a sealed record
+/// bricking that persona's drain lane). The exit-fee reserve derivation
+/// (`shekyl-standoff` `reserve.rs`) prices its pessimistic `Release` over
+/// this same structural shape; its headroom arithmetic is derived against
+/// this computed ceiling (currently 80,456 bytes), and the ceiling test
+/// ties the two so a KAT-table regeneration that grows the ceiling forces
+/// the reserve derivation to be re-run.
+pub(crate) fn p_lane_weight_ceiling_bytes() -> usize {
+    static CEILING: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+        let mut max = 0;
+        for n_in in 1..=shekyl_tx_builder::MAX_INPUTS {
+            // The proof-size table is non-monotonic in depth, so scan every
+            // legal (inputs, outputs, depth) cell rather than assuming the
+            // corner shape is the heaviest.
+            for n_out in 1..=2 {
+                for tree_depth in 1..=shekyl_tx_weight::MAX_TREE_DEPTH {
+                    max = max.max(super::tx_fee_model::predict_weight(
+                        super::tx_fee_model::InputCount::clamped(n_in),
+                        super::tx_fee_model::OutputCount::clamped(n_out),
+                        tree_depth,
+                        u64::MAX,
+                    ));
+                }
+            }
+        }
+        max
+    });
+    *CEILING
+}
+
+/// Bond fee for the first-stake post, from one daemon fee snapshot.
+///
+/// Named and separated from `first_stake`'s body so the gate is
+/// visible and testable: the P-lane's one fee decision (now the shared
+/// [`p_lane_floor_fee`] below, which the drain façade also quotes), and
+/// until 2026-08-17 it was the one production `get_fee_estimates`
+/// consumer that did **not** go through [`ValidatedFeeEstimates`] —
+/// reading `economy` straight off the raw snapshot with no ceiling.
+/// The bond fee is charged to persona working capital and carries no
+/// user-facing control by design (the P-lane pin), so an inflated
+/// economy rate would be paid with nobody positioned to see it. That
+/// makes this the lane that most needs the ceiling, not the one that
+/// can do without it.
+///
+/// The whole snapshot is validated, not just `economy`: a
+/// non-monotonic band is a defect or a lie whichever tier you read,
+/// and a bond path more permissive than the send path would be the
+/// incoherence.
+///
+/// # Errors
+///
+/// [`FirstStakeError::FeeUnreasonable`] when the daemon answered and
+/// the ceiling refused it; [`FirstStakeError::FeeEstimate`] when the
+/// reply was malformed. The split is by remedy (rule 82), mirroring
+/// `-29109` vs `-29102` on the send path.
+fn bond_fee_from_estimates(
+    estimates: super::traits::FeeEstimates,
+) -> Result<AtomicUnits, FirstStakeError> {
+    p_lane_floor_fee(estimates).map_err(|e| match e {
+        FeeEstimatorError::DaemonFeeUnreasonable(v) => FirstStakeError::FeeUnreasonable(v),
+        other => FirstStakeError::FeeEstimate(other.to_string()),
+    })
+}
+
+/// The canonical `P`-lane floor fee from one daemon fee snapshot: validated
+/// economy tier over the [`p_lane_weight_ceiling_bytes`] structural weight
+/// ceiling. **The single fee decision for every `P`-lane spend** — the bond
+/// post (via [`bond_fee_from_estimates`]) and the WI-RPC-5 drain façade
+/// ([`drain_to_principal`](super::drain_facade)) both quote this function, so
+/// the P-lane fee-uniformity CONTRACT PIN is one body, not two derivations
+/// that can drift. Callers map [`FeeEstimatorError`] onto their own error
+/// surface, preserving the `-29109` (refused answer) vs `-29102` (failed
+/// query) remedy split.
+pub(crate) fn p_lane_floor_fee(
+    estimates: super::traits::FeeEstimates,
+) -> Result<AtomicUnits, FeeEstimatorError> {
+    let estimates = ValidatedFeeEstimates::try_new(estimates)?;
+    // `tx_fee::fee_from_weight`, not `FeeRate::calculate_fee_from_weight`:
+    // the latter multiplies unchecked and documents that it may panic. The
+    // validated cap makes overflow unreachable here, but a wallet path
+    // should not be one edit away from aborting the process on a
+    // daemon-supplied number.
+    Ok(AtomicUnits::from_raw(super::tx_fee_model::fee_from_weight(
+        &estimates.economy(),
+        p_lane_weight_ceiling_bytes(),
+    )))
+}
 
 /// What a completed first-stake reports back to the stake entry (public
 /// identity only).
@@ -78,6 +176,12 @@ fn funding_refusal_detail(e: &BondAssemblyError) -> String {
         BondAssemblyError::InsufficientFunding { .. } => {
             "insufficient persona funding for the bond floor + fee".to_owned()
         }
+        // Count-free: the wallet's spendable-record count is P-activity
+        // volume (the same class the pending-block Debug redacts); the
+        // headroom itself is a public constant and survives.
+        BondAssemblyError::TooManyFundingInputs { max, .. } => format!(
+            "persona funding is fragmented across more than {max} spendable              outputs — more than one bond post can carry"
+        ),
         BondAssemblyError::OutputNotYetDrained { .. } => {
             "a persona funding output is not yet drained into the reference tree; \
              wait for the tree to catch up and retry"
@@ -117,8 +221,62 @@ fn preflight_error(e: &BondAssemblyError) -> FirstStakeError {
         | BondAssemblyError::OutputNotYetDrained { .. } => {
             FirstStakeError::Funding(funding_refusal_detail(e))
         }
+        // Its own arm, because BOTH standing buckets misdiagnose it
+        // (rule 82): "fund and retry" makes fragmentation worse, and
+        // "corrupt state" is false — the funding is intact, there is just
+        // more of it than one bond post's vin headroom carries.
+        BondAssemblyError::TooManyFundingInputs { max, .. } => {
+            FirstStakeError::FundingFragmented { max: *max }
+        }
         _ => FirstStakeError::State(funding_refusal_detail(e)),
     }
+}
+
+/// Which archival posture a first-stake bonds into
+/// (`COMPLETETREE_ACTIVATION.md` D-3).
+///
+/// **Mandatory on [`Engine::first_stake`], with no default, deliberately.**
+/// A defaulted parameter is exactly the `ARCHIVAL_BOND_CONSTRUCTION.md`
+/// §9.1 footgun this round exists to close: it makes one posture reachable
+/// without anyone stating it, and the posture that would be reachable is
+/// the unbounded one. A mandatory enum forces every caller — RPC, CLI,
+/// e2e fixture, embedder — to say which obligation it is asking for.
+///
+/// This amends §9.1 items 1–2 (from "separately-named constructor; the
+/// standard entry takes no holdings argument" to "one entry, mandatory
+/// posture enum"). The property §9.1 was protecting is preserved and
+/// strengthened: opt-in by intent, no default to override, and no
+/// select-all affordance anywhere — a caller names a *posture*, never a
+/// shard set and never a raw [`HoldingsKind`].
+///
+/// The **warning** that must precede a foundation choice is not this
+/// type's job: D-4 puts it structurally at the RPC boundary (an
+/// acknowledgment field whose absence returns the warning text) and in the
+/// CLI's typed phrase. The engine trusts that its caller stated intent,
+/// because the engine has no user to warn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StakePosture {
+    /// Ordinary market archival staking: a per-shard bond over an assigned
+    /// subset of the corpus, inside the reward market.
+    ///
+    /// **A stub in this round** — shard assignment does not exist yet, so
+    /// this arm refuses with [`FirstStakeError::NoShardsAvailable`] rather
+    /// than posting anything. The refusal is typed and names its remedy
+    /// (rule 22: scoped work lands where scoped, and a deferral is
+    /// disclosed, never silent). When the assignment round lands, this arm
+    /// assigns and posts; **the caller's shape does not change**, which is
+    /// why the parameter is a posture rather than a shard set.
+    Market,
+    /// The Foundation whole-corpus archival backstop: `CompleteTree`
+    /// holdings, outside the reward market by holdings shape and fully
+    /// inside the penalty economy.
+    ///
+    /// Never a default and never reachable without a caller naming it
+    /// here — the hardcode that used to produce it unconditionally was
+    /// deleted in the same change that made this arm opt-in, so no code
+    /// state ever existed where an ordinary staker silently owed the
+    /// corpus.
+    FoundationCompleteTree,
 }
 
 /// First-stake refusal/failure taxonomy (rule 82;
@@ -133,6 +291,15 @@ pub enum FirstStakeError {
     /// defect at the caller, not a user refusal.
     #[error("no stake engine resident: first-stake requires the open-with-intent path")]
     NoStakeEngine,
+    /// The bond watch recovered (adopted) a staked slot **this session**
+    /// (`staking_enabled` with no resident actor — the only way to occupy
+    /// that state, since a staker session spawns its actor at open): the
+    /// recovered persona's keys are derivable only at open under Model D,
+    /// so staking becomes operational at the next open. A **domain**
+    /// refusal with a self-contained remedy: close and reopen the wallet,
+    /// then retry.
+    #[error("staking recovered this session: close and reopen the wallet to finish recovery")]
+    RecoveredPendingReopen,
     /// A signed bond post is already sealed and awaiting dispatch (W3): the
     /// stake is in flight; the dispatch driver will broadcast it.
     #[error("a signed bond post is already awaiting dispatch")]
@@ -167,6 +334,25 @@ pub enum FirstStakeError {
     /// P-scan catch up, then retry.
     #[error("first-stake funding not ready: {0}")]
     Funding(String),
+    /// The persona's spendable funding is fragmented across more than the
+    /// per-transaction vin headroom
+    /// ([`MAX_RETENTION_FUNDING_INPUTS`](super::bond_assembly::MAX_RETENTION_FUNDING_INPUTS))
+    /// — W1-clean, and NEITHER standing remedy applies: the funding is
+    /// intact (not [`Self::State`]) and funding more makes it worse (not
+    /// [`Self::Funding`]). The bond sweep must consume everything (GF-4b),
+    /// so it refuses rather than silently bonding a subset; no
+    /// consolidation verb exists yet for un-bonded persona funding, so the
+    /// actionable half is avoidance — do not split persona funding across
+    /// more `stake_in` transfers than the headroom. Carries the headroom
+    /// (a public constant), never the wallet's record count (P-activity
+    /// volume, the redacted class).
+    #[error(
+        "persona funding is fragmented across more than {max} spendable outputs —          more than one bond post can carry; consolidate before retrying          (avoid splitting persona funding across more than {max} stake_in transfers)"
+    )]
+    FundingFragmented {
+        /// The per-transaction funding-input headroom (public constant).
+        max: usize,
+    },
     /// A wallet-state read/decode failed **before** the durable point
     /// (pending seal, pscan seal, persona id, funding arithmetic) —
     /// W1-clean like a funding refusal, but **not** one: funding cannot fix
@@ -178,6 +364,14 @@ pub enum FirstStakeError {
     /// and retry; nothing durable was written (W1-clean).
     #[error("bond fee estimate failed: {0}")]
     FeeEstimate(String),
+    /// The daemon *answered* the fee query and the wallet refused the
+    /// answer (`ValidatedFeeEstimates`). Distinct from
+    /// [`Self::FeeEstimate`] by remedy, exactly as `-29109` is distinct
+    /// from `-29102` on the send path: retrying the connection does not
+    /// help, because the connection worked. Nothing durable was written
+    /// (W1-clean) — the refusal happens before the durable point.
+    #[error("bond fee estimate refused: {0}")]
+    FeeUnreasonable(CeilingViolation),
     /// The durable staker record could not be written.
     #[error("persisting the bond record failed: {0}")]
     Persist(String),
@@ -185,6 +379,55 @@ pub enum FirstStakeError {
     /// point it is the W2 window — re-invoke `stake` to resume.
     #[error("stake engine failed: {0}")]
     Engine(String),
+    /// [`StakePosture::Market`] was requested and **no shard assignment
+    /// exists yet** (`COMPLETETREE_ACTIVATION.md` §10 item 1): market
+    /// staking bonds over an assigned subset of the corpus, and the
+    /// mechanism that picks that subset is its own design round.
+    ///
+    /// A typed refusal with a named remedy rather than a silent deferral
+    /// (rule 22), and W1-clean: it fires after the idempotency guards —
+    /// so a wallet that is already staking still gets *that* diagnosis,
+    /// which is the more specific one — but before the fee estimate, the
+    /// funding sweep, and every durable write. Nothing is written, nothing
+    /// is swept, and no daemon round trip is spent on a bond that cannot
+    /// be assembled.
+    ///
+    /// **Not** an invitation to pass
+    /// [`StakePosture::FoundationCompleteTree`] instead: that posture is a
+    /// permanent, non-earning, unbounded-storage obligation, and choosing
+    /// it to route around this refusal is precisely the mistake D-4's
+    /// warning gate exists to prevent.
+    #[error(
+        "market staking assigns a shard automatically, and shard assignment \
+         is not built yet: no shards are available to bond. Nothing was written"
+    )]
+    NoShardsAvailable,
+}
+
+impl StakePosture {
+    /// The holdings this posture posts — the only conversion from an
+    /// intent into a [`HoldingsKind`] in the tree. The caller names a
+    /// posture and never a kind or a shard set (D-3; the §9.1
+    /// no-select-all property).
+    ///
+    /// [`StakePosture::Market`] refuses rather than posting an empty
+    /// `ShardSetCompact`, which consensus rejects at JoinMarket anyway
+    /// (`bond_post.rs`, floor-zero protection) — so the alternative to
+    /// this refusal is not a smaller bond, it is an invalid one.
+    ///
+    /// [`StakePosture::FoundationCompleteTree`] is the whole-corpus
+    /// backstop: `CompleteTree` carries no shard list by wire rule
+    /// (`BondPostError::CompleteTreeWithShardIds`), so the empty set
+    /// here is the obligation's *encoding*, not its size.
+    pub(crate) fn holdings(self) -> Result<HoldingsDescriptor, FirstStakeError> {
+        match self {
+            Self::Market => Err(FirstStakeError::NoShardsAvailable),
+            Self::FoundationCompleteTree => Ok(HoldingsDescriptor {
+                kind: HoldingsKind::CompleteTree,
+                shard_ids: ShardSet::empty(),
+            }),
+        }
+    }
 }
 
 use super::signer::EngineSignerKind;
@@ -256,8 +499,9 @@ where
     /// go-live is gated only by the #332 staker-activation entry that wires
     /// this orchestrator (nothing else guards it; activation sequencing must
     /// be handled there, not assumed from a witness gap). Tests pass
-    /// [`SpentRecordsDurablyPruned::for_test`]. Dead_code allow retires with
-    /// the RPC stake entry (`docs/FOLLOWUPS.md`).
+    /// [`SpentRecordsDurablyPruned::for_test`]. This carries no suppression —
+    /// it is reached from wired code; go-live retires with the RPC stake entry
+    /// (`docs/FOLLOWUPS.md`).
     pub(crate) async fn assemble_bond_post(
         self_arc: Arc<RwLock<Self>>,
         handle: PersonaHandle,
@@ -269,7 +513,7 @@ where
         let p_slot = handle.p_slot();
 
         // Brief read: clone the spawn inputs the assemble path needs.
-        let (daemon, stake, curve_tree, pending_write_lock, chain_tip, tip_hash_at) = {
+        let (daemon, stake, curve_tree, pending_gate, chain_tip, tip_hash_at) = {
             let g = self_arc.read().await;
             let stake = g
                 .stake_handle()
@@ -281,20 +525,20 @@ where
                 g.daemon().clone(),
                 stake,
                 g.curve_tree.clone(),
-                g.pending_write_lock.clone(),
+                g.pending_gate.clone(),
                 chain_tip,
                 tip_hash_at,
             )
         };
 
         // F-1: independent store over the cloned lock (no Engine-held store).
-        let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
+        let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
         // §3.3 / §3.5: one live post per persona. This early read is an
         // optimistic fast-fail only — it keys on `p_slot` (the sole identity
         // available before assembly; 1:1 with the persona canonical id, which
         // is not derivable until the tx is bound below). The *authoritative*
-        // one-post-per-persona serialization is `push_post` under the write
+        // one-post-per-persona serialization is `seal_post` under the write
         // lock (see the final seal), which rejects atomically by persona even
         // if two same-persona assembles race past this gate. Reopening
         // criterion (rule 21): if the RPC entry ever admits concurrent
@@ -317,7 +561,7 @@ where
         // preflight ran (`sweep_bond_funding`), re-run at this path's own
         // fresh reference/state so the persist→assemble window cannot ride
         // stale inputs.
-        let (selection, reference) = Self::sweep_bond_funding(
+        let (selection, reference, snapshot_generation) = Self::sweep_bond_funding(
             self_arc.clone(),
             &store,
             &curve_tree,
@@ -427,15 +671,39 @@ where
             funding_gindexes: assembled.funding_gindexes.clone(),
             state: PendingPostState::Pending,
         };
-        let pushed = store
+        let admission = store
             .mutate(|block| {
-                let ok = block.push_post(sealed);
-                (ok, ok)
+                // Seal-time reservation re-check under the write lock — the
+                // drain seam's guard, which this path was missing. The
+                // `reserved` snapshot read before assembly is stale: a
+                // same-persona claim or drain assembled concurrently may have
+                // reserved one of these funding inputs since, and persona
+                // dedup alone does not see a cross-kind gindex collision.
+                //
+                // It matters beyond the doomed record it avoids.
+                // `PendingPostBlock::remove_settled` retires a claim or drain
+                // when the inputs it reserved leave the live funding set, and
+                // reads that absence as proof THAT record's transaction
+                // confirmed. The inference holds only while one record can
+                // reserve a given gindex: if a post and a drain share an input,
+                // the post confirming spends it and retires the drain too —
+                // reopening a lane whose transaction never landed. This post is
+                // not itself retired that way (its evidence is the pscan's own
+                // bond-post match), but it can falsify someone else's, so the
+                // guard belongs here as much as on the paths it protects.
+                let admission = block.seal_post(sealed, snapshot_generation);
+                (admission == SealAdmission::Admit, admission)
             })
             .await
             .map_err(|e| BondAssemblyError::build("pending-post seal", e))?;
-        if !pushed {
-            return Err(BondAssemblyError::PendingPostExists.into());
+        match admission {
+            SealAdmission::Admit => {}
+            SealAdmission::PersonaLive => return Err(BondAssemblyError::PendingPostExists.into()),
+            // Same remedy — retry against a fresh snapshot — so both map to the
+            // one retryable refusal, whose message names every cause.
+            SealAdmission::InputRaced | SealAdmission::Stale => {
+                return Err(BondAssemblyError::InputRaced.into())
+            }
         }
 
         Ok(assembled)
@@ -461,22 +729,30 @@ where
         holdings: &HoldingsDescriptor,
         fee: AtomicUnits,
         pruning_landed: &SpentRecordsDurablyPruned,
-    ) -> Result<(FundingSelection, ReferenceBlock), BondAssemblyError> {
+    ) -> Result<(FundingSelection, ReferenceBlock, u64), BondAssemblyError> {
         // Anchored ReferenceBlock via the ordinary procedure (WI-2 F-6).
         let reference = anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?;
         let reference_height = BlockHeight::from_raw(reference.height.0);
 
-        // Sealed funding records (empty set if no pscan seal yet).
-        let funding_records = load_pscan_state_for_engine(self_arc)
+        // The seal basis is ONE ordered read — pending block, then pscan seal.
+        // The order is `load_seal_basis`'s guarantee: loading the pscan seal
+        // first (as this path did until review #572 round 6) can pair funding
+        // from before a settlement with a generation from after it, so the seal
+        // admits an input the settled record already spent. The generation
+        // rides out to the seal so `seal_post` can tell whether this
+        // selection's basis still holds.
+        let basis = load_seal_basis(self_arc, store)
             .await
-            .map_err(|e| BondAssemblyError::build("pscan state load", e))?
+            .map_err(|e| match e {
+                SealBasisError::Pending(e) => BondAssemblyError::build("reserved gindexes", e),
+                SealBasisError::PScan(e) => BondAssemblyError::build("pscan state load", e),
+            })?;
+        let snapshot_generation = basis.generation();
+        let reserved = basis.reserved().clone();
+        let funding_records = basis
+            .into_pscan()
             .map(|s| s.funding_outputs().to_vec())
             .unwrap_or_default();
-
-        let reserved = store
-            .read(shekyl_engine_state::PendingPostBlock::reserved_gindexes)
-            .await
-            .map_err(|e| BondAssemblyError::build("reserved gindexes", e))?;
 
         let floor = AtomicUnits::from_raw(bond_floor(holdings));
         // Align with the wire builder / retention verifier: a zero floor is
@@ -490,6 +766,10 @@ where
             .checked_add(fee)
             .ok_or(BondAssemblyError::AmountOverflow)?;
 
+        // RefuseTooMany: the bond post's consume-everything semantics
+        // (GF-4b structural emptiness) forbid a silent subset, and the post
+        // carries its own bond vin inside the consensus vin cap — see
+        // `MAX_RETENTION_FUNDING_INPUTS`.
         let selection = sweep_funding_outputs(
             pruning_landed,
             &funding_records,
@@ -497,8 +777,9 @@ where
             &reserved,
             required,
             reference_height,
+            SweepOverflowPolicy::RefuseTooMany,
         )?;
-        Ok((selection, reference))
+        Ok((selection, reference, snapshot_generation))
     }
 }
 
@@ -533,14 +814,43 @@ where
     /// ticket — `persist_bond_record` is re-entrant); the un-resumed slot is
     /// benign by the `StakingBlock` hint design and, post-genesis, arm #3's
     /// backstop.
+    ///
+    /// # The posture is the caller's, and it is mandatory
+    ///
+    /// `posture` names the obligation this bond takes on
+    /// ([`StakePosture`], `COMPLETETREE_ACTIVATION.md` D-3). There is no
+    /// default: the entry used to hardcode `CompleteTree` ("genesis
+    /// posture", the named PR-4c deviation), which made every first-stake
+    /// wallet owe the whole corpus without anyone asking for it. That
+    /// hardcode is deleted here rather than re-anchored behind a default,
+    /// so no code state exists in which an ordinary staker silently owes
+    /// the corpus.
+    ///
+    /// Nothing posture-shaped is persisted, and nothing needs to be: the
+    /// posture is realized as the assembled post's `HoldingsDescriptor`,
+    /// and from there the **connected bond record** is the durable, chain-
+    /// owned marker every later consumer reads (the serving pinner derives
+    /// its obligation from it; `staking_info` renders it). A W2 resume
+    /// passes the posture again, exactly as the first call did.
     pub async fn first_stake(
         self_arc: Arc<RwLock<Self>>,
         slot: u32,
+        posture: StakePosture,
     ) -> Result<FirstStakeOutcome, FirstStakeError> {
         let slot = PSlot::from_raw(slot);
-        let (daemon, stake, curve_tree, pending_write_lock, chain_tip, tip_hash_at, staking) = {
+        let (daemon, stake, curve_tree, pending_gate, chain_tip, tip_hash_at, staking) = {
             let g = self_arc.read().await;
-            let stake = g.stake_handle().ok_or(FirstStakeError::NoStakeEngine)?;
+            let stake = match g.stake_handle() {
+                Some(stake) => stake,
+                // `staking_enabled` with no resident actor is exactly the
+                // mid-session bond-watch recovery state — name the remedy
+                // (reopen) rather than reporting an internal sequencing
+                // fault over a healthy wallet.
+                None if g.ledger.read().ledger.staking.staking_enabled => {
+                    return Err(FirstStakeError::RecoveredPendingReopen);
+                }
+                None => return Err(FirstStakeError::NoStakeEngine),
+            };
             let snap = g.ledger.snapshot();
             let chain_tip = g.ledger.synced_height();
             let tip_hash_at = move |h: u64| snap.block_hash_at(h);
@@ -551,13 +861,18 @@ where
                 g.daemon().clone(),
                 stake,
                 g.curve_tree.clone(),
-                g.pending_write_lock.clone(),
+                g.pending_gate.clone(),
                 chain_tip,
                 tip_hash_at,
                 staking,
             )
         };
-        let store = pending_post_store_for_engine(self_arc.clone(), pending_write_lock);
+        // User work always wins (`ENGINE_CADENCE_DRIVER.md` §3): register
+        // this user-initiated first-stake on the foreground gauge for its
+        // whole assemble→seal span, so the cadence driver's epoch-claim leg
+        // yields rather than racing it to the funding set.
+        let _foreground = ForegroundSession::enter(UserPendingPost::FirstStake, &pending_gate);
+        let store = pending_post_store_for_engine(self_arc.clone(), pending_gate);
 
         // Idempotency / W2 split (§5.1 + §5.7 W2) — every guard is
         // **wallet-level**, keyed on the wallet's own recorded state rather
@@ -581,6 +896,16 @@ where
                 .map(|s| s.bond_post_matches().to_vec())
                 .unwrap_or_default();
             for &bonded in &staking.bonded_slots {
+                // A bond-watch sighting is confirmed on-chain evidence at the
+                // same tier as a pscan match — the principal scan OBSERVED
+                // this slot's bond post. A probe-adopted slot's pscan seal
+                // lags until the P-scan catches up, so without this check the
+                // resume path would read "durable slot, no match" (the W2
+                // phantom shape) and mint a DUPLICATE JoinMarket post for an
+                // already-bonded persona. Checked first: no actor round-trip.
+                if staking.bond_sightings.contains_key(&bonded) {
+                    return Err(FirstStakeError::AlreadyStaked);
+                }
                 let id = stake
                     .persona_canonical_id(PSlot::from_raw(bonded))
                     .await
@@ -618,25 +943,26 @@ where
             false
         };
 
-        // Genesis posture: JoinMarket CompleteTree holdings; the bond fee is
-        // derived from the daemon's live estimate over the bond size ceiling
-        // (the seam the WI-2 addendum reserved for this entry — overpaying is
-        // a miner transfer, never a conservation term).
-        let holdings = HoldingsDescriptor {
-            kind: HoldingsKind::CompleteTree,
-            shard_ids: ShardSet::empty(),
-        };
-        let fee = {
-            let estimates = daemon
+        // After the idempotency/W2 guards and before the fee estimate on
+        // purpose. The guards above are pure reads, and their refusals
+        // are *more specific* than a refused posture: a wallet with a
+        // post in flight should hear `BondInFlight`, not "no shards
+        // available" (rule 82's misdiagnosis guard). Everything below is
+        // either a daemon round trip, a funding sweep, or durable — so a
+        // refused posture costs none of it. The conversion itself lives
+        // on [`StakePosture::holdings`].
+        let holdings = posture.holdings()?;
+        // The bond fee is derived from the daemon's live estimate over the
+        // bond size ceiling (the seam the WI-2 addendum reserved for this
+        // entry — overpaying is a miner transfer, never a conservation
+        // term), gated by the same ceiling the send path applies —
+        // see [`bond_fee_from_estimates`].
+        let fee = bond_fee_from_estimates(
+            daemon
                 .get_fee_estimates()
                 .await
-                .map_err(|e| FirstStakeError::FeeEstimate(e.into().to_string()))?;
-            AtomicUnits::from_raw(
-                estimates
-                    .economy
-                    .calculate_fee_from_weight(BOND_SIZE_CEILING_BYTES),
-            )
-        };
+                .map_err(|e| FirstStakeError::FeeEstimate(e.into().to_string()))?,
+        )?;
 
         // W1 preflight sweep (SA-R1-b, sweep-before-persist): the SAME body
         // the assemble path runs (`sweep_bond_funding` — including the
@@ -689,312 +1015,5 @@ where
 
 /// KAT helpers for the two height couplings (F-2 / F-6).
 #[cfg(test)]
-mod tests {
-    /// The stake error surface never carries persona funding amounts or
-    /// gindexes (the most-logged-surface discipline): every numeric-bearing
-    /// arm is reduced to its name, on BOTH the preflight sanitizer and the
-    /// post-persist assemble/sign path (`engine_failure_detail` — the path
-    /// the review found leaking `InsufficientFunding {available, required}`
-    /// verbatim).
-    #[test]
-    fn funding_refusal_detail_is_amount_free() {
-        let d = super::funding_refusal_detail(&super::BondAssemblyError::InsufficientFunding {
-            available: 123_456,
-            required: 999_999,
-        });
-        assert!(!d.contains("123") && !d.contains("999"), "no amounts: {d}");
-        assert!(d.contains("insufficient"));
-
-        let d = super::funding_refusal_detail(&super::BondAssemblyError::OutputNotYetDrained {
-            gindex: 424_242,
-        });
-        assert!(!d.contains("424"), "no gindex: {d}");
-        assert!(d.contains("not yet drained"));
-
-        let d = super::engine_failure_detail(&super::StakeEngineError::Assembly(
-            super::BondAssemblyError::InsufficientFunding {
-                available: 123_456,
-                required: 999_999,
-            },
-        ));
-        assert!(
-            !d.contains("123") && !d.contains("999"),
-            "assemble-path amounts sanitized: {d}"
-        );
-        assert!(d.contains("bond assembly failed"));
-    }
-
-    use super::*;
-    use shekyl_curve_tree::{should_reanchor, REF_ANCHOR_AGE};
-
-    /// F-2 (i): assemble stamps `anchor_t0` via [`daemon_claimed_tip`]; the
-    /// pscan `BlockSource::tip_height` path also routes through that same
-    /// named function (see `block_source.rs`). This KAT pins that both
-    /// modules name the same item.
-    #[test]
-    fn assemble_imports_named_daemon_claimed_tip() {
-        // `daemon_claimed_tip` is in scope in this module (assemble path) and
-        // is the body of `DaemonBlockSource::tip_height` / `PBlockSource::tip_height`.
-        // A rename that forked the two clocks would break this shared import.
-        let assemble_name = std::any::type_name_of_val(
-            &daemon_claimed_tip::<crate::engine::test_support::TestDaemon>,
-        );
-        let source_name = std::any::type_name_of_val(
-            &crate::engine::pscan::block_source::daemon_claimed_tip::<
-                crate::engine::test_support::TestDaemon,
-            >,
-        );
-        assert_eq!(
-            assemble_name, source_name,
-            "assemble and BlockSource must share one daemon_claimed_tip symbol"
-        );
-        assert!(
-            assemble_name.contains("daemon_claimed_tip"),
-            "unexpected tip-clock symbol name: {assemble_name}"
-        );
-    }
-
-    /// F-6: when ingest lags such that `should_reanchor` fires on the
-    /// would-be reference, the disposition is loud
-    /// [`BondAssemblyError::ReferenceResyncing`] (not silent assemble_tx fail).
-    #[test]
-    fn lagging_ingest_trips_should_reanchor_loud_resync_disposition() {
-        let chain_tip = 10_000u64;
-        let ingested = 100u64;
-        let anchor_tip = chain_tip.min(ingested);
-        let reference_height = anchor_tip
-            .checked_sub(REF_ANCHOR_AGE)
-            .expect("short but ok");
-        assert!(
-            should_reanchor(chain_tip, reference_height),
-            "fixture must trip the too-stale arm"
-        );
-        let err = BondAssemblyError::ReferenceResyncing {
-            detail: "tree too far behind to anchor a submittable reference; resync",
-        };
-        assert!(matches!(
-            err,
-            BondAssemblyError::ReferenceResyncing { detail } if detail.contains("resync")
-        ));
-    }
-
-    /// F-4 companion: orchestrator selects funding only via
-    /// [`sweep_funding_outputs`](super::bond_assembly::sweep_funding_outputs).
-    #[test]
-    fn orchestrator_uses_sweep_as_sole_funding_path() {
-        // Drop only the trailing `mod tests` so assertion literals cannot
-        // self-match (`wire.rs` tripwire shape).
-        let orch = include_str!("bond_orchestrator.rs")
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .expect("bond_orchestrator.rs has a production section");
-        // Split the call-site needle so a production doc-comment mention of
-        // the symbol alone is not enough — the live call site must remain.
-        let sweep_call = concat!("sweep", "_funding_outputs(");
-        assert!(
-            orch.contains(sweep_call),
-            "orchestrator must select funding only via sweep_funding_outputs"
-        );
-        let retired = concat!("select", "_funding_outputs");
-        assert!(
-            !orch.contains(retired),
-            "retired subset selector must not reappear"
-        );
-    }
-
-    /// F-6 (ii): sweep reference height is taken from the same
-    /// [`ReferenceBlock`] handed to `assemble_tx` (`reference.height()`).
-    #[test]
-    fn sweep_reference_height_equals_anchored_reference_block_height() {
-        let reference = ReferenceBlock {
-            height: CtBlockHeight(1_234),
-            curve_tree_root: [0xAB; 32],
-            block_hash: [0xCD; 32],
-        };
-        let sweep_height = BlockHeight::from_raw(reference.height.0);
-        assert_eq!(
-            sweep_height.to_raw(),
-            reference.height.0,
-            "sweep must filter against the anchored ReferenceBlock's height"
-        );
-    }
-
-    // ── first_stake guard matrix (wallet-level idempotency + slot guards) ──
-
-    use crate::engine::{Credentials, DaemonClient, EngineCreateParams, SoloSigner};
-    use shekyl_engine_file::SafetyOverrides;
-    use std::sync::Arc as StdArc;
-    use tokio::sync::RwLock as TokioRwLock;
-
-    /// Never-connecting daemon (no eager RPC before the guards under test).
-    fn dummy_daemon() -> DaemonClient {
-        let rpc = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(shekyl_rpc_transport::HttpRpc::new(
-                "http://127.0.0.1:1".to_string(),
-            ))
-        })
-        .expect("construct HttpRpc (no connection attempted)");
-        DaemonClient::new(rpc)
-    }
-
-    fn fixed_seed() -> [u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES] {
-        let mut s = [0u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
-        for (i, b) in s.iter_mut().enumerate() {
-            *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(3);
-        }
-        s
-    }
-
-    /// A fresh first-stake acts only on the monotone cursor: any other slot
-    /// is the `WrongSlot` refusal, before any daemon work or durable write —
-    /// the guard that makes the `pub` embedder surface safe.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn first_stake_refuses_a_fresh_slot_off_the_cursor() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let base_path = tmp.path().join("wallet");
-        let creds = Credentials::password_only(b"pw");
-        let seed = fixed_seed();
-
-        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
-        let network = params.network;
-        Engine::<SoloSigner>::create(params, dummy_daemon())
-            .expect("create")
-            .close(&creds)
-            .expect("close");
-
-        let engine = Engine::<SoloSigner>::open_full_with_first_stake_intent(
-            &base_path,
-            &creds,
-            network,
-            dummy_daemon(),
-            SafetyOverrides::none(),
-            0,
-        )
-        .expect("intent open")
-        .into_wallet();
-        let arc = StdArc::new(TokioRwLock::new(engine));
-
-        let err = Engine::first_stake(arc, 7).await.expect_err("off-cursor");
-        assert!(
-            matches!(
-                err,
-                FirstStakeError::WrongSlot {
-                    requested: 7,
-                    expected: 0
-                }
-            ),
-            "got {err:?}"
-        );
-    }
-
-    /// A staker wallet resumes only a recorded bonded slot — and once ANY
-    /// bonded persona has a confirmed on-chain post, every slot refuses
-    /// `AlreadyStaked` (the wallet-level SA-DQ-1 idempotency: pre-fix, a
-    /// call naming a different slot slipped past the per-slot check and
-    /// minted a durable second first-stake).
-    #[tokio::test(flavor = "multi_thread")]
-    async fn staker_first_stake_refuses_wrong_slots_and_confirmed_wallets_at_any_slot() {
-        use shekyl_engine_state::pscan_cursor::PScanCursor;
-        use shekyl_engine_state::pscan_state::{BondPostRecord, PScanState};
-
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let base_path = tmp.path().join("wallet");
-        let password: &[u8] = b"pw";
-        let creds = Credentials::password_only(password);
-        let seed = fixed_seed();
-
-        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
-        let network = params.network;
-        let engine =
-            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
-        engine
-            .persist_bond_record(PSlot::from_raw(3))
-            .expect("persist bond record");
-        engine.close(&creds).expect("close");
-
-        // W2 shape (durable slot, no post anywhere): resume must target the
-        // recorded slot; slot 4 is the WrongSlot refusal, not a second mint.
-        let opened = Engine::<SoloSigner>::open_full(
-            &base_path,
-            &creds,
-            network,
-            dummy_daemon(),
-            SafetyOverrides::none(),
-        )
-        .expect("staker reopen")
-        .into_wallet();
-        let persona_3 = opened
-            .stake_handle()
-            .expect("staker reopen spawns the actor")
-            .persona_canonical_id(PSlot::from_raw(3))
-            .await
-            .expect("bonded persona id");
-        let arc = StdArc::new(TokioRwLock::new(opened));
-        let err = Engine::first_stake(arc.clone(), 4)
-            .await
-            .expect_err("unrecorded slot on a staker");
-        assert!(
-            matches!(
-                err,
-                FirstStakeError::WrongSlot {
-                    requested: 4,
-                    expected: 3
-                }
-            ),
-            "got {err:?}"
-        );
-        // Release the wallet-file lock before sealing evidence below.
-        match StdArc::try_unwrap(arc) {
-            Ok(lock) => lock.into_inner().close(&creds).expect("close staker"),
-            Err(_) => panic!("engine arc still shared"),
-        }
-
-        // Seal confirmed-on-chain evidence for the bonded persona, then
-        // reopen: EVERY slot — the bonded one and any other — must refuse
-        // AlreadyStaked (wallet-level, not per-slot).
-        {
-            let (file, _outcome) = shekyl_engine_file::WalletFile::open(
-                &base_path,
-                password,
-                network,
-                SafetyOverrides::none(),
-            )
-            .expect("wallet file open");
-            let key = crate::engine::sealing_keys::state_wrap_key_from_wallet_file(&file);
-            let state = PScanState::new(
-                PScanCursor::genesis(),
-                std::collections::BTreeMap::new(),
-                std::collections::BTreeMap::new(),
-                vec![BondPostRecord {
-                    height: BlockHeight::from_raw(10),
-                    p_canonical_id: persona_3,
-                    post_kind: 0,
-                }],
-                Vec::new(),
-                Vec::new(),
-            );
-            let bytes = state.to_postcard_bytes().expect("encode state");
-            file.save_pscan_state(key.as_bytes(), &bytes)
-                .expect("seal evidence");
-        }
-        let opened = Engine::<SoloSigner>::open_full(
-            &base_path,
-            &creds,
-            network,
-            dummy_daemon(),
-            SafetyOverrides::none(),
-        )
-        .expect("reopen with evidence")
-        .into_wallet();
-        let arc = StdArc::new(TokioRwLock::new(opened));
-        for slot in [3u32, 4u32] {
-            let err = Engine::first_stake(arc.clone(), slot)
-                .await
-                .expect_err("confirmed wallet refuses every slot");
-            assert!(
-                matches!(err, FirstStakeError::AlreadyStaked),
-                "slot {slot}: got {err:?}"
-            );
-        }
-    }
-}
+#[path = "bond_orchestrator_tests.rs"]
+mod tests;

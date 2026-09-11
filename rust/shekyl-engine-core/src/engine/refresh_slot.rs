@@ -24,6 +24,35 @@
 // `SlotGuard` for the duration of the scan; dropping the guard releases the
 // flag (RAII), whether the task succeeded, errored, or was cancelled.
 
+/// Single-flight flags for the embedder-held open-span tasks.
+///
+/// One Engine field so adding serving does not spend a `FIELDS_CEILING`
+/// slot. The two flags are **independent**: a P-scan and a serving host
+/// run together for the wallet's open lifetime (they are parked as one
+/// `OpenTasks` bundle on the embedder side). Refresh/rescan stay on
+/// their own [`RefreshSlot`] because those two *share* a flag — they
+/// must never run concurrently.
+///
+/// Serving reuses [`RefreshSlot`] (this file's primitive) rather than a
+/// third copy of the same `AtomicBool`. P-scan keeps [`PScanSlot`] so
+/// that workflow's call sites do not move in this slice.
+pub(crate) struct OpenTaskSlots {
+    /// The 2d-1 P-scan task. Independent of [`Self::serving`].
+    pub pscan: super::pscan::task::PScanSlot,
+    /// The SH-2b-2 serving host. Independent of [`Self::pscan`].
+    pub serving: RefreshSlot,
+}
+
+impl OpenTaskSlots {
+    /// Fresh unclaimed flags. Called once at `Engine::assemble`.
+    pub(crate) fn new() -> Self {
+        Self {
+            pscan: super::pscan::task::PScanSlot::new(),
+            serving: RefreshSlot::new(),
+        }
+    }
+}
+
 /// Per-engine single-flight slot shared by
 /// [`Engine::start_refresh`](super::Engine::start_refresh) and
 /// [`Engine::start_rescan`](super::Engine::start_rescan).

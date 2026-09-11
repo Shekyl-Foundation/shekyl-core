@@ -1,12 +1,11 @@
 name: "CodeQL Analysis"
 
 on:
-  push:
-    branches: [main, dev]
   pull_request:
     branches: [main, dev]
   schedule:
     - cron: "30 4 * * 1"   # Every Monday at 4:30 AM UTC
+  workflow_dispatch:
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
 # Without a concurrency group, every push to an open PR stacks a full new
@@ -65,6 +64,11 @@ jobs:
 
   analyze-cpp:
     name: Analyze C/C++
+    # Buildless C/C++ on every PR was ~the Monday job paid daily, for a
+    # surface whose highs live in Rust. Weekly + dispatch keeps the
+    # extractor warm without occupying a PR runner. Reopen onto PR if a
+    # real `src/` high appears that buildless-on-schedule would miss.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -109,6 +113,10 @@ jobs:
 
   analyze-python:
     name: Analyze Python
+    # Python on every PR scanned tests/ + contrib scripts that are not
+    # the consensus surface. Weekly + dispatch. Reopen onto PR if a
+    # production Python entry point grows (none today).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

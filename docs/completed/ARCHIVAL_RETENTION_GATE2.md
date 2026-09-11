@@ -155,7 +155,7 @@ derives identical `(ℓ, H_fire, R_k)` from consensus-visible state (§3.3–§3
 | `CHALLENGES_PER_EPOCH` | **1** | Guaranteed on-demand test per `(P,s,E)` — demand floor (§0) |
 | `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** | Slash grace after `H_close` — [`ARCHIVAL_TIMING_CONSTANTS.md`](../design/ARCHIVAL_TIMING_CONSTANTS.md) |
 | `CHALLENGE_BEACON_SEAL_BLOCKS` | **1** (provisional) | Blocks after `H_open` before `block_hash(H_seal)` is fixed — `shekyl-archival-retention::CHALLENGE_BEACON_SEAL_BLOCKS` |
-| `CHALLENGE_RESPONSE_BLOCKS` | **TBD (byte pin)** | Blocks after `H_fire` to accept credit; must end before `H_close` |
+| `CHALLENGE_RESPONSE_BLOCKS` | **500** (`SEB / 20`, pinned 2026-08-15) | Blocks after `H_fire` to accept credit; must end before `H_close`. Pinned by ruling — see `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 6a. The must-end-before-`H_close` obligation is *not* yet enforced anywhere; the fire-ceiling fix lands with the first consumer (FOLLOWUPS TJ-2) |
 
 ### 3.2 Epoch heights (ordering)
 
@@ -173,18 +173,32 @@ emission read.
 
 ### 3.3 Leaf index (deterministic)
 
+> **SUPERSEDED 2026-08-24 by `PC-D3`** (`ARCHIVAL_PER_CHALLENGE_RECORD.md`).
+> The block below is the ORIGINAL derivation and is **not what ships** — it is
+> kept because this file is the record of what gate-2 built, not a live spec.
+>
+> The shipped preimage appends `block_hash(h−1)` and the label is
+> **`-v2`**. Under this `-v1` form the index is a function of `(P, s, E)`
+> alone, so a pair-epoch's three challenges sample the SAME leaf — three
+> countersignatures over three identical openings, which looks like three
+> tests and contains one. **Implementing the block below would reproduce that
+> defect**, which is why the supersession is stated here rather than left to a
+> reader to discover from the registry.
+
 ```text
 τ = cSHAKE256(
-  customization = "shekyl/archival-serve-challenge-leaf-v1",
+  customization = "shekyl/archival-serve-challenge-leaf-v1",   # SUPERSEDED: now -v2
   input         = P_id[32]
                   || shard_id_le64
-                  || E_le64
+                  || E_le64                                     # SUPERSEDED: || block_hash(h−1)[32]
 )
 
 ℓ = uint64(τ) mod segment_leaf_count(shard, E)
 ```
 
 `ℓ` is knowable at epoch open; `P` must still be **reachable at `H_fire`**.
+(Under `PC-D3` it is knowable only once the challenging block is known — the
+point of binding it to that block.)
 
 ### 3.4 Fire time (beacon — reachability)
 

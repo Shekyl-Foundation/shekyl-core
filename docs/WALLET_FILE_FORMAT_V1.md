@@ -30,8 +30,8 @@ operational properties the envelope guarantees.
    KDF parameters, and the wrap salt. Everything privacy-sensitive (even
    network and capability mode) lives inside a ciphertext. Anyone
    grepping a filesystem sees "this is some Shekyl V3 wallet file"; they
-   do not see whether it is mainnet or stagenet, FULL or VIEW_ONLY,
-   hardware-offload-bound or not.
+   do not see whether it is mainnet or stagenet, or which capability
+   mode byte it carries.
 
 3. **Two-level KEK for fast password rotation.** The password stretches
    to a `wrap_key` via Argon2id. `wrap_key` decrypts a random 32-byte
@@ -50,12 +50,14 @@ operational properties the envelope guarantees.
    stable) and survives arbitrary re-orderings of auto-saves.
 
 5. **Capability-discriminated seed block.** The seed block is a
-   self-describing tagged union; V3 supports `FULL`, `VIEW_ONLY`, and
-   `HARDWARE_OFFLOAD`. `RESERVED_MULTISIG` is claimed by V3.1 and parsed
-   with a dedicated error message in V3.0. The discriminator lives
-   inside the ciphertext (per Minimum-Leak), not in AAD, but is
-   length-self-describing so a V3.0 parser that refuses an unknown mode
-   does not accidentally read past the end of cap_content.
+   self-describing tagged union; V3 supports exactly one live mode,
+   `FULL` (`0x01`). Bytes `0x02`–`0x04` are retired or reserved in the
+   §2.3 discriminant table and refused by the parser (rule 23: the
+   contract records the namespace so a byte cannot be silently
+   re-minted; no code symbol exists for any non-`FULL` mode). The
+   discriminator lives inside the ciphertext (per Minimum-Leak), not in
+   AAD, but is length-self-describing so a parser that refuses an
+   unknown mode does not accidentally read past the end of cap_content.
 
 ## 2. `<name>.wallet.keys` layout
 
@@ -133,36 +135,36 @@ were AAD-bound to region 1, rotation would require re-encrypting region
 
 ### 2.3 Capability modes
 
-| `mode_byte` | Name                | `cap_content` layout                                   | `cap_content_len` |
-|-------------|---------------------|--------------------------------------------------------|-------------------|
-| `0x01`      | `FULL`              | `master_seed[64]`                                      | 64                |
-| `0x02`      | `VIEW_ONLY`         | `view_sk[32] \|\| ml_kem_dk[2400] \|\| spend_pk[32]`   | 2464              |
-| `0x03`      | `HARDWARE_OFFLOAD`  | as `VIEW_ONLY` then `dev_desc_len(u16 LE) \|\| dev_desc[..]` | 2466 + len      |
-| `0x04`      | `RESERVED_MULTISIG` | — reserved for V3.1 —                                  | —                 |
-| other       | unknown             | parser refuses with `UnknownCapabilityMode`            | —                 |
+| `mode_byte` | Status                    | `cap_content` layout                        | `cap_content_len` |
+|-------------|---------------------------|---------------------------------------------|-------------------|
+| `0x01`      | `FULL` — the only live mode | `master_seed[64]`                         | 64                |
+| `0x02`      | RETIRED — never reuse     | parser refuses with `UnknownCapabilityMode` | —                 |
+| `0x03`      | RETIRED — never reuse     | parser refuses with `UnknownCapabilityMode` | —                 |
+| `0x04`      | RESERVED                  | parser refuses with `UnknownCapabilityMode` | —                 |
+| other       | unknown                   | parser refuses with `UnknownCapabilityMode` | —                 |
 
-**FULL** is the canonical mode: a 64-byte `master_seed` from which the
-entire Shekyl key tree (`spend_sk`, `view_sk`, `ml_kem_dk`) is derived
-per [POST_QUANTUM_CRYPTOGRAPHY.md](POST_QUANTUM_CRYPTOGRAPHY.md). Every
+**FULL** is the canonical — and only — mode: a 64-byte `master_seed`
+from which the entire Shekyl key tree (`spend_sk`, `view_sk`,
+`ml_kem_dk`) is derived per
+[POST_QUANTUM_CRYPTOGRAPHY.md](POST_QUANTUM_CRYPTOGRAPHY.md). Every
 wallet open re-runs the derivation; `ml_kem_dk` is not stored.
 
-**VIEW_ONLY** omits `spend_sk`. `view_sk` and `ml_kem_dk` are persisted
-verbatim because they cannot be re-derived without `master_seed`.
-`spend_pk` is stored so the loader can construct the full public
-classical address.
-
-**HARDWARE_OFFLOAD** extends `VIEW_ONLY` with a `device_desc` blob
-identifying the external spend-signer. The wallet behaves like
-VIEW_ONLY for every operation that does not need `spend_sk`; spend
-operations are dispatched to the device. `device_desc` layout is
-specific to the device driver and opaque to the envelope.
-
-`RESERVED_MULTISIG` is reserved. V3.0 parses mode `0x04` and emits a
-precise error (`RequiresMultisigSupport`, rendered by the C++ layer as
-"this wallet file requires Shekyl V3.1 or later"). The reserved
-designation is not a feature flag; it is a forward-compatibility guard
-ensuring V3.0 cannot accidentally open a multisig wallet with pieces
-missing.
+**Retired bytes carry no layout.** `0x02` (formerly a view-only layout;
+capability REJECTED per the decision log, 2026-09-07) and `0x03`
+(formerly a hardware-offload layout; capability DEFERRED per
+`docs/FOLLOWUPS.md` — the future layout will be designed against a real
+device, not inherited from a guess) are retired and must never be
+reassigned a different meaning: a pre-genesis file bearing either byte
+was written by a build that no longer exists, and reusing the byte
+would make such a file silently parse as something else. `0x04` is
+RESERVED (a multisig envelope, if one ever ships, re-derives its layout
+from that design's spec; nothing about the old placeholder is
+normative). This table is the contract entry that protects the
+namespace (rule `23-disposition-visibility`); no code constant, enum
+variant, or layout for `0x02`–`0x04` exists anywhere in the tree, and
+the parser refuses all of them with the same generic
+`UnknownCapabilityMode` error that any unknown byte gets — a refusal
+that names no specific future arm.
 
 ### 2.4 Argon2id defaults
 
@@ -173,9 +175,9 @@ profile:
 - `t = 0x03`
 - `p = 0x01`
 
-These produce ≈1 s derivation on a 2024-era laptop. The KAT profile
-clamps `m_log2 = 0x08` (256 KiB) so the test suite runs in seconds; KATs
-explicitly flag this relaxation as KAT-only.
+These produce ≈1 s derivation on a 2024-era laptop. The pinned-vector
+profile clamps `m_log2 = 0x08` (256 KiB) so the test suite runs in
+seconds; the fixtures explicitly flag this relaxation as fixture-only.
 
 ### 2.5 Capability decode posture
 
@@ -190,35 +192,26 @@ than falling back:
    wrong-password guess so the decryption path cannot be used as an
    oracle.
 2. **`mode_byte` is decoded first.** Before a single byte of
-   `cap_content` is interpreted, the mode byte is mapped through
-   `from_envelope_byte` (FULL / VIEW_ONLY / HARDWARE_OFFLOAD /
-   reserved-multisig / unknown). Unknown bytes fail with
-   `UnknownCapabilityMode`; the reserved-multisig placeholder fails
-   with `RequiresMultisigSupport`. No other capability's decoder runs
-   on a byte it was not handed.
+   `cap_content` is interpreted, the mode byte is checked against the
+   §2.3 table. Only `0x01` (`FULL`) passes; every other byte — retired,
+   reserved, or unknown — fails with the same generic
+   `UnknownCapabilityMode` error. No refusal names a specific future
+   arm, and no other decoder runs on a byte it was not handed.
 3. **`cap_content_len` is validated against the declared mode.**
-   `validate_cap_content` enforces:
-   - FULL: `cap_len == 64` exactly.
-   - VIEW_ONLY: `cap_len == 32 + ML_KEM_768_DK_LEN + 32 = 2464`
-     exactly (no trailing bytes, no truncation).
-   - HARDWARE_OFFLOAD: `cap_len >= 32 + ML_KEM_768_DK_LEN + 32 + 2 =
-     2466` (the `+2` is the u16 `device_desc_len` prefix; the device
-     descriptor itself is length-prefixed and consumed by the
-     dispatched decoder, not skipped).
-   Any mismatch fails with `CapContentLenMismatch { mode, len }`
-   which is the typed equivalent of the audit plan's
-   "CapabilityPayloadMismatch" refusal. No capability-shape fallback
-   runs on a length-check failure.
+   `validate_cap_content` enforces FULL: `cap_len == 64` exactly (no
+   trailing bytes, no truncation). Any mismatch fails with
+   `CapContentLenMismatch { mode, len }`, the typed equivalent of the
+   audit plan's "CapabilityPayloadMismatch" refusal. No
+   capability-shape fallback runs on a length-check failure.
 4. **Per-capability interpretation happens above the envelope.** The
    `OpenedKeysFile` produced by `open_keys_file` hands `cap_content`
-   out as opaque bytes tagged with `capability_mode`. The caller
-   (for FULL, the key-tree rederivation in `shekyl-account`; for
-   VIEW_ONLY / HARDWARE_OFFLOAD, the scanner's session-key layer)
-   owns the mode-specific parse. That parse runs against bytes whose
-   `(mode, len)` pair is already known to be consistent with the
-   declared capability — it does not re-check the mode, because the
-   envelope has already refused every `(mode, len)` shape that is
-   not a member of the closed set above.
+   out as opaque bytes tagged with `capability_mode`. The caller (the
+   key-tree rederivation in `shekyl-account`) owns the mode-specific
+   parse. That parse runs against bytes whose `(mode, len)` pair is
+   already known to be consistent with the declared capability — it
+   does not re-check the mode, because the envelope has already refused
+   every `(mode, len)` shape that is not a member of the closed set
+   above.
 
 **Review rule.** Any code path in this layer that uses `read_to_end`,
 `take_while`, or similar unbounded patterns against `cap_content` —
@@ -292,8 +285,8 @@ cache only `wrap_key_region_2` (and other derived subkeys such as
 
 **Pre-genesis note.** On-disk **layout** is unchanged; **ciphertext** produced
 under a pre-amendment implementation that keyed region AEAD with raw `file_kek`
-does not decrypt under this prescription. Regenerate wallets and Tier-3 KATs;
-no migration code. Design record:
+does not decrypt under this prescription. Regenerate wallets and the pinned
+format vectors; no migration code. Design record:
 [`docs/design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md).
 
 ## 3. `<name>.wallet` layout
@@ -405,28 +398,31 @@ the 32-byte raw seed hex. V3 does not attempt silent recovery.
 ### 4.7 Pre-v1 refusal
 
 V3 refuses every file that does not begin with `SHEKYLWT`. There is no
-silent migration from Monero-lineage keys-file formats. The C++ layer
-surfaces the refusal as `wallet_incompatible` with a message pointing
-at the BIP-39 / raw-seed restore flow.
+silent migration from Monero-lineage keys-file formats. The refusal
+surfaces as `BadMagic` with a message pointing at the BIP-39 /
+raw-seed restore flow.
 
 ## 5. Error taxonomy
 
-Opaque to userspace; the C++ layer maps each to a specific message:
+Opaque to userspace; the Rust callers (`shekyl-engine-file` and above)
+map each to a specific message. The numeric codes date from the deleted
+C-ABI surface (§7); they are retained as a contract so a code is never
+reused with a different meaning:
 
-| Rust variant                 | FFI code | C++ message surface |
-|------------------------------|----------|---------------------|
-| `TooShort`                   | 1        | "wallet file truncated" |
-| `BadMagic`                   | 2        | "not a Shekyl V3 wallet file — please restore from seed" |
-| `FormatVersionTooNew`        | 3        | "wallet file written by a newer Shekyl; please upgrade" |
-| `UnsupportedKdfAlgo`         | 4        | "unknown KDF algorithm id" |
-| `KdfParamsOutOfRange`        | 5        | "KDF parameters out of policy range" |
-| `UnsupportedWrapCount`       | 6        | "unexpected wrap-key count" |
-| `CapContentLenMismatch`      | 7        | "capability content length does not match mode" |
-| `UnknownCapabilityMode`      | 8        | "unknown capability mode" |
-| `RequiresMultisigSupport`    | 9        | "this wallet requires Shekyl V3.1 or later" |
-| `InvalidPasswordOrCorrupt`   | 10       | "wrong password, or wallet file corrupt" |
-| `StateSeedBlockMismatch`     | 11       | "this .wallet does not belong to the .wallet.keys next to it" |
-| `Internal`                   | 12       | "internal wallet-file error" |
+| Rust variant                 | Code | Message surface |
+|------------------------------|------|-----------------|
+| `TooShort`                   | 1    | "wallet file truncated" |
+| `BadMagic`                   | 2    | "not a Shekyl V3 wallet file — please restore from seed" |
+| `FormatVersionTooNew`        | 3    | "wallet file written by a newer Shekyl; please upgrade" |
+| `UnsupportedKdfAlgo`         | 4    | "unknown KDF algorithm id" |
+| `KdfParamsOutOfRange`        | 5    | "KDF parameters out of policy range" |
+| `UnsupportedWrapCount`       | 6    | "unexpected wrap-key count" |
+| `CapContentLenMismatch`      | 7    | "capability content length does not match mode" |
+| `UnknownCapabilityMode`      | 8    | "unknown capability mode" |
+| — RETIRED, never reuse —     | 9    | was `RequiresMultisigSupport`; variant deleted with the non-`FULL` capability arms (rule 23) — mode `0x04` now refuses as `UnknownCapabilityMode` |
+| `InvalidPasswordOrCorrupt`   | 10   | "wrong password, or wallet file corrupt" |
+| `StateSeedBlockMismatch`     | 11   | "this .wallet does not belong to the .wallet.keys next to it" |
+| `Internal`                   | 12   | "internal wallet-file error" |
 
 Wrong-password and tamper paths both return `InvalidPasswordOrCorrupt`
 so the error code cannot be used as an oracle.
@@ -455,7 +451,7 @@ expensive against feasible adversaries.
 **`region1_nonce`, `region1_ct`, `region1_tag`.** Opaque under
 `wrap_key_region_1` (§2.6). Region 1's plaintext includes the `mode_byte`
 and `network` — deliberately hidden from filesystem scans so "is this a
-VIEW_ONLY stagenet wallet?" is not answerable without the password.
+stagenet wallet?" is not answerable without the password.
 
 **`expected_classical_address` (inside region 1).** Loader uses this
 both for sanity (derivation agrees) and for UX (displayable before any
@@ -472,16 +468,23 @@ open time from `.wallet.keys`'s last 16 bytes.
   — the normative envelope module. `seal_keys_file`, `inspect_keys_file`,
   `open_keys_file`, `rewrap_keys_file_password`, `seal_state_file`,
   `open_state_file`.
-- [`rust/shekyl-ffi/src/wallet_envelope_ffi.rs`](../rust/shekyl-ffi/src/wallet_envelope_ffi.rs)
-  — C-ABI surface for the above. Two-call sizing, zeroize-on-failure,
-  narrow-error discipline per
-  [.cursor/rules/40-ffi-discipline.mdc](../.cursor/rules/40-ffi-discipline.mdc).
-- [`src/shekyl/shekyl_ffi.h`](../src/shekyl/shekyl_ffi.h) — the C-side
-  prototypes. Constants and struct layouts pinned by `static_assert`
-  against the Rust `#[repr(C)]` definitions.
+- **There is no longer a C-ABI surface for this format.**
+  `rust/shekyl-ffi/src/wallet_envelope_ffi.rs` and the wallet section of
+  `src/shekyl/shekyl_ffi.h` existed so `wallet2.cpp` could open and seal
+  these files; both were deleted at Phase 5 (2026-08-19) with the C++
+  wallet stack. The format is now consumed only from Rust, through
+  `shekyl-engine-file`, which takes `shekyl-crypto-pq` directly. A future
+  C consumer would need a new surface designed for it — the deleted one
+  should not be resurrected from git history without re-deciding its
+  shape.
 - [`docs/test_vectors/WALLET_FILE_FORMAT_V1/`](test_vectors/WALLET_FILE_FORMAT_V1/)
-  — Tier-3 KATs: three sealed blobs (`full.hex`, `view_only.hex`,
-  `hardware_offload.hex`) plus a `manifest.json` describing the inputs
-  that produced each blob. The KAT generator runs Argon2id at
-  `m_log2 = 0x08` (256 KiB) so the `cargo test` cycle stays fast; the
-  production wallets always use the defaults in §2.4.
+  — self-pinned (tier-3) format vectors per `50-testing.mdc`'s
+  vector-oracle taxonomy — drift tripwires, not KATs: two sealed blobs
+  (`full.hex`, `state_for_full.hex`) plus a `manifest.json` describing
+  the inputs that produced each blob. Regeneration is gated on a
+  decision-log citation (`SHEKYL_PINNED_REGEN_DECISION`). The
+  regenerator runs Argon2id at `m_log2 = 0x08` (256 KiB) so the
+  `cargo test` cycle stays fast; production wallets always use the
+  defaults in §2.4. The §2.6 wrap-key derivation carries a true KAT
+  (independent tier-2 oracle: raw HMAC per RFC 5869 against the spec's
+  byte-exact labels) in `wallet_envelope.rs`.

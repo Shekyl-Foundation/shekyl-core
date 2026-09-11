@@ -87,9 +87,9 @@ pub fn prune_below_epoch_at_height(block_height: u64, max_claim_age_w: u64) -> O
 ///
 /// The log carries **two entry kinds** — do not assume every entry is a slash:
 /// a *bad-standing interval* has `start < end` (a slash opens with
-/// `end_exclusive = u64::MAX`; `Rebond` closes it in place), while the `Unbond`
+/// `end_exclusive = u64::MAX`; `Rebond` closes it in place), while the `Release`
 /// **clean interval-close** is **zero-length** (`start == end`) — a pure exit
-/// marker recording the unbond settlement epoch
+/// marker recording the release settlement epoch
 /// ([`clean_interval_close`](crate::bond_connect::clean_interval_close)). Its
 /// empty range excludes no epoch from [`good_through`] by construction, and
 /// every codec/marshal path deliberately carries `start == end`; never add a
@@ -295,11 +295,15 @@ pub struct EpochCloseShard {
     pub freeze_height: u64,
 }
 
-/// One serve-credit row at epoch close, as indices into the gather arrays.
+/// One credited (bond, shard) pair at epoch close, as indices into the
+/// gather arrays.
 ///
-/// Pairs are **distinct** by construction at the storage layer (the
-/// serve-credit ledger is keyed `(P_id, shard_id, E)`); duplicates would
-/// double-count `R_market` and work.
+/// Pairs are **distinct** by construction of the gather fold (`PC-D6`): the
+/// ledger holds one row per challenge (keyed `(P_id, shard_id, E, block)`,
+/// `PC-D4`), and the C++ gather folds rows sharing a 48-byte pair-epoch
+/// prefix into one entry before these indices are built. Duplicates would
+/// double-count `R_market` and work — removing the fold turns exactly its
+/// own test red.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CreditPair {
     pub bond_idx: usize,

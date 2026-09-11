@@ -36,7 +36,14 @@
 #include <boost/thread/future.hpp>
 #include <boost/utility/string_ref.hpp>
 #include <chrono>
+#include <cstring>
 #include <utility>
+
+#ifndef _WIN32
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
 
 #include "common/command_line.h"
 #include "cryptonote_core/cryptonote_core.h"
@@ -156,9 +163,14 @@ namespace nodetool
                                                                                                   " If this option is given the options add-priority-node and seed-node are ignored"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_p2p_seed_node   = {"seed-node", "Connect to a node to retrieve peer addresses, and disconnect"};
     const command_line::arg_descriptor<std::vector<std::string> > arg_tx_proxy = {"tx-proxy", "Send local txes through proxy: <network-type>,[socks5://[user:pass@]]<socks-ip:port>[,max_connections] i.e. \"tor,127.0.0.1:9050,100\""};
-    const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound = {"anonymous-inbound", "<hidden-service-address>,<[bind-ip:]port>[,max_connections] i.e. \"x.onion,127.0.0.1:18083,100\""};
+    // PWD-E7 (P2P_2_ENDPOINT_ROUND.md): the durable-address warning is stated
+    // wherever this flag is documented, because the failure mode is quiet --
+    // this flag is not a custody preference; taking it is opting into a
+    // durable address. The default posture (no flag) is an ephemeral per-boot
+    // onion the daemon publishes itself; see arg_no_ephemeral_tor below.
+    const command_line::arg_descriptor<std::vector<std::string> > arg_anonymous_inbound = {"anonymous-inbound", "<hidden-service-address>,<[bind-ip:]port>[,max_connections] i.e. \"x.onion,127.0.0.1:18083,100\". This opts into a STABLE, DURABLE onion address (for seeds and deliberately-persistent infrastructure); without it the daemon publishes an ephemeral per-boot address that identifies nothing across restarts"};
+    const command_line::arg_descriptor<bool> arg_no_ephemeral_tor = {"no-ephemeral-tor", "Disable the default ephemeral-per-boot Tor inbound posture (PWD-E7). Without this flag the daemon spawns a managed pinned tor when one is installed, mints a v3 onion key in memory, and serves overlay inbound on a fresh address each boot; configuring --anonymous-inbound or --tx-proxy for tor also makes the ephemeral posture yield", false};
     const command_line::arg_descriptor<std::string> arg_ban_list = {"ban-list", "Specify ban list file, one IP address per line"};
-    const command_line::arg_descriptor<bool> arg_p2p_hide_my_port   =    {"hide-my-port", "Do not announce yourself as peerlist candidate", false, true};
     const command_line::arg_descriptor<bool> arg_no_sync = {"no-sync", "Don't synchronize the blockchain with other peers", false};
 
     const command_line::arg_descriptor<bool>        arg_no_igd  = {"no-igd", "Disable UPnP port mapping"};
@@ -362,7 +374,58 @@ namespace nodetool
         return inbounds;
     }
 
-    bool is_filtered_command(const epee::net_utils::network_address& address, int command)
+    std::optional<epee::net_utils::network_address> derive_advertised_endpoint(
+    const epee::net_utils::network_address& observed, const uint16_t advertised_port)
+  {
+    if (advertised_port == 0)
+      return std::nullopt; // not dialable
+    if (observed.get_type_id() == epee::net_utils::ipv4_network_address::get_type_id())
+      return epee::net_utils::network_address{epee::net_utils::ipv4_network_address(
+        observed.as<epee::net_utils::ipv4_network_address>().ip(), advertised_port)};
+    if (observed.get_type_id() == epee::net_utils::ipv6_network_address::get_type_id())
+      return epee::net_utils::network_address{epee::net_utils::ipv6_network_address(
+        observed.as<epee::net_utils::ipv6_network_address>().ip(), advertised_port)};
+    return std::nullopt;
+  }
+
+  std::set<std::string> local_interface_hosts()
+  {
+    std::set<std::string> hosts;
+#ifndef _WIN32
+    struct ifaddrs *ifaddr = nullptr;
+    if (getifaddrs(&ifaddr) != 0)
+      return hosts;
+    for (struct ifaddrs *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next)
+    {
+      if (ifa->ifa_addr == nullptr)
+        continue;
+      if (ifa->ifa_addr->sa_family == AF_INET)
+      {
+        const auto *sin = reinterpret_cast<const sockaddr_in *>(ifa->ifa_addr);
+        if (sin->sin_addr.s_addr == INADDR_ANY)
+          continue;
+        // s_addr is already network-order, matching ipv4_network_address.
+        hosts.insert(epee::net_utils::network_address{
+          epee::net_utils::ipv4_network_address{sin->sin_addr.s_addr, 0}}.host_str());
+      }
+      else if (ifa->ifa_addr->sa_family == AF_INET6)
+      {
+        const auto *sin6 = reinterpret_cast<const sockaddr_in6 *>(ifa->ifa_addr);
+        boost::asio::ip::address_v6::bytes_type bytes{};
+        std::memcpy(bytes.data(), sin6->sin6_addr.s6_addr, bytes.size());
+        const boost::asio::ip::address_v6 v6{bytes, sin6->sin6_scope_id};
+        if (v6.is_unspecified())
+          continue;
+        hosts.insert(epee::net_utils::network_address{
+          epee::net_utils::ipv6_network_address{v6, 0}}.host_str());
+      }
+    }
+    freeifaddrs(ifaddr);
+#endif
+    return hosts;
+  }
+
+  bool is_filtered_command(const epee::net_utils::network_address& address, int command)
     {
         switch (command)
         {

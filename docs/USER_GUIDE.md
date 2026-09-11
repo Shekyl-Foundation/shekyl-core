@@ -72,12 +72,11 @@ Use the CLI tools when you want to:
 | `shekyl-gen-ssl-cert` | Generate self-signed SSL certificates for RPC |
 | `shekyl-blockchain-import` | Import blockchain from a file |
 | `shekyl-blockchain-export` | Export blockchain to a file |
-| `shekyl-blockchain-prune` | Prune or copy-prune a blockchain database |
+| `shekyl-mdb-copy` | Compact a stopped daemon's database |
 | `shekyl-blockchain-stats` | Print blockchain statistics |
 | `shekyl-blockchain-ancestry` | Trace transaction ancestry chains |
 | `shekyl-blockchain-depth` | Compute minimum chain depth for outputs |
 | `shekyl-blockchain-usage` | Histogram of output reuse as ring members (legacy) |
-| `shekyl-blockchain-prune-known-spent-data` | Remove provably-spent prunable data |
 
 ### Getting the binaries
 
@@ -123,9 +122,9 @@ data-dir=/var/lib/shekyl
 log-file=/var/log/shekyl/shekyld.log
 log-level=0
 prune-blockchain=1
-rpc-bind-ip=0.0.0.0
-confirm-external-bind=1
-restricted-rpc=1
+# RPC defaults to loopback. For your own wallet on another machine you
+# control, bind a view-only second listener (not a public remote node):
+# rpc-restricted-bind-port=11030
 ```
 
 Load a config file with `--config-file /path/to/shekyld.conf`. See
@@ -151,17 +150,16 @@ example.
 | `--prune-blockchain` | Enable pruning (~95% storage reduction for old prunable data) |
 | `--db-sync-mode <mode>` | LMDB sync mode: `safe`, `fast`, `fastest` |
 | `--block-sync-size <n>` | Number of blocks per sync batch |
-| `--fast-block-sync 1` | Use precomputed block hashes to skip PoW verification during sync |
 
 **RPC**
 
 | Flag | Description |
 |------|-------------|
 | `--rpc-bind-port <port>` | HTTP RPC listen port (default: 11029 mainnet); Axum is the sole transport |
-| `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1) |
-| `--restricted-rpc` | Disable admin endpoints (safe for public-facing nodes) |
+| `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1). IPv4 or IPv6 (`::1`). Loopback only: a wildcard (`0.0.0.0`, `::`) is refused, and so is a network address — the daemon RPC has no authentication. `--rpc-use-ipv6` also binds `--rpc-bind-ipv6-address` (default `::1`) on the same start. Another machine of yours reaches this node through its onion service |
+| `--restricted-rpc` | Disable admin endpoints on the main listener (view-only for *your* wallet; not a public remote node) |
+| `--rpc-restricted-bind-port <port>` | Second view-only listener for a wallet you operate |
 | `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
-| `--confirm-external-bind` | Required when binding RPC to 0.0.0.0 |
 
 shekyld does **not** accept `--rpc-login` or `--rpc-ssl*` (inbound RPC is
 plaintext). Use loopback locally; for remote access prefer an onion service
@@ -177,7 +175,6 @@ or a reverse proxy. Wallet-RPC retains login/SSL flags for its own listener.
 | `--add-peer <host:port>` | Manually add a peer |
 | `--add-priority-node <host:port>` | Peer that is always maintained |
 | `--ban-list <path>` | File of banned IP addresses |
-| `--hide-my-port` | Do not advertise your port to peers |
 
 **Background operation**
 
@@ -196,6 +193,13 @@ and `--*-service` flags were removed in V3.1.
 
 When `shekyld` is running in the foreground, you get an interactive console.
 Type `help` to list all commands. The most useful ones, grouped by purpose:
+
+The same commands work from a second shell against a running daemon —
+`shekyld status`, `shekyld exit` — over its local RPC port (pass
+`--rpc-bind-port` / `--testnet` if the daemon is not on the defaults). The
+exit status is `0` when the daemon answered, `1` when the command is unknown
+or the request failed (daemon not running, connection refused, error reply),
+so scripts can check it without parsing the output.
 
 **Status and information**
 
@@ -255,7 +259,6 @@ Type `help` to list all commands. The most useful ones, grouped by purpose:
 | `flush_cache [bad-txs\|bad-blocks]` | Clear internal caches |
 | `pop_blocks <n>` | Roll back the last N blocks |
 | `prune_blockchain` | Enable pruning on a non-pruned database |
-| `set_bootstrap_daemon <addr>` | Set or clear a bootstrap daemon for fast-sync |
 
 **Exit**
 
@@ -295,43 +298,39 @@ tells the wallet to skip scanning blocks before that height, which is much
 faster. If you don't know the exact height, use `--restore-date 2026-03-15`
 to estimate it.
 
-### Restoring from keys
-
-For advanced recovery, you can restore from individual keys:
-
-- **From spend key:** `--generate-from-spend-key /path/to/wallet`
-- **From view key:** `--generate-from-view-key /path/to/wallet` (creates a
-  view-only wallet)
-- **From both keys + address:** `--generate-from-keys /path/to/wallet`
+The seed words are the only restore path: every wallet key (spend, view,
+message-signing, ML-KEM) derives from the master seed, so there is no
+separate restore-from-keys flow and no view-only wallet variant.
 
 ### Opening an existing wallet
 
 ```bash
-./shekyl-cli --wallet-file /path/to/mywallet
+./shekyl-cli --engine-file mywallet
 ```
 
 ### Connecting to a daemon
 
-By default, the wallet connects to `localhost:11029`. To connect to a
-different daemon:
+By default the wallet connects to a daemon on this machine, at the RPC
+port for `--network` (`127.0.0.1:11029` on mainnet). `shekyld` serves RPC
+on loopback only, so a node of yours on another machine is reached through
+a Tor onion service you run in front of its loopback RPC (see "Wallet
+through Tor" below), over a SOCKS proxy:
 
 ```bash
-./shekyl-cli --wallet-file /path/to/mywallet \
-    --daemon-address 192.168.1.10:11029 \
-    --trusted-daemon
-```
-
-Use `--trusted-daemon` when you control the daemon (your own machine). Use
-`--untrusted-daemon` for remote public nodes -- the wallet will take extra
-precautions to avoid leaking information.
-
-To connect through a SOCKS proxy (e.g. Tor):
-
-```bash
-./shekyl-cli --wallet-file /path/to/mywallet \
-    --proxy socks4a:127.0.0.1:9050 \
+./shekyl-cli --engine-file mywallet \
+    --proxy socks5h://127.0.0.1:9050 \
     --daemon-address <onion-address>:11029
 ```
+
+Shekyl RPC is operator-to-operator: there is no recommended configuration
+in which the wallet talks to a daemon someone else controls, and `shekyld`
+does not advertise itself as a public node. A `--daemon-address` that is
+not loopback is said out loud when the wallet starts — whoever operates
+that daemon sees which blocks the wallet requests and what it broadcasts,
+and no proxy or encryption changes that. The warning reads the same for
+your own node: it states what a daemon is told, not who you are talking
+to. Without `--proxy`, a non-loopback address additionally warns that the
+connection itself is visible on the network path.
 
 ### Understanding Bech32m addresses
 
@@ -344,8 +343,7 @@ Shekyl uses a segmented **Bech32m** address format with three parts:
 3. **PQC-B segment** (`skpq2...`) -- contains the rest of the ML-KEM-768 key
 
 The full address is approximately 2,030 characters. When sharing addresses,
-use copy-paste or URIs. The classical segment alone is sufficient for
-view-only scanning and display purposes.
+use copy-paste or URIs.
 
 To see your address inside the wallet:
 
@@ -434,13 +432,14 @@ confirmation):
 [wallet]: set priority <0|1|2|3|4>
 ```
 
-**Offline signing** (air-gapped):
-
-```
-[wallet]: transfer --do-not-relay <address> <amount>
-[wallet]: sign_transfer
-[wallet]: submit_transfer
-```
+**There is no offline ("air-gapped") signing workflow, by design.** An
+FCMP++ membership proof needs the live curve tree, so an offline signer
+cannot deliver the isolation such a workflow claims — the "cold" half
+would still need current chain data to build a valid transaction. Cold
+*storage* is the seed phrase on paper; a machine that signs is online.
+Every `transfer` shows the built transaction (destination, amount, fee)
+and waits for your confirmation before broadcasting — decline it and
+nothing leaves the wallet.
 
 ### Sweep commands
 
@@ -493,10 +492,13 @@ approximately 23 KB. Fees scale with transaction size.
 Shekyl staking is **archival pay-for-service**. You bond SKL as on-chain
 collateral backing archival service, and you earn a share of the block
 reward-emission leg for the archival work your position verifiably performs.
-There are **no duration tiers, no lock period, no claim/unstake transactions,
-and no minimum stake** — those belonged to an earlier claim-based design that
-was retired before genesis. Your principal stays yours the whole time; the
-bond is an honesty anchor (slashable for misbehavior), not a custody transfer.
+There are **no duration tiers, no lock period, no claim transactions, and no
+minimum stake** — those belonged to an earlier claim-based design that was
+retired before genesis. Your principal stays yours the whole time; the bond
+is an honesty anchor (slashable for misbehavior), not a custody transfer.
+When you are done staking, `unstake` posts the permanent exit and
+`collect_unstaked` returns the released collateral to your balance (PR-C,
+2026-09-03).
 
 For the economic model, see
 [`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md) §Component 3–4 and the canonical
@@ -515,24 +517,38 @@ timing and funding footguns that matter for your privacy.
   reward budget is divided among stakers in proportion to *capped* verified
   serve-work, so a larger position does not buy a proportionally larger share.
 - **Rewards arrive automatically.** They are paid through the loud
-  reward-emission leg (public amounts) and received to a firewalled pseudonym
-  — there is no manual "claim" step and no separate claim transaction.
-- **Principal stays liquid.** You can release collateral by unbonding, subject
+  reward-emission leg (public amounts) and received to a firewalled pseudonym.
+  There is no manual "claim" step: the open wallet submits the claim
+  transaction itself once each reward epoch settles. Very small rewards are
+  held until enough accumulate to be worth the network fee, and a wallet that
+  was closed for a while claims its backlog shortly after you reopen it.
+  Automatic claiming currently requires the wallet's daemon to be on the same
+  machine (a loopback address). If your wallet points at a remote daemon —
+  even one you run yourself — rewards are not claimed automatically yet; they
+  are held, and the wallet raises an operator alarm rather than claiming over
+  the remote connection. Remote-daemon claiming arrives with remote-daemon
+  support as a whole.
+- **Principal stays liquid.** You can release collateral by releasing, subject
   to a release cooldown. There is no fixed lock height to wait out.
 
 ### Wallet support today
 
-Archival staking activation and status are driven through the wallet's staking
-surface, **not** through interactive `shekyl-cli` commands yet:
+Staking is split across surfaces today: the **exit verbs are live in
+interactive `shekyl-cli`** (PR-C), while activation and status are not yet:
 
-- **Wallet RPC** exposes staking activation (`stake`) and read-only status
-  (`get_staked_balance`, `get_staked_outputs`, `staking_info`). Reward-related
-  reads never conflate bonded principal with received rewards.
+- **Interactive `shekyl-cli`** carries the exit pair — `unstake` (posts the
+  permanent exit) and `collect_unstaked` (returns the released collateral to
+  your balance), each with the irreversibility confirmation the exit warrants.
+- **Wallet RPC** exposes staking activation (`stake`), the same exit verbs
+  (`unstake`, `collect_unstaked`), and read-only status (`get_staked_balance`,
+  `get_staked_outputs`, `staking_info`). Reward-related reads never conflate
+  bonded principal with received rewards.
 - **The desktop GUI** exposes staker activation directly.
 
-Interactive `shekyl-cli` staking commands are on the roadmap but **not yet
-available**; this section will document them when they land. Until then, the
-above is the honest status — use the GUI or the wallet-RPC methods to stake.
+Interactive `shekyl-cli` **activation** is still on the roadmap and **not yet
+available**; this section will document it when it lands. Until then, stake
+through the GUI or the wallet-RPC `stake` method — and use `shekyl-cli` or
+wallet RPC to exit.
 
 ### Privacy considerations
 
@@ -694,13 +710,15 @@ For I2P:
 ### Wallet through Tor
 
 ```bash
-./shekyl-cli --wallet-file /path/to/wallet \
-    --proxy socks4a:127.0.0.1:9050 \
+./shekyl-cli --engine-file mywallet \
+    --proxy socks5h://127.0.0.1:9050 \
     --daemon-address <onion-address>:11029
 ```
 
 The daemon must expose a hidden service for RPC (separate from the P2P
-hidden service).
+hidden service). The wallet still states at startup that the daemon's
+operator sees what it asks for — true of your own node too; see
+"Connecting to a daemon".
 
 ### Key behaviours
 
@@ -768,33 +786,48 @@ For the full technical specification, see
 
 ## Wallet RPC Server (`shekyl-wallet-rpc`)
 
-The wallet RPC server provides programmatic JSON-RPC access to wallet
-functions. Use it for exchange integrations, automated payments, or
-building applications on top of Shekyl.
+`shekyl-wallet-rpc` is the JSON-RPC server behind every Shekyl wallet
+client: `shekyl-cli` hosts one in-process for you over a private local
+endpoint, so most users never start it directly. Run it yourself for
+tooling that speaks JSON-RPC over HTTP, or to serve several wallets from one
+process. The contract is `docs/api/wallet_rpc.yaml`; the flag reference is
+`docs/EXECUTABLES.md` §3.
 
 ### Launching
 
 ```bash
 ./shekyl-wallet-rpc \
-    --wallet-file /path/to/wallet \
-    --rpc-bind-port 11030 \
+    --wallet-dir /path/to/wallets \
+    --rpc-bind 127.0.0.1:29500 \
     --rpc-login user:password \
-    --daemon-address 127.0.0.1:11029
+    --daemon-address http://127.0.0.1:11029
 ```
 
 ### Key flags
 
 | Flag | Description |
 |------|-------------|
-| `--wallet-file <path>` | Wallet file to open |
-| `--wallet-dir <path>` | Directory for `create_wallet`/`open_wallet` RPC methods |
-| `--rpc-bind-port <port>` | Port to listen on (required) |
-| `--rpc-login <user:pass>` | Require HTTP digest auth (strongly recommended) |
-| `--disable-rpc-login` | Disable auth -- **dangerous**, use only in trusted environments |
-| `--restricted-rpc` | Limit to read-only and transfer operations |
-| `--rpc-ssl <mode>` | Enable SSL (`enabled`, `disabled`, `autodetect`) |
-| `--daemon-address <addr>` | Connect to a specific daemon |
-| `--trusted-daemon` | Enable commands that rely on a trusted daemon (your own node) |
+| `--wallet-dir <path>` | Directory of wallet files; `create_wallet` / `open_wallet` work here |
+| `--rpc-bind <addr>` | A numeric `IP:PORT` (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames are not resolved) or `uds:///path/to.sock` (Unix). Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are **refused** — bind a specific IP address; a non-loopback address **requires** `--rpc-login` |
+| `--rpc-login <user:pass>` | HTTP basic auth, both halves non-empty (anything else is refused at startup). Mandatory off loopback; on loopback or a UDS socket it may be omitted |
+| `--disable-rpc-login` | Run without auth — refused off loopback, and refused together with `--rpc-login` (pass one) |
+| `--daemon-address <url>` | Your node's RPC URL. Default: this machine's daemon at the RPC port for `--network`. A daemon that is not loopback is disclosed in the log at startup, `--proxy` or not (see "Connecting to a daemon" above) |
+| `--proxy <socks5h://…>` | Route the daemon connection through a SOCKS5h proxy |
+| `--network <name>` | `mainnet` (default), `testnet`, or `stagenet` |
+
+**Three things the server will refuse, on purpose.** Binding `0.0.0.0` or
+`::` binds every interface your machine has *and every one it gains later*
+(a VPN, a hotspot, a container bridge), so the server asks you to name the
+one interface you mean. And it will not serve without authentication on any
+address other than loopback: a wallet RPC the network can reach honours
+every request, spends included. **The network being yours is not what
+provides the security** — the TV, the smart plug and a guest's phone are on
+your home network too. And it answers only requests whose `Content-Type` is
+`application/json` (anything else gets HTTP 415): that is what stops a web
+page in your browser from driving the wallet on `127.0.0.1` — every real
+client sends it anyway — and, when you run without `--rpc-login`, it answers
+only to its IP address or `localhost`, not to a hostname a web page could
+have pointed at your machine.
 
 ### Method categories
 
@@ -808,8 +841,10 @@ All methods are called via `POST /json_rpc`. Key groups:
 - **Keys and proofs:** `query_key`, `get_tx_key`, `check_tx_key`,
   `get_tx_proof`, `sign`, `verify`
 - **Staking (archival):** `stake` (activation), `get_staked_balance`,
-  `get_staked_outputs`, `staking_info` (reads). There is no `unstake`/`claim`
-  RPC — archival staking has no claim/unstake wire; those methods are reserved.
+  `get_staked_outputs`, `staking_info` (reads); `stake_in`, `drain`,
+  `get_drain_balance` (WI-RPC-5); `unstake` and `collect_unstaked` (the
+  composed exit, PR-C). There is no `claim` RPC — emission claims are
+  engine-side automation, and that name is rejected, not reserved.
 - **PQC Multisig:** `create_pqc_multisig_group`, `get_pqc_multisig_info`,
   `export_multisig_signing_request`, `sign_multisig_partial`,
   `import_multisig_signatures`
@@ -846,19 +881,30 @@ Export the blockchain to a portable file:
 ./shekyl-blockchain-export --output-file partial.raw --block-start 0 --block-stop 100000
 ```
 
-### `shekyl-blockchain-prune`
+### `shekyl-mdb-copy`
 
-Create a pruned copy of the database (keeps only ~5% of prunable data):
-
-```bash
-./shekyl-blockchain-prune --copy-pruned-database /path/to/pruned/
-```
-
-Or prune in-place (modifies the existing database):
+Pruning happens inside the daemon: start `shekyld` with `--prune-blockchain`,
+or run the `prune_blockchain` command in the daemon console. An in-place
+prune marks database pages as free without shrinking the file. To reclaim
+the disk space, stop `shekyld` and compact the database:
 
 ```bash
-./shekyl-blockchain-prune
+mkdir /path/to/compacted
+./shekyl-mdb-copy -c ~/.shekyl/lmdb /path/to/compacted/
 ```
+
+then replace the old `lmdb` directory with the compacted copy (you
+temporarily need disk space for both). The destination directory must
+already exist and be empty, and the tool must run as the user that owns
+the data directory — the copy opens the database read-only but still
+needs write access to the source's reader-lock file (`lock.mdb`, created
+if missing), and a `sudo` run leaves the compacted copy root-owned, so
+the daemon cannot use it after the swap. Always pass both paths: with
+the destination omitted, the tool streams the entire database to
+standard output.
+
+Note that pruning removes only transaction proof and PQC-auth data;
+curve-tree leaf data is not prunable and grows with the chain.
 
 ### `shekyl-blockchain-stats`
 
@@ -877,18 +923,18 @@ Additional flags: `--with-inputs`, `--with-outputs`, `--with-hours`.
 | `shekyl-blockchain-ancestry` | Trace the input ancestry of a transaction |
 | `shekyl-blockchain-depth` | Compute minimum chain depth for an output or transaction |
 | `shekyl-blockchain-usage` | Histogram of output reuse as ring members (legacy) |
-| `shekyl-blockchain-prune-known-spent-data` | Remove prunable data for outputs that are provably spent |
 
 All tools accept `--data-dir`, `--testnet`, `--stagenet`, and
 `--log-level` flags.
 
-> **Note:** `shekyl-blockchain-ancestry`, `shekyl-blockchain-depth`,
-> `shekyl-blockchain-usage`, and `shekyl-blockchain-prune-known-spent-data`
-> all analyze spend-graph relationships that FCMP++ transactions do not
-> reveal (a spend never discloses which output it consumes, and inputs carry
-> no ring-member references). They have no substrate on Shekyl chain data
-> and are scheduled for a deletion audit (see `docs/EXECUTABLES.md` and
-> `docs/FOLLOWUPS.md`).
+> **Note:** `shekyl-blockchain-ancestry`, `shekyl-blockchain-depth`, and
+> `shekyl-blockchain-usage` all analyze spend-graph relationships that FCMP++
+> transactions do not reveal (a spend never discloses which output it
+> consumes, and inputs carry no ring-member references). They have no
+> substrate on Shekyl chain data and are scheduled for a deletion audit (see
+> `docs/EXECUTABLES.md` and `docs/FOLLOWUPS.md`;
+> `shekyl-blockchain-prune-known-spent-data` was already deleted under that
+> audit).
 
 ---
 
@@ -912,33 +958,17 @@ stored.
 
 **Write your seed on paper. Store it offline. Never share it.**
 
-### Key export
+### No secret export, no view-only wallets
 
-| Command | Description |
-|---------|-------------|
-| `viewkey` | Display your secret and public view keys |
-| `spendkey` | Display your secret and public spend keys |
-| `restore_height` | Display the wallet's creation height |
-
-### View-only wallets
-
-A view-only wallet can monitor incoming transactions but cannot spend. To
-create one:
-
-```
-[wallet]: save_watch_only
-```
-
-To track outgoing transactions in a view-only wallet, periodically export
-key images from your full wallet and import them:
-
-```
-# On the full wallet:
-[wallet]: export_key_images /path/to/key_images
-
-# On the view-only wallet:
-[wallet]: import_key_images /path/to/key_images
-```
+The wallet deliberately has **no secret-egress surface**: there are no
+`viewkey` / `spendkey` display commands, no key-image export, and no
+view-only ("watch-only") wallet variant. Your seed backup is shown exactly
+once, at create/restore time — everything else derives from it. Under
+FCMP++ a view key is not a chain-scanning credential the way it was in
+CryptoNote-era coins, so a view-only wallet would not deliver the
+third-party-auditor use case; balance disclosure to a third party is
+served by reserve proofs (`get_reserve_proof` / `check_reserve_proof`)
+with scoped, cryptographic disclosure instead of a standing credential.
 
 ### Changing your password
 
@@ -1149,7 +1179,7 @@ Behavior changes to be aware of when upgrading:
 | **Emission** | The schedule by which new SKL is created. The total supply is mathematically capped. |
 | **FCMP++ membership proof** | A zero-knowledge proof that the spent output exists in the full UTXO set without revealing which one. The anonymity set is every output on the blockchain. |
 | **Hybrid signature** | Two signatures on every transaction: Ed25519 (classical) and ML-DSA-65 (quantum-resistant). |
-| **Key images** | Cryptographic markers that prevent double-spending. Exported from full wallets to track spends in view-only wallets. |
+| **Key images** | Cryptographic markers that prevent double-spending. Derived and tracked internally by the wallet; there is no export surface. |
 | **KDF rounds** | Key derivation function iterations; higher values make wallet password brute-forcing harder. |
 | **Mnemonic seed** | The 24 BIP-39 words that fully restore your wallet (plus your passphrase, if you opted in to one). Treat as a master password you can never change. |
 | **ML-DSA-65** | A quantum-resistant signature algorithm standardized by NIST (FIPS 204). |
@@ -1160,8 +1190,6 @@ Behavior changes to be aware of when upgrading:
 | **Staking** | Locking SKL for a period to earn yield from the emission pool. |
 | **Stealth address** | A one-time address generated for each transaction so only sender and receiver know the destination. |
 | **Payment request** | A merchant invoice record (amount, label, expiry) tied to your primary address — replaces per-sender subaddress rotation. |
-| **View-only wallet** | A wallet that can see incoming transactions but cannot spend. Created with `save_watch_only`. |
-
 ---
 
 ## Getting Help

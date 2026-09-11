@@ -12,6 +12,13 @@ description: >-
   download fails THIS step; --retry rides through transients (house
   precedent: build.yml APT_SET_CONF's Acquire::Retries).
 
+  --retry-all-errors, NOT --retry-connrefused: the latter adds only
+  ECONNREFUSED to curl's retryable set, so a plain "failed to connect"
+  (exit 7 — network unreachable, connect timeout, a host resolving but
+  not answering) was never retried and failed the whole job on one blip
+  (observed on PR #431). The line above already claimed --retry rode
+  through transients; it did not, for the most common one.
+
   Keep the default toolchain in sync with rust/rust-toolchain.toml on a
   bump (the toolchain.toml doc's mandate: CI installs the pinned
   toolchain up front; the .toml only selects it). Avoids the dtolnay
@@ -40,7 +47,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs
+        curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-all-errors -o /tmp/rustup-init.sh https://sh.rustup.rs
         component_args=""
         for c in ${{ inputs.components }}; do
           component_args="$component_args --component $c"

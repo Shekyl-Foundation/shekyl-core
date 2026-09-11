@@ -1,0 +1,42 @@
+[package]
+name = "shekyl-p-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Persona serving host: composes the loopback serving loop with the wallet's Tor onion service, over a serve-set derived from the bond record"
+publish = false
+
+[dependencies]
+# `ServingReader` (the read-only store handle this host is allowed to hold) and
+# `SegmentPin` (the per-member pin outcome whose policy this crate sets).
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# The serving loop itself: the loopback endpoint + the store-backed provider.
+shekyl-p-serve = { path = "../shekyl-p-serve" }
+# The onion half: the supervisor, the serving posture (vanguards + onion as one
+# indivisible knob), and the derived serving identity.
+shekyl-tor-control-wallet = { path = "../shekyl-tor-control-wallet" }
+# Same runtime the two halves already use; `sync` for the posture watch this
+# crate re-exports, `time` for the bounded startup wait.
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
+
+[dev-dependencies]
+# The posture-loss KATs tamper the one-way prune-disabled flag through a
+# feature-gated fixture; the feature exists only on this dev edge, so
+# production builds of this crate (and everything above it) compile a
+# curve-tree with no clear path at all.
+shekyl-curve-tree = { path = "../shekyl-curve-tree", features = ["test-tamper"] }
+tokio = { version = "1", default-features = false, features = [
+    "macros",
+    "rt-multi-thread",
+    "io-util",
+    "net",
+] }
+# The workspace's standard test fixture: a `DataDirectory` for the supervisor
+# under test (which never launches — the composition test drives it with a
+# binary that cannot pass the hash gate).
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -17,14 +17,12 @@ use std::sync::{Arc, Mutex};
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use shekyl_daemon_rpc::submit::{
-    CommitOutcome, KeyImageConflict, ParsedSubmission, ReferenceFacts, ShimFault, SubmitFacts,
-    SubmitStateShim, TxMeta, TxVerifier, VerificationCertificate, VerifyFailure,
+    BondProbe, CommitOutcome, KeyImageConflict, ParsedSubmission, ReferenceFacts, ShimFault,
+    SubmitFacts, SubmitStateShim, TxMeta, TxVerifier, VerificationCertificate, VerifyFailure,
 };
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
-use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
-use shekyl_wire::{
-    BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, ServeCredit, Transaction, TxPrefix,
-};
+use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, TAG_INPUT_SERVE_CREDIT};
+use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
 /// The curve-tree root the fixture facts report at the reference height.
 pub const FIXTURE_ROOT: [u8; 32] = [0xAA; 32];
@@ -108,7 +106,12 @@ pub fn spend_tx_with_kis(key_images: &[[u8; 32]], fee: u64) -> Transaction {
                 })
                 .collect(),
             outputs,
-            extra: vec![0x06, 0xAA, 0xBB, 0xCC],
+            // Two outputs, so the PQC scan fields must both be present and
+            // correctly sized. This was `vec![0x06, 0xAA, 0xBB, 0xCC]`, a
+            // truncated varint that no parser ever accepted; it survived only
+            // while `validate_context_free_pruned` skipped the field-shape rule
+            // on an unparseable `extra`.
+            extra: conforming_pqc_extra(2),
         },
         ct: Ct::Fcmp {
             fee,
@@ -116,6 +119,7 @@ pub fn spend_tx_with_kis(key_images: &[[u8; 32]], fee: u64) -> Transaction {
             base,
             pqc_auths: key_images.iter().map(|_| pqc_auth()).collect(),
             prunable: Some(Prunable {
+                serve_credit_pruned: Vec::new(),
                 bulletproofs: vec![bp_plus()],
                 tree_depth: 3,
                 fcmp_proof: vec![0xEF; 2500],
@@ -137,17 +141,16 @@ pub fn serve_credit_tx(fee: u64) -> Transaction {
     Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
-            inputs: vec![Input::ServeCredit(Box::new(ServeCredit {
-                p_canonical_id: [0x11; 32],
-                shard_id: 7,
-                settlement_epoch: 42,
-                segment_subroot_rk: [0x22; 32],
-                leaf_index_in_segment: 0x0403_0201,
-                leaf_bytes: [0x33; 128],
-                c1_layers: vec![vec![[0x44; 32], [0x45; 32]], vec![[0x46; 32]]],
-                c2_layers: vec![vec![[0x55; 32]]],
-                hybrid_signature: vec![0x66; 3385],
-            }))],
+            inputs: vec![Input::ServeCredit {
+                // Opaque kept half (RF-D1 / rule 40): tag ‖ p_id ‖ shard ‖ epoch ‖ ed25519.
+                canonical_bytes: {
+                    let mut b = vec![TAG_INPUT_SERVE_CREDIT];
+                    b.extend_from_slice(&[0x11; 32]);
+                    b.extend_from_slice(&[7, 42]);
+                    b.extend_from_slice(&[0x66; 64]);
+                    b
+                },
+            }],
             outputs: vec![],
             extra: vec![],
         },
@@ -160,7 +163,15 @@ pub fn serve_credit_tx(fee: u64) -> Transaction {
                 commitments: vec![],
             },
             pqc_auths: vec![],
-            prunable: None,
+            // RF-D1: the pruned half of the record, one per serve-credit vin.
+            prunable: Some(Prunable {
+                bulletproofs: vec![],
+                tree_depth: 0,
+                fcmp_proof: vec![],
+                pseudo_outs: vec![],
+                // One opaque pruned record per serve-credit vin.
+                serve_credit_pruned: vec![vec![0x77; 64]],
+            }),
         },
     }
 }
@@ -231,8 +242,8 @@ pub fn emission_tx(fee: u64) -> Transaction {
                     canonical_bytes: emission_vin_bytes(),
                 },
             ],
+            extra: conforming_pqc_extra(outputs.len()),
             outputs,
-            extra: vec![],
         },
         ct: Ct::Fcmp {
             fee,
@@ -240,6 +251,8 @@ pub fn emission_tx(fee: u64) -> Transaction {
             base,
             pqc_auths: vec![pqc_auth(), pqc_auth()],
             prunable: Some(Prunable {
+                // Spend fixture: no pass records (RF-D1).
+                serve_credit_pruned: Vec::new(),
                 bulletproofs: vec![bp_plus()],
                 tree_depth: 3,
                 fcmp_proof: vec![0xEF; 2500],
@@ -273,6 +286,8 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         weight_limit: 149_400,
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,
+        bond_record_bonded_total: None,
+        release: None,
         emission: None,
         emission_claim_conflict: None,
     }
@@ -301,6 +316,17 @@ pub struct SnapshotRecord {
     /// The §8.7.1 BP3 probe key the engine passed (bond-post submissions
     /// only).
     pub bond_p_canonical_id: Option<[u8; 32]>,
+    /// Which archival-bond question the engine asked (§8.7.1 BP3 vs
+    /// §8.7.1.1): the debit arm needs the record's contents, not just its
+    /// presence, and asking the wrong one is invisible in the id alone.
+    pub bond_probe_is_release: bool,
+    /// The `bond_debit` the debit arm's probe carried. The C++ gather skips
+    /// its per-shard scan when this does not equal the record's live balance,
+    /// so an engine that passed a wrong value (0, say) would make the gather
+    /// skip for EVERY valid Release and the battery refuse it — a refusal no
+    /// mock-served fact set can expose, because the mock never runs the
+    /// gather. Recorded so a test can assert the vin's own value reaches it.
+    pub bond_probe_debit: Option<u64>,
     /// The §8.7.2 E6/E7 probe the engine passed (emission submissions
     /// only): the vin-derived claimant id + claimed epochs.
     pub emission_probe: Option<([u8; 32], Vec<u64>)>,
@@ -348,14 +374,19 @@ impl SubmitStateShim for MockShim {
         txid: &TxHash,
         key_images: &[[u8; 32]],
         reference_block: &BlockHash,
-        bond_p_canonical_id: Option<&[u8; 32]>,
+        bond_probe: Option<BondProbe<'_>>,
         emission_probe: Option<(&[u8; 32], &[u64])>,
     ) -> Result<SubmitFacts, ShimFault> {
         self.snapshots.lock().unwrap().push(SnapshotRecord {
             txid: *txid,
             key_images: key_images.to_vec(),
             reference_block: *reference_block,
-            bond_p_canonical_id: bond_p_canonical_id.copied(),
+            bond_p_canonical_id: bond_probe.map(|probe| *probe.p_canonical_id()),
+            bond_probe_is_release: matches!(bond_probe, Some(BondProbe::Release { .. })),
+            bond_probe_debit: match bond_probe {
+                Some(BondProbe::Release { bond_debit, .. }) => Some(bond_debit),
+                _ => None,
+            },
             emission_probe: emission_probe.map(|(id, epochs)| (*id, epochs.to_vec())),
         });
         Ok(self.facts.clone())
@@ -427,4 +458,30 @@ impl TxVerifier for MockVerifier {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.result
     }
+}
+
+/// The `tx_extra` a transaction with `n` outputs must carry (CEN-I19,
+/// `GENESIS_TX_WIRE_FORMAT.md` §9.6a): exactly one `0x06` of `1120·n` bytes and
+/// one `0x07` of `32·n`, and neither when `n == 0`. Payloads are filler — the
+/// shape rule reads counts and lengths only. A fixture must be a *valid*
+/// transaction in every respect but the one under test; before this rule these
+/// built transactions with outputs and an empty `extra`, a shape no builder has
+/// ever produced.
+pub fn conforming_pqc_extra(n_outputs: usize) -> Vec<u8> {
+    if n_outputs == 0 {
+        return Vec::new();
+    }
+    shekyl_wire::tx_extra::serialize(&[
+        shekyl_wire::tx_extra::TxExtraField::PqcKemCiphertext(vec![
+            0x6a;
+            shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES
+                * n_outputs
+        ]),
+        shekyl_wire::tx_extra::TxExtraField::PqcLeafHashes(vec![
+            0x7b;
+            shekyl_wire::tx_extra::PQC_LEAF_HASH_BYTES
+                * n_outputs
+        ]),
+    ])
+    .expect("conforming PQC tx_extra serializes")
 }

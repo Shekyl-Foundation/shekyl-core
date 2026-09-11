@@ -132,6 +132,35 @@ pub fn compress_payload(payload: &[u8]) -> Result<Option<Vec<u8>>, Error> {
 /// Both are the calling layer's obligation: it knows it shaped the size,
 /// and the bytes do not say so. `make_payload_send_txs` discharges the
 /// first by not calling the compressor at all when `pad` is set.
+///
+/// # Invariant for anyone routing a NEW message type through here
+///
+/// **No message carrying secret or otherwise confidential material is ever
+/// compressed — of any lifetime.**
+/// Ruled by `docs/design/SHEKYL_P2P_PROTOCOL.md` PWD-T7, and stated at this
+/// call site rather than only in the design doc because **this is where the
+/// decision is actually made** — by whoever adds the next message type.
+///
+/// Compress-then-encrypt is the CRIME/BREACH shape. That attack needs a
+/// **secret** and **attacker-influenced data** compressed in the same context,
+/// so an adversary can vary its own input and watch the ciphertext length.
+/// **The secret's lifetime is irrelevant to it** — a node-local static value or
+/// a reused token is as extractable as a per-session one, and is worth *more*
+/// once extracted, so "per-connection" is not the boundary.
+/// It is safe on this path today for one specific reason: p2p payloads are
+/// blocks and transactions — **public consensus data, carrying no confidential
+/// value of any kind**. Not "no per-connection secret": that scoping is the one
+/// the paragraph above disowns, and it would leave a node-local static or a
+/// reused token outside the claim. The blobs do contain ciphertexts, and those
+/// are public by design — the invariant is about values whose *disclosure*
+/// matters, not values that happen to be encrypted. The safety is a property of
+/// the *message set*, not of the compressor, so it stops holding the moment the
+/// message set changes.
+///
+/// If a message would carry **any** confidential value — session key, node-local
+/// secret, reused token, anything whose disclosure matters — **do not compress
+/// it**. PWD-T7 records bucket-padding after compression as the named retreat
+/// if the invariant ever has to be relaxed rather than obeyed.
 #[must_use]
 pub fn try_compress_message(message: Vec<u8>) -> Vec<u8> {
     match compress_message(&message) {

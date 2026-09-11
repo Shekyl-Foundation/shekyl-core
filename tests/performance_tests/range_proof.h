@@ -30,7 +30,7 @@
 
 #pragma once
 
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 
 template<bool a_verify>
 class test_range_proof

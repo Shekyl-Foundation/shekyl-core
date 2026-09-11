@@ -92,15 +92,92 @@ the same PR.
    supersedes, or closes them) — a passing textual mention does not
    trigger the row.
 
+6. **One lane, one family: a row's Completion Status is owned by
+   exactly one lane.** Two lanes that both edit one row will both
+   resolve the conflict, and a side-pick keeps one true change while
+   silently discarding the other — the discard is invisible because
+   both sides were correct, so neither reviewer sees a wrong claim to
+   object to. The row merges clean and one lane's ruling is simply
+   gone.
+
+   Where a family is worked by concurrent lanes, satisfy the rule in
+   whichever branch the prefix grammar allows. **Ask the grammar
+   itself rather than judging by appearance** — pass the candidate
+   Family cells to the same script CI gates with:
+
+   ```bash
+   python3 scripts/ci/check_index_prefix_uniqueness.py \
+     --prefix '**XX-A1…XX-A9**' '**XX-B1…XX-B9**' \
+     --replace '<the row being split, quoted exactly as §2 holds it>'
+   ```
+
+   `--replace` is not optional when splitting: the row you are
+   replacing still holds the prefix its successors want, so without it
+   the tool can only approve a split **after** that split has landed.
+   Quote the removed row's Family cell byte-exactly — a cell matching
+   no §2 row is refused rather than silently ignored.
+
+   Exit **0** — distinct among themselves and clear of the registry,
+   branch (a) is available. Exit **1** — either the candidates collapse
+   into one prefix (branch (b); do not split) or they are distinct but
+   one wants a prefix another family holds (rename it, or name that row
+   with `--replace`); the output says which. Exit **2** — the question
+   could not be asked. It is the gate's own parser reading the gate's
+   own registry, so the answer here and the answer CI enforces cannot
+   drift apart.
+
+   - **(a) One row per lane-owned sub-family**, when the sub-families
+     parse to distinct prefixes. `PWD-T`/`PWD-B`/`PWD-I`/`PWD-A`/
+     `PWD-E` do, because the cluster letter lands in the
+     hyphen-letter infix — the same mechanism that lets `SP-` and
+     `SP-T` coexist. Round-level facts (pins, rename history,
+     cross-cluster totals) stay on a parent row; a cross-lane
+     aggregate is a **dated snapshot pointing at its authoritative
+     source**, never a second authority.
+   - **(b) One row, per-lane status in the owning doc**, when they do
+     not. Every `C2-R<n>` round collapses to the same `C2-R` prefix,
+     and widening the grammar to separate them would make `SP-T1` and
+     `SP-T2` read as different families — trading away the
+     discrimination the uniqueness check exists to provide. Splitting
+     there buys uniformity by breaking a working gate; the row keeps
+     one status cell that points at the round docs.
+
+   This governs concurrent **edits to one row**. It does not stop a
+   lane reading another family's row, and it is not a claim that
+   families are independent in substance: sub-families routinely build
+   on each other's rulings. It separates who may *write* a status
+   cell, nothing more.
+
+7. **A row that does not render does not exist.** **Every** row of
+   **every** table in the index must match its own table's header —
+   not just the §2 registry. The defect that prompted this rule
+   appeared in the two-column *documents* table as well, so a rule
+   scoped to registry rows would exempt one of the cases it exists to
+   catch, and the gate is file-wide for the same reason. GFM splits cells on
+   unescaped pipes *before* inline parsing — a pipe inside a code
+   span still splits, and only `\|` is literal — then silently drops
+   any surplus cell and blanks any missing one. Content past the
+   column count is registered in source, invisible on the page, and
+   therefore unmaintained: three rows carried 5,455 such characters,
+   including the record that two ruled decisions had been superseded
+   and a status that went stale precisely because nobody could see
+   it. Escape a literal pipe; never let a row outgrow its header.
+
 ## Enforcement
 
-Review-borne and agent halt-condition **only** — no CI backstop
-exists today; nothing in `.github/workflows/` checks the registry or
-lints doc tokens. A minimal lint is feasible (registry-prefix
-uniqueness; diff-scoped bare-token detection in `docs/design/*.md`)
-and is carried by the stale-status fix pass that the index's
-known-stale-statuses ledger already mandates. Until that lands, do
-not treat these rules as automatically enforced.
+Partly CI-enforced, partly review-borne — know which.
+
+**Enforced in `.github/workflows/docs-gates.yml`:** rule 1's prefix
+uniqueness (`check_index_prefix_uniqueness.py`) and rule 7's table
+shape (`check_index_table_shape.py`, file-wide and escape-aware).
+Both assert their own subject per rule 47.
+
+**Not enforced — review-borne and agent halt-condition only:** rules
+2, 3, 4, 5 and 6. No gate lints bare phase tokens, checks that a
+landed item updated its row, or knows which lane owns a row; rule 6
+in particular is a *design-time* discipline whose violation looks
+like a clean merge, so nothing downstream can detect it. Do not
+treat these as automatically enforced.
 
 ## Worked example
 
@@ -117,6 +194,8 @@ cites its closing edit instead: `(decision-anchored: closed by
 
 ## Related rules
 
+- **`95-documentation-lifecycle.mdc`** — document classes, archive-or-contract,
+  FOLLOWUPS one-liners, CHANGELOG scope; the index is the map, not a ledger.
 - **`91-documentation-after-plans.mdc`** — the doc-update task that
   carries index maintenance.
 - **`05-system-thinking.mdc`** — specification first; the index row

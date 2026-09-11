@@ -150,9 +150,6 @@ namespace tools
    *  (ensure-directory-exists): greenspun's tenth rule in action!
    */
   bool create_directories_if_necessary(const std::string& path);
-  /*! \brief std::rename wrapper for nix and something strange for windows.
-   */
-  std::error_code replace_file(const std::string& old_name, const std::string& new_name);
 
   bool sanitize_locale();
 

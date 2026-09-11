@@ -39,6 +39,7 @@
 
 #include <boost/program_options.hpp>
 #include <optional>
+#include <memory>
 #include <boost/serialization/vector.hpp>
 
 #include <boost/serialization/optional.hpp>
@@ -55,6 +56,7 @@
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "cryptonote_basic/block_ingest.h"
 #include "cryptonote_protocol/enums.h"
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "misc_language.h"
@@ -116,10 +118,19 @@ struct event_visitor_settings
 
   enum settings
   {
+    // `set_txs_do_not_relay` was here. Removed with tests/core_tests/tx_pool.cpp,
+    // its sole user, because `relay_method::none` means "received via RPC with
+    // do_not_relay set" and Shekyl has no such RPC.
+    //
+    // The remaining bits are renumbered rather than left with a gap. These
+    // masks are boost-serialized, but only into a stream that `ctest` generates
+    // and plays back in ONE process (`--generate_and_play_test_data`); no
+    // corpus is committed, and `test_event_entry` is a boost variant whose type
+    // indices shift whenever an event type is added. Reserving a bit here would
+    // claim a compatibility surface the surrounding format does not honour.
     set_txs_keeped_by_block = 1 << 0,
-    set_txs_do_not_relay = 1 << 1,
-    set_local_relay = 1 << 2,
-    set_txs_stem = 1 << 3
+    set_local_relay = 1 << 1,
+    set_txs_stem = 1 << 2
   };
 
   event_visitor_settings(int a_mask = 0)
@@ -182,6 +193,12 @@ private:
 };
 
 
+// The generator's curve-tree replica (defined in chaingen.cpp): the Rust
+// CurveTreeClient over shekyl-ffi, replaying the generator's own chain so every
+// constructed header carries the curve_tree_root the daemon checks at admission
+// (CEN-B5). Shared between generator copies; it reconciles by block hash.
+struct curve_tree_replica;
+
 class test_generator
 {
 public:
@@ -232,15 +249,25 @@ public:
     bf_tx_fees   = 1 << 9
   };
 
+  /// The transaction bodies a recorded block carries -- what the curve-tree
+  /// replica ingests when a later block is built on it. Kept beside
+  /// block_info rather than inside it: block_info is copied by the hundred
+  /// on every weight-window query and serialized, bodies are neither.
+  struct block_txs
+  {
+    cryptonote::transaction miner_tx;
+    std::vector<cryptonote::transaction> txs;
+  };
+
   test_generator(): m_events(nullptr) {}
-  test_generator(const test_generator &other): m_blocks_info(other.m_blocks_info), m_events(other.m_events), m_nettype(other.m_nettype) {}
+  test_generator(const test_generator &other): m_blocks_info(other.m_blocks_info), m_block_txs(other.m_block_txs), m_replica(other.m_replica), m_events(other.m_events), m_nettype(other.m_nettype) {}
   void get_block_chain(std::vector<block_info>& blockchain, const crypto::hash& head, size_t n) const;
   void get_last_n_block_weights(std::vector<size_t>& block_weights, const crypto::hash& head, size_t n) const;
   uint64_t get_already_generated_coins(const crypto::hash& blk_id) const;
   uint64_t get_already_generated_coins(const cryptonote::block& blk) const;
 
   void add_block(const cryptonote::block& blk, size_t tsx_size, std::vector<size_t>& block_weights, uint64_t already_generated_coins, uint64_t block_reward,
-    uint8_t hf_version = 1);
+    uint8_t hf_version = 1, const std::vector<cryptonote::transaction>& txs = std::vector<cryptonote::transaction>());
   bool construct_block(cryptonote::block& blk, uint64_t height, const crypto::hash& prev_id,
     const cryptonote::account_base& miner_acc, uint64_t timestamp, uint64_t already_generated_coins,
     std::vector<size_t>& block_weights, const std::list<cryptonote::transaction>& tx_list,
@@ -259,13 +286,31 @@ public:
   bool construct_block_manually_tx(cryptonote::block& blk, const cryptonote::block& prev_block,
     const cryptonote::account_base& miner_acc, const std::vector<crypto::hash>& tx_hashes, size_t txs_size);
   void fill_nonce(cryptonote::block& blk, const cryptonote::difficulty_type& diffic, uint64_t height);
+  /// Fill blk.curve_tree_root with the root a block on blk.prev_id commits to:
+  /// the curve-tree state after every ancestor connected, computed by replaying
+  /// the ancestors' recorded transactions through the replica. An unknown
+  /// prev_id (a test's deliberate bad parent) gets the empty-tree root; any
+  /// replica failure throws -- a substituted root would only surface as a
+  /// rejected block ten or sixty blocks later.
+  void fill_curve_tree_root(cryptonote::block& blk);
   void set_events(const std::vector<test_event_entry> * events) { m_events = events; }
   void set_network_type(const cryptonote::network_type nettype) { m_nettype = nettype; }
 
 private:
+  /// Transaction bodies for `tx_hashes` a manually constructed block names,
+  /// looked up among the events (transaction / vector<transaction> entries);
+  /// a hash with no body is warned about and omitted.
+  std::vector<cryptonote::transaction> find_txs_in_events(const std::vector<crypto::hash>& tx_hashes) const;
+
   std::unordered_map<crypto::hash, block_info> m_blocks_info;
+  std::unordered_map<crypto::hash, block_txs> m_block_txs;
+  std::shared_ptr<curve_tree_replica> m_replica;
   const std::vector<test_event_entry> * m_events;
-  cryptonote::network_type m_nettype;
+  // The harness's network. Defaulted, not left indeterminate: fill_nonce
+  // reads it whenever a block's difficulty exceeds 1 and the events pointer
+  // is set (MAKE_GENESIS_BLOCK sets it), and every generator that never
+  // called set_network_type used to hand an uninitialized enum there.
+  cryptonote::network_type m_nettype = cryptonote::FAKECHAIN;
 
   friend class boost::serialization::access;
 
@@ -305,10 +350,10 @@ struct output_index {
   bool is_coin_base;
   bool spent;
   bool rct;
-  rct::key comm;
+  ct::key comm;
   const cryptonote::block *p_blk;
   const cryptonote::transaction *p_tx;
-  rct::key v3_mask{};
+  ct::key v3_mask{};
   crypto::secret_key v3_ho{};
   bool v3_recovered = false;
 
@@ -329,13 +374,13 @@ struct output_index {
 
   void set_rct(bool arct) {
     rct = arct;
-    if (rct && p_tx->rct_signatures.outPk.size() > out_no)
-      comm = p_tx->rct_signatures.outPk[out_no].mask;
+    if (rct && p_tx->ct_signatures.outPk.size() > out_no)
+      comm = p_tx->ct_signatures.outPk[out_no].mask;
     else
-      comm = rct::zeroCommit(amount);
+      comm = ct::zeroCommit(amount);
   }
 
-  rct::key commitment() const {
+  ct::key commitment() const {
     return comm;
   }
 
@@ -364,7 +409,7 @@ struct output_index {
   }
 };
 
-typedef std::tuple<uint64_t, crypto::public_key, rct::key> get_outs_entry;
+typedef std::tuple<uint64_t, crypto::public_key, ct::key> get_outs_entry;
 typedef std::pair<crypto::hash, size_t> output_hasher;
 typedef boost::hash<output_hasher> output_hasher_hasher;
 typedef std::map<uint64_t, std::vector<size_t> > map_output_t;
@@ -566,10 +611,6 @@ public:
     {
       m_tx_relay = cryptonote::relay_method::local;
     }
-    else if (settings.mask & event_visitor_settings::set_txs_do_not_relay)
-    {
-      m_tx_relay = cryptonote::relay_method::none;
-    }
     else if (settings.mask & event_visitor_settings::set_txs_stem)
     {
       m_tx_relay = cryptonote::relay_method::stem;
@@ -588,7 +629,7 @@ public:
 
     cryptonote::tx_verification_context tvc = AUTO_VAL_INIT(tvc);
     size_t pool_size = m_c.get_pool_transactions_count();
-    m_c.handle_incoming_tx(t_serializable_object_to_blob(tx), tvc, m_tx_relay, false);
+    m_c.handle_incoming_tx(t_serializable_object_to_blob(tx), tvc, m_tx_relay, false, epee::net_utils::zone::invalid);
     bool tx_added = pool_size + 1 == m_c.get_pool_transactions_count();
     bool r = m_validator.check_tx_verification_context(tvc, tx_added, m_ev_index, tx);
     CHECK_AND_NO_ASSERT_MES(r, false, "tx verification context check failed");
@@ -609,7 +650,7 @@ public:
     }
     size_t pool_size = m_c.get_pool_transactions_count();
     for (size_t i = 0; i < tx_blobs.size(); ++i)
-      m_c.handle_incoming_tx(tx_blobs[i], tvcs[i], m_tx_relay, false);
+      m_c.handle_incoming_tx(tx_blobs[i], tvcs[i], m_tx_relay, false, epee::net_utils::zone::invalid);
     size_t tx_added = m_c.get_pool_transactions_count() - pool_size;
     bool r = m_validator.check_tx_verification_context_array(tvcs, tx_added, m_ev_index, txs);
     CHECK_AND_NO_ASSERT_MES(r, false, "tx verification context check failed");
@@ -633,7 +674,7 @@ public:
       m_c.cleanup_handle_incoming_blocks();
     }
     else
-      bvc.m_verifivation_failed = true;
+      cryptonote::reject_block_internal(bvc);
     bool r = m_validator.check_block_verification_context(bvc, m_ev_index, b);
     CHECK_AND_NO_ASSERT_MES(r, false, "block verification context check failed");
     return r;
@@ -667,7 +708,7 @@ public:
       m_c.cleanup_handle_incoming_blocks();
     }
     else
-      bvc.m_verifivation_failed = true;
+      cryptonote::reject_block_internal(bvc);
 
     cryptonote::block blk;
     binary_archive<false> ba{epee::strspan<std::uint8_t>(sr_block.data)};
@@ -687,7 +728,7 @@ public:
 
     cryptonote::tx_verification_context tvc = AUTO_VAL_INIT(tvc);
     size_t pool_size = m_c.get_pool_transactions_count();
-    m_c.handle_incoming_tx(sr_tx.data, tvc, m_tx_relay, false);
+    m_c.handle_incoming_tx(sr_tx.data, tvc, m_tx_relay, false, epee::net_utils::zone::invalid);
     bool tx_added = pool_size + 1 == m_c.get_pool_transactions_count();
 
     cryptonote::transaction tx;
@@ -872,6 +913,7 @@ inline bool do_replay_file(const std::string& filename)
 
 #define MAKE_GENESIS_BLOCK(VEC_EVENTS, BLK_NAME, MINER_ACC, TS)                       \
   test_generator generator;                                                           \
+  generator.set_events(&VEC_EVENTS);                                                  \
   cryptonote::block BLK_NAME;                                                           \
   generator.construct_block(BLK_NAME, MINER_ACC, TS);                                 \
   VEC_EVENTS.push_back(BLK_NAME);
@@ -937,7 +979,7 @@ inline bool do_replay_file(const std::string& filename)
 
 #define MAKE_TX_MIX_RCT(VEC_EVENTS, TX_NAME, FROM, TO, AMOUNT, NMIX, HEAD)                       \
   cryptonote::transaction TX_NAME;                                                             \
-  construct_tx_to_key(VEC_EVENTS, TX_NAME, HEAD, FROM, TO, AMOUNT, TESTS_DEFAULT_FEE, NMIX, true, rct::RangeProofPaddedBulletproof); \
+  construct_tx_to_key(VEC_EVENTS, TX_NAME, HEAD, FROM, TO, AMOUNT, TESTS_DEFAULT_FEE, NMIX, true, ct::RangeProofPaddedBulletproof); \
   VEC_EVENTS.push_back(TX_NAME);
 
 #define MAKE_TX(VEC_EVENTS, TX_NAME, FROM, TO, AMOUNT, HEAD) MAKE_TX_MIX(VEC_EVENTS, TX_NAME, FROM, TO, AMOUNT, 0, HEAD)
@@ -951,7 +993,7 @@ inline bool do_replay_file(const std::string& filename)
   }
 
 #define MAKE_TX_MIX_LIST_RCT(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD) \
-        MAKE_TX_MIX_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD, rct::RangeProofPaddedBulletproof, 4)
+        MAKE_TX_MIX_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD, ct::RangeProofPaddedBulletproof, 4)
 #define MAKE_TX_MIX_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, AMOUNT, NMIX, HEAD, RCT_TYPE, BP_VER)  \
   {                                                                                      \
     cryptonote::transaction t;                                                           \
@@ -961,7 +1003,7 @@ inline bool do_replay_file(const std::string& filename)
   }
 
 #define MAKE_TX_MIX_DEST_LIST_RCT(VEC_EVENTS, SET_NAME, FROM, TO, NMIX, HEAD)            \
-        MAKE_TX_MIX_DEST_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, NMIX, HEAD, rct::RangeProofPaddedBulletproof, 4)
+        MAKE_TX_MIX_DEST_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, NMIX, HEAD, ct::RangeProofPaddedBulletproof, 4)
 #define MAKE_TX_MIX_DEST_LIST_RCT_EX(VEC_EVENTS, SET_NAME, FROM, TO, NMIX, HEAD, RCT_TYPE, BP_VER)  \
   {                                                                                      \
     cryptonote::transaction t;                                                           \

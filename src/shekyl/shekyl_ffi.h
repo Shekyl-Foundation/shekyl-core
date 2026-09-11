@@ -3,16 +3,20 @@
 // All rights reserved.
 
 /// @file shekyl_ffi.h
-/// @brief C declarations for the Rust shekyl-ffi crate (libshekyl_ffi.a).
+/// @brief C declarations for the Rust FFI surface.
 ///
-/// This header is the sole FFI boundary between C++ and Rust in the Shekyl
-/// codebase. Every function here has a corresponding `#[no_mangle] pub extern "C"`
-/// in `rust/shekyl-ffi/src/lib.rs`.
+/// This header is the C ABI between C++ and Rust. Most functions are
+/// exported from `rust/shekyl-ffi` (`libshekyl_ffi.a`). Daemon-only
+/// symbols (`shekyl_daemon_rpc_*`, `shekyl_daemon_ctl_*`) are exported
+/// from `rust/shekyl-daemon-rpc` and reach C++ through the daemon image
+/// (`libshekyl_daemon_image.a`; see `cmake/BuildRust.cmake`).
 ///
 /// ## Linking
 ///
-/// Link against `libshekyl_ffi.a` (static archive produced by `cargo build`).
-/// The CMake integration is in `cmake/BuildRust.cmake`.
+/// Wallet/tool binaries link `libshekyl_ffi.a`. `shekyld` and daemon
+/// unit tests link `libshekyl_daemon_image.a` (shekyl-ffi +
+/// shekyl-daemon-rpc, one `tracing-core` dispatcher). Never link both
+/// archives on one line.
 ///
 /// ## Memory model
 ///
@@ -39,11 +43,6 @@
 #include <cstddef>
 #include <cstdint>
 
-/// Witness header size for the legacy FCMP++ prove path (shekyl_fcmp_prove).
-/// Used only by genRctFcmpPlusPlus in core_tests/chaingen.cpp.
-/// Production signing uses shekyl_sign_fcmp_transaction (collapsed path).
-#define SHEKYL_PROVE_WITNESS_HEADER_BYTES 256
-
 /// m_pqc_public_key canonical layout: X25519_pub[32] || ML-KEM-768_ek[1184].
 #define SHEKYL_PQC_PUBLIC_KEY_BYTES 1216
 #define SHEKYL_X25519_PK_BYTES 32
@@ -54,12 +53,34 @@
 #define SHEKYL_MASTER_SEED_BYTES 64
 /// Raw 32-byte seed accepted by testnet/fakechain generate flows.
 #define SHEKYL_RAW_SEED_BYTES 32
-/// Canonical 65-byte classical address body (`version || spend_pk || view_pk`)
-/// used by wallet-file AAD and by `shekyl_account_public_address_build` /
-/// `_check`. Must match Rust `account::CLASSICAL_ADDRESS_BYTES` exactly; a
-/// drift here corrupts every later field of `ShekylAllKeysBlob` because the
-/// FFI is declared `#[repr(C)]` with byte-aligned `[u8; N]` arrays.
-#define SHEKYL_CLASSICAL_ADDRESS_BYTES 65
+/// Full classical address payload in `ShekylAllKeysBlob.classical_address_bytes`
+/// and Rust `account::CLASSICAL_ADDRESS_BYTES`:
+/// `version || spend_pk || view_pk || msg_sign_pk[48]` (113).
+/// Must match the Rust constant exactly; a drift corrupts every later
+/// field of the `#[repr(C)]` blob.
+///
+/// This is the FULL field. The `version || spend || view` prefix alone is
+/// `SHEKYL_CLASSICAL_ADDRESS_PREFIX_BYTES` (65); the difference
+/// between them is `msg_sign_pk`, which is why the two are pinned together.
+#define SHEKYL_CLASSICAL_ADDRESS_BYTES 113
+
+/// SLH-DSA-192s message-signing public key — the fourth classical field.
+/// Matches Rust `shekyl_address::MSG_SIGN_PK_LEN`.
+#define SHEKYL_MSG_SIGN_PK_BYTES 48
+
+/// The classical address PREFIX: version(1) || spend(32) || view(32) = 65.
+/// Equivalently, the byte offset of `msg_sign_pk` inside the `#[repr(C)]`
+/// blob's classical address field, which is how its one consumer uses it —
+/// `populate_account_from_blob` (`cryptonote_basic/account.cpp`).
+///
+/// The `static_assert` below is what makes that offset arithmetic safe: it
+/// pins the full field as prefix + `msg_sign_pk`, so a drift in either
+/// constant fails the build rather than silently shifting the read.
+#define SHEKYL_CLASSICAL_ADDRESS_PREFIX_BYTES 65
+static_assert(
+    SHEKYL_CLASSICAL_ADDRESS_BYTES
+        == SHEKYL_CLASSICAL_ADDRESS_PREFIX_BYTES + SHEKYL_MSG_SIGN_PK_BYTES,
+    "blob classical bytes are the classical prefix plus msg_sign_pk");
 
 /// BIP-39 inputs: 32-byte entropy, 24 words, 64-byte PBKDF2-HMAC-SHA512 output,
 /// max mnemonic string length (24 × longest English word "mountain"=8 + 23
@@ -143,12 +164,21 @@ struct ShekylPqcCanonicalLens {
 /// Return the canonical PQC multisig wire lengths (see ShekylPqcCanonicalLens).
 ShekylPqcCanonicalLens shekyl_pqc_canonical_lens();
 
-/// Generate a hybrid ML-DSA + Ed25519 keypair.
-/// Free both buffers with shekyl_buffer_free. Wipe secret_key after use.
+/// TEST-SUPPORT ONLY (F-7): generates a fresh, NON-derived hybrid keypair for
+/// the FFI test suite. Real wallets derive their keys — do NOT call from
+/// production code. Free both buffers with shekyl_buffer_free; wipe secret_key.
 ShekylPqcKeypair shekyl_pqc_keypair_generate();
 
-/// Sign a message with a hybrid ML-DSA secret key.
-/// secret_key_ptr/len: secret key bytes from shekyl_pqc_keypair_generate.
+/// Sign a message with a canonical-encoded hybrid (Ed25519 + ML-DSA-65) secret
+/// key on the **tx per-input PQC auth surface**: the Rust side binds the
+/// surface domain (SCHEME_DOMAIN_PQC_AUTH_TX, SA-R-2) internally — C++ never
+/// carries a domain string — so signatures from this export verify ONLY as tx
+/// per-input auth (shekyl_pqc_verify scheme 1). Do not reach for it from any
+/// other signing surface; each surface gets its own export with its own
+/// Rust-owned domain (see shekyl_pqc_sign_multisig_participant).
+/// secret_key_ptr/len: canonical hybrid secret key bytes. Production keys are
+/// wallet-derived and Rust-held (rule 36) — production C++ never holds one;
+/// tests source keys from the TEST-SUPPORT shekyl_pqc_keypair_generate.
 /// Returns signature blob. Caller frees with shekyl_buffer_free.
 ShekylPqcSignatureResult shekyl_pqc_sign(
     const uint8_t* secret_key_ptr,
@@ -156,7 +186,24 @@ ShekylPqcSignatureResult shekyl_pqc_sign(
     const uint8_t* message_ptr,
     size_t message_len);
 
-/// Verify a hybrid PQC signature.
+/// TEST-SUPPORT ONLY (F-7): sign a message as a multisig participant (scheme 2),
+/// under the multisig-specific domain. A participant signature is NOT
+/// interchangeable with a shekyl_pqc_sign (single-signer) signature over the
+/// same message. Use this — not shekyl_pqc_sign — to assemble multisig
+/// containers in tests. Production multisig participant signing is unbuilt; do
+/// not call from production code. Returns signature blob; free with
+/// shekyl_buffer_free.
+ShekylPqcSignatureResult shekyl_pqc_sign_multisig_participant(
+    const uint8_t* secret_key_ptr,
+    size_t secret_key_len,
+    const uint8_t* message_ptr,
+    size_t message_len);
+
+/// Verify a hybrid PQC signature. The scheme-level domain is Rust-owned
+/// (SA-R-2): scheme_id 1 verifies under the tx per-input auth surface
+/// (SCHEME_DOMAIN_PQC_AUTH_TX — the shekyl_pqc_sign twin), scheme_id 2 under
+/// the multisig participant domain (the shekyl_pqc_sign_multisig_participant
+/// twin). C++ passes no domain string.
 ///
 /// Returns 0 on success, or a nonzero PqcVerifyError discriminant on failure:
 ///   1  = SchemeMismatch         5  = ThresholdMismatch     (9 retired — see below)
@@ -177,7 +224,6 @@ uint8_t shekyl_pqc_verify(
     const uint8_t* message,
     size_t message_len);
 
-/// Verify a hybrid PQC signature with optional group ID binding.
 /// Compute Keccak-256 hash of data_ptr[0..data_len].
 /// out_ptr: 32 writable bytes for the hash output.
 bool shekyl_cn_fast_hash(
@@ -192,21 +238,28 @@ bool shekyl_tree_hash(
     size_t count,
     uint8_t* out_ptr);
 
-/// Calculate the adaptive release multiplier based on transaction volume.
-/// Returns multiplier in fixed-point (1e18 = 1.0).
+/// Release multiplier from demand pacing:
+/// clamp(tx_volume / baseline, RELEASE_MIN, RELEASE_MAX), fixed-point
+/// SCALE. The volume operand crosses as the exact window
+/// (tx_count_sum, window_blocks) -- FL-R24: Rust forms
+/// tx_count_sum / (baseline * window_blocks) in one division; C++ counts and
+/// never divides (shekyl/tx_volume_window.h). Since FL-R12' the PAID
+/// composition applies this Rust-side inside shekyl_block_reward; this
+/// export remains for observability (RPC get_info's release_multiplier
+/// field).
 uint64_t shekyl_calc_release_multiplier(
-    uint64_t tx_volume_avg,
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
     uint64_t tx_volume_baseline,
     uint64_t release_min,
     uint64_t release_max);
 
-uint64_t shekyl_apply_release_multiplier(
-    uint64_t base_reward,
-    uint64_t multiplier);
-
-/// Calculate fee burn percentage based on network metrics.
+/// Calculate fee burn percentage based on network metrics. Volume operand
+/// as for shekyl_calc_release_multiplier: the exact window
+/// (tx_count_sum, window_blocks), FL-R24.
 uint64_t shekyl_calc_burn_pct(
-    uint64_t tx_volume,
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
     uint64_t tx_baseline,
     uint64_t circulating_supply,
     uint64_t total_supply,
@@ -257,6 +310,79 @@ uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
+
+/// The quantized fee-correction scalar C_q (FL-R12' round-8 amendment,
+/// whole-scalar form) with pow2-boundary hysteresis. sigma_scaled and
+/// burn_pct_scaled are the SAME shekyl_calc_emission_share /
+/// shekyl_calc_burn_pct outputs validation computes at this state.
+/// prev_cq_scaled = 0 means no held value, and it is what the daemon
+/// passes today: the band is a capability of this export, not yet a
+/// property of the served rate. FL-R3 is RULED -- the band stays and is
+/// restored -- pending the grid-anchored previous value's own round.
+uint64_t shekyl_fee_correction_quantized(
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
+    uint64_t sigma_scaled,
+    uint64_t burn_pct_scaled,
+    uint64_t prev_cq_scaled);
+
+/// The corrected four-slot fee ladder (FL-R17 three tiers + the RK-5 wire
+/// bridge slot; Fh main arm unconditional). Writes exactly four values;
+/// the CALLER clamps fees[0] at the relay floor. Returns:
+///   0  - the four values were written;
+///  -1  - null out_fees, nothing written;
+///  -2  - the scalars cannot form the rungs' products in 128 bits,
+///        nothing written. No chain state reaches this; it exists so a
+///        corrupt or synthetic caller gets a status instead of an abort
+///        across the ABI (rule 40).
+int32_t shekyl_corrected_fee_ladder(
+    uint64_t base_reward,
+    uint64_t mnw,
+    uint64_t mlw,
+    uint64_t full_reward_zone,
+    uint64_t ref_tx_weight,
+    uint64_t c_q,
+    uint64_t *out_fees);
+
+/// shekyl_block_reward status codes. Rejection is POSITIVE, caller misuse
+/// NEGATIVE, so "the block is invalid" is never confused with "the call was".
+#define SHEKYL_BLOCK_REWARD_OK             0
+#define SHEKYL_BLOCK_REWARD_BLOCK_TOO_BIG  1
+#define SHEKYL_BLOCK_REWARD_INVALID       (-1)
+
+/// The PAID block reward — the one owner of the FL-R12' signed composition
+/// max(M_r*curve(remaining), TAIL) * penalty(x): release multiplier on the
+/// curve, tail floor on the modulated result, quadratic penalty applied LAST
+/// (floors belong to emission; penalties apply to the paid quantity). The
+/// only fallible entry in the economics family: BLOCK_TOO_BIG is a consensus
+/// rejection, not an internal error. The limit is INCLUSIVE — a block at
+/// exactly 2 * effective median is accepted and earns zero; only
+/// current_block_weight > 2 * effective median is rejected. out_weight_limit
+/// receives that doubled effective median on EVERY path so a caller can
+/// report the limit it was rejected against without recomputing the clamp.
+/// A past-asymptote already_generated_coins is a legitimate perpetual-tail
+/// state, not an error. INVALID covers a null out-pointer and an input
+/// beyond the exact arithmetic domain (medians around 2^43 and above, where
+/// the product leaves 128 bits) — fail-closed rather than wrapping.
+/// Neither out-pointer may be null.
+int32_t shekyl_block_reward(
+    uint64_t median_weight,
+    uint64_t current_block_weight,
+    uint64_t already_generated_coins,
+    uint64_t full_reward_zone,
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
+    uint64_t *out_reward,
+    uint64_t *out_weight_limit);
+
+
+/// Advance already_generated_coins by a block reward. Under FL-R12' the
+/// accumulator passes the emission-curve asymptote (perpetual tail); the
+/// only saturation is the u64 rail (FL-R14). One entry point for both
+/// C++ connect paths.
+uint64_t shekyl_advance_already_generated(
+    uint64_t already_generated_coins,
+    uint64_t block_reward);
 
 /// Calculate emission share (Component 4) based on chain age and decay curve.
 uint64_t shekyl_calc_emission_share(
@@ -332,35 +458,6 @@ uint8_t shekyl_derive_view_tag_prefilter(
     const uint8_t* ml_kem_ss_ptr,
     uint64_t output_index);
 
-/// Expected proof size for given inputs and tree depth.
-size_t shekyl_fcmp_proof_len(uint32_t num_inputs, uint8_t tree_depth);
-
-/// FCMP++ prove result (proof blob + pseudo-outs).
-struct ShekylFcmpProveResult {
-    ShekylBuffer proof;
-    ShekylBuffer pseudo_outs;    // num_inputs * 32 bytes (C_tilde compressed)
-    bool success;
-};
-
-/// Construct FCMP++ proof from variable-length witness blob.
-/// witness_ptr / witness_len: serialized witness for all inputs.
-/// Per input: fixed header (256 bytes) + leaf chunk + C1/C2 branch layers.
-/// Header: [O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32]
-///   y = SAL output-key secret (0 for legacy one-time addresses)
-///   z = Pedersen commitment mask
-///   a = desired pseudo-out blinding factor
-/// See shekyl-ffi crate docs for the full wire format specification.
-///
-/// tree_depth: upstream library `layers` count (= LMDB depth + 1).
-/// C++ callers must convert: layers = lmdb_depth + 1.
-ShekylFcmpProveResult shekyl_fcmp_prove(
-    const uint8_t* witness_ptr,
-    size_t witness_len,
-    uint32_t num_inputs,
-    const uint8_t* tree_root_ptr,
-    uint8_t tree_depth,
-    const uint8_t* signable_tx_hash_ptr);
-
 /// Verify FCMP++ proof with batch verification.
 ///
 /// Returns 0 on success, or a nonzero VerifyError discriminant (1-7) on failure:
@@ -388,8 +485,9 @@ uint8_t shekyl_fcmp_verify(
 
 /// Verify a membership-only FCMP++ proof (reward-emission backing; NO key image).
 /// Mirror of shekyl_fcmp_verify without the key-image array. Anti-replay for this
-/// path is the emission per-epoch dedup, not a key image; the ML-DSA leaf gate is
-/// shekyl_emission_hybrid_auth_verify. po_count must equal pqc_hash_count.
+/// path is the emission per-epoch dedup, not a key image; the hybrid leaf-gated
+/// auth check is step 8 inside the coarse shekyl_emission_vin_verify call.
+/// po_count must equal pqc_hash_count.
 /// po_count must be in 1..=MAX_INPUTS (= 8); 0 or larger is rejected up front.
 /// Returns 0 on success, else the VerifyError discriminant:
 ///   1 = Deserialization (also: null ptr; po_count == 0 or > MAX_INPUTS; po_count*32 usize overflow)
@@ -407,35 +505,6 @@ uint8_t shekyl_fcmp_membership_only_verify(
     const uint8_t* tree_root_ptr,
     uint8_t tree_depth,
     const uint8_t* signable_tx_hash_ptr);
-
-/// Reward-emission hybrid vin-auth verify (PR-E1; the C-1 hard-gate core). C-1 calls
-/// this once per auth (Auth-B backing, Auth-P pseudonym).
-///   (1) recompute hash_pqc_public_key(pubkey) and require equality with the in-circuit
-///       committed leaf_hash (binds the auth to the proven leaf, gate-6 §9.6);
-///   (2) verify the HYBRID (Ed25519 + ML-DSA-65) signature over msg.
-/// The auth is hybrid, matching every other signature in the system — NOT ML-DSA-only.
-/// Ratified for defense-in-depth against a classical break of ML-DSA-65 (Auth-P has no
-/// membership-proof classical fallback). See REWARD_EMISSION_VIN_PLAN.md R1.A(2) retraction.
-/// pubkey_ptr: canonical hybrid public key bytes. sig_ptr: canonical hybrid
-/// signature bytes. leaf_hash_ptr: 32-byte in-circuit committed leaf hash.
-/// pubkey_len / sig_len MUST equal the canonical hybrid pubkey / signature lengths — a
-/// non-canonical length is rejected UP FRONT (before any pointer is read) as PubkeyDeser (2) /
-/// SigDeser (3), NOT NullPtr. Pass the exact canonical byte counts, not a buffer capacity.
-/// LEAF-HASH INPUT — do not get this wrong: despite the pqc_pk naming, the leaf hash is
-/// hash_pqc_public_key over the FULL canonical hybrid pubkey bytes (Ed25519 || ML-DSA-65),
-/// exactly what curve-tree leaves commit (derivation.rs::derive_pqc_leaf_hash). Hashing only
-/// the ML-DSA component yields a different leaf_hash and systematic LeafHashMismatch (code 4).
-/// Returns 0 on success, else:
-///   1 = NullPtr   2 = PubkeyDeser   3 = SigDeser
-///   4 = LeafHashMismatch   5 = Verify (signature did not verify).
-uint8_t shekyl_emission_hybrid_auth_verify(
-    const uint8_t* pubkey_ptr,
-    size_t pubkey_len,
-    const uint8_t* msg_ptr,
-    size_t msg_len,
-    const uint8_t* sig_ptr,
-    size_t sig_len,
-    const uint8_t* leaf_hash_ptr);
 
 /// Convert raw output tuples into serialized 4-scalar leaves.
 ShekylBuffer shekyl_fcmp_outputs_to_leaves(
@@ -483,10 +552,16 @@ bool shekyl_kem_decapsulate(
 
 /// Encode Shekyl Bech32m address. Returns UTF-8 string in ShekylBuffer.
 /// network: 0=mainnet, 1=testnet, 2=stagenet.
+/// msg_sign_pk_ptr: 48 bytes (SLH-DSA-192s message-signing public key,
+/// the fourth classical field since the fork-(ii) layout). REQUIRED —
+/// null returns a null buffer, because no valid address exists without
+/// it. Callers holding only an `account_public_address` (no msg_sign_pk)
+/// cannot re-encode; live daemon paths carry the original address string.
 ShekylBuffer shekyl_address_encode(
     uint8_t network,
     const uint8_t* spend_key_ptr,
     const uint8_t* view_key_ptr,
+    const uint8_t* msg_sign_pk_ptr,
     const uint8_t* ml_kem_ek_ptr,
     size_t ml_kem_ek_len);
 
@@ -526,24 +601,6 @@ bool shekyl_decode_blob(
     size_t* data_len_out);
 
 // ─── Output Construction / Scanning / PQC Signing ────────────────────────────
-
-/// Typed struct for FCMP++ prover inputs (replaces hand-counted memcpy offsets).
-struct ProveInputFields {
-    uint8_t output_key[32];
-    uint8_t key_image_gen[32];
-    uint8_t commitment[32];
-    uint8_t h_pqc[32];
-    uint8_t spend_key_x[32];
-    uint8_t spend_key_y[32];
-    uint8_t commitment_mask[32];
-    uint8_t pseudo_out_blind[32];
-};
-
-/// Build the 256-byte witness header from a typed ProveInputFields.
-/// out_buf must point to at least 256 writable bytes.
-bool shekyl_fcmp_build_witness_header(
-    const ProveInputFields* input,
-    uint8_t* out_buf);
 
 /// Result of construct_output.
 struct ShekylOutputData {
@@ -1148,6 +1205,122 @@ uint32_t shekyl_curve_tree_scalars_per_leaf();    // 4
 uint32_t shekyl_curve_tree_selene_chunk_width();  // 38 (LAYER_ONE_LEN)
 uint32_t shekyl_curve_tree_helios_chunk_width();  // 18 (LAYER_TWO_LEN)
 
+// ---------------------------------------------------------------------------
+// Curve-tree replica (rust/shekyl-ffi/src/curve_tree_replica_ffi.rs)
+//
+// An ephemeral Rust CurveTreeClient the C++ test generator
+// (tests/core_tests/chaingen.cpp) drives to compute the curve_tree_root every
+// generated block header must carry, now that the admission-time header-root
+// check (CEN-B5) runs on every nettype. The client's parity with the daemon's
+// store is KAT-pinned (shekyl-curve-tree/tests/recon_kat.rs); every generated
+// block that connects is a live parity check between the two.
+//
+// Contract: heights strictly consecutive from 0; transactions in block order,
+// coinbase first; `next_block_root` is the state at chain height tip + 1 (what
+// a block built on the tip commits to; the empty-tree sentinel for a fresh
+// replica). `rollback_to_fork(h)` keeps heights 0..=h. Every failure returns
+// false and logs; nothing is substituted. Test-generator surface only.
+// ---------------------------------------------------------------------------
+
+typedef struct ShekylCurveTreeReplica ShekylCurveTreeReplica;
+
+/// One output's leaf-relevant facts (vout[i] + ct_signatures.outPk[i].mask).
+/// Layout mirrors the Rust `#[repr(C)]` definition field-for-field.
+typedef struct ShekylCurveTreeReplicaOutput {
+    uint8_t output_key[32];
+    uint8_t commitment[32];
+    uint8_t has_commitment;  // 0 when i >= outPk.size() (leaf-ineligible)
+    uint8_t target_kind;     // 0 txout_to_tagged_key, 1 txout_to_key, 2 other
+} ShekylCurveTreeReplicaOutput;
+
+/// One transaction's leaf inputs in vout order.
+typedef struct ShekylCurveTreeReplicaTx {
+    uint8_t is_miner;
+    uint8_t has_leaf_hash_blob;      // tx_extra 0x07 tag present
+    const uint8_t* leaf_hash_blob;   // raw 0x07 payload, leaf_hash_blob_len bytes
+    size_t leaf_hash_blob_len;
+    const ShekylCurveTreeReplicaOutput* outputs;
+    size_t n_outputs;
+} ShekylCurveTreeReplicaTx;
+
+// Layout pins (rule 40): a drift here is silent -- wrong roots, a block
+// rejected sixty heights later, no pointer back. The Rust module carries the
+// same assertions.
+static_assert(offsetof(ShekylCurveTreeReplicaOutput, output_key) == 0, "replica output layout");
+static_assert(offsetof(ShekylCurveTreeReplicaOutput, commitment) == 32, "replica output layout");
+static_assert(offsetof(ShekylCurveTreeReplicaOutput, has_commitment) == 64, "replica output layout");
+static_assert(offsetof(ShekylCurveTreeReplicaOutput, target_kind) == 65, "replica output layout");
+static_assert(sizeof(ShekylCurveTreeReplicaOutput) == 66, "replica output layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, is_miner) == 0, "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, has_leaf_hash_blob) == 1, "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, leaf_hash_blob) == sizeof(void*), "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, leaf_hash_blob_len) == 2 * sizeof(void*), "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, outputs) == 3 * sizeof(void*), "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, n_outputs) == 4 * sizeof(void*), "replica tx layout");
+static_assert(sizeof(ShekylCurveTreeReplicaTx) == 5 * sizeof(void*), "replica tx layout");
+
+/// Create an empty replica; null if the ephemeral store cannot be opened.
+ShekylCurveTreeReplica* shekyl_curve_tree_replica_new(void);
+/// Destroy a replica (null tolerated).
+void shekyl_curve_tree_replica_free(ShekylCurveTreeReplica* replica);
+/// Ingest one block at `height` (tip + 1, or 0 for a fresh replica).
+bool shekyl_curve_tree_replica_ingest_block(
+    ShekylCurveTreeReplica* replica,
+    uint64_t height,
+    const ShekylCurveTreeReplicaTx* txs,
+    size_t n_txs);
+/// Keep heights 0..=fork_height. On the client's poisoned failure mode the
+/// handle is unusable and must be freed.
+bool shekyl_curve_tree_replica_rollback_to_fork(
+    ShekylCurveTreeReplica* replica,
+    uint64_t fork_height);
+/// Ingested tip height; false when nothing is ingested (out untouched).
+bool shekyl_curve_tree_replica_tip_height(
+    const ShekylCurveTreeReplica* replica,
+    uint64_t* out_height);
+/// The curve_tree_root a block built on the current tip must carry (32 bytes).
+bool shekyl_curve_tree_replica_next_block_root(
+    const ShekylCurveTreeReplica* replica,
+    uint8_t* out_root);
+
+// ---------------------------------------------------------------------------
+// tx_extra PQC field shape rule (rust/shekyl-ffi/src/tx_extra_ffi.rs;
+// GENESIS_TX_WIRE_FORMAT.md §9.6a as ruled 2026-09-05; census CEN-I19).
+//
+// With n = vout.size(): exactly one 0x06 KEM-ciphertext field of 1120·n bytes
+// and exactly one 0x07 leaf-hash field of 32·n bytes when n > 0; neither when
+// n == 0. The caller parses tx_extra itself and passes the byte length of
+// every 0x06 / 0x07 field it found, in order. Consensus: called from
+// core::check_tx_semantic and Blockchain::prevalidate_miner_transaction.
+// ---------------------------------------------------------------------------
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_OK                           0
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR                 1
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_PRESENT_WITHOUT_OUTPUTS  2
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_MISSING                  3
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_DUPLICATE                4
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_LENGTH                   5
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_PRESENT_WITHOUT_OUTPUTS 6
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_MISSING                 7
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE               8
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH                  9
+/// Buffer size for out_msg, NUL included.
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP                      256
+/// Returns SHEKYL_TX_EXTRA_PQC_SHAPE_OK or one of the codes above, and writes
+/// the rule's own sentence for that code into out_msg as a NUL-terminated
+/// string (empty on OK; truncated on a character boundary if it would not
+/// fit). The daemon LOGS THAT STRING rather than formatting a second one from
+/// the code: the rule's words belong to the crate that owns the rule, and two
+/// formatters agreeing is a promise nobody can keep. A null array pointer is
+/// accepted only with a zero count; out_msg may be null with out_msg_cap 0.
+int32_t shekyl_tx_extra_pqc_field_shape(
+    size_t n_outputs,
+    const size_t* kem_lens,
+    size_t kem_count,
+    const size_t* leaf_lens,
+    size_t leaf_count,
+    char* out_msg,
+    size_t out_msg_cap);
+
 /// Compose every curve-tree layer ABOVE the leaf layer, narrow from the leaf-chunk
 /// layer — the correct producer-side grow that telescopes to the reference root
 /// (fixes the depth-3 layer-2 incremental-deepening divergence: an in-place deepen
@@ -1274,18 +1447,27 @@ typedef struct ShekylDaemonRpcHandle ShekylDaemonRpcHandle;
 
 /// Start the Axum daemon RPC server on a dedicated Tokio runtime.
 /// rpc_server_ptr: pointer to an initialized core_rpc_server.
-/// bind_addr: "ip:port" C string.
+/// bind_host / bind_port: the operator's --rpc-bind-ip / --rpc-bind-port
+///   values as given.
+/// bind_host_v6: the operator's --rpc-bind-ipv6-address (or the restricted
+///   twin) when --rpc-use-ipv6 is set; NULL otherwise. Rust parses both
+///   families, classifies them, and binds a second socket on this handle
+///   when the v6 address is distinct — C++ does not start a second server.
+///   Wildcard and network binds are refused (RPC_TRANSPORT_POSTURE.md RT-1/RT-2).
+///   C++ composes and validates nothing.
 /// restricted: true to block admin-only endpoints.
 /// cors_origins: optional comma-separated allow-list from
 ///   --rpc-access-control-origins; NULL or empty = CORS default-deny.
 /// max_connections / max_connections_per_public_ip /
 ///   max_connections_per_private_ip: concurrent-connection caps enforced by the
-///   Rust listener (0 = unlimited), already cross-validated by
-///   core_rpc_server::init.
-/// Returns an opaque handle, or NULL on failure.
+///   Rust listener (0 = unlimited), validated there.
+/// Returns an opaque handle, or NULL on failure; parse/cap/bind refusals are
+/// logged with their reason by the Rust side before NULL is returned.
 ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
     void* rpc_server_ptr,
-    const char* bind_addr,
+    const char* bind_host,
+    const char* bind_port,
+    const char* bind_host_v6,
     bool restricted,
     const char* cors_origins,
     uint64_t max_connections,
@@ -1295,457 +1477,74 @@ ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
 /// Gracefully stop the Axum daemon RPC server and free the handle.
 void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
 
-// ─── Wallet file format v1 (WALLET_FILE_FORMAT_V1) ──────────────────────────
-//
-// Two-file envelope: `.wallet.keys` (seed block, write-once) + `.wallet`
-// (state block, frequently rewritten). Password-stretched via Argon2id;
-// content encrypted under XChaCha20-Poly1305 with a minimum-leak AAD model
-// (see docs/WALLET_FILE_FORMAT_V1.md for the byte-level spec). Every
-// variable-length output uses the probe-and-retry pattern:
-//   1. call with out_buf = nullptr, out_cap = 0 → out_len_required is set
-//      and the function returns false with out_error =
-//      SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL;
-//   2. allocate a buffer of at least out_len_required bytes; call again.
-// On real errors (wrong password, tampered file, unsupported mode) the
-// function returns false and out_error is set to a specific code;
-// out_buf is zeroed (to the extent it was touched) so observers see the
-// same write pattern on every failure path.
+// ---------------------------------------------------------------------------
+// shekyld control client (`shekyld <command>` → running daemon), the outbound
+// half of the daemon's HTTP surface. Plaintext loopback only — the daemon
+// registers neither --rpc-login nor --rpc-ssl* (docs/DAEMON_RPC_RUST.md).
+// Rust: shekyl-daemon-rpc/src/ctl_client.rs.
+// ---------------------------------------------------------------------------
 
-#define SHEKYL_WALLET_FILE_FORMAT_VERSION 0x01
-#define SHEKYL_WALLET_STATE_FILE_FORMAT_VERSION 0x01
+/// Request completed; the out pair holds the response body.
+#define SHEKYL_DAEMON_CTL_OK             0
+/// A required pointer was null, or a C string was not UTF-8.
+#define SHEKYL_DAEMON_CTL_ERR_NULL_PTR  -1
+/// `address` did not form a dialable http://host:port endpoint.
+#define SHEKYL_DAEMON_CTL_ERR_ENDPOINT  -2
+/// Connect, send, receive, or timeout failure; the out pair holds the reason.
+#define SHEKYL_DAEMON_CTL_ERR_TRANSPORT -3
+/// The runtime could not be started, or the caller is already inside one.
+#define SHEKYL_DAEMON_CTL_ERR_RUNTIME   -4
 
-#define SHEKYL_WALLET_KDF_ALGO_ARGON2ID 0x01
-#define SHEKYL_WALLET_KDF_DEFAULT_M_LOG2 0x10 /* 64 MiB */
-#define SHEKYL_WALLET_KDF_DEFAULT_T 0x03
-#define SHEKYL_WALLET_KDF_DEFAULT_P 0x01
+/// POST `body` to `http://<address>/<route>` and return the response body.
+/// address: "host:port" of the daemon RPC listener (no scheme).
+/// route: the path, leading '/' optional ("/json_rpc", "/getinfo", …); the
+///   content type follows the route (".bin" → binary, otherwise JSON).
+/// body / body_len: request body; body may be NULL iff body_len == 0.
+/// timeout_secs: per-request bound, connect through the last body byte.
+/// out_ptr / out_len: on SHEKYL_DAEMON_CTL_OK the response body; on any
+///   error that can write (every path except a NULL out_ptr/out_len) the
+///   UTF-8 reason. Always release with shekyl_daemon_ctl_free (a NULL/0
+///   pair is a no-op there).
+/// Returns one of the SHEKYL_DAEMON_CTL_* codes.
+int32_t shekyl_daemon_ctl_post(
+    const char* address,
+    const char* route,
+    const uint8_t* body,
+    size_t body_len,
+    uint64_t timeout_secs,
+    uint8_t** out_ptr,
+    size_t* out_len);
 
-#define SHEKYL_WALLET_CAPABILITY_FULL             0x01
-#define SHEKYL_WALLET_CAPABILITY_VIEW_ONLY        0x02
-#define SHEKYL_WALLET_CAPABILITY_HARDWARE_OFFLOAD 0x03
-#define SHEKYL_WALLET_CAPABILITY_RESERVED_MULTISIG 0x04
+/// Release a buffer returned through shekyl_daemon_ctl_post's out pair.
+void shekyl_daemon_ctl_free(uint8_t* ptr, size_t len);
 
-#define SHEKYL_WALLET_KEYS_WRAP_SALT_BYTES 16
-#define SHEKYL_WALLET_SEED_BLOCK_TAG_BYTES 16
-/// Canonical classical-address layout used by the wallet envelope.
-/// version(1) || spend_pk(32) || view_pk(32).
-#define SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES 65
+// Console rendering for natively-served methods (DAEMON_RPC_KV_CUTOVER.md
+// §3.4). Rust: shekyl-daemon-rpc/src/console.rs.
+#define SHEKYL_DAEMON_CONSOLE_OK            0
+#define SHEKYL_DAEMON_CONSOLE_ERR_NULL_PTR -1
+#define SHEKYL_DAEMON_CONSOLE_ERR_UNKNOWN  -2
+#define SHEKYL_DAEMON_CONSOLE_ERR_REQUEST  -3
+#define SHEKYL_DAEMON_CONSOLE_ERR_AMBIGUOUS_SOURCE -4  // both rpc_server_ptr and address given
 
-#define SHEKYL_WALLET_ERR_OK 0
-#define SHEKYL_WALLET_ERR_TOO_SHORT 1
-#define SHEKYL_WALLET_ERR_BAD_MAGIC 2
-#define SHEKYL_WALLET_ERR_VERSION_TOO_NEW 3
-#define SHEKYL_WALLET_ERR_UNSUPPORTED_KDF_ALGO 4
-#define SHEKYL_WALLET_ERR_KDF_PARAMS_OUT_OF_RANGE 5
-#define SHEKYL_WALLET_ERR_UNSUPPORTED_WRAP_COUNT 6
-#define SHEKYL_WALLET_ERR_CAP_CONTENT_LEN_MISMATCH 7
-#define SHEKYL_WALLET_ERR_UNKNOWN_CAPABILITY_MODE 8
-#define SHEKYL_WALLET_ERR_REQUIRES_MULTISIG 9
-#define SHEKYL_WALLET_ERR_INVALID_PASSWORD_OR_CORRUPT 10
-#define SHEKYL_WALLET_ERR_STATE_SEED_BLOCK_MISMATCH 11
-#define SHEKYL_WALLET_ERR_INTERNAL 12
-#define SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL 13
-#define SHEKYL_WALLET_ERR_NULL_POINTER 14
+/// Run one console command (`argv[0]` selects) and return its rendered text.
+/// rpc_server_ptr: the live core_rpc_server in-process, else NULL.
+/// address: "host:port" of the daemon RPC when running as `shekyld <cmd>`,
+///   else NULL. Exactly one of the two is set.
+/// out_ptr / out_len: on OK the text to print, on ERR_REQUEST the reason;
+///   release with shekyl_daemon_ctl_free.
+// `nettype` is the CALLING process's network (cryptonote::network_type), for
+// the VC-2 identity handshake on the remote arm. Read by nothing on the live
+// arm, where every axis would compare a value to itself.
+int32_t shekyl_daemon_console_run(
+    const char* const* argv,
+    size_t argc,
+    void* rpc_server_ptr,
+    const char* address,
+    uint64_t timeout_secs,
+    uint8_t nettype,
+    uint8_t** out_ptr,
+    size_t* out_len);
 
-/* Error codes emitted by the high-level orchestrator FFI
- * (shekyl_wallet_create / shekyl_wallet_open / shekyl_wallet_save_state /
- * shekyl_wallet_rotate_password). The envelope-only codes above are
- * reused where the underlying failure is an envelope failure, so
- * wallet2.cpp only needs one taxonomy. */
-#define SHEKYL_WALLET_ERR_IO                              15
-#define SHEKYL_WALLET_ERR_PAYLOAD                         16
-#define SHEKYL_WALLET_ERR_LEDGER                          17
-#define SHEKYL_WALLET_ERR_KEYS_FILE_ALREADY_EXISTS        18
-#define SHEKYL_WALLET_ERR_ALREADY_LOCKED                  19
-#define SHEKYL_WALLET_ERR_ATOMIC_WRITE_RENAME             20
-#define SHEKYL_WALLET_ERR_UNKNOWN_NETWORK                 21
-#define SHEKYL_WALLET_ERR_NETWORK_MISMATCH                22
-#define SHEKYL_WALLET_ERR_KEYS_FILE_WRITE_ONCE_VIOLATION  23
-#define SHEKYL_WALLET_ERR_PREFS                           24
-
-/* Transitional (2k.a -> 2m-keys) capability-refusal codes emitted by
- * shekyl_wallet_extract_rederivation_inputs. Distinct codes per
- * capability so the C++ wallet2 shim can translate each to its own
- * capability-mode branch rather than collapsing them into a generic
- * "not FULL" failure. Both codes are slated for deletion alongside
- * the extract FFI in 2m-keys. Rule 40 (zero-on-failure) still applies:
- * the 64-byte master-seed out-buffer is zero-filled on either refusal.
- *
- * Naming-stability note: the symbol suffix reads `_NO_SPEND` even
- * though the FFI now returns the 64-byte master seed rather than a
- * 32-byte spend scalar. The suffix refers to the capability-mode
- * refusal category ("this wallet has no spend capability"), not to
- * any specific byte count. Renaming would churn every C++ call site
- * for a cosmetic gain; the constants retire in 2m-keys regardless. */
-#define SHEKYL_WALLET_ERR_CAPABILITY_VIEW_ONLY_NO_SPEND         25
-#define SHEKYL_WALLET_ERR_CAPABILITY_HARDWARE_OFFLOAD_NO_SPEND  26
-
-/* save_as refusal codes. save_as is atomic only within a single
- * filesystem (design pin #10 / Q2.A); cross-filesystem rename is
- * refused outright so the caller (typically the GUI) can fall back
- * to a non-atomic export flow that the user explicitly confirms.
- * Pre-existing target files refuse so the orchestrator never
- * silently overwrites a wallet pair. The companion typed-ledger
- * FFI surface and its BLOCK_NOT_HYDRATED codepoint were deleted as
- * a Phase 5 pre-emption; see docs/V3_WALLET_DECISION_LOG.md. */
-#define SHEKYL_WALLET_ERR_SAVE_AS_CROSS_FILESYSTEM        27
-#define SHEKYL_WALLET_ERR_SAVE_AS_TARGET_EXISTS           28
-
-/// AAD-readable header view of a `.wallet.keys` file. Layout pinned by
-/// `static_assert` below; any change in Rust flow-checks against the
-/// `#[repr(C)]` struct in `rust/shekyl-ffi/src/wallet_envelope_ffi.rs`.
-struct ShekylKeysFileHeaderView {
-    uint8_t format_version;
-    uint8_t kdf_algo;
-    uint8_t kdf_m_log2;
-    uint8_t kdf_t;
-    uint8_t kdf_p;
-    uint8_t wrap_count;
-    uint8_t _reserved[2];
-    uint8_t wrap_salt[SHEKYL_WALLET_KEYS_WRAP_SALT_BYTES];
-};
-static_assert(sizeof(ShekylKeysFileHeaderView) == 8 + SHEKYL_WALLET_KEYS_WRAP_SALT_BYTES,
-    "ShekylKeysFileHeaderView layout must match Rust #[repr(C)] (padding pinned by _reserved[2])");
-
-/// Full post-decryption view of a `.wallet.keys` file (fixed-size metadata).
-/// The variable-length `cap_content` bytes are written into a caller-
-/// provided buffer by `shekyl_wallet_keys_open`.
-///
-/// Padding is spelled out explicitly so the layout does not depend on the
-/// compiler's implicit alignment rules for `uint64_t`. `_reserved_align[7]`
-/// is the pad between `expected_classical_address` (odd 65-byte length)
-/// and `creation_timestamp` (8-byte aligned). The Rust `#[repr(C)]`
-/// counterpart in `rust/shekyl-ffi/src/wallet_envelope_ffi.rs` carries the
-/// same explicit field so both sides agree at sizeof = 112 bytes.
-struct ShekylOpenedKeysInfo {
-    uint8_t format_version;
-    uint8_t capability_mode;
-    uint8_t network;
-    uint8_t seed_format;
-    uint8_t _reserved[4];
-    uint8_t expected_classical_address[SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES];
-    uint8_t _reserved_align[7];
-    uint64_t creation_timestamp;
-    uint32_t restore_height_hint;
-    uint32_t cap_content_len;
-    uint8_t seed_block_tag[SHEKYL_WALLET_SEED_BLOCK_TAG_BYTES];
-};
-static_assert(sizeof(ShekylOpenedKeysInfo) ==
-    8 + SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES + 7 + 8 + 4 + 4
-        + SHEKYL_WALLET_SEED_BLOCK_TAG_BYTES,
-    "ShekylOpenedKeysInfo layout must match Rust #[repr(C)]");
-
-/// Parse only the AAD-readable header of a `.wallet.keys` file. Cheap;
-/// does not touch the password. Returns false with BAD_MAGIC for pre-v1
-/// files so wallet2.cpp can surface the dedicated "restore from seed"
-/// upgrade message.
-bool shekyl_wallet_keys_inspect(
-    const uint8_t* bytes_ptr, size_t bytes_len,
-    ShekylKeysFileHeaderView* out_view,
-    uint32_t* out_error);
-
-/// Seal a fresh `.wallet.keys` file. See header comment for the two-call
-/// sizing pattern. `cap_content_ptr/len` carries the capability-mode bytes
-/// with the layout documented in docs/WALLET_FILE_FORMAT_V1.md.
-bool shekyl_wallet_keys_seal(
-    const uint8_t* password_ptr, size_t password_len,
-    uint8_t network,
-    uint8_t seed_format,
-    uint8_t capability_mode,
-    const uint8_t* cap_content_ptr, size_t cap_content_len,
-    uint64_t creation_timestamp,
-    uint32_t restore_height_hint,
-    const uint8_t* expected_classical_address_ptr,
-    uint8_t kdf_m_log2, uint8_t kdf_t, uint8_t kdf_p,
-    uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
-    uint32_t* out_error);
-
-/// Decrypt a `.wallet.keys` file and populate `out_info` plus the
-/// `cap_content_buf`. Two-call sizing: call once with
-/// `cap_content_buf = nullptr, cap_content_cap = 0` to discover
-/// `out_info->cap_content_len`, then retry with a sufficient buffer.
-bool shekyl_wallet_keys_open(
-    const uint8_t* password_ptr, size_t password_len,
-    const uint8_t* bytes_ptr, size_t bytes_len,
-    ShekylOpenedKeysInfo* out_info,
-    uint8_t* cap_content_buf, size_t cap_content_cap,
-    uint32_t* out_error);
-
-/// Rotate the wrapping password on a `.wallet.keys` file. The output has
-/// the same byte length as the input; region 1 bytes are byte-identical
-/// across the rotation (enforced by debug_assert on the Rust side).
-/// Pass `new_kdf_present = 0` to preserve the existing KDF parameters.
-bool shekyl_wallet_keys_rewrap_password(
-    const uint8_t* old_password_ptr, size_t old_password_len,
-    const uint8_t* new_password_ptr, size_t new_password_len,
-    const uint8_t* bytes_ptr, size_t bytes_len,
-    uint8_t new_kdf_present,
-    uint8_t new_kdf_m_log2, uint8_t new_kdf_t, uint8_t new_kdf_p,
-    uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
-    uint32_t* out_error);
-
-/// Seal a `.wallet` state file. Each call re-runs the Argon2id wrap to
-/// recover `file_kek` (no file_kek is cached across FFI calls).
-bool shekyl_wallet_state_seal(
-    const uint8_t* password_ptr, size_t password_len,
-    const uint8_t* keys_file_ptr, size_t keys_file_len,
-    const uint8_t* state_plain_ptr, size_t state_plain_len,
-    uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
-    uint32_t* out_error);
-
-/// Open a `.wallet` state file. Cross-checks the seed_block_tag with the
-/// companion `.wallet.keys`; returns
-/// SHEKYL_WALLET_ERR_STATE_SEED_BLOCK_MISMATCH if the two do not belong
-/// together (swap-detection).
-bool shekyl_wallet_state_open(
-    const uint8_t* password_ptr, size_t password_len,
-    const uint8_t* keys_file_ptr, size_t keys_file_len,
-    const uint8_t* state_file_ptr, size_t state_file_len,
-    uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
-    uint32_t* out_error);
-
-/* ----------------------------------------------------------------------
- * High-level wallet-file orchestrator (opaque handle)
- * ----------------------------------------------------------------------
- *
- * `ShekylWallet` is an opaque handle produced by `shekyl_wallet_create`
- * and `shekyl_wallet_open`, consumed by every other function in this
- * block, and destroyed exclusively by `shekyl_wallet_free`. Internally
- * it owns the Rust `WalletFile` (which holds the advisory file
- * lock, cached keys-file bytes, and decoded non-secret metadata) plus
- * the loaded `WalletLedger`.
- *
- * Before this surface, wallet2.cpp re-implemented companion-path
- * derivation, atomic writes, advisory locking, and write-once
- * enforcement in C++. This surface moves all of that into Rust; C++
- * only calls the lifecycle operations and reads non-secret metadata.
- *
- * Thread-safety: C++ must not call two mutating operations on the same
- * handle concurrently. Read-only getters may overlap with each other
- * but not with writers. The handle itself is `!Send` on the Rust side.
- */
-
-/* Opaque forward declaration; the layout of `ShekylWallet` is private
- * to Rust. C++ consumers hold `ShekylWallet*` and pass it unchanged. */
-struct ShekylWallet;
-
-/* Non-secret wallet metadata view. Populated by
- * `shekyl_wallet_get_metadata`; fields mirror the Rust `#[repr(C)]`
- * struct in `rust/shekyl-ffi/src/wallet_file_ffi.rs`. Layout pinned by
- * the `static_assert` below. */
-struct ShekylWalletMetadata {
-    uint8_t network;          /* 0 = Mainnet, 1 = Testnet, 2 = Stagenet */
-    uint8_t capability_mode;  /* SHEKYL_WALLET_CAPABILITY_* */
-    uint8_t seed_format;      /* 0x00 = BIP-39, 0x01 = raw hex */
-    uint8_t _reserved[5];     /* aligns the u64 below */
-    uint64_t creation_timestamp;
-    uint32_t restore_height_hint;
-    uint8_t _reserved_align[4];
-    uint8_t expected_classical_address[SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES];
-    uint8_t _tail_pad[7];     /* pads the struct to its 8-byte-aligned size */
-};
-static_assert(sizeof(ShekylWalletMetadata) ==
-    8 + 8 + 4 + 4 + SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES + 7,
-    "ShekylWalletMetadata layout must match Rust #[repr(C)] in wallet_file_ffi.rs");
-
-/* Create a fresh wallet pair (`.wallet.keys` + `.wallet`) at
- * `base_path_ptr/len` (UTF-8) and return an owning handle via
- * `*out_handle`. On failure, `*out_handle` is left NULL.
- *
- * `initial_ledger_postcard_*` may be `(NULL, 0)`; an empty
- * `WalletLedger` is synthesized. Non-empty bytes must decode as a
- * valid ledger, otherwise this function returns
- * SHEKYL_WALLET_ERR_LEDGER without touching disk. */
-bool shekyl_wallet_create(
-    const char* base_path_ptr, size_t base_path_len,
-    const uint8_t* password_ptr, size_t password_len,
-    uint8_t network,
-    uint8_t seed_format,
-    uint8_t capability_mode,
-    const uint8_t* cap_content_ptr, size_t cap_content_len,
-    uint64_t creation_timestamp,
-    uint32_t restore_height_hint,
-    const uint8_t* expected_classical_address_ptr,
-    uint8_t kdf_m_log2, uint8_t kdf_t, uint8_t kdf_p,
-    const uint8_t* initial_ledger_postcard_ptr, size_t initial_ledger_postcard_len,
-    ShekylWallet** out_handle,
-    uint32_t* out_error);
-
-/* CLI-ephemeral safety overrides for the current wallet session. Mirrors
- * the Rust `#[repr(C)]` `ShekylSafetyOverrides` and the in-tree
- * `shekyl_wallet_file::SafetyOverrides`. Implements the
- * "CLI-ephemeral overrides" layer of the three-layer preference model
- * pinned in docs/WALLET_PREFS.md §2.3 and §3.3.
- *
- * Each field is a `(has_<name>, <name>)` pair:
- *   * `has_<name> == 0` → honor the network default
- *     (`NetworkSafetyConstants::for_network(network).<default>`).
- *   * `has_<name> != 0` → use `<name>` for this session only. The
- *     value is NOT persisted; the orchestrator emits a `tracing::warn!`
- *     line at open time naming the field, the value, and the default.
- *
- * The `_pad*` fields are explicit 7-byte pads so the `uint64_t` members
- * start on their natural 8-byte alignment regardless of compiler rules.
- * They MUST be zero; the Rust side does not currently check this, but
- * future versions may, so do not smuggle side-channel data through them.
- *
- * Pass a NULL `ShekylSafetyOverrides*` to `shekyl_wallet_open` to mean
- * "no overrides" (equivalent to a zeroed struct). The GUI path always
- * passes NULL; only the shekyl-cli --advanced flags produce a non-NULL
- * pointer. */
-struct ShekylSafetyOverrides {
-    uint8_t has_max_reorg_depth;
-    uint8_t _pad0[7];
-    uint64_t max_reorg_depth;
-    uint8_t has_skip_to_height;
-    uint8_t _pad1[7];
-    uint64_t skip_to_height;
-    uint8_t has_refresh_from_block_height;
-    uint8_t _pad2[7];
-    uint64_t refresh_from_block_height;
-};
-static_assert(sizeof(ShekylSafetyOverrides) == 48,
-    "ShekylSafetyOverrides layout must match Rust #[repr(C)] in wallet_file_ffi.rs");
-
-/* Open an existing wallet pair. On success populates `*out_handle`,
- * `*out_state_lost`, and `*out_restore_from_height`.
- *
- * `overrides` may be NULL, meaning "no CLI overrides active" (the GUI
- * path). A non-NULL pointer supplies the CLI-ephemeral layer; see
- * `ShekylSafetyOverrides` above.
- *
- * When `*out_state_lost` is true, `.wallet` was absent on disk and the
- * orchestrator synthesized a fresh ledger seeded with the keys-file's
- * `restore_height_hint`. The caller MUST drive a rescan starting at
- * `*out_restore_from_height` and then call `shekyl_wallet_save_state`
- * with the rebuilt ledger before closing. */
-bool shekyl_wallet_open(
-    const char* base_path_ptr, size_t base_path_len,
-    const uint8_t* password_ptr, size_t password_len,
-    uint8_t expected_network,
-    const struct ShekylSafetyOverrides* overrides,
-    ShekylWallet** out_handle,
-    bool* out_state_lost,
-    uint64_t* out_restore_from_height,
-    uint32_t* out_error);
-
-/* Destroy a handle returned by `shekyl_wallet_create` or
- * `shekyl_wallet_open`. Calling with NULL is a no-op so C++ RAII
- * wrappers can be branchless. Passing the same non-null pointer twice
- * is undefined behavior. */
-void shekyl_wallet_free(ShekylWallet* h);
-
-/* Populate `*out` with the non-secret wallet metadata. Returns false
- * only on null-pointer arguments; the metadata itself cannot fail to
- * read because it was fully decoded at create/open time. */
-bool shekyl_wallet_get_metadata(
-    ShekylWallet* h,
-    ShekylWalletMetadata* out,
-    uint32_t* out_error);
-
-/* Serialize the handle's in-memory `WalletLedger` to postcard bytes
- * using the standard two-call sizing convention. The emitted bytes
- * contain secrets (TxSecretKey fields); callers must zeroize before
- * free and never log. */
-bool shekyl_wallet_export_ledger_postcard(
-    ShekylWallet* h,
-    uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
-    uint32_t* out_error);
-
-/* Seal a new `.wallet` from the given ledger postcard bytes. The bytes
- * are re-parsed before AEAD sealing so malformed input is rejected cheaply.
- * Steady-state saves use the session-cached `wrap_key_region_2` (no Argon2).
- * On success the handle's in-memory ledger is replaced so subsequent
- * `shekyl_wallet_export_ledger_postcard` calls reflect the save. */
-bool shekyl_wallet_save_state(
-    ShekylWallet* h,
-    const uint8_t* ledger_postcard_ptr, size_t ledger_postcard_len,
-    uint32_t* out_error);
-
-/* Rotate the wallet password. `use_new_kdf = 0` preserves the existing
- * KDF parameters; non-zero picks up `new_kdf_{m_log2,t,p}`. Region 1 of
- * `.wallet.keys` and every byte of `.wallet` are byte-identical after
- * the rotation — only the wrap layer changes. */
-bool shekyl_wallet_rotate_password(
-    ShekylWallet* h,
-    const uint8_t* old_password_ptr, size_t old_password_len,
-    const uint8_t* new_password_ptr, size_t new_password_len,
-    uint8_t use_new_kdf,
-    uint8_t new_kdf_m_log2, uint8_t new_kdf_t, uint8_t new_kdf_p,
-    uint32_t* out_error);
-
-/* ---------------------------------------------------------------------------
- * Transitional: 64-byte master-seed extraction (2k.a -> 2m-keys).
- *
- * Extracts the 64-byte master seed from a FULL-mode wallet handle so
- * the C++ `wallet2::load_keys` shim can drive the existing
- * (non-transitional) shekyl_account_rederive FFI, which rebuilds
- * `m_spend_secret_key`, `m_view_secret_key`, and `m_ml_kem_decap_key`
- * locally in C++. No HKDF runs inside this function: the seed is
- * already in `cap_content` under the FULL layout, authenticated at
- * open time by the envelope AAD, and this call just copies the bytes
- * out under the capability gate.
- *
- * Design rationale (Option A'):
- *   The classical spend/view scalars and m_ml_kem_decap_key are
- *   OUTPUTS of shekyl_account_rederive, not independent secrets. The
- *   2k.a design pins this FFI to the master seed alone so (1)
- *   derivation lives in one place on the Rust side, (2) there is no
- *   intermediate state in which C++ holds classical scalars without
- *   the seed (or vice versa), and (3) the deletion surface in
- *   2m-keys is one pointer argument and one error-code group.
- *
- * Capability-mode policy:
- *   FULL             -> writes all 64 bytes, returns true, OK.
- *   VIEW_ONLY        -> writes zeros, returns false,
- *                       SHEKYL_WALLET_ERR_CAPABILITY_VIEW_ONLY_NO_SPEND.
- *   HARDWARE_OFFLOAD -> writes zeros, returns false,
- *                       SHEKYL_WALLET_ERR_CAPABILITY_HARDWARE_OFFLOAD_NO_SPEND.
- *
- * Rule 40 (zero-on-failure): `out_master_seed_64` is unconditionally
- * zero-filled on function entry; only on success does it hold the
- * 64 seed bytes.
- *
- * Leak-on-success defense (caller contract): the C++ call site MUST
- * receive these bytes into auto-wiping storage -- the canonical
- * pattern is an `epee::mlocked<tools::scrubbed_arr<uint8_t, 64>>`
- * member inside the `wallet2::TransitionalSecretKeys` RAII struct,
- * never a raw `uint8_t[64]` stack local. After the C++ side has
- * driven shekyl_account_rederive and rebuilt m_ml_kem_decap_key,
- * it MUST also scrub `m_account.m_keys.m_master_seed_64` via
- * `cryptonote::account_base::forget_master_seed()` so the
- * ShekylWallet handle remains the single in-memory source of truth
- * for the master seed (Option β, 2k.a design pin 12). */
-bool shekyl_wallet_extract_rederivation_inputs(
-    ShekylWallet* h,
-    uint8_t* out_master_seed_64,
-    uint32_t* out_error);
-
-/* ===========================================================================
- * save_as -- atomic-within-a-filesystem wallet relocate
- * ---------------------------------------------------------------------------
- * The companion typed per-block ledger FFI surface (the per-element
- * repr(C) structs and `shekyl_wallet_{get,set,free}_*` trios that
- * shipped under the 2l.a sub-commit) was deleted as a Phase 5
- * pre-emption: zero `.cpp` callers ever materialized, and waiting
- * for Phase 5's mass deletion would have left an unused FFI surface
- * sitting on the maintenance budget. See
- * `docs/V3_WALLET_DECISION_LOG.md` -- "Phase 5 pre-emption rule" --
- * for the precedent that gates further individual pre-emptions.
- * ===========================================================================
- */
-
-/* Atomic-within-a-filesystem relocate of the wallet pair to a new
- * base path. Cross-filesystem rename is refused with
- * SHEKYL_WALLET_ERR_SAVE_AS_CROSS_FILESYSTEM; pre-existing target
- * files refuse with SHEKYL_WALLET_ERR_SAVE_AS_TARGET_EXISTS. The
- * companion `<base>.address.txt` and `<base>.prefs.toml` are NOT
- * relocated -- the address file is a UX cosmetic, the prefs file
- * is the caller's responsibility. */
-bool shekyl_wallet_save_as(
-    ShekylWallet* h,
-    const char* new_base_path_ptr, size_t new_base_path_len,
-    const uint8_t* password_ptr, size_t password_len,
-    uint32_t* out_error);
 
 // ---------------------------------------------------------------------------
 // Archival serve-credit verification (ARCHIVAL_RETENTION_GATE2.md §5.3)
@@ -1755,6 +1554,24 @@ struct shekyl_archival_verify_ctx {
     uint64_t current_height;
     uint64_t settlement_epoch;
     uint8_t block_hash_at_seal[32];
+    /// `block_hash(h-1)` of the block being validated (PC-D3). NOT
+    /// `block_hash_at_seal` above: the two are different blocks feeding
+    /// different derivations (the challenged leaf index vs. the fire height),
+    /// and populating this from the seal hash yields a well-formed index for
+    /// the wrong block.
+    ///
+    /// **Field order is load-bearing.** This sits between
+    /// `block_hash_at_seal` and `registry_segment_subroot_rk` to match
+    /// `ShekylArchivalVerifyCtx` in rust/shekyl-ffi/src/archival_ffi/codes.rs.
+    /// A mismatch here does not fail cleanly: Rust reads stack residue, which
+    /// is not all-zeros, so the ERR_PREVHASH_UNPOPULATED guard stays silent
+    /// and the index derives from garbage -- surfacing as a path mismatch
+    /// attributed to the prover.
+    ///
+    /// All-zeros is refused with ERR_PREVHASH_UNPOPULATED, ahead of any parse
+    /// of prover-controlled bytes: an unpopulated ctx is the CALLER's defect,
+    /// and checked later a malformed vin would mask it indefinitely.
+    uint8_t prev_block_hash[32];
     uint8_t registry_segment_subroot_rk[32];
     uint64_t segment_leaf_count;
     const uint8_t* pqc_pubkey_ptr;
@@ -1764,14 +1581,27 @@ struct shekyl_archival_verify_ctx {
     size_t leaf_layer_scalars_len;
 };
 
+// ABI pins, mirrored by `const _: () = assert!(...)` in
+// rust/shekyl-ffi/src/archival_ffi/codes.rs. See the note on
+// `prev_block_hash` above for why a mid-struct addition does NOT fail cleanly
+// and why offsets are pinned rather than only the size.
+static_assert(offsetof(struct shekyl_archival_verify_ctx, current_height) == 0,
+              "shekyl_archival_verify_ctx ABI drift");
+static_assert(offsetof(struct shekyl_archival_verify_ctx, block_hash_at_seal) == 16,
+              "shekyl_archival_verify_ctx ABI drift");
+static_assert(offsetof(struct shekyl_archival_verify_ctx, prev_block_hash) == 48,
+              "shekyl_archival_verify_ctx ABI drift: PC-D3's block hash is not where Rust reads it");
+static_assert(offsetof(struct shekyl_archival_verify_ctx, segment_leaf_count) == 112,
+              "shekyl_archival_verify_ctx ABI drift");
+
 #define SHEKYL_ARCHIVAL_VERIFY_OK                    0
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_NULL_PTR        1
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_WIRE              2
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_PATH_TOO_SHALLOW 3
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_NOT_IN_OPENING 4
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_SUBROOT_MISMATCH  5
-#define SHEKYL_ARCHIVAL_VERIFY_ERR_LEAF_INDEX        6
-#define SHEKYL_ARCHIVAL_VERIFY_ERR_REGISTRY_RK       7
+/* 6 (ERR_LEAF_INDEX) RETIRED by RF-D6: the index is derived, not transported. Not reused. */
+/* 7 (ERR_REGISTRY_RK) RETIRED by RF-D6: R_k is not on the wire. Not reused. */
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_FIRE_NOT_REACHED  8
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_CREDIT_DEADLINE   9
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_PQC_VERIFY       10
@@ -1779,6 +1609,10 @@ struct shekyl_archival_verify_ctx {
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_ZERO_GEOMETRY      12
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_EPOCH_MISMATCH    13
 #define SHEKYL_ARCHIVAL_VERIFY_ERR_SCALAR_SHAPE      14
+/// PC-D3: ctx.prev_block_hash was the all-zero unpopulated sentinel.
+#define SHEKYL_ARCHIVAL_VERIFY_ERR_PREVHASH_UNPOPULATED 15
+/// PWD-B7: drop verdict for a shekyl_archival_verify_serve_credit_vin error code.
+uint8_t shekyl_archival_verify_drop_verdict(uint8_t code);
 
 /// Empty-set archival attestation root (`attestation_root(&[])`). Writes 32
 /// bytes to `out_ptr`. Returns true on success. Not the all-zero null hash —
@@ -1821,10 +1655,101 @@ uint64_t shekyl_archival_challenge_fire_height(
     uint64_t shard_id,
     uint64_t settlement_epoch);
 
-/// `vin_payload` is the vin body after the `0x04` type tag.
+/// Extract `(P, shard, E)` from a serve-credit vin's opaque `canonical_bytes`
+/// (tag byte INCLUDED). The Rust codec is the only parser of those bytes
+/// (RF-D1 / rule 40): C++ indexes by these three fields and reads nothing
+/// else. Returns SHEKYL_ARCHIVAL_VERIFY_OK or a wire error code. Empty
+/// length is a wire failure, not ERR_NULL_PTR.
+uint8_t shekyl_archival_serve_credit_extract(
+    const uint8_t* vin_ptr,
+    size_t vin_len,
+    uint8_t* out_p_canonical_id,
+    uint64_t* out_shard_id,
+    uint64_t* out_settlement_epoch);
+
+/// Settlement-outcome row encoding (SO-D2).
+///
+/// C++ owns the table and its 48-byte key; Rust owns the 3-byte value, because
+/// the value carries the invariant that its outcome byte equals the fold over
+/// its counts. There is deliberately NO outcome parameter: supplying one would
+/// reopen at the boundary the disagreement the Rust type closes.
+///
+/// **The key is `ArchivalPairEpochKey`, not `ArchivalServeCreditKey`** — this
+/// comment said the latter until PC-D4 widened that key to 56 B. The settlement
+/// table is per-pair-epoch by design (SO-D1: one row per pair with issued >= 1),
+/// so it did not widen with the ledger, and SO-D2's "one key probes both
+/// tables" rationale is retired rather than broken: the two tables answer at
+/// different granularities — evidence per challenge, verdict per pair-epoch.
+/// See ARCHIVAL_PER_CHALLENGE_RECORD.md §5.2.
+///
+/// Writes SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES bytes to out_row on OK (0) and
+/// writes NOTHING on any error, so a caller that ignores the code cannot store
+/// a fabricated settlement.
+///   0 = ok, 1 = null out_row, 2 = passes > issued, 3 = issued exceeds one byte,
+///   4 = issued == 0 (SO-D1: a pair the urn never reached is recorded by its
+///       ABSENCE; writing a zero-issued row would make absence ambiguous).
+///
+/// Codes 5 and 6 are READ-ONLY -- the writer cannot produce them; see
+/// shekyl_archival_settlement_row_validate below.
+uint8_t shekyl_archival_settlement_row(
+    uint32_t passes,
+    uint32_t issued,
+    uint8_t* out_row);
+
+/// Encoded length of a settlement row — a FIXED-SIZE FFI contract, so both
+/// sides agree on it at COMPILE time (rule 40) rather than through a runtime
+/// query. Rust pins the same number with `const _: () = assert!(...)` beside
+/// its definition; a divergence fails the build on whichever side moved.
+#define SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES 3
+
+/// Validate a STORED settlement row: re-fold its counts and confirm the stored
+/// outcome is the one they derive. Returns 0 when canonical, otherwise the
+/// same code the writer would have refused it with.
+///
+/// The read half of the invariant. The write path cannot emit a row whose
+/// outcome contradicts its counts, or a zero-issued row -- but until this
+/// existed the read path could not ASK, because the check lives in Rust and
+/// C++ cannot reach it, so a corrupt cell came back as a valid settlement.
+/// C++ does not parse these bytes to check them (rule 40); it asks.
+///
+/// Takes the three bytes as SCALARS rather than a pointer: the row is a fixed
+/// 3 bytes, so there is no null case, no length to agree on, and nothing for
+/// either side to reconstruct. A `const uint8_t*` here would have been a
+/// larger boundary for no gain.
+///
+/// Codes: 0 = canonical, 2 = passes > issued, 3 = issued exceeds one byte,
+/// 4 = issued == 0, and two the WRITER cannot produce because they describe a
+/// stored row that no fold could have emitted:
+///   5 = the outcome byte is not one of the three live tags (a zero-filled or
+///       garbage cell);
+///   6 = the outcome is a live tag but not the one its own counts fold to.
+/// Kept distinct because this is a FATAL diagnostic and "which corruption" is
+/// the whole value of the code -- 5 points at the cell, 6 at the row's
+/// contents. Reporting either as 2 would name a count desync that did not
+/// happen.
+uint8_t shekyl_archival_settlement_row_validate(uint8_t outcome, uint8_t passes, uint8_t issued);
+
+/// The verifier-derived challenge leaf index (RF-D6: never on the wire;
+/// PC-D3: bound to the block the record rides in).
+///
+/// `prev_block_hash` is `block_hash(h-1)` of the block being validated, 32
+/// bytes. All-zeros returns ERR_PREVHASH_UNPOPULATED rather than deriving.
+uint8_t shekyl_archival_challenge_leaf_index(
+    const uint8_t* p_canonical_id,
+    uint64_t shard_id,
+    uint64_t settlement_epoch,
+    const uint8_t* prev_block_hash,
+    uint64_t segment_leaf_count,
+    uint32_t* out_leaf_index);
+
+/// Verify one pass record: the vin's `canonical_bytes` (tag byte INCLUDED)
+/// plus this vin's slice of the prunable region's serve-credit records
+/// (RF-D1: one per serve-credit vin, in vin order).
 uint8_t shekyl_archival_verify_serve_credit_vin(
     const uint8_t* vin_payload_ptr,
     size_t vin_payload_len,
+    const uint8_t* pruned_ptr,
+    size_t pruned_len,
     const struct shekyl_archival_verify_ctx* ctx_ptr);
 
 // ---------------------------------------------------------------------------
@@ -1853,9 +1778,15 @@ struct shekyl_archival_pid_pubkey {
 /// headers is the RAW 49-byte-record tx_extra blob — Rust splits and parses it;
 /// headers_readable == 0 means C++ could not parse the coinbase tx_extra at all
 /// (-> ERR_HEADERS_UNREADABLE, never misread as the committed empty set).
+/// prev_block_hash is block_hash(h-1) -- the nonce's anchor term, replacing the deleted `r`.
+/// It must be the VALIDATED predecessor, not prev_id as supplied: an unvalidated header field is
+/// producer-chosen, which is the property `r` was deleted for having. All-zeros is refused
+/// (-> ERR_PREVHASH_UNPOPULATED); there is deliberately NO _readable flag, because a verifier
+/// holding a block has parsed its header, so such an arm could never legitimately fire.
 struct shekyl_archival_attestation_verify_ctx {
     uint8_t attestation_root[32];
     uint8_t cb_out_key[32];
+    uint8_t prev_block_hash[32];
     uint8_t cb_out_key_readable;
     uint8_t headers_readable;
     const uint8_t* headers_ptr;
@@ -1876,6 +1807,7 @@ struct shekyl_archival_attestation_verify_ctx {
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH 9
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY   10
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE 11
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PREVHASH_UNPOPULATED 12
 
 /// Step 1: name the distinct pass p_ids in a block's attestation headers, so C++ knows which
 /// archival-bond pubkeys to read before it can build the ctx pairs above. Parses the same raw
@@ -1919,7 +1851,7 @@ uint8_t shekyl_archival_verify_bond_post_ct_balance(
     uint64_t bond_debit);
 
 // General CT cleartext balance (GENESIS_TX_WIRE_FORMAT.md §2.3): the no-bond-term
-// shape for verRctSemanticsSimple / verRctSemanticsFeeOnly. Canonical prime-order
+// shape for verCtSemanticsSimple / verCtSemanticsFeeOnly. Canonical prime-order
 // points only; INVALID_POINT is checked before the sum, so a torsion-laden input
 // returns INVALID_POINT (never SUM_MISMATCH).
 #define SHEKYL_CT_BALANCE_OK                  0
@@ -1972,7 +1904,7 @@ uint8_t shekyl_check_commitment_masks(
 // JoinMarket bond-post semantic verify (gate-4 §3.5; hybrid pubkey + P_id hint stay C++).
 // Codes 1 (NULL_PTR), 19 (LEN_OVERFLOW), and 23 (BOND_SPEND_PK_COUPLING) are shared
 // vin-marshaling guards from the common vin marshaler, so BOTH bond-post entry points
-// can return them: JoinMarket returns 0-10, 19, or 23; Unbond additionally returns
+// can return them: JoinMarket returns 0-10, 19, or 23; Release additionally returns
 // 11-18 and 20-22.
 #define SHEKYL_ARCHIVAL_BOND_POST_OK                           0
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR                 1
@@ -2029,6 +1961,8 @@ uint64_t shekyl_archival_last_settled_epoch_as_of_parent(uint64_t parent_height)
 /// NUL-terminated static reason for an admission code (do not free). Distinguishes
 /// marshal failures from the below-floor verdict.
 const char* shekyl_archival_admission_err_string(uint8_t code);
+/// PWD-B7: drop verdict for a shekyl_archival_check_bond_admission error code.
+uint8_t shekyl_archival_admission_drop_verdict(uint8_t code);
 
 /// Refuse a bond whose holdings credit no work: admission runs the SAME chain
 /// that pays (shard_work_micro -> work_milli_from_micro).
@@ -2056,21 +1990,21 @@ uint8_t shekyl_archival_check_bond_admission(
     size_t has_segment_len,
     uint64_t parent_height);
 
-// Unbond bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
+// Release bond-post semantic verify (gate-4 §3.5 debit path; PHASE_2B_FSM_RETOOL.md
 // P2B-8). Extends the shared SHEKYL_ARCHIVAL_BOND_POST_* error space above: 11-18,
-// 20, 21, and 22 are Unbond-semantic; 19 (LEN_OVERFLOW) and 23
+// 20, 21, and 22 are Release-semantic; 19 (LEN_OVERFLOW) and 23
 // (BOND_SPEND_PK_COUPLING) are shared vin-marshaling guards returned by both
 // entry points (see the JoinMarket block above).
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_UNBOND    11
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE    11
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING          12
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_UNBOND       13
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_CREDIT           14
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_FLOOR_MISMATCH   15
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_UNBOND         16
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE       13
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_CREDIT           14
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_FLOOR_MISMATCH   15
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_RELEASE         16
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL          17
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED    18
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW            19
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_UNBOND_HOLDINGS_NOT_EMPTY 20
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_HOLDINGS_NOT_EMPTY 20
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL       21
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING 22
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING  23
@@ -2127,7 +2061,7 @@ uint8_t shekyl_archival_check_bond_admission(
 // at the same ShardSet::new boundary as the count cap — "a set on the wire").
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD 48
 
-/// Unbond bond-post verify. `record_exists`/`record_bonded_total`/
+/// Release bond-post verify. `record_exists`/`record_bonded_total`/
 /// `record_bad_interval_count` come from the LMDB bond record;
 /// `per_shard_last_served_ptr` is the array of the served shards' last-served
 /// settlement epochs (never-served shards omitted; for a CompleteTree record,
@@ -2138,11 +2072,11 @@ uint8_t shekyl_archival_check_bond_admission(
 /// every epoch through the anchor is slash-settled, closing the one-block
 /// connect-ordering race (add_transaction runs before
 /// process_archival_slash_at_height in add_block). `current_settlement_epoch`
-/// is the epoch the Unbond lands in. A record whose interval log is at the
+/// is the epoch the Release lands in. A record whose interval log is at the
 /// codec cap rejects (INTERVAL_LOG_FULL): the connect's clean interval-close
 /// could not append, and a verified-but-unconnectable tx would be a
 /// deterministic halt.
-uint8_t shekyl_archival_verify_unbond_bond_post(
+uint8_t shekyl_archival_verify_release_bond_post(
     uint8_t post_kind,
     uint8_t holdings_kind,
     const uint64_t* shard_ids_ptr,
@@ -2160,29 +2094,94 @@ uint8_t shekyl_archival_verify_unbond_bond_post(
     uint64_t last_settled_slash_epoch,
     uint64_t current_settlement_epoch);
 
-// Unbond block-connect fold + pop twin (gate-4 §4.3 "On confirm" / §5;
+// Fold the served shards' last-served epochs into the whole-record
+// release-cooldown anchor -- the SAME fold
+// `shekyl_archival_verify_release_bond_post` applies internally, exported so a
+// marshaling caller reports the anchor instead of deriving a second one in C++.
+//
+// `out_present` is written 1 with the anchor in `out_epoch`, or 0 with
+// `out_epoch = 0` when no shard has served. Both outputs are written on every
+// OK return. The flag is load-bearing rather than cosmetic: the two consensus
+// predicates that consume the anchor treat an ABSENT anchor as permissive
+// (nothing served => nothing to cool down from), so a consumer that inferred
+// absence from a missing or zero field would route "we do not know" into the
+// permissive branch. Epoch 0 is a real settlement epoch; only the flag
+// separates it from "never served".
+//
+// Callers gather the slice exactly as the Release verify arm does: the record's
+// held shards for a compact set, the all-shards P-prefix scan for a
+// complete-tree record (which stores no shard list); never-served shards are
+// omitted by the DB accessors, so an empty slice is the legitimate
+// "record exists, nothing served" case.
+uint8_t shekyl_archival_whole_record_last_served(
+    const uint64_t* per_shard_last_served_ptr,
+    size_t per_shard_last_served_len,
+    uint8_t* out_present,
+    uint64_t* out_epoch);
+
+// Kind→scan decision for the last-served gather that
+// `shekyl_archival_whole_record_last_served` folds. Exhaustive on the Rust
+// `HoldingsKind` enum: a third variant fails to compile until its arm is
+// written. C++ marshals this discriminant and calls the matching DB accessor
+// -- it does not re-derive the kind decision. Compact holdings (0) fold the
+// record's held shards; complete-tree (1) scans every served shard, because
+// a complete-tree record stores no shard list.
+#define SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_HELD_SHARDS 0
+#define SHEKYL_ARCHIVAL_LAST_SERVED_SCAN_ALL_SHARDS  1
+uint8_t shekyl_archival_last_served_scan(
+    uint8_t holdings_kind,
+    uint8_t* out_scan);
+
+// Debit authorization pin -- the single gate between a compromised serving
+// host and a collateral-draining exit. A VALUE-OUT bond-post authorizes
+// against the RECORD's committed bond_spend_pk, never against the persona's
+// identity key (which a serving host holds) and never against a key the vin
+// carries (which would be a forgeable self-assertion). A record committing
+// no canonical-length key authorizes NOTHING -- fail closed, no identity-key
+// fallback.
+//
+// SELECTOR: bond_debit > 0, NOT the post kind. Consumers are Release and the
+// DROP arm of HoldingsUpdate. Rebond and HoldingsUpdate-add are credit paths
+// (bond_debit == 0) that consensus authorizes with the identity key -- do
+// not call this for them, or a legitimate credit is rejected: keying on kind
+// instead of the debit term rejects every valid HoldingsUpdate-add block.
+//
+// The Rust submit battery calls the same shekyl-archival-retention function
+// natively (DAEMON_SUBMIT_VERDICT.md 8.7.1.1 row UB3), so block path and
+// submit path cannot drift on this predicate.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY 49
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH  50
+/// PWD-B7: drop verdict for a shekyl_archival_verify_*_bond_post error code.
+uint8_t shekyl_archival_bond_post_drop_verdict(uint8_t code);
+uint8_t shekyl_archival_debit_auth_pin(
+    const uint8_t* record_bond_spend_pk_ptr,
+    size_t record_bond_spend_pk_len,
+    const uint8_t* auth_pubkey_ptr,
+    size_t auth_pubkey_len);
+
+// Release block-connect fold + pop twin (gate-4 §4.3 "On confirm" / §5;
 // PHASE_2B_FSM_RETOOL.md P2B-8 implementation locus). The C++ connect arm owns
 // the LMDB write txn and writes EXACTLY what the out-params dictate; no
 // consensus arithmetic caller-side. Non-OK codes are connect-time invariant
 // breaches / pop-time journal desyncs — the caller maps them to a FATAL abort
 // (the emission-connect posture), never a soft skip.
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_OK                          0
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_NULL_PTR                1
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_OK                          0
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_NULL_PTR                1
 // Code 2 (LEN_OVERFLOW) is retired: the connect fold takes the record's held
 // shard COUNT, not a pointer/length pair, so no slice marshal exists to guard.
 // The value stays reserved so the family's codes never renumber.
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_HOLDINGS_KIND           3
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_ZERO              4
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL  5
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_FLOOR_INVARIANT  6
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_UNDERFLOW  7
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_INTERVAL_LOG_FULL       8
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_RECORD_NOT_EXITED       9
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_MISSING_CLEAN_CLOSE    10
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_PRE_IMAGE_EMPTY        11
-#define SHEKYL_ARCHIVAL_UNBOND_APPLY_ERR_TOTAL_BONDED_OVERFLOW  12
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_HOLDINGS_KIND           3
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_DEBIT_ZERO              4
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_DEBIT_NOT_RECORD_TOTAL  5
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_FLOOR_INVARIANT  6
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_UNDERFLOW  7
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_INTERVAL_LOG_FULL       8
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_RECORD_NOT_EXITED       9
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_MISSING_CLEAN_CLOSE    10
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_PRE_IMAGE_EMPTY        11
+#define SHEKYL_ARCHIVAL_RELEASE_APPLY_ERR_TOTAL_BONDED_OVERFLOW  12
 
-/// Unbond connect fold: record inputs are the record's CURRENT state (before
+/// Release connect fold: record inputs are the record's CURRENT state (before
 /// the release); the outs are the full post-connect write set — record becomes
 /// post_bonded_total/post_holdings_kind with post_held_shard_count (always 0)
 /// shard ids, the clean interval-close [start, end) is APPENDED to the record's
@@ -2192,15 +2191,15 @@ uint8_t shekyl_archival_verify_unbond_bond_post(
 /// write here — bond_debit is the CT-balance source term on the wire. The
 /// record's holdings arrive as (kind, held shard count) — the fold's floor
 /// invariant never reads shard-id values, so no shard-id array crosses the FFI
-/// (the shekyl_archival_unbond_pop shape).
-uint8_t shekyl_archival_unbond_connect(
+/// (the shekyl_archival_release_pop shape).
+uint8_t shekyl_archival_release_connect(
     uint64_t record_bonded_total,
     uint8_t record_holdings_kind,
     uint64_t record_held_shard_count,
     size_t record_bad_interval_count,
     uint64_t vin_bond_debit,
     uint64_t total_bonded_atomic,
-    uint64_t unbond_settlement_epoch,
+    uint64_t release_settlement_epoch,
     uint64_t* post_bonded_total_out,
     uint8_t* post_holdings_kind_out,
     uint64_t* post_held_shard_count_out,
@@ -2212,7 +2211,7 @@ uint8_t shekyl_archival_unbond_connect(
 /// bond-post vin per P_canonical_id per block (gate-4 §3.5; the
 /// shekyl_emission_block_claims_unique sibling, keyed on P alone). Per-tx
 /// verify runs against pre-block DB state, so every same-P same-block pair
-/// (JoinMarket+JoinMarket double-credit, Unbond+Unbond double-debit, mixed
+/// (JoinMarket+JoinMarket double-credit, Release+Release double-debit, mixed
 /// kinds) passes it independently; this pass — run once per block over every
 /// bond-post vin's P_canonical_id, before connect — is the layer that REJECTS
 /// the block. The §4.5 conservation audit is NOT a backstop (a double-credit
@@ -2223,19 +2222,19 @@ uint8_t shekyl_archival_bond_post_block_unique(
     const uint8_t* ids_ptr,
     size_t num_ids);
 
-/// Unbond pop twin: validates the tip record is the connect's product (Exited
-/// state + trailing clean interval-close for unbond_settlement_epoch), then
+/// Release pop twin: validates the tip record is the connect's product (Exited
+/// state + trailing clean interval-close for release_settlement_epoch), then
 /// re-credits total_bonded_atomic with the journaled pre-image balance. The
 /// record fields themselves are restored caller-side as a byte-copy of the
 /// pre-image journal row. `has_trailing_interval` is 0 when the record's
 /// interval log is empty (the trailing start/end operands are then ignored).
-uint8_t shekyl_archival_unbond_pop(
+uint8_t shekyl_archival_release_pop(
     uint64_t current_record_bonded_total,
     uint64_t current_record_held_shard_count,
     uint8_t has_trailing_interval,
     uint64_t trailing_interval_start,
     uint64_t trailing_interval_end,
-    uint64_t unbond_settlement_epoch,
+    uint64_t release_settlement_epoch,
     uint64_t journal_pre_bonded_total,
     uint64_t total_bonded_atomic,
     uint64_t* new_total_bonded_out);
@@ -2243,7 +2242,7 @@ uint8_t shekyl_archival_unbond_pop(
 // HoldingsUpdate verify + connect/pop (gate-4 §4.4). Semantic verify returns the
 // shared SHEKYL_ARCHIVAL_BOND_POST_* space (OK=0, 24-35 HU-semantic, plus the
 // shared marshaling guards); the connect/pop folds return the HU_APPLY family
-// below. As with Unbond, a non-OK apply code is a connect-time invariant breach /
+// below. As with Release, a non-OK apply code is a connect-time invariant breach /
 // pop-time journal desync — the caller maps it to a FATAL abort, never a soft
 // skip.
 #define SHEKYL_ARCHIVAL_HU_APPLY_OK                        0
@@ -2367,7 +2366,7 @@ uint8_t shekyl_archival_holdings_update_pop(
 // Rebond verify + connect/pop (gate-4 §3.4; P2B-9 reinstatement). Semantic
 // verify returns the shared SHEKYL_ARCHIVAL_BOND_POST_* space (OK=0, 37-44
 // Rebond-semantic, plus the shared guards); the connect/pop folds return the
-// REBOND_APPLY family below. As with Unbond/HoldingsUpdate, a non-OK apply code
+// REBOND_APPLY family below. As with Release/HoldingsUpdate, a non-OK apply code
 // is a connect-time invariant breach / pop-time journal desync — the caller
 // maps it to a FATAL abort, never a soft skip.
 #define SHEKYL_ARCHIVAL_REBOND_APPLY_OK                          0
@@ -2809,6 +2808,8 @@ uint8_t shekyl_archival_emission_epoch_work(
 #define SHEKYL_EMISSION_VIN_ERR_AUTH_MALFORMED        15
 /* Step 8: hybrid auth signature rejected over its Q1 binding message. */
 #define SHEKYL_EMISSION_VIN_ERR_AUTH_REJECTED         16
+/// PWD-B7: drop verdict for a shekyl_emission_vin_verify error code.
+uint8_t shekyl_emission_vin_drop_verdict(uint8_t code);
 
 /* Upper bound on settlement_epochs per emission vin — mirrors the Rust wire
  * pin MAX_SETTLEMENT_EPOCHS_PER_EMISSION (emission_wire.rs; the parse rejects
@@ -2951,6 +2952,34 @@ int32_t shekyl_difficulty_lwma1_next(
     uint64_t chain_height,
     struct shekyl_u128* out_next_difficulty);
 
+/// The fork-choice comparison (C2-R1b-Q1a): strictly greater cumulative
+/// difficulty switches, equality keeps the incumbent, an operator-
+/// checkpoint match forces the switch. Writes
+/// `SHEKYL_FORK_CHOICE_KEEP_CURRENT` or `SHEKYL_FORK_CHOICE_SWITCH` to
+/// `*out_verdict`; returns 0 on success or
+/// `SHEKYL_DIFFICULTY_ERR_NULL_PTR`.
+int32_t shekyl_difficulty_fork_choice(
+    struct shekyl_u128 current_cumulative,
+    struct shekyl_u128 alternative_cumulative,
+    uint8_t checkpoint_match,
+    int32_t* out_verdict);
+
+/// Alt-chain LWMA window selection (C2-R1b-Q1b / CEN-D5): which
+/// main-chain height range `[*out_main_start, *out_main_stop)` and how
+/// many newest alt entries fill the window for a candidate at
+/// `bei_height` whose stored alt ancestry has `alt_len` blocks starting
+/// at `first_alt_height` (ignored when `alt_len == 0`). Returns 0, or
+/// `SHEKYL_DIFFICULTY_ERR_WINDOW` on a height-0 candidate or
+/// discontiguous ancestry (fail closed), or
+/// `SHEKYL_DIFFICULTY_ERR_NULL_PTR`.
+int32_t shekyl_difficulty_alt_window_plan(
+    uint64_t bei_height,
+    uint64_t alt_len,
+    uint64_t first_alt_height,
+    uint64_t* out_main_start,
+    uint64_t* out_main_stop,
+    uint64_t* out_alt_take_newest);
+
 /// PoW-target predicate: does `hash` satisfy `difficulty`?
 ///
 /// Wraps the `shekyl-difficulty` crate's `check_hash` — the unified
@@ -2978,6 +3007,43 @@ int32_t shekyl_difficulty_check_hash(
     const uint8_t (*hash)[32],
     struct shekyl_u128 difficulty,
     bool* out_pass);
+
+/// C2-R3 block-timestamp consensus rule
+/// (docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md §4.3, ratified
+/// 2026-09-01): the candidate timestamp is valid iff it is at most
+/// `local_clock + 540` (saturating arithmetic) AND strictly greater
+/// than sorted-index-5 of the 11 timestamps immediately preceding it,
+/// the window right-padded with `genesis_ts` when fewer than 11
+/// predecessors exist. Wraps the `shekyl-difficulty` crate's
+/// `check_timestamp_rule` — the ONE implementation of the ruled
+/// sentence; `Blockchain::check_block_timestamp` is a marshaling shim
+/// over this entry point (rule 20), as `shekyl_difficulty_lwma1_next`
+/// above serves the difficulty half.
+///
+/// `window` holds the <= 11 newest predecessor timestamps in any order
+/// (callers with deeper history truncate to the newest 11 first —
+/// C2-R3-Q1 sub-a); it may be null only when `window_len == 0` (block 1:
+/// full genesis padding). `*out_median` receives the padded window's
+/// median on every verdict except WINDOW_TOO_WIDE (which writes 0); the
+/// miner-template caller reads it unconditionally. Returns a
+/// `SHEKYL_TIMESTAMP_RULE_*` verdict code (>= 0: the rule's answer), or
+/// `SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR` on pointer misuse.
+int32_t shekyl_difficulty_check_timestamp_rule(
+    uint64_t candidate_ts,
+    const uint64_t* window,
+    size_t window_len,
+    uint64_t genesis_ts,
+    uint64_t local_clock,
+    uint64_t* out_median);
+
+/// Verdict codes for `shekyl_difficulty_check_timestamp_rule` (mirrors
+/// of the Rust `TimestampRuleVerdict` discriminants; renumbering is an
+/// FFI break).
+#define SHEKYL_TIMESTAMP_RULE_OK               INT32_C(0)
+#define SHEKYL_TIMESTAMP_RULE_WINDOW_TOO_WIDE  INT32_C(1)
+#define SHEKYL_TIMESTAMP_RULE_ABOVE_FTL        INT32_C(2)
+#define SHEKYL_TIMESTAMP_RULE_NOT_ABOVE_MEDIAN INT32_C(3)
+#define SHEKYL_TIMESTAMP_RULE_ERR_NULL_PTR     INT32_C(-1)
 
 // ---------------------------------------------------------------------------
 // RandomX v2 light-cache PoW verification FFI surface
@@ -3077,20 +3143,59 @@ bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
 /// so what ships is what was derived and tested. A zero draw does not mean "fire
 /// this instant" — deadlines are whole seconds, so it resolves to the earliest
 /// one that does not under-provision (the next second boundary; see
-/// cryptonote::detail::embargo_deadline). Rounding it down instead would put the
+/// cryptonote::detail::relay_deadline). Rounding it down instead would put the
 /// deadline up to ~999 ms in the past, which shortens an embargo, and a shorter
 /// embargo is the privacy-losing direction at every draw value including zero.
-uint64_t shekyl_dandelionpp_embargo_draw_seconds(void);
+///
+/// \param zone The relay zone the transaction is embargoed on, as
+/// `epee::net_utils::zone` cast to a byte. The embargo is per-zone since §89.2:
+/// the anonymity zone stems, and a rendezvous hop needs a longer embargo than a
+/// clearnet one. Anything outside 0..=3 resolves to `zone::invalid`, which is
+/// provisioned as the worst case — a corrupt byte costs recovery latency rather
+/// than embargo length. (Masking would send 5 to `public_`, the shortest.)
+uint64_t shekyl_dandelionpp_embargo_draw_seconds(uint8_t zone);
 
 /// How long to wait before judging a still-unseen transaction failed, in
 /// seconds — a quantile of the embargo distribution (at most 1 in 100 embargoes
 /// still running), not a multiple of its mean. On the adopted table that is
-/// exactly 874 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
+/// exactly 2297 s (`ADOPTED_PROPAGATION_TIMEOUT_SECS` in shekyl-relay-privacy),
 /// pinned so the wait cannot drift from the distribution. A stem transaction is
 /// invisible to its sender until it fluffs, so a shorter deadline declares
 /// healthy transactions dead while their backstop is still running, and the
 /// sender then releases the inputs it had reserved.
+///
+/// Deliberately takes no zone, though the draw above does: this is a wallet
+/// decision, and the wallet cannot know which zone its transaction took. It
+/// gets the worst zone's wait. The whole export is a deletion target — see
+/// DAEMON_RELAY_PRIVACY.md §89.6.
 uint64_t shekyl_dandelionpp_propagation_timeout_seconds(void);
+
+/// How long an ORIGIN waits before re-broadcasting its own still-unseen
+/// transaction -- seconds, per zone.
+///
+/// The base of the pool's re-broadcast escalation for a `relay_method::local`
+/// entry that has ALREADY BEEN SENT, replacing `MIN_RELAY_TIME` on that arm
+/// only. Derived rather than chosen: the rate is
+/// `1 / (1 - EMBARGO_FULL_TRAVEL_PROBABILITY)`, so the origin asks "has this
+/// stem probably completed?" at the confidence the network already uses to
+/// answer it. On the anonymity timer that is 1148 s against a 346 s median;
+/// `MIN_RELAY_TIME` at 300 s sat BELOW the median, re-emitting while most
+/// embargoes along the origin's own stem were still running.
+///
+/// An unsent `local` entry (`relayed == false`) is NOT a caller: no stem was
+/// launched, so there is no completion to wait on, and the pool keeps
+/// `MIN_RELAY_TIME` there. See `local_relay_base` in `tx_pool.cpp`.
+///
+/// `zone` is `epee::net_utils::zone` as a byte. Originated traffic carries
+/// `origin_zone == invalid` -- it did not arrive over anything -- and
+/// `invalid` resolves to the anonymity class, which is both correct here (a
+/// surviving `local` IS an anonymity origin) and the fail-safe direction.
+///
+/// CONTRACT: never zero, and never below the pool's own `MIN_RELAY_TIME`
+/// (300 s) for any zone -- the value is a pure function of shipped constants,
+/// and `every_parameter_class_clears_the_pool_floor` pins both bounds for
+/// every parameter class. The divisor in `get_relay_delay` rests on the first.
+uint64_t shekyl_dandelionpp_origin_retry_interval_seconds(uint8_t zone);
 
 
 // ── Live relay zone (RP-3a, DAEMON_RELAY_PRIVACY.md sec 18) ────────────────
@@ -3125,37 +3230,133 @@ static_assert(sizeof(ShekylRelayBlob) == sizeof(const std::uint8_t*) + sizeof(st
 //! sorted and de-duplicated by the zone (receive order is an observable). It
 //! becomes a single levin notification — delivered blob-by-blob it would become
 //! N notifications, leaking the batch size as a per-peer message count.
+//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll.
 typedef void (*ShekylRelayFluffCb)(void* ctx, const std::uint8_t* peer,
                                    const ShekylRelayBlob* blobs, std::size_t n);
-//! Covert channel `channel` came due with its stem slot unbound: clear it —
-//! nil the binding, discard buffers — on the channel's own strand. The other
-//! half of the deleted slot array: the binding itself travels with each covert
-//! send, and the LOSS of a binding travels here, because an unbound channel
-//! emits no sends. One index crosses -- no array, no slot order, no width to
-//! reconcile. Fires at EVERY due tick while the slot stays unbound (derived
-//! from the map at each poll, never pushed once at a transition), so the
-//! receiver must be idempotent and a lost clear self-heals one covert interval
-//! later. Must not throw across the FFI boundary.
-typedef void (*ShekylRelayCovertUnbindCb)(void* ctx, std::size_t channel);
+// ShekylRelayNoiseUnbindCb is DELETED, not kept as a souvenir (rule 15).
+// It carried "this channel's stem slot is unbound, clear it" to a C++ side
+// that held the buffers. Since #515 those buffers are Rust's, and since the
+// carrier caller `Effect::NoiseUnbind` is consumed entirely inside Rust by
+// `NoiseQueues::unbind` -- which is what invalidates outstanding send tokens.
+// C++ has no channel state left to clear, so the callback had no job the
+// moment the join landed. Its idempotence note went with it: the effect still
+// fires at every due tick while the slot stays unbound, and `unbind` is
+// idempotent on the Rust side where the state now lives.
 //! Supply the outbound connection set on demand: write the id count through
 //! `out_n` and return a pointer to `*out_n` x 16 bytes valid until the poll
 //! returns (nullptr with `*out_n == 0` for none). shekyl_relay_zone_poll calls
 //! this ONLY at an epoch boundary, so a fluff-release wake never pays for the
 //! connection scan. Must not throw across the FFI boundary.
+//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll.
 typedef const std::uint8_t* (*ShekylRelayOutboundCb)(void* ctx, std::size_t* out_n);
 
-//! Covert channel `channel` is due to send.
+//! Noise channel `channel` is due to send.
 //!
-//! Carries NO payload discriminant, and that is deliberate (CV-4): whether the
-//! send is a dummy or drains a queued real fragment is a queue question, and the
-//! queue is C++. Rust decides WHEN and WHICH CHANNEL; C++ decides WHAT. Adding a
-//! kind or a "has real pending" flag here would let the cadence react to traffic,
-//! and that change would look like a latency optimisation rather than the
-//! covert-channel leak it is. Must not throw across the FFI boundary.
+//! Carries the BYTES and returns whether they went out. Both halves are new
+//! as of the carrier caller; the queue moved to Rust in #515 and this
+//! signature had not followed it.
+//!
+//! Still carries NO payload discriminant, and that is still CV-4: whether this
+//! emission is a dummy or drains a queued real fragment must not be knowable to
+//! anything that could feed the cadence. What changed is only the DIRECTION of
+//! travel. CV-4 forbids handing the SCHEDULER traffic-dependent input -- a
+//! kind, a queue depth, a has-real-pending flag -- so the cadence cannot react
+//! to traffic. Opaque bytes travelling OUTWARD, chosen by Rust after the
+//! cadence has already fixed when and to whom, tell the scheduler nothing.
+//!
+//! The RETURN is not a convenience. `NoiseQueues::take_for_send` is
+//! deliberately NON-DESTRUCTIVE: only a resolved token advances the queue. With
+//! no status coming back there is no way to call `sent`, so every take would
+//! hand out the same fragment forever and `failed` would be unreachable. The
+//! widening is what makes the token's failure mode reachable at all.
+//!
+//! Return true if the bytes were handed to the transport, false otherwise.
+//!
+//! A false RESTARTS the channel rather than re-offering this one fragment:
+//! `NoiseSend::failed` clears the channel's offset and its binding and bumps
+//! the epoch, so a multi-window notification resumes from its FIRST fragment
+//! on a later tick, against whatever peer the slot holds then. That is CV-1's
+//! restart, not a per-fragment retry — a half-delivered message must not be
+//! completed to a different successor, and the queue cannot know how much of
+//! it the failed send actually put on the wire.
+//!
+//! Stated because the single-window case makes the two indistinguishable, and
+//! an earlier draft of this contract described that case as the general rule.
+//! Must not throw across the FFI boundary.
+//!
 //! `peer` is the 16-byte connection id the channel's stem slot is bound to --
 //! never nil, since an unbound slot emits nothing (CV-2). The binding travels
 //! with the send (§20.3's inversion) rather than as a pushed slot array.
-typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel, const std::uint8_t* peer);
+//! `bytes` covers `len` readable bytes and is valid only for the call.
+//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll.
+typedef bool (*ShekylRelayNoiseSendCb)(void* ctx, std::size_t channel, const std::uint8_t* peer,
+                                       const std::uint8_t* bytes, std::size_t len);
+
+//! What became of a message handed to the carrier -- reported once, terminally.
+//!
+//! `token` is the value the enqueuer passed to
+//! `shekyl_relay_zone_noise_enqueue`; `sent` is true only when EVERY window of
+//! the message was ACCEPTED BY THE TRANSPORT.
+//!
+//! ACCEPTED, not acknowledged -- and the name `sent` is kept rather than
+//! renamed because it means here exactly what `send()` means everywhere in
+//! this tree. epee queues writes asynchronously: `connections::send` reports
+//! that the bytes were placed on a connection's write queue, not that they
+//! left the socket and not that a peer received them. A connection that fails
+//! after accepting them does not come back through this callback.
+//!
+//! So relay recording and the F-10 observation are charged on transport
+//! acceptance. That is the same basis every other relay path here records on,
+//! and a STRICTER one than the fluff arm: `on_fluff` never looks at its send
+//! result and `fluff_and_record` records before sending, while the carrier
+//! checks the `send` return and falls back to fluff when the transport
+//! refuses. Reporting true write completion would need a completion signal
+//! epee does not expose; it becomes expressible at the daemon transport
+//! cutover, where the write path is Rust-owned (`docs/FOLLOWUPS.md`).
+//!
+//! BOTH ARMS, AND THE FALSE ONE IS WHY THIS EXISTS. A completion signal alone
+//! leaves a caller waiting forever on a message the carrier discarded: an
+//! unbound channel clears its pending messages, so a transaction can leave the
+//! queue having never reached a peer. `sent == false` is that case, and it
+//! must be read as NOT RELAYED rather than as "not yet". The pool's `relayed`
+//! bit chooses an origin's re-broadcast backoff, and an origin given the
+//! derived interval for a discarded transaction waits ~1148 s for something
+//! that was never sent and will not be -- the swallow case that interval
+//! exists to rescue, defeated by the mechanism meant to help.
+//!
+//! WHY A COMPLETION SIGNAL AT ALL. `record_relayed` and the stem-watch
+//! observation fire where a send is KNOWN to have happened. An enqueue is not
+//! a send: the queue accepts a message and its windows go out later, at cadence
+//! ticks. Recording at enqueue claims a relay for a message that may never
+//! leave, and charges a stem observation to a peer that may never receive it --
+//! the channel rebinds on failure, so the successor is not known until the
+//! send.
+//!
+//! NOT A CV-4 BREACH, and the argument is the one that widened
+//! `ShekylRelayNoiseSendCb`. CV-4 forbids feeding the SCHEDULER
+//! traffic-dependent input; the cadence decides WHEN to emit and TO WHOM, and
+//! this reports what the cadence already did, after it did it -- downstream of
+//! both decisions, exactly like the send callback's own return. Nothing here is
+//! readable by the schedule. Stated because "a new export on the noise path" is
+//! what a reviewer will otherwise read as a breach.
+//!
+//! Must not throw across the FFI boundary.
+//! `peer` is the 16-byte connection id the message was sent to -- in the sense
+//! above, accepted by the transport for that connection -- or null on a
+//! discard. Reported rather than remembered: a channel binds to whatever
+//! its stem slot holds at send time, so the destination chosen when the
+//! transaction was enqueued may not be the one the send was bound to. Recording
+//! the enqueue-time peer would charge an F-10 observation to a node that never
+//! saw the transaction -- a wrong entry in the tallies, not a missing one.
+//!
+//! Unambiguous for a completed message because of CV-1: a rebind RESTARTS the
+//! run rather than resuming it, so every window of a message that finished
+//! went to one peer.
+//!
+//! \pre MUST NOT re-enter the zone — see shekyl_relay_zone_poll, which states
+//! the precondition once, for all four of its callbacks.
+typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, bool sent,
+                                             const std::uint8_t* peer);
 
 //! Forward to the successor written into `out_dest`.
 #define SHEKYL_RELAY_PLAN_STEM        0
@@ -3164,11 +3365,16 @@ typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel, const st
 //! Settled for this epoch: fluff. Retrying cannot change the answer.
 #define SHEKYL_RELAY_PLAN_FLUFF_EPOCH 2
 
+//! Carrier: the zone's ordinary connection.
+#define SHEKYL_RELAY_CARRIER_ORDINARY 0
+//! Carrier: a noise channel, bound to the stem slot (channel i follows slot i).
+#define SHEKYL_RELAY_CARRIER_NOISE    1
+
 //! Zone-shape flags for `shekyl_relay_zone_new`.
 //!
 //! Named bits rather than two `bool` parameters, deliberately. Adjacent bools
 //! in a C signature transpose silently — and transposing THESE two swaps the
-//! i2p/tor outbound-only fluff rule with the covert enable, which is the exact
+//! i2p/tor outbound-only fluff rule with the noise enable, which is the exact
 //! regression RP-3a's first pass shipped (caught only because eight `private_*`
 //! gtests happened to cover it). Function *signatures* on this surface are
 //! gated by `scripts/ci/check_relay_ffi_signatures.sh` (conflicting-declaration
@@ -3176,31 +3382,58 @@ typedef void (*ShekylRelayCovertSendCb)(void* ctx, std::size_t channel, const st
 //! `zone_flag_bits_do_not_transpose` owns those, and a bitmask removes the
 //! ordering question the signature gate cannot see.
 //!
-//! The i2p/tor rule follows the NETWORK, not covert mode: a hidden-service zone
-//! with covert disabled still needs it. That is why the bits are independent.
+//! The i2p/tor rule follows the NETWORK, not noise mode: a hidden-service zone
+//! with noise disabled still needs it. That is why the bits are independent.
 //! Keep these values in sync with `SHEKYL_RELAY_ZONE_*` in `relay_zone_ffi`.
 #define SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY 1u
-#define SHEKYL_RELAY_ZONE_COVERT_ENABLED 2u
+#define SHEKYL_RELAY_ZONE_NOISE_ENABLED 2u
 
 //! Open a zone with the caller's epoch length (public 600/30, noise 300/30).
+//! `zone` is the `epee::net_utils::zone` discriminant; it selects the
+//! transport-bound parameters (§89.2) so this zone's stem-observation window
+//! matches the embargo its successors draw. It is NOT a restatement of
+//! `SHEKYL_RELAY_ZONE_OUTBOUND_FLUFF_ONLY` — fluff reach follows the network,
+//! transit latency follows the transport, and outbound-only fluff on clearnet
+//! is still open (§25.5).
 //! `flags` is a mask of the `SHEKYL_RELAY_ZONE_*` bits above.
-//! Null when a zone cannot be built: SIZE_MAX stems, or a zero epoch — which
-//! would expire at every wake and spin the relay timer. Treat null as fatal.
-RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::size_t stems,
+//! Null when a zone cannot be built: SIZE_MAX stems, a zero epoch (would
+//! expire at every wake and spin the relay timer), noise enabled on a
+//! cleartext `zone` byte (padding sizes conceals nothing an observer cannot
+//! already read), or a noise channel count other than
+//! `CRYPTONOTE_NOISE_CHANNELS`. Secrecy is the zone discriminant, not the
+//! fluff-reach bit — `NOISE_ENABLED` without `OUTBOUND_FLUFF_ONLY` on an
+//! encrypted zone is valid. Treat null as fatal.
+RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms, std::uint8_t zone,
+                                       std::size_t stems,
                                        std::uint32_t min_epoch_secs,
                                        std::uint32_t epoch_jitter_secs,
                                        std::uint32_t flags);
-//! Whether this zone runs covert (noise) channels.
+//! Whether this zone runs noise channels.
 //! The single owner of a fact this side used to re-derive at nine sites from
 //! `!zone::noise.empty()` — a byte payload doubling as its own enable flag.
 //! Frozen at construction, so this is a plain read. False for a null handle.
-bool shekyl_relay_zone_covert_enabled(const RelayZoneHandle* handle);
+bool shekyl_relay_zone_noise_enabled(const RelayZoneHandle* handle);
 
-//! R-1: should this RELAYED transaction be diverted onto the anonymity zone's
-//! stem? One roll, at entry. A verdict crosses, not a probability -- the rate
-//! and its per-hop meaning stay in Rust. Callers own the pre-fluff test: a
-//! transaction that has fluffed must leave the zone.
-bool shekyl_relay_zone_divert_relayed_tx();
+//! R-1 origination roll AND its zone mapping, one crossing (rule 40): draws
+//! whether this ORIGINATED transaction takes the anonymity zone and returns
+//! the zone byte send_txs reads -- invalid (0, fail-closed anonymity) or
+//! public_ (1, clearnet BY DESIGN, not fallback). Replaces the
+//! divert_originated_tx + originated_zone_from_anonymity_roll pair, whose
+//! only caller fed one's bool straight into the other. The rate and the
+//! mapping stay in Rust; relayed traffic inherits its arrival zone instead.
+std::uint8_t shekyl_relay_zone_roll_originated_zone();
+
+//! §18.4 live diagnostic: record the zone's achieved outbound
+//! anonymity-CONNECTION count (connections, not peers -- §16.6); returns the
+//! floor transition (0 steady, 1 went below, 2 recovered) for the warn log.
+//! The floor comparison lives in Rust's FloorWatch, the logging path -- no
+//! wire path reads this state (§18.3).
+std::uint8_t shekyl_relay_zone_note_achieved_out(std::uint8_t zone, std::uint32_t achieved);
+
+//! Admin-surface read of the §18.4 diagnostic (AdminOnly listener only -- a
+//! public below-floor bit is a targeting oracle, §16.3). False until the
+//! first note: no data is never a fabricated zero.
+bool shekyl_relay_zone_floor_snapshot(std::uint8_t zone, std::uint32_t* out_achieved, std::uint32_t* out_floor, bool* out_below);
 
 //! The outbound floor the embargo provisioning assumes (F-8b): counts below
 //! this put real fluff first-passage above the provisioned value.
@@ -3212,6 +3445,33 @@ std::uint32_t shekyl_relay_zone_min_provisioned_out_peers();
 //! FROM those measurements. Same value today, opposite derivations -- do not
 //! substitute one for the other.
 std::uint32_t shekyl_p2p_default_out_peers();
+
+//! Once-at-origin zone routing (Q12-D5a; Q12_D6A_PEER_DISCOVERY_RUN.md §§12,
+//! 18), moved from `cryptonote_protocol/enums.h` under rule 20. Bytes cross
+//! raw; the C++ wrappers in enums.h static_assert `relay_method`,
+//! `epee::net_utils::zone` and `zone_route::decision` against this contract.
+//! Unknown bytes map to the SAFE arm (fail-closed / false), never toward
+//! clearnet -- refuse-to-leak is the family's invariant (§30.5).
+//!
+//! Decision bytes: 0 = keep_arrival, 1 = anonymity_fail_closed,
+//! 2 = public_clearnet.
+std::uint8_t shekyl_relay_zone_once_at_origin_route(std::uint8_t tx_relay, std::uint8_t origin_zone);
+
+//! §30.5/§89.8: an origin on a non-public zone keeps its `local` txpool
+//! record whatever the transport did. Unknown-byte policy is INVERTED here
+//! relative to the siblings, because so is the leak direction: an unknown
+//! ZONE byte on a decodable local origin returns true (not provably public;
+//! keeping `local` fail-closes later, where false would let the record
+//! upgrade and the next pool re-relay put an anonymity origin on clearnet).
+//! Unknown METHOD byte: false.
+bool shekyl_relay_zone_originated_stays_in_zone(std::uint8_t tx_relay, std::uint8_t nzone);
+
+//! Pre-fluff relay methods (stem / local). Unknown bytes: false.
+bool shekyl_relay_zone_is_pre_fluff_relay(std::uint8_t tx_relay);
+
+//! R-1 coherence: pre-fluff on a real anonymity origin. Unknown bytes: false.
+bool shekyl_relay_zone_r1_coherence_keeps_origin(std::uint8_t tx_relay, std::uint8_t origin_zone);
+
 
 //! Record `n` packed 32-byte CANONICAL tx hashes stemmed to `successor`
 //! (16-byte uuid); `source` is the arriving peer's uuid or null for local
@@ -3229,8 +3489,23 @@ void shekyl_relay_zone_record_stem(RelayZoneHandle* handle,
 //! nothing, or a dropper clears its own record by echoing (F-10). Unknown
 //! hashes are ignored; call on EVERY zone's handle, since a stem placed on
 //! one zone can return through another.
-void shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
-    const std::uint8_t* hashes, std::size_t n, const std::uint8_t* from);
+//!
+//! Returns how many of `hashes` this arrival resolved as PROPAGATED and writes
+//! their 32-byte ids into `out_propagated` in order — the transactions for
+//! which "it came back from somewhere other than where I sent it" just became
+//! true. The count is bounded by `n`, so size the buffer once at 32*n.
+//!
+//! Passing `out_propagated == nullptr` -- and only that argument -- makes this
+//! a count-only call: the verdicts are still resolved, nothing is written. A
+//! null `handle` or `hashes` is a different case and returns 0 having done
+//! nothing.
+//!
+//! The verdict leaves HERE rather than being retained for a later query. A
+//! per-transaction outcome store would be a second copy of a fact the txpool
+//! already owns, with no invalidation tied to the pool entry's lifetime.
+std::size_t shekyl_relay_zone_record_arrival(RelayZoneHandle* handle,
+    const std::uint8_t* hashes, std::size_t n, const std::uint8_t* from,
+    std::uint8_t* out_propagated);
 
 //! Fixed-layout stem-tally row for the §55 transit path (native endian, 40
 //! bytes). Must match `ShekylStemTallyRow` in the Rust FFI.
@@ -3270,9 +3545,8 @@ void shekyl_relay_zone_on_close(RelayZoneHandle* handle, const std::uint8_t* id)
 //! Stem slots backed by a live peer — the inherited `connection_count`. Reads a
 //! single-writer atomic, so it is safe from any thread.
 std::size_t shekyl_relay_zone_live_stems(const RelayZoneHandle* handle);
-//! Configured stem width (slot count). When covert is enabled this is also the
-//! channel count (channel i follows slot i). Size the C++ channel deque from
-//! this so the two widths cannot silently diverge.
+//! Configured stem width (slot count). When noise is enabled this is also the
+//! channel count (channel i follows slot i).
 std::size_t shekyl_relay_zone_stem_width(const RelayZoneHandle* handle);
 //! Earliest time the zone has work; what the asio timer is armed against.
 std::uint64_t shekyl_relay_zone_next_wake(const RelayZoneHandle* handle);
@@ -3289,13 +3563,26 @@ std::int32_t shekyl_relay_zone_plan_relay(RelayZoneHandle* handle, const std::ui
 //! Plan a relay; on NO_ROUTE merge `outbound` once and re-plan. Settled fluff
 //! epochs do not refresh. This is the production notify path: the refresh
 //! policy lives in Rust with the zone. No callback — commands return nothing;
-//! a covert channel the refresh leaves unbound clears at its next due tick
-//! through shekyl_relay_zone_poll's on_unbind.
+//! a noise channel the refresh leaves unbound clears at its next due tick
+//! inside Rust, through NoiseQueues::unbind at the next poll.
 std::int32_t shekyl_relay_zone_plan_relay_with_refresh(
     RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
     const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest);
+//! Plan a relay AND the wire that carries it — phase, carrier and slot in
+//! one crossing (rule 40). Return is the same SHEKYL_RELAY_PLAN_* code as
+//! plan_relay_with_refresh. out_carrier is SHEKYL_RELAY_CARRIER_*;
+//! out_channel is the stem slot and is meaningful only when the carrier is
+//! noise (written 0 otherwise). Every out-param is written on the
+//! null-handle path so a mishandled NO_ROUTE cannot be read as a noise
+//! stem. `dandelionpp_notify` is its production caller as of 2026-08-29 —
+//! COVER_TRAFFIC_RESTORATION.md §3.1a. It stood unused before that, kept
+//! against a caller grep on §1.6's criteria, which still govern deletion.
+std::int32_t shekyl_relay_zone_plan_dispatch_with_refresh(
+    RelayZoneHandle* handle, const std::uint8_t* source, bool local_origin,
+    const std::uint8_t* outbound, std::size_t n, std::uint8_t* out_dest,
+    std::uint8_t* out_carrier, std::uint32_t* out_channel);
 //! Merge the current outbound set into the stem map mid-epoch. Used for
-//! connection churn, covert-send recovery, and the forced refresh after a stem
+//! connection churn, noise-send recovery, and the forced refresh after a stem
 //! send failure. No callback — see plan_relay_with_refresh.
 void shekyl_relay_zone_update_stems(RelayZoneHandle* handle, const std::uint8_t* outbound,
                                     std::size_t n);
@@ -3310,20 +3597,80 @@ std::size_t shekyl_relay_zone_queue_fluff(RelayZoneHandle* handle, std::uint64_t
 //! outbound set is not passed in: `gather_outbound` is called back only when a
 //! wake crosses an epoch boundary and the stem map is rebuilt, so a fluff
 //! release never triggers the connection scan.
+//!
+//! \pre NO CALLBACK MAY RE-ENTER THIS HANDLE — all four of them, not only the
+//! newest. This function holds a mutable borrow of the zone for its whole
+//! body, and a second one of the carrier queue across the dispatch that
+//! delivers the effects. Calling any shekyl_relay_zone_*
+//! function on the same handle from inside gather_outbound, on_fluff,
+//! on_noise or on_carrier_resolved constructs an aliasing mutable borrow,
+//! which is undefined behaviour. Buffer whatever the callback learns and
+//! apply it after poll returns — the C++ producer did exactly this, recording
+//! a stem observation from the resolution callback, until review caught it.
+//! No callback may throw across the boundary.
 void shekyl_relay_zone_poll(RelayZoneHandle* handle, std::uint64_t now_ms, void* ctx,
                             ShekylRelayOutboundCb gather_outbound,
-                            ShekylRelayFluffCb on_fluff, ShekylRelayCovertUnbindCb on_unbind,
-                            ShekylRelayCovertSendCb on_covert);
+                            ShekylRelayFluffCb on_fluff,
+                            ShekylRelayNoiseSendCb on_noise,
+                            ShekylRelayCarrierResolvedCb on_carrier_resolved);
+
+//! Hand the carrier ONE transaction to carry on `channel`; true if accepted.
+//!
+//! Takes a single transaction blob rather than a vector, and Rust does the
+//! levin framing. That is COVER_TRAFFIC_RESTORATION.md §2.9b made structural:
+//! two transactions in one carrier message share one window, one slot and one
+//! successor -- the pairwise linkage Dandelion++ exists to deny -- and the
+//! queue cannot enforce it because it sees opaque bytes. A batch is not
+//! something this crossing can express, so it cannot be refused for it either.
+//!
+//! False covers EVERY refusal and a caller cannot tell them apart from the
+//! return alone, so they are listed rather than implied — "refused" reads as
+//! the queue's size rule and most of these are not that: a null handle or tx,
+//! a zone with NO CARRIER (the ordinary case, since the development opt-in
+//! defaults off), a framing failure, an unknown channel, or the queue's own
+//! rule (a whole number of windows, at most `carrier::MAX_FRAGMENTS` — the
+//! Rust-owned cap in `shekyl-relay-privacy`, which has no C macro mirror and
+//! deliberately so: one owner, not a constant to synchronise), or THE CHANNEL
+//! BEING FULL.
+//!
+//! That last one is the only refusal a caller can hit by doing nothing wrong,
+//! and it is the reason this list claims to be exhaustive rather than
+//! illustrative. A channel holds at most one epoch's worth of windows. That is
+//! a BACKLOG bound, not a delivery guarantee: the drain is one window per due
+//! tick, and nothing else empties the queue -- an epoch rollover redraws the
+//! stem map without touching it, so queued messages survive a roll. The cap is
+//! therefore the only thing standing between a node that stems faster than the
+//! cadence and unbounded growth, here and in the caller's token map. What it
+//! admits is delay: a message accepted behind a full channel waits up to about
+//! an epoch for the wire. A full channel means the carrier is saturated, not
+//! that the transaction is malformed -- send it by the ordinary wire, which is
+//! what the producer does.
+//! `token` is the caller's handle for this message, opaque to the carrier and
+//! returned verbatim through `ShekylRelayCarrierResolvedCb`. It is deliberately
+//! NOT a transaction hash: the queue holds framed bytes it cannot parse, which
+//! is what keeps the one-transaction rule enforceable and the size bound the
+//! enforcement point. A queue that could read the id would have a reason to
+//! look inside, and the next change would give it one.
+//!
+//! A `true` return means ACCEPTED, not sent. The message reaches the wire on
+//! later cadence ticks, and its fate arrives through the resolution callback.
+bool shekyl_relay_zone_noise_enqueue(RelayZoneHandle* handle, std::size_t channel,
+                                     const std::uint8_t* tx, std::size_t tx_len,
+                                     std::uint64_t token);
 //! Release every pending fluff batch — what notify::run_fluff() drives.
 void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms,
                                    void* ctx, ShekylRelayFluffCb on_fluff);
 //! Start a new epoch immediately — what notify::run_epoch() drives. No
-//! callback — the rollover's covert consequences ride the schedule, exactly
+//! callback — the rollover's noise consequences ride the schedule, exactly
 //! as a deadline-crossing rollover's do.
 void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms,
                                    const std::uint8_t* outbound, std::size_t n);
 
-// ── Levin payload compression (IMPLEMENTATION_INDEX.md LV row) ─────────────
+// ── Levin ingress + emit framing + compression (IMPLEMENTATION_INDEX.md LV row) ──────
+//
+// Levin FFI: ingress admit (PWD-B3 / B3a / B4) plus compression / noise /
+// fragment emit. Ingress policy lives in rust/shekyl-levin; C++ handle_recv
+// is a marshaling shim over shekyl_levin_ingress_admit.
 //
 // The epee::levin compression path is a marshaling shim over these exports
 // (emit: contrib/epee/src/levin_base.cpp try_compress_message; receive:
@@ -3343,19 +3690,19 @@ void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms
 // or size-less frame; -4 = null pointer / undersized output buffer;
 // -6 = the Rust image was built without the zstd feature (production always
 // has it on; pure-Rust feature-off builds only); -7 = a size limit was
-// exceeded.
+// exceeded; -8 = unknown flag bits at ingress; -9 = unknown dispatch
+// command.
 //
 // -3 and -7 are separate because they call for opposite operator responses
 // — a corrupt or hostile peer versus an honest peer whose batch outgrew the
 // per-command cap — and the receive path closes the connection on both.
 //
-// Decompression writes into CALLER storage: size it with
-// shekyl_levin_inflated_size, then inflate with shekyl_levin_decompress_into.
-// Nothing is allocated on the Rust side and nothing is copied across the
-// boundary, which matters during IBD where these are multi-megabyte block
-// batches once per packet per connection. Only compression returns a
-// Rust-allocated ShekylBuffer (its output size is not knowable in advance),
-// and that buffer MUST be freed with shekyl_buffer_free.
+// Variable-length emit (compress, noise, fragment) returns a Rust-allocated
+// ShekylBuffer that MUST be freed with shekyl_buffer_free. Receive is
+// direct-write: size with shekyl_levin_inflated_size, then inflate with
+// shekyl_levin_decompress_into — nothing is allocated on the Rust side on
+// that path, which matters during IBD where these are multi-megabyte block
+// batches once per packet per connection.
 
 //! Compress one finalized Levin message — header and payload together.
 //! 0 = out holds the re-framed COMPRESSED message (free with
@@ -3381,6 +3728,190 @@ int32_t shekyl_levin_inflated_size(const uint8_t* input, size_t input_len,
 int32_t shekyl_levin_decompress_into(const uint8_t* input, size_t input_len,
                                      uint8_t* out, size_t out_cap,
                                      size_t* out_written);
+//! Build a dummy ("noise") message of exactly noise_bytes total length —
+//! command 0, B|E set, zeroed payload; the white-noise cover-traffic unit.
+//! 0 = out set (free with shekyl_buffer_free); -3 when noise_bytes cannot
+//! hold a bucket header or would produce an m_cb above the Levin packet
+//! limit (the epee shim returns a null slice, the historical contract).
+//! Size policy lives in rust/shekyl-levin; this export is marshaling.
+int32_t shekyl_levin_noise_notify(size_t noise_bytes, ShekylBuffer* out);
+//! Emit a notification for `command` as one or more messages, each exactly
+//! noise_size bytes on the wire — a single zero-padded notification when it
+//! fits, B/middle/E fragments when it does not. The fragment padding
+//! algorithm lives only in rust/shekyl-levin now. 0 = out set (free with
+//! shekyl_buffer_free); -3 when noise_size cannot hold two headers or
+//! would produce an m_cb above the Levin packet limit. The inner payload
+//! may itself be larger — that is why this path fragments.
+int32_t shekyl_levin_fragmented_notify(size_t noise_size, uint32_t command,
+                                       const uint8_t* payload, size_t payload_len,
+                                       ShekylBuffer* out);
+//! Admit one parsed Levin bucket header (PWD-B3 / PWD-B3a / PWD-B4).
+//! Writes the payload cap into `out_cap` on success. A noise/fragment
+//! bucket (neither REQUEST nor RESPONSE) writes UINT64_MAX so the
+//! caller's packet limit binds; cover traffic with command 0 is not
+//! an unknown command. 0 = admitted; -4 = out_cap was null; -8 =
+//! unknown flag bits; -9 = unknown dispatch command.
+int32_t shekyl_levin_ingress_admit(uint32_t command, uint32_t flags,
+                                    uint64_t* out_cap);
+
+// -- Peer-attribution drop rule (PWD-B7) ------------------------------------
+// Opaque ABI for rust/shekyl-peer-policy::DropVerdict. C++ writes these
+// constants through shekyl_drop_verdict_classify and reads only via the
+// two predicates. Zero does not sever. The gtest searches the byte domain
+// for the severing value rather than restating the discriminants.
+
+#define SHEKYL_DROP_VERDICT_UNCLASSIFIED      0u
+#define SHEKYL_DROP_VERDICT_POLICY_OR_STATE   1u
+#define SHEKYL_DROP_VERDICT_INTERNAL_FAILURE  2u
+#define SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM 3u
+
+bool shekyl_drop_verdict_severs(uint8_t verdict);
+bool shekyl_drop_verdict_is_internal_failure(uint8_t verdict);
+uint8_t shekyl_drop_verdict_combine(uint8_t current, uint8_t incoming);
+//! Fold `incoming` into `slot`. Null `slot` is a no-op (no peer to attribute).
+void shekyl_drop_verdict_classify(uint8_t* slot, uint8_t incoming);
+
+// -- Block-ingest outcome (PWD-B7 block twin) -------------------------------
+// Opaque ABI for rust/shekyl-peer-policy::BlockIngest. Replaces
+// block_verification_context's bag of independent bools. C++ writes
+// non-reject arms through shekyl_block_ingest_record and reject arms
+// through shekyl_block_ingest_reject_* (Rust pairs the drop slot).
+// Zero is Unclassified: not added, not rejected, not a drop. P2P asks
+// shekyl_block_announce_action / shekyl_block_sync_action, not these
+// bytes. Action bytes have no header constants.
+
+#define SHEKYL_BLOCK_INGEST_UNCLASSIFIED     0u
+#define SHEKYL_BLOCK_INGEST_ADDED            1u
+#define SHEKYL_BLOCK_INGEST_ALREADY_EXISTS   2u
+#define SHEKYL_BLOCK_INGEST_ORPHANED         3u
+#define SHEKYL_BLOCK_INGEST_MISSING_TXS      4u
+#define SHEKYL_BLOCK_INGEST_DEGRADED_KEEP    5u
+#define SHEKYL_BLOCK_INGEST_ALT_STORED       6u
+#define SHEKYL_BLOCK_INGEST_REJECTED         7u
+#define SHEKYL_BLOCK_INGEST_REJECTED_BAD_POW 8u
+
+bool shekyl_block_ingest_is_added(uint8_t outcome);
+bool shekyl_block_ingest_already_exists(uint8_t outcome);
+bool shekyl_block_ingest_is_orphaned(uint8_t outcome);
+bool shekyl_block_ingest_missing_txs(uint8_t outcome);
+bool shekyl_block_ingest_is_rejected(uint8_t outcome);
+bool shekyl_block_ingest_is_bad_pow(uint8_t outcome);
+//! Fold `incoming` into `slot`. First writer wins. Null `slot` is a no-op.
+void shekyl_block_ingest_record(uint8_t* slot, uint8_t incoming);
+//! Pair both slots. Either pointer null is a no-op (do not half-write).
+void shekyl_block_ingest_reject_form(uint8_t* outcome, uint8_t* drop);
+void shekyl_block_ingest_reject_state(uint8_t* outcome, uint8_t* drop);
+void shekyl_block_ingest_reject_internal(uint8_t* outcome, uint8_t* drop);
+void shekyl_block_ingest_reject_bad_pow(uint8_t* outcome, uint8_t* drop);
+void shekyl_block_ingest_reject_with_drop(uint8_t* outcome, uint8_t* drop, uint8_t incoming_drop);
+
+//! Announce/sync instruction bytes. No SHEKYL_BLOCK_ANNOUNCE_* constants:
+//! C++ never writes these. An unrecognised byte is idle (do not drop).
+uint8_t shekyl_block_announce_action(uint8_t outcome, uint8_t drop, bool handle_ok);
+bool shekyl_block_announce_re_request_txs(uint8_t action);
+bool shekyl_block_announce_drop(uint8_t action);
+bool shekyl_block_announce_heavier_score(uint8_t action);
+bool shekyl_block_announce_our_failure(uint8_t action);
+bool shekyl_block_announce_relay(uint8_t action);
+bool shekyl_block_announce_request_history(uint8_t action);
+
+uint8_t shekyl_block_sync_action(uint8_t outcome, uint8_t drop);
+bool shekyl_block_sync_drop(uint8_t action);
+bool shekyl_block_sync_heavier_score(uint8_t action);
+bool shekyl_block_sync_orphan_resync(uint8_t action);
+
+// ---------------------------------------------------------------------------
+// Daemon ephemeral Tor inbound -- PWD-E7 (docs/design/P2P_2_ENDPOINT_ROUND.md)
+// ---------------------------------------------------------------------------
+// The DEFAULT overlay-endpoint posture: the daemon spawns a managed, pinned
+// tor, mints a v3 onion key IN MEMORY, publishes with ADD_ONION Flags=
+// DiscardPK, and uses the returned ServiceID as its per-boot overlay inbound
+// address. The DataDirectory is a unique 0700 subdirectory of the daemon
+// config folder, wiped on teardown -- a restart cannot reuse entry guards.
+// The operator-provisioned stable posture (--anonymous-inbound + torrc) is a
+// different privacy posture, not a different custody of the same thing, and
+// configuring it makes the ephemeral posture yield. All of the posture logic
+// lives in rust/shekyl-tor-control-daemon; these exports are marshaling.
+//
+// These symbols live in shekyl-ffi (linked by every C++ binary that
+// instantiates node_server via SHEKYL_FFI_LINK_LIBS). daemon_image is a
+// superset, so shekyld sees them too. They are not in shekyl-daemon-rpc:
+// that crate is the Axum HTTP server, not the P2P overlay.
+
+#define SHEKYL_DAEMON_TOR_OK                 0
+#define SHEKYL_DAEMON_TOR_ALREADY_RUNNING    1
+#define SHEKYL_DAEMON_TOR_ARG                2
+#define SHEKYL_DAEMON_TOR_NO_BINARY          3
+#define SHEKYL_DAEMON_TOR_BAD_BINARY         4
+#define SHEKYL_DAEMON_TOR_START_FAILED       5
+#define SHEKYL_DAEMON_TOR_NOT_RUNNING        1
+#define SHEKYL_DAEMON_TOR_PUBLISH_FAILED     3
+
+//! Start the managed tor: verify the binary, create a unique wiped
+//! DataDirectory under `data_dir_parent` (the daemon config folder -- never
+//! the DataDirectory itself), bootstrap to 100%, and return its SOCKS
+//! listener. No onion is published yet -- that is shekyl_daemon_tor_publish,
+//! called after the daemon has bound its loopback inbound listener (on an
+//! OS-assigned port; a port guessed before binding could already be taken
+//! and abort init). BLOCKS for the whole sequence (tens of seconds on a
+//! cold bootstrap; bound by bootstrap_timeout_secs plus small constants).
+//! Outputs are NUL-terminated: out_socks_addr (>= 48 bytes; the managed
+//! tor's SOCKS "ip:port" -- the zone's outbound proxy), out_error (>= 256
+//! bytes recommended). Return codes: SHEKYL_DAEMON_TOR_OK; _ALREADY_RUNNING
+//! (refused, not stacked); _ARG; _NO_BINARY (calm skip -- no candidate at
+//! all); _BAD_BINARY (candidate found but unusable: pin mismatch, unpinned
+//! target, unreadable); _START_FAILED (spawn/bootstrap -- incarnation torn
+//! down before return, so a failed start commits the caller to nothing).
+int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir_parent,
+                            uint32_t bootstrap_timeout_secs,
+                            char* out_socks_addr, size_t out_socks_addr_len,
+                            char* out_error, size_t out_error_len);
+
+//! Publish the per-boot v3 onion on the running managed tor (key minted in
+//! memory, ADD_ONION Flags=DiscardPK), forwarding virtual_port (what peers
+//! dial) to 127.0.0.1:local_port (the daemon's already-bound inbound
+//! listener), MaxStreams=max_streams per rendezvous circuit. Outputs are
+//! NUL-terminated: out_service_id (>= 57 bytes; 56-char service id, no
+//! ".onion"), out_error (>= 256 bytes recommended). Returns 0 = published;
+//! 1 = no instance running (start first); 2 = argument error; 3 = publish
+//! failed (detail in out_error). A publish failure leaves tor RUNNING: the
+//! ruled degrade is outbound-only on the zone (keep the SOCKS proxy, serve
+//! no overlay inbound this boot) -- do not abort the daemon.
+int shekyl_daemon_tor_publish(uint16_t virtual_port, uint16_t local_port,
+                              uint16_t max_streams,
+                              char* out_service_id, size_t out_service_id_len,
+                              char* out_error, size_t out_error_len);
+
+//! Is the ephemeral tor still up? false when never started, already shut
+//! down, or died. Per PWD-E7 there is no respawn: a death means the overlay
+//! posture is gone for this boot. The daemon's idle loop polls this and, on
+//! the true->false edge, logs once that overlay inbound is lost and that
+//! originated transactions stay fail-closed on the tor zone.
+bool shekyl_daemon_tor_is_alive(void);
+
+//! Bounded teardown of the ephemeral posture (DEL_ONION, SIGTERM -> wait ->
+//! SIGKILL, reap). Idempotent: true when an instance was running and is now
+//! down, false when there was nothing to stop.
+bool shekyl_daemon_tor_shutdown(void);
+
+// ---------------------------------------------------------------------------
+// DRS-P0d logical-state digest v0
+// (`docs/design/DAEMON_REDB_STORE.md` §7.1). One coarse call: C++ has
+// already collected height-ordered block hashes, the spent-key set, and
+// the live curve-tree root from production LMDB. Archival journals are
+// not inputs (named exclusion, §7.1.1).
+//
+// `block_hashes` / `spent_keys` may be NULL only when the corresponding
+// count is 0. `curve_root` and `out_digest` are always 32-byte buffers
+// and must be non-NULL.
+// ---------------------------------------------------------------------------
+int32_t shekyl_logical_state_digest_v0(
+    const uint8_t* block_hashes,
+    uint64_t n_blocks,
+    const uint8_t* spent_keys,
+    uint64_t n_spent,
+    const uint8_t* curve_root,
+    uint8_t* out_digest);
 
 } // extern "C"
 
@@ -3401,6 +3932,14 @@ int32_t shekyl_levin_decompress_into(const uint8_t* input, size_t input_len,
 /// Rust workspace runs `panic = "abort"` so any panic terminates the
 /// process before reaching the return path.
 #define SHEKYL_DIFFICULTY_ERR_INTERNAL       -4
+/// `shekyl_difficulty_alt_window_plan` preconditions failed: height-0
+/// candidate or alt ancestry not contiguous with the candidate.
+#define SHEKYL_DIFFICULTY_ERR_WINDOW         -5
+
+/// `shekyl_difficulty_fork_choice`: the incumbent chain stays.
+#define SHEKYL_FORK_CHOICE_KEEP_CURRENT      INT32_C(0)
+/// `shekyl_difficulty_fork_choice`: reorganize onto the alternative.
+#define SHEKYL_FORK_CHOICE_SWITCH            INT32_C(1)
 
 /// `shekyl_pow_randomx_v2_hash` wrote `*out_hash`, or
 /// `shekyl_pow_randomx_v2_set_canonical` pinned the seedhash.
@@ -3418,6 +3957,15 @@ int32_t shekyl_levin_decompress_into(const uint8_t* input, size_t input_len,
 /// Reserved for a panic crossing the FFI boundary. Not currently
 /// emitted; `panic = "abort"` terminates the process first.
 #define SHEKYL_POW_RANDOMX_V2_ERR_INTERNAL            -4
+
+/// `shekyl_logical_state_digest_v0` wrote `*out_digest`.
+#define SHEKYL_CHAIN_DIGEST_V0_OK                      0
+/// A required pointer was null. `curve_root` and `out_digest` are
+/// always required; `block_hashes` / `spent_keys` may be null only
+/// when the corresponding count is 0.
+#define SHEKYL_CHAIN_DIGEST_V0_ERR_NULL_PTR           -1
+/// `n_blocks` or `n_spent` overflowed `size_t` when widened to bytes.
+#define SHEKYL_CHAIN_DIGEST_V0_ERR_OVERFLOW           -2
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h
 /// (C-compatible header used by both memwipe.c and mlocker.cpp).

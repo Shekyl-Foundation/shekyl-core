@@ -18,47 +18,34 @@ name: ci/economics-c2a-prime
 on:
   pull_request:
     branches: [dev]
-    paths:
+    paths: &econ_paths
       - "config/economics_params.json"
       - "cmake/generate_economics_params.py"
       - "src/cryptonote_basic/**"
       - "src/cryptonote_core/blockchain.cpp"
       - "src/cryptonote_core/blockchain.h"
-      # Conservation-KAT guarded surface: the accrual/burn row write +
-      # pop-removal (blockchain_db), compute_emission_split /
-      # compute_fee_burn (src/shekyl), and the HF_VERSION_* activation
-      # constants (cryptonote_config.h). A regression in any of these must
-      # trigger the gate that exists to catch it.
+      # Conservation-KAT guarded surface. Named by convention, not a
+      # frozen file list and not `src/shekyl/**` / `tests/unit_tests/**`:
+      # those directories also hold FFI/log/secure_mem headers and
+      # archival bond/credit tests that are not this gate. A future
+      # `economics.cpp` or `economics_*.cpp` / `archival_*emission*.cpp`
+      # still fires; `CMakeLists.txt` still fires when a new test is
+      # registered under a name that does not yet match.
       - "src/blockchain_db/**"
-      - "src/shekyl/**"
+      - "src/shekyl/economics.*"
       - "src/cryptonote_config.h"
       - "rust/shekyl-economics/**"
       - "rust/shekyl-economics-sim/**"
       - "rust/shekyl-ffi/**"
-      - "tests/unit_tests/**"
+      - "tests/unit_tests/CMakeLists.txt"
+      - "tests/unit_tests/economics*.cpp"
+      - "tests/unit_tests/archival_*emission*.cpp"
       - "tests/core_tests/**"
       - "scripts/ci/run_economics_c2a_prime.sh"
       - ".github/workflows/economics-c2a-prime.yml"
   push:
     branches: [dev]
-    paths:
-      - "config/economics_params.json"
-      - "cmake/generate_economics_params.py"
-      - "src/cryptonote_basic/**"
-      - "src/cryptonote_core/blockchain.cpp"
-      - "src/cryptonote_core/blockchain.h"
-      # Keep in lockstep with the pull_request paths above (conservation-KAT
-      # guarded surface).
-      - "src/blockchain_db/**"
-      - "src/shekyl/**"
-      - "src/cryptonote_config.h"
-      - "rust/shekyl-economics/**"
-      - "rust/shekyl-economics-sim/**"
-      - "rust/shekyl-ffi/**"
-      - "tests/unit_tests/**"
-      - "tests/core_tests/**"
-      - "scripts/ci/run_economics_c2a_prime.sh"
-      - ".github/workflows/economics-c2a-prime.yml"
+    paths: *econ_paths
   workflow_dispatch:
 
 concurrency:
@@ -161,9 +148,15 @@ jobs:
           # The CALIBRATION build is CMAKE_BUILD_TYPE=Release, so BUILD_SHARED_LIBS
           # defaults OFF (it only flips ON for Debug, CMakeLists.txt:608-612). Internal
           # libraries are therefore static .a archives and the test binaries are
-          # statically linked against them — no internal .so files exist, and the
-          # binaries are self-contained for the layer jobs. The deliverable to verify
-          # is the two test binaries themselves; the tar already excludes *.a and *.o.
+          # statically linked against them — no internal .so files exist, which is why
+          # the tar can exclude *.a and *.o and still ship working binaries.
+          #
+          # That does NOT make them self-contained, and this comment previously said it
+          # did. The binaries still need SYSTEM libraries (boost, libunwind, ssl,
+          # sodium) that the layer jobs install by hand; when one is missing the binary
+          # exits 127 at the loader. This step verifies the binaries are PRESENT, which
+          # is necessary and not sufficient — the layer jobs prove they RUN, via
+          # require_binary_runs in run_economics_c2a_prime.sh.
           required=(
             build/tests/unit_tests/unit_tests
             build/tests/core_tests/core_tests
@@ -234,9 +227,20 @@ jobs:
           # git is required by the "configure git" step and actions/checkout@v5
           # (submodules: recursive). The build job gets it via APT_INSTALL_LINUX;
           # the layer jobs install a minimal runtime set and must add it here.
+          #
+          # This list is the test binaries' DT_NEEDED set, not a guess. Derive it
+          # with `readelf -d build/tests/unit_tests/unit_tests | grep NEEDED`
+          # against a Release build and map each entry to its jammy package —
+          # a library missing here is not a link error, it is exit 127 at the
+          # dynamic loader before main, which the gate reports as "no tests".
+          # libunwind8 / program-options / serialization were absent from this
+          # list from the day the layer jobs landed, which is why every layer
+          # gate had reported zero cases (see the "Verify test binaries are
+          # runnable" step below, which now asserts this rather than trusting it).
           apt -y install git ripgrep python3 libboost-system1.74.0 libboost-filesystem1.74.0 \
             libboost-thread1.74.0 libboost-chrono1.74.0 libboost-regex1.74.0 \
-            libssl3 libsodium23 libprotobuf23
+            libboost-program-options1.74.0 libboost-serialization1.74.0 \
+            libssl3 libsodium23 libprotobuf23 libunwind8
       - name: install build toolchain for Rust tests
         # curl + ca-certificates: required by the install-Rust step
         # below. They were NEVER installed in this job — the old
@@ -270,7 +274,36 @@ jobs:
         id: layer_run
         env:
           CTEST_OUTPUT_ON_FAILURE: ON
+        # `shell: bash` is load-bearing, not style (rule 46).
+        #
+        # THE DEFECT: a pipeline's exit status is its LAST command's, so
+        # piping this gate's verdict through `tee` reported tee's
+        # success and discarded the script's — a failing layer went
+        # GREEN. That holds under every shell; `sh` and `bash` alike.
+        #
+        # THE FIX, and why it names a shell. This job runs in
+        # `container: ubuntu:22.04`, and inside a container GitHub's
+        # default for a bare `run:` is **`sh`**, not the `bash -e` you
+        # get on a hosted runner. Ubuntu 22.04's `sh` is dash, whose
+        # `set` rejects `-o pipefail` outright — an earlier attempt to
+        # fix this with `set -eo pipefail` alone therefore turned a
+        # silently-passing gate into `Illegal option -o pipefail`.
+        # Naming `shell: bash` gives
+        # `bash --noprofile --norc -eo pipefail {0}`, which supplies
+        # both `-e` and pipefail by definition; the `build` job in this
+        # same workflow and same image already does it, so bash is
+        # known present.
+        #
+        # `set -eo pipefail` is kept explicitly as well, so the intent
+        # is legible at the step and survives a change to GitHub's
+        # defaults.
+        #
+        # The rule-46 SIGPIPE trap does not apply: it bites when an
+        # early-exiting consumer (`rg -q`, `head`) kills its producer,
+        # and `tee` consumes to completion.
+        shell: bash
         run: |
+          set -eo pipefail
           scripts/ci/run_economics_c2a_prime.sh ${{ matrix.subcommand }} \
             2>&1 | tee "economics-c2a-layer${{ matrix.layer }}.log"
       - name: Upload failure diagnostics

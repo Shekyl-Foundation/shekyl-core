@@ -12,15 +12,15 @@
 //! PQC scan fields — `0x06` hybrid KEM ciphertexts (`x25519 ‖ ML-KEM-768` per
 //! output) and `0x07` leaf hashes (`h_pqc` per output).
 //!
-//! This parses the **Shekyl genesis `tx_extra` tag set** — a deliberate subset of
-//! `src/cryptonote_basic/tx_extra.h`. Tag grammars match that header: most tags are
-//! `tag · V(len) · blob` (`FIELD(std::string)`); `0x01` is a bare 32-byte key; `0x04`
-//! is `V(count) · count×32`; `0x05` is `V(count) · count×{u8,u8,[32]}`; `0x00` padding
+//! This crate owns the **Shekyl genesis `tx_extra` tag set**
+//! (`GENESIS_TX_WIRE_FORMAT.md` §9.6a). Tag grammars: most tags are
+//! `tag · V(len) · blob`; `0x01` is a bare 32-byte key; `0x04` is
+//! `V(count) · count×32`; `0x05` is `V(count) · count×{u8,u8,[32]}`; `0x00` padding
 //! is a run of zero bytes (≤ `TX_EXTRA_PADDING_MAX_COUNT`). Inherited Monero tags that
 //! are **not** part of the genesis grammar — merge-mining (`0x03`) and the "mysterious
-//! minergate" (`0xDE`) — are deliberately **rejected** (shed, per the
-//! `60-no-monero-legacy` rule); their removal from the C++ oracle's `tx_extra` variant is
-//! a follow-up shed (cf. the §5 dead-arm cuts).
+//! minergate" (`0xDE`) — are **rejected** (rule 60). The byte values stay retired.
+//! The C++ variant is an adapter that must admit this same set until that parser
+//! is deleted.
 
 use std::io::{self, Read, Write};
 
@@ -48,6 +48,12 @@ pub const TX_EXTRA_TAG_MULTISIG_MIGRATION: u8 = 0x08;
 pub const TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS: u8 = 0x09;
 /// `0x0A` — PQC spend-auth pubkeys blob.
 pub const TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS: u8 = 0x0A;
+
+/// `0x0B` — archival attestation blob. A present tag with an empty payload
+/// encodes as two bytes (`0x0B 0x00`), not as an absent extra. The consensus
+/// reader's committed empty set is a successful parse with the tag **absent**;
+/// present-empty and absent both yield an empty blob at that API.
+pub const TX_EXTRA_TAG_ARCHIVAL_ATTESTATION: u8 = 0x0B;
 
 /// X25519 ciphertext bytes per output (`tx_extra.h`).
 pub const X25519_CT_BYTES: usize = 32;
@@ -116,6 +122,8 @@ pub enum TxExtraField {
     PqcViewTagHints(Vec<u8>),
     /// `0x0A` — PQC spend-auth pubkeys blob.
     PqcSpendAuthPubkeys(Vec<u8>),
+    /// `0x0B` — archival attestation blob.
+    ArchivalAttestation(Vec<u8>),
 }
 
 /// A per-output hybrid KEM ciphertext from a `0x06` field.
@@ -233,6 +241,9 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
             TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS => {
                 TxExtraField::PqcSpendAuthPubkeys(read_blob(&mut cur, "pqc_spend_auth_pubkeys")?)
             }
+            TX_EXTRA_TAG_ARCHIVAL_ATTESTATION => {
+                TxExtraField::ArchivalAttestation(read_blob(&mut cur, "archival_attestation")?)
+            }
             other => {
                 return Err(io::Error::other(format!(
                     "tx_extra: unknown tag {other:#04x}"
@@ -295,6 +306,7 @@ pub fn serialize(fields: &[TxExtraField]) -> io::Result<Vec<u8>> {
             | TxExtraField::MultisigMigration(b)
             | TxExtraField::PqcViewTagHints(b)
             | TxExtraField::PqcSpendAuthPubkeys(b)
+            | TxExtraField::ArchivalAttestation(b)
                 if b.len() > READ_LEN_CAP =>
             {
                 return Err(io::Error::other(format!(
@@ -363,6 +375,9 @@ fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {
         TxExtraField::PqcSpendAuthPubkeys(blob) => {
             write_blob(w, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS, blob)
         }
+        TxExtraField::ArchivalAttestation(blob) => {
+            write_blob(w, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION, blob)
+        }
     }
 }
 
@@ -404,4 +419,273 @@ pub fn pqc_leaf_hashes_per_output(blob: &[u8]) -> io::Result<Vec<[u8; 32]>> {
             h
         })
         .collect())
+}
+
+/// Why a `0x06` / `0x07` field is refused at admission (§9.6a as ruled
+/// 2026-09-05; CEN-I19). Every variant names its tag, and every variant whose
+/// defect is a count or a length names those numbers — a rejected transaction
+/// says what was expected, not merely that something was wrong. The daemon
+/// logs this type's `Display` verbatim across the FFI
+/// (`shekyl_tx_extra_pqc_field_shape`), so its log line and a port's error are
+/// the same sentence by construction rather than by two formatters agreeing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PqcFieldShapeError {
+    /// A tagged field is present on a transaction with no outputs.
+    PresentWithoutOutputs { tag: u8 },
+    /// The transaction has outputs but no field carrying this tag;
+    /// `expected` is the length the single field would have had.
+    Missing { tag: u8, expected: usize },
+    /// More than one field carries this tag: the bytes admit two readings
+    /// (first-match, last-match, reject) and a port may pick a different one.
+    Duplicate { tag: u8, count: usize },
+    /// The single field's length is not `stride · n_outputs`.
+    Length {
+        tag: u8,
+        got: usize,
+        expected: usize,
+    },
+}
+
+impl std::fmt::Display for PqcFieldShapeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PresentWithoutOutputs { tag } => {
+                write!(
+                    f,
+                    "tx_extra {tag:#04x} present on a transaction with no outputs"
+                )
+            }
+            Self::Missing { tag, expected } => write!(
+                f,
+                "tx_extra {tag:#04x} missing on a transaction with outputs; {expected} bytes required"
+            ),
+            Self::Duplicate { tag, count } => {
+                write!(
+                    f,
+                    "tx_extra {tag:#04x} appears {count} times; exactly one is admitted"
+                )
+            }
+            Self::Length { tag, got, expected } => write!(
+                f,
+                "tx_extra {tag:#04x} is {got} bytes; {expected} required for this output count"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PqcFieldShapeError {}
+
+/// The PQC field shape rule, on the facts either parser extracts: with
+/// `n = n_outputs`, a transaction carries **exactly one** `0x06` of
+/// `HYBRID_KEM_CT_BYTES · n` and **exactly one** `0x07` of
+/// `PQC_LEAF_HASH_BYTES · n` when `n > 0`, and **neither** when `n == 0`.
+///
+/// `kem_lens` / `leaf_lens` are the byte lengths of every `0x06` / `0x07`
+/// field found, in order. The daemon feeds these from its own `tx_extra`
+/// parse (over the FFI twin `shekyl_tx_extra_pqc_field_shape`) and the port
+/// feeds them from [`parse`] via [`check_pqc_field_shape_of`], so the rule has
+/// one home. The zero-output arm is what keeps serve-credit transactions
+/// (no outputs, empty `extra`) admissible: they are the must-accept control.
+///
+/// Consensus, not policy (Rick, 2026-09-05): `0x07` is the fourth scalar of
+/// every leaf these outputs become — a short or missing field used to be
+/// zero-filled into the tree, a leaf set a faithful port would not store; and
+/// a short or missing `0x06` leaves the recipient unable to ever see or spend
+/// the payment, which a relay-only rule would still let a miner commit.
+pub fn check_pqc_field_shape(
+    n_outputs: usize,
+    kem_lens: &[usize],
+    leaf_lens: &[usize],
+) -> Result<(), PqcFieldShapeError> {
+    check_one(
+        TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT,
+        HYBRID_KEM_CT_BYTES,
+        n_outputs,
+        kem_lens,
+    )?;
+    check_one(
+        TX_EXTRA_TAG_PQC_LEAF_HASHES,
+        PQC_LEAF_HASH_BYTES,
+        n_outputs,
+        leaf_lens,
+    )
+}
+
+fn check_one(
+    tag: u8,
+    stride: usize,
+    n_outputs: usize,
+    lens: &[usize],
+) -> Result<(), PqcFieldShapeError> {
+    if n_outputs == 0 {
+        return if lens.is_empty() {
+            Ok(())
+        } else {
+            Err(PqcFieldShapeError::PresentWithoutOutputs { tag })
+        };
+    }
+    // `n_outputs` is a vout count the caller already parsed, so this product
+    // cannot overflow in practice; saturating keeps the arithmetic total
+    // without inventing a variant for a state no transaction can reach.
+    let expected = stride.saturating_mul(n_outputs);
+    match lens {
+        [] => Err(PqcFieldShapeError::Missing { tag, expected }),
+        [got] if *got == expected => Ok(()),
+        [got] => Err(PqcFieldShapeError::Length {
+            tag,
+            got: *got,
+            expected,
+        }),
+        many => Err(PqcFieldShapeError::Duplicate {
+            tag,
+            count: many.len(),
+        }),
+    }
+}
+
+/// [`check_pqc_field_shape`] over parsed fields.
+pub fn check_pqc_field_shape_of(
+    fields: &[TxExtraField],
+    n_outputs: usize,
+) -> Result<(), PqcFieldShapeError> {
+    let kem: Vec<usize> = fields
+        .iter()
+        .filter_map(|f| match f {
+            TxExtraField::PqcKemCiphertext(b) => Some(b.len()),
+            _ => None,
+        })
+        .collect();
+    let leaf: Vec<usize> = fields
+        .iter()
+        .filter_map(|f| match f {
+            TxExtraField::PqcLeafHashes(b) => Some(b.len()),
+            _ => None,
+        })
+        .collect();
+    check_pqc_field_shape(n_outputs, &kem, &leaf)
+}
+
+#[cfg(test)]
+mod pqc_field_shape {
+    use super::*;
+
+    const K: usize = HYBRID_KEM_CT_BYTES;
+    const L: usize = PQC_LEAF_HASH_BYTES;
+
+    #[test]
+    fn conforming_shapes_pass() {
+        assert_eq!(check_pqc_field_shape(1, &[K], &[L]), Ok(()));
+        assert_eq!(check_pqc_field_shape(5, &[5 * K], &[5 * L]), Ok(()));
+        // The serve-credit control: no outputs, no fields.
+        assert_eq!(check_pqc_field_shape(0, &[], &[]), Ok(()));
+    }
+
+    #[test]
+    fn rick_s_vectors_are_refused() {
+        use PqcFieldShapeError as E;
+        assert_eq!(
+            check_pqc_field_shape(1, &[K], &[L, L]),
+            Err(E::Duplicate {
+                tag: 0x07,
+                count: 2
+            })
+        );
+        assert_eq!(
+            check_pqc_field_shape(1, &[K, K], &[L]),
+            Err(E::Duplicate {
+                tag: 0x06,
+                count: 2
+            })
+        );
+        assert_eq!(
+            check_pqc_field_shape(1, &[K], &[2 * L]),
+            Err(E::Length {
+                tag: 0x07,
+                got: 2 * L,
+                expected: L
+            })
+        );
+        assert_eq!(
+            check_pqc_field_shape(1, &[K], &[0]),
+            Err(E::Length {
+                tag: 0x07,
+                got: 0,
+                expected: L
+            })
+        );
+        assert_eq!(
+            check_pqc_field_shape(1, &[2 * K], &[L]),
+            Err(E::Length {
+                tag: 0x06,
+                got: 2 * K,
+                expected: K
+            })
+        );
+        assert_eq!(
+            check_pqc_field_shape(1, &[0], &[L]),
+            Err(E::Length {
+                tag: 0x06,
+                got: 0,
+                expected: K
+            })
+        );
+        assert_eq!(
+            check_pqc_field_shape(1, &[], &[]),
+            Err(E::Missing {
+                tag: 0x06,
+                expected: K
+            })
+        );
+        assert_eq!(
+            check_pqc_field_shape(2, &[2 * K], &[]),
+            Err(E::Missing {
+                tag: 0x07,
+                expected: 2 * L
+            })
+        );
+        // The sentences themselves: the daemon logs these verbatim, so a
+        // message that stopped naming its numbers would fail here.
+        assert_eq!(
+            check_pqc_field_shape(2, &[2 * K], &[])
+                .unwrap_err()
+                .to_string(),
+            "tx_extra 0x07 missing on a transaction with outputs; 64 bytes required"
+        );
+        assert_eq!(
+            check_pqc_field_shape(1, &[K], &[2 * L])
+                .unwrap_err()
+                .to_string(),
+            "tx_extra 0x07 is 64 bytes; 32 required for this output count"
+        );
+        assert_eq!(
+            check_pqc_field_shape(0, &[], &[L]),
+            Err(E::PresentWithoutOutputs { tag: 0x07 })
+        );
+        assert_eq!(
+            check_pqc_field_shape(0, &[K], &[]),
+            Err(E::PresentWithoutOutputs { tag: 0x06 })
+        );
+    }
+
+    #[test]
+    fn over_parsed_fields_the_same_rule() {
+        let ok = [
+            TxExtraField::PubKey([1u8; 32]),
+            TxExtraField::PqcKemCiphertext(vec![0; 2 * K]),
+            TxExtraField::PqcLeafHashes(vec![0; 2 * L]),
+        ];
+        assert_eq!(check_pqc_field_shape_of(&ok, 2), Ok(()));
+        let dup = [
+            TxExtraField::PqcKemCiphertext(vec![0; K]),
+            TxExtraField::PqcLeafHashes(vec![0; L]),
+            TxExtraField::PqcLeafHashes(vec![0; L]),
+        ];
+        assert_eq!(
+            check_pqc_field_shape_of(&dup, 1),
+            Err(PqcFieldShapeError::Duplicate {
+                tag: 0x07,
+                count: 2
+            })
+        );
+    }
 }

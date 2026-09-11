@@ -30,9 +30,15 @@
 #   dispatch can still produce a green run while the T5 budget
 #   question is open.
 #
-# * Weekly cron (`0 6 * * 1`): `cargo-mutants` per §5.5.6 + §4.6 M2.
-#   Mutation-tests the harness + verifier under the §1.4 sole-consumer
-#   discipline. Skip-list discipline lives in `.cargo/mutants.toml`.
+# * Weekly cron (`0 6 * * 1`): the FULL 1024-pin `full-parity` sweep.
+#   The daily 05:00 cron runs that job's 19-dataset subset; the Monday
+#   cron is what selects the full label (see `PARITY_CTEST_LABEL`,
+#   which keys on `schedule != '0 5 * * *'`). This cron previously also
+#   drove the weekly `cargo-mutants` sweep; that job is DELETED (see
+#   below), but the cron is deliberately KEPT because full-parity's
+#   full sweep is its other consumer — removing it alongside the job
+#   would have silently downgraded the 1024-pin sweep to never running
+#   on schedule.
 #
 # * Daily cron / weekly full sweep / dispatch: `full-parity` — the
 #   Phase 3a C-full-dataset vs Rust-light parity gate + post-link nm
@@ -60,7 +66,8 @@
 # resource collisions).
 #
 # Cron offset: `0 5 * * *` for daily structural-validate runs;
-# `0 6 * * 1` for the weekly cargo-mutants run.
+# `0 6 * * 1` for the weekly full-parity sweep (formerly also the
+# cargo-mutants run, deleted with the T18 re-scope).
 
 name: randomx-v2-differential
 
@@ -83,7 +90,6 @@ on:
       - '.github/actions/build-randomx-v2-ref/**'
       - '.github/workflows/randomx-v2-differential.yml'
       - '.github/workflows/randomx-v2-adversarial-ratio.yml'
-      - '.cargo/mutants.toml'
   pull_request:
     paths:
       - 'rust/shekyl-randomx-differential/**'
@@ -96,13 +102,12 @@ on:
       - '.github/actions/build-randomx-v2-ref/**'
       - '.github/workflows/randomx-v2-differential.yml'
       - '.github/workflows/randomx-v2-adversarial-ratio.yml'
-      - '.cargo/mutants.toml'
   schedule:
     # Daily structural-validate at 05:00 UTC. Staggered from existing
     # `nightly.yml` (03:00 UTC) + `shekyl-oxide-divergence.yml`
     # (Mon 04:00 UTC) + `codeql.yml` (Mon 04:30 UTC).
     - cron: "0 5 * * *"
-    # Weekly `cargo-mutants` on Monday at 06:00 UTC.
+    # Weekly full-parity sweep on Monday at 06:00 UTC.
     - cron: "0 6 * * 1"
   workflow_dispatch:
     inputs:
@@ -118,6 +123,32 @@ on:
           - daily
           - full
         default: daily
+      checkout_ref:
+        description: >-
+          Git ref the matrix lanes check out, instead of the matrix
+          branch. Exists so a lane can be REHEARSED on a feature branch
+          before it first runs unattended: the matrix jobs otherwise
+          hardcode `ref: <matrix.branch>`, so dispatching against a
+          feature branch runs that branch's workflow file but checks
+          out main/dev — which do not contain the code under test, so
+          the run reds for a reason unrelated to the wiring. Leave
+          empty for normal operation. No T-A11 exposure: any dispatch
+          is `operator-supplied` by construction and can never be cited
+          as coverage.
+        type: string
+        default: ''
+      rotation_index:
+        description: >-
+          Replay a specific rotating-lane index. Leave empty for a
+          normal run (the scheduled lane derives its own index from
+          the date). A value here is a REPLAY of an already-explored
+          index, and the harness banner labels it `operator-supplied`
+          so a green replay cannot be cited as a green sweep (§4.5
+          T-A11). The corresponding input set is reconstructable by
+          anyone from the integer alone, so the choice is auditable
+          rather than trusted.
+        type: string
+        default: ''
       runtime_modes:
         description: >-
           Also run the runtime-modes job (T5 latency + T7/T8
@@ -207,15 +238,33 @@ jobs:
         # sites add a separate `rustup target add` step, the
         # depends.yml pattern).
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
-        # `ubuntu-latest` images carry CMake by default, but we pin
-        # Ninja explicitly because the submodule's CMakeLists builds
-        # ~50 translation units and Ninja's parallelism is materially
-        # faster than the default Makefile generator on the 4-vCPU
-        # runner. Cost: a few seconds of `apt install`.
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. The submodule's CMakeLists wants
+        # Ninja (it builds ~50 translation units and Ninja's parallelism
+        # beats the Makefile generator on a 4-vCPU runner) — but
+        # ubuntu-24.04 already ships Ninja 1.13.2 and CMake 3.31.6, so
+        # the old `apt-get install ninja-build` fetched an OLDER ninja
+        # (1.11.1) over the network for no benefit.
+        #
+        # That step has cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and a merge gate on 2026-08-19 cancelled at 30 minutes
+        # with its actual checks never run. Verifying instead removes
+        # the network from this job and asserts the prerequisites exist
+        # rather than assuming them.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  and ubuntu-24.04-arm both ship CMake + Ninja). If the image" >&2
+              echo "  changed, install it here explicitly rather than assuming." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         # Composite action (.github/actions/build-randomx-v2-ref): one
         # recipe for every lane — the rationale (out-of-band submodule
@@ -380,16 +429,47 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ matrix.branch }}
+          # Same rehearsal override as the rotating lane: this job had
+          # the identical limitation — a dispatch could not exercise a
+          # change to it on the branch carrying that change, because
+          # the ref is pinned to the matrix branch. Default unchanged,
+          # so scheduled runs behave exactly as before.
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || matrix.branch }}
           submodules: recursive
       - name: Install Rust toolchain
         # Composite action (.github/actions/install-rust); see the
         # structural-validate job's step comment.
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         uses: ./.github/actions/build-randomx-v2-ref
       - name: concurrent mode (T7 byte-equality + T8 RSS ceiling)
@@ -400,7 +480,11 @@ jobs:
         # job): 4+1 workers × 256 hashes each over the per-PR-size
         # random corpus against a capacity-2 CacheStore — T7 asserts
         # cross-worker determinism plus rust/C byte-equality, T8
-        # asserts the 640 MiB × 1.10 RSS ceiling via /proc/self/statm
+        # asserts the (workers+1)×256 MiB + 128 MiB (×1.10) RSS
+        # ceiling (R1-D9 F4 Round-3 amendment; the original 640 MiB
+        # slot-only pin failed every daily cron 2026-07-08 →
+        # 2026-08-08 at a flat ~1035 MiB drift plateau — see
+        # rss_ceiling_bytes in mode_concurrent.rs) via /proc/self/statm
         # (Linux runner, so the T8 leg is live, not the cross-platform
         # no-op). The daemon verifies blocks on multiple threads: a
         # divergence here is a plausible REAL consensus finding —
@@ -430,46 +514,511 @@ jobs:
         run: |
           cargo run --release --locked -p shekyl-randomx-differential \
             --bin shekyl-randomx-differential -- --mode=latency
+
+  verdict-ratchet:
+    # MR-DQ-2 (per-PR leg) + re-scope item 3, converged
+    # (RANDOMX_V2_MUTATION_REGIME.md §6.6, §7.5 item 3).
+    #
+    # Mutation testing scoped to the harness's VERDICT FUNCTIONS, not
+    # to whole modules. §6.6 measured why: at module scope the
+    # survivors are dominated by orchestration reachable only through
+    # live sessions — the API-shape artifacts MR-F10 predicted — while
+    # the verdict functions kill 11/11. Narrow scope, real signal.
+    #
+    # WHAT THIS ASSERTS, both halves (§7.5 item 3):
+    #   1. the verdicts stay MUTATION-REACHABLE — i.e. they remain
+    #      functions returning Result, never bare assertion macros.
+    #      Per MR-F12 cargo-mutants does not mutate macro invocations,
+    #      so a verdict rewritten as `assert_eq!` drops out of coverage
+    #      WITHOUT CHANGING A SINGLE NUMBER;
+    #   2. their negative tests stay LOAD-BEARING.
+    # It makes no T-A9 claim (MR-F11).
+    #
+    # Cost: 11 mutants in 36 s measured locally, ~58 s on the
+    # committed runner class — it finishes inside the structural job's
+    # measured 31-44 min many times over, so per-PR is free in
+    # wall-clock terms.
+    #
+    # PATHS FILTERING is inherited, not re-declared: the workflow-level
+    # positive `pull_request: paths:` filter (R1-D12) already means an
+    # unrelated PR never triggers this workflow at all, so it never
+    # pays the C-reference build. The structural job relies on exactly
+    # the same mechanism and carries no filter of its own.
+    name: 'pr: verdict mutation ratchet (T18)'
+    runs-on: ubuntu-latest
+    # Dominated by the C-reference build and the cargo build, not by
+    # the 36 s ratchet itself.
+    timeout-minutes: 30
+    if: github.event_name != 'schedule' || github.event.schedule == '0 5 * * *'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - name: Install Rust toolchain
-        # Composite action (.github/actions/install-rust); see the
-        # structural-validate job's step comment.
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference
         uses: ./.github/actions/build-randomx-v2-ref
       - name: Install cargo-mutants
-        # `cargo install --locked` is idempotent: on workflow re-run
-        # the binary is already present in `~/.cargo/bin`. The
-        # `--locked` flag pins against `cargo-mutants`' own
-        # `Cargo.lock`; absent that pin a transitive dep can shift
-        # the binary's behavior between runs.
-        run: cargo install cargo-mutants --locked
-      - name: cargo mutants (harness + verifier)
+        # VERSION-PINNED per MR-F7: `--locked` pins the tool's own
+        # dependency tree, not the tool. Every behaviour this gate
+        # depends on — which constructs are mutation sites, `--re`
+        # matching, the default test scoping — can shift on a release
+        # day, and an unpinned bump would move the mutant count under
+        # a gate whose whole job is to notice that count changing.
+        run: cargo install cargo-mutants --version 27.1.0 --locked
+      - name: Assert the ratchet's subject exists
         working-directory: rust
-        # Per `.cargo/mutants.toml`: invokes mutation testing across
-        # `shekyl-randomx-differential` + `shekyl-pow-randomx` with
-        # the skip-list discipline. T18 asserts that survival rate
-        # is bounded by the skip-list; new survivors require either
-        # (a) a §5.5.6-row plan-doc amendment justifying the skip
-        # addition, or (b) a verifier/harness-side change that
-        # collapses the survivor.
+        # THE GATE MUST ASSERT ITS OWN SUBJECT EXISTS (§13). `--re`
+        # matches mutant NAMES, so renaming a verdict function silently
+        # empties the population and the ratchet then reports a clean
+        # green over nothing — the exact failure shape this round was
+        # opened to catch, reproduced inside its own fix. The floor is
+        # a pin: raising it is fine when a verdict is added, lowering
+        # it requires deleting one deliberately.
         #
-        # `--in-place` runs mutations inline rather than in a
-        # parallel worktree; the runner's 14 GB SSD is tight for
-        # multi-worktree mutation runs at workspace scale.
+        # `wc -l < file` is a redirect, not a pipe, so no verdict
+        # travels through a pipeline (rule 46).
         #
-        # canonical_pins_full is skipped here for the same
-        # reason structural-validate's debug step skips it: mutants
-        # runs the suite in DEBUG once per mutant, and 1024 interpreted
-        # hashes are hours in debug — the baseline alone would eat the
-        # 360-minute cap. Mutation coverage of the verifier's hashing
-        # is already carried by the rest of the suite; the pins test's
-        # job is arch parity, not mutant killing. (First `--` = cargo
-        # test args, second = test-binary args.)
-        run: cargo mutants --package shekyl-randomx-differential --package shekyl-pow-randomx --in-place -- -- --skip canonical_pins_full
+        # `--test-package` is PINNED EXPLICITLY even though it currently
+        # equals cargo-mutants' default (`TestPackages::Mutated`, which
+        # judges a mutant by its own crate's tests). Both scoped files
+        # live in `shekyl-randomx-differential`, so the default is
+        # correct here — but correct BY LUCK OF SCOPE. MR-F5 is the
+        # record of what an unpinned default costs: it silently became
+        # the contract, and the whole re-scope followed. Inheriting it
+        # again, with the excuse that this time it happens to be right,
+        # would close the round by re-committing its founding error.
+        run: |
+          set -euo pipefail
+          cargo mutants --package shekyl-randomx-differential \
+            --test-package shekyl-randomx-differential \
+            --re 'verdict' --list > verdict-mutants.txt
+          count=$(wc -l < verdict-mutants.txt)
+          echo "verdict-scoped mutants: ${count}"
+          cat verdict-mutants.txt
+          if [ "${count}" -lt 11 ]; then
+            echo "FATAL: expected at least 11 verdict-scoped mutants, found ${count}." >&2
+            echo "  A verdict was renamed, deleted, or rewritten as a bare assertion" >&2
+            echo "  macro (MR-F12: macros are not mutation sites). The ratchet would" >&2
+            echo "  otherwise report a clean green over an empty population." >&2
+            exit 1
+          fi
+      - name: Verdict mutation ratchet
+        working-directory: rust
+        # Verdict unpiped per rule 46; cargo-mutants exits non-zero on
+        # any surviving mutant.
+        #
+        # A survivor here means a harness negative test stopped being
+        # load-bearing — NOT a consensus finding. Fix the test (or the
+        # verdict), do not add a skip-list entry without the §4.6 M2
+        # substrate-anchored justification and a FOLLOWUPS cite.
+        run: |
+          set -euo pipefail
+          cargo mutants --package shekyl-randomx-differential \
+            --test-package shekyl-randomx-differential \
+            --re 'verdict' --in-place --profile release \
+            -- -- --skip canonical_pins_full
+      - name: Upload ratchet diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verdict-ratchet-failure-${{ github.run_id }}
+          path: |
+            rust/verdict-mutants.txt
+            rust/mutants.out/
+          retention-days: 30
+
+  rotating-pr:
+    # MR-DQ-6 RULED (2026-08-19): single leg on pull_request.
+    #
+    # WHAT THIS IS, and what it deliberately is NOT. The index is
+    # days-since-epoch, so every PR on a given day derives the SAME
+    # index and re-checks the SAME inputs. This leg therefore does
+    # **not** advance the explored boundary — that still moves once per
+    # day, on the cron. It is a TRIPWIRE ON THE CHANGE: does this diff
+    # diverge against the C oracle on a non-pinned input set?
+    #
+    # Reading it as coverage would be the decay this round exists to
+    # stop, so the banner labels it `pull-request`, a provenance
+    # distinct from both siblings: not schedule-derived (it advances
+    # nothing) and not operator-supplied (nobody chose the index).
+    # Only `schedule-derived` may ever be credited as coverage (T-A11).
+    #
+    # WHY IT EARNS ITS RUNNER. Before this leg, no per-PR gate
+    # exercised a single input outside the pinned corpus:
+    # structural-validate runs --mode=correctness at per-PR sizing over
+    # the PINNED corpus, native-arm runs the pinned 1024, and the
+    # verdict ratchet mutates verdict functions. A verifier change that
+    # diverges only OFF-corpus passed every per-PR gate, landed on dev,
+    # and waited for the daily cron — which, per MR-R1a, does not exist
+    # until dev reaches main. That class of regression had no per-PR
+    # tripwire at all and an unbounded window before detection.
+    #
+    # BUDGET (measured, run 32214326519): 444 s in the mode plus ~44 s
+    # of setup and builds. The per-PR critical path is
+    # structural-validate at ~26 min, so this hides inside it entirely:
+    # +8 runner-minutes, +0 wall-clock. Unrelated PRs never reach here
+    # — the workflow-level positive `paths:` filter (R1-D12) is the
+    # gate, exactly as it is for structural-validate.
+    #
+    # SINGLE LEG, NO MATRIX, on purpose: the cron's [main, dev] matrix
+    # is meaningless here. A PR is one head, checked out once by the
+    # default checkout.
+    #
+    # TRIAGING A RED. It is ambiguous between "this PR broke it" and
+    # "today's index already diverges on dev". Disambiguate by REPLAYING
+    # THE SAME INDEX against dev — which is exactly what the derived
+    # seed buys, and which is a one-command question rather than an
+    # investigation. Do not escalate as a consensus finding before that
+    # replay; do not re-run this job to retest, since a same-day re-run
+    # re-checks identical inputs and a next-day one changes them.
+    name: 'pr: rotating tripwire (non-pinned inputs)'
+    runs-on: ubuntu-latest
+    # Mode measured at 444 s; 30 leaves room for a slow runner without
+    # becoming a place a hang can hide.
+    timeout-minutes: 30
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
+        run: |
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
+      - name: Configure + build randomx-v2 C reference
+        uses: ./.github/actions/build-randomx-v2-ref
+      - name: Resolve rotation index
+        id: rotation
+        # Same derivation as the cron leg, resolved once. Deliberately
+        # NOT accepting an override here: a PR tripwire whose index a
+        # contributor could choose would let a diff be checked against
+        # an input set the contributor picked (§4.5 T-A7/T-A11).
+        run: |
+          set -euo pipefail
+          index=$(( $(date -u +%s) / 86400 ))
+          echo "index=${index}" >> "$GITHUB_OUTPUT"
+          echo "rotation index ${index} (pull-request tripwire)"
+      - name: rotating tripwire (non-pinned inputs vs the C oracle)
+        working-directory: rust
+        # Verdict unpiped (rule 46). Same sizing as the cron leg so a
+        # PR red and a cron red are directly comparable.
+        run: |
+          set -euo pipefail
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- \
+            --mode=rotating \
+            --rotation-index=${{ steps.rotation.outputs.index }} \
+            --rotation-provenance=pull-request \
+            --random-corpus-seedhashes=32 \
+            --random-corpus-data-per-seedhash=32 \
+            > rotating-pr.log 2>&1
+      - name: Surface the lane's own record
+        if: always()
+        # §13: a green tick that does not evidence its own subject is
+        # not evidence. Without this, a run checking 1024 pairs and one
+        # checking zero look identical.
+        run: |
+          set -euo pipefail
+          # Guarded: if the job failed BEFORE the lane wrote its log —
+          # a toolchain install stall, a C-reference build failure —
+          # then an unguarded `cat` fails too and buries the real error
+          # under a missing-file message. A diagnostic step that can
+          # itself fail is a diagnostic that obscures.
+          if [ -f "rust/rotating-pr.log" ]; then
+            cat "rust/rotating-pr.log"
+          else
+            echo "no rotating log at rust/rotating-pr.log — the lane did not reach its run step."
+            echo "The failure is in an earlier step; this is not a divergence."
+          fi
+      - name: Upload divergence forensics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        # Forensics, not recovery: the INPUTS are reconstructable from
+        # the index alone; what is not reconstructable is the observed
+        # output on this runner at this toolchain state.
+        with:
+          name: randomx-rotating-pr-idx${{ steps.rotation.outputs.index }}-failure-${{ github.run_id }}
+          path: rust/rotating-pr.log
+          retention-days: 90
+
+  rotating:
+    # The exploring differential lane (RANDOMX_V2_MUTATION_REGIME.md
+    # §7.5 item 2). Every other differential lane re-verifies the same
+    # 1024 pinned pairs; this one derives a fresh input set per
+    # rotation index and runs rust-vs-C over inputs the project has
+    # never tested.
+    #
+    # COVERAGE CLAIM, stated in full because the short version gets
+    # miscredited: this lane advances the EXPLORED boundary, never the
+    # PINNED one. It bites against spec-non-equivalence on inputs
+    # outside the pinned corpus; it does NOT grow the regression corpus
+    # absent a finding, and does NOT prove spec-equivalence at any
+    # sizing. The pinned corpus grows only through the §7.9 MR-R3
+    # promotion path — divergence, halt, root-cause, fix, THEN promote
+    # against the fixed build. Never at discovery: at discovery
+    # rust != c and neither leg is authoritative.
+    #
+    # Branch matrix per the house pattern (runtime-modes) and MR-F3:
+    # schedule events fire on the default branch only, so without a
+    # matrix this cron would never exercise dev, where verifier work
+    # lands first.
+    #
+    # BOTH LEGS GET THE SAME INDEX, deliberately. The index is resolved
+    # once per run and shared, so main and dev explore identical
+    # inputs — which is what makes "diverged on dev, clean on main"
+    # immediately informative about the delta between them. Giving each
+    # branch its own index to "double throughput" is the plausible-
+    # sounding optimisation that would silently destroy that
+    # comparison: two lanes exploring disjoint inputs can never tell
+    # you which branch is responsible for a divergence. Written down
+    # because nothing in the code prevents it.
+    #
+    # NO SCHEDULED EXECUTION UNTIL THIS REACHES main. Schedule events
+    # use the DEFAULT branch's workflow file, so while this job exists
+    # only on dev it has no cron. Every pre-main run is therefore a
+    # dispatch, and every dispatch is `operator-supplied` by
+    # construction — so the EXPLORED BOUNDARY DOES NOT ADVANCE AT ALL
+    # before the main merge, and no pre-main green may be credited as
+    # coverage. A run history full of green operator-supplied rows
+    # reads like coverage to anyone who was not here; it is not.
+    name: 'cron: rotating differential lane (${{ matrix.branch }})'
+    runs-on: ubuntu-latest
+    # Measured DIRECTLY at the sizing this job runs — 32x32 = 1024
+    # pairs in 515 s on the measurement box — rather than extrapolated
+    # from a smaller run. The earlier extrapolation (128 pairs in 69 s,
+    # scaled ~8x) landed close, but it scaled through a factor that is
+    # not uniform: seedhashes go 8->32 (4x, on Argon2d cache derives)
+    # while pairs go 128->1024 (8x, on hashes), so the agreement was
+    # reassurance rather than derivation. At the ~1.58x runner factor
+    # (RANDOMX_V2_MUTATION_REGIME.md §2.2.1) that is ~13.6 min. 40
+    # leaves margin without becoming a place a hang can hide.
+    #
+    # FIRST REHEARSAL (run 32214326519, 2026-08-19): the whole job —
+    # C-reference build, cargo build and the rotation — took 8-9 min
+    # per leg, i.e. the ~13.6 min projection for the rotation ALONE
+    # was conservative. Recorded rather than re-tuned: the 1.58x factor
+    # was derived from a debug test-suite baseline and evidently does
+    # not transfer uniformly to this workload either, which is the same
+    # lesson as the extrapolation it replaced. 40 stays.
+    timeout-minutes: 40
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.rotation_index != '')
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, dev]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          # `checkout_ref` lets a dispatch rehearse this lane on a
+          # feature branch. Without it the first-ever execution of any
+          # change to this job is unattended, on both matrix legs at
+          # once, on a lane whose documented posture is halt-and-
+          # escalate — so a wiring defect would arrive dressed as a
+          # plausible consensus finding, which is the response you
+          # least want to train on a false alarm.
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || matrix.branch }}
+      - name: Install Rust toolchain
+        uses: ./.github/actions/install-rust
+      - name: Verify CMake + Ninja are present
+        # NO apt install, deliberately. `ubuntu-latest` maps to
+        # ubuntu-24.04, whose image already ships CMake and Ninja
+        # 1.13.2 — so `apt-get install ninja-build` fetched an OLDER
+        # ninja (1.11.1) over the network, untimed, for no benefit.
+        #
+        # That step has now cost this repo four killed jobs: three on
+        # 2026-08-18 that sat SIX HOURS each on an archive.ubuntu.com
+        # stall, and this lane's own merge gate on 2026-08-19, cancelled
+        # at 30 minutes with the rotation never run. A merge gate must
+        # not depend on an apt mirror being reachable.
+        #
+        # Verifying instead of installing removes the network from these
+        # jobs entirely, and asserts the gate's own prerequisites exist
+        # rather than assuming them: if a future runner image drops
+        # either tool this fails in seconds with an actionable message,
+        # instead of failing later inside cmake with a generator error.
+        run: |
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  ships CMake + Ninja). If the image changed, install it" >&2
+              echo "  here explicitly rather than assuming it is present." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
+      - name: Configure + build randomx-v2 C reference
+        uses: ./.github/actions/build-randomx-v2-ref
+      - name: Resolve rotation index
+        id: rotation
+        # Computed ONCE here and consumed by the run step, per §7.9
+        # MR-R1: a lane straddling midnight UTC that re-derived the
+        # index mid-run would emit a banner index that does not
+        # describe all of its own inputs — a record that lies while
+        # looking complete.
+        #
+        # Schedule runs take days-since-epoch, so consecutive days
+        # explore different inputs and the sequence is reconstructable
+        # from a date alone. A dispatch supplies its own index, which
+        # is a REPLAY and is labelled as such: an operator-chosen index
+        # must never be citable as routine coverage (§4.5 T-A11).
+        run: |
+          set -euo pipefail
+          # Provenance is bound to the EVENT, not to whether an index
+          # input happens to be empty. Keying it on input-emptiness
+          # would be correct only while the job's `if:` refuses a
+          # dispatch with no index — an invariant held by a different
+          # expression thirty lines away, with nothing asserting the
+          # coupling. Relax that condition later ("let dispatch do a
+          # fresh sweep too" is an obvious future request) and a
+          # manual run would be labelled schedule-derived: exactly the
+          # §4.5 T-A11 laundering the label exists to prevent. Bound
+          # this way the label is true by construction however the
+          # `if:` evolves.
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            provenance="schedule-derived"
+          else
+            provenance="operator-supplied"
+          fi
+          if [ -n "${{ inputs.rotation_index }}" ]; then
+            index="${{ inputs.rotation_index }}"
+          else
+            index=$(( $(date -u +%s) / 86400 ))
+          fi
+          echo "index=${index}"           >> "$GITHUB_OUTPUT"
+          echo "provenance=${provenance}" >> "$GITHUB_OUTPUT"
+          echo "rotation index ${index} (${provenance})"
+      - name: rotating mode (fresh inputs vs the C oracle)
+        working-directory: rust
+        # 32 x 32 = 1024 pairs the project has never tested, matching
+        # the pinned lane's nightly sizing so the two are comparable.
+        #
+        # The verdict is NOT piped (rule 46): a `| tee` pipeline exits
+        # with tee's status under `bash -e` without pipefail, which
+        # would make this gate structurally incapable of failing. The
+        # binary writes to a log via redirection and the exit code is
+        # the step's own.
+        #
+        # A divergence here is a plausible REAL consensus finding:
+        # halt and escalate per RANDOMX_V2_PHASE3_PLAN.md §7.3. Under a
+        # rotating seed that needs saying twice — re-running on a later
+        # index WOULD come back green. Replay the recorded
+        # (seedhash, data) pair from the failure record instead.
+        run: |
+          set -euo pipefail
+          cargo run --release --locked -p shekyl-randomx-differential \
+            --bin shekyl-randomx-differential -- \
+            --mode=rotating \
+            --rotation-index=${{ steps.rotation.outputs.index }} \
+            --rotation-provenance=${{ steps.rotation.outputs.provenance }} \
+            --random-corpus-seedhashes=32 \
+            --random-corpus-data-per-seedhash=32 \
+            > "rotating-${{ matrix.branch }}.log" 2>&1
+      - name: Surface the lane's own record
+        if: always()
+        # The run step redirects to a log (rule 46: the verdict must
+        # not travel through a `tee`), which means that on a GREEN run
+        # nothing the harness printed reaches the job log — the
+        # artifact only uploads `if: failure()`. So a lane that checked
+        # 1024 pairs and a lane that checked ZERO would look
+        # identical: the same green tick, the same absent output.
+        #
+        # That is §13 in this job: a clean signal that does not
+        # evidence its own subject. `always()` so the record appears on
+        # success and failure alike, and the banner's rotation binding
+        # is readable without downloading an artifact.
+        run: |
+          set -euo pipefail
+          # Guarded: if the job failed BEFORE the lane wrote its log —
+          # a toolchain install stall, a C-reference build failure —
+          # then an unguarded `cat` fails too and buries the real error
+          # under a missing-file message. A diagnostic step that can
+          # itself fail is a diagnostic that obscures.
+          if [ -f "rust/rotating-${{ matrix.branch }}.log" ]; then
+            cat "rust/rotating-${{ matrix.branch }}.log"
+          else
+            echo "no rotating log at rust/rotating-${{ matrix.branch }}.log — the lane did not reach its run step."
+            echo "The failure is in an earlier step; this is not a divergence."
+          fi
+      - name: Upload divergence forensics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        # FORENSICS, not recovery — the division matters and §7.9 MR-R1
+        # records which half may be lost. The *inputs* are
+        # reconstructable from the rotation index alone, forever, with
+        # no artifact and no retention window; that is why the seed is
+        # derived rather than drawn. What the artifact carries is the
+        # *observed outputs on this runner at this toolchain state* —
+        # both hashes, both cache SHAs, the harness version and the
+        # fork pin — which are NOT reconstructable, and which are the
+        # whole investigation when a divergence later fails to
+        # reproduce locally.
+        with:
+          name: randomx-rotating-${{ matrix.branch }}-idx${{ steps.rotation.outputs.index }}-failure-${{ github.run_id }}
+          path: rust/rotating-${{ matrix.branch }}.log
+          retention-days: 90
 
   full-parity:
     # Phase 3a Hole-1 gate wiring (RandomX v2 test-regime hardening F1):
@@ -663,14 +1212,32 @@ jobs:
         # Composite action (.github/actions/install-rust); rustup-init
         # resolves the aarch64 host triple itself.
         uses: ./.github/actions/install-rust
-      - name: Install CMake + Ninja
-        # cmake is listed explicitly (unlike the x86 jobs, which lean on
-        # ubuntu-latest carrying it): the arm image is a separate build
-        # and this lane must not die at `cmake: command not found`
-        # before its actual checks run. Idempotent if preinstalled.
+      - name: Verify CMake + Ninja are present
+        # The arm image is a separate build, so its inventory was
+        # checked separately rather than assumed to match x86:
+        # ubuntu-24.04-arm ships CMake 3.31.6 and Ninja 1.13.2, the same
+        # as ubuntu-24.04. The old apt step was therefore not merely
+        # redundant here — it installed cmake 3.28.3 over the image's
+        # 3.31.6, actively DOWNGRADING the toolchain this lane tests
+        # with, on top of the mirror-stall risk that killed four jobs
+        # across 2026-08-18/19.
+        #
+        # The concern the old comment named — dying at `cmake: command
+        # not found` before the real checks run — is now met directly by
+        # asserting both tools rather than by installing them.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build
+          set -euo pipefail
+          for tool in cmake ninja; do
+            if ! command -v "${tool}" >/dev/null 2>&1; then
+              echo "FATAL: ${tool} is not on PATH." >&2
+              echo "  The runner image is expected to provide it (ubuntu-24.04" >&2
+              echo "  and ubuntu-24.04-arm both ship CMake + Ninja). If the image" >&2
+              echo "  changed, install it here explicitly rather than assuming." >&2
+              exit 1
+            fi
+          done
+          cmake --version
+          ninja --version
       - name: Configure + build randomx-v2 C reference (aarch64)
         # Composite action: the SAME recipe as the x86 lanes by
         # construction — on this runner it produces the arm

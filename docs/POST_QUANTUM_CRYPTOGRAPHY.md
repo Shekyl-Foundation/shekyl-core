@@ -1,6 +1,11 @@
 # Post Quantum Cryptography (PQC)
 
-> **Last updated:** 2026-06-09
+> **Last updated:** 2026-08-26
+>
+> **Status:** LIVING CONTRACT (spend-path hybrid). Address v2 / SLH-DSA-192s
+> message-signing field: [`design/WALLET_MESSAGE_SIGNING.md`](design/WALLET_MESSAGE_SIGNING.md)
+> SM-R-8 (freeze signed 2026-08-13). This doc remains SoT for spend/ownership
+> Ed25519 + ML-DSA-65.
 
 ## Purpose
 
@@ -39,8 +44,8 @@ Implications:
   required on the rebooted chain.
 - We do not need a mixed old/new transaction regime after launch.
 - The rebooted chain may require a single new transaction version from launch.
-- Legacy chain data may still be used for snapshot/accounting purposes, but not
-  as a consensus-validation obligation for the rebooted runtime.
+- There is no Monero-era UTXO snapshot to restore. Genesis is a clean Option C
+  cut ([`GENESIS_TRANSPARENCY.md`](GENESIS_TRANSPARENCY.md) §4; rule 60).
 
 ## Security Goals
 
@@ -83,7 +88,9 @@ but it avoids betting the chain on a single transition-era primitive.
 - Classical component: `Ed25519`
 - PQ component: `ML-DSA-65`
 - Security rule: hybrid authorization succeeds only if the classical and PQ
-  components both verify
+  components both verify. Since PR-SA-2 the combiner is **nested**
+  (PQ-inner / classical-outer, `HYBRID_SIG_VERSION = 2`), not two independent
+  signatures over the same bytes — see **Nested Combiner (v2)** below.
 
 Rationale:
 
@@ -91,6 +98,44 @@ Rationale:
 - ML-DSA-65 targets NIST level 3 style security and is a reasonable transition
   choice for a public chain.
 - The combination gives classical and PQ assurance during the migration period.
+- The nested shape closes the Bindel–Hale class of combiner weaknesses: a
+  verifier that skips the PQ half cannot even reconstruct the classical
+  half's message, so a degenerate implementation fails closed instead of
+  verifying insecurely.
+
+#### Nested Combiner (v2)
+
+The signing construction (SA-R-1/2/3/5, `docs/design/SIGNATURE_ALIGNMENT.md`;
+implementation `rust/shekyl-crypto-pq/src/signature.rs`):
+
+```text
+preimage  = cSHAKE256-64(customization = domain, input = scheme_id ‖ message)
+σ_pq      = ML-DSA-65.Sign(preimage, ctx = "")        // PQ-inner
+σ_ed      = Ed25519.Sign(preimage ‖ σ_pq)             // classical-outer
+wire      = HybridSignature { ed25519: σ_ed, ml_dsa: σ_pq }   // sig_version 2
+```
+
+- **`domain` is required and non-empty.** Every signing surface has its own
+  frozen `SCHEME_DOMAIN_*` string (`shekyl/pqc-auth-tx-v1`,
+  `shekyl/pqc-auth-tx-multisig-v1`, the archival emission/attestation/
+  serve-credit/bond domains); a signature is valid only on the surface it was
+  minted for. The domain is applied inside Rust — C++ callers never carry a
+  domain string (rule 40 / SA-R-2).
+- **`scheme_id` is inside the signed preimage** (SA-R-5), so cross-scheme
+  reinterpretation of a signature's bytes is closed structurally.
+- **The preimage is 64 bytes, not 32.** The digest is the signed content, so
+  its collision resistance bounds the whole scheme's unforgeability against a
+  counterparty who influences message bytes; 32 bytes would cap that at
+  2^128, below ML-DSA-65's Category-3 target (compare FIPS 204's HashML-DSA,
+  which pairs ML-DSA-65 with ≥384-bit digests). 64 bytes restores 2^256.
+- **ML-DSA context is empty** (SA-R-3, KAT-pinned).
+- **Verify returns `Result<()>`, never `Result<bool>`** — there is no
+  `Ok(false)` for a caller to mishandle (the F1 accepts-invalid class is
+  unrepresentable).
+- **The version byte is the security boundary** (SA-R-4): the wire length did
+  not move between v1 (parallel) and v2 (nested), so parse rejects any
+  `sig_version ≠ 2` before the combiner runs. A frozen v1 vector pins the
+  rejection (see Test Vectors).
 
 ### Phase 2: KEM (Ships at Genesis)
 
@@ -716,7 +761,7 @@ adds a dedicated hybrid authorization structure outside `tx_extra`.
 The FCMP++ type for user transactions is `CTTypeFcmpPlusPlusPqc = 1`. This is
 Shekyl's only non-coinbase CT type. It replaces CLSAG ring signatures with
 FCMP++ membership proofs, uses Bulletproof+ range proofs, and adds a
-`referenceBlock` field to `rctSigBase` anchoring the proof to a specific curve
+`referenceBlock` field to `CtSigBase` anchoring the proof to a specific curve
 tree snapshot. The prunable section carries `curve_trees_tree_depth` and an
 opaque `fcmp_pp_proof` blob instead of CLSAGs.
 
@@ -727,7 +772,7 @@ Conceptually:
 ```text
 TransactionV3 {
   prefix: TransactionPrefixV3
-  rct_signatures: rctSig          // type = CTTypeFcmpPlusPlusPqc (1)
+  ct_signatures: CtSig          // type = CTTypeFcmpPlusPlusPqc (1)
   pqc_auths: std::vector<PqcAuthentication>   // one per input (pqc_auths.size() == vin.size())
 }
 ```
@@ -845,7 +890,10 @@ HybridSignature {
 
 Phase-1 constraints:
 
-- `sig_version = 1`
+- `sig_version = 2` — the nested-combiner version (PR-SA-2). `sig_version = 1`
+  named the retired parallel construction; the byte layout and total length
+  are identical, so this version byte is the **only** old/new discriminator
+  and parse rejects any other value (SA-R-4).
 - `scheme_id = 1`
 - `reserved = 0`
 - `ed25519_sig_len = 64`
@@ -879,8 +927,8 @@ Therefore the signed payload is defined as:
 signed_payload =
   cn_fast_hash(
     serialize(TransactionPrefixV3)
-    || serialize(RctSigningBody)
-    || H(serialize(RctSigPrunable))
+    || serialize(CtSigningBody)
+    || H(serialize(CtSigPrunable))
     || serialize(PqcAuthHeader)
     || H(pqc_pk_0) || H(pqc_pk_1) || ... || H(pqc_pk_{N-1})
   )
@@ -890,9 +938,9 @@ Where:
 
 - `TransactionPrefixV3` is the full serialized transaction prefix, including
   `extra`
-- `RctSigningBody` is the non-PQC FCMP++ body data required to bind the actual
+- `CtSigningBody` is the non-PQC FCMP++ body data required to bind the actual
   transaction economics, outputs, and spend semantics (see layout below)
-- `H(serialize(RctSigPrunable))` is `cn_fast_hash` of the serialized prunable
+- `H(serialize(CtSigPrunable))` is `cn_fast_hash` of the serialized prunable
   data (`fcmp_pp_proof`, `pseudoOuts`, `curve_trees_tree_depth`,
   `BulletproofPlus`), binding the signature to the FCMP++ proof
 - `H(pqc_pk_i)` is `cn_fast_hash` of the `hybrid_public_key` blob for each
@@ -908,9 +956,9 @@ PqcAuthHeader {
 }
 ```
 
-### RctSigningBody Layout
+### CtSigningBody Layout
 
-`RctSigningBody` is the output of `rctSig.serialize_rctsig_base(ar, num_inputs, num_outputs)`.
+`CtSigningBody` is the output of `CtSig.serialize_ctsig_base(ar, num_inputs, num_outputs)`.
 It comprises the base (non-prunable) FCMP++ structure: type, message,
 pseudoOuts/ecdhInfo as applicable, and `referenceBlock` (the block height
 anchoring the FCMP++ curve tree snapshot, validated within `[tip - 100, tip - 2]`).
@@ -920,7 +968,8 @@ transaction hash calculation.
 ### Measured Sizes (Phase 1)
 
 Measured from canonical serialization output in
-`docs/PQC_TEST_VECTOR_001.json`:
+`docs/test_vectors/PQC_HYBRID_V2_KAT.json` (identical to the v1-era
+measurements — the v1→v2 combiner change did not move the wire):
 
 - `HybridPublicKey` canonical bytes: `1996` bytes
 - `HybridSignature` canonical bytes: `3385` bytes
@@ -941,20 +990,20 @@ The measured values match the canonical field layout:
 
 Canonical vector material is published in:
 
-- `docs/PQC_TEST_VECTOR_001.json`
-
-The vector contains:
-
-- fixed message bytes (`message_hex`)
-- canonical encoded `HybridPublicKey`
-- canonical encoded `HybridSignature`
-- expected encoded lengths
-- expected verify result (`true`)
-
-The Rust crate validates this vector in
-`rust/shekyl-crypto-pq/src/signature.rs` via
-`documented_vector_verifies`, including a negative check with a tampered
-message.
+- `docs/test_vectors/PQC_HYBRID_V2_KAT.json` — the **positive** v2 material:
+  one pinned keypair and, for each ratified signing surface, a pinned nested
+  (v2) signature over one shared message. Validated by
+  `rust/shekyl-crypto-pq/tests/kat_hybrid_v2.rs`, which asserts every vector
+  verifies under its own surface domain, **rejects** under every other
+  surface's domain (SA-R-2 cross-surface separation), and that the pinned
+  domain strings still equal the Rust `SCHEME_DOMAIN_*` constants. Regenerate
+  with the file's `#[ignore]` writer — it is idempotent while the
+  construction is unchanged.
+- `docs/PQC_TEST_VECTOR_001.json` — the **frozen v1 negative** fixture
+  (never regenerated): a parallel-construction signature from before SA-R-4's
+  version bump. `frozen_v1_vector_is_rejected_at_parse`
+  (`rust/shekyl-crypto-pq/src/signature.rs`) asserts it is refused at parse —
+  the round's security boundary, proven by a signature that once verified.
 
 Importantly:
 
@@ -968,12 +1017,20 @@ For `TransactionV3`, validation succeeds only if all of the following succeed:
 
 1. standard transaction structural checks
 2. existing privacy-layer checks required for the chosen v3 scheme
-3. canonical PQC field decoding
+3. canonical PQC field decoding — this is where `sig_version ≠ 2` is rejected
+   (SA-R-4), before any combiner logic runs
 4. ownership/spend binding checks for the hybrid authorization material
-5. `Ed25519.verify(signed_payload, ed25519_sig, ed25519_pub)`
-6. `ML-DSA.verify(signed_payload, ml_dsa_sig, ml_dsa_pub)`
+5. the nested hybrid verify over the signed payload, under the surface's
+   scheme domain (`shekyl/pqc-auth-tx-v1` for tx per-input auth):
+   - `preimage = cSHAKE256-64(domain, scheme_id ‖ signed_payload)`
+   - `ML-DSA.verify(preimage, ml_dsa_sig, ml_dsa_pub)` — PQ-inner first
+   - `Ed25519.verify(preimage ‖ ml_dsa_sig, ed25519_sig, ed25519_pub)` —
+     classical-outer
 
-If either signature fails, the spend authorization is invalid.
+Verification is fail-closed: any failing step invalidates the spend
+authorization, and the verify API returns `Result<()>` (no boolean for a
+caller to mishandle). A verifier that skips the PQ half cannot reconstruct
+the classical-outer message, so both halves are always exercised.
 
 ## Wallet and Scanning Notes
 
@@ -1261,7 +1318,7 @@ sets the intended direction:
 ### Resolved Items
 
 - **Rust crate for ML-DSA-65:** `fips204` crate (`ml_dsa_65` module).
-- **`RctSigningBody` layout:** `rctSig.serialize_rctsig_base` output; used in
+- **`CtSigningBody` layout:** `CtSig.serialize_ctsig_base` output; used in
   the signing payload alongside prefix and PQ auth header.
 - **Ownership binding:** `PqcAuthentication` is attached to `TransactionV3`;
   the signed payload covers prefix + RCT base + auth header (excluding the

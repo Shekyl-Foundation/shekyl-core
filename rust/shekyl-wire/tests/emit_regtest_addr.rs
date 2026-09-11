@@ -21,13 +21,7 @@ fn emit_regtest_mining_address() {
 
     let (_seed, blob) = generate_account_from_raw_seed(&[0x11u8; 32], DerivationNetwork::Fakechain)
         .expect("derive fakechain account");
-    let spend: [u8; 32] = blob.classical_address_bytes[1..33]
-        .try_into()
-        .expect("spend key slice");
-    let view: [u8; 32] = blob.classical_address_bytes[33..65]
-        .try_into()
-        .expect("view key slice");
-    let addr = ShekylAddress::new(Network::Mainnet, spend, view, blob.ml_kem_ek.to_vec());
+    let addr = blob.to_address(Network::Mainnet);
     let encoded = addr.encode().expect("encode address");
     // Round-trip through the decoder the daemon uses, as a sanity gate.
     assert!(ShekylAddress::decode(&encoded).is_ok(), "must decode");

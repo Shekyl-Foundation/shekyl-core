@@ -30,6 +30,8 @@
 
 #include <boost/thread/mutex.hpp>
 #include <boost/thread/thread.hpp>
+#include <cstdint>
+#include <optional>
 
 #include "gtest/gtest.h"
 
@@ -45,7 +47,7 @@ namespace
   {
     static constexpr int handshake_command() noexcept { return 1001; }
     static constexpr bool handshake_complete() noexcept { return true; }
-    size_t get_max_bytes(int command) const { return LEVIN_DEFAULT_MAX_PACKET_SIZE; }
+    std::optional<size_t> get_max_bytes(uint32_t, uint32_t, int32_t* = nullptr) const { return LEVIN_DEFAULT_MAX_PACKET_SIZE; }
   };
 
   typedef epee::levin::async_protocol_handler_config<test_levin_connection_context> test_levin_protocol_handler_config;
@@ -229,7 +231,6 @@ namespace
   {
   public:
     static const int expected_command = 5615871;
-    static const int expected_return_code = 782546;
 
     test_levin_protocol_handler__hanle_recv_with_invalid_data()
       : m_expected_invoke_out_buf(512, 'y')
@@ -248,11 +249,9 @@ namespace
       m_req_head.m_cb = SWAP64LE(m_in_data.size());
       m_req_head.m_have_to_return_data = true;
       m_req_head.m_command = SWAP32LE(expected_command);
-      m_req_head.m_return_code = SWAP32LE(LEVIN_OK);
       m_req_head.m_flags = SWAP32LE(LEVIN_PACKET_REQUEST);
       m_req_head.m_protocol_version = SWAP32LE(LEVIN_PROTOCOL_VER_1);
 
-      m_commands_handler.return_code(expected_return_code);
       m_commands_handler.invoke_out_buf(m_expected_invoke_out_buf);
     }
 
@@ -332,7 +331,6 @@ TEST_F(positive_test_connection_to_levin_protocol_handler_calls, handler_process
 {
   // Setup
   const int expected_command = 2634981;
-  const int expected_return_code = 6732;
   const std::string expected_out_data(128, 'w');
 
   test_connection_ptr conn = create_connection();
@@ -351,7 +349,6 @@ TEST_F(positive_test_connection_to_levin_protocol_handler_calls, handler_process
   buf += in_data;
 
   m_commands_handler.invoke_out_buf(expected_out_data);
-  m_commands_handler.return_code(expected_return_code);
 
   // Test
   ASSERT_TRUE(conn->m_protocol_handler.handle_recv(buf.data(), buf.size()));
@@ -378,7 +375,6 @@ TEST_F(positive_test_connection_to_levin_protocol_handler_calls, handler_process
   ASSERT_EQ(expected_out_data, out_data);
   ASSERT_EQ(LEVIN_SIGNATURE, SWAP64LE(resp_head.m_signature));
   ASSERT_EQ(expected_command, SWAP32LE(resp_head.m_command));
-  ASSERT_EQ(expected_return_code, SWAP32LE(resp_head.m_return_code));
   ASSERT_EQ(expected_out_data.size(), SWAP64LE(resp_head.m_cb));
   ASSERT_FALSE(resp_head.m_have_to_return_data);
   ASSERT_EQ(SWAP32LE(LEVIN_PROTOCOL_VER_1), resp_head.m_protocol_version);

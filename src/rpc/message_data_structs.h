@@ -31,7 +31,7 @@
 #include "crypto/hash.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/difficulty.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 #include "rpc/rpc_handler.h"
 
 #include <unordered_map>
@@ -79,8 +79,6 @@ namespace rpc
     uint64_t id;
     uint32_t ip;
     uint16_t port;
-    uint16_t rpc_port;
-    uint32_t rpc_credits_per_hash;
     uint64_t last_seen;
     uint32_t pruning_seed;
   };
@@ -123,7 +121,7 @@ namespace rpc
   struct output_key_mask_unlocked
   {
     crypto::public_key key;
-    rct::key mask;
+    ct::key mask;
     bool unlocked;
   };
 

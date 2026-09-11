@@ -20,9 +20,9 @@
 //!
 //! # Round 4a visibility
 //!
-//! Per [`super::mod`]'s visibility note, the trait ships `pub(crate)`
-//! until the JSON-RPC server cutover at V3.2. Stage 1's consumer is
-//! [`Engine<S>`](super::super::Engine), which lives inside this crate.
+//! Per [`super::mod`]'s visibility note, the trait ships `pub(crate)`.
+//! Stage 1's consumer is [`Engine<S>`](super::super::Engine), which lives
+//! inside this crate.
 //!
 //! # Workflow-shape, not primitive-shape
 //!
@@ -71,6 +71,7 @@ use shekyl_address::Network;
 use shekyl_crypto_pq::handle::OutputHandle;
 use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::key_image::KeyImage;
+use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_tx_builder::{LeafEntry, PqcAuth, TreeContext};
 use shekyl_units::AtomicUnits;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
@@ -94,19 +95,58 @@ pub(crate) const VIEW_TAG_BYTES: usize = 1;
 /// lifetime; cheap; touches no secrets.
 ///
 /// Per `STAGE_1_PR_3_KEY_ENGINE.md` §3.3 Sub-bundle A, mirrors
-/// `AllKeysBlob`'s public side: the 1216-byte ML-KEM-768 PK and the
-/// 65-byte classical address bytes. Returned by
-/// [`KeyEngine::account_public_address`] as `&AccountPublicAddress`
-/// — the one trait method that hands out a borrowed reference rather
-/// than an owned message, because address material is not bound to
-/// any per-call context.
+/// `AllKeysBlob`'s public side: the 1216-byte PQC public key and the
+/// [`shekyl_address::CLASSICAL_SEGMENT_LEN`]-byte classical payload.
+/// Returned by [`KeyEngine::account_public_address`] as
+/// `&AccountPublicAddress` — the one trait method that hands out a
+/// borrowed reference rather than an owned message, because address
+/// material is not bound to any per-call context.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct AccountPublicAddress {
-    /// ML-KEM-768 public key (1216 bytes per FIPS 203).
+    /// The wallet's PQC public material: `x25519_pk(32) ‖ ml_kem_ek(1184)`.
+    /// Read the halves through the accessors below rather than slicing —
+    /// the split point is this type's business, not its callers'.
     pub pqc_public_key: Vec<u8>,
-    /// Encoded classical address bytes.
+    /// Classical address payload (`version ‖ spend ‖ view ‖ msg_sign_pk`).
+    /// Split through [`Self::to_shekyl_address`], not by offset.
     pub classical_address_bytes: Vec<u8>,
+}
+
+/// Byte length of the X25519 public key that prefixes
+/// [`AccountPublicAddress::pqc_public_key`].
+pub(crate) const X25519_PK_LEN: usize = 32;
+
+impl AccountPublicAddress {
+    /// The ML-KEM-768 encapsulation key — everything after the X25519
+    /// prefix. `None` if the field is too short to hold the prefix,
+    /// which is wallet-state corruption rather than a normal outcome.
+    ///
+    /// Single owner of that split: three call sites used to re-slice
+    /// `pqc_public_key[32..]` with a bare literal.
+    pub(crate) fn ml_kem_encap_key(&self) -> Option<&[u8]> {
+        self.pqc_public_key.get(X25519_PK_LEN..)
+    }
+
+    /// Rebuild the encoded address. The classical split lives in
+    /// [`shekyl_address::ShekylAddress::from_classical_bytes`] — this
+    /// type does not re-learn offsets.
+    pub(crate) fn to_shekyl_address(
+        &self,
+        network: shekyl_address::Network,
+    ) -> Result<shekyl_address::ShekylAddress, shekyl_address::AddressError> {
+        let ek = self
+            .ml_kem_encap_key()
+            .ok_or(shekyl_address::AddressError::BadLength {
+                segment: "ML-KEM encap key (after x25519 prefix)",
+                expected: shekyl_address::PQC_PAYLOAD_LEN,
+                got: self.pqc_public_key.len().saturating_sub(X25519_PK_LEN),
+            })?;
+        shekyl_address::ShekylAddress::from_classical_bytes(
+            network,
+            &self.classical_address_bytes,
+            ek.to_vec(),
+        )
+    }
 }
 
 /// View tag bytes from a hybrid ciphertext.
@@ -118,7 +158,6 @@ pub(crate) struct AccountPublicAddress {
 /// short publicly-comparable bytestrings, not opaque hashes that need
 /// verification machinery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct ViewTag(pub(crate) [u8; VIEW_TAG_BYTES]);
 
 /// Input to [`KeyEngine::try_claim_output`].
@@ -132,7 +171,6 @@ pub(crate) struct ViewTag(pub(crate) [u8; VIEW_TAG_BYTES]);
 /// thereof); none impose a `Zeroize` discipline on the receiver.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct OutputDetectionInput {
     // --- Cryptographic inputs to `scan_output_recover` ---------------------
     /// The hybrid ciphertext (X25519 ephemeral + ML-KEM ciphertext).
@@ -223,7 +261,6 @@ pub(crate) enum OutputClaimResult {
 /// [`KeyActor`]: super::super::key_actor::KeyActor
 #[derive(Clone, ZeroizeOnDrop)]
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct OutputClaim {
     /// Opaque reference to the per-output spending capability.
     /// Stored by the orchestrator against the claimed output's
@@ -301,7 +338,6 @@ impl std::fmt::Debug for OutputClaim {
 /// any future secret-bearing field gets a `[REDACTED]` placeholder
 /// inline.
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct TxInputSigningContext {
     /// Opaque reference to the per-output spending capability.
     /// Resolved by `sign_transaction`'s impl against the implementor's
@@ -406,7 +442,6 @@ impl std::fmt::Debug for TxInputSigningContext {
 /// [`TransferDetails`]: shekyl_engine_state::TransferDetails
 /// [`shekyl_tx_builder::sign_transaction`]: shekyl_tx_builder::sign_transaction
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct SourceSecretsBundle {
     /// Output-key secret `x` where `O = x*G + y*T`. 32-byte canonical
     /// little-endian Ed25519 scalar encoding.
@@ -464,7 +499,6 @@ impl std::fmt::Debug for SourceSecretsBundle {
 /// per `35-secure-memory.mdc` does not depend on inner-type
 /// discipline holding across maintenance.
 #[non_exhaustive]
-#[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct TxToSign {
     /// Network for recipient address decoding at sign time.
     pub network: Network,
@@ -503,7 +537,6 @@ impl std::fmt::Debug for TxToSign {
 #[non_exhaustive]
 pub(crate) struct OutputDestination {
     /// Canonical encoded recipient address from the build request.
-    #[allow(dead_code)] // 2a-3 recipient output construction reads this.
     pub address: String,
 }
 
@@ -523,7 +556,6 @@ pub(crate) enum TxOutputContext {
     /// User payment. `amount` is the only confidential field.
     Payment {
         #[zeroize(skip)]
-        #[allow(dead_code)] // 2a-3 recipient output construction reads `dest.address`.
         dest: OutputDestination,
         amount: u64,
     },
@@ -554,7 +586,6 @@ impl std::fmt::Debug for TxOutputContext {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub(crate) struct FcmpPlusPlusContext {
-    #[allow(dead_code)] // 2a-3 `sign_transaction` consumes `tree`.
     pub tree: TreeContext,
 }
 
@@ -572,8 +603,11 @@ pub(crate) struct FcmpPlusPlusContext {
 pub(crate) struct TxSignatures {
     pub bulletproof_plus: Vec<u8>,
     pub out_commitments: Vec<[u8; 32]>,
-    pub enc_amounts: Vec<[u8; 9]>,
-    pub enc_labels: Vec<[u8; 9]>,
+    /// Typed end to end. These are pure pass-throughs from `SignedProofs` to
+    /// `WireEncodeInput`, and there is no route back up: the type has no public
+    /// byte constructor, so once the encoder's input is typed this must be too.
+    pub enc_amounts: Vec<EncryptedOutputField>,
+    pub enc_labels: Vec<EncryptedOutputField>,
     pub per_input: Vec<TxInputSignature>,
     pub fcmp_proof: Vec<u8>,
     pub fee: u64,

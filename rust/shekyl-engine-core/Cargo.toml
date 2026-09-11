@@ -81,9 +81,20 @@ shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 # `PRpc` (an `Rpc` impl); it does NOT depend on `ureq` — all agent construction
 # and use is confined to shekyl-p-transport (§2b invariant 1).
 shekyl-p-transport = { path = "../shekyl-p-transport" }
+# `WalletTorControl` (P's Tor instance) and `OnionIdentity` (expanded in the
+# wallet context, §7.2(iii) / SH-2b-1). The identity type is re-exported from
+# the wallet crate so this crate does not take the control-protocol client —
+# that crate is the launch path for Principal's Tor, which must not live here.
+shekyl-tor-control-wallet = { path = "../shekyl-tor-control-wallet" }
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-rpc-client = { path = "../shekyl-rpc-client", features = ["std"] }
+# The daemon's wire types, in production and not only in test doubles (RK-4c).
+# The refresh path hand-rolled `get_transactions` params and walked the reply
+# as untyped JSON — a second definition of a shape that already has one, and
+# the copy the daemon cannot see is the one that drifts. Doubles have answered
+# with these types since RK-1 (RK-D1); this is production catching up.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 # `signing_assembly` computes leaf `key_image_gen = Hp(O)` per tx-builder.
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
@@ -102,6 +113,20 @@ shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 # wrapper uses `kameo` (already a direct dep here, line below, exact-pinned
 # `=0.20.0`). No new `kameo`/`redb` edge versions are introduced.
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# The persona serving host (SH-2): this crate implements its `ServeSetPinner`
+# seam. Driving `PersonaServingHost::refresh` from the P-scan sweep is SH-2b.
+# The dependency runs engine-core -> p-host and never the reverse — p-host
+# names no engine type, which is what lets the pinner seam be the only path
+# to a `ServeSet`.
+shekyl-p-host = { path = "../shekyl-p-host" }
+# The OA-1 operator alarm channel, re-exported from this crate's root
+# (`src/lib.rs`), alongside `shekyl-address`'s payment-URI codec. A leaf that
+# names no engine type — the dependency runs engine-core -> operator-alarm and
+# never the reverse, which is what lets an embedder render an alarm without
+# linking the orchestrator. No new third-party edge: its only deps are
+# `shekyl-tor-control-wallet` (already here, for `WalletTorControl`) and `tokio` (already a
+# direct dep).
+shekyl-operator-alarm = { path = "../shekyl-operator-alarm" }
 # Phase 2a-3 synthetic FCMP++ tree root (§3.0.5): Selene multiexp + Helios
 # placeholder siblings in `engine::synthetic_tree`, consumed by assembly and
 # `sign_bridge` on the production send path.
@@ -181,6 +206,16 @@ tokio = { version = "1", features = ["time", "macros", "sync", "rt", "rt-multi-t
 # `CancellationToken` is part of the unconditional surface in
 # tokio-util 0.7 (no feature gate); no explicit feature list needed.
 tokio-util = { version = "0.7" }
+
+# Free-space probe for the serving task's disk-headroom alarm
+# (`statvfs`; COMPLETETREE_ACTIVATION.md Q-2). Mirrors the line
+# `shekyl-engine-prefs` already carries for its directory-fsync shim —
+# same crate, same version, same `fs` feature, already locked and in the
+# build graph, so this is a direct edge onto a vetted dependency rather
+# than a new one. `deny(unsafe_code)` on this crate is unaffected: the
+# attribute governs this crate's own code, and the syscall wrapper's
+# `unsafe` stays inside rustix.
+rustix = { version = "1", features = ["fs"] }
 # `Engine::refresh` constructs a `shekyl_scanner::Scanner` from
 # `AllKeysBlob`, which requires assembling a `ViewPair` over
 # `(EdwardsPoint, Scalar, [u8; 32], Vec<u8>)`. Decompressing the
@@ -206,7 +241,17 @@ zeroize = { workspace = true }
 # This is the first live consumer (closes the FOLLOWUP kameo pin).
 kameo = { workspace = true }
 
+# WP-D9: the disk probe's Windows half. The Win32 call itself lives in
+# `shekyl-win-sec` because it needs `unsafe` and this crate denies it (WP-D2);
+# what is here is a delegation. Unix keeps rustix's `statvfs`; neither is
+# resolved on the other platform.
+[target.'cfg(windows)'.dependencies]
+shekyl-win-sec = { path = "../shekyl-win-sec" }
+
 [dev-dependencies]
+# Test doubles answer with the daemon's own wire types (RK-D1), so a double
+# cannot drift from the contract the way a hand-written JSON literal can.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # Self dev-dep (the scanner crate's own bench idiom): enables `test-helpers`
 # for this crate's integration tests, so `tests/sp_r0_arm1_fire.rs` compiles
 # the DQ-F fire harness into the lib-under-test on a plain `cargo test`
@@ -236,7 +281,14 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # `ci/benchmarks` workflow installs (`^0.19`). Migrated from
 # `iai-callgrind = "0.16"` per
 # `docs/investigation/2026-05-09-bench-baseline-flake.md` §5.
-gungraun = "0.19"
+# `client_requests` for the same reason shekyl-engine-state enables it:
+# collection driven by Callgrind client requests instead of the default
+# `--toggle-collect=*::__gungraun_wrapper_mod::*`, which records
+# `instructions=0` whenever rustc folds that wrapper — deterministically
+# for a given binary, so retries cannot clear it (see
+# `docs/investigation/2026-05-09-bench-baseline-flake.md` and the
+# key-dispatch baseline bench's module doc).
+gungraun = { version = "0.19", features = ["client_requests"] }
 tempfile = "3"
 # `test-util` enables `#[tokio::test(start_paused = true)]` and the
 # in-test `tokio::time` virtualization that `wallet::refresh`'s

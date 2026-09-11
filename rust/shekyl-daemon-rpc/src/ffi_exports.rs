@@ -15,7 +15,8 @@ use std::os::raw::c_char;
 /// Opaque handle returned to C++ for a running daemon RPC server.
 #[repr(C)]
 pub struct ShekylDaemonRpcHandle {
-    shutdown: *const tokio::sync::Notify,
+    /// Level-triggered stop signal for every acceptor on this handle.
+    shutdown: *const tokio::sync::watch::Sender<bool>,
     rt: *const tokio::runtime::Runtime,
     /// The serve task's join handle. `shekyl_daemon_rpc_stop` blocks on it so
     /// the graceful-shutdown drain of in-flight handlers (which hold live
@@ -40,32 +41,82 @@ pub struct ShekylDaemonRpcHandle {
 ///
 /// - `rpc_server_ptr` must be a valid pointer to an initialized `core_rpc_server`,
 ///   or null (returns null immediately).
-/// - `bind_addr` must be a valid null-terminated C string, or null (returns null).
+/// - `bind_host` and `bind_port` must be valid null-terminated C strings, or
+///   null (returns null): the operator's `--rpc-bind-ip` / `--rpc-bind-port`
+///   values as given.
+/// - `bind_host_v6` is the operator's `--rpc-bind-ipv6-address` (or the
+///   restricted twin) **as given** when `--rpc-use-ipv6` is set — an empty
+///   value included, so Rust refuses it rather than C++ silently dropping the
+///   family — or null when the flag is off. Rust parses it with the same
+///   port, classifies it, and binds a second socket on this handle when it
+///   names a different interface; one server serves every socket
+///   (`server::serve_listeners`). C++ composes nothing.
 /// - `cors_origins` may be null (default-deny) or a null-terminated
 ///   comma-separated allow-list string.
 /// - `max_connections`, `max_connections_per_public_ip`, and
 ///   `max_connections_per_private_ip` are the concurrent-connection caps
-///   (0 = unlimited), already parsed and cross-validated by
-///   `core_rpc_server::init`.
+///   (0 = unlimited) as given; `ConnLimits::checked` validates them here.
+///
+/// Parse, cap, and bind refusals are logged with their reason before the
+/// null handle is returned, so the operator reads why, not "failed to start".
 /// - The pointed-to `core_rpc_server` must remain alive for the lifetime of the
 ///   returned handle.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     rpc_server_ptr: *mut std::ffi::c_void,
-    bind_addr: *const c_char,
+    bind_host: *const c_char,
+    bind_port: *const c_char,
+    bind_host_v6: *const c_char,
     restricted: bool,
     cors_origins: *const c_char,
     max_connections: u64,
     max_connections_per_public_ip: u64,
     max_connections_per_private_ip: u64,
 ) -> *mut ShekylDaemonRpcHandle {
-    if rpc_server_ptr.is_null() || bind_addr.is_null() {
+    if rpc_server_ptr.is_null() || bind_host.is_null() || bind_port.is_null() {
+        // A caller bug, not an operator value — logged all the same, so no
+        // null handle is ever silent.
+        tracing::error!(
+            "daemon-rpc: start called with a null core, bind-host or bind-port pointer"
+        );
         return std::ptr::null_mut();
     }
 
-    let bind = match std::ffi::CStr::from_ptr(bind_addr).to_str() {
-        Ok(s) => s.to_owned(),
-        Err(_) => return std::ptr::null_mut(),
+    let (Ok(host), Ok(port)) = (
+        std::ffi::CStr::from_ptr(bind_host).to_str(),
+        std::ffi::CStr::from_ptr(bind_port).to_str(),
+    ) else {
+        tracing::error!("daemon-rpc: --rpc-bind-ip / --rpc-bind-port are not valid UTF-8");
+        return std::ptr::null_mut();
+    };
+    let host_v6 = if bind_host_v6.is_null() {
+        None
+    } else {
+        match std::ffi::CStr::from_ptr(bind_host_v6).to_str() {
+            Ok(s) => Some(s),
+            Err(_) => {
+                tracing::error!("daemon-rpc: --rpc-bind-ipv6-address is not valid UTF-8");
+                return std::ptr::null_mut();
+            }
+        }
+    };
+    let addrs = match crate::bind::listen_addrs(host, port, host_v6) {
+        Ok(addrs) => addrs,
+        Err(e) => {
+            tracing::error!("daemon-rpc: {e}");
+            return std::ptr::null_mut();
+        }
+    };
+    let conn_limits = match crate::conn_limit::ConnLimits::checked(
+        max_connections,
+        max_connections_per_public_ip,
+        max_connections_per_private_ip,
+    ) {
+        Ok(limits) => limits,
+        Err(e) => {
+            tracing::error!("daemon-rpc: {e}");
+            return std::ptr::null_mut();
+        }
     };
 
     let cors = if cors_origins.is_null() {
@@ -93,62 +144,63 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(
                 }
                 parsed
             }
-            Err(_) => return std::ptr::null_mut(),
+            Err(_) => {
+                tracing::error!("daemon-rpc: --rpc-access-control-origins is not valid UTF-8");
+                return std::ptr::null_mut();
+            }
         }
     };
 
     let core = match crate::core::CoreRpc::from_raw(rpc_server_ptr) {
         Some(c) => std::sync::Arc::new(c),
-        None => return std::ptr::null_mut(),
-    };
-
-    let rt = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_name("daemon-rpc")
-        .build()
-    {
-        Ok(r) => r,
-        Err(_) => return std::ptr::null_mut(),
-    };
-
-    let config = crate::server::ServerConfig {
-        bind_address: bind,
-        restricted,
-        cors_origins: cors,
-        // Caps parsed and validated by core_rpc_server::init (0 = unlimited).
-        conn_limits: crate::conn_limit::ConnLimits {
-            max_total: max_connections,
-            max_per_public_ip: max_connections_per_public_ip,
-            max_per_private_ip: max_connections_per_private_ip,
-        },
-        ..Default::default()
-    };
-
-    // Bind synchronously so a failure (EADDRINUSE, bad address) is reported to
-    // the caller as a null handle rather than logged-and-dropped inside the
-    // spawned serve task. The runtime is dropped on the early return.
-    let listener = match rt.block_on(crate::server::bind_listener(&config.bind_address)) {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("daemon-rpc bind failed on {}: {e}", config.bind_address);
+        None => {
+            tracing::error!("daemon-rpc: core_rpc_server pointer was not a live core");
             return std::ptr::null_mut();
         }
     };
 
-    let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
-    let shutdown_for_server = shutdown.clone();
+    let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("daemon-rpc")
+        .build()
+    else {
+        tracing::error!("daemon-rpc: failed to build the tokio runtime");
+        return std::ptr::null_mut();
+    };
 
+    // Bind every family synchronously so a refusal or EADDRINUSE is a null
+    // handle, not a log inside a spawned task. A later family failing drops
+    // the sockets already bound on this return.
+    let mut bound = Vec::with_capacity(addrs.len());
+    for addr in addrs {
+        match rt.block_on(crate::bind::bind_listener(addr)) {
+            Ok(listener) => bound.push(listener),
+            Err(e) => {
+                tracing::error!("daemon-rpc bind failed on {addr}: {e}");
+                return std::ptr::null_mut();
+            }
+        }
+    }
+
+    let config = crate::server::ServerConfig {
+        restricted,
+        cors_origins: cors,
+        conn_limits,
+        ..Default::default()
+    };
+    // Level-triggered: a `stop` that lands before any acceptor has polled
+    // is still observed by `wait_for` (a `Notify` stored no permit and lost
+    // it). One sender, cloned into every acceptor by `serve_listeners`.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let serve = rt.spawn(async move {
-        if let Err(e) =
-            crate::server::serve_with_listener(core, config, listener, shutdown_for_server).await
-        {
+        if let Err(e) = crate::server::serve_listeners(core, config, bound, shutdown_rx).await {
             tracing::error!("daemon-rpc server error: {e}");
         }
     });
 
     let handle = Box::new(ShekylDaemonRpcHandle {
-        shutdown: std::sync::Arc::into_raw(shutdown),
-        rt: Box::into_raw(Box::new(rt)) as *const _,
+        shutdown: Box::into_raw(Box::new(shutdown_tx)).cast_const(),
+        rt: Box::into_raw(Box::new(rt)).cast_const(),
         serve: Box::into_raw(Box::new(serve)),
     });
 
@@ -171,13 +223,16 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_stop(handle: *mut ShekylDaemonRpcHand
     // Signal graceful shutdown: axum stops accepting and lets in-flight
     // handlers run to completion — including a submit mid-Phase-C on the
     // blocking pool, whose closure holds live references into the C++ core.
-    if !handle.shutdown.is_null() {
-        let notify = std::sync::Arc::from_raw(handle.shutdown);
-        notify.notify_one();
+    let shutdown = (!handle.shutdown.is_null()).then(|| Box::from_raw(handle.shutdown.cast_mut()));
+    if let Some(tx) = &shutdown {
+        // Every acceptor on this handle observes this, whether or not it has
+        // been polled yet (`watch` is level-triggered; `notify_waiters` was
+        // not and could lose a stop that landed first).
+        tx.send_replace(true);
     }
 
     if !handle.rt.is_null() {
-        let rt = Box::from_raw(handle.rt as *mut tokio::runtime::Runtime);
+        let rt = Box::from_raw(handle.rt.cast_mut());
         // Block until the serve task's graceful drain finishes BEFORE the
         // runtime is dropped and control returns to C++ (which then destroys
         // the core_rpc_server / core the in-flight handlers reference).
@@ -186,9 +241,10 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_stop(handle: *mut ShekylDaemonRpcHand
         // into the C++ pool/blockchain, potentially mid-commit.
         if !handle.serve.is_null() {
             let serve = *Box::from_raw(handle.serve);
-            let _ = rt.block_on(serve);
+            drop(rt.block_on(serve));
         }
         drop(rt);
+        drop(shutdown);
     } else if !handle.serve.is_null() {
         // No runtime to drive the join (should not happen): reclaim the box
         // so it is not leaked. The task cannot be awaited without a runtime.
@@ -222,6 +278,10 @@ fn submit_facts_field_value(seed: u64, field: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+// Deliberate low-byte truncation on every `as u8`: the values must stay
+// byte-identical to `submit_facts_test_fill` in daemon_submit_ffi.cpp, whose
+// u64-to-u8 field assignments truncate the same way (§4.5 parity hooks).
+#[allow(clippy::cast_possible_truncation)]
 fn submit_facts_filled(seed: u64) -> crate::ffi::SubmitFactsFfi {
     let mut root = [0u8; 32];
     let root_word = submit_facts_field_value(seed, 5);
@@ -246,6 +306,7 @@ fn submit_facts_filled(seed: u64) -> crate::ffi::SubmitFactsFfi {
         weight_limit: submit_facts_field_value(seed, 8),
         chain_height: submit_facts_field_value(seed, 9),
         in_chain_height: submit_facts_field_value(seed, 11),
+        bond_record_bonded_total: submit_facts_field_value(seed, 16),
     }
 }
 
@@ -288,6 +349,442 @@ pub unsafe extern "C" fn shekyl_submit_facts_rust_check(
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
+fn hard_fork_facts_filled(seed: u64) -> crate::ffi::HardForkFactsFfi {
+    crate::ffi::HardForkFactsFfi {
+        earliest_height: submit_facts_field_value(seed, 0),
+        window: submit_facts_field_value(seed, 1) as u32,
+        votes: submit_facts_field_value(seed, 2) as u32,
+        threshold: submit_facts_field_value(seed, 3) as u32,
+        state: submit_facts_field_value(seed, 4) as u32,
+        queried_version: submit_facts_field_value(seed, 5) as u8,
+        active_version: submit_facts_field_value(seed, 6) as u8,
+        voting: submit_facts_field_value(seed, 7) as u8,
+        enabled: submit_facts_field_value(seed, 8) as u8,
+        reserved: [0; 4],
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_hard_fork_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_hard_fork_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_hard_fork_facts_rust_fill(
+    out: *mut crate::ffi::HardForkFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(hard_fork_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_hard_fork_facts`: 0 iff every field matches.
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_hard_fork_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_hard_fork_facts_rust_check(
+    facts: *const crate::ffi::HardForkFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == hard_fork_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn fee_estimate_facts_filled(seed: u64) -> crate::ffi::FeeEstimateFactsFfi {
+    crate::ffi::FeeEstimateFactsFfi {
+        fees: [
+            submit_facts_field_value(seed, 0),
+            submit_facts_field_value(seed, 1),
+            submit_facts_field_value(seed, 2),
+            submit_facts_field_value(seed, 3),
+        ],
+        quantization_mask: submit_facts_field_value(seed, 4),
+        fee_count: submit_facts_field_value(seed, 5) as u8,
+        reserved: [0; 7],
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_fee_estimate_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_fee_estimate_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_fee_estimate_facts_rust_fill(
+    out: *mut crate::ffi::FeeEstimateFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(fee_estimate_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_fee_estimate_facts`: 0 iff every field
+/// matches.
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_fee_estimate_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_fee_estimate_facts_rust_check(
+    facts: *const crate::ffi::FeeEstimateFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == fee_estimate_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
+fn net_stats_facts_filled(seed: u64) -> crate::ffi::NetStatsFactsFfi {
+    crate::ffi::NetStatsFactsFfi {
+        start_time: submit_facts_field_value(seed, 0),
+        total_packets_in: submit_facts_field_value(seed, 1),
+        total_bytes_in: submit_facts_field_value(seed, 2),
+        total_packets_out: submit_facts_field_value(seed, 3),
+        total_bytes_out: submit_facts_field_value(seed, 4),
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_net_stats_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_net_stats_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_net_stats_facts_rust_fill(
+    out: *mut crate::ffi::NetStatsFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(net_stats_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_net_stats_facts`: 0 iff every field matches
+/// the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_net_stats_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_net_stats_facts_rust_check(
+    facts: *const crate::ffi::NetStatsFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == net_stats_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
+// Seed-derived per-field values are deliberately truncated into the narrow
+// fields — the point is to exercise every byte of the layout (F26).
+#[allow(clippy::cast_possible_truncation)]
+fn identity_facts_filled(seed: u64) -> crate::ffi::IdentityFactsFfi {
+    let mut genesis_hash = [0u8; 32];
+    let word = submit_facts_field_value(seed, 1);
+    for (i, byte) in genesis_hash.iter_mut().enumerate() {
+        *byte = (word >> ((i % 8) * 8)) as u8;
+    }
+    crate::ffi::IdentityFactsFfi {
+        nettype: submit_facts_field_value(seed, 0) as u8,
+        reserved: [0; 7],
+        genesis_hash,
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_identity_facts` (layout twin, VC-2).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_identity_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_identity_facts_rust_fill(
+    out: *mut crate::ffi::IdentityFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(identity_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_identity_facts`: 0 iff every field matches
+/// the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_identity_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_identity_facts_rust_check(
+    facts: *const crate::ffi::IdentityFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == identity_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
+// Seed-derived per-field values are deliberately truncated into the narrow
+// fields — the point is to exercise every byte of the layout (F26).
+#[allow(clippy::cast_possible_truncation)]
+fn chain_tip_facts_filled(seed: u64) -> crate::ffi::ChainTipFactsFfi {
+    let mut top_hash = [0u8; 32];
+    let word = submit_facts_field_value(seed, 1);
+    for (i, byte) in top_hash.iter_mut().enumerate() {
+        *byte = (word >> ((i % 8) * 8)) as u8;
+    }
+    crate::ffi::ChainTipFactsFfi {
+        chain_height: submit_facts_field_value(seed, 0),
+        top_hash,
+        target_height: submit_facts_field_value(seed, 2),
+        synchronized: submit_facts_field_value(seed, 3) as u8,
+        release_build: submit_facts_field_value(seed, 4) as u8,
+        reserved: [0; 6],
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_chain_tip_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_chain_tip_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_chain_tip_facts_rust_fill(
+    out: *mut crate::ffi::ChainTipFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(chain_tip_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_chain_tip_facts`: 0 iff every field matches
+/// the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_chain_tip_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_chain_tip_facts_rust_check(
+    facts: *const crate::ffi::ChainTipFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == chain_tip_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
+// Narrow fields on purpose (see chain_tip_facts_filled).
+#[allow(clippy::cast_possible_truncation)]
+fn block_header_facts_filled(seed: u64) -> crate::ffi::BlockHeaderFactsFfi {
+    let mut hashes = [[0u8; 32]; 6];
+    for (f, hash) in hashes.iter_mut().enumerate() {
+        let word = submit_facts_field_value(seed, f as u64);
+        for (i, byte) in hash.iter_mut().enumerate() {
+            *byte = (word >> ((i % 8) * 8)) as u8;
+        }
+    }
+    crate::ffi::BlockHeaderFactsFfi {
+        hash: hashes[0],
+        prev_hash: hashes[1],
+        miner_tx_hash: hashes[2],
+        curve_tree_root: hashes[3],
+        attestation_root: hashes[4],
+        pow_hash: hashes[5],
+        height: submit_facts_field_value(seed, 6),
+        depth: submit_facts_field_value(seed, 7),
+        chain_height: submit_facts_field_value(seed, 8),
+        timestamp: submit_facts_field_value(seed, 9),
+        difficulty_lo: submit_facts_field_value(seed, 10),
+        difficulty_hi: submit_facts_field_value(seed, 11),
+        cumulative_difficulty_lo: submit_facts_field_value(seed, 12),
+        cumulative_difficulty_hi: submit_facts_field_value(seed, 13),
+        reward: submit_facts_field_value(seed, 14),
+        block_weight: submit_facts_field_value(seed, 15),
+        long_term_weight: submit_facts_field_value(seed, 16),
+        num_txes: submit_facts_field_value(seed, 17),
+        nonce: submit_facts_field_value(seed, 18) as u32,
+        major_version: submit_facts_field_value(seed, 19) as u8,
+        minor_version: submit_facts_field_value(seed, 20) as u8,
+        orphan_status: submit_facts_field_value(seed, 21) as u8,
+        pow_hash_filled: submit_facts_field_value(seed, 22) as u8,
+        found: submit_facts_field_value(seed, 23) as u8,
+        reserved: [0; 7],
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_block_header_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_block_header_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_block_header_facts_rust_fill(
+    out: *mut crate::ffi::BlockHeaderFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(block_header_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_block_header_facts`: 0 iff every field
+/// matches the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_block_header_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_block_header_facts_rust_check(
+    facts: *const crate::ffi::BlockHeaderFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == block_header_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
+// Narrow fields on purpose (see chain_tip_facts_filled).
+#[allow(clippy::cast_possible_truncation)]
+fn block_hash_facts_filled(seed: u64) -> crate::ffi::BlockHashFactsFfi {
+    let mut hash = [0u8; 32];
+    let word = submit_facts_field_value(seed, 0);
+    for (i, byte) in hash.iter_mut().enumerate() {
+        *byte = (word >> ((i % 8) * 8)) as u8;
+    }
+    crate::ffi::BlockHashFactsFfi {
+        hash,
+        chain_height: submit_facts_field_value(seed, 1),
+        found: submit_facts_field_value(seed, 2) as u8,
+        reserved: [0; 7],
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_block_hash_facts` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_block_hash_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_block_hash_facts_rust_fill(
+    out: *mut crate::ffi::BlockHashFactsFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(block_hash_facts_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_block_hash_facts`: 0 iff every field
+/// matches the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `facts` must point to a readable `shekyl_rpc_block_hash_facts`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_block_hash_facts_rust_check(
+    facts: *const crate::ffi::BlockHashFactsFfi,
+    seed: u64,
+) -> i32 {
+    if facts.is_null() {
+        return -1;
+    }
+    if facts.read() == block_hash_facts_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
+// Narrow field on purpose (see chain_tip_facts_filled).
+#[allow(clippy::cast_possible_truncation)]
+fn hardfork_entry_filled(seed: u64) -> crate::ffi::HardforkEntryFfi {
+    crate::ffi::HardforkEntryFfi {
+        version: submit_facts_field_value(seed, 0) as u8,
+        reserved: [0; 7],
+        height: submit_facts_field_value(seed, 1),
+    }
+}
+
+/// Rust-side fill of `shekyl_rpc_hardfork_entry` (layout twin, RK-D3).
+///
+/// # Safety
+///
+/// `out` must point to a writable `shekyl_rpc_hardfork_entry`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_hardfork_entry_rust_fill(
+    out: *mut crate::ffi::HardforkEntryFfi,
+    seed: u64,
+) {
+    if out.is_null() {
+        return;
+    }
+    out.write(hardfork_entry_filled(seed));
+}
+
+/// Rust-side check of `shekyl_rpc_hardfork_entry`: 0 iff every field matches
+/// the seed derivation (-1 otherwise, including null input).
+///
+/// # Safety
+///
+/// `entry` must point to a readable `shekyl_rpc_hardfork_entry`, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_rpc_hardfork_entry_rust_check(
+    entry: *const crate::ffi::HardforkEntryFfi,
+    seed: u64,
+) -> i32 {
+    if entry.is_null() {
+        return -1;
+    }
+    if entry.read() == hardfork_entry_filled(seed) {
+        0
+    } else {
+        -1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,11 +811,17 @@ mod tests {
     fn rust_fill_check_round_trips() {
         for seed in [0u64, 1, 0xDEAD_BEEF_CAFE_F00D, u64::MAX] {
             let mut pod = crate::ffi::SubmitFactsFfi::zeroed();
-            unsafe { shekyl_submit_facts_rust_fill(&mut pod, seed) };
-            assert_eq!(unsafe { shekyl_submit_facts_rust_check(&pod, seed) }, 0);
+            unsafe { shekyl_submit_facts_rust_fill(&raw mut pod, seed) };
+            assert_eq!(
+                unsafe { shekyl_submit_facts_rust_check(&raw const pod, seed) },
+                0
+            );
             // A single-byte perturbation anywhere must fail the check.
             pod.root[31] ^= 0x01;
-            assert_eq!(unsafe { shekyl_submit_facts_rust_check(&pod, seed) }, -1);
+            assert_eq!(
+                unsafe { shekyl_submit_facts_rust_check(&raw const pod, seed) },
+                -1
+            );
         }
     }
 }

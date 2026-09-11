@@ -11,8 +11,9 @@ Governing posture: get it right, not get it now. A release is a deliberate,
 gated act — never a merge to keep diffs small.
 
 Companion docs: `RELEASING.md` (tag → CI → artifact mechanics),
-`RELEASE_CHECKLIST.md` (feature-readiness gates), `GENESIS_STRATEGY.md` (frozen
-launch tuple), `TESTNET_REHEARSAL_CHECKLIST.md` (network go/no-go),
+`RELEASE_CHECKLIST.md` (feature-readiness gates), `GENESIS_TRANSPARENCY.md`
+(frozen launch tuple; ops narrative in shekyl-dev),
+`TESTNET_REHEARSAL_CHECKLIST.md` (network go/no-go),
 `UPGRADE_POLICY.md` (feature-driven cadence).
 
 ---
@@ -153,7 +154,7 @@ release blocker, not a footnote.
 The moment a release tag is used to stand up a seed, this tuple is **frozen for
 that network**; if any element later changes on `dev` and is promoted without
 re-running the rehearsal, you silently fork your own network
-(`GENESIS_STRATEGY.md`). Diff every element between the previous released tag and
+(`GENESIS_TRANSPARENCY.md`). Diff every element between the previous released tag and
 the candidate SHA:
 
 - [ ] `config::testnet::GENESIS_TX`
@@ -165,7 +166,7 @@ the candidate SHA:
 If **any** changed → re-run the rehearsal from clean datadirs per
 `TESTNET_REHEARSAL_CHECKLIST.md` before this candidate can become a release.
 
-Also pin the deterministic artifacts per `GENESIS_STRATEGY.md`: block 0 hash,
+Also pin the deterministic artifacts per `GENESIS_TRANSPARENCY.md`: block 0 hash,
 block 0 blob, block 0 miner-tx hash, daemon version + git commit, startup tuple.
 All three seeds must compare byte-for-byte.
 
@@ -182,7 +183,7 @@ each before the genesis freeze — after it, these are immutable.**
 | Frozen tuple | `config::testnet::*` | `config::mainnet::*` |
 | **Genesis HF number** | testnet artifact (`HF_VERSION_SHEKYL_NG = 17`) | **one canonical number, reconciled across code + `UPGRADE_POLICY.md` + HF table** |
 | Lead time before activation | accelerated | ≥ 4 weeks (`UPGRADE_POLICY.md`); 72 h floor for emergency forks |
-| Snapshot allocation | none | per `GENESIS_STRATEGY.md` decision |
+| Snapshot allocation | none | per `GENESIS_TRANSPARENCY.md` decision |
 
 **Pre-freeze blocker:** the genesis HF number must be made canonical in one
 authority doc and every `hf_version >=` gate before mainnet. It is currently

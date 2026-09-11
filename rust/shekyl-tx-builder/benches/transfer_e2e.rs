@@ -55,7 +55,7 @@ fn fresh_2out_commitments() -> Vec<Commitment> {
 fn fresh_hybrid_secret_key() -> HybridSecretKey {
     let scheme = HybridEd25519MlDsa;
     let (_pk, sk) = scheme
-        .keypair_generate()
+        .generate_ephemeral_keypair_for_tests()
         .expect("hybrid keypair generation");
     sk
 }
@@ -87,7 +87,11 @@ fn crypto_bench_transfer_e2e_components(c: &mut Criterion) {
     group.bench_function("hybrid_sign_1_input", |b| {
         b.iter(|| {
             let sig = scheme
-                .sign(black_box(&sk), black_box(&message))
+                .sign(
+                    black_box(&sk),
+                    shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+                    black_box(&message),
+                )
                 .expect("hybrid sign");
             black_box(sig);
         });

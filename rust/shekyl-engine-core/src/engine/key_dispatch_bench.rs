@@ -128,10 +128,10 @@ fn build_output_paid_to(
         output_key: constructed.output_key,
         commitment: constructed.commitment,
         view_tag: ViewTag([constructed.view_tag_prefilter]),
-        enc_amount: constructed.enc_amount,
-        amount_tag_on_chain: constructed.amount_tag,
-        enc_label: constructed.enc_label,
-        label_tag_on_chain: constructed.label_tag,
+        enc_amount: constructed.enc_amount_bytes(),
+        amount_tag_on_chain: constructed.amount_tag(),
+        enc_label: constructed.enc_label_bytes(),
+        label_tag_on_chain: constructed.label_tag(),
         output_index,
         tx_hash,
     }
@@ -362,7 +362,6 @@ fn unpopulated_transfer(seed: u64) -> TransferDetails {
         spent: false,
         spent_height: None,
         key_image: None,
-        awaiting_confirmation: None,
         spending_tx_hash: None,
         // The post-pass populates these from `None`; that is the measured work.
         source_ciphertext: None,

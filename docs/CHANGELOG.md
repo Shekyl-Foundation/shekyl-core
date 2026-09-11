@@ -2,7 +2,3695 @@
 
 ## [Unreleased]
 
+## [3.1.0-alpha.8] - 2026-09-10
+
 ### Added
+
+- **Daemon logical-state digest v0 (DRS-P0d).** A layout-independent
+  cSHAKE256 digest of production LMDB's core chain (height-ordered
+  block hashes), spent-key set, and live curve-tree root, read under
+  one LMDB snapshot. Two engines with the same logical state agree
+  regardless of B-tree layout. The digest is a regression oracle
+  except on CHECKED-CONFORMANT census rows, where a match is
+  correctness evidence (CSR-3). Archival journals are a named
+  exclusion — a core-only match is not archival parity
+  (`DAEMON_REDB_STORE.md` §7.1.1).
+
+- **The daemon publishes an ephemeral per-boot onion address by default
+  (PWD-E7).** When a pinned Tor binary is installed (SP-T0c gate:
+  `SHEKYL_TOR_BINARY` → beside the executable →
+  `/opt/shekyl/<version>-<target>/` staging → `PATH`), `shekyld` spawns
+  a managed tor, mints a v3 onion key in memory, publishes it with
+  `ADD_ONION Flags=DiscardPK`, and serves overlay inbound on a fresh
+  address each boot — no persisted secret, no durable identifier, and no
+  reused tor `DataDirectory` (a unique 0700 subdirectory of the daemon
+  config folder is created per boot and wiped on teardown, so entry guards
+  cannot join one boot's onion to the next). The new
+  `rust/shekyl-tor-control-daemon` crate owns the posture; the daemon and
+  wallet tor supervisors share only the neutral protocol crate and never
+  share a tor instance, config, data directory, or log sink (PWD-E9).
+  Opt out with `--no-ephemeral-tor`; configuring `--anonymous-inbound` or
+  a tor `--tx-proxy` yourself also makes the default yield.
+  `--anonymous-inbound`'s help text now states that taking it opts into a
+  stable, durable onion address. A tor start failure logs loudly and the
+  daemon continues without overlay inbound; it never aborts.
+
+- **Wallet and daemon console refuse a daemon that is not this build.**
+  On first request they compare the four-axis identity tuple in
+  `get_version` (wire version, consensus-constants digest, network, genesis)
+  against this binary's compiled values and refuse a mismatch in operator
+  language. Comparison is one function in `shekyl-rpc-types`; a down or
+  not-ready daemon is not cached as a contract mismatch. `CORE_RPC_VERSION`
+  3.28 → **3.29**. The genesis axis compares the daemon's block-0 id to this
+  build's per-network pin (`GENESIS_ALLOCATIONS.md` / `mining_parity`); a
+  remint of genesis updates the pin in the same change. A daemon reporting a
+  foreign DAA target no longer produces a
+  console warning: the digest handshake is the instrument, and figures still
+  use the generated `T`.
+- **Every ignored regtest e2e test now has a CI disposition.** The
+  live-daemon gate loop (`scripts/ci/run_live_daemon_gates.sh`) arms all
+  fourteen fast wallet/staking/curve-tree e2e gates per PR, runs the two
+  heavy consensus gates (depth-3 FCMP++ spend, emission claim) in a new
+  nightly lane (`nightly-live-daemon-slow.yml`, `GATE_LANE=slow`), and
+  records the one deliberate non-gate (a fixture regenerator); the
+  undecided count is ratcheted to zero, so a new `#[ignore]`d regtest
+  test fails CI until it is armed (observed red first), scheduled slow,
+  or decided dark with its reason recorded. Tree-wide, every `#[ignore]`
+  must now carry its reason in the attribute
+  (`scripts/ci/check_ignore_reasons.sh` on the grep-gates run).
+- **Staking rewards now claim automatically.** The engine runs a cadence
+  driver (`ENGINE_CADENCE_DRIVER.md`) that submits the emission-claim
+  transaction once each reward epoch settles — no manual step, and the
+  `claim`/`claim_rewards` RPC methods remain REJECTED in the wallet-RPC
+  contract. Rewards below the compiled-in fee floor
+  (`shekyl_economics::EMISSION_CLAIM_FEE_FLOOR`) are held and aggregated
+  until they cover the fee; anything still unclaimed at its claim-window
+  floor is evaluated once and forfeited loudly (operator alarm). A
+  background claim never contends with a user-initiated send: the claim
+  leg yields whenever user work holds the pending lock.
+- **Stuck-transaction watchdog and serving liveness run unattended.**
+  The same cadence driver fires the submit-lifecycle escape ladder on
+  chain progress (a pending transaction can no longer stall forever just
+  because no RPC poll arrived), re-arms hidden-service serving whenever
+  the obligation exists and the task is not live (covers both
+  failed-at-open and died-later), and raises a `ChainProgress` operator
+  alarm when the observed tip stops advancing — worded to cover both
+  "chain stalled" and "your daemon is unreachable."
+
+- **Wallet RPC liveness gate (`ci/wallet-rpc-liveness`).** Sibling of the
+  daemon's `ci/rpc-route-liveness`: `wallet_rpc.yaml`'s
+  `x-shekyl-method-registry` is now CI-enforced in both directions —
+  every SPECIFIED method has a dispatch arm and a production consumer
+  outside the server crate; every REJECTED/RESERVED method has no arm;
+  every arm has a registry row. The reverse direction is what turns
+  "`claim` stays REJECTED in the contract" from a note into an
+  invariant: a handler added while the registry still says refused now
+  fails CI instead of shipping. Grep-cheap (no toolchain), fails closed
+  on empty extraction (rule 47).
+
+### Changed
+
+- **Consensus: the transaction-volume operand is the exact window mean,
+  not its integer floor (FL-R24, `FEE_LADDER_DERIVATION.md` §11.6 PR A).**
+  The block reward's release multiplier `M_r` and the fee burn `b` were
+  computed from `tx_count_sum / 720` truncated to an integer, which
+  quantized a consensus operand to ticks of `1/V` (2–3 % of `M_r` under
+  Poisson noise, §11.7 FL-E1) and pinned it to the 0.8 rail on chains whose
+  mean sat just above 40. The daemon now hands Rust the pair
+  `(tx_count_sum, blocks)` (`Blockchain::get_tx_volume_window`, renamed
+  from `get_tx_volume_avg`; `shekyl::tx_volume_window`) and
+  `shekyl_economics::TxVolume` divides once against the baseline. Every
+  block whose 720-block window mean is fractional pays a different reward
+  than before: mid-curve at mean 40.5 the paid reward moves
+  819 200 000 000 → 829 440 000 000 (+1.25 %), `burn_pct` 223 606 →
+  225 000 (SCALE 10⁶). Pre-existing reward KATs are unchanged because all
+  of them feed whole-number means; the new KATs pin both values. FFI:
+  `shekyl_block_reward`, `shekyl_calc_release_multiplier`,
+  `shekyl_calc_burn_pct` and `shekyl_fee_correction_quantized` take
+  `(tx_count_sum, window_blocks)` in place of one `tx_volume` scalar.
+  Pre-genesis; no chain to migrate.
+
+- **Levin ingress rejects unknown commands and unknown flag bits.** A
+  dispatch (`REQUEST`/`RESPONSE`) whose command is not a `DefinedCommand`,
+  or any flag bit outside the five defined flags, is connection-fatal at
+  ingress. Cover traffic (neither `REQUEST` nor `RESPONSE`, typically
+  command 0) is still admitted and bounded by the packet limit. The table
+  and discriminator live in `shekyl-levin`; C++ `handle_recv` is a
+  marshaling shim (`shekyl_levin_ingress_admit`). `NOTIFY_NEW_BLOCK`
+  (2001) and `COMMAND_PING` (1003) are unknown dispatch; the sole block
+  announce is 2008 `NOTIFY_NEW_COMPACT_BLOCK`. Cap movements vs the
+  inherited table: 1007 support-flags 4096 → 256; 2003 get-objects
+  request 2 MiB → 5056 (hash-list derivation); 2006 request-chain
+  512 KiB → 1_200_256 (hash-list derivation, the inherited envelope
+  could not fit `BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT`); 2007 / 2008 /
+  2009 / 2010 keep their inherited envelopes (4 / 4 / 1 / 4 MiB) rather
+  than taking the packet limit; 2002 and 2004 stay at the packet limit
+  until PWD-B12 and the 2004 byte budget land.
+- **A peer is dropped only when the rejection is attributable to the
+  sender (PWD-B7).** The inherited `m_no_drop_offense` flag meant
+  droppable by *absence*, so our own pool-bookkeeping failures and
+  storage exceptions severed innocent connections. The drop decision is
+  now a typed tri-state verdict in `shekyl-peer-policy` (unclassified /
+  policy-or-state / internal-failure / attributable-form); only the last
+  severs. C++ writes through `shekyl_drop_verdict_classify` /
+  `reject_form|state|internal` at the failure site; unclassified does
+  not sever. `check_tx_inputs` classifies each return itself, including
+  chain-state arms (spent key image, missing/too-recent reference
+  block). `add_tx` does not promote an unclassified inner failure to
+  form. Mixed archival FFI codes (serve-credit, bond-post, admission,
+  debit-auth) classify in Rust; C++ writes the returned byte. Our-state
+  and marshal faults do not sever. The announce-size check declines
+  without disconnecting; a block-sync prepare failure still flushes the
+  failed span so sync can recover. Malformed input still drops.
+
+- **Block ingest no longer drops on failed-set-ness (PWD-B7 block
+  twin).** `block_verification_context`'s bag of bools is an opaque
+  `m_outcome` (`BlockIngest` in `shekyl-peer-policy`) plus the same
+  `m_drop_verdict` slot the tx path uses. Announce and sync ask
+  `shekyl_block_announce_action` / `shekyl_block_sync_action`; a
+  rejected block does not sever unless the drop slot severs. Missing-txs
+  re-requests compact transactions. C++ writes through
+  `record_block_ingest` / `reject_block_*` (Rust pairs the drop slot)
+  and never switches on a classification byte.
+
+- **`docs/FOLLOWUPS.md` genesis-hold triage.** Every pre-genesis row got a
+  disposition pass: 44 resolved/overtaken/duplicate/won't-fix rows removed
+  (git history is the archive), 3 rows reclassified to post-genesis with
+  named blockers (fee-bump, wallet-decryption MFA, network-filesystem
+  wallets), and the delivered DRS-P0a–P0c legs trimmed out of the DRS-P0
+  row, leaving P0d as the open blocker. Process-only; no code change.
+- **Internal "Unbond" vocabulary renamed to "Release."** The terminal
+  bond exit is now called Release everywhere the code and living docs
+  speak about it (matching `RELEASE_COOLDOWN_EPOCHS`), across Rust
+  (`PendingRelease`, `submit_release`, `stake_engine/release.rs`), the
+  C++ submit path, CI scripts, and design docs. Nothing user-visible or
+  on-wire changed: the `BondPostKind` wire discriminant stays `2`, and
+  the user surface stays `unstake` / `collect_unstaked`. The wallet-file
+  schemas that carried renamed field names bumped versions
+  (`PENDING_POST_VERSION` and `PSCAN_STATE_VERSION` 9 → 10; pre-genesis,
+  no migration). The LMDB journal name `archival_bond_unbond_log` and
+  its direct C++ carriers are deliberately excluded — carried by the DRS
+  redb port per the `docs/FOLLOWUPS.md` entry. Historical records
+  (decision log, reconciliation registry, this changelog's released
+  entries) keep the old name as the record of what was.
+
+- **The daemon and the Rust port now admit the same `tx_extra` tag set, and an
+  unparseable `extra` is refused rather than skipped.** `shekyl-wire` had long
+  documented merge-mining (`0x03`) and "mysterious minergate" (`0xDE`) as
+  outside the Shekyl genesis grammar and rejected them, while the C++ parser
+  still accepted both. Two parsers disagreeing about which transactions exist
+  is the defect; both tags are now deleted from the C++ variant (rule 60),
+  along with the `add_aux_pow` RPC method that was `0x03`'s only producer, its
+  schema, dispatch entry and python client, and `merge_mining.{h,cpp}`. The
+  tag bytes stay retired in a comment so a future tag cannot reuse a meaning
+  older software would parse differently.
+
+  **`0x0B` was kept, and that is the finding.** The archival attestation tag
+  had been grouped with the other two as inherited dead code on a "no producer
+  found" basis. It has a live consensus reader deciding `headers_readable`
+  during attestation verification; what it lacks is a *producer*, which is an
+  unfinished feature, not legacy. Deleting it would have removed a consensus
+  reader. It is now modelled in `shekyl-wire` instead, and its missing
+  producer is filed on its own terms.
+
+  **What that unlocks.** With the tag sets equal,
+  `validate_context_free_pruned` no longer skips the CEN-I19 PQC field-shape
+  rule when `extra` fails to parse — a tolerance that existed only because
+  failing hard would once have refused transactions the daemon accepts. The
+  flip exposed a fixture that could never have existed: a two-output spend
+  whose `extra` was a truncated varint, which no parser accepted and which
+  survived only because the parse was conditional. The wallet scanner no
+  longer re-implements the tag grammar: `shekyl-scanner` parses `extra`
+  through `shekyl-wire`, so it cannot admit the retired tags or stop at a
+  genesis tag it does not consume.
+
+- **Wallet-envelope test vectors renamed by oracle tier; pinned vectors
+  rebuilt on a real derived address.** Per the new `50-testing.mdc`
+  vector-oracle rule (external / independent / self-pinned; only the
+  first two are KATs), the `WALLET_FILE_FORMAT_V1` sealed fixtures are
+  now named as the self-pinned drift tripwires they are, their
+  regenerator refuses to run without a decision-log citation
+  (`SHEKYL_PINNED_REGEN_DECISION`), and the published vectors under
+  `docs/test_vectors/WALLET_FILE_FORMAT_V1/` were regenerated so
+  `expected_classical_address` derives from the sealed seed and
+  `seed_format` is a production-valid wire byte. A true tier-2 KAT for
+  the §2.6 wrap-key derivation (raw HMAC per RFC 5869 against the
+  spec's byte-exact labels) lands alongside. Wire format unchanged.
+  (Decision log 2026-09-07.)
+
+- **Wallet capability collapsed to `FULL`-only; cold signing rejected
+  permanently.** The `ViewOnly` capability is REJECTED (no product use
+  case; FCMP++ has no view-key chain scan) and `HardwareOffload` is
+  DEFERRED with zero code symbols (the v1 layout was a guess against no
+  real device; the future layout will be designed against one). The
+  wallet envelope now seals and opens mode byte `0x01` only — bytes
+  `0x02`/`0x03` are RETIRED and `0x04` RESERVED in
+  `WALLET_FILE_FORMAT_V1.md` §2.3, all refused fail-closed as
+  `UnknownCapabilityMode` (new splice-tamper tests pin the refusal).
+  Cold signing (`export_unsigned` / `submit_signed` air-gap flow) is
+  rejected permanently, superseding the A4 post-genesis deferral: an
+  FCMP++ witness needs the live curve tree, so the offline half cannot
+  deliver the isolation it claims; cold storage is the seed phrase.
+  API deltas: wallet-RPC error `-29005` (`CAPABILITY_FORBIDS`) is
+  RETIRED — unreachable with one capability, the numeric code is never
+  reused; `wallet_rpc.yaml` gains a machine-readable
+  `x-shekyl-method-registry` (SPECIFIED / RESERVED / REJECTED per
+  method) and `x-shekyl-error-ranges`; the `capability` field on wallet
+  handle responses always reads `"FULL"`. Envelope wire format for
+  existing `FULL` wallets is unchanged. (Decision log 2026-09-07; rule
+  `23-disposition-visibility`.)
+
+- **`money_supply` is now `emission_curve_asymptote` — the name says what the
+  number is (FL-R15).** Under the perpetual tail signed as FL-R12′, gross
+  issuance passes `2³² · 10⁹` and keeps going: the accumulator runs *through*
+  that value rather than stopping at it. The old name asserted a ceiling the
+  code no longer enforces, and that mismatch is what produced FL-R16 — two of
+  the constant's four jobs turned out to be *assertions that the cap holds*.
+
+  **What changed, for anyone reading a config or a header.** The
+  `config/economics_params.json` key is `emission_curve_asymptote`; the
+  generated C++ macro is `SHEKYL_EMISSION_CURVE_ASYMPTOTE` (rule 93 prefix,
+  replacing the inherited unprefixed `MONEY_SUPPLY`); the Rust surface is
+  `EconomicParams::emission_curve_asymptote` /
+  `params::EMISSION_CURVE_ASYMPTOTE`. **Behaviour is unchanged** — the value,
+  the emission arithmetic, and the parameter digest are all identical, and the
+  economics simulator's `--fee-ladder` and `--stage2` reports are byte-for-byte
+  the same across the rename.
+
+  **If you have an out-of-tree `economics_params.json`**, rename the key: the
+  build fails loudly on a missing key rather than defaulting.
+
+- **`ActivityMetric::new` no longer rejects a supply past the asymptote
+  (FL-R16b).** The constructor validated `circulating_supply ≤ MONEY_SUPPLY`
+  as a structural invariant. That invariant is false under the perpetual tail —
+  a chain state past the asymptote is legitimate, not impossible — so the check
+  and its `CirculatingExceedsSupply` discriminator are removed. The remaining
+  structural invariants (`total_staked ≤ circulating_supply`, zero-at-genesis)
+  are unchanged.
+
+- **Peerlist trust is earned in-process: nothing restored from disk is
+  trusted, and `--add-peer` is a candidate rather than a trusted peer.**
+  White-list membership now means exactly *"this process dialled it and it
+  answered"*. On startup every persisted address is loaded as a **gray**
+  candidate and earns white by a successful outbound dial; `--add-peer`
+  entries enter gray for the same reason, having never been dialled.
+
+  **Why it is security-relevant.** A persisted white list made white mean *a
+  file asserts that some earlier process verified something*. White entries
+  are dialled in preference to gray **and are the only ones gossiped onward**,
+  so a supplied or stale datadir — a pre-synced download, a restored backup, a
+  container volume, a shared mount — made a node both a preferential dialler
+  of, and an amplifier for, whatever the file contained. Encrypting the store
+  would not have fixed this: encryption is a privacy mechanism for the peer
+  graph, and verification is what supplies trust.
+
+  **Operator-visible effects.** A wrong or unreachable `--add-peer` address is
+  **no longer gossiped to other nodes** — gray entries are never disclosed, so
+  a typo stops propagating immediately instead of being handed to every peer
+  that syncs with you. Its **removal is eventual, not immediate**: a failed
+  refill dial only records the address in the recently-failed cache, and
+  eviction waits for the periodic housekeeping probe to draw that entry (one
+  random gray peer per zone per cycle) and fail. A bad address can therefore
+  survive many failed dials and restarts; what changes is that it no longer
+  spreads, and no longer occupies a preferentially-dialled slot. Seed contact is
+  keyed on holding **no candidate at all** rather than no trusted one, so a
+  restarting node dials its stored pool instead of visiting a seed first. The
+  first start after upgrading is a cold-ish start: the persisted store's
+  version is bumped, so the previous file is dropped whole.
+
+  **One capacity change, stated because it is not obvious.** White and gray
+  had separate caps (1000 + 5000). One trust class means one cap, so a node
+  saturating both now persists up to `P2P_LOCAL_GRAY_PEERLIST_LIMIT` rather
+  than the sum; the entries dropped are the least recently seen.
+
+- **Block reward: one Rust owner, and the composition the FL round signed
+  (FL-R12′).** The paid reward is now
+  `max(M_r · curve(remaining), TAIL) · penalty(x)`, computed by
+  `shekyl-economics::paid_block_reward`; C++ marshals to it and computes
+  nothing. The ordering is the consensus-visible part: the release
+  multiplier applies to the **curve** and the tail floors the result (at a
+  perpetual tail there is nothing to pace, and a multiplied floor would pay
+  least exactly when fees are lowest), while the weight penalty applies to
+  the **paid quantity, after the floor** (composed before it, the penalty
+  would be dead at the tail permanently, and there is no post-tail era).
+
+- **The supply cap is retired and the accumulator runs through the
+  asymptote.** `already_generated_coins` no longer saturates at the
+  emission-curve asymptote — a past-asymptote state is a legitimate
+  perpetual-tail state rather than an error — which closes the divergence
+  where the estimator and the relay floor dead-lettered at exhaustion. The
+  persisted width stays `u64` (FL-R14), guarded by a build-time assertion
+  on the ≈89,750-year headroom.
+
+- **Fee ladder: three tiers, state-computed (FL-R17).** The daemon serves
+  `economy` / `standard` / `priority` from
+  `shekyl-economics::corrected_fee_ladder`, scaled by the whole
+  volume-dependent correction `C_q = Q_ceil((1−σ)·M_r/(1−b))` on the
+  M_r-neutral operand. The `Fh` main arm is unconditional (the inherited
+  surge discount is gone), and the served economy rung is clamped up to the
+  relay floor so a conforming wallet's quote can only err toward
+  acceptance. **Wire shape is unchanged** — the vector still carries four
+  slots, with slot 2 mirroring `standard` as a bridge until the RPC
+  cutover.
+
+- **The served correction carries no daemon-local state.** It is the plain
+  pow2 ceiling snap of the correction at the queried height, so every node
+  derives the same rate there; a restarted and a long-running daemon
+  cannot quote differently. The pow2-boundary hysteresis the design round
+  ruled is built and tested in `shekyl-economics` but is **not on the
+  served path yet**: a remembered value makes the rate depend on the
+  process's query history, and a one-step seed from the previous block
+  inverts it. FL-R3 rules that the band stays and is restored, via a
+  grid-anchored previous value that keeps it derivable from chain state;
+  that shape is a design change and lands in its own round. Until then
+  the served correction is the plain snap.
+
+- **Wallet fee-rate ceiling raised to a structural bound.**
+  `absolute_fee_rate_cap()` is now derived with every factor at its own
+  extreme (220,000,000 atomic/weight) instead of at the genesis point. The
+  previous 28,000,000 value sat **below honest daemon quotes** from about
+  year 3 and would have refused correct snapshots. The swept peaks are
+  91,000,000 at ≈ year 7 on the neutral accumulation and 98,000,000 at
+  ≈ year 8 on a dormant-then-busy trajectory — history matters, because a
+  slower-emitting past leaves a larger `R` at the same height. **Neither
+  is the reachable maximum**: arbitrary volume paths are uncountable, so
+  the sweep is a floor under the bound's adequacy, not a proof of
+  tightness. That is why the cap is structural rather than swept.
+
+### API
+
+- **`shekyl_block_reward` takes `tx_volume_avg`**, and the release
+  multiplier composes inside the one owner rather than being applied by the
+  caller; `shekyl_apply_release_multiplier` and
+  `shekyl_cap_reward_to_remaining_supply` are gone. New exports
+  `shekyl_fee_correction_quantized` and `shekyl_corrected_fee_ladder` carry
+  the ladder. `shekyl_corrected_fee_ladder` returns `0` on success, `-1`
+  for a null out-pointer, and `-2` for scalars the rungs cannot form in
+  128 bits — no chain state reaches the last one; it exists so a corrupt
+  caller gets a status instead of an abort across the ABI (rule 40).
+  `shekyl_fee_correction_quantized` is total.
+  `Blockchain::get_dynamic_base_fee_estimate_2021_scaling`
+  gains a `c_q` parameter.
+
+### Removed
+
+- **Levin `return_code` is deleted (PWD-B5).** The bucket header is **29
+  bytes**, not 33: the inherited signed `i32` at old offset 21 is gone, and
+  flags follow command immediately. Notifications always wrote `0`; the
+  three remaining invokes put a handler `int` on the wire. Application
+  callbacks already tested `code < 0` (local timeout `-4` / destroyed `-3`).
+  The epee invoke wrapper still treated `code <= 0` as failure because it
+  expected the handler's positive `1`; that `1` left with the field, so a
+  `RESPONSE` now delivers `LEVIN_OK` (0) — a reply arrived — and the
+  wrapper fails only on `code < 0`. Handshake failures hang up after
+  sending Levin "success." Application success or failure is the payload
+  or the close. A later NACK is a command body, not a header field and
+  not a flag bit (PWD-B4 rejects unknown bits). Local invoke-callback
+  `int` stays for timeout/destroyed — that is API, not wire. No protocol
+  version moves: `SHEKYL_PROTOCOL_VERSION` denotes the crypto era, and
+  there is no wire-command-set version to bump. Pre-genesis: no
+  compatibility with 33-byte peers. The four `SPEC_VERIFY_COST`
+  `msg_bytes` pins follow the 29-byte header (−4 B each); hop rounding
+  (175 / 453) is unchanged.
+
+- **One block-propagation path, not two (PWD-B6).** `NOTIFY_NEW_BLOCK`
+  (2001) is deleted; command **2008** is the sole block announce. The two
+  were already one code path — 2001's handler forwarded into 2008 — and
+  nothing ever sent 2001. Command ids **2008 / 2009 are unchanged**. The
+  identifiers are `NOTIFY_NEW_COMPACT_BLOCK` / `NOTIFY_REQUEST_COMPACT_MISSING_TX`
+  (Rust: `NewCompactBlock` / `RequestCompactMissingTx`): `FLUFFY` collides
+  with Dandelion++ stem/fluff (`dandelionpp_fluff` on 2002) and names a
+  Monero rollout this chain has no history of. Compact, not "just block":
+  2008 is header-first (relay clears `b.txs`); full blocks still travel on
+  `NOTIFY_RESPONSE_GET_OBJECTS` (2004) during sync. `P2P_SUPPORT_FLAG_FLUFFY_BLOCKS`
+  (0x01) goes with 2001; `0x01` is left unassigned. Advertised flags live
+  as `shekyl-levin::SupportFlags::ADVERTISED` (zstd only), pinned against
+  the C++ macros by `check_levin_constant_parity.sh`. The obsolete
+  `--fluffy-blocks` CLI flag is deleted. No protocol version moves:
+  `SHEKYL_PROTOCOL_VERSION` denotes the crypto era, and there is no
+  wire-command-set version to bump.
+
+- **The anchor peerlist mechanism is deleted whole** — the persisted anchor
+  section, `anchor_peerlist_entry`, its container and manager methods, the
+  anchor dial arm, and `P2P_DEFAULT_ANCHOR_CONNECTIONS_COUNT`.
+
+  Anchors existed only to carry peers across a restart, and peerlist trust no
+  longer crosses that boundary. Within a session the mechanism could not
+  produce a connection at all: an entry was in the anchor set only while an
+  outbound connection to it was open, and the dial path skipped every entry it
+  already had a connection to. It also under-delivered against its own
+  constant — the whole persisted set was drained and destroyed to buy at most
+  one connection.
+
+  **Consequence for operators:** the anchor exemption in the
+  sync-slot drop logic went with the mechanism. `should_drop_connection` still
+  refuses to drop a peer that is not striped, one carrying the stripe we need
+  next, one usable for pruned-block sync, or one holding the next unpruned
+  block — what was removed is the *unconditional* exemption an anchor
+  connection had, not connection protection in general.
+
+- **`--hide-my-port` is gone, as an option and as a capability; whether this
+  node advertises a port is now derived.** The flag expressed something the
+  node can determine for itself, and its default meant a reachability
+  downgrade required no conscious act. `get_local_node_data` now announces the
+  listening (or `--p2p-external-port`) port only where a peer could actually
+  reach us on it: the zone must support the back-ping that verifies the claim,
+  and we must accept inbound connections at all. **This also fixes a
+  divergence** — `check_incoming_connections` has always asked the second
+  question, while the announcement site asked only whether the flag was set, so
+  a node run with `--in-peers 0` announced a port that refuses every connection
+  it attracts. Operators wanting no inbound use `--in-peers 0`, which now
+  suppresses the announcement by derivation; operators wanting no p2p
+  participation at all should not run a daemon. The flag never did anything on
+  Tor or I2P, where `m_can_pingback` is false by construction. NAT'd ports are
+  handled naturally by the revised p2p rather than by an operator flag.
+
+- **PWD-B8: a p2p timer that was never driven, and two lineage-dead wire
+  structs.** `m_bad_peer_checker` (`once_a_time_seconds<43>`) had exactly one
+  occurrence tree-wide — its own declaration — and `on_idle` never called it;
+  its orphaned `m_bad_peer_check_lock` goes with it. `connection_entry_base`
+  and its `connection_entry` typedef had **zero** references anywhere, and
+  `network_address_old` only two, both in the debug size printer. Nothing
+  observable changes, because none of it was reachable; the value is that a
+  cadence constant no code reads no longer reads as a cadence to anyone
+  auditing the file.
+
+
+### Fixed
+
+- **P2P: a node no longer retries outbound to its own public listen address.**
+  Foundation seeds sit in a shared hardcoded list; public zone binds
+  `0.0.0.0` and leaves `m_our_address` unset, so a seed TCP-hairpinned
+  itself, the handshake nonce dropped the connection, and
+  `start_outer_call` logged ERROR on a ~13s cadence. Outbound now skips a
+  candidate whose port is our listen / advertised-external port and whose
+  host is loopback or a local interface address. Detection stays the nonce
+  (PWD-T1); this is the wasted-dial half of PWD-E3(c). Same-host other-port
+  (mainnet + testnet on one VPS) is still dialable.
+
+- **Consensus: the `tx_extra` PQC fields have a shape rule, and the storage
+  fail-open that hid its absence is gone (CEN-I19, S1).** A transaction whose
+  `0x07` leaf-hash field was missing, short, long or unparsable was accepted at
+  connect and the DB zero-filled `h_pqc` for the uncovered outputs — a leaf
+  whose post-quantum binding was to nothing (unspendable) and a leaf set a
+  faithful port would not have stored; the `0x06` KEM-ciphertext field had the
+  same gap, leaving a recipient unable to ever see or spend the payment. Ruled
+  by Rick 2026-09-05: with `n = vout.size()`, exactly one `0x06` of `1120·n`
+  bytes and exactly one `0x07` of `32·n` when `n > 0`, neither when `n == 0`
+  (serve-credit transactions), and duplicates are rejected because first-match
+  parsing let the same bytes mean two things. The rule lives in `shekyl-wire`
+  and reaches the daemon through `shekyl_tx_extra_pqc_field_shape`; the C++
+  adapter runs in `check_tx_semantic` (relay and block, no `kept_by_block`
+  exemption) and `prevalidate_miner_transaction`; the DB collector aborts on the
+  same shape instead of zero-filling. Red-first: every vector observed accepted
+  at all three gates before the rule. `GENESIS_TX_WIRE_FORMAT.md` §9.6a had
+  both lines wrong in mirrored ways (`0x06` "per output"; `0x07` "not
+  self-describing") — corrected under refuted-not-superseded with the
+  serializer lines that refute them. Every producer already emits both fields
+  at the full length, genesis included, so no conforming transaction changes.
+
+- **Consensus: the block header's `curve_tree_root` is now checked at
+  admission against the tip root, before the block is added (CEN-B5, S1).**
+  `handle_block_to_main_chain` compared the header against the tree root read
+  *after* `add_block` — the post-drain state — while `create_block_template`
+  fills the header from the root *before* it, the state at the block's own
+  height that the per-height record, the wallet client and the CT-2 KAT all
+  name. The two agree only when nothing matures at the block, so every
+  non-FAKECHAIN chain would have rejected block 60 (the genesis coinbase
+  matures there) and halted; the FAKECHAIN skip around the check hid it from
+  every Blockchain-level test and every `--regtest` run. The compare now runs
+  with the other header checks, after proof-of-work and before the miner-tx
+  prevalidation, and a mismatch rejects the block outright — the post-add
+  compare with its connect-then-pop arm is deleted. Observed red → green by
+  the first non-FAKECHAIN Blockchain fixture in the tree
+  (`curve_tree_header_root_check.cpp`: TESTNET, fixed difficulty 1, real
+  LMDB, block 60 rejected before and connected after). The FAKECHAIN skip
+  around the check is deleted: the core_tests generator now computes real
+  roots by replaying its own recorded chain through the Rust curve-tree
+  client, exposed to C++ as `shekyl_curve_tree_replica_*` in `shekyl-ffi`
+  (the client's parity with the daemon's store was KAT-pinned; every
+  generated block that connects is now a live cross-implementation check at
+  every height), and the fake-DB test doubles report the empty-tree sentinel
+  instead of zeros. `CurveTreeClient::next_block_root` — the one-past-tip
+  read a header producer needs — is added and pinned to the recon fixture.
+  `shekyl-ffi` gains the `shekyl-curve-tree` dependency, which brings `redb`
+  into the daemon image ahead of the daemon redb store that needs it anyway.
+  `FCMP_PLUS_PLUS.md` §5 now states the state the header commits to.
+  Register: CEN-B5 stays DIVERGENT until re-reviewed at the merged sha;
+  both its divergences are fixed.
+
+- **Consensus hardening: the curve-tree leaf collector aborts instead of
+  silently dropping an output (CEN-L11/L12).** Three arms in the DB-side leaf
+  collector discarded an output on a `continue` or an unchecked construct
+  verdict, and a dropped output is deterministically unspendable with no
+  verify-time twin. All three are unreachable for any validated transaction —
+  CEN-H12/F8's sole-output-type whitelist, four `outPk.size()` gates, and the
+  canonical/prime-order point gates on output keys and commitment masks — so
+  they now abort rather than skip, each naming the gate that forecloses it.
+  Those gates carry reverse pointers warning that relaxing them surfaces as a
+  connect-time abort, and a Rust falsifier asserts they accept only what the
+  leaf builder can encode. The FOLLOWUPS row that described this as a live
+  fund-loss path is corrected: it was latent. **Both rows are now promoted
+  CHECKED-CONFORMANT by the follow-up re-review at the merged sha** —
+  register 99 / 1 / 2 over P0f's 102-row snapshot, CEN-B5 the sole DIVERGENT
+  row. For anyone grepping history: PR #609's merge commit carries the title
+  *"register 99/1/2"*, written before that PR's round 6 withdrew the
+  promotion (withdrawn-in-PR, records-was); the register was 97 / 3 / 2 at
+  that merge and reaches 99 / 1 / 2 only with this re-review, one PR later
+  than the title claims.
+
+- **The drain byte-parity e2e pinned a fixture state that never existed.**
+  `e2e_drain_wire_shape_matches_a_real_transfer` asserted the confirmed
+  sweep-all bond leaves exactly ONE persona funding record; the bond post's
+  change has been a two-output split (`change_lo`/`change_hi`) since before
+  the assertion was written, so the walk was deterministically red on clean
+  `dev` — surfaced by PR-C's full walk battery, verified against a clean
+  dev baseline with the same daemon. Corrected to the assembly's real
+  invariant (two split halves), with the cushion re-sized so the larger
+  half alone funds the drain and the 1-in/2-out byte-parity proposition is
+  preserved; the shared confirmed-bond fixture's wait now also requires
+  the swept records' arm-1 prune before snapshotting (a determinism hole).
+
+- **Consensus: PoW acceptance is gated on the verifier's verdict, not the
+  fail-closed sentinel (CEN-D2/D1 S1).** The `0xff…` hash written on RandomX
+  FFI failure passes `check_hash` at difficulty 1, and the validation sites
+  ignored the verifier's returned bool — so under (verifier failure ∧
+  difficulty 1) a block could connect with its PoW never verified. All three
+  consumer sites (main connect, alt path, longhash worker) now reject on the
+  bool; the sentinel remains as a belt; a local verifier failure rejects
+  without `m_bad_pow` (the block is unproven, not disproven);
+  `get_altblock_longhash` routes through the single `IPowSchema` dispatch
+  point. Five verdict-contract unit tests, two red-observed.
+
+- **Consensus: the FCMP++ proof-skip at block connect is now hash-gated
+  (CEN-M8 S0).** The skip was presence-gated — any pool hit skipped the
+  membership/spend-authorization proof — while `add_tx`'s `kept_by_block`
+  tolerance admits admission-failed txs with `fcmp_verified = 0`, so an
+  invalid proof could connect unverified. `take_tx` now reports whether the
+  pool's verification cache affirmatively covers the bytes (flag AND hash
+  match), and connect skips only on that verdict. Admission-verified txs
+  keep their skip (the D++ embargo's `hop` is unchanged); a never-verified
+  tx pays full verification. Unit tests pin the verdict contract
+  (admission-failed false, hash-match true, stale-hash false, failure-return
+  reset); the connect-path wiring regression is a FOLLOWUPS item blocked on
+  the FCMP++ spend builder.
+
+### Added
+
+- **A documentation claim audit, and the measurement that argued for it.**
+  PR #633 took thirteen review rounds. The first nine were reactive — a
+  reviewer found an instance, it was fixed, the next round found another of
+  the same class — and from round ten the author ran a mechanical claim check
+  before each push. That pass caught three defects no reviewer had filed (a
+  matrix row routed to a section that did not exist, a register that jumped
+  W-3 to W-6, a stated writer count gone stale), and the rounds after it found
+  only what it could not see. `scripts/ci/check_doc_claims.py` makes that
+  check a gate: a document **declares** which invariants it means to hold
+  (`<!-- claim-audit: series DRS-W -->` and five siblings) and the gate checks
+  exactly those. Declared rather than inferred, because the first cut inferred
+  them corpus-wide and reported **991 findings against a clean tree** — a gate
+  that unusable is convention theatre pointing the other way. Every extraction
+  distinguishes checked-and-passed from found-nothing-to-check and fails on the
+  second, and the pass line states the limit in its own output: it checks
+  numeric and structural claims against source, **not rationales** — four
+  premises refuted by review the same week would all have passed it green.
+  Its 81 failure paths and 24 negative controls are falsified by a committed,
+  runnable matrix (`check_doc_claims_falsification.py`) that builds a synthetic
+  corpus in a temp tree rather than mutating the repo, and which **measures
+  its own completeness**: every one of the gate's discrepancy, non-coverage and
+  refusal sites must be executed by some case, or the matrix fails. That sweep
+  found seven unexercised sites on its first run — including the wrong-commit
+  submodule branch, which no case reached at all. A ratchet in
+  `docs/ci/doc-claims-baseline.txt` holds live dead-citation debt monotone
+  downward and stops a document silently un-declaring a leg, because opt-in
+  without a ratchet is adoption theatre. Both legs assert against the **base
+  revision**: the figure otherwise travels in the same commit as the change it
+  constrains, so one edit could add rot and lift the bar to match, and the
+  registry records the full declaration (`series:DRS-W`, not `series`) so a
+  document holding two of one kind cannot drop either unnoticed — and the
+  registry line is itself base-checked, since dropping a declaration and
+  deleting the token recording it passes every single-tree check. A citation into a submodule that is
+  **not checked out** aborts the run and names the init command rather than
+  counting as rot: absence of the file is first evidence the *subject* is
+  absent, which is the misattribution the link gate makes in that same state.
+  First adopted by the P0b atomicity audit, where it immediately caught a live
+  defect: `V4_DESIGN_NOTES.md` still restated the finding range with its old
+  upper bound after the register had grown past it. It then caught one in
+  itself — the ratchet's own baseline had been measured in a worktree with a
+  submodule absent, and CI went red on the first push.
+
+- **DRS-P0b — the atomicity audit covers the store that exists.** The
+  April 2026 `LMDB_WRITE_ATOMICITY_AUDIT.md` was a PASS doing work it was
+  never entitled to do: 22 of the 49 declared tables post-dated it (49 declared, 48 at runtime — DRS-W5), while its
+  covered subjects included the dead claim-era staking paths and two dead
+  tables. Rewritten in place at `dev 2dba46537` over every write path —
+  connect, pop, txpool (re-censused: 14 `LockedTXN` constructions / 13
+  commits, the read-snapshot `get_transaction_info` recorded as the
+  deliberate baseline; the April D++ fix verified alive and intact), alt
+  blocks, **three** prune shapes — one atomic and two deliberately
+  checkpointed (archival retention rides the block's transaction with its
+  receipt written before the destruction it authorises; `prune_tx_data`
+  commits per ≤256-height batch **with its resumption anchor in the same
+  transaction**; `prune_worker` commits and reopens every 4096 deletions) —
+  and the store lifecycle — `open()` (one transaction, three exits, one of
+  which commits before it refuses: DRS-W10), `reset()` (enumeration wipe —
+  its stale FOLLOWUPS row closed) and `migrate()` (zero writes by design). The §10 coverage matrix is
+  gate-pinned to `SHEKYL_LMDB_TABLES` (DRS §9.1 leg 3 now live; eight new
+  failure paths observed red). The in-code-only conventions are
+  transcribed for the Rust store: A-2 height bases with the F-B5b
+  convert-don't-unify rationale verbatim, A-4's load-bearing revert
+  partial order, A-6's guard census (22× `std::runtime_error` vs 2×
+  `DB_ERROR_TXN_START` for one precondition). Findings DRS-W1…DRS-W11 recorded —
+  none S-graded, no C++ touched — including `txs` (zero write or read
+  sites; inherited-dead candidate) and `hf_starting_heights` (deleted at
+  every writable `open()`, structurally absent at runtime), and the post-pop
+  burn pair living outside the pop funnel — which `blockchain_import
+  --pop-blocks` reaches today by popping straight through the DB — and
+  **DRS-W9**, the connect side of the same architectural fact: the burn
+  pair also runs after the try whose catches set `m_batch_success`, so an
+  LMDB write failure between the row and its aggregate commits the block
+  and the row without the total. That one falsified a PASS this audit had
+  published, and it is the production entry that regrades DRS-W7 from
+  unreachable to live. The dead
+  `staker_pool_balance` properties row left the schema doc, and the
+  workflow carrying the schema gates is renamed `docs-gates.yml` for what
+  it does (Rick's #624 boundary: P0b's item, no other lane's).
+
+- **Shard-visual: ruling B's assigned residue CLOSED (2026-09-06), and
+  the single-algorithm fallback RETIRED.** Three items the spec handed
+  to ruling B by name and B never closed, ruled together: `time_density`
+  is **kept** (admitted, deliberately dormant — the paragraph is what
+  makes it deliberate rather than an oversight); the post-rewire
+  aesthetics are **accepted as they stand**; and the single-algorithm
+  palette is **retired** with a rule-21 reopening criterion, because
+  both of its trigger conditions resolved (continuity was ruled the
+  wrong property, and the floor budget was ruled in candidate.v1's
+  favour). Also closes the *Final algorithm palette* open question and
+  points the stale *Algorithm versioning* entry at the ruling that
+  already settled its privacy half.
+
+  One reported aesthetics finding was **withdrawn under measurement**:
+  the claim that distinguishability collapses at the 128px product size
+  does not survive — pairwise full-image RGB-RMS is min 42.0 / median
+  53.5 at 128px against min 42.9 / median 57.8 at 512px, so
+  distinguishability is size-independent. It was an impression of a
+  thumbnail strip, not a property of the renders, and the withdrawal is
+  recorded rather than the finding.
+
+- **Shard-visual performance targets AMENDED (2026-09-06), and the
+  amendment changes what they assert.** **RATIFIED.** *Authority: the
+  ruling reached this work relayed, and was then confirmed by Rick
+  directly to steering on 2026-09-06 ("Shard visual B is ratified") —
+  confirmed in-channel rather than by an artifact in the tree, which is
+  where the record stands.* The ruling: the floor scores are
+  acceptable, so of budget / candidate / floor device the **budget
+  gives**. New targets, stated as *median on the floor device, warm,
+  otherwise idle* — the quantity `examples/budget_matrix.rs` actually
+  emits: 128px 350 ms, 256px 800 ms, 512px 4 s, 1024px 25 s (2× the
+  corpus-worst floor median; the originals are struck through in
+  place, refuted not superseded). Two things recorded with them:
+  (1) the originals named **no statistic and no device state**, so
+  they were never falsifiable — an unfalsifiable threshold generates
+  no failures, which is why they survived unexamined; (2) the
+  replacements are **regression bounds, not fitness bounds** — at 2×
+  the measured worst nothing the implementation does can breach them,
+  and presenting them in the old voice would ship a check that cannot
+  fail. Enforced by named trigger (any renderer / compositor /
+  entropy-draw change obliges a floor re-run; `docs/FOLLOWUPS.md`)
+  plus a new CI gate `shard-visual-x86-smoke`, whose **pass** line
+  carries its own disclaimer because a green checkmark otherwise
+  reads as "performance is fine" and cannot bound the Pi 4 floor.
+
+- **Shard-visual ruling B (measurement half): goldens, KATs, avalanche,
+  floor budget matrix — executed 2026-09-06.** Designated-reference
+  goldens committed once (the run is recorded by the generator inside
+  `tests/goldens/recipes.json` → `_reference_run`, not restated in
+  prose where it would drift; x86_64, release, and the toolchain
+  `rust/rust-toolchain.toml` pins; never regenerated by consuming
+  tests); full-recipe KATs for
+  all nine fixtures on both implementations (shekyl-dev pins a copy of
+  the same artifact); two-limb avalanche on the pixel axis (sweep min
+  RMS 34.165 ≥ floor 20). Floor-device results (skl-pi, Pi 4, thermal
+  bracket 50.6–59.4 °C at stock 1800 MHz): raster parity measured
+  **RMS = 0.000000 on all nine fixtures at 128px** (bit-identical to
+  the x86 goldens — recorded as measured, does not reopen the
+  bit-exactness retraction; 256/512/1024px parity is unmeasured, since
+  goldens exist at the one size); budget matrix **36/36 cells over
+  budget** (1.3×–6.2×; full per-fixture table committed under
+  `docs/benchmarks/`),
+  falsifying candidate.v1's fitness on the stated minimum device at
+  every tier — ruling owed among budget / candidate / floor device
+  (spec *Measurements of record*). Thresholds θ = 2.0 and floor ≥ 20
+  untouched throughout.
+
+- **Shard-visual ruling B (spec half): the layered determinism bar,
+  pre-registered thresholds, and the sensitivity correction.** Ratified
+  2026-09-05. Hash-derived structure is bit-exact forever (pinned by
+  the twin Rust/Python recipe KATs); the painted raster is held to a
+  pre-registered perceptual metric (RGB-RMS ≤ θ = 2.0, decoded pixels
+  never PNG bytes), fixed before any cross-platform measurement
+  exists. The spec's bit-equivalence prose is retracted in place with
+  its reopening criterion (a deterministic rasterizer pinned across
+  both implementations). The reorg-continuity claim is corrected, not
+  softened: it was wrong as written and in direct opposition to the
+  integrity check's purpose — the ruled property is sensitivity, with
+  a two-limb avalanche falsifier (floor ≥ 20) whose second limb is
+  what makes it a test. The floor-device budget matrix, goldens, and
+  tests are the held measurement half (FOLLOWUPS). Also restores the
+  candidate-compositor § heading eaten by an earlier edit anchor.
+
+- **DRS-P0a — LMDB table reconciliation: the pin→HEAD delta is measured,
+  registered, and gate-pinned.** The DRS design doc's Round-2 substrate
+  figures (46 tables, seven undocumented, two phantoms) had aged into
+  today's 49; P0a closes the delta by **set difference, not history
+  search** — births = 3 (both attestation-witness tables and
+  `archival_settlement`, each with owning commit and the schema
+  version-ladder as independent witness), **deaths = ∅ measured**, not
+  assumed by the total adding up. A 49-row reconciliation registry in
+  [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) records per-table
+  disposition (39 documented-at-pin + 7 since-documented + 3 born-since),
+  the pin-era doc closure (41 claimed = 39 real + 2 phantoms), and the
+  provenance trap that bit twice: a pickaxe on a bare name measures the
+  identifier *family* (`archival_settlement_epoch_at_height`, pre-pin),
+  the quoted literal measures the *table* (post-pin). The schema doc's
+  duplicate `properties`-titled heading — present since before the pin
+  and invisible to the property-row gate's set() dedup — is merged into
+  the one `properties` section, and `check_lmdb_schema_coverage.py`
+  gains the legs that would have seen all of it: section headings as a
+  duplicate-free bijection with `SHEKYL_LMDB_TABLES`, and the registry's
+  rows and stated count pinned to the same macro. Every new failure path
+  observed red before landing. DEL-005 closed; stale DRS figure sites
+  corrected with records-was pins kept.
+
+- **Shard-visual ruling A: parameter admissibility closed, with a
+  pre-registered criterion and typed enforcement.** The spec's
+  parameter design-review checkpoint had inverted — the gate existed,
+  never ran, and the borderline set it was meant to gate shipped in the
+  GUI preview, because the feature set was designed against a fake
+  chain that publishes what the real chain hides (cleartext amounts,
+  cleartext tiers). The pre-registered criterion (a feature is
+  admissible iff it is a deterministic function of data any shard
+  holder reads from held block bytes) admits `activity_density`,
+  `output_richness`, count-based `coinbase_ratio`, and `time_density`;
+  rejects the value moments (CT) and `tier_skew_high` (confidential
+  staking / the F-ARCHIVAL tier oracle); and rule-21-rejects the
+  stake-event features with a named reopening criterion.
+  `ShardAggregate` and `Features` now carry only the admitted set;
+  renderer inputs that consumed rejected features draw from their own
+  SHAKE256 namespaces at fresh indices. Companion rulings: the
+  rendering-spec version is chain data pinned at shard creation height
+  (never wallet data), and overridden renders are non-canonical by
+  type (`CandidateRecipe.canonical`). The no-tradeability
+  enforcement-point inventory is verified and codified; the
+  `shard.v1.render.*` / `candidate.v1.*` namespace families are
+  registered in the implementation index. Aesthetics closure and the
+  determinism bar are ruling B (FOLLOWUPS).
+
+- **C2-R1c — alt admission + acceptance topology: ruled, and the sync
+  orphan arm stops punishing peers for our own state.** Seven rulings
+  signed ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md)
+  §5.5): the two-tier admission contract ratified as defense economics
+  under the intervals-not-averages constraint; CEN-K1 split into its two
+  conflated conditions; K9's `relay_method::block` tolerance fixed to
+  three named producers (the third found by the ruling's own falsifier,
+  executed pre-signature); K10 ratified as-composed with M8's hash gate,
+  dependency armed; storage floors ratified with bounds routed to GAP-4
+  by name; topology ratified with belts named. **The Q3b defect fix:**
+  the sync-loop orphan arm severed and scored every connection from a
+  span's origin on a flag that means "our store lost the parent" — local
+  pops, the checkpoint-rollback discard (reachable mid-span through the
+  600 s reload), and the Q1a flip-flop discard all reach it honestly.
+  The arm now cleans up and re-walks the chain directly via the new
+  shared `request_chain_history` helper (which also retired a three-copy
+  drift set); the queue-bookkeeping-mismatch drop keeps its teeth.
+  Enforced twice: consensus-invariants **[7/7]** (whole-arm extraction,
+  full punitive token set, both failure paths observed firing) and the
+  new behavioral rig `sync_orphan_arm.cpp` (scripted-core seam, three
+  vectors: the orphan arm's no-punishment-and-healing vector and the
+  cleanup-failure-recovery vector each observed red-first on their
+  pre-fix forms, while the bookkeeping-mismatch vector stays green on
+  both trees BY DESIGN — it guards against over-correction; five
+  review rounds hardened the fix through two Bugbot HIGHs and two
+  Bugbot MEDIUMs). Census: nine rows → bucket 2, counts 86/35/5/46 = 172;
+  the R1 batch is complete and the round doc is closed to completed/.
+
+- **The staking exit is REACHABLE: `unstake` + `collect_unstaked` (PR-C —
+  the composed verb, wallet-RPC + CLI).** The reachability gate held since
+  PR-P4 (and narrowed, never lifted, by the engine walk, the submit fact
+  set, and PR-B's dispatch seam + daemon walk) is lifted: `unstake` posts
+  the irreversible `Unbond` exit for the first live-bonded persona
+  (engine-resolved — the wire never names a slot, fee is the canonical
+  P-lane floor, CLI carries the irreversibility confirmation), and
+  `collect_unstaked` sweeps the released collateral to principal with an
+  engine-computed exact payment (`Σ selected − fee`, zero change); a
+  `SWEPT` reply *requires* both halves of the completion fact —
+  `remainder` (the swept persona's) and `another_pool_remains` (the
+  lane's, so a per-persona `0` cannot read as lane-wide completion while
+  a rotation-residue exit is uncollected; optional fields cannot forge
+  "done"). A single overloaded verb was
+  rejected for irreversible-step mis-selection, and the sweep deliberately
+  does not ride `drain`'s firewall-pinned active-persona shape — the
+  RESERVED→shipped reconciliation is recorded in the OpenAPI census.
+  Codes `-29513..-29529`, with the released-vs-held dispatch dispositions
+  on distinct codes (`-29521`/`-29522`) because they demand opposite
+  client behavior, a non-loopback daemon named as operator
+  configuration (`-29528`) rather than an internal fault, and a pre-seal
+  daemon outage while preparing the sweep named retryable (`-29529`,
+  `check the daemon`) rather than an opaque internal fault. Both staging `dead_code` allows retired
+  (rule-21 conditions met); `PENDING_POST_VERSION` v9 stands (no
+  persisted-wire change).
+
+- **Finding discharged with it: the funded retirement gate had passing
+  coverage and zero production reach.** Emptying a persona slot requires a
+  drain of exactly `spendable − fee`; the fee is an internal quote over a
+  live daemon estimate — never a parameter, never exposed by any read —
+  and `get_drain_balance` is gross-of-fee, so no user path could produce
+  the zero the gate fires on: the retire engine walk (#575) observed it
+  fire only on synthetically constructed states (a test that constructs a
+  gate's trigger state proves the gate works, and says nothing about
+  whether the state is reachable). The witness-gated terminal sweep is
+  what makes it reachable, and the new composed-arc regtest walk
+  (`e2e_unstake_collect_retire_composed_arc`) retires a persona
+  end-to-end from states produced only by the shipped verbs: post →
+  connect → sweep (remainder 0) → rotation → claim-window expiry →
+  funded-gated retirement on real-chain evidence. The F-D1 amount stage
+  is untouched (the sweep's payment is an output of selection, where
+  per-output amounts already legitimately live); the §12.3 carve
+  exception for the total-shaped exit sweep is recorded in
+  `PRINCIPAL_STAKE_LIFECYCLE.md` and scoped by the `TerminalExitObserved`
+  witness type.
+- **C2-R0 phase 2 — the census learns to say what is missing.** The
+  consensus census gains **§12, the GAP register**: 8 `GAP-` rows (registered
+  at birth) for consensus rules with no site — 7 grounded from the phase-1
+  corpus study ([`C2_R0_PHASE1_CANDIDATES.md`](design/C2_R0_PHASE1_CANDIDATES.md),
+  landed as the frozen input) and 1 steering-routed carry (GAP-8: the two
+  supply clamps encode **opposite terminal emission policies**, documented
+  on both sides without either comment seeing the other — the register's
+  worked example; resolution rides FL-R12′). Six candidates ground as
+  **present-already** and are recorded with pointers (C3→R3, C4→the
+  unlock_time triple-divergence, C5→no peer-time mechanism, C9→R4,
+  C11→bootstrap arms, C12→R1b). GAP rows sit outside the §3 denominator —
+  site-anchored sums must not absorb siteless rows. External evidence was
+  spot-checked at primary sources before entering any row (the Qubic
+  campaign figures verify verbatim, with the +461.8/−460.0
+  separate-ledger-lines decompression recorded). §10's R2 batch now carries
+  Rick's 2026-09-03 **deferral** in the queue row itself (resumes on
+  FL-R12′; the red-test conjunct is already discharged), with pointers on
+  all 8 member rows.
+
+- **C2-R1b implementation — the fork-choice/depth contract and the
+  operator-checkpoint surfaces**
+  ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md) §4b
+  ratified 2026-09-03, §4c execution record). The prune now writes a
+  **monotonic watermark** (its durable receipt, same txn as the
+  deletions; exempt from every revert), and `BlockchainDB::pop_block` —
+  the single funnel all pop writers traverse — **refuses any pop landing
+  below the oldest fully-retained epoch's open height**, converting the
+  silent post-horizon corruption arm into a loud refusal; a
+  watermark-refused network switch leaves the node loudly DEGRADED
+  (sticky flag, new `get_info.following_degraded`, `CORE_RPC_VERSION`
+  3.26) **without penalizing the peer** — the refusal is a local
+  retention limitation, not block invalidity, so the block stays in the
+  alt store and `bvc` carries no failure (a `m_verifivation_failed`
+  refusal would have both P2P paths drop and score every honest peer
+  advertising the heavier chain, isolating the degraded node onto its
+  own fork; core test `gen_reorg_watermark_refused_switch` pins the
+  false→true transition, stickiness, and recurrence, observed red-first
+  on the pre-fix form) — and a watermark-refused checkpoint rollback
+  fail-stops. The
+  fork-choice comparison and the CEN-D5 alt-window selection cross to
+  `shekyl-difficulty` (`fork_choice`, `alt_window_plan`) behind new FFI
+  exports with shared pinned vectors
+  (`docs/test_vectors/FORK_CHOICE_V1.json`, Rust-native + C++ e2e
+  consumers). Checkpoint wiring is **uniform across all public
+  networks** (both nettype guards deleted — the `return true` silent
+  false positive included; rule-71 allowlist 8 → 4); the checkpoint
+  rollback target is floored at the genesis-only chain (the inherited
+  height-1 wrap is unrepresentable, and the saturated-to-zero form
+  aborted on the can't-pop-genesis guard), a conflict at genesis itself
+  fail-stops as unresolvable, the walk stops after an applied rollback
+  (later height-ordered checkpoints would be read against the stale
+  pre-rollback height), and conflict output names file, height, and
+  both hashes; core test `gen_checkpoint_conflict_rollback` pins the
+  completed low-height rollback with a second conflicting checkpoint in
+  the file, observed red-first on both pre-fix forms. Deleted: the
+  unpopulatable difficulty-checkpoint twin and the weekly accidental
+  full-chain difficulty recompute, and the caller-less no-arg
+  `pop_block` overload. `check_consensus_invariants.sh` gains the
+  watermark single-writer/no-revert invariant [6/6].
+
+- **DRS-P0f row coverage complete — and it found both of the review's S-graded defects.** The conformance
+  register disposes the **102** bucket-1/2 census rows that existed when it
+  ran: **99 CHECKED-CONFORMANT, 1 DIVERGENT, 2 failed closed** (the divergent
+  row is CEN-B5's rule-71 FAKECHAIN skip, which census R9 owns). CEN-L11 with
+  CEN-L12 coupled were fixed by PR #609 and promoted at its merged sha. The
+  bucket-1/2 set has since grown to **121** — C2-R1b promoted nine rows on
+  2026-09-03 and C2-R1c ten more on 2026-09-04 — and those nineteen are
+  UNREVIEWED until reviewed. **Both S-graded findings ran the
+  full arc — found, ruled FIX, fixed, merged, re-reviewed:** the S0 (CEN-M8,
+  with CEN-G4/J26) by PR #602 and the S1 (CEN-D2 with CEN-D1) by PR #604, so
+  no S-graded divergence remained — until 2026-09-04, when CEN-B5's
+  header-check timing (S1, see the Changed entry) reopened the DRS-0 gate. Each
+  row carries
+  sha-pinned, arm-walked evidence and 15 routed REWRITE-NOTEs for the rebuild. The S0:
+  **CEN-M8** — block connect's FCMP++ proof-skip *was* **presence-gated** where
+  the ratified rule requires **hash-gated**, and the `kept_by_block` admission
+  tolerance meant a tx whose proof failed at pool admission could connect with
+  verification skipped, while the exact required check sat unused on that path.
+  Ruled FIX per the §7.2 ladder and **fixed by PR #602** (merged): the skip is
+  now hash-gated and CEN-M8 with CEN-G4/J26 is re-reviewed CHECKED-CONFORMANT.
+  Detail:
+  [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md) §5.4.1.
+
+- **DRS-P0f slice 1 — the conformance register's first verdicts.** The
+  register that gates DRS-E2's correctness arm is no longer empty. **CEN-H5
+  CHECKED-CONFORMANT** — the vin whitelist, carried by one rule site
+  (`check_inputs_types_supported`) reached from both relay admission
+  (`check_tx_semantic` — run once per pool entrant: in `add_tx` for fresh
+  entrants, caller-side for the pre-verified `kept_by_block` re-inserts) and
+  block connect (`ver_non_input_consensus` on the pool supplement, block-fatal
+  on main and alt paths), with `check_tx_inputs`' typed dispatch and the DB
+  write backstop behind it *(evidence as corrected 2026-09-03 — slice 1
+  originally cited the dead double-spend visitor as connect coverage; the CSR
+  decision log carries the correction)*. **CEN-L12 DIVERGENT**, coupled to
+  CEN-L11 — its maturity arithmetic conforms exactly (60/10, `unlock_time`
+  absent, staked arm retired) but the spec's *universality* clause fails while
+  L11's unchecked construct verdict can silently drop an accepted output, so
+  **L12 cannot be promoted while L11 stands**. Consensus-relevant because
+  correctness-oracle status attaches per row: a digest match on a
+  CHECKED-CONFORMANT row is correctness evidence; on any other row it remains
+  regression evidence only. Detail in
+  [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md)
+  §5.4.1.
+
+- **The `Unbond` exit lane is dispatched and daemon-walked (PR-B = #601,
+  2026-09-02) — an
+  `Unbond` has now been assembled by the wallet, accepted by native
+  `/submit_transaction`, and connected on a real regtest chain, for the
+  first time anywhere.** `Engine::submit_unbond`
+  (`shekyl-engine-core/src/engine/unbond_dispatch.rs`, `pub(crate)`) is
+  the claim/drain sibling seam: bond-record facts fetched as one bound
+  read view over the persona-isolated transport
+  (`fetch_claim_source_for`), readiness refused with consensus's own
+  predicates before any curve-tree work, the canonical P-lane floor fee
+  (no knob), sweep-all funding through the bond path's own sweep body,
+  `AssembleUnbond` in the actor, a `PendingUnbond` sealed
+  persist-before-dispatch, then the posture→submitter choke point. The
+  pending-post block gains the fourth reservation-observed kind —
+  **`PENDING_POST_VERSION` v8 → v9** (rule 42; snapshot + paired-bump
+  gate) — deliberately NOT a `PendingBondPost`: the exit draws no
+  decorrelation offset (its trigger, a cooldown expiring, is already
+  public), so it must not enter WI-3's due-check, and it retires by its
+  reservation settling (`remove_settled`), not a pscan match. The
+  **daemon walk** (`e2e_unbond_accepted_and_connected`, the FOLLOWUPS
+  registration it discharges) asserts the RF-D9-class byte proposition —
+  submit-accept via the §8.7.1.1 UB battery, block-connect via the
+  record row read back **present with `bonded_total == 0`** (a
+  transition observed from the pre-submit floor balance) — on the
+  genesis schedule with the cooldown predicates **vacuous by design**
+  (never-served persona; the served-exit arms remain PR-A's unit
+  battery, and the SEB lever cannot cheapen a served exit because the
+  slash watermark advances `CHALLENGE_RESOLUTION_BLOCKS` in blocks).
+  **Reachability is NOT lifted**: no RPC method, no CLI verb, `unstake`
+  RESERVED — the seam's only caller is the `#[cfg(test)]` walk, so
+  "nothing dispatches the assembled bytes" narrowed to "nothing
+  user-facing dispatches"; lifting it is PR-C's composed `unstake`
+  (post + a decorrelated drain), which also inherits the
+  retire-on-a-real-chain arm by its recorded conditional. **Review
+  round 3 hardened the funding sweep with a consensus vin-headroom
+  bound spanning all three retention lanes**: `FCMP_MAX_INPUTS_PER_TX`
+  caps the WHOLE vin, and every tx `sweep_funding_outputs` funds
+  carries exactly one non-funding vin (bond, emission, or Unbond), so
+  an 8-record sweep assembled a 9-vin transaction — accepted on
+  FAKECHAIN (the C++ cap is gated off there, so no regtest walk can
+  observe the boundary) and rejected on every public network. The
+  sweep now owns `MAX_RETENTION_FUNDING_INPUTS` (= 7, pinned by an
+  absolute KAT after a bite proved the relative tests could not see
+  the constant drift) with a per-caller overflow policy: the bond post
+  and the claim's fee sweep refuse by name (their GF-4b
+  consume-everything semantics forbid a silent subset), and the exit
+  caps to the largest subset (no consume-everything obligation;
+  leftovers go to the retired persona's drain). Round 5 classified the
+  refusal on the first-stake surface: `FirstStakeError::FundingFragmented`
+  → wallet-RPC **-29512 STAKE_FUNDING_FRAGMENTED** — its own arm because
+  both standing buckets misdiagnose it (rule 82: "-29500 fund and retry"
+  worsens fragmentation; "-32603 internal" is false, the funding is
+  intact) — rendering the public headroom constant and never the
+  wallet's record count (P-activity volume, the redacted class; the
+  sanitizer reduces the engine arm the same way).
+
+- **Rule 71 (network uniformity) + its CI gate.** On the
+  consensus/validation surface, nettype selects data, never control flow;
+  a real behavioral divergence must be named, ratified, and loud
+  (`.cursor/rules/71-network-uniformity.mdc`, minted at Rick's direction
+  during C2-R1a — both inherited checkpoint mechanisms had the
+  `if (nettype == MAINNET) { do the real thing }` shape).
+  `scripts/ci/check_network_uniformity.sh` (wired into `ci/grep-gates`)
+  flags any new public-nettype equality or inequality branch in
+  `cryptonote_core/ + checkpoints/ + blockchain_db/` against an annotated
+  8-entry allowlist enforced as a bijection (a copy-pasted duplicate of
+  an allowlisted branch fails the total). Matching is spelling- and
+  operand-independent (either comparison direction, any variable name,
+  `if(`/`if (`, wrapped lines, compound conditions, `switch`/`case`),
+  and collection failures are loud (a stripper failure or an empty
+  fence directory fails the gate rather than reading as no-match).
+  Every enforcement arm was observed red on a planted evasion before
+  landing.
+
+- **Wallet engine staking product door (`Engine::stake()` → `StakeFacade`).**
+  Staking / drain / claim product calls go through `StakeFacade`; JSON-RPC
+  method names are unchanged. Inherent `Engine` methods are count-frozen
+  (`METHODS_CEILING`). See
+  [`ENGINE_COMPOSITION_DECOMPOSITION.md`](design/ENGINE_COMPOSITION_DECOMPOSITION.md).
+
+- **Daemon C++ is not a base — a complete rewrite gates release (countermand,
+  2026-09-01).** Recorded with its blast radius across `DRS-*` and its
+  row-level census map in
+  [`CONSENSUS_STORE_RECONCILIATION.md`](design/CONSENSUS_STORE_RECONCILIATION.md)
+  (`CSR-`), which also reconciles that program with the consensus rewrite —
+  the two partition the same six C++ files on orthogonal cuts and had **zero**
+  cross-references in either direction. Consensus-relevant effects: the C++ is
+  demoted from *trusted* oracle to a differential reference for rules that are
+  **both** ratified on record **and** carrying an **affirmative conformance
+  record** — absence of a recorded divergence means *unreviewed*, not conformant,
+  so the checked set was empty until **DRS-P0f** (the per-row conformance review, minted here) began populating it (a
+  **conformance-exception register** holds the known divergences, seeded with
+  CEN-L11, whose ratified spec the implementation does not meet); **heed retired** as an
+  intermediate engine (DEL-007), **redb stands**. Design-round detail — the
+  CSR-1…CSR-5 rulings, the 18-row store map, and the arithmetic corrections —
+  stays in the owning document per
+  [`95-documentation-lifecycle`](../.cursor/rules/95-documentation-lifecycle.mdc).
+
+- **CI gate: every workflow file must parse and be shaped like a workflow.**
+  A workflow GitHub cannot parse produces a run with zero jobs and no failing
+  named check, so the gates it carries go quiet — that is how one unquoted
+  step name took the documentation-lifecycle gate set offline. The check runs
+  in the unfiltered `grep-gates` job, so it sees every workflow edit.
+
+- **P2P wire census (P2P-1, `PWC-`).** `docs/design/P2P_1_WIRE_CENSUS.md`
+  enumerates the peer-to-peer wire surface and the connection-management
+  behavior around it at `dev` `30cd547e2` — 57 bucketed rows, 3 b1 / 6 b2 /
+  2 b3 / 46 b4, on the same four-bucket bar and evidence-class column as the
+  consensus census. Mechanical denominator (26 C++ KV maps, 72 field lines,
+  22 Rust `PortableMap` twins) with a sum check whose 4-map residual is
+  accounted row by row, and six named inverse spot-checks. Mints one new
+  evidence class, `inherited-defensive`, for a defence the tree carries by
+  lineage with no Shekyl record examining it. Discharges the requirements
+  register's §7 tasks 1–4 and records task 5 as not verifiable from the
+  repository. Findings of note: `connection_entry_base` has zero callers
+  tree-wide and `network_address_old` only a size printer (both bucket-3
+  deletion candidates); `network_config`'s never-sent KV map would advertise
+  a 50 MB packet limit against the 100 MB the transport enforces; the
+  Shi et al. (NDSS 2025) eclipse attack's double-spend arm is refused at the
+  tree by an **inherited** Monero guard (`f7fd209ed`, 2024-03-07) that no
+  Shekyl record has examined, while its graylist and whitelist sub-attacks
+  are unaddressed. Docs only, no behavior change.
+
+- **Merged consensus-rule census (C1).** `docs/design/CONSENSUS_RULE_CENSUS.md`
+  supersedes the three census walks as the single live instrument and the
+  consensus-rewrite's specification input (171 rows, buckets 87/14/2/68;
+  every RC/CEN/Survey-A id resolved in its §9 accounting; the C2
+  design-round queue in its §10). Consensus-relevant finding folded in: the
+  MTP timestamp boundary is three-way split (ratified-strict spec,
+  equality-accepting live validator, strict-but-unwired Rust predicate) —
+  flagged for an early ruling. The RC and CEN walks are archived to
+  `docs/completed/`; docs only, no behavior change.
+
+- **Independent second consensus-rule census (`RC-`).** 181 independently
+  ratifiable rules, walked from the block and transaction acceptance
+  entry points at `8ba1aae3d` and classified into four buckets. The
+  census is the instrument for the consensus rewrite; no chain
+  behavior change.
+
+- **Consensus-rule census (CEN-1).** `docs/design/CONSENSUS_RULE_CENSUS_3.md`
+  enumerates every rule on the block/tx acceptance path at dev `8ba1aae3d`
+  (161 rows; 84 Shekyl-spec'd / 23 inherited-ratified / 54 never examined)
+  as the specification substrate for the consensus Rust rewrite (2026-08-30
+  ruling: census precedes rewrite). Docs only; no behavior change.
+
+### Removed
+
+- **The per-block-checkpoint fast-sync mechanism (consensus)** — C2-R1a,
+  ratified 2026-09-02
+  ([`CONSENSUS_C2_R1_REORG.md`](completed/CONSENSUS_C2_R1_REORG.md) §3).
+  Deleted whole: the compiled-in hash-of-hashes table and its loader
+  (mainnet's pin was a stale inherited constant no Shekyl blob could match;
+  testnet/stagenet blobs loaded with no verification), the four
+  `fast_check` arms in block connect (PoW skip, pool-supplement NIC skip,
+  per-tx input/FCMP skip, and the CEN-G8 GF-1 belt — retired, its job
+  subsumed by the now-unconditional per-tx pin), the `kept_by_block`
+  early-success wrapper arm (CEN-E4), the p2p hash-chunk expansion and
+  pruned-span weight gating, `--fast-block-sync`, `src/blocks/` (three
+  zero-byte `.dat` blobs), and `shekyl-blockchain-export --blocksdat`
+  (the blob generator). Behavior-preserving: every arm was unreachable
+  with the shipped empty data. Census: CEN-E3/E4/G8 → bucket 3, counts
+  86/16/5/64.
+
+- **P2P wire: the two dead RPC-advertisement fields are gone.**
+  `rpc_port` and `rpc_credits_per_hash` were members of the handshake
+  schema (`basic_node_data`) and of every peerlist entry — parsed and
+  recorded on receipt, though `KV_SERIALIZE_OPT` omitted them from honest
+  wire bytes at their permanent zero — keeping open the capability to
+  advertise what the ratified RPC posture says will never exist:
+  `rpc_credits_per_hash` is Monero's RPC-payment/mining-credit system, and
+  `rpc_port` advertises a public RPC endpoint over P2P — contrary to
+  `RPC_TRANSPORT_POSTURE.md` RT-9, whose RT-W5 slice already deleted the
+  RPC-side half (PR #533). Both fields are now deleted from the C++ wire
+  structs, the peerlist manager, the connection contexts, and the Rust
+  `shekyl-levin` maps in the same change, so the dual stack never disagrees;
+  a peer that still sends them is read as any other unknown field. The
+  persisted peerlist store version is bumped (v7, drop-on-load — a stale
+  cache re-bootstraps, no migration shim). The drop includes the anchor
+  list, so the first restart after upgrade rebuilds the peer view from
+  seeds and gossip without the anchor set's eclipse resistance for that one
+  bootstrap; a *downgrade* (an old binary reading a v7 store) ends in the
+  same empty-peerlist re-bootstrap, but via a load exception rather than a
+  clean version drop. The store loader now also refuses an implausible
+  per-list length prefix (untrusted disk input, ceiling derived from the
+  per-zone peerlist caps) instead of reserving memory of disk-chosen
+  magnitude at startup — a corrupt cache re-bootstraps either way.
+  Pre-genesis the wire is free to change; post-genesis
+  both fields would have been permanent (`CONSENSUS_RULE_CENSUS_1.md` U-5
+  and the `rpc_port` half of L-6).
+
+- **The two offline prune utilities are retired; `shekyl-mdb-copy` replaces
+  the only capability they uniquely held.** `shekyl-blockchain-prune` had been
+  inert since LMDB v6: its private version guard (`MAX_SUPPORTED_DB_VERSION =
+  5`) refused every VERSION-10 database, and its copy path enumerated 16 of
+  the schema's 49 tables — bumping the guard without fixing the list would
+  have silently dropped `txs_pqc_auths`, `output_metadata`, and every
+  archival/curve-tree table. `shekyl-blockchain-prune-known-spent-data` was a
+  structural no-op on an amount-0 CT chain (its scan skips every zero-amount
+  input and output). Pruning stays daemon-resident (`--prune-blockchain` at
+  startup, the 5-hour timer, the `prune_blockchain` RPC/console command —
+  see the Changed entry for the completed confirmed-prune semantics);
+  file-size reclaim is now the schema-agnostic
+  `shekyl-mdb-copy -c` (upstream LMDB `mdb_copy`, newly built from the
+  vendored source), and the daemon console's prune warning — which pointed
+  operators at the binary that refused to run — now describes that flow.
+  Reversion clause in `FOLLOWUPS.md` (post-genesis): any rebuilt offline
+  prune tool derives its table set from the schema source of truth.
+
+### Changed
+
+- **Register: CEN-I12 re-reviewed at the merged reconciliation and promoted
+  CHECKED-CONFORMANT — 100 / 1 / 1 over P0f's 102-row snapshot.** At
+  `667817d47` all three FCMP++ verifier arms read the node's own per-height
+  record under the reference block's height, never the header, and that
+  record is the ruled state (the tree at chain height `ref_height`). The
+  verdict rests on the state definition, not the placeholder rationale slice
+  7 used. CEN-L8 is the one row still failed closed; CEN-B5 the one DIVERGENT.
+  The per-height root record is recorded as a spec-level requirement on any
+  store the rewrite uses. Register-only; no code.
+
+- **Daemon RPC: `get_block_header_by_hash`, `hard_fork_info` and
+  `get_fee_estimate` change shape; `CORE_RPC_VERSION` is now 3.27 (RK-5b).**
+  Those three plus `get_last_block_header` and `get_block_headers_range` (and
+  the `getlastblockheader` / `getblockheaderbyhash` / `getblockheadersrange`
+  aliases) are served natively from Rust. **The last two keep their response
+  shapes** — a client parses them exactly as before, and only their refusals
+  changed. **Operator impact — three replies a client parses differently.** `get_block_header_by_hash` answers **per
+  element**: `block_headers` is now an array of `{hash, block_header?}` slots
+  rather than a bare header array, so a client learns *which* hash was
+  unknown instead of receiving zero headers and an error string, and one
+  unknown hash no longer discards the other nine hundred; the request's
+  singular `hash` field is gone (it had no in-tree caller, and its only
+  effect beside `hashes` was to slip one lookup past the restricted cap of
+  1000). `hard_fork_info` splits the reply's single
+  `version` in two, and the mapping is exact: **`active_version` is that
+  field renamed** — the deleted handler always filled it from
+  `get_current_hard_fork_version()`, whatever the request asked about — and
+  **`queried_version` is new**, naming the version the `window` / `votes` /
+  `threshold` fields beside it actually describe. A client reading `version`
+  today wants `active_version`; nothing it could read before told it what the
+  voting counts were counting. `get_fee_estimate` drops the `fee` scalar,
+  which the C++ handler set to `fees[0]` and which therefore carried nothing
+  the tier array did not. Also corrected while porting: the restricted
+  header-range cap bounded `end - start` rather than the count, so a
+  restricted caller could obtain 1001 headers against a cap of 1000; and a
+  restricted caller asking for `fill_pow_hash` is now refused rather than
+  handed an empty field with status OK. `get_block_headers_range` refuses a
+  request that names no range (absent `params` or `{}`) instead of answering
+  for block 0 as the C++ did — a client that omits its heights is told it
+  omitted them — and bounds both endpoints against the chain tip before
+  reading anything, which the C++ also did and the first port did not.
+  `get_last_block_header` **refuses with `CORE_BUSY` (-9) on an
+  unsynchronized node**, where the C++ answered `status: BUSY` with a
+  zero-filled header — a shape that let a client reading the header without
+  checking the status report a fork version of 0. `hard_fork_info` no longer
+  accepts `version: 0`: it was the C++'s spelling of "absent", and omitting
+  the field is now the only way to ask about the next fork.
+
+- **The daemon console reads the DAA block target from the build, not from
+  the daemon it is talking to.** `T` is genesis-frozen and single-sourced
+  through `config/consensus_constants.json`, which generates both the C++
+  header and the Rust constant. The console previously computed its
+  block-statistics and hash-rate figures from `/get_info`'s `target`, which
+  gave one constant two sources — and over a remote connection, a source the
+  daemon controls. **Operator impact:** `shekyld status`,
+  `print_blockchain_dynamic_stats` and `alt_chain_info` now print a warning
+  when the daemon reports a different target, naming both values, and compute
+  from this build's. A daemon reporting a different `T` is running different
+  consensus rules, so this most likely means a mismatched binary or a
+  different chain.
+
+- **FCMP++ spec: the membership anchor is a state property, not a header
+  read (CEN-I12 reconciled).** `FCMP_PLUS_PLUS.md` §7 step 2's prose said the
+  verifier reads the reference block's header `curve_tree_root`; that was the
+  pre-2026-04-13 code, replaced by the per-height root record (`292c00aff7`)
+  without the prose following. Ruled: the anchor is the curve-tree state at
+  chain height `ref_height` — after the reference block's parent connects,
+  before its own drain (boundary corrected on review) — with the header
+  field and the per-height record as its two witnesses; the verifier reads
+  its own record, the prover reads the header. The in-code FAKECHAIN
+  comment is a consequence, not the rationale. Step 1's rationale also drops
+  the retired claim-era staked-maturity arm (CEN-L12). Found-not-ruled: step
+  2b/2c's depth pseudocode is split the same way (routed to CEN-I13). The
+  register's CEN-I12 row stayed failed-closed until re-reviewed at the merged
+  sha — promoted 2026-09-05, see the entry above.
+
+- **CEN-B5 has a second, live divergence — the post-connect header-root
+  check compares the wrong state (S1; found, graded and routed — not fixed
+  here).** `handle_block_to_main_chain` compares the header `curve_tree_root`
+  against the root read *after* `add_block`, but `create_block_template`
+  fills the header from the root *before* the add — the state at chain
+  height N that the per-height record, the wallet client and the CT-2 KAT
+  all name. The operands differ at every block where a leaf drains, observed
+  on real LMDB by a new keying pin in `archival_substrate_lmdb.cpp`; the
+  genesis coinbase drains when block 60 connects, so mainnet/testnet/stagenet
+  would reject block 60 and halt (derived; no non-FAKECHAIN fixture exists to
+  observe it). The rule-71 skip R9 owns is the cause, not the context:
+  nettype gating the check left every test and every `--regtest` run blind
+  to it. Fix-or-accept is Rick's (DRS
+  §7.2); FOLLOWUPS carries the sketch. The "no S-graded divergence remains"
+  claim is withdrawn at every surface it reached; DRS-0 is gated again.
+  *(Fixed 2026-09-05 — see the CEN-B5 entry under Fixed above.)*
+
+- **Consensus: the block-timestamp rule is ratified and single-sentence
+  (C2-R3, `docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md`, ratified
+  2026-09-01).** A candidate timestamp is valid iff it is at most
+  `local_clock + 540 s` (checked at main connect AND alt admission — the
+  alt store previously had no future-time bound) and strictly greater
+  than element index 5 of the sorted window of the 11 timestamps
+  immediately preceding it on its own chain (equality was previously
+  accepted; the alt path previously medianed the whole alt chain,
+  averaging even-length windows; below 11 blocks of history the window is
+  now right-padded with the genesis timestamp instead of skipping the
+  check). Miner templates floor their timestamp at `median + 1`. The rule
+  has ONE implementation — `shekyl-difficulty`'s `check_timestamp_rule`
+  (built on its `is_above_mtp` / `is_timestamp_below_ftl` predicates) —
+  exported through `shekyl-ffi` beside the LWMA-1 difficulty entry point;
+  the C++ validator is a marshaling shim per rule 20 (the crossing was
+  re-ratified 2026-09-01, replacing the round's original C++ owner). It is
+  pinned by the shared vectors
+  `docs/test_vectors/MTP_BOUNDARY_V1.json` (new; rule-30 pinned) natively
+  in Rust and end-to-end through the FFI, and is
+  exercised red-first in `core_tests` (strict boundary, bootstrap
+  padding, alt FTL, alt newest-11 truncation). Consensus-forking vs the
+  inherited behavior; the pre-genesis stressnet is genesis-only and the
+  estate rebuild required by the V11 schema + genesis remint absorbs the
+  regenesis. `DAA_LWMA1.md` §5.5 carries the refuted-premise correction.
+
+- **The four p2p read methods are served from Rust, and four things the C++ was
+  doing are not reproduced.** `sync_info`, `get_connections`,
+  `/get_net_stats` and `/get_peer_list` answer natively (RK-5a of the daemon
+  RPC cutover), along with the five console commands that read them —
+  `sync_info`, `print_cn`, `print_pl`, `print_pl_stats`, `print_net_stats`.
+  Their handlers, wire structs, dispatch rows and console bodies are deleted,
+  and so is the C++ nothing else reached: `connection_info`, the protocol
+  handler's `get_connections()`, and the `json_object` (de)serializer pair
+  that was its last reader. **Reply shapes are unchanged** — every field set
+  was compared before and after on two connected regtest nodes — so
+  `CORE_RPC_VERSION` does not move. What changed are four value edge-cases
+  the port would not carry: `get_connections` read the clock **twice** per
+  connection, so a connection's reported `live_time` could disagree with the
+  divisor behind its own `avg_download`; elapsed times now saturate instead
+  of wrapping into centuries when a clock moves backwards; the download
+  `rate` and each connection's current speeds are converted totally rather than
+  through casts that are undefined for a negative or out-of-range float; and `sync_info`'s queue overview no longer
+  sizes its gap run from peer-advertised heights without a ceiling. Also
+  removed: `print_cn`'s **SSL column**, which had no wire field behind it and
+  therefore always printed `no` — p2p SSL is disabled by construction, so it
+  could not have said anything else.
+
+  One **request semantic** does change, deliberately. `/get_peer_list`'s
+  `public_only` is `KV_SERIALIZE_OPT(…, true)`, and the C++ bridge skipped
+  deserialization for an empty body — so a bodyless request got the whole
+  peerlist while `{}` got the public subset. Native Rust treats an absent body
+  and an absent field alike, at the declared default. `utils/fleet/read_anon_histogram.sh`
+  was the one caller relying on the bodyless form and now asks for
+  `public_only: false` explicitly, so the anonymity histogram keeps counting
+  stored candidates rather than the publicly shareable ones.
+
+- **`engine_trait_bench_key_dispatch_baseline_iai` collects via Callgrind client requests** (the `ledger_iai` pattern) instead of gungraun's wrapper toggle, which reported `instructions=0` deterministically on CI once rustc folded the wrapper — retries and fresh runners reproduced the build and so reproduced the zero. Count moves by 38 instructions in ~14.6M; the post-merge `update-baseline` run absorbs it. The facts shim's pool remap is also linear now — one forward cursor over `missed`, valid because `get_transactions_info` returns hits in request order — instead of a rescan that was quadratic on the uncapped unrestricted listener; a cursor/contract violation refuses as `ERR_INTERNAL` rather than reporting a pooled transaction missing, and a `[H, H]` duplicate-slot test pins the remap (shared v3 spend fixture, `pqc_spend_fixture.h`). Developer-facing and daemon-internal; no wire change.
+
+- **A tx proof's `confirmations` is the daemon's gather-lock count, not a number the wallet re-derives from a later tip.** `confirmations_of` issued a second `get_height` and subtracted the `block_height` captured in the earlier `get_transactions` — two chain snapshots for one answer, so a block landing between the two requests inflated the count, and a reorg could make it describe a chain the block is no longer on. The native handler already computes `chain_height - block_height` against the tip it reads once for the whole gather (the one-lock rule RK-4c introduced); the wallet was discarding exactly that guarantee and paying an extra round trip for a worse answer. It now carries the value. Taking the daemon's number is no more trusting than the arithmetic was — both operands were always its to choose — and it is self-consistent. `FetchedTx` holds a `TxChainState` arm rather than `in_pool: bool` beside `block_height: Option<u64>`, so "pooled at 12 confirmations" is unrepresentable and `confirmations_of` is total: no RPC, no `async`, no unreachable error branch. Found by Copilot on #576.
+
+- **A doc row claiming a slice `**landed**` must now name its PR (`scripts/ci/check_landed_rows_stamped.py`).** Stamping the row is step 6 of `DAEMON_RPC_KV_CUTOVER.md`'s per-slice checklist and it was skipped for six consecutive merged slices, leaving that document's `Status:` banner reading *"design open for RK-4a"* while RK-4a, RK-4b and RK-4c had all been written. Because rule 95's banner is what a grep-driven reader uses to classify every claim below it, one stale banner misclassifies a whole file. The gate binds only the knowable half — a merge sha cannot exist pre-merge, so an in-flight row passes — and it strips code spans before matching, so a log entry *naming* the placeholder is not read as one *using* it. Developer-facing only; no runtime or wire effect.
+
+- **The confirmed `prune_blockchain` command now completes both pruning
+  phases before returning.** `Blockchain::prune_blockchain` previously ran
+  only the stripe prune; the output-metadata pass (`prune_tx_data`, which
+  deletes the `txs_pqc_auths`/`txs_prunable` rows) was reached only by the
+  five-hour `update_blockchain_pruning` tick, so an operator who pruned and
+  immediately stopped the daemon to compact reclaimed almost nothing. Both
+  phases now run in the same locked call, the startup path's duplicate
+  `prune_tx_data()` invocation is deleted, and on a tx-data failure the
+  first-prune startup branch now fails hard exactly like the
+  already-pruned branch always did.
+
+- **The covert carrier now carries real transactions, not dummies alone**
+  (`COVER_TRAFFIC_RESTORATION.md` §3.1a). `dandelionpp_notify` consumes
+  `shekyl_relay_zone_plan_dispatch_with_refresh` and enqueues on the noise
+  carrier instead of sending directly. **API:**
+  `shekyl_relay_zone_noise_enqueue` takes a caller-minted `token`, and
+  `shekyl_relay_zone_poll` takes a `ShekylRelayCarrierResolvedCb` reporting
+  whether the transport accepted every window of each enqueued message —
+  acceptance into epee's asynchronous write queue, not proof a peer received
+  it, since a socket failing afterwards never revises the verdict. The pool is told a
+  carrier-borne transaction was relayed **only on completion** — an enqueue is
+  not a send, and a discarded message reads as *not relayed* so the origin
+  retries on the short grid rather than waiting out the derived interval for a
+  transaction that was never sent. **Still behind the development opt-in,
+  defaulting off.**
+
+- **Covert cover cadence is now `3.333 s + U[0, 3.334 s]` — a mean of exactly
+  5 000 ms, down from `10 s + U[0, 5 s]` (12.5 s).** Operator-visible: an armed
+  dual-zone node carries **~42 GB/month** of cover traffic, up from ~21 GB.
+  The per-node ceiling is ruled **per node** and raised to **16 KiB/s
+  sustained** (was 8 KiB/s per node against a per-zone figure — three
+  denominators for one quantity, now one), with a **24,579 B/s** burst at the
+  shortest interval. The ceiling is a compile-time assert in
+  `params::carrier`, so a shorter cadence, a wider window, or a third
+  encrypted zone is a build break rather than a stale table entry.
+  `CRYPTONOTE_NOISE_MIN_DELAY` / `_DELAY_RANGE` are **deleted** — zero readers,
+  and the cadence now lives in `params::carrier` in milliseconds because
+  3.333 s is not a whole number of seconds. **Nothing pays this today**: the
+  carrier is behind a development opt-in that defaults off. Privacy effect
+  re-measured (`DAEMON_RELAY_PRIVACY.md` §56.7): the bounded family's residual
+  linkage channel falls from 0.120 to 0.058 against chance 0.050 at a 10 s
+  observation gap. See `COVER_TRAFFIC_RESTORATION.md` §3.3.
+
+### Fixed
+
+- **A reserve proof whose locator names a pooled transaction is refused, not counted.** `check_reserve_proof`'s batch fetch parsed whatever the daemon served without inspecting `location`, so an unconfirmed transaction's outputs verified cryptographically and entered `total - spent` — mempool money, still erasable by a competing spend, presented as live confirmed reserve (`CheckedReserveProof` has no pool dimension a verifier could consult). The batch fetch now refuses pooled entries with the new `-29304 PROOF_TX_UNCONFIRMED`, carrying the txid so an honest-but-early prover knows to wait for confirmation and regenerate; the tx-proof paths are deliberately unchanged, since they report `in_pool`/`confirmations` honestly. Registered in `docs/api/wallet_rpc.yaml`; bite-verified — with the guard removed, the pooled-locator fixture proof verifies. Found by Copilot on #576.
+
+- **`--prune-blockchain` no longer deletes the hash of a pruned
+  transaction.** `BlockchainLMDB::prune_tx_data` dropped `txs_prunable_hash`
+  and `txs_pqc_auths` together with the prunable body. The body going is the
+  point — those bytes live in shard archival (`docs/V3_STAKER_ARCHIVAL.md`
+  set C). The hash staying is why the table exists: a pruned v3 txid is
+  `cn_fast_hash(prefix, base_ct, pqc_auth_hash, prunable_hash)`, and there
+  is no `pqc_auth_hash` table, so dropping either operand left a chain that
+  could not name what it kept. Stripe pruning (`prune_worker`) already
+  retained the hash; the depth pass now matches. `/get_transactions` on a
+  pruned node can therefore still bind the prefix to its txid, and a store
+  that holds a body with no hash beside it remains `FactsFault::Inconsistent`.
+  Because a datadir pruned by the old code already lost those rows — and would
+  otherwise open silently and answer `INCONSISTENT` for every previously
+  pruned transaction, forever — the LMDB schema version is bumped **v10 →
+  v11**: retention semantics, not layout, and the standing remedy (delete and
+  resync) applies at open instead of surfacing weeks later as RPC errors.
+
+- **A confirmed emission claim or drain now releases its seal — before this,
+  neither ever did.** Both paths seal a one-live-per-persona record before
+  dispatch (the record *is* the input reservation), and only the bond post's
+  seal was ever retired. `remove_claim` and `remove_drain` existed with callers
+  only under `#[cfg(test)]`, so nothing in production released either gate.
+
+  The drain leak was visible: drain once, and that persona's lane refused
+  `-29511 DRAIN_IN_FLIGHT` across sessions, permanently, even though the money
+  had settled normally. **The claim leak was worse because nothing surfaced it**
+  — claims are engine-automated, so the persona simply stopped claiming, with no
+  user action to correlate the silence against.
+
+  `PendingPostBlock::remove_settled` retires either kind once **every** funding
+  gindex it reserved has left the accrual's live funding set, called from the
+  existing WI-3 dispatch tick inside the same locked mutate, so the record and
+  its reservation are released in one seal (R2-4). The evidence is the wallet's
+  own verified scan at the reorg depth the bond post's confirmation already
+  uses. It is deliberately **not** the bond post's confirmation set: that set is
+  filtered to the JoinMarket post kind, and crossing the two would retire a live
+  drain because the persona's *bond post* confirmed — a different transaction.
+
+  Two edges are handled rather than assumed. A **partly** spent reservation is
+  not settlement (a drain spends all its inputs in one transaction, so a
+  half-gone reservation is a state the confirming spend cannot produce) and is
+  held. An **empty** reservation is never settled: `[].all(..)` is `true`, so
+  the Q11 zero-fee-input claim — which reserves nothing, paying its fee from the
+  mint — would otherwise retire the instant it was sealed, before its bytes
+  reached the network.
+
+- **A seal whose snapshot predates a retirement is refused, not sealed against
+  spent inputs** (`PENDING_POST_VERSION` v7 → v8). Retiring on
+  reservation-absence needs one live record per gindex, and the seal-time union
+  check alone does not give it across an assembly: A snapshots the reservation
+  set, and while its proof work runs, B seals A's chosen input, confirms, and is
+  retired. B's reservation is now gone, so A's union check sees the input free
+  and admits — sealing a transaction whose input B already spent, whose absence
+  the *next* tick then reads as A's own confirmation. A record the network
+  rejected would be booked as settled.
+
+  The block carries a monotonic count of reservation **releases**, bumped by
+  every method that drops a live record and compared at the seal against the
+  value the assembly read with its snapshot. The union check sees reservations
+  that are present; the generation makes reservations that were *released*
+  visible. Comparing the reservation sets themselves cannot: the release returns
+  the set to exactly its snapshot value, so snapshot and seal read identical
+  while the inputs behind them have been spent. Persisted rather than in-memory
+  because the pending-post store reloads the block from the seal on every read
+  and every mutation — an unpersisted counter would reset to zero on each load
+  and never refuse anything. Same remedy as the existing input race (retry
+  against a fresh snapshot), so it surfaces through the same refusal, whose
+  message now names every cause rather than only a concurrent post.
+
+  The two reads that form that snapshot are **ordered**, which the first cut of
+  the guard got wrong: all three seams read the pending block and the pscan seal
+  concurrently in one `join!`, so the pscan load could return a funding set from
+  *before* a settlement while the pending read returned the generation from
+  *after* it. Stale funding paired with a current generation passes the seal —
+  the same admission the counter was added to prevent. The pending block is now
+  read to completion first, then the pscan seal, so every release either
+  precedes both reads (and the spent input is never offered) or moves the
+  generation (and the seal refuses). The ordering lives in one place,
+  `load_seal_basis`, whose result type has private fields and no other
+  constructor, because a source pin over the seams can only prove the function
+  is called — never that a hand-rolled equivalent got the order right.
+
+  The raw inserters `push_post` / `push_claim` / `push_drain` are now
+  `#[cfg(test)]`, and the public `PendingPostBlock::new(posts)` constructor is
+  **deleted**. They admit one live record per persona per kind and nothing else
+  — no cross-kind overlap check, no generation comparison — so each was a public
+  way to break the retirement's premise, whatever the in-workspace callers
+  happened to do. Once their visibility was made honest the compiler enumerated
+  the rest: with `seal_*` inserting directly, all four had **zero** production
+  callers. `new` had none at all and is gone (rule 15); the three inserters
+  survive only as test seeding, compiled out of the library, because staging a
+  state the guards prevent is a legitimate thing for a test to need and an
+  illegitimate thing for production to reach.
+
+  Every seeding path now goes through `seal_*`, which also makes the fixtures
+  more faithful: the seal stamps `Dispatched` as it inserts, so a `Pending`
+  claim or drain is a state production can no longer persist, and fixtures that
+  constructed one were staging an unreachable shape.
+
+### Added
+
+- **`POST /submit_transaction` accepts `Unbond` bond-posts.** The battery
+  covered the `JoinMarket` kind only and refused every other one `Malformed`;
+  it now carries the Unbond fact set (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1) and
+  dispatches `verify_unbond_bond_post`, the same function the block path
+  already runs. `HoldingsUpdate` and `Rebond` still refuse — no wallet builds
+  either kind, so a fact set for them would be untestable guesswork.
+
+  **No wallet can reach this yet.** The staking exit stays deliberately
+  unreachable: no RPC method, no CLI verb, nothing dispatching the assembled
+  bytes. What changed is that a dispatched Unbond would now be accepted rather
+  than refused.
+
+  Security-relevant, and the reason this is not a copy of the credit arm: a
+  bond-post *credit* is authorized by `P`'s identity key, but a *debit* moves
+  bonded collateral out, and the identity key is the one a serving host holds
+  in order to sign responses at all. The debit is therefore authorized against
+  the record's committed cold `bond_spend_pk`, and that pin now lives in one
+  place (`shekyl-archival-retention::debit_auth_pin`) called by both the
+  daemon's block path and its submit path, rather than being implemented twice.
+  A record committing no canonical-length key authorizes nothing — there is no
+  identity-key fallback.
+
+- **A stall alarm for pending claims and drains.** A record dispatched but not
+  settled past the alarm horizon is named in the operator log, keyed by kind
+  *and* persona so a persona holding both a stuck claim and a stuck drain gets
+  both alarms. The record is HELD, matching the bond post's
+  funds-safety-over-liveness posture — the alarm reports the stall, it does not
+  clear it. Two cases still produce a permanent stall and both remain named
+  FOLLOWUPS items: a **terminal rejection**, and an **ambiguous submit** whose
+  bytes never reached the network — the seams seal before a single submit and
+  keep the record on a transport error by design, and nothing resubmits it
+  because the driver selects bond posts only.
+
+- **The wallet can read the four `Unbond` verify operands and assemble the
+  full `Unbond` exit transaction (PR-P4).** Before this it held *none* of
+  `record_bonded_total`, `record_bad_interval_count`, `last_served_epoch`
+  or `last_settled_slash_epoch`, so an exit producer could only have
+  assembled blind. `/archival_claim_source` now marshals all four — the
+  interval-log count was the one missing from the original three, and it
+  is the operand with no absent state, which is exactly why it fell out
+  of a list — and the decoder makes every one a REQUIRED field: absence
+  is a decode error, never a default. The permissive reading is the
+  dangerous one here. `release_cooldown_elapsed` and
+  `slashes_settled_through` both treat an absent serve anchor as "clear",
+  and `0 < MAX_BOND_BAD_INTERVALS` passes, so a field that never arrived
+  would have told a user an irreversible exit was safe to take.
+  `ServeAnchor` and `SlashWatermark` keep "never served" / "nothing
+  settled" distinct from "never arrived" at the type level, and are the
+  single place either becomes an `Option` for consensus.
+  `build_unbond_vin` returns an `UnbondVin` witness whose sole
+  constructor establishes the genesis-frozen invariants, and
+  `UnbondRecordState::ensure_exit_ready` mirrors
+  `verify_unbond_bond_post`'s refusals **in the verifier's own order**, so
+  a wallet refusal and a consensus rejection cannot disagree about why.
+  Around that vin, `AssembleUnbond` assembles the whole persona-bound
+  transaction: funding from the typed `P`-space pool (cover + earnings —
+  a principal output is unrepresentable in the selector's input type),
+  the released collateral entering as a **source** (`sum(funding) +
+  bond_debit == sum(outputs) + fee`, and the side is genesis-frozen in
+  the type — `debit_term()` returns an `InputTerm`, so it cannot be
+  placed on the output side), payout split across two outputs to `P`'s
+  **own base address** — never the principal, because the composed
+  `unbond()` is the post **plus a decorrelated drain** and paying the
+  exit straight out would put the P↔principal edge in one transaction.
+  The surface-A `pqc_auths` slot is signed under **`bond_spend_pk`**, not
+  the identity key: that is the whole of GF-1 debit authorization, which
+  consensus pins in `archival_debit_auth_pin` and which is the only thing
+  stopping a compromised serving host — it holds `hybrid_sign_sk` — from
+  authorizing a collateral-draining exit. `wire_bond_post_input` gained
+  its `Unbond` arm here; the refusal it replaced said the kind "has no
+  wallet-side producer yet", which was true when written and is not now.
+  **Deliberately not reachable.** `assemble_unbond` is `pub(crate)` with
+  no RPC method and no CLI verb behind it, and wallet-RPC `unstake` stays
+  RESERVED. The producer exists; what remains is reachability and dispatch
+  of the assembled bytes. Native `/submit_transaction` admission was a
+  third item on that list when this entry was written and is not one now
+  — the Unbond fact set landed in this same release (see the submit entry
+  above), so the two must be read together. The walk lands as its own PR,
+  so the producer merging is not the event that lifts RESERVED.
+
+### Changed
+
+- **`/get_transactions` and `/is_key_image_spent` are served natively in Rust,
+  and their C++ handlers are deleted (RK-4c).** Both console commands —
+  `print_tx` and `is_key_image_spent` — render in Rust on both arms, the
+  wallet's refresh and proofs paths read through the shared wire types instead
+  of hand-rolled JSON, and `COMMAND_RPC_GET_TRANSACTIONS`,
+  `COMMAND_RPC_IS_KEY_IMAGE_SPENT`, their dispatch rows and both restricted
+  caps are gone.
+  The facts export answers **per request slot** rather than batching two
+  lookups and re-sorting them, which removes the two internal errors that
+  existed only because that sort could disagree with itself ("tx hash
+  mismatch", "internal error - txs is empty").
+  `entry`'s KV map branches on `in_pool`, so the Rust type makes the branch a
+  type: `Mined` or `Pooled`, with `in_pool` derived from the arm. A flat
+  struct of optional members round-trips every captured vector while still
+  able to emit documents the daemon cannot produce.
+  Two divergences are deliberate: the reply's `tx_hash` is canonical
+  lower-case rather than an echo of the request's casing, and a `spent_status`
+  outside 0/1/2 is a malformed reply rather than a fourth state a caller has
+  to guess about.
+
+- **`get_transactions` no longer returns `txs_as_hex` / `txs_as_json`, and
+  `CORE_RPC_VERSION` is 3.25.** The handler filled them "in case an old wallet
+  asks" and the old wallet is `src/wallet/`, deleted — so they duplicated
+  `txs[i].as_hex` and `.as_json` for a reader that does not exist (rule 60).
+  The `_v2` oracle vectors were captured from the edited C++ struct before it
+  was deleted, so the new shape has a real oracle rather than a hand-written
+  one, and the `_v1` files stay beside them so the removal itself is
+  assertable. `get_version` earns a `_v2` for the same bump, by a different
+  route: its reply carries `CORE_RPC_VERSION`, and that constant moved to Rust,
+  so the new value cannot be re-captured from C++ at all. The vectors are never
+  hand-edited, so the bump gets a file beside the capture, held honest by a pair
+  test that substitutes the live constant into `_v1` and demands the result
+  equal `_v2` exactly — it may differ by that constant and nothing else, and it
+  cannot go stale against it either.
+
+- **The facts export reads the prunable hash unconditionally, and refuses a
+  store that contradicts itself.** Two defects, one root: the exporter was
+  written against what the deleted C++ handler did, and pruning is a Shekyl
+  system that Monero never had, so that handler is not authority for it.
+
+  The hash was read only when the prunable **blob** was present. But
+  `prune_worker` and `prune_tx_data` delete `txs_prunable` (and the worker,
+  `txs_prunable_tip`) and never `txs_prunable_hash` — retaining the hash
+  after dropping the bytes is the entire reason to store it, since it is
+  what still binds a pruned body to its transaction. So on a pruned daemon every pruned transaction would have
+  reported an all-zero `prunable_hash`. Pruned-daemon mode is node-local and
+  ships post-genesis without coordination (rule 75); its absence today is not a
+  reason to encode its absence. The hash is now read for every transaction the
+  chain holds, and the blob's absence is what it actually means — pruned, a
+  fact about this node, not a fault.
+
+  A **missing** hash, and a `get_tx_outputs_gindexs` that returns false, are
+  now `SHEKYL_RPC_FACTS_ERR_INCONSISTENT` rather than an all-zero field and an
+  empty index list. Both had a plausible-looking fallback that would have
+  reached the caller as a fact about their request instead of a fault of this
+  node — which is the property `FactsFault::Inconsistent` exists to carry, and
+  its doc now names all three reads that raise it rather than only the height
+  case it was written for.
+
+  The entry vector is left to `vector(n)`'s value-initialization instead of
+  being `memset` afterwards. Value-initialization zeroes every scalar and gives
+  the pointer members real null pointers rather than an all-zero byte pattern
+  that is only null by convention, so the `memset` added nothing — while being
+  undefined at `txids_len == 0`, where `data()` may be null and passing null to
+  `memset` is undefined even for a zero count. An empty `get_transactions`
+  request is valid, so that length is reachable, and it now has a test.
+
+- **The release checklist's testnet consensus script reaches
+  `get_transactions` again.** `scripts/check_testnet_genesis_consensus.py`
+  wrapped the call in a `/json_rpc` envelope, but `get_transactions` is a REST
+  endpoint — it has no row in either JSON-RPC dispatch table and never did on
+  this bridge, so the script died at "Method not found" before its genesis
+  comparison ever ran (RK-4c's field-name update sat on a call that could not
+  succeed). It now POSTs to `/get_transactions` directly; the JSON-RPC helper
+  stays for the methods that are dispatched there (`get_block_header_by_height`,
+  `get_info`). Release-tooling only; no runtime or wire effect.
+
+- **A daemon refusal is no longer read as data.** `Rpc::rpc_call` and
+  `json_rpc_call` only deserialize — they do not enforce the wire's `status` —
+  so a daemon could answer a non-OK status *and* a complete, plausible body in
+  one document, and five typed consumers read the body first: both
+  `block_fetch` calls, both `proofs_chain_facts` fetches, and the reserve
+  proof's `is_key_image_spent`.
+
+  It matters most where the reply feeds a judgement rather than a display: a
+  refusal carrying one plausible-length `spent_status` array changes a reserve
+  proof's total, and one carrying a plausible entry lets a proof verify against
+  a transaction the daemon just declined to vouch for. The own-node default
+  narrows who can send such a document; it does not make it evidence.
+
+  One `refuse_unless_ok` rather than five checks, so the refusal reads the same
+  way everywhere and a sixth typed consumer has something to reach for. The
+  test builds a body that clears every check *downstream* of the status — right
+  count, matching `tx_hash`, a pruned blob `parse_pruned_tx` accepts — so
+  without the check the call **succeeds** and hands back a transaction; that is
+  the hazard, not a parse error arriving late.
+
+- **An undefined `where_found` is refused, not read as "not found".** The FFI
+  contract permits 0/1/2; anything else was mapped to `Missed`, which answers
+  the caller successfully about a transaction this daemon may well hold — an
+  ABI violation rendered as a fact about their request. It now frees the owner
+  and raises an internal facts error, as the block path already did for a
+  length no allocation could have produced.
+
+  The mapping moved to `slot_of`, a pure function beside the `unsafe` walk,
+  because the walk needs a live `core_rpc_server` and this is the part with a
+  decision in it. The pointer arithmetic stays at the call site; what crosses
+  is already owned data — which is what makes the refusal testable at all.
+
+- **`key_images_spent` has the three-way test its logic needs.** The status
+  values and the slot re-association are the whole of that function: unspent
+  images are gathered with their positions, asked of the pool, and written back
+  through `unspent_slots`. A request whose images are all one kind cannot tell
+  a correct re-association from an off-by-one, so the fixture mixes chain-spent,
+  unspent and pool-spent and puts the **pool hit last** — writing pool answers
+  in arrival order then lands it on the wrong image, and does. The pool entry is
+  seeded through the DB so `tx_memory_pool::init` builds `m_spent_key_images`
+  the way production does, rather than the test asserting over a hand-set field.
+
+- **The C++ RK-4c replaced is deleted, not left callerless.** Retiring
+  `on_get_transactions` was the last caller of
+  `Blockchain::get_split_transactions_blobs` and of the `core::` wrappers
+  `get_split_transactions_blobs`, `get_pool_transactions_info` and
+  `are_key_images_spent[_in_pool]`. The first of those carries a pruning model
+  that is **wrong for Shekyl**: it reads the prunable hash only when the
+  prunable *blob* survived, and sets the hash to null when it did not — the
+  exact inversion of what `prune_worker` does, and the same defect this slice
+  corrected in the facts export.
+
+  Leaving it callerless would be worse than never having written it.
+  Pruning-and-serving-from-archive has no Monero counterpart, so the inherited
+  C++ is a *first draft of a Shekyl system*, and a wrong first draft sitting in
+  the tree is what the next port reads as the design. Deleted with its `core::`
+  wrapper, its declaration and its explicit template instantiation.
+
+  The reads underneath stay: `have_tx_keyimges_as_spent`,
+  `check_for_key_images` and `get_transactions_info` all have live callers — the
+  facts shim calls the last two directly, which is precisely what left the
+  wrappers dead. `get_transaction_version` went with them and is disclosed as
+  a different case: it was **already** dead on `dev`, with no callers and no
+  header declaration, so it was swept under rule 15 rather than orphaned here.
+
+- **The docs that described the old trust boundary were swept with it.** The
+  binding below left seven statements asserting the opposite — that a pruned
+  body is "not re-hashed" and the daemon's label is "the only association
+  handle" — across `block_fetch`, its suite, and the cutover design doc. A doc
+  that contradicts an enforcement is worse than a stale one: it tells the next
+  reader the boundary is weaker than it is, and a design section tells the next
+  *slice* to build it that way. Review flagged three; a sweep for the claim
+  found five in code plus two in the contract, and all seven are corrected at
+  source.
+
+  Two of those were the canonical contract rather than commentary: RK-D8's
+  shape-preservation rule now records RK-4c's field retirement as a **narrow,
+  satisfied exception** (parity green first, removal as its own commit, so the
+  divergence still bisects — the discipline, not a waiver), and §6's
+  `CORE_RPC_VERSION` baseline says 3.25 rather than the 3.22 it froze at, since
+  a baseline that stops tracking the constant reads as a freeze.
+
+- **A pruned transaction body is bound to the hash that was asked for.** The
+  batch parser checked the reply's `tx_hash` **label** against the request and
+  never the body, so a daemon could serve any canonical transaction under the
+  requested label: shape validation passes, the label matches, and a proof
+  consumer then verifies outputs belonging to a transaction that may not be on
+  this chain.
+
+  The identity is now recomputed from the bytes.
+  `Transaction::hash_with_supplied_prunable` is the Rust equivalent of
+  `get_pruned_transaction_hash` — a pruned body has no prunable section, so
+  plain `hash()` substitutes the null hash and returns an identity no
+  transaction has. The reply's `prunable_hash` is the daemon's to choose too and
+  gains it nothing: choosing freely leaves it solving
+  `H(prefix ‖ base ‖ pqc ‖ X) = txid` for `X`, a keccak preimage rather than a
+  substitution. The full form is bound the same way, via `hash()` directly.
+
+  Both hashes share one construction rather than two, so the pruned and
+  unpruned paths cannot drift into hashing the same transaction two ways.
+
+  Two existing fixtures had to change, which is the finding confirming itself:
+  they paired arbitrary labels with arbitrary bodies, and one served **the same
+  body under two different requested hashes** — the substitution case, sitting
+  in the happy-path test, passing only because the label was the whole check.
+  They now derive the label from the body.
+
+- **The console stops replacing the daemon's reason with its own complaint.**
+  A native handler reports failure as a `RestErrorEnvelope`, which the success
+  types do not model, so two success-only decodes reported "malformed reply"
+  over the server's stated cause. Refusing unknown fields made that certain
+  rather than incidental — the envelope's `error` is precisely the field the
+  success type does not model. Both sites now use `decode_reply`, which tries
+  the envelope second, as `print_height` already did.
+
+- **The RPC read surface refuses unknown fields.** `shekyl-rpc-types::chain`
+  and `::transactions` tolerated them because "additive daemon-side evolution
+  must not break an older wallet" — not a constraint this tree has, since there
+  is no network and every client ships with the daemon. What the tolerance
+  bought was a **renamed** field arriving unnoticed while the name we look for
+  defaults: a wrong value wearing the shape of a legitimate one, on replies that
+  feed proof verification.
+
+  Free to remove, and checked rather than assumed: every captured epee vector
+  still parses with the denial on, so the types already modelled everything the
+  daemon emits. It also aligns the daemon surface with the wallet-RPC decision
+  (F-1), where an unknown key is `-32602` rather than a guess.
+
+  `SubmitVerdict` keeps its tolerance, on its real reason rather than the compat
+  one: a verdict arrives mid-submit, where a daemon and wallet from different
+  in-tree builds must still agree on whether the transaction was accepted, and
+  failing that parse turns an informational field into an ambiguous submit —
+  the outcome the §2.3 skew design exists to prevent. `skew_c` pins it.
+
+  **Not a fix for silent defaults**, and the docs say so: `#[serde(default)]`
+  still lets an *omitted* field become its zero value, and 27 fields across the
+  two modules do. That audit is filed separately because it needs per-field
+  judgement — some absences are legitimate `KV_SERIALIZE_OPT` omissions the
+  vectors depend on.
+
+- **`print_transaction` binds the reply to the request, not just its arity.**
+  It accepted whatever single entry came back, so a daemon could answer with a
+  different transaction — every field well-formed, only the identity wrong —
+  and the console printed it under the operator's hash. It could also answer
+  with an entry *and* report that hash missed, and the entry won. Now the
+  entry's `tx_hash` must equal what was asked and `missed_tx` must be empty,
+  which is the rule `parse_tx_batch` already holds the wallet's consumers to.
+
+  These two cases need a canned reply rather than the projection-backed
+  fixture: the projection only ever answers about the hash it was handed, so it
+  cannot state a reply that contradicts the request.
+
+- **The pruned-spend test carries a real spend, so the retained PQC segment is
+  actually exercised.** `has_pqc` is false for a coinbase (`txin_gen`), so a
+  miner-only chain leaves `txs_pqc_auths` empty — the sibling test proved the
+  prunable-hash half of `prune_tx_data`'s contract and was silent on the other.
+  The new case adds a v3 spend with non-empty `pqc_auths` and asserts the
+  property both retained items exist for: after the body is dropped, the chain
+  can still **name** what it kept, via
+  `get_pruned_transaction_hash(pruned, prunable_hash) == txid`. Re-deleting the
+  segment fails it on that assertion.
+
+- **`print_transaction` stopped calling every confirmed transaction pruned.**
+  The console asks whether the daemon still holds a transaction's prunable
+  half, and reads `prunable_as_hex` to decide — a field only the **split** form
+  fills. It was requesting the whole transaction, so the halves arrived
+  concatenated in `as_hex` with `prunable_as_hex` empty, which is
+  indistinguishable from "the daemon pruned it": every ordinary mined
+  transaction printed as `(pruned)`. `split` here is not a display preference
+  but what makes the label answerable, which is why the C++ console set it too.
+
+  Covered end to end, by a fixture that answers with the **real projection**
+  over fixed facts rather than a canned reply — a canned reply is blind to this
+  defect, since it would return split-form data whatever the console asked for,
+  and the test would pass over the bug. Reverting `split` reproduces
+  `Found in blockchain at height 3 (pruned)` for a transaction whose prunable
+  half is present, while the genuinely-pruned case stays green, so the fix is
+  not the label being disabled.
+
+- **`get_transactions` and `is_key_image_spent` requests omit their empty
+  sequences.** epee drops an empty sequence rather than emitting `[]`, for
+  plain `KV_SERIALIZE` members as well as OPT ones — the response types in this
+  module already said so, and the request types did not. The rule is the
+  wire's, so it binds requests this tree *sends* exactly as it binds replies it
+  serves. A sweep of every `Vec` field on every request type in the crate found
+  these two and no others: `GetBlocksByHeightRequest.heights` derives no
+  `Serialize` at all, so the attribute would have been decoration there.
+
+- **The `get_transactions` projection matrix is covered.** It replaced a C++
+  matrix and nothing reached it — the parity vectors build `TxEntry` directly,
+  and the live console test only ever hits the genesis transaction's
+  empty-prunable, `decode_as_json = false` corner. Table-driven now across
+  `split` / `prune` / `decode_as_json`, the chain/pool/miss slots, and a
+  renderer failure, with an injected renderer that echoes what it was handed so
+  the assertions pin *what* was rendered and under which `base_only` — the
+  `prune` case must render base-only, or the json leaks the half `prune`
+  withheld.
+
+- **The proofs workflow's daemon-facing half is its own module**
+  (`engine/proofs_chain_facts.rs`). Typing the daemon replies pushed
+  `proofs.rs` to 1204 lines, over the decomposition ratchet's 1200 cap, and the
+  gate offers two ways out — carve it, or baseline it. Neither was taken
+  literally: the split is by responsibility, not by line count. Everything in
+  the new module answers "what does the chain say about this transaction?"
+  across an **untrusted boundary**, where a daemon may lie, omit, reorder, or
+  answer with a body nobody asked for; what stays in `proofs.rs` is
+  cryptographic work over facts already established. Different job, different
+  failure mode.
+
+  The seam is five items wide — four functions plus the record two of them
+  return — and the not-found reporter stays private, since a caller needing it
+  would be doing the new module's job somewhere else. The split also surfaced
+  coupling worth removing: `proofs_tests.rs` had been reaching wire types
+  (`Ct`, `Transaction`) through `use super::*`, inheriting a workflow module's
+  third-party imports rather than naming its own.
+
+
+- **Documentation lifecycle is now a first-class process.** `docs/README.md`
+  and `.cursor/rules/95-documentation-lifecycle.mdc` classify every doc
+  (living contract / open plan / closed-as-record). Work-item targets are
+  only **pre-genesis**, **post-genesis** (tiny, named blocker), and **V4**
+  (NIST lattice-only, 2–5 years). Claim-era staking specs are deleted, not
+  stubbed. Closed Stage-1 / Stage-0 plans and named audits moved to
+  `docs/completed/`. `docs/FOLLOWUPS.md` is a one-liner queue again.
+
+- **`/get_blocks_by_height.bin` is served natively in Rust, and the binary
+  FFI dispatch bridge is deleted (RK-4b).** With RK-4a's `/get_o_indexes.bin`
+  this was the last `.bin` route reaching C++, so `dispatch_bin`,
+  `bin_handler!`, `CoreRpc::bin_endpoint`, `core_rpc_ffi_bin_endpoint`,
+  `core_rpc_ffi_free_buf`, the `DBIN` macro, `bin_fn` and `get_bin_table`
+  all go: the binary half of the epee dispatch bridge is gone ahead of RK-X.
+  `free_buf` had no caller once the endpoint that allocated through it was
+  deleted, and the header still advertised binary endpoints returning
+  buffers through it.
+  The oracle capture settled a question the C++ declaration would have
+  answered wrongly. `block_complete_entry` has five KV members and this
+  handler sets two, so `pruned`, `block_weight` and `attestation_witness`
+  never reach this wire — and with `pruned` false the map serializes `txs`
+  as an **array of strings**, dropping each transaction's prunable hash.
+  The array-of-objects form exists only on the p2p path, so modelling it
+  here would have carried a variant the daemon cannot emit.
+  Two behaviours are recorded rather than silently carried. A height the
+  chain cannot produce still returns the blocks read **before** it, as the
+  C++ did — it cleared its list once before the loop and returned from the
+  failure without clearing again. And the restricted listener's 1000-block
+  cap now **fires**: the C++ gated it on `m_restricted && ctx` while the
+  bridge always passed a null `ctx`, so the check was dead and a restricted
+  listener accepted any number of heights. That is a deliberate fix, not
+  parity.
+  The engine's timing rig stops hand-rolling the request and reply walk;
+  `Section::collect_bytes_named`, a tree-scanning helper that existed for
+  that walk, goes with its only caller, and `shekyl-engine-core` drops its
+  direct dependency on the codec.
+
+### Removed
+
+- **`core_rpc_ffi_is_restricted` and the accessor it was the only caller
+  of.** The export had no caller in any language — the Rust server takes its
+  posture from its own configuration, never by asking C++ — and it was the
+  sole user of `core_rpc_server::is_restricted()`, so both go (rule 15).
+  Found while fixing the restricted gate above: an export whose whole
+  purpose was to report restrictedness across the boundary, in a tree where
+  the restrictedness had never crossed it.
+
+- **`/get_transaction_pool_hashes.bin` is retired.** The binary spelling of
+  a route that is called; nothing called this one. The two handlers made
+  the same two core reads and differed only in raw-versus-hex output, so
+  the surviving JSON route keeps them and nothing else went callerless.
+  `CORE_RPC_VERSION` is **3.24**. Found by `ci/rpc-route-liveness` on its
+  first run and held as an allowlist entry pending disposition; that entry
+  is now gone rather than permanent — an allowlist entry is a claim someone
+  has to defend, and there was no defence to make. Reopen clause in
+  `docs/DAEMON_RPC_RUST.md`.
+
+### Fixed
+
+- **A restricted RPC listener disclosed transactions the node had not
+  broadcast.** Every C++ handler decides its caller's posture from
+  `m_restricted && ctx`, and the dispatch bridge passed `nullptr` for `ctx`
+  on every JSON and JSON-RPC route, so that expression was false however the
+  daemon was configured. On the pool paths it is not a request cap: the
+  sensitive flag selects `relay_category::all` over `::broadcasted`, and the
+  DB's iteration skips what does not match the category — so the flag decides
+  whether a transaction is enumerated at all, not which of its fields are
+  shown. A `--restricted-rpc` listener therefore answered with transactions
+  in the `stem` and `local` states: still-stemming ones, and the node's own
+  submissions before they were relayed. `/get_transactions` disclosed them by
+  hash; `/get_transaction_pool` and `/get_transaction_pool_hashes` enumerated
+  them with no argument at all, which hands over the identifiers to ask
+  about. The listener's own help text is "do not return privacy sensitive
+  data in RPC calls". The bridge now passes a shared origin context, which
+  restores the intended meaning for every bridged handler at once; the
+  unrestricted listener is unaffected, because `m_restricted` is false there
+  and the expression was false before and after. No wire shape changes, so
+  `CORE_RPC_VERSION` is untouched. (`do_not_relay` transactions are *not* in
+  the leaked set — they cannot exist in Shekyl: no RPC accepts the flag and
+  the pool's only writer of it hardcodes 0.)
+
+- **The restricted-RPC gate now has a guard that CI actually runs.** The only
+  assertion that can observe whether the C++ dispatch bridge passes a
+  connection context is a live-daemon test, and live-daemon tests are
+  `#[ignore]`d because the Rust lane builds no `shekyld`. The `build-ubuntu`
+  job compiles one with `BUILD_TESTS=ON` and installs the Rust toolchain, so
+  the gate runs there against the tree just built — no extra build, about
+  three seconds. The step asserts that exactly one test ran: `--exact` matches
+  the full test path, and `cargo test` exits 0 reporting "0 passed" when a
+  filter matches nothing, so a moved or misspelled name would otherwise turn
+  the gate into a green no-op.
+
+- **`relay_tx`'s C++ restricted gate is deleted, not repaired.** The handler
+  computed `m_restricted && ctx` and skipped the `relay_category::all` arm
+  when it held. That expression cannot hold in any reachable state: `relay_tx`
+  is admin-only, decided once in Rust at the only transport
+  (`RESTRICTED_METHODS`), which answers 403 before C++ is entered — so the
+  restricted listener never arrives, and on the admin listener `m_restricted`
+  is false. An earlier draft of this entry reported it as a live
+  unauthenticated relay, and a later one kept the check as defence in depth;
+  both were wrong. It defended nothing, and membership of the Rust list is
+  itself pinned against an independent specification by a test, so loosening
+  that gate fails in Rust rather than falling through to here. Removed under
+  rule 15, which takes the site count in the design doc from eleven to ten.
+  Of those eleven methods `relay_tx` is the only one Rust gates per-method, so
+  this is a bounded sweep rather than an open class.
+
+- **Every password rotation on Windows failed, and the crate that owns the
+  defect was tested on no Windows machine anywhere.** `rotate_password`
+  replaces `.wallet.keys` through the atomic writer while the wallet handle
+  still holds `LockFileEx` on byte 0 of it. `NamedTempFile::persist` issues
+  `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` and nothing else, and a
+  byte-range lock on the target makes that `ERROR_ACCESS_DENIED` — surfaced
+  as `AtomicWriteRename` carrying os error 5, flattened by the RPC's classifier into
+  `-32603 "password rotation failed"`. `std::fs::rename` issues the same
+  call *and* retries on `ERROR_ACCESS_DENIED` through
+  `SetFileInformationByHandle(FileRenameInfoEx)` with POSIX semantics, which
+  supersedes the open target rather than deleting it, so step 4 is now
+  `TempPath::keep` + `rename`. The `keep` is not a cleanup formality: it is
+  the `SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)` that `persist` performed as
+  its own first step, and without it the staged file's
+  `FILE_ATTRIBUTE_TEMPORARY` — which asks the cache manager to avoid
+  writing the data back while cache is available — rides onto
+  `.wallet.keys`, leaving a permanent wallet artifact permanently marked
+  temporary. It does **not** undo the preceding `sync_all`, which is
+  `FlushFileBuffers` on Windows and flushes unconditionally; what it
+  misdescribes is the file's whole subsequent life, as false metadata and
+  as a standing hint to any later writer that does not flush explicitly.
+  `keep` also disarms `tempfile`'s cleanup, so a failed rename now unlinks
+  the staged file explicitly instead of stranding it beside the wallet. This is the same class as the mandatory-lock bug in the keys-file
+  read: POSIX-shaped reasoning about file replacement, invisible on Linux
+  because `imp::keep` is a no-op there and `rename(2)` never cared about an
+  advisory `flock`. Four tests pin it — `persist` must stay refused
+  over a locked target on Windows and `rename` must stay able to supersede
+  it, the target must never be left marked temporary, and the whole
+  rotation shape must work under a live `KeysFileLock`. Known limitation,
+  stated rather than discovered: the `FileRenameInfoEx` path needs NTFS, so
+  rotation with a live lock still fails on exFAT or a share without
+  POSIX-semantics rename.
+
+- **Two `shekyl-engine-file` test oracles read the keys file through a
+  second handle**, which is `ERROR_LOCK_VIOLATION` on Windows for the same
+  mandatory-lock reason, so they could not run there at all. They now read
+  with no handle open. Reading the handle's cached envelope would have been
+  worse than leaving them broken: it would make a test whose entire purpose
+  is detecting an on-disk rewrite blind to one.
+
+- **`AtomicWriteRename` was reported for a step that may never have run.**
+  A `TempPath::keep` failure — the staged file's `FILE_ATTRIBUTE_TEMPORARY`
+  clear on Windows — was wrapped in the variant whose own documentation says
+  it carries the error from `rename(2)` specifically, so an error naming the
+  swap could be raised before any swap was attempted. Split into
+  `AtomicWriteFinalizeStaged`, because the two have different causes and
+  different remedies and one name cannot carry both. This is not only
+  tidiness: `keep()` leaves `tempfile`'s cleanup guard *armed* while a failed
+  rename does not, so the conflation had made the cleanup-arm test unable to
+  tell, on Windows, whether the arm it guards had run at all. Fixing the
+  error model removed that gap instead of documenting it. Also corrected:
+  the module and variant docs claimed the staged file "is removed" on
+  failure — cleanup is best-effort from both owners (`tempfile`'s guard
+  ignores unlink errors; ours logs and continues). The guarantee is that the
+  **target is byte-unchanged**; a stray `.shekyl-tmp` sibling is possible,
+  and is clutter rather than a wallet artifact.
+
+- **`BuildRust.cmake`'s Windows skip was justified by a blocker that no
+  longer exists.** Its comment said the Rust wallet stack was Unix-only, that
+  the Windows port was still an open design question (named-pipe ACLs vs.
+  UDS), and that building there would fail on the first of many sites. WP-Q1
+  ruled the pipe, WP-W2 shipped it, and both binaries were observed building
+  and linking for `x86_64-pc-windows-msvc` with `rpc_session_e2e` passing.
+  The rationale is corrected; **the gate is deliberately not flipped**, because
+  compiling is not installing and the CMake path, staging, `install()` and the
+  archive layout are all still unverified. WP-W5 owns that removal.
+
+- **`shekyl-engine-file` joined the Windows scouting step.** It owns the
+  atomic write, the keys-file lock and password rotation — every
+  Windows-specific file primitive the wallet has — and no Windows lane
+  covered it. The rotation bug therefore surfaced as an opaque `-32603`
+  from a `shekyl-wallet-rpc` lifecycle test instead of as four red tests in
+  the crate that owns it.
+
+- **The submit-shim fixture paid a fee it never put in the transaction.**
+  `make_tx` derived a floor-clearing fee, asserted it cleared the floor,
+  and stored it beside the transaction — while the transaction itself kept
+  the shape builder's hardcoded `txnFee = 1000000`. Both readings then
+  existed at once: `commit_tx` is handed the derived fee as an argument, so
+  every shim test paid it, and `tx_memory_pool::add_tx` reads
+  `get_tx_fee(tx)`, so the one test exercising that path paid 0.001. The
+  divergence was invisible until the dynamic minimum rose past the
+  constant, at which point `legacy_add_tx_double_spend_pin` failed on a fee
+  rejection while claiming to pin double-spend classification. The fee now
+  settles **into** the transaction — writing it changes the blob length,
+  which changes the fee required, so it iterates to a fixed point — and the
+  assertion is on the value `add_tx` will actually read rather than on the
+  local the test computed for itself. The bond-post builder, which had the
+  same derive-and-discard, shares the settle.
+
+### Changed
+
+- **`/get_o_indexes.bin` is served natively in Rust, and the `.bin` wire
+  now has a typed schema layer (RK-4a).** `shekyl-portable-storage` is the
+  codec; nothing mapped RPC commands onto it, and `shekyl-levin`'s schema
+  layer is for p2p by design. `shekyl-rpc-types::bin_commands` is that
+  layer, beside the JSON types, because one method has one definition
+  whichever encoding it speaks.
+  Two rules came from capturing epee's bytes rather than reading its
+  declarations, and neither is visible in the latter: a
+  `KV_SERIALIZE_VAL_POD_AS_BLOB` hash crosses as **32 raw bytes** where the
+  JSON side spells it as 64 hex characters, and an **empty sequence is
+  absent** rather than `[]`. Both are pinned against epee's own bytes,
+  compared as bytes — a byte-exactness claim checked through a text pipe
+  tests the pipe.
+  The wallet client's hand-rolled request build and reply walk are gone for
+  the shared map, and it no longer depends on the codec directly. The reply
+  shape is unchanged, including that an unknown transaction is a 200
+  carrying a non-OK `status` rather than a transport error.
+
+### Removed
+
+- **`/get_blocks.bin` (+ `/getblocks.bin`) and `/get_hashes.bin` (+
+  `/gethashes.bin`) are retired (RK-4x).** They were wallet2's batch sync;
+  `src/wallet/` is gone and nothing called them — not Rust, not C++, not
+  the python framework, not the functional tests. The Rust wallet fetches
+  one block per height over `get_block`. Daemon-to-daemon sync is
+  unaffected: that is Levin, through a different
+  `find_blockchain_supplement` overload.
+  The retirement reaches further than the routes. `on_get_blocks` was the
+  only caller of `core::get_pool_info`, which was the only reader of the
+  transaction pool's **departure history** — a timestamped in-memory record
+  of when each transaction left the pool, each entry flagged sensitive or
+  not, kept to serve incremental pool deltas to that batch sync. That is
+  the timing correlate the relay-privacy work exists to deny, and it was
+  being retained for an endpoint nobody called. It is gone, along with the
+  9-argument `find_blockchain_supplement`, `get_pool_info` at both levels,
+  and the two `COMMAND_RPC_GET_BLOCKS_FAST_MAX_*` limits.
+  `CORE_RPC_VERSION` is **3.23**: retiring a served route is a wire change.
+  **Reopen** iff a named live consumer needs batch sync over RPC, and then
+  as a typed Rust route designed against what FCMP++ scanning needs — never
+  a restoration of the epee structs (`docs/DAEMON_RPC_RUST.md`).
+
+### Added
+
+- **Archival staking parity on wallet-RPC and CLI (WI-RPC-5).** Three new
+  wallet-RPC methods over Engine surfaces that were built but unwired:
+  `stake_in` (fund the staking balance with an ordinary principal
+  transfer; same pending-tx confirm/submit path as `build_pending_tx`;
+  carries the GF-7 change-co-presence disclosure in the contract and the
+  CLI pre-confirm print), `get_drain_balance` (two-armed: `ready` with the
+  spendable amount, or `syncing` — never `"0"` while unanchored), and
+  `drain` (`{amount}` only — **no fee, destination, or `p_slot`
+  parameters**; the fee is the canonical P-lane floor computed
+  engine-side, the destination is engine-pinned to the principal, and the
+  persona is resolved from live actor state by the new
+  `Engine::drain_to_principal` façade, which keeps the DS-4
+  `EXIT_FEE_RESERVE_ATOMIC` gate on live-persona drains). The three
+  schemas set `additionalProperties: false` and the params structs use
+  `#[serde(deny_unknown_fields)]`, so extra keys answer `-32602` instead
+  of being silently dropped; drain application errors are pinned at
+  `-29507..-29511`. `get_balance.staked` and `.claimable_rewards` are now
+  live projections from the staking view instead of hardcoded `"0"`. New
+  CLI commands: `get_tx_note`, `set_tx_note`, `abandon`, `stake_in`,
+  `drain_balance`, `drain`. Claim-era registry names resolved: `claim`
+  and `get_stakes` are REJECTED (engine-side claims; archival firewall);
+  `unstake` stays RESERVED — its gate is now **reachability plus the
+  regtest walk**, not the producer, which exists (`build_unbond_vin` /
+  `AssembleUnbond`) and is deliberately unreachable. The drain
+  confirmation/prune driver remains a FOLLOWUPS item — the receipt is a
+  dispatch fact, not a settlement fact, and both surfaces say so.
+
+- **A CI gate that makes the RPC liveness rule executable
+  (`ci/rpc-route-liveness`).** `DAEMON_RPC_RUST.md` has always said a
+  method is live iff it has a route *and* a live consumer. Stated in prose,
+  nothing enforced it, which is how two callerless endpoints survived an
+  audit that had the rule written down. The gate now requires every path in
+  the Axum route table to have a reference outside route registration, the
+  FFI dispatch table, and comments — or an allowlist entry stating why it
+  is served without one. It found a third dead route on its first run,
+  `/get_transaction_pool_hashes.bin`, which is retired above — the
+  allowlist it was held in is now empty of exemptions.
+
+### Changed
+
+- **CI PR fan-out cut (`chore/ci-fanout-cut`).** A typical non-docs PR
+  was standing up ~15 workflows / ~30 jobs / ~500 billed minutes, and
+  four concurrent PRs plus a `dev` push queued the shared runner pool
+  for hours. The merge-blocking graph is now: Ubuntu 22.04 compile-only
+  + Ubuntu 24.04 build whose tests consume the artifact (no second
+  cmake/ctest rebuild) + macOS + Windows MSVC; ARM v8 qemu KATs only
+  when the three cross-arch crates change; `make depends` only when
+  `contrib/depends` (or Makefile) changes, with the six-target matrix
+  on a nightly; eight grep/source-scan gates in one job; CodeQL Rust
+  on PR, C++/Python weekly. Arch Linux and Windows MSYS2 moved to
+  `weekly-os.yml`. `source archive` still runs on PRs into `main`
+  (required check) and is skipped on PRs into `dev`. The MSRV cargo
+  check is the rust-audit-test job at `rust-toolchain.toml` 1.94, not
+  a second compile. Push-to-`dev` no longer double-runs the OS matrix
+  or the rust job (the PR event already tested the merge). Dispatch-only
+  leftovers: `bench-runner-bisect.yml` deleted; `rust-stable-canary.yml`
+  schedule removed until `cargo +stable fmt --check` has an owner.
+  Economics C2a′ paths glob by naming convention
+  (`src/shekyl/economics.*`, `tests/unit_tests/economics*.cpp`,
+  `tests/unit_tests/archival_*emission*.cpp`) rather than a frozen
+  file list or `src/shekyl/**`. The Ubuntu 24.04 CTest-artifact verify
+  step fail-closes if CMakeFiles/objects/archives leak into the tarball.
+- **`get_block` is served natively in Rust, and the two console commands
+  that read it move with it (RK-3b,
+  `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases answer from
+  `shekyl-daemon-rpc`, by hash or by height, over a new facts export that
+  reads the block under one acquisition of the chain lock. `print_block`
+  renders in Rust now — the same lines in the same order, with the reward
+  in SKL, the timestamp in UTC keeping its `<unknown>` cutoff, and the
+  difficulty decimalised from the wide form. Porting the console in the
+  same change is the point: it was the last C++ caller that would
+  otherwise have parsed a Rust-produced reply through the old struct.
+  Every refusal keeps its wording as well as its code, including the
+  inherited `Hash = .` a by-height failure produces.
+- **The first variable-length facts payload.** A block's blob, transaction
+  list and rendered `json` have no size the caller can know in advance, so
+  they are owned by one C++ allocation and released by one paired free —
+  the shape the hard-fork table already used, now written down as the rule
+  for every payload of this kind. epee's `json` rendering is carried
+  through untouched rather than reimplemented: it renders the whole
+  transaction structure, and it is already queued for deletion along with
+  the field itself, which duplicates `blob`.
+- **`get_block_header_by_height` is served natively in Rust (RK-3,
+  `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases answer from
+  `shekyl-daemon-rpc::methods` over a new facts export that reads the
+  bound, the block, its weights and both difficulties under **one**
+  acquisition of the chain lock, so every field of a header describes the
+  same chain state. The reply is unchanged, pinned by oracle vectors
+  captured from epee first — including the wire's three-field rendering of
+  each 128-bit difficulty and the asymmetry where `block_weight` and
+  `long_term_weight` vanish at zero while `block_size`, filled from the
+  same source, stays. A height past the tip keeps its `-2` refusal naming
+  the top height; a store that reports a height it cannot produce the
+  block for keeps the contract's `-5` and wording, and is logged. The
+  wallet client's private header struct retires for the shared type and
+  now rejects a non-OK `status` instead of reading past it. This carries
+  the shared `BlockHeader` that the remaining header methods will reuse;
+  they stay in C++ for now because each is read by a console command that
+  also needs `get_info` (see the design's console matrix).
+- **Hash fields on the daemon RPC wire are typed (`HashHex`).** Every
+  32-byte hash the RPC carries was a `String`, which admitted "not a hash
+  at all" as a value and left each consumer to parse hex for itself.
+  `HashHex` moves that parse into the deserializer once: 64 hex characters
+  of either case in, always lowercase out, anything else refused. It is a
+  wire-level type over raw bytes, not a wrapper around a domain hash — a
+  single `block_header` carries block, transaction, root and
+  proof-of-work hashes, so consumers name the kind at their edge, where
+  they know it. `block_header.pow_hash` becomes `Option<HashHex>`, keeping
+  the daemon's "was it filled?" flag alive to the wire while emitting the
+  same `""` epee did. Emitted bytes are unchanged throughout, which the
+  oracle vectors check. Two hand-written test fixtures that described
+  replies the daemon could never send were caught by the new type and now
+  build through it.
+- **`--daemon-address` says §1's thing at the point of configuration
+  (RT-W7).** A daemon address that is not loopback now draws the operator
+  statement of `RPC_TRANSPORT_POSTURE.md` §1 when the wallet starts —
+  whoever operates that daemon sees which blocks the wallet requests, when,
+  and what it broadcasts; that is what a daemon is told in order to serve,
+  and no proxy or encryption changes it; there is no recommended
+  configuration with a daemon somebody else controls — in `shekyl-cli` (on
+  stderr) and `shekyl-wallet-rpc` (in its log) alike. `--proxy` silences
+  the existing network-path warning, never this one: a proxy hides the
+  path, not the wallet from its daemon. The statement asserts only what an
+  address can say ("is not a loopback address"), so the operator of their
+  own remote node reads it as true of themselves; loopback and unix-socket
+  daemons stay silent, and no configuration draws an assurance. The
+  disclosure module moved from `shekyl-cli` into `shekyl-rpc-transport`
+  (`network_posture`) so both binaries say it in the same words — the
+  outbound twin of the shared `listen` classifier — and it is pure: each
+  binary emits in its own voice. The two sides now share one loopback
+  predicate (`listen::is_loopback_ip`), so `[::ffff:127.0.0.1]` is loopback
+  for a daemon address as it is for a bind; a zone-scoped literal
+  (`fe80::1%eth0`) is a literal, not a name to leak; and bare `socks://`
+  counts as local-resolving, as the dialers that accept it read it.
+  **Also:** both wallets' `--daemon-address` defaults named ports no daemon
+  serves (`localhost:11028`, `http://127.0.0.1:28581`). The flag is now
+  optional and its default follows `--network` — this machine's daemon at
+  that network's RPC port (`Network::daemon_rpc_port`, pinned by a test to
+  the daemon's `cryptonote_config.h`) — so a testnet wallet finds a testnet
+  daemon without the operator knowing the port.
+- **The daemon RPC binds loopback only; `--confirm-external-bind` is
+  retired (RT-W2).** A wildcard bind (`0.0.0.0`, `::`, the IPv4-mapped
+  spellings) is refused unconditionally — consent to interfaces that do
+  not exist yet — and a bind on a specific network address is refused
+  because the daemon RPC has no authentication of any kind: every RPC leg
+  is operator-to-operator, and the daemon's remote leg is the onion
+  service or a reverse proxy outside the daemon — the crossing is never
+  the daemon's own socket. The refusal
+  lives at the one Rust seam every daemon listener passes through
+  (`shekyl-daemon-rpc::bind::bind_listener`, the restricted listener included —
+  it had no gate at all), on a strictly parsed address (hostnames are not
+  resolved), and is logged with its reason before the daemon exits.
+  `--confirm-external-bind`, a permission slip for exactly these binds,
+  is refused by name through the removed-flags shim: confirmation is not
+  refusal. One listen classifier, `shekyl_rpc_transport::listen`, now
+  serves the wallet RPC and the daemon RPC, so "wildcard" and "loopback"
+  mean one thing across the tree. IPv6 is a first-class family: `::1` is
+  loopback; `--rpc-use-ipv6` binds `--rpc-bind-ipv6-address` (default
+  `::1`) as a second socket on the same FFI start, not a second C++
+  server. A network IPv6 bind is refused for the same reason as IPv4 —
+  no authentication. **The FFI boundary moves with it:** the daemon's
+  `--rpc-bind-ip` / `--rpc-bind-port` / `--rpc-bind-ipv6-address` go to
+  Rust as given, which parses them and validates the connection caps;
+  the C++ IP-parse blocks, bracket stripping, `host:port` composition
+  and cap checks are deleted. One server serves every socket of a start
+  (`serve_listeners`): the connection caps are per server as the flags
+  say, `get_info` counts every family, and the stop signal is a
+  level-triggered `watch`, so a stop cannot be lost to an acceptor that
+  has not been polled yet. `--rpc-ignore-ipv4` — which parsed into a
+  field nothing read — is retired by name alongside
+  `--confirm-external-bind`, and the removed-flags shim now answers for a
+  config-file flag too, the route every shipped unit file uses. The
+  container image binds RPC on loopback and no longer exposes 11029; the
+  documented recipe is `docker run --network host`, so the container's
+  loopback is the host's and nothing in the daemon changes (a daemon UDS
+  listener is filed with its trigger, not built). An explicitly empty
+  `--rpc-bind-ipv6-address` under `--rpc-use-ipv6` is refused by name
+  rather than silently dropped, and a refusal on the separate restricted
+  listener names the `--rpc-restricted-bind-*` flags it came from.
+  **One behaviour change in that move is a fix, not a port:** the C++
+  cap check refused any `--rpc-max-connections-per-public-ip` /
+  `-per-private-ip` value under `--rpc-max-connections 0` (unlimited) as
+  "bigger than" the total; an unbounded total contradicts nothing, so
+  `ConnLimits::checked` accepts it and refuses only a per-IP cap above a
+  *bounded* total, by flag name.
+
+- **An unencrypted `enc_label` or `enc_amount` is now unrepresentable, not
+  merely wrong.** Both are XOR ciphertexts under a one-time per-output key, and
+  both were plain `[u8; 9]` fields on `OutputInfo` assembled by a hand-written
+  "copy eight bytes, append the tag" block repeated at eight call sites —
+  including the genesis block builder. The live path was already correct
+  (`sign_bridge.rs` took its values straight from `construct_output`), so this
+  fixes no leak; it removes the possibility. `EncryptedOutputField`
+  (`shekyl-crypto-pq/src/encrypted_output_field.rs`, re-exported from
+  `output`) has no public byte constructor. The in-process constructors are
+  `OutputData::enc_label_wire()` / `enc_amount_wire()`, which return the
+  value `construct_output` assembled at the moment of encryption — the field
+  on `OutputData` *is* the type, not an 8+1 pair a late accessor re-wraps.
+  `Deserialize` is the other route, and it exists for the FFI JSON boundary.
+
+  The hazard was never a weak plaintext — an all-zero *plaintext* encrypts to
+  `k_label[..8]` and is uniform, exactly as the sentinel does. It was bytes
+  that never met the encryption, which are a constant on the wire and mark
+  every output carrying them, breaking the `SUBADDRESS_UNDER_PQC.md` §5.7.10
+  indistinguishability invariant. "Reject zeros" was considered and rejected as
+  the remedy: it treats one symptom, admits any other unencrypted constant, and
+  can fire on a legitimate ciphertext that happens to be zero.
+
+  The guarantee is compiler-enforced on three axes, all verified by attempting
+  the forgery from outside the crate: `EncryptedOutputField([0; 9])` is
+  `E0423` (the inner field is private), overwriting a real `OutputData`'s
+  stored field is `E0616` (`pub(crate)`), and building an `OutputData`
+  literal is `E0451`.
+
+  Those attempts are committed as compile-fail tests
+  (`shekyl-crypto-pq/tests/trybuild/`), which **retracts this entry's earlier
+  judgement** that a `trybuild` harness was not worth adding for them. Two
+  things made that judgement wrong. The cost was overstated — `trybuild` was
+  already a dev-dependency of `shekyl-logging` and so already in `Cargo.lock`,
+  adding no package to the supply chain. And the alternative it chose was
+  documentation: a comment cannot fail, and widening a field back to `pub`
+  would have left every existing test passing while the guarantee evaporated.
+  A property this crate names in its own title deserves a check that goes red.
+
+  The routes live in separate fixtures because a field-privacy error
+  aborts the compilation before later bodies are type-checked — sharing a file,
+  later routes vanish from the snapshot and would have been guarded by nothing.
+
+  One exception survives, and it is a boundary rather than a constructor: the
+  type's `Deserialize` impl, used where `shekyl_sign_fcmp_transaction` takes its
+  outputs as JSON and the far side computed the encryption. The byte
+  constructor behind it is private to the defining module, so no crate can
+  call it. That path's only non-test caller is the C++ `construct_tx*` chain,
+  which has had no production caller since `wallet2` was deleted, and it goes
+  with the consensus-oracle harness. The JSON encoding is unchanged — still an
+  18-character lowercase hex string, now pinned by a test — so the FFI contract
+  is untouched.
+- **`get_block_count` and `on_get_block_hash` are served natively in Rust
+  (RK-2, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases of each
+  (`getblockcount`, `on_getblockhash`) answer from
+  `shekyl-daemon-rpc::methods` over the typed facts FFI; the C++ handlers,
+  their `COMMAND_RPC_*` structs and the hand-rolled JSON-array parser in
+  `core_rpc_ffi.cpp` are deleted. Replies are unchanged, pinned by oracle
+  vectors captured from epee first — including that `on_get_block_hash`
+  answers with a bare JSON string rather than an object. Its refusals keep
+  their JSON-RPC codes (`-1` wrong parameter, `-2` height too large) and
+  messages; the too-large message still names the top height, now read in
+  the same call as the hash so the two cannot disagree. **One deliberate
+  change:** a *negative* height is answered `-1` (wrong parameter) instead
+  of `-2` — the old classification came from `std::stoull` wrapping the
+  value in the deleted parser, not from a decision.
+- **Daemon RPC Phase 2 begins: `get_height` and `get_version` are served
+  natively in Rust (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** The
+  wire types are now `shekyl-rpc-types::{GetHeightResponse,
+  GetVersionResponse}` — one definition for the daemon that serves them,
+  the wallet that reads them and the console that renders them — and the
+  handlers read core state through a typed facts FFI
+  (`shekyl_rpc_chain_tip`, `shekyl_rpc_hardforks`) instead of C++
+  `COMMAND_RPC_*` structs marshaled by epee. Parity with the old handlers
+  is pinned by oracle vectors captured from epee before the C++ was
+  deleted; the JSON documents are parsed-equal (same keys, values and
+  `KV_SERIALIZE_OPT` omissions; key order and whitespace are no longer
+  epee's). `CORE_RPC_VERSION` (3.22, unchanged) moved to Rust with its
+  only reader. The console's `print_height` renders in Rust on both arms
+  (`shekyld print_height` and the interactive console). Also deleted as
+  dead: `COMMAND_RPC_GET_OUTPUTS{,_BIN}`, `COMMAND_RPC_FAST_EXIT` and the
+  `core::get_outs` / `Blockchain::get_outs` chain behind them — none had
+  a dispatch row or a caller. No change to any reply a client parses; the
+  reason text inside a transport-level failure (the 500 envelope's `error`
+  string) now names what actually failed instead of "FFI dispatch failed"
+  — diagnostic text, not contract (RK-D8 scope).
+
+- **The legacy FCMP++ prove seam is gone.** `genRctFcmpPlusPlus` — the C++ end
+  of the retired C++ → Rust → C++ → Rust proving round-trip — had no caller:
+  production signing moved to `shekyl_sign_fcmp_transaction` (one call), and
+  `core_tests/chaingen.cpp` stopped calling it when the `gen_fcmp_*` tests were
+  deleted. It is deleted with the exports that existed only to serve it
+  (`shekyl_fcmp_prove`, `shekyl_fcmp_proof_len`) and their C++ declarations,
+  including `SHEKYL_PROVE_WITNESS_HEADER_BYTES`, `ShekylFcmpProveResult` and
+  `ProveInputFields`. **No production path changes** — the Rust prover is
+  untouched; this removes a C++ orchestration wrapper and an FFI surface, per
+  [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md) §5 step 1.
+
+  The witness *format* survives and moved rather than died: the FROST multisig
+  coordinator still parses it, so `parse_prove_witness`, its helpers,
+  `SHEKYL_PROVE_WITNESS_HEADER_BYTES`, the `shekyl_fcmp_build_witness_header`
+  writer, `ProveInputFields` and the `WITNESS_HEADER.json` round-trip test are
+  all now `#[cfg(feature = "multisig")]`,
+  which puts the dependency where the compiler enforces it instead of leaving a
+  parser that nothing in a default build reads. Its wire-format spec — the only
+  prose description of the layout — moved onto `parse_prove_witness` **with a
+  correction**: it had documented a 224-byte, 7-field header, omitting the
+  commitment mask, where the real header is 256 bytes and 8 fields.
+
+  `fill_construct_tx_rct_stub` is deliberately **not** deleted: the
+  `construct_tx*` chain that calls it is the C++ consensus oracle's transaction
+  factory, and retiring that is the oracle lane's work.
+- **`shekyl-wallet-rpc` refuses two listen configurations it used to
+  accept** (RT-1 / RT-2, `docs/design/RPC_TRANSPORT_POSTURE.md`).
+  A wildcard `--rpc-bind` (`0.0.0.0`, `::`, `[::]`, and their IPv4-mapped
+  spellings) is refused at startup: a wildcard bind is a bind to interfaces
+  that do not exist yet — the VPN that comes up tomorrow, a hotspot, a
+  container bridge — so it is consent on behalf of the operator's future
+  self, which is why it is a refusal rather than the daemon's one-time
+  `--confirm-external-bind`. And a non-loopback bind with authentication
+  disabled is refused: there is no deployment in which an unauthenticated
+  wallet RPC that the network can reach is acceptable. Both rules live in
+  one `validate_listen`, consulted by both bind paths (`run_server` and
+  `spawn_in_process_with`), and the tests prove the wiring at each. Loopback
+  with auth disabled and the Unix socket are unchanged. `--rpc-login` must
+  be `NAME:PASSWORD` with both halves non-empty: `:` used to yield a blank
+  Basic credential that the listener counted as authentication (`Basic Og==`
+  satisfied it), and a value without `:` used to yield a username with an
+  empty password; both are now refused by name at the parser, and the
+  credential type (`BasicCredential`) cannot be constructed blank, so the
+  bind seam has nothing to re-inspect. `--rpc-login` together with
+  `--disable-rpc-login` is refused as a contradiction rather than resolved
+  by precedence; `--rpc-login=` is a given (and refused) value, not an
+  omission. Off loopback, Basic over cleartext is permitted until RT-W4
+  and logged as a warning naming what it costs (RT-3). The listener now
+  accepts `Content-Type: application/json` only (415 otherwise): a browser
+  can send a cross-origin `text/plain` POST to loopback with no preflight,
+  and default-deny CORS hides only the response — so this gate, not the
+  credential, is what keeps a web page from driving the auth-less loopback
+  listener. Its other half closes DNS rebinding: where authentication is
+  disabled, the `Host` must be an IP literal or `localhost` (421 otherwise),
+  because a rebound hostname makes a page's JSON fetch same-origin with no
+  preflight to refuse. This is slice RT-W1
+  of the RPC transport posture (RULED 2026-08-21): every RPC leg is
+  operator-to-operator and the adversary is the network path; remote legs
+  become pinned mutual TLS with a server-side fingerprint allowlist (RT-4,
+  external PSK rejected on four hazards with RFC 8446 / 9257 / 9258 anchors
+  read), Tor in addition to TCP under one auth story, and `--public-node`
+  slated for removal — with two probes (RT-P1, RT-P2) pre-registered before
+  they run; a third, RT-P3, was withdrawn when its premise proved false.
+
+  The `shekyl-wallet-rpc` sections of `EXECUTABLES.md` and `USER_GUIDE.md`
+  are rewritten against the Rust binary: they had described the retired C++
+  server (`--rpc-bind-port`, `--rpc-ssl*`, `--confirm-external-bind`, digest
+  auth), none of which exists.
+
+- **The inherited `rct` confidential-transaction surface is now spelled
+  `ct`.** `src/fcmp/rctTypes.{h,cpp}`, `rctOps.{h,cpp}`,
+  `rctCryptoOps.{h,c}` and `rctSigs.{h,cpp}` are now `ct_types`, `ct_ops`,
+  `ct_crypto_ops` and **`ct_semantics`**; `namespace rct` is `namespace ct`;
+  `rctSig` / `rctSigBase` / `rctSigPrunable` are `CtSig` / `CtSigBase` /
+  `CtSigPrunable`; `transaction.rct_signatures` is `ct_signatures`; and the
+  `serialize_rctsig_*`, `verRctSemantics*`, `is_rct_*` families follow. The
+  name asserted a construction Shekyl does not have — there is no ring, and
+  the module it named does verification, not signing, which is why the
+  verifier is `ct_semantics` and not `ct_signatures` (that spelling would
+  have re-committed the "signatures" half of the misnomer). Disposition and
+  the full was→now table:
+  [`CT_SURFACE_NAMING_PIN.md`](design/CT_SURFACE_NAMING_PIN.md).
+  **Rename-only; no consensus byte moved.** The `binary_archive` variant
+  tags are numeric (`0x90`–`0xa0`) and untouched, so no serialized byte
+  depends on a renamed identifier. **JSON-visible:** the `json_archive` /
+  `debug_archive` variant-tag *strings* changed with the type names
+  (`"rct_key"` → `"ct_key"`, `"rct_rctSig"` → `"ct_CtSig"`, `"rct::key"` →
+  `"ct::key"`, …), affecting `decode_as_json` / tx-pool JSON — the same
+  pre-genesis-free public surface the 2026-07-11 tag rename disclosed. The
+  dead `using ct_signatures = rct::rctSig;` alias in `cryptonote_basic.h`
+  was deleted with the sweep. `genRctFcmpPlusPlus` and
+  `fill_construct_tx_rct_stub` keep their names deliberately: they are
+  deletion targets, not rename targets, and are the only `Rct`-spelled
+  identifiers left under `src/fcmp/`.
+
+- **`shekyld <command>` reaches the running daemon through the Rust
+  transport.** The control client (`shekyld status`, `exit`,
+  `print_height`, …) dialed the daemon's loopback RPC with epee's
+  `http_simple_client`; it now goes through `shekyl_daemon_ctl_post`
+  (`shekyl-daemon-rpc/src/ctl_client.rs`, over `shekyl-rpc-transport` —
+  the same client the wallet dials the daemon with). The C++ side keeps
+  only its request/response structs and their JSON framing
+  (`src/daemon/rpc_client.h`). Scope is exactly the control path's:
+  plaintext loopback, no credentials, no TLS — the daemon registers
+  neither `--rpc-login` nor `--rpc-ssl*`, and the login/TLS parameters
+  that were threaded through `t_command_server` →
+  `t_command_parser_executor` → `t_rpc_command_executor` only to be
+  passed as empty are gone with the client they fed. A failed request
+  now names its cause (`connection error (… Connection refused …)`)
+  instead of "Couldn't connect to daemon". No operator-visible change
+  on the happy path.
+- **`shekyl-rpc-transport` builds no TLS layer for a plaintext
+  endpoint.** Every endpoint used to be wrapped in a native-roots TLS
+  connector, so a host with no root store (a minimal image, a freshly
+  provisioned device) could not construct a client for a plaintext
+  `http://` daemon at all. An `http://` endpoint now gets a bare
+  connector with `enforce_http(true)`; only `https://` loads roots. A
+  plaintext client refuses an `https://` request URI before the connector
+  (direct and SOCKS arms share the check).
+- **The block-reward weight penalty moved to Rust; `get_block_reward` is
+  now a marshaling shim.** It was the last economics arithmetic C++
+  performed itself — `mul128` plus two `div128_64` on an amount — while
+  the base subsidy, burn and emission split already delegated to
+  `shekyl-economics`. `shekyl_block_reward` now performs the base
+  subsidy, the "make it soft" median clamp, the penalty and the
+  above-`2 × median` rejection in one call. It is the first fallible
+  entry in the economics FFI family (rejection is a consensus outcome,
+  not an error, and is reported as a positive status; caller misuse is
+  negative). The supply-advance clamp, previously written out at both the
+  main-chain and alt-chain connect paths, moved with it as
+  `shekyl_advance_already_generated`. Values are pinned across the
+  boundary by an 81-vector KAT asserted from **both** languages, derived
+  independently of the C++ implementation and landed *before* the move.
+- **`compute_fee_burn` and `compute_emission_split` no longer take an
+  `hf_version`.** Their `hf_version < HF_VERSION_SHEKYL_NG` guard could
+  not execute: the constant is 1, each network declares exactly one fork
+  entry at version 1, and no code path produces a lower version. The
+  dead branch and the parameters that existed to feed it are removed. A
+  future hard fork that changes economics semantics reintroduces gating
+  in `shekyl-economics`, beside the math it selects.
+
+### Fixed
+
+- **Opening a wallet on Windows failed with an internal error (`-32603`)
+  on every attempt.** `WalletFile::open` took the keys-file lock and then
+  read the file through a *second* handle (`std::fs::read`). The lock is
+  `fd-lock` over `LockFileEx`, which on Windows is a **mandatory**
+  byte-range lock — the locked byte cannot be read through any other
+  handle, the same process included — so the read failed with
+  `ERROR_LOCK_VIOLATION`, surfaced as a generic I/O detail, and reached
+  the RPC as `-32603`. POSIX `flock` is advisory, so nothing on Linux or
+  macOS could see it; the Windows CI scouting run of PR #526 did, on the
+  first wallet `open` ever executed there. The read now goes through the
+  handle that holds the lock (`KeysFileLock::acquire_and_read`) — one
+  handle, and the bytes of the file that was locked rather than whatever
+  sits at the path a moment later. A unit test pins the platform fact
+  (a path read while locked fails on Windows, succeeds on POSIX), and
+  `lock.rs` no longer claims the lock is advisory everywhere. The review
+  of that fix found the sibling: `WalletFile::verify_password` — the
+  first-stake entry's verify-before-close — read the path lock-free *by
+  design*, which is the same second handle, so every first stake on
+  Windows would have failed the same way. Verification now runs on a
+  snapshot of the sealed envelope taken from the open handle
+  (`WalletFile::sealed_keys_envelope`) — the keys bytes that handle read
+  under its lock — and, in the RPC, only after the engine lock that guards
+  the handle is released, so the Argon2id derivation never holds the
+  engine's writers up. Review then found the lock's oldest gap: it is held
+  on an inode, and a password rotation replaces the keys file's inode, so
+  after `change_password` a second open of the same wallet succeeded on
+  POSIX. The rotation now locks the staged file before renaming it into
+  place (the atomic writer gained a pre-persist hook), so the lock follows
+  the file; a regression test pins it.
+
+  The Windows scouting step that found it reported **success** on the run
+  page — `continue-on-error` hides its command's result — with the failure
+  ~8,000 log lines deep. It now runs every command, publishes a per-command
+  exit table to the job summary, and fails the step (still non-blocking)
+  when any command failed. Results recorded in
+  `docs/design/WINDOWS_WALLET_PROBE_SHEET.md` §4.3: P-16 passed first
+  time; the self-hosted pipe under axum served its first real request.
+
+- **`shekyld <command>` exits `1` when the request failed.** A recognized
+  command whose RPC could not be completed — daemon not running, connection
+  refused, a JSON-RPC error, a non-OK status — printed the failure and then
+  exited `0`, indistinguishable to a script or service manager from
+  success (`shekyld exit` against a dead daemon "succeeded"). The control
+  client now records a failed request and the process exit status reports
+  it; `0` means the daemon answered.
+- **The block-reward supply-headroom cap underflowed past full emission.**
+  `get_block_reward`'s 6-argument overload capped a block's reward at
+  `MONEY_SUPPLY - already_generated_coins`, computed in `uint64_t`. Once
+  `already_generated_coins` passed the cap that subtraction wrapped to a
+  near-`UINT64_MAX` headroom, so the comparison guarding the cap was
+  never true and the cap silently did nothing — the inverse of its
+  purpose. No production path reached it (the connect path caps the
+  stored total), but both Rust reward entry points already defended
+  against an out-of-range total and this was the one member of the family
+  that did not. Now `shekyl_cap_reward_to_remaining_supply`, saturating,
+  beside the supply-advance clamp it is the twin of.
+
+- **The four `ci/economics-c2a-prime` layer gates had never run a test.**
+  The layer jobs' runtime package list was missing `libunwind8`,
+  `libboost-program-options1.74.0` and `libboost-serialization1.74.0`, so
+  the test binaries exited 127 at the dynamic loader; the gate discarded
+  both the loader error and the exit status and reported "no test cases
+  found", which read as a missing harness. The harnesses existed
+  throughout. The gate now executes each binary before counting, so a
+  binary that cannot start is never again reported as a missing test.
+
+### Added
+
+- **The Windows wallet transport, self-hosted only** (WP-W2, second
+  implementing slice of the Windows wallet round —
+  `docs/design/WINDOWS_WALLET_SUPPORT.md` §8.1, ruled 2026-08-20). On
+  Windows `shekyl-cli` hosts `shekyl-wallet-rpc` in-process over an
+  owner-only named pipe: descriptor applied at creation on every instance,
+  `first_pipe_instance(true)` so a name someone else already holds fails
+  loud instead of being joined, and a client dial (`open_verified`) that
+  runs the owner + integrity peer check **before** handing back a handle,
+  so no request byte can reach a pipe that has not passed. Windows ships
+  **no** external local form: there is no `npipe://`, and `uds://` is
+  refused at parse on both the CLI and the server with a message naming
+  the platform — `RpcUrlForm::Uds` and `ListenAddr::Uds` are `cfg(unix)`,
+  so a Windows arm offering the transport cannot compile. The scripted
+  seed export (`--seed-out`) is created owner-only at `CreateFileW`
+  (user-SID grant, one ACE, protected DACL, `CREATE_NEW`), the `0600`
+  equivalent, pinned by probe P-16.
+
+  The design record carries a correction worth reading: the ruling's first
+  form called the peer check "pre-positioned, not load-bearing" on the
+  self-hosted path, on the premise that the client dials a handle. It dials
+  a *name* through the OS namespace, and the 0700 directory that contains
+  the Unix socket has no pipe analogue, so the check is the replacement for
+  that containment on a path that runs with auth disabled. Recorded as an
+  error corrected by grounding.
+
+  **Gate asymmetry, stated plainly.** The `shekyl-win-sec` half is checked,
+  clippy'd, documented and probed for a Windows target. The `cfg(windows)`
+  arms in `shekyl-wallet-rpc` and `shekyl-cli` are seen by no compiler on
+  a Linux box (their graphs reach `ring`) and are observed only by the
+  Windows runner's informational scouting step, which now also runs the
+  two end-to-end tests. **No Windows wallet ships yet:** `BuildRust.cmake`
+  still skips the Rust binaries for Windows targets, and Windows release
+  archives still carry the daemon and no wallet. WP-W5 owns both the build
+  gate and turning the scouting step blocking, once it has been seen green.
+
+- **`shekyl-win-sec`: the Windows security primitives for the wallet
+  transport** (WP-W1, first implementing slice of the Windows wallet round —
+  `docs/design/WINDOWS_WALLET_SUPPORT.md`). Owner-only security descriptors
+  built from SDDL, the current-user SID the pipe name is derived from, and the
+  client-side peer check that requires the server's owner SID to match **and**
+  its integrity level to be at least Medium. Its own crate because both sides
+  of the transport need the same Win32 token/SID calls and one of them
+  (`shekyl-wallet-rpc`) is `#![deny(unsafe_code)]`. Compiles to nothing off
+  Windows; no new supply-chain surface (`windows-sys` was already in
+  `Cargo.lock`).
+
+  The wallet's disk-headroom probe gains a Windows half in the same slice —
+  `GetDiskFreeSpaceExW`'s `lpFreeBytesAvailableToCaller`, the exact analog of
+  `statvfs`'s `f_bavail`, chosen so both platforms answer the same question:
+  how many bytes the process filling the disk may actually write.
+
+  **No Windows wallet ships yet.** The transport itself (WP-W2/W3) is not
+  built, `BuildRust.cmake` still skips the Rust binaries for Windows targets,
+  and Windows release archives still carry the daemon and no wallet — unchanged
+  from the C1/C2 cutover. What this adds is the foundation plus the CI gates
+  that will catch it regressing.
+
+- **The CMake build now produces the Rust `shekyl-cli` and
+  `shekyl-wallet-rpc` binaries** (C1/C2 install cutover).
+  `cmake/BuildRust.cmake` previously invoked `cargo` only for the two
+  staticlibs, so `shekyl-cli` — listed as a build output in
+  `INSTALLATION_GUIDE.md` for as long as that guide has existed — was
+  never actually produced by a CMake build, and `bin/shekyl-wallet-rpc`
+  was the C++ `wallet_rpc_server` wearing that `OUTPUT_NAME`. Both Rust
+  binaries are now built, staged into `bin/` (which is what
+  `contrib/gitian/` tars into the release archives), and installed.
+  **Not on Windows:** the Rust wallet stack is Unix-only today (UDS
+  transport, 0600 socket backing "auth rides the transport", 0600 seed
+  export), so `BuildRust.cmake` skips the binaries for Windows targets.
+  Combined with the `wallet_rpc_server` deletion below, Windows release
+  archives carry the daemon but no wallet until that port lands —
+  tracked in `docs/FOLLOWUPS.md` ("Rust wallet stack: no Windows
+  support"). macOS is unaffected: it is Unix, and needed only
+  cross-linker wiring — rustc's link step now inherits the depends
+  toolchain's `-B` / `--target` / `--sysroot`, which it never got while
+  this file built staticlibs only, because an archive is never linked.
+
+### Removed
+
+- **epee's HTTP client is deleted.** `http_client.h` / `http_client_base.h`
+  / `abstract_http_client`, digest auth (`http_auth.{h,cpp}`, both the
+  client and the server halves), `net_helper` (the blocking asio
+  connector), the `invoke_http_*` templates (`http_abstract_invoke.h`,
+  `http_server_handlers_map2.h`), and the HTTP server request parser
+  (`http_server_impl_base.h`, `http_protocol_handler.{h,inl}`) that had no
+  production includer since the listener deletion and was kept compiling
+  by its own unit test. Its last two production consumers moved off it in
+  the preceding changes (the `shekyld <command>` control client onto the
+  Rust transport; the bootstrap forward deleted). With the listener
+  already gone, epee has no HTTP surface left; the `http-client` fuzz
+  target and the `HTTP_*Auth` / `http_server` unit tests go with the code
+  they exercised. `net_ssl` stays — the P2P TCP server still links it.
+
+- **The bootstrap-daemon forward is gone.** `--bootstrap-daemon-address`
+  / `-login` / `-proxy`, the `set_bootstrap_daemon` RPC and console
+  command, and the forward that — while the local node was more than ten
+  blocks behind — re-issued a wallet's queries (`/getblocks.bin` from its
+  restore height, `/is_key_image_spent`, `/gettransactions`, …) to a
+  third-party node, in `auto` mode one the daemon picked from peer
+  gossip. It inverted Shekyl's posture (own node by default; a remote is
+  the *wallet's* explicit, visible choice) by moving the most identifying
+  query pattern to a node the user never chose and flagging it with an
+  `untrusted` field no wallet reads. `get_info` loses
+  `bootstrap_daemon_address`, `height_without_bootstrap` and
+  `was_bootstrap_ever_used`; every response loses the constant-false
+  `untrusted`; `shekyld status` no longer prints a bootstrapping clause.
+  Ruling and rule-21 reopen (wallet-side, explicit, never a daemon
+  forward) in `docs/DAEMON_RPC_RUST.md`. **Operator impact:** a config
+  carrying any `bootstrap-daemon-*` key fails to start with a named
+  migration message (`removed_flags`); point the wallet at a daemon you
+  operate while IBD runs.
+
+- **`--public-node` and `/get_public_nodes` are gone.** shekyld no longer
+  advertises an RPC port over P2P for other people's wallets, and the
+  discovery RPC whose only production consumer was bootstrap-daemon
+  `auto` is deleted. RPC is operator-to-operator: both ends are machines
+  you control; the adversary is the path between them, never the peer.
+  Restricted RPC (`--restricted-rpc`, `--rpc-restricted-bind-port`)
+  remains, for your own wallet on a less-privileged port. Phone-only
+  users have no supported configuration — a deliberate product boundary;
+  rule-21 reopen is a light-client protocol, never restore `--public-node`.
+  **Operator impact:** `--public-node` in a config fails to start with a
+  named migration message. `CORE_RPC_VERSION` 3.22. See
+  `docs/DAEMON_RPC_RUST.md`. With nothing left to set them, `node_server`
+  no longer carries an RPC port / credits-per-hash to advertise (the
+  handshake fields stay on the wire at zero), and the `print_pl publicrpc`
+  console filter — which could only ever list strangers' advertised RPC
+  ports — is gone. The same ruling applies to the RPC readout:
+  `get_peer_list`'s `peer` and `get_connections`' `connection_info` no
+  longer carry `rpc_port` / `rpc_credits_per_hash` (values only a
+  non-conforming peer could supply; rides the same 3.22 bump).
+
+- **The C++ wallet stack is deleted — `wallet2` and everything that
+  existed only to serve it** (Phase 5 of the Rust wallet rewrite,
+  `docs/design/WALLET_REWRITE_PLAN.md`). 27,579 lines: all of
+  `src/wallet/` (24,239 — `wallet2.{h,cpp}`, `wallet2_ffi.{h,cpp}`, the
+  two remaining `wallet_rpc_server_*` headers, `wallet_args`,
+  `node_rpc_proxy`, `fee_priority`, `fee_algorithm`, `wallet_errors`),
+  `src/device/device_cold.hpp` (typed entirely on `tools::wallet2::*`,
+  included only by `wallet2.cpp`), the `account_base` SHKW1 transitional
+  helpers, and the two Rust FFI modules whose only consumer was
+  `wallet2.cpp` (`engine_file_ffi.rs`, `wallet_envelope_ffi.rs` — 15
+  exports, 6 of which already had no C++ caller). `src/shekyl/shekyl_ffi.h`
+  loses its wallet section; one constant survives, relocated, because a
+  daemon-side call site uses it as a byte offset.
+
+  Nothing shipped changes. The C++ wallet has been unshipped since the
+  C1/C2 install cutover handed its binary name and install slot to the
+  Rust `shekyl-wallet-rpc`, and it never carried a staking surface at all
+  — so deleting it removes no capability and unblocks staking exit being
+  built once, in Rust. The Windows CI job drops the `wallet` target and
+  is renamed accordingly: Windows wallet support was already absent
+  before this change and is not affected by it (see
+  `docs/design/WINDOWS_WALLET_SUPPORT.md`).
+
+- **The C++ `wallet_rpc_server` executable is deleted**, in the same PR
+  that handed its binary name and install slot to the Rust
+  `shekyl-wallet-rpc`. Keeping it would have left an uninstalled second
+  implementation of a surface the Rust binary already owns — built on
+  every CI run, shipped to nobody, and available to accrete fixes that
+  would then have to be paid for twice. `wallet_rpc_server.{h,cpp}` and
+  the CMake target are gone; `wallet_rpc_server_commands_defs.h` and
+  `wallet_rpc_server_error_codes.h` remain **only** because
+  `wallet2_ffi.cpp` still includes them, and go with `wallet2` at
+  Phase 5. The Windows removed-flag CI assertions now cover `shekyld`
+  alone (they grep a message emitted by C++ `src/common/removed_flags`,
+  which the Rust binary's argument parser does not produce).
+- **Trezor hardware-wallet backend deleted** (`src/device_trezor/`,
+  `tests/trezor/`, `cmake/CheckTrezor.cmake`, and the `TREZOR_DEBUG` /
+  `USE_DEVICE_TREZOR` build arms). It was dead code under the V3
+  default — protobuf generation never ran, `protocol.cpp` carried a
+  `#error` against accidental compilation — and Trezor firmware has no
+  post-quantum support, which V3 addresses require from genesis.
+  Reopen criterion: Trezor ships firmware implementing the primitives
+  in `docs/HARDWARE_WALLETS.md` §V4 Roadmap. The dormant Ledger
+  backend under `src/device/` is unaffected (separate retirement
+  track).
+
+### Changed
+
+- **C++ noise carrier deleted; the epoch-budget guard lives at `Zone::new`
+  (`COVER_TRAFFIC_RESTORATION.md` §2.9, #515).** `NoiseQueues` is the
+  carrier. C++ no longer builds a noise zone: `make_relay_zone` never sets
+  the flag, the channel deque and `send_noise` are gone, and the two
+  remaining noise callbacks fail loudly rather than no-op. A full-size
+  message must fit in one epoch (`carrier::noise_windows_in_epoch`
+  against `MAX_FRAGMENTS`) or `Zone::new` refuses — the C++
+  `static_assert` that went with `send_noise`. The unused
+  `CRYPTONOTE_NOISE_MIN_EPOCH` / `_EPOCH_RANGE` `#define`s went with
+  `noise_zone_params`; every C++ zone now passes the Dandelion++ epoch.
+- **The serve-credit response wire is drafted, and it is TWO artifacts
+  (`RF-D1`/`RF-D2`/`RF-D4`).** A scoping premise was corrected before drafting:
+  TJ-H's reserved padding belongs to the **Tor-served shard payload** (its attack
+  is an observed response size), not the on-chain vin, so `RF-D1`/`RF-D2` and
+  `RF-D4` govern different wires and cannot share a boundary. They stay one slice
+  because they share a *validation surface*: does each artifact make its hashed
+  region unambiguous to a verifier?
+
+  On-chain: the kept/pruned boundary is structural (the vin/prunable split), with
+  the **pairing** stated rather than inferred — pruned entries in serve-credit-vin
+  order, one per serve-credit vin — and stating the pairing is what removes the
+  count field, which would have been a MUST-equal check on a length the tx
+  already determines. `segment_subroot_rk` and `leaf_index_in_segment` come off
+  the wire entirely (`RF-D6`): both are derivable by the verifier, and a
+  wire-supplied verification target is *unsound if trusted*, not merely
+  redundant. `hybrid_signature` becomes
+  `ed25519_countersignature: [u8; 64]`, a **fixed array**: a name that no longer
+  asserts contents it lacks, with the length prefix and bound check gone because
+  a wrong length is now unrepresentable.
+
+  Served payload: `leaf_count varint ‖ padding_len varint ‖ segment_bytes ‖
+  padding_bytes`, with only `segment_bytes` hashed against `R_k` — a leaf
+  **count** makes multiple-of-128 structural, and an explicit `padding_len`
+  keeps the frame self-delimiting rather than deriving padding extent from
+  `content-length`.
+  `RF-D7`: "read-anything" is about **content, never length** — `padding_len` is
+  adversary-declared, so readers MUST reject
+  `padding_len > leaf_count × LEAF_BYTES` **before allocating or draining**,
+  bounding a body at 2× a segment. An earlier cut claimed the response was
+  "bounded by the transport cap"; it is not — `shekyl-p-serve` has no
+  response-length cap and the fetcher's is 256 MB, 77× a segment. `content-length` cannot stand in — it
+  does not locate the split, verification is by reconstruction rather than
+  delimiter, and it is a property of the transport rather than the format.
+  Forward-compatibility posture ruled **write-zero, read-anything**, so a future
+  padding scheme needs no flag day. Pinned now because
+  `recompute_segment_r_k` has **no production consumer** — the definition has one
+  side to change, not two.
+
+- **Relay axes stay un-collapsed (`DAEMON_RELAY_PRIVACY.md` §93, #513).**
+  Dandelion++ runs on every zone; noise is a carrier on encrypted links only,
+  never a reason to demote a stem. `LinkSecrecy` is constructed only from a
+  `RelayZone` (`of`), so a caller cannot mint "encrypted" beside the wrong
+  reach. `Zone::new` returns `Result<_, ZoneNewError>` — noise-on-cleartext
+  and a mismatched channel count stay distinct refusals; the FFI maps both
+  to null. The inherited covert branch in `send_txs` is deleted, not repaired.
+
+- **Covert executor is a real port (`COVER_TRAFFIC_RESTORATION.md` §2.9 step 2, #508).**
+  `CovertQueues` owns the fragment window (`dummy.len()`), refuses a
+  non-multiple, and emits exactly one window per take — real or cover.
+  `CovertSend` is epoch-bound so a dropped token restarts and a stale
+  resolve cannot advance a later message. CV-4 still hands distinct
+  queues to `covert_cadence`; `Driver::poll` still takes no queue.
+  C++ `send_noise` still executes in production until step 4 wires
+  notify and deletes the inherited covert branch.
+- **Rule 91's sweep discipline gains its two boundaries.** *(1) A constant's doc
+  is part of the edit, not adjacent to it* — when a value changes, its own doc
+  comment changes in the same edit, because **proximity implies authority** and a
+  declaration whose comment and value disagree is the worst place for that
+  disagreement to sit. *(2) The sweep covers claims about the present, never the
+  record of what was* — a released CHANGELOG entry describing a value as it
+  shipped is history, not staleness, and a mechanical sweep that "fixes" it
+  corrupts the record **while reporting success**. Both landed from a
+  transport-cap sweep that found four live stale comments (including a constant
+  whose own doc described the pre-change fields) and one released entry that was
+  correctly left alone. Stated plainly in the rule: the tree's **executable**
+  surface is checked continuously and its **descriptive** surface is checked
+  never — eight stale numerals in one round, none where a gate reads.
+- **`r` deletes from the attestation nonce and the witness — replaced, not
+  removed (`RF-D3`/`RF-D5`).** The nonce's first term becomes the block's
+  **validated** predecessor hash: `r` and `cb_out_key` were chosen by the same
+  party, so `r` never provided pre-signing resistance, while `block_hash(h−1)`
+  cannot exist before block `h−1` does. The witness blob drops its 32-byte
+  prefix (`count ‖ sigs`), and the transport cap moves 866,600 → 866,568 in
+  three places with three enforcement mechanisms.
+
+  `RF-D5`: the deletion is **not** a removal — it requires the anchor to *arrive*,
+  so the `#[repr(C)]` FFI ctx widens by `prev_block_hash` and C++ populates it.
+  All-zeros is refused with its own verdict code rather than a generic
+  malformed-ctx path, and there is deliberately **no readability flag**: a
+  verifier holding a block has parsed its header, so that arm could never fire,
+  and a flag is itself caller-populated so it would be forgotten alongside the
+  hash. Tested against real callers — **five C++ call sites forgot the field and
+  were refused loudly at build time**; under the flag design all five would have
+  passed silently on a consensus path.
+
+  Preserving the term's **arity** let the frozen cross-language KAT re-anchor
+  with nonce, countersignature and `attestation_root` byte-identical — rule 30
+  satisfied by construction rather than by regenerating a vector checkable only
+  against the code it tests. Rule 42 was checked and has **no instance** here
+  (globs, CI-gate scope, and purpose all exclude a consensus transport blob whose
+  integrity is the mined root); no bump owed, recorded so none is added.
+
+- **The serve-credit response-format round is open (`RF-D1…RF-Dn`).** Unblocked
+  by the carrier round's ruling (merged in PR #501), and **now pure
+  transcription: every input is pinned.** `RF-D3` — whether `r` survives — was
+  carried as the round's one open test and **dissolved on grounding**. The
+  disposition is unchanged (`r` deletes) but the round did not settle it: the
+  2026-08-10 ruling did, on an argument this round had restated incorrectly.
+  The ruling's argument is *shared chooser plus an existence bound* — `r` and
+  `cb_out_key` are chosen by the same party, so `r` never provided pre-signing
+  resistance — where the round had converted "not choosable" into "ungrindable"
+  and written a falsifier for the paraphrase. Recorded rather than quietly
+  fixed, because it is the third dissolve-on-grounding in this arc and the class
+  is identical each time: a residual carried into a new round without
+  re-grounding its reasoning. `CR-F2`'s `prefix_hash`/tx-id change is carried as
+  a first-class input rather than a cross-reference to the round that discovered
+  it.
+
+- **`shekyl-wallet-rpc` now names the Rust binary, everywhere.** The C++
+  `wallet_rpc_server` keeps building under its own target name through
+  the transition but is no longer installed and no longer claims that
+  `OUTPUT_NAME`; it is deleted wholesale with `wallet2` in the Phase-5
+  commit. Two different programs sharing one installed name was the
+  failure this cutover exists to prevent. The Windows CI removed-flag
+  assertions follow the C++ binary (the V3.1 migration message they grep
+  for comes from `src/common/removed_flags.{h,cpp}` and cannot transfer
+  to the Rust binary's argument parser); the shipped Rust binaries gain
+  their own runs-and-responds check. The gitian packaging copies for
+  `shekyl-cli` and `shekyl-wallet-rpc` now hard-fail instead of
+  `|| true` — they are guaranteed products, and tolerating their absence
+  meant a release with no wallet-rpc could be staged silently.
+- **Cover restoration is PR 1 of the relay-logic Rust cutover, not a C++
+  feature with a Rust mirror.** `COVER_TRAFFIC_RESTORATION.md` §2.9 names
+  the five-step series; the C++ `broadcast_all_zones` loop is condemned
+  glue that step 3 deletes. Review polarity: Rust owns remaining relay
+  logic, C++ is the shim the series removes. `RelayCarrier::Covert`
+  carries `SlotIndex`; `CovertQueues` slices at the fragment window so
+  CV-1 is a restart, not a name; CV-4 threads the queues into the
+  cadence collector; the dispatch FFI crossing is in `shekyl_ffi.h`.
+- **The pass-record carrier round is a record partition, not a signature split
+  (`CR-D2`).** Sizing the whole record was arithmetic, not measurement: the
+  segment layout (`SEGMENT_LAYER_J = 2`, Selene/Helios 38/18) fixes the opening
+  at two branch layers (`1,792 B`) plus a leaf chunk (`4·38·32 = 4,864 B`) that
+  is on-wire cost despite no struct declaring it — `verify_segment_path` takes
+  `leaf_layer_scalars` as a separate parameter and cannot derive it. The whole
+  record is ~10,243 B ≈ 262 GB/yr, so **`path` is the dominant term and the
+  signature is not**: pruning only the ML-DSA leg keeps ~177 GB/yr, twice the
+  figure that disqualified doing nothing. The surviving option prunes the leaf
+  chunk, branch layers, and ML-DSA leg together, keeping ~278 B ≈ 7.1 GB/yr
+  (**refined to ~230 B ≈ 5.9 GB/yr by `RF-D6` later in this same release**, which
+  drops two verifier-derivable fields from the record) —
+  enough to identify the record and check the classical signature, **not**
+  enough to re-verify the opening, which is stated on the ruling rather than
+  left to be discovered.
+
+  The same read corrects `shekyl-economics-sim`'s `RESPONSE_BYTES`, which
+  understated the opening **2.16×** (three branch layers where the assembler
+  yields two; the leaf layer as 38 scalars where it is 152). It moves one end of
+  the Stage-2 **A5/W10** finding: re-fetch still undercuts holding at bulk
+  transit (`q* ≈ 0.274`), and at retail egress the proxy now **loses** at loose
+  grace rather than free-riding. The two proxy tests are restated to assert both
+  ends separately — the strong form they encoded (failure at the
+  proxy-unfavourable end implies failure across the band) no longer follows.
+  Whether A5/W10 survives overall is not settled here.
+
+  `CR-D1` resolved by reading, completing the round: there was **no tension**
+  between `blockchain.cpp:3726` and `cryptonote_basic.h:620-621`. The count
+  check is skipped for serve-credit txs precisely because `:3746-3754` imposes a
+  **stricter** rule twenty lines later — `pqc_auths` must be *empty*, error
+  string *"signature is on the vin"* — and `:3630` skips the spend arm as
+  non-spending. So the slot is **forbidden, not occupied**, and it is a category
+  error besides: `pqc_auths` is per-input *spend* authorization while a
+  countersignature attests to a *read*. The kept Ed25519 leg therefore stays on
+  the vin, no consensus assertion is inverted, and the carrier round is **RULED**
+  — kept (header + `leaf_bytes` + Ed25519) on the vin in the prefix, pruned
+  (ML-DSA leg + `path`) as a parallel structure keyed to the vin **inside**
+  `serialize_rctsig_prunable`, since a vin cannot straddle `unprunable_size`.
+
+- **The Foundation CompleteTree posture is reachable, warned, and served —
+  and it is no longer the default anything.** Round record:
+  [`docs/design/COMPLETETREE_ACTIVATION.md`](design/COMPLETETREE_ACTIVATION.md).
+  Before this, `first_stake` **hardcoded** `CompleteTree` holdings, so every
+  wallet that staked silently took on the whole-corpus obligation — while the
+  serving side refused to serve it, because a shard-id serve-set cannot
+  express "all". Both halves are closed, in the same round, so no code state
+  ever existed where an ordinary staker silently owed the corpus.
+  - **The obligation is derived, never stored.** A CompleteTree persona's
+    serve-set is the store's frozen prefix `[0, next_freeze_seg)` — one
+    growing number, re-read every refresh, so shards join the served set as
+    they freeze with no list maintained anywhere that could drift. Retention
+    is a **one-way prune-disabled posture** on the store rather than per-shard
+    pins: `prune_frozen` refuses outright under it, which makes "a foundation
+    node prunes bytes it owes" unrepresentable instead of merely guarded
+    against.
+  - **Choosing it is now an act, not a default.** `first_stake` takes a
+    mandatory `StakePosture`; the hardcode is deleted. The RPC requires
+    `acknowledge_non_earning_unbounded`, and the refusal body when it is
+    missing (`-29506`) **is the full statement of terms** — never earns,
+    grows forever, slash side live — so a client either shows the operator
+    those terms or deliberately echoes an acknowledgment it was handed. The
+    CLI's `stake --complete-tree-foundation` prints the same text and will not
+    proceed until the operator types `serve without reward`. The GUI never
+    sends the field.
+  - **Market staking refuses honestly in the meantime.** `-29505
+    STAKE_NO_SHARDS_AVAILABLE`: shard assignment is its own round, so a
+    well-funded wallet is told so rather than posting an empty holdings set
+    that consensus would reject.
+  - **Operators can see it.** `staking_info` and the CLI report the live
+    serving posture (absent renders "not serving" — the honest reading for a
+    host that has not started), and a disk-headroom alarm watches the volume
+    the corpus grows on, for **any** serving posture. A failed probe reads
+    *disarmed*, never healthy.
+- **The prunable region's sole-occupant invariant now has a name and a test.**
+  `calculate_transaction_prunable_hash` computes the prunable hash two ways —
+  the blob tail after `unprunable_size`, or a re-serialization of
+  `rct_signatures.p` — and they agree **only because `ctsig_prunable` is the
+  last thing the transaction serializer writes**. That equivalence is
+  positional, and it had no name in the code and no test. An append after
+  `ctsig_prunable` diverges the two paths silently: a node that kept the blob
+  hashes the new bytes, a node re-serializing from the parsed struct does not,
+  and the disagreement surfaces as a `"tx hash cash integrity failure"` throw
+  on blob-holding nodes only. `tx_prunable_region_sole_occupant.cpp` asserts
+  tail length *equals* re-serialized length — naming the defect ("the prunable
+  region has a second occupant") rather than reporting a hash mismatch — plus
+  the blob-present/blob-absent hash equality it implies. Deliberately C++
+  despite rule 20: the invariant is a property of the C++ serializer's
+  ordering, so a Rust test would be blind to the append it exists to catch.
+
+- **Fee sanity ceiling is live (interim form) — `-29109 DAEMON_FEE_UNREASONABLE`.**
+  Named fee tiers were previously accepted from the daemon unchecked
+  (only `Custom` rates were capped). The wallet now refuses a snapshot
+  that is non-monotonic or whose effective weight-1 charge exceeds the
+  era-maximum legitimate fee — the daemon-rounded genesis-condition
+  `Fh` (14,000,000 atomic units/weight), derived from the economics
+  crate and KAT-pinned rather than hand-picked — on both the build path
+  and `get_default_fee_priority`, through one `ValidatedFeeEstimates`
+  constructor. (A 100,000 mid-regime literal was caught in review
+  refusing honest young-chain snapshots from block 1.) Caller-side `Custom`
+  band violations are `-32602`, not a daemon defect. The intra-snapshot
+  10×-economy lock is **withdrawn**: honest `shekyld` 2021-scaling
+  `Fh / Fl` is 65×–1000×, so that lock banned the production Priority
+  tier. The historical median-multiple ceiling remains the V3.x
+  `WalletSideEstimator`'s job (2026-08-16 decision-log entries).
+- **`custom` fee rates can reach the daemon's own `PRIORITY` tier.** The
+  `custom` band's "100× economy" ceiling was the withdrawn 10× lock in
+  another place: on the pinned 2021-scaling row `(340, 1400, 67_000)` it
+  refused `custom = 67_000` as *the caller's* error while `PRIORITY`
+  returned that exact rate. `custom` is now bounded by the economy floor
+  and the same absolute cap every named tier obeys, and nothing else, so
+  "priority, plus a little" is expressible (2026-08-17 decision-log
+  entry).
+- **The bond fee obeys the ceiling too (`stake` can now return `-29109`).**
+  `first_stake` was the one production `get_fee_estimates` consumer that
+  read `economy` straight off the raw snapshot, so the new ceiling did
+  not cover it. That is the lane where it matters most: the bond fee is
+  charged to persona working capital and carries no user-facing fee
+  control by design, so a daemon quoting an absurd rate was paid with
+  nobody positioned to notice — 6.5 billion atomic units for a 200,000
+  per-weight `economy` tier, in the pinned vector. It now goes through
+  the same `ValidatedFeeEstimates` gate, and a refusal is
+  `FirstStakeError::FeeUnreasonable` → `-29109` rather than being folded
+  into `-29102` ("check the daemon connection and retry"), which is the
+  wrong remedy when the connection worked. Nothing durable is written on
+  that path (W1-clean). `FeeRate::calculate_fee_from_weight` — which
+  multiplies unchecked and documents that it may panic — now has zero
+production callers.
+- **Fee-rate units in the API say per *weight*, not per byte.** `FeeRate`'s
+  contract is per weight unit, and the two diverge by the Bulletproofs+
+  clawback once a transaction has more than two outputs — so a client that
+  sized a `custom` rate against the serialized length pinned the wrong
+  number. Corrected on the `Feerate` scalar, the `FeePriority` description,
+  and `FeePriority::Custom`'s rustdoc.
+- **An ambiguous submit no longer reports a manufactured transaction hash.**
+  `SubmitPendingResolution.tx_hash` is `Option<TxHash>`: when the reservation
+  is no longer in flight there are no bytes to hash, and the previous code
+  synthesized one from the `ReservationId`. The field is documented as the
+  submitted tx's hash and is consumed by the V3.x mempool monitor, so a
+  synthesized value was a plausible, *nonexistent* txid — the monitor would
+  have read "never in the mempool" as "disappeared from it", a confident
+  wrong verdict where `None` is a correct absent one. Correlation runs
+  through `reservation_id`, which the same event always carries; the
+  synthesizer is deleted rather than renamed.
+- **Legacy scalar-`fee` tier synthesis deleted.** A daemon reply without
+  a `fees` array was treated as pre-2021-scaling and turned into
+  `(fee×1, fee×5, fee×1000)`. No such daemon exists on this chain
+  (`HF_VERSION_2021_SCALING = 1` from genesis), and the invented `×1000`
+  priority meant any base fee above 100 blew the absolute cap and got
+  the whole snapshot refused — Economy included. A missing `fees` array
+  is now a malformed reply. A daemon that grows the ladder past four
+  tiers still works.
+- **Dust boundary corrected: marginal input weight 3457 → 9136.** The
+  provisional `MARGINAL_INPUT_WEIGHT` stub (zero FCMP proof increment)
+  outlived the KAT that was meant to replace it; the dust threshold now
+  composes the shared fee formula with the weight model's own
+  `marginal_input_weight_at_d_ref`, so outputs that cost more to spend
+  than they carry are correctly classed as dust.
+- **Fee-surface scaffolding retired.** `STUB_FEE_ATOMIC_UNITS` and the
+  pre-PR-5 `*_in_state` reference bodies are `#[cfg(test)]`-gated;
+  "Phase 1 stub" doc-prose on the live estimator swept; the
+  grace-blocks constant has one owner (`shekyl-rpc-client`); daemon
+  fee-error classification is prefix-anchored instead of substring-open.
+  `phase1_tx_hash` is deleted outright (an intermediate rename to
+  `correlation_tx_hash` did not survive review): an *ambiguous* submit
+  whose transaction bytes the engine no longer holds now reports
+  `tx_hash: None` — a synthetic reservation-derived id is not a
+  transaction hash, and emitting one as if it were was the defect.
+- **Fee-path invariants moved into the types.** `ValidatedFeeEstimates`
+  carries its mask's non-zero proof and its constructor is
+  crate-internal, so outside the engine it is an opaque token minted
+  only at the fetch boundary — no consumer can hand the build path a
+  snapshot that skipped the ceiling. `FeeRate::from_nonzero` makes
+  `Custom` construction total, retiring a `CustomFeeBand` variant that
+  was unreachable and, had it been reachable, would have blamed the
+  caller for a daemon-supplied mask.
+  `marginal_input_weight_at_d_ref()` drops its `tree_depth` parameter:
+  every caller passed `MAX_TREE_DEPTH`, and fixing it is the point — a
+  dust bar that tracked live tree depth would reclassify outputs a
+  wallet already holds each time the tree grew a level.
+
+- **An indivisible-value requirement is only as strong as its field list, so
+  the shape is now "derive every field", not "these N fields".**
+  `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 6 asked for a provenance record
+  that cannot be constructed without all three attestations. That was
+  implemented to spec and the gate still **faded open**, because the defect
+  arrived through a *fourth* field nobody had listed — leaving a producer-shaped
+  batch on any `aarch64` box able to certify itself a rule-76 floor datum.
+  Completeness of an enumeration is not checkable from inside the requirement,
+  so the revised property is that **every field is derived from the apparatus
+  that ran and none is declared by the caller**: it holds for fields nobody
+  anticipated. The superseded text is retained — "necessary but not sufficient"
+  is only legible next to what it was.
+
+- **Rule 91 gains an index sweep.** A correction is not landed until every
+  surface *pointing at* the corrected text agrees with it — headings, tables of
+  contents, `IMPLEMENTATION_INDEX.md` rows, `FOLLOWUPS.md` entry titles, and
+  cross-references from other docs. A corrected body under a stale heading is
+  worse than an uncorrected item: long docs are read by heading, so the stale
+  title routes the correction to exactly the readers who did not need it while
+  the file looks fixed to anyone grepping the body.
+
+- **Genesis tx-key remint (`shekyl/genesis-txkey-v2`).** The founding
+  transaction key is now derived from payment identity (spend ‖ view ‖
+  ML-KEM encap key ‖ amount), not the Bech32m address spelling. A layout
+  correction can no longer rotate `GENESIS_TX`. The v1 customization is
+  retired unused; pins in `cryptonote_config.h`, `GENESIS_ALLOCATIONS.md`,
+  `mining_parity`, and the shekyl-wire h0 corpus move with the remint.
+
+- **Wallet-owned address encode rides `shekyl_address_encode`.**
+  `account_base` keeps the blob-derived `msg_sign_pk` (public, not
+  persisted, not on `account_public_address`) so
+  `get_public_address_str` — including `start_mining` — emits a real
+  fork-(ii) address. Struct-only `get_account_address_as_str` stays
+  fail-closed.
+
+- **W₂ is pinned, and what unblocked it was a ruling rather than a
+  measurement.** `CHALLENGE_RESPONSE_BLOCKS` collapses from its
+  `Option<u64> = None` staging slot to
+  `SETTLEMENT_EPOCH_BLOCKS / 20` (500 blocks, ≈16.7 h), written as a
+  fraction so it tracks if the epoch is ever re-pinned, and the interim
+  match-assert is replaced by the bare
+  `CHALLENGE_RESOLUTION_BLOCKS >= CHALLENGE_RESPONSE_BLOCKS` the slot's own
+  pin shape specified — no `Some(n)` left behind as scaffolding (rule 21).
+
+  **The ruling: W₂ has no surviving upper bound.** Every argument for
+  keeping it small was clock-burn, and that attack needed a commitment
+  record (superseded by derived assignment) and an abandonment penalty
+  (killed by the impossibility result — §6 keeps its sizing arithmetic "as
+  the record of what a penalty would have had to achieve, not as pending
+  work"). Under derived assignment there is no occupancy to extend: the
+  witness is the producer of block `h`, and a witness that sits on its
+  assignment wastes exactly one of the pair's three draws whether W₂ is 500
+  blocks or 5,000. Clock-burn is a draw-count attack, not a duration one.
+  The rest is slack — settlement bookkeeping already grants a full epoch of
+  grace, outstanding-challenge count is bookkeeping, `P`'s availability
+  burden is unchanged, and a longer window is a DDoS *defense*. One further
+  candidate raised in review, **outsourcing resistance**, is rejected: the
+  economics invert it, half of it is not an attack, and decisively a short
+  W₂ does not prevent the cheap (local) form anyway.
+
+  With a hard lower bound and no upper one, the shape is pick generous, not
+  optimal — the band ≈200–500 is the ruled part and the divisor is its
+  consequence. **No measurement is owed.** Demoting the unused rig to a
+  "floor check that can only raise W₂" was the half-step that kept the
+  question open: a check whose only possible outcome is a safe-direction
+  move, applied to a constraint that is already one-sided, confirms what
+  the asymmetry already settled. The value is ruled, not provisional.
+  Reopen only if a *premise* of the ruling returns (clock-burn regains both
+  a commitment record and an abandonment penalty, or
+  `SETTLEMENT_EPOCH_BLOCKS` is re-pinned out of the band).
+
+  Also corrects the design doc's stale clause "every extra block of W₂
+  widens the clock-burn window §6 prices" — **corrected rather than
+  deleted**, because a silent gap there is what let this keep circling:
+  every re-derivation read it and reconstructed an upper bound that no
+  longer exists.
+
+- **A persona now releases the pins of shards it no longer owes** —
+  closing §9.7 item 5's leaking direction (SH pin-release). A pin means
+  one thing, "`prune_frozen` must not delete this segment's bytes", and
+  until now nothing ever removed one: the pin table was written by
+  `pin_serve_set` and cleared by tree truncation and **nothing else**. So
+  every shard that left a persona's holdings — an ordinary
+  `HoldingsUpdate` drop, not only unbonding — kept its ~3.33 MB forever,
+  up to ~13.6 GB against a rule-76 Pi-4 floor. Not self-correcting, and
+  the doc's own words for it were "a leak, not a policy".
+
+  `LeafStore` gains `pinned_shard_ids` and `release_pins`;
+  `EngineServeSetPinner` gains the departure ledger and the gate. The
+  asymmetry §9.7 ruled is what shapes it: **acquiring a pin needs no
+  finality; releasing one does**, because the reclaim is disk (recoverable)
+  and the risk is a slash (not).
+
+  **The gate is epoch-shaped, not reorg-shaped.** A reorg depth answers
+  "has this departure settled"; the obligation asks something else. §4
+  quantizes drawability to epoch boundaries — a pair is drawable in E iff
+  it held the shard at **E's open** — and that fixed pre-challenge
+  evaluation is the WS-1 constraint that stops `P` dropping a shard after
+  the fire to escape. A mid-epoch drop therefore leaves the pair drawable
+  through E's close. It bites at the pin because `StoreShardProvider` is
+  **serve-set-blind** — it answers for any shard whose bytes are in the
+  store — so the leak is currently what keeps the obligation met, and a
+  720-block release would have reclaimed the bytes ~9,280 blocks early,
+  turning a disk leak into a miss. A pinned-but-unowed shard is released
+  only after **two consecutive epoch opens** of absence, and its clock is
+  **cleared if the shard returns**. `W₂` is deliberately not an operand:
+  it has no landed constant (it is the rig's output), and a full epoch of
+  slack covers any `W₂` shorter than `SETTLEMENT_EPOCH_BLOCKS` — with the
+  stated reopen if the rig ever derives one at or above an epoch. Pin runs
+  before release in the same actor turn, so the only reachable transient is
+  an extra pin, which fails toward retention.
+
+  The store does not enforce the gate: it has no clock, no view of the
+  bond record, and no memory of when a shard left one. A half-check there
+  would look guarded while the real condition went unenforced. Two stated
+  residuals: the ledger is in memory per session (a restart restarts the
+  clock — slower reclamation, never an early release), and the release
+  lags the pin by one refresh (the reconcile learns the store's pin set
+  from the reply it is answering; against an epoch-scale gate that is not
+  a lag that means anything).
+
+- **The signature-alignment round is closed; its last rule is enforced,
+  not remembered (SA-R-7 tail).** The FFI boundary ratchet
+  (`shekyl-ffi/tests/ffi_boundary_ratchet.rs`) pins every raw
+  `slice::from_raw_parts` and raw `Vec::with_capacity` in the crate per
+  file, failing in both directions — a net-new raw site fails CI, an
+  improvement must tighten its pin — with `legacy_util`'s
+  `slice_from_ptr`/`bounded_capacity` as the seam obligations (rule 40);
+  the second byte-identical unguarded `make_slice` clone
+  (`engine_file_ffi`) was absorbed into the seam. House conventions
+  landed as rules: one-domain-string-one-context (rule 30, SA-R-2),
+  envelope-vs-payload version naming (rule 42, the SM-R-5 split),
+  refuse-never-panic on the untrusted FFI path (rule 40), and the new
+  `46-shell-gate-exits` — gate verdicts never travel through a pipe
+  (five swallowed-exit exhibits in one round, including one that pushed
+  a clippy-red commit and one that masked a broken C++ link).
+  FOLLOWUPS' thirteen stray plus-bullet wraps mechanically rejoined
+  (whitespace-normalized content verified identical).
+
+- **The persona serving host is wired: a staker's wallet now starts one**
+  (SH-2b-2). `Engine::start_serving_if_staker` is the sibling of
+  `start_pscan_if_staker`, and the embedder parks both handles together
+  in an `OpenTasks` bundle rather than as separate positional handles —
+  they have one lifetime, are created together and torn down together,
+  so a third task costs a field rather than a parameter on every
+  lifecycle signature. Shutdown is **serving first**: stopping the
+  advertisement before the scan, for the same reason the host stops tor
+  before its listener — a published descriptor must never outlive the
+  ability to answer at it. Fail-closed at open, like the P-scan. A
+  staker with no *active* persona gets `Ok(None)`: there is nothing to
+  serve until one is activated, and first-stake mid-session already
+  collapses onto reopen under Model D. Serving derives its serve-set
+  over a persona-isolated transport, which today means the ① local
+  posture — so a daemon that is not on loopback is refused with the
+  remedy named, rather than serving a set derived over the principal's
+  shared connection. The `<P>.wallet.tor` path helper joins
+  `shekyl-engine-file`'s companion family (`.curvetree`, `.pscan`,
+  `.pending`) rather than the prefs crate: it is wallet *data*, and the
+  family appends to the full base path.
+
+- **The wallet can configure a Tor service, and almost none of it is a
+  setting** (SH-2b-2). `PersonaServingHost::start` needs a
+  `TorServiceConfig`, and the wallet had no surface for one. The
+  organizing principle for the surface it now has: **every knob is a
+  fingerprint** — DQ-T0.7's argument about data-directory rotation, that
+  deviation from defaults is itself a signature, generalizes across the
+  whole struct — so the default answer is derive-or-inherit and exposure
+  needs a reason. The three fields get three different answers. The
+  **data directory is derived**, `<P>.tor/` off the same stem
+  `<P>.prefs.toml` uses: that satisfies DQ-T0.7's wallet-adjacent /
+  wallet-controlled / non-world-writable requirements by construction,
+  and it forecloses the linkage a configurable path invites — a shared
+  Tor directory is a shared entry-guard set, which cross-links every
+  persona served through it. The **binary source is discovery**, with a
+  single override (`device.tor_binary_path`, `PREFS_SCHEMA_VERSION`
+  3→4) because it is the one item where the operator holds information
+  the wallet cannot derive; the hash gate runs on whatever it resolves
+  to, so an override selects which candidate is gated, never whether.
+  The **supervisor policy gets no surface at all** — backoff,
+  `degrade_after`, `bootstrap_deadline` and `trust_retry` are observable
+  in retry timing, so an operator-tuned supervisor is a distinguishable
+  client. There is deliberately **no serve-or-not toggle**: a staker with
+  holdings that does not serve accrues misses and slashes, so the bond is
+  the decision, not a preference.
+
+- **A staker whose serving path cannot be configured does not open**
+  (SH-2b-2). Same fail-closed posture as `wrap_and_start_pscan`, for the
+  same reason: opening with serving dark is opening into an accruing
+  slash the operator cannot see. The derived directory is created
+  **private** rather than umask-shaped — `create_dir_all` honours the
+  umask, which typically yields `0o775`, leaving entry-guard state
+  group-writable — and a *pre-existing* directory that is group- or
+  world-writable is refused rather than silently tightened, because the
+  wallet did not create it and does not know what else relies on its
+  mode. A `device.tor_binary_path` that names no file on this machine
+  falls back to discovery with one warning rather than failing: the prefs
+  file travels with the wallet cluster, and a moved wallet must not
+  break.
+
+- **Untrusted numeric conversions: one live over-reservation fixed, the
+  cast gate made real at the trust boundary (SA-6, SA-R-7 — ratified
+  2026-08-14).** The
+  census behind the ruling (298 non-test `as` casts across the exposed
+  crates) found the reject-via-`try_from` convention already lint-enforced
+  and the decode crates cast-free — and three gate defects: (1)
+  `shekyl-ffi::parse_prove_witness` reserved `Vec` capacity directly from
+  three C-ABI wire counts, so a hostile 4-byte count could demand up to
+  ~412 GB and abort the whole C++ host process on allocation failure — now
+  capped before the reserve by the bytes that must back the elements (the
+  same guard the function already applied to sibling counts), with a pinned
+  refusal test; (2) `shekyl-ffi`'s crate-root
+  `#![allow(clippy::cast_possible_truncation, cast_sign_loss)]` silently
+  overrode the workspace deny on the one crate sitting on the C++ trust
+  boundary — narrowed to site-level allows, each with a value-preserving
+  rationale; (3) `shekyl-daemon-rpc`, `shekyl-wallet-rpc`, `shekyl-cli`,
+  and `shekyl-relay` never inherited the workspace lint table (`-D
+  warnings` cannot enable an allow-by-default lint) — wired in via
+  `[lints] workspace = true`, with ~100 latent lint sites fixed
+  (every surveyed lossy cast proved construction-time value-preserving; no
+  behavior, wire, or public-API change). The rule is codified as
+  `SIGNATURE_ALIGNMENT.md` §2.3 SA-R-7 — **ratified 2026-08-14** after a
+  reviewer-driven completeness check over every `with_capacity` in the FFI
+  crate (30 sites: the three fixed wire-embedded counts were the only ones;
+  ptr+len ABI-pair counts are guarded, with one unchecked multiply brought
+  up to the crate's own pattern; `.len()`-derived counts safe by
+  construction). `legacy_util::bounded_capacity` now owns those reserves
+  (including sibling counts); C1/C2 share one parser. Ratification's
+  remaining residual — a mechanical source-scan gate on raw
+  `with_capacity` / bare `from_raw_parts` — lands in the SA conventions
+  tail.
+
+- **The cryptographic inventory is closed (SA-6).**
+  `docs/CRYPTOGRAPHIC_INVENTORY.md` now carries every section the SA round
+  owed it: §1 primitive pins + the RNG-source map (two-policy split:
+  fail-safe hedged nonces, fail-loud key material) and §2 the six-surface
+  signing inventory, both transcribed from `SIGNATURE_ALIGNMENT.md` with
+  every pin and scheme-domain constant re-verified at source; §4, the
+  curve-based ZK risk register §5 had cited before the section existed
+  (perfectly-hiding commitments keep recorded amounts private retroactively;
+  proof soundness is the quantum-exposed property, co-signed by hybrid PQC
+  auths and owned by the V4 transition); and §6, the close — the honest
+  audit-status column (exact-pinned FIPS crates, no external audit until
+  Phase 9) and the infrastructure survey, which found **release assets are
+  published with no maintainer-key signature step**: filed as a rule-21
+  reopen with a dated `RELEASE_CHECKLIST.md` enforcement row so the first
+  release cannot ship unsigned by omission. Four stale
+  `ARCHIVAL_FIREWALL_GATE6.md` sites still calling the C-1 vin-layer
+  ML-DSA equality check "not yet landed" corrected to DISCHARGED (#277).
+
+- **The wallet has an operator alarm channel, and the tor supervisor is
+  its first producer** (OA-1). `ARCHIVAL_BOND_2D2_SP_T0_TOR.md` §3c calls
+  `TorPosture::Degraded` "the operator-alarm hook (`82`)" and specifies
+  how an alarm layer must render it; no alarm layer existed, so the
+  supervisor has been publishing alarm-shaped edges into nothing.
+  The new `shekyl-operator-alarm` crate is that layer, re-exported
+  from `shekyl-engine-core`'s root. Its primary surface is a
+  `watch<AlarmBoard>` snapshot rather than an event stream, because the
+  requirement that decides the shape is that a check which is **not
+  running** must read as *disarmed* and never as healthy — and a stream
+  cannot say that, since a disarmed check and a clean one both emit
+  nothing. Its `tor_posture` module maps posture to board: the §3c
+  episode rule (a degraded tor that briefly recovers and degrades again is
+  **one** `IncidentId`, ending only at `Ready { recovering: false }`), one
+  cause tag per `ServiceFailure` with no collapsing, and vanguard
+  integrity marked `Disarmed` off `Ready` because the `warning` field
+  exists on that variant and no other. It takes the posture *receiver*,
+  not a `TorService`, so it is testable without a tor binary. It is a leaf
+  crate rather than an engine module because it names no engine type: rule 82
+  makes failure-mode UX first-class, and a GUI matching on `OperatorAlarm`
+  should not have to link the wallet orchestrator to render a board.
+
+- **Alarms are classified by whether their observable outlives their
+  condition, not by a severity ladder** (OA-1). `AlarmLifetime::Episode`
+  leaves the board when its producer reports the condition gone;
+  `LatchedRederived` is held for acknowledgment, because the evidence
+  disappears while the damage stands — a vanguard set that was re-drawn
+  stays re-drawn after the next write succeeds and the warning clears. The
+  latch is also what makes a *coalescing* channel safe: a `watch` keeps
+  only the latest value, so an unlatched raise-and-clear inside one tick
+  would vanish. A severity ladder could express the split but nothing
+  would enforce it; here the class comes from an exhaustive match, so a
+  new alarm does not compile until someone classifies it.
+  Acknowledgment names the `IncidentId` the operator actually read, so a
+  fault that arrived while they were reading cannot be dismissed unseen.
+
+- **Live status and outstanding faults are separate shapes on the alarm
+  board** (OA-1). `ConditionState` carries at most one *live* alarm —
+  which is all a producer can report, since the tor supervisor's
+  `warning` is one `Option<ServiceWarning>` — and resolved latches go to
+  `AlarmBoard::unacknowledged`, a queue ordered oldest incident first.
+  A single per-condition slot was wrong: the vanguard set has three
+  distinct integrity faults on one `AlarmCondition` and only one of them
+  latches, so a later unrelated fault would have evicted the
+  unacknowledged record of a guard-set re-draw — silently losing exactly
+  what latching exists to retain. The split also turns two previously
+  runtime-checked properties structural: a latch survives its condition
+  being disarmed because it does not live on that condition's row, and
+  `acknowledge` cannot silence a fault that is still happening because a
+  live alarm is not in the queue to acknowledge. A recurrence *reclaims*
+  its queued incident rather than duplicating beside it —
+  `LatchedRederived` means the producer re-detects the same unfixed
+  problem on every start, which is one fault, not two.
+
+- **The tor control `EventSink` is not, and was never going to be, the
+  alarm channel's input** (OA-1, grounded correction). The plan of record
+  had a translator consuming it. No production call site issues
+  `SETEVENTS` — the DQ-T0.4 `STREAM` subscription is a harness, and §3c's
+  own retraction settled that bootstrap readiness is a `GETINFO` poll,
+  "a command, not a subscription" — so in production the sink receives
+  nothing at all, and `ControlReply` is a deliberately forensic surface
+  ("parse it, never log it") rather than an alarm vocabulary. The wallet's
+  honest production value is the new `EventSink::unsubscribed()`, which
+  states that at the construction site instead of leaving it as an
+  anonymous dropped receiver that reads like an accident. The alarm input
+  is the posture watch, where the supervisor's liveness policy actually
+  publishes.
+
+- **A full rescan now reconstructs a lost staking history — the principal
+  scan's bond watch** (SA-R-6 from-seed reconstruction,
+  `feat/rescan-slot-reconstruction`). At open, while the seed is transiently
+  in scope, the wallet derives the public persona canonical ids for the probe
+  window `{bonded} ∪ {cursor..=cursor+32}` into the new
+  `StakingBlock::persona_id_cache` — once per slot for the wallet's life
+  (ids are pure functions of the seed), so every later open and the
+  credential-less `rescan_blockchain` have candidates at zero keygen cost.
+  The ordinary refresh/rescan matches on-chain `Input::BondPost`
+  observations against the cache and the merge **adopts** each sighted slot
+  back into `bonded_slots`, records its first-sighting height
+  (`bond_sightings`), re-arms `staking_enabled`, and raises the monotone
+  `p_slot` cursor — positive evidence only, unconditional for every wallet
+  (a never-staked wallet's watch simply never fires). A restored-from-seed
+  wallet therefore recovers both the SA-R-6 no-reuse mark and the
+  reachability of its bonded personas (Model D: `bonded_slots` is the only
+  derive-forward input) on any full rescan, with no staking-specific
+  recovery flow. Soundness bridges: the phantom GC evaluates sighted slots
+  with the height-gated verdict (a stale pscan seal cannot collect a
+  probe-adopted real bond), and the first-stake resume guard treats a
+  persisted sighting as `AlreadyStaked` (no duplicate bond post while the
+  P-scan lags). `STAKING_BLOCK_VERSION` 1→2,
+  `WALLET_LEDGER_FORMAT_VERSION` 16→17 (refuse-don't-migrate; pre-genesis
+  recreate). Histories deeper than 32 slots converge across open+rescan
+  cycles; the watch sees only what the principal scan covers (a
+  `restore_from_height` above the bonds needs a lower-floor rescan — the
+  same birthday semantics as funds).
+
+- **Levin white-noise emit routed through Rust; the fragment algorithm has
+  one implementation.** `epee::levin::make_noise_notify` and
+  `make_fragmented_notify` are now forwarding shims over two new
+  `shekyl_levin_*` FFI exports backed by `shekyl-levin`'s KAT'd
+  `noise_notify` / `fragmented_notify` — the C++ fragment-padding
+  algorithm (the privacy-load-bearing emit logic: constant on-wire size is
+  the property white-noise exists to provide) is deleted rather than kept
+  as a parity twin. The byte-exact `make_noise.*` / `make_fragment.*`
+  gtests now execute through the FFI, turning the hand-mirrored KAT
+  oracle into a live cross-language identity check in CI. With
+  compression already Rust-owned, the entire Levin emit-transform surface
+  (`IMPLEMENTATION_INDEX.md` LV row) is single-sourced in Rust; still C++
+  until LV-3: the read-side state machine and the plain
+  notification/request/response finalize path. Emit also refuses a bucket
+  whose `m_cb` would exceed the Levin packet limit, checked in
+  `shekyl-levin` before any allocation (the on-wire body, not the inner
+  payload fragmentation exists to split); the FFI wrappers are marshaling.
+
+- **Curve-tree actor fail-stop now resumes over the held store, not a
+  path-reopen** (SH-2a). `CurveTreeHandle` keeps a `WriterRecovery` for
+  the wallet's life and `respawn` rebuilds the writer over the same open
+  store. A live serving host already holds that `Arc`; reopening the file
+  would be `DatabaseAlreadyOpen` (or, if it succeeded, a second store the
+  host is not serving). The wallet-close/open reopen poll stays on
+  `open_and_spawn` only. Recovery is its own capability rather than a
+  method on `ServingReader`: the reader is `Clone`d out to the persona
+  serving crates, and resuming from it would have made every one of those
+  copies able to mint a second writer beside the actor.
+
+- **The serve-set staleness tripwire reads one clock twice** (SH-2a). The
+  lag is the store's own `sync_tip_height` stamped when a `PinnedServeSet`
+  is minted, subtracted from the same reading later — not the record's
+  `as_of_height`, which is the *daemon's* tip over RPC. Differencing those
+  measured how far the wallet trailed its daemon, and reported
+  `Current { lag: 0 }` for the whole of a catch-up: exactly the window in
+  which holdings move and a gained shard goes unpinned. A tip *below* the
+  stamp is now `Staleness::RolledBack` rather than a saturated zero — the
+  sync tip is not monotonic, and the rollbacks that move it backwards also
+  delete pinned-segment rows. And `PersonaServingHost` counts consecutive
+  failed refreshes (`Staleness::RefreshFailing`), because a curve-tree
+  actor that fail-stops and cannot be resumed freezes ingest and pinning
+  together — a common mode no store-derived reading can see.
+
+- **A terminally-pruned serve-set member no longer wedges every later
+  refresh** (SH-2a). `PinnedServeSet::acquire` still refuses to start over
+  one (nothing is serving; the remedy is a store rebuild by chain replay),
+  but `refreshed` records it on `already_pruned()` and installs the pins
+  that succeeded. Refusing the whole report on refresh froze the witness
+  for the life of the host, leaving every shard connected afterwards
+  unpinned and prunable — `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6 item 4's
+  slash, re-entering through the error path of the refresh built to close
+  it. `not_yet_frozen()` is renamed `not_yet_frozen_at_last_pin()`: it is a
+  point-in-time diagnostic, and servability has one live authority
+  (`open_frozen_segment_body`) that the serving loop already asks per
+  request.
+
+- **`stake` gains a fourth refusal: `-29503 STAKE_RECORD_MOVED`** (PR-SA-5,
+  `docs/api/wallet_rpc.yaml`). The RPC reads its persona slot from the open
+  engine *before* the credentialed reopen, and that reopen runs the SP-R0
+  open-time reconcile — which can collect that slot as a phantom (arm #3) or
+  burn the monotone cursor past it for a retired persona (arm #2), either of
+  which makes the earlier read stale. A reconcile that *adopts* a chain-proven
+  bond resolves to `-29502 AlreadyStaked` instead, and that precedence is
+  correct: the wallet has just proved it holds a confirmed bond. `Engine::first_stake` already refused fail-closed; the
+  refusal was merely **mis-surfaced as `-32603` InternalError**. It is a
+  legitimate domain state (nothing durable written, a plain re-invoke reads the
+  reconciled record) and now reads as one, per rule 82. The code carries **no
+  payload**: persona slot numbering is wallet-internal and the operator's remedy
+  does not depend on it (rule 81). Deleting the staleness outright — resolving
+  the elect slot *after* reconciliation — reshapes the first-stake intent and the
+  spawn gate, a distinct validation surface tracked in `FOLLOWUPS.md`.
+
+- **Daemon relay: the anonymity zone is chosen once, at origination**
+  (Q12-U3). Relayed traffic inherits its arrival zone; coherence holds
+  it. `p = 0.5` (`MIXED_ELIGIBILITY_PCT_HUNDREDTHS = 5000`) is the
+  indifference point on a linear trade, not a measured optimum, and is
+  not operator-configurable. Originated traffic that rolls clearnet
+  does so by design and is distinguishable at the site from fail-closed
+  (chose anonymity, zone unusable, send nothing). `/get_stem_tallies`
+  rows now carry a `zone` label; the endpoint stays admin-only.
+  `origin_zone` is still not a routing field. Named consumer: the
+  Q12-D6a isolation arm. `on_relay_tx` and a missed submit nudge are
+  residual absorption paths (zone re-decided after origination) and
+  are recorded, not closed here. `send_txs` requires a `zone_route`
+  token only `once_at_origin_route` can construct.
+
+- **Daemon relay: anonymity arrivals stem at arrival, and the txpool
+  records which zone they arrived over** (Q12-U1 / Q12-U2 / Q12-U4,
+  `feat/q12-u1-u2-arrival-zone-and-coherence`). `relay_method::forward`
+  — "arrived over i2p/tor; hold, then broadcast to clearnet" — is
+  deleted, along with the delay it timed. An arrival is now stemmed
+  on the transport it arrived over, so R-1 coherence can keep it there
+  for the rest of the stem. The pool still fluffs an expired stem to
+  clearnet; that is the Dandelion++ exit, not a leak. The
+  `origin_zone` field is written at first arrival (and not revised
+  when a later peer upgrades the relay method). Q12-U3 later chose
+  the zone at origination and labelled stem tallies by zone; this
+  field remains a telemetry / isolation-arm instrument, not a
+  routing input.
+
+- **Pinned crypto vectors: the SA-3a raw-public-key leaf-hash pins moved to
+  a machine-readable fixture** (`docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json`;
+  PR-SA-3a, rule-30 vector-change record). The four byte pins — frozen
+  captures of the pre-dedup `PqcLeafScalar::from_pqc_public_key`
+  implementation, covering the degenerate lengths (empty, 1-byte) the
+  derived-path `PQC_LEAF_HASH_KAT.json` cannot express — are
+  **byte-identical relocations** of the inline hex that briefly lived in
+  `rust/shekyl-fcmp/src/leaf.rs`; no vector was added, removed, or
+  re-minted, so pin continuity is preserved. The consuming test
+  (`pqc_leaf_hash_raw_pk_known_answer_vectors` in `shekyl-crypto-pq`) now
+  asserts each vector through **both** consensus entry points
+  (`hash_pqc_public_key` and the `shekyl-fcmp` wrapper), and the JSON is
+  consumable by cross-language KAT tooling (C++/FFI differential harness).
+
+- **Pinned crypto vectors: the `bond_post` surface is retired from the
+  hybrid-v2 KAT** (`docs/test_vectors/PQC_HYBRID_V2_KAT.json`; PR-SA-2b,
+  rule-30 vector-change record). SA-2b resolved the bond-slot preimage
+  question as "generic wins": the bond vin carries no on-vin signature, its
+  authorization is the generic surface-A `pqc_auths` slot, and the dedicated
+  `SCHEME_DOMAIN_BOND_POST` domain was deleted — so the fixture drops from
+  seven vectors to six. The six surviving vectors and the pinned keypair are
+  **byte-identical** to the previous fixture (the shared `KAT_MESSAGE` bytes
+  are frozen with the pinned signatures; cross-build pin continuity is
+  preserved — no construction change occurred and none is masked).
+
+- **Wallet internals: the in-flight-spend lock is now derived from the
+  send journal instead of being stored on each output row**
+  (`WALLET_SEND_RECORD.md` PR-SJ-1b, `feat/wallet-sj1b-field-retirement`).
+  Runtime send/balance semantics are unchanged for a live wallet;
+  balance computation got measurably faster (~14% fewer instructions
+  on the hot path), and a wallet mid-rescan can no longer lose track
+  of an in-flight send — the journal survives the wipe the old
+  per-row lock did not. **Wallet-file break (pre-genesis):** files
+  written by earlier builds need a re-create (`rm -rf` and restore
+  from seed).
+
+  Two user-facing consequences of the same change:
+
+  - **A send that provably can never confirm now says so.** If a
+    transaction's input turns up spent by a *different* transaction
+    (another device restored from the same seed got there first), or a
+    rescan from a higher block puts the input permanently out of the
+    wallet's view, the send moves to presumed-dead in your history
+    instead of sitting "pending" forever. Its input locks release with
+    it. A late confirmation still flips the row back, loudly.
+  - **Opening a wallet file from an older build gives the right
+    error.** The version check now runs before the file body is parsed,
+    so you get "unsupported wallet format version" — which tells you to
+    re-create from your seed — rather than a parse error that reads
+    like corruption on a wallet whose keys and seed are perfectly fine.
+
+### Fixed
+
+- **`ci/gh-actions/rust` clippy compiles `ledger_iai` again after
+  the client-request change.** `gungraun`'s `client_requests` feature
+  pulls `valgrind-requests`, whose bindgen step needs `libclang.so`.
+  The rust gate runs in a bare `ubuntu:24.04` container that had
+  Valgrind headers but not libclang; `ci/benchmarks` stayed green
+  because GitHub's hosted image already ships clang. Still gungraun
+  — no harness swap. The container now installs `libclang-dev` and
+  `clang`.
+
+- **`ci/benchmarks` capture no longer dies on `ledger_iai`
+  `instructions=0`.** The six postcard cells were one-liners under
+  gungraun's default `--toggle-collect=*::__gungraun_wrapper_mod::*`;
+  when rustc inlined that wrapper, Callgrind recorded 0 and the
+  producer guard rejected the run (PR #467 / `dev` from 2026-08-14).
+  Those benches now bound the measured region with Callgrind client
+  requests (`EntryPoint::None`, `--instr-atstart=no`) so collection
+  does not depend on the wrapper symbol. See
+  `docs/investigation/2026-05-09-bench-baseline-flake.md`.
+
+- **The RandomX v2 differential's daily cron is green again: the T8
+  RSS ceiling is re-derived for Arc reach-through residency, and the
+  weekly cargo-mutants gate got its trigger back.** The T8 gate
+  (`--mode=concurrent` RSS bound) had failed every daily cron since
+  its first CI execution (2026-07-08): its 640 MiB ceiling modeled
+  only `CacheStore`'s two slot holdings, but the workload's
+  free-running workers legitimately keep displaced caches resident
+  via their in-flight `Arc` holds — a flat ~1035 MiB drift plateau
+  on the committed runner class, not a leak. The ceiling is now
+  worker-count-derived (`(workers + 1) × 256 MiB + 128 MiB`, R1-D9
+  F4 Round-3 amendment in `RANDOMX_V2_PHASE2G_PLAN.md`); leak
+  detection is preserved (a persistent per-rotation leak still trips
+  the bound within four of the run's 32 rotations). Separately, a
+  prior cleanup commit had accidentally severed the weekly
+  `cargo-mutants` job's header, orphaning its steps into the
+  runtime-modes job — leaving the T18 mutation gate with no trigger
+  at all. The job is restored verbatim with its weekly cadence and
+  360-minute budget.
+
+- **`BlockchainLMDB::reset()` now wipes every table, so an in-place chain
+  reset can no longer resurrect stale consensus state.** The old
+  hand-written drop list omitted 25 Shekyl-added tables (the whole
+  curve-tree and archival families plus block-burn and
+  pending-additions); because a reset chain re-uses heights and hashes, a
+  surviving row at a re-used key was read as the re-added block's state —
+  an actively wrong `curve_tree_root`, silently. `reset()` now enumerates
+  the environment's named tables and empties each one except the
+  keep-list (`table_survives_chain_reset` — txpool only; mempool
+  lifecycle is separate), then re-seeds the version row — the
+  fresh-database state `open()` produces. A future table cannot be missed
+  by construction. `reset_leaves_every_table_fresh` asserts every-table
+  empty against the environment oracle and pins that populated txpool
+  tables survive. No production flow currently reaches `reset()` (test
+  harnesses only); this closes the hazard before any tool adopts in-place
+  reset.
+
+### Added
+
+- **LV-2b notifies — 2001–2004 / 2006–2010.** Typed Levin maps in
+  `shekyl-levin` for `NOTIFY_NEW_BLOCK` through `NOTIFY_GET_TXPOOL_COMPLEMENT`,
+  including `block_complete_entry` (pruned vs unpruned `txs`,
+  `attestation_witness` transport cap `32 + 8 + 256 * 3385`). Empty STL
+  containers omit the key (C++ match, including handshake peerlists).
+  `dandelionpp_fluff` OPT default true; `CONTAINER_POD_AS_BLOB` for hash
+  and `uint64` lists. In-crate consumer: encode → `notify()` →
+  `BucketReader` (`tests/notify_kats.rs`). Does not wire the daemon
+  (`handle_recv` / `net_node` remain LV-3).
+
+- **LV-2b dual-stack handshake against `shekyld`.** Ignored integration
+  harness `rust/shekyl-levin/tests/dual_stack.rs` (`SHEKYLD_BIN`) speaks
+  handshake / ping / timed-sync / support-flags with a live `--regtest`
+  daemon over Levin. Default `cargo test -p shekyl-levin` still spawns
+  no daemon (`LV2_PORTABLE_STORAGE.md` §12 step 4).
+
+- **LV-2b first drop — handshake / timed-sync / ping / support-flags.**
+  Typed Levin maps in `shekyl-levin` on `shekyl-portable-storage`
+  (1001 / 1002 / 1003 / 1007 plus the `network_address` union).
+  OPT-omit, `cumulative_difficulty_top64` store-always / load-OPT, and
+  encode → `invoke()` → `BucketReader` round-trips in
+  `tests/payload_kats.rs`. Does not wire the daemon
+  (`handle_recv` / `net_node` remain LV-3).
+
+- **LV-2 portable_storage decision** (`docs/design/LV2_PORTABLE_STORAGE.md`).
+  First-party `shekyl-portable-storage` codec (LV-2a) then typed Levin command
+  schemas in `shekyl-levin` (LV-2b). Cuprate `epee-encoding` is
+  reference-not-dependency, closing the question
+  `DAEMON_RELAY_PRIVACY.md` §8 deferred. Command inventory in
+  `LEVIN_PROTOCOL.md` drops the non-existent 1004–1006 and adds live
+  2010 `NOTIFY_GET_TXPOOL_COMPLEMENT`.
+
+- **LV-2a `shekyl-portable-storage`.** First-party binary portable_storage
+  codec, KAT'd against C++ `epee_serialization.cpp` (`two_keys`,
+  `duplicate_key`) plus encode/decode limits as a parameter (Levin vs
+  HTTP `.bin`). Completes `docs/PORTABLE_STORAGE.md`. Rewires
+  `get_o_indexes.bin` (`shekyl-rpc-client`) and the test-only
+  `get_blocks_by_height.bin` harness (`shekyl-engine-core`) onto the
+  crate and deletes both homegrown parsers. LV-2b (typed Levin maps)
+  is not in this change.
+
+- **You can now give up on a stuck send.** The new wallet-RPC method
+  `abandon_tx` marks a dispatched-but-unconfirmed send `ABANDONED` in
+  your history (`WALLET_SEND_RECORD.md` P3-4 / SJ-DQ-8, PR-SJ-3,
+  `feat/wallet-abandon-sj3`). Closes the Phase 4c abandon FOLLOWUP.
+
+  Abandoning is honest about what it does and does not do:
+
+  - The record is kept, not hidden — and if the transaction confirms
+    later anyway, the row flips to `CONFIRMED` loudly rather than
+    staying wrong.
+  - The retained per-transaction secret is kept, so a payment proof
+    (`get_tx_proof`) still works for an abandoned send.
+  - The spent-input locks are **not** released by intent: they release
+    when the wallet's watchdog establishes the network no longer holds
+    the send — the protection that stops two transactions provably
+    spending the same input from linking your wallet.
+  - A `CONFIRMED` or `FAILED` send refuses with `-29108` naming its
+    state; there is deliberately no force override. Re-abandoning is a
+    harmless no-op.
 
 - **Your sent transactions now appear in your transfer history, and they
   say what actually happened to them.** `get_transfers` /
@@ -648,9 +4336,9 @@
   follow-up batches per the ledger.
 - **docs: `CONFIDENTIAL_STAKING` supersession hardening (agent-misread).**
   The retired confidential-claim / 3C / entitlement staking body moved to
-  [`docs/completed/CONFIDENTIAL_STAKING.md`](completed/CONFIDENTIAL_STAKING.md)
+  `docs/completed/CONFIDENTIAL_STAKING.md` (deleted 2026-08-26)
   with a loud non-SoT banner. A short redirect stub remains at
-  [`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md)
+  `docs/design/CONFIDENTIAL_STAKING.md` (deleted 2026-08-26)
   naming the living authoritative surfaces (`PHASE_2B_STAKE_LIFECYCLE`,
   `PRINCIPAL_STAKE_LIFECYCLE`, `REWARD_EMISSION_LEG`, bond/firewall docs) so
   basename greps under `docs/design/` hit the tombstone instead of ~1300
@@ -7540,7 +11228,7 @@
   unblocked; gate-6 Round 3–4 wallet defaults remain open.
 
 - **docs: P2B-6 §7 landed + LMDB substrate verify (2026-06-07).**
-  [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §7 — archival threat
+  `PHASE_2B_STAKE_LIFECYCLE.md` (deleted 2026-08-26) §7 — archival threat
   model (T-A*, G11 extended, F1/T-A1 gate); claim-era wargame → §7.A. §7.11: LMDB on `dev`
   verified (`m_properties` scalars, `already_generated_coins`, `pop_block` revert pattern;
   bond wire greenfield). FSM retool substrate-verify row closed.
@@ -7558,7 +11246,7 @@
   [`STAKER_ARCHIVAL_SIM.md`](design/STAKER_ARCHIVAL_SIM.md) §*T-A1 / T-A2*.
 
 - **docs: P2B-6 §7 threat model review round 1 (2026-06-07).**
-  [`PHASE_2B_SECTION7_DRAFT.md`](completed/PHASE_2B_SECTION7_DRAFT.md) — F1 SEB structural
+  `PHASE_2B_SECTION7_DRAFT.md` (deleted 2026-08-26) — F1 SEB structural
   lever + T-A1 sim gate; T-A16 (A6); G11 KAT invariants; G1 three-tier slash surfacing;
   partial slash stays Bonded (FSM). Timing doc §1.1 SEB/F1 coupling.
 
@@ -8579,7 +12267,7 @@
   C++ ESF base subsidy to Rust landed separately (PR #93) and wires the
   consensus path to the `shekyl_base_block_reward` primitive, **not** to
   this trait — the trait remains consumer-free until its own cutover per
-  [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
+  [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](completed/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
   §6.2. No consensus or wire-format change.
 
 ### Security
@@ -8722,7 +12410,7 @@
   `FaultInjecting<LocalLedger>` test wrapper and `replace_ledger`
   test helper were deleted; hybrid retry tests drive
   `ConcurrentMutation` producer-side. Shape (b) per
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §8; atomicity rationale per
   [`docs/completed/STAGE_1_PR_3_M3B_PREFLIGHT.md`](completed/STAGE_1_PR_3_M3B_PREFLIGHT.md)
   §3.
@@ -8742,7 +12430,7 @@
   **baseline daemon correctness — identical to the spend path's reliance
   on spent-key-image revert** when a spend is reorged-then-respent — so
   it is not a stake-specific dependency at all, and the daemon's
-  `pop_block` mechanism ([`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md)
+  `pop_block` mechanism (`CONFIDENTIAL_STAKING.md`, deleted 2026-08-26)
   §11; inherited-architecture consensus code) is not the wallet's to
   track. Edits: §10.1 box rewritten to "forward-rebuild only, no reversal
   work"; §5.2 closing note collapsed to the key-image-parity statement;
@@ -8862,7 +12550,7 @@
   `WalletFile::save_state` now takes session-cached `wrap_key_region_2` only;
   password-taking steady-state save deleted. `shekyl_wallet_save_state` FFI
   drops the password parameters. Design:
-  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
+  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](completed/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 
 - **Wallet file format v1: per-region HKDF wrap keys (spec + implementation).**
   [`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) §2.6 prescribes
@@ -8875,7 +12563,7 @@
 ### Documentation
 
 - **Stage 1 PR 6 — external lessons canvass (§5.12).**
-  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
+  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](completed/STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
   records historical wallet-disaster lessons, OS discipline for F5(b), Stage 4
   actor-model pins (bounded mailbox, save coalescing, supervisor `stop`), and
   substrate verification (KDF params in wrap AAD; HKDF `address` = 65-byte
@@ -8884,7 +12572,7 @@
   [`docs/FOLLOWUPS.md`](FOLLOWUPS.md).
 
 - **Stage 0 PR-A — iai-callgrind symmetry rule** (`3d313256c`). Backfill.
-  [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2 codifies
+  [`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md) §4.2 codifies
   the symmetry rule (setup *and* fixture teardown excluded from the measured
   region; criterion amortizes `Drop` via `b.iter`, iai-callgrind does not) and
   adds Finding 5 to the §4.4 gap-check inventory. Closes the
@@ -8893,7 +12581,7 @@
   `engine_trait_bench_*` bench.
 
 - **Stage 0 PR-A-extension — iai-callgrind boundary rule** (`2e5309ad3`).
-  Backfill. [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2
+  Backfill. [`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md) §4.2
   adds the boundary rule (iai-callgrind measures function-boundary value
   movement; `Engine<SoloSigner>` is 6,296 bytes, so by-value fixture passing
   cost ~600 instructions of memcpy) and the §4.4 unified
@@ -8901,7 +12589,7 @@
   memcpy-at-boundary finding.
 
 - **Stage 0 PR-C — iai-callgrind hoisting rule** (`93d515123`). Backfill.
-  [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2 adds the
+  [`docs/design/STAGE_0_HARNESS.md`](completed/STAGE_0_HARNESS.md) §4.2 adds the
   hoisting rule (criterion-side `b.iter` iter-amortization can elide
   state-dependent compute the author meant to count) and the §4.4 two-anchor
   static check (predict criterion `median_ns` from iai instructions by workload
@@ -8919,7 +12607,7 @@
   `shekyl-engine-file` adds `Mutex<WalletFileState>`, `rotate_password` on
   `&self`, additive `save_state_with_wrap_key_region_2`, and `base_path()`.
   `WalletFile` trait impl and `Engine<F>` wiring follow in C3–C5. Design:
-  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
+  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](completed/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 
 - **RandomX v2 Track A Phase 2h adversarial-corpus methodology
   landed** (`feat/randomx-v2-phase2h-impl`, target PR; commits
@@ -9303,7 +12991,8 @@
     signature-audit pin — matches the bindings file's fork-pin
     SHA against the submodule HEAD at
     `external/randomx-v2`). New
-    [`.cargo/mutants.toml`](../.cargo/mutants.toml) configures
+    `.cargo/mutants.toml` (deleted 2026-08-19 with the T18 re-scope;
+    see `docs/design/RANDOMX_V2_MUTATION_REGIME.md` MR-DQ-8) configured
     `cargo-mutants` with `timeout_multiplier = 5.0` and skip-globs
     for tooling binaries (`src/bin/**`) and canonical outputs
     (`canonical_outputs.rs`) per the skip-list discipline. New
@@ -11363,7 +15052,7 @@
   Lands the Round-3-closed `PendingTxEngine` trait, the (γ) lean
   three-collection reservation model, secondary-engine trait seams,
   and `Engine<S, D, L, R, P>` orchestration dispatch per
-  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §4 / §5.0 / §7.X (C0 = `4466d153e` … C7 = `ca7622558`; C8 doc
   commit follows).
   - `pub trait PendingTxEngine: Send + Sync + 'static` at
@@ -11393,7 +15082,7 @@
   (`feat/stage-1-pr4-refresh-engine`, 2026-05-15 → 2026-05-20).
   Lands the Phase-0a-binding `RefreshEngine` trait and the
   `ViewMaterial` adjacent type per
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §4 Phase 0a + Phase 0c + Phase 0e and
   [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.3 (PR 4 C0 = `322677261`; C1 = `d3edc1abb`).
@@ -11457,10 +15146,10 @@
   `8fc207051`; `SuppressedRateLimit` variant per Round 4
   review pass F6 = same commit). Lands the second channel of
   the two-channel error / diagnostic actor-mesh seam per
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R6 reframe + §5.4.8 attack-surface dispositions.
   - `pub enum RefreshDiagnostic` at
-    [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+    [`engine/diagnostics/refresh_events.rs`](../rust/shekyl-engine-core/src/engine/diagnostics/refresh_events.rs)
     with `#[non_exhaustive]` and the Round-4-audit-confirmed
     Stage 1 variant set: `DaemonMalformed { kind:
     MalformedKind }`, `DaemonTimeout { op: DaemonOp, elapsed:
@@ -11540,7 +15229,7 @@
     general injector; `queued_failures()` drain inspector;
     `debug_assert!`-on-Drop queue-drain contract per F-Mock-2).
   - Adds `Engine::replace_refresh` test-only setter on
-    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+    [`engine/lifecycle/support.rs`](../rust/shekyl-engine-core/src/engine/lifecycle/support.rs)
     mirroring the existing `replace_daemon` / `replace_ledger`
     helpers.
   - Adds Class 1 trait-surface smoke tests covering empty-queue
@@ -11603,7 +15292,7 @@
     [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
     (struct, `impl Rpc`, `impl DaemonEngine`, module docstrings),
     [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs),
-    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs),
+    [`engine/lifecycle/mod.rs`](../rust/shekyl-engine-core/src/engine/lifecycle/mod.rs),
     [`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs),
     [`benches/common/engine_fixture.rs`](../rust/shekyl-engine-core/benches/common/engine_fixture.rs)
     (forward-pointer comment), and
@@ -11642,7 +15331,7 @@
     constructor (`fn replace_refresh<R2: RefreshEngine>(self,
     refresh: R2) -> Engine<S, D, L, R2>`) mirroring the
     existing `replace_daemon` / `replace_ledger` shape at
-    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs).
+    [`engine/lifecycle/support.rs`](../rust/shekyl-engine-core/src/engine/lifecycle/support.rs).
     The refactor lets the generic `R` type parameter change
     between construction and replacement so test orchestration
     can build an `Engine<…, LocalRefresh>` at assemble time
@@ -11651,7 +15340,7 @@
     `dyn`-erased trait object.
   - Adds `AssertionSink`, `PanickingSink`, and the
     `PanickingSinkTrigger` configuration enum to
-    [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs),
+    [`engine/diagnostics/sink.rs`](../rust/shekyl-engine-core/src/engine/diagnostics/sink.rs),
     all gated `#[cfg(any(test, feature = "test-helpers"))]`
     per the F-Mock-1 cfg-symmetry pin. `AssertionSink` records
     emitted `RefreshDiagnostic` events for post-hoc coherence
@@ -11709,7 +15398,7 @@
   *C8 — docs propagation* (this commit):
   - This CHANGELOG entry extended with the C7 sub-section
     above and the C8 sub-section here.
-  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     gains the Phase-1-landed Status-banner closure paragraph
     enumerating C0–C8 landing SHAs; §7.X gains per-`Commit
     Cn` `Landed:` lines anchoring each commit's SHA inline
@@ -11781,7 +15470,7 @@
     candidate P1-closing shapes close P3 as a side effect;
     P3 stays catalogued separately to preserve the Copilot
     PR #37 audit trail).
-  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     §5.5 named-home table rows P1 / P2 / P3 updated with a
     bold **Phase 1 landed without absorption** marker plus
     one-sentence cross-refs to the re-anchored FOLLOWUPS
@@ -11867,7 +15556,7 @@
     closure and only `Scanner::scan` is measured. **F11-S
     audit-trail impact: ZERO** — the F11-S binding
     measurement (per
-    [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     §3.1 / §5.4.9 / §7.Y) is anchored on the cold-cache
     N=16 worst-case p99 (12.95 ms per-tx / 819 µs
     per-output), and the cold variant was already
@@ -13777,7 +17466,7 @@
 - **Stage 1 PR 4 — `RefreshError::InternalInvariantViolation
   { context: &'static str }` variant addition** (PR 4 C3 =
   `c45894ffe`; Phase 0c amendment per
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R6 close-out). Resolves the Round 2 R6 "(a) extend
   `ConcurrentMutation` or (b) introduce
   `InternalInvariantViolation`" cleanup pin at the design layer.
@@ -14607,7 +18296,7 @@
   (commit decomposition + Phase 1 commit list)**
   (`feat/stage-1-pr4-round-4`, 2026-05-14). Single-commit
   doc-only Round 4 close on
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   per the PR 1 / PR 2 / PR 3 / PR 5 precedent. §4 Phase 0
   candidates (0a–0e, with 0d struck) finalize as
   binding-pinned at the type-signature level; Round 4 audit
@@ -14637,16 +18326,16 @@
   §6 Round 4 readiness gate; no further design rounds open
   unless Phase 1 commit-authoring surfaces a structural
   finding (the closure rule per
-  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §7 governs reopening if it does).
 
 - **Stage 1 PR 4 — Round 3 confirmation
   (α confirmed by PR 5 Round 1's actor-mesh-framed disposition)**
   (`feat/stage-1-pr4-round-3-confirmation`, 2026-05-14). Single-commit
   doc-only Round 3 closure on
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md).
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md).
   PR 5 Round 1's disposition under the actor-mesh framing (per
-  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5.0 / §5.2 / §5.5) confirmed shape (1) — *snapshot-ID pinning* —
   with the reservation tracker holding monotone semantics under
   PR 4's α; PR 4 advances directly to Round 4 (commit decomposition
@@ -14689,7 +18378,7 @@
   [`STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./completed/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md):
   - **A1 commit (mechanical past-tensing sweep)**: reconciled
     17-reference enumeration across
-    [`STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md),
+    [`STAGE_0_HARNESS.md`](./completed/STAGE_0_HARNESS.md),
     [`STAGE_1_PR_1_DAEMON_ENGINE.md`](./completed/STAGE_1_PR_1_DAEMON_ENGINE.md),
     and [`STAGE_1_PR_2_LEDGER_ENGINE.md`](./completed/STAGE_1_PR_2_LEDGER_ENGINE.md)
     to 13 in-scope references; `PERFORMANCE_BASELINE.md`'s four
@@ -15402,7 +19091,10 @@
     versioned domain-separation prefix
     (`b"shekyl-snapshot-id-v1"`) permits V3.x migration to
     a wider output or different hash family without cross-
-    stage rebuild.
+    stage rebuild. *(Since superseded by SA-3c, 2026-08-11:
+    the digest is now cSHAKE256 with the domain as the
+    customization, `b"shekyl/snapshot-id-v1"` — see the
+    V3_WALLET_DECISION_LOG SA-3c entry.)*
 
     Sites updated: `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`
     §4 Phase 0b binding, §5.4 R2 sketch + prose, §5.5
@@ -15593,7 +19285,10 @@
   `shekyl-crypto-hash::cn_fast_hash` (original padding,
   consensus-audited) truncated to the first 128 bits with
   versioned domain-separation prefix
-  (`b"shekyl-snapshot-id-v1"`). *(Forward-pointer: the
+  (`b"shekyl-snapshot-id-v1"`). *(Since superseded by
+  SA-3c, 2026-08-11 → cSHAKE256 with the domain as the
+  customization; see the V3_WALLET_DECISION_LOG SA-3c
+  entry.)* *(Forward-pointer: the
   Copilot-fix follow-up entry below revised this binding from
   segment-2g's prior `sha2`-based form to the Keccak-based
   form. The prior `sha2` citation referenced
@@ -16200,7 +19895,7 @@
   / adversarial-daemon-resistance-as-structural) are
   **independently sufficient** to defeat shapes (2) and (3) under
   the actor-mesh framing per
-  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5.5. Ground 1 is expected confirmation, not load-bearing for
   the disposition.
 
@@ -16232,7 +19927,7 @@
   `feat/stage-1-pr5-pending-tx-engine-design` (off `dev` at
   PR-#42 merge `6de8335d5`). Closes the load-bearing open
   question
-  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5 in **one round** rather than the seed's
   three-to-four-rounds projection because the §5.0 actor-mesh
   framing exhausts the wargaming surface in this round per the
@@ -16401,12 +20096,12 @@
   from. Doc-only.
 
   Doc-only; no Rust or C++ code touched. Cross-references:
-  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./completed/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5.0 (actor-mesh framing as Round 1 substrate), §5.1
   (three-shape comparison under the lens), §5.2 (PR 4 α
   confirmed), §5.3 (five criteria), §5.4 (residuals), §5.5
   (Round 1 disposition + scorecard);
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.6 / §5.4.7 R6 reframe / §5.4.8 (the cross-cutting
   `DiagnosticSink` contracts inherited by PR 5);
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
@@ -16425,7 +20120,7 @@
   moved to the **top** of the PR 4 cluster rather than to
   the bottom). Concrete dispositions:
   - Typo `Forecloseing` → `Foreclosing` in
-    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     §5.4.6 (R6 reframe, concurrent-emit pin discussion).
   - Typo `dispositon` → `disposition` in
     [`REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md)
@@ -16440,7 +20135,7 @@
     over alternatives**).
   - Two CHANGELOG citation links retargeted from
     self-references to
-    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     over to the actual
     [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
     source. The link **text** named the source file; the
@@ -16463,7 +20158,7 @@
 - **Stage 1 PR 4 — §5.5 work-list hygiene: P3
   `apply_scan_result_to_state` `Vec<usize>`-discard row
   added.** Single-row addition to the
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.5 work-list against the dev-side FOLLOWUPS entry
   ("P3: `apply_scan_result_to_state` allocates `Vec<usize>`
   even for trait-impl callers that discard it") that landed
@@ -16490,7 +20185,7 @@
   Doc-only commit on `feat/stage-1-pr4-refresh-engine-design`
   (off `dev` at `9e53c82fa`). Closes the load-bearing open
   question
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5 named in the seed; α is the disposition because it satisfies
   all four review criteria — PR 4 extraction cleanliness, PR 5
   two-phase build/submit/discard contract over reorg events,
@@ -16504,7 +20199,7 @@
   R2 (β as V3.x FOLLOWUPS) and a hypothetical follow-up PR (γ
   if R1's PR 5 design surfaces correctness need).
 
-  - Adds [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  - Adds [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
     §5.4 (Round 1 disposition with four-criteria rationale and
     R1 / R2 / R3 residuals) and §5.5 (work-list table for every
     refresh-adjacent item with its target version and "where
@@ -16533,14 +20228,14 @@
   Doc-only; no Rust or C++ code touched. Branch posture:
   `feat/stage-1-pr4-refresh-engine-design` stays on `dev`-rooted
   doc-only commits until M3e closes per
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)'s
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)'s
   branch policy.
 
 - **Stage 1 PR 4 — Round 1 review pass: more carefully-specified
   α (view-material flow, atomicity, error taxonomy).** Same-day
   follow-up to the Round 1 disposition above. The review pass
   corrected
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §3.1's materially-wrong "no secret-touching surface" framing
   to **master-secret isolation** routed through R4 — the existing
   producer
@@ -16899,7 +20594,7 @@
   supersedes Round 2 first-pass R5 / R6 dispositions.** This
   bullet supersedes the immediately-following bullet's R5 and
   R6 dispositions per the
-  [Round 2 reframe section](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [Round 2 reframe section](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R5 reframe / §5.4.7 R6 reframe / §5.4.8. The
   immediately-following bullet's R1 / R2 / R3 / R4 / R7
   dispositions are unchanged and still hold.
@@ -18095,7 +21790,7 @@
     callers (`engine::refresh::*`) bind against `DaemonEngine`
     or `Rpc` instead of reaching through to the wrapped
     transport. `From<RpcError> for IoError` lands in
-    [`engine::error`](../rust/shekyl-engine-core/src/engine/error.rs)
+    [`engine::error`](../rust/shekyl-engine-core/src/engine/error/io.rs)
     to satisfy `DaemonEngine::Error: Into<IoError>` for the
     `DaemonClient` impl.
   - **`MockDaemon` (renamed from `MockRpc`) extends to a full
@@ -18134,7 +21829,7 @@
     tag or KDF construction surface as test failures.
   - **`#[cfg(test)] pub(crate) Engine::replace_daemon<D2>(self,
     daemon: D2) -> Engine<S, D2>`** in
-    [`engine::lifecycle`](../rust/shekyl-engine-core/src/engine/lifecycle.rs).
+    [`engine::lifecycle`](../rust/shekyl-engine-core/src/engine/lifecycle/support.rs).
     Move-rebuild helper for the §6.3 hybrid-construction
     discipline: real `Engine::create` with a dummy `DaemonClient`
     pays the lifecycle cost once (file lock, KDF, ledger init,
@@ -18699,7 +22394,7 @@
 - **`Engine::create` / `Engine::open_full` / `Engine::change_password` /
   `Engine::close` lifecycle methods on `shekyl-engine-core` (Phase 1
   `lifecycle` task).** The new
-  [`shekyl_engine_core::engine::lifecycle`](../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+  [`shekyl_engine_core::engine::lifecycle`](../rust/shekyl-engine-core/src/engine/lifecycle/mod.rs)
   module composes
   [`shekyl-engine-file`](../rust/shekyl-engine-file/src/),
   [`shekyl-crypto-pq::account::rederive_account`](../rust/shekyl-crypto-pq/src/account.rs),
@@ -19002,7 +22697,7 @@
   [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md) is
   rewritten from the Round 4b template stub into the per-bench
   frozen-baseline shape that
-  [`docs/design/STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md)
+  [`docs/design/STAGE_0_HARNESS.md`](./completed/STAGE_0_HARNESS.md)
   §4.5 operationalizes (one populated section for
   `engine_trait_bench_ledger_synced_height` frozen at Stage 0
   PR-2's merge SHA; four deferred-bench placeholder sections for
@@ -19081,7 +22776,7 @@
   three N=3 invariance-verification captures (runs `25239954863`,
   `25239956447`, `25239958016`) that produced byte-identical
   iai-callgrind output (±0% variance on the gate metric per
-  [`STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md) §4.4 dynamic
+  [`STAGE_0_HARNESS.md`](./completed/STAGE_0_HARNESS.md) §4.4 dynamic
   check). The bench's "frozen at" SHA is the capture SHA
   `0276d210e` (PR-2 commit 4c, post-Q `Box<Engine<S>>` fixture);
   the in-tree
@@ -19336,8 +23031,8 @@
      wallet-cache I/O) to drive
      `shekyl-engine-state::TransferDetails` through FFI, then deletes
      the C++ struct from
-     [`src/wallet/wallet2.h`](../src/wallet/wallet2.h) and
-     [`src/wallet/wallet_rpc_server_commands_defs.h`](../src/wallet/wallet_rpc_server_commands_defs.h).
+     `src/wallet/wallet2.h` and
+     `src/wallet/wallet_rpc_server_commands_defs.h`.
      Closes either at V3.1 or by superseding deletion in the V3.2
      `wallet2.cpp` retirement.
 
@@ -19811,7 +23506,7 @@
   the current `m_wallet_file`) and password change
   (`force_rewrite_keys=true`, as routed from
   `wallet2::change_password`) — now throw a typed
-  [`tools::error::wallet_shkw1_operation_unsupported`](../src/wallet/wallet_errors.h)
+  `tools::error::wallet_shkw1_operation_unsupported`
   before any wallet-state mutation (no `trim_hashchain` cache
   touch, no `prepare_file_names` path rewrite, no cache
   serialization). Both flows require FFI that doesn't exist
@@ -19880,7 +23575,7 @@
   runs while C++ secrets are still live, and the C++ wipe
   happens after the handle drops. Three new typed refusals
   in
-  [`src/wallet/wallet_errors.h`](../src/wallet/wallet_errors.h)
+  `src/wallet/wallet_errors.h`
   discriminate structural failure modes (wrong network vs.
   AAD-bound cryptographic inconsistency vs. unsupported
   capability) so CLI, wallet RPC, and tests can render
@@ -20334,11 +24029,12 @@
   un-skip criteria for the two gated paths),
   [`docs/benchmarks/README.md`](benchmarks/README.md) (capture
   procedure + baseline-update policy),
-  [`scripts/bench/capture_cpp_baseline.sh`](../scripts/bench/capture_cpp_baseline.sh)
+  `scripts/bench/capture_cpp_baseline.sh`
   (reference-machine capture wrapper emitting a schema-versioned
   JSON envelope with toolchain + host CPU + git-rev metadata),
-  [`tests/wallet_bench/README.md`](../tests/wallet_bench/README.md)
-  (local build + run instructions + known gaps). The frozen
+  `tests/wallet_bench/README.md`
+  (local build + run instructions + known gaps). *(Both deleted in the
+  Phase-5 wallet2 cutover; the paths above are historical.)* The frozen
   `wallet2_baseline_v0.json` is captured on a reference machine by
   the commit author and landed as a follow-up — this commit ships
   the harness, not the numbers, because the reference machine is
@@ -20659,7 +24355,7 @@
   amendment (no-Mock substrate for C6).**
   (`feat/stage-1-pr4-refresh-engine`, 2026-05-20). Doc-only
   amendment to
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](completed/STAGE_1_PR_4_REFRESH_ENGINE.md)
   landed mid-Phase-1 between C5β (legacy producer scaffolding
   deletion) and C6 (test substrate). The Round 4 §7.X C6 plan
   ("`MockRefresh` test substrate; mirrors `MockDaemon` /
@@ -20795,7 +24491,7 @@
 
      **Empirical variant enumeration (per source).** Of the
      six `RefreshError` variants at
-     [`engine/error.rs:148`](../rust/shekyl-engine-core/src/engine/error.rs),
+     [`engine/error/refresh.rs`](../rust/shekyl-engine-core/src/engine/error/refresh.rs),
      three are reachable from a `RefreshEngine` impl's
      `Self::Error` via the `From` conversion: `Cancelled`
      (unit), `Io(IoError)` (payload), and
@@ -20842,7 +24538,7 @@
   is `pub(crate)`, unit-variant-only by convention, four
   variants (`Cancelled`, `Io`, `Malformed`, `Internal`).
   Orchestrator-facing
-  [`RefreshError`](../rust/shekyl-engine-core/src/engine/error.rs)
+  [`RefreshError`](../rust/shekyl-engine-core/src/engine/error/refresh.rs)
   is `pub`, payload-bearing throughout. The `From` impl
   boundary at
   [`engine/local_refresh.rs:368–384`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)

@@ -49,6 +49,17 @@ COIN = 10^12                 // 12-decimal precision
 CRYPTONOTE_DISPLAY_DECIMAL_POINT = 12
 ```
 
+> **Naming note (FL-R15).** The constant names in the block above are the
+> ones the *original chain* shipped, and are recorded here as such. In the
+> Shekyl tree the first has since been renamed to
+> `SHEKYL_EMISSION_CURVE_ASYMPTOTE` (`emission_curve_asymptote` in
+> `config/economics_params.json`) — because under the perpetual tail it is
+> the emission curve's asymptote, not a supply ceiling. No declaration or
+> use of the old name survives under `src/`, `rust/`, `tests/`, `config/`
+> or `cmake/` — the single remaining hit is a `blockchain.cpp` comment
+> quoting the inherited Monero rationale. The other occurrences are in
+> documents like this one, recording what the original chain shipped.
+
 In CryptoNote-family code, `MONEY_SUPPLY` is expressed in **atomic units**.
 With 12-decimal precision, the effective whole-coin supply ceiling was:
 
@@ -200,7 +211,7 @@ treasury output on mainnet/stagenet is retired). The genesis coinbase is
 built by the Rust `geblock` tool (`rust/shekyl-genesis-tool`) from the
 committed recipients files `config/genesis_recipients.{mainnet,testnet,stagenet}.json`,
 with a **deterministic transaction key** derived from the recipients file
-itself (cSHAKE256, customization `shekyl/genesis-txkey-v1`; full spec in
+itself (cSHAKE256, customization `shekyl/genesis-txkey-v2`; full spec in
 the tool's `txkey` module). Genesis is transparent by design — CT type
 Null, cleartext amounts, published recipients — so the public derivation
 discloses nothing beyond this document, and it makes the pinned

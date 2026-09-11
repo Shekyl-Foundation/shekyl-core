@@ -700,9 +700,9 @@ pub fn emission_vin_verify_backing(
 /// verifier share, so they cannot drift), then verifies:
 ///
 /// 1. **Auth-B (stake-side)** — the leaf gate first
-///    (`hash_pqc_public_key(backing_pubkey) == pqc_pk_hash`, the same
-///    order the PR-E1 `shekyl_emission_hybrid_auth_verify` primitive pins:
-///    a signature over an unrelated-but-valid key must not pass), then the
+///    (`hash_pqc_public_key(backing_pubkey) == pqc_pk_hash`; the order is
+///    load-bearing: a signature over an unrelated-but-valid key must not
+///    pass — this function is where that order is pinned), then the
 ///    hybrid signature `auth_backing` under `backing_pubkey` over the
 ///    backing-role message. This binds the auth to the **proven leaf**, not
 ///    merely *a* leaf (gate-6 §9.6).
@@ -761,12 +761,15 @@ fn verify_hybrid_auth(
     let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
         return Err(EmissionVerifyError::AuthMalformed { role });
     };
-    match HybridEd25519MlDsa.verify(&pubkey, msg, &sig) {
-        Ok(true) => Ok(()),
-        // Ok(false) and Err collapse to one rejection: the split is a
-        // library-reporting detail, not a consensus distinction.
-        _ => Err(EmissionVerifyError::AuthRejected { role }),
-    }
+    // The scheme-level domain is the role's surface (SA-R-2): a claim-role
+    // signature is not a valid backing-role signature and vice versa.
+    let domain: &[u8] = match role {
+        EmissionAuthRole::Claim => shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_CLAIM,
+        EmissionAuthRole::Backing => shekyl_crypto_pq::signature::SCHEME_DOMAIN_EMISSION_BACKING,
+    };
+    HybridEd25519MlDsa
+        .verify(&pubkey, domain, msg, &sig)
+        .map_err(|_| EmissionVerifyError::AuthRejected { role })
 }
 
 /// The fail-closed assembly: all three witnesses, or no verdict.

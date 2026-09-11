@@ -8,6 +8,8 @@
 #pragma once
 
 #include <list>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "chaingen.h"
@@ -27,11 +29,10 @@
 // self-cleans on that path (cryptonote_core.cpp prepare_handle_incoming_blocks).
 //
 // Success requires the block to actually land on the main chain. A block
-// that is accepted-but-orphaned or routed to an alt chain reports
-// m_verifivation_failed == false with m_added_to_main_chain == false; for
-// these fixtures that is a failure to report at the offending height, not
-// a phantom success to surface later as an opaque BLOCK_DNE or an
-// aggregate height mismatch.
+// that is accepted-but-orphaned or routed to an alt chain is not
+// rejected and not added; for these fixtures that is a failure to report
+// at the offending height, not a phantom success to surface later as an
+// opaque BLOCK_DNE or an aggregate height mismatch.
 inline bool add_block_to_core(cryptonote::core& c, const cryptonote::block& blk)
 {
   cryptonote::block_verification_context bvc = AUTO_VAL_INIT(bvc);
@@ -45,27 +46,36 @@ inline bool add_block_to_core(cryptonote::core& c, const cryptonote::block& blk)
     return false;
   const bool handled = c.handle_incoming_block(bd, &blk, bvc);
   c.cleanup_handle_incoming_blocks();
-  return handled && !bvc.m_verifivation_failed && bvc.m_added_to_main_chain;
+  return handled && !cryptonote::block_rejected(bvc) && cryptonote::block_added(bvc);
 }
 
-// The independent recompute of verify's modulated base_reward for an empty
-// FAKECHAIN block: 0h curve + release multiplier at tx_volume_avg == 0
-// (empty blocks carry no non-coinbase txs) + the MONEY_SUPPLY cap.
-// Deliberately NOT read back from the connect path — this is the
-// conservation identity's independent leg. (tests/core_tests/block_reward.cpp
-// keeps its own hand-rolled base recompute on purpose: it re-derives the raw
-// base from MONEY_SUPPLY >> esf without shekyl_base_block_reward, so it
-// stays independent of the FFI this helper trusts.)
+// Independent recompute of the paid pre-penalty quantity for an empty
+// FAKECHAIN block (empty volume window). One owner: shekyl_block_reward
+// (weight 1 < zone ⇒ no penalty). Deliberately NOT read back from the
+// connect path — this is the conservation identity's independent leg.
 inline uint64_t expected_full_subsidy(uint64_t already_generated)
 {
-  const uint64_t raw_base = shekyl_base_block_reward(already_generated);
-  const uint64_t release_mult = shekyl_calc_release_multiplier(
-      /*tx_volume_avg=*/0, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
-  uint64_t q_full = shekyl_apply_release_multiplier(raw_base, release_mult);
-  const uint64_t remaining = MONEY_SUPPLY - already_generated;
-  if (q_full > remaining)
-    q_full = remaining;
-  return q_full;
+  uint64_t computed = 0;
+  uint64_t limit = 0;
+  const int32_t st = shekyl_block_reward(
+      0,
+      1,
+      already_generated,
+      CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
+      /*tx_count_sum=*/0,
+      /*window_blocks=*/0,
+      &computed,
+      &limit);
+  // Fail LOUDLY. Returning 0 here would hand the conservation identity a
+  // bogus subsidy: the identity could be satisfied trivially, or fail far
+  // downstream with a misleading number, and either way the real fault —
+  // a rejected FFI call — would be invisible (PR #640 review). This is a
+  // test oracle; a refusal must reach the test, not be absorbed.
+  if (st != SHEKYL_BLOCK_REWARD_OK)
+    throw std::runtime_error(
+        "expected_full_subsidy: shekyl_block_reward rejected the call (status " +
+        std::to_string(st) + ") at already_generated=" + std::to_string(already_generated));
+  return computed;
 }
 
 // Seeds `generator` bookkeeping with the already-connected genesis block

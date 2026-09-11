@@ -28,6 +28,8 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+#include <algorithm>
+#include <sstream>
 #include <atomic>
 #include "common/string_util.h"
 #include "wipeable_string.h"
@@ -38,7 +40,7 @@
 #include "cryptonote_config.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 #include "shekyl/shekyl_ffi.h"
 
 using namespace epee;
@@ -131,15 +133,15 @@ namespace cryptonote
   {
     if (tx.version >= 2 && !is_coinbase(tx))
     {
-      rct::rctSig &rv = tx.rct_signatures;
-      if (rv.type == rct::CTTypeNull)
+      ct::CtSig &rv = tx.ct_signatures;
+      if (rv.type == ct::CTTypeNull)
         return true;
       if (rv.outPk.size() != tx.vout.size())
       {
         LOG_PRINT_L1("Failed to parse transaction from blob, bad outPk size in tx " << get_transaction_hash(tx));
         return false;
       }
-      for (size_t n = 0; n < tx.rct_signatures.outPk.size(); ++n)
+      for (size_t n = 0; n < tx.ct_signatures.outPk.size(); ++n)
       {
         crypto::public_key output_public_key;
         if (!get_output_public_key(tx.vout[n], output_public_key))
@@ -147,12 +149,27 @@ namespace cryptonote
           LOG_PRINT_L1("Failed to get output public key for output " << n << " in tx " << get_transaction_hash(tx));
           return false;
         }
-        rv.outPk[n].dest = rct::pk2rct(output_public_key);
+        rv.outPk[n].dest = ct::pk2rct(output_public_key);
       }
 
       if (!base_only)
       {
-        if (rct::is_rct_bulletproof_plus(rv.type))
+        // RF-D9. The serve-credit shape is non-spending: consensus REQUIRES
+        // `bulletproofs_plus`, `fcmp_pp_proof` and `pseudoOuts` to be empty
+        // (tx_verification_utils.cpp:117-124), because there are no outputs
+        // to range-prove and no membership to prove. The checks below assume
+        // a spend and demand exactly one bulletproof, so without this arm the
+        // type is unparseable: every serve-credit tx fails
+        // `parse_and_validate_tx_from_blob` with "Failed to expand
+        // transaction data", which is the second of the two gates that made
+        // this vin type unreachable end to end.
+        //
+        // Typed off the vin, like the pqc_auths arm in cryptonote_basic.h --
+        // the shape is a property of the transaction, not of what happens to
+        // be absent from the struct.
+        const bool serve_credit_shape =
+          classify_archival_tx(tx.vin).kind == archival_tx_kind::serve_credit_only;
+        if (ct::is_ct_bulletproof_plus(rv.type) && !serve_credit_shape)
         {
           if (rv.p.bulletproofs_plus.size() != 1)
           {
@@ -164,7 +181,7 @@ namespace cryptonote
             LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs_plus L size in tx " << get_transaction_hash(tx));
             return false;
           }
-          const size_t max_outputs = rct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus[0]);
+          const size_t max_outputs = ct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus[0]);
           if (max_outputs < tx.vout.size())
           {
             LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs_plus max outputs in tx " << get_transaction_hash(tx));
@@ -174,7 +191,7 @@ namespace cryptonote
           CHECK_AND_ASSERT_MES(n_amounts == rv.outPk.size(), false, "Internal error filling out V");
           rv.p.bulletproofs_plus[0].V.resize(n_amounts);
           for (size_t i = 0; i < n_amounts; ++i)
-            rv.p.bulletproofs_plus[0].V[i] = rct::scalarmultKey(rv.outPk[i].mask, rct::INV_EIGHT);
+            rv.p.bulletproofs_plus[0].V[i] = ct::scalarmultKey(rv.outPk[i].mask, ct::INV_EIGHT);
         }
       }
     }
@@ -190,6 +207,19 @@ namespace cryptonote
     tx.invalidate_hashes();
     tx.set_blob_size(tx_blob.size());
     return true;
+  }
+  //---------------------------------------------------------------
+  bool get_archival_serve_credit_key(const txin_archival_serve_credit_response& vin,
+    crypto::hash& p_canonical_id, uint64_t& shard_id, uint64_t& settlement_epoch)
+  {
+    // Empty cannot form a tagged blob; the codec (tag, interior, trailing
+    // bytes) is otherwise the FFI's. C++ does not slice the tag off.
+    if (vin.canonical_bytes.empty())
+      return false;
+    return shekyl_archival_serve_credit_extract(
+      vin.canonical_bytes.data(), vin.canonical_bytes.size(),
+      reinterpret_cast<uint8_t*>(p_canonical_id.data), &shard_id, &settlement_epoch)
+      == SHEKYL_ARCHIVAL_VERIFY_OK;
   }
   //---------------------------------------------------------------
   bool parse_and_validate_tx_base_from_blob(const blobdata_ref& tx_blob, transaction& tx)
@@ -294,10 +324,10 @@ namespace cryptonote
   {
     CHECK_AND_ASSERT_MES(!tx.pruned, std::numeric_limits<uint64_t>::max(), "get_transaction_weight does not support pruned txes");
     CHECK_AND_ASSERT_MES(tx.version >= 3, blob_size, "Shekyl requires tx version >= 3");
-    const rct::rctSig &rv = tx.rct_signatures;
-    if (!rct::is_rct_bulletproof_plus(rv.type))
+    const ct::CtSig &rv = tx.ct_signatures;
+    if (!ct::is_ct_bulletproof_plus(rv.type))
       return blob_size;
-    const size_t n_padded_outputs = rct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus);
+    const size_t n_padded_outputs = ct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus);
     uint64_t bp_clawback = get_transaction_weight_clawback(tx, n_padded_outputs);
     CHECK_AND_ASSERT_THROW_MES_L1(bp_clawback <= std::numeric_limits<uint64_t>::max() - blob_size, "Weight overflow");
     return blob_size + bp_clawback;
@@ -307,8 +337,8 @@ namespace cryptonote
   {
     CHECK_AND_ASSERT_MES(tx.pruned, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support non pruned txes");
     CHECK_AND_ASSERT_MES(tx.version >= 2, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support v1 txes");
-    CHECK_AND_ASSERT_MES(tx.rct_signatures.type == rct::CTTypeFcmpPlusPlusPqc,
-        std::numeric_limits<uint64_t>::max(), "Unsupported rct_signatures type in get_pruned_transaction_weight");
+    CHECK_AND_ASSERT_MES(tx.ct_signatures.type == ct::CTTypeFcmpPlusPlusPqc,
+        std::numeric_limits<uint64_t>::max(), "Unsupported ct_signatures type in get_pruned_transaction_weight");
     CHECK_AND_ASSERT_MES(!tx.vin.empty(), std::numeric_limits<uint64_t>::max(), "empty vin");
 
     // get pruned data size
@@ -330,6 +360,24 @@ namespace cryptonote
 
     // FCMP++ proof size (serialized as varint length + bytes) -- already in pruned blob
     // No CLSAG data in FCMP++
+
+    // RF-D1: a serve-credit tx's pruned region is its pass records, and each
+    // is a fixed size for a FROZEN segment at SEGMENT_LAYER_J = 2 (the opening
+    // of any leaf in a full segment is one Helios layer of 18 and one Selene
+    // layer of 38 scalars; the ML-DSA leg is fixed) -- so a pruned node
+    // reconstructs the weight exactly, the same way it does pseudoOuts for a
+    // spend. This RELIES ON ADMISSION: the record was verified against the
+    // registry's frozen-segment R_k (shekyl_archival_verify_serve_credit_vin),
+    // and a record of any other shape cannot hash to that root, so every
+    // admitted tx carries records of exactly this size. No bulletproof
+    // clawback: a non-spending tx has no outputs to range-prove.
+    if (classify_archival_tx(tx.vin).kind == archival_tx_kind::serve_credit_only)
+    {
+      extra = config::ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES * count_serve_credit_inputs(tx.vin);
+      CHECK_AND_ASSERT_THROW_MES_L1(extra <= std::numeric_limits<uint64_t>::max() - weight, "Weight overflow");
+      weight += extra;
+      return weight;
+    }
 
     // calculate deterministic pseudoOuts size: sized by the spend subset,
     // not vin.size() — see count_spend_inputs (cryptonote_basic.h).
@@ -378,7 +426,7 @@ namespace cryptonote
   {
     if (tx.version > 1)
     {
-      fee = tx.rct_signatures.txnFee;
+      fee = tx.ct_signatures.txnFee;
       return true;
     }
     uint64_t amount_in = 0;
@@ -406,6 +454,27 @@ namespace cryptonote
     return r;
   }
   //---------------------------------------------------------------
+  // A malformed `tx_extra` is attacker-supplied, and since CEN-I19's shape
+  // check runs at admission it reaches this parser once per relayed
+  // transaction. Echoing the whole blob back into the log is therefore an
+  // amplification: MAX_TX_EXTRA_SIZE is 24576 bytes, so a hex dump is 48 KB of
+  // log per rejected transaction per peer, at a level that is on by default.
+  // Describe the blob instead — its length, where parsing stopped, and a
+  // bounded head sample, which is what a reader needs to recognise the shape —
+  // and leave the full bytes to whoever holds the transaction.
+  static std::string describe_tx_extra(const std::vector<uint8_t>& tx_extra, size_t failed_at)
+  {
+    static constexpr size_t SAMPLE_BYTES = 32;
+    const size_t n = std::min(SAMPLE_BYTES, tx_extra.size());
+    std::ostringstream oss;
+    oss << tx_extra.size() << " bytes, stopped at offset " << failed_at << ", first " << n
+        << " bytes: " << string_tools::buff_to_hex_nodelimer(
+             std::string(reinterpret_cast<const char*>(tx_extra.data()), n));
+    if (n < tx_extra.size())
+      oss << "…";
+    return oss.str();
+  }
+  //---------------------------------------------------------------
   bool parse_tx_extra(const std::vector<uint8_t>& tx_extra, std::vector<tx_extra_field>& tx_extra_fields)
   {
     tx_extra_fields.clear();
@@ -419,10 +488,10 @@ namespace cryptonote
     {
       tx_extra_field field;
       bool r = ::do_serialize(ar, field);
-      CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to deserialize extra field. extra = " << string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size())));
+      CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
       tx_extra_fields.push_back(field);
     } while (!ar.eof());
-    CHECK_AND_NO_ASSERT_MES_L1(::serialization::check_stream_state(ar), false, "failed to deserialize extra field. extra = " << string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size())));
+    CHECK_AND_NO_ASSERT_MES_L1(::serialization::check_stream_state(ar), false, "failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
 
     return true;
   }
@@ -461,7 +530,7 @@ namespace cryptonote
       bool r = ::do_serialize(ar, field);
       if (!r)
       {
-        MWARNING("failed to deserialize extra field. extra = " << string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size())));
+        MWARNING("failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
         if (!allow_partial)
           return false;
         break;
@@ -471,7 +540,7 @@ namespace cryptonote
     } while (!ar.eof());
     if (!::serialization::check_stream_state(ar))
     {
-      MWARNING("failed to deserialize extra field. extra = " << string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size())));
+      MWARNING("failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
       if (!allow_partial)
         return false;
     }
@@ -484,8 +553,6 @@ namespace cryptonote
     if (!pick<tx_extra_pub_key>(nar, tx_extra_fields, TX_EXTRA_TAG_PUBKEY)) return false;
     if (!pick<tx_extra_additional_pub_keys>(nar, tx_extra_fields, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS)) return false;
     if (!pick<tx_extra_nonce>(nar, tx_extra_fields, TX_EXTRA_NONCE)) return false;
-    if (!pick<tx_extra_merge_mining_tag>(nar, tx_extra_fields, TX_EXTRA_MERGE_MINING_TAG)) return false;
-    if (!pick<tx_extra_mysterious_minergate>(nar, tx_extra_fields, TX_EXTRA_MYSTERIOUS_MINERGATE_TAG)) return false;
     if (!pick<tx_extra_pqc_ownership>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_OWNERSHIP)) return false;
     if (!pick<tx_extra_pqc_kem_ciphertext>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT)) return false;
     if (!pick<tx_extra_pqc_leaf_hashes>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_LEAF_HASHES)) return false;
@@ -572,25 +639,6 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
-  bool add_mm_merkle_root_to_tx_extra(std::vector<uint8_t>& tx_extra, const crypto::hash& mm_merkle_root, size_t mm_merkle_tree_depth)
-  {
-    CHECK_AND_ASSERT_MES(mm_merkle_tree_depth < 32, false, "merge mining merkle tree depth should be less than 32");
-    size_t start_pos = tx_extra.size();
-    tx_extra.resize(tx_extra.size() + 3 + 32);
-    //write tag
-    tx_extra[start_pos] = TX_EXTRA_MERGE_MINING_TAG;
-    //write data size
-    ++start_pos;
-    tx_extra[start_pos] = 33;
-    //write depth varint (always one byte here)
-    ++start_pos;
-    tx_extra[start_pos] = mm_merkle_tree_depth;
-    //write data
-    ++start_pos;
-    memcpy(&tx_extra[start_pos], &mm_merkle_root, 32);
-    return true;
-  }
-  //---------------------------------------------------------------
   bool remove_field_from_tx_extra(std::vector<uint8_t>& tx_extra, const std::type_info &type)
   {
     if (tx_extra.empty())
@@ -604,11 +652,11 @@ namespace cryptonote
     {
       tx_extra_field field;
       bool r = ::do_serialize(ar, field);
-      CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to deserialize extra field. extra = " << string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size())));
+      CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
       if (std::visit([&type](const auto& x) -> bool { return typeid(x) != type; }, field))
         ::do_serialize(newar, field);
     } while (!ar.eof());
-    CHECK_AND_NO_ASSERT_MES_L1(::serialization::check_stream_state(ar), false, "failed to deserialize extra field. extra = " << string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tx_extra.data()), tx_extra.size())));
+    CHECK_AND_NO_ASSERT_MES_L1(::serialization::check_stream_state(ar), false, "failed to deserialize tx_extra: " << describe_tx_extra(tx_extra, ar.getpos()));
     tx_extra.clear();
     std::string s = oss.str();
     tx_extra.reserve(s.size());
@@ -810,6 +858,12 @@ namespace cryptonote
     // — the same strictness the FCMP++ leaf builder applies, so nothing
     // accepted here is silently skipped from the curve tree. Replaces the
     // inherited crypto::check_key, which only checked on-curve.
+    //
+    // LOAD-BEARING DOWNSTREAM (CEN-L11): blockchain_db.cpp's leaf collector
+    // now THROWS on a construct_leaf failure instead of dropping the output,
+    // on the strength of this gate and its commitment-mask twin. Weakening
+    // either turns an unspendable-output bug into an abort at block connect —
+    // safer, but only if you meant it.
     const uint8_t rc = shekyl_check_output_keys(keys_flat.data(), tx.vout.size());
     if (rc != SHEKYL_OUTPUT_POINTS_OK)
     {
@@ -921,6 +975,38 @@ namespace cryptonote
     }
   }
   //---------------------------------------------------------------
+  bool check_tx_extra_pqc_field_shape(const transaction& tx, std::string& reason)
+  {
+    std::vector<tx_extra_field> fields;
+    if (!parse_tx_extra(tx.extra, fields))
+    {
+      reason = "tx_extra does not parse; the PQC field shape cannot be established";
+      return false;
+    }
+    std::vector<size_t> kem_lens, leaf_lens;
+    for (const tx_extra_field& f : fields)
+    {
+      if (const auto* kem = std::get_if<tx_extra_pqc_kem_ciphertext>(&f))
+        kem_lens.push_back(kem->blob.size());
+      else if (const auto* leaf = std::get_if<tx_extra_pqc_leaf_hashes>(&f))
+        leaf_lens.push_back(leaf->blob.size());
+    }
+    // The rule's verdict AND its sentence come from shekyl-wire: the daemon
+    // logs what the rule says rather than re-deriving a second wording from
+    // the code, which would be two formatters to keep in step forever.
+    char msg[SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP] = {0};
+    const int32_t rc = shekyl_tx_extra_pqc_field_shape(tx.vout.size(),
+      kem_lens.empty() ? nullptr : kem_lens.data(), kem_lens.size(),
+      leaf_lens.empty() ? nullptr : leaf_lens.data(), leaf_lens.size(),
+      msg, sizeof(msg));
+    if (rc == SHEKYL_TX_EXTRA_PQC_SHAPE_OK)
+      return true;
+    msg[sizeof(msg) - 1] = '\0';
+    reason = msg[0] != '\0'
+      ? std::string(msg)
+      : ("tx_extra PQC field shape check failed with code " + std::to_string(rc));
+    return false;
+  }
   //---------------------------------------------------------------
   bool check_output_types(const transaction& tx, const uint8_t hf_version)
   {
@@ -931,6 +1017,15 @@ namespace cryptonote
         // txout_to_tagged_key is the sole output type from genesis (the
         // claim-era txout_to_staked_key was retired with the confidential-
         // staking cutover; GENESIS_TX_WIRE_FORMAT.md tag registry).
+        //
+        // LOAD-BEARING DOWNSTREAM (CEN-L11/H12): blockchain_db.cpp's
+        // curve-tree leaf collector handles exactly txout_to_tagged_key and
+        // the retained legacy txout_to_key arm, and THROWS on any other target
+        // rather than skipping the output. Admitting a variant outside those
+        // two without teaching the collector to build its leaf turns a widened
+        // rule into an abort at block connect. (The legacy arm is itself
+        // rule-60 deletion residue owned by the census §10 R5 queue; deleting
+        // it there narrows this pair to one.)
         CHECK_AND_ASSERT_MES(
           std::holds_alternative<txout_to_tagged_key>(o.target),
           false, "wrong variant type (index " << o.target.index()
@@ -1150,7 +1245,7 @@ namespace cryptonote
       // pseudoOuts are sized by the spend subset, not vin.size() — see
       // count_spend_inputs (cryptonote_basic.h).
       const size_t outputs = t.vout.size();
-      bool r = tt.rct_signatures.p.serialize_rctsig_prunable(ba, t.rct_signatures.type, count_spend_inputs(t.vin), outputs);
+      bool r = tt.ct_signatures.p.serialize_ctsig_prunable(ba, t.ct_signatures.type, count_spend_inputs(t.vin), count_serve_credit_inputs(t.vin), outputs);
       CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures prunable");
       cryptonote::get_blob_hash(ss.str(), res);
     }
@@ -1189,20 +1284,20 @@ namespace cryptonote
     get_transaction_prefix_hash(t, prefix_hash);
 
     // base rct
-    crypto::hash base_rct_hash;
+    crypto::hash base_ct_hash;
     {
       std::stringstream ss;
       binary_archive<true> ba(ss);
       const size_t inputs = t.vin.size();
       const size_t outputs = t.vout.size();
-      bool r = tt.rct_signatures.serialize_rctsig_base(ba, inputs, outputs);
-      CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize rct signatures base");
-      cryptonote::get_blob_hash(ss.str(), base_rct_hash);
+      bool r = tt.ct_signatures.serialize_ctsig_base(ba, inputs, outputs);
+      CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize ct signatures base");
+      cryptonote::get_blob_hash(ss.str(), base_ct_hash);
     }
 
     // prunable rct
     crypto::hash prunable_hash;
-    if (t.rct_signatures.type == rct::CTTypeNull)
+    if (t.ct_signatures.type == ct::CTTypeNull)
       prunable_hash = crypto::null_hash;
     else
       prunable_hash = pruned_data_hash;
@@ -1219,13 +1314,13 @@ namespace cryptonote
       CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize pqc_auths");
       cryptonote::get_blob_hash(ss.str(), pqc_auth_hash);
 
-      crypto::hash hashes[4] = { prefix_hash, base_rct_hash, pqc_auth_hash, prunable_hash };
+      crypto::hash hashes[4] = { prefix_hash, base_ct_hash, pqc_auth_hash, prunable_hash };
       res = cn_fast_hash(hashes, sizeof(hashes));
     }
     else
     {
       // v2: hash(prefix, base_rct, prunable)
-      crypto::hash hashes[3] = { prefix_hash, base_rct_hash, prunable_hash };
+      crypto::hash hashes[3] = { prefix_hash, base_ct_hash, prunable_hash };
       res = cn_fast_hash(hashes, sizeof(hashes));
     }
 
@@ -1256,21 +1351,21 @@ namespace cryptonote
     CHECK_AND_ASSERT_MES(prefix_size <= unprunable_size && unprunable_size <= blob.size(), false, "Inconsistent transaction prefix, unprunable and blob sizes");
 
     // base rct (blob from prefix_size to end of rct base; for v3, we must serialize separately since pqc_auths follows)
-    crypto::hash base_rct_hash;
+    crypto::hash base_ct_hash;
     {
       transaction &tt = const_cast<transaction&>(t);
       std::stringstream ss;
       binary_archive<true> ba(ss);
       const size_t inputs = t.vin.size();
       const size_t outputs = t.vout.size();
-      bool r = tt.rct_signatures.serialize_rctsig_base(ba, inputs, outputs);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures base");
-      cryptonote::get_blob_hash(ss.str(), base_rct_hash);
+      bool r = tt.ct_signatures.serialize_ctsig_base(ba, inputs, outputs);
+      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize ct signatures base");
+      cryptonote::get_blob_hash(ss.str(), base_ct_hash);
     }
 
     // prunable rct
     crypto::hash prunable_hash;
-    if (t.rct_signatures.type == rct::CTTypeNull)
+    if (t.ct_signatures.type == ct::CTTypeNull)
       prunable_hash = crypto::null_hash;
     else
     {
@@ -1289,13 +1384,13 @@ namespace cryptonote
       CHECK_AND_ASSERT_MES(r, false, "Failed to serialize pqc_auths");
       cryptonote::get_blob_hash(ss.str(), pqc_auth_hash);
 
-      crypto::hash hashes[4] = { prefix_hash, base_rct_hash, pqc_auth_hash, prunable_hash };
+      crypto::hash hashes[4] = { prefix_hash, base_ct_hash, pqc_auth_hash, prunable_hash };
       res = cn_fast_hash(hashes, sizeof(hashes));
     }
     else
     {
       // v2: hash(prefix, base_rct, prunable)
-      crypto::hash hashes[3] = { prefix_hash, base_rct_hash, prunable_hash };
+      crypto::hash hashes[3] = { prefix_hash, base_ct_hash, prunable_hash };
       res = cn_fast_hash(hashes, sizeof(hashes));
     }
 

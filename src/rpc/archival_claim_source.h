@@ -35,6 +35,17 @@ namespace rpc
 /// struct_init responses and the tests construct `response{}`, so bond-less
 /// part-A fields stay zeroed without a per-field reset ladder here (which
 /// would have to grow in lockstep with every future response field).
+///
+/// **Throws** on any gather or marshal failure, and the caller must catch: the
+/// `BlockchainDB` accessors this composes throw `DB_ERROR`, and a non-OK return
+/// from the cooldown-anchor fold throws here for the same reason. That is the
+/// only error channel — deliberately, since a second one (a status return) would
+/// leave callers handling both, and the one that is easy to forget is the one
+/// that matters: a partially-filled response whose absent operands read as the
+/// *permissive* branch of the exit predicates. Refusing the whole response is
+/// the only answer that cannot be misread, so the handler catches and answers a
+/// non-OK RPC status, which the wallet's decoder rejects before reading any
+/// payload field.
 void fill_archival_emission_claim_source(const BlockchainDB& db,
     const crypto::hash& p_id,
     COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE::response& res);

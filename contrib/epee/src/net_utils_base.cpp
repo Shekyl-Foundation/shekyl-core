@@ -87,13 +87,53 @@ namespace epee { namespace net_utils
 		return self_->less(*other_self);
 	}
 
+	namespace
+	{
+		//! \brief Does this address name a host at all?
+		//!
+		//! Anonymity zones hand every inbound connection the same per-zone
+		//! `unknown()` sentinel (`net_node.inl` `set_default_remote`, one call
+		//! per zone), so an address-keyed operation that equates two of them
+		//! selects the whole zone rather than one peer.
+		//!
+		//! Spelled over `is_blockable()`, which is already exactly this test
+		//! wherever it is used, but named separately: `is_blockable` asks a
+		//! policy question ("may we ban this?") and this asks a semantic one
+		//! ("does this denote a host?"). Coextensive today; if they diverge,
+		//! this is the one line to change.
+		//!
+		//! DELETE this, the guard in `is_same_host`, and both comments once an
+		//! inbound anonymity-zone connection carries an endpoint that is BOUND to
+		//! the session, not merely reachable -- a dial proves the announced onion
+		//! answers, never that this peer controls it, and adopting an unbound
+		//! announcement would let one peer be scored as another. There is then no
+		//! `unknown()` to compare and this is dead code.
+		bool identifies_a_host(const network_address& addr)
+		{
+			return addr.is_blockable();
+		}
+	}
+
 	bool network_address::is_same_host(const network_address& other) const
 	{
 		// clang typeid workaround
 		network_address::interface const* const self_ = self.get();
 		network_address::interface const* const other_self = other.self.get();
-		if (self_ == other_self) return true;
+		// Two default-constructed addresses: the inherited contract calls these
+		// the same host, and that is unchanged.
+		if (!self_ && !other_self) return true;
 		if (!self_ || !other_self) return false;
+		// An address that names no host is not the same host as anything,
+		// including another such address.
+		//
+		// MUST PRECEDE THE POINTER-EQUALITY SHORT-CIRCUIT BELOW. `self` is a
+		// `shared_ptr`, and every inbound connection in an anonymity zone is
+		// assigned its remote from the zone's single `default_remote`, so in
+		// production they all alias one pointee. Placed after `self_ ==
+		// other_self` this guard is dead in exactly the case it exists for, and
+		// a test that builds two separate `unknown()` values still passes.
+		if (!identifies_a_host(*this) || !identifies_a_host(other)) return false;
+		if (self_ == other_self) return true;
 		if (typeid(*self_) == typeid(*other_self))
 			return self_->is_same_host(*other_self);
 		const auto this_id = get_type_id();

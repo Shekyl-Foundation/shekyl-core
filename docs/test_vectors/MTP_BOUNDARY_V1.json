@@ -1,0 +1,182 @@
+{
+  "comment": [
+    "Shared boundary vectors for the C2-R3 ruled timestamp rule",
+    "(docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md §4.3, ratified 2026-09-01):",
+    "a candidate timestamp T is consensus-valid iff T <= local_clock + 540",
+    "(FTL) and T > M (MTP), where M is element index 5 (0-based) of the",
+    "sorted window of the 11 timestamps immediately preceding the candidate,",
+    "the window right-padded with the genesis timestamp when fewer than 11",
+    "predecessors exist. Callers with deeper history select the NEWEST 11",
+    "before calling (C2-R3-Q1 sub-a); a wider window is a caller bug and is",
+    "refused, never silently medianed.",
+    "",
+    "Consumers: rust/shekyl-difficulty/tests/mtp_boundary_vectors.rs pins the",
+    "ONE implementation (shekyl-difficulty check_timestamp_rule + its",
+    "predicates) natively over every section, and C++",
+    "tests/unit_tests/mtp_boundary.cpp pins the same sections end-to-end",
+    "through the FFI boundary (shekyl_difficulty_check_timestamp_rule) the",
+    "validator shim consumes.",
+    "",
+    "Vectors are pinned per rule 30: a change here is a consensus change and",
+    "requires review + a CHANGELOG entry."
+  ],
+  "constants": {
+    "mtp_window": 11,
+    "median_index_of_sorted_window": 5,
+    "ftl_seconds": 540
+  },
+  "predicate_cases": {
+    "comment": "Exact 11-element windows (order arbitrary; median is by sorted order). verdict is the MTP half only: true iff candidate > sorted[5]. FTL is not in play (consumers pass local_clock = candidate).",
+    "cases": [
+      {
+        "name": "sorted_window_below_median",
+        "window": [1000, 1120, 1240, 1360, 1480, 1600, 1720, 1840, 1960, 2080, 2200],
+        "median": 1600,
+        "candidate": 1599,
+        "verdict": false
+      },
+      {
+        "name": "sorted_window_equal_median_THE_BOUNDARY",
+        "window": [1000, 1120, 1240, 1360, 1480, 1600, 1720, 1840, 1960, 2080, 2200],
+        "median": 1600,
+        "candidate": 1600,
+        "verdict": false
+      },
+      {
+        "name": "sorted_window_one_above_median",
+        "window": [1000, 1120, 1240, 1360, 1480, 1600, 1720, 1840, 1960, 2080, 2200],
+        "median": 1600,
+        "candidate": 1601,
+        "verdict": true
+      },
+      {
+        "name": "unsorted_window_below_median",
+        "window": [2200, 1000, 1840, 1120, 1600, 1360, 1960, 1480, 2080, 1240, 1720],
+        "median": 1600,
+        "candidate": 1599,
+        "verdict": false
+      },
+      {
+        "name": "unsorted_window_equal_median",
+        "window": [2200, 1000, 1840, 1120, 1600, 1360, 1960, 1480, 2080, 1240, 1720],
+        "median": 1600,
+        "candidate": 1600,
+        "verdict": false
+      },
+      {
+        "name": "unsorted_window_one_above_median",
+        "window": [2200, 1000, 1840, 1120, 1600, 1360, 1960, 1480, 2080, 1240, 1720],
+        "median": 1600,
+        "candidate": 1601,
+        "verdict": true
+      },
+      {
+        "name": "duplicates_median_from_lower_run",
+        "window": [500, 500, 500, 500, 500, 500, 700, 700, 700, 700, 700],
+        "median": 500,
+        "candidate": 500,
+        "verdict": false
+      },
+      {
+        "name": "duplicates_one_above_lower_run",
+        "window": [500, 500, 500, 500, 500, 500, 700, 700, 700, 700, 700],
+        "median": 500,
+        "candidate": 501,
+        "verdict": true
+      },
+      {
+        "name": "all_equal_window_equal_candidate",
+        "window": [777, 777, 777, 777, 777, 777, 777, 777, 777, 777, 777],
+        "median": 777,
+        "candidate": 777,
+        "verdict": false
+      },
+      {
+        "name": "all_equal_window_one_above",
+        "window": [777, 777, 777, 777, 777, 777, 777, 777, 777, 777, 777],
+        "median": 777,
+        "candidate": 778,
+        "verdict": true
+      },
+      {
+        "name": "zero_window_zero_candidate_production_genesis_shape",
+        "window": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "median": 0,
+        "candidate": 0,
+        "verdict": false
+      },
+      {
+        "name": "zero_window_one_candidate",
+        "window": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "median": 0,
+        "candidate": 1,
+        "verdict": true
+      }
+    ]
+  },
+  "assembly_cases": {
+    "comment": "history_newest_first holds the <= 11 newest predecessor timestamps (newest first); the rule pads to 11 with genesis_ts before taking sorted[5]. verdict is the MTP half (FTL not in play). A history wider than 11 is refused by the rule function (window_too_wide) — the newest-11 selection is the caller's, covered by the core_tests alt-truncation generator, not re-implemented here.",
+    "cases": [
+      {
+        "name": "block1_only_genesis_zero_equal",
+        "history_newest_first": [0],
+        "genesis_ts": 0,
+        "median": 0,
+        "candidate": 0,
+        "verdict": false
+      },
+      {
+        "name": "block1_only_genesis_zero_one_above",
+        "history_newest_first": [0],
+        "genesis_ts": 0,
+        "median": 0,
+        "candidate": 1,
+        "verdict": true
+      },
+      {
+        "name": "bootstrap_five_real_pad_six_median_is_pad",
+        "history_newest_first": [50, 40, 30, 20, 0],
+        "genesis_ts": 0,
+        "median": 0,
+        "candidate": 0,
+        "verdict": false
+      },
+      {
+        "name": "bootstrap_five_real_pad_six_one_above_pad",
+        "history_newest_first": [50, 40, 30, 20, 0],
+        "genesis_ts": 0,
+        "median": 0,
+        "candidate": 1,
+        "verdict": true
+      },
+      {
+        "name": "bootstrap_nonzero_genesis_median_is_genesis",
+        "history_newest_first": [2000, 1500, 1200, 1000],
+        "genesis_ts": 1000,
+        "median": 1000,
+        "candidate": 1000,
+        "verdict": false
+      },
+      {
+        "name": "bootstrap_nonzero_genesis_one_above",
+        "history_newest_first": [2000, 1500, 1200, 1000],
+        "genesis_ts": 1000,
+        "median": 1000,
+        "candidate": 1001,
+        "verdict": true
+      }
+    ]
+  },
+  "ftl_cases": {
+    "comment": "FTL half: valid iff candidate <= local_clock + 540. Rust consumer: is_timestamp_below_ftl.",
+    "cases": [
+      { "name": "ftl_exactly_at_bound", "candidate": 10540, "local_clock": 10000, "verdict": true },
+      { "name": "ftl_one_past_bound", "candidate": 10541, "local_clock": 10000, "verdict": false },
+      { "name": "ftl_far_future", "candidate": 99999, "local_clock": 10000, "verdict": false },
+      { "name": "ftl_deep_past_passes", "candidate": 0, "local_clock": 10000, "verdict": true },
+      { "name": "ftl_equal_clock", "candidate": 10000, "local_clock": 10000, "verdict": true },
+      { "name": "ftl_u64_boundary_within_bound_wrapping_deadline_kills_naive_add", "candidate": 18446744073709551565, "local_clock": 18446744073709551515, "verdict": true },
+      { "name": "ftl_u64_boundary_past_bound", "candidate": 18446744073709551615, "local_clock": 18446744073709551015, "verdict": false }
+    ]
+  }
+}

@@ -23,10 +23,9 @@ use std::io::Write;
 use shekyl_economics::{
     base_block_reward,
     burn::{calc_burn_pct, compute_burn_split},
-    calc_effective_emission_share, calc_release_multiplier,
+    calc_effective_emission_share, effective_emission,
     params::{mul_scale, EconomicParams, SCALE},
-    release::apply_release_multiplier,
-    split_block_emission, ScaledShare,
+    split_block_emission, ScaledShare, TxVolume,
 };
 
 use crate::burden::{
@@ -183,7 +182,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         burn_base_rate: params.burn_base_rate,
         burn_cap: params.burn_cap,
         staker_pool_share: params.staker_pool_share,
-        money_supply: params.money_supply,
+        emission_curve_asymptote: params.emission_curve_asymptote,
         emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
         final_subsidy_per_minute: params.final_subsidy_per_minute,
         daa_target_seconds: EconomicParams::default().daa_target_seconds,
@@ -192,9 +191,8 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         ..EconomicParams::default()
     };
     let total_blocks = params.blocks_per_year * config.sim_years;
-    let money_supply = u128::from(params.money_supply);
     let mut already_generated: u128 =
-        (config.initial_emitted_fraction * params.money_supply as f64) as u128;
+        (config.initial_emitted_fraction * params.emission_curve_asymptote as f64) as u128;
     let mut total_burned: u128 = 0;
     let mut cumulative_outputs: f64 = 0.0;
     // Integer atomic accumulators (DQ-2G: the budget quantities never touch f64).
@@ -204,23 +202,12 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 
     for block in 0..total_blocks {
         let abs_height = block + config.genesis_height_offset;
-        let base_reward = base_block_reward(
-            already_generated.min(u128::from(u64::MAX)) as u64,
-            &economic,
-        )
-        .unwrap_or(0);
+        let ag = already_generated.min(u128::from(u64::MAX)) as u64;
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
         cumulative_outputs += tx_volume as f64 * OUTPUTS_PER_TX_NORMAL;
 
-        let mult = calc_release_multiplier(
-            tx_volume,
-            params.tx_volume_baseline,
-            params.release_min,
-            params.release_max,
-        );
-        let remaining = money_supply.saturating_sub(already_generated);
-        let remaining_u64 = remaining.min(u128::from(u64::MAX)) as u64;
-        let effective = apply_release_multiplier(base_reward, mult).min(remaining_u64);
+        let effective =
+            effective_emission(ag, TxVolume::per_block(tx_volume), &economic).unwrap_or(0);
 
         let emission_share = calc_effective_emission_share(
             abs_height,
@@ -233,10 +220,10 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
         let burn_pct = calc_burn_pct(
-            tx_volume,
+            TxVolume::per_block(tx_volume),
             params.tx_volume_baseline,
             circulating,
-            params.money_supply,
+            params.emission_curve_asymptote,
             params.burn_base_rate,
             params.burn_cap,
         );
@@ -254,7 +241,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
 
         year_emission_atomic += u128::from(staker_emission);
         year_burn_atomic += u128::from(whole_burn);
-        already_generated = (already_generated + u128::from(effective)).min(money_supply);
+        already_generated += u128::from(effective);
         total_burned += u128::from(flat.actually_destroyed);
 
         if (block + 1) % params.blocks_per_year == 0 {
@@ -1352,7 +1339,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
             burn_base_rate: params.burn_base_rate,
             burn_cap: params.burn_cap,
             staker_pool_share: params.staker_pool_share,
-            money_supply: params.money_supply,
+            emission_curve_asymptote: params.emission_curve_asymptote,
             emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
             final_subsidy_per_minute: params.final_subsidy_per_minute,
             daa_target_seconds: EconomicParams::default().daa_target_seconds,
@@ -1360,7 +1347,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
             // invent them, since the asymptote is ceremony-gated and unpinned (§11.4).
             ..EconomicParams::default()
         };
-        let br = base_block_reward(params.money_supply / 2, &econ).unwrap_or(0);
+        let br = base_block_reward(params.emission_curve_asymptote / 2, &econ).unwrap_or(0);
         crate::swing::a6_report(out, &ESCALATION_PREVIEW_N, br)?;
     }
     let a4 = a4_stuffing_report(out, params)?;

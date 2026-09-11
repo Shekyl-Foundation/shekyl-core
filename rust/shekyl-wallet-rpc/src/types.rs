@@ -203,14 +203,13 @@ pub const CAPABILITY_FULL: &str = "FULL";
 
 /// Map an Engine [`Capability`] to its OpenAPI `CapabilityMode` string.
 ///
-/// Single source of truth for the `WalletHandle.capability` response field and
-/// the `CapabilityForbids` (`-29005`) `error.data.capability` field, so the two
-/// never disagree when a new capability variant lands.
+/// Single source of truth for the `WalletHandle.capability` response
+/// field. `Full` is the only capability (rule 23); the match is kept so
+/// a ratified future capability extends it here rather than minting a
+/// second stringification site.
 pub fn capability_mode_str(cap: Capability) -> &'static str {
     match cap {
         Capability::Full => CAPABILITY_FULL,
-        Capability::ViewOnly => "VIEW_ONLY",
-        Capability::HardwareOffload => "HARDWARE_OFFLOAD",
     }
 }
 
@@ -219,7 +218,7 @@ pub fn capability_mode_str(cap: Capability) -> &'static str {
 pub struct WalletHandle {
     /// Wallet file stem within the served wallet directory.
     pub name: String,
-    /// Capability mode (`FULL` / `VIEW_ONLY` / `HARDWARE_OFFLOAD`).
+    /// Capability mode. Always `FULL` — the only capability (rule 23).
     pub capability: String,
     /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
     pub network: String,
@@ -232,16 +231,38 @@ pub struct WalletHandle {
 pub type AtomicUnitsString = String;
 
 /// `get_balance` result.
+///
+/// As of WI-RPC-5 the staking fields carry live values projected from the
+/// same authoritative staking view `get_staked_balance` reads (see
+/// `project::get_balance_result`). For a non-staker wallet they are a
+/// genuine `"0"` — nothing is staked — never a placeholder.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetBalanceResult {
-    /// Spendable liquid balance (maps from unlocked until staking lands).
+    /// Spendable liquid balance (maps from unlocked until staking splits
+    /// liquid from locked principal).
     pub liquid: AtomicUnitsString,
-    /// Staked principal; `"0"` until Stage 3 stake methods land.
-    pub staked: AtomicUnitsString,
+    /// Bond principal under confirmed live bonds PLUS principal committed
+    /// by in-flight sealed posts — the sum of `get_staked_balance`'s two
+    /// bonded legs (the legs stay separate on that method).
+    ///
+    /// **Absent (not `"0"`) when the wallet's sealed staking state cannot
+    /// be read**: the liquid fields stay authoritative while the staking
+    /// projection degrades, and absence is structurally distinct from a
+    /// zero — the engine pin "never render nothing-staked over a bad seal"
+    /// holds on the wire. A non-staker's `"0"` is a true zero and is
+    /// always present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staked: Option<AtomicUnitsString>,
     /// Unlocked / spendable now.
     pub unlocked: AtomicUnitsString,
-    /// Claimable staking rewards; `"0"` until Stage 3.
-    pub claimable_rewards: AtomicUnitsString,
+    /// Emission-reward money received and still unspent in staking-side
+    /// outputs — the same quantity as
+    /// `get_staked_balance.rewards_received_unspent`; NOT a claim-era
+    /// "accrued but unclaimed" entitlement (no such user-visible quantity
+    /// exists in the archival design). Absent exactly when `staked` is
+    /// (unreadable staking seal — degrade, never a fabricated zero).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimable_rewards: Option<AtomicUnitsString>,
     /// Awaiting-confirmation / in-flight spend lock.
     pub pending: AtomicUnitsString,
 }
@@ -251,6 +272,54 @@ pub struct GetBalanceResult {
 pub struct GetPrimaryAddressResult {
     /// Canonical Shekyl address string.
     pub address: String,
+}
+
+/// `sign_message` result (PR-SM-2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignMessageResult {
+    /// The armored signature: a single-line `shekylmsgsig1.` string,
+    /// ~21.7 KB for the ratified SLH-DSA-192s scheme (SM-R-5/R-8).
+    pub signature: String,
+}
+
+/// Marker that `verify_message` succeeded. The contract field is
+/// `const: true`; this type cannot represent `verified: false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Verified;
+
+impl Serialize for Verified {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(true)
+    }
+}
+
+impl<'de> Deserialize<'de> for Verified {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = bool::deserialize(deserializer)?;
+        if value {
+            Ok(Self)
+        } else {
+            Err(serde::de::Error::custom(
+                "verify_message is success-only; verified must be true",
+            ))
+        }
+    }
+}
+
+/// `verify_message` result (PR-SM-2).
+///
+/// Success-only by contract: every negative outcome is one of the
+/// `-29800`-band error codes (SM-R-6's taxonomy needs four distinct
+/// sentences — mismatch, corruption, unknown scheme, unbound address —
+/// which a `valid: false` boolean cannot carry). This deliberately
+/// diverges from `check_tx_proof`'s `{"valid": false}` shape, which
+/// predates that ruling.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VerifyMessageResult {
+    /// Always `true`: the signature verifies for the address, message,
+    /// and network. Present so scripted callers read a self-describing
+    /// field rather than inferring success from an empty object.
+    pub verified: Verified,
 }
 
 /// `get_height` result.
@@ -298,6 +367,38 @@ pub enum TransferState {
     /// nothing proved the send was refused: a late confirmation still
     /// flips this row to CONFIRMED (rule 82).
     Dropped,
+    /// The user abandoned the send (`abandon_tx`; OUTGOING journal
+    /// `Abandoned` only).
+    ///
+    /// Distinct from [`Self::Dropped`] because the release came from
+    /// user intent, not confirmed-absent evidence — the carried input
+    /// locks may still be held until the watchdog resolves — and, as
+    /// with DROPPED, a late confirmation still flips this row to
+    /// CONFIRMED loudly rather than staying wrong (rule 82 / P3-4).
+    Abandoned,
+}
+
+impl TransferState {
+    /// OpenAPI / JSON-RPC wire string (`SCREAMING_SNAKE_CASE`). Single
+    /// owner of that vocabulary so error data and `get_transfers` never
+    /// diverge.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "PENDING",
+            Self::Confirmed => "CONFIRMED",
+            Self::Spent => "SPENT",
+            Self::Failed => "FAILED",
+            Self::Dropped => "DROPPED",
+            Self::Abandoned => "ABANDONED",
+        }
+    }
+}
+
+impl std::fmt::Display for TransferState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Receive-attribution kind for INCOMING transfer rows (FA-8 / WI-RPC-4).
@@ -400,6 +501,14 @@ pub struct TransferView {
     /// than carrying an invented `UNATTRIBUTED`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attribution: Option<ReceiveAttributionView>,
+    /// User-authored note for this transaction (SJ-DQ-7), set via
+    /// `set_tx_note`.
+    ///
+    /// Keyed by the bare txid, so it annotates the transaction rather than
+    /// one output row: both directions of a self-send surface the same
+    /// note. Absent when no note is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// `get_wallet_info` result — one-round-trip aggregate of live read surfaces
@@ -408,7 +517,7 @@ pub struct TransferView {
 pub struct GetWalletInfoResult {
     /// Wallet file stem within the served wallet directory.
     pub name: String,
-    /// Capability mode (`FULL` / `VIEW_ONLY` / `HARDWARE_OFFLOAD`).
+    /// Capability mode. Always `FULL` — the only capability (rule 23).
     pub capability: String,
     /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
     pub network: String,
@@ -422,8 +531,13 @@ pub struct GetWalletInfoResult {
     pub restore_height: i64,
     /// Balance projection (same shape as `get_balance`).
     pub balance: GetBalanceResult,
-    /// Staking read projection (same shape as `staking_info`).
-    pub staking: StakingInfoResult,
+    /// Staking read projection (same shape as `staking_info`). **Absent
+    /// when the wallet's sealed staking state cannot be read** — the
+    /// liquid identity/height/balance fields stay served (degrade, never
+    /// a whole-surface `-32603` and never zeros over a bad seal); absent
+    /// together with `balance.staked` / `balance.claimable_rewards`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staking: Option<StakingInfoResult>,
 }
 
 /// `get_transfers` result.
@@ -527,6 +641,43 @@ pub struct SubmitPendingTxResult {
 /// `discard_pending_tx` result (empty object).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DiscardPendingTxResult {}
+
+/// `abandon_tx` result (PR-SJ-3): the row's resulting state — always
+/// `ABANDONED` on success (fresh abandon and idempotent re-abandon
+/// answer identically, SJ-DQ-8).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AbandonTxResult {
+    /// Resulting journal state, in `get_transfers` vocabulary.
+    pub state: TransferState,
+}
+
+/// `set_tx_note` result (SJ-DQ-7): the note as stored after the write.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetTxNoteResult {
+    /// The transaction the note is attached to (lowercase hex).
+    pub tx_hash: String,
+    /// The note as stored after the write. **Omitted** (not serialized as
+    /// JSON `null`) when the note was cleared — an empty input removes the
+    /// entry rather than storing `""`, matching the OpenAPI shape and the
+    /// `skip_serializing_if` on `TransferView.note`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// `get_tx_note` result (SJ-DQ-7): the note currently stored for a txid.
+///
+/// Deliberately the same shape as [`SetTxNoteResult`] — a read-back answers
+/// in the vocabulary the write echoed, so a client can compare them directly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetTxNoteResult {
+    /// The transaction queried (lowercase hex).
+    pub tx_hash: String,
+    /// The stored note. **Omitted** (not serialized as JSON `null`) when
+    /// there is none — which is also the answer for a txid the wallet has
+    /// never seen; a note carries no existence claim about the transaction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
 
 /// Payment-request lifecycle state (WI-RPC-1 receiving).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -685,6 +836,110 @@ pub struct StakingInfoResult {
     /// never scanned as a staker).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pscan_synced_height: Option<i64>,
+    /// `true` when this session's scan recovered a staked slot that becomes
+    /// operational at the next wallet open — close and reopen the wallet to
+    /// finish staking recovery. `false` in the steady state.
+    #[serde(default)]
+    pub recovery_pending_reopen: bool,
+    /// What the serving host is currently obligated to serve
+    /// (`"market"` / `"foundation_complete_tree"`), or absent when no host
+    /// is running — see the contract's `StakingInfoResult.posture`.
+    ///
+    /// Absent for a bonded wallet is a legitimate reading, not a gap: the
+    /// field reports the live serving truth, and a host inside its launch
+    /// standoff is not yet serving anything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub posture: Option<String>,
+}
+
+/// `get_drain_balance` result (WI-RPC-5 archival staking actions).
+///
+/// Two-armed by contract (F-D2 / rule 82): a wallet that cannot yet anchor
+/// the drainable set answers `syncing`, NEVER `"0"` — a zero while syncing
+/// would be a lie a client cannot distinguish from an empty pool. The tag
+/// mirrors the yaml `oneOf` discriminant exactly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum GetDrainBalanceResult {
+    /// The drainable set is anchored; `spendable` is the aggregate scalar
+    /// across the active persona's pool (deliberately no per-epoch or
+    /// per-output breakdown — the aggregate is the firewall-safe read).
+    Ready {
+        /// Aggregate drainable amount (atomic units, decimal string).
+        spendable: AtomicUnitsString,
+    },
+    /// The read is transiently unanchorable (e.g. curve-tree ingest behind
+    /// the anchor age). `detail` is scalar-free: no amounts, no indices.
+    Syncing {
+        /// Human-readable transient condition.
+        detail: String,
+    },
+}
+
+/// Success verdict projection for `drain` — the client image of the
+/// Engine's `DrainOutcome` (WI-RPC-5). A distinct vocabulary from
+/// [`SubmitVerdictView`]: the drain pipeline seals before dispatch, so its
+/// success arms are the terminal dispatch facts, not the mempool-visibility
+/// ladder `submit_pending_tx` reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DrainVerdictView {
+    /// Fresh broadcast success (the normal arm).
+    Broadcast,
+    /// A previously-sealed identical drain was found confirmed at submit
+    /// time; `confirmed_height` carries the daemon-claimed height.
+    AlreadyInChain,
+}
+
+/// `drain` result (WI-RPC-5): the sealed-then-dispatched drain's receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrainResult {
+    /// Transaction hash (lowercase hex).
+    pub tx_hash: String,
+    /// Success verdict.
+    pub verdict: DrainVerdictView,
+    /// Present iff verdict is `ALREADY_IN_CHAIN`: the daemon-claimed
+    /// confirming height (untrusted display metadata — the drain
+    /// confirmation driver, still FOLLOWUPS, is the settlement authority).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmed_height: Option<i64>,
+}
+
+/// `unstake` result (PR-C): the sealed-then-dispatched exit's receipt.
+/// Same dispatch-verdict shape as [`DrainResult`] (both pipelines seal
+/// before dispatch); a type alias so the two cannot drift.
+pub type UnstakeResult = DrainResult;
+
+/// `collect_unstaked` result (PR-C). Internally tagged to match
+/// [`shekyl_engine_core::CollectOutcome`]: a `SWEPT` arm *requires*
+/// `tx_hash` / `swept` / `remainder` / `another_pool_remains`, so
+/// neither half of the completion fact can be omitted and rendered as
+/// silent completion. **The completion fact is two-part**: `remainder`
+/// is the swept persona's (`"0"` = nothing remains beyond this pass;
+/// nonzero = call again once the residue matures or this pass confirms),
+/// and `another_pool_remains` is the lane's (`true` = another exited
+/// persona still holds an uncollected pool — call again).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CollectUnstakedResult {
+    /// One sweep pass was dispatched.
+    Swept {
+        /// The pass's transaction hash (lowercase hex).
+        tx_hash: String,
+        /// What this pass moves to the principal.
+        swept: AtomicUnitsString,
+        /// What the pool still holds beyond this pass (immature payouts
+        /// plus mature overflow past the input cap). `"0"` is THIS
+        /// persona's completion — see `another_pool_remains` for the lane.
+        remainder: AtomicUnitsString,
+        /// Whether any OTHER exited persona still holds an uncollected pool
+        /// (dust-skipped slots count). `false` + `remainder "0"` = the exit
+        /// lane is fully collected; `true` = call `collect_unstaked` again.
+        another_pool_remains: bool,
+    },
+    /// The exited pool is already empty — collection is complete and the
+    /// funded-gated retirement proceeds on its own.
+    NothingLeft,
 }
 
 /// `get_tx_proof` result (WI-RPC-3 proofs).

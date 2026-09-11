@@ -28,6 +28,13 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+// Shekyl: this file is consensus-oracle / miner-tx construction
+// (construct_miner_tx, construct_tx_* used by tests/core_tests and the
+// daemon). The product spend path is the Rust builder
+// (shekyl-tx-builder + shekyl-engine-core). Do not grow a second wallet
+// spend path here. See docs/FOLLOWUPS.md "C++ transaction builder is
+// test-only".
+
 #include <unordered_set>
 #include <random>
 #include <iostream>
@@ -49,7 +56,7 @@ using namespace epee;
 #include "shekyl/economics.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
-#include "fcmp/rctSigs.h"
+#include "fcmp/ct_semantics.h"
 
 namespace {
 
@@ -116,7 +123,7 @@ namespace cryptonote
     LOG_PRINT_L2("destinations include " << num_stdaddresses << " standard addresses and " << num_subaddresses << " subaddresses");
   }
   //---------------------------------------------------------------
-  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version, uint64_t tx_volume_avg, uint64_t circulating_supply, uint64_t genesis_ng_height) {
+  bool construct_miner_tx(size_t height, size_t median_weight, uint64_t already_generated_coins, size_t current_block_weight, uint64_t fee, uint64_t frozen_segment_count, const account_public_address &miner_address, transaction& tx, const blobdata& extra_nonce, size_t max_outs, uint8_t hard_fork_version, shekyl::tx_volume_window tx_volume, uint64_t circulating_supply, uint64_t genesis_ng_height) {
     tx.vin.clear();
     tx.vout.clear();
     tx.extra.clear();
@@ -133,14 +140,14 @@ namespace cryptonote
     in.height = height;
 
     uint64_t block_reward;
-    if(!get_block_reward(median_weight, current_block_weight, already_generated_coins, block_reward, hard_fork_version, tx_volume_avg))
+    if(!get_block_reward(median_weight, current_block_weight, already_generated_coins, block_reward, hard_fork_version, tx_volume))
     {
       LOG_PRINT_L0("Block is too big");
       return false;
     }
 
     // Component 4: split emission between miner and staker pool
-    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, genesis_ng_height, hard_fork_version);
+    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, genesis_ng_height);
     block_reward = em_split.miner_emission;
 
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -150,7 +157,7 @@ namespace cryptonote
     // Component 2: adaptive fee burn. frozen_segment_count must be the same
     // parent-state n connect-time validation will judge this coinbase against
     // (create_block_template computes it once for both construction passes).
-    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, frozen_segment_count, hard_fork_version);
+    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume, circulating_supply, frozen_segment_count);
     block_reward += burn.miner_fee_income;
 
     // Single "dusty" output with identity-mask RCT (active from genesis on rebooted chain).
@@ -191,9 +198,9 @@ namespace cryptonote
       tx_extra_pqc_leaf_hashes leaf_hash_field;
       leaf_hash_field.blob.reserve(out_amounts.size() * PQC_LEAF_HASH_BYTES);
 
-      tx.rct_signatures.outPk.resize(out_amounts.size());
-      tx.rct_signatures.enc_amounts.resize(out_amounts.size());
-      tx.rct_signatures.enc_labels.resize(out_amounts.size());
+      tx.ct_signatures.outPk.resize(out_amounts.size());
+      tx.ct_signatures.enc_amounts.resize(out_amounts.size());
+      tx.ct_signatures.enc_labels.resize(out_amounts.size());
 
       for (size_t i = 0; i < out_amounts.size(); ++i)
       {
@@ -214,12 +221,12 @@ namespace cryptonote
         cryptonote::set_tx_out(out_amounts[i], out_key, true, vt, out);
         tx.vout.push_back(out);
 
-        memcpy(tx.rct_signatures.outPk[i].mask.bytes, od.commitment, 32);
+        memcpy(tx.ct_signatures.outPk[i].mask.bytes, od.commitment, 32);
 
-        memcpy(tx.rct_signatures.enc_amounts[i].data(), od.enc_amount, 8);
-        tx.rct_signatures.enc_amounts[i][8] = od.amount_tag;
-        memcpy(tx.rct_signatures.enc_labels[i].data(), od.enc_label, 8);
-        tx.rct_signatures.enc_labels[i][8] = od.label_tag;
+        memcpy(tx.ct_signatures.enc_amounts[i].data(), od.enc_amount, 8);
+        tx.ct_signatures.enc_amounts[i][8] = od.amount_tag;
+        memcpy(tx.ct_signatures.enc_labels[i].data(), od.enc_label, 8);
+        tx.ct_signatures.enc_labels[i][8] = od.label_tag;
 
         kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
         if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
@@ -291,7 +298,7 @@ namespace cryptonote
     return addr.m_view_public_key;
   }
   //---------------------------------------------------------------
-  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, bool rct, bool shuffle_outs, bool use_view_tags, uint8_t hf_version, rct::keyV *out_commitment_masks)
+  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, bool rct, bool shuffle_outs, bool use_view_tags, uint8_t hf_version, ct::keyV *out_commitment_masks)
   {
     (void)use_view_tags;      // v3 always uses view tags via shekyl_construct_output
     hw::device &hwdev = sender_account_keys.get_device();
@@ -464,11 +471,11 @@ namespace cryptonote
     // if this is a single-destination transfer to a subaddress, we set the tx pubkey to R=s*D
     if (num_stdaddresses == 0 && num_subaddresses == 1)
     {
-      txkey_pub = rct::rct2pk(hwdev.scalarmultKey(rct::pk2rct(single_dest_subaddress.m_spend_public_key), rct::sk2rct(tx_key)));
+      txkey_pub = ct::rct2pk(hwdev.scalarmultKey(ct::pk2rct(single_dest_subaddress.m_spend_public_key), ct::sk2rct(tx_key)));
     }
     else
     {
-      txkey_pub = rct::rct2pk(hwdev.scalarmultBase(rct::sk2rct(tx_key)));
+      txkey_pub = ct::rct2pk(hwdev.scalarmultBase(ct::sk2rct(tx_key)));
     }
     remove_field_from_tx_extra(tx.extra, typeid(tx_extra_pub_key));
     add_tx_pub_key_to_extra(tx, txkey_pub);
@@ -596,27 +603,27 @@ namespace cryptonote
     CHECK_AND_ASSERT_MES(tx.version >= 3, false, "Shekyl requires tx version >= 3");
     {
       uint64_t amount_in = 0, amount_out = 0;
-      rct::ctkeyV inSk;
+      ct::ctkeyV inSk;
       inSk.reserve(sources.size());
-      rct::keyV destinations;
+      ct::keyV destinations;
       std::vector<uint64_t> inamounts, outamounts;
       std::vector<unsigned int> index;
       for (size_t i = 0; i < sources.size(); ++i)
       {
-        rct::ctkey ctkey;
+        ct::ctkey ctkey;
         amount_in += sources[i].amount;
         inamounts.push_back(sources[i].amount);
         index.push_back(sources[i].real_output);
-        ctkey.dest = rct::sk2rct(in_contexts[i].in_ephemeral.sec);
+        ctkey.dest = ct::sk2rct(in_contexts[i].in_ephemeral.sec);
         ctkey.mask = sources[i].mask;
         inSk.push_back(ctkey);
-        memwipe(&ctkey, sizeof(rct::ctkey));
+        memwipe(&ctkey, sizeof(ct::ctkey));
       }
       for (size_t i = 0; i < tx.vout.size(); ++i)
       {
         crypto::public_key output_public_key;
         get_output_public_key(tx.vout[i], output_public_key);
-        destinations.push_back(rct::pk2rct(output_public_key));
+        destinations.push_back(ct::pk2rct(output_public_key));
         outamounts.push_back(tx.vout[i].amount);
         amount_out += tx.vout[i].amount;
       }
@@ -631,25 +638,25 @@ namespace cryptonote
 
       crypto::hash tx_prefix_hash;
       get_transaction_prefix_hash(tx, tx_prefix_hash, hwdev);
-      rct::ctkeyV outSk;
-      // Serializable rctSig stub (dummy BP+); the wallet overwrites via shekyl_sign_fcmp_transaction()
+      ct::ctkeyV outSk;
+      // Serializable CtSig stub (dummy BP+); the wallet overwrites via shekyl_sign_fcmp_transaction()
       // after constructing tree paths and per-output PQC material.
-      rct::fill_construct_tx_rct_stub(tx.rct_signatures, rct::hash2rct(tx_prefix_hash), amount_in - amount_out,
+      ct::fill_construct_tx_rct_stub(tx.ct_signatures, ct::hash2rct(tx_prefix_hash), amount_in - amount_out,
           crypto::null_hash, inamounts, outamounts, destinations);
-      memwipe(inSk.data(), inSk.size() * sizeof(rct::ctkey));
+      memwipe(inSk.data(), inSk.size() * sizeof(ct::ctkey));
 
       // v3: overwrite stub commitments and enc_amounts with real HKDF-derived values.
       // Export commitment masks (z scalars) so shekyl_sign_fcmp_transaction can produce
       // BP+ proofs against the HKDF-derived commitments.
       if (!v3_rct_data.empty())
       {
-        CHECK_AND_ASSERT_MES(v3_rct_data.size() == tx.rct_signatures.outPk.size(), false,
+        CHECK_AND_ASSERT_MES(v3_rct_data.size() == tx.ct_signatures.outPk.size(), false,
           "v3_rct_data size mismatch with outPk");
         for (size_t i = 0; i < v3_rct_data.size(); ++i)
         {
-          memcpy(tx.rct_signatures.outPk[i].mask.bytes, v3_rct_data[i].commitment, 32);
-          tx.rct_signatures.enc_amounts[i] = v3_rct_data[i].enc_amount_with_tag;
-          tx.rct_signatures.enc_labels[i] = v3_rct_data[i].enc_label_with_tag;
+          memcpy(tx.ct_signatures.outPk[i].mask.bytes, v3_rct_data[i].commitment, 32);
+          tx.ct_signatures.enc_amounts[i] = v3_rct_data[i].enc_amount_with_tag;
+          tx.ct_signatures.enc_labels[i] = v3_rct_data[i].enc_label_with_tag;
         }
         if (out_commitment_masks)
         {
@@ -692,7 +699,7 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
-  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, bool rct, bool use_view_tags, uint8_t hf_version, rct::keyV *out_commitment_masks)
+  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, bool rct, bool use_view_tags, uint8_t hf_version, ct::keyV *out_commitment_masks)
   {
     hw::device &hwdev = sender_account_keys.get_device();
     hwdev.open_tx(tx_key);
@@ -745,22 +752,25 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
-  void get_altblock_longhash(const block& b, crypto::hash& res, const crypto::hash& seed_hash)
+  bool get_altblock_longhash(const block& b, crypto::hash& res, const crypto::hash& seed_hash)
   {
     blobdata bd = get_block_hashing_blob(b);
-    if (shekyl_pow_randomx_v2_hash(
-          reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
-          reinterpret_cast<const uint8_t*>(bd.data()),
-          bd.size(),
-          reinterpret_cast<uint8_t (*)[32]>(res.data)) != SHEKYL_POW_RANDOMX_V2_OK)
+    // One PoW dispatch point: the same IPowSchema the main path uses (the
+    // registry is ratified height/version-unconditional — CEN-D2's schema
+    // half — so 0 is passed rather than parsing an untrusted miner tx for an
+    // operand the dispatch ignores). This collapses what used to be a second,
+    // direct FFI call site.
+    const IPowSchema& pow_schema = get_pow_for_height(0, b.major_version);
+    if (!pow_schema.hash(bd.data(), bd.size(), 0, &seed_hash, 0, res))
     {
-      // Fail closed: a longhash the verifier could not compute must never
-      // satisfy a difficulty target. 0xff..ff is the numerically maximum
-      // 256-bit value, which check_hash() rejects for any difficulty > 1.
-      // Matches the fail-closed sentinel the alt-block caller pre-seeds in
-      // blockchain.cpp.
+      // The 0xff..ff sentinel is a BELT, not the gate: check_hash() rejects
+      // it only at difficulty > 1 — at difficulty 1 every hash passes, so a
+      // caller relying on the sentinel alone fails OPEN (CEN-D2). The
+      // returned bool is the gate; the alt validation site rejects on it.
       memset(res.data, 0xff, sizeof(res.data));
+      return false;
     }
+    return true;
   }
 
   bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const int major_version, const crypto::hash *seed_hash, const int miners)
@@ -783,13 +793,13 @@ namespace cryptonote
 
     if (!pow_schema.hash(bd.data(), bd.size(), height, resolved_seed_hash, miners, res))
     {
-      // Fail closed: on a verifier failure pow_schema.hash() leaves res
-      // unwritten, and the hash-returning overload below pre-seeds res to
-      // null_hash (0x00..00) — the numerically minimum 256-bit value, which
-      // check_hash() accepts for ANY difficulty. Several callers ignore the
-      // returned bool, so a soft failure must never surface as an accepted
-      // PoW. Writing the maximum 256-bit value guarantees check_hash() rejects
-      // it. Matches the fail-closed sentinel in get_altblock_longhash().
+      // The 0xff..ff sentinel is a BELT, not the gate: it makes check_hash()
+      // reject at any difficulty > 1, but at difficulty 1 every hash passes
+      // ((2^256-1)*1 < 2^256), so the sentinel alone fails OPEN there
+      // (CEN-D2). The returned bool is the gate — the block-validation call
+      // sites and the longhash worker reject on it; the sentinel remains for
+      // display-only callers that ignore the bool (RPC pow_hash fills).
+      // Matches the fail-closed belt in get_altblock_longhash().
       memset(res.data, 0xff, sizeof(res.data));
       return false;
     }

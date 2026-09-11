@@ -431,7 +431,7 @@ come from §5.4.
 was recorded here as one, and it does not survive its own algebra.
 
 The argument ran: storage is cheap, so once a shard is fetched, discarding it is
-irrational; `held(P,E)` changes only by bond/unbond so the same shards recur
+irrational; `held(P,E)` changes only by bond/release so the same shards recur
 every epoch; therefore the rational free-rider converges on holding, and the
 attacker *category* dissolves. The failure is that **"keep after fetch is
 rational" and "free-riding is unprofitable" are the same inequality**:
@@ -912,6 +912,14 @@ and attribution is mechanical.
      argument:** it re-runs through the same `tj_shard_payload_report` machinery
      by changing one operand, and Round 1 should measure it rather than assert
      it.
+     **MEASURED 2026-08-11 — the claim holds.** The 2-of-3 ruling set the count
+     to `3` (renamed `CHALLENGES_PER_PAIR_PER_EPOCH`), and re-running that one
+     operand lifts §5.7c's watch-cell from **1.095× to 3.285×** — linear in the
+     count, as argued. The cheap-transit cell is no longer marginal: the
+     within-class F-1 headline is decisive at BOTH ends of the fetch band, and
+     the deterrent no longer leans on §5.7b's labor threshold "nobody should
+     lean on". Pinned by
+     `within_cloud_class_cheap_transit_cell_is_decisive_at_lambda_three`.
   *Caveat to check, not to wave away:* a free-rider who **holds between**
   sequential challenges pays one ingress for `n` challenges, collapsing (1) —
   but holding between challenges **is archiving**, which is the honest
@@ -1096,7 +1104,7 @@ exists to prevent.)*
   after which the helper answers every challenge forever. A one-time cost
   unlocking unlimited commitment generation is §5.7a inverted (the free-rider
   must pay *perpetually*, not once). Second-order, and worth keeping: sharing
-  `k_P` lets the helper impersonate `P` outright — collect its rewards, unbond
+  `k_P` lets the helper impersonate `P` outright — collect its rewards, release
   it — so the free-rider only shares with infrastructure it controls (at which
   point the helper *is* `P`'s storage and this is **honest archiving across two
   machines**) or with a trusted third party carrying the bond (a real,
@@ -1248,7 +1256,9 @@ fix, not a new design).
 
 ### 10.2 TJ-2 (CRITICAL) — response semantics are **not** frozen, and this corrects a claim in §9
 
-`constants.rs:24`: `pub const CHALLENGE_RESPONSE_BLOCKS: Option<u64> = None;` —
+`constants.rs`: **`pub const CHALLENGE_RESPONSE_BLOCKS: u64 = SETTLEMENT_EPOCH_BLOCKS / 20;`
+(500 blocks, pinned 2026-08-15).** Historical reading below, retained because the
+reasoning it drove is still the record; the blocker itself is discharged —
 *"Not yet byte-pinned in gate-2 §3.1."* **The acceptance deadline after `H_fire`
 has no value.**
 
@@ -1261,6 +1271,18 @@ against **a deadline that does not exist**. Until `CHALLENGE_RESPONSE_BLOCKS` is
 pinned, the free-rider's round-trip budget is **unbounded** and the margin is
 **not evaluable**. This is a **freeze item, not a build item**, and it gates the
 evaluability of §9.4 and §9.5.
+
+**DISCHARGED (2026-08-15): `CHALLENGE_RESPONSE_BLOCKS = SETTLEMENT_EPOCH_BLOCKS
+/ 20` = 500 blocks (≈16.7 h).** The deadline exists, so the `n·I − S` margin,
+the helper round-trip and the dumb-pipe case are now evaluable and §9.4/§9.5's
+arithmetic can be run. The pin was made by **ruling** — W₂ has no surviving
+upper bound, so the shape is *pick generous* — not by measurement, and
+**(corrected 2026-08-15) it is settled, not provisional.** An earlier version
+of this note said "a floor check can still raise it — so a margin computed
+against 500 should be re-run if the rig moves the value", which left §9.4/§9.5
+reading as evaluable-but-pending. No rig is owed and the value is not moving;
+a margin computed against 500 is simply evaluable. It re-opens only if the
+ruling's premises do (see `constants.rs` on `CHALLENGE_RESPONSE_BLOCKS`).
 
 ### 10.3 TJ-3 (HIGH) — the fire beacon seals one block into a 10,000-block epoch
 
@@ -1497,9 +1519,10 @@ sweep input rather than a structural hole.
 
 ### 11.7 Revised dependency order
 
-1. **TJ-2 — `CHALLENGE_RESPONSE_BLOCKS`.** Prerequisite, **not** a broken freeze
-   claim: the `n·I − S` margin, the helper round-trip, and the dumb-pipe case
-   are unevaluable until it has a value. **Gates the sweep, not the build.**
+1. **TJ-2 — `CHALLENGE_RESPONSE_BLOCKS`. ✅ DISCHARGED 2026-08-15** (= 500,
+   `SEB / 20`). Was a prerequisite, **not** a broken freeze claim: the
+   `n·I − S` margin, the helper round-trip, and the dumb-pipe case were
+   unevaluable until it had a value. The sweep it gated is now runnable.
 2. **Item 1 — the read shape and the on-chain artifact.** §11.1 decides it:
    bulk read, no viable leaf parameterization. Everything downstream is a
    function of this.

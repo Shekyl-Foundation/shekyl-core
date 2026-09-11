@@ -10,7 +10,7 @@
 //! Bulletproof+) is written and re-read, proving the serializer is internally
 //! consistent (`read(write(x)) == x`) across every FCMP++ field with arbitrary
 //! byte values. The byte layout is transcribed from the C++ oracle source
-//! (`rctTypes.h` `serialize_rctsig_base`/`serialize_rctsig_prunable`,
+//! (`ct_types.h` `serialize_ctsig_base`/`serialize_ctsig_prunable`,
 //! `cryptonote_basic.h` `pqc_authentication`) — see `src/transaction.rs`.
 //!
 //! The byte-identity proof on a *real, consensus-valid* spend lives in
@@ -22,9 +22,11 @@
 //! self-validates it against `shekyl_fcmp::proof::verify` (the consensus rule),
 //! then round-trips it through this serializer.
 
-use shekyl_wire::{
-    BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, ServeCredit, Transaction, TxPrefix,
-};
+mod common;
+use common::conforming_pqc_extra;
+
+use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
+use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
 /// Build a representative 1-in / 2-out FCMP++ spend. Field *sizes* mirror the
 /// real shape (single-key PQC pk/sig, one Bp+, per-input pseudo-out); the byte
@@ -43,6 +45,7 @@ fn synthetic_spend() -> Transaction {
         hybrid_signature: vec![0xCD; 3385],
     }];
     let prunable = Prunable {
+        serve_credit_pruned: Vec::new(),
         bulletproofs: vec![BpPlus {
             a: [0x10; 32],
             a1: [0x11; 32],
@@ -77,7 +80,16 @@ fn synthetic_spend() -> Transaction {
                     view_tag: 9,
                 },
             ],
-            extra: vec![0x06, 0xAA, 0xBB, 0xCC],
+            // Two outputs, so the PQC scan fields must be present and correctly
+            // sized. This was `vec![0x06, 0xAA, 0xBB, 0xCC]`, a truncated varint
+            // that never parsed; the validator only tolerated it while the
+            // tx_extra parse was conditional.
+            //
+            // `extra` is part of TxPrefix, so correcting it moved the three
+            // pinned hashes below. They moved because the fixture changed, not
+            // because a layout regressed: the cross-language parity pin lives on
+            // its own fixture in `pruned_tx_hash_parity.rs` and is untouched.
+            extra: conforming_pqc_extra(2),
         },
         ct: Ct::Fcmp {
             fee: 12_345,
@@ -176,26 +188,28 @@ fn fcmp_spend_rejects_trailing_bytes() {
     );
 }
 
-#[test]
-fn fee_only_serve_credit_round_trips_and_validates() {
-    // The non-spend fee-only Fcmp shape (§2.5 serve-credit): one non-spending
-    // serve_credit input, no outputs, empty pqc_auths, no prunable. Ct::read's
-    // EOF-tolerant tail must parse it, and the shape-aware validate() must accept it.
-    let serve_credit = Input::ServeCredit(Box::new(ServeCredit {
-        p_canonical_id: [0x11; 32],
-        shard_id: 7,
-        settlement_epoch: 42,
-        segment_subroot_rk: [0x22; 32],
-        leaf_index_in_segment: 0x0403_0201,
-        leaf_bytes: [0x33; 128],
-        c1_layers: vec![vec![[0x44; 32]]],
-        c2_layers: vec![vec![[0x55; 32]]],
-        hybrid_signature: vec![0x66; 3385],
-    }));
-    let tx = Transaction {
+/// Build a serve-credit tx with `n` records, in the post-`RF-D1` shape: each
+/// vin an opaque kept-half blob, each pruned record an opaque blob in the
+/// prunable region, paired by position.
+fn serve_credit_tx(n: usize) -> Transaction {
+    let inputs = (0..n)
+        .map(|i| {
+            let mut b = vec![TAG_INPUT_SERVE_CREDIT];
+            b.extend_from_slice(&[0x11; 32]);
+            // Distinct per record, so a pairing bug shows as a mismatch
+            // rather than as two interchangeable copies.
+            b.extend_from_slice(&[7 + u8::try_from(i).expect("index fits u8"), 42]);
+            b.extend_from_slice(&[0x66; 64]);
+            Input::ServeCredit { canonical_bytes: b }
+        })
+        .collect();
+    let serve_credit_pruned = (0..n)
+        .map(|i| vec![0x44 + u8::try_from(i).expect("index fits u8"); 40])
+        .collect();
+    Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
-            inputs: vec![serve_credit],
+            inputs,
             outputs: vec![],
             extra: vec![],
         },
@@ -208,19 +222,98 @@ fn fee_only_serve_credit_round_trips_and_validates() {
                 commitments: vec![],
             },
             pqc_auths: vec![],
-            prunable: None,
+            prunable: Some(Prunable {
+                // Empty by consensus mandate: a non-spending tx has no outputs
+                // to range-prove and no membership to prove.
+                bulletproofs: vec![],
+                tree_depth: 0,
+                fcmp_proof: vec![],
+                pseudo_outs: vec![],
+                serve_credit_pruned,
+            }),
         },
-    };
-    let parsed = Transaction::from_bytes(&tx.serialize()).expect("parse fee-only serve-credit tx");
-    assert_eq!(parsed, tx, "fee-only form must round-trip");
-    assert!(
-        matches!(parsed.ct, Ct::Fcmp { prunable: None, .. }),
-        "fee-only ct parses with no prunable"
-    );
-    tx.validate()
-        .expect("fee-only serve-credit tx must validate");
-    // Distinct 3-part (no-pqc) hash form — just exercise it (live parity deferred).
+    }
+}
+
+#[test]
+fn serve_credit_tx_round_trips_and_validates() {
+    // The §2.5 serve-credit shape, INVERTED by RF-D1: one non-spending
+    // serve_credit input, no outputs, empty pqc_auths, and -- new -- a prunable
+    // region holding the pruned half of the record. It used to be identified by
+    // the ABSENCE of that region.
+    let tx = serve_credit_tx(1);
+    let parsed = Transaction::from_bytes(&tx.serialize()).expect("parse serve-credit tx");
+    assert_eq!(parsed, tx, "serve-credit form must round-trip");
+    tx.validate().expect("serve-credit tx must validate");
     let _ = tx.hash();
+}
+
+/// The shape is no longer identifiable by EOF, and this is the test that says
+/// so: bytes DO follow the base now, so a reader still using "nothing follows"
+/// as the discriminator would try to parse `pqc_auths` out of the prunable
+/// region. Both implementations type it off the vin instead (RF-D9).
+#[test]
+fn serve_credit_tx_has_bytes_after_the_base() {
+    let tx = serve_credit_tx(1);
+    let bytes = tx.serialize();
+    let parsed = Transaction::from_bytes(&bytes).expect("parse");
+    match &parsed.ct {
+        Ct::Fcmp {
+            pqc_auths,
+            prunable: Some(p),
+            ..
+        } => {
+            assert!(pqc_auths.is_empty(), "serve-credit carries no pqc_auths");
+            assert_eq!(p.serve_credit_pruned.len(), 1);
+            assert!(p.bulletproofs.is_empty() && p.fcmp_proof.is_empty());
+            assert!(p.pseudo_outs.is_empty());
+        }
+        other => panic!("expected a populated prunable region, got {other:?}"),
+    }
+}
+
+/// One record per serve-credit vin, in vin order, with NO count on the wire.
+/// Multiple records is where a pairing bug becomes visible at all -- with one
+/// record, order and count are unfalsifiable.
+#[test]
+fn serve_credit_records_pair_with_their_vins_in_order() {
+    let tx = serve_credit_tx(3);
+    let parsed = Transaction::from_bytes(&tx.serialize()).expect("parse");
+    let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &parsed.ct
+    else {
+        panic!("expected prunable");
+    };
+    assert_eq!(p.serve_credit_pruned.len(), 3);
+    for (i, record) in p.serve_credit_pruned.iter().enumerate() {
+        assert_eq!(
+            record[0],
+            0x44 + u8::try_from(i).expect("index fits u8"),
+            "record {i} is not the one that belongs to vin {i}"
+        );
+    }
+}
+
+/// The count is DERIVED from the vin count, so a record array that disagrees
+/// with it must not validate -- that is what makes omitting the count field
+/// safe rather than merely smaller.
+#[test]
+fn a_record_count_disagreeing_with_the_vin_count_is_refused() {
+    let mut tx = serve_credit_tx(2);
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut tx.ct
+    {
+        p.serve_credit_pruned.pop();
+    }
+    let err = tx
+        .validate()
+        .expect_err("one record for two serve-credit vins must be refused");
+    assert!(
+        err.to_string().contains("one pruned pass record"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -240,21 +333,23 @@ fn fcmp_spend_rejects_oversized_pqc_blob() {
 #[test]
 fn synthetic_spend_hash_preimage_is_pinned() {
     // Regression guard for the 4-part FCMP++ spend hash (§11):
-    //   cn_fast_hash( H(prefix) ‖ H(base) ‖ H(varint(N)·pqc_auths) ‖ H(prunable) ).
-    // There is no live spend-hash oracle yet (the KAT is deferred), so this pins the
-    // *preimage structure* against accidental drift — most importantly the leading
-    // varint(N) count prefix on the pqc_auths component, which the C++ oracle emits
-    // because the hash uses the generic std::vector serializer (begin_array(cnt) ->
+    //   keccak256( H(prefix) ‖ H(base) ‖ H(varint(N)·pqc_auths) ‖ H(prunable) ).
+    // Cross-language parity for this arm is pinned struct-derived in
+    // `pruned_tx_hash_parity.rs` (C++ leg: `pruned_tx_hash_parity.cpp`); the
+    // daemon-captured sibling is `live_oracle_spend_identity_matches_the_accepted_bytes`
+    // in the same files. This additionally pins the *preimage structure*
+    // against accidental drift — most importantly the leading varint(N) count
+    // prefix on the pqc_auths component, which the C++ oracle emits because the
+    // hash uses the generic std::vector serializer (begin_array(cnt) ->
     // serialize_varint), unlike the prefix-less tx body. If this value changes,
-    // either the layout regressed or the live KAT just landed — confirm against the
-    // daemon before updating.
+    // the layout regressed — confirm against the C++ leg before updating.
     let h: String = synthetic_spend()
         .hash()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(
-        h, "d6cb346f02830be0a91c395dcf64ba1492b05e47c17e6b2f54f0858735a0d03e",
+        h, "32e2207f96d09ef2c5c72ab3a2737e77fdd20cf0b09b998bf9c00da2bf588c99",
         "synthetic FCMP++ spend hash preimage drifted (see the §11 note above)"
     );
 }
@@ -263,7 +358,7 @@ fn synthetic_spend_hash_preimage_is_pinned() {
 fn synthetic_spend_prefix_hash_is_pinned() {
     // The FCMP++ `signable_tx_hash` (FCMP_SPEND_SIGNING_PREIMAGE.md §1.2) — the prefix
     // hash the membership/SAL proof signs. It INCLUDES the version:
-    // cn_fast_hash(varint(3) ‖ TxPrefix::write). Distinct from the chain-identity tx
+    // keccak256(varint(3) ‖ TxPrefix::write). Distinct from the chain-identity tx
     // hash above. Source-validated against the spec; no live spend-hash oracle yet, so
     // this pins the value against drift — confirm vs the daemon before changing it.
     let tx = synthetic_spend();
@@ -289,7 +384,7 @@ fn synthetic_spend_prefix_hash_is_pinned() {
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(
-        h, "271a9c0a13de6a1a7e81db6ef7e2cde7d2ac7145581050ae3dbe34e5858d9f9c",
+        h, "131e4af4d1fb26be406470eacbc8f8e59e75dd921e8aac727f693746bbae1057",
         "FCMP++ prefix (signable_tx_hash) drifted (§1.2)"
     );
 }
@@ -297,14 +392,14 @@ fn synthetic_spend_prefix_hash_is_pinned() {
 #[test]
 fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
     // Per-input PQC signing preimage (§1.1): payload(i) = prefix_blob ‖ ct_base_blob ‖
-    // prunable_hash ‖ pqc_header(i) ‖ all_key_hashes, then cn_fast_hash. Source-validated;
+    // prunable_hash ‖ pqc_header(i) ‖ all_key_hashes, then keccak256. Source-validated;
     // the live C++ oracle KAT is the §1.1 residual. Regression guard against drift.
     let tx = synthetic_spend();
     let hashes = tx.pqc_signing_payload_hashes();
     assert_eq!(hashes.len(), 1, "one PQC signing hash per input");
     let h: String = hashes[0].iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
-        h, "12997863855a3d6f731199b75780966075a36aa587b13adeef7f45e9100355dd",
+        h, "5cc2aea0f8f7d57bbb8f0ef77709b41aca673bd8e3caf8e9c59cc6c253e98ed1",
         "FCMP++ PQC signing preimage drifted (§1.1)"
     );
     // Structural: the fee is bound into the preimage (it lives in ct_base_blob), so
@@ -504,4 +599,8 @@ fn into_full_typed_view() {
         commitments: Vec::new(),
     });
     assert!(null_ct.into_full().is_err());
+
+    // Serve-credit has a prunable *region* after RF-D1, but it is not a
+    // spend proof — `into_full` is typed off the vin, not off `Some`.
+    assert_eq!(serve_credit_tx(1).into_full().unwrap_err(), PrunedError);
 }

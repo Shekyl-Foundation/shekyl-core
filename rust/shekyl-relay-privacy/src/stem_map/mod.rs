@@ -61,12 +61,20 @@ pub type SourceId = Option<ConnectionId>;
 ///
 /// Distinct from a walk cursor into a [`Pin`]'s candidate list so the two
 /// integers cannot be silently swapped at the type level.
+///
+/// **Public since 2026-08-17** because the covert carrier binds channel `i` to
+/// stem slot `i` (`DAEMON_RELAY_PRIVACY.md` §20.3), so a caller outside this
+/// crate must be able to name the slot a plan chose. It is exported as a
+/// newtype rather than a bare `usize` precisely to keep the property above:
+/// at a crate boundary a raw index is exactly what gets swapped with a cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct SlotIndex(usize);
+pub struct SlotIndex(usize);
 
 impl SlotIndex {
+    /// The slot's index, which is also its covert channel (§20.3).
     #[inline]
-    const fn get(self) -> usize {
+    #[must_use]
+    pub const fn get(self) -> usize {
         self.0
     }
 }
@@ -305,7 +313,8 @@ impl StemMap {
     }
 
     /// The slot currently holding `peer`, if any.
-    fn slot_of(&self, peer: ConnectionId) -> Option<SlotIndex> {
+    #[must_use]
+    pub fn slot_of(&self, peer: ConnectionId) -> Option<SlotIndex> {
         self.out
             .iter()
             .position(|s| *s == Some(peer))

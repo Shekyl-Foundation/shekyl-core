@@ -23,7 +23,7 @@
 //! and migrated here; that module now wraps this crate with the bond-specific
 //! term rigidity.
 //!
-//! Bulletproof+ range-proof verification remains in C++ (`rctSigs`); this crate
+//! Bulletproof+ range-proof verification remains in C++ (`ct_semantics`); this crate
 //! is only the commitment-sum balance.
 //!
 //! The crate is also the single home for the §2.3 **output-point validity**

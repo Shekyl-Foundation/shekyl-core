@@ -51,7 +51,7 @@ uint64_t get_transaction_weight_limit(uint8_t hf_version);
  * @param rvv list of signatures to verify
  * @return true if all signatures verified semantics successfully, false otherwise
  */
-bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv);
+bool ver_mixed_ct_semantics(std::vector<const ct::CtSig*> rvv);
 
 /**
  * @brief Used to provide transaction info that skips the mempool to block handling code.
@@ -81,7 +81,7 @@ struct block_connect_supplement
 {
     pool_supplement pool;
     // Per-block credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3, credit-wire CW-2).
-    // Opaque Rust-canonical bytes (r ‖ count ‖ pass signatures). Empty until the
+    // Opaque Rust-canonical bytes (count ‖ pass signatures). Empty until the
     // transport populates it; empty means "no witness supplied" and stores no
     // side-table row on main-chain add.
     blobdata attestation_witness;
@@ -97,7 +97,7 @@ struct block_connect_supplement
  *     4. Check tx weight < get_transaction_weight_limit()
  *     5. Passes core::check_tx_semantic()
  *     6. Passes Blockchain::check_tx_outputs()
- *     7. Passes ver_mixed_rct_semantics() [Uses batch FCMP++ verification when applicable]
+ *     7. Passes ver_mixed_ct_semantics() [Uses batch FCMP++ verification when applicable]
  *
  * For pool_supplement input:
  * We assume the structure of the pool supplement is already correct: for each value entry, the

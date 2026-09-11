@@ -33,7 +33,9 @@ struct Scenario {
 }
 
 fn real_p() -> (Vec<u8>, [u8; 32], HybridSecretKey) {
-    let (pk, sk) = HybridEd25519MlDsa.keypair_generate().expect("keypair");
+    let (pk, sk) = HybridEd25519MlDsa
+        .generate_ephemeral_keypair_for_tests()
+        .expect("keypair");
     let pubkey = pk.to_canonical_bytes().expect("pk bytes");
     let p_id = *p_canonical_id_from_hybrid_pubkey(&pubkey).as_bytes();
     (pubkey, p_id, sk)
@@ -48,7 +50,13 @@ fn one_pass(
     claimed_pubkey: Vec<u8>,
 ) -> Scenario {
     let nonce = attestation_nonce(&R, &CB, &claimed_p_id, SHARD, EPOCH);
-    let sig = HybridEd25519MlDsa.sign(signing_sk, &nonce).expect("sign");
+    let sig = HybridEd25519MlDsa
+        .sign(
+            signing_sk,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
+            &nonce,
+        )
+        .expect("sign");
     let record = PassRecord {
         p_id: claimed_p_id,
         shard_id: SHARD,
@@ -63,7 +71,6 @@ fn one_pass(
     };
     Scenario {
         witness: BlockAttestationWitness {
-            r: R,
             pass_signatures: vec![sig],
         }
         .to_canonical_bytes()
@@ -97,6 +104,7 @@ fn call(
     pairs: &[ShekylArchivalPidPubkey],
 ) -> u8 {
     let ctx = ShekylArchivalAttestationVerifyCtx {
+        prev_block_hash: R,
         attestation_root: root,
         cb_out_key: CB,
         cb_out_key_readable: cb_readable,
@@ -198,7 +206,9 @@ fn wrong_mined_root_is_root_mismatch() {
 #[test]
 fn forged_signature_is_countersig_invalid() {
     let (pubkey, p_id, _sk) = real_p();
-    let (_other_pk, other_sk) = HybridEd25519MlDsa.keypair_generate().unwrap();
+    let (_other_pk, other_sk) = HybridEd25519MlDsa
+        .generate_ephemeral_keypair_for_tests()
+        .unwrap();
     // Signed by other_sk, claims real P: root recomputes (same sig bytes), countersig fails.
     let s = one_pass(&other_sk, p_id, pubkey);
     let pairs = [pair(s.p_id, &s.pubkey)];
@@ -342,6 +352,7 @@ fn unreadable_coinbase_key_is_cbkey_unreadable() {
 #[test]
 fn unreadable_headers_is_headers_unreadable() {
     let ctx = ShekylArchivalAttestationVerifyCtx {
+        prev_block_hash: R,
         attestation_root: empty_attestation_root(),
         cb_out_key: CB,
         cb_out_key_readable: 1,
@@ -509,6 +520,87 @@ fn pass_ids_null_out_len_is_null_ptr() {
     assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR);
 }
 
+/// Same as [`call`] but with the anchor chosen, for the two tests that vary it.
+fn call_with_prev(
+    prev_block_hash: [u8; 32],
+    root: [u8; 32],
+    headers: &[u8],
+    witness: &[u8],
+    pairs: &[ShekylArchivalPidPubkey],
+) -> u8 {
+    let ctx = ShekylArchivalAttestationVerifyCtx {
+        prev_block_hash,
+        attestation_root: root,
+        cb_out_key: CB,
+        cb_out_key_readable: 1,
+        headers_readable: 1,
+        headers_ptr: if headers.is_empty() {
+            std::ptr::null()
+        } else {
+            headers.as_ptr()
+        },
+        headers_len: headers.len(),
+        pairs_ptr: if pairs.is_empty() {
+            std::ptr::null()
+        } else {
+            pairs.as_ptr()
+        },
+        pairs_len: pairs.len(),
+    };
+    unsafe {
+        shekyl_archival_verify_attestation(
+            if witness.is_empty() {
+                std::ptr::null()
+            } else {
+                witness.as_ptr()
+            },
+            witness.len(),
+            &raw const ctx,
+        )
+    }
+}
+
+/// GENESIS REGRESSION. An all-zero `prev_block_hash` with **no pass records**
+/// must verify OK, not trip the unpopulated-field sentinel.
+///
+/// The genesis block's `prev_id` **is** all-zeros, and genesis reaches this path:
+/// `top_block_hash()` returns `null_hash` on an empty chain, so
+/// `bl.prev_id == get_tail_id()` holds and `add_new_block` routes genesis to
+/// `handle_block_to_main_chain` → `verify_block_attestation`. An earlier cut of
+/// this change gated on the ctx unconditionally and would have **rejected
+/// genesis**, so the chain could never have initialised.
+///
+/// `prev_id` is the block *object* hash, not the RandomX PoW value, so nothing
+/// about mining excludes an all-zero id — the PoW-difficulty intuition does not
+/// apply. The unit suite missed this because no test drives a full
+/// `Blockchain::init`; this is the pin that would have.
+#[test]
+fn genesis_all_zero_prev_hash_with_no_records_verifies_ok() {
+    assert_eq!(
+        call_with_prev([0u8; 32], empty_attestation_root(), &[], &[], &[]),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK,
+        "genesis (all-zero prev_id, zero records) must verify; rejecting it halts the \
+         chain at initialisation"
+    );
+}
+
+/// The other half: with a record present the anchor IS consumed, so all-zeros is
+/// the caller having failed to populate it and must be refused.
+///
+/// Negative control for the test above — remove the `!records.is_empty()` scope
+/// and the genesis test goes red; remove the check entirely and this one does.
+#[test]
+fn all_zero_prev_hash_with_a_record_is_refused() {
+    let (pubkey, p_id, sk) = real_p();
+    let s = one_pass(&sk, p_id, pubkey);
+    let pairs = [pair(s.p_id, &s.pubkey)];
+    assert_eq!(
+        call_with_prev([0u8; 32], s.root, &s.headers, &s.witness, &pairs),
+        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PREVHASH_UNPOPULATED,
+        "a record consumes the anchor, so an unpopulated one must be refused"
+    );
+}
+
 #[test]
 fn pass_ids_null_headers_nonzero_len_is_null_ptr() {
     let mut out = [[0u8; 32]; 4];
@@ -551,7 +643,7 @@ fn pass_ids_feeds_step2_coverage() {
 /// re-paste only if the genesis-frozen wire format changes:
 ///   cargo test -p shekyl-ffi emit_attestation_verify_kat -- --ignored --nocapture
 #[test]
-#[ignore]
+#[ignore = "vector emitter for the C++ cross-language KAT; asserts nothing — run with --ignored --nocapture to regenerate"]
 fn emit_attestation_verify_kat() {
     fn hex(b: &[u8]) -> String {
         b.iter().map(|x| format!("{x:02x}")).collect()

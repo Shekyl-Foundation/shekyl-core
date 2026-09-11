@@ -35,7 +35,7 @@
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/subaddress_index.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
-#include "fcmp/rctOps.h"
+#include "fcmp/ct_ops.h"
 #include "cryptonote_config.h"
 
 namespace hw {
@@ -131,7 +131,7 @@ namespace hw {
             crypto::secret_key_to_public_key(m, M);
 
             // D = B + M
-            crypto::public_key D = rct::rct2pk(rct::addKeys(rct::pk2rct(keys.m_account_address.m_spend_public_key), rct::pk2rct(M)));
+            crypto::public_key D = ct::rct2pk(ct::addKeys(ct::pk2rct(keys.m_account_address.m_spend_public_key), ct::pk2rct(M)));
             return D;
         }
 
@@ -180,7 +180,7 @@ namespace hw {
             crypto::public_key D = get_subaddress_spend_public_key(keys, index);
 
             // C = a*D
-            crypto::public_key C = rct::rct2pk(rct::scalarmultKey(rct::pk2rct(D), rct::sk2rct(keys.m_view_secret_key)));
+            crypto::public_key C = ct::rct2pk(ct::scalarmultKey(ct::pk2rct(D), ct::sk2rct(keys.m_view_secret_key)));
 
             // result: (C, D)
             cryptonote::account_public_address address;
@@ -212,13 +212,13 @@ namespace hw {
             return r && public_key == calculated_pub;
         }
 
-        bool device_default::scalarmultKey(rct::key & aP, const rct::key &P, const rct::key &a) {
-            rct::scalarmultKey(aP, P,a);
+        bool device_default::scalarmultKey(ct::key & aP, const ct::key &P, const ct::key &a) {
+            ct::scalarmultKey(aP, P,a);
             return true;
         }
 
-        bool device_default::scalarmultBase(rct::key &aG, const rct::key &a) {
-            rct::scalarmultBase(aG,a);
+        bool device_default::scalarmultBase(ct::key &aG, const ct::key &a) {
+            ct::scalarmultBase(aG,a);
             return true;
         }
 
@@ -281,29 +281,29 @@ namespace hw {
             return true;
         }
 
-        bool device_default::tx_prepare(const rct::key &H, const rct::key &xx,
-                                         rct::key &a, rct::key &aG, rct::key &aHP, rct::key &II) {
-            rct::skpkGen(a, aG);
-            rct::scalarmultKey(aHP, H, a);
-            rct::scalarmultKey(II, H, xx);
+        bool device_default::tx_prepare(const ct::key &H, const ct::key &xx,
+                                         ct::key &a, ct::key &aG, ct::key &aHP, ct::key &II) {
+            ct::skpkGen(a, aG);
+            ct::scalarmultKey(aHP, H, a);
+            ct::scalarmultKey(II, H, xx);
             return true;
         }
-        bool  device_default::tx_prepare(rct::key &a, rct::key &aG) {
-            rct::skpkGen(a, aG);
+        bool  device_default::tx_prepare(ct::key &a, ct::key &aG) {
+            ct::skpkGen(a, aG);
             return true;
         }
-        bool  device_default::tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const rct::keyV &hashes, const rct::ctkeyV &outPk, rct::key &prehash) {
-            prehash = rct::cn_fast_hash(hashes);
-            return true;
-        }
-
-
-        bool device_default::tx_hash(const rct::keyV &toHash, rct::key &c_old) {
-            c_old = rct::hash_to_scalar(toHash);
+        bool  device_default::tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const ct::keyV &hashes, const ct::ctkeyV &outPk, ct::key &prehash) {
+            prehash = ct::cn_fast_hash(hashes);
             return true;
         }
 
-        bool device_default::tx_sign(const rct::key &c,  const rct::keyV &xx, const rct::keyV &alpha, const size_t rows, const size_t dsRows, rct::keyV &ss ) {
+
+        bool device_default::tx_hash(const ct::keyV &toHash, ct::key &c_old) {
+            c_old = ct::hash_to_scalar(toHash);
+            return true;
+        }
+
+        bool device_default::tx_sign(const ct::key &c,  const ct::keyV &xx, const ct::keyV &alpha, const size_t rows, const size_t dsRows, ct::keyV &ss ) {
             CHECK_AND_ASSERT_THROW_MES(dsRows<=rows, "dsRows greater than rows");
             CHECK_AND_ASSERT_THROW_MES(xx.size() == rows, "xx size does not match rows");
             CHECK_AND_ASSERT_THROW_MES(alpha.size() == rows, "alpha size does not match rows");
@@ -314,7 +314,7 @@ namespace hw {
             return true;
         }
 
-        bool device_default::fcmp_prepare(const rct::key &tree_root, uint8_t tree_depth) {
+        bool device_default::fcmp_prepare(const ct::key &tree_root, uint8_t tree_depth) {
             return true;
         }
 
@@ -322,7 +322,7 @@ namespace hw {
             return true;
         }
 
-        bool device_default::fcmp_proof_add_input(const rct::key &key_image, const std::vector<uint8_t> &tree_path) {
+        bool device_default::fcmp_proof_add_input(const ct::key &key_image, const std::vector<uint8_t> &tree_path) {
             return true;
         }
 

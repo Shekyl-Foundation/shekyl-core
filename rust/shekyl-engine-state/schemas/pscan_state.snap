@@ -205,7 +205,7 @@
         }
       },
       {
-        "name": "pending_unbonds",
+        "name": "pending_releases",
         "ty": {
           "name": "BTreeMap<K, V>",
           "ty": {
@@ -557,149 +557,6 @@
                         "NewtypeStruct": {
                           "name": "u32",
                           "ty": "U32"
-                        }
-                      }
-                    }
-                  },
-                  {
-                    "name": "tx_hash",
-                    "ty": {
-                      "name": "TxHash",
-                      "ty": {
-                        "NewtypeStruct": {
-                          "name": "[T; N]",
-                          "ty": {
-                            "Tuple": [
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              },
-                              {
-                                "name": "u8",
-                                "ty": "U8"
-                              }
-                            ]
-                          }
                         }
                       }
                     }
@@ -1390,7 +1247,7 @@
                     }
                   },
                   {
-                    "name": "unbond_epoch",
+                    "name": "release_epoch",
                     "ty": {
                       "name": "SettlementEpoch",
                       "ty": {
@@ -1414,6 +1271,165 @@
                     }
                   }
                 ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "watch_floors",
+        "ty": {
+          "name": "BTreeMap<K, V>",
+          "ty": {
+            "Map": {
+              "key": {
+                "name": "PCanonicalId",
+                "ty": {
+                  "NewtypeStruct": {
+                    "name": "[T; N]",
+                    "ty": {
+                      "Tuple": [
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        },
+                        {
+                          "name": "u8",
+                          "ty": "U8"
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              "val": {
+                "name": "BlockHeight",
+                "ty": {
+                  "NewtypeStruct": {
+                    "name": "u64",
+                    "ty": "U64"
+                  }
+                }
               }
             }
           }

@@ -114,15 +114,15 @@ TEST(account, rederive_from_raw_seed_reproduces_account)
 // closes that gap end-to-end through the lower-level account_base API. See
 // docs/audit_trail/2026-05-ffi-constant-drift-audit.md.
 //
-// Note: there is intentionally no `wallet2`-level wrapper exercised here.
-// `wallet2` exposes no `generate_from_bip39` entry point **by design**: the
-// wallet2 layer is being deleted at Phase 5 of the Rust wallet rewrite, and
-// new BIP-39 wallet creation will live in the Rust wallet path post-
-// migration. A `static_assert` tripwire in
-// `tests/unit_tests/wallet_storage.cpp` defends the absence against drift;
-// the architectural decision is recorded in `docs/FOLLOWUPS.md`
-// §"V3.1+ Legacy C++ → Rust rewrite scope". This account_base-layer test
-// is the deepest C++ surface that still exercises the BIP-39 + MAINNET
+// Note: there is no `wallet2`-level wrapper exercised here because there is
+// no `wallet2`. It never exposed a `generate_from_bip39` entry point, by
+// design, and the whole layer was deleted at Phase 5 of the Rust wallet
+// rewrite; BIP-39 wallet creation lives in the Rust wallet path. The
+// `static_assert` tripwire that used to defend the absence lived in
+// `tests/unit_tests/wallet_storage.cpp`, which was deleted with its subject
+// at B3 — the absence is now structural rather than asserted. This
+// account_base-layer test is the deepest C++ surface that exercises the
+// BIP-39 + MAINNET
 // FFI round-trip; the primary functional guarantee is the Rust test
 // `shekyl-crypto-pq::tests::generate_from_bip39_mainnet_roundtrips_to_rederive`.
 TEST(account, rederive_from_bip39_reproduces_account_mainnet)
@@ -326,10 +326,12 @@ TEST(account, generate_from_raw_seed_rejects_mainnet_and_stagenet)
 //      account for the same raw seed — distinct HKDF salt).
 //   2. `generate(..., MAINNET)` and `generate(..., STAGENET)` throw at the
 //      FFI's `permitted_seed_format` check. This is the failure mode that
-//      replaces the pre-fix silent miscompile: production paths
-//      (`wallet2::generate`, `on_create_wallet` RPC, `on_stop_background_sync`)
-//      now fail loudly on (MAINNET, RAW32) / (STAGENET, RAW32) rather than
-//      silently producing FAKECHAIN-salted unspendable wallets.
+//      replaces the pre-fix silent miscompile: the callers that carried the
+//      bug (`wallet2::generate`, `on_create_wallet` RPC,
+//      `on_stop_background_sync`) failed loudly on (MAINNET, RAW32) /
+//      (STAGENET, RAW32) rather than silently producing FAKECHAIN-salted
+//      unspendable wallets. Those callers are gone with wallet2; the guard
+//      they proved out still protects every remaining `generate` caller.
 // See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
 TEST(account, generate_uses_explicit_nettype_argument)
 {

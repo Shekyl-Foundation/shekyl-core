@@ -42,6 +42,7 @@
 #include "cryptonote_basic/difficulty.h"
 #include "cryptonote_basic/hardfork.h"
 #include "cryptonote_protocol/enums.h"
+#include "net/enums.h"
 #include "blockchain_db/shekyl_types.h"
 #include "shekyl/shekyl_ffi.h" // epoch-close FFI row structs for ArchivalEmissionEpochSnapshot::to_ffi_*
 
@@ -113,10 +114,56 @@ extern const command_line::arg_descriptor<bool, false> arg_db_salvage;
 enum class relay_category : uint8_t
 {
   broadcasted = 0,//!< Public txes received via block/fluff
-  relayable,      //!< Every tx not marked `relay_method::none`
-  legacy,         //!< `relay_category::broadcasted` + `relay_method::none` for rpc relay requests or historical reasons
+  /*! Every tx not marked `relay_method::none`.
+
+      Deliberately NOT collapsed into `all`, even though nothing supplies
+      `none` at admission any more: the pool's writers are
+      `handle_incoming_tx` (p2p `stem`/`fluff`, import `block`),
+      `Blockchain`'s reorg re-adds (`block`), and the engine submit
+      (`local`). `none` means "received via RPC with `do_not_relay` set" and
+      Shekyl has no such RPC.
+
+      It is not a zero-decode guard, and it is worth saying so because that is
+      the plausible-sounding reason to keep it: a zeroed record decodes to
+      `fluff`, NOT `none` (`get_relay_method` falls through state 0 to the
+      `fluff` return). Reaching `none` needs `do_not_relay = 1`, which only a
+      build that had a `do_not_relay` writer could have persisted.
+
+      What it actually is: the DB-layer half of a two-layer filter. Its one production
+      reader is `get_relayable_transactions`, which passes it to
+      `for_all_txpool_txes` and *also* tests `!meta.do_not_relay` in the loop
+      body. So this category is not the sole guard against relaying a
+      do-not-relay entry, and no test should be credited for that. It stays
+      because it costs nothing and it is the only filter at the DB read;
+      removing it is a change to the relay loop's iteration, which is a
+      different surface from this classifier. */
+  relayable,
   all             //!< Everything in the db
 };
+
+/* `legacy` was deleted here. It was `broadcasted` + `relay_method::none` --
+   the most public class unioned with the most private one -- and its own
+   doc gave the reason as "rpc relay requests or historical reasons". The
+   history was Monero's pre-Dandelion++ RPC; Shekyl is v3-from-genesis with
+   no such client (rule 60), so the union had no member any caller wanted.
+   Nine of its ten call sites were asking "is this publicly known", which is
+   `broadcasted`, and one of those -- `fill_block_template` -- would have
+   admitted a do-not-relay transaction into a block template had `none` ever
+   been reachable. The tenth, `core::pool_has_tx`, was asking a different
+   question and now says so: it asks `all`, because its caller wants "do I
+   already hold these bytes". See the note at its definition.
+   `matches_category`'s table is pinned exhaustively by
+   `tests/unit_tests/relay_category.cpp`.
+
+   Removing a middle member renumbered `all`, and that is deliberately NOT
+   compensated with an explicit value or a reserved gap. These values have no
+   counterparty: `relay_category` is never cast, never serialized, and never
+   crosses the FFI -- unlike `relay_method`, whose bytes ARE a contract and are
+   pinned by `static_assert` in `cryptonote_protocol/enums.h`. Pinning a value
+   with no reader would tell the next maintainer a wire contract exists, which
+   is the shape of debt this deletion removes. Reopen if `relay_category` ever
+   gains a persisted or FFI representation: the pin then goes beside that
+   representation, as `relay_method`'s does. */
 
 bool matches_category(relay_method method, relay_category category) noexcept;
 
@@ -143,7 +190,7 @@ struct output_data_t
   crypto::public_key pubkey;       //!< the output's public key (for spend verification)
   uint64_t           unlock_time;  //!< the output's unlock time (or height)
   uint64_t           height;       //!< the height of the block which created the output
-  rct::key           commitment;   //!< the output's amount commitment (for spend verification)
+  ct::key           commitment;   //!< the output's amount commitment (for spend verification)
 };
 #pragma pack(pop)
 
@@ -177,7 +224,7 @@ struct alt_block_data_t
 struct output_pruning_metadata_t
 {
   crypto::public_key pubkey;       //!< output one-time public key
-  rct::key           commitment;   //!< Pedersen commitment (amount commitment)
+  ct::key           commitment;   //!< Pedersen commitment (amount commitment)
   uint64_t           unlock_time;  //!< unlock time or height
   uint64_t           height;       //!< block height containing this output
   uint8_t            pruned;       //!< 1 if the parent tx's prunable data was removed
@@ -197,7 +244,7 @@ struct txpool_tx_meta_t
   uint64_t max_used_block_height;
   uint64_t last_failed_height;
   uint64_t receive_time;
-  uint64_t last_relayed_time; //!< If received over i2p/tor, randomized forward time. If Dandelion++stem, randomized embargo time. Otherwise, last relayed timestamp
+  uint64_t last_relayed_time; //!< If Dandelion++ stem, randomized embargo time. Otherwise, last relayed timestamp.
   // 112 bytes
   uint8_t kept_by_block;
   uint8_t relayed;
@@ -206,9 +253,75 @@ struct txpool_tx_meta_t
   uint8_t pruned: 1;
   uint8_t is_local: 1;
   uint8_t dandelionpp_stem : 1;
-  uint8_t is_forwarding: 1;
+  /*! This transaction has been seen arriving from somewhere OTHER than the
+      peer it was stemmed to — F-10's predicate, resolved.
+
+      Named for the fact rather than for what the pool does with it. The fact
+      is "observed circulating"; disarming the origin's re-broadcast is one
+      consumer's response to it (`get_relayable_transactions`' `local` arm),
+      and a second consumer wanting the same fact should not have to read a
+      field named after the first one's reaction.
+
+      Set by `tx_memory_pool::on_stem_propagated`, from the Rust stem watch's
+      verdict. NOT a timer and not a count: the watch refuses to resolve an
+      arrival charged to the successor the observation was given to, so an
+      echo from the peer that was handed the stem sets nothing (F-10, §49).
+
+      ZERO IS "NOT OBSERVED", which is why this bit and not a new one. It held
+      `is_forwarding` until Q12-U2 deleted `relay_method::forward`, then sat
+      reserved — never read, written only as an explicit zero. So every record
+      ever persisted carries zero here by construction, the layout does not
+      move (`fcmp_verified` and `origin_zone` keep their positions), and the
+      conservative reading is the one old records already give.
+
+      Still zeroed by `set_relay_method`, and that stays CORRECT rather than
+      being worked around: `upgrade_relay_method` only calls it when the
+      method strictly increases, so a pinned `local` origin — the only class
+      that uses the re-broadcast arm — keeps the bit for its whole life, while
+      an entry that genuinely leaves `local` for `fluff`/`block` has left that
+      arm and should not carry a disarm for it. */
+  uint8_t observed_circulating: 1;
   uint8_t fcmp_verified: 1;  // set when fcmp_verification_hash is valid
-  uint8_t bf_padding: 2;
+  //! Zone this transaction ARRIVED over. See set_origin_zone/get_origin_zone.
+  //
+  // Q12-U1. Exactly two bits, because `invalid`/`public_`/`i2p`/`tor` is four
+  // values -- the right width, not merely spare room. The record stays a fixed
+  // 192 bytes, so nothing about the format grows and there is no version to
+  // bump (rule 42 governs `rust/shekyl-engine-{state,file}/**`; this is
+  // daemon-side C++ LMDB, re-verified at pre-flight rather than inherited).
+  //
+  // LIVE PRODUCTION INPUT since 2026-08-25, and the rule-15 deletion clause
+  // below is therefore SPENT. `tx_pool.cpp`'s `local_relay_base` reads this
+  // field on every relay pass to pick the parameter class for an origin's
+  // re-broadcast interval (DAEMON_RELAY_PRIVACY.md §92.5c item 3): a value
+  // change here changes when a transaction is re-emitted. Deleting the field
+  // now silently reverts every origin to the clearnet wait.
+  //
+  // It reached that state having been telemetry with three scoped consumers,
+  // none delivered: U1 pool-loop routing — deleted with
+  // `relay_method::forward` (Q12-D3); U2 re-relay origin bucketing — retracted
+  // (`2cd0fb72`, not a leak fix); U3 zone-labelled `/get_stem_tallies` —
+  // collection zone, not this field. Fourth consumer, named 2026-08-13: the
+  // Q12-D6a isolation arm (`Q12_D6A_PEER_DISCOVERY_RUN.md` §6) — distinguish
+  // originated-on-anon from relayed-on-anon.
+  //
+  // The reading it acquired is narrow and worth stating so it is not widened
+  // by accident: the retry timer asks only "anonymity class or clearnet
+  // class?", and every entry that reaches it carries `invalid`, which resolves
+  // to the anonymity class. It is not a routing decision and does not select a
+  // peer.
+  //
+  // NO MIGRATION, and the reason is load-bearing: `zone::invalid == 0`, and a
+  // record written before this field existed has these bits zero, so it
+  // decodes to "origin unknown" -- already the correct sentinel.
+  //
+  // That is stronger than "the spare bits happen to be zero". The predecessor
+  // `bf_padding` (now `observed_circulating`) was never READ anywhere at the
+  // time, and its only writes were three
+  // explicit `= 0` assignments in tx_pool.cpp, now replaced by the setter. So
+  // every record ever persisted carries zero here by construction, and the
+  // fallback is a fact about the data rather than a hope about it.
+  uint8_t origin_zone: 2;
 
   // FCMP++ verification cache: hash(proof || tree_root || key_images).
   // When fcmp_verified == 1, the proof was previously verified against
@@ -220,6 +333,29 @@ struct txpool_tx_meta_t
 
   void set_relay_method(relay_method method) noexcept;
   relay_method get_relay_method() const noexcept;
+
+  //! Record the zone this transaction ARRIVED over.
+  //
+  // Deliberately separate from `set_relay_method`. The relay method is a
+  // routing DECISION and the origin zone is a FACT about where the bytes came
+  // from; folding the fact into the decision is what made the zone
+  // unrecoverable in the first place -- `relay_method::forward` meant "arrived
+  // somewhere other than clearnet" and threw away which somewhere.
+  //
+  // The setter itself is last-write. First-arrival is `add_tx`'s rule: it
+  // calls this only on a fresh insert, so a stem→fluff upgrade does not
+  // revise the provenance.
+  void set_origin_zone(epee::net_utils::zone zone) noexcept;
+
+  //! The zone this transaction arrived over, or `zone::invalid` if unknown.
+  //
+  // `invalid` is returned for every record written before this field existed,
+  // and for locally originated transactions, which did not arrive over
+  // anything. Callers must treat it as "origin unknown" rather than as a
+  // fourth transport. Nothing production-routes on this value. Named
+  // consumer: Q12-D6a isolation arm (`Q12_D6A_PEER_DISCOVERY_RUN.md` §6).
+  // The HF re-validation read is preservation, not that consumer.
+  epee::net_utils::zone get_origin_zone() const noexcept;
 
   //! \return True if `get_relay_method()` now returns `method`.
   bool upgrade_relay_method(relay_method method) noexcept;
@@ -600,7 +736,7 @@ private:
    * @param commitment the rct commitment to the output amount
    * @return amount output index
    */
-  virtual uint64_t add_output(const crypto::hash& tx_hash, const tx_out& tx_output, const uint64_t& local_index, const uint64_t unlock_time, const rct::key *commitment) = 0;
+  virtual uint64_t add_output(const crypto::hash& tx_hash, const tx_out& tx_output, const uint64_t& local_index, const uint64_t unlock_time, const ct::key *commitment) = 0;
 
   /**
    * @brief store amount output indices for a tx's outputs
@@ -645,14 +781,6 @@ private:
   /*********************************************************************
    * private concrete members
    *********************************************************************/
-  /**
-   * @brief private version of pop_block, for undoing if an add_block fails
-   *
-   * This function simply calls pop_block(block& blk, std::vector<transaction>& txs)
-   * with dummy parameters, as the returns-by-reference can be discarded.
-   */
-  void pop_block();
-
   // helper function to remove transaction from blockchain
   /**
    * @brief helper function to remove transaction from the blockchain
@@ -661,7 +789,12 @@ private:
    *
    * @param tx_hash the hash of the transaction to be removed
    */
-  void remove_transaction(const crypto::hash& tx_hash);
+  // `block_height` is the height of the block being popped — supplied by
+  // `pop_block`, never recomputed here. The vin does not carry the block
+  // (PC-D2 makes it implicit), so this function CANNOT rebuild the widened
+  // serve-credit key on its own, and reading ambient chain state would be the
+  // invariant-held-by-circumstance shape §3.4.2 refuses.
+  void remove_transaction(const crypto::hash& tx_hash, uint64_t block_height);
 
   uint64_t num_calls = 0;  //!< a performance metric
   uint64_t time_blk_hash = 0;  //!< a performance metric
@@ -682,7 +815,12 @@ protected:
    * @param tx_hash_ptr the hash of the transaction, if already calculated
    * @param tx_prunable_hash_ptr the hash of the prunable part of the transaction, if already calculated
    */
-  void add_transaction(const crypto::hash& blk_hash, const std::pair<transaction, blobdata_ref>& tx, const crypto::hash* tx_hash_ptr = NULL, const crypto::hash* tx_prunable_hash_ptr = NULL);
+  // `block_height` is the height of the block this tx is being added in
+  // (PC-D4): the serve-credit ledger key carries it, so the add path must be
+  // TOLD the height rather than infer it. `remove_transaction` takes the same
+  // value from `pop_block`, which is what makes the pop delete the key the add
+  // wrote (ARCHIVAL_PER_CHALLENGE_RECORD.md §3.4.2).
+  void add_transaction(const crypto::hash& blk_hash, const std::pair<transaction, blobdata_ref>& tx, uint64_t block_height, const crypto::hash* tx_hash_ptr = NULL, const crypto::hash* tx_prunable_hash_ptr = NULL);
 
   mutable uint64_t time_tx_exists = 0;  //!< a performance metric
   uint64_t time_commit1 = 0;  //!< a performance metric
@@ -1718,13 +1856,6 @@ public:
   bool txpool_tx_matches_category(const crypto::hash& tx_hash, relay_category category);
 
   /**
-   * @brief prune output data for the given amount
-   *
-   * @param amount the amount for which to prune data
-   */
-  virtual void prune_outputs(uint64_t amount) = 0;
-
-  /**
    * @brief get the blockchain pruning seed
    * @return the blockchain pruning seed
    */
@@ -1785,8 +1916,10 @@ public:
    * @brief prune confirmed transaction data beyond the reorg safety depth.
    *
    * For each transaction in blocks older than (tip - depth), stores output
-   * metadata in the output_metadata table and removes prunable verification
-   * data (and the optional `txs_pqc_auths` slice).
+   * metadata in the output_metadata table and removes the prunable body
+   * (`txs_prunable`). The prunable hash and the `txs_pqc_auths` slice stay:
+   * both are operands of the transaction's identity, and the complete body
+   * is served from shard archival rather than from a pruned node.
    *
    * @param depth  confirmation depth; use 0 for CRYPTONOTE_TX_PRUNE_DEPTH
    * @return true on success
@@ -2043,6 +2176,30 @@ public:
   virtual uint64_t get_archival_budget_accrual(uint64_t height) const = 0;
   virtual void remove_archival_budget_accrual(uint64_t height) = 0;
 
+  /**
+   * @brief highest `prune_below_epoch` the retention prune has ever applied
+   *
+   * The pop floor's source (C2-R1b-Q1c): written by the prune itself in the
+   * same write txn (the prune's durable receipt for what it destroyed) —
+   * monotonic, one writer, never lowered, and deliberately EXEMPT from pop
+   * reversal (F-2: destruction cannot be undone by a pop, so unlike the
+   * frozen-shard counter this property never decrements). 0 = no prune has
+   * ever run; every pop is then within journal coverage. The base default
+   * keeps every test double permissive.
+   */
+  virtual uint64_t get_archival_prune_watermark_epoch() const { return 0; }
+
+  /**
+   * @brief the single pop-refusal predicate (C2-R1b-Q1c)
+   *
+   * True iff a pop landing at `target_tip_height` stays at or above the
+   * open height of the oldest fully-retained epoch. THE one comparison:
+   * the pop_block belt and every pre-check (chain switch, checkpoint
+   * rollback, RPC pop_blocks) call this — never a local re-spelling (the
+   * three-copies drift trap the debit-auth gate exists for).
+   */
+  bool pop_target_allowed(uint64_t target_tip_height) const;
+
   virtual void set_total_bonded_atomic(uint64_t balance) = 0;
   virtual uint64_t get_total_bonded_atomic() const = 0;
 
@@ -2059,12 +2216,38 @@ public:
 
   // ─── Archival serve-credit ledger (gate-2 §3.1) ───────────────────────────
 
+  // PC-D4: the ledger is per-CHALLENGE, keyed `(P, shard, E, block_height)`.
+  // A pair-epoch now holds up to CHALLENGES_PER_PAIR_PER_EPOCH rows, one per
+  // block that challenged it, and consensus counts passes by ENUMERATING them
+  // — no field anywhere carries a tally (PC-D1/PC-D5).
+  //
+  // `block_height` is the height of the block the record rides in. It must be
+  // passed by the caller on BOTH the add and the pop path, from the same
+  // source, and never read from ambient chain state: a pop that recomputed the
+  // height from `height()` would delete a key it never wrote
+  // (ARCHIVAL_PER_CHALLENGE_RECORD.md §3.4.2).
+  /// Exact per-challenge read: a row for this pair at THIS block.
+  ///
+  /// Admission stays pair-epoch-wide (`pass_count > 0`) while the live issuer
+  /// is the one-challenge-per-pair-epoch beacon (`challenge_fire_height` /
+  /// `challenge_leaf_index`). The assignment cutover (`assign_epoch` — Rust
+  /// only, no FFI; ARCHIVAL_CHALLENGE_MECHANISM.md §9.5.1) makes this the
+  /// uniqueness question. Named blocker, named caller: do not delete under
+  /// rule 15. Tests that pass their own height are not coverage of a
+  /// production caller that does not exist yet.
   virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) const = 0;
+    uint64_t settlement_epoch, uint64_t block_height) const = 0;
   virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) = 0;
+    uint64_t settlement_epoch, uint64_t block_height) = 0;
   virtual void remove_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch) = 0;
+    uint64_t settlement_epoch, uint64_t block_height) = 0;
+
+  /// Rows recorded for `(P, shard, E)` — the PC-D5 enumeration over the
+  /// pair-epoch prefix. Admission and the failure window collapse this to
+  /// `> 0` while the beacon still issues one challenge; the settlement writer
+  /// (SO-D7) and the assignment cutover's count bound consume the number.
+  virtual uint32_t archival_serve_credit_pass_count(const crypto::hash& p_id, uint64_t shard_id,
+    uint64_t settlement_epoch) const = 0;
 
   // Gate-4 / shard-registry substrate (default: false until implemented).
   virtual bool get_archival_bond_hybrid_pubkey(const crypto::hash& p_id,
@@ -2144,8 +2327,8 @@ public:
   /// connected (§6.3: the naive remove-inverse leaves prune-evicted
   /// already-claimed epochs out of the restored set — the double-mint).
   virtual void revert_archival_emission_claims_at_height(uint64_t block_height);
-  /// Unbond connect writer (gate-4 §4.3 "On confirm"; the Rust fold
-  /// `shekyl_archival_unbond_connect` dictates the entire write set — record
+  /// Release connect writer (gate-4 §4.3 "On confirm"; the Rust fold
+  /// `shekyl_archival_release_connect` dictates the entire write set — record
   /// to the Exited shape, clean interval-close appended, counter debited):
   /// journals the record's full pre-image first (the emission WS-2 §6.3
   /// shape — the vin carries the POST-state, so holdings are otherwise
@@ -2156,11 +2339,11 @@ public:
   /// Caller: the bond-post vin connect dispatch (add_transaction).
   virtual void apply_archival_unbond(uint64_t block_height, const crypto::hash& p_id,
     uint64_t vin_bond_debit);
-  /// Restore the Unbond pre-image journal rows recorded when `block_height`
+  /// Restore the Release pre-image journal rows recorded when `block_height`
   /// connected, re-crediting `total_bonded_atomic` via the Rust pop fold
   /// (which validates the tip record is the connect's product — Exited state
   /// + trailing clean close). Trailing-entry invariant (ratified 2026-07-12,
-  /// §3.5): slashability ends at the Unbond connect — the slash scheduler
+  /// §3.5): slashability ends at the Release connect — the slash scheduler
   /// only challenges currently held shards and an Exited record holds none —
   /// so nothing appends after the clean close and the trailing entry is
   /// always the connect's close. pop_block still runs the slash revert first
@@ -2175,7 +2358,7 @@ public:
   /// `Bonded` (ShardSetCompact) — no interval, no clean close (grace-tail
   /// posture). Journals the full pre-image of the mutated fields first, and
   /// reads the LIVE `total_bonded_atomic` internally (per-post threading, as
-  /// Unbond). Any fold error is a hard abort. Caller: the bond-post vin
+  /// Release). Any fold error is a hard abort. Caller: the bond-post vin
   /// connect dispatch (add_transaction).
   virtual void apply_archival_holdings_update_add(uint64_t block_height,
     const crypto::hash& p_id, const std::vector<uint64_t>& post_shard_ids);
@@ -2222,9 +2405,11 @@ public:
   /// horizon); the Rust age computation pins a segment that froze at/after
   /// H_close(add_epoch) to the same longest-horizon extreme.
   virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const;
-  /// Unbond verify marshaling (P2B-8 Q1/Q2): each held shard's last-served
+  /// Release verify marshaling (P2B-8 Q1/Q2): each held shard's last-served
   /// settlement epoch — one reverse-cursor seek per shard over the BE
-  /// composite serve-credit key `P_id ‖ BE64(shard) ‖ BE64(epoch)` — with
+  /// composite serve-credit key `P_id ‖ BE64(shard) ‖ BE64(epoch) ‖
+  /// BE64(block_height)` (PC-D4; the seek's ceiling probe takes MAX in the
+  /// appended component too) — with
   /// never-served shards omitted (they carry no bit; the Rust fold treats an
   /// empty result as never-served ⇒ cooldown vacuously elapsed). The fold to
   /// the whole-record anchor and the cooldown verdict stay Rust-side
@@ -2242,7 +2427,7 @@ public:
   /// The slash scheduler's monotone settled watermark
   /// (`archival_last_slash_epoch`): every settlement epoch `<=` the returned
   /// value has been scanned at its slash deadline. u64 max = no epoch settled
-  /// yet (the storage sentinel). Marshaled into the Unbond release verify
+  /// yet (the storage sentinel). Marshaled into the Release release verify
   /// (SLASH_SETTLEMENT_PENDING gate).
   virtual uint64_t get_archival_last_slash_epoch() const;
   /// Finalize `R_market` / `Σwork` at settlement-epoch close (`ARCHIVAL_CONSENSUS_STATE.md` §3.3–§3.5).

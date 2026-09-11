@@ -184,10 +184,117 @@ fi
 echo
 
 # ----------------------------------------------------------------------
+# 6. C2-R1b-Q1c / F-2: the prune watermark has ONE writer and no revert.
+#    The pop floor is the prune's durable receipt: written only inside
+#    prune_archival_epochs_before (same txn as the deletions), monotonic,
+#    and deliberately EXEMPT from pop reversal -- pops cannot restore
+#    pruned rows, so the floor never retreats. A second key site is a
+#    drift twin; a mention inside any revert_* function body is the
+#    walk-down hole reopening through the back door. (Rule 47: writer
+#    presence is asserted before its uniqueness.)
+# ----------------------------------------------------------------------
+echo "[6/6] prune-watermark single-writer + no-revert (C2-R1b F-2)"
+# Exactly two identifier occurrences: the definition and the prune call.
+# A floor (>= 2) would let a THIRD call site ride in under a gate that
+# claims single-writer -- the count is an equality, so an unauthorized
+# second caller of the writer turns this red instead of passing.
+WM_CALLS=$(grep -c "note_archival_prune_watermark_epoch" src/blockchain_db/lmdb/db_lmdb.cpp || true)
+if [[ "${WM_CALLS:-0}" -ne 2 ]]; then
+  echo "      FAIL: expected exactly 2 note_archival_prune_watermark_epoch"
+  echo "            occurrences (definition + the prune call site), found"
+  echo "            ${WM_CALLS:-0} -- fewer means the writer or its call is gone,"
+  echo "            more means an unauthorized second caller."
+  FAIL=1
+else
+  WM_KEY_SITES=$(grep -c '"archival_prune_watermark_epoch"' src/blockchain_db/lmdb/db_lmdb.cpp || true)
+  # Anchored on the prune watermark's own identifiers: the slash revert
+  # legitimately speaks of the slash-fold watermark, a different concept.
+  # Region bound: from each revert_* definition to the NEXT top-level
+  # BlockchainLMDB member -- not the first column-0 '}'. Review asked
+  # about inner-brace truncation (all seven bodies verified to end at
+  # their true '}' today), and checking that surfaced the real adjacent
+  # hole the wider bound closes: anonymous-namespace helpers that sit
+  # BETWEEN reverts (and are called by them) escaped a body-only scan,
+  # so a revert could launder the forbidden reference through a helper.
+  # Close only on a COLUMN-0 definition of a non-revert member: bodies
+  # log their own qualified name (LOG_PRINT_L3("BlockchainLMDB::"...)),
+  # so an unanchored close fires two lines into every function.
+  WM_IN_REVERTS=$(awk '/^void BlockchainLMDB::revert_/{inr=1} inr && /^[A-Za-z_].*BlockchainLMDB::/ && !/BlockchainLMDB::revert_/{inr=0} inr' src/blockchain_db/lmdb/db_lmdb.cpp | grep -c "archival_prune_watermark" || true)
+  if [[ "${WM_KEY_SITES:-0}" -ne 2 ]]; then
+    echo "      FAIL: property key must appear exactly twice (reader + writer);"
+    echo "            found ${WM_KEY_SITES:-0} -- a third site is a drift twin or"
+    echo "            an unauthorized writer."
+    FAIL=1
+  elif [[ "${WM_IN_REVERTS:-0}" -ne 0 ]]; then
+    echo "      FAIL: a revert_* body references the prune watermark -- the floor"
+    echo "            is exempt from pop reversal BY DESIGN (F-2)."
+    FAIL=1
+  else
+    echo "      OK"
+  fi
+fi
+echo
+
+# ----------------------------------------------------------------------
+# 7. C2-R1c-Q3b: the sync-loop orphan arm re-syncs; it never punishes.
+#    An in-loop orphan during span processing means OUR store lost the
+#    parent between the span pre-check and the add (checkpoint-rollback
+#    discard, operator pop, Q1a flip-flop discard) -- degradation, not
+#    peer misconduct. Misrepresentation is caught at the queue
+#    bookkeeping-mismatch arm instead. Rule 47: the arm's own marker is
+#    asserted present before its content is judged.
+# ----------------------------------------------------------------------
+echo "[7/7] sync orphan arm re-syncs without penalizing (C2-R1c-Q3b)"
+INL=src/cryptonote_protocol/cryptonote_protocol_handler.inl
+# Capture each WHOLE block_sync_orphan_resync arm (its if-line through
+# the closing brace at the same indent) and keep the one carrying the
+# Q3b marker -- a fixed post-marker line count missed both a punitive
+# call placed before the marker and the arm growing past the window
+# (review round 1 on the R1c PR). The inherited subject was
+# `bvc.m_marked_as_orphaned`; PWD-B7's block twin replaced that bool
+# with the Rust sync-action predicate. Re-point, do not delete.
+# Punitive tokens: every drop_* spelling plus host scoring and host
+# blocking.
+# set -e would abort at this assignment on extractor failure, making the
+# pinpoint diagnostic below unreachable (rule 46's class: the verdict
+# must not die in transit) -- capture the rc through an || arm.
+Q3B_RC=0
+Q3B_ARM=$(awk '
+  /if[[:space:]]*\(block_sync_orphan_resync\(/ { cap=1; buf="" }
+  cap { buf = buf $0 "\n";
+        if ($0 ~ /^            \}$/) { cap=0;
+          if (buf ~ /re-syncing without penalizing the origin/) { print buf; found++ } } }
+  END { if (found != 1) exit 3 }' "$INL") || Q3B_RC=$?
+if [[ "$Q3B_RC" -ne 0 || -z "$Q3B_ARM" ]]; then
+  echo "      FAIL: could not extract exactly one marker-carrying orphan arm"
+  echo "            (extractor rc $Q3B_RC) -- the arm was removed, reworded,"
+  echo "            or re-indented; re-point this gate, do not delete it."
+  FAIL=1
+else
+  Q3B_PUNISH=$(printf '%s' "$Q3B_ARM" | grep -cE "drop_connection|add_host_fail|block_host|hit_score|m_score" || true)
+  if [[ "${Q3B_PUNISH:-0}" -ne 0 ]]; then
+    echo "      FAIL: the sync orphan arm contains a punitive call"
+    echo "            (drop_connection*/add_host_fail/block_host/hit_score/m_score) --"
+    echo "            punishment re-entered the arm (C2-R1c-Q3b ruled this a"
+    echo "            defect; the fix falsifier in the round doc names the"
+    echo "            only evidence that reopens HOW, and nothing reopens"
+    echo "            WHETHER)."
+    FAIL=1
+  elif rg -n 'm_marked_as_orphaned' "$INL" >/dev/null; then
+    echo "      FAIL: $INL still names m_marked_as_orphaned -- the bool is gone;"
+    echo "            the sync path asks block_sync_orphan_resync (PWD-B7)."
+    FAIL=1
+  else
+    echo "      OK"
+  fi
+fi
+echo
+
+# ----------------------------------------------------------------------
 # Result summary.
 # ----------------------------------------------------------------------
 if [[ "$FAIL" -ne 0 ]]; then
   echo "consensus-invariants: FAIL"
   exit 1
 fi
-echo "consensus-invariants: PASS (5/5)"
+echo "consensus-invariants: PASS (7/7)"

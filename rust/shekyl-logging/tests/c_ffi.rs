@@ -46,6 +46,7 @@ const C_HARNESS: &str = r##"
 #include <string.h>
 
 /* Mirrors src/shekyl/shekyl_log.h constants that land in commit 3. */
+#define SHEKYL_LOG_LEVEL_ERROR 1u
 #define SHEKYL_LOG_LEVEL_INFO 3u
 #define SHEKYL_LOG_OK         0
 #define SHEKYL_LOG_ERR_ALREADY_INIT (-1)
@@ -73,6 +74,26 @@ extern size_t shekyl_log_default_path(
     char *out_ptr, size_t out_cap);
 
 int main(void) {
+    /* Pre-init: WARNING+ is audible on stderr so C++ MERROR between
+       on_startup and the entry point's mlog_configure is not silent;
+       INFO stays off. The emit must not consume the one-shot install
+       (init_rc below must still be 0). */
+    static const char pre_tgt[] = "global";
+    _Bool pre_err = shekyl_log_level_enabled(
+        SHEKYL_LOG_LEVEL_ERROR, pre_tgt, (size_t)(sizeof(pre_tgt) - 1));
+    _Bool pre_info = shekyl_log_level_enabled(
+        SHEKYL_LOG_LEVEL_INFO, pre_tgt, (size_t)(sizeof(pre_tgt) - 1));
+    printf("pre_err_enabled=%d\n", pre_err ? 1 : 0);
+    printf("pre_info_enabled=%d\n", pre_info ? 1 : 0);
+    static const char pre_msg[] = "pre-init probe";
+    shekyl_log_emit(
+        SHEKYL_LOG_LEVEL_ERROR,
+        pre_tgt, (size_t)(sizeof(pre_tgt) - 1),
+        NULL, 0u,
+        0u,
+        NULL, 0u,
+        pre_msg, (size_t)(sizeof(pre_msg) - 1));
+
     /* Forwarder before any init: NOT_INITIALIZED (-9), and the
        one-shot pin must NOT be consumed by the failed attempt. */
     int fwd_pre = shekyl_log_install_tracing_forwarder();
@@ -290,6 +311,8 @@ fn c_harness_links_and_runs_against_staticlib() {
     // have fired in sequence. Exact line-by-line assertions catch
     // accidental behavior drift more than a "contains" check would.
     for needle in [
+        "pre_err_enabled=1",
+        "pre_info_enabled=0",
         "fwd_pre_rc=-9",
         "init_rc=0",
         "double_init_rc=-1",
@@ -310,4 +333,8 @@ fn c_harness_links_and_runs_against_staticlib() {
             "expected {needle:?} in harness stdout.\nstdout:\n{stdout}\nstderr:\n{stderr}"
         );
     }
+    assert!(
+        stderr.contains("pre-init probe"),
+        "pre-init ERROR emit must reach stderr without installing the subscriber.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
 }

@@ -1,0 +1,195 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Docs structural gates — one job emitting one required status context, over a
+# growing bundle of WHOLE-TREE checks: docs/, the rules, and the source those
+# documents cite. Each step's comment says what that step asserts; read those
+# rather than this header, which cannot stay ahead of the bundle.
+#
+# The bundle began as the dead-relative-link gate and still carries its
+# rationale, because that rationale is the bundle's:
+#
+# Every markdown link in docs/ whose target is a relative path must resolve in
+# the checkout, or carry a reasoned entry in docs/ci/link-allowlist.txt.
+#
+# Why a gate and not a periodic sweep: the rot regenerates. The RP-3a
+# follow-up counted a handful of dead links; the 2026-07-30 census that closed
+# it found 178 across 27 files, most introduced by ordinary file moves
+# (design/ -> completed/, crate splits, the RCT->CT rename) in the days after
+# each doc was written. docs/ is a grounding source in this repo — the
+# decision log, design rounds, and completed-round closeouts are read as
+# evidence — so a dead anchor silently converts a grounded claim into an
+# unverifiable one. One-time sweeps have been run and have not held.
+#
+# Every checker here is stdlib python3 (present on ubuntu-latest); no ripgrep,
+# no PyYAML, nothing to install. Both of the link gate's failure modes are
+# negative-controlled in its closing commit: an injected dead link fails the
+# run, and an allowlist entry without a reason fails the allowlist itself.
+#
+# Structure mirrors grep-gates.yml: single job, single runner,
+# fast-running, superseded-run cancellation.
+
+name: ci/docs-gates
+
+on:
+  pull_request:
+    branches: [dev]
+    # NO `paths:` FILTER, DELIBERATELY. This job's name is a REQUIRED status
+    # context on dev, and a required context that never reports is not a
+    # skipped check — it is "Expected — waiting for status to be reported",
+    # forever. A path filter therefore deadlocks every PR it excludes, with no
+    # red anywhere to explain it. PR #660 (two files, neither under docs/) sat
+    # blocked on exactly this and had to be force-merged because the failure
+    # mode is silence. This is the mirror of #653, which fixed
+    # `paths-ignore: docs/**` stranding docs-only PRs and left this direction
+    # standing.
+    #
+    # Filtering was also wrong on the merits, independently of the deadlock.
+    # Every check below is WHOLE-TREE, not diff-scoped: they validate the state
+    # of the tree, not what a PR touched. check_doc_links.py resolves links
+    # from docs/ INTO source files, so an ordinary code-only file move breaks
+    # docs and — under a `docs/**` filter — could not start the gate that
+    # exists to catch it. That is the rot this workflow was written for; the
+    # 2026-07-30 census found 178 dead links, "most introduced by ordinary
+    # file moves". Reading this file as "the link gate for docs/" is what made
+    # a `docs/**` filter look reasonable; it never was.
+    #
+    # And the filter was a hand-maintained list of the subjects of every check
+    # below, which had to grow as those checks grew. It already carried a
+    # warning that pruning it "silently unwires that gate" (P0a, 2026-09-05);
+    # while this change was open, #658 added a check and five more path entries
+    # to feed it. That is the drift, observed rather than predicted. A list
+    # that must not drift, next to gates that keep acquiring subjects, is a
+    # standing liability. Deleting it deletes the drift.
+    #
+    # Cost of always running: ~25 s (five consecutive runs: 24/25/25/26 s and
+    # one 3m31s outlier), on a job already bounded at 10 minutes.
+
+concurrency:
+  group: docs-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check-doc-links:
+    name: "Docs structural gates (links, banners, fossils, FOLLOWUPS, index)"
+    runs-on: ubuntu-latest
+    # Both checks are pure-Python over a checkout; a minute is generous.
+    # Bounded per 47-gate-subject-assertion.mdc so an infrastructure stall
+    # cannot present as a docs failure.
+    timeout-minutes: 10
+    steps:
+      # Submodules required: docs cite files under external/* (e.g.
+      # randomx-v2 headers). Without them the gate false-fails on correct
+      # links — measured 2026-07-31 on this workflow's first green path.
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - name: Run doc-link check
+        # Every relative markdown link under docs/ must resolve in the
+        # checkout, or carry a reasoned allowlist entry. The gate this file
+        # was created for; its rationale and negative controls are in the
+        # header. Instance of 47-gate-subject-assertion.mdc.
+        #
+        # No `if:` guard, because nothing has run before it to be masked by.
+        run: python3 scripts/ci/check_doc_links.py
+
+      - name: Run empty-identifier-heading check
+        # An identifier heading whose body vanished reads as answered and is
+        # not — invisible to every other gate, since the file still parses,
+        # the links still resolve, and the heading still answers a search.
+        # Instance of 47-gate-subject-assertion.mdc.
+        #
+        # Runs even if the link check failed, so one docs defect does not
+        # mask the other.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_doc_headings.py
+
+      - name: Run LMDB schema coverage check
+        # Every table in db_lmdb.cpp's SHEKYL_LMDB_TABLES list must have a
+        # section in docs/LMDB_SCHEMA.md, and the doc's stated total must
+        # match the list. Nine live tables had zero mentions when this gate
+        # was written — absence of a section reads as absence of a table.
+        #
+        # Runs even if earlier checks failed, for the same non-masking
+        # reason as above.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_lmdb_schema_coverage.py
+
+      - name: Run DRS-P0d digest-v0 coverage check
+        # The logical-state digest v0 must name its three families
+        # (core chain, spent_keys, curve root) at the hasher, the LMDB
+        # walker, the FFI, and the audit read-set — and must record the
+        # archival-journal exclusion. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_drs_p0d_digest_coverage.py
+
+      - name: Run status-banner check
+        # design/ and completed/ without a Status line in the first 40 lines
+        # after H1 read as current SoT. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_doc_status_banners.py
+
+      - name: Run forbidden-fossil check
+        # Live RCTType* names, GENESIS_STRATEGY.md, privacy-security.mdc in
+        # always-applied rules. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_doc_fossils.py
+
+      - name: "Run FOLLOWUPS Target: check"
+        # Every work item must carry Target: pre-genesis|post-genesis|V4.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_followups_targets.py
+
+      - name: Run FOLLOWUPS gate selftest (unclosed-bold leg)
+        # That gate's unclosed-bold leg carries a falsifier; run it, because a
+        # check nobody exercises is a check nobody knows still fires. Only that
+        # leg is falsified — see the script header.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_followups_targets.py --selftest
+
+      - name: Run index prefix-uniqueness check
+        # Rule 94 §2 family prefixes must not collide.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_index_prefix_uniqueness.py
+
+      - name: Run index table-shape check
+        # GFM drops a surplus cell and blanks a missing one, so a malformed row
+        # says one thing in source and another on the page — 5,455 characters
+        # across three rows were registered and never rendered, and the
+        # invisible half went stale because nobody could see it.
+        # File-wide, not registry-scoped, and escape-aware (`\|` is literal).
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_index_table_shape.py
+
+      - name: Run consensus-digest independent oracle
+        # Re-implements the canonical form (CLIENT_VERSION_CONSTANTS_VALIDATION.md
+        # §3.3) in Python and compares to build.rs's PINNED_DIGEST. The build
+        # script and the crate's tests share one Rust canonicaliser; the KAT's
+        # frozen literals catch a drift only while they are not moved in the
+        # same edit. Recomputing from the rules every run leaves no literal to
+        # move. VC-R18. Instance of 47-gate-subject-assertion.mdc: it fails if
+        # PINNED_DIGEST is renamed or absent rather than passing over nothing.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_consensus_digest_oracle.py
+
+      - name: Run claim-era basename check
+        # docs/design/ must not grow CONFIDENTIAL_STAKING.md or a
+        # txin_stake_claim spec. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_no_claim_era_spec.py
+
+      - name: Run landed-row stamp check
+        # A row claiming a slice **landed** must name its PR; six consecutive
+        # RK slices merged unstamped and the banner went stale (PR #576).
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_landed_rows_stamped.py

@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <optional>
+#include <cstdint>
 #include "net/net_utils_base.h"
 #include "crypto/hash.h"
 
@@ -47,7 +48,7 @@ namespace cryptonote
   {
     cryptonote_connection_context(): m_state(state_before_handshake), m_remote_blockchain_height(0), m_last_response_height(0),
         m_expected_heights_start(0), m_last_request_time(boost::date_time::not_a_date_time), m_callback_request_count(0),
-        m_last_known_hash(crypto::null_hash), m_pruning_seed(0), m_rpc_port(0), m_rpc_credits_per_hash(0), m_anchor(false), m_score(0),
+        m_last_known_hash(crypto::null_hash), m_pruning_seed(0), m_score(0),
         m_expect_response(0), m_expect_height(0), m_num_requested(0) {}
 
     enum state
@@ -92,8 +93,13 @@ namespace cryptonote
     static constexpr int handshake_command() noexcept { return 1001; }
     bool handshake_complete() const noexcept { return m_state != state_before_handshake; }
 
-    //! \return Maximum number of bytes permissible for `command`.
-    static size_t get_max_bytes(int command) noexcept;
+    //! \return Payload cap for this `(command, flags)` pair, or `nullopt`
+    //! if the header is unrecognised at ingress (PWD-B3a). `nullopt` is
+    //! connection-fatal even for a zero-length payload — returning cap 0
+    //! would admit empty unknown commands. On reject, `reject_rc` (when
+    //! non-null) receives the `shekyl_levin_ingress_admit` code (`-8`
+    //! unknown flags, `-9` unknown dispatch command).
+    static std::optional<size_t> get_max_bytes(uint32_t command, uint32_t flags, int32_t* reject_rc = nullptr) noexcept;
 
     //! Use this instead of `m_state = state_normal`.
     void set_state_normal();
@@ -111,9 +117,6 @@ namespace cryptonote
     copyable_atomic m_callback_request_count; //in debug purpose: problem with double callback rise
     crypto::hash m_last_known_hash;
     uint32_t m_pruning_seed;
-    uint16_t m_rpc_port;
-    uint32_t m_rpc_credits_per_hash;
-    bool m_anchor;
     int32_t m_score;
     int m_expect_response;
     uint64_t m_expect_height;

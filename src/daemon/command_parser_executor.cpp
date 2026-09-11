@@ -40,12 +40,11 @@ namespace daemonize {
 t_command_parser_executor::t_command_parser_executor(
     uint32_t ip
   , uint16_t port
-  , const std::optional<tools::login>& login
-  , const epee::net_utils::ssl_options_t& ssl_options
+  , cryptonote::network_type nettype
   , bool is_rpc
   , cryptonote::core_rpc_server* rpc_server
   )
-  : m_executor(ip, port, login, ssl_options, is_rpc, rpc_server)
+  : m_executor(ip, port, nettype, is_rpc, rpc_server)
 {}
 
 bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& args)
@@ -59,7 +58,6 @@ bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& 
   bool white = false;
   bool gray = false;
   bool pruned = false;
-  bool publicrpc = false;
   size_t limit = 0;
   for (size_t i = 0; i < args.size(); ++i)
   {
@@ -75,10 +73,6 @@ bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& 
     {
       pruned = true;
     }
-    else if (args[i] == "publicrpc")
-    {
-      publicrpc = true;
-    }
     else if (!epee::string_tools::get_xtype_from_string(limit, args[i]))
     {
       std::cout << "Invalid syntax: Unexpected parameter: " << args[i] << ". For more details, use the help command." << std::endl;
@@ -87,7 +81,7 @@ bool t_command_parser_executor::print_peer_list(const std::vector<std::string>& 
   }
 
   const bool print_both = !white && !gray;
-  return m_executor.print_peer_list(white | print_both, gray | print_both, limit, pruned, publicrpc);
+  return m_executor.print_peer_list(white | print_both, gray | print_both, limit, pruned);
 }
 
 bool t_command_parser_executor::print_peer_list_stats(const std::vector<std::string>& args)
@@ -449,7 +443,10 @@ bool t_command_parser_executor::start_mining(const std::vector<std::string>& arg
     }
   }
 
-  m_executor.start_mining(info.address, threads_count, nettype, do_background_mining, ignore_battery);
+  // Pass the validated ORIGINAL string through; the parse above stays as
+  // the syntax/network gate (the parsed struct cannot be re-encoded since
+  // the fork-(ii) address layout).
+  m_executor.start_mining(args.front(), threads_count, nettype, do_background_mining, ignore_battery);
 
   return true;
 }
@@ -939,10 +936,13 @@ bool t_command_parser_executor::prune_blockchain(const std::vector<std::string>&
   {
     std::cout << "Warning: pruning from within shekyld will not shrink the database file size." << std::endl;
     std::cout << "Instead, parts of the file will be marked as free, so the file will not grow" << std::endl;
-    std::cout << "until that newly free space is used up. If you want a smaller file size now," << std::endl;
-    std::cout << "exit shekyld and run shekyl-blockchain-prune (you will temporarily need more" << std::endl;
-    std::cout << "disk space for the database conversion though). If you are OK with the database" << std::endl;
-    std::cout << "file keeping the same size, re-run this command with the \"confirm\" parameter." << std::endl;
+    std::cout << "until that newly free space is used up. To prune, re-run this command with" << std::endl;
+    std::cout << "the \"confirm\" parameter. If you also want a smaller file size, wait for" << std::endl;
+    std::cout << "pruning to finish, then exit shekyld, create an empty destination directory," << std::endl;
+    std::cout << "and (as the user that owns the data directory) compact the database with:" << std::endl;
+    std::cout << "  shekyl-mdb-copy -c <data-dir>/lmdb <destination-dir>" << std::endl;
+    std::cout << "then replace the old lmdb directory with the copy (you will temporarily need" << std::endl;
+    std::cout << "disk space for both)." << std::endl;
     return true;
   }
 
@@ -952,71 +952,6 @@ bool t_command_parser_executor::prune_blockchain(const std::vector<std::string>&
 bool t_command_parser_executor::check_blockchain_pruning(const std::vector<std::string>& args)
 {
   return m_executor.check_blockchain_pruning();
-}
-
-bool t_command_parser_executor::set_bootstrap_daemon(const std::vector<std::string>& args)
-{
-  struct parsed_t
-  {
-    std::string address;
-    std::string user;
-    std::string password;
-    std::string proxy;
-  };
-
-  std::optional<parsed_t> parsed = [&args]() -> std::optional<parsed_t> {
-    const size_t args_count = args.size();
-    if (args_count == 0)
-    {
-      return {};
-    }
-    if (args[0] == "auto")
-    {
-      if (args_count == 1)
-      {
-        return {{args[0], "", "", ""}};
-      }
-      if (args_count == 2)
-      {
-        return {{args[0], "", "", args[1]}};
-      }
-    }
-    else if (args[0] == "none")
-    {
-      if (args_count == 1)
-      {
-        return {{"", "", "", ""}};
-      }
-    }
-    else
-    {
-      if (args_count == 1)
-      {
-        return {{args[0], "", "", ""}};
-      }
-      if (args_count == 2)
-      {
-        return {{args[0], "", "", args[1]}};
-      }
-      if (args_count == 3)
-      {
-        return {{args[0], args[1], args[2], ""}};
-      }
-      if (args_count == 4)
-      {
-        return {{args[0], args[1], args[2], args[3]}};
-      }
-    }
-    return {};
-  }();
-
-  if (!parsed)
-  {
-    std::cout << "Invalid syntax: Wrong number of parameters. For more details, use the help command." << std::endl;
-    return true;
-  }
-
-  return m_executor.set_bootstrap_daemon(parsed->address, parsed->user, parsed->password, parsed->proxy);
 }
 
 bool t_command_parser_executor::flush_cache(const std::vector<std::string>& args)

@@ -29,7 +29,7 @@ name: "Shekyl CodeQL config"
 #      exists.
 #   2. Wallet secret material lives in `Zeroizing<…>` /
 #      `ZeroizeOnDrop` types from `shekyl-crypto-pq`, and the
-#      `.zeroize-allowlist` files plus `zeroize-check.yml`
+#      `.zeroize-allowlist` files plus the grep-gates.yml zeroize step
 #      independently audit that every secret-bearing field is
 #      wiped on drop. A hard-coded production credential would
 #      either fail that audit or never make it past review.

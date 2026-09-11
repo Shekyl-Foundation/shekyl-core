@@ -92,7 +92,10 @@ bool archival_budget_conservation_boundary::verify_conservation(
 
     // ── The conservation identity, in labeled form ─────────────────────────
     // Independent recompute of every leg from the block's OWN operands
-    // (height, major_version, prior cumulative supply). The staker inflow
+    // (height and prior cumulative supply; major_version stopped being an
+    // operand when the unreachable hf_version gate was deleted from
+    // shekyl/economics.h, and is asserted above only to prove the fixture
+    // really crosses the fork boundary for the pop/reconnect leg). The staker inflow
     // accrues unconditionally (the pre-activation burn leg is deleted —
     // emission is a genesis fact), so the labeled form now pins the
     // destination outright: the whole inflow in the accrual row, nothing
@@ -101,7 +104,7 @@ bool archival_budget_conservation_boundary::verify_conservation(
     // only the row-level equality catches it (the F-B1b class).
     const uint64_t q_full = expected_full_subsidy(already_generated);
     const shekyl::EmissionSplit em_split =
-        shekyl::compute_emission_split(q_full, height, genesis_ng_height, blk.major_version);
+        shekyl::compute_emission_split(q_full, height, genesis_ng_height);
 
     // Fee-free fixture — a disclosed COVERAGE GAP, not just a fixture fact:
     // production's redirected quantity is

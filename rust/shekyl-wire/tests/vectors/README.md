@@ -30,7 +30,7 @@ is the genesis wire-format / hashing oracle. Two assertions ride these:
 Each is a coinbase-only block: `vin = [gen]`, ct type `0` (`Null`), tagged_key
 outputs (five on h0, one on h1/h2), PQC `tx_extra`. The coinbase ct base carries
 `enc_amounts` / `enc_labels` / `outPk` even for `Null`
-(`src/fcmp/rctTypes.h:209-280`) — the bytes the pre-fix vendored reader skipped,
+(`src/fcmp/ct_types.h:209-280`) — the bytes the pre-fix vendored reader skipped,
 which this crate consumes.
 
 ## Regenerate

@@ -3,8 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Transaction-meta block — per-tx secret keys + notes + free-form attributes
-//! + short-lived pool-tx observations.
+//! Transaction-meta block — per-tx secret keys + notes + short-lived
+//! pool-tx observations.
 //!
 //! Third of four `.wallet`-side ledger blocks (after
 //! [`LedgerBlock`](crate::ledger_block::LedgerBlock) and
@@ -15,9 +15,6 @@
 //!   generated when it *constructed* a tx. Kept so the user can later prove a
 //!   payment to a third party without re-deriving from the seed.
 //! * **User notes** — free-text notes the user attached to specific txids.
-//! * **Attributes** — opaque `String -> String` key/value pairs used as a
-//!   forward-compatible extension point for UX settings that the wallet
-//!   wants to persist but has no dedicated field for yet.
 //! * **Scanned pool transactions** — the live mempool observations the
 //!   scanner has made. Short-lived by nature but persisted across runs so
 //!   that a restart does not lose the "pending" state the user sees.
@@ -59,7 +56,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{error::WalletLedgerError, serde_helpers::zeroizing_bytes_32};
 
-/// Schema version of the tx-meta block. V3.0 ships version `2`.
+/// Schema version of the tx-meta block. V3.0 ships version `3`.
 /// Any field addition / removal / renaming inside the block bumps this;
 /// loads that see a different version refuse rather than migrate.
 ///
@@ -71,7 +68,113 @@ use crate::{error::WalletLedgerError, serde_helpers::zeroizing_bytes_32};
 ///   single tx secret scalar for every output including change
 ///   (`sign_bridge::sign_tx`), it has no subaddresses, and the field
 ///   had no producer whole-tree.
-pub const TX_META_BLOCK_VERSION: u32 = 2;
+/// - `3` — `attributes` deleted (SA-4 dead persisted-field sweep,
+///   executing the P3-5 ruling `WALLET_SEND_RECORD.md`): the untyped
+///   `String -> String` wallet2-lineage bag had no writer, no reader,
+///   and no defined semantics (rules 60/81). Reopen criterion: a named,
+///   typed UX-state need that `tx_notes` cannot carry.
+pub const TX_META_BLOCK_VERSION: u32 = 3;
+
+/// Maximum length of **one** note, in UTF-8 bytes (SJ-DQ-7).
+///
+/// A note is persisted, rescan-preserved, schema-versioned state, so an
+/// unbounded one is a storage-amplification vector. 4 KiB is generous for a
+/// human note and small on disk.
+///
+/// **Enforced structurally**: the `tx_notes` map is private and
+/// `TxMetaBlock::set_note` is its only insertion door, so every caller —
+/// RPC, CLI, tests, and any future writer — passes this bound rather than
+/// agreeing to. Boundaries may pre-check with this constant to fail before
+/// taking a write lock, but they are not the enforcement.
+///
+/// **The number of notes needs no separate cap.** A note attaches to a
+/// transaction the wallet is part of — [`crate::WalletLedger::set_note`]
+/// refuses a note for a txid the wallet has no relationship with — so the
+/// entry count can never exceed the wallet's own transaction population,
+/// which is already bounded by the payload the transfers and journal consume.
+/// The count is a side effect of the membership rule, not a number anyone had
+/// to derive; a client cannot inflate the map with notes on arbitrary txids,
+/// which is what made the payload the only backstop before.
+pub const TX_NOTE_MAX_BYTES: usize = 4 * 1024;
+
+/// Refusal when a note exceeds [`TX_NOTE_MAX_BYTES`].
+///
+/// Carries **byte counts only** — never the note text — so counterparty-
+/// bearing free text cannot escape through an error string (rules 35/36).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("note exceeds the {max}-byte maximum ({len} bytes)")]
+pub struct TxNoteTooLong {
+    /// Observed UTF-8 byte length of the refused note.
+    pub len: usize,
+    /// Ceiling that was exceeded ([`TX_NOTE_MAX_BYTES`]).
+    pub max: usize,
+}
+
+/// Enforce [`TX_NOTE_MAX_BYTES`] on a candidate note — the **single owner** of
+/// the ceiling check.
+///
+/// `TxMetaBlock::set_note` calls it on the write path; a boundary (e.g. the
+/// wallet-RPC handler) may also call it to fast-fail an over-length request
+/// before doing work, but the comparison, the ceiling, and the refusal all
+/// live here, so an early refusal can never differ from the write-door one.
+/// Reports byte counts only — never the note content (rules 35/36).
+///
+/// # Errors
+///
+/// [`TxNoteTooLong`] when `note` exceeds [`TX_NOTE_MAX_BYTES`].
+pub fn check_tx_note_len(note: &str) -> Result<(), TxNoteTooLong> {
+    if note.len() > TX_NOTE_MAX_BYTES {
+        return Err(TxNoteTooLong {
+            len: note.len(),
+            max: TX_NOTE_MAX_BYTES,
+        });
+    }
+    Ok(())
+}
+
+/// The pre-write note entry captured by `TxMetaBlock::set_note` — the **txid
+/// it belongs to** together with its prior value — consumed by
+/// [`TxMetaBlock::restore_note`] to undo a write after a failed durable save
+/// (fail closed).
+///
+/// Both fields are **private**, the token carries its own txid, and it is
+/// deliberately **not `Clone`**. So: the only way to obtain one is from
+/// `set_note`; `restore_note` puts the value back on *that* txid (there is no
+/// caller-supplied destination to redirect); and a token restores at most
+/// once. A caller therefore cannot capture a token from a known transaction
+/// and replay it onto arbitrary txids — which is what keeps the restore path
+/// from re-admitting notes past [`crate::WalletLedger::set_note`]'s membership
+/// gate and re-opening the unbounded note-map amplification.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PriorNote {
+    txid: [u8; 32],
+    value: Option<String>,
+}
+
+/// Result of `TxMetaBlock::set_note`: whether the map changed (and thus
+/// needs a durable save) or the write is already a no-op.
+///
+/// Not `Clone`: the `Applied` arm carries a single-use [`PriorNote`] rollback
+/// token, and duplicating it would let the same restore replay onto the map.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SetTxNoteOutcome {
+    /// Map entry changed. `previous` is the pre-write value (an opaque
+    /// [`PriorNote`], for fail-closed rollback via [`TxMetaBlock::restore_note`]);
+    /// `stored` is the post-write value (`None` when cleared).
+    Applied {
+        /// Entry present before this write, if any — opaque, feed it straight
+        /// to [`TxMetaBlock::restore_note`].
+        previous: PriorNote,
+        /// Entry present after this write (`None` when the note was cleared).
+        stored: Option<String>,
+    },
+    /// Map already matched the requested state (clear of absent, or set of
+    /// an identical string). No durable save is required.
+    Unchanged {
+        /// Authoritative post-write state (`None` when no note is set).
+        stored: Option<String>,
+    },
+}
 
 /// A single 32-byte tx secret scalar, wrapped so both its in-memory
 /// representation and its deserialization path zeroize on drop.
@@ -181,14 +284,25 @@ pub struct TxMetaBlock {
     pub tx_keys: BTreeMap<[u8; 32], TxSecretKeys>,
 
     /// User-authored free-text notes, keyed by txid.
+    ///
+    /// **Private on purpose.** [`TX_NOTE_MAX_BYTES`] is enforced on every path
+    /// that *authors* a note: `Self::set_note` is the only write door and
+    /// refuses an over-length note (via [`check_tx_note_len`]), and
+    /// [`Self::restore_note`] consumes only an opaque [`PriorNote`] that
+    /// `set_note` already validated — so no in-memory API can insert an
+    /// over-length note. [`Self::notes`] / [`Self::note`] are the only doors
+    /// out.
+    ///
+    /// **`Deserialize` is deliberately not re-validated.** The sealed on-disk
+    /// form is trusted input: the AEAD envelope authenticates it and this
+    /// wallet only ever wrote it through `set_note`, so `Deserialize`
+    /// *restores* prior values rather than admitting new ones. Validating on
+    /// load would defend against a file this wallet cannot produce (an
+    /// over-length note in a validly-sealed block) and would pay for it by
+    /// making a wallet **unopenable** — the wrong trade for the one file that
+    /// holds a user's seed-adjacent state. Declined by design, not overlooked.
     #[serde(default = "BTreeMap::new")]
-    pub tx_notes: BTreeMap<[u8; 32], String>,
-
-    /// Opaque `String -> String` attribute bag for forward-compatible UX
-    /// state. Wallet2 used an `unordered_map<string, string>`; we keep the
-    /// functional surface but insist on `BTreeMap` for byte stability.
-    #[serde(default = "BTreeMap::new")]
-    pub attributes: BTreeMap<String, String>,
+    tx_notes: BTreeMap<[u8; 32], String>,
 
     /// Scanner-observed mempool transactions. Bounded externally by the
     /// orchestrator's pruning policy (see module-level follow-up).
@@ -209,24 +323,25 @@ impl TxMetaBlock {
             block_version: TX_META_BLOCK_VERSION,
             tx_keys: BTreeMap::new(),
             tx_notes: BTreeMap::new(),
-            attributes: BTreeMap::new(),
             scanned_pool_txs: BTreeMap::new(),
         }
     }
 
     /// Construct a tx-meta block from its component maps at the current
     /// version. Convenience for tests and the orchestrator's build path.
+    ///
+    /// Takes no notes map: notes are bounded state and enter only through
+    /// `Self::set_note`, so there is no constructor that can seed the block
+    /// past [`TX_NOTE_MAX_BYTES`]. Callers that want notes set them after
+    /// construction.
     pub fn new(
         tx_keys: BTreeMap<[u8; 32], TxSecretKeys>,
-        tx_notes: BTreeMap<[u8; 32], String>,
-        attributes: BTreeMap<String, String>,
         scanned_pool_txs: BTreeMap<[u8; 32], ScannedPoolTx>,
     ) -> Self {
         Self {
             block_version: TX_META_BLOCK_VERSION,
             tx_keys,
-            tx_notes,
-            attributes,
+            tx_notes: BTreeMap::new(),
             scanned_pool_txs,
         }
     }
@@ -237,25 +352,118 @@ impl TxMetaBlock {
     }
 
     /// Deserialize from postcard bytes produced by
-    /// [`Self::to_postcard_bytes`]. Refuses any version mismatch.
+    /// [`Self::to_postcard_bytes`].
+    /// **Refuses a version mismatch before decoding the body**, so a blob
+    /// written by another schema version reports its version rather than
+    /// surfacing as a codec error (see [`crate::version_gate`]).
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
-        let block: Self = postcard::from_bytes(bytes)?;
-        block.check_version()?;
-        Ok(block)
+        // Version first, body second — see [`crate::version_gate`]: postcard
+        // carries no framing, so a stale blob decoded under the current
+        // declaration fails as corruption before any post-decode check can
+        // name the version. The gate reads only the leading varint.
+        crate::version_gate::gate_leading_version(bytes, "tx_meta", TX_META_BLOCK_VERSION)?;
+        Ok(postcard::from_bytes(bytes)?)
     }
 
     /// Version gate. Called automatically by [`Self::from_postcard_bytes`];
     /// exposed publicly so the `WalletLedger` aggregator (commit 2g) can
     /// fan out the same check.
     pub fn check_version(&self) -> Result<(), WalletLedgerError> {
-        if self.block_version != TX_META_BLOCK_VERSION {
-            return Err(WalletLedgerError::UnsupportedBlockVersion {
-                block: "tx_meta",
-                file: self.block_version,
-                binary: TX_META_BLOCK_VERSION,
+        crate::version_gate::gate_version(self.block_version, "tx_meta", TX_META_BLOCK_VERSION)
+    }
+
+    /// Read the user-authored note for `txid`, if any.
+    #[must_use]
+    pub fn note(&self, txid: &[u8; 32]) -> Option<&str> {
+        self.tx_notes.get(txid).map(String::as_str)
+    }
+
+    /// The whole note map, read-only — for projections that annotate a batch
+    /// of rows and would otherwise pay a lookup call per row.
+    ///
+    /// Shared immutably: reading notes is unrestricted, writing them is not —
+    /// the map itself is private and `Self::set_note` is the only door in.
+    #[must_use]
+    pub fn notes(&self) -> &BTreeMap<[u8; 32], String> {
+        &self.tx_notes
+    }
+
+    /// Set or clear the note for `txid` — the crate-internal length door.
+    ///
+    /// **`pub(crate)` on purpose.** This enforces the note *length* bound but
+    /// **not** the membership rule (a note attaches only to a transaction the
+    /// wallet has), because that rule needs the whole ledger and this type
+    /// sees only its own block. [`crate::WalletLedger::set_note`] is the public
+    /// door: it checks membership, then calls this. Keeping this inner method
+    /// out of the public API is what makes the membership rule *structural* —
+    /// no cross-crate caller can reach the map past it (the `tx_notes` field is
+    /// private, and [`Self::restore_note`] only re-admits an opaque
+    /// [`PriorNote`] this method already validated).
+    ///
+    /// - Empty `note` removes any entry (no separate delete method).
+    /// - Non-empty `note` inserts or replaces; length is capped at
+    ///   [`TX_NOTE_MAX_BYTES`] UTF-8 bytes.
+    /// - Identical set / clear-of-absent returns
+    ///   [`SetTxNoteOutcome::Unchanged`] so the caller can skip a durable
+    ///   save (same discipline as abandon's already-abandoned short-circuit).
+    ///
+    /// # Errors
+    ///
+    /// [`TxNoteTooLong`] when `note` exceeds the byte ceiling. The error
+    /// reports counts only — never the note content.
+    pub(crate) fn set_note(
+        &mut self,
+        txid: [u8; 32],
+        note: String,
+    ) -> Result<SetTxNoteOutcome, TxNoteTooLong> {
+        if note.is_empty() {
+            return Ok(match self.tx_notes.remove(&txid) {
+                None => SetTxNoteOutcome::Unchanged { stored: None },
+                Some(previous) => SetTxNoteOutcome::Applied {
+                    previous: PriorNote {
+                        txid,
+                        value: Some(previous),
+                    },
+                    stored: None,
+                },
             });
         }
-        Ok(())
+
+        check_tx_note_len(&note)?;
+
+        if self.tx_notes.get(&txid).is_some_and(|cur| cur == &note) {
+            return Ok(SetTxNoteOutcome::Unchanged { stored: Some(note) });
+        }
+
+        let previous = self.tx_notes.insert(txid, note.clone());
+        Ok(SetTxNoteOutcome::Applied {
+            previous: PriorNote {
+                txid,
+                value: previous,
+            },
+            stored: Some(note),
+        })
+    }
+
+    /// Restore a prior note entry after a failed durable save (fail closed).
+    ///
+    /// `previous` is the opaque, single-use [`PriorNote`] from `Self::set_note`'s
+    /// [`SetTxNoteOutcome::Applied`] arm. It carries **its own txid**, so the
+    /// value is put back exactly where it came from — there is no caller-supplied
+    /// destination to redirect, and no way to replay it onto another txid. The
+    /// value was already in the map (hence already validated), so the restore
+    /// cannot re-admit an over-length note. Its `Some` re-inserts, its `None`
+    /// removes.
+    pub fn restore_note(&mut self, previous: PriorNote) {
+        let PriorNote { txid, value } = previous;
+        match value {
+            Some(prior) => {
+                self.tx_notes.insert(txid, prior);
+            }
+            None => {
+                self.tx_notes.remove(&txid);
+            }
+        }
     }
 }
 
@@ -297,14 +505,6 @@ mod tests {
             },
         );
 
-        let mut tx_notes = BTreeMap::new();
-        tx_notes.insert(key(0x01, 0), "rent".into());
-        tx_notes.insert(key(0x03, 0), "alice".into());
-
-        let mut attributes = BTreeMap::new();
-        attributes.insert("display.fiat".into(), "USD".into());
-        attributes.insert("display.theme".into(), "dark".into());
-
         let mut scanned_pool_txs = BTreeMap::new();
         scanned_pool_txs.insert(
             key(0x04, 0),
@@ -321,7 +521,15 @@ mod tests {
             },
         );
 
-        TxMetaBlock::new(tx_keys, tx_notes, attributes, scanned_pool_txs)
+        let mut block = TxMetaBlock::new(tx_keys, scanned_pool_txs);
+        // Notes enter only through the bounded door.
+        block
+            .set_note(key(0x01, 0), "rent".into())
+            .expect("in-bound note");
+        block
+            .set_note(key(0x03, 0), "alice".into())
+            .expect("in-bound note");
+        block
     }
 
     #[test]
@@ -392,6 +600,81 @@ mod tests {
     }
 
     #[test]
+    fn set_note_set_clear_and_noop() {
+        let mut b = TxMetaBlock::empty();
+        let id = key(0x10, 0);
+
+        // Clear of absent is a no-op.
+        assert_eq!(
+            b.set_note(id, String::new()).expect("clear-absent"),
+            SetTxNoteOutcome::Unchanged { stored: None }
+        );
+        assert!(b.note(&id).is_none());
+
+        // Set applies.
+        match b.set_note(id, "rent".into()).expect("set") {
+            SetTxNoteOutcome::Applied {
+                previous: PriorNote { value: None, .. },
+                stored: Some(s),
+            } => assert_eq!(s, "rent"),
+            other => panic!("expected Applied first set, got {other:?}"),
+        }
+        assert_eq!(b.note(&id), Some("rent"));
+
+        // Identical set is Unchanged (no dirty write).
+        assert_eq!(
+            b.set_note(id, "rent".into()).expect("identical"),
+            SetTxNoteOutcome::Unchanged {
+                stored: Some("rent".into())
+            }
+        );
+
+        // Overwrite applies with previous.
+        match b.set_note(id, "rent — March".into()).expect("overwrite") {
+            SetTxNoteOutcome::Applied {
+                previous: PriorNote { value: Some(p), .. },
+                stored: Some(s),
+            } => {
+                assert_eq!(p, "rent");
+                assert_eq!(s, "rent — March");
+            }
+            other => panic!("expected Applied overwrite, got {other:?}"),
+        }
+
+        // Clear applies and restores via restore_note — the opaque `PriorNote`
+        // token round-trips straight back through the restore door.
+        let outcome = b.set_note(id, String::new()).expect("clear");
+        match &outcome {
+            SetTxNoteOutcome::Applied {
+                previous: PriorNote { value: Some(p), .. },
+                stored: None,
+            } => assert_eq!(p, "rent — March"),
+            other => panic!("expected Applied clear, got {other:?}"),
+        }
+        if let SetTxNoteOutcome::Applied { previous, .. } = outcome {
+            b.restore_note(previous);
+        }
+        assert_eq!(b.note(&id), Some("rent — March"));
+    }
+
+    #[test]
+    fn set_note_refuses_over_length_without_mutating() {
+        let mut b = TxMetaBlock::empty();
+        let id = key(0x11, 0);
+        b.set_note(id, "keep".into()).expect("seed");
+
+        let over = "x".repeat(TX_NOTE_MAX_BYTES + 1);
+        let err = b.set_note(id, over).expect_err("over-length must refuse");
+        assert_eq!(err.max, TX_NOTE_MAX_BYTES);
+        assert_eq!(err.len, TX_NOTE_MAX_BYTES + 1);
+        // Map unchanged; error Display carries counts only.
+        assert_eq!(b.note(&id), Some("keep"));
+        let msg = err.to_string();
+        assert!(msg.contains("maximum"), "{msg}");
+        assert!(!msg.contains("xxxxx"), "refusal must not echo note body");
+    }
+
+    #[test]
     fn tx_secret_key_roundtrips_via_postcard() {
         // Sanity check at the leaf level that a lone TxSecretKey makes it
         // through the airtight zeroizing helper intact.
@@ -402,22 +685,20 @@ mod tests {
     }
 
     proptest! {
-        // Arbitrary tx_notes + attributes + scanned_pool_txs sizes.
+        // Arbitrary tx_notes + scanned_pool_txs sizes.
         // We deliberately keep tx_keys out of the proptest: TxSecretKey
         // has no Clone, which makes generic `Strategy` composition
         // awkward, and leaf-level coverage already lives in
         // `tx_secret_key_roundtrips_via_postcard`.
         #[test]
         fn populated_block_round_trip_proptest(
+            // 1.. characters, not 0..: the empty string is not a storable
+            // note — `set_note("")` is the clear operation — so generating one
+            // would assert a round-trip the type deliberately does not offer.
             notes in proptest::collection::btree_map(
                 any::<[u8; 32]>(),
-                "[a-zA-Z0-9 ]{0,32}",
+                "[a-zA-Z0-9 ]{1,32}",
                 0..8,
-            ),
-            attrs in proptest::collection::btree_map(
-                "[a-z.]{1,16}",
-                "[a-z0-9 ]{0,16}",
-                0..6,
             ),
             pool in proptest::collection::btree_map(
                 any::<[u8; 32]>(),
@@ -437,7 +718,10 @@ mod tests {
                     )
                 })
                 .collect();
-            let b = TxMetaBlock::new(BTreeMap::new(), notes, attrs, scanned_pool_txs);
+            let mut b = TxMetaBlock::new(BTreeMap::new(), scanned_pool_txs);
+            for (txid, note) in notes {
+                b.set_note(txid, note).expect("generated notes are in bound");
+            }
             let bytes = b.to_postcard_bytes().expect("serialize");
             let back = TxMetaBlock::from_postcard_bytes(&bytes).expect("deserialize");
             prop_assert_eq!(&back, &b);
