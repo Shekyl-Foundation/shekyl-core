@@ -4,6 +4,18 @@
 
 ### Changed
 
+- **LWMA-1 genesis difficulty is 400** (`daa_genesis_difficulty` in
+  `config/consensus_constants.json`). The first 90 blocks still share
+  one constant until the LWMA window fills; 400 is the testnet
+  calibration against `skl-miner-test` (4 threads), replacing the
+  zawy12 example value of 100 that produced ~20s blocks on that
+  miner. This is a consensus-constant change: `CONSENSUS_CONSTANTS_DIGEST`
+  moves, alpha.8 nodes will refuse an alpha.9 daemon on the digest
+  handshake, and any chain that already mined heights 1–90 at
+  difficulty 100 must wipe and resync. Genesis block hash is
+  unchanged (genesis PoW still uses difficulty 1). Retune is that
+  JSON key.
+
 - **Archival serving route is `/shard/{id}` (`RF-R1`).** The throwaway
   `/x-provisional/v0/shard/` path is discarded. The status/header privacy
   contract (one 404 for every complete-head miss; two personas
