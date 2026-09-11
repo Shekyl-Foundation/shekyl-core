@@ -474,6 +474,13 @@ impl RegtestDaemon {
         log_tail(&self.data_dir.join("daemon.log"))
     }
 
+    /// Panic with the daemon log inlined. Call on a submit/dispatch
+    /// failure: `Drop` removes the datadir (log included) as the unwind
+    /// proceeds, so a "see the log file" pointer would name a deleted file.
+    pub(super) fn panic_with_log(&self, context: &str, err: impl std::fmt::Display) -> ! {
+        panic!("{context}: {err}; daemon log tail:\n{}", self.log_tail());
+    }
+
     /// The harness's RPC client, for tests that drive the daemon directly.
     pub(super) fn rpc(&self) -> &HttpRpc {
         &self.rpc
@@ -2086,7 +2093,7 @@ async fn stake_persona_to_confirmed_bond(
                         daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
                         refresh(&arc).await;
                     }
-                    Err(e) => panic!("first_stake: {e}"),
+                    Err(e) => daemon.panic_with_log("first_stake", e),
                 }
             }
             let outcome =
@@ -2160,7 +2167,7 @@ async fn stake_persona_to_confirmed_bond(
                         daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
                         refresh(&arc).await;
                     }
-                    Err(e) => panic!("assemble market bond post: {e:?}"),
+                    Err(e) => daemon.panic_with_log("assemble market bond post", format!("{e:?}")),
                 }
             }
             assert!(
@@ -2195,9 +2202,9 @@ async fn stake_persona_to_confirmed_bond(
     // PR-4b bond-post Phase-C battery verifies the wallet-built post over
     // real RPC. Any rejection — Phase A, Phase C, transport — fails loudly.
     let receipt = verdict.unwrap_or_else(|e| {
-        panic!(
-            "daemon must accept the wallet-built bond post \
-             (PR-4b battery landed; got {e:?})"
+        daemon.panic_with_log(
+            "daemon must accept the wallet-built bond post (PR-4b battery landed)",
+            format!("{e:?}"),
         )
     });
     eprintln!("bond post accepted by the daemon submit engine: {receipt:?}");
@@ -2679,10 +2686,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
                 daemon.generate_blocks(1, &fixture.principal).await;
                 refresh(&fixture.arc).await;
             }
-            Err(e) => {
-                let tail = daemon.log_tail();
-                panic!("submit_emission_claim: {e}; daemon log tail:\n{tail}");
-            }
+            Err(e) => daemon.panic_with_log("submit_emission_claim", e),
         }
     }
     let receipt = receipt.expect("claim must assemble and dispatch within the retry budget");
@@ -3181,7 +3185,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
                 daemon.generate_blocks(3, &principal).await;
                 refresh(&fixture.arc).await;
             }
-            Err(e) => panic!("submit_drain: {e}"),
+            Err(e) => daemon.panic_with_log("submit_drain", e),
         }
     }
     let receipt = receipt.expect("drain must assemble and dispatch within the retry budget");
@@ -3395,7 +3399,7 @@ async fn e2e_release_accepted_and_connected() {
                 daemon.generate_blocks(10, &fixture.principal).await;
                 refresh(&fixture.arc).await;
             }
-            Err(e) => panic!("submit_release: {e}"),
+            Err(e) => daemon.panic_with_log("submit_release", e),
         }
     }
     let receipt = receipt.expect("the exit must assemble and dispatch within the retry budget");
@@ -3551,7 +3555,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
                 daemon.generate_blocks(3, &fixture.principal).await;
                 refresh(&fixture.arc).await;
             }
-            Err(e) => panic!("unstake: {e}"),
+            Err(e) => daemon.panic_with_log("unstake", e),
         }
     }
     let posted = posted.expect("unstake must post within the retry ladder");
@@ -3623,7 +3627,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
                 daemon.generate_blocks(3, &fixture.principal).await;
                 refresh(&fixture.arc).await;
             }
-            Err(e) => panic!("collect_unstaked: {e}"),
+            Err(e) => daemon.panic_with_log("collect_unstaked", e),
         }
     }
     let CollectOutcome::Swept {

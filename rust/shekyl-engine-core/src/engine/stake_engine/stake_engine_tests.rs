@@ -1385,8 +1385,11 @@ mod emission_claim_assembly {
         let mut cursor: &[u8] = reply.bound_tx.bytes();
         let mut tx = Transaction::read(&mut cursor).expect("assembled bytes parse whole");
         assert!(cursor.is_empty(), "no trailing bytes after the tx");
-        // The daemon's Phase A runs exactly this on the submitted bytes;
-        // a claim the builder emits must clear it before it ever leaves.
+        // Context-free wire validation — the same `Transaction::validate()`
+        // Phase A runs on submitted bytes. This bites against a builder that
+        // emits a structurally invalid claim; it does NOT cover the rest of
+        // Phase A (canonical-encoding check, coinbase reject, unlock_time
+        // pool pin, emission-vin parse).
         tx.validate()
             .expect("assembled claim passes shekyl-wire context-free validation");
 

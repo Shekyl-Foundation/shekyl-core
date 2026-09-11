@@ -5040,9 +5040,9 @@ exactly one copy.
 The failure this produced was silent and looked like a wallet defect.
 The regtest emission-claim e2e (`e2e_emission_claim_accepted_and_applied`)
 passed against a Release daemon and failed against a Debug daemon with a
-bare `Malformed` from `/submit_transaction`. Phase C logging (added in
-the same change) named the cause: `epoch 1 not finalized at height
-1025`. `Blockchain::init` in `libcryptonote_core.so` had armed the
+bare `Malformed` from `/submit_transaction`. Phase C now returns a
+`VerifyReject` whose reason the submit engine logs at `info`; that
+line named the cause: `epoch 1 not finalized at height 1025`. `Blockchain::init` in `libcryptonote_core.so` had armed the
 512-block regtest schedule in *its* copy of the latch and logged the
 override as active; the RPC submit verifier in the executable read its
 own copy, still on the genesis 10 000-block schedule, and computed

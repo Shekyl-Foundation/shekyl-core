@@ -138,7 +138,9 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
 }
 
 fn verify(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFailure> {
-    DaemonTxVerifier.verify(parsed, facts)
+    DaemonTxVerifier
+        .verify(parsed, facts)
+        .map_err(|e| e.cause())
 }
 
 /// Re-run Phase A over a mutated transaction. Every mutant in this suite
@@ -795,6 +797,32 @@ fn engine_accepts_the_spend_end_to_end_with_the_production_verifier() {
 }
 
 // ─── O6: commitment mask non-triviality ─────────────────────────────────
+
+#[test]
+fn a_malformed_reject_names_its_leg() {
+    // This bites against a silent unit `Malformed` leaking back onto the
+    // seam; it does NOT cover that every production site goes through a
+    // constructor (the type does — a cause without a reason does not
+    // compile).
+    let identity = {
+        let mut bytes = [0u8; 32];
+        bytes[0] = 1;
+        bytes
+    };
+    let parsed = mutated(|tx| {
+        let (_, base, _, _) = fcmp_parts_mut(tx);
+        base.commitments[0] = identity;
+    });
+    let err = DaemonTxVerifier
+        .verify(&parsed, &admitting_facts(fixture()))
+        .expect_err("a trivial output commitment must be refused");
+    assert_eq!(err.cause(), VerifyFailure::Malformed);
+    assert!(
+        err.reason().contains("O6"),
+        "the operator reason must name the O6 leg, got {:?}",
+        err.reason()
+    );
+}
 
 #[test]
 fn trivial_output_commitments_are_rejected() {

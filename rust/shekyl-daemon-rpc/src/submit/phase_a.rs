@@ -151,18 +151,26 @@ impl ParsedSubmission {
 /// A Phase-A refusal: wire verdict `Rejected{Malformed}` plus the
 /// daemon-side diagnostic (`reason`) for the operator log. The reason
 /// never crosses the RPC boundary — §2.2's wire minimalism deleted the
-/// `detail` field; operators read logs, wallets read causes.
+/// `detail` field; operators read logs, wallets read causes. An empty
+/// reason is unrepresentable: [`Self::new`] is the only constructor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhaseAReject {
-    /// Operator-facing diagnostic, logged daemon-side only.
-    pub reason: String,
+    reason: String,
 }
 
 impl PhaseAReject {
-    fn new(reason: impl Into<String>) -> Self {
-        Self {
-            reason: reason.into(),
-        }
+    fn new(reason: impl std::fmt::Display) -> Self {
+        let reason = reason.to_string();
+        assert!(
+            !reason.is_empty(),
+            "PhaseAReject reason must name the failing leg (programmer invariant)"
+        );
+        Self { reason }
+    }
+
+    /// Operator-facing diagnostic, logged daemon-side only.
+    pub fn reason(&self) -> &str {
+        &self.reason
     }
 
     /// The wire verdict this refusal maps to — always `Malformed` (§3.1:
@@ -445,4 +453,15 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
         kind,
         emission_vin,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "must name the failing leg")]
+    fn a_reject_without_a_reason_is_unrepresentable() {
+        let _ = PhaseAReject::new("");
+    }
 }

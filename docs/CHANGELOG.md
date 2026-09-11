@@ -466,13 +466,15 @@
   verifier read the executable's unarmed copy. Configure now fails with the
   reason (`V3_WALLET_DECISION_LOG.md` 2026-09-10). Release and CI
   configurations were already static and are unaffected.
-- **Daemon RPC: a Phase C submit rejection names its leg.** The submit
-  engine logs the rejected kind and failure at `info`, and the verifier
-  logs the specific failing check (and the emission battery's error) at
-  `debug`; previously a `Malformed` verdict left no daemon-side trace.
-  The wallet logs at `error` when a transaction it built fails its own
-  local round-trip parse — a build-path defect, never a daemon verdict —
-  since that outcome is otherwise indistinguishable from a daemon refusal.
+- **Daemon RPC: a Phase C submit rejection names its leg.** The verifier
+  returns a `VerifyReject` pairing the wire-cause (`Malformed` /
+  `StaleRoot` / `DoubleSpendConflict`) with the failing check; a cause
+  without a reason is unrepresentable. The submit engine logs both at
+  `info` once. Previously a `Malformed` verdict left no daemon-side
+  trace of which battery leg refused. The wallet logs at `error` when a
+  transaction it built fails its own local round-trip parse — a
+  build-path defect, never a daemon verdict — since that outcome is
+  otherwise indistinguishable from a daemon refusal.
 - **P2P: a node no longer retries outbound to its own public listen address.**
   Foundation seeds sit in a shared hardcoded list; public zone binds
   `0.0.0.0` and leaves `m_our_address` unset, so a seed TCP-hairpinned
