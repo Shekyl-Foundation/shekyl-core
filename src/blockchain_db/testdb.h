@@ -87,7 +87,23 @@ public:
   virtual void correct_block_cumulative_difficulties(const uint64_t& start_height, const std::vector<difficulty_type>& new_cumulative_difficulties) override {}
   virtual uint64_t get_block_already_generated_coins(const uint64_t& height) const override { return 10000000000; }
   virtual uint64_t get_block_long_term_weight(const uint64_t& height) const override { return 128; }
-  virtual std::vector<uint64_t> get_long_term_block_weights(uint64_t start_height, size_t count) const override { return {}; }
+  // `count` copies of what `get_block_long_term_weight` reports, NOT an empty
+  // vector. The two accessors are the same fact read two ways, and returning
+  // `{}` here made them contradict: `Blockchain::get_long_term_block_weight_median`
+  // inserts this vector into a rolling median and then calls `median()`, so an
+  // empty answer left the window EMPTY and `median()` read its uninitialised
+  // storage. The resulting long-term median was heap-dependent — observed as
+  // 9 475 100 461 579 156 132 in one ordering and sane in another — which then
+  // set `m_long_term_effective_median_block_weight` and both fee paths from it.
+  //
+  // It stayed hidden because the pre-FL-R20 estimate inserted `grace_blocks`
+  // zeroes into a COPY of that window before taking the median, which made the
+  // value well-defined (0) and `max(0, Zm)` sane. The relay floor had no such
+  // accident and was already reading the garbage. FL-R20 deletes the grace
+  // insertion, so the fixture had to stop lying.
+  virtual std::vector<uint64_t> get_long_term_block_weights(uint64_t start_height, size_t count) const override {
+    return std::vector<uint64_t>(count, get_block_long_term_weight(start_height));
+  }
   virtual crypto::hash get_block_hash_from_height(const uint64_t& height) const override { return crypto::hash(); }
   virtual std::vector<cryptonote::block> get_blocks_range(const uint64_t& h1, const uint64_t& h2) const override { return std::vector<cryptonote::block>(); }
   virtual std::vector<crypto::hash> get_hashes_range(const uint64_t& h1, const uint64_t& h2) const override { return std::vector<crypto::hash>(); }
