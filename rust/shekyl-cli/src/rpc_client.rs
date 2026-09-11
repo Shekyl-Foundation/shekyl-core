@@ -889,15 +889,62 @@ mod tests {
             concat!("\"mne", "monic\":"),
         ];
 
-        for (name, src) in senders {
-            for field in forbidden_json_fields {
-                assert!(
-                    !src.contains(field),
-                    "{name} builds a JSON object with {field} — a secret in a \
-                     serde_json::Value is a heap copy that never gets wiped. \
-                     Send it through a borrowed rpc_client::params shape instead."
-                );
+        // The NEGATIVE needles run over every `.rs` in the crate, not just the
+        // list. The regression this gate names — "the next author will reach
+        // for `json!` exactly the way the first nine did" — produces a file
+        // that sends a secret and uses no params shape at all, so a list the
+        // author must remember to extend is blind to it by construction, and
+        // so is any completeness check written over `params::` (that measures
+        // which files already did the right thing, not which ones send
+        // secrets). Over-inclusion is the safe direction here: these needles
+        // are negative, so scanning too much is a false RED, never a false
+        // green. Comment-only lines are dropped because this file's own doc
+        // comment spells `"password":` while explaining the needle.
+        let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut walked: std::collections::BTreeSet<String> = Default::default();
+        let mut stack = vec![src_root.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the crate's src/ is readable") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let rel = path
+                        .strip_prefix(&src_root)
+                        .expect("walked under src/")
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let text = std::fs::read_to_string(&path).expect("read source");
+                    let code: String = text
+                        .lines()
+                        .filter(|l| !l.trim_start().starts_with("//"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    for field in forbidden_json_fields {
+                        assert!(
+                            !code.contains(field),
+                            "{rel} builds a JSON object with {field} — a secret in \
+                             a serde_json::Value is a heap copy that never gets \
+                             wiped. Send it through a borrowed rpc_client::params \
+                             shape instead."
+                        );
+                    }
+                    walked.insert(rel);
+                }
             }
+        }
+
+        // Rule 47, and the cross-check the two instruments need: a walk that
+        // silently stopped reaching files would pass every assertion above. The
+        // hand-written list is the known-good population, so the walk must
+        // contain all of it — if it ever doesn't, the walk is broken, not the
+        // list.
+        for (name, src) in senders {
+            assert!(
+                walked.contains(name),
+                "the src/ walk no longer reaches {name}, so its negative needles \
+                 above proved nothing — fix the walk before trusting this gate"
+            );
             assert!(
                 src.contains(concat!("par", "ams::")),
                 "{name} is listed as a secret-bearing sender but no longer uses \
