@@ -72,6 +72,20 @@ FAIL=0
 # The knowledge was in the tree; it just had not been swept across.
 # ----------------------------------------------------------------------
 
+# Child gates exit 0 = clean, 1 = violations (already printed), >1 = could
+# not judge. Folding >1 into FAIL=1 would let later invariants print OK
+# after a scan error on an inflation surface. Propagate.
+run_child() {
+  local rc=0
+  "$@" || rc=$?
+  case "$rc" in
+    0) echo "      OK" ;;
+    1) FAIL=1 ;;
+    *) echo "      FATAL: $* exited ${rc} (scan error, not a verdict)" >&2
+       exit "$rc" ;;
+  esac
+}
+
 # Returns 0 = clean (no matches), 1 = violations found (printed).
 # Exits 2 on a scan error -- never silently clean.
 rg_verdict() {
@@ -223,11 +237,7 @@ echo
 # Invariant 4: archival reward gates (mint + integer arithmetic).
 # ----------------------------------------------------------------------
 echo "[4/5] Archival reward gates"
-if ! scripts/ci/check_archival_reward_gates.sh; then
-  FAIL=1
-else
-  echo "      OK"
-fi
+run_child scripts/ci/check_archival_reward_gates.sh
 echo
 
 # ----------------------------------------------------------------------
@@ -237,11 +247,7 @@ echo
 # retired M1 gate's former tripwire, ARCHIVAL_REWARD_GATE_M1.md §13).
 # ----------------------------------------------------------------------
 echo "[5/5] Segment-freeze one-site tripwires"
-if ! scripts/ci/check_segment_freeze_sites.sh; then
-  FAIL=1
-else
-  echo "      OK"
-fi
+run_child scripts/ci/check_segment_freeze_sites.sh
 echo
 
 # ----------------------------------------------------------------------
