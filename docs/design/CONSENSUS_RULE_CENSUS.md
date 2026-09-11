@@ -18,10 +18,10 @@ regression-only. See [`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECON
 coverage is complete over the 2026-09-02 set**, not the live one (P0f is the per-row conformance review
 — *not* P0d, which is Digest v0): the **102** bucket-1/2 rows that existed on
 2026-09-02 are disposed — 100 CHECKED-CONFORMANT, 1 DIVERGENT (CEN-B5's rule-71
-FAKECHAIN skip — retired with the S1 fix on PR #623, 2026-09-05; promotion owed at the merged sha), 1 failed closed (CEN-L8; CEN-I12 failed closed the
+FAKECHAIN skip — retired with the S1 fix on PR #623, 2026-09-05; **re-reviewed at `e54e5b983` and promoted 2026-09-11**, so no row is DIVERGENT today), 1 failed closed (CEN-L8; CEN-I12 failed closed the
 same way until its anchor source was reconciled, and was promoted 2026-09-05). **The set has since grown:** C2-R1b promoted nine rows into bucket 2 on
 2026-09-03 and C2-R1c ten more on 2026-09-04 (nine promotions plus the
-CEN-K1 → K1a/K1b split), and CEN-I19 was minted into bucket 1 on 2026-09-06 with its implementation, so the live bucket-1/2 count is **130** (counted from the rows 2026-09-06: 87 b1 + 43 b2) and those twenty-eight — the nineteen promotions, the I19 mint, and R2's eight — are UNREVIEWED until P0f reviews them. **The review's two S-graded findings are fixed and re-verified** — the S0 by
+CEN-K1 → K1a/K1b split), and CEN-I19 was minted into bucket 1 on 2026-09-06 with its implementation (**re-reviewed at `2ec553a3f` and promoted 2026-09-11**), so the live bucket-1/2 count is **130** (counted from the rows 2026-09-06: 87 b1 + 43 b2) and those twenty-eight — the nineteen promotions, the I19 mint, and R2's eight — are UNREVIEWED until P0f reviews them. **The review's two S-graded findings are fixed and re-verified** — the S0 by
 PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (CEN-D2/D1 promoted) — **and a third — CEN-B5's header-check timing, S1, found 2026-09-04 (§7 #17) — is fixed on PR #623 (2026-09-05, §7 #18), merged-sha re-review owed;** **CEN-L11/L12 promoted at PR #609's merged fix** (2026-09-04); every other row is UNREVIEWED. Bucket-4 rows record
 questions, never answers; the §10
 queue is the design-round program that answers them.
@@ -926,9 +926,9 @@ input, not fixes.
     holds the two reads apart so the keying cannot drift back silently.
     §5 of the spec is rewritten to the state the header commits to (the
     "after processing all transactions" sentence is retired, records-was);
-    register row stays DIVERGENT until re-reviewed at the merged sha (both
-    divergences fixed on PR #623; promotion owed per the M8/D2/L11
-    precedent).
+    register row was DIVERGENT until re-reviewed at the merged sha; both
+    divergences were fixed on PR #623 and the row was **re-reviewed at
+    `e54e5b983` and PROMOTED 2026-09-11** per the M8/D2/L11 precedent.
 
 19. **CEN-I19 minted: the `tx_extra` PQC field shape is a consensus rule, and
     the storage fail-open that hid its absence is retired** (2026-09-05 ruled,
