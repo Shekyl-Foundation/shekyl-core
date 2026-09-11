@@ -123,6 +123,25 @@ pub fn omit_from_history(cmd: &str) -> bool {
     )
 }
 
+/// The display form of an address (CU-4): the first 24 characters, an
+/// ellipsis, and the last 12. Shekyl's hybrid-PQC addresses run to hundreds
+/// of characters; the full string is unusable at a glance and floods scrollback.
+/// This form is **display-only** — it can never be pasted as a destination —
+/// so surfaces that print it say where the full form lives (`address --full`
+/// / `address --out <path>`). Short inputs pass through unchanged.
+#[must_use]
+pub fn short_address(addr: &str) -> String {
+    const HEAD: usize = 24;
+    const TAIL: usize = 12;
+    let chars: Vec<char> = addr.chars().collect();
+    if chars.len() <= HEAD + TAIL + 1 {
+        return addr.to_owned();
+    }
+    let head: String = chars[..HEAD].iter().collect();
+    let tail: String = chars[chars.len() - TAIL..].iter().collect();
+    format!("{head}…{tail}")
+}
+
 /// Neutralize control characters in free-form, externally-supplied text before
 /// printing it to the terminal, replacing each with the Unicode replacement
 /// char. A payment-request label is free-form and, when carried on a
@@ -144,8 +163,18 @@ pub fn sanitize_for_terminal(s: &str) -> std::borrow::Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{omit_from_history, sanitize_for_terminal};
+    use super::{omit_from_history, sanitize_for_terminal, short_address};
     use std::borrow::Cow;
+
+    #[test]
+    fn short_address_keeps_head_and_tail_only() {
+        let long = format!("{}{}{}", "a".repeat(24), "b".repeat(100), "c".repeat(12));
+        let short = short_address(&long);
+        assert_eq!(short, format!("{}…{}", "a".repeat(24), "c".repeat(12)));
+
+        // At or under the head+tail budget, the address passes through whole.
+        assert_eq!(short_address("skl1short"), "skl1short");
+    }
 
     #[test]
     fn history_omits_secrets_and_bearer_pastes() {

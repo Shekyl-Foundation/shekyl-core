@@ -625,9 +625,9 @@ Each operation is a method on `Wallet` with a focused signature. No mode flags; 
 
 Drop without porting:
 - `set_log_level` / `set_log_categories` (logger is process-global, not wallet-state).
-- `mining` commands (now in `shekyld`).
+- `mining` commands — the **hashing** (now in `shekyld`; the wallet process never runs RandomX). Controlling the daemon's miner is a different thing and later landed in the CLI as `mine start/stop/status` (`CLI_USABILITY.md` CU-3) — thin daemon-RPC calls, no mining in the wallet.
 - `set_default_priority` and similar pref-storage RPC methods (handled by [shekyl-wallet-prefs](rust/shekyl-wallet-prefs/)).
-- `start_mining`, `stop_mining` (out-of-scope for a wallet).
+- `start_mining`, `stop_mining` as **wallet-RPC methods** (out-of-scope for a wallet server: the registry carries no mining methods). The interactive CLI's later `mine` verbs (`CLI_USABILITY.md` CU-3) talk to the daemon's own endpoints directly, not through wallet RPC — the cut here was the wallet *doing/serving* mining, not the CLI *controlling* it.
 - `payment_id` (Phase 1 decision; not a `TxRequest::extra` escape hatch either — gone).
 - `make_integrated_address` / `split_integrated_address` and the `IntegratedAddress` type entirely.
 - The four-call `export_outputs` / `import_outputs` / `export_key_images` / `import_key_images` dance — replaced by `UnsignedTxBundle` / `SignedTxBundle`.

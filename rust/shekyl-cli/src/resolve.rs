@@ -34,11 +34,21 @@ pub enum ResolvedCommand {
     Save,
     Status,
     Help,
+    /// `help <command>` — the one-command usage block (CU-2).
+    HelpCommand {
+        topic: String,
+    },
     Exit,
 
     // -- Balance / address --
     Balance,
-    Address,
+    /// `address [--full | --out <path>]` (CU-4). The default is the short
+    /// display form; `full` prints the whole ~2,030-character string;
+    /// `out` writes it to a new 0600 file instead of the terminal.
+    Address {
+        full: bool,
+        out: Option<String>,
+    },
 
     // -- Transfers --
     Transfer {
@@ -175,13 +185,24 @@ pub enum ResolvedCommand {
         message: String,
     },
 
+    // -- Mining control (CU-3; the daemon does the hashing) --
+    MineStart {
+        /// `None` is the wallet-convenience default (`min(cores, 4)`),
+        /// spelled `auto` on the command line.
+        threads: Option<u64>,
+    },
+    MineStop,
+    MineStatus,
+
     // -- Meta --
     Password,
     Rescan {
         hard: bool,
     },
     Version,
-    EngineInfo,
+    /// `wallet` — the wallet summary (height, balance, address). Renamed
+    /// from `engine_info` (CU-2); the old name stays as a hidden alias.
+    Wallet,
 
     // -- Unknown --
     /// An unrecognized command token (the `other` catch-all). Rendered as
@@ -216,7 +237,16 @@ pub fn parse(input: &str) -> ResolvedCommand {
     }
 
     match cmd {
-        "help" => ResolvedCommand::Help,
+        // `help` alone is the categorized listing; `help <command>` is that
+        // command's usage block. The topic is the first token only — `help
+        // request new` reads as topic "request", whose block covers both
+        // spellings.
+        "help" => match args.first() {
+            None => ResolvedCommand::Help,
+            Some(topic) => ResolvedCommand::HelpCommand {
+                topic: (*topic).to_string(),
+            },
+        },
         "exit" | "quit" => ResolvedCommand::Exit,
         "create" => {
             if let Some(filename) = args.first() {
@@ -256,7 +286,37 @@ pub fn parse(input: &str) -> ResolvedCommand {
         "save" => ResolvedCommand::Save,
         "status" => ResolvedCommand::Status,
         "balance" => ResolvedCommand::Balance,
-        "address" => ResolvedCommand::Address,
+        "address" => {
+            // CU-4: default is the short display form; --full prints the
+            // whole address; --out <path> writes it to a new 0600 file.
+            let full = args.contains(&"--full");
+            let out = match parse_flag_str(args, "--out") {
+                FlagValue::Absent => None,
+                FlagValue::Set(p) => Some(p),
+                FlagValue::Invalid(_) => return diag("address: --out expects a path"),
+            };
+            if full && out.is_some() {
+                return diag("address: use --full or --out <path>, not both");
+            }
+            // Reject stray arguments: a typo'd flag must not silently print
+            // the short form as if it were what was asked for (rule 82).
+            let mut i = 0;
+            while i < args.len() {
+                match args[i] {
+                    "--full" => {}
+                    "--out" => i += 1, // skip the path value
+                    a if a.starts_with("--out=") => {}
+                    other => {
+                        return diag(format!(
+                            "address: unexpected argument {other:?} \
+                             (usage: address [--full | --out <path>])"
+                        ))
+                    }
+                }
+                i += 1;
+            }
+            ResolvedCommand::Address { full, out }
+        }
         "transfer" => {
             let no_confirm = args.contains(&"--no-confirm");
             let priority = match parse_flag::<u32>(args, "--priority") {
@@ -360,6 +420,26 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 }
             }
         }
+        // Mining control (CU-3). Grammar lives in `commands::mine` so this
+        // match does not grow another island; extra tokens are diagnostics
+        // (F8 / rule 82), never a silent drop.
+        "mine" => match crate::commands::mine::parse_mine(args) {
+            Ok(parsed) => resolved_mine(parsed),
+            Err(message) => diag(message),
+        },
+        "start_mining" => match crate::commands::mine::parse_start_mining_alias(args) {
+            Ok(parsed) => resolved_mine(parsed),
+            Err(message) => diag(message),
+        },
+        "stop_mining" => match crate::commands::mine::parse_noarg_alias("stop_mining", args) {
+            Ok(parsed) => resolved_mine(parsed),
+            Err(message) => diag(message),
+        },
+        "mining_status" => match crate::commands::mine::parse_noarg_alias("mining_status", args) {
+            Ok(parsed) => resolved_mine(parsed),
+            Err(message) => diag(message),
+        },
+
         "history" if args.first().copied() == Some("incoming") => {
             if args.contains(&"--unattributed") {
                 ResolvedCommand::HistoryIncomingUnattributed
@@ -603,10 +683,22 @@ pub fn parse(input: &str) -> ResolvedCommand {
             ResolvedCommand::Rescan { hard }
         }
         "version" => ResolvedCommand::Version,
-        "engine_info" => ResolvedCommand::EngineInfo,
+        // `wallet` is the public name (CU-2); `engine_info` survives as a
+        // hidden alias so existing habits and scripts keep working.
+        "wallet" | "engine_info" => ResolvedCommand::Wallet,
         other => ResolvedCommand::Unknown {
             cmd: other.to_string(),
         },
+    }
+}
+
+/// Map the mining parser's verb onto the dispatch enum.
+fn resolved_mine(parsed: crate::commands::mine::ParsedMine) -> ResolvedCommand {
+    use crate::commands::mine::ParsedMine;
+    match parsed {
+        ParsedMine::Start { threads } => ResolvedCommand::MineStart { threads },
+        ParsedMine::Stop => ResolvedCommand::MineStop,
+        ParsedMine::Status => ResolvedCommand::MineStatus,
     }
 }
 
@@ -834,7 +926,13 @@ mod tests {
         assert!(matches!(parse("close"), ResolvedCommand::Close));
         assert!(matches!(parse("refresh"), ResolvedCommand::Refresh));
         assert!(matches!(parse("balance"), ResolvedCommand::Balance));
-        assert!(matches!(parse("address"), ResolvedCommand::Address));
+        assert!(matches!(
+            parse("address"),
+            ResolvedCommand::Address {
+                full: false,
+                out: None
+            }
+        ));
     }
 
     #[test]
@@ -1381,6 +1479,128 @@ mod tests {
                 assert!(n_outputs.is_none());
             }
             other => panic!("expected Fee, got {other:?}"),
+        }
+    }
+
+    /// CU-2 vocabulary: `wallet` is the public summary command with
+    /// `engine_info` as a hidden alias, and `help <command>` resolves to a
+    /// per-command topic rather than the full listing.
+    #[test]
+    fn wallet_rename_and_help_topics_parse() {
+        assert!(matches!(parse("wallet"), ResolvedCommand::Wallet));
+        assert!(matches!(parse("engine_info"), ResolvedCommand::Wallet));
+        assert!(matches!(parse("help"), ResolvedCommand::Help));
+        match parse("help transfer") {
+            ResolvedCommand::HelpCommand { topic } => assert_eq!(topic, "transfer"),
+            other => panic!("expected HelpCommand, got {other:?}"),
+        }
+        match parse("help request new") {
+            ResolvedCommand::HelpCommand { topic } => {
+                assert_eq!(topic, "request", "topic is the first token");
+            }
+            other => panic!("expected HelpCommand, got {other:?}"),
+        }
+    }
+
+    /// CU-4 address display: `--full` and `--out <path>` parse, are
+    /// mutually exclusive, and stray arguments are diagnostics rather than
+    /// a silent short-form print.
+    #[test]
+    fn address_flags_parse_and_reject_strays() {
+        assert!(matches!(
+            parse("address --full"),
+            ResolvedCommand::Address {
+                full: true,
+                out: None
+            }
+        ));
+        match parse("address --out /tmp/addr.txt") {
+            ResolvedCommand::Address { full: false, out } => {
+                assert_eq!(out.as_deref(), Some("/tmp/addr.txt"));
+            }
+            other => panic!("expected Address, got {other:?}"),
+        }
+        match parse("address --out=/tmp/addr.txt") {
+            ResolvedCommand::Address { out, .. } => {
+                assert_eq!(out.as_deref(), Some("/tmp/addr.txt"));
+            }
+            other => panic!("expected Address, got {other:?}"),
+        }
+        for line in [
+            "address --full --out /tmp/a",
+            "address --out",
+            "address --fill",
+            "address extra",
+        ] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(message.contains("address"), "{line}: {message}");
+                }
+                other => panic!("{line}: expected Diagnostic, got {other:?}"),
+            }
+        }
+    }
+
+    /// CU-3 mining verbs: `mine start/stop/status` plus the Monero
+    /// muscle-memory aliases, thread-count grammar, and the F8 rule that a
+    /// partial `mine` is a usage diagnostic — never bare "Unknown command".
+    #[test]
+    fn mine_verbs_aliases_and_partial_input_parse() {
+        assert!(matches!(
+            parse("mine start"),
+            ResolvedCommand::MineStart { threads: None }
+        ));
+        assert!(matches!(
+            parse("mine start auto"),
+            ResolvedCommand::MineStart { threads: None }
+        ));
+        assert!(matches!(
+            parse("mine start 2"),
+            ResolvedCommand::MineStart { threads: Some(2) }
+        ));
+        assert!(matches!(parse("mine stop"), ResolvedCommand::MineStop));
+        assert!(matches!(parse("mine status"), ResolvedCommand::MineStatus));
+
+        // Aliases.
+        assert!(matches!(
+            parse("start_mining 3"),
+            ResolvedCommand::MineStart { threads: Some(3) }
+        ));
+        assert!(matches!(
+            parse("start_mining"),
+            ResolvedCommand::MineStart { threads: None }
+        ));
+        assert!(matches!(parse("stop_mining"), ResolvedCommand::MineStop));
+        assert!(matches!(
+            parse("mining_status"),
+            ResolvedCommand::MineStatus
+        ));
+
+        // F8: partials, bad values, and extra tokens are usage diagnostics.
+        for line in [
+            "mine",
+            "mine begin",
+            "mine start 0",
+            "mine start four",
+            "mine start 2 extra",
+            "mine stop now",
+            "mine status --json",
+            "start_mining 2 extra",
+            "stop_mining now",
+            "mining_status extra",
+        ] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(
+                        message.contains("mine")
+                            || message.contains("start_mining")
+                            || message.contains("stop_mining")
+                            || message.contains("mining_status"),
+                        "{line}: {message}"
+                    );
+                }
+                other => panic!("{line}: expected Diagnostic, got {other:?}"),
+            }
         }
     }
 

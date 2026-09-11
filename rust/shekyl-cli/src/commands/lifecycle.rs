@@ -253,7 +253,11 @@ pub fn cmd_rescan(rpc: &RpcSession, hard: bool) {
     }
 }
 
-pub fn cmd_status(rpc: &RpcSession) {
+/// `status` — wallet and daemon sync heights. `daemon_down_hint` is the F1
+/// recovery copy (CLI_USABILITY.md §CU-5): the wallet RPC reports an
+/// unreachable daemon as `daemon_height: null`, and this surface owes the
+/// same "start shekyld" line as the paths that dial the daemon directly.
+pub fn cmd_status(rpc: &RpcSession, daemon_down_hint: Option<&str>) {
     if !require_open(rpc) {
         return;
     }
@@ -277,9 +281,13 @@ pub fn cmd_status(rpc: &RpcSession) {
                 }
                 None => {
                     println!("Daemon height: unavailable (daemon unreachable).");
-                    println!(
-                        "Showing wallet height only — start/sync your node, then \"refresh\"."
-                    );
+                    match daemon_down_hint {
+                        Some(hint) => println!("{hint} Then run \"refresh\"."),
+                        None => println!(
+                            "Showing wallet height only — start/sync your node, then \
+                             \"refresh\"."
+                        ),
+                    }
                 }
             }
         }
