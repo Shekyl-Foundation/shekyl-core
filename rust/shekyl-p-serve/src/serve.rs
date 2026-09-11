@@ -50,6 +50,16 @@ use crate::provider::{ShardBody, ShardProvider};
 
 /// The one route this endpoint answers. **Provisional and THROWAWAY** —
 /// see the crate doc; nothing about this path is a format-round candidate.
+///
+/// **That sentence is `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5's ruling, and it
+/// is only half a disposition.** §9.5 rules this route *out* of the format
+/// round; nothing rules it *into* another, so it is on track to freeze at
+/// genesis exactly as written — the word `provisional` becoming the part
+/// that can never change. Registered as `RF-R1` (`docs/FOLLOWUPS.md`,
+/// `docs/design/IMPLEMENTATION_INDEX.md` §2) so the obligation to decide it
+/// is tracked rather than inferred from this comment. **Do not change this
+/// value to "fix" the above** — that is the decision `RF-R1` exists to have
+/// deliberately, and a rename here would freeze a second undecided string.
 pub const ROUTE_PREFIX: &str = "/x-provisional/v0/shard/";
 
 /// Response content type for shard bytes.
