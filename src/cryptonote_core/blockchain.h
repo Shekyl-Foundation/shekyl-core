@@ -614,19 +614,26 @@ namespace cryptonote
     }
 
     /**
-     * @brief get dynamic per kB or byte fee for a given block weight
+     * @brief the raw fee-correction scalar C at a chain state (FL-R20)
      *
-     * The dynamic fee is based on the block weight in a past window, and
-     * the current block reward. It is expressed by kB before v8, and
-     * per byte from v8.
+     * `C = (1-sigma)*M_r/(1-b)` in SCALE units, from shekyl-economics. ONE
+     * derivation, shared by the relay floor and the served ladder: FL-R6 is an
+     * identity under FL-R20 and FL-R21 deletes the clamp that used to
+     * reconcile them, so computing C twice would put the identity one edit
+     * away from being false.
      *
-     * @param block_reward the current block reward
-     * @param median_block_weight the median block weight in the past window
-     * @param version hard fork version for rules and constants to use
+     * Replaces `get_dynamic_base_fee`, whose whole body was the inherited
+     * `0.95 * R * w_ref / M^2` — the 0.95 deleted by FL-R20 (it and the 2%
+     * admission buffer were the same fudge for the same gap, which FL-R23
+     * closes structurally) and the arithmetic moved to its Rust owner
+     * (`shekyl_relay_fee_floor`, rule 20).
      *
-     * @return the fee
+     * @param db_height the chain height to price at
+     * @param already_generated_coins supply at that height, for the burn curve
+     *
+     * @return C in SCALE units
      */
-    static uint64_t get_dynamic_base_fee(uint64_t block_reward, size_t median_block_weight, uint8_t version);
+    uint64_t fee_correction_at(uint64_t db_height, uint64_t already_generated_coins) const;
 
     /**
      * @brief the three-tier estimate with its inputs supplied rather than read

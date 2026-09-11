@@ -706,6 +706,60 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     0
 }
 
+/// The FL-R20 relay floor `F(h) = R·C·w_ref/M²`, floored at 1 — the value
+/// `check_fee` prices admission from and, by identity, the estimate's
+/// economy rung (`out_fees[0]` of [`shekyl_corrected_fee_ladder`] at the
+/// same operands).
+///
+/// **The identity is the point.** FL-R6 became an identity under FL-R20
+/// and FL-R21 deletes the `fees[0] = max(fees[0], floor)` clamp that used
+/// to reconcile two independent computations. That deletion is only safe
+/// while the two are one function, so this export and the ladder's slot 0
+/// both resolve to `shekyl_economics::checked_relay_fee_floor`.
+///
+/// `(mnw, mlw)` take the same pair the ladder does. The daemon's relay
+/// path passes `(effective_median, long_term_effective_median)`, which is
+/// the same `min(short-ish, long-term)` reduction the estimate's
+/// `(Mnw, Mlw)` performs — one definition of `M`, so the two call sites
+/// cannot drift.
+///
+/// Returns `0` on success (the floor is written through `out_floor`),
+/// `-1` for a null `out_floor`, and `-2` for scalars outside the ladder's
+/// `u128` domain — the same statuses, for the same reasons, as
+/// [`shekyl_corrected_fee_ladder`], whose note explains why a boundary
+/// this input cannot reach is fallible at all (rule 40).
+///
+/// # Safety
+///
+/// `out_floor` must be non-null and point at one writable `u64`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_fee_floor(
+    base_reward: u64,
+    mnw: u64,
+    mlw: u64,
+    full_reward_zone: u64,
+    ref_tx_weight: u64,
+    c_scaled: u64,
+    out_floor: *mut u64,
+) -> i32 {
+    if out_floor.is_null() {
+        return -1;
+    }
+    let Some(floor) = shekyl_economics::checked_relay_fee_floor(
+        base_reward,
+        mnw,
+        mlw,
+        full_reward_zone,
+        ref_tx_weight,
+        c_scaled,
+    ) else {
+        return -2;
+    };
+    // SAFETY: non-null per the check; caller guarantees one writable u64.
+    unsafe { out_floor.write(floor) };
+    0
+}
+
 /// Advance `already_generated_coins` by a block reward.
 ///
 /// One entry point for both C++ connect paths (main-chain and alt-chain),

@@ -437,24 +437,139 @@ pub fn checked_corrected_fee_ladder(
     ref_tx_weight: u64,
     c_q: u64,
 ) -> Option<FeeLadder> {
-    let mfw = mnw.min(mlw).max(full_reward_zone).max(1);
-    let round_scaled = |num: u128, den: u128| -> u64 {
-        round_money_up_2(u64::try_from(num / den).unwrap_or(u64::MAX))
-    };
+    let mfw = u128::from(effective_fee_median(mnw, mlw, full_reward_zone));
     let base = u128::from(base_reward);
-    let w_ref = u128::from(ref_tx_weight);
-    let m = u128::from(mfw);
     let cq = u128::from(c_q);
-    let s = u128::from(SCALE);
-    let ms = m.checked_mul(s)?;
-    let m2s = m.checked_mul(ms)?;
-    let base_w_cq = base.checked_mul(w_ref)?.checked_mul(cq)?;
-    let base_cq = base.checked_mul(cq)?;
+    let ms = mfw.checked_mul(u128::from(SCALE))?;
+
+    // `economy` IS the relay floor, by call and not by coincidence. FL-R6
+    // became an identity under FL-R20, and an identity asserted by two
+    // expressions that happen to agree is one edit away from being false
+    // — so the wire's slot 0 and `check_fee`'s floor are the same
+    // function of the same operands.
+    let economy =
+        checked_relay_fee_floor(base_reward, mnw, mlw, full_reward_zone, ref_tx_weight, c_q)?;
     Some(FeeLadder {
-        economy: round_scaled(base_w_cq, m2s),
-        standard: round_scaled(base_w_cq.checked_mul(4)?, m2s),
-        priority: round_scaled(base_cq.checked_mul(2)?, ms),
+        economy,
+        // `4F`, not `round(4·R·w·C/M²)`. FL-R20 prices the sustained-growth
+        // rung as a multiple OF THE FLOOR, so the two cannot drift apart
+        // by a rounding step at the bottom of the range where `max(1)`
+        // binds and `4 × (the unfloored quotient)` would be zero.
+        // `4F` in u128, saturating at the u64 rail exactly as `economy`
+        // does. NOT `economy.checked_mul(4)?`: that multiplies in u64 and
+        // so narrows the ladder's DOMAIN — the pre-FL-R20 shape formed
+        // `4·R·w·C` in the u128 numerator before dividing, and a reward
+        // large enough to make `4F` exceed u64 (the BLOCK_REWARD_OVERESTIMATE
+        // fallback reaches it) would refuse a ladder that used to price.
+        // `rpc_facts_shims.a_fee_estimate_writes_three_priced_tiers` caught
+        // that as an FFI-level refusal, not as a wrong number.
+        standard: u64::try_from(u128::from(economy) * 4).unwrap_or(u64::MAX),
+        // `2RC/M` — the `Fh` main arm — floored at 1 for the reason FL-R20
+        // keeps `max(1)` on the relay floor: a zero rung is not a cheap
+        // price, it is a tier that admits everything.
+        //
+        // The floor is NOT redundant, which is worth stating because the
+        // obvious algebra says it is: `2RC/M` beats `RCw/M^2` whenever
+        // `2M > w_ref`, and `M >= full_reward_zone` = 300 000 against a
+        // 3 000-byte reference tx, so priority looks like it dominates a
+        // floored economy automatically. It does not — `economy` carries
+        // its own `max(1)`, so at a reward small enough to truncate both
+        // quotients to zero, economy is 1 and an unfloored priority is 0.
+        // `priority_dominates_the_floor` found that corner; the algebra
+        // above was written before it and was wrong.
+        // Raised to `standard` when the arithmetic falls below it, so the
+        // ladder is MONOTONE BY CONSTRUCTION. The obvious algebra says this
+        // never binds — `2RC/M` beats `4RCw/M^2` whenever `M > 2·w_ref`, and
+        // `M >= full_reward_zone` = 300 000 against a 3 000-byte reference tx
+        // — and it is wrong, because the rungs it compares carry floors of
+        // their own. At a reward small enough to truncate every quotient to
+        // zero, `economy` is `max(1)` = 1, `standard` is `4F` = 4, and an
+        // unfloored `priority` is 0: `[1, 4, 1]`, which is not a ladder. A
+        // bare `max(1)` does not fix that; the rung has to clear the one
+        // below it.
+        //
+        // Found by `rpc_facts_shims.a_fee_estimate_writes_three_priced_tiers`,
+        // which asserts the wire contract `fees[0] <= fees[1] <= fees[2]`
+        // every tier-selecting consumer relies on. The Rust test that should
+        // have caught it asserted `priority >= economy` — true, wrong axis.
+        priority: u64::try_from(base.checked_mul(cq)?.checked_mul(2)? / ms)
+            .unwrap_or(u64::MAX)
+            .max(u64::try_from(u128::from(economy) * 4).unwrap_or(u64::MAX)),
     })
+}
+
+/// The fee median `M` every rung and the relay floor divide by — **one
+/// definition**, so FL-R6's identity cannot be broken by editing one of
+/// two copies.
+///
+/// The `min` is inherited and provably dead at both call sites: the
+/// estimate passes `Mnw = min(Msw, 50·Mlw)` with `Msw >= Mlw`, and the
+/// daemon's relay path passes `(effective_median, LTM)` where the
+/// effective median is built as `max(LTM, short_term)` clamped to
+/// `50·LTM`. Both give `mnw >= mlw`, so the `min` has never selected its
+/// first argument. It is NOT removed here: the operand crosses the FFI,
+/// so dropping it is a signature change, and it may only go together
+/// with tests pinning the two invariants that make it dead (FL-R21 sweep,
+/// PR C).
+fn effective_fee_median(mnw: u64, mlw: u64, full_reward_zone: u64) -> u64 {
+    mnw.min(mlw).max(full_reward_zone).max(1)
+}
+
+/// The FL-R20 relay floor `F(h) = R·C·w_ref/M²`, floored at 1 — what
+/// `check_fee` prices admission from and what the estimate serves as its
+/// economy rung.
+///
+/// **Raw `C`, and no rounding.** Monero's 0.95 and the 2 % admission
+/// buffer were the same fudge for the same gap, and FL-R23 closes that
+/// gap structurally; `round_money_up_2` on the served path went with
+/// them (FL-R21), because a floor rounded up to two significant digits
+/// is a floor a conforming wallet's exact quote can miss.
+///
+/// `max(1)` is kept: a zero floor admits everything, and `get_dynamic_base_fee`'s
+/// contract — that `0` is unambiguously the block-reward-failure arm, not
+/// a price — is load-bearing at the C++ call site.
+///
+/// `None` only outside the `u128` domain, which no chain state reaches;
+/// see [`checked_corrected_fee_ladder`] for why that arm exists at all.
+#[must_use]
+pub fn checked_relay_fee_floor(
+    base_reward: u64,
+    mnw: u64,
+    mlw: u64,
+    full_reward_zone: u64,
+    ref_tx_weight: u64,
+    c_scaled: u64,
+) -> Option<u64> {
+    let mfw = u128::from(effective_fee_median(mnw, mlw, full_reward_zone));
+    let ms = mfw.checked_mul(u128::from(SCALE))?;
+    let m2s = mfw.checked_mul(ms)?;
+    let num = u128::from(base_reward)
+        .checked_mul(u128::from(ref_tx_weight))?
+        .checked_mul(u128::from(c_scaled))?;
+    Some(u64::try_from(num / m2s).unwrap_or(u64::MAX).max(1))
+}
+
+/// [`checked_relay_fee_floor`], saturating outside the domain — the same
+/// fallback [`corrected_fee_ladder`] takes, so the floor and the rung it
+/// equals cannot disagree about an impossible input either.
+#[must_use]
+pub fn relay_fee_floor(
+    base_reward: u64,
+    mnw: u64,
+    mlw: u64,
+    full_reward_zone: u64,
+    ref_tx_weight: u64,
+    c_scaled: u64,
+) -> u64 {
+    checked_relay_fee_floor(
+        base_reward,
+        mnw,
+        mlw,
+        full_reward_zone,
+        ref_tx_weight,
+        c_scaled,
+    )
+    .unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -471,18 +586,18 @@ mod tests {
         let coin = 1_000_000_000u64;
         assert_eq!(
             corrected_fee_ladder(10 * coin, 300_000, 300_000, 300_000, 3_000, SCALE).as_slots(),
-            [340, 1400, 67_000]
+            [333, 1332, 66_666]
         );
         // Heritage case 2: Mnw = 15 MB surge over a 300 kB long-term
         // median. Was 22 000 under the surge discount; the unconditional
         // main arm prices full expansion here too.
         assert_eq!(
             corrected_fee_ladder(10 * coin, 15_000_000, 300_000, 300_000, 3_000, SCALE).as_slots(),
-            [340, 1400, 67_000]
+            [333, 1332, 66_666]
         );
         assert_eq!(
             corrected_fee_ladder(10 * coin, 1_500_000, 1_500_000, 300_000, 3_000, SCALE).as_slots(),
-            [13, 53, 14_000]
+            [13, 52, 13_333]
         );
     }
 
@@ -501,9 +616,22 @@ mod tests {
         // …and with `C_q` small it is back in the domain, so the refusal
         // above is the arithmetic and not a blanket on `w_ref = 0`.
         assert!(checked_corrected_fee_ladder(u64::MAX, z, z, z, 0, SCALE).is_some());
-        // `C_q = 1` (a scalar, not `SCALE`) keeps `priority` formable
-        // while `4·R·w_ref·C_q` overflows.
-        assert!(checked_corrected_fee_ladder(u64::MAX, z, z, z, u64::MAX, 1).is_none());
+        // `C = 2` keeps `priority` formable while `R·w_ref·C` — the
+        // floor's numerator, which `economy` and `standard` share —
+        // overflows u128.
+        //
+        // RE-DERIVED under FL-R20, not re-pinned. This case used to read
+        // `C_q = 1` and overflow on `4·R·w_ref·C_q`, because `standard`
+        // was `round(4·R·w·C / M²)` and formed the `4·` inside the u128
+        // numerator. Item 4 makes it `4F` — four times the FLOOR, after
+        // the division — so that input is now genuinely inside the domain
+        // and refusing it would be the wrong answer. The rung's operand
+        // list changed; the case that probes it has to change with it,
+        // which is the whole point of deciding the domain per rung.
+        assert!(checked_corrected_fee_ladder(u64::MAX, z, z, z, u64::MAX, 2).is_none());
+        // The same operands at `C = 1` ARE in the domain — so the refusal
+        // above is the arithmetic, not a blanket on a huge `w_ref`.
+        assert!(checked_corrected_fee_ladder(u64::MAX, z, z, z, u64::MAX, 1).is_some());
         // A denominator past the rail, with a numerator that fits.
         assert!(checked_corrected_fee_ladder(1, u64::MAX, u64::MAX, u64::MAX, 1, 1).is_none());
         // The honest domain is not swept up by any of it.
@@ -530,18 +658,31 @@ mod tests {
         let coin = 1_000_000_000u64;
         let ladder =
             corrected_fee_ladder(10 * coin, 1_500_000, 1_500_000, 300_000, 3_000, 16 * SCALE);
-        assert_eq!(ladder.economy, 220);
+        // 213, not the 208 a post-hoc rescale of the C = 1 rung (13) would
+        // give. The remainder C scales over is still thrown away by
+        // truncating first; only the rounding step that used to hide it is
+        // gone (FL-R21), so the gap narrowed from 220-vs-210 to 213-vs-208
+        // and the property is unchanged.
+        assert_eq!(ladder.economy, 213);
+        assert_eq!(13 * 16, 208, "the rescale-after value this rung must beat");
         assert_eq!(
             ladder.as_slots(),
             [ladder.economy, ladder.standard, ladder.priority]
         );
     }
 
-    /// Genesis-condition top rung with `C_q = 1` is the uncongested
-    /// genesis `Fh` (14,000,000); at the genesis-congested `C_q = 2` it
-    /// is 28,000,000.
+    /// Genesis-condition top rung with `C = 1` is the uncongested genesis
+    /// `Fh` (13,653,333); at the genesis-congested `C = 2` it is
+    /// 27,306,666.
     ///
-    /// 28,000,000 is the GENESIS ANCHOR, not a cap. It was FL-R9's wallet
+    /// **These are the unrounded values.** They were 14,000,000 and
+    /// 28,000,000 while `round_money_up_2` sat on the served path; FL-R21
+    /// deletes it, so the anchor is now the arithmetic's own answer rather
+    /// than that answer rounded up to two significant digits. (13,653,333
+    /// is the very value `round_money_up_two_places_matches_cpp` pins as
+    /// rounding to 14,000,000 — same number, one step earlier.)
+    ///
+    /// 27,306,666 is the GENESIS ANCHOR, not a cap. It was FL-R9's wallet
     /// cap until #640 re-derived that as the 220,000,000 structural bound
     /// — the old value sat below honest daemon quotes from ≈ year 3, so
     /// naming it a cap here would preserve the superseded contract in the
@@ -553,11 +694,11 @@ mod tests {
         let base = base_block_reward(0, &p).unwrap();
         assert_eq!(
             corrected_fee_ladder(base, 300_000, 300_000, 300_000, 3_000, SCALE).priority,
-            14_000_000
+            13_653_333
         );
         assert_eq!(
             corrected_fee_ladder(base, 300_000, 300_000, 300_000, 3_000, 2 * SCALE).priority,
-            28_000_000
+            27_306_666
         );
     }
 
@@ -636,6 +777,173 @@ mod tests {
         assert!(
             stepped > 0,
             "the sweep must include states the snap actually moves"
+        );
+    }
+
+    /// The 18-row grid migrated from the deleted C++ KATs
+    /// (`tests/unit_tests/fee.cpp` in full, and
+    /// `scaling_2021.cpp`'s `fee_2021_scaling.relay_fee`), which tested
+    /// `Blockchain::get_dynamic_base_fee` — the inherited
+    /// `0.95 · R·w_ref/M²`. FL-R20 deletes the 0.95 and moves the
+    /// arithmetic here, so the function they called no longer exists.
+    ///
+    /// **Every expected value is re-derived from FL-R20, not read off this
+    /// code.** A migrated KAT whose values come from the implementation it
+    /// is meant to pin asserts only that the code equals itself, which is
+    /// exactly how a formula change ships a regression with green tests.
+    /// The `old` column is what the C++ assertion held, and it is kept in
+    /// the table so the delta is reviewable rather than asserted.
+    ///
+    /// Only eight of eighteen rows move: below ≈ 80 atomic units the integer
+    /// truncation had already absorbed the 5%, so deleting it changes nothing
+    /// there. That is also why the 0.95 was easy to overlook — it is invisible
+    /// across most of the served range, and every row where it *is* visible is
+    /// a row where the old floor under-priced by exactly one twentieth.
+    ///
+    /// The per-row `old == new - new/20` assertion is the independent check on
+    /// the new column: it holds for all eighteen rows, so each new value is the
+    /// old one with precisely the 0.95 removed and nothing else.
+    #[test]
+    fn relay_floor_matches_the_migrated_heritage_grid() {
+        const COIN: u64 = 1_000_000_000;
+        const ZONE: u64 = 300_000;
+        const W_REF: u64 = 3_000;
+
+        // (reward, median, old 0.95 value, new FL-R20 value)
+        let grid: [(u64, u64, u64, u64); 18] = [
+            (10 * COIN, ZONE, 317, 333),
+            (10 * COIN, ZONE / 2, 317, 333),
+            (10 * COIN, 1, 317, 333),
+            (10 * COIN, 100_000, 317, 333),
+            (10 * COIN, 600_000, 79, 83),
+            (10 * COIN, 3_000_000, 3, 3),
+            (10 * COIN, 6_000_000, 1, 1),
+            (COIN, ZONE, 32, 33),
+            (COIN, ZONE / 2, 32, 33),
+            (COIN, 1, 32, 33),
+            (COIN, 600_000, 8, 8),
+            (COIN, 3_000_000, 1, 1),
+            (3 * COIN / 10, ZONE, 10, 10),
+            (3 * COIN / 10, ZONE / 2, 10, 10),
+            (3 * COIN / 10, 1, 10, 10),
+            (3 * COIN / 10, 600_000, 2, 2),
+            (3 * COIN / 10, 3_000_000, 1, 1),
+            (1, ZONE, 1, 1),
+        ];
+
+        let mut moved = 0usize;
+        for &(reward, median, old, new) in &grid {
+            // The daemon passes `(effective_median, LTM)`; at the KAT's single
+            // median both operands are that median, and the `.max(ZONE)` inside
+            // reproduces `get_dynamic_base_fee`'s `min_block_weight` clamp.
+            assert_eq!(
+                relay_fee_floor(reward, median, median, ZONE, W_REF, SCALE),
+                new,
+                "FL-R20 floor at reward={reward} median={median} (C = 1)"
+            );
+            // The old value is the new one less 1/20, floored — the shape of
+            // the deletion, asserted rather than asserted-about.
+            assert_eq!(new - new / 20, old, "0.95 relation at median={median}");
+            if new != old {
+                moved += 1;
+            }
+        }
+        // Rule 47: if no row moved, this grid would pass unchanged against the
+        // pre-FL-R20 formula and would not be testing the deletion at all.
+        assert_eq!(moved, 8, "exactly eight rows move when the 0.95 goes");
+
+        // The very large median the C++ `minimum_fee_floor` case used, kept as
+        // its own row because it is the one that proves `max(1)` still binds.
+        assert_eq!(
+            relay_fee_floor(COIN, 100_000 * ZONE, 100_000 * ZONE, ZONE, W_REF, SCALE),
+            1,
+            "max(1) is kept: a zero floor admits everything"
+        );
+    }
+
+    /// **FL-R6's identity, asserted.** The served economy rung and the
+    /// relay floor `check_fee` prices from must be the same number for
+    /// every state — that is what makes FL-R21's deletion of the
+    /// `fees[0] = max(fees[0], floor)` clamp a deletion of a no-op rather
+    /// than a behaviour change.
+    ///
+    /// A clamp deleted because two expressions happen to agree is one edit
+    /// away from being wrong. This is the test that notices.
+    #[test]
+    fn economy_rung_is_the_relay_floor() {
+        let coin = 1_000_000_000u64;
+        let mut floored = 0usize;
+        for &reward in &[1u64, 1_000, 10 * coin, 2_048_000_000_000] {
+            for &(mnw, mlw) in &[
+                (300_000u64, 300_000u64),
+                (15_000_000, 300_000),
+                (1_500_000, 1_500_000),
+                (300_000, 15_000_000),
+                (50_000_000, 50_000_000),
+            ] {
+                for &c in &[SCALE * 68 / 100, SCALE, 2 * SCALE, 16 * SCALE] {
+                    let ladder = corrected_fee_ladder(reward, mnw, mlw, 300_000, 3_000, c);
+                    let floor = relay_fee_floor(reward, mnw, mlw, 300_000, 3_000, c);
+                    assert_eq!(
+                        ladder.economy, floor,
+                        "economy != relay floor at reward={reward} mnw={mnw} mlw={mlw} c={c}"
+                    );
+                    assert_eq!(ladder.standard, floor * 4, "standard must be 4F");
+                    if floor == 1 {
+                        floored += 1;
+                    }
+                }
+            }
+        }
+        // Rule 47: `max(1)` is part of the identity, so the sweep has to
+        // reach it. Without a state where the floor binds, the identity
+        // would be untested exactly where the two expressions could most
+        // easily part company.
+        assert!(floored > 0, "the sweep must reach the max(1) floor");
+    }
+
+    /// **The wire contract: `economy <= standard <= priority`.**
+    ///
+    /// Every tier-selecting consumer relies on the served slots being
+    /// ordered, and `rpc_facts_shims.a_fee_estimate_writes_three_priced_tiers`
+    /// asserts it on the C++ side. This is the same contract at the
+    /// arithmetic's own level, and it exists because the first version of
+    /// this test asserted only `priority >= economy` — which is true, and
+    /// is the wrong axis. `standard` is `4F`, so it sits ABOVE economy by
+    /// construction, and the rung that can fall below it is `priority`.
+    /// The degenerate corner (a reward small enough to truncate every
+    /// quotient to zero) produced `[1, 4, 1]` and the weaker assertion
+    /// passed on it.
+    #[test]
+    fn the_served_ladder_is_monotone() {
+        let coin = 1_000_000_000u64;
+        for &reward in &[1u64, 1_000, 10 * coin, 2_048_000_000_000] {
+            for &m in &[300_000u64, 1_500_000, 15_000_000, 50_000_000] {
+                for &c in &[SCALE * 68 / 100, SCALE, 16 * SCALE] {
+                    let ladder = corrected_fee_ladder(reward, m, m, 300_000, 3_000, c);
+                    assert!(
+                        ladder.economy <= ladder.standard,
+                        "economy {} above standard {} at reward={reward} m={m} c={c}",
+                        ladder.economy,
+                        ladder.standard
+                    );
+                    assert!(
+                        ladder.standard <= ladder.priority,
+                        "standard {} above priority {} at reward={reward} m={m} c={c}",
+                        ladder.standard,
+                        ladder.priority
+                    );
+                }
+            }
+        }
+
+        // The corner that produced `[1, 4, 1]`, pinned so the regression has
+        // a name rather than only a property to violate.
+        let degenerate = corrected_fee_ladder(1, 300_000, 300_000, 300_000, 3_000, SCALE);
+        assert_eq!(
+            degenerate.as_slots(),
+            [1, 4, 4],
+            "every rung truncates to zero here; the floors must still leave a ladder"
         );
     }
 

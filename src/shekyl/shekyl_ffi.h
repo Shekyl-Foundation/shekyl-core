@@ -311,6 +311,26 @@ uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
+// The FL-R20 relay floor F(h) = R*C*w_ref/M^2, floored at 1 - what check_fee
+// prices admission from AND, by identity, the estimate's economy rung
+// (shekyl_corrected_fee_ladder's out_fees[0] at the same operands). FL-R21
+// deletes the fees[0] clamp that used to reconcile two independent
+// computations; that is only safe while they are one function, so both
+// resolve to the same Rust entry point.
+// (mnw, mlw) take the same pair the ladder does: the relay path passes
+// (effective_median, long_term_effective_median), the same min(short, long)
+// reduction the estimate's (Mnw, Mlw) performs.
+// Returns 0 (floor written through out_floor), -1 null out_floor, -2 scalars
+// outside the ladder's u128 domain.
+int32_t shekyl_relay_fee_floor(
+    uint64_t base_reward,
+    uint64_t mnw,
+    uint64_t mlw,
+    uint64_t full_reward_zone,
+    uint64_t ref_tx_weight,
+    uint64_t c_scaled,
+    uint64_t* out_floor);
+
 // The RAW fee-correction scalar C = (1-sigma)*M_r/(1-b) in SCALE units
 // (FL-R20) - what the relay floor follows: F(h) = R*C(h)*w_ref/M^2.
 // `sigma_scaled` / `burn_pct_scaled` are the same shekyl_calc_emission_share /
