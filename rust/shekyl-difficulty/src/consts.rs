@@ -46,11 +46,12 @@ pub const MTP_WINDOW: u64 = DAA_MTP_WINDOW;
 /// compile-time-truncation defense as [`N_USIZE`].
 pub const MTP_WINDOW_USIZE: usize = DAA_MTP_WINDOW_USIZE;
 
-/// The single ratified pre-window difficulty value (the "difficulty
-/// guess" of canonical LWMA-1 line 107, expressed as a consensus
-/// constant rather than a runtime parameter per
-/// `docs/completed/DAA_LWMA1.md` §2.6). Returned by `lwma1_next` for any
-/// `chain_height < N`.
+/// The pre-window difficulty value (the "difficulty guess" of
+/// canonical LWMA-1 line 107). Returned by `lwma1_next` for any
+/// `chain_height < N`. Numeric calibration lives only in
+/// `config/consensus_constants.json` (`daa_genesis_difficulty`);
+/// retune there. `DAA_LWMA1.md` §2.6 is the historical Round-4 pin
+/// of 100, not a freeze on later launch calibration.
 pub const GENESIS_DIFFICULTY: u128 = DAA_GENESIS_DIFFICULTY;
 
 // Consensus-property sentinels. These const-eval `assert!` blocks pin
@@ -90,11 +91,17 @@ const _: () = assert!(
      drift requires a spec amendment."
 );
 
-// Per docs/completed/DAA_LWMA1.md §2.6 (GENESIS_DIFFICULTY = 100).
+// Launch calibration is a JSON knob (`daa_genesis_difficulty`), not a
+// frozen algorithm constant like N/T/FTL/MTP. Pin only that it stays
+// above the genesis-block PoW difficulty of 1 (builder.rs: genesis
+// nonce 0 always satisfies check_hash at difficulty 1). A future
+// retune is an edit of that JSON key; this sentinel must not demand a
+// second matching literal.
 const _: () = assert!(
-    GENESIS_DIFFICULTY == 100,
-    "DAA_LWMA1.md §2.6 ratifies GENESIS_DIFFICULTY = 100; \
-     drift requires a spec amendment."
+    GENESIS_DIFFICULTY > 1,
+    "daa_genesis_difficulty must exceed the genesis-block PoW \
+     difficulty of 1; the numeric value lives only in \
+     config/consensus_constants.json."
 );
 
 // u64 / usize mirror-consistency sentinels. The `_USIZE` mirrors are

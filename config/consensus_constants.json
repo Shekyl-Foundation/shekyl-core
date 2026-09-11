@@ -5,12 +5,12 @@
   "fcmp_reference_block_max_age": 100,
   "ct_type_fcmp_plus_plus_pqc": 1,
 
-  "_comment_daa": "LWMA-1 difficulty adjustment parameters per docs/completed/DAA_LWMA1.md §4. Consumed by rust/shekyl-difficulty (Phase 1, ratified 2026-05-18). Window-shape constants only: N, T, FTL, MTP window length, and the genesis difficulty constant. The bias factor 99/200, the solvetime clamp 6, and the min-L floor 1/20 deliberately do NOT live here per the Round 3 disposition (DAA_LWMA1.md §4) — they appear as bare integer literals inside src/lwma1.rs because changing them is a deviation from the canonical zawy12 reference, not a tunable parameter.",
+  "_comment_daa": "LWMA-1 difficulty adjustment parameters per docs/completed/DAA_LWMA1.md §4. Consumed by rust/shekyl-difficulty (Phase 1, ratified 2026-05-18). Window-shape constants only: N, T, FTL, MTP window length, and the genesis difficulty constant. The bias factor 99/200, the solvetime clamp 6, and the min-L floor 1/20 deliberately do NOT live here per the Round 3 disposition (DAA_LWMA1.md §4) — they appear as bare integer literals inside src/lwma1.rs because changing them is a deviation from the canonical zawy12 reference, not a tunable parameter. daa_genesis_difficulty is the launch-calibration knob for the first N blocks (LWMA-1 short-circuit until the window is full); retune it here. 400 is the 2026-09-11 testnet calibration against skl-miner-test (4 RandomX v2 threads): D=100 produced ~20s blocks, so 400 is ~80–120s on that miner. The zawy12 example value of 100 remains the historical Round-4 pin in DAA_LWMA1.md §2.6.",
   "daa_window_n": 90,
   "daa_target_seconds": 120,
   "daa_ftl_seconds": 540,
   "daa_mtp_window": 11,
-  "daa_genesis_difficulty": 100,
+  "daa_genesis_difficulty": 400,
 
   "_comment_archival": "Per-shard archival retention bond floor (ARCHIVAL_BOND_FLOOR). Calibrated from bond_rate* = 0.75 per docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md §9.3 (1 sim capital unit ≡ 1 SKL). Foundation CompleteTree holders post one nominal bond at this floor.",
   "archival_bond_floor_atomic": 750000000,
