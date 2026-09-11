@@ -2957,10 +2957,24 @@ mod tests {
         );
     }
 
-    /// Pin the genesis-condition `Fh` the wallet cap is derived from
-    /// (`fee_policy.rs`: daemon-rounded genesis `Fh` = 14,000,000).
+    /// Pin the genesis-condition `Fh` of the LEGACY transliteration — the
+    /// `Current` comparison column's own baseline, not the served value.
+    ///
+    /// The name and docstring used to say this was "the `Fh` the wallet cap is
+    /// derived from", and that stopped being true twice over. The cap derives
+    /// from `corrected_fee_ladder(...).priority` at the structural maximum
+    /// correction, not from the transliteration; and since FL-R21 took
+    /// `round_money_up_2` off the served path the genesis anchor is 13,653,333
+    /// rather than this 14,000,000. `fee_policy.rs` pins the cap itself
+    /// (`absolute_cap_is_the_structural_bound`), which is where that
+    /// assertion belongs — a cross-crate claim asserted from the side that
+    /// does not own it goes stale silently, as this one did.
+    ///
+    /// What remains true, and is all this asserts: the four-rung ArticMine
+    /// transliteration, rounded the way the pre-FL-R20 daemon rounded it,
+    /// puts genesis `Fh` at 14,000,000.
     #[test]
-    fn genesis_fh_matches_wallet_cap() {
+    fn genesis_fh_of_the_legacy_transliteration() {
         let params = EconomicParams::default();
         let base = base_block_reward(0, &params).expect("genesis base");
         let fees = rounded(articmine_ladder_raw(base, 300_000, 300_000));

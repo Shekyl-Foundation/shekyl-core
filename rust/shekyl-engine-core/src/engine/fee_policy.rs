@@ -457,12 +457,21 @@ mod tests {
     fn twenty_twenty_one_scaling_kat_rows_are_well_formed() {
         // tests/unit_tests/scaling_2021.cpp `wallet_fee_estimate`,
         // mapped economy=fees[0], standard=fees[1], priority=fees[2].
-        ValidatedFeeEstimates::try_new(snapshot(340, 1400, 67_000))
-            .expect("10 SKL / 300k-zone Fh=67000 is 197× economy and must pass");
-        ValidatedFeeEstimates::try_new(snapshot(340, 1400, 22_000))
-            .expect("10 SKL / large-Mnw Fh=22000 is 65× economy and must pass");
-        ValidatedFeeEstimates::try_new(snapshot(13, 53, 14_000))
-            .expect("10 SKL / 1.5M-zone Fh=14000 is 1077× economy and must pass");
+        //
+        // These MIRROR that file's rows, so they move when it moves — which
+        // is the only thing that makes a mirrored constant a cross-check
+        // rather than a second copy free to drift. They moved with FL-R21
+        // (no `round_money_up_2` on the served path, `standard` = 4F exactly).
+        ValidatedFeeEstimates::try_new(snapshot(333, 1332, 66_666))
+            .expect("10 SKL / 300k-zone Fh=66666 is 200× economy and must pass");
+        ValidatedFeeEstimates::try_new(snapshot(13, 52, 13_333))
+            .expect("10 SKL / 1.5M-zone Fh=13333 is 1025× economy and must pass");
+        // The large-Mnw row is deliberately NOT repeated: `Mfw = min(Mnw, Mlw)`
+        // makes it identical to the first row, which is the dead `min` finding
+        // showing through. It used to carry Fh = 22,000 — the SURGE-DISCOUNT
+        // value FL-C2(b) deleted at #640 — so it had been citing a number no
+        // C++ KAT contained for two rounds before this commit; the remaining
+        // mention over there is a comment saying exactly that.
         ValidatedFeeEstimates::try_new(snapshot(10, 20, 101))
             .expect("the withdrawn 10× lock must not refuse 10.1×");
     }
