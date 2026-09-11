@@ -436,6 +436,20 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // F1 at startup (CLI_USABILITY.md §CU-5): a dead local daemon is the
+    // most common first-run state; disclose it now rather than at the first
+    // command that needs it. Loopback only — probing a remote daemon at
+    // startup would spend a Tor circuit on a courtesy check.
+    if let Some(ref dc) = daemon_client {
+        if dc.is_loopback() {
+            if let Err(e) = dc.get_info() {
+                if matches!(e, daemon::DaemonError::ConnectionRefused { .. }) {
+                    eprintln!("Note: {e}");
+                }
+            }
+        }
+    }
+
     if let Some(ref filename) = cli.wallet {
         // The password lives in this inner scope and nowhere else, so it is
         // wiped before the match below — which can reach `process::exit`, and

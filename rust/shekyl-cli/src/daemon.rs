@@ -209,6 +209,15 @@ impl DaemonClient {
         &self.url
     }
 
+    /// The F1 recovery copy this client was built with (`None` for remote
+    /// daemons). For surfaces that report daemon-unreachable through a path
+    /// that never dials this client — `status` reads `daemon_height: null`
+    /// off the wallet RPC — and still owe the "start shekyld" line.
+    #[must_use]
+    pub fn down_hint(&self) -> Option<&str> {
+        self.down_hint.as_deref()
+    }
+
     /// True when the configured endpoint is a loopback address. Mining
     /// control is loopback-only (CU-3 gate 2): the daemon's mining RPCs are
     /// admin surface, and "start mining over the network" is refused CLI-side

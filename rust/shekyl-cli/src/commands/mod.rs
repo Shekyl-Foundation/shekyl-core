@@ -205,7 +205,12 @@ pub fn repl(
                              after every operation; there is nothing to save."
                         );
                     }
-                    ResolvedCommand::Status => lifecycle::cmd_status(&rpc),
+                    ResolvedCommand::Status => {
+                        lifecycle::cmd_status(
+                            &rpc,
+                            daemon_client.and_then(DaemonClient::down_hint),
+                        );
+                    }
                     ResolvedCommand::Password => lifecycle::cmd_password(&rpc),
                     ResolvedCommand::Rescan { hard } => {
                         lifecycle::cmd_rescan(&rpc, hard);
