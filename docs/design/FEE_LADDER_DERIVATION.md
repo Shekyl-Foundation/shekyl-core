@@ -2973,7 +2973,7 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
    `predict_weight(n_in, n_out, depth, fee) == Transaction::weight()` of
    the transaction the builder produces, exactly. The gate asserts its own
    subject (rule 47): it fails if the shape enumeration is empty.
-4. Estimate path: `fees[0] = F` (no clamp, no `round_money_up_2`),
+4. Estimate path **(cited as "item 3" before the renumbering below, and by the maintainer in-channel; same item)**: `fees[0] = F` (no clamp, no `round_money_up_2`),
    `fees[1] = 4F`, `fees[2] = 2RC/M`; the wire shape (FL-R7) is unchanged.
 
 *Economics (`rust/shekyl-economics/src/fee.rs`):* export raw
