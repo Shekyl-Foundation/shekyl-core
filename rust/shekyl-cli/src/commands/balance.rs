@@ -46,17 +46,62 @@ pub fn cmd_balance(rpc: &RpcSession) {
     }
 }
 
-pub fn cmd_address(rpc: &RpcSession) {
+/// `address [--full | --out <path>]` (CU-4). Hybrid addresses run to
+/// ~2,030 characters; the default is a short **display-only** form so the
+/// terminal stays usable, with the full string behind `--full` (print) or
+/// `--out <path>` (written to a new 0600 file, never overwriting — the same
+/// file-creation shape as `--seed-out`; an address is public, the uniform
+/// handling is for consistency, not secrecy).
+pub fn cmd_address(rpc: &RpcSession, full: bool, out: Option<&str>) {
     if !require_open(rpc) {
         return;
     }
-    match rpc.call("get_primary_address", json!({})) {
+    let address = match rpc.call("get_primary_address", json!({})) {
         Ok(val) => match val.get("address").and_then(|v| v.as_str()) {
-            Some(address) => println!("{address}"),
-            None => eprintln!("Malformed get_primary_address response."),
+            Some(address) => address.to_owned(),
+            None => {
+                eprintln!("Malformed get_primary_address response.");
+                return;
+            }
         },
-        Err(e) => rpc.report("Failed to get address", &e),
+        Err(e) => {
+            rpc.report("Failed to get address", &e);
+            return;
+        }
+    };
+
+    if let Some(path) = out {
+        let path = std::path::Path::new(path);
+        let write = super::scripted::open_owner_only_excl(path, "address file").and_then(
+            |mut file| -> Result<(), Box<dyn std::error::Error>> {
+                use std::io::Write;
+                writeln!(file, "{address}")?;
+                Ok(())
+            },
+        );
+        match write {
+            Ok(()) => println!(
+                "Full address ({} characters) written to {}.",
+                address.chars().count(),
+                path.display()
+            ),
+            Err(e) => eprintln!("{e}"),
+        }
+        return;
     }
+
+    if full {
+        println!("{address}");
+        return;
+    }
+
+    println!("{}", crate::display::short_address(&address));
+    println!(
+        "(short display form of the {}-character address — not valid for \
+         pasting; \"address --full\" prints it all, \"address --out <path>\" \
+         writes it to a file)",
+        address.chars().count()
+    );
 }
 
 /// One-round-trip wallet summary over `get_wallet_info` (WI-RPC-4).

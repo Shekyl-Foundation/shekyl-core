@@ -43,6 +43,10 @@ Wallet lifecycle:
 
 Address and balance:
   address                             Show the wallet's primary address
+                                      (short display form; not pasteable)
+    [--full]                          Print the full address
+    [--out <path>]                    Write the full address to a new
+                                      private file (never overwrites)
   balance                             Show balance breakdown
 
 Transfers:
@@ -209,7 +213,9 @@ pub fn repl(
 
                     // Balance / address
                     ResolvedCommand::Balance => balance::cmd_balance(&rpc),
-                    ResolvedCommand::Address => balance::cmd_address(&rpc),
+                    ResolvedCommand::Address { full, out } => {
+                        balance::cmd_address(&rpc, full, out.as_deref());
+                    }
 
                     // Transfers
                     ResolvedCommand::Transfer {

@@ -42,7 +42,13 @@ pub enum ResolvedCommand {
 
     // -- Balance / address --
     Balance,
-    Address,
+    /// `address [--full | --out <path>]` (CU-4). The default is the short
+    /// display form; `full` prints the whole ~2,030-character string;
+    /// `out` writes it to a new 0600 file instead of the terminal.
+    Address {
+        full: bool,
+        out: Option<String>,
+    },
 
     // -- Transfers --
     Transfer {
@@ -280,7 +286,37 @@ pub fn parse(input: &str) -> ResolvedCommand {
         "save" => ResolvedCommand::Save,
         "status" => ResolvedCommand::Status,
         "balance" => ResolvedCommand::Balance,
-        "address" => ResolvedCommand::Address,
+        "address" => {
+            // CU-4: default is the short display form; --full prints the
+            // whole address; --out <path> writes it to a new 0600 file.
+            let full = args.contains(&"--full");
+            let out = match parse_flag_str(args, "--out") {
+                FlagValue::Absent => None,
+                FlagValue::Set(p) => Some(p),
+                FlagValue::Invalid(_) => return diag("address: --out expects a path"),
+            };
+            if full && out.is_some() {
+                return diag("address: use --full or --out <path>, not both");
+            }
+            // Reject stray arguments: a typo'd flag must not silently print
+            // the short form as if it were what was asked for (rule 82).
+            let mut i = 0;
+            while i < args.len() {
+                match args[i] {
+                    "--full" => {}
+                    "--out" => i += 1, // skip the path value
+                    a if a.starts_with("--out=") => {}
+                    other => {
+                        return diag(format!(
+                            "address: unexpected argument {other:?} \
+                             (usage: address [--full | --out <path>])"
+                        ))
+                    }
+                }
+                i += 1;
+            }
+            ResolvedCommand::Address { full, out }
+        }
         "transfer" => {
             let no_confirm = args.contains(&"--no-confirm");
             let priority = match parse_flag::<u32>(args, "--priority") {
@@ -894,7 +930,13 @@ mod tests {
         assert!(matches!(parse("close"), ResolvedCommand::Close));
         assert!(matches!(parse("refresh"), ResolvedCommand::Refresh));
         assert!(matches!(parse("balance"), ResolvedCommand::Balance));
-        assert!(matches!(parse("address"), ResolvedCommand::Address));
+        assert!(matches!(
+            parse("address"),
+            ResolvedCommand::Address {
+                full: false,
+                out: None
+            }
+        ));
     }
 
     #[test]
@@ -1461,6 +1503,45 @@ mod tests {
                 assert_eq!(topic, "request", "topic is the first token");
             }
             other => panic!("expected HelpCommand, got {other:?}"),
+        }
+    }
+
+    /// CU-4 address display: `--full` and `--out <path>` parse, are
+    /// mutually exclusive, and stray arguments are diagnostics rather than
+    /// a silent short-form print.
+    #[test]
+    fn address_flags_parse_and_reject_strays() {
+        assert!(matches!(
+            parse("address --full"),
+            ResolvedCommand::Address {
+                full: true,
+                out: None
+            }
+        ));
+        match parse("address --out /tmp/addr.txt") {
+            ResolvedCommand::Address { full: false, out } => {
+                assert_eq!(out.as_deref(), Some("/tmp/addr.txt"));
+            }
+            other => panic!("expected Address, got {other:?}"),
+        }
+        match parse("address --out=/tmp/addr.txt") {
+            ResolvedCommand::Address { out, .. } => {
+                assert_eq!(out.as_deref(), Some("/tmp/addr.txt"));
+            }
+            other => panic!("expected Address, got {other:?}"),
+        }
+        for line in [
+            "address --full --out /tmp/a",
+            "address --out",
+            "address --fill",
+            "address extra",
+        ] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(message.contains("address"), "{line}: {message}");
+                }
+                other => panic!("{line}: expected Diagnostic, got {other:?}"),
+            }
         }
     }
 
