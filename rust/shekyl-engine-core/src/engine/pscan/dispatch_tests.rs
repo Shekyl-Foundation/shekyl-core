@@ -929,32 +929,71 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
 #[test]
 fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
     // Production halves only — a doc-comment mention must not satisfy the pin.
-    for (name, src, seal) in [
+    //
+    // The needles below are PLAIN literals, not `concat!`-split, so this gate
+    // is only sound while the searched text genuinely excludes each file's own
+    // tests module: `drain_dispatch.rs` and `release_dispatch.rs` both contain
+    // their own seal literal inside `mod tests` (their seam gates name it), so
+    // over-inclusion would let a file's test module satisfy the positive pin
+    // while production had stopped sealing entirely.
+    //
+    // Hence `split_once` + `expect` rather than `split().next().unwrap_or(src)`:
+    // the latter always yields a first piece, so a drifted marker silently made
+    // the "production half" the whole file and the gate went green on exactly
+    // the regression it exists to catch. Marker drift must be red.
+    //
+    // `inline_tests` is the fourth column because the four files are NOT alike:
+    // `bond_orchestrator.rs` keeps its tests out-of-line (`#[cfg(test)] mod
+    // tests;`), so it has no marker to split on and is scanned whole. That was
+    // previously safe only by accident of where its tests happen to live — an
+    // accident a refactor moving them inline would revoke in silence. The
+    // `false` arm now ASSERTS the absence, so acquiring an inline tests module
+    // fails loudly with instructions instead of quietly widening the scan.
+    const TESTS_MARKER: &str = "\n#[cfg(test)]\nmod tests {";
+    for (name, src, seal, inline_tests) in [
         (
             "drain_dispatch.rs",
             include_str!("../drain_dispatch.rs"),
             ".seal_drain(",
+            true,
         ),
         (
             "claim_dispatch.rs",
             include_str!("../claim_dispatch.rs"),
             ".seal_claim(",
+            true,
         ),
         (
             "bond_orchestrator.rs",
             include_str!("../bond_orchestrator.rs"),
             ".seal_post(",
+            false,
         ),
         (
             "release_dispatch.rs",
             include_str!("../release_dispatch.rs"),
             ".seal_release(",
+            true,
         ),
     ] {
-        let production = src
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .unwrap_or(src);
+        let production = if inline_tests {
+            src.split_once(TESTS_MARKER)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{name} no longer carries the tests-module marker this split relies on; \
+                         the scan would silently widen to the whole file and let its own test \
+                         module satisfy the `{seal}` pin"
+                    )
+                })
+                .0
+        } else {
+            assert!(
+                !src.contains(TESTS_MARKER),
+                "{name} acquired an inline tests module; it is scanned whole, so its own test \
+                 text can now satisfy the `{seal}` pin — give it the `true` arm"
+            );
+            src
+        };
         let code: String = production
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
