@@ -54,6 +54,56 @@ cd "$REPO_ROOT"
 FAIL=0
 
 # ----------------------------------------------------------------------
+# Rule 46/47: rg exits 0 = matches, 1 = no matches, >1 = SCAN ERROR.
+# `if rg ...; then FAIL; else OK; fi` cannot tell 2 from 1, so a missing
+# search root or a malformed -g glob landed in the OK branch -- WITH the
+# offending line printed to stdout. Measured 2026-09-11: rg prints
+# `present/live.cpp:1:next_difficulty(1);` and exits 2 when one of several
+# roots is absent. A gate that could not read its subject has not returned
+# a verdict, and must not be read as one.
+#
+# The DOC_ALLOWLIST is the live trigger, not a hypothetical: its entries
+# become `-g "!${f}"` globs, and the FAIL text below instructs readers to
+# add entries. A malformed one silences every invariant permanently.
+#
+# This idiom is LIFTED, not invented -- check_carrier_flag_hidden.sh has
+# split grep's 2 from its 1 (with a comment naming the failure mode) since
+# it was written, and check_ignore_reasons.sh does count-then-FATAL-at-zero.
+# The knowledge was in the tree; it just had not been swept across.
+# ----------------------------------------------------------------------
+
+# Returns 0 = clean (no matches), 1 = violations found (printed).
+# Exits 2 on a scan error -- never silently clean.
+rg_verdict() {
+  local out rc=0
+  out=$(rg "$@") || rc=$?
+  case "$rc" in
+    0) printf '%s\n' "$out"; return 1 ;;
+    1) return 0 ;;
+    *) echo "FATAL: rg exited ${rc} (scan error, not no-match) during:" >&2
+       echo "       rg $*" >&2
+       echo "       The gate could not read its subject, so it has NO verdict." >&2
+       echo "       Usual causes: a search root was deleted/renamed, or a" >&2
+       echo "       DOC_ALLOWLIST entry is not a valid glob." >&2
+       exit 2 ;;
+  esac
+}
+
+# Rule 47 positive control: the searched population must be non-empty.
+# A zero-file scan reports the same clean as a scan that examined
+# everything, and the glob excludes are exactly what could empty it.
+assert_population() {
+  local label="$1"; shift
+  local files rc=0
+  files=$(rg --files "$@") || rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$files" ]; then
+    echo "FATAL: ${label}: the search enumerated no files (rg rc ${rc})." >&2
+    echo "       The invariant below would pass over an empty set." >&2
+    exit 2
+  fi
+}
+
+# ----------------------------------------------------------------------
 # Allowlists (comment-only mentions of deleted symbols).
 #
 # Each entry is a file path that may legitimately reference a deleted
@@ -89,7 +139,11 @@ echo "[1/5] Symbol-isolation: next_difficulty / next_difficulty_64"
 
 mapfile -t glob_excludes < <(build_glob_excludes)
 
-if rg --type-add 'cpp:*.{c,h,cpp,hpp,cc,inl}' --type cpp \
+assert_population "invariant 1 (DAA symbol isolation)" \
+  --type-add 'cpp:*.{c,h,cpp,hpp,cc,inl}' --type cpp \
+  "${glob_excludes[@]}" -g '!build/**' src/ tests/ contrib/
+
+if ! rg_verdict --type-add 'cpp:*.{c,h,cpp,hpp,cc,inl}' --type cpp \
       "${glob_excludes[@]}" \
       -g '!build/**' \
       -n \
@@ -114,7 +168,10 @@ echo
 # ----------------------------------------------------------------------
 echo "[2/5] No-C-ABI in rust/shekyl-difficulty/src/"
 
-if rg --type rust \
+assert_population "invariant 2 (no C-ABI in shekyl-difficulty)" \
+  --type rust rust/shekyl-difficulty/src/
+
+if ! rg_verdict --type rust \
       -n \
       '(#\[no_mangle\]|extern\s+"C"\s+fn|#\[export_name)' \
       rust/shekyl-difficulty/src/
@@ -138,7 +195,11 @@ echo "[3/5] No-orphaned-magic-numbers: DIFFICULTY_* / FTL / MTP legacy"
 
 DELETED_DEFINES='DIFFICULTY_TARGET_V[12]|DIFFICULTY_WINDOW|DIFFICULTY_LAG|DIFFICULTY_CUT|DIFFICULTY_BLOCKS_COUNT|DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN|CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT|BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW|CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1'
 
-if rg --type-add 'cpp:*.{c,h,cpp,hpp,cc,inl}' --type cpp \
+assert_population "invariant 3 (deleted #defines)" \
+  --type-add 'cpp:*.{c,h,cpp,hpp,cc,inl}' --type cpp \
+  "${glob_excludes[@]}" -g '!build/**' src/ tests/ contrib/
+
+if ! rg_verdict --type-add 'cpp:*.{c,h,cpp,hpp,cc,inl}' --type cpp \
       "${glob_excludes[@]}" \
       -g '!build/**' \
       -n \
