@@ -7,9 +7,8 @@
 //! SP-T3 spike's `serve.rs`, whose inbound-hardening shape (decoupled
 //! accept, per-step timeouts, pre-allocation request bound, aggregate-only
 //! counters) was validated there and carries forward here. The spike's
-//! `x-spike/v0` framing does **not** carry forward; this crate's
-//! `x-provisional/v0` is equally THROWAWAY (crate doc), it is simply the
-//! throwaway that serves real shards by id.
+//! `x-spike/v0` framing does **not** carry forward; the production route
+//! is `GET /shard/{id}` (`RF-R1`).
 //!
 //! Integration point for the serving host (SH-1): [`PServeEndpoint::bind`]
 //! plus [`PServeEndpoint::addr`] as the `ADD_ONION` `Port=` target. This
@@ -48,19 +47,13 @@ use tokio::task::JoinHandle;
 
 use crate::provider::{ShardBody, ShardProvider};
 
-/// The one route this endpoint answers. **Provisional and THROWAWAY** —
-/// see the crate doc; nothing about this path is a format-round candidate.
-///
-/// **That sentence is `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.5's ruling, and it
-/// is only half a disposition.** §9.5 rules this route *out* of the format
-/// round; nothing rules it *into* another, so it is on track to freeze at
-/// genesis exactly as written — the word `provisional` becoming the part
-/// that can never change. Registered as `RF-R1` (`docs/FOLLOWUPS.md`,
-/// `docs/design/IMPLEMENTATION_INDEX.md` §2) so the obligation to decide it
-/// is tracked rather than inferred from this comment. **Do not change this
-/// value to "fix" the above** — that is the decision `RF-R1` exists to have
-/// deliberately, and a rename here would freeze a second undecided string.
-pub const ROUTE_PREFIX: &str = "/x-provisional/v0/shard/";
+/// The one route this endpoint answers. Ruled `RF-R1`
+/// (`docs/design/ARCHIVAL_SERVING_ROUTE.md`): `GET /shard/{id}`.
+/// Not a format-round candidate — §9.5's exclusion stands — and not
+/// consensus. **Do not rename this to restore `provisional` or mint a
+/// `v0`/`v1` slot**; a successor request contract picks a new path with a
+/// named reopening.
+pub const ROUTE_PREFIX: &str = "/shard/";
 
 /// Response content type for shard bytes.
 pub const CONTENT_TYPE: &str = "application/octet-stream";
@@ -539,7 +532,7 @@ async fn read_head(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 /// What a parsed request asks for.
 #[derive(Debug, PartialEq, Eq)]
 enum Request {
-    /// `GET /x-provisional/v0/shard/{shard_id}`.
+    /// `GET /shard/{shard_id}`.
     Shard(u64),
 }
 

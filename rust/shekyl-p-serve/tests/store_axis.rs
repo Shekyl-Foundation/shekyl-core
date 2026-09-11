@@ -93,7 +93,7 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
         .await
         .expect("bind endpoint");
 
-    let response = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
+    let response = fetch(ep.addr(), "/shard/0").await;
     let mut body = body_of(&response);
 
     // The witness's first act is to read the frame (`RF-D4`): it says how
@@ -149,8 +149,8 @@ async fn unfrozen_and_unknown_shards_are_indistinguishable_404s() {
     .await
     .expect("bind");
 
-    let unfrozen = fetch(ep.addr(), "/x-provisional/v0/shard/1").await;
-    let unknown = fetch(ep.addr(), "/x-provisional/v0/shard/77").await;
+    let unfrozen = fetch(ep.addr(), "/shard/1").await;
+    let unknown = fetch(ep.addr(), "/shard/77").await;
     let bad_route = fetch(ep.addr(), "/nope").await;
     assert_eq!(unfrozen, unknown);
     assert_eq!(unknown, bad_route);
@@ -174,7 +174,7 @@ async fn unpinned_prune_surfaces_as_a_counted_failure_not_a_distinct_response() 
     ))))
     .await
     .expect("bind");
-    let pruned = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
+    let pruned = fetch(ep.addr(), "/shard/0").await;
     let bad_route = fetch(ep.addr(), "/nope").await;
     assert_eq!(pruned, bad_route, "store failure renders the shared 404");
     assert_eq!(ep.lookup_failure_count(), 1, "but the counter names it");
