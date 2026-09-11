@@ -1168,7 +1168,7 @@ fn corrected_fee_ladder_null_out_returns_minus_one() {
 /// failure shape, so the domain is checked and refused with `-2`.
 #[test]
 fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
-    let mut fees = [SENTINEL; 4];
+    let mut fees = [SENTINEL; 3];
     for (base, mnw, mlw, zone, w, cq) in [
         (u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX),
         (u64::MAX, 300_000, 300_000, 300_000, 3_000, u64::MAX),
@@ -1190,7 +1190,7 @@ fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
             "out-of-domain scalars must be refused, not computed \
              (base={base}, mnw={mnw}, mlw={mlw}, zone={zone}, w={w}, cq={cq})"
         );
-        assert_eq!(fees, [SENTINEL; 4], "a refused call must not write");
+        assert_eq!(fees, [SENTINEL; 3], "a refused call must not write");
     }
 
     // And the honest domain still computes: the refusal is not a blanket.
@@ -1206,7 +1206,7 @@ fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
         )
     };
     assert_eq!(st, 0);
-    assert_eq!(fees, [340, 1400, 1400, 67_000]);
+    assert_eq!(fees, [340, 1400, 67_000]);
 }
 
 #[test]
@@ -1214,7 +1214,7 @@ fn corrected_fee_ladder_marshals_the_heritage_vector() {
     // 10 SKL reward, Mnw = Mlw = zone, C_q = 1: the FL-R17 signed shape over
     // the heritage values — the same vector scaling_2021.cpp pins from the
     // C++ side, so a drift in either marshal direction fails one of the two.
-    let mut fees = [SENTINEL; 4];
+    let mut fees = [SENTINEL; 3];
     let st = unsafe {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
@@ -1227,7 +1227,7 @@ fn corrected_fee_ladder_marshals_the_heritage_vector() {
         )
     };
     assert_eq!(st, 0);
-    assert_eq!(fees, [340, 1400, 1400, 67_000]);
+    assert_eq!(fees, [340, 1400, 67_000]);
 }
 
 #[test]

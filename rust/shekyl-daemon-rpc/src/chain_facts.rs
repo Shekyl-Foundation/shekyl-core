@@ -295,10 +295,10 @@ pub struct HardForkInfo {
     pub earliest_height: u64,
 }
 
-/// The dynamic base-fee estimate: four tiers and the quantization mask.
+/// The dynamic base-fee estimate: three priced tiers and the quantization mask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeeEstimate {
-    pub fees: [u64; 4],
+    pub fees: [u64; 3],
     pub quantization_mask: u64,
 }
 
@@ -336,12 +336,12 @@ fn lookup_selector(at: BlockLookup) -> (Option<[u8; 32]>, u64) {
 
 /// The fee POD becomes typed facts only when C++ wrote every tier it claimed.
 ///
-/// `fee_count` is the runtime half of the four-ness `FeeTiers` enforces on
-/// the wire: the estimator resizes to four, the C++ shim refuses any other
-/// length, and this check is what makes a POD that arrived `OK` with a
-/// shorter write a fault rather than a base fee padded with zeros.
+/// `fee_count` is the runtime half of the arity `FeeTiers` enforces on
+/// the wire: it must equal `fees.len()`, which is what makes a POD that
+/// arrived `OK` with a shorter write a fault rather than a base fee
+/// padded with zeros.
 fn fee_estimate_from_pod(pod: ffi::FeeEstimateFactsFfi) -> Result<FeeEstimate, FactsFault> {
-    if pod.fee_count != 4 {
+    if usize::from(pod.fee_count) != pod.fees.len() {
         return Err(FactsFault::Inconsistent);
     }
     Ok(FeeEstimate {
@@ -574,19 +574,19 @@ mod tests {
     }
 
     #[test]
-    fn a_fee_pod_that_did_not_write_four_tiers_is_inconsistent() {
-        let four = ffi::FeeEstimateFactsFfi {
-            fees: [1, 2, 3, 4],
+    fn a_fee_pod_that_did_not_write_every_tier_is_inconsistent() {
+        let three = ffi::FeeEstimateFactsFfi {
+            fees: [1, 2, 3],
             quantization_mask: 8,
-            fee_count: 4,
+            fee_count: 3,
             reserved: [0; 7],
         };
-        let ok = fee_estimate_from_pod(four).expect("four tiers is the contract");
-        assert_eq!(ok.fees, [1, 2, 3, 4]);
+        let ok = fee_estimate_from_pod(three).expect("three tiers is the contract");
+        assert_eq!(ok.fees, [1, 2, 3]);
         assert_eq!(ok.quantization_mask, 8);
 
-        for count in [0, 3, 5] {
-            let mut short = four;
+        for count in [0, 2, 4] {
+            let mut short = three;
             short.fee_count = count;
             assert_eq!(
                 fee_estimate_from_pod(short),

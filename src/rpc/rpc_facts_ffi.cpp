@@ -175,21 +175,19 @@ int fee_estimate(cryptonote::Blockchain& bc, uint64_t grace_blocks,
       bc.get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, fees);
       out->quantization_mask = cryptonote::Blockchain::get_fee_quantization_mask();
     }
-    // The estimator resizes to exactly four SLOTS, carrying three priced
-    // tiers: slot 2 is the RK-5 bridge and mirrors slot 1 (standard) until
-    // the RPC cutover, so four is a wire shape rather than four rates.
-    // That four-ness lives in one function and nothing else asserted it, so
-    // a derivation that returned three would have produced a silently wrong
-    // "base fee" downstream. Checked here instead.
-    if (fees.size() != 4)
+    // Arity lives on the POD array, not a second magic number. The
+    // estimator writes `FeeLadder::as_slots`; a length that does not fill
+    // `out->fees` is a fault rather than a shorter answer padded with zeros.
+    constexpr size_t kSlots = sizeof(out->fees) / sizeof(out->fees[0]);
+    if (fees.size() != kSlots)
     {
       MERROR("fee estimate facts: estimator returned " << fees.size()
-        << " tiers, expected 4");
+        << " tiers, expected " << kSlots);
       return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
     }
-    for (size_t i = 0; i < 4; ++i)
+    for (size_t i = 0; i < kSlots; ++i)
       out->fees[i] = fees[i];
-    out->fee_count = 4;
+    out->fee_count = static_cast<uint8_t>(kSlots);
     return SHEKYL_RPC_FACTS_OK;
   }
   catch (const std::exception& e)
@@ -1689,7 +1687,11 @@ void shekyl_rpc_fee_estimate_facts_test_fill(shekyl_rpc_fee_estimate_facts* out,
   if (!out)
     return;
   std::memset(out, 0, sizeof(*out));
-  for (size_t i = 0; i < 4; ++i)
+  // Field indices 4 and 5 below are not fee-slot indexes: they seed a
+  // distinct value per POD field. The Rust twin (`ffi_exports.rs`) keeps
+  // the same indices, so both halves still fill identically.
+  constexpr size_t kSlots = sizeof(out->fees) / sizeof(out->fees[0]);
+  for (size_t i = 0; i < kSlots; ++i)
     out->fees[i] = field_value(seed, i);
   out->quantization_mask = field_value(seed, 4);
   out->fee_count = static_cast<uint8_t>(field_value(seed, 5));

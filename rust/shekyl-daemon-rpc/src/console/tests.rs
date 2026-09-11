@@ -1327,7 +1327,7 @@ fn a_get_info_reply_missing_a_field_is_refused_rather_than_defaulted() {
     assert!(out.contains("height"), "{out}");
 }
 
-fn fee_reply(fees: [u64; 4]) -> String {
+fn fee_reply(fees: [u64; 3]) -> String {
     typed_reply(&serde_json::json!({
         "jsonrpc": "2.0",
         "id": "0",
@@ -1393,7 +1393,7 @@ fn a_range_reply_that_misses_the_window_is_refused() {
     }));
     let address = route_server(vec![
         ("/get_info", info_reply(10)),
-        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 320, 4000])),
+        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
         ("json_rpc:get_block_headers_range", short),
     ]);
     let (code, out) = run(&["print_blockchain_dynamic_stats", "3"], Some(&address));
@@ -1412,7 +1412,7 @@ fn a_range_reply_that_misses_the_window_is_refused() {
     }));
     let address = route_server(vec![
         ("/get_info", info_reply(10)),
-        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 320, 4000])),
+        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
         ("json_rpc:get_block_headers_range", wrong),
     ]);
     let (code, out) = run(&["print_blockchain_dynamic_stats", "3"], Some(&address));
@@ -1452,7 +1452,7 @@ fn dynamic_stats_reports_the_window_it_summarized() {
     }));
     let (address, log) = route_server_recording(vec![
         ("/get_info", info_reply(10)),
-        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 320, 4000])),
+        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
         ("json_rpc:get_block_headers_range", range),
     ]);
     let (code, out) = run(&["print_blockchain_dynamic_stats", "3"], Some(&address));
@@ -1518,7 +1518,7 @@ fn dynamic_stats_reports_the_window_it_summarized() {
 fn dynamic_stats_clamps_a_window_longer_than_the_chain() {
     let (address, log) = route_server_recording(vec![
         ("/get_info", info_reply(2)),
-        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 320, 4000])),
+        ("json_rpc:get_fee_estimate", fee_reply([20, 80, 4000])),
         (
             "json_rpc:get_block_headers_range",
             headers_range_reply(&[0, 1]),

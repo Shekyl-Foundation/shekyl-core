@@ -326,10 +326,10 @@ uint64_t shekyl_fee_correction_quantized(
     uint64_t burn_pct_scaled,
     uint64_t prev_cq_scaled);
 
-/// The corrected four-slot fee ladder (FL-R17 three tiers + the RK-5 wire
-/// bridge slot; Fh main arm unconditional). Writes exactly four values;
-/// the CALLER clamps fees[0] at the relay floor. Returns:
-///   0  - the four values were written;
+/// The corrected three-slot fee ladder (`FeeLadder::as_slots`: economy,
+/// standard, priority; Fh main arm unconditional). Writes exactly three
+/// values; the CALLER clamps fees[0] at the relay floor. Returns:
+///   0  - the three values were written;
 ///  -1  - null out_fees, nothing written;
 ///  -2  - the scalars cannot form the rungs' products in 128 bits,
 ///        nothing written. No chain state reaches this; it exists so a

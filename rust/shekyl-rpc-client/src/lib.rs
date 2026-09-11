@@ -182,8 +182,6 @@ pub enum FeePriority {
     Unimportant,
     /// The `Normal` priority, as defined by Monero.
     Normal,
-    /// The `Elevated` priority, as defined by Monero.
-    Elevated,
     /// The `Priority` priority, as defined by Monero.
     Priority,
     /// A custom priority.
@@ -200,7 +198,6 @@ impl FeePriority {
         match self {
             FeePriority::Unimportant => 1,
             FeePriority::Normal => 2,
-            FeePriority::Elevated => 3,
             FeePriority::Priority => 4,
             FeePriority::Custom { priority, .. } => *priority,
         }
@@ -209,18 +206,14 @@ impl FeePriority {
 
 /// Which fee tier a caller's priority buys.
 ///
-/// The mapping the local index arithmetic encoded, named: priority `0` and
-/// `1` both take the lowest tier (the old code reached that by
-/// `saturating_sub(1)` on a `u32`), `2` and `3` step up, and anything `>= 4`
-/// — including a `Custom` priority of a million — takes the highest. Every
-/// `u32` maps to a tier, so the out-of-range `InvalidPriority` this function
-/// used to be able to return is not merely unused: it is unreachable, which
-/// is why the bounds check went with the index.
+/// Priority `0` and `1` both take the lowest tier (the old index arithmetic
+/// reached that by `saturating_sub(1)` on a `u32`), `2` takes the middle,
+/// and anything `>= 3` — including a `Custom` priority of a million — takes
+/// the highest. Every `u32` maps to a tier.
 fn fee_tier_for(priority: FeePriority) -> shekyl_rpc_types::FeeTier {
     match priority.fee_priority() {
         0 | 1 => shekyl_rpc_types::FeeTier::Low,
         2 => shekyl_rpc_types::FeeTier::Normal,
-        3 => shekyl_rpc_types::FeeTier::Medium,
         _ => shekyl_rpc_types::FeeTier::High,
     }
 }
@@ -481,12 +474,10 @@ pub trait Rpc: Sync + Clone {
             // The pre-2021-scaling fallback is gone with the field it read.
             // It multiplied the scalar by one of `[1, 5, 25, 1000]` when the
             // daemon sent no `fees` array — a Monero wallet2 path for a
-            // daemon Shekyl has never had, since the estimator resizes to
-            // exactly four tiers on every network and `FeeTiers` is a fixed
-            // `[u64; 4]`, so "no tiers" is now unrepresentable rather than
-            // merely unreachable (rule 60). It also carried the only
-            // unchecked multiply in this function, on a daemon-supplied
-            // number.
+            // daemon Shekyl has never had. `FeeTiers` is a fixed `[u64; 3]`,
+            // so "no tiers" is unrepresentable rather than merely
+            // unreachable (rule 60). It also carried the only unchecked
+            // multiply in this function, on a daemon-supplied number.
             FeeRate::new(res.fees.get(fee_tier_for(priority)), res.quantization_mask)
         }
     }
@@ -617,44 +608,23 @@ mod tests {
         assert_eq!(fee_tier_for(custom(1)), FeeTier::Low);
         assert_eq!(fee_tier_for(FeePriority::Normal), FeeTier::Normal);
         assert_eq!(fee_tier_for(custom(2)), FeeTier::Normal);
-        assert_eq!(fee_tier_for(FeePriority::Elevated), FeeTier::Medium);
-        assert_eq!(fee_tier_for(custom(3)), FeeTier::Medium);
+        assert_eq!(fee_tier_for(custom(3)), FeeTier::High);
         assert_eq!(fee_tier_for(FeePriority::Priority), FeeTier::High);
         assert_eq!(fee_tier_for(custom(4)), FeeTier::High);
         assert_eq!(fee_tier_for(custom(u32::MAX)), FeeTier::High);
     }
 
-    /// An `Elevated` caller pays the STANDARD rate, and that is the point
-    /// of the RK-5 bridge rather than an accident of the mapping.
-    ///
-    /// `Elevated` maps to [`FeeTier::Medium`], which indexes slot 2 — the
-    /// old `Fm`. FL-R17 signed three tiers, and the daemon keeps the
-    /// vector four wide until the RPC cutover by serving slot 2 as a
-    /// mirror of standard. So a wallet2-transliterated `Elevated` caller
-    /// is priced with the majority instead of self-marking on a rung of
-    /// its own, which is the anonymity-set claim the bridge exists to
-    /// make.
-    ///
-    /// Asserted end to end — mapping *and* slot semantics — because each
-    /// half is separately true and harmless while together they carry the
-    /// claim. The producer's side is pinned in `shekyl-economics`
-    /// (`FeeLadder::as_slots`) and at the FFI boundary; this is the
-    /// consumer's.
+    /// Every named tier buys a different rate. A mapping that collapsed two
+    /// of them would make the tier choice unobservable in every other test.
     #[test]
-    fn an_elevated_caller_is_priced_at_the_standard_rate_by_the_bridge() {
-        // A reply shaped as the daemon emits it: slot 2 mirrors slot 1.
-        let served = shekyl_rpc_types::FeeTiers([10, 20, 20, 40]);
-        let elevated = served.get(fee_tier_for(FeePriority::Elevated));
-        let standard = served.get(fee_tier_for(FeePriority::Normal));
-        assert_eq!(
-            elevated, standard,
-            "the bridge must price Elevated with standard; a distinct slot-2 \
-             rate would put those callers in a cohort of their own"
-        );
-        assert_ne!(
-            elevated,
-            served.get(fee_tier_for(FeePriority::Priority)),
-            "and it must not silently become the priority rate either"
+    fn each_named_tier_buys_a_distinct_rate() {
+        let served = shekyl_rpc_types::FeeTiers([10, 20, 40]);
+        let low = served.get(fee_tier_for(FeePriority::Unimportant));
+        let normal = served.get(fee_tier_for(FeePriority::Normal));
+        let high = served.get(fee_tier_for(FeePriority::Priority));
+        assert!(
+            low < normal && normal < high,
+            "tiers must ascend and differ: {low}, {normal}, {high}"
         );
     }
 }
