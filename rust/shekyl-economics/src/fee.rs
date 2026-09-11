@@ -498,6 +498,92 @@ pub fn checked_corrected_fee_ladder(
     })
 }
 
+/// `G` — the FL-R23 lookback depth, in blocks. Admission takes the minimum
+/// floor over `h′−G ..= h′`, so a quote taken at `h` and paid at exactly
+/// `F(h)` is admitted **by identity at every node whose tip lies in
+/// `[h, h+G]`** — per node, which is the honest form of the claim.
+///
+/// Derived from three terms, none of them a trace (§11.2): the hot-session
+/// quote-to-broadcast gap (0–2 blocks) + the network height spread at relay
+/// time (peers may be ahead of the quoting node by the blocks that arrived
+/// during propagation — 2) + one block of slack. The first draft's `G` = 3
+/// left only one block for the spread, so a peer two blocks ahead would have
+/// evaluated `[h+1, h+4]`, excluded `h`, and refused — a partial relay
+/// partition, harder to diagnose than a bounce.
+pub const RELAY_FLOOR_LOOKBACK: usize = 5;
+
+/// FL-R23 admission slack, in basis points. **Pinned at zero**, and a named
+/// parameter rather than an absence.
+///
+/// It replaces Monero's `needed/50` (2 %), which — with the 0.95 inside the
+/// floor — insured the same gap probabilistically and, per finding 9, insured
+/// nothing else. FL-R23 closes that gap structurally instead: the lookback is
+/// exact where a buffer was a guess.
+///
+/// **What makes zero safe is the weight gate**, not an argument. At zero slack
+/// a one-byte error in `predict_weight` on any shape is a hard bounce, and one
+/// the lookback cannot absorb because the shortfall is structural rather than
+/// temporal. `shekyl-tx-weight`'s `tests/weight_gate.rs` asserts the predictor
+/// against the bytes the builder emits over every `n_in × n_out × L` a spend
+/// can take and every `u64` fee varint length. If that gate ever fails on a
+/// live shape, re-introducing a buffer is this constant and its KAT — one
+/// value, not a design round (review A-2).
+pub const RELAY_ADMISSION_SLACK_BP: u32 = 0;
+
+/// The FL-R23 admission predicate: a transaction is admitted at tip `h′` iff
+///
+/// ```text
+/// fee >= mask_round_up( weight · min{ F(h′−k) : 0 <= k <= G } )
+/// ```
+///
+/// less `slack_bp` basis points, which is zero
+/// ([`RELAY_ADMISSION_SLACK_BP`]).
+///
+/// `floors` is the caller's `(h′−G ..= h′)` window of [`relay_fee_floor`]
+/// values, newest or oldest first — only the minimum is read, so the order
+/// carries no meaning and the caller is not asked to promise one.
+///
+/// **A short window is stricter, never looser.** The minimum over fewer
+/// floors is greater than or equal to the minimum over more, so a caller that
+/// can supply only part of the window (a freshly started node, a ring emptied
+/// by a reorg) refuses transactions the full window would have admitted and
+/// admits none it would not. That is the pre-FL-R23 behaviour, and it is the
+/// safe direction to degrade in — but it IS a degradation, so a caller that
+/// can warm its window should.
+///
+/// **Empty `floors` refuses everything.** No floor is not a floor of zero; it
+/// is the absence of a basis on which to admit, and a zero floor would admit
+/// every transaction including a free one.
+///
+/// Why `min` is safe here at all, registered so it stays safe (review A-3): a
+/// minimum over a window is adversary-favourable by construction — any
+/// transient dip in `F` becomes the threshold for `G` blocks. It is safe
+/// because **every operand of `F` is slow**: a 720-block SMA (`C`), a
+/// 100-block weight median (`M`), a reward decaying by `2⁻²¹` per block
+/// (`R`). That is a property of the operands, not of `min`.
+/// **Reopening clause (rule 21): FL-R23 reopens if any operand with a
+/// per-block response enters `F`** — a fast term would be amplified by the
+/// window for `G` blocks.
+#[must_use]
+pub fn relay_floor_admits(fee: u64, weight: u64, mask: u64, floors: &[u64], slack_bp: u32) -> bool {
+    let Some(&min_floor) = floors.iter().min() else {
+        return false;
+    };
+    // A zero mask cannot come off `get_fee_quantization_mask`, but this is
+    // reached through `extern "C"` where the ABI takes a bare `u64` and a
+    // division by it would abort rather than refuse (rule 40).
+    let mask = u128::from(mask.max(1));
+    let needed = {
+        let raw = u128::from(weight) * u128::from(min_floor);
+        raw.div_ceil(mask) * mask
+    };
+    // Slack is subtracted from the requirement, so `slack_bp = 0` leaves it
+    // exactly `needed` — the identity FL-R22 relies on when the wallet pays
+    // the served rung and nothing more.
+    let threshold = needed - needed * u128::from(slack_bp) / 10_000;
+    u128::from(fee) >= threshold
+}
+
 /// The fee median `M` every rung and the relay floor divide by — **one
 /// definition**, so FL-R6's identity cannot be broken by editing one of
 /// two copies.
@@ -859,6 +945,138 @@ mod tests {
             1,
             "max(1) is kept: a zero floor admits everything"
         );
+    }
+
+    /// The constant FL-R23 turns on, pinned so changing it is a deliberate
+    /// act with a test to update — the KAT SS11.6 item 2 asks for.
+    ///
+    /// Zero is not "no parameter". It is a parameter whose value is zero
+    /// because the weight gate makes exactness affordable; the doc comment on
+    /// the constant names that gate as the reason, so whoever raises it knows
+    /// what evidence would justify it.
+    #[test]
+    fn the_admission_slack_is_zero() {
+        assert_eq!(
+            RELAY_ADMISSION_SLACK_BP, 0,
+            "FL-R23 admits at the floor exactly"
+        );
+        assert_eq!(RELAY_FLOOR_LOOKBACK, 5, "G = 5 (review A-1)");
+    }
+
+    /// FL-R22's identity: a wallet paying **exactly** the served rung is
+    /// admitted, with nothing to spare. This is the whole reason the pad was
+    /// withdrawn — if paying `F(h)` needed a margin, the margin would be the
+    /// design.
+    #[test]
+    fn a_fee_at_the_floor_exactly_is_admitted() {
+        // One floor in the window, mask 1: the requirement is weight × F.
+        let floor = 333u64;
+        let weight = 11_097u64;
+        let exact = weight * floor;
+        assert!(relay_floor_admits(
+            exact,
+            weight,
+            1,
+            &[floor],
+            RELAY_ADMISSION_SLACK_BP
+        ));
+        // And one atomic unit short is refused — the assertion above would
+        // hold for a predicate that admits everything.
+        assert!(!relay_floor_admits(
+            exact - 1,
+            weight,
+            1,
+            &[floor],
+            RELAY_ADMISSION_SLACK_BP
+        ));
+    }
+
+    /// The lookback is a MINIMUM, and the quote it protects is the old one:
+    /// on a rising floor a fee priced `G` blocks ago is still admitted.
+    #[test]
+    fn the_lookback_admits_a_quote_from_the_oldest_block_in_the_window() {
+        let weight = 1_000u64;
+        // A floor rising one block at a time across the window.
+        let window: Vec<u64> = (0..=RELAY_FLOOR_LOOKBACK as u64)
+            .map(|k| 100 + k * 7)
+            .collect();
+        let oldest = *window.first().expect("window is non-empty");
+        let newest = *window.last().expect("window is non-empty");
+        assert!(newest > oldest, "the fixture must actually rise");
+
+        // Priced at the OLDEST floor: admitted, which is FL-R23's point.
+        assert!(relay_floor_admits(weight * oldest, weight, 1, &window, 0));
+        // Without the lookback — only the current tip — the same fee bounces.
+        assert!(!relay_floor_admits(
+            weight * oldest,
+            weight,
+            1,
+            &[newest],
+            0
+        ));
+    }
+
+    /// A partial window is STRICTER, never looser. A node that has not warmed
+    /// its ring refuses what the full window would admit and admits nothing
+    /// extra, so degrading is safe in the one direction that matters.
+    #[test]
+    fn a_short_window_only_ever_refuses_more() {
+        let weight = 1_000u64;
+        let full = [140u64, 133, 127, 121, 115, 110];
+        for cut in 1..full.len() {
+            let partial = &full[..cut];
+            for fee_per_weight in 100..=145u64 {
+                let fee = weight * fee_per_weight;
+                let full_admits = relay_floor_admits(fee, weight, 1, &full, 0);
+                let partial_admits = relay_floor_admits(fee, weight, 1, partial, 0);
+                assert!(
+                    !partial_admits || full_admits,
+                    "a {cut}-entry window admitted a fee the full window refused"
+                );
+            }
+        }
+        // Rule 47: the sweep must contain a fee the two windows DISAGREE on,
+        // or "never looser" holds vacuously.
+        let fee = weight * 115;
+        assert!(relay_floor_admits(fee, weight, 1, &full, 0));
+        assert!(!relay_floor_admits(fee, weight, 1, &full[..1], 0));
+    }
+
+    /// No floors is not a floor of zero. A zero threshold admits every
+    /// transaction, including a free one, so the absence of a basis refuses.
+    #[test]
+    fn an_empty_window_refuses_everything() {
+        assert!(!relay_floor_admits(u64::MAX, 1, 1, &[], 0));
+        assert!(!relay_floor_admits(0, 0, 1, &[], 0));
+    }
+
+    /// The quantization mask rounds the requirement UP, so a fee that covers
+    /// the raw product but not the rounded one is refused.
+    #[test]
+    fn the_requirement_is_rounded_up_to_the_mask() {
+        let weight = 10u64;
+        let floor = 7u64; // raw requirement 70
+        assert!(relay_floor_admits(70, weight, 1, &[floor], 0));
+        // At mask 100 the requirement rounds to 100.
+        assert!(!relay_floor_admits(70, weight, 100, &[floor], 0));
+        assert!(!relay_floor_admits(99, weight, 100, &[floor], 0));
+        assert!(relay_floor_admits(100, weight, 100, &[floor], 0));
+        // A zero mask cannot reach this from the daemon, but must not divide
+        // by zero across the ABI.
+        assert!(relay_floor_admits(70, weight, 0, &[floor], 0));
+    }
+
+    /// Slack is subtracted from the requirement. Zero today, but the arm has
+    /// to work or re-introducing a buffer would be a code change rather than
+    /// the one-constant edit review A-2 signed off.
+    #[test]
+    fn slack_lowers_the_requirement_when_it_is_not_zero() {
+        let weight = 1_000u64;
+        let floor = 100u64; // requirement 100_000
+        assert!(!relay_floor_admits(99_000, weight, 1, &[floor], 0));
+        // 200 bp = 2%, Monero's old buffer: 98_000 now clears it.
+        assert!(relay_floor_admits(98_000, weight, 1, &[floor], 200));
+        assert!(!relay_floor_admits(97_999, weight, 1, &[floor], 200));
     }
 
     /// **FL-R6's identity, asserted.** The served economy rung and the
