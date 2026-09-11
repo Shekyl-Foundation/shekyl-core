@@ -1,17 +1,18 @@
 # FL — Fee Ladder Derivation from Shekyl Miner Economics
 
-**Status:** OPEN — **round 19 (§11) OPEN, 2026-09-10: the relay floor follows raw `C` (FL-R20), the quantizers and §10 go (FL-R21), the wallet pays the served rung exactly (FL-R22), admission is lookback-min over `G` = 5 blocks (FL-R23; `G` re-derived per node at review A-1, 2026-09-10), SMA resolution decided on FL-E3 (FL-R24); confirmation run pre-registered §11.5, implementation spec §11.6 awaiting review.** Earlier text: round RULED, implementation landed. §8 now carries
+**Status:** OPEN — **round 19 (§11) OPEN, 2026-09-10: the relay floor follows raw `C` (FL-R20), the quantizers and §10 go (FL-R21), the wallet pays the served rung exactly (FL-R22), admission is lookback-min over `G` = 5 blocks (FL-R23; `G` re-derived per node at review A-1, 2026-09-10), SMA resolution decided on FL-E3 (FL-R24); confirmation run pre-registered §11.5, implementation spec §11.6 **SIGNED OFF by the maintainer in-channel 2026-09-11** — PR A (FL-R24, the consensus operand) is MERGED to `dev`; **PR B (relay policy) and PR C (the FL-R21 deletion sweep) are cleared to implement.** §8 now carries
 **FL-R12′ and FL-R17 SIGNED and FL-R14 RULED** (in-channel, provenance
 per-row); the remaining rows hold their marked states. Rows marked BUILT
 refer to the round-9 implementation, which **merged as PR #640**
-(`fb06e1d2b`, from `feat/fee-ladder-impl-1`); the follow-up mechanical
-sweep — FL-R15's rename and FL-R16b's guard removal — is in flight on
-`feat/fee-ladder-impl-2`. What keeps this document OPEN is the residue
-queued in [`FOLLOWUPS.md`](../FOLLOWUPS.md), each row pointing at the
-§8 row that carries its blocker. **FL-R3** is the one with a
-consensus-surface consequence: the hysteresis band is built and tested
-but not on the served path, and restoring it needs the time-grid shape,
-which returns as its own round.
+(`fb06e1d2b`, from `feat/fee-ladder-impl-1`), and the follow-up
+mechanical sweep — FL-R15's rename and FL-R16b's guard removal —
+**merged as PR #654**; both branches are deleted and archive-tagged.
+What keeps this document OPEN is round 19 (§11) and the residue queued in
+[`FOLLOWUPS.md`](../FOLLOWUPS.md), each row pointing at the §-row that
+carries its blocker. **FL-R3 is CLOSED premise-refuted** (FL-R21): the
+pow2 snap its band smoothed is deleted, so nothing is restored, and §10
+is closed as record (archive tag
+`archive/fl-r3-time-grid-2026-09-11`).
 The RK-5
 RPC migration lane is explicitly out of scope: every wire-shaped
 consequence in §7 carries a named trigger and is a proposal, not a
@@ -2500,7 +2501,8 @@ Closed as record 2026-09-10 by §11 (FL-R21). Round 2b completed (`/tmp/fl_r3_ro
 **Status:** OPEN. Rulings received in-channel 2026-09-09 → 2026-09-10 and
 recorded here per row (§11.2); the confirmation run FL-E1…FL-E3 is
 pre-registered at §11.5 and its results are recorded at §11.7 (FL-E1…FL-E3 run 2026-09-10; FL-R24 RULED: exact SMA for reward and floor, a consensus row); the implementation
-spec is §11.6 and awaits review before code. **This round supersedes §10**,
+spec is §11.6, **signed off in-channel 2026-09-11** (PR A merged; PR B and
+PR C cleared). **This round supersedes §10**,
 which closes as record at §10.16 — not because its measurements were wrong
 but because the thing it was restoring turned out to rest on a premise
 refuted two rounds before §10 opened (§11.1 item 2).
@@ -2638,8 +2640,10 @@ its CEN-M3 routing is discharged — the census row's formula text is
 carried by the implementing PR); **FL-D6 and FL-D8 moot** (no snap, no
 boundary cells, nothing to smooth); **FL-R3-STORE demoted** from an FL
 blocker to the storage-lane performance item it was before round 18
-promoted it — FL-R23's cold cost is one 723-block scan (§11.6), inside the
-720 budget to within the lookback depth.
+promoted it — FL-R23's cold cost is one 725-block scan (§11.6), inside the
+720 budget to within the lookback depth. *(This row was ruled 2026-09-09 when `G` = 3 made the scan 723; `G` was re-derived to 5 at review A-1 the
+next day, so the figure is restated here at the settled `G` rather than
+left disagreeing with §11.6.)*
 
 **FL-R22 — The wallet pays exactly the served rung.** No pad, fixed or
 drawn. The day's path to this ruling, in order, because each step was
@@ -2873,7 +2877,14 @@ does not scale as stated — either would mean the operands are faster than
 §11.2's safety argument assumes, and FL-R23's reopening clause fires
 rather than `G` being tuned down.
 
-### §11.6 Implementation scope (specification for review; no code before sign-off)
+### §11.6 Implementation scope — **SIGNED OFF 2026-09-11**
+
+**Provenance:** signed off by the maintainer in-channel on 2026-09-11
+("the spec is signed off on"), recorded as an in-channel sign-off — the
+provenance class this lane already consumes (FL-R12′, FL-R21) — and
+**not** as an in-tree signature: no approving review or maintainer commit
+carries it, and this line says so rather than letting a relay read as
+one. PR A landed under it; **PR B and PR C are cleared to implement.**
 
 Three PRs, in this order, so a reviewer never meets a consensus
 predicate and a repo-wide deletion in one diff (review 2026-09-10):
@@ -2923,8 +2934,13 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
   and a rollback that restores `/ blocks` at the scan and re-forms the
   scalar at the four FFI exports. Lands first so PR B is read against a
   settled operand.
-- **PR B — relay policy (FL-R20, FL-R22, FL-R23)** — items 1–3 and the
-  weight gate below. Relay policy and wallet-side only.
+- **PR B — relay policy (FL-R20, FL-R22, FL-R23)** — items 1–4 below,
+  in that order: the weight-gate property test (item 3) lands before the
+  zero-slack deletion it justifies. Relay policy and wallet-side only.
+  *(Items were numbered 1, 2, 4, 3 when the weight gate was inserted at
+  review A-2; renumbered to reading order here — the numeric order used
+  to contradict the ordering the items themselves require. Order and
+  numbering only; no item's content changed.)*
 - **PR C — the FL-R21 deletion sweep** (economics, FFI, instrument).
 
 *Daemon (`blockchain.cpp`, `tx_pool.cpp`), Rust-forward per rule 20:*
@@ -2945,7 +2961,7 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
    weight gate ever fails on a live shape, re-introducing a buffer is one
    constant and one KAT, not a design round (review A-2).
    `kept_by_block` exempt, unchanged.
-4. **Weight gate (review A-2, same PR as the deletion, before it):**
+3. **Weight gate (review A-2, same PR as the deletion, and landing BEFORE it):**
    finding 9 rests on one equality assertion
    (`transfer_pending_tx_tests.rs:1053`). With zero slack a one-byte
    prediction error on any untested shape is a hard bounce that FL-R23
@@ -2957,7 +2973,7 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
    `predict_weight(n_in, n_out, depth, fee) == Transaction::weight()` of
    the transaction the builder produces, exactly. The gate asserts its own
    subject (rule 47): it fails if the shape enumeration is empty.
-3. Estimate path: `fees[0] = F` (no clamp, no `round_money_up_2`),
+4. Estimate path: `fees[0] = F` (no clamp, no `round_money_up_2`),
    `fees[1] = 4F`, `fees[2] = 2RC/M`; the wire shape (FL-R7) is unchanged.
 
 *Economics (`rust/shekyl-economics/src/fee.rs`):* export raw
