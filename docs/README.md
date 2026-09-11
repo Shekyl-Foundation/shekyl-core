@@ -139,6 +139,7 @@ There is no V3.1 / V3.2 / V3.x release train. Allowed FOLLOWUPS / plan `Target:`
 | Economics / denomination | [DESIGN_CONCEPTS.md](DESIGN_CONCEPTS.md) |
 | Genesis allocations | [GENESIS_TRANSPARENCY.md](GENESIS_TRANSPARENCY.md), [GENESIS_ALLOCATIONS.md](GENESIS_ALLOCATIONS.md) |
 | Archival staking (mechanism) | [V3_STAKER_ARCHIVAL.md](V3_STAKER_ARCHIVAL.md) |
+| Archival serving route (request) | [design/ARCHIVAL_SERVING_ROUTE.md](design/ARCHIVAL_SERVING_ROUTE.md) |
 | Archival wallet FSM | [design/PHASE_2B_FSM_RETOOL.md](design/PHASE_2B_FSM_RETOOL.md) |
 | Principal stake lifecycle | [design/PRINCIPAL_STAKE_LIFECYCLE.md](design/PRINCIPAL_STAKE_LIFECYCLE.md) |
 | Reward emission | [design/REWARD_EMISSION_LEG.md](design/REWARD_EMISSION_LEG.md) |

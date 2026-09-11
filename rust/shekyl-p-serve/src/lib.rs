@@ -33,23 +33,20 @@
 //! bind → publish onion → tear down) and did not need to grow this
 //! crate's privacy contract to do it.
 //!
-//! # `x-provisional/v0` — THROWAWAY *transport* framing, no vote in the format round
+//! # Request contract (`RF-R1`) — `GET /shard/{shard_id}`
 //!
-//! The route is `GET /x-provisional/v0/shard/{shard_id}`. §9.5 records the
-//! discipline verbatim: *"the provisional framing is THROWAWAY and gets no
-//! vote in the format round."* The frozen response format is a
-//! genesis-irreversible decision made on its own merits (including
-//! resumability, which is a *format property* — the serving loop writes in
-//! bounded chunks precisely so a future resumable format is a change of
-//! framing, not a rewrite of the loop). Nothing about the **HTTP** shape is
-//! a proposal; a reviewer who finds `x-provisional/v0` cited in a design doc
-//! should treat that as a bug.
+//! The route, status line, and header set are
+//! `docs/design/ARCHIVAL_SERVING_ROUTE.md`. §9.5 of
+//! `ARCHIVAL_CHALLENGE_MECHANISM.md` still excludes this HTTP shape from
+//! the **format** round — that exclusion stands — and `RF-R1` is the
+//! successor it lacked. Citing `/shard/` in a design doc is not a bug;
+//! citing it as a format-round candidate still is.
 //!
 //! **The body is a different matter as of `RF-D4` (2026-08-20), and the two
 //! must not be confused.** The response *payload* now carries the ruled
 //! served frame — [`shekyl_curve_tree::served_frame::ServedFrameHeader`],
 //! `leaf_count ‖ padding_len ‖ segment_bytes ‖ padding_bytes` — which **is**
-//! genesis-frozen. The throwaway half is the status line, the header set and
+//! genesis-frozen. The request half is the status line, the header set and
 //! the route; the framed half is everything after `\r\n\r\n`. This crate
 //! *emits* that frame, it does not define it: the definition lives in
 //! `shekyl-curve-tree` because any fetcher already depends on that crate to

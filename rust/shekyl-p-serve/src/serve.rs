@@ -7,9 +7,8 @@
 //! SP-T3 spike's `serve.rs`, whose inbound-hardening shape (decoupled
 //! accept, per-step timeouts, pre-allocation request bound, aggregate-only
 //! counters) was validated there and carries forward here. The spike's
-//! `x-spike/v0` framing does **not** carry forward; this crate's
-//! `x-provisional/v0` is equally THROWAWAY (crate doc), it is simply the
-//! throwaway that serves real shards by id.
+//! `x-spike/v0` framing does **not** carry forward; the production route
+//! is `GET /shard/{id}` (`RF-R1`).
 //!
 //! Integration point for the serving host (SH-1): [`PServeEndpoint::bind`]
 //! plus [`PServeEndpoint::addr`] as the `ADD_ONION` `Port=` target. This
@@ -48,9 +47,14 @@ use tokio::task::JoinHandle;
 
 use crate::provider::{ShardBody, ShardProvider};
 
-/// The one route this endpoint answers. **Provisional and THROWAWAY** —
-/// see the crate doc; nothing about this path is a format-round candidate.
-pub const ROUTE_PREFIX: &str = "/x-provisional/v0/shard/";
+/// The one route this endpoint answers. Ruled `RF-R1`
+/// (`docs/design/ARCHIVAL_SERVING_ROUTE.md`): `GET /shard/{id}`.
+/// Not a format-round candidate — §9.5's exclusion stands — and not
+/// consensus. **Do not rename this to restore `provisional` or mint a
+/// version token.** A later request contract is an additional path that
+/// suffixes `/shard/`, with a named reopening; until then this is the
+/// only route.
+pub const ROUTE_PREFIX: &str = "/shard/";
 
 /// Response content type for shard bytes.
 pub const CONTENT_TYPE: &str = "application/octet-stream";
@@ -531,7 +535,7 @@ async fn read_head(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 /// What a parsed request asks for.
 #[derive(Debug, PartialEq, Eq)]
 enum Request {
-    /// `GET /x-provisional/v0/shard/{shard_id}`.
+    /// `GET /shard/{shard_id}`.
     Shard(u64),
 }
 

@@ -3,14 +3,18 @@
 **Status:** OPEN — design round RULED. §8 is signed (FL-R12′ / FL-R17;
 FL-R14 ruled). The round-9 implementation bundle **merged as PR #640**
 (`fb06e1d2b`); the follow-up mechanical sweep (FL-R15 rename + FL-R16b)
-is in flight on `feat/fee-ladder-impl-2`. What keeps the round OPEN is
+**merged as PR #654**. What keeps the round OPEN is round 19 (§11) and
 the residue queued in [`FOLLOWUPS.md`](../FOLLOWUPS.md) — each row a
 one-liner pointing at its owning §-row, which carries the named blocker.
 FL-R3 **CLOSED premise-refuted at round 19** (2026-09-10): its time-grid
 round (§10) is closed as record and **§11 is OPEN** — the relay floor
 follows raw `C`, the quantizers go, the wallet pays the served rung
-exactly, admission is lookback-min over `G` = 5 (FL-R20…FL-R23; FL-R24
-open on FL-E3). Branch `design/fl-r3-time-grid`.
+exactly, admission is lookback-min over `G` = 5 (FL-R20…FL-R24, the last
+decided on FL-E3). **§11.6 SIGNED OFF in-channel 2026-09-11:** PR A (the
+consensus operand) is MERGED to `dev`; PR B (relay policy) and PR C (the
+deletion sweep) are cleared to implement. The design branch
+`design/fl-r3-time-grid` is merged and deleted, archive-tagged
+`archive/fl-r3-time-grid-2026-09-11`.
 All substance lives in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md);
 this file is the thin round-state record only (rule 95 — one owner per
 claim, no restatement). Consensus behavior changes live in the
@@ -1145,10 +1149,10 @@ directly. Dispositions:
    genesis-blocking escalation), scheduled on its own merits.
 6. **PRs — SETTLED, no longer pending.** The design PR (#614) and the
    FL-R18/FL-R19 ruling record (#634) are MERGED. The round-9 split is
-   complete on the first leg: `feat/fee-ladder-impl-1` (atomic bundle,
-   built and gated) **MERGED as #640 at `fb06e1d2b`**; `-impl-2` (the
-   mechanical FL-R15 rename, with FL-R16b) is in flight on
-   `feat/fee-ladder-impl-2`.
+   complete: `feat/fee-ladder-impl-1` (atomic bundle, built and gated)
+   **MERGED as #640 at `fb06e1d2b`**, and `-impl-2` (the mechanical
+   FL-R15 rename, with FL-R16b) **MERGED as #654**. Both branches are
+   deleted and archive-tagged.
 7. Census-R2: **both resume conjuncts are SATISFIED** — FL-R12′ signed
    (round 8) and the red test extant (graduated green on impl-1). R2 can
    resume per its own criterion; the routing to the consensus lane
@@ -1283,4 +1287,4 @@ not written. State: **§11 OPEN** — FL-E1…FL-E3 pre-registered (§11.5), run
 `5574be2ea`, results at §11.7: FL-R20…FL-R23 confirmed; FL-R24's rule
 fired (integer tick 307 bp at age 30) and the maintainer RULED exact SMA
 for reward and floor — a pre-genesis consensus row for the implementing PR;
-implementation spec §11.6 awaits review.
+implementation spec §11.6 **signed off in-channel 2026-09-11** — PR A merged, PR B and PR C cleared.

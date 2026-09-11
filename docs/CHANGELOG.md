@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Archival serving route is `/shard/{id}` (`RF-R1`).** The throwaway
+  `/x-provisional/v0/shard/` path is discarded. The status/header privacy
+  contract (one 404 for every complete-head miss; two personas
+  header-identical) is unchanged.
+
 ## [3.1.0-alpha.8] - 2026-09-10
 
 ### Added

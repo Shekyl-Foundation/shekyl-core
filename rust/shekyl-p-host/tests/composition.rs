@@ -462,7 +462,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
     let addr = host.serve_addr();
     assert!(addr.ip().is_loopback(), "the serve target is loopback");
 
-    let first = fetch(addr, "/x-provisional/v0/shard/0").await;
+    let first = fetch(addr, "/shard/0").await;
     assert_eq!(
         served_segment_len(&first),
         (leaves_per_segment() * LEAF_BYTES) as u64,
@@ -495,7 +495,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
         addr,
         "the loopback target must not move under incarnation churn"
     );
-    let second = fetch(addr, "/x-provisional/v0/shard/0").await;
+    let second = fetch(addr, "/shard/0").await;
     assert_eq!(second, first, "and it must still be serving the same bytes");
     let (served, _refused, failures, _accept_errors) = host.counters();
     assert_eq!(served, 2);
@@ -660,7 +660,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     // The prune that would have cost the shard. The refresh's pin is what
     // survives it — taken before the freeze, which is the whole point.
     store.prune_frozen(&[]).expect("prune");
-    let body = fetch(host.serve_addr(), "/x-provisional/v0/shard/1").await;
+    let body = fetch(host.serve_addr(), "/shard/1").await;
     assert_eq!(
         served_segment_len(&body),
         (leaves_per_segment() * LEAF_BYTES) as u64,
@@ -1062,7 +1062,7 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
     // And the pins it holds are still real.
     store.prune_frozen(&[]).expect("prune");
     assert_eq!(
-        served_segment_len(&fetch(host.serve_addr(), "/x-provisional/v0/shard/0").await),
+        served_segment_len(&fetch(host.serve_addr(), "/shard/0").await),
         (leaves_per_segment() * LEAF_BYTES) as u64
     );
 

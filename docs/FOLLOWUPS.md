@@ -919,7 +919,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Validate `prev_id` before attestation verify on the alt-chain path**
   - Target: pre-genesis
 
-- **Land round 19: the relay floor follows raw `C` (FL-R20…FL-R23)** — implementation spec at [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §11.6, awaiting spec review after the FL-E1…FL-E3 run (§11.7): `get_current_fee_per_byte` = `R·C·w_ref/M²` raw; lookback-min admission over `G` = 5 in a Rust predicate (with the A-2 weight-gate property test and a zero-pinned `RELAY_ADMISSION_SLACK_BP`); three PRs — consensus operand (FL-R24), relay policy, deletion sweep; delete the pow2 snap, hysteresis, `MIN_REPRESENTABLE_C`, the `fees[0]` clamp, `round_money_up_2` on the served path, the 2 % buffer and the 0.95; wallet path unchanged. FL-R24 (SMA resolution) decided on FL-E3 first. Replaces the former §7-band restoration row: the snap the band smoothed is deleted (FL-R21), so nothing is restored. Falsify by `rg quantize_pow2_ceil rust/shekyl-economics/src/fee.rs` returning nothing.
+- **Land round 19: the relay floor follows raw `C` (FL-R20…FL-R23)** — implementation spec at [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §11.6, **SIGNED OFF in-channel 2026-09-11; PR A (consensus operand, FL-R24) MERGED to `dev` — PR B (relay policy) and PR C (deletion sweep) remain**: `get_current_fee_per_byte` = `R·C·w_ref/M²` raw; lookback-min admission over `G` = 5 in a Rust predicate (with the A-2 weight-gate property test and a zero-pinned `RELAY_ADMISSION_SLACK_BP`); three PRs — consensus operand (FL-R24) **DONE**, then relay policy, then deletion sweep; delete the pow2 snap, hysteresis, `MIN_REPRESENTABLE_C`, the `fees[0]` clamp, `round_money_up_2` on the served path, the 2 % buffer and the 0.95; wallet path unchanged. FL-R24 (SMA resolution) was decided on FL-E3 first, and PR A landed under it. Replaces the former §7-band restoration row: the snap the band smoothed is deleted (FL-R21), so nothing is restored. Falsify by `rg quantize_pow2_ceil rust/shekyl-economics/src/fee.rs` returning nothing.
   - Target: pre-genesis
 
 - **Disclose the fee-tier privacy trade in the wallet/CLI tier picker** — rule-81 obligation created by FL-R17's signature; carrier is the engine tier-mapping change. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §7.
@@ -930,7 +930,6 @@ Default. Lands before genesis if it should exist at launch.
 
 - ~~**Measure boundary-cell occupancy**~~ — **DONE at round 18**: occupancy 741‰, mean residence 637 blocks, max 13 597; it selected `P` = 720. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.10 (the figures) and §9 FL-D8 (row closed).
   - Target: pre-genesis
-
 
 ## Post-genesis
 

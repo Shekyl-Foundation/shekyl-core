@@ -981,6 +981,12 @@ should treat it as a bug.
 > implementation. The numbers already recorded in this document were taken on
 > the `x-spike/v0` route and are not restated.
 
+> **Amendment (2026-09-10, `RF-R1`).** The production route is now
+> `/shard/{id}` ([`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md)).
+> A re-run of this rig exercises that path, via `shekyl_p_serve::ROUTE_PREFIX`.
+> The numbers above were taken on `x-spike/v0` then driven against
+> `x-provisional/v0`; they are not restated. The spike remains disposable.
+
 **Candidates to survive, having been *validated* here rather than designed here:**
 
 - **`shekyl_tor_control_client::control::onion`** (D1) — already production-shaped and living

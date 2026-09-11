@@ -157,11 +157,11 @@ async fn serves_each_shard_by_its_own_id() {
         .await
         .expect("bind");
 
-    let ra = fetch(ep.addr(), "/x-provisional/v0/shard/7").await;
+    let ra = fetch(ep.addr(), "/shard/7").await;
     assert!(head_of(&ra).starts_with("HTTP/1.1 200 OK"));
     assert_eq!(&ra[ra.len() - a.len()..], &a[..], "shard 7 serves a-bytes");
 
-    let rb = fetch(ep.addr(), "/x-provisional/v0/shard/9").await;
+    let rb = fetch(ep.addr(), "/shard/9").await;
     assert_eq!(&rb[rb.len() - b.len()..], &b[..], "shard 9 serves b-bytes");
 
     assert_eq!(ep.served_count(), 2);
@@ -179,8 +179,8 @@ async fn two_personas_are_header_identical() {
     let b = PServeEndpoint::bind(FixtureProvider::new([(1, vec![0xBB; 2048])]))
         .await
         .expect("bind b");
-    let ha = head_of(&fetch(a.addr(), "/x-provisional/v0/shard/0").await);
-    let hb = head_of(&fetch(b.addr(), "/x-provisional/v0/shard/1").await);
+    let ha = head_of(&fetch(a.addr(), "/shard/0").await);
+    let hb = head_of(&fetch(b.addr(), "/shard/1").await);
     assert_eq!(ha, hb, "two personas must be header-identical");
 
     // The header set is exactly the declared one — checked by name so
@@ -223,17 +223,18 @@ async fn every_non_servable_outcome_renders_one_identical_404() {
         ("GET", "/"),
         ("GET", "/health"),
         ("GET", "/x-spike/v0/shard/3"),
-        ("GET", "/x-provisional/v0/shard/"),
-        ("GET", "/x-provisional/v0/shard/abc"),
-        ("GET", "/x-provisional/v0/shard/4"), // valid route, unheld shard
+        ("GET", "/x-provisional/v0/shard/3"), // RF-R1 predecessor — a miss, not an alias
+        ("GET", "/shard/"),
+        ("GET", "/shard/abc"),
+        ("GET", "/shard/4"), // valid route, unheld shard
         // Wrong METHOD on a path GET would serve: a method-aware server
         // answers 405 or 200 here. Either is a second shape, not an
         // existence leak.
-        ("POST", "/x-provisional/v0/shard/3"),
-        ("HEAD", "/x-provisional/v0/shard/3"),
-        ("PUT", "/x-provisional/v0/shard/3"),
-        ("DELETE", "/x-provisional/v0/shard/3"),
-        ("OPTIONS", "/x-provisional/v0/shard/3"),
+        ("POST", "/shard/3"),
+        ("HEAD", "/shard/3"),
+        ("PUT", "/shard/3"),
+        ("DELETE", "/shard/3"),
+        ("OPTIONS", "/shard/3"),
     ] {
         seen.push(request(ep.addr(), method, path).await);
     }
@@ -241,7 +242,7 @@ async fn every_non_servable_outcome_renders_one_identical_404() {
     let failing = PServeEndpoint::bind(Arc::new(FailingProvider))
         .await
         .expect("bind failing");
-    seen.push(fetch(failing.addr(), "/x-provisional/v0/shard/3").await);
+    seen.push(fetch(failing.addr(), "/shard/3").await);
     assert_eq!(failing.lookup_failure_count(), 1);
 
     for resp in &seen {
@@ -269,7 +270,7 @@ async fn a_request_body_does_not_reset_the_response() {
     let body = vec![b'z'; 64 * 1024];
     s.write_all(
         format!(
-            "POST /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\ncontent-length: {}\r\n\r\n",
+            "POST /shard/0 HTTP/1.1\r\nhost: x\r\ncontent-length: {}\r\n\r\n",
             body.len()
         )
         .as_bytes(),
@@ -299,7 +300,7 @@ async fn unread_request_bytes_do_not_truncate_the_served_shard() {
         .await
         .expect("bind");
     let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
-    s.write_all(b"GET /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\n\r\n")
+    s.write_all(b"GET /shard/0 HTTP/1.1\r\nhost: x\r\n\r\n")
         .await
         .expect("write request");
     // Never answered — no keep-alive — and exactly the unread remainder
@@ -337,7 +338,7 @@ async fn a_slow_reader_is_not_reset_before_it_reads_the_shard() {
         .await
         .expect("bind");
     let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
-    s.write_all(b"GET /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\n\r\n")
+    s.write_all(b"GET /shard/0 HTTP/1.1\r\nhost: x\r\n\r\n")
         .await
         .expect("write request");
     s.write_all(&vec![b'q'; 64 * 1024])
@@ -383,7 +384,7 @@ async fn a_multi_chunk_body_arrives_whole_and_in_order() {
     let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
         .await
         .expect("bind");
-    let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
+    let r = fetch(ep.addr(), "/shard/0").await;
     let (head, frame, body) = parse_served(&r);
     assert!(head.contains(&format!("content-length: {}", frame.framed_len())));
     assert_eq!(
@@ -405,7 +406,7 @@ async fn the_served_body_leads_with_the_frame_header() {
     let ep = PServeEndpoint::bind(FixtureProvider::new([(0, payload.clone())]))
         .await
         .expect("bind");
-    let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
+    let r = fetch(ep.addr(), "/shard/0").await;
 
     let (head, frame, body) = parse_served(&r);
     assert!(head.starts_with("HTTP/1.1 200 OK"));
@@ -441,7 +442,7 @@ async fn a_body_that_is_not_a_leaf_array_is_not_servable() {
     let ep = PServeEndpoint::bind(Arc::new(RaggedProvider))
         .await
         .expect("bind");
-    let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
+    let r = fetch(ep.addr(), "/shard/0").await;
     assert_eq!(r, NOT_FOUND.as_bytes(), "an unframeable body is not served");
     assert_eq!(ep.served_count(), 0);
 }
@@ -521,7 +522,7 @@ async fn the_cap_does_not_refuse_below_it() {
         .await
         .expect("bind");
     for _ in 0..8 {
-        let r = fetch(ep.addr(), "/x-provisional/v0/shard/0").await;
+        let r = fetch(ep.addr(), "/shard/0").await;
         assert!(head_of(&r).starts_with("HTTP/1.1 200 OK"));
     }
     assert_eq!(ep.refused_count(), 0, "no refusal below the cap");
@@ -537,7 +538,7 @@ async fn oversized_request_head_is_closed_not_answered() {
         .await
         .expect("bind");
     let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
-    s.write_all(b"GET /x-provisional/v0/shard/0 HTTP/1.1\r\n")
+    s.write_all(b"GET /shard/0 HTTP/1.1\r\n")
         .await
         .expect("write line");
     let filler = vec![b'x'; MAX_REQUEST_BYTES * 2];
@@ -552,38 +553,34 @@ async fn oversized_request_head_is_closed_not_answered() {
 }
 
 #[test]
-fn request_parsing_accepts_only_the_provisional_route() {
+fn route_prefix_is_the_rf_r1_path() {
+    assert_eq!(ROUTE_PREFIX, "/shard/");
+    assert!(!ROUTE_PREFIX.contains("provisional"));
+    assert!(!ROUTE_PREFIX.contains("v0"));
+}
+
+#[test]
+fn request_parsing_accepts_only_the_ruled_route() {
     assert_eq!(
-        parse_request(b"GET /x-provisional/v0/shard/42 HTTP/1.1\r\n\r\n"),
+        parse_request(b"GET /shard/42 HTTP/1.1\r\n\r\n"),
         Some(Request::Shard(42))
     );
-    assert_eq!(parse_request(b"GET /shard/42 HTTP/1.1\r\n\r\n"), None);
+    // Discarded RF-R1 predecessor — a miss, not an alias.
+    assert_eq!(
+        parse_request(b"GET /x-provisional/v0/shard/42 HTTP/1.1\r\n\r\n"),
+        None
+    );
     // The spike's route is dead here — its framing did not carry over.
     assert_eq!(
         parse_request(b"GET /x-spike/v0/shard/42 HTTP/1.1\r\n\r\n"),
         None
     );
-    assert_eq!(
-        parse_request(b"HEAD /x-provisional/v0/shard/1 HTTP/1.1\r\n\r\n"),
-        None
-    );
+    assert_eq!(parse_request(b"HEAD /shard/1 HTTP/1.1\r\n\r\n"), None);
     // A negative id is not a u64 — rejected rather than wrapped.
-    assert_eq!(
-        parse_request(b"GET /x-provisional/v0/shard/-1 HTTP/1.1\r\n\r\n"),
-        None
-    );
+    assert_eq!(parse_request(b"GET /shard/-1 HTTP/1.1\r\n\r\n"), None);
     // No version token / extra tokens → miss.
-    assert_eq!(
-        parse_request(b"GET /x-provisional/v0/shard/1\r\n\r\n"),
-        None
-    );
-    assert_eq!(
-        parse_request(b"GET /x-provisional/v0/shard/1 HTTP/1.1 extra\r\n\r\n"),
-        None
-    );
+    assert_eq!(parse_request(b"GET /shard/1\r\n\r\n"), None);
+    assert_eq!(parse_request(b"GET /shard/1 HTTP/1.1 extra\r\n\r\n"), None);
     // Query / suffix is not a bare u64.
-    assert_eq!(
-        parse_request(b"GET /x-provisional/v0/shard/1?x=1 HTTP/1.1\r\n\r\n"),
-        None
-    );
+    assert_eq!(parse_request(b"GET /shard/1?x=1 HTTP/1.1\r\n\r\n"), None);
 }
