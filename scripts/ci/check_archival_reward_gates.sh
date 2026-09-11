@@ -127,13 +127,44 @@ fi
 # Mint gate: no live emission vin crediting outputs (provisional bands).
 MINT_PATTERN='reward_P|archival.*emission.*mint|mint.*archival.*reward'
 MINT_EXCLUDE='TODO|FOLLOWUP|comment'
-if rg -n "$MINT_PATTERN" src/fcmp src/cryptonote_core \
-  --glob '*.cpp' --glob '*.h' 2>/dev/null | rg -v "$MINT_EXCLUDE" >/dev/null; then
+
+# The verdict is the OUTPUT, never the pipeline's status, and the scan's own
+# status is checked separately. The previous form was:
+#
+#   if rg -n "$MINT_PATTERN" <roots> 2>/dev/null | rg -v "$MINT_EXCLUDE" >/dev/null
+#
+# which went silently clean on a scan error, by two independent routes --
+# BOTH measured 2026-09-11 against this script's own `set -euo pipefail`:
+#
+#   1. PIPEFAIL, which this script sets: rg's exit 2 becomes the pipeline's
+#      status even though rg PRINTED the offending match, so the `if` reads a
+#      found violation as clean. (Without pipefail this arm behaves correctly
+#      -- which is why the defect is invisible if you test it in a plain
+#      shell. The script's own options are what make it live.)
+#   2. A malformed glob or a total scan failure, pipefail or not: rg aborts
+#      with no output, `rg -v` sees an empty stream and exits 1, and the `if`
+#      reads "no violations".
+#
+# And `2>/dev/null` discarded the one thing that would have shown either:
+# rg's error text. A gate that cannot read its subject has no verdict, and
+# this one did not even leave a trace that it had failed to look.
+#
+# Same rc-split as check_carrier_flag_hidden.sh and check_segment_freeze_sites.sh
+# (whose `scan()` comment names this exact failure mode). Lifted, not invented.
+MINT_RC=0
+MINT_RAW="$(rg -n "$MINT_PATTERN" src/fcmp src/cryptonote_core \
+  --glob '*.cpp' --glob '*.h')" || MINT_RC=$?
+if (( MINT_RC > 1 )); then
+  echo "FATAL: rg exited ${MINT_RC} scanning for a live mint path (scan error," >&2
+  echo "       not no-match). The gate could not read its subject, so it has NO" >&2
+  echo "       verdict on the emission-vin crediting path. Usual causes: a" >&2
+  echo "       search root was deleted/renamed, or a --glob is malformed." >&2
+  exit 2
+fi
+MINT_HITS="$(printf '%s' "$MINT_RAW" | rg -v "$MINT_EXCLUDE" || true)"
+if [[ -n "$MINT_HITS" ]]; then
   echo "FAIL: possible live archival reward mint path in C++ (grep hit)" >&2
-  # Diagnostic: same pattern and exclusion as the gate, so the printed hits
-  # are exactly the ones that tripped it.
-  rg -n "$MINT_PATTERN" src/fcmp src/cryptonote_core --glob '*.cpp' --glob '*.h' 2>/dev/null \
-    | rg -v "$MINT_EXCLUDE" || true
+  printf '%s\n' "$MINT_HITS" >&2
   FAIL=1
 fi
 
