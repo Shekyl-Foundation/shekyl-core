@@ -1,14 +1,121 @@
 #!/usr/bin/env bash
 #
+# Copyright (c) 2025-2026, The Shekyl Foundation
+# All rights reserved.
+# BSD-3-Clause
+#
 # Archival reward gates — mint + integer arithmetic discipline.
 # Invoked from check_consensus_invariants.sh and CI.
 
 set -euo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-cd "$REPO_ROOT"
+# Resolve from the script, not the caller's cwd. The comment stripper is a
+# sibling file; `$0` is relative when the parent gate invokes us, so reading
+# it after a cd-to-root would look for the helper under the repo root.
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd) || exit 2
+cd "${here}/../.." || exit 2
+
+if ! command -v rg >/dev/null 2>&1; then
+  echo "FAIL: ripgrep (rg) not found — the gate cannot enforce its contract" >&2
+  exit 2
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "FAIL: python3 not found — the comment stripper cannot run" >&2
+  exit 2
+fi
 
 FAIL=0
+
+# rg exit-code discipline: 0 = matches, 1 = no matches, >1 = scan error.
+# `if VAR="$(rg …)"` folds >1 into "no matches" because set -e is suppressed
+# in if-conditions — a false-green on the gate's own scanner. `scan` maps
+# no-match to success (empty output) and propagates scan errors, so a plain
+# `VAR="$(scan …)"` assignment aborts loudly under set -e / pipefail.
+# Presence checks branch on [[ -n "$VAR" ]], never on rg's exit status
+# (`scan -q` would map no-match to 0 and make a missing subject look present).
+scan() {
+  local rc=0
+  rg "$@" || rc=$?
+  if (( rc > 1 )); then
+    echo "FAIL: rg exited ${rc} (scan error, not no-match) during: rg $*" >&2
+    return "${rc}"
+  fi
+  return 0
+}
+
+# Comment-stripped body. A stripper failure is not a match-less file (rule 47).
+code_only() { python3 "$here/strip_c_comments.py" "$1"; }
+
+# path:line:content hits in FILE after comments are stripped. Empty output is
+# no hit. Uses the shared stripper (trailing `// TODO`, block-disabled code,
+# and `*out = reward_P` are all live code — a line-regex on rg -n output is
+# not). Stripper failure exits 2; it is not a clean scan.
+stripped_hits() {
+  local file="$1" pattern="$2" body hits
+  body=$(code_only "$file") || {
+    echo "FATAL: comment stripper failed on ${file} — an unreadable file is not a clean scan" >&2
+    exit 2
+  }
+  hits=$(printf '%s' "$body" | scan -n "$pattern")
+  if [[ -n "$hits" ]]; then
+    while IFS= read -r line; do
+      printf '%s:%s\n' "$file" "$line"
+    done <<< "$hits"
+  fi
+}
+
+# The mint / accrual arms read the stripper's output, so a stripper regression
+# would widen both in the passing direction at once.
+if ! python3 "$here/strip_c_comments.py" --self-test >/dev/null; then
+  echo "FAIL: the comment stripper failed its own regression cases; mint and" >&2
+  echo "      accrual checks read its output, so their verdicts cannot be trusted." >&2
+  exit 2
+fi
+
+MINT_PATTERN='reward_P|archival.*emission.*mint|mint.*archival.*reward'
+MINT_ROOTS=(src/fcmp src/cryptonote_core)
+
+# Negative controls for comment handling (rule 50). A regression here is a
+# silent green on the tree: refuse to judge until these hold.
+mint_predicate_self_test() {
+  local d f hits
+  d=$(mktemp -d) || return 2
+  f="$d/probe.cpp"
+
+  _expect() {
+    local want="$1" label="$2" src="$3"
+    printf '%s\n' "$src" > "$f"
+    hits=$(stripped_hits "$f" "$MINT_PATTERN")
+    if [[ "$want" == hit && -z "$hits" ]]; then
+      echo "SELF-TEST FAIL: ${label}: expected a hit" >&2
+      return 1
+    fi
+    if [[ "$want" == miss && -n "$hits" ]]; then
+      echo "SELF-TEST FAIL: ${label}: expected no hit, got:" >&2
+      printf '%s' "$hits" >&2
+      return 1
+    fi
+    return 0
+  }
+
+  local rc=0
+  _expect miss "line comment"            '// reward_P = 1;'                          || rc=1
+  _expect miss "block comment"           '/* reward_P = 1; */'                       || rc=1
+  _expect miss "block-disabled code"     '/* uint64_t x = reward_P; */'              || rc=1
+  _expect hit  "bare assignment"         'uint64_t reward_P = 2;'                    || rc=1
+  _expect hit  "trailing TODO"           'reward_P = 1; // TODO: move to rust'       || rc=1
+  _expect hit  "trailing word comment"   'void h() { reward_P = 2; } // no comment here' || rc=1
+  _expect hit  "pointer write"           '*out = reward_P;'                          || rc=1
+  _expect hit  "indented pointer write"  '  *out = reward_P;'                        || rc=1
+  unset -f _expect
+  rm -rf "$d"
+  return "$rc"
+}
+
+if ! mint_predicate_self_test; then
+  echo "FAIL: mint-predicate self-test failed; refusing to judge the tree." >&2
+  exit 2
+fi
 
 REWARD_ARITH="rust/shekyl-archival-retention/src/reward_arithmetic.rs"
 
@@ -19,7 +126,7 @@ REWARD_ARITH="rust/shekyl-archival-retention/src/reward_arithmetic.rs"
 if [[ ! -f "$REWARD_ARITH" ]]; then
   echo "FAIL: $REWARD_ARITH not found — pure-integer gate cannot enforce its contract" >&2
   echo "  (if the module moved, update REWARD_ARITH in this gate; do not let it pass silently)" >&2
-  exit 1
+  exit 2
 fi
 
 # Pure fixed-width integer discipline for the canonical reward arithmetic.
@@ -47,10 +154,11 @@ fi
 # genuinely-benign, reviewed use — e.g. a slice index that provably never reaches
 # a credited value). The marker forces the exemption to be explicit and grep-able.
 NONFIXED_PATTERN='\bf32\b|\bf64\b|\busize\b|\bisize\b|\bAtomic[A-Za-z0-9]+\b|::atomic\b'
-if NONFIXED_HITS="$(rg -n "$NONFIXED_PATTERN" "$REWARD_ARITH" | rg -v 'reward-arith-allow')"; then
+NONFIXED_HITS="$(scan -n "$NONFIXED_PATTERN" "$REWARD_ARITH" | scan -v 'reward-arith-allow')"
+if [[ -n "$NONFIXED_HITS" ]]; then
   echo "FAIL: non-fixed-width / non-deterministic type in reward_arithmetic.rs" >&2
   echo "  (pure-integer contract underwrites cross-arch bit-identity; see gate comment)" >&2
-  echo "$NONFIXED_HITS" >&2
+  printf '%s\n' "$NONFIXED_HITS" >&2
   FAIL=1
 fi
 
@@ -85,28 +193,46 @@ fi
 #     rather than discover F-B1b again.
 #
 # The block is extracted by its comment anchor and its m_db->add_block
-# terminator; comment lines are stripped before the negative checks (the
-# block's own comments name the banned symbols as warnings). The positive
-# presence checks fail loudly if the anchors drift, so a refactor that
-# moves the block cannot silently retire the gate.
+# terminator; comments are then stripped before the checks (the block's own
+# comments name the banned symbols as warnings, and a `/* */`-disabled
+# compute_emission_split would otherwise still satisfy the positive anchors).
+# The positive presence checks fail loudly if the anchors drift, so a refactor
+# that moves the block cannot silently retire the gate.
 BLOCKCHAIN_CPP="src/cryptonote_core/blockchain.cpp"
+if [[ ! -f "$BLOCKCHAIN_CPP" ]]; then
+  echo "FAIL: $BLOCKCHAIN_CPP not found — accrual tripwire cannot enforce its contract" >&2
+  echo "  (if the file moved, update BLOCKCHAIN_CPP in this gate; do not let it pass silently)" >&2
+  exit 2
+fi
 ACCRUAL_BLOCK="$(awk '/Staker-inflow accrual \(ARCHIVAL_BUDGET_SCHEDULE/,/m_db->add_block\(/' "$BLOCKCHAIN_CPP")"
-ACCRUAL_CODE="$(rg -v '^\s*//' <<<"$ACCRUAL_BLOCK" || true)"
 if [[ -z "$ACCRUAL_BLOCK" ]]; then
   echo "FAIL: staker-inflow accrual block not found in $BLOCKCHAIN_CPP" >&2
   echo "  (if the anchors moved, update this tripwire; do not let it pass silently)" >&2
   FAIL=1
 else
-  if rg -n 'get_block_reward' <<<"$ACCRUAL_CODE"; then
+  accrual_tmp=$(mktemp)
+  printf '%s\n' "$ACCRUAL_BLOCK" > "$accrual_tmp"
+  ACCRUAL_CODE=$(code_only "$accrual_tmp") || {
+    rm -f "$accrual_tmp"
+    echo "FATAL: comment stripper failed on the extracted accrual block" >&2
+    exit 2
+  }
+  rm -f "$accrual_tmp"
+
+  hits=$(printf '%s' "$ACCRUAL_CODE" | scan -n 'get_block_reward')
+  if [[ -n "$hits" ]]; then
     echo "FAIL: get_block_reward call inside the staker-inflow accrual block" >&2
     echo "  (the split operand is verify's base_reward; a second reward computation" >&2
     echo "   reintroduces the F-B1c-c2 operand drift — see gating round §9.9)" >&2
+    printf '%s\n' "$hits" >&2
     FAIL=1
   fi
-  if rg -n 'get_current_version|get_ideal_version\(' <<<"$ACCRUAL_CODE"; then
+  hits=$(printf '%s' "$ACCRUAL_CODE" | scan -n 'get_current_version|get_ideal_version\(')
+  if [[ -n "$hits" ]]; then
     echo "FAIL: tip-relative or table-only version read inside the accrual block" >&2
     echo "  (the version operand is bl.major_version — the block's own consensus-checked" >&2
     echo "   version; see F-B1b in gating round §9.9)" >&2
+    printf '%s\n' "$hits" >&2
     FAIL=1
   fi
   # Anchors are the three symbols that MAKE this the accrual block: both legs
@@ -115,7 +241,7 @@ else
   # must be something the block cannot lose without ceasing to be itself, or
   # the tripwire fires on correct refactors and gets weakened to shut it up.
   for anchor in 'compute_emission_split' 'compute_fee_burn' 'archival_budget_accrual'; do
-    if ! rg -q "$anchor" <<<"$ACCRUAL_CODE"; then
+    if [[ -z "$(printf '%s' "$ACCRUAL_CODE" | scan "$anchor")" ]]; then
       echo "FAIL: accrual-block anchor '${anchor}' not found in the extracted block" >&2
       echo "  Either the block moved (re-anchor this tripwire to it), or a leg of the" >&2
       echo "  staker inflow was removed (that is a consensus change — justify it)." >&2
@@ -125,53 +251,36 @@ else
 fi
 
 # Mint gate: no live emission vin crediting outputs (provisional bands).
-MINT_PATTERN='reward_P|archival.*emission.*mint|mint.*archival.*reward'
-MINT_EXCLUDE='TODO|FOLLOWUP'
-# A COMMENT is excluded by being a comment LINE, not by containing the word.
-# The exclude list read 'TODO|FOLLOWUP|comment', so `rg -v` dropped any hit
-# whose text contained the bare English word -- `reward_P = 1; // no comment
-# here` was silently excluded from an INFLATION-SURFACE gate. Matching the
-# rg -n `path:line:content` shape and anchoring on the comment leader is the
-# same drop_comment_hits idiom check_segment_freeze_sites.sh already uses.
-MINT_COMMENT_LINE='^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)'
+# Verdict is comment-stripped content, never rg's exit status. Comments are
+# excluded by being comments, not by containing a word; a code line with a
+# trailing TODO is still a mint path.
+for d in "${MINT_ROOTS[@]}"; do
+  if [[ ! -d "$d" ]]; then
+    echo "FATAL: ${d} not found — mint gate cannot read its subject" >&2
+    echo "  (if the tree moved, update MINT_ROOTS; do not let it pass silently)" >&2
+    exit 2
+  fi
+done
 
-# The verdict is the OUTPUT, never the pipeline's status, and the scan's own
-# status is checked separately. The previous form was:
-#
-#   if rg -n "$MINT_PATTERN" <roots> 2>/dev/null | rg -v "$MINT_EXCLUDE" >/dev/null
-#
-# which went silently clean on a scan error, by two independent routes --
-# BOTH measured 2026-09-11 against this script's own `set -euo pipefail`:
-#
-#   1. PIPEFAIL, which this script sets: rg's exit 2 becomes the pipeline's
-#      status even though rg PRINTED the offending match, so the `if` reads a
-#      found violation as clean. (Without pipefail this arm behaves correctly
-#      -- which is why the defect is invisible if you test it in a plain
-#      shell. The script's own options are what make it live.)
-#   2. A malformed glob or a total scan failure, pipefail or not: rg aborts
-#      with no output, `rg -v` sees an empty stream and exits 1, and the `if`
-#      reads "no violations".
-#
-# And `2>/dev/null` discarded the one thing that would have shown either:
-# rg's error text. A gate that cannot read its subject has no verdict, and
-# this one did not even leave a trace that it had failed to look.
-#
-# Same rc-split as check_carrier_flag_hidden.sh and check_segment_freeze_sites.sh
-# (whose `scan()` comment names this exact failure mode). Lifted, not invented.
-MINT_RC=0
-MINT_RAW="$(rg -n "$MINT_PATTERN" src/fcmp src/cryptonote_core \
-  --glob '*.cpp' --glob '*.h')" || MINT_RC=$?
-if (( MINT_RC > 1 )); then
-  echo "FATAL: rg exited ${MINT_RC} scanning for a live mint path (scan error," >&2
-  echo "       not no-match). The gate could not read its subject, so it has NO" >&2
-  echo "       verdict on the emission-vin crediting path. Usual causes: a" >&2
-  echo "       search root was deleted/renamed, or a --glob is malformed." >&2
-  exit 2
-fi
-MINT_HITS="$(printf '%s' "$MINT_RAW" | rg -v "$MINT_EXCLUDE" | rg -v "$MINT_COMMENT_LINE" || true)"
+MINT_HITS=""
+for d in "${MINT_ROOTS[@]}"; do
+  files=$(scan --files "$d" --glob '*.cpp' --glob '*.h')
+  if [[ -z "$files" ]]; then
+    echo "FATAL: ${d} enumerates no C++ files (*.cpp/*.h) — the mint gate" >&2
+    echo "       would pass over an empty set (rule 47)." >&2
+    exit 2
+  fi
+  while IFS= read -r f; do
+    hits=$(stripped_hits "$f" "$MINT_PATTERN")
+    if [[ -n "$hits" ]]; then
+      MINT_HITS+="${hits}"$'\n'
+    fi
+  done <<< "$files"
+done
+
 if [[ -n "$MINT_HITS" ]]; then
   echo "FAIL: possible live archival reward mint path in C++ (grep hit)" >&2
-  printf '%s\n' "$MINT_HITS" >&2
+  printf '%s' "$MINT_HITS" >&2
   FAIL=1
 fi
 
