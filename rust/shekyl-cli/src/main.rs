@@ -34,7 +34,7 @@ enum Commands {
 
     /// Non-interactively create a wallet, writing its one-time seed backup to
     /// a file (for scripting / automation). Connection flags (--network,
-    /// --testnet, --engine-dir, --rpc-url, …) are global: they parse before
+    /// --testnet, --wallet-dir, --rpc-url, …) are global: they parse before
     /// or after the subcommand name.
     Create(commands::scripted::CreateArgs),
 
@@ -79,13 +79,15 @@ pub struct ReplArgs {
 
     /// Directory for wallet files. Default: ~/.shekyl/wallets/<network>/
     /// (created on demand), so wallets on different networks never share a
-    /// directory. Ignored with --rpc-url.
-    #[arg(long, global = true)]
-    engine_dir: Option<String>,
+    /// directory. Ignored with --rpc-url. (--engine-dir is a hidden alias,
+    /// CU-2.)
+    #[arg(long, global = true, alias = "engine-dir")]
+    wallet_dir: Option<String>,
 
-    /// Open a wallet immediately on startup
-    #[arg(long, global = true)]
-    engine_file: Option<String>,
+    /// Open this wallet immediately on startup. (--engine-file is a hidden
+    /// alias, CU-2.)
+    #[arg(long, global = true, alias = "engine-file")]
+    wallet: Option<String>,
 
     /// SOCKS proxy for the wallet's daemon connections — the self-hosted
     /// block scan and the REPL's direct daemon queries (e.g.
@@ -136,17 +138,17 @@ impl ReplArgs {
         }
     }
 
-    /// The wallet-file directory: `--engine-dir` as given, else the
+    /// The wallet-file directory: `--wallet-dir` as given, else the
     /// per-network default `~/.shekyl/wallets/<network>/` (CU-1) — so a
     /// testnet wallet file can never collide with a mainnet one, the
     /// Electrum isolation shape. Only consulted for a self-hosted session
     /// (`--rpc-url` stores wallets server-side).
-    fn wallet_dir(&self) -> Result<std::path::PathBuf, String> {
-        if let Some(dir) = &self.engine_dir {
+    fn resolved_wallet_dir(&self) -> Result<std::path::PathBuf, String> {
+        if let Some(dir) = &self.wallet_dir {
             return Ok(std::path::PathBuf::from(dir));
         }
         let home = dirs::home_dir()
-            .ok_or("cannot determine the home directory; pass --engine-dir explicitly")?;
+            .ok_or("cannot determine the home directory; pass --wallet-dir explicitly")?;
         Ok(home
             .join(".shekyl")
             .join("wallets")
@@ -323,9 +325,9 @@ fn build_session(
             cli.debug,
         )?),
         Endpoints::SelfHosted { network, daemon } => {
-            let wallet_dir = cli.wallet_dir()?;
+            let wallet_dir = cli.resolved_wallet_dir()?;
             // The per-network default is created on demand; an explicit
-            // --engine-dir is also created rather than failing on a path the
+            // --wallet-dir is also created rather than failing on a path the
             // operator clearly intends to use.
             std::fs::create_dir_all(&wallet_dir)
                 .map_err(|e| format!("cannot create wallet dir {}: {e}", wallet_dir.display()))?;
@@ -434,7 +436,7 @@ fn run_repl(cli: &ReplArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    if let Some(ref filename) = cli.engine_file {
+    if let Some(ref filename) = cli.wallet {
         // The password lives in this inner scope and nowhere else, so it is
         // wiped before the match below — which can reach `process::exit`, and
         // `exit` bypasses Drop. A `Zeroizing` still in scope at that call is a
@@ -597,17 +599,19 @@ mod tests {
 
     /// The default wallet dir is per-network (`~/.shekyl/wallets/<network>/`,
     /// CU-1) so wallets on different networks never share a directory; an
-    /// explicit `--engine-dir` is taken as given.
+    /// explicit `--wallet-dir` is taken as given.
     #[test]
     fn the_default_wallet_dir_is_per_network() {
         let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
-        let dir = args(&["shekyl-cli", "--testnet"]).wallet_dir().unwrap();
+        let dir = args(&["shekyl-cli", "--testnet"])
+            .resolved_wallet_dir()
+            .unwrap();
         assert!(
             dir.ends_with(".shekyl/wallets/testnet"),
             "got {}",
             dir.display()
         );
-        let mainnet = args(&["shekyl-cli"]).wallet_dir().unwrap();
+        let mainnet = args(&["shekyl-cli"]).resolved_wallet_dir().unwrap();
         assert!(
             mainnet.ends_with(".shekyl/wallets/mainnet"),
             "got {}",
@@ -615,7 +619,7 @@ mod tests {
         );
         assert_eq!(
             args(&["shekyl-cli", "--engine-dir", "/tmp/wallets"])
-                .wallet_dir()
+                .resolved_wallet_dir()
                 .unwrap(),
             std::path::PathBuf::from("/tmp/wallets")
         );

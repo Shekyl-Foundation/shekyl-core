@@ -30,7 +30,7 @@ type BoxErr = Box<dyn std::error::Error>;
 /// `shekyl-cli create <name> --seed-out <path>` — non-interactive create.
 #[derive(clap::Args)]
 pub struct CreateArgs {
-    /// Wallet name (file created under --engine-dir).
+    /// Wallet name (file created under --wallet-dir).
     pub name: String,
     /// Write the one-time seed backup to this path. Created 0600 and refuses
     /// to overwrite an existing file. Required — the server never re-exposes
@@ -49,7 +49,7 @@ pub struct CreateArgs {
 /// `shekyl-cli restore <name> --seed-file <path>` — non-interactive restore.
 #[derive(clap::Args)]
 pub struct RestoreArgs {
-    /// Wallet name (file created under --engine-dir).
+    /// Wallet name (file created under --wallet-dir).
     pub name: String,
     /// Read the seed backup from this file — a BIP-39 mnemonic
     /// (mainnet/stagenet) or a 32-byte raw seed as hex (testnet), i.e. exactly

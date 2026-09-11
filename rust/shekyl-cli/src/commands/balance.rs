@@ -60,7 +60,9 @@ pub fn cmd_address(rpc: &RpcSession) {
 }
 
 /// One-round-trip wallet summary over `get_wallet_info` (WI-RPC-4).
-pub fn cmd_engine_info(rpc: &RpcSession) {
+/// The REPL command is `wallet` (renamed from `engine_info`, CU-2; the old
+/// name is a hidden alias).
+pub fn cmd_wallet(rpc: &RpcSession) {
     if !require_open(rpc) {
         return;
     }

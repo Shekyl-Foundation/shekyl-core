@@ -34,6 +34,10 @@ pub enum ResolvedCommand {
     Save,
     Status,
     Help,
+    /// `help <command>` — the one-command usage block (CU-2).
+    HelpCommand {
+        topic: String,
+    },
     Exit,
 
     // -- Balance / address --
@@ -181,7 +185,9 @@ pub enum ResolvedCommand {
         hard: bool,
     },
     Version,
-    EngineInfo,
+    /// `wallet` — the wallet summary (height, balance, address). Renamed
+    /// from `engine_info` (CU-2); the old name stays as a hidden alias.
+    Wallet,
 
     // -- Unknown --
     /// An unrecognized command token (the `other` catch-all). Rendered as
@@ -216,7 +222,16 @@ pub fn parse(input: &str) -> ResolvedCommand {
     }
 
     match cmd {
-        "help" => ResolvedCommand::Help,
+        // `help` alone is the categorized listing; `help <command>` is that
+        // command's usage block. The topic is the first token only — `help
+        // request new` reads as topic "request", whose block covers both
+        // spellings.
+        "help" => match args.first() {
+            None => ResolvedCommand::Help,
+            Some(topic) => ResolvedCommand::HelpCommand {
+                topic: (*topic).to_string(),
+            },
+        },
         "exit" | "quit" => ResolvedCommand::Exit,
         "create" => {
             if let Some(filename) = args.first() {
@@ -603,7 +618,9 @@ pub fn parse(input: &str) -> ResolvedCommand {
             ResolvedCommand::Rescan { hard }
         }
         "version" => ResolvedCommand::Version,
-        "engine_info" => ResolvedCommand::EngineInfo,
+        // `wallet` is the public name (CU-2); `engine_info` survives as a
+        // hidden alias so existing habits and scripts keep working.
+        "wallet" | "engine_info" => ResolvedCommand::Wallet,
         other => ResolvedCommand::Unknown {
             cmd: other.to_string(),
         },
@@ -1381,6 +1398,26 @@ mod tests {
                 assert!(n_outputs.is_none());
             }
             other => panic!("expected Fee, got {other:?}"),
+        }
+    }
+
+    /// CU-2 vocabulary: `wallet` is the public summary command with
+    /// `engine_info` as a hidden alias, and `help <command>` resolves to a
+    /// per-command topic rather than the full listing.
+    #[test]
+    fn wallet_rename_and_help_topics_parse() {
+        assert!(matches!(parse("wallet"), ResolvedCommand::Wallet));
+        assert!(matches!(parse("engine_info"), ResolvedCommand::Wallet));
+        assert!(matches!(parse("help"), ResolvedCommand::Help));
+        match parse("help transfer") {
+            ResolvedCommand::HelpCommand { topic } => assert_eq!(topic, "transfer"),
+            other => panic!("expected HelpCommand, got {other:?}"),
+        }
+        match parse("help request new") {
+            ResolvedCommand::HelpCommand { topic } => {
+                assert_eq!(topic, "request", "topic is the first token");
+            }
+            other => panic!("expected HelpCommand, got {other:?}"),
         }
     }
 

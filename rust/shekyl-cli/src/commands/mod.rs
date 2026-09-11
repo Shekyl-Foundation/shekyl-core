@@ -125,9 +125,9 @@ Receiving history:
                                       match (FA-8 UNATTRIBUTED)
 
 Meta:
-  engine_info                         Wallet summary (height, balance, address)
+  wallet                              Wallet summary (height, balance, address)
   version                             Show CLI and wallet-RPC versions
-  help                                Show this help
+  help [command]                      Show this help, or one command's usage
   exit / quit                         Exit shekyl-cli";
 
 pub fn repl(
@@ -163,6 +163,12 @@ pub fn repl(
 
                 match resolve::parse(line) {
                     ResolvedCommand::Help => println!("{HELP_TEXT}"),
+                    ResolvedCommand::HelpCommand { topic } => match command_help(&topic) {
+                        Some(block) => println!("{block}"),
+                        None => {
+                            eprintln!("No help for {topic:?}. Type \"help\" for the command list.")
+                        }
+                    },
                     ResolvedCommand::Exit => break,
 
                     // Lifecycle
@@ -312,8 +318,8 @@ pub fn repl(
 
                     // Meta
                     ResolvedCommand::Version => cmd_version(&rpc),
-                    ResolvedCommand::EngineInfo => {
-                        balance::cmd_engine_info(&rpc);
+                    ResolvedCommand::Wallet => {
+                        balance::cmd_wallet(&rpc);
                     }
 
                     ResolvedCommand::Unknown { cmd } => {
@@ -337,6 +343,39 @@ pub fn repl(
     // private UDS socket directory).
     rpc.shutdown();
     Ok(())
+}
+
+/// The one-command usage block for `help <command>` (CU-2): the lines of
+/// [`HELP_TEXT`] whose command column names `topic`, plus their continuation
+/// lines. **Derived from `HELP_TEXT` rather than kept as a second table**, so
+/// the listing and the one-pagers can never disagree — a new command's help
+/// line is automatically its `help <command>` answer.
+///
+/// The extraction leans on `HELP_TEXT`'s fixed shape: command lines are
+/// indented exactly two spaces, continuation lines deeper, and section
+/// headers/blank lines start at column zero.
+fn command_help(topic: &str) -> Option<String> {
+    // Hidden aliases answer with their public block.
+    let canonical = match topic {
+        "engine_info" => "wallet",
+        "quit" => "exit",
+        t => t,
+    };
+    let mut out: Vec<&str> = Vec::new();
+    let mut capturing = false;
+    for line in HELP_TEXT.lines() {
+        let indent = line.len() - line.trim_start().len();
+        if indent == 2 {
+            let first = line.split_whitespace().next().unwrap_or("");
+            capturing = first == canonical;
+        } else if indent == 0 {
+            capturing = false;
+        }
+        if capturing {
+            out.push(line);
+        }
+    }
+    (!out.is_empty()).then(|| out.join("\n"))
 }
 
 /// `version`: CLI version, plus the connected wallet-RPC server's version
@@ -507,6 +546,30 @@ mod tests {
         assert_eq!(parse_amount("1.0"), Some(1_000_000_000));
         assert_eq!(parse_amount("abc"), None);
         assert_eq!(parse_amount("1.0000000001"), None); // >9 decimal places
+    }
+
+    /// `help <command>` extracts that command's block from HELP_TEXT —
+    /// including multi-line continuations and flag lines — answers hidden
+    /// aliases with the public block, and is honest about unknown topics.
+    #[test]
+    fn command_help_extracts_one_command_block() {
+        let transfer = command_help("transfer").expect("transfer is documented");
+        assert!(
+            transfer.contains("transfer <amount> <address>"),
+            "{transfer}"
+        );
+        assert!(transfer.contains("--priority"), "{transfer}");
+        assert!(
+            !transfer.contains("transfers "),
+            "the sibling command's block must not bleed in: {transfer}"
+        );
+        // A two-word grammar answers under its first token.
+        let request = command_help("request").expect("request is documented");
+        assert!(request.contains("request new"), "{request}");
+        // Hidden alias → public block.
+        let wallet = command_help("engine_info").expect("alias answers");
+        assert!(wallet.contains("wallet"), "{wallet}");
+        assert!(command_help("no_such_command").is_none());
     }
 
     #[test]
