@@ -270,33 +270,64 @@ so scripts can check it without parsing the output.
 
 ## Wallet Basics (`shekyl-cli`)
 
-### Creating a new wallet
+`shekyl-cli` is an interactive shell: start it, then type commands at the
+prompt. The prompt always names the network — and the open wallet, when
+there is one:
 
-```bash
-./shekyl-cli --generate-new-wallet /path/to/mywallet
+```
+mainnet>
+testnet:miner>
 ```
 
-You will be prompted for a password. The wallet generates a 24-word
-BIP-39 seed phrase (English wordlist) -- **write it down on paper
+Type `help` for the full command list and `help <command>` for one
+command's usage.
+
+Wallet files live under `~/.shekyl/wallets/<network>/` by default, one
+directory per network, so a testnet wallet can never shadow a mainnet one.
+`--wallet-dir <path>` overrides the directory.
+
+### Creating a new wallet
+
+At the prompt:
+
+```
+mainnet> create mywallet
+```
+
+You will be prompted for a password, and the wallet's 24-word BIP-39 seed
+phrase (English wordlist) is shown **once** — **write it down on paper
 immediately**. This seed is the only way to recover your funds if your
-wallet file is lost.
+wallet file is lost. To keep the seed out of logs and scrollback, `create`
+refuses to print it when output is piped or redirected.
+
+For scripts there is a non-interactive subcommand that writes the seed to a
+file instead of the terminal (created `0600`, refusing to overwrite):
+
+```bash
+./shekyl-cli create mywallet --seed-out /safe/path/seed.txt \
+    [--password-file <path> | --password-stdin]
+```
 
 Your wallet is automatically a V3 wallet with full post-quantum key material
 (Ed25519 + ML-DSA-65). No extra steps are needed.
 
 ### Restoring from a seed phrase
 
-```bash
-./shekyl-cli --restore-deterministic-wallet \
-    --generate-new-wallet /path/to/restored \
-    --restore-height 100000
+At the prompt:
+
+```
+mainnet> restore mywallet word1 word2 ... word24
 ```
 
-You will be prompted to enter your 24 BIP-39 words (and your passphrase,
-if you opted in to one at creation). The `--restore-height` flag
-tells the wallet to skip scanning blocks before that height, which is much
-faster. If you don't know the exact height, use `--restore-date 2026-03-15`
-to estimate it.
+or non-interactively, reading the seed from a file:
+
+```bash
+./shekyl-cli restore mywallet --seed-file /safe/path/seed.txt \
+    [--password-file <path> | --password-stdin]
+```
+
+If you opted in to a BIP-39 passphrase at creation, you will need it here
+too. After a restore, run `refresh` to scan the chain for your funds.
 
 The seed words are the only restore path: every wallet key (spend, view,
 message-signing, ML-KEM) derives from the master seed, so there is no
@@ -304,20 +335,32 @@ separate restore-from-keys flow and no view-only wallet variant.
 
 ### Opening an existing wallet
 
+At the prompt:
+
+```
+mainnet> open mywallet
+```
+
+or open at startup:
+
 ```bash
-./shekyl-cli --engine-file mywallet
+./shekyl-cli --wallet mywallet
 ```
 
 ### Connecting to a daemon
 
 By default the wallet connects to a daemon on this machine, at the RPC
-port for `--network` (`127.0.0.1:11029` on mainnet). `shekyld` serves RPC
-on loopback only, so a node of yours on another machine is reached through
-a Tor onion service you run in front of its loopback RPC (see "Wallet
-through Tor" below), over a SOCKS proxy:
+port for the selected network (`127.0.0.1:11029` on mainnet; `--testnet`
+and `--stagenet` pick the matching port automatically). If no daemon is
+answering there, the wallet says so when it starts and names the command
+that would fix it (`shekyld --testnet`, and the port it answers on).
+
+`shekyld` serves RPC on loopback only, so a node of yours on another
+machine is reached through a Tor onion service you run in front of its
+loopback RPC (see "Wallet through Tor" below), over a SOCKS proxy:
 
 ```bash
-./shekyl-cli --engine-file mywallet \
+./shekyl-cli --wallet mywallet \
     --proxy socks5h://127.0.0.1:9050 \
     --daemon-address <onion-address>:11029
 ```
@@ -343,13 +386,20 @@ Shekyl uses a segmented **Bech32m** address format with three parts:
 3. **PQC-B segment** (`skpq2...`) -- contains the rest of the ML-KEM-768 key
 
 The full address is approximately 2,030 characters. When sharing addresses,
-use copy-paste or URIs.
+use `address --out`, `make_uri`, or payment-request URIs — never retype it.
 
 To see your address inside the wallet:
 
 ```
-[wallet]: address
+mainnet> address
 ```
+
+By default this prints a **short display form** (the first 24 characters,
+an ellipsis, and the last 12) plus the full length — enough to recognize
+the address at a glance, and explicitly not valid for pasting.
+`address --full` prints the whole string; `address --out <path>` writes it
+to a new private file so the full form never has to transit terminal
+scrollback or shell history.
 
 ---
 
@@ -357,7 +407,7 @@ To see your address inside the wallet:
 
 ### Receiving SKL
 
-Each account has **one reusable primary address**. On-chain privacy comes from
+Your wallet has **one reusable primary address**. On-chain privacy comes from
 per-output cryptography (stealth outputs, hybrid KEM) — **not** from generating a
 new address for every sender. Reuse your address freely; rotation does not
 improve chain privacy and is not recommended as default hygiene.
@@ -365,71 +415,57 @@ improve chain privacy and is not recommended as default hygiene.
 Display your primary address:
 
 ```
-[wallet]: address
+mainnet> address
 ```
+
+(the short display form; `address --full` / `address --out <path>` for the
+real string — see "Understanding Bech32m addresses" above).
 
 **Merchants and invoicing:** create a **payment request** (amount, label,
-optional expiry) and share a `shekyl:` URI with query parameters. Attribution
-is cooperative (off-chain label + optional on-wire `enc_label` echo when the
-product flag is enabled). Unattributed inbound payments are normal — funds are
-still yours.
-
-**Separate contexts** (e.g. personal vs business) use **accounts** or separate
-wallet files — deliberate opsec, not a casual default. Seed-derived
-multi-account is planned post-V3.0.
-
-**Address book** for saving frequent recipients:
+optional expiry) and share a `shekyl:` URI with query parameters:
 
 ```
-[wallet]: address_book add <address> [description]
-[wallet]: address_book
+mainnet> request new <amount> <label> [--expiry <height>]
+mainnet> requests list [pending|matched|all]
 ```
 
-### Managing accounts
+Attribution is cooperative (off-chain label + optional on-wire `enc_label`
+echo when the product flag is enabled). Unattributed inbound payments are
+normal — funds are still yours; `history incoming --unattributed` lists
+them. `make_uri` / `parse_uri` compose and decode `shekyl:` URIs directly.
 
-Accounts let you organize funds into separate "buckets" within one wallet:
-
-```
-[wallet]: account new [label]
-[wallet]: account switch <index>
-[wallet]: account label <index> <label>
-```
+**Separate contexts** (e.g. personal vs business) use **separate wallet
+files** — deliberate opsec, not a casual default. There are no accounts or
+subaddresses in the Shekyl model; payment requests carry the
+per-payer/per-purpose attribution that subaddresses carried elsewhere.
 
 ### Checking your balance
 
 ```
-[wallet]: balance
-[wallet]: balance detail
+mainnet> balance
 ```
 
-Other useful commands:
-
-- `incoming_transfers [available|unavailable|all]` -- list individual outputs
-- `unspent_outputs [min_amount] [max_amount]` -- filter by amount
+shows the balance breakdown (spendable now vs still locked). `wallet`
+prints a one-shot summary — height, balance, address — and `status` shows
+wallet and daemon sync heights.
 
 ### Sending SKL
 
-Basic transfer:
+Basic transfer (one recipient per transaction):
 
 ```
-[wallet]: transfer <address> <amount>
-```
-
-You can send to multiple recipients in one transaction:
-
-```
-[wallet]: transfer <addr1> <amount1> <addr2> <amount2>
+mainnet> transfer <amount> <address>
 ```
 
 The wallet automatically constructs an FCMP++ membership proof for each
 spent input, signs with both Ed25519 and ML-DSA-65 (hybrid PQC), and
 broadcasts the transaction.
 
-**Priority levels** control the fee (higher priority = higher fee = faster
-confirmation):
+**Priority** controls the fee (higher priority = higher fee = faster
+confirmation): `0`–`1` economy, `2` standard, `3`+ priority.
 
 ```
-[wallet]: set priority <0|1|2|3|4>
+mainnet> transfer <amount> <address> --priority 3
 ```
 
 **There is no offline ("air-gapped") signing workflow, by design.** An
@@ -441,44 +477,51 @@ Every `transfer` shows the built transaction (destination, amount, fee)
 and waits for your confirmation before broadcasting — decline it and
 nothing leaves the wallet.
 
-### Sweep commands
+### No sweep commands
 
-Move all funds or specific subsets:
-
-| Command | Description |
-|---------|-------------|
-| `sweep_all <address>` | Send entire balance to one address |
-| `sweep_below <amount> <address>` | Consolidate outputs below a threshold |
-| `sweep_single <key_image> <address>` | Send a specific output |
-| `sweep_account <address>` | Sweep the current account |
+The Monero-era sweep family (`sweep_all`, `sweep_below`, `sweep_single`,
+`sweep_unmixable`) does not exist: with a single primary address, no
+accounts, and no mixin rules there is nothing to consolidate toward. To
+move your funds, `transfer` the amount `balance` shows as spendable.
+(`drain` exists but is staking-side: it moves staking funds back to this
+wallet.)
 
 ### Transaction verification and proofs
 
-Prove to a third party that a payment was made:
+Prove to a third party that a payment was made. A multi-word `[message]`
+binds into the proof; the verifier must supply the identical string:
 
 | Command | Description |
 |---------|-------------|
-| `get_tx_key <txid>` | Retrieve the transaction secret key |
-| `check_tx_key <txid> <txkey> <address>` | Verify a payment using the tx key |
-| `get_tx_proof <txid> <address>` | Generate a cryptographic proof of payment |
-| `check_tx_proof <txid> <address> <signature>` | Verify a payment proof |
-| `get_reserve_proof [all\|<amount>]` | Prove you hold at least a certain balance |
-| `check_reserve_proof <address> <signature>` | Verify a reserve proof |
+| `get_tx_proof <txid> <address> [message]` | Prove a payment to `<address>` (sent or received; open wallet required) |
+| `check_tx_proof <txid> <address> <proof> [message]` | Verify a tx proof (no wallet needed) |
+| `get_reserve_proof [amount] [message]` | Prove unspent reserve (omit the amount to prove the full balance) |
+| `check_reserve_proof <address> <proof> [message]` | Verify a reserve proof (no wallet needed) |
+
+There is no `get_tx_key` / `check_tx_key`: the raw per-tx key is a bearer
+credential over the whole transaction, so its export is rejected in the
+proofs contract (WI-RPC-3) — the scoped `get_tx_proof` / `check_tx_proof`
+pair covers the use case.
 
 ### Transaction history
 
 ```
-[wallet]: show_transfers [in|out|pending|failed|pool] [min_height] [max_height]
-[wallet]: show_transfer <txid>
-[wallet]: export_transfers [csv]
+mainnet> transfers
+mainnet> show_transfer <txid>
+mainnet> set_tx_note <txid> <note>
+mainnet> get_tx_note <txid>
 ```
+
+`transfers` lists recent transactions; `abandon <txid>` gives up on a
+dispatched send (funds stay locked until the network is confirmed to have
+dropped it).
 
 ### Fees
 
-Check the current fee estimate:
+Check fee quotes and the size estimate:
 
 ```
-[wallet]: fee
+mainnet> fee [--inputs N] [--outputs N]
 ```
 
 V3 transactions are larger than legacy transactions due to FCMP++ proofs
@@ -533,22 +576,25 @@ timing and funding footguns that matter for your privacy.
 
 ### Wallet support today
 
-Staking is split across surfaces today: the **exit verbs are live in
-interactive `shekyl-cli`** (PR-C), while activation and status are not yet:
+The full staking surface is live in interactive `shekyl-cli` (type
+`help stake` — or any staking command's name — for usage):
 
-- **Interactive `shekyl-cli`** carries the exit pair — `unstake` (posts the
-  permanent exit) and `collect_unstaked` (returns the released collateral to
-  your balance), each with the irreversibility confirmation the exit warrants.
-- **Wallet RPC** exposes staking activation (`stake`), the same exit verbs
-  (`unstake`, `collect_unstaked`), and read-only status (`get_staked_balance`,
-  `get_staked_outputs`, `staking_info`). Reward-related reads never conflate
-  bonded principal with received rewards.
-- **The desktop GUI** exposes staker activation directly.
+- **Activation:** `stake` makes this wallet a staker (Foundation nodes
+  only: `stake --complete-tree-foundation`, which states its terms and
+  requires a typed phrase).
+- **Status:** `staked_balance`, `staked_outputs`, `staking_info`.
+- **Principal movement:** `stake_in <amount>` adds funds to the staking
+  balance; `drain_balance` shows what can move back; `drain <amount>`
+  moves it back (fee and destination are automatic).
+- **Exit:** `unstake` posts the permanent exit and `collect_unstaked`
+  returns the released collateral, each with the irreversibility
+  confirmation the exit warrants (PR-C).
 
-Interactive `shekyl-cli` **activation** is still on the roadmap and **not yet
-available**; this section will document it when it lands. Until then, stake
-through the GUI or the wallet-RPC `stake` method — and use `shekyl-cli` or
-wallet RPC to exit.
+**Wallet RPC** exposes the same verbs (`stake`, `get_staked_balance`,
+`get_staked_outputs`, `staking_info`, `stake_in`, `drain`,
+`get_drain_balance`, `unstake`, `collect_unstaked`); reward-related reads
+never conflate bonded principal with received rewards. **The desktop GUI**
+exposes staker activation directly.
 
 ### Privacy considerations
 
@@ -579,12 +625,26 @@ mining_status
 ### From the wallet
 
 ```
-[wallet]: start_mining [threads]
-[wallet]: stop_mining
+mainnet> mine start          # default threads: min(cores, 4)
+mainnet> mine start 8        # explicit thread count
+mainnet> mine status         # active/idle, threads, hash rate
+mainnet> mine stop
 ```
 
-These commands tell the connected daemon to mine. Rewards are sent to
-your wallet address.
+`start_mining [threads]`, `stop_mining`, and `mining_status` work as
+aliases for the same verbs.
+
+These commands **control** mining on the connected daemon — the daemon
+still does the hashing (no RandomX runs in the wallet process), and the
+daemon owns the mining threads, so mining keeps running after you close
+the CLI. Rewards pay to the open wallet's address automatically; you never
+paste an address the way the daemon-console form requires.
+
+`mine` requires an open wallet, a **loopback** daemon (mining is
+controlled on the daemon's own host), the unrestricted RPC listener, and a
+daemon on the same network as the CLI. If the daemon is still syncing,
+`mine start` warns that you may be mining a stale chain and asks for
+confirmation first.
 
 ### Background mining
 
@@ -634,7 +694,11 @@ threshold lives entirely in the PQC auth layer.
 4. **Assemble:** The coordinator collects all M signature files, assembles the
    `pqc_auth` container, and broadcasts the transaction.
 
-### Wallet RPC methods
+### Planned wallet-RPC surface
+
+These methods are the v31 design's shape and are **not yet in the wallet-RPC
+contract registry** (`docs/api/wallet_rpc.yaml`); they land with the
+multisig implementation:
 
 | Method | Description |
 |--------|-------------|
@@ -710,7 +774,7 @@ For I2P:
 ### Wallet through Tor
 
 ```bash
-./shekyl-cli --engine-file mywallet \
+./shekyl-cli --wallet mywallet \
     --proxy socks5h://127.0.0.1:9050 \
     --daemon-address <onion-address>:11029
 ```
@@ -746,14 +810,22 @@ Both the daemon and wallet must be started with the same network flag:
 
 ```bash
 ./shekyld --testnet
-./shekyl-cli --testnet --wallet-file /path/to/testnet-wallet
+./shekyl-cli --testnet
 ```
 
-To switch the daemon to a different network inside the wallet at runtime:
+The wallet keeps the networks from mixing on its own:
 
-```
-[wallet]: set_daemon <address:port>
-```
+- Wallet files live in a **per-network directory**
+  (`~/.shekyl/wallets/testnet/`), so a testnet wallet can never shadow a
+  mainnet one.
+- The prompt names the network (`testnet:miner>`), so you always know
+  which money you are holding.
+- The default daemon address follows the flag (`127.0.0.1:12029` on
+  testnet), and `mine start` refuses if the daemon reports a different
+  network than the CLI was started with.
+
+Switching networks is a restart (`exit`, then start again with the other
+flag) — a deliberate speed bump between test money and real money.
 
 ---
 
@@ -831,25 +903,35 @@ have pointed at your machine.
 
 ### Method categories
 
-All methods are called via `POST /json_rpc`. Key groups:
+All methods are called via `POST /json_rpc`. The specified surface (per the
+contract's `x-shekyl-method-registry`):
 
-- **Wallet lifecycle:** `create_wallet`, `open_wallet`, `close_wallet`
-- **Balance and address:** `get_balance`, `get_address`, `create_address`,
-  `get_accounts`
-- **Transfers:** `transfer`, `transfer_split`, `sweep_all`, `sweep_single`,
-  `get_transfers`, `get_transfer_by_txid`
-- **Keys and proofs:** `query_key`, `get_tx_key`, `check_tx_key`,
-  `get_tx_proof`, `sign`, `verify`
-- **Staking (archival):** `stake` (activation), `get_staked_balance`,
+- **Wallet lifecycle:** `create_wallet`, `restore_wallet`, `open_wallet`,
+  `close_wallet`, `change_password`, `get_wallet_info`
+- **Balance and address:** `get_balance`, `get_primary_address`
+- **Sending:** `build_pending_tx`, `submit_pending_tx`,
+  `discard_pending_tx`, `abandon_tx`, `estimate_tx_size_and_weight`,
+  `get_default_fee_priority`
+- **History:** `get_transfers`, `get_transfer_by_id`, `set_tx_note`,
+  `get_tx_note`
+- **Sync:** `refresh`, `rescan_blockchain`, `get_height`, `get_version`
+- **Payment requests and URIs:** `create_payment_request`,
+  `list_payment_requests`, `make_uri`, `parse_uri`
+- **Staking:** `stake` (activation), `get_staked_balance`,
   `get_staked_outputs`, `staking_info` (reads); `stake_in`, `drain`,
   `get_drain_balance` (WI-RPC-5); `unstake` and `collect_unstaked` (the
   composed exit, PR-C). There is no `claim` RPC — emission claims are
   engine-side automation, and that name is rejected, not reserved.
-- **PQC Multisig:** `create_pqc_multisig_group`, `get_pqc_multisig_info`,
-  `export_multisig_signing_request`, `sign_multisig_partial`,
-  `import_multisig_signatures`
-- **UTXO control:** `freeze`, `thaw`, `frozen`
-- **Mining:** `start_mining`, `stop_mining`
+- **Proofs and signing:** `get_tx_proof`, `check_tx_proof`,
+  `get_reserve_proof`, `check_reserve_proof`, `sign_message`,
+  `verify_message`
+
+There are **no wallet-RPC mining methods**: the daemon does the hashing,
+and mining is controlled through the daemon's own restricted-off endpoints
+(which the `shekyl-cli` `mine` verbs drive). Monero-era names the registry
+refuses outright — `get_tx_key`/`check_tx_key`, spend proofs,
+`sweep_*`/accounts, cold-signing export/import — are recorded as REJECTED
+in the contract so they cannot be silently re-minted.
 
 For the full RPC reference, see the wallet-RPC contract
 [`docs/api/wallet_rpc.yaml`](api/wallet_rpc.yaml).
@@ -945,11 +1027,10 @@ All tools accept `--data-dir`, `--testnet`, `--stagenet`, and
 Your 24-word BIP-39 seed phrase is the **only** way to recover your
 wallet. No company, no foundation, no developer can recover it for you.
 
-To display it inside the wallet:
-
-```
-[wallet]: seed
-```
+The seed is shown **exactly once**, when the wallet is created or
+restored; there is no `seed` command to redisplay it afterwards (see "No
+secret export" below). If you did not record it then, and the wallet file
+is still healthy, create a new wallet and transfer the funds to it.
 
 If you opted in to a BIP-39 passphrase at creation time, the seed words
 alone are not sufficient -- you must also retain the passphrase. There
@@ -973,18 +1054,10 @@ with scoped, cryptographic disclosure instead of a standing credential.
 ### Changing your password
 
 ```
-[wallet]: password
+mainnet> password
 ```
 
-### Key derivation hardening
-
-For additional brute-force resistance when your wallet file might be exposed:
-
-```bash
-./shekyl-cli --wallet-file /path/to/wallet --kdf-rounds 10000
-```
-
-Higher values slow down wallet opening but make password cracking much harder.
+prompts for the current password, then the new one twice.
 
 ---
 
@@ -1002,31 +1075,21 @@ Higher values slow down wallet opening but make password cracking much harder.
 
 ### Wallet balance is wrong or zero
 
-- **Not synced:** Run `refresh` in the wallet. Make sure the daemon is fully
-  synchronised first.
-- **Restore height too high:** If you restored from seed with a height above
-  your first transaction, the wallet missed those transactions. Re-restore
-  with a lower height or use `--restore-date`.
-- **Stale spent data:** Run `rescan_spent` to recheck which outputs have
-  been spent.
-- **Full rescan:** `rescan_bc` rescans the entire blockchain from your
-  wallet's creation height.
+- **Not synced:** Run `refresh` in the wallet. `status` shows the wallet's
+  height next to the daemon's — make sure the daemon is fully synchronised
+  first.
+- **Full rescan:** `rescan` rebuilds your transaction history from the
+  chain (transaction keys, notes, payment requests and staking records are
+  kept). This can take a while.
 
 ### Transaction not confirming
 
-- Make sure the daemon is synced (`status` in daemon console).
+- Make sure the daemon is synced (`status` in the wallet shows both
+  heights; `status` in the daemon console shows peers and sync state).
 - The transaction pool can be checked with `print_pool` in the daemon.
-- If a transaction is stuck, check `show_transfers pending` in the wallet.
-
-### Version mismatch
-
-If the wallet warns about a daemon version mismatch:
-
-```bash
-./shekyl-cli --allow-mismatched-daemon-version --wallet-file /path/to/wallet
-```
-
-This should only be used temporarily while updating.
+- Check the transaction's state with `transfers` / `show_transfer <txid>`
+  in the wallet. A dispatched send that the network has dropped can be
+  given up with `abandon <txid>`.
 
 ### Reading logs
 
@@ -1042,8 +1105,9 @@ Or change it at runtime in the console:
 set_log 2
 ```
 
-Wallet logs are written to the same directory as the wallet file, with a
-`.log` extension.
+`shekyl-cli` logs to stderr only (warnings and up by default; tune with
+`SHEKYL_LOG`, see "Logging" below) — it writes no log file, so nothing
+about your wallet activity lands on disk beside the wallet.
 
 ---
 

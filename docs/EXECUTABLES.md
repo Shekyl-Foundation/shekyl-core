@@ -172,8 +172,9 @@ shekyl-cli [options]
 | `--daemon-address <host:port\|url>` | Daemon to connect to. Default: this machine's daemon at the RPC port for `--network` (`11029` / `12029` / `13029`). With `--rpc-url` the self-hosted wallet RPC is not started, but the REPL still queries the daemon at this address directly. A daemon that is not loopback is disclosed on stderr at startup (USER_GUIDE "Connecting to a daemon"; `RPC_TRANSPORT_POSTURE.md` §1) |
 | `--rpc-url <url>` | Connect to an external `shekyl-wallet-rpc` instead of self-hosting one (`http://host:port`, or `uds:///path/to.sock` on Unix) |
 | `--network <type>` | Network the self-hosted wallet server binds to: `mainnet` (default), `testnet`, `stagenet`. With `--rpc-url` that server is not started, and the flag is then read only to supply the default daemon port for the REPL's own daemon queries — so a run that names its own `--daemon-address` never consults it |
-| `--engine-dir <path>` | Directory for wallet files (default `.`). Ignored with `--rpc-url` |
-| `--engine-file <name>` | Open a wallet immediately on startup |
+| `--testnet` / `--stagenet` | Shorthand for `--network testnet` / `--network stagenet` — the same flags `shekyld` takes (CU-1). The prompt names the selected network |
+| `--wallet-dir <path>` | Directory for wallet files. Default: the per-network `~/.shekyl/wallets/<network>/`, created on demand, so wallets on different networks never share a directory (CU-1). Ignored with `--rpc-url`. `--engine-dir` is a hidden alias (CU-2) |
+| `--wallet <name>` | Open a wallet immediately on startup. `--engine-file` is a hidden alias (CU-2) |
 | `--proxy <socks5h://host:port>` | SOCKS proxy for the daemon connections. Prefer `socks5h://`: the REPL's direct daemon queries honor the scheme, and `socks5://` resolves the hostname locally (a DNS leak, warned at startup) |
 | `--daemon-ca-cert <pem>` | PEM CA certificate for an `https://` daemon with a custom CA |
 | `--debug` | Show structured RPC error details on failures |
@@ -203,7 +204,7 @@ is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 
 | Command | Description |
 |---------|-------------|
-| `address` | Show the wallet's primary address |
+| `address [--full] [--out <path>]` | Show the wallet's primary address (short display form by default; `--full` prints all ~2,030 characters; `--out` writes the full form to a new private file) |
 | `balance` | Balance breakdown |
 
 **Transfers**
@@ -239,7 +240,22 @@ is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 | `stake_in <amount>` | Add funds to the staking balance (prints a privacy note, then confirms) |
 | `drain_balance` | How much staking money can be moved back to this wallet |
 | `drain <amount>` | Move staking funds back to this wallet (fee and destination automatic; no flags) |
+| `unstake` | Post the permanent exit for the staked bond (irreversible; confirms first) |
+| `collect_unstaked` | Collect the released exit funds back into this wallet (one pass at a time) |
 | `chain_health` | Daemon/chain health (separate connection) |
+
+**Mining** (the daemon does the hashing; these control it — CU-3)
+
+| Command | Description |
+|---------|-------------|
+| `mine start [threads\|auto]` | Start mining on the local daemon, paying to this wallet (default threads: `min(cores, 4)`; the daemon owns the threads, so mining keeps running after the CLI exits) |
+| `mine stop` | Stop mining on the daemon |
+| `mine status` | Mining state, thread count, and hash rate |
+
+`start_mining [threads]` / `stop_mining` / `mining_status` are accepted as
+aliases. Requires an open wallet, a loopback daemon, the unrestricted RPC
+listener, and a daemon on the same network as the CLI; a still-syncing
+daemon prompts for confirmation.
 
 **Proofs and message signing**
 
@@ -256,9 +272,9 @@ is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 
 | Command | Description |
 |---------|-------------|
-| `engine_info` | Wallet summary (height, balance, address) |
+| `wallet` | Wallet summary (height, balance, address); `engine_info` is a hidden alias (CU-2) |
 | `version` | CLI and wallet-RPC versions |
-| `help` | Show help |
+| `help [command]` | Show all commands, or one command's usage |
 | `exit` / `quit` | Exit shekyl-cli |
 
 Offline cold signing (`describe_transfer` / `sign_transfer` /
@@ -268,12 +284,12 @@ Offline cold signing (`describe_transfer` / `sign_transfer` /
 ### Examples
 
 ```bash
-# Create a new wallet interactively
-shekyl-cli --engine-dir ~/wallets
+# Start the shell (wallets live in ~/.shekyl/wallets/mainnet/ by default)
+shekyl-cli
 
-# Open an existing wallet against the testnet daemon on this machine (the
-# default daemon address follows --network)
-shekyl-cli --network testnet --engine-dir ~/wallets --engine-file testnet
+# Open an existing testnet wallet against the testnet daemon on this
+# machine (the default daemon address and wallet directory follow the flag)
+shekyl-cli --testnet --wallet miner
 
 # Reach a node of yours on another machine through its onion service
 shekyl-cli --proxy socks5h://127.0.0.1:9050 \

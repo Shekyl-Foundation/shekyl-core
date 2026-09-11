@@ -340,9 +340,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Genesis ceremony tooling: `generate-genesis-address` CLI**
   - Target: pre-genesis
 
-- **USER_GUIDE realignment to the Rust CLI surface (2026-06-10 doc**
-  - Target: pre-genesis
-
 - **Stage 1 trait-extraction chain — closeout audit (2026-05-29, [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)**
   - Target: pre-genesis
 

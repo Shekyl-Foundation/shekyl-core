@@ -1,7 +1,8 @@
 # CLI wallet coherence and usability (CU)
 
-**Status:** OPEN — Round 1 (2026-09-11). Owning doc for the `CU-1…CU-N`
-identifier family (registered in
+**Status:** OPEN — Round 1 (2026-09-11); CU-1…CU-6 implemented on
+`feat/cli-usability-cu` (one commit per cut), awaiting landing on `dev`.
+Owning doc for the `CU-1…CU-N` identifier family (registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2).
 
 **Scope.** `shekyl-cli` is Shape B and internally coherent; the end-user
