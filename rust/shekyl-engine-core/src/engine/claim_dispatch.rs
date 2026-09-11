@@ -462,10 +462,13 @@ mod tests {
     ///    or moves it outside the critical section's textual span.
     #[test]
     fn seam_routes_through_the_pipeline_and_the_submit_choke_point() {
-        let seam = include_str!("claim_dispatch.rs")
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .expect("claim_dispatch.rs has a production section");
+        // `split_once`, not `split().next()`: the latter always yields a
+        // first piece, so a drifted marker would silently make the
+        // "production half" the whole file and let this test module's own
+        // text satisfy the positive needles below. Marker drift must be red.
+        let (seam, _) = include_str!("claim_dispatch.rs")
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("claim_dispatch.rs carries the tests-module marker this split relies on");
 
         // Split needles so doc-comment mentions alone cannot satisfy them —
         // the live call sites must remain.

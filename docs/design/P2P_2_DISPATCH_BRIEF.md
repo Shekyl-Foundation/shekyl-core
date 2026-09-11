@@ -523,7 +523,12 @@ bucket-4 mass lives here.
 The census narrowed this from "is there a leak" to a falsifiable claim:
 production submission runs through the `Local` posture, and **no production
 caller selects the per-`P` `OwnRemote` arm**. Name such a call site and PWD-A1 is
-refuted. Required reading, carried from the register unchanged:
+refuted. That falsifier runs in CI rather than by hand:
+`rust/shekyl-engine-core/tests/broadcast_own_remote_production_census.rs` pins
+every production occurrence of the ② arm and fails on any addition — a renamed
+subject reds there too, rather than reading as a clean sweep. It is a
+source-text census, not a reachability proof, and it is silent on the ① arm's
+loopback premise. Required reading, carried from the register unchanged:
 `ARCHIVAL_FIREWALL_GATE6.md`'s GF-7 rounds (including the finding that cover
 parameter `r` is cover-blind, which **stands** — only the instrument was made
 fail-closed); the cover-is-always-protocol-added ruling, which is in
