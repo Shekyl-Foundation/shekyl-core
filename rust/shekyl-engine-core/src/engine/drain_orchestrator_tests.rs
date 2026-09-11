@@ -271,12 +271,15 @@ fn retired_sweep_ignores_the_reserve() {
 ///    `Engine` method — no `self_arc`, no `Arc<RwLock<Self>>` (the
 ///    `ENGINE_COMPOSITION_DECOMPOSITION.md` discipline the engine-side
 ///    entry delegates through);
-/// 2. the **body of `orchestrate_drain`** (not the file — `plan_drain` is
-///    still defined here as the public planner, so grepping the file for
-///    it is vacuous) routes the payment arm through the F-D1 amount+select
-///    half ([`plan_from_operands`]) and the sweep arm through
-///    [`select_for_sweep`], never the bond sweep (`sweep_funding_outputs`),
-///    which would bypass the §12.3 drain-amount taint-carve.
+/// 2. the **body of `orchestrate_drain`** — bounded at both ends, from its
+///    signature to its column-0 closing brace, because `plan_drain` is
+///    still defined here as the public planner (so grepping the *file* is
+///    vacuous) and anything defined *below* the function would otherwise
+///    be scanned as if it were inside it — routes the payment arm through
+///    the F-D1 amount+select half ([`plan_from_operands`]) and the sweep
+///    arm through [`select_for_sweep`], never the bond sweep
+///    (`sweep_funding_outputs`), which would bypass the §12.3 drain-amount
+///    taint-carve.
 ///
 /// Named edits that make this red: delete the `plan_from_operands(` call
 /// from the payment arm; delete the `select_for_sweep(` call from the
@@ -301,10 +304,23 @@ fn orchestrate_drain_is_a_free_function_over_the_fd1_carve() {
         "orchestrate_drain must not hold the Engine lock"
     );
 
-    let body: String = src
+    // Everything after the signature — then bounded at the function's own
+    // closing brace, because a top-level item closes at column 0. Without that
+    // second bound the "body" is really "the whole production half below this
+    // signature": today the two coincide only because `orchestrate_drain` is
+    // the last item in the file (183 body lines out of a 185-line tail), and
+    // one helper added underneath would let a relocated `plan_from_operands(`
+    // call satisfy a needle the payment arm had stopped satisfying. `expect`,
+    // never `unwrap_or` — a boundary that stops naming the close must be red,
+    // not a silently widened scan.
+    let below_signature = src
         .split_once(free_fn)
         .expect("orchestrate_drain must exist to pin its body")
-        .1
+        .1;
+    let (body, _rest_of_file) = below_signature
+        .split_once("\n}\n")
+        .expect("orchestrate_drain's body closes at column 0");
+    let body: String = body
         .lines()
         .filter(|l| {
             let t = l.trim_start();
