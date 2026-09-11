@@ -1206,14 +1206,20 @@ fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
         )
     };
     assert_eq!(st, 0);
-    assert_eq!(fees, [340, 1400, 67_000]);
+    assert_eq!(fees, [333, 1332, 66_666]);
 }
 
 #[test]
 fn corrected_fee_ladder_marshals_the_heritage_vector() {
-    // 10 SKL reward, Mnw = Mlw = zone, C_q = 1: the FL-R17 signed shape over
-    // the heritage values — the same vector scaling_2021.cpp pins from the
-    // C++ side, so a drift in either marshal direction fails one of the two.
+    // 10 SKL reward, Mnw = Mlw = zone, C = 1: the FL-R17 signed shape over the
+    // heritage values — the same vector scaling_2021.cpp pins from the C++
+    // side, so a drift in either marshal direction fails one of the two.
+    //
+    // [333, 1332, 66_666] since FL-R21, where it was [340, 1400, 67_000]: the
+    // served path no longer rounds each rung up to two significant digits, and
+    // `standard` is `4F` exactly rather than its own rounded quotient. The
+    // C++ pin moved with it in the same commit — that is what makes this pair
+    // a cross-check rather than two copies of one number.
     let mut fees = [SENTINEL; 3];
     let st = unsafe {
         shekyl_corrected_fee_ladder(
@@ -1227,7 +1233,7 @@ fn corrected_fee_ladder_marshals_the_heritage_vector() {
         )
     };
     assert_eq!(st, 0);
-    assert_eq!(fees, [340, 1400, 67_000]);
+    assert_eq!(fees, [333, 1332, 66_666]);
 }
 
 #[test]
