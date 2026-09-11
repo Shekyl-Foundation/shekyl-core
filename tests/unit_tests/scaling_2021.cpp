@@ -91,47 +91,45 @@ TEST(fee_2021_scaling, wallet_fee_estimate)
   PREFIX_WINDOW(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
   std::vector<uint64_t> fees;
 
-  // FL round §5.2 shape (FL-R17 signed): three tiers, fees[2] mirrors
-  // fees[1] (RK-5 wire bridge), Fh main arm UNCONDITIONAL. C_q = SCALE is
-  // the neutral correction, so economy/standard keep the heritage values.
+  // FL round §5.2 shape (FL-R17 signed): three tiers, one slot each since
+  // FL-R25 deleted the RK-5 bridge, Fh main arm UNCONDITIONAL. C_q = SCALE
+  // is the neutral correction, so economy/standard keep the heritage
+  // values — the deleted slot carried a duplicate of standard, never a
+  // rate of its own, which is why no expected VALUE below changes.
 
   // 10 SKL reward, Mnw=Mlw=ZONE_V5
   fees.clear();
   bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 300000, 300000, SHEKYL_FIXED_POINT_SCALE, fees);
-  ASSERT_EQ(fees.size(), 4);
+  ASSERT_EQ(fees.size(), 3);
   ASSERT_EQ(fees[0], 340u);
   ASSERT_EQ(fees[1], 1400u);
-  ASSERT_EQ(fees[2], 1400u);
-  ASSERT_EQ(fees[3], 67000u);
+  ASSERT_EQ(fees[2], 67000u);
 
   // 10 SKL reward, large Mnw. The heritage 22000 came from the surge
   // discount; the unconditional main arm prices full expansion here too
   // (FL-C2(b) — the one derived defect in the inherited shape).
   fees.clear();
   bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 15000000, 300000, SHEKYL_FIXED_POINT_SCALE, fees);
-  ASSERT_EQ(fees.size(), 4);
+  ASSERT_EQ(fees.size(), 3);
   ASSERT_EQ(fees[0], 340u);
   ASSERT_EQ(fees[1], 1400u);
-  ASSERT_EQ(fees[2], 1400u);
-  ASSERT_EQ(fees[3], 67000u);
+  ASSERT_EQ(fees[2], 67000u);
 
   // 10 SKL reward, Mnw=Mlw=1500000
   fees.clear();
   bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 1500000, 1500000, SHEKYL_FIXED_POINT_SCALE, fees);
-  ASSERT_EQ(fees.size(), 4);
+  ASSERT_EQ(fees.size(), 3);
   ASSERT_EQ(fees[0], 13u);
   ASSERT_EQ(fees[1], 53u);
-  ASSERT_EQ(fees[2], 53u);
-  ASSERT_EQ(fees[3], 14000u);
+  ASSERT_EQ(fees[2], 14000u);
 
   // C_q = 2 (one congestion step): every rung doubles pre-rounding.
   fees.clear();
   bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 300000, 300000, 2 * SHEKYL_FIXED_POINT_SCALE, fees);
-  ASSERT_EQ(fees.size(), 4);
+  ASSERT_EQ(fees.size(), 3);
   ASSERT_EQ(fees[0], 670u);
   ASSERT_EQ(fees[1], 2700u);
-  ASSERT_EQ(fees[2], 2700u);
-  ASSERT_EQ(fees[3], 140000u);
+  ASSERT_EQ(fees[2], 140000u);
 }
 
 TEST(fee_2021_scaling, state_computed_estimate_holds_the_acceptance_identity)
@@ -160,12 +158,13 @@ TEST(fee_2021_scaling, state_computed_estimate_holds_the_acceptance_identity)
   PREFIX_WINDOW(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
   std::vector<uint64_t> fees;
   bc->get_dynamic_base_fee_estimate_2021_scaling(10, fees);
-  ASSERT_EQ(fees.size(), 4);
-  // The FL-R17 signed shape survives the state-computed path: the RK-5
-  // bridge slot mirrors standard, and the rungs ascend.
-  ASSERT_EQ(fees[2], fees[1]);
+  ASSERT_EQ(fees.size(), 3);
+  // The FL-R17 signed shape survives the state-computed path. The mirror
+  // assertion went with the slot (FL-R25); what is left is the property
+  // the mirror made un-assertable — every served rung ascends, with no
+  // pair required to be equal.
   ASSERT_LE(fees[0], fees[1]);
-  ASSERT_LE(fees[1], fees[3]);
+  ASSERT_LE(fees[1], fees[2]);
   // The acceptance identity.
   ASSERT_GE(fees[0], bc->get_current_fee_per_byte());
 }

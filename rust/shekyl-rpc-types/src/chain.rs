@@ -43,7 +43,10 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.29: `get_version` gains the three identity-
+/// `CORE_RPC_VERSION_MINOR`. 3.30: `get_fee_estimate.fees` drops the dead
+/// fourth slot — three priced tiers, one slot each (FL-R25; the RK-5 bridge
+/// mirrored slot 1 for a `FeePriority::Elevated` caller that never existed).
+/// 3.29: `get_version` gains the three identity-
 /// tuple fields — `consensus_constants_digest`, `nettype`, `genesis_hash`
 /// (`CLIENT_VERSION_CONSTANTS_VALIDATION.md` `VC-2`). 3.28 was the peer
 /// identifier leaving every readout; 3.27 RK-5b's three header-method shape
@@ -54,7 +57,7 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// honestly and git merging them character-for-character, because `= 25` →
 /// `= 26` is textually identical whoever writes it. This value was read on
 /// the tree cut from PR #658's merge.
-pub const CORE_RPC_VERSION_MINOR: u32 = 29;
+pub const CORE_RPC_VERSION_MINOR: u32 = 30;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -399,10 +402,10 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_637);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 29);
+        assert_eq!(CORE_RPC_VERSION, 196_638);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 30);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 29);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 30);
     }
 
     #[test]

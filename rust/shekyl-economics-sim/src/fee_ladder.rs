@@ -242,8 +242,21 @@ fn round_money_up_2(v: u64) -> u64 {
         .expect("round_money_up overflow (C++ throws here)")
 }
 
-fn rounded(raw: [u64; 4]) -> [u64; 4] {
-    raw.map(round_money_up_2)
+/// The legacy ladder projected onto the three priced rungs, for comparison
+/// against the corrected one.
+///
+/// `articmine_ladder_raw` still returns four — that transliteration is the
+/// round's subject and porting it faithfully is the point — but its `Fm`
+/// slot (index 2) has no counterpart since FL-R25 deleted the fourth wire
+/// slot. Dropping it here keeps the comparison rung-for-rung instead of
+/// pairing `Fm` against `priority` by position, which is the shape that
+/// would silently mis-state every corrected-vs-current row.
+fn rounded(raw: [u64; 4]) -> [u64; 3] {
+    [
+        round_money_up_2(raw[0]),
+        round_money_up_2(raw[1]),
+        round_money_up_2(raw[3]),
+    ]
 }
 
 /// The SERVED ladder, from **the production owner itself** — no local
@@ -261,7 +274,7 @@ fn rounded(raw: [u64; 4]) -> [u64; 4] {
 /// none of it. The legacy transliteration survives ONLY as the `Current`
 /// comparison column, where reproducing today's daemon bit-for-bit is
 /// the point.
-fn served_ladder(base_reward: u64, median: u64, c_q: u64) -> [u64; 4] {
+fn served_ladder(base_reward: u64, median: u64, c_q: u64) -> [u64; 3] {
     corrected_fee_ladder(
         base_reward,
         median,
@@ -522,12 +535,12 @@ pub struct RungTable {
     pub base_reward_unmodulated: u64,
     pub c_scaled: u64,
     /// What the daemon serves today (5-arg estimate semantics).
-    pub current: [u64; 4],
+    pub current: [u64; 3],
     /// The validation-path economics with raw `C` — the *mispricing*
     /// measurement. The §5.2 proposal serves the quantized form below.
-    pub corrected_raw_c: [u64; 4],
+    pub corrected_raw_c: [u64; 3],
     /// What a §5.2 daemon would serve (`C_q`, ceiling rule).
-    pub served_ceil_cq: [u64; 4],
+    pub served_ceil_cq: [u64; 3],
     /// `check_fee` acceptance bound at this state. Modeled as
     /// `floor − floor/50` per byte: the real check takes 2% off the
     /// *total* and rounds up to the quantization mask
@@ -640,13 +653,13 @@ pub struct DwellResult {
     pub blocks_measured: u64,
     /// Median run length (blocks) of an unchanged posted value, per rung,
     /// over the whole trace.
-    pub median_dwell: [u64; 4],
+    pub median_dwell: [u64; 3],
     /// TRUE distinct posted values per rung (set cardinality — the wire
     /// alphabet).
-    pub distinct_posted_values: [u64; 4],
+    pub distinct_posted_values: [u64; 3],
     /// Number of value CHANGES per rung (churn; a value revisited counts
     /// each time). The pre-review field misnamed this "distinct values".
-    pub value_changes: [u64; 4],
+    pub value_changes: [u64; 3],
     /// FL-D8 (§10.9), statistic 1 — **occupancy**: blocks whose raw `C`
     /// sits in the band's flicker zone, per thousand blocks measured.
     /// The "how much chain TIME" half of the question the round needs to
@@ -694,7 +707,7 @@ pub struct DwellResult {
     /// values). `None` when no value change began inside the window (the
     /// value held through the whole ramp — vacuous pass, reported as
     /// such).
-    pub min_dwell_started_in_ramp: [Option<u64>; 4],
+    pub min_dwell_started_in_ramp: [Option<u64>; 3],
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1283,9 +1296,9 @@ fn dwell_scenario(
     // Per rung: (value, run_length, run_start_block) plus accumulators.
     let mut runs: [Vec<(u64, u64)>; 4] = [vec![], vec![], vec![], vec![]]; // (start, len)
     let mut values: [BTreeSet<u64>; 4] = Default::default();
-    let mut current: [u64; 4] = [0; 4];
-    let mut run_len: [u64; 4] = [0; 4];
-    let mut run_start: [u64; 4] = [0; 4];
+    let mut current: [u64; 3] = [0; 3];
+    let mut run_len: [u64; 3] = [0; 3];
+    let mut run_start: [u64; 3] = [0; 3];
     for t in 0..blocks {
         let frac = if (mean_end - mean_start).abs() < f64::EPSILON {
             0.0
@@ -1339,7 +1352,7 @@ fn dwell_scenario(
             (m, None) => unreachable!("mode {} produced no served C_q", m.name()),
         };
         ag = advance_traced_state(ag, v_avg, params);
-        for i in 0..4 {
+        for i in 0..3 {
             values[i].insert(fees[i]);
             if fees[i] == current[i] {
                 run_len[i] += 1;
@@ -1358,10 +1371,10 @@ fn dwell_scenario(
     }
 
     let is_ramp = (mean_end - mean_start).abs() >= f64::EPSILON;
-    let mut median_dwell = [0u64; 4];
-    let mut distinct = [0u64; 4];
-    let mut changes = [0u64; 4];
-    let mut min_ramp: [Option<u64>; 4] = [None; 4];
+    let mut median_dwell = [0u64; 3];
+    let mut distinct = [0u64; 3];
+    let mut changes = [0u64; 3];
+    let mut min_ramp: [Option<u64>; 3] = [None; 3];
     for i in 0..4 {
         let mut lens: Vec<u64> = runs[i].iter().map(|&(_, l)| l).collect();
         lens.sort_unstable();
@@ -1869,8 +1882,8 @@ pub struct DegeneratePins {
     /// coupling; this pin makes it true).
     pub penalty_at_tail_x_half: u64,
     /// The ladder and relay floor computed from each at exhaustion.
-    pub estimate_ladder_at_exhaustion: [u64; 4],
-    pub validation_ladder_at_exhaustion: [u64; 4],
+    pub estimate_ladder_at_exhaustion: [u64; 3],
+    pub validation_ladder_at_exhaustion: [u64; 3],
     pub relay_floor_at_exhaustion: u64,
 }
 
@@ -2852,19 +2865,27 @@ mod tests {
     /// Pin the transliteration against `tests/unit_tests/scaling_2021.cpp`
     /// `wallet_fee_estimate` (10 SKL reward cases) — the instrument's
     /// "current" column must reproduce the C++ oracle exactly.
+    ///
+    /// Deliberately NOT routed through [`rounded`], which projects onto the
+    /// three priced rungs since FL-R25. This pin's subject is the legacy
+    /// FOUR-value transliteration, and letting the projection eat `Fm`
+    /// would quietly drop a pinned oracle value — the heritage KAT would
+    /// still pass while covering one rung less than it claims.
     #[test]
     fn transliteration_matches_cpp_kat() {
         let coin: u64 = 1_000_000_000;
+        let legacy =
+            |r: u64, mnw: u64, mlw: u64| articmine_ladder_raw(r, mnw, mlw).map(round_money_up_2);
         assert_eq!(
-            rounded(articmine_ladder_raw(10 * coin, 300_000, 300_000)),
+            legacy(10 * coin, 300_000, 300_000),
             [340, 1400, 5400, 67_000]
         );
         assert_eq!(
-            rounded(articmine_ladder_raw(10 * coin, 15_000_000, 300_000)),
+            legacy(10 * coin, 15_000_000, 300_000),
             [340, 1400, 5400, 22_000]
         );
         assert_eq!(
-            rounded(articmine_ladder_raw(10 * coin, 1_500_000, 1_500_000)),
+            legacy(10 * coin, 1_500_000, 1_500_000),
             [13, 53, 1100, 14_000]
         );
     }
@@ -2876,7 +2897,8 @@ mod tests {
         let params = EconomicParams::default();
         let base = base_block_reward(0, &params).expect("genesis base");
         let fees = rounded(articmine_ladder_raw(base, 300_000, 300_000));
-        assert_eq!(fees[3], 14_000_000);
+        // `fees[2]` is priority since FL-R25 dropped the bridge slot.
+        assert_eq!(fees[2], 14_000_000);
     }
 
     /// Pin the relay-floor transliteration against

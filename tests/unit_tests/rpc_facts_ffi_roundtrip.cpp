@@ -261,7 +261,8 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
 
   static_assert(sizeof(shekyl_rpc_net_stats_facts) == 40, "net-stats facts POD changed size");
   static_assert(sizeof(shekyl_rpc_hard_fork_facts) == 32, "hard-fork facts POD changed size");
-  static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 48, "fee-estimate facts POD changed size");
+  // 40 since FL-R25: three fee slots, not four.
+  static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 40, "fee-estimate facts POD changed size");
 
   // RK-5a's three list PODs. Same reason as `shekyl_rpc_tx_entry` above: they
   // carry pointers, so a fill/check twin has nothing to compare and the

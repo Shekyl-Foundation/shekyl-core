@@ -607,7 +607,7 @@ impl CoreRpc {
             return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
         }
         let mut pod = ffi::FeeEstimateFactsFfi {
-            fees: [0; 4],
+            fees: [0; 3],
             quantization_mask: 0,
             fee_count: 0,
             reserved: [0; 7],

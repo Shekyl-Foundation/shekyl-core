@@ -326,10 +326,19 @@ impl FeeLadder {
         priority: u64::MAX,
     };
 
-    /// Wire shape `[economy, standard, standard, priority]`.
+    /// Wire shape `[economy, standard, priority]` — one slot per priced
+    /// tier, no bridge.
+    ///
+    /// FL-R25 deleted the fourth slot. It carried a duplicate of
+    /// `standard` so that a `FeePriority::Elevated` caller, mapped to a
+    /// slot of its own, would pay the standard rate and stay inside the
+    /// largest anonymity set. That reasoning was sound and its premise was
+    /// not: `Elevated` had zero production callers, so the slot was
+    /// wire-served and dead, and the anonymity set it protected had no
+    /// members.
     #[must_use]
-    pub const fn as_slots(self) -> [u64; 4] {
-        [self.economy, self.standard, self.standard, self.priority]
+    pub const fn as_slots(self) -> [u64; 3] {
+        [self.economy, self.standard, self.priority]
     }
 }
 
@@ -428,27 +437,32 @@ mod tests {
     use crate::base_block_reward;
 
     /// Neutral correction (`C_q = 1`) against the `scaling_2021.cpp`
-    /// heritage vectors, with the FL-R17 shape applied: three tiers, the
-    /// bridge slot mirroring standard, and the `Fh` main arm
+    /// heritage vectors, with the FL-R17 shape applied: three tiers, one
+    /// slot each since FL-R25 deleted the bridge, and the `Fh` main arm
     /// unconditional (the 22 000 surge value in the second heritage case
     /// becomes the main-arm 67 000 — the FL-C2(b) fix, deliberate).
+    ///
+    /// The values are unchanged by FL-R25 — only the duplicate is gone.
+    /// `[340, 1400, 1400, 67_000]` became `[340, 1400, 67_000]`: the
+    /// deleted slot carried a second copy of `standard`, never a rate of
+    /// its own, which is the whole reason it could go.
     #[test]
     fn neutral_ladder_matches_heritage_vectors_with_signed_shape() {
         let coin = 1_000_000_000u64;
         assert_eq!(
             corrected_fee_ladder(10 * coin, 300_000, 300_000, 300_000, 3_000, SCALE).as_slots(),
-            [340, 1400, 1400, 67_000]
+            [340, 1400, 67_000]
         );
         // Heritage case 2: Mnw = 15 MB surge over a 300 kB long-term
         // median. Was 22 000 under the surge discount; the unconditional
         // main arm prices full expansion here too.
         assert_eq!(
             corrected_fee_ladder(10 * coin, 15_000_000, 300_000, 300_000, 3_000, SCALE).as_slots(),
-            [340, 1400, 1400, 67_000]
+            [340, 1400, 67_000]
         );
         assert_eq!(
             corrected_fee_ladder(10 * coin, 1_500_000, 1_500_000, 300_000, 3_000, SCALE).as_slots(),
-            [13, 53, 53, 14_000]
+            [13, 53, 14_000]
         );
     }
 
@@ -485,7 +499,7 @@ mod tests {
             corrected_fee_ladder(u64::MAX, z, z, z, 0, u64::MAX),
             FeeLadder::SATURATED
         );
-        assert_eq!(FeeLadder::SATURATED.as_slots(), [u64::MAX; 4]);
+        assert_eq!(FeeLadder::SATURATED.as_slots(), [u64::MAX; 3]);
     }
 
     /// `C_q` in the numerator before the median division, not a rescale of
@@ -497,7 +511,14 @@ mod tests {
         let ladder =
             corrected_fee_ladder(10 * coin, 1_500_000, 1_500_000, 300_000, 3_000, 16 * SCALE);
         assert_eq!(ladder.economy, 220);
-        assert_eq!(ladder.as_slots()[2], ladder.standard);
+        // Slot 2 is `priority` since FL-R25 deleted the bridge. This line
+        // used to assert it mirrored `standard`; what it is worth checking
+        // now is that the slots carry the three tiers in order, so a future
+        // reordering of `as_slots` cannot pass unnoticed.
+        assert_eq!(
+            ladder.as_slots(),
+            [ladder.economy, ladder.standard, ladder.priority]
+        );
     }
 
     /// Genesis-condition top rung with `C_q = 1` is the uncongested

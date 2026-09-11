@@ -665,7 +665,7 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     };
     let fees = ladder.as_slots();
     for (i, f) in fees.iter().enumerate() {
-        // SAFETY: non-null per the check; caller guarantees 4 writable u64s.
+        // SAFETY: non-null per the check; caller guarantees 3 writable u64s.
         unsafe { out_fees.add(i).write(*f) };
     }
     0

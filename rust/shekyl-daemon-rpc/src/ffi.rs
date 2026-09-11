@@ -564,13 +564,13 @@ pub struct HardForkFactsFfi {
 /// `fees` is fixed at four because the estimator writes exactly four SLOTS.
 /// They carry three priced tiers: slot 2 is the RK-5 bridge and mirrors slot
 /// 1 (standard) until the RPC cutover, so four slots is a wire shape and not
-/// four rates. `fee_count` reports how many it actually wrote, so a change to
+/// three rates. `fee_count` reports how many it actually wrote, so a change to
 /// that contract is a refusal rather than a shorter answer read as a base
 /// fee.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeeEstimateFactsFfi {
-    pub fees: [u64; 4],
+    pub fees: [u64; 3],
     pub quantization_mask: u64,
     pub fee_count: u8,
     pub reserved: [u8; 7],
@@ -588,11 +588,11 @@ const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, voting) == 26);
 const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, enabled) == 27);
 const _: () = assert!(std::mem::offset_of!(HardForkFactsFfi, reserved) == 28);
 
-const _: () = assert!(std::mem::size_of::<FeeEstimateFactsFfi>() == 48);
+const _: () = assert!(std::mem::size_of::<FeeEstimateFactsFfi>() == 40);
 const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fees) == 0);
-const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, quantization_mask) == 32);
-const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fee_count) == 40);
-const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, reserved) == 41);
+const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, quantization_mask) == 24);
+const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fee_count) == 32);
+const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, reserved) == 33);
 
 /// Twin of `shekyl_rpc_net_stats_facts` (RK-5a). Layout pinned both
 /// directions by `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via

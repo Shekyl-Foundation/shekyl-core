@@ -28,22 +28,20 @@ use shekyl_rpc_types::{FeeTier, GetFeeEstimateResponse};
 /// The vector the daemon's own parity suite pins, parsed by the client's
 /// type. Same file, both directions — which is the only reason this is a
 /// contract rather than two crates agreeing with themselves.
-const V2: &str = include_str!("../../shekyl-rpc-types/tests/vectors/rpc/get_fee_estimate_v2.json");
+const V3: &str = include_str!("../../shekyl-rpc-types/tests/vectors/rpc/get_fee_estimate_v3.json");
 
 #[test]
-fn the_daemons_captured_reply_parses_and_carries_four_tiers() {
+fn the_daemons_captured_reply_parses_and_carries_three_tiers() {
     let reply: GetFeeEstimateResponse =
-        serde_json::from_str(V2).expect("the 3.27 reply must parse through the shared type");
+        serde_json::from_str(V3).expect("the 3.30 reply must parse through the shared type");
     assert!(reply.status.is_ok());
-    let tiers = [
-        FeeTier::Low,
-        FeeTier::Normal,
-        FeeTier::Medium,
-        FeeTier::High,
-    ];
-    // Ascending and distinct: a mapping that collapsed two tiers, or an
-    // estimator that returned the same number four times, would make the
-    // tier choice unobservable in every other test.
+    let tiers = [FeeTier::Low, FeeTier::Normal, FeeTier::High];
+    // Ascending and distinct. Before FL-R25 this walked four tiers and had
+    // to tolerate slot 2 mirroring slot 1 — the bridge — so "distinct"
+    // could only ever be asserted on three of the four values. With the
+    // dead slot gone the property is simply true: every tier a caller can
+    // name buys a different rate, and a mapping that collapsed two of them
+    // would make the tier choice unobservable in every other test.
     let values: Vec<u64> = tiers.iter().map(|t| reply.fees.get(*t)).collect();
     assert!(
         values.windows(2).all(|w| w[0] < w[1]),
@@ -60,7 +58,10 @@ fn the_daemons_captured_reply_parses_and_carries_four_tiers() {
 /// compute from a scalar the tiers were supposed to replace.
 #[test]
 fn a_reply_still_carrying_the_retired_scalar_is_refused() {
-    let mut doc: serde_json::Value = serde_json::from_str(V2).unwrap();
+    // Built from V3, not V2: a V2 base would now be refused for its
+    // four-slot array as well as the scalar, and this test would pass
+    // while no longer isolating the subject it names.
+    let mut doc: serde_json::Value = serde_json::from_str(V3).unwrap();
     doc.as_object_mut()
         .unwrap()
         .insert("fee".to_owned(), serde_json::json!(20));

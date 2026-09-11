@@ -501,11 +501,12 @@ int shekyl_rpc_hard_fork_info(core_rpc_handle* h, uint8_t requested_version,
 // `Blockchain::get_dynamic_base_fee_estimate`, which it was the only caller
 // of, are deleted (rule 60).
 //
-// `fees` is fixed at four because the estimator resizes to exactly four
-// tiers; `fee_count` reports what was actually written so a change in that
+// `fees` is fixed at three because the estimator resizes to exactly three
+// tiers — one per priced tier since FL-R25 deleted the bridge slot;
+// `fee_count` reports what was actually written so a change in that
 // contract is caught here rather than read as a shorter answer.
 typedef struct shekyl_rpc_fee_estimate_facts {
-    uint64_t fees[4];
+    uint64_t fees[3];
     uint64_t quantization_mask;
     uint8_t  fee_count;
     uint8_t  reserved[7];

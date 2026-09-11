@@ -4508,12 +4508,14 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
   // FL round §5.2 (FL-R17 signed: three tiers; FL-R12' round-8 amendment:
   // whole-scalar C_q on the M_r-neutral operand). The ladder arithmetic is
   // Rust-owned (shekyl-economics `corrected_fee_ladder`); this marshals.
-  // fees[2] mirrors fees[1] — the RK-5 wire bridge: the dead Fm slot keeps
-  // the vector shape until the RPC cutover, and wallet2-transliterated
-  // `Elevated` callers stay inside the largest anonymity set. The Fh main
-  // arm is UNCONDITIONAL (2R/M — exact marginal pricing of full expansion;
-  // the inherited surge discount was FL-C2(b)'s one derived defect).
-  fees.resize(4);
+  // Three slots, one per priced tier: [economy, standard, priority].
+  // FL-R25 deleted the fourth. It mirrored fees[1] so a wallet2-
+  // transliterated `Elevated` caller would pay the standard rate; that
+  // caller does not exist, so the slot was wire-served and dead. The Fh
+  // main arm is UNCONDITIONAL (2R/M — exact marginal pricing of full
+  // expansion; the inherited surge discount was FL-C2(b)'s one derived
+  // defect).
+  fees.resize(3);
   const int32_t rc = shekyl_corrected_fee_ladder(
       base_reward,
       Mnw,

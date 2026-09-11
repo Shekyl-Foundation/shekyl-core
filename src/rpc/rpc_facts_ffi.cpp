@@ -1689,7 +1689,12 @@ void shekyl_rpc_fee_estimate_facts_test_fill(shekyl_rpc_fee_estimate_facts* out,
   if (!out)
     return;
   std::memset(out, 0, sizeof(*out));
-  for (size_t i = 0; i < 4; ++i)
+  // Three slots since FL-R25. Field indices 4 and 5 below are deliberately
+  // NOT renumbered: they seed a distinct value per field, and the Rust twin
+  // (`ffi_exports.rs`) keeps the same indices, so both halves still fill
+  // identically. Re-indexing one side only is how a fill/check twin starts
+  // comparing two different documents and passing anyway.
+  for (size_t i = 0; i < 3; ++i)
     out->fees[i] = field_value(seed, i);
   out->quantization_mask = field_value(seed, 4);
   out->fee_count = static_cast<uint8_t>(field_value(seed, 5));
