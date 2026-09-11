@@ -186,30 +186,16 @@ pub struct HardForkInfoResponse {
     pub earliest_height: u64,
 }
 
-/// Which tier of the dynamic fee estimate a caller wants.
+/// Which priced rung of the dynamic fee estimate a caller wants.
 ///
-/// The wire carries FOUR SLOTS but only THREE PRICED TIERS. FL-R17 signed
-/// three (economy / standard / priority) and RK-5 keeps the vector four
-/// wide until the RPC cutover, so slot 2 — [`FeeTier::Medium`], the old
-/// `Fm` — is a BRIDGE that mirrors [`FeeTier::Normal`]. It is not a
-/// distinct rate and must not be priced as one.
-///
-/// The slots were always a bare array, so the tier a caller meant lived in
-/// an index. Naming them is what stops `fees[3]` being reachable by
-/// position.
+/// The wire is a three-element array `[economy, standard, priority]`.
+/// Naming the rungs is what stops a caller reaching a slot by position.
 ///
 /// These are the **derivation's** tiers, deliberately not the wallet's
 /// `FeePriority` (economy / standard / priority). Those are a UX policy that
 /// *maps onto* these — `economy = Low`, `standard = Normal`,
 /// `priority = High` — and collapsing the two vocabularies into one would bake
 /// a wallet policy into the daemon's wire contract.
-///
-/// **`Medium` is gone (FL-R25).** It named the RK-5 bridge slot, which
-/// carried a duplicate of `Normal` so a wallet2-transliterated `Elevated`
-/// caller would pay the standard rate instead of self-marking on a rung of
-/// its own. The argument was right and its premise was not — `Elevated` had
-/// no production callers — so the slot, the tier that named it and the
-/// priority that reached it are all deleted rather than bridged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeeTier {
     Low,
@@ -219,22 +205,15 @@ pub enum FeeTier {
 
 /// The three fee tiers, in derivation order: `[economy, standard, priority]`.
 ///
-/// A fixed array of three SLOTS carrying three priced tiers — one each,
-/// after FL-R25 deleted the bridge. Fixed, so a reply carrying a different
-/// count **fails to deserialize** rather than being read as a shorter
-/// answer. The arity lives in one C++ function
-/// (`get_dynamic_base_fee_estimate_2021_scaling`'s `resize`) and nothing
-/// downstream asserts it, so a derivation that returned the wrong number
-/// would otherwise have produced a silently wrong base fee.
+/// Fixed, so a reply carrying any other count **fails to deserialize**
+/// rather than being read as a shorter answer with the priority rate in
+/// the wrong position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct FeeTiers(pub [u64; 3]);
 
 impl FeeTiers {
-    /// The fee for one tier. Total: every [`FeeTier`] indexes a slot that
-    /// exists, because the array is fixed at three and there are three
-    /// tiers — the mapping is now a bijection rather than four slots
-    /// serving three names.
+    /// The fee for one tier. Every [`FeeTier`] indexes a slot that exists.
     #[must_use]
     pub const fn get(self, tier: FeeTier) -> u64 {
         let Self(fees) = self;
@@ -299,15 +278,8 @@ mod tests {
     };
 
     /// The arity is enforced by the type, not trusted. A reply carrying any
-    /// count but three is a parse error — which is the whole point, since
-    /// the `resize` it mirrors lives in one C++ function and nothing
-    /// downstream asserts it.
-    ///
-    /// FL-R25 moved the count from four to three. Note the FOUR-slot case
-    /// below, which used to be the contract and is now a refusal: that is
-    /// what stops a daemon still emitting the bridge slot from being read
-    /// as a shorter answer with the priority rate silently in the wrong
-    /// position.
+    /// count but three is a parse error, including the four-slot shape that
+    /// used to be the contract.
     #[test]
     fn a_fee_reply_with_the_wrong_tier_count_does_not_parse() {
         let three = r#"{"status":"OK","fees":[1,2,4]}"#;

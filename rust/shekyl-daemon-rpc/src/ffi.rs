@@ -561,12 +561,10 @@ pub struct HardForkFactsFfi {
 
 /// Twin of `shekyl_rpc_fee_estimate_facts` (RK-5b).
 ///
-/// `fees` is fixed at four because the estimator writes exactly four SLOTS.
-/// They carry three priced tiers: slot 2 is the RK-5 bridge and mirrors slot
-/// 1 (standard) until the RPC cutover, so four slots is a wire shape and not
-/// three rates. `fee_count` reports how many it actually wrote, so a change to
-/// that contract is a refusal rather than a shorter answer read as a base
-/// fee.
+/// `fees` is one slot per priced tier: `[economy, standard, priority]`.
+/// `fee_count` reports how many the estimator actually wrote, so a change
+/// to that contract is a refusal rather than a shorter answer read as a
+/// base fee.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeeEstimateFactsFfi {

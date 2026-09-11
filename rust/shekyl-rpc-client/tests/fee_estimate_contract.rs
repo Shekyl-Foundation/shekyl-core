@@ -36,12 +36,8 @@ fn the_daemons_captured_reply_parses_and_carries_three_tiers() {
         serde_json::from_str(V3).expect("the 3.30 reply must parse through the shared type");
     assert!(reply.status.is_ok());
     let tiers = [FeeTier::Low, FeeTier::Normal, FeeTier::High];
-    // Ascending and distinct. Before FL-R25 this walked four tiers and had
-    // to tolerate slot 2 mirroring slot 1 — the bridge — so "distinct"
-    // could only ever be asserted on three of the four values. With the
-    // dead slot gone the property is simply true: every tier a caller can
-    // name buys a different rate, and a mapping that collapsed two of them
-    // would make the tier choice unobservable in every other test.
+    // Every named tier buys a different rate. A mapping that collapsed two
+    // of them would make the tier choice unobservable in every other test.
     let values: Vec<u64> = tiers.iter().map(|t| reply.fees.get(*t)).collect();
     assert!(
         values.windows(2).all(|w| w[0] < w[1]),
@@ -58,9 +54,9 @@ fn the_daemons_captured_reply_parses_and_carries_three_tiers() {
 /// compute from a scalar the tiers were supposed to replace.
 #[test]
 fn a_reply_still_carrying_the_retired_scalar_is_refused() {
-    // Built from V3, not V2: a V2 base would now be refused for its
-    // four-slot array as well as the scalar, and this test would pass
-    // while no longer isolating the subject it names.
+    // Built from V3, not V2: a V2 base would be refused for its four-slot
+    // array as well as the scalar, and this test would pass while no
+    // longer isolating the subject it names.
     let mut doc: serde_json::Value = serde_json::from_str(V3).unwrap();
     doc.as_object_mut()
         .unwrap()

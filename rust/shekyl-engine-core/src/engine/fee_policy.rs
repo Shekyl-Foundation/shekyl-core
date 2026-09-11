@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn twenty_twenty_one_scaling_kat_rows_are_well_formed() {
         // tests/unit_tests/scaling_2021.cpp `wallet_fee_estimate`,
-        // mapped economy=fees[0], standard=fees[1], priority=fees[3].
+        // mapped economy=fees[0], standard=fees[1], priority=fees[2].
         ValidatedFeeEstimates::try_new(snapshot(340, 1400, 67_000))
             .expect("10 SKL / 300k-zone Fh=67000 is 197× economy and must pass");
         ValidatedFeeEstimates::try_new(snapshot(340, 1400, 22_000))

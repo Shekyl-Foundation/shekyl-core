@@ -645,6 +645,24 @@ TEST(rpc_facts_shims, a_fee_estimate_beyond_the_reward_window_is_refused)
   EXPECT_EQ(0u, f.fee_count) << "a refusal reports no tiers";
 }
 
+// The production marshal, not the layout twin: a successful estimate must
+// fill every POD slot the array declares, and no more. The fill/check
+// twins cannot see an estimator that still emits a fourth value.
+TEST(rpc_facts_shims, a_fee_estimate_writes_three_priced_tiers)
+{
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
+
+  shekyl_rpc_fee_estimate_facts f{};
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::fee_estimate(bap.bc, 10, &f));
+  constexpr size_t kSlots = sizeof(f.fees) / sizeof(f.fees[0]);
+  EXPECT_EQ(kSlots, static_cast<size_t>(3));
+  EXPECT_EQ(f.fee_count, static_cast<uint8_t>(kSlots));
+  EXPECT_LE(f.fees[0], f.fees[1]);
+  EXPECT_LE(f.fees[1], f.fees[2]);
+  EXPECT_GT(f.quantization_mask, 0u);
+}
+
 TEST(rpc_facts_shims, null_out_pointer_refuses)
 {
   BlockchainAndPool bap;

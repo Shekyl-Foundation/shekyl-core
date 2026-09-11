@@ -404,15 +404,10 @@ pub unsafe extern "C" fn shekyl_rpc_hard_fork_facts_rust_check(
 #[allow(clippy::cast_possible_truncation)]
 fn fee_estimate_facts_filled(seed: u64) -> crate::ffi::FeeEstimateFactsFfi {
     crate::ffi::FeeEstimateFactsFfi {
-        // Field indices 4 and 5 below are deliberately NOT renumbered after
-        // FL-R25 dropped a slot: they seed distinct values per field, and
-        // re-indexing them would move every expected value in the harness
-        // for no gain.
-        fees: [
-            submit_facts_field_value(seed, 0),
-            submit_facts_field_value(seed, 1),
-            submit_facts_field_value(seed, 2),
-        ],
+        // Field indices 4 and 5 below are not fee-slot indexes: they seed a
+        // distinct value per POD field. Re-indexing them would move every
+        // expected value in the harness for no gain.
+        fees: std::array::from_fn(|i| submit_facts_field_value(seed, i as u64)),
         quantization_mask: submit_facts_field_value(seed, 4),
         fee_count: submit_facts_field_value(seed, 5) as u8,
         reserved: [0; 7],

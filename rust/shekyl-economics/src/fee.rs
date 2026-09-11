@@ -25,13 +25,10 @@
 //!
 //! Tier contracts (§5.5): `fees[0]` economy — the admission rung, clamped
 //! by the CALLER at the unbuffered relay floor; `fees[1]` standard — the
-//! sustained-growth rung and the default; `fees[3]` priority — exact
+//! sustained-growth rung and the default; `fees[2]` priority — exact
 //! marginal-cost pricing of expansion to the 2×median cap, the `Fh` main
 //! arm made **unconditional** (the surge discount was FL-C2(b)'s one
-//! derived defect in the inherited shape). `fees[2]` is the RK-5 wire
-//! bridge: the dead `Fm` slot serves the standard value so the vector
-//! shape does not change before the RPC cutover and wallet2-transliterated
-//! `Elevated` callers stay inside the largest anonymity set.
+//! derived defect in the inherited shape).
 
 use crate::params::{EconomicParams, SCALE};
 use crate::release::calc_release_multiplier;
@@ -305,10 +302,8 @@ pub fn hysteresis_settled(c_scaled: u64) -> bool {
 /// beyond the (accepted, recorded) fee-policy bucketing itself.
 pub const EMISSION_CLAIM_FEE_FLOOR: u64 = 3_600_000_000;
 
-/// The three priced rungs. The RK-5 wire shape is a derived view
-/// ([`Self::as_slots`]): slot 2 mirrors `standard` so the vector length
-/// does not change before the RPC cutover. Named fields mean the bridge
-/// slot cannot drift from `standard` independently.
+/// The three priced rungs. [`Self::as_slots`] is the wire projection:
+/// `[economy, standard, priority]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeeLadder {
     pub economy: u64,
@@ -326,23 +321,14 @@ impl FeeLadder {
         priority: u64::MAX,
     };
 
-    /// Wire shape `[economy, standard, priority]` — one slot per priced
-    /// tier, no bridge.
-    ///
-    /// FL-R25 deleted the fourth slot. It carried a duplicate of
-    /// `standard` so that a `FeePriority::Elevated` caller, mapped to a
-    /// slot of its own, would pay the standard rate and stay inside the
-    /// largest anonymity set. That reasoning was sound and its premise was
-    /// not: `Elevated` had zero production callers, so the slot was
-    /// wire-served and dead, and the anonymity set it protected had no
-    /// members.
+    /// Wire shape `[economy, standard, priority]` — one slot per priced tier.
     #[must_use]
     pub const fn as_slots(self) -> [u64; 3] {
         [self.economy, self.standard, self.priority]
     }
 }
 
-/// The corrected three-tier ladder (FL-R17) plus the RK-5 bridge slot.
+/// The corrected three-tier ladder (FL-R17).
 ///
 /// `base_reward` is the **M_r-neutral** total reward
 /// ([`crate::base_block_reward`] — `max(curve(remaining), TAIL)`, total
@@ -437,15 +423,9 @@ mod tests {
     use crate::base_block_reward;
 
     /// Neutral correction (`C_q = 1`) against the `scaling_2021.cpp`
-    /// heritage vectors, with the FL-R17 shape applied: three tiers, one
-    /// slot each since FL-R25 deleted the bridge, and the `Fh` main arm
-    /// unconditional (the 22 000 surge value in the second heritage case
-    /// becomes the main-arm 67 000 — the FL-C2(b) fix, deliberate).
-    ///
-    /// The values are unchanged by FL-R25 — only the duplicate is gone.
-    /// `[340, 1400, 1400, 67_000]` became `[340, 1400, 67_000]`: the
-    /// deleted slot carried a second copy of `standard`, never a rate of
-    /// its own, which is the whole reason it could go.
+    /// heritage vectors: three tiers, `Fh` main arm unconditional (the
+    /// 22 000 surge value in the second heritage case becomes the
+    /// main-arm 67 000 — the FL-C2(b) fix, deliberate).
     #[test]
     fn neutral_ladder_matches_heritage_vectors_with_signed_shape() {
         let coin = 1_000_000_000u64;
@@ -511,10 +491,6 @@ mod tests {
         let ladder =
             corrected_fee_ladder(10 * coin, 1_500_000, 1_500_000, 300_000, 3_000, 16 * SCALE);
         assert_eq!(ladder.economy, 220);
-        // Slot 2 is `priority` since FL-R25 deleted the bridge. This line
-        // used to assert it mirrored `standard`; what it is worth checking
-        // now is that the slots carry the three tiers in order, so a future
-        // reordering of `as_slots` cannot pass unnoticed.
         assert_eq!(
             ladder.as_slots(),
             [ladder.economy, ladder.standard, ladder.priority]

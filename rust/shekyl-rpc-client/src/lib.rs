@@ -209,18 +209,7 @@ impl FeePriority {
 /// Priority `0` and `1` both take the lowest tier (the old index arithmetic
 /// reached that by `saturating_sub(1)` on a `u32`), `2` takes the middle,
 /// and anything `>= 3` — including a `Custom` priority of a million — takes
-/// the highest. Every `u32` maps to a tier, so the out-of-range
-/// `InvalidPriority` this function used to be able to return is not merely
-/// unused: it is unreachable, which is why the bounds check went with the
-/// index.
-///
-/// **FL-R25 changed one caller's rate, and it is the only behaviour change
-/// in the deletion.** Priority `3` used to reach `FeeTier::Medium` — the
-/// bridge slot, priced at the standard rate. `Medium` is gone, so `3` now
-/// falls into `High` and pays the priority rate. The only way to ask for
-/// `3` was `FeePriority::Elevated`, which had no production callers, or
-/// `Custom { priority: 3 }`, which asks for a rung above normal and now
-/// gets one that exists.
+/// the highest. Every `u32` maps to a tier.
 fn fee_tier_for(priority: FeePriority) -> shekyl_rpc_types::FeeTier {
     match priority.fee_priority() {
         0 | 1 => shekyl_rpc_types::FeeTier::Low,
@@ -485,12 +474,10 @@ pub trait Rpc: Sync + Clone {
             // The pre-2021-scaling fallback is gone with the field it read.
             // It multiplied the scalar by one of `[1, 5, 25, 1000]` when the
             // daemon sent no `fees` array — a Monero wallet2 path for a
-            // daemon Shekyl has never had, since the estimator resizes to
-            // exactly four tiers on every network and `FeeTiers` is a fixed
-            // `[u64; 4]`, so "no tiers" is now unrepresentable rather than
-            // merely unreachable (rule 60). It also carried the only
-            // unchecked multiply in this function, on a daemon-supplied
-            // number.
+            // daemon Shekyl has never had. `FeeTiers` is a fixed `[u64; 3]`,
+            // so "no tiers" is unrepresentable rather than merely
+            // unreachable (rule 60). It also carried the only unchecked
+            // multiply in this function, on a daemon-supplied number.
             FeeRate::new(res.fees.get(fee_tier_for(priority)), res.quantization_mask)
         }
     }
@@ -621,28 +608,14 @@ mod tests {
         assert_eq!(fee_tier_for(custom(1)), FeeTier::Low);
         assert_eq!(fee_tier_for(FeePriority::Normal), FeeTier::Normal);
         assert_eq!(fee_tier_for(custom(2)), FeeTier::Normal);
-        // FL-R25: `3` used to reach `Medium`, the bridge slot priced at the
-        // standard rate. `Medium` is gone, so `3` takes `High` — the one
-        // behaviour change in the deletion, asserted rather than implied.
         assert_eq!(fee_tier_for(custom(3)), FeeTier::High);
         assert_eq!(fee_tier_for(FeePriority::Priority), FeeTier::High);
         assert_eq!(fee_tier_for(custom(4)), FeeTier::High);
         assert_eq!(fee_tier_for(custom(u32::MAX)), FeeTier::High);
     }
 
-    /// Every tier a caller can name buys a DIFFERENT rate.
-    ///
-    /// This replaces `an_elevated_caller_is_priced_at_the_standard_rate_by_the_bridge`,
-    /// which FL-R25 deleted along with its subject. That test asserted the
-    /// RK-5 bridge: slot 2 mirrored slot 1 so a wallet2-transliterated
-    /// `Elevated` caller paid the standard rate instead of self-marking on
-    /// a rung of its own. The anonymity argument was sound; its premise was
-    /// not, because `Elevated` had no production callers, so the cohort it
-    /// protected was empty and the slot was wire-served and dead.
-    ///
-    /// What is worth asserting now is the property the bridge made
-    /// un-assertable: with no mirrored slot, distinctness holds across the
-    /// whole ladder rather than across three of four values.
+    /// Every named tier buys a different rate. A mapping that collapsed two
+    /// of them would make the tier choice unobservable in every other test.
     #[test]
     fn each_named_tier_buys_a_distinct_rate() {
         let served = shekyl_rpc_types::FeeTiers([10, 20, 40]);

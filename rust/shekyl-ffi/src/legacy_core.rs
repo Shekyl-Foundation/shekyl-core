@@ -614,12 +614,11 @@ pub extern "C" fn shekyl_fee_correction_quantized(
     )
 }
 
-/// The corrected four-slot fee ladder (FL-R17 three tiers + the RK-5 wire
-/// bridge slot; `Fh` main arm unconditional; economy is clamped by the
-/// CALLER at the relay floor). Writes exactly four values through
-/// `out_fees`. Returns:
+/// The corrected three-slot fee ladder (`FeeLadder::as_slots`; `Fh` main
+/// arm unconditional; economy is clamped by the CALLER at the relay
+/// floor). Writes exactly three values through `out_fees`. Returns:
 ///
-/// * `0` — the four values were written;
+/// * `0` — the three values were written;
 /// * `-1` — null `out_fees`, nothing written;
 /// * `-2` — the scalars are outside the arithmetic's domain, nothing
 ///   written (see below).
@@ -639,7 +638,7 @@ pub extern "C" fn shekyl_fee_correction_quantized(
 ///
 /// # Safety
 ///
-/// `out_fees` must be null or valid for writing four `u64`s.
+/// `out_fees` must be null or valid for writing three `u64`s.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     base_reward: u64,

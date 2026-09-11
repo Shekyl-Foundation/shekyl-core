@@ -47,7 +47,8 @@ use shekyl_economics::{
     calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
     effective_emission, emission_speed_factor, hysteresis_fold, hysteresis_settled,
     hysteresis_step, paid_block_reward, projected_already_generated, tail_subsidy_per_block,
-    EconomicParams, TxVolume, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    EconomicParams, FeeLadder, TxVolume, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY,
+    STAKER_EMISSION_SHARE,
 };
 
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
@@ -242,16 +243,19 @@ fn round_money_up_2(v: u64) -> u64 {
         .expect("round_money_up overflow (C++ throws here)")
 }
 
+/// Served-ladder arity, derived from the production owner so a slot-count
+/// change cannot leave this instrument half-converted.
+const SERVED_SLOTS: usize = FeeLadder::SATURATED.as_slots().len();
+
 /// The legacy ladder projected onto the three priced rungs, for comparison
 /// against the corrected one.
 ///
 /// `articmine_ladder_raw` still returns four — that transliteration is the
 /// round's subject and porting it faithfully is the point — but its `Fm`
-/// slot (index 2) has no counterpart since FL-R25 deleted the fourth wire
-/// slot. Dropping it here keeps the comparison rung-for-rung instead of
-/// pairing `Fm` against `priority` by position, which is the shape that
-/// would silently mis-state every corrected-vs-current row.
-fn rounded(raw: [u64; 4]) -> [u64; 3] {
+/// slot (index 2) has no served counterpart. Dropping it here keeps the
+/// comparison rung-for-rung instead of pairing `Fm` against `priority` by
+/// position.
+fn rounded(raw: [u64; 4]) -> [u64; SERVED_SLOTS] {
     [
         round_money_up_2(raw[0]),
         round_money_up_2(raw[1]),
@@ -274,7 +278,7 @@ fn rounded(raw: [u64; 4]) -> [u64; 3] {
 /// none of it. The legacy transliteration survives ONLY as the `Current`
 /// comparison column, where reproducing today's daemon bit-for-bit is
 /// the point.
-fn served_ladder(base_reward: u64, median: u64, c_q: u64) -> [u64; 3] {
+fn served_ladder(base_reward: u64, median: u64, c_q: u64) -> [u64; SERVED_SLOTS] {
     corrected_fee_ladder(
         base_reward,
         median,
@@ -535,12 +539,12 @@ pub struct RungTable {
     pub base_reward_unmodulated: u64,
     pub c_scaled: u64,
     /// What the daemon serves today (5-arg estimate semantics).
-    pub current: [u64; 3],
+    pub current: [u64; SERVED_SLOTS],
     /// The validation-path economics with raw `C` — the *mispricing*
     /// measurement. The §5.2 proposal serves the quantized form below.
-    pub corrected_raw_c: [u64; 3],
+    pub corrected_raw_c: [u64; SERVED_SLOTS],
     /// What a §5.2 daemon would serve (`C_q`, ceiling rule).
-    pub served_ceil_cq: [u64; 3],
+    pub served_ceil_cq: [u64; SERVED_SLOTS],
     /// `check_fee` acceptance bound at this state. Modeled as
     /// `floor − floor/50` per byte: the real check takes 2% off the
     /// *total* and rounds up to the quantization mask
@@ -653,13 +657,13 @@ pub struct DwellResult {
     pub blocks_measured: u64,
     /// Median run length (blocks) of an unchanged posted value, per rung,
     /// over the whole trace.
-    pub median_dwell: [u64; 3],
+    pub median_dwell: [u64; SERVED_SLOTS],
     /// TRUE distinct posted values per rung (set cardinality — the wire
     /// alphabet).
-    pub distinct_posted_values: [u64; 3],
+    pub distinct_posted_values: [u64; SERVED_SLOTS],
     /// Number of value CHANGES per rung (churn; a value revisited counts
     /// each time). The pre-review field misnamed this "distinct values".
-    pub value_changes: [u64; 3],
+    pub value_changes: [u64; SERVED_SLOTS],
     /// FL-D8 (§10.9), statistic 1 — **occupancy**: blocks whose raw `C`
     /// sits in the band's flicker zone, per thousand blocks measured.
     /// The "how much chain TIME" half of the question the round needs to
@@ -707,7 +711,7 @@ pub struct DwellResult {
     /// values). `None` when no value change began inside the window (the
     /// value held through the whole ramp — vacuous pass, reported as
     /// such).
-    pub min_dwell_started_in_ramp: [Option<u64>; 3],
+    pub min_dwell_started_in_ramp: [Option<u64>; SERVED_SLOTS],
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1244,6 +1248,83 @@ pub(crate) fn advance_traced_state(ag: u64, v_avg: u64, params: &EconomicParams)
     advance_already_generated(ag, paid)
 }
 
+/// Per-rung run tracking over a dwell trace. Length is the served ladder's
+/// arity — a fourth slot cannot exist here.
+struct RungRuns<const N: usize> {
+    runs: [Vec<(u64, u64)>; N],
+    values: [BTreeSet<u64>; N],
+    current: [u64; N],
+    run_len: [u64; N],
+    run_start: [u64; N],
+}
+
+struct RungStats<const N: usize> {
+    median_dwell: [u64; N],
+    distinct: [u64; N],
+    changes: [u64; N],
+    min_ramp: [Option<u64>; N],
+    /// Start offset of the second run per rung (`None` if the value never
+    /// changed). Index 1 is the standard rung.
+    first_change: [Option<u64>; N],
+}
+
+impl<const N: usize> RungRuns<N> {
+    fn new() -> Self {
+        Self {
+            runs: std::array::from_fn(|_| Vec::new()),
+            values: std::array::from_fn(|_| BTreeSet::new()),
+            current: [0; N],
+            run_len: [0; N],
+            run_start: [0; N],
+        }
+    }
+
+    fn observe(&mut self, t: u64, fees: [u64; N]) {
+        for (i, fee) in fees.into_iter().enumerate() {
+            self.values[i].insert(fee);
+            if fee == self.current[i] {
+                self.run_len[i] += 1;
+            } else {
+                if self.run_len[i] > 0 {
+                    self.runs[i].push((self.run_start[i], self.run_len[i]));
+                }
+                self.current[i] = fee;
+                self.run_len[i] = 1;
+                self.run_start[i] = t;
+            }
+        }
+    }
+
+    fn finish(mut self, is_ramp: bool, ramp_len: u64) -> RungStats<N> {
+        for ((runs, start), len) in self.runs.iter_mut().zip(self.run_start).zip(self.run_len) {
+            runs.push((start, len));
+        }
+        let mut stats = RungStats {
+            median_dwell: [0; N],
+            distinct: [0; N],
+            changes: [0; N],
+            min_ramp: [None; N],
+            first_change: [None; N],
+        };
+        for (i, runs) in self.runs.iter().enumerate() {
+            let mut lens: Vec<u64> = runs.iter().map(|&(_, l)| l).collect();
+            lens.sort_unstable();
+            stats.median_dwell[i] = lens[lens.len() / 2];
+            stats.distinct[i] = self.values[i].len() as u64;
+            stats.changes[i] = (runs.len() - 1) as u64;
+            stats.first_change[i] = runs.get(1).map(|&(start, _)| start);
+            if is_ramp {
+                stats.min_ramp[i] = runs
+                    .iter()
+                    .filter(|&&(start, _)| start > 0 && start < ramp_len)
+                    .map(|&(_, l)| l)
+                    .min();
+            }
+        }
+        stats
+    }
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn dwell_scenario(
     scenario: &'static str,
@@ -1293,12 +1374,7 @@ fn dwell_scenario(
     // bias, and every band's lag, in the units users pay.
     let mut over_ceiling = 0u64;
     let mut under_ceiling = 0u64;
-    // Per rung: (value, run_length, run_start_block) plus accumulators.
-    let mut runs: [Vec<(u64, u64)>; 4] = [vec![], vec![], vec![], vec![]]; // (start, len)
-    let mut values: [BTreeSet<u64>; 4] = Default::default();
-    let mut current: [u64; 3] = [0; 3];
-    let mut run_len: [u64; 3] = [0; 3];
-    let mut run_start: [u64; 3] = [0; 3];
+    let mut rungs = RungRuns::<SERVED_SLOTS>::new();
     for t in 0..blocks {
         let frac = if (mean_end - mean_start).abs() < f64::EPSILON {
             0.0
@@ -1352,53 +1428,21 @@ fn dwell_scenario(
             (m, None) => unreachable!("mode {} produced no served C_q", m.name()),
         };
         ag = advance_traced_state(ag, v_avg, params);
-        for i in 0..3 {
-            values[i].insert(fees[i]);
-            if fees[i] == current[i] {
-                run_len[i] += 1;
-            } else {
-                if run_len[i] > 0 {
-                    runs[i].push((run_start[i], run_len[i]));
-                }
-                current[i] = fees[i];
-                run_len[i] = 1;
-                run_start[i] = t;
-            }
-        }
-    }
-    for i in 0..4 {
-        runs[i].push((run_start[i], run_len[i]));
+        rungs.observe(t, fees);
     }
 
     let is_ramp = (mean_end - mean_start).abs() >= f64::EPSILON;
-    let mut median_dwell = [0u64; 3];
-    let mut distinct = [0u64; 3];
-    let mut changes = [0u64; 3];
-    let mut min_ramp: [Option<u64>; 3] = [None; 3];
-    for i in 0..4 {
-        let mut lens: Vec<u64> = runs[i].iter().map(|&(_, l)| l).collect();
-        lens.sort_unstable();
-        median_dwell[i] = lens[lens.len() / 2];
-        distinct[i] = values[i].len() as u64;
-        changes[i] = (runs[i].len() - 1) as u64;
-        if is_ramp {
-            min_ramp[i] = runs[i]
-                .iter()
-                .filter(|&&(start, _)| start > 0 && start < ramp_len)
-                .map(|&(_, l)| l)
-                .min();
-        }
-    }
+    let stats = rungs.finish(is_ramp, ramp_len);
     DwellResult {
         scenario,
         is_ramp,
         age_years: st.height / BLOCKS_PER_YEAR,
         mode: mode.name(),
         blocks_measured: blocks,
-        median_dwell,
-        distinct_posted_values: distinct,
-        value_changes: changes,
-        min_dwell_started_in_ramp: min_ramp,
+        median_dwell: stats.median_dwell,
+        distinct_posted_values: stats.distinct,
+        value_changes: stats.changes,
+        min_dwell_started_in_ramp: stats.min_ramp,
         d8_boundary_occupancy_permille: if blocks == 0 {
             0
         } else {
@@ -1421,9 +1465,9 @@ fn dwell_scenario(
         is_quantized_map: mode.serves_quantized_map(),
         grid_max_fold_depth: grid.depth_stats().0,
         grid_period: mode.grid_period().unwrap_or(0),
-        // The standard rung's first CHANGE after the trace's opening value
-        // (`runs[1][0]` starts at 0 by construction).
-        first_change_offset: runs[1].get(1).map(|&(start, _)| start),
+        // Standard rung: first CHANGE after the opening value (that run
+        // starts at 0 by construction).
+        first_change_offset: stats.first_change[1],
         over_ceiling_permille: over_ceiling * 1000 / blocks.max(1),
         under_ceiling_permille: under_ceiling * 1000 / blocks.max(1),
     }
@@ -1882,8 +1926,8 @@ pub struct DegeneratePins {
     /// coupling; this pin makes it true).
     pub penalty_at_tail_x_half: u64,
     /// The ladder and relay floor computed from each at exhaustion.
-    pub estimate_ladder_at_exhaustion: [u64; 3],
-    pub validation_ladder_at_exhaustion: [u64; 3],
+    pub estimate_ladder_at_exhaustion: [u64; SERVED_SLOTS],
+    pub validation_ladder_at_exhaustion: [u64; SERVED_SLOTS],
     pub relay_floor_at_exhaustion: u64,
 }
 
@@ -2862,15 +2906,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rung_runs_tracks_one_change_per_slot() {
+        let mut rungs = RungRuns::<SERVED_SLOTS>::new();
+        rungs.observe(0, [10, 20, 40]);
+        rungs.observe(1, [10, 20, 40]);
+        rungs.observe(2, [10, 20, 80]);
+        let stats = rungs.finish(false, 0);
+        assert_eq!(SERVED_SLOTS, 3);
+        assert_eq!(stats.distinct, [1, 1, 2]);
+        assert_eq!(stats.changes, [0, 0, 1]);
+        assert_eq!(stats.min_ramp, [None, None, None]);
+        assert_eq!(stats.first_change, [None, None, Some(2)]);
+    }
+
     /// Pin the transliteration against `tests/unit_tests/scaling_2021.cpp`
     /// `wallet_fee_estimate` (10 SKL reward cases) — the instrument's
     /// "current" column must reproduce the C++ oracle exactly.
     ///
     /// Deliberately NOT routed through [`rounded`], which projects onto the
-    /// three priced rungs since FL-R25. This pin's subject is the legacy
-    /// FOUR-value transliteration, and letting the projection eat `Fm`
-    /// would quietly drop a pinned oracle value — the heritage KAT would
-    /// still pass while covering one rung less than it claims.
+    /// three priced rungs. This pin's subject is the legacy FOUR-value
+    /// transliteration, and letting the projection eat `Fm` would quietly
+    /// drop a pinned oracle value — the heritage KAT would still pass while
+    /// covering one rung less than it claims.
     #[test]
     fn transliteration_matches_cpp_kat() {
         let coin: u64 = 1_000_000_000;
@@ -2897,7 +2955,7 @@ mod tests {
         let params = EconomicParams::default();
         let base = base_block_reward(0, &params).expect("genesis base");
         let fees = rounded(articmine_ladder_raw(base, 300_000, 300_000));
-        // `fees[2]` is priority since FL-R25 dropped the bridge slot.
+        // `fees[2]` is priority.
         assert_eq!(fees[2], 14_000_000);
     }
 

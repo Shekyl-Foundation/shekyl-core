@@ -1464,21 +1464,14 @@ fn fee_v2_is_v1_minus_exactly_the_redundant_scalar() {
     );
 }
 
-/// FL-R25: `_v3` is `_v2` with the bridge slot removed — a TRANSFORM pair,
-/// the third delta shape, because no subtraction of a *field* from `_v2`
-/// produces `_v3`: the change is to an array's arity, inside one field.
+/// `_v3` is `_v2` with slot 2 removed — a TRANSFORM pair, because no
+/// subtraction of a *field* from `_v2` produces `_v3`: the change is to
+/// an array's arity, inside one field.
 ///
-/// Slot 2 was `FeeTier::Medium`, the RK-5 bridge, which carried a duplicate
-/// of slot 1 so a `FeePriority::Elevated` caller would pay the standard
-/// rate. `Elevated` had no production callers, so the slot was wire-served
-/// and dead and FL-R25 deleted it. The reshaping is written here as code so
-/// `_v3` cannot become its own authority: hand-edit either file and this
-/// goes red.
-///
-/// Note the captured values are four DISTINCT numbers, which no real daemon
-/// ever emitted — under the bridge slot 2 always equalled slot 1. That is a
-/// property of the fixture, not of the wire, and it is why the transform
-/// drops slot 2 by POSITION rather than by looking for a duplicate.
+/// The captured values are four DISTINCT numbers, which no real daemon
+/// ever emitted (slot 2 mirrored slot 1). The transform drops slot 2 by
+/// POSITION rather than by looking for a duplicate, so `_v3` cannot
+/// become its own authority: hand-edit either file and this goes red.
 #[test]
 fn fee_v3_is_v2_with_the_bridge_slot_removed() {
     let v2 = parsed(include_str!("vectors/rpc/get_fee_estimate_v2.json"));

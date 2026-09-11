@@ -91,11 +91,9 @@ TEST(fee_2021_scaling, wallet_fee_estimate)
   PREFIX_WINDOW(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
   std::vector<uint64_t> fees;
 
-  // FL round §5.2 shape (FL-R17 signed): three tiers, one slot each since
-  // FL-R25 deleted the RK-5 bridge, Fh main arm UNCONDITIONAL. C_q = SCALE
-  // is the neutral correction, so economy/standard keep the heritage
-  // values — the deleted slot carried a duplicate of standard, never a
-  // rate of its own, which is why no expected VALUE below changes.
+  // FL round §5.2 shape (FL-R17 signed): three tiers, Fh main arm
+  // UNCONDITIONAL. C_q = SCALE is the neutral correction, so
+  // economy/standard keep the heritage values.
 
   // 10 SKL reward, Mnw=Mlw=ZONE_V5
   fees.clear();
@@ -159,10 +157,6 @@ TEST(fee_2021_scaling, state_computed_estimate_holds_the_acceptance_identity)
   std::vector<uint64_t> fees;
   bc->get_dynamic_base_fee_estimate_2021_scaling(10, fees);
   ASSERT_EQ(fees.size(), 3);
-  // The FL-R17 signed shape survives the state-computed path. The mirror
-  // assertion went with the slot (FL-R25); what is left is the property
-  // the mirror made un-assertable — every served rung ascends, with no
-  // pair required to be equal.
   ASSERT_LE(fees[0], fees[1]);
   ASSERT_LE(fees[1], fees[2]);
   // The acceptance identity.
