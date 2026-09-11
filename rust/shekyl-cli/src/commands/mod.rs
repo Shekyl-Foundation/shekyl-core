@@ -15,6 +15,7 @@ mod balance;
 mod chain;
 mod fees;
 mod lifecycle;
+mod mine;
 mod proofs;
 mod receiving;
 pub mod scripted;
@@ -91,6 +92,14 @@ Staking:
                                       into this wallet (one pass at a time;
                                       the reply says what remains)
   chain_health                        Show daemon/chain health (separate conn)
+
+Mining (the daemon does the hashing; these control it):
+  mine start [threads|auto]           Start mining on the local daemon,
+                                      paying to this wallet (default
+                                      threads: min(cores, 4); keeps
+                                      running after the CLI exits)
+  mine stop                           Stop mining on the daemon
+  mine status                         Show mining state and hash rate
 
 Proofs (multi-word [message] binds into the proof; the verifier must
 supply the identical string — repeated spaces are collapsed to one):
@@ -273,6 +282,17 @@ pub fn repl(
                         chain::cmd_chain_health(daemon_client);
                     }
 
+                    // Mining control (CU-3; the daemon does the hashing)
+                    ResolvedCommand::MineStart { threads } => {
+                        mine::cmd_mine_start(&rpc, daemon_client, network, threads);
+                    }
+                    ResolvedCommand::MineStop => {
+                        mine::cmd_mine_stop(&rpc, daemon_client, network);
+                    }
+                    ResolvedCommand::MineStatus => {
+                        mine::cmd_mine_status(&rpc, daemon_client, network);
+                    }
+
                     // Proofs (WI-RPC-3 surface)
                     ResolvedCommand::GetTxProof {
                         txid,
@@ -359,6 +379,7 @@ fn command_help(topic: &str) -> Option<String> {
     let canonical = match topic {
         "engine_info" => "wallet",
         "quit" => "exit",
+        "start_mining" | "stop_mining" | "mining_status" => "mine",
         t => t,
     };
     let mut out: Vec<&str> = Vec::new();
@@ -569,6 +590,12 @@ mod tests {
         // Hidden alias → public block.
         let wallet = command_help("engine_info").expect("alias answers");
         assert!(wallet.contains("wallet"), "{wallet}");
+        // Mining aliases (CU-3) all answer with the `mine` block.
+        for alias in ["start_mining", "stop_mining", "mining_status", "mine"] {
+            let mine = command_help(alias).expect("mining alias answers");
+            assert!(mine.contains("mine start"), "{alias}: {mine}");
+            assert!(mine.contains("mine stop"), "{alias}: {mine}");
+        }
         assert!(command_help("no_such_command").is_none());
     }
 

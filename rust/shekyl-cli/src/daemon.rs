@@ -201,6 +201,78 @@ impl DaemonClient {
     pub fn get_info(&self) -> Result<Value, DaemonError> {
         self.json_rpc("get_info", &serde_json::json!({}))
     }
+
+    /// The configured daemon URL, for refusal copy that names the endpoint
+    /// (CLI_USABILITY.md §CU-5 F4).
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// True when the configured endpoint is a loopback address. Mining
+    /// control is loopback-only (CU-3 gate 2): the daemon's mining RPCs are
+    /// admin surface, and "start mining over the network" is refused CLI-side
+    /// before any round-trip.
+    #[must_use]
+    pub fn is_loopback(&self) -> bool {
+        let host = self.url.split("://").nth(1).unwrap_or(&self.url);
+        host.starts_with("127.0.0.1") || host.starts_with("localhost") || host.starts_with("[::1]")
+    }
+
+    /// POST to one of the daemon's DJSON **path** handlers (`/start_mining`,
+    /// `/stop_mining`, `/mining_status`, …). These are not `/json_rpc`
+    /// methods: the response is a flat object whose `status` field carries
+    /// `"OK"` or the daemon's refusal text (`core_rpc_ffi.cpp` json table).
+    fn path_rpc(&self, path: &str, body: &Value) -> Result<Value, DaemonError> {
+        let url = format!("{}{path}", self.url);
+
+        let mut response = self
+            .agent
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .send(body.to_string().as_bytes())
+            .map_err(|e| self.with_down_hint(classify_ureq_error(&e)))?;
+
+        let body_str = response
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| DaemonError::MalformedResponse(e.to_string()))?;
+
+        let parsed: Value = serde_json::from_str(&body_str)
+            .map_err(|e| DaemonError::MalformedResponse(e.to_string()))?;
+
+        match parsed.get("status").and_then(|s| s.as_str()) {
+            Some("OK") => Ok(parsed),
+            Some(other) => Err(DaemonError::Other(format!("daemon replied: {other}"))),
+            None => Err(DaemonError::MalformedResponse(
+                "missing 'status' field".into(),
+            )),
+        }
+    }
+
+    /// Start mining on the daemon (CU-3). The daemon owns the threads; they
+    /// outlive this CLI process.
+    pub fn start_mining(&self, miner_address: &str, threads: u64) -> Result<Value, DaemonError> {
+        self.path_rpc(
+            "/start_mining",
+            &serde_json::json!({
+                "miner_address": miner_address,
+                "threads_count": threads,
+                "do_background_mining": false,
+                "ignore_battery": false,
+            }),
+        )
+    }
+
+    /// Stop mining on the daemon (CU-3).
+    pub fn stop_mining(&self) -> Result<Value, DaemonError> {
+        self.path_rpc("/stop_mining", &serde_json::json!({}))
+    }
+
+    /// Query the daemon's mining state (CU-3).
+    pub fn mining_status(&self) -> Result<Value, DaemonError> {
+        self.path_rpc("/mining_status", &serde_json::json!({}))
+    }
 }
 
 fn classify_ureq_error(err: &ureq::Error) -> DaemonError {

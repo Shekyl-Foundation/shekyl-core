@@ -179,6 +179,15 @@ pub enum ResolvedCommand {
         message: String,
     },
 
+    // -- Mining control (CU-3; the daemon does the hashing) --
+    MineStart {
+        /// `None` is the wallet-convenience default (`min(cores, 4)`),
+        /// spelled `auto` on the command line.
+        threads: Option<u64>,
+    },
+    MineStop,
+    MineStatus,
+
     // -- Meta --
     Password,
     Rescan {
@@ -375,6 +384,24 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 }
             }
         }
+        // Mining control (CU-3). The F8 rule: a partial or typo'd mining
+        // verb gets a usage diagnostic naming `mine start [threads]`, never
+        // a bare "Unknown command".
+        "mine" => match args.first().copied() {
+            Some("start") => parse_mine_threads(args.get(1).copied()),
+            Some("stop") => ResolvedCommand::MineStop,
+            Some("status") => ResolvedCommand::MineStatus,
+            _ => diag(
+                "mine: usage is \"mine start [threads|auto]\", \"mine stop\", \
+                 or \"mine status\"",
+            ),
+        },
+        // Monero muscle-memory aliases (also what USER_GUIDE.md had been
+        // teaching before CU-6 corrected it).
+        "start_mining" => parse_mine_threads(args.first().copied()),
+        "stop_mining" => ResolvedCommand::MineStop,
+        "mining_status" => ResolvedCommand::MineStatus,
+
         "history" if args.first().copied() == Some("incoming") => {
             if args.contains(&"--unattributed") {
                 ResolvedCommand::HistoryIncomingUnattributed
@@ -623,6 +650,22 @@ pub fn parse(input: &str) -> ResolvedCommand {
         "wallet" | "engine_info" => ResolvedCommand::Wallet,
         other => ResolvedCommand::Unknown {
             cmd: other.to_string(),
+        },
+    }
+}
+
+/// The thread-count grammar shared by `mine start [threads|auto]` and the
+/// `start_mining [threads]` alias (CU-3): absent or `auto` means the wallet
+/// default (`min(cores, 4)`, resolved at execution); a number must be a
+/// positive integer.
+fn parse_mine_threads(arg: Option<&str>) -> ResolvedCommand {
+    match arg {
+        None | Some("auto") => ResolvedCommand::MineStart { threads: None },
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(n) if n >= 1 => ResolvedCommand::MineStart { threads: Some(n) },
+            _ => diag(format!(
+                "mine start: threads must be a positive number or \"auto\", got {raw:?}"
+            )),
         },
     }
 }
@@ -1418,6 +1461,52 @@ mod tests {
                 assert_eq!(topic, "request", "topic is the first token");
             }
             other => panic!("expected HelpCommand, got {other:?}"),
+        }
+    }
+
+    /// CU-3 mining verbs: `mine start/stop/status` plus the Monero
+    /// muscle-memory aliases, thread-count grammar, and the F8 rule that a
+    /// partial `mine` is a usage diagnostic — never bare "Unknown command".
+    #[test]
+    fn mine_verbs_aliases_and_partial_input_parse() {
+        assert!(matches!(
+            parse("mine start"),
+            ResolvedCommand::MineStart { threads: None }
+        ));
+        assert!(matches!(
+            parse("mine start auto"),
+            ResolvedCommand::MineStart { threads: None }
+        ));
+        assert!(matches!(
+            parse("mine start 2"),
+            ResolvedCommand::MineStart { threads: Some(2) }
+        ));
+        assert!(matches!(parse("mine stop"), ResolvedCommand::MineStop));
+        assert!(matches!(parse("mine status"), ResolvedCommand::MineStatus));
+
+        // Aliases.
+        assert!(matches!(
+            parse("start_mining 3"),
+            ResolvedCommand::MineStart { threads: Some(3) }
+        ));
+        assert!(matches!(
+            parse("start_mining"),
+            ResolvedCommand::MineStart { threads: None }
+        ));
+        assert!(matches!(parse("stop_mining"), ResolvedCommand::MineStop));
+        assert!(matches!(
+            parse("mining_status"),
+            ResolvedCommand::MineStatus
+        ));
+
+        // F8: partials and bad values are usage diagnostics.
+        for line in ["mine", "mine begin", "mine start 0", "mine start four"] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(message.contains("mine"), "{line}: {message}");
+                }
+                other => panic!("{line}: expected Diagnostic, got {other:?}"),
+            }
         }
     }
 
