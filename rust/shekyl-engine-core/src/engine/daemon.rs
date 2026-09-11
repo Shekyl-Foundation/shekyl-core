@@ -43,6 +43,7 @@ use std::future::Future;
 use serde_json::{json, Value};
 use shekyl_rpc_client::{FeeRate, RejectCause, Rpc, RpcError};
 use shekyl_rpc_transport::HttpRpc;
+use shekyl_rpc_types::{FeeTier, GetFeeEstimateResponse};
 use shekyl_scanner::ScannableBlock;
 use shekyl_wire::Transaction;
 
@@ -56,89 +57,35 @@ use crate::engine::transaction_submitter::submit_outcome_from_verdict;
 // rationale for a local copy no longer applies).
 use shekyl_rpc_client::GRACE_BLOCKS_FOR_FEE_ESTIMATE;
 
-/// Map a daemon `get_fee_estimate` JSON-RPC `result` object onto the
-/// three-tier [`FeeEstimates`] snapshot (§3.3), deriving every tier
-/// and the rounding mask from this **one** response.
+/// Map a daemon `get_fee_estimate` reply onto the three-tier
+/// [`FeeEstimates`] snapshot, deriving every tier and the rounding mask
+/// from this **one** response.
 ///
-/// Mirrors `shekyl_rpc_client::Rpc::get_fee_rate`'s response handling but
-/// resolves **all three** non-`Custom` tiers from a single call rather
-/// than one tier per call. Tiers map to `fees` indices `0` (economy),
-/// `1` (standard), `3` (priority) per `V3_WALLET_DECISION_LOG.md`.
-/// Index `2` (`Fm`, "elevated") is deliberately unmapped: the wallet
-/// offers three named tiers, and the ladder's ends — cheapest and
-/// fastest — are the ones a user picks between.
+/// Parses through [`GetFeeEstimateResponse`] so a wire-arity change is a
+/// type error here rather than a local JSON destructure the shared
+/// contract cannot see. Tiers are [`FeeTier::Low`] / [`FeeTier::Normal`]
+/// / [`FeeTier::High`] — one slot each, `[economy, standard, priority]`.
 ///
-/// # `fees` is required, and its absence is not a legacy shape
-///
-/// The ArticMine 2021 fee ladder is live **from genesis**:
-/// `HF_VERSION_2021_SCALING` is `1` (`src/cryptonote_config.h`), so
-/// `core_rpc_server::on_get_base_fee_estimate` always takes the
-/// `version >= HF_VERSION_2021_SCALING` branch and always answers with
-/// a four-element `fees` array (`Blockchain::
-/// get_dynamic_base_fee_estimate_2021_scaling` `resize(4)`s it). Every
-/// Shekyl daemon is subject to the same rule.
-///
-/// A pre-2021-scaling daemon answering with a bare scalar `fee` is
-/// therefore a shape that **cannot occur on this chain**; it is
-/// Monero-lineage inheritance, and the multiplier ladder the wallet
-/// used to synthesize from it (`×1 / ×5 / ×1000`) was an invented
-/// tier band with no daemon behind it — one that put `priority`
-/// three orders of magnitude above `economy` and so tripped the
-/// absolute cap on any base fee over 100, refusing the whole snapshot
-/// (Economy included) for a daemon that had charged nothing unusual.
-/// Deleted per rules 60 / 15 / 16: a missing `fees` array is a
-/// malformed reply, like any other missing field.
-///
-/// Untrusted-daemon input is parsed defensively (rule
-/// `20-rust-vs-cpp-policy.mdc` §3): every field is validated, and
-/// missing or non-numeric fields and `status != "OK"` map to
-/// [`RpcError::InvalidFee`] / [`RpcError::InvalidPriority`].
-fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
-    if result.get("status").and_then(Value::as_str) != Some("OK") {
+/// A missing `fees` array is malformed, not a legacy scalar to synthesize
+/// from: Shekyl genesis is already 2021-scaling, and the invented
+/// `×1 / ×5 / ×1000` band is gone.
+fn fee_estimates_from_reply(reply: &GetFeeEstimateResponse) -> Result<FeeEstimates, RpcError> {
+    if !reply.status.is_ok() {
         return Err(RpcError::InvalidFee);
     }
-
-    let mask = result
-        .get("quantization_mask")
-        .and_then(Value::as_u64)
-        .ok_or(RpcError::InvalidFee)?;
-
-    // `FeeRate::new` already rejects `mask == 0` / `per_weight == 0`;
-    // surface a per-tier rate or the upstream error verbatim.
-    let rate = |per_weight: u64| FeeRate::new(per_weight, mask);
-
-    // `fees` must be an array of at least the four tiers every Shekyl
-    // daemon emits. Absent, null, or any non-array (`fees: "oops"`) is
-    // a malformed reply — there is no fallback shape to degrade to, so
-    // nothing here can silently accept a snapshot the daemon did not
-    // actually quote.
-    let Some(Value::Array(fees)) = result.get("fees") else {
-        return Err(RpcError::InvalidFee);
-    };
-    // A short array is a malformed estimate, not a silently-clamped
-    // one. Destructured once rather than indexed three times, so the
-    // ladder positions are named here and nowhere else — including
-    // `_elevated` (`Fm`), whose absence from the wallet's tier set is
-    // now visible in the code instead of only in prose. A longer array
-    // from a future daemon keeps working (rule 75).
-    let [economy, standard, _elevated, priority, ..] = &fees[..] else {
-        return Err(RpcError::InvalidPriority);
-    };
-    let tier = |value: &Value| -> Result<u64, RpcError> {
-        value.as_u64().ok_or(RpcError::InvalidPriority)
-    };
-    let (economy, standard, priority) = (
-        rate(tier(economy)?)?,
-        rate(tier(standard)?)?,
-        rate(tier(priority)?)?,
-    );
-
+    let mask = reply.quantization_mask;
     Ok(FeeEstimates {
-        economy,
-        standard,
-        priority,
+        economy: FeeRate::new(reply.fees.get(FeeTier::Low), mask)?,
+        standard: FeeRate::new(reply.fees.get(FeeTier::Normal), mask)?,
+        priority: FeeRate::new(reply.fees.get(FeeTier::High), mask)?,
         quantization_mask: mask,
     })
+}
+
+#[cfg(test)]
+fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
+    let reply = serde_json::from_value(result.clone()).map_err(|_| RpcError::InvalidFee)?;
+    fee_estimates_from_reply(&reply)
 }
 
 /// What a wallet requires of the daemon it dials (`VC-4`).
@@ -421,18 +368,18 @@ impl DaemonEngine for DaemonClient {
     /// Issues **one** `get_fee_estimate` JSON-RPC call and maps its
     /// response onto all three non-`Custom`
     /// [`FeePriority`](super::FeePriority) tiers plus the snapshot
-    /// `quantization_mask` via [`fee_estimates_from_value`] — not
-    /// three per-tier [`Rpc::get_fee_rate`] calls, so the tier band
-    /// carries no tier-vs-tier skew from interleaved reads.
+    /// `quantization_mask` via [`GetFeeEstimateResponse`] — not three
+    /// per-tier [`Rpc::get_fee_rate`] calls, so the tier band carries no
+    /// tier-vs-tier skew from interleaved reads.
     fn get_fee_estimates(&self) -> impl Send + Future<Output = Result<FeeEstimates, Self::Error>> {
         async move {
-            let result: Value = self
+            let reply: GetFeeEstimateResponse = self
                 .json_rpc_call(
                     "get_fee_estimate",
                     Some(json!({ "grace_blocks": GRACE_BLOCKS_FOR_FEE_ESTIMATE })),
                 )
                 .await?;
-            fee_estimates_from_value(&result)
+            fee_estimates_from_reply(&reply)
         }
     }
 
@@ -836,40 +783,25 @@ mod tests {
         );
     }
 
-    /// V3 daemon: `fees` array present, tiers map to indices 0/1/3
+    /// Tiers map Low/Normal/High onto `[economy, standard, priority]`,
     /// and the shared `quantization_mask` lands on the snapshot.
     #[test]
-    fn fee_estimates_array_maps_indices_0_1_3() {
+    fn fee_estimates_array_maps_the_three_priced_tiers() {
         let result = json!({
             "status": "OK",
-            "fees": [100u64, 200, 300, 400],
-            "fee": 100,
+            "fees": [100u64, 200, 400],
             "quantization_mask": 8u64,
         });
         let est = fee_estimates_from_value(&result).expect("well-formed fee array");
         assert_eq!(est.economy, FeeRate::new(100, 8).unwrap());
         assert_eq!(est.standard, FeeRate::new(200, 8).unwrap());
-        // Index 3, *not* 2 — the "elevated" tier (index 2) has no
-        // wallet `FeePriority`.
         assert_eq!(est.priority, FeeRate::new(400, 8).unwrap());
         assert_eq!(est.quantization_mask, 8);
-        // Tiers are distinct (regression for a collapsed mapping).
         assert_ne!(est.economy, est.priority);
     }
 
     /// A reply carrying only the scalar `fee` is malformed, not a
     /// legacy shape to synthesize tiers from.
-    ///
-    /// `HF_VERSION_2021_SCALING` is `1`, so every Shekyl daemon emits
-    /// `fees[4]`; the `×1 / ×5 / ×1000` ladder the wallet used to
-    /// invent here had no daemon behind it, and its `×1000` priority
-    /// meant any base fee above 100 blew the absolute cap and got the
-    /// **whole** snapshot refused — Economy included — for a daemon
-    /// charging nothing unusual.
-    ///
-    /// This bites against the ladder being reintroduced. It does NOT
-    /// cover the `fees` mapping (that is
-    /// `fee_estimates_array_maps_indices_0_1_3`).
     #[test]
     fn fee_estimates_refuses_a_scalar_only_reply() {
         for reply in [
@@ -887,7 +819,7 @@ mod tests {
     fn fee_estimates_rejects_non_ok_status() {
         let result = json!({
             "status": "BUSY",
-            "fees": [100u64, 200, 300, 400],
+            "fees": [100u64, 200, 400],
             "quantization_mask": 8u64,
         });
         assert!(matches!(
@@ -896,19 +828,27 @@ mod tests {
         ));
     }
 
-    /// A `fees` array too short to carry the priority tier (index 3)
-    /// is malformed, not silently clamped to a lower tier.
+    /// A count other than three is a parse error, including the four-slot
+    /// shape that used to be the contract. Reading four as a longer
+    /// three-slot answer would put priority on the old bridge slot.
     #[test]
-    fn fee_estimates_rejects_short_fees_array() {
-        let result = json!({
-            "status": "OK",
-            "fees": [100u64, 200],
-            "quantization_mask": 8u64,
-        });
-        assert!(matches!(
-            fee_estimates_from_value(&result),
-            Err(RpcError::InvalidPriority)
-        ));
+    fn fee_estimates_rejects_the_wrong_tier_count() {
+        for fees in [
+            json!([100u64, 200]),
+            json!([100u64, 200, 300, 400]),
+            json!([100u64, 200, 300, 400, 500, 600]),
+            json!([]),
+        ] {
+            let result = json!({
+                "status": "OK",
+                "fees": fees,
+                "quantization_mask": 8u64,
+            });
+            assert!(
+                matches!(fee_estimates_from_value(&result), Err(RpcError::InvalidFee)),
+                "a tier count other than three must not parse: {result}"
+            );
+        }
     }
 
     /// A present-but-non-array `fees` (e.g. a string) is malformed, and
@@ -927,33 +867,17 @@ mod tests {
         ));
     }
 
-    /// A daemon that grows the ladder past four tiers keeps working:
-    /// the wallet reads its three positions and ignores the rest
-    /// (rule 75 — no coordinated wallet upgrade for a tier it does not
-    /// offer).
+    /// Absent `quantization_mask` is the wire default (`OPT(1)`), matching
+    /// [`GetFeeEstimateResponse`].
     #[test]
-    fn fee_estimates_tolerates_a_longer_fees_array() {
+    fn fee_estimates_absent_mask_is_the_wire_default() {
         let result = json!({
             "status": "OK",
-            "fees": [100u64, 200, 300, 400, 500, 600],
-            "quantization_mask": 8u64,
+            "fees": [100u64, 200, 400],
         });
-        let est = fee_estimates_from_value(&result).expect("a longer ladder is not malformed");
-        assert_eq!(est.economy, FeeRate::new(100, 8).unwrap());
-        assert_eq!(est.standard, FeeRate::new(200, 8).unwrap());
-        assert_eq!(est.priority, FeeRate::new(400, 8).unwrap());
-    }
-
-    #[test]
-    fn fee_estimates_rejects_missing_mask() {
-        let result = json!({
-            "status": "OK",
-            "fees": [100u64, 200, 300, 400],
-        });
-        assert!(matches!(
-            fee_estimates_from_value(&result),
-            Err(RpcError::InvalidFee)
-        ));
+        let est = fee_estimates_from_value(&result).expect("mask OPT(1)");
+        assert_eq!(est.quantization_mask, 1);
+        assert_eq!(est.priority, FeeRate::new(400, 1).unwrap());
     }
 
     /// `quantization_mask == 0` would make `FeeRate::new` reject; the
@@ -962,7 +886,7 @@ mod tests {
     fn fee_estimates_rejects_zero_mask() {
         let result = json!({
             "status": "OK",
-            "fees": [100u64, 200, 300, 400],
+            "fees": [100u64, 200, 400],
             "quantization_mask": 0u64,
         });
         assert!(matches!(

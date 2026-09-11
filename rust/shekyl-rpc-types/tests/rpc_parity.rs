@@ -873,7 +873,7 @@ fn every_v2_sibling_is_its_v1_capture_minus_only_the_identifier() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 5] = [
+    let links: [(&str, &str); 6] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -894,6 +894,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v5.json"),
             include_str!("vectors/rpc/get_version_synced_v6.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v6.json"),
+            include_str!("vectors/rpc/get_version_synced_v7.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -907,12 +911,14 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // pure version bump. VC-2 adds the identity tuple at the last link, and
     // naming them here is what keeps "differs by exactly the version" a real
     // invariant rather than one weakened until it stopped failing.
-    const ADDED_AT_LINK: [&[&str]; 5] = [
+    const ADDED_AT_LINK: [&[&str]; 6] = [
         &[],
         &[],
         &[],
         &[],
         &["consensus_constants_digest", "nettype", "genesis_hash"],
+        // 3.30 (FL-R25) removes a fee slot; `get_version` gains nothing.
+        &[],
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1455,5 +1461,36 @@ fn fee_v2_is_v1_minus_exactly_the_redundant_scalar() {
         derived,
         parsed(include_str!("vectors/rpc/get_fee_estimate_v2.json")),
         "`_v2` differs by that field and nothing else"
+    );
+}
+
+/// `_v3` is `_v2` with slot 2 removed — a TRANSFORM pair, because no
+/// subtraction of a *field* from `_v2` produces `_v3`: the change is to
+/// an array's arity, inside one field.
+///
+/// The captured values are four DISTINCT numbers, which no real daemon
+/// ever emitted (slot 2 mirrored slot 1). The transform drops slot 2 by
+/// POSITION rather than by looking for a duplicate, so `_v3` cannot
+/// become its own authority: hand-edit either file and this goes red.
+#[test]
+fn fee_v3_is_v2_with_the_bridge_slot_removed() {
+    let v2 = parsed(include_str!("vectors/rpc/get_fee_estimate_v2.json"));
+    let fees = v2["fees"]
+        .as_array()
+        .expect("v2 carries a fees array")
+        .clone();
+    assert_eq!(
+        fees.len(),
+        4,
+        "the pair only means anything if `_v2` is the four-slot shape"
+    );
+
+    let mut derived = v2;
+    derived["fees"] =
+        serde_json::Value::Array(vec![fees[0].clone(), fees[1].clone(), fees[3].clone()]);
+    assert_eq!(
+        derived,
+        parsed(include_str!("vectors/rpc/get_fee_estimate_v3.json")),
+        "`_v3` is `_v2` minus slot 2 and nothing else"
     );
 }

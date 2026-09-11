@@ -4507,13 +4507,11 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
 {
   // FL round §5.2 (FL-R17 signed: three tiers; FL-R12' round-8 amendment:
   // whole-scalar C_q on the M_r-neutral operand). The ladder arithmetic is
-  // Rust-owned (shekyl-economics `corrected_fee_ladder`); this marshals.
-  // fees[2] mirrors fees[1] — the RK-5 wire bridge: the dead Fm slot keeps
-  // the vector shape until the RPC cutover, and wallet2-transliterated
-  // `Elevated` callers stay inside the largest anonymity set. The Fh main
+  // Rust-owned (shekyl-economics `corrected_fee_ladder`); this marshals
+  // `FeeLadder::as_slots` — [economy, standard, priority]. The Fh main
   // arm is UNCONDITIONAL (2R/M — exact marginal pricing of full expansion;
   // the inherited surge discount was FL-C2(b)'s one derived defect).
-  fees.resize(4);
+  uint64_t slots[3];
   const int32_t rc = shekyl_corrected_fee_ladder(
       base_reward,
       Mnw,
@@ -4521,7 +4519,7 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
       CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
       DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT,
       c_q,
-      fees.data());
+      slots);
   // Neither rejection is reachable from here — the out-pointer is a
   // just-resized vector, and the scalars are chain state, far inside the
   // ladder's u128 domain. The throw names WHICH one fired anyway: -1 is a
@@ -4535,6 +4533,7 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
                               : "unknown status")
       << "), base_reward=" << base_reward << " Mnw=" << Mnw << " Mlw=" << Mlw
       << " c_q=" << c_q);
+  fees.assign(slots, slots + (sizeof(slots) / sizeof(slots[0])));
 }
 
 void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, std::vector<uint64_t> &fees) const

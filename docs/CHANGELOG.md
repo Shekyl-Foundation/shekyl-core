@@ -4,6 +4,26 @@
 
 ### Changed
 
+- **The fee estimate returns three tiers, not four, and `CORE_RPC_VERSION`
+  is 3.30 (FL-R25).** `get_fee_estimate.fees` was a four-slot array
+  carrying three priced rates: slot 2 duplicated slot 1. The duplicate
+  existed so a caller asking for Monero's `Elevated` priority would pay the
+  standard rate rather than self-marking on a rung of its own — a sound
+  anonymity argument whose premise was not: `Elevated` had no production
+  callers, in this repo or the GUI, so the cohort it protected was empty.
+  Nothing that speaks Monero's RPC can reach this chain in any case; the
+  address format, transaction format and proof system all differ.
+
+  **What changes for a caller.** `fees` has three elements —
+  `[economy, standard, priority]` — and a reply carrying four is now a
+  parse error rather than a shorter answer read with the priority rate in
+  the wrong position. Requesting priority `3` used to buy the standard
+  rate through the duplicate slot and now buys the priority rate; the only
+  ways to ask for `3` were the `Elevated` variant, which is deleted, and a
+  custom priority of `3`, which asks for a rung above normal and now gets
+  one that exists. Daemon and wallet ship together and there is no deployed
+  network, so no migration applies.
+
 - **LWMA-1 genesis difficulty is 400** (`daa_genesis_difficulty` in
   `config/consensus_constants.json`). The first 90 blocks still share
   one constant until the LWMA window fills; 400 is the testnet

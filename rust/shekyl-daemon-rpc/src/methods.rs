@@ -1458,7 +1458,7 @@ pub(crate) mod tests {
         fn fee_estimate(&self, grace_blocks: u64) -> Result<FeeEstimate, FactsFault> {
             self.asked_grace.store(grace_blocks, Ordering::SeqCst);
             Ok(FeeEstimate {
-                fees: [10, 20, 30, 40],
+                fees: [10, 20, 40],
                 quantization_mask: 8,
             })
         }
@@ -1905,7 +1905,7 @@ pub(crate) mod tests {
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v6.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v7.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {

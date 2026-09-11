@@ -629,7 +629,7 @@ namespace cryptonote
     static uint64_t get_dynamic_base_fee(uint64_t block_reward, size_t median_block_weight, uint8_t version);
 
     /**
-     * @brief the four-tier estimate with its inputs supplied rather than read
+     * @brief the three-tier estimate with its inputs supplied rather than read
      *
      * Same computation as the overload below, for a caller that already holds
      * the block reward and the two weight medians.
@@ -644,27 +644,21 @@ namespace cryptonote
      * @param c_q the whole volume-dependent correction scalar
      *   `Q_ceil((1-sigma)*M_r/(1-b))`, in SHEKYL_FIXED_POINT_SCALE units
      *   (SCALE = 1.0x); derived from chain state, never remembered
-     * @param fees out: FOUR SLOTS carrying THREE tiers (FL-R17) —
-     *   [0] economy, [1] standard, [2] == [1], [3] priority. Slot 2 is the
-     *   RK-5 wire bridge: the retired `Fm` rung keeps the vector shape until
-     *   the RPC cutover, and mirrors standard so wallet2-transliterated
-     *   `Elevated` callers land in the largest anonymity set rather than on
-     *   a rung of their own. The CALLER clamps [0] up to the relay floor.
+     * @param fees out: three slots — [0] economy, [1] standard, [2] priority.
+     *   The CALLER clamps [0] up to the relay floor.
      */
     void get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, uint64_t c_q, std::vector<uint64_t> &fees) const;
 
     /**
-     * @brief get four levels of dynamic per byte fee estimate for the next few blocks
+     * @brief get three levels of dynamic per-byte fee estimate for the next few blocks
      *
      * The dynamic fee is based on the block weight in a past window, and
-     * the current block reward. It is expressed per byte, and is based on
-     * https://github.com/ArticMine/Monero-Documents/blob/master/MoneroScaling2021-02.pdf
-     * This function calculates an estimate for a dynamic fee which will be
-     * valid for the next grace_blocks
+     * the current block reward. It is expressed per byte. This function
+     * calculates an estimate valid for the next grace_blocks.
      *
      * @param grace_blocks number of blocks we want the fee to be valid for
      *
-     * @return the fee estimates (4 of them)
+     * @return the fee estimates (economy, standard, priority)
      */
     void get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, std::vector<uint64_t> &fees) const;
 

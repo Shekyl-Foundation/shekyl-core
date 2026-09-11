@@ -150,13 +150,14 @@ ciphersuite = "0.4"
 shekyl-multisig = { path = "../shekyl-multisig", optional = true }
 # The daemon JSON-RPC send path (`DaemonClient::get_fee_estimates` /
 # `submit_transaction`, `engine/daemon.rs`) is always-compiled production
-# code that builds `get_fee_estimate` params and parses the response as
-# `serde_json::Value` (defensive untrusted-daemon parsing per
-# `20-rust-vs-cpp-policy.mdc` §3). `serde_json` is already in the workspace
-# lockfile (transitively via `shekyl-rpc-client`, plus this crate's build- and
-# dev-deps), so making it a direct non-optional dependency adds no new
-# third-party crate (`17-dependency-discipline.mdc`). It is therefore no
-# longer listed under the `multisig` feature.
+# code that builds `get_fee_estimate` params. The fee snapshot parses
+# through `shekyl_rpc_types::GetFeeEstimateResponse` (defensive
+# untrusted-daemon parsing per `20-rust-vs-cpp-policy.mdc` §3); other
+# daemon methods still take `serde_json::Value`. `serde_json` is already
+# in the workspace lockfile (transitively via `shekyl-rpc-client`, plus
+# this crate's build- and dev-deps), so making it a direct non-optional
+# dependency adds no new third-party crate (`17-dependency-discipline.mdc`).
+# It is therefore no longer listed under the `multisig` feature.
 serde_json = "1"
 # Hex decode/encode for the daemon block/tx blobs and tx-hash params on the
 # native `fetch_scannable_block` path (`engine/block_fetch.rs`). Already in the
