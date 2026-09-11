@@ -1243,7 +1243,14 @@ the summary jitter is computed on the merge.
 `windows=0 payload_bytes=0 flows=13`, 20 877 packets captured, 0 dropped by
 kernel. `duration_s=0.000` is the counter's window-span with n=0, not the
 capture wall-clock. This is the filter rehearsal the method names — not the
-2 h baseline, and not B − A. Arms B and C remain the budget measurement.
+2 h baseline, and not B − A.
+
+**Arm A 2 h baseline (2026-09-11, seedusw, v3.1.0-alpha.8).** Carrier off
+(`ExecStart` has no `--carrier-development`; journal has no `ARMED` line).
+`sudo timeout 7200 tcpdump -i lo -s 0 -w /tmp/arm-a-alpha8.pcap 'tcp and dst port 9050'`:
+first packet 04:14:24Z, last 06:14:13Z, span 7189 s, 2221 packets, 0 kernel
+drops. Counter `--expect-zero`: `windows=0 payload_bytes=0 flows=8`. This is
+the B − A baseline on this binary. Arms B and C remain the budget measurement.
 
 **Window: 2 hours per arm.** The relative standard error of the aggregate rate
 is `0.0963/√n` per channel, with four channels at a 5 s mean: ~5 min resolves a
