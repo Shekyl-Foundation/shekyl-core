@@ -286,15 +286,17 @@ fn no_production_site_outside_the_choke_point_selects_the_own_remote_arm() {
                 "{file}: names the ② broadcast arm in production \
                  ({}) but carries no pin — a production site now selects or routes \
                  `OwnRemote`. This is PWD-A1's stated falsifier: re-derive the claim \
-                 in `P2P_2_DISPATCH_BRIEF.md` §2.4 before adding a row here.",
-                describe(row)
+                 in `P2P_2_DISPATCH_BRIEF.md` §2.4 before adding a row here.{}",
+                describe(row),
+                bare_only_caveat(row, &[0; NEEDLES.len()])
             )),
             Some(pinned) if pinned != row => failures.push(format!(
                 "{file}: pinned {} but found {} — the choke point's shape moved. If \
                  the 2c config-source slice landed, re-run PWD-A1's falsifier and \
-                 update §2.4; do not re-pin reflexively.",
+                 update §2.4; do not re-pin reflexively.{}",
                 describe(pinned),
-                describe(row)
+                describe(row),
+                bare_only_caveat(row, pinned)
             )),
             Some(_) => {}
         }
@@ -316,6 +318,32 @@ fn no_production_site_outside_the_choke_point_selects_the_own_remote_arm() {
         "PWD-A1 ② broadcast-arm census (`P2P_2_DISPATCH_BRIEF.md` §2.4):\n{}",
         failures.join("\n")
     );
+}
+
+/// The bare `OwnRemote` needle is shared with the **fetch** `Posture` enum,
+/// which carries an `OwnRemote` variant of its own and whose scan-loop wiring
+/// slice (`posture.rs` module docs) has yet to land. When a row moves on that
+/// column *alone*, this census genuinely cannot tell PWD-A1's falsifier from
+/// that unrelated slice — so it says which reading it cannot rule out instead
+/// of asserting the broadcast one at a maintainer who is working on the other.
+///
+/// The bare needle stays despite the conflation: it is what makes an alias
+/// import (`use BroadcastPosture::OwnRemote as X`) unable to slip the census,
+/// since the `use` line must still write the identifier.
+fn bare_only_caveat(
+    row: &[usize; NEEDLES.len()],
+    baseline: &[usize; NEEDLES.len()],
+) -> &'static str {
+    let bare_moved = row[0] != baseline[0];
+    let rest_unchanged = row[1..] == baseline[1..];
+    if bare_moved && rest_unchanged {
+        " Only the bare `OwnRemote` identifier moved: if this is the fetch \
+         `Posture::OwnRemote` (the scan-loop wiring slice), re-pin with that \
+         rationale; if it is the broadcast arm reached through an alias import, \
+         this IS the falsifier."
+    } else {
+        ""
+    }
 }
 
 fn describe(row: &[usize; NEEDLES.len()]) -> String {
