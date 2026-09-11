@@ -640,11 +640,13 @@ daemon owns the mining threads, so mining keeps running after you close
 the CLI. Rewards pay to the open wallet's address automatically; you never
 paste an address the way the daemon-console form requires.
 
-`mine` requires an open wallet, a **loopback** daemon (mining is
-controlled on the daemon's own host), the unrestricted RPC listener, and a
-daemon on the same network as the CLI. If the daemon is still syncing,
-`mine start` warns that you may be mining a stale chain and asks for
-confirmation first.
+`mine` requires an open wallet, the unrestricted RPC listener, and a
+daemon on the same network as the CLI. The silent default is a daemon
+on this machine — the recommended posture. A remote `--daemon-address`
+(for example a node on your own network) is allowed: `mine start`
+reminds you that mining control is admin RPC, then continues. If the
+daemon is still syncing, `mine start` refuses — the daemon will not
+mine until it has caught up.
 
 ### Background mining
 

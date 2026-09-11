@@ -8,7 +8,26 @@
 use serde_json::json;
 
 use super::{format_amount_str, require_open};
+use crate::display::short_address;
 use crate::rpc_client::RpcSession;
+
+/// Fetch this wallet's primary address. `fail` is the report prefix on an
+/// RPC error (`Failed to get address` / `Failed to get the payout address`).
+pub(crate) fn primary_address(rpc: &RpcSession, fail: &str) -> Option<String> {
+    match rpc.call("get_primary_address", json!({})) {
+        Ok(val) => match val.get("address").and_then(|v| v.as_str()) {
+            Some(address) => Some(address.to_owned()),
+            None => {
+                eprintln!("Malformed get_primary_address response.");
+                None
+            }
+        },
+        Err(e) => {
+            rpc.report(fail, &e);
+            None
+        }
+    }
+}
 
 pub fn cmd_balance(rpc: &RpcSession) {
     if !require_open(rpc) {
@@ -56,18 +75,8 @@ pub fn cmd_address(rpc: &RpcSession, full: bool, out: Option<&str>) {
     if !require_open(rpc) {
         return;
     }
-    let address = match rpc.call("get_primary_address", json!({})) {
-        Ok(val) => match val.get("address").and_then(|v| v.as_str()) {
-            Some(address) => address.to_owned(),
-            None => {
-                eprintln!("Malformed get_primary_address response.");
-                return;
-            }
-        },
-        Err(e) => {
-            rpc.report("Failed to get address", &e);
-            return;
-        }
+    let Some(address) = primary_address(rpc, "Failed to get address") else {
+        return;
     };
 
     if let Some(path) = out {
@@ -95,7 +104,7 @@ pub fn cmd_address(rpc: &RpcSession, full: bool, out: Option<&str>) {
         return;
     }
 
-    println!("{}", crate::display::short_address(&address));
+    println!("{}", short_address(&address));
     println!(
         "(short display form of the {}-character address — not valid for \
          pasting; \"address --full\" prints it all, \"address --out <path>\" \
@@ -126,7 +135,12 @@ pub fn cmd_wallet(rpc: &RpcSession) {
             println!("Wallet: {}", s("name"));
             println!("  Network:         {}", s("network"));
             println!("  Capability:      {}", s("capability"));
-            println!("  Address:         {}", s("address"));
+            let addr = s("address");
+            let shown = short_address(addr);
+            println!("  Address:         {shown}");
+            if shown != addr {
+                println!("                   (display only; \"address --full\" prints it all)");
+            }
             println!("  Wallet height:   {}", i("wallet_height"));
             match val.get("daemon_height").and_then(serde_json::Value::as_i64) {
                 Some(h) => println!("  Daemon height:   {h}"),

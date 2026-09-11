@@ -15,7 +15,7 @@ mod balance;
 mod chain;
 mod fees;
 mod lifecycle;
-mod mine;
+pub(crate) mod mine;
 mod proofs;
 mod receiving;
 pub mod scripted;
@@ -98,7 +98,7 @@ Staking:
   chain_health                        Show daemon/chain health (separate conn)
 
 Mining (the daemon does the hashing; these control it):
-  mine start [threads|auto]           Start mining on the local daemon,
+  mine start [threads|auto]           Start mining on the connected daemon,
                                       paying to this wallet (default
                                       threads: min(cores, 4); keeps
                                       running after the CLI exits)

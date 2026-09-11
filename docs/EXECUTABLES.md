@@ -253,9 +253,11 @@ is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 | `mine status` | Mining state, thread count, and hash rate |
 
 `start_mining [threads]` / `stop_mining` / `mining_status` are accepted as
-aliases. Requires an open wallet, a loopback daemon, the unrestricted RPC
-listener, and a daemon on the same network as the CLI; a still-syncing
-daemon prompts for confirmation.
+aliases. Requires an open wallet, the unrestricted RPC listener, and a
+daemon on the same network as the CLI. The default daemon is loopback
+(the recommended posture); a remote `--daemon-address` is allowed and
+`mine start` reminds you of the risk. A still-syncing daemon refuses
+`mine start` until it is caught up.
 
 **Proofs and message signing**
 

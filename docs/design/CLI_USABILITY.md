@@ -48,10 +48,14 @@ does not run RandomX") is unchanged and this doc re-pins it:
 - **Doing** — RandomX threads, block templates, block submission — stays
   in `shekyld`. `shekyl-cli` gains no hashing code, ever.
 - **Controlling** — `start` / `stop` / `status` with this wallet's
-  payout address — is a CLI adaptor over the daemon's `AdminOnly`,
-  loopback-only path RPCs, the same class of work `chain_health` already
-  does through the independent `DaemonClient`
+  payout address — is a CLI adaptor over the daemon's `AdminOnly`
+  path RPCs, the same class of work `chain_health` already does through
+  the independent `DaemonClient`
   ([`../../rust/shekyl-cli/src/daemon.rs`](../../rust/shekyl-cli/src/daemon.rs)).
+  The silent default is a loopback daemon (the recommended posture). A
+  named remote `--daemon-address` is a valid advanced configuration
+  (a node on the same network boundary, for example); the CLI reminds,
+  it does not refuse.
 - `wallet_rpc.yaml` gains **no** mining methods: control is daemon RPC,
   not a spend/scan concern, and the wallet-RPC server never proxies it.
   Parity rows 72/74 (`start_mining_for_rpc` / `stop_mining_for_rpc`)
@@ -143,17 +147,20 @@ Gates, all fail-closed before any daemon call:
    open wallet the refusal names `open` / `create`. (`mine stop` /
    `mine status` also require it for symmetry: mining verbs are wallet
    verbs here; the daemon console is the wallet-less path.)
-2. **Loopback daemon only** — mining RPCs are `AdminOnly`; a
-   non-loopback `--daemon-address` is refused with "control mining from
-   the daemon host" copy. This is a CLI refusal in addition to the
-   daemon's own gating, so the operator hears it before a network
-   round-trip.
+2. **Loopback is the silent default, not a force.** The default
+   `--daemon-address` is this machine. A non-loopback endpoint is a
+   valid advanced configuration (a node on the same network boundary,
+   for example). `mine start` reminds the operator that mining control
+   is admin RPC and that a local daemon is the recommended posture,
+   then continues. Classification uses the canonical
+   `network_posture::is_loopback_host` (not a substring check).
 3. **Unrestricted RPC** — a restricted listener refuses admin RPCs;
    the CLI surfaces that as "restricted RPC" copy (§4), not a raw
    error string.
-4. **Sync state** — if the daemon reports `busy_syncing` (or
-   `synchronized: false`), `mine start` warns and requires confirmation
-   rather than silently mining a stale tip.
+4. **Sync state** — if the daemon reports `synchronized: false`,
+   `mine start` **refuses**. `/start_mining` is `CHECK_CORE_READY`
+   (`is_synchronized`) and returns `BUSY` on a syncing daemon; a
+   confirmation that then fails is worse than saying so up front.
 
 On successful `mine start`, the CLI states that mining continues after
 the CLI exits — the daemon owns the threads.
@@ -165,7 +172,8 @@ unusable and encourages sloppy copy-paste. `address`:
 
 - Default: a **short display form** — first 24 characters + `…` +
   last 12 — plus the full length, explicitly labeled as *display only,
-  not a valid address*.
+  not a valid address*. `wallet` (the summary) uses the same short
+  form; glance surfaces do not dump the ~2,030-character string.
 - `address --full` prints the whole address (unchanged behavior).
 - `address --out <path>` writes the full address to a new `0600` file
   (refuses to overwrite), so the full string never has to transit
@@ -181,12 +189,12 @@ Enumerated here before code (rule 82); each path says what to run next.
 |---|---|---|---|
 | F1 | Daemon down / connection refused | `mine`, `chain_health`, `status`, startup disclosure | The network-matched daemon invocation: `shekyld` / `shekyld --testnet` / `shekyld --stagenet` and the port it would answer on |
 | F2 | Wrong network vs daemon (wallet testnet, daemon mainnet) | `mine start` preflight (`get_info` nettype vs `--network`) | Name both networks and the flag to fix (restart CLI or daemon with the matching flag) |
-| F3 | Restricted RPC | `mine *` | "The daemon's RPC listener is restricted (view-only); mining control needs the unrestricted loopback listener" |
-| F4 | Remote (non-loopback) daemon | `mine *` preflight | "Mining is controlled on the daemon's own host; this CLI is pointed at `<addr>`" |
+| F3 | Restricted RPC | `mine *` | "The daemon's RPC listener is restricted (view-only); mining control needs the unrestricted RPC listener" |
+| F4 | Remote (non-loopback) daemon | `mine start` | Reminder that the recommended posture is a local daemon; **does not refuse**. A named remote endpoint (own-network node, etc.) is a valid advanced configuration. Startup already discloses non-loopback (RT-W7). |
 | F5 | No wallet open | `mine *` (and existing `require_open` sites) | `open <name>` / `create <name>` |
 | F6 | Already mining | `mine start` | Current thread count + `mine stop` first (daemon reports the state; the CLI relays it, no error tone) |
-| F7 | Daemon syncing | `mine start` | "syncing (height X of Y) — mining now may mine a stale chain"; requires confirmation |
-| F8 | `start_mining` (or `mine`) typo'd / partial | parser | Usage diagnostic naming `mine start [threads]`, never bare "Unknown command" |
+| F7 | Daemon not synced | `mine start` | Refuse with height copy. The daemon will not mine until it is caught up (`CHECK_CORE_READY` / `BUSY`); there is no confirmation that can succeed. |
+| F8 | `start_mining` (or `mine`) typo'd / partial / extra args | parser | Usage diagnostic naming `mine start [threads]`, never bare "Unknown command" |
 | F9 | Password/seed TTY rules | existing `display.rs` / `--password-stdin` surfaces | Already correct; unchanged |
 
 ### CU-6 — Docs (rule 91)

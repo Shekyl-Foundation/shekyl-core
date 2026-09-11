@@ -391,10 +391,11 @@ fn parse_network(s: &str) -> Result<Network, String> {
 /// bare "connection refused". A remote daemon gets no hint: "start it" copy
 /// for a machine the operator may not control would mislead.
 fn daemon_down_hint(cli: &ReplArgs, address: &str) -> Option<String> {
-    let loopback = ["127.0.0.1", "localhost", "[::1]"]
-        .iter()
-        .any(|h| address.contains(h));
-    if !loopback {
+    // Same classification as the startup disclosure: a substring match on
+    // "127.0.0.1" would accept 127.0.0.1.evil.com and miss 127.0.0.0/8.
+    // Loopback-only hint — "start shekyld" is true of this machine, not of
+    // a remote node the operator named.
+    if !daemon::is_loopback_endpoint(address) {
         return None;
     }
     let network = parse_network(cli.network_name()).ok()?;
@@ -650,6 +651,15 @@ mod tests {
         assert!(hint.contains("shekyld --testnet"), "got {hint}");
         assert!(hint.contains("12029"), "got {hint}");
         assert!(daemon_down_hint(&testnet, "node.example.com:12029").is_none());
+        assert!(
+            daemon_down_hint(&testnet, "http://127.0.0.1.evil.com:12029").is_none(),
+            "a spoofed 127.0.0.1 prefix is not loopback"
+        );
+        assert!(daemon_down_hint(&testnet, "[::1]:12029").is_some());
+        assert!(
+            daemon_down_hint(&testnet, "127.0.0.2:12029").is_some(),
+            "127.0.0.0/8 is loopback"
+        );
 
         let mainnet_hint =
             daemon_down_hint(&args(&["shekyl-cli"]), "127.0.0.1:11029").expect("hint");

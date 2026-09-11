@@ -9,16 +9,16 @@
 //! process. The original "the CLI doesn't mine" cut was about the wallet
 //! *doing* the work, not *controlling* it (CLI_USABILITY.md §1).
 //!
-//! Every verb passes the same fail-closed gates before any daemon call
-//! (CLI_USABILITY.md §CU-3): wallet open (the payout address comes from this
-//! wallet), loopback daemon only, unrestricted RPC, and matching network.
-//! `mine start` additionally warns-and-confirms on a syncing daemon and
-//! refuses politely when mining is already active.
+//! Shared fail-closed gates before any mining daemon call (CLI_USABILITY.md
+//! §CU-3): wallet open, unrestricted RPC, matching network. `mine start`
+//! additionally refuses a daemon that is not synced (the daemon's own
+//! `CHECK_CORE_READY`) and reminds — does not refuse — when the endpoint is
+//! not loopback. Loopback is the silent default and the recommended posture;
+//! a remote daemon the operator named is a valid advanced configuration.
 
-use crate::daemon::DaemonClient;
+use crate::daemon::{DaemonClient, DaemonInfo};
 use crate::display::short_address;
 use crate::rpc_client::RpcSession;
-use serde_json::json;
 
 /// The wallet-convenience default thread count: `min(available cores, 4)`.
 /// Not a tuned miner — operators who care pass a count or drive `shekyld`
@@ -30,14 +30,76 @@ fn default_threads() -> u64 {
     cores.min(4)
 }
 
-/// The shared fail-closed gates (CU-3 gates 1–4 / §CU-5 F2–F5). Returns the
+/// Parsed mining verb. Lives next to the handlers so `resolve` does not grow
+/// another grammar island in the command match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParsedMine {
+    Start { threads: Option<u64> },
+    Stop,
+    Status,
+}
+
+/// `mine start [threads|auto]` / `mine stop` / `mine status`. Extra tokens
+/// are a usage diagnostic, never a silent drop (rule 82).
+pub(crate) fn parse_mine(args: &[&str]) -> Result<ParsedMine, String> {
+    match args {
+        ["start"] => Ok(ParsedMine::Start { threads: None }),
+        ["start", token] => Ok(ParsedMine::Start {
+            threads: parse_thread_token(token)?,
+        }),
+        ["stop"] => Ok(ParsedMine::Stop),
+        ["status"] => Ok(ParsedMine::Status),
+        _ => Err(
+            "mine: usage is \"mine start [threads|auto]\", \"mine stop\", \
+             or \"mine status\""
+                .to_owned(),
+        ),
+    }
+}
+
+/// `start_mining [threads|auto]` alias.
+pub(crate) fn parse_start_mining_alias(args: &[&str]) -> Result<ParsedMine, String> {
+    match args {
+        [] => Ok(ParsedMine::Start { threads: None }),
+        [token] => Ok(ParsedMine::Start {
+            threads: parse_thread_token(token)?,
+        }),
+        _ => Err("start_mining: usage is \"start_mining [threads|auto]\"".to_owned()),
+    }
+}
+
+/// `stop_mining` / `mining_status` take no arguments.
+pub(crate) fn parse_noarg_alias(verb: &str, args: &[&str]) -> Result<ParsedMine, String> {
+    if !args.is_empty() {
+        return Err(format!("{verb}: takes no arguments (usage: {verb})"));
+    }
+    match verb {
+        "stop_mining" => Ok(ParsedMine::Stop),
+        "mining_status" => Ok(ParsedMine::Status),
+        _ => Err(format!("{verb}: usage is \"{verb}\"")),
+    }
+}
+
+fn parse_thread_token(raw: &str) -> Result<Option<u64>, String> {
+    match raw {
+        "auto" => Ok(None),
+        other => match other.parse::<u64>() {
+            Ok(n) if n >= 1 => Ok(Some(n)),
+            _ => Err(format!(
+                "mine start: threads must be a positive number or \"auto\", got {raw:?}"
+            )),
+        },
+    }
+}
+
+/// The shared fail-closed gates (CU-3 / §CU-5 F2, F3, F5). Returns the
 /// daemon's `get_info` snapshot when every gate passes, so callers get the
 /// sync fields without a second round-trip.
 fn gate<'a>(
     rpc: &RpcSession,
     daemon: Option<&'a DaemonClient>,
     network: &str,
-) -> Option<(&'a DaemonClient, serde_json::Value)> {
+) -> Option<(&'a DaemonClient, DaemonInfo)> {
     // F5 — mining verbs are wallet verbs: the payout address is this
     // wallet's. The daemon console is the wallet-less path.
     if rpc.open_wallet_name().is_none() {
@@ -53,18 +115,7 @@ fn gate<'a>(
         return None;
     };
 
-    // F4 — mining RPCs are admin surface; refuse CLI-side before any
-    // network round-trip rather than relaying the daemon's own refusal.
-    if !dc.is_loopback() {
-        eprintln!(
-            "Mining is controlled on the daemon's own host; this CLI is pointed at {}.\n\
-             Run shekyl-cli on that machine, or use the daemon's own console.",
-            dc.url()
-        );
-        return None;
-    }
-
-    // One get_info answers gates 3–4 and the sync fields. A refused
+    // One get_info answers F2, F3, and the sync fields. A refused
     // connection carries the F1 "start shekyld" hint via DaemonClient.
     let info = match dc.get_info() {
         Ok(info) => info,
@@ -75,32 +126,52 @@ fn gate<'a>(
     };
 
     // F3 — restricted listener: admin RPCs are not served there.
-    if info
-        .get("restricted")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
+    if info.restricted {
         eprintln!(
             "The daemon's RPC listener is restricted (view-only); mining control \
-             needs the unrestricted loopback listener."
+             needs the unrestricted RPC listener."
         );
         return None;
     }
 
     // F2 — network mismatch: a testnet wallet pointing at a mainnet daemon
-    // would mine (and pay out) on the wrong network.
-    let nettype = info.get("nettype").and_then(|v| v.as_str()).unwrap_or("");
-    if !nettype.is_empty() && nettype != network {
+    // would mine (and pay out) on the wrong network. An omitted/empty nettype
+    // is a malformed reply, not a skip.
+    if info.nettype.is_empty() {
         eprintln!(
-            "Network mismatch: this CLI is on {network} but the daemon at {} reports {nettype}.\n\
+            "The daemon at {} did not report its network; refusing mining control.",
+            dc.url()
+        );
+        return None;
+    }
+    if info.nettype != network {
+        eprintln!(
+            "Network mismatch: this CLI is on {network} but the daemon at {} reports {}.\n\
              Restart shekyl-cli or shekyld so both use the same \
              --testnet/--stagenet flag.",
-            dc.url()
+            dc.url(),
+            info.nettype
         );
         return None;
     }
 
     Some((dc, info))
+}
+
+/// F4 — reminder, not a force. Loopback is the silent default; a named
+/// remote daemon (for example a node on the same network boundary) is a
+/// valid advanced configuration. The operator already chose the endpoint;
+/// say the recommended posture out loud, then continue.
+fn remind_if_remote(dc: &DaemonClient) {
+    if dc.is_loopback() {
+        return;
+    }
+    eprintln!(
+        "Note: this daemon ({}) is not on this machine. Mining control is \
+         admin RPC; the recommended posture is a daemon on this machine. \
+         Continuing with the endpoint you named.",
+        dc.url()
+    );
 }
 
 /// `mine start [threads|auto]` — start mining on the daemon, paying to this
@@ -114,22 +185,16 @@ pub fn cmd_mine_start(
     let Some((dc, info)) = gate(rpc, daemon, network) else {
         return;
     };
+    remind_if_remote(dc);
 
     // F6 — already mining: relay the daemon's state, no error tone.
     match dc.mining_status() {
         Ok(status) => {
-            if status
-                .get("active")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-            {
-                let threads_now = status
-                    .get("threads_count")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
+            if status.active {
                 println!(
-                    "The daemon is already mining with {threads_now} thread(s). \
-                     Run \"mine stop\" first to change the thread count."
+                    "The daemon is already mining with {} thread(s). \
+                     Run \"mine stop\" first to change the thread count.",
+                    status.threads_count
                 );
                 return;
             }
@@ -140,54 +205,29 @@ pub fn cmd_mine_start(
         }
     }
 
-    // F7 — syncing daemon: mining now may mine a stale chain.
-    let busy_syncing = info
-        .get("busy_syncing")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let synchronized = info
-        .get("synchronized")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true);
-    if busy_syncing || !synchronized {
-        let height = info
-            .get("height")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        let target = info
-            .get("target_height")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        let of_target = if target > height {
-            format!("height {height} of {target}")
+    // F7 — not synced: `/start_mining` is CHECK_CORE_READY and will return
+    // BUSY. Refuse here with the height copy rather than confirm-and-fail.
+    if !info.synchronized {
+        let of_target = if info.target_height > info.height {
+            format!("height {} of {}", info.height, info.target_height)
         } else {
-            format!("height {height}")
+            format!("height {}", info.height)
         };
-        if !super::confirm(&format!(
-            "The daemon is still syncing ({of_target}) — mining now may mine a stale chain."
-        )) {
-            println!("Mining not started.");
-            return;
-        }
+        eprintln!(
+            "The daemon is still syncing ({of_target}) and will not start mining \
+             until it is caught up."
+        );
+        return;
     }
 
-    let address = match rpc.call("get_primary_address", json!({})) {
-        Ok(val) => match val.get("address").and_then(|v| v.as_str()) {
-            Some(address) => address.to_owned(),
-            None => {
-                eprintln!("Malformed get_primary_address response.");
-                return;
-            }
-        },
-        Err(e) => {
-            rpc.report("Failed to get the payout address", &e);
-            return;
-        }
+    let Some(address) = super::balance::primary_address(rpc, "Failed to get the payout address")
+    else {
+        return;
     };
 
     let threads = threads.unwrap_or_else(default_threads);
     match dc.start_mining(&address, threads) {
-        Ok(_) => {
+        Ok(()) => {
             println!(
                 "Mining started: {threads} thread(s) on the daemon, paying to {}.",
                 short_address(&address)
@@ -209,11 +249,7 @@ pub fn cmd_mine_stop(rpc: &RpcSession, daemon: Option<&DaemonClient>, network: &
 
     match dc.mining_status() {
         Ok(status) => {
-            if !status
-                .get("active")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-            {
+            if !status.active {
                 println!("The daemon is not mining.");
                 return;
             }
@@ -225,7 +261,7 @@ pub fn cmd_mine_stop(rpc: &RpcSession, daemon: Option<&DaemonClient>, network: &
     }
 
     match dc.stop_mining() {
-        Ok(_) => println!("Mining stopped."),
+        Ok(()) => println!("Mining stopped."),
         Err(e) => eprintln!("Failed to stop mining: {e}"),
     }
 }
@@ -243,34 +279,78 @@ pub fn cmd_mine_status(rpc: &RpcSession, daemon: Option<&DaemonClient>, network:
 
     match dc.mining_status() {
         Ok(status) => {
-            let active = status
-                .get("active")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if !active {
+            if !status.active {
                 println!("Mining: idle.");
                 return;
             }
-            let threads = status
-                .get("threads_count")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            let speed = status
-                .get("speed")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
             println!("Mining: active");
-            println!("  Threads:    {threads}");
-            println!("  Hash rate:  {speed} H/s");
-            if let Some(address) = status.get("address").and_then(|v| v.as_str()) {
-                if !address.is_empty() {
-                    println!("  Paying to:  {}", short_address(address));
-                }
+            println!("  Threads:    {}", status.threads_count);
+            println!("  Hash rate:  {} H/s", status.speed);
+            if !status.address.is_empty() {
+                println!("  Paying to:  {}", short_address(&status.address));
             }
-            if let Some(difficulty) = status.get("difficulty").and_then(serde_json::Value::as_u64) {
-                println!("  Difficulty: {difficulty}");
+            if status.difficulty > 0 {
+                println!("  Difficulty: {}", status.difficulty);
             }
         }
         Err(e) => eprintln!("{e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_mine, parse_noarg_alias, parse_start_mining_alias, ParsedMine};
+
+    #[test]
+    fn mine_grammar_accepts_exact_arity_and_rejects_strays() {
+        assert_eq!(
+            parse_mine(&["start"]).unwrap(),
+            ParsedMine::Start { threads: None }
+        );
+        assert_eq!(
+            parse_mine(&["start", "auto"]).unwrap(),
+            ParsedMine::Start { threads: None }
+        );
+        assert_eq!(
+            parse_mine(&["start", "2"]).unwrap(),
+            ParsedMine::Start { threads: Some(2) }
+        );
+        assert_eq!(parse_mine(&["stop"]).unwrap(), ParsedMine::Stop);
+        assert_eq!(parse_mine(&["status"]).unwrap(), ParsedMine::Status);
+
+        for args in [
+            &[][..],
+            &["begin"][..],
+            &["start", "0"][..],
+            &["start", "four"][..],
+            &["start", "2", "extra"][..],
+            &["stop", "now"][..],
+            &["status", "--json"][..],
+        ] {
+            assert!(parse_mine(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn mining_aliases_reject_extra_arguments() {
+        assert_eq!(
+            parse_start_mining_alias(&[]).unwrap(),
+            ParsedMine::Start { threads: None }
+        );
+        assert_eq!(
+            parse_start_mining_alias(&["3"]).unwrap(),
+            ParsedMine::Start { threads: Some(3) }
+        );
+        assert!(parse_start_mining_alias(&["3", "extra"]).is_err());
+        assert_eq!(
+            parse_noarg_alias("stop_mining", &[]).unwrap(),
+            ParsedMine::Stop
+        );
+        assert!(parse_noarg_alias("stop_mining", &["now"]).is_err());
+        assert_eq!(
+            parse_noarg_alias("mining_status", &[]).unwrap(),
+            ParsedMine::Status
+        );
+        assert!(parse_noarg_alias("mining_status", &["--json"]).is_err());
     }
 }

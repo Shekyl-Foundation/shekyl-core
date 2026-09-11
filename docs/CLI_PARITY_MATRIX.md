@@ -119,7 +119,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 68 | `set_tx_key` | N/A | Out of scope | Manual tx key injection, niche |
 | 69 | `set_tx_note` | `set_tx_note` | Covered | Native `set_tx_note` (PR-SA-4 / SJ-DQ-7); CLI landed WI-RPC-5. The note is the verbatim line remainder; a missing note is a usage error, never a silent clear (the wire's empty-note clear stays RPC-only). 4096-UTF-8-byte ceiling |
 | 70 | `show_qr_code` | N/A | Out of scope | QR display, GUI concern |
-| 71 | `start_mining` | `mine start [threads\|auto]` (alias `start_mining`) | Covered | CU-3 ([`design/CLI_USABILITY.md`](design/CLI_USABILITY.md)): the CLI **controls** mining; the daemon still does the hashing — no RandomX runs in the wallet, which is what the original "Out of scope" was protecting. Loopback + unrestricted RPC only; pays to this wallet's address; the daemon owns the threads past CLI exit |
+| 71 | `start_mining` | `mine start [threads\|auto]` (alias `start_mining`) | Covered | CU-3 ([`design/CLI_USABILITY.md`](design/CLI_USABILITY.md)): the CLI **controls** mining; the daemon still does the hashing — no RandomX runs in the wallet, which is what the original "Out of scope" was protecting. Loopback is the default/recommended posture (a named remote daemon is allowed, with a reminder); unrestricted RPC; pays to this wallet's address; the daemon owns the threads past CLI exit |
 | 72 | `start_mining_for_rpc` | N/A | Out of scope | RPC mining, removed. Unchanged by row 71: this was the wallet-RPC *doing* mining, which stays out |
 | 73 | `stop_mining` | `mine stop` (alias `stop_mining`) | Covered | As row 71; `mine status` (alias `mining_status`) reports state, threads, hash rate |
 | 74 | `stop_mining_for_rpc` | N/A | Out of scope | As row 72 |

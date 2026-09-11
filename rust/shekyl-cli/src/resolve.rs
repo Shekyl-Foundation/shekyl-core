@@ -420,23 +420,25 @@ pub fn parse(input: &str) -> ResolvedCommand {
                 }
             }
         }
-        // Mining control (CU-3). The F8 rule: a partial or typo'd mining
-        // verb gets a usage diagnostic naming `mine start [threads]`, never
-        // a bare "Unknown command".
-        "mine" => match args.first().copied() {
-            Some("start") => parse_mine_threads(args.get(1).copied()),
-            Some("stop") => ResolvedCommand::MineStop,
-            Some("status") => ResolvedCommand::MineStatus,
-            _ => diag(
-                "mine: usage is \"mine start [threads|auto]\", \"mine stop\", \
-                 or \"mine status\"",
-            ),
+        // Mining control (CU-3). Grammar lives in `commands::mine` so this
+        // match does not grow another island; extra tokens are diagnostics
+        // (F8 / rule 82), never a silent drop.
+        "mine" => match crate::commands::mine::parse_mine(args) {
+            Ok(parsed) => resolved_mine(parsed),
+            Err(message) => diag(message),
         },
-        // Monero muscle-memory aliases (also what USER_GUIDE.md had been
-        // teaching before CU-6 corrected it).
-        "start_mining" => parse_mine_threads(args.first().copied()),
-        "stop_mining" => ResolvedCommand::MineStop,
-        "mining_status" => ResolvedCommand::MineStatus,
+        "start_mining" => match crate::commands::mine::parse_start_mining_alias(args) {
+            Ok(parsed) => resolved_mine(parsed),
+            Err(message) => diag(message),
+        },
+        "stop_mining" => match crate::commands::mine::parse_noarg_alias("stop_mining", args) {
+            Ok(parsed) => resolved_mine(parsed),
+            Err(message) => diag(message),
+        },
+        "mining_status" => match crate::commands::mine::parse_noarg_alias("mining_status", args) {
+            Ok(parsed) => resolved_mine(parsed),
+            Err(message) => diag(message),
+        },
 
         "history" if args.first().copied() == Some("incoming") => {
             if args.contains(&"--unattributed") {
@@ -690,19 +692,13 @@ pub fn parse(input: &str) -> ResolvedCommand {
     }
 }
 
-/// The thread-count grammar shared by `mine start [threads|auto]` and the
-/// `start_mining [threads]` alias (CU-3): absent or `auto` means the wallet
-/// default (`min(cores, 4)`, resolved at execution); a number must be a
-/// positive integer.
-fn parse_mine_threads(arg: Option<&str>) -> ResolvedCommand {
-    match arg {
-        None | Some("auto") => ResolvedCommand::MineStart { threads: None },
-        Some(raw) => match raw.parse::<u64>() {
-            Ok(n) if n >= 1 => ResolvedCommand::MineStart { threads: Some(n) },
-            _ => diag(format!(
-                "mine start: threads must be a positive number or \"auto\", got {raw:?}"
-            )),
-        },
+/// Map the mining parser's verb onto the dispatch enum.
+fn resolved_mine(parsed: crate::commands::mine::ParsedMine) -> ResolvedCommand {
+    use crate::commands::mine::ParsedMine;
+    match parsed {
+        ParsedMine::Start { threads } => ResolvedCommand::MineStart { threads },
+        ParsedMine::Stop => ResolvedCommand::MineStop,
+        ParsedMine::Status => ResolvedCommand::MineStatus,
     }
 }
 
@@ -1580,11 +1576,28 @@ mod tests {
             ResolvedCommand::MineStatus
         ));
 
-        // F8: partials and bad values are usage diagnostics.
-        for line in ["mine", "mine begin", "mine start 0", "mine start four"] {
+        // F8: partials, bad values, and extra tokens are usage diagnostics.
+        for line in [
+            "mine",
+            "mine begin",
+            "mine start 0",
+            "mine start four",
+            "mine start 2 extra",
+            "mine stop now",
+            "mine status --json",
+            "start_mining 2 extra",
+            "stop_mining now",
+            "mining_status extra",
+        ] {
             match parse(line) {
                 ResolvedCommand::Diagnostic { message } => {
-                    assert!(message.contains("mine"), "{line}: {message}");
+                    assert!(
+                        message.contains("mine")
+                            || message.contains("start_mining")
+                            || message.contains("stop_mining")
+                            || message.contains("mining_status"),
+                        "{line}: {message}"
+                    );
                 }
                 other => panic!("{line}: expected Diagnostic, got {other:?}"),
             }
