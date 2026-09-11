@@ -1413,6 +1413,11 @@ change instead of two.
 
 ## 4. What this round does not decide
 
+- **The request half** (route, status line, header set). Ruled 2026-09-10
+  as `RF-R1` in [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) —
+  path `/shard/{id}`, status/header transcribed from `shekyl-p-serve`.
+  This round's exclusion of the HTTP layer stands; that document is the
+  successor the exclusion lacked, not a reopening of this round.
 - **The settlement-outcome table schema** (§9.7 item 9) and **`EndpointUpdate`
   on the bond wire** — separate PRs, separate validation surfaces
   ([rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)).

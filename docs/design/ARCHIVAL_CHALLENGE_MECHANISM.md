@@ -1580,6 +1580,13 @@ shaped by what was convenient to implement — precisely the
 design-precedes-consensus-code rule; the serving transport is the one
 part of this that is not consensus code, and it stays that way.
 
+**Successor (`RF-R1`, 2026-09-10).** The sentence above is the exclusion
+from the format round; it is not a disposition of the request. The
+request half — path, status/header contract, request grammar — is
+[`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md), ruled the same
+day. The path is `/shard/{id}`. The word `provisional` does not survive
+in it.
+
 ## 9.6 Build-round review dispositions (2026-08-11)
 
 Findings from the serving-path build review, recorded where the build

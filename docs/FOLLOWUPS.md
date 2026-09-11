@@ -931,7 +931,6 @@ Default. Lands before genesis if it should exist at launch.
 - ~~**Measure boundary-cell occupancy**~~ — **DONE at round 18**: occupancy 741‰, mean residence 637 blocks, max 13 597; it selected `P` = 720. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.10 (the figures) and §9 FL-D8 (row closed).
   - Target: pre-genesis
 
-
 ## Post-genesis
 
 Exceptional deferral with a named blocker. This list stays tiny.

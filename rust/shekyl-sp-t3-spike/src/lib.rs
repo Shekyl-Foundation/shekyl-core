@@ -23,9 +23,9 @@
 //! - the crate is named `shekyl-sp-t3-spike`, not `shekyl-sp-t3`;
 //! - the wire framing is no longer defined here at all. This crate used to
 //!   carry its own `x-spike/v0` copy of the serving loop; that copy is
-//!   deleted and the framing now comes from `shekyl_p_serve`, whose
-//!   `x-provisional/v0` route is disclaimed in exactly the same terms and
-//!   gets exactly as many votes in the format round: none;
+//!   deleted and the framing now comes from `shekyl_p_serve`, whose route
+//!   is `GET /shard/{id}` (`RF-R1`). The spike remains disposable; the
+//!   production route is not;
 //! - the request/response shape is a placeholder for *transport
 //!   measurement*, and carries no claim about what TJ-B should freeze.
 //!
