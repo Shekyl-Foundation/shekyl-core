@@ -35,12 +35,45 @@ DEF_GLOB='rust/shekyl-relay-privacy/src/verify_cost.rs'
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root" || exit 2
 
+# Rule 47, and the reason this block is not a one-liner: grep returns 1 for
+# "no match" and 2 for "could not read" (missing file, unreadable path). The
+# earlier form captured $? and tested only `-eq 0`, so a RENAMED verify_cost.rs
+# fell through to the constant-is-gone arm -- and, with no marker found, the
+# gate printed "the §94 sweep is complete / this gate has no remaining subject
+# and should be deleted". It did not merely go green on a broken run: it
+# recommended its own retirement on a false premise, which is the one failure a
+# provenance tripwire must never have.
+#
+# So the SUBJECT FILE is asserted readable before its contents are read as
+# evidence of anything. Absence of the constant is only a deletion event if we
+# could actually read the file it should be in.
+if [ ! -r "$DEF_GLOB" ]; then
+  echo "FAIL: ${DEF_GLOB} is missing or unreadable."
+  echo "      The gate could not read its subject, so the absence of"
+  echo "      ${CONST} is NOT evidence that §94 landed -- it is evidence the"
+  echo "      file moved. Re-point this gate; do not delete it, and do not"
+  echo "      read this as the sweep being complete."
+  exit 2
+fi
+
 grep -q "pub const ${CONST}" "$DEF_GLOB"
 const_present=$?
+if [ "$const_present" -gt 1 ]; then
+  echo "FAIL: grep could not scan ${DEF_GLOB} (rc ${const_present})."
+  echo "      A scan error is not a no-match; the gate has no verdict."
+  exit 2
+fi
 
 # Marked sites, one path per line. `-l` so the verdict is a file list.
-marked=$(grep -rl "$MARKER" rust/ docs/ src/ --include='*.rs' --include='*.md' --include='*.h' --include='*.cpp' 2>/dev/null)
-marked_rc=$?
+# stderr is NOT discarded and rc>1 is NOT folded into "no markers": an
+# unreadable search root would otherwise read as a completed sweep.
+marked_rc=0
+marked=$(grep -rl "$MARKER" rust/ docs/ src/ --include='*.rs' --include='*.md' --include='*.h' --include='*.cpp') || marked_rc=$?
+if [ "$marked_rc" -gt 1 ]; then
+  echo "FAIL: the marker search errored (rc ${marked_rc}) -- a search that could"
+  echo "      not read its roots has not shown that no marker survives."
+  exit 2
+fi
 
 if [ "$const_present" -eq 0 ]; then
   if [ "$marked_rc" -ne 0 ] || [ -z "$marked" ]; then
