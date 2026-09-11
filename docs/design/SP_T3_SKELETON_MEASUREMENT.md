@@ -469,7 +469,14 @@ introduction-point reuse. All three are measured below.
 | Correlated descriptor publication timing | **CONFIRMED (weak), and weaker than expected** | Two personas added **0.043 s** apart began publishing **0.98 s** apart — a tight, genuinely correlated window. But the HSDir result above blunts it: exploiting the correlation requires observing **≥ 2 of the 32 distinct directories** the two descriptors land on *and* correlating across them, because no directory sees both. Combined with the fact that two unrelated services starting at once on a busy directory look identical, this is a real-but-weak channel, not a break. `T = ⟨`multi-HSDir operator; sees upload times at the directories it runs; cost = running a meaningful fraction of the HSDir ring; priced in the C2/C3 bucket`⟩`. |
 | Co-serving penalty *(deterrence floor, not architecture)* | **QUANTIFIED AS A LOWER BOUND** | Doing the forbidden thing costs **both** axes at once: complete guard overlap (2/2) **and** ≥ ×1.54 on `D*`. **Floor, not characterization** — one run, N=2, C-tor, single vantage. See §12.0d. Distinct from **SPIKE-F-11** (one persona, many readers), which is conformant and **unmeasured**. |
 | `MaxStreams` **exhaustion** on A observable at B | **UNMEASURABLE-HERE** | Distinct from the contention row above and **not claimed either way**. Deliberate flooding to the stream cap, distinguished from ambient variance, needs a controlled load generator and a quiet baseline this spike does not have. Contention at concurrency 2 is not evidence about the exhaustion path. |
-| Error responses fingerprint the shared backend | **REFUTED (by construction)** | `serve.rs` renders one identical 404 for every non-matching request — wrong path, wrong method, malformed — asserted by `every_non_route_gets_one_identical_error`. Two personas' success headers are asserted byte-identical by `two_personas_are_header_identical`, and the complete header set is pinned to `content-type` + `content-length` (no `server`, no `date`, no `etag`, no `accept-ranges`). |
+| Error responses fingerprint the shared backend | **REFUTED (by construction)** | `serve.rs` renders one identical 404 for every non-matching request — wrong path, wrong method, malformed — asserted by `every_non_servable_outcome_renders_one_identical_404` (`rust/shekyl-p-serve/src/serve_tests.rs`). Two personas' success headers are asserted byte-identical by `two_personas_are_header_identical`, and the complete header set is pinned to `content-type` + `content-length` (no `server`, no `date`, no `etag`, no `accept-ranges`). *(Citation repaired 2026-09-11.)* |
+
+
+> **Citation repaired 2026-09-11.** The row named `every_non_route_gets_one_identical_error`,
+> deleted with the spike at `d0206a6581`. Successor:
+> `every_non_servable_outcome_renders_one_identical_404`, which includes the wrong-METHOD
+> case as the same `NOT_FOUND` bytes — a 405 is a second error shape, not an existence
+> leak. Holdings are chain-public (`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §0, §6).
 
 ---
 

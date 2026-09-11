@@ -333,8 +333,10 @@ impl std::fmt::Debug for PServeEndpoint {
 ///
 /// * **Complete request head that is non-servable** (wrong path/method,
 ///   malformed route/id, unknown or unfrozen shard, store failure) → the
-///   single shared [`NOT_FOUND`] body. That is the probe surface for the
-///   route table, holdings, and store health — collapsed to one shape.
+///   single shared [`NOT_FOUND`] body. A second status (405 vs 404 vs 400)
+///   fingerprints the implementation; a distinct store-failure response is
+///   a live health oracle. Holdings are chain-public — GET 200 vs 404 is
+///   already the availability oracle — and are not what this collapse hides.
 /// * **No complete head** (oversized buffer, mid-head EOF, read timeout)
 ///   or **over capacity** → connection close with no HTTP bytes. Same
 ///   class as ordinary circuit death; not a status-code oracle. Writing
