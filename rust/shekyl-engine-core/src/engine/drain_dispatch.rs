@@ -475,10 +475,13 @@ mod tests {
     ///    textually precedes the network send.
     #[test]
     fn seam_routes_through_the_pipeline_and_the_submit_choke_point() {
-        let production = include_str!("drain_dispatch.rs")
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .expect("drain_dispatch.rs has a production section");
+        // `split_once`, not `split().next()`: the latter always yields a
+        // first piece, so a drifted marker would silently make the
+        // "production half" the whole file and let this test module's own
+        // text satisfy the positive needles below. Marker drift must be red.
+        let (production, _) = include_str!("drain_dispatch.rs")
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("drain_dispatch.rs carries the tests-module marker this split relies on");
         // Code-only view: drop comment-only lines (`//`, `///`, `//!`) so the
         // module docs' references to forbidden tokens cannot satisfy the
         // negative guards below.
