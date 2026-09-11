@@ -109,9 +109,7 @@ async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
     request(addr, "GET", path).await
 }
 
-/// A complete request head with an arbitrary method, so the miss sweep can
-/// cover the wrong-METHOD case on the same byte-identity assertion as every
-/// other miss rather than on a weaker status-line check.
+/// One complete request head; returns the response bytes.
 async fn request(addr: SocketAddr, method: &str, path: &str) -> Vec<u8> {
     let mut s = TcpStream::connect(addr).await.expect("connect");
     s.write_all(format!("{method} {path} HTTP/1.1\r\nhost: x\r\n\r\n").as_bytes())
@@ -211,37 +209,33 @@ fn not_found_uses_the_declared_header_set_and_content_type() {
 
 #[tokio::test]
 async fn every_non_servable_outcome_renders_one_identical_404() {
-    // The full *complete-head* miss set in one sweep: wrong path, wrong
-    // prefix, malformed id, UNKNOWN shard id (a valid route to a shard
-    // this persona does not hold), a wrong METHOD on a shard it DOES
-    // hold, and a provider infrastructure failure. All must be
-    // byte-identical, or the differences become a probe surface for the
-    // route table, the holdings, or store health.
-    // Incomplete heads (oversized / EOF / timeout) are a different
-    // wire class — close, like over-capacity — covered separately.
+    // Every complete-head miss is the one `NOT_FOUND`. A 405, a 500, or a
+    // second 404 shape is an implementation fingerprint; a distinct
+    // store-failure response is a live health oracle. Holdings are
+    // chain-public — GET 200 vs 404 is already the availability oracle —
+    // so this is not an existence test. It does NOT cover incomplete heads
+    // (oversized / EOF / timeout): those close, like over-capacity.
     let ep = PServeEndpoint::bind(FixtureProvider::new([(3, leaves(1, 7))]))
         .await
         .expect("bind");
     let mut seen: Vec<Vec<u8>> = Vec::new();
-    for path in [
-        "/",
-        "/health",
-        "/x-spike/v0/shard/3",
-        "/x-provisional/v0/shard/",
-        "/x-provisional/v0/shard/abc",
-        "/x-provisional/v0/shard/4", // valid route, unheld shard
+    for (method, path) in [
+        ("GET", "/"),
+        ("GET", "/health"),
+        ("GET", "/x-spike/v0/shard/3"),
+        ("GET", "/x-provisional/v0/shard/"),
+        ("GET", "/x-provisional/v0/shard/abc"),
+        ("GET", "/x-provisional/v0/shard/4"), // valid route, unheld shard
+        // Wrong METHOD on a path GET would serve: a method-aware server
+        // answers 405 or 200 here. Either is a second shape, not an
+        // existence leak.
+        ("POST", "/x-provisional/v0/shard/3"),
+        ("HEAD", "/x-provisional/v0/shard/3"),
+        ("PUT", "/x-provisional/v0/shard/3"),
+        ("DELETE", "/x-provisional/v0/shard/3"),
+        ("OPTIONS", "/x-provisional/v0/shard/3"),
     ] {
-        seen.push(fetch(ep.addr(), path).await);
-    }
-    // Wrong METHOD belongs to the same miss class. It is swept HERE, against
-    // byte-identity, rather than left to `non_get_methods_are_not_served`,
-    // which asserts only that the status line starts `HTTP/1.1 404` — a
-    // divergent header set or ordering on a non-GET would pass that check and
-    // still be a second fingerprint. The path used is shard 3, which this
-    // persona DOES hold: a non-GET on a held shard is exactly where a
-    // divergent 404 would tell a prober the shard exists.
-    for method in ["POST", "HEAD", "PUT", "DELETE", "OPTIONS"] {
-        seen.push(request(ep.addr(), method, "/x-provisional/v0/shard/3").await);
+        seen.push(request(ep.addr(), method, path).await);
     }
 
     let failing = PServeEndpoint::bind(Arc::new(FailingProvider))
@@ -250,27 +244,14 @@ async fn every_non_servable_outcome_renders_one_identical_404() {
     seen.push(fetch(failing.addr(), "/x-provisional/v0/shard/3").await);
     assert_eq!(failing.lookup_failure_count(), 1);
 
-    assert!(
-        seen.windows(2).all(|w| w[0] == w[1]),
-        "every miss must render byte-identically"
-    );
-    assert!(head_of(&seen[0]).starts_with("HTTP/1.1 404"));
+    for resp in &seen {
+        assert_eq!(
+            resp.as_slice(),
+            NOT_FOUND.as_bytes(),
+            "every complete-head miss must be the shared 404"
+        );
+    }
     assert_eq!(ep.served_count(), 0, "a miss is not counted as a serve");
-}
-
-#[tokio::test]
-async fn non_get_methods_are_not_served() {
-    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 1))]))
-        .await
-        .expect("bind");
-    let mut s = TcpStream::connect(ep.addr()).await.expect("connect");
-    s.write_all(b"POST /x-provisional/v0/shard/0 HTTP/1.1\r\nhost: x\r\n\r\n")
-        .await
-        .expect("write");
-    let mut out = Vec::new();
-    s.read_to_end(&mut out).await.expect("read");
-    assert!(head_of(&out).starts_with("HTTP/1.1 404"));
-    assert_eq!(ep.served_count(), 0);
 }
 
 #[tokio::test]
