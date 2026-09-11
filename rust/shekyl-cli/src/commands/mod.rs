@@ -133,6 +133,7 @@ Meta:
 pub fn repl(
     rpc: RpcSession,
     daemon_client: Option<&DaemonClient>,
+    network: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::resolve::{self, ResolvedCommand};
 
@@ -146,7 +147,7 @@ pub fn repl(
     println!("Welcome to shekyl-cli. Type \"help\" for commands.");
 
     loop {
-        let prompt = crate::session::prompt(rpc.is_open());
+        let prompt = crate::session::prompt(network, rpc.open_wallet_name().as_deref());
 
         match rl.readline(&prompt) {
             Ok(line) => {

@@ -17,11 +17,21 @@ use std::fmt;
 #[derive(Debug)]
 pub enum DaemonError {
     NotConfigured,
-    ConnectionRefused(String),
+    ConnectionRefused {
+        detail: String,
+        /// Recovery copy naming the daemon invocation that would fix it
+        /// (`shekyld --testnet` + port), filled by the client for loopback
+        /// endpoints (CU-1; CLI_USABILITY.md §CU-5 F1). `None` for a remote
+        /// daemon, where "start it" would mislead.
+        hint: Option<String>,
+    },
     SocksFailure(String),
     TlsFailure(String),
     MalformedResponse(String),
-    RpcError { code: i64, message: String },
+    RpcError {
+        code: i64,
+        message: String,
+    },
     Other(String),
 }
 
@@ -32,10 +42,16 @@ impl fmt::Display for DaemonError {
                 f,
                 "Daemon not configured. Use --daemon-address to set the daemon endpoint."
             ),
-            Self::ConnectionRefused(detail) => write!(
-                f,
-                "Daemon connection refused (is the daemon running?). Detail: {detail}"
-            ),
+            Self::ConnectionRefused { detail, hint } => {
+                write!(
+                    f,
+                    "Daemon connection refused (is the daemon running?). Detail: {detail}"
+                )?;
+                if let Some(hint) = hint {
+                    write!(f, "\n{hint}")?;
+                }
+                Ok(())
+            }
             Self::SocksFailure(detail) => write!(
                 f,
                 "SOCKS/Tor proxy connection failed (check --proxy and Tor status). Detail: {detail}"
@@ -64,6 +80,9 @@ impl std::error::Error for DaemonError {}
 pub struct DaemonClient {
     url: String,
     agent: ureq::Agent,
+    /// See [`DaemonError::ConnectionRefused`]: attached to every refused
+    /// connection this client reports.
+    down_hint: Option<String>,
 }
 
 /// Normalize a daemon address to the URL form the transports expect: a
@@ -88,10 +107,13 @@ impl DaemonClient {
     ///   Tor assigns an isolated circuit via `IsolateSOCKSAuth`. Generic SOCKS proxies
     ///   may ignore auth-based isolation.
     /// - `ca_cert_path`: optional path to a PEM CA certificate for self-signed daemons.
+    /// - `down_hint`: recovery copy attached to refused connections (the
+    ///   caller knows the network and whether the endpoint is loopback).
     pub fn new(
         daemon_address: &str,
         proxy: Option<&str>,
         _ca_cert_path: Option<&str>,
+        down_hint: Option<String>,
     ) -> Result<Self, DaemonError> {
         if daemon_address.is_empty() {
             return Err(DaemonError::NotConfigured);
@@ -109,7 +131,26 @@ impl DaemonClient {
 
         let agent = config_builder.build().new_agent();
 
-        Ok(Self { url, agent })
+        Ok(Self {
+            url,
+            agent,
+            down_hint,
+        })
+    }
+
+    /// Attach this client's recovery hint to a refused connection. Applied
+    /// at the one seam every request passes through, so each caller's error
+    /// display carries the copy without knowing about it.
+    fn with_down_hint(&self, err: DaemonError) -> DaemonError {
+        match err {
+            DaemonError::ConnectionRefused { detail, hint: None } => {
+                DaemonError::ConnectionRefused {
+                    detail,
+                    hint: self.down_hint.clone(),
+                }
+            }
+            other => other,
+        }
     }
 
     /// Call a JSON-RPC method on the daemon.
@@ -127,7 +168,7 @@ impl DaemonClient {
             .post(&rpc_url)
             .header("Content-Type", "application/json")
             .send(body.to_string().as_bytes())
-            .map_err(|e| classify_ureq_error(&e))?;
+            .map_err(|e| self.with_down_hint(classify_ureq_error(&e)))?;
 
         let body_str = response
             .body_mut()
@@ -179,7 +220,10 @@ fn classify_ureq_error(err: &ureq::Error) -> DaemonError {
         || lower.contains("unreachable")
         || lower.contains("timed out")
     {
-        DaemonError::ConnectionRefused(msg)
+        DaemonError::ConnectionRefused {
+            detail: msg,
+            hint: None,
+        }
     } else {
         DaemonError::Other(msg)
     }
