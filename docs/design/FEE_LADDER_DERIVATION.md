@@ -2640,8 +2640,10 @@ its CEN-M3 routing is discharged — the census row's formula text is
 carried by the implementing PR); **FL-D6 and FL-D8 moot** (no snap, no
 boundary cells, nothing to smooth); **FL-R3-STORE demoted** from an FL
 blocker to the storage-lane performance item it was before round 18
-promoted it — FL-R23's cold cost is one 723-block scan (§11.6), inside the
-720 budget to within the lookback depth.
+promoted it — FL-R23's cold cost is one 725-block scan (§11.6), inside the
+720 budget to within the lookback depth. *(This row was ruled 2026-09-09 when `G` = 3 made the scan 723; `G` was re-derived to 5 at review A-1 the
+next day, so the figure is restated here at the settled `G` rather than
+left disagreeing with §11.6.)*
 
 **FL-R22 — The wallet pays exactly the served rung.** No pad, fixed or
 drawn. The day's path to this ruling, in order, because each step was
