@@ -5012,4 +5012,73 @@ real derived address (KAT taxonomy PR)"`.
 `rust/shekyl-crypto-pq/src/wallet_envelope.rs` tests module;
 `.cursor/rules/50-testing.mdc` §"Every vector declares its oracle".
 
+---
+
+## 2026-09-10 — Single-Rust-image contract: shared internal libraries are refused (amends 2026-06-11)
+
+**Decision.** `BUILD_SHARED_LIBS=ON` is refused at configure time
+(`CMakeLists.txt`, `FATAL_ERROR`); internal C++ libraries are static in
+every build type. The Debug-defaults-to-shared behaviour inherited from
+the Monero build is deleted, not gated.
+
+**Why.** The 2026-06-11 mechanism selects one Rust archive per *link
+head* and verifies the result with a post-link `nm` gate on `shekyld`.
+Both assume the C++ libraries between the Rust archive and the binary
+are static, so that the binary is the only link head. Under
+`BUILD_SHARED_LIBS=ON` every internal library that lists
+`SHEKYL_FFI_LINK_LIBS` is its own link head, resolves the generator
+expression to `shekyl_ffi`, and embeds a full copy of `libshekyl_ffi.a`.
+`nm --defined-only` on a Debug tree found four such `.so`s —
+`libcryptonote_core`, `libcryptonote_basic`,
+`libcryptonote_format_utils_basic`, `libepee` — each carrying its own
+`tracing-core` `GLOBAL_DISPATCH` and its own
+`shekyl_archival_retention::constants::EFFECTIVE`, next to the
+executable's `libshekyl_daemon_image.a`: five Rust images in one
+process. The gate passed: it inspects the binary, and the binary holds
+exactly one copy.
+
+The failure this produced was silent and looked like a wallet defect.
+The regtest emission-claim e2e (`e2e_emission_claim_accepted_and_applied`)
+passed against a Release daemon and failed against a Debug daemon with a
+bare `Malformed` from `/submit_transaction`. Phase C now returns a
+`VerifyReject` whose reason the submit engine logs at `info`; that
+line named the cause: `epoch 1 not finalized at height 1025`. `Blockchain::init` in `libcryptonote_core.so` had armed the
+512-block regtest schedule in *its* copy of the latch and logged the
+override as active; the RPC submit verifier in the executable read its
+own copy, still on the genesis 10 000-block schedule, and computed
+`h_close(1) = 20 000`. Every Rust `static` is duplicated the same way;
+the epoch latch is only the one that had a visible consequence.
+
+**Why refuse rather than fix shared linking.** Resolving Rust symbols
+from the executable into the `.so`s (undefined-in-shlib + exported from
+the binary) is platform-divergent (ELF vs Mach-O vs PE) and would exist
+only to preserve a Debug-build convenience that has no user — the
+production and CI configurations are already static. Per
+`16-architectural-inheritance.mdc` (user-protection defaults in
+user-absent contexts) the inherited default inverts to a loud refusal.
+Deleting the configuration removes the failure class; a gate that
+walked every `.so` would only arbitrate it.
+
+**Consequences.**
+
+- Debug builds link statically (longer links; `docs/COMPILING_DEBUGGING_TESTING.md`
+  rewrites its shared-library section accordingly).
+- `utils/health/clang-*.sh` and `Makefile` `debug-all` drop their
+  `BUILD_SHARED_LIBS` flags; the CI artifact-layout comments that
+  attributed static internals to "Release defaults OFF" now cite the
+  refusal.
+- The `nm` gate's coverage claim is exact again: with one link head per
+  binary, "one `GLOBAL_DISPATCH` in `shekyld`" is "one Rust image in the
+  `shekyld` process".
+- Reversion clause: reopen only if a shipped binary must load Rust code
+  from a shared object (a plugin surface, a language binding). The
+  substrate is that binary's link map; the re-evaluation is a fresh
+  decision-log entry that also specifies how the `nm` gate walks its
+  shared objects.
+
+**Reference.** `CMakeLists.txt` (`BUILD_SHARED_LIBS` refusal),
+`cmake/BuildRust.cmake` (per-binary image selection),
+`src/daemon/CMakeLists.txt` (nm gate),
+`rust/shekyl-archival-retention/src/constants.rs` (`EFFECTIVE` latch).
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

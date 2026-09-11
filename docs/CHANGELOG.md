@@ -458,6 +458,25 @@
 
 ### Fixed
 
+- **Build: shared internal libraries are refused; Debug builds link
+  statically.** `BUILD_SHARED_LIBS=ON` (the inherited Debug default) gave
+  every internal `.so` that links the Rust FFI archive its own copy of the
+  Rust image, duplicating process-global Rust state behind the single-image
+  `nm` gate's back. Observed as a Debug `shekyld` refusing every emission
+  claim as not-yet-finalized: `Blockchain::init` armed the regtest
+  settlement-epoch schedule in `libcryptonote_core.so`'s copy while the RPC
+  verifier read the executable's unarmed copy. Configure now fails with the
+  reason (`V3_WALLET_DECISION_LOG.md` 2026-09-10). Release and CI
+  configurations were already static and are unaffected.
+- **Daemon RPC: a Phase C submit rejection names its leg.** The verifier
+  returns a `VerifyReject` pairing the wire-cause (`Malformed` /
+  `StaleRoot` / `DoubleSpendConflict`) with the failing check; a cause
+  without a reason is unrepresentable. The submit engine logs both at
+  `info` once. Previously a `Malformed` verdict left no daemon-side
+  trace of which battery leg refused. The wallet logs at `error` when a
+  transaction it built fails its own local round-trip parse — a
+  build-path defect, never a daemon verdict — since that outcome is
+  otherwise indistinguishable from a daemon refusal.
 - **P2P: a node no longer retries outbound to its own public listen address.**
   Foundation seeds sit in a shared hardcoded list; public zone binds
   `0.0.0.0` and leaves `m_our_address` unset, so a seed TCP-hairpinned

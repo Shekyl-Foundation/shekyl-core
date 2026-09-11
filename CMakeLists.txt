@@ -593,19 +593,24 @@ else()
 endif()
 option(STATIC "Link libraries statically" ${DEFAULT_STATIC})
 
-# This is a CMake built-in switch that concerns internal libraries
-set(BUILD_SHARED_LIBS_DEFAULT OFF)
-if (NOT STATIC AND CMAKE_BUILD_TYPE_LOWER STREQUAL "debug")
-	set(BUILD_SHARED_LIBS_DEFAULT ON)
+# Internal libraries are always static. Shared internal libraries are
+# refused, not merely defaulted off: every internal library that lists
+# SHEKYL_FFI_LINK_LIBS is the head of its own link line when it is a shared
+# object, so each .so embeds its own copy of the Rust image — its own
+# tracing dispatcher and its own copy of every Rust `static` — next to the
+# executable's image. That violates the single-Rust-image contract
+# (V3_WALLET_DECISION_LOG.md 2026-06-11 / 2026-09-10) in a way the
+# post-link nm gate in src/daemon/CMakeLists.txt cannot see, because the
+# duplicates live in the .so files rather than in the binary it inspects.
+# Observed: a Debug shekyld whose Blockchain::init armed the regtest
+# settlement-epoch schedule in libcryptonote_core.so's copy while the RPC
+# submit verifier read the executable's unarmed copy and refused every
+# emission claim as not-yet-finalized under the genesis schedule.
+if(BUILD_SHARED_LIBS)
+  message(FATAL_ERROR "BUILD_SHARED_LIBS=ON is not supported: shared internal libraries each embed a separate copy of the Rust image and split its process-global state (single-Rust-image contract, V3_WALLET_DECISION_LOG.md 2026-09-10). Configure without -DBUILD_SHARED_LIBS.")
 endif()
-option(BUILD_SHARED_LIBS "Build internal libraries as shared" ${BUILD_SHARED_LIBS_DEFAULT})
-
-if (BUILD_SHARED_LIBS)
-  message(STATUS "Building internal libraries with position independent code")
-  add_definitions("-DBUILD_SHARED_LIBS")
-else()
-  message(STATUS "Building internal libraries as static")
-endif()
+set(BUILD_SHARED_LIBS OFF)
+message(STATUS "Building internal libraries as static")
 set(PIC_FLAG "-fPIC")
 
 if(STATIC)

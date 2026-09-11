@@ -268,6 +268,13 @@ shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 # alter the default-feature production crate graph.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Live-daemon e2e (`engine::regtest_e2e`): route the wallet's own
+# `tracing` events into the test's captured output, so a wallet-side
+# refusal (e.g. the `submit_transaction` round-trip guard) is visible
+# next to the daemon log excerpt rather than dropped for want of a
+# subscriber. `fmt` + `env-filter` only; already in the lockfile via
+# `shekyl-logging` / `shekyl-wallet-rpc`.
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 # `gungraun` is the deterministic-instructions sibling for the
 # criterion wall-clock benches in this crate. The CI gate

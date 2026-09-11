@@ -32,7 +32,7 @@ fn reject_reason(tx_hex: &str) -> String {
         },
         "every Phase-A failure maps to Rejected{{Malformed}}"
     );
-    reject.reason
+    reject.reason().to_owned()
 }
 
 // ── The admit path ──────────────────────────────────────────────────────

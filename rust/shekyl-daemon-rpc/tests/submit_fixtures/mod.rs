@@ -19,6 +19,7 @@ use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use shekyl_daemon_rpc::submit::{
     BondProbe, CommitOutcome, KeyImageConflict, ParsedSubmission, ReferenceFacts, ShimFault,
     SubmitFacts, SubmitStateShim, TxMeta, TxVerifier, VerificationCertificate, VerifyFailure,
+    VerifyReject,
 };
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
 use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, TAG_INPUT_SERVE_CREDIT};
@@ -425,7 +426,7 @@ impl SubmitStateShim for MockShim {
 /// Deterministic [`TxVerifier`]: scripted pass/fail, call-counted.
 #[derive(Debug)]
 pub struct MockVerifier {
-    pub result: Result<(), VerifyFailure>,
+    pub result: Result<(), VerifyReject>,
     pub calls: AtomicUsize,
 }
 
@@ -439,7 +440,10 @@ impl MockVerifier {
 
     pub fn failing(failure: VerifyFailure) -> Arc<Self> {
         Arc::new(Self {
-            result: Err(failure),
+            result: Err(VerifyReject::from_cause(
+                failure,
+                "mock verifier: scripted Phase C refusal",
+            )),
             calls: AtomicUsize::new(0),
         })
     }
@@ -450,13 +454,9 @@ impl MockVerifier {
 }
 
 impl TxVerifier for MockVerifier {
-    fn verify(
-        &self,
-        _parsed: &ParsedSubmission,
-        _facts: &SubmitFacts,
-    ) -> Result<(), VerifyFailure> {
+    fn verify(&self, _parsed: &ParsedSubmission, _facts: &SubmitFacts) -> Result<(), VerifyReject> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.result
+        self.result.clone()
     }
 }
 

@@ -57,13 +57,9 @@ where the variable `DIR_SRC` is expected to store the path to the Shekyl source 
 
 ## Use cases
 
-### Test Driven Development (TDD) - shared libraries for release builds
+### Internal libraries are always static
 
-Building shared libraries spares a lot of disk space and linkage time. By default only the debug builds produce shared libraries. If you'd like to produce dynamic libraries for the release build for the same reasons as it's being done for the debug version, then you need to add the `BUILD_SHARED_LIBS=ON` flag to the `CMake` call, like the following:
-
-`cmake -S "$DIR_SRC" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON && make`
-
-A perfect use case for the above call is following the Test Driven Development (TDD) principles. In a nutshell, you'd first write a couple of tests, which describe the (new) requirements of the class/method that you're about to write or modify. The tests will typically compile for quite a long time, so ideally write them once. After you're done with the tests, the only thing left to do is to keep modifying the implementation for as long as the tests are failing. If the implementation is contained properly within a .cpp file, then the only time cost to be paid will be compiling the single source file and generating the implementation's shared library. The test itself will not have to be touched and will pick up the new version of the implementation (via the shared library) upon the next execution of the test.
+Every build type links the in-tree C++ libraries statically; `-DBUILD_SHARED_LIBS=ON` is refused at configure time. Shared internal libraries are incompatible with the single-Rust-image contract (`docs/V3_WALLET_DECISION_LOG.md`, 2026-06-11 and 2026-09-10): each `.so` that links the Rust FFI archive is the head of its own link line and embeds its own copy of the Rust image, so process-global Rust state (the `tracing` dispatcher, the regtest settlement-epoch latch, every other `static`) is duplicated and the copies disagree. The failure is silent — the daemon starts, logs normally, and rejects valid work — which is why the configuration is refused rather than defaulted off. Debug builds therefore pay full static link times; iterate on the Rust side with `cargo test -p <crate>` where the change allows it.
 
 ### Project generation for IDEs
 

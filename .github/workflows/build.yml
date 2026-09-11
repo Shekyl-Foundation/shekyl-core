@@ -366,9 +366,10 @@ jobs:
         run: scripts/ci/run_live_daemon_gates.sh
 
       # Pack the CTest tree for the 24.04 test job. Same shape as
-      # economics-c2a-prime.yml: Release defaults BUILD_SHARED_LIBS OFF
-      # (CMakeLists.txt), so test binaries are statically linked against
-      # in-tree libraries and the tar can drop *.o / *.a / CMakeFiles.
+      # economics-c2a-prime.yml: internal libraries are always static
+      # (CMakeLists.txt refuses BUILD_SHARED_LIBS), so test binaries are
+      # statically linked against in-tree libraries and the tar can drop
+      # *.o / *.a / CMakeFiles.
       # They still need SYSTEM libraries (boost, ssl, sodium, unwind)
       # that the test job installs. CMake bakes absolute paths into
       # CTestTestfile.cmake; both jobs use container ubuntu:24.04 +

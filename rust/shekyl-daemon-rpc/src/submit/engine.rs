@@ -161,7 +161,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         let parsed = match parse_submission(tx_hex) {
             Ok(parsed) => parsed,
             Err(reject) => {
-                tracing::debug!(reason = %reject.reason, "submit rejected at Phase A");
+                tracing::info!(reason = %reject.reason(), "submit rejected at Phase A");
                 return Ok(reject.verdict());
             }
         };
@@ -182,13 +182,15 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // the credit arm triggers no scan, so gating it would spend a hybrid
         // verify to protect nothing.
         if parsed.bond_post_is_release() {
-            if let Err(failure) = verify_debit_slot_possession(&parsed) {
-                tracing::debug!(
+            if let Err(reject) = verify_debit_slot_possession(&parsed) {
+                tracing::info!(
+                    cause = ?reject.cause(),
+                    reason = %reject.reason(),
                     "submit rejected: release bond-post slot failed the possession \
                      pre-gate (no fact gather performed)"
                 );
                 return Ok(SubmitVerdict::Rejected {
-                    cause: failure.into(),
+                    cause: reject.into(),
                 });
             }
         }
@@ -416,8 +418,18 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
 
         // The crypto battery (FCMP++ membership, BP+, CT balance, PQC
         // hybrid auth, archival-arm checks) behind the seam.
-        if let Err(failure) = self.verifier.verify(parsed, facts) {
-            return Ok(Err(failure.into()));
+        if let Err(reject) = self.verifier.verify(parsed, facts) {
+            // `info`, not `debug`: the submitter only ever sees the
+            // coarse `RejectCause`, so this line is the operator's one
+            // record of what the daemon refused. The reason is on the
+            // reject — a cause without a named leg is unrepresentable.
+            tracing::info!(
+                kind = ?parsed.kind,
+                cause = ?reject.cause(),
+                reason = %reject.reason(),
+                "submit rejected at Phase C by the verifier"
+            );
+            return Ok(Err(reject.into()));
         }
 
         // Mint the witness (§3.3) — the only construction site in the

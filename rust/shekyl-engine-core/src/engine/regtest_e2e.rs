@@ -78,16 +78,33 @@ fn serial_lock() -> Arc<Mutex<()>> {
     SERIAL.get_or_init(|| Arc::new(Mutex::new(()))).clone()
 }
 
+/// Route the wallet's own `tracing` events into this test's captured
+/// output. Without a subscriber they are dropped, and a wallet-side
+/// refusal that never reaches the daemon (the `submit_transaction`
+/// round-trip guard, for one) leaves no trace anywhere. `warn` by
+/// default; `RUST_LOG` overrides. Idempotent across the binary: a second
+/// install is a no-op, never a panic.
+fn install_wallet_tracing() {
+    use tracing_subscriber::EnvFilter;
+    drop(
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()))
+            .with_test_writer()
+            .with_ansi(false)
+            .try_init(),
+    );
+}
+
 /// A live `shekyld --regtest` daemon spawned for one test, with an ephemeral
 /// data dir and RPC port. Killed and cleaned on drop.
-/// Last 15 lines of the daemon's captured log, inlined into panics:
+/// Last 40 lines of the daemon's captured log, inlined into panics:
 /// `RegtestDaemon::drop` removes the datadir (log included) as a panic
 /// unwinds, so a "see the log file" pointer would name a deleted file.
 fn log_tail(log_path: &std::path::Path) -> String {
     std::fs::read_to_string(log_path)
         .map(|s| {
             let lines: Vec<&str> = s.lines().collect();
-            let start = lines.len().saturating_sub(15);
+            let start = lines.len().saturating_sub(40);
             lines[start..].join("\n")
         })
         .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"))
@@ -209,6 +226,7 @@ impl RegtestDaemon {
         // concurrent `cargo test` *process*'s daemon — the in-process lock can't
         // serialize across processes — so it is deliberately not done here.
         let serial = serial_lock().lock_owned().await;
+        install_wallet_tracing();
 
         let bin = Self::binary();
         let rpc_port = Self::free_port();
@@ -230,8 +248,11 @@ impl RegtestDaemon {
             &rpc_port.to_string(),
             "--data-dir",
             data_dir.to_str().expect("utf8 data dir"),
+            // Level 1 (`info`): the submit engine records a Phase C
+            // refusal at `info`, so the log tail a panic inlines names
+            // what the daemon rejected instead of a bare `Malformed`.
             "--log-level",
-            "0",
+            "1",
         ]);
         // Distinct from the main port. Both probes bind :0 and release
         // immediately, so the kernel is free to hand back the same number
@@ -444,6 +465,20 @@ impl RegtestDaemon {
     /// TCP connection), rather than sharing this instance's `rpc` client.
     pub(super) fn rpc_port(&self) -> u16 {
         self.rpc_port
+    }
+
+    /// Last lines of the daemon's log, for inlining into a test's own
+    /// panic. Read it *before* panicking: the unwind drops this fixture,
+    /// which kills the daemon and removes the datadir, log included.
+    pub(super) fn log_tail(&self) -> String {
+        log_tail(&self.data_dir.join("daemon.log"))
+    }
+
+    /// Panic with the daemon log inlined. Call on a submit/dispatch
+    /// failure: `Drop` removes the datadir (log included) as the unwind
+    /// proceeds, so a "see the log file" pointer would name a deleted file.
+    pub(super) fn panic_with_log(&self, context: &str, err: impl std::fmt::Display) -> ! {
+        panic!("{context}: {err}; daemon log tail:\n{}", self.log_tail());
     }
 
     /// The harness's RPC client, for tests that drive the daemon directly.
@@ -2058,7 +2093,7 @@ async fn stake_persona_to_confirmed_bond(
                         daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
                         refresh(&arc).await;
                     }
-                    Err(e) => panic!("first_stake: {e}"),
+                    Err(e) => daemon.panic_with_log("first_stake", e),
                 }
             }
             let outcome =
@@ -2132,7 +2167,7 @@ async fn stake_persona_to_confirmed_bond(
                         daemon.generate_blocks(MINE_BATCH_BLOCKS, &principal).await;
                         refresh(&arc).await;
                     }
-                    Err(e) => panic!("assemble market bond post: {e:?}"),
+                    Err(e) => daemon.panic_with_log("assemble market bond post", format!("{e:?}")),
                 }
             }
             assert!(
@@ -2167,9 +2202,9 @@ async fn stake_persona_to_confirmed_bond(
     // PR-4b bond-post Phase-C battery verifies the wallet-built post over
     // real RPC. Any rejection — Phase A, Phase C, transport — fails loudly.
     let receipt = verdict.unwrap_or_else(|e| {
-        panic!(
-            "daemon must accept the wallet-built bond post \
-             (PR-4b battery landed; got {e:?})"
+        daemon.panic_with_log(
+            "daemon must accept the wallet-built bond post (PR-4b battery landed)",
+            format!("{e:?}"),
         )
     });
     eprintln!("bond post accepted by the daemon submit engine: {receipt:?}");
@@ -2651,7 +2686,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
                 daemon.generate_blocks(1, &fixture.principal).await;
                 refresh(&fixture.arc).await;
             }
-            Err(e) => panic!("submit_emission_claim: {e}"),
+            Err(e) => daemon.panic_with_log("submit_emission_claim", e),
         }
     }
     let receipt = receipt.expect("claim must assemble and dispatch within the retry budget");
@@ -3150,7 +3185,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
                 daemon.generate_blocks(3, &principal).await;
                 refresh(&fixture.arc).await;
             }
-            Err(e) => panic!("submit_drain: {e}"),
+            Err(e) => daemon.panic_with_log("submit_drain", e),
         }
     }
     let receipt = receipt.expect("drain must assemble and dispatch within the retry budget");
@@ -3364,7 +3399,7 @@ async fn e2e_release_accepted_and_connected() {
                 daemon.generate_blocks(10, &fixture.principal).await;
                 refresh(&fixture.arc).await;
             }
-            Err(e) => panic!("submit_release: {e}"),
+            Err(e) => daemon.panic_with_log("submit_release", e),
         }
     }
     let receipt = receipt.expect("the exit must assemble and dispatch within the retry budget");
@@ -3520,7 +3555,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
                 daemon.generate_blocks(3, &fixture.principal).await;
                 refresh(&fixture.arc).await;
             }
-            Err(e) => panic!("unstake: {e}"),
+            Err(e) => daemon.panic_with_log("unstake", e),
         }
     }
     let posted = posted.expect("unstake must post within the retry ladder");
@@ -3592,7 +3627,7 @@ async fn e2e_unstake_collect_retire_composed_arc() {
                 daemon.generate_blocks(3, &fixture.principal).await;
                 refresh(&fixture.arc).await;
             }
-            Err(e) => panic!("collect_unstaked: {e}"),
+            Err(e) => daemon.panic_with_log("collect_unstaked", e),
         }
     }
     let CollectOutcome::Swept {

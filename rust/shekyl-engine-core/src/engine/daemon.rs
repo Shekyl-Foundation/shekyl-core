@@ -459,10 +459,24 @@ impl DaemonEngine for DaemonClient {
         tx_bytes: Vec<u8>,
     ) -> impl Send + Future<Output = Result<TxSubmitOutcome, Self::Error>> {
         async move {
-            let Ok(tx) = Transaction::from_bytes(&tx_bytes) else {
-                return Ok(TxSubmitOutcome::Rejected {
-                    cause: RejectCause::Malformed,
-                });
+            let tx = match Transaction::from_bytes(&tx_bytes) {
+                Ok(tx) => tx,
+                Err(e) => {
+                    // The wallet is refusing bytes it built itself: a
+                    // build-path defect, never a daemon verdict. Loud by
+                    // design — the outcome below is indistinguishable from
+                    // the daemon's Phase-A refusal, so this line is the only
+                    // place the cause is visible.
+                    tracing::error!(
+                        error = %e,
+                        tx_len = tx_bytes.len(),
+                        "wallet-built transaction failed its own round-trip parse; \
+                         refused locally as Malformed, no RPC issued"
+                    );
+                    return Ok(TxSubmitOutcome::Rejected {
+                        cause: RejectCause::Malformed,
+                    });
+                }
             };
 
             let hash = TxHash::from_bytes(tx.hash());

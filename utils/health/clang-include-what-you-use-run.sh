@@ -59,7 +59,6 @@ cmake ../.. \
 -DUSE_CCACHE=ON \
 -DCMAKE_C_INCLUDE_WHAT_YOU_USE="$UWYU_COMMAND" \
 -DCMAKE_CXX_INCLUDE_WHAT_YOU_USE="$UWYU_COMMAND" \
--DBUILD_SHARED_LIBS=ON \
 -DBUILD_TESTS=ON
 
 make clean					# Clean up to generate the full report

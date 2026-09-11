@@ -145,11 +145,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The CALIBRATION build is CMAKE_BUILD_TYPE=Release, so BUILD_SHARED_LIBS
-          # defaults OFF (it only flips ON for Debug, CMakeLists.txt:608-612). Internal
-          # libraries are therefore static .a archives and the test binaries are
-          # statically linked against them — no internal .so files exist, which is why
-          # the tar can exclude *.a and *.o and still ship working binaries.
+          # Internal libraries are always static .a archives (CMakeLists.txt refuses
+          # BUILD_SHARED_LIBS under the single-Rust-image contract) and the test
+          # binaries are statically linked against them — no internal .so files
+          # exist, which is why the tar can exclude *.a and *.o and still ship
+          # working binaries.
           #
           # That does NOT make them self-contained, and this comment previously said it
           # did. The binaries still need SYSTEM libraries (boost, libunwind, ssl,
