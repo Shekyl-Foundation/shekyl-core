@@ -15,6 +15,30 @@ contract construction must satisfy; this side does not.
 
 ## 1. Why this doc exists
 
+> **Correction 2026-09-11 — the paragraph below is a record of 2026-07, not a
+> description of the tree. All four things it says do not exist now do.** It reads
+> "Construction side genuinely does not exist yet -- there is no builder, no
+> `TxRequest` variant, no `bond_credit` handling in the RCT balance, and no
+> `P`-identity derivation." Each clause is refuted on `dev`:
+>
+> | clause | where it lives now |
+> | --- | --- |
+> | builder | `rust/shekyl-archival-bond-builder/` (crate + `tests/`), and `rust/shekyl-engine-core/src/engine/bond_assembly.rs` |
+> | `TxRequest` | `rust/shekyl-engine-core/src/engine/pending.rs:299` |
+> | `bond_credit` in the balance | `rust/shekyl-archival-retention/src/bond_ct_balance.rs` |
+> | `P`-identity derivation | `rust/shekyl-archival-retention/src/id.rs:20` `p_canonical_id_from_hybrid_pubkey`, with a KAT at `rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs` |
+>
+> **This document already says so, 560 lines further down:** §"Status" records
+> **DISCHARGED 2026-08-16** by the CompleteTree activation round — *"The builder
+> landed."* So the file has contradicted itself about whether its own subject
+> exists, and the half a reader meets first is the wrong one.
+>
+> The paragraph is **banner-corrected rather than rewritten**: it is the genuine
+> record of the motivating state, and §1 is titled "Why this doc exists" — the
+> reasoning for opening the round is not made wrong by the round succeeding. What
+> was wrong is that it carried no date while sitting where it is read first. Follow
+> the Status section for landing state; this section is history.
+
 The archival bond record format is **genesis-frozen** and **permanent**: a
 bond posted at genesis is keyed by `p_canonical_id` and its `bond_spend_pk` is
 immutable for the record's life (`ARCHIVAL_BOND_GATE4.md` §4.1). Construction

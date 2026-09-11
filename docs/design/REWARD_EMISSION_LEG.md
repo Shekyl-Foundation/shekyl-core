@@ -838,7 +838,17 @@ funding** (the *only* rung where the reveal newly identifies the funding tx + it
 dispreferred): the wallet rule is that the bond post / re-bond **sweeps P's entire spendable
 funding set**, so no raw funding output survives to be backing-eligible and first-emission backing
 is necessarily the bond-post change. Pinned **mandatory, firewall-class** in the gate-6 spec
-(§2.4/§2.5); bakes into the unbuilt `stake_in` flow at zero cost.
+(§2.4/§2.5); bakes into the `stake_in` flow at zero cost.
+
+> **Correction 2026-09-11.** This sentence read "the **unbuilt** `stake_in` flow".
+> `stake_in` landed 2026-07-18 (`f8a1254c2`,
+> `rust/shekyl-engine-core/src/engine/principal_stake.rs:153`), so the qualifier was
+> 55 days stale. **The claim it qualified is unchanged** — the zero-cost argument
+> never depended on the flow being unbuilt, only on the sweep rule holding — so this
+> is the cheapest of the five surfaces that carried the stale word, and is recorded
+> only because a reader who trusts one stale qualifier discounts the sentence around
+> it. The sweep rule's own verification is discharged in
+> `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.5.
 
 **No wire/consensus backing-lineage rule** — two hard reasons, not a lean: (1) consensus is **blind
 to lineage** (a principal→P and a P→P transfer are indistinguishable stealth txs — that blindness
