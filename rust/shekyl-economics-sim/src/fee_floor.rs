@@ -43,10 +43,20 @@
 //!   refuted class as the snap and §11.2 removes it from the served path.
 //!
 //! §1.9 discipline: `C` comes from the owners through
-//! [`fee_ladder::correction_factor_ratio`]; the floor formula is written
-//! here ONLY because its owner does not exist yet — §11.6 names the
-//! production function that replaces [`floor_rate`] when it lands, and
-//! this pin is what that function is tested against.
+//! [`fee_ladder::correction_factor_ratio`]. The floor formula was written
+//! here because its owner did not exist; **it does now** —
+//! `shekyl_economics::relay_fee_floor` landed with FL-R20 items 1 and 4,
+//! and the daemon's `get_current_fee_per_byte` calls it.
+//!
+//! [`floor_rate`] is NOT simply replaced by it, and the reason is the
+//! instrument's subject rather than inertia: the owner returns atomic
+//! units per byte, floored at 1, which at large `M` is a single digit —
+//! so per-block RATIOS taken on it would be dominated by integer
+//! truncation and would report quantization as slew. This function keeps
+//! `SCALE` in the numerator and stays in `u128` precisely to measure
+//! below that floor. Substituting the owner here would normalize away the
+//! thing being measured. What the sweep owes is a CROSS-CHECK that the two
+//! agree once truncated, not a substitution (§11.6 instrument item, PR C).
 
 use core::fmt::Write as _;
 use std::collections::VecDeque;
