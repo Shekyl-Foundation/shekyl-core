@@ -52,11 +52,14 @@ scan() {
 }
 
 # Drop `rg -n` hits (path:line:content) whose content is a comment or doc line
-# (`// …`, `/* …`, ` * …`), so an explanatory comment, a log line, or an assert
-# message that merely names a pinned symbol cannot trip a raw textual count.
-# A genuinely-benign in-code mention still uses the reward-gate-site-allow
-# marker; this only spares prose from the magic-number tripwires.
-drop_comment_hits() { scan -v '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)'; }
+# (`// …`, `/* …`, ` * …` with a space after the star), so an explanatory
+# comment, a log line, or an assert message that merely names a pinned symbol
+# cannot trip a raw textual count. The star alternative requires the following
+# space so `*out = …` / `*ptr` (a dereference, i.e. code) is not treated as a
+# block-comment continuation. A genuinely-benign in-code mention still uses
+# the reward-gate-site-allow marker; this only spares prose from the
+# magic-number tripwires.
+drop_comment_hits() { scan -v '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*[[:space:]])'; }
 
 LMDB_CPP="src/blockchain_db/lmdb/db_lmdb.cpp"
 LMDB_H="src/blockchain_db/lmdb/db_lmdb.h"
