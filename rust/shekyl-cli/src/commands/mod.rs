@@ -15,6 +15,7 @@ mod balance;
 mod chain;
 mod fees;
 mod lifecycle;
+pub(crate) mod mine;
 mod proofs;
 mod receiving;
 pub mod scripted;
@@ -42,6 +43,10 @@ Wallet lifecycle:
 
 Address and balance:
   address                             Show the wallet's primary address
+                                      (short display form; not pasteable)
+    [--full]                          Print the full address
+    [--out <path>]                    Write the full address to a new
+                                      private file (never overwrites)
   balance                             Show balance breakdown
 
 Transfers:
@@ -92,6 +97,14 @@ Staking:
                                       the reply says what remains)
   chain_health                        Show daemon/chain health (separate conn)
 
+Mining (the daemon does the hashing; these control it):
+  mine start [threads|auto]           Start mining on the connected daemon,
+                                      paying to this wallet (default
+                                      threads: min(cores, 4); keeps
+                                      running after the CLI exits)
+  mine stop                           Stop mining on the daemon
+  mine status                         Show mining state and hash rate
+
 Proofs (multi-word [message] binds into the proof; the verifier must
 supply the identical string — repeated spaces are collapsed to one):
   get_tx_proof <txid> <address> [message]
@@ -125,14 +138,15 @@ Receiving history:
                                       match (FA-8 UNATTRIBUTED)
 
 Meta:
-  engine_info                         Wallet summary (height, balance, address)
+  wallet                              Wallet summary (height, balance, address)
   version                             Show CLI and wallet-RPC versions
-  help                                Show this help
+  help [command]                      Show this help, or one command's usage
   exit / quit                         Exit shekyl-cli";
 
 pub fn repl(
     rpc: RpcSession,
     daemon_client: Option<&DaemonClient>,
+    network: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::resolve::{self, ResolvedCommand};
 
@@ -146,7 +160,7 @@ pub fn repl(
     println!("Welcome to shekyl-cli. Type \"help\" for commands.");
 
     loop {
-        let prompt = crate::session::prompt(rpc.is_open());
+        let prompt = crate::session::prompt(network, rpc.open_wallet_name().as_deref());
 
         match rl.readline(&prompt) {
             Ok(line) => {
@@ -162,6 +176,12 @@ pub fn repl(
 
                 match resolve::parse(line) {
                     ResolvedCommand::Help => println!("{HELP_TEXT}"),
+                    ResolvedCommand::HelpCommand { topic } => match command_help(&topic) {
+                        Some(block) => println!("{block}"),
+                        None => {
+                            eprintln!("No help for {topic:?}. Type \"help\" for the command list.")
+                        }
+                    },
                     ResolvedCommand::Exit => break,
 
                     // Lifecycle
@@ -185,7 +205,12 @@ pub fn repl(
                              after every operation; there is nothing to save."
                         );
                     }
-                    ResolvedCommand::Status => lifecycle::cmd_status(&rpc),
+                    ResolvedCommand::Status => {
+                        lifecycle::cmd_status(
+                            &rpc,
+                            daemon_client.and_then(DaemonClient::down_hint),
+                        );
+                    }
                     ResolvedCommand::Password => lifecycle::cmd_password(&rpc),
                     ResolvedCommand::Rescan { hard } => {
                         lifecycle::cmd_rescan(&rpc, hard);
@@ -193,7 +218,9 @@ pub fn repl(
 
                     // Balance / address
                     ResolvedCommand::Balance => balance::cmd_balance(&rpc),
-                    ResolvedCommand::Address => balance::cmd_address(&rpc),
+                    ResolvedCommand::Address { full, out } => {
+                        balance::cmd_address(&rpc, full, out.as_deref());
+                    }
 
                     // Transfers
                     ResolvedCommand::Transfer {
@@ -266,6 +293,17 @@ pub fn repl(
                         chain::cmd_chain_health(daemon_client);
                     }
 
+                    // Mining control (CU-3; the daemon does the hashing)
+                    ResolvedCommand::MineStart { threads } => {
+                        mine::cmd_mine_start(&rpc, daemon_client, network, threads);
+                    }
+                    ResolvedCommand::MineStop => {
+                        mine::cmd_mine_stop(&rpc, daemon_client, network);
+                    }
+                    ResolvedCommand::MineStatus => {
+                        mine::cmd_mine_status(&rpc, daemon_client, network);
+                    }
+
                     // Proofs (WI-RPC-3 surface)
                     ResolvedCommand::GetTxProof {
                         txid,
@@ -311,8 +349,8 @@ pub fn repl(
 
                     // Meta
                     ResolvedCommand::Version => cmd_version(&rpc),
-                    ResolvedCommand::EngineInfo => {
-                        balance::cmd_engine_info(&rpc);
+                    ResolvedCommand::Wallet => {
+                        balance::cmd_wallet(&rpc);
                     }
 
                     ResolvedCommand::Unknown { cmd } => {
@@ -336,6 +374,40 @@ pub fn repl(
     // private UDS socket directory).
     rpc.shutdown();
     Ok(())
+}
+
+/// The one-command usage block for `help <command>` (CU-2): the lines of
+/// [`HELP_TEXT`] whose command column names `topic`, plus their continuation
+/// lines. **Derived from `HELP_TEXT` rather than kept as a second table**, so
+/// the listing and the one-pagers can never disagree — a new command's help
+/// line is automatically its `help <command>` answer.
+///
+/// The extraction leans on `HELP_TEXT`'s fixed shape: command lines are
+/// indented exactly two spaces, continuation lines deeper, and section
+/// headers/blank lines start at column zero.
+fn command_help(topic: &str) -> Option<String> {
+    // Hidden aliases answer with their public block.
+    let canonical = match topic {
+        "engine_info" => "wallet",
+        "quit" => "exit",
+        "start_mining" | "stop_mining" | "mining_status" => "mine",
+        t => t,
+    };
+    let mut out: Vec<&str> = Vec::new();
+    let mut capturing = false;
+    for line in HELP_TEXT.lines() {
+        let indent = line.len() - line.trim_start().len();
+        if indent == 2 {
+            let first = line.split_whitespace().next().unwrap_or("");
+            capturing = first == canonical;
+        } else if indent == 0 {
+            capturing = false;
+        }
+        if capturing {
+            out.push(line);
+        }
+    }
+    (!out.is_empty()).then(|| out.join("\n"))
 }
 
 /// `version`: CLI version, plus the connected wallet-RPC server's version
@@ -506,6 +578,36 @@ mod tests {
         assert_eq!(parse_amount("1.0"), Some(1_000_000_000));
         assert_eq!(parse_amount("abc"), None);
         assert_eq!(parse_amount("1.0000000001"), None); // >9 decimal places
+    }
+
+    /// `help <command>` extracts that command's block from HELP_TEXT —
+    /// including multi-line continuations and flag lines — answers hidden
+    /// aliases with the public block, and is honest about unknown topics.
+    #[test]
+    fn command_help_extracts_one_command_block() {
+        let transfer = command_help("transfer").expect("transfer is documented");
+        assert!(
+            transfer.contains("transfer <amount> <address>"),
+            "{transfer}"
+        );
+        assert!(transfer.contains("--priority"), "{transfer}");
+        assert!(
+            !transfer.contains("transfers "),
+            "the sibling command's block must not bleed in: {transfer}"
+        );
+        // A two-word grammar answers under its first token.
+        let request = command_help("request").expect("request is documented");
+        assert!(request.contains("request new"), "{request}");
+        // Hidden alias → public block.
+        let wallet = command_help("engine_info").expect("alias answers");
+        assert!(wallet.contains("wallet"), "{wallet}");
+        // Mining aliases (CU-3) all answer with the `mine` block.
+        for alias in ["start_mining", "stop_mining", "mining_status", "mine"] {
+            let mine = command_help(alias).expect("mining alias answers");
+            assert!(mine.contains("mine start"), "{alias}: {mine}");
+            assert!(mine.contains("mine stop"), "{alias}: {mine}");
+        }
+        assert!(command_help("no_such_command").is_none());
     }
 
     #[test]

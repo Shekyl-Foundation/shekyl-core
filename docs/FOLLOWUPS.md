@@ -14,6 +14,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **`on_mining_status` still labels dead pre-RandomX variants "Cryptonight" (rule 60).** The daemon's `pow_algorithm` label table (`src/rpc/core_rpc_server.cpp` `on_mining_status`) emits Cryptonight names for PoW variants Shekyl never had; the CLI deliberately does not render the field (CU-3, [`CLI_USABILITY.md`](design/CLI_USABILITY.md) §CU-3) but the daemon-side arms are dead-branch deletion work — falsify by `grep -n "Cryptonight" src/rpc/core_rpc_server.cpp` returning nothing.
+  - Target: pre-genesis
+
 - **Delete or justify `tx_extra` 0x0A (`PQC_SPEND_AUTH_PUBKEYS`) — it has no producer.** Found at the C2-R2 signing round (Rick, verified at source): declared (`src/cryptonote_basic/tx_extra.h:48`, `rust/shekyl-wire/src/tx_extra.rs:50`), parsed (`tx_extra.rs:233`), picked (`src/cryptonote_basic/cryptonote_format_utils.cpp:540`) — and nothing anywhere constructs the field; the only write arm is the codec's generic `write_blob` branch. A parse surface with no producer is rule-15 debt and a fuzzing surface for free. Rule 15: delete at the port, or record the future producer that justifies it. — [`CONSENSUS_C2_R2_WEIGHT_FEES.md`](completed/CONSENSUS_C2_R2_WEIGHT_FEES.md) Q10
   - Target: pre-genesis
 
@@ -335,9 +338,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Genesis ceremony tooling: `generate-genesis-address` CLI**
-  - Target: pre-genesis
-
-- **USER_GUIDE realignment to the Rust CLI surface (2026-06-10 doc**
   - Target: pre-genesis
 
 - **Stage 1 trait-extraction chain — closeout audit (2026-05-29, [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)**

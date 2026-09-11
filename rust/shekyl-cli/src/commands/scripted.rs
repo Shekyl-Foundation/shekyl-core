@@ -30,7 +30,7 @@ type BoxErr = Box<dyn std::error::Error>;
 /// `shekyl-cli create <name> --seed-out <path>` — non-interactive create.
 #[derive(clap::Args)]
 pub struct CreateArgs {
-    /// Wallet name (file created under --engine-dir).
+    /// Wallet name (file created under --wallet-dir).
     pub name: String,
     /// Write the one-time seed backup to this path. Created 0600 and refuses
     /// to overwrite an existing file. Required — the server never re-exposes
@@ -49,7 +49,7 @@ pub struct CreateArgs {
 /// `shekyl-cli restore <name> --seed-file <path>` — non-interactive restore.
 #[derive(clap::Args)]
 pub struct RestoreArgs {
-    /// Wallet name (file created under --engine-dir).
+    /// Wallet name (file created under --wallet-dir).
     pub name: String,
     /// Read the seed backup from this file — a BIP-39 mnemonic
     /// (mainnet/stagenet) or a 32-byte raw seed as hex (testnet), i.e. exactly
@@ -185,29 +185,37 @@ fn strip_one_trailing_newline(s: &mut String) {
 
 /// Open the seed-out path 0600 with O_EXCL semantics: refuse to overwrite an
 /// existing file and refuse to follow a symlink on the final component.
-#[cfg(unix)]
 fn open_seed_out(path: &Path) -> Result<File, BoxErr> {
+    open_owner_only_excl(path, "seed file")
+}
+
+/// Open `path` as a new owner-only (0600) file with O_EXCL semantics: refuse
+/// to overwrite an existing file and refuse to follow a symlink on the final
+/// component. The one file-creation shape for everything the CLI writes out
+/// (`--seed-out`, `address --out`); `what` names the file class in the error.
+#[cfg(unix)]
+pub(crate) fn open_owner_only_excl(path: &Path, what: &str) -> Result<File, BoxErr> {
     use std::os::unix::fs::OpenOptionsExt;
     OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(path)
-        .map_err(|e| seed_out_error(path, &e))
+        .map_err(|e| create_error(what, path, &e))
 }
 
-/// Open the seed-out path owner-only with `CREATE_NEW` semantics — the same
-/// contract as the Unix arm, with the DACL applied at creation rather than a
-/// mode. The Win32 call lives in `shekyl-win-sec` (WP-D2: this crate holds
-/// no `unsafe`); what is here is the call and the error text.
+/// Open `path` owner-only with `CREATE_NEW` semantics — the same contract as
+/// the Unix arm, with the DACL applied at creation rather than a mode. The
+/// Win32 call lives in `shekyl-win-sec` (WP-D2: this crate holds no
+/// `unsafe`); what is here is the call and the error text.
 #[cfg(windows)]
-fn open_seed_out(path: &Path) -> Result<File, BoxErr> {
-    shekyl_win_sec::create_owner_only_file(path).map_err(|e| seed_out_error(path, &e))
+pub(crate) fn open_owner_only_excl(path: &Path, what: &str) -> Result<File, BoxErr> {
+    shekyl_win_sec::create_owner_only_file(path).map_err(|e| create_error(what, path, &e))
 }
 
-fn seed_out_error(path: &Path, cause: &dyn std::fmt::Display) -> BoxErr {
+fn create_error(what: &str, path: &Path, cause: &dyn std::fmt::Display) -> BoxErr {
     format!(
-        "cannot create seed file {} (it must not already exist): {cause}",
+        "cannot create {what} {} (it must not already exist): {cause}",
         path.display()
     )
     .into()

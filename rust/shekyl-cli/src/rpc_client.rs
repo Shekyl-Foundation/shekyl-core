@@ -379,6 +379,11 @@ impl RpcSession {
         self.open_wallet.borrow().is_some()
     }
 
+    /// The open wallet's name, for the prompt (CU-1). `None` when closed.
+    pub fn open_wallet_name(&self) -> Option<String> {
+        self.open_wallet.borrow().clone()
+    }
+
     /// Record that `name` is now the open wallet.
     pub fn set_open(&self, name: &str) {
         *self.open_wallet.borrow_mut() = Some(name.to_owned());
