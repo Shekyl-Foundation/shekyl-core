@@ -97,6 +97,49 @@ pub fn quantize_pow2_ceil(c_scaled: u64) -> u64 {
     }
 }
 
+/// The **raw** fee-correction scalar `C = (1−σ)·M_r/(1−b)`, in [`SCALE`]
+/// units (FL-R20).
+///
+/// This is the scalar the relay floor follows: `F(h) = R·C(h)·w_ref/M²`,
+/// with **no snap, no band, no rounding**, and **one formula for every
+/// regime** — `C < 1` on a quiet chain (`M_r` at its low rail) lowers the
+/// floor below the inherited value exactly as `C > 1` raises it. There is
+/// no `max(F, F_inherited)` arm, because a floor that only ever rises is
+/// not a correction.
+///
+/// `sigma_scaled` and `burn_pct_scaled` are the caller's already-computed
+/// fixed-point components — the same `shekyl_calc_emission_share` /
+/// `shekyl_calc_burn_pct` values the validation path uses at this state,
+/// so there is one derivation and no second model on the estimate side.
+///
+/// Total by construction, which is what lets it cross `extern "C"`
+/// without a fallible arm (rule 40): `σ` and `b` are each clamped below
+/// `SCALE`, so the divisor `SCALE − b` is at least 1 and the quotient of
+/// two `u128`s built from `u64`s cannot exceed `u64::MAX` — the numerator
+/// is bounded by `SCALE · release_max`. The reachable range is far
+/// narrower than the type: `C ≈ 0.68` at the young-quiet corner
+/// (`M_r` = 0.8, `σ` = 0.15, `b` = 0) up to `≈ 13` congested-mature, which
+/// is why FL-R21 could delete `MIN_REPRESENTABLE_C` — the pow2 floor it
+/// provided guarded a boundary raw `C` never approaches.
+#[must_use]
+pub fn fee_correction(
+    tx_volume: TxVolume,
+    sigma_scaled: u64,
+    burn_pct_scaled: u64,
+    params: &EconomicParams,
+) -> u64 {
+    let m_r = calc_release_multiplier(
+        tx_volume,
+        params.tx_volume_baseline,
+        params.release_min,
+        params.release_max,
+    );
+    let sigma = sigma_scaled.min(SCALE - 1);
+    let b = burn_pct_scaled.min(params.burn_cap).min(SCALE - 1);
+    u64::try_from(u128::from(SCALE - sigma) * u128::from(m_r) / u128::from(SCALE - b))
+        .expect("C fits u64: numerator <= SCALE * release_max, divisor >= 1")
+}
+
 /// The quantized fee-correction scalar `C_q` (round-8 amendment,
 /// whole-scalar form), with boundary hysteresis.
 ///
@@ -141,21 +184,18 @@ pub fn fee_correction_quantized(
     prev_cq_scaled: u64,
     params: &EconomicParams,
 ) -> u64 {
-    let m_r = calc_release_multiplier(
-        tx_volume,
-        params.tx_volume_baseline,
-        params.release_min,
-        params.release_max,
-    );
-    let sigma = sigma_scaled.min(SCALE - 1);
-    let b = burn_pct_scaled.min(params.burn_cap).min(SCALE - 1);
-    let c = u64::try_from(u128::from(SCALE - sigma) * u128::from(m_r) / u128::from(SCALE - b))
-        .expect("C fits u64");
+    // The raw scalar has ONE owner ([`fee_correction`]) and this is the
+    // quantizer wrapped around it. Before FL-R20 the expression lived here
+    // and nowhere else, so the relay floor could not read `C` without
+    // reading the snap with it — which is the whole of FL-R20's finding.
     // TOTALITY AT THE BOUNDARY is `hysteresis_step`'s floor: `σ` and `b`
-    // are clamped just above, so what remains is a `C` of 0, which the
-    // floor absorbs. The reasoning lives there, with the code that does
-    // it.
-    hysteresis_step(c, prev_cq_scaled)
+    // are clamped inside `fee_correction`, so what remains is a `C` of 0,
+    // which the floor absorbs. The reasoning lives there, with the code
+    // that does it.
+    hysteresis_step(
+        fee_correction(tx_volume, sigma_scaled, burn_pct_scaled, params),
+        prev_cq_scaled,
+    )
 }
 
 /// The smallest exactly-representable raw `C`: the floor [`hysteresis_step`]
@@ -529,6 +569,74 @@ mod tests {
         assert_eq!(quantize_pow2_ceil(680_000), 1_000_000);
         assert_eq!(quantize_pow2_ceil(1_130_000), 2_000_000);
         assert_eq!(quantize_pow2_ceil(12_917_390), 16_000_000);
+    }
+
+    /// Raw `C` at the corners §1 derives, and the two properties FL-R20
+    /// rests on: it is CONTINUOUS (no snap) and it goes BELOW `SCALE`.
+    ///
+    /// A quantized `C_q` cannot express either — `quantize_pow2_ceil`
+    /// maps the whole young-quiet corner onto `SCALE` — so a relay floor
+    /// reading `C_q` can only ever be raised, never lowered, which is the
+    /// asymmetry FL-R20 removes.
+    #[test]
+    fn raw_correction_is_continuous_and_falls_below_one() {
+        let p = EconomicParams::default();
+
+        // Baseline volume, no subsidy split, no burn: C is exactly 1.
+        assert_eq!(fee_correction(TxVolume::per_block(50), 0, 0, &p), SCALE);
+
+        // Young-quiet corner: M_r at its 0.8 low rail, sigma = 0.15, b = 0.
+        // C = 0.8 * 0.85 = 0.68 — BELOW SCALE, which is the half of the
+        // range the quantizer erased.
+        let quiet = fee_correction(TxVolume::per_block(1), SCALE * 15 / 100, 0, &p);
+        assert_eq!(quiet, SCALE * 68 / 100);
+        assert!(quiet < SCALE, "raw C must be able to LOWER the floor");
+
+        // Continuity: one transaction more in the window moves C by a
+        // hair, not by a factor of two. The quantized scalar's step at a
+        // pow2 boundary is what FL-R3 spent two rounds trying to damp.
+        let a = fee_correction(TxVolume::window(50 * 720 + 1, 720), 0, 0, &p);
+        let b = fee_correction(TxVolume::window(50 * 720 + 2, 720), 0, 0, &p);
+        assert!(b >= a, "C is monotone in volume");
+        assert!(
+            b - a < SCALE / 1000,
+            "one tx must move raw C by well under 0.1%, got {} in SCALE units",
+            b - a
+        );
+    }
+
+    /// The quantizer is now a wrapper, and this is the falsifier for that
+    /// claim: for every state, `C_q` is exactly the snap of raw `C`. If
+    /// the extraction had changed the arithmetic — a clamp applied in a
+    /// different order, say — these would part company.
+    #[test]
+    fn quantized_correction_is_exactly_the_snap_of_the_raw_one() {
+        let p = EconomicParams::default();
+        let mut stepped = 0usize;
+        for v in [1u64, 10, 40, 49, 50, 51, 65, 80, 200] {
+            for sigma_pct in [0u64, 5, 15] {
+                for burn_pct in [0u64, 10, 50] {
+                    let sigma = SCALE * sigma_pct / 100;
+                    let burn = SCALE * burn_pct / 100;
+                    let raw = fee_correction(TxVolume::per_block(v), sigma, burn, &p);
+                    assert_eq!(
+                        fee_correction_quantized(TxVolume::per_block(v), sigma, burn, 0, &p),
+                        hysteresis_step(raw, 0),
+                        "C_q must be the snap of raw C at v={v} sigma={sigma} b={burn}"
+                    );
+                    if hysteresis_step(raw, 0) != raw {
+                        stepped += 1;
+                    }
+                }
+            }
+        }
+        // Rule 47: if the snap never moved anything, the assertion above
+        // would hold for a `hysteresis_step` that is the identity, and
+        // this test would be asserting nothing about the quantizer.
+        assert!(
+            stepped > 0,
+            "the sweep must include states the snap actually moves"
+        );
     }
 
     /// The hysteresis band: sitting on a boundary does not flicker; a

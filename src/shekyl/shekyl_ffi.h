@@ -311,6 +311,18 @@ uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
+// The RAW fee-correction scalar C = (1-sigma)*M_r/(1-b) in SCALE units
+// (FL-R20) - what the relay floor follows: F(h) = R*C(h)*w_ref/M^2.
+// `sigma_scaled` / `burn_pct_scaled` are the same shekyl_calc_emission_share /
+// shekyl_calc_burn_pct outputs validation computes at this state, and
+// (tx_count_sum, window_blocks) is FL-R24's undivided window. No snap, no
+// band, no previous value - hence no prev_cq parameter. Cannot fail.
+uint64_t shekyl_fee_correction(
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
+    uint64_t sigma_scaled,
+    uint64_t burn_pct_scaled);
+
 /// The quantized fee-correction scalar C_q (FL-R12' round-8 amendment,
 /// whole-scalar form) with pow2-boundary hysteresis. sigma_scaled and
 /// burn_pct_scaled are the SAME shekyl_calc_emission_share /

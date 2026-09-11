@@ -586,6 +586,42 @@ pub unsafe extern "C" fn shekyl_block_reward(
     }
 }
 
+/// The **raw** fee-correction scalar `C = (1−σ)·M_r/(1−b)` in `SCALE`
+/// units (FL-R20) — the scalar the relay floor follows,
+/// `F(h) = R·C(h)·w_ref/M²`.
+///
+/// `sigma_scaled` and `burn_pct_scaled` are the SAME
+/// `shekyl_calc_emission_share` / `shekyl_calc_burn_pct` outputs the
+/// validation path computes at this state — one source, no second
+/// derivation — and `(tx_count_sum, window_blocks)` is the exact window
+/// FL-R24 put on the wire undivided.
+///
+/// No snap, no band, no rounding, and **no previous value**: that is the
+/// whole difference from [`shekyl_fee_correction_quantized`], and it is
+/// why this export has no `prev_cq_scaled` parameter to pass zero to.
+/// `C < 1` on a quiet chain lowers the floor exactly as `C > 1` raises
+/// it; the quantized scalar could not express the first direction,
+/// because the pow2 ceiling snap maps the entire sub-unity range onto
+/// `SCALE`.
+///
+/// Cannot fail — the crate function is total (see its note on the
+/// boundary), so nothing here can panic across the ABI (rule 40).
+#[no_mangle]
+pub extern "C" fn shekyl_fee_correction(
+    tx_count_sum: u64,
+    window_blocks: u64,
+    sigma_scaled: u64,
+    burn_pct_scaled: u64,
+) -> u64 {
+    let params = shekyl_economics::params::EconomicParams::default();
+    shekyl_economics::fee_correction(
+        shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
+        sigma_scaled,
+        burn_pct_scaled,
+        &params,
+    )
+}
+
 /// The quantized fee-correction scalar C_q (FL-R12′ round-8 amendment,
 /// whole-scalar form) with pow2-boundary hysteresis. `sigma_scaled` and
 /// `burn_pct_scaled` are the SAME `shekyl_calc_emission_share` /
