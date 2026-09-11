@@ -93,6 +93,12 @@ const PENALTY_FREE_ZONE: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64
 /// ```text
 /// C   = (1−σ)·M_r/(1−b)  ≤  1·release_max/(1−burn_cap)     (σ ⇒ 0)
 /// C_q = 2^ceil(log2 C)                                      (≤ 16 at canonical params)
+///       — a BOUNDING device here, not the served scalar: FL-R20 has the
+///         ladder follow raw C, and the pow2 ceiling is kept only because
+///         C_q ≥ C makes the cap an upper bound. It is loose in the safe
+///         direction, which is this function's whole disposition. (FL-R21
+///         deletes `quantize_pow2_ceil`; the sweep owes this call site a
+///         replacement that bounds raw C directly.)
 /// R   ≤ base_block_reward(0)                                (monotone in already_generated)
 /// Mfw ≥ Zm
 /// cap = corrected_fee_ladder(R₀, Zm, Zm, Zm, w_ref, C_q^max).priority
@@ -548,8 +554,15 @@ mod tests {
     #[test]
     fn absolute_cap_is_the_structural_bound() {
         let cap = absolute_fee_rate_cap();
+        // 218,453,333 = 2·R₀·C_max/(Zm·SCALE) with R₀ = 2,048,000,000,000 and
+        // C_max = 16·SCALE. It was 220,000,000 while the served ladder rounded
+        // each rung up to two significant digits; FL-R21 takes
+        // `round_money_up_2` off that path, so the bound is now the
+        // arithmetic's own answer. The cap TIGHTENED, and the swept maximum
+        // below moved down with it, so the soundness margin is unchanged —
+        // which is the property that matters, not the value.
         assert_eq!(
-            cap, 220_000_000,
+            cap, 218_453_333,
             "economics params moved the structural fee bound"
         );
     }
@@ -660,7 +673,11 @@ mod tests {
         // The peak over the SWEPT trajectories — not a claim about every
         // reachable history. It sits on the dormant rail, which is the
         // point: the neutral walk alone understated it.
-        assert_eq!(worst.0, 98_000_000, "the swept maximum moved");
+        // 97,961,085, not the 98,000,000 that value rounded up to before
+        // FL-R21. The assertion above (`worst.0 <= cap`) is the one carrying
+        // the guarantee, and it holds with the same slack: 97,961,085 against
+        // a 218,453,333 bound.
+        assert_eq!(worst.0, 97_961_085, "the swept maximum moved");
         assert_eq!(
             worst.3, p.release_min,
             "the swept peak left the dormant rail"
