@@ -51,8 +51,9 @@ use crate::provider::{ShardBody, ShardProvider};
 /// (`docs/design/ARCHIVAL_SERVING_ROUTE.md`): `GET /shard/{id}`.
 /// Not a format-round candidate — §9.5's exclusion stands — and not
 /// consensus. **Do not rename this to restore `provisional` or mint a
-/// `v0`/`v1` slot**; a successor request contract picks a new path with a
-/// named reopening.
+/// version token.** A later request contract is an additional path that
+/// suffixes `/shard/`, with a named reopening; until then this is the
+/// only route.
 pub const ROUTE_PREFIX: &str = "/shard/";
 
 /// Response content type for shard bytes.

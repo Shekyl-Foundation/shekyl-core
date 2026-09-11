@@ -56,12 +56,17 @@ Was `/x-provisional/v0/shard/`. Discarded because:
   ([rule 21](../../.cursor/rules/21-reversion-clause-discipline.mdc))
 - `x-` is the unofficial-prefix convention
 
-The onion serves one resource. The path names it. A future request
-contract picks a **new** path then, with a named reopening — it does not
-ride a version slot reserved today.
+The onion serves one resource. The path names it. Genesis stays
+`GET /shard/{id}`. If a later request contract is needed, it is an
+**additional** path that suffixes `/shard/` (the resource name stays; a
+token is added), with a named reopening — not a rename of this path, and
+not a `v0` slot reserved today
+([rule 21](../../.cursor/rules/21-reversion-clause-discipline.mdc)).
+Until that reopening, anything other than `/shard/{id}` is the shared
+404.
 
-The discarded path is a miss (the shared 404), same as any other wrong
-path. Do not keep it as an alias.
+The discarded path is a miss, same as any other wrong path. Do not keep
+it as an alias.
 
 ### Status and headers — RULED by transcription
 
@@ -123,7 +128,10 @@ the W₂ rig derives). They are operational bounds, not the request line.
   successor that exclusion lacked.
 - Not a promise that HTTP/1.1 remains the serving transport after a
   future serving redesign. A successor transport is a new contract with
-  a named reopening, not a version bump of `/shard/`.
+  a named reopening, not a version bump of this path.
+- Not a reserved `/v2/shard/` (or any other token) in today's route
+  table. The suffix-shaped successor is the reopening *shape*, not a
+  path this endpoint answers.
 
 ---
 
