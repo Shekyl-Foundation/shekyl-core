@@ -51,8 +51,20 @@ designated-backing *selector* consuming `BackingSet`, the `EmissionReward`
 classification arm, and the emission-path integration test. Out of scope
 (**SP-R0**, unchanged): durable removal of confirmed-spent funding records
 (FOLLOWUPS "2d-1 WI-2"); §3.2 re-pins the dead-code invariant that sequencing
-rests on. Out of scope entirely: `stake_in` (unbuilt; §3.5 preserves its
-design constraints untouched).
+rests on. Out of scope entirely: `stake_in` (§3.5 preserves its design
+constraints untouched).
+
+> **Correction 2026-09-11 — this scope line's stated ground has expired, and
+> the verdict is deliberately left standing without one.** It read
+> "`stake_in` (unbuilt; …)", making unbuilt-ness the *reason* `stake_in` was
+> out of scope. `stake_in` landed 2026-07-18 (`f8a1254c2`), so that reason is
+> gone. **Whether `stake_in` belongs in GF4b's scope is now an open question
+> for this arc's owner.** The word is removed rather than replaced because a
+> verdict that outlives its reason is repaired by re-deriving it, not by
+> fitting a fresh reason to the answer already on the page — the same failure
+> this document's own §3.5 correction describes. Nothing here asserts the
+> verdict is wrong; it is *unsupported* until someone rules. The design
+> constraint §3.5 parks is discharged separately, there.
 
 ## 2. Substrate (verified at source on `dev` = `c72d2ecdb`, 2026-07-08)
 
@@ -390,10 +402,31 @@ sweep + the funding-record set (the bond-post path's data plane; the
 1. **Single structured `bond_floor + cover` funding output** (lifecycle §3 /
    §3.1): the input-*count* signal on the P-public bond post is mitigated by
    `stake_in` funding each admission as **one** structured output, so the
-   sweep consumes one input in the common case. `stake_in` is unbuilt; this
-   remains a design constraint on it, restated here so the sweep PR is not
-   read as weakening it. The sweep is the mechanism that makes "consume
-   everything" and "consume one input" the same statement in the common case.
+   sweep consumes one input in the common case. The sweep is the mechanism
+   that makes "consume everything" and "consume one input" the same
+   statement in the common case.
+
+   > **DISCHARGED 2026-09-11 — the constraint is satisfied and tested.**
+   > `stake_in` builds a single-recipient funding request, asserted at
+   > `rust/shekyl-engine-core/src/engine/principal_stake.rs:276` —
+   > `stake_in_request_is_a_single_output_to_the_active_persona`, whose
+   > `assert_eq!(request.recipients.len(), 1, …)` carries the message
+   > **"single-output funding (GF-4b)"**, citing this criterion by name.
+   >
+   > *(This paragraph read "`stake_in` is unbuilt; this remains a design
+   > constraint on it" until today. `stake_in` landed 2026-07-18 in
+   > `f8a1254c2`, whose subject line cites `PRINCIPAL_STAKE_LIFECYCLE` PR-P2
+   > — one of the five documents that went on denying it existed — so this
+   > line was 55 days stale. The correction is dated rather than applied
+   > silently because the wrong word is not the defect. **Parking a
+   > constraint on unbuilt code converts a live verification obligation into
+   > invisible debt the moment that code lands**: the obligation fell due on
+   > 2026-07-18, and the surface that owed it went on saying there was
+   > nothing yet to check. That the constraint was in fact met is the
+   > implementer's diligence — the test cites GF-4b unprompted — and not
+   > this process working. A reader grounding on the old sentence would have
+   > concluded, correctly per the page and wrongly per the tree, that the
+   > verification could not yet be attempted.)*
 
    **Launch-window disposition (GF4b-2, priority-1 — answered, not
    deferred).** Until `stake_in` lands, every bond post exposes the raw

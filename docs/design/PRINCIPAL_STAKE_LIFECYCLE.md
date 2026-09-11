@@ -196,6 +196,21 @@ that owns it (§4a PR map) — no signature churn between "surface" and "impleme
   `scan.rs` "provenance" comment previously cited here is about
   *wire-parse* provenance (`ParsedTransaction`), a different concept. The
   "can land ahead of `stake_in`" claim was confirmed correct and has landed.
+
+  > **Note 2026-09-11 — `stake_in` has since been built; the paragraph above is
+  > left as written.** It describes the sweep as "a design constraint on the
+  > **unbuilt** `stake_in` funding path", which was true when written and is
+  > carried under this bullet's own "verified at source 2026-07-01" stamp — a
+  > dated record of the birth condition, not a standing claim about the tree, so
+  > it is annotated rather than edited. `stake_in` landed 2026-07-18
+  > (`f8a1254c2`, `rust/shekyl-engine-core/src/engine/principal_stake.rs:153`).
+  > **What the reader needs and the paragraph can no longer give:** the
+  > "when built, its signature takes …" prescription is now checkable against
+  > shipped code rather than pending, and the single-structured-output half of it
+  > is discharged — `stake_in_request_is_a_single_output_to_the_active_persona`
+  > (`principal_stake.rs:276`) asserts the single-recipient shape, citing GF-4b.
+  > The sweep half (full spendable-funding set, no subset parameter) is **not**
+  > verified here and this note does not claim it is.
   **UPDATE 2026-07-08 (wired state, GF-4b PR):** landed — `MintLineageOutput`
   classified at the scan seam and persisted on `PFundingOutputRecord`
   (schema v5, with `spendable_height` via the shared `eligible_height`);

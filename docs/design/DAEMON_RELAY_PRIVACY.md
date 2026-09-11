@@ -88,6 +88,23 @@ none of this is genesis-blocking. It is being fixed before ship because it is
 
 ## 0. Problem statement (verified at source and by measurement)
 
+> **Dated 2026-09-11 — this section is the state that MOTIVATED the work, recorded
+> as found. Read it as history; it is not a description of the tree today.** The
+> banner exists because §0 is written in the present tense and carried no date,
+> and at least one of its sentences has since been overtaken: *"There is no test,
+> anywhere in the tree, of any randomized quantity in the relay layer."* That was
+> the finding that justified the round, and it is **preserved, not deleted** —
+> but a randomized relay quantity is now tested, in
+> `tests/unit_tests/txpool_relay_timers.cpp` (`TEST(relay_deadline,
+> an_out_of_range_draw_saturates_forward_never_backward)`,
+> `is_monotonic_in_the_draw`, `zero_draw_still_never_lands_in_the_past`) and
+> across `rust/shekyl-relay-privacy/` (`poisson.rs`, `geometric.rs`, `rng.rs`).
+>
+> Dating the section is the whole remedy, and deliberately so: no sentence below
+> is edited, because deciding which of §0's findings the port has since closed is
+> the relay arc's judgement, not a sweeper's. A date converts the section from a
+> standing assertion into the record it always was.
+
 Shekyl inherits a complete Dandelion++ implementation from the Monero
 lineage: the stem map in `src/net/dandelionpp.cpp` (**deleted at RP-3a** — see
 §16; `dandelionpp.cpp:NNN` citations throughout this document are historical and
