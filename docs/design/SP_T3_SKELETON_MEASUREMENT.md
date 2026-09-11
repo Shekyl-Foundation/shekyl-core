@@ -469,7 +469,42 @@ introduction-point reuse. All three are measured below.
 | Correlated descriptor publication timing | **CONFIRMED (weak), and weaker than expected** | Two personas added **0.043 s** apart began publishing **0.98 s** apart — a tight, genuinely correlated window. But the HSDir result above blunts it: exploiting the correlation requires observing **≥ 2 of the 32 distinct directories** the two descriptors land on *and* correlating across them, because no directory sees both. Combined with the fact that two unrelated services starting at once on a busy directory look identical, this is a real-but-weak channel, not a break. `T = ⟨`multi-HSDir operator; sees upload times at the directories it runs; cost = running a meaningful fraction of the HSDir ring; priced in the C2/C3 bucket`⟩`. |
 | Co-serving penalty *(deterrence floor, not architecture)* | **QUANTIFIED AS A LOWER BOUND** | Doing the forbidden thing costs **both** axes at once: complete guard overlap (2/2) **and** ≥ ×1.54 on `D*`. **Floor, not characterization** — one run, N=2, C-tor, single vantage. See §12.0d. Distinct from **SPIKE-F-11** (one persona, many readers), which is conformant and **unmeasured**. |
 | `MaxStreams` **exhaustion** on A observable at B | **UNMEASURABLE-HERE** | Distinct from the contention row above and **not claimed either way**. Deliberate flooding to the stream cap, distinguished from ambient variance, needs a controlled load generator and a quiet baseline this spike does not have. Contention at concurrency 2 is not evidence about the exhaustion path. |
-| Error responses fingerprint the shared backend | **REFUTED (by construction)** | `serve.rs` renders one identical 404 for every non-matching request — wrong path, wrong method, malformed — asserted by `every_non_route_gets_one_identical_error`. Two personas' success headers are asserted byte-identical by `two_personas_are_header_identical`, and the complete header set is pinned to `content-type` + `content-length` (no `server`, no `date`, no `etag`, no `accept-ranges`). |
+| Error responses fingerprint the shared backend | **REFUTED (by construction)** | `serve.rs` renders one identical 404 for every non-matching request — wrong path, wrong method, malformed — asserted by `every_non_servable_outcome_renders_one_identical_404` (`rust/shekyl-p-serve/src/serve_tests.rs`). Two personas' success headers are asserted byte-identical by `two_personas_are_header_identical`, and the complete header set is pinned to `content-type` + `content-length` (no `server`, no `date`, no `etag`, no `accept-ranges`). *(Citation repaired 2026-09-11 — see the note below.)* |
+
+
+> **Citation repair 2026-09-11 — a cited test died inside a wholesale deletion, and
+> the verdict above went on citing it.** The row read *"asserted by
+> `every_non_route_gets_one_identical_error`"*. That test lived in
+> `rust/shekyl-sp-t3-spike/src/serve.rs`, which `d0206a6581` (2026-08-11, the
+> serving-loop review) deleted whole — 593 lines — when the spike was folded into
+> production `shekyl-p-serve`. The name has not existed in the tree since.
+>
+> **The verdict stands and the coverage is real**; only the pointer was dead. The
+> successor is `every_non_servable_outcome_renders_one_identical_404`, which sweeps
+> wrong path, wrong prefix, malformed id, a valid route to an unheld shard, a wrong
+> method on a *held* shard, and a provider infrastructure failure, and asserts all of
+> them byte-identical.
+>
+> **The wrong-method leg is new, added by this repair**, and the reason is the second
+> half of the finding: the row claimed three cases — wrong path, wrong method,
+> malformed — but the surviving sweep covered two. The method case rested on
+> `non_get_methods_are_not_served`, which asserts only that the status line starts
+> `HTTP/1.1 404`; a divergent header set or ordering on a non-GET would pass it. That
+> is not hypothetical: with `parse_request` mutated to accept `HEAD` as a route — so a
+> `HEAD` on a held shard serves the shard instead of the shared 404 —
+> `non_get_methods_are_not_served` **passes** and the extended sweep **fails**
+> (observed, then reverted). The parser-level
+> `request_parsing_accepts_only_the_provisional_route` also catches that particular
+> mutation, but it checks the parse result, not the response bytes: a divergence
+> introduced at the render layer rather than the parser would escape it, and the
+> byte-identity sweep is what closes that.
+>
+> **The mechanism is worth more than the repair.** A citation can die silently inside
+> a deletion that is itself correct — nothing in the spike fold was wrong, and no gate
+> reads design-doc prose for test names. The tell was that this row named *two* tests
+> and only one migrated: `two_personas_are_header_identical` is live at
+> `serve_tests.rs:167`. One of two surviving is the signature of a wholesale deletion
+> crossing a citation, and it is visible only by checking each name.
 
 ---
 

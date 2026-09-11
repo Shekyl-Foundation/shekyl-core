@@ -106,8 +106,15 @@ impl ShardProvider for FailingProvider {
 }
 
 async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
+    request(addr, "GET", path).await
+}
+
+/// A complete request head with an arbitrary method, so the miss sweep can
+/// cover the wrong-METHOD case on the same byte-identity assertion as every
+/// other miss rather than on a weaker status-line check.
+async fn request(addr: SocketAddr, method: &str, path: &str) -> Vec<u8> {
     let mut s = TcpStream::connect(addr).await.expect("connect");
-    s.write_all(format!("GET {path} HTTP/1.1\r\nhost: x\r\n\r\n").as_bytes())
+    s.write_all(format!("{method} {path} HTTP/1.1\r\nhost: x\r\n\r\n").as_bytes())
         .await
         .expect("write request");
     let mut out = Vec::new();
@@ -206,9 +213,10 @@ fn not_found_uses_the_declared_header_set_and_content_type() {
 async fn every_non_servable_outcome_renders_one_identical_404() {
     // The full *complete-head* miss set in one sweep: wrong path, wrong
     // prefix, malformed id, UNKNOWN shard id (a valid route to a shard
-    // this persona does not hold), and a provider infrastructure
-    // failure. All must be byte-identical, or the differences become a
-    // probe surface for the route table, the holdings, or store health.
+    // this persona does not hold), a wrong METHOD on a shard it DOES
+    // hold, and a provider infrastructure failure. All must be
+    // byte-identical, or the differences become a probe surface for the
+    // route table, the holdings, or store health.
     // Incomplete heads (oversized / EOF / timeout) are a different
     // wire class — close, like over-capacity — covered separately.
     let ep = PServeEndpoint::bind(FixtureProvider::new([(3, leaves(1, 7))]))
@@ -225,6 +233,17 @@ async fn every_non_servable_outcome_renders_one_identical_404() {
     ] {
         seen.push(fetch(ep.addr(), path).await);
     }
+    // Wrong METHOD belongs to the same miss class. It is swept HERE, against
+    // byte-identity, rather than left to `non_get_methods_are_not_served`,
+    // which asserts only that the status line starts `HTTP/1.1 404` — a
+    // divergent header set or ordering on a non-GET would pass that check and
+    // still be a second fingerprint. The path used is shard 3, which this
+    // persona DOES hold: a non-GET on a held shard is exactly where a
+    // divergent 404 would tell a prober the shard exists.
+    for method in ["POST", "HEAD", "PUT", "DELETE", "OPTIONS"] {
+        seen.push(request(ep.addr(), method, "/x-provisional/v0/shard/3").await);
+    }
+
     let failing = PServeEndpoint::bind(Arc::new(FailingProvider))
         .await
         .expect("bind failing");
