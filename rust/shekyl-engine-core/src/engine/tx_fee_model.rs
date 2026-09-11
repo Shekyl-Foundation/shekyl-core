@@ -118,7 +118,29 @@ pub(crate) fn fee_from_weight(rate: &FeeRate, weight: usize) -> u64 {
     tx_fee::fee_from_weight(rate, weight)
 }
 
-/// Two-pass fee fixpoint for one output-count variant (§3.3 / §3.10.1).
+/// Iteration bound for [`converge_fee`], and why it is never reached.
+///
+/// If a pass leaves `varint_len(fee)` unchanged it leaves the *weight*
+/// unchanged, so the next pass returns the same fee — that pass was already
+/// the fixed point. Every non-fixed pass therefore consumes one of the ten
+/// varint lengths a `u64` can take, which bounds the iteration at ten
+/// regardless of rate or shape. The bound is one more than that, so the loop
+/// always exits by agreement rather than by exhaustion.
+const MAX_FEE_FIXPOINT_PASSES: usize = 11;
+
+/// Fee fixpoint for one output-count variant (§3.3 / §3.10.1).
+///
+/// The fee is an **argument** to the weight predictor, not just its product:
+/// the wire carries `varint(fee)`, so `fee = rate x weight(fee)` is a fixed
+/// point. Iterating from a seed at or below it converges monotonically (both
+/// `predict_weight` and [`fee_from_weight`] are non-decreasing), and the
+/// bound above says how fast.
+///
+/// Returning before the fixed point under-pays by one varint byte's worth of
+/// rate for a fee that has just crossed a `2^(7k)` boundary. That was
+/// invisible while relay admission carried a percentage buffer; under FL-R20
+/// / FL-R23 it is a hard bounce, and not one the lookback-min can absorb,
+/// because the shortfall is structural rather than temporal.
 #[must_use]
 pub(crate) fn converge_fee(
     rate: &FeeRate,
@@ -128,11 +150,20 @@ pub(crate) fn converge_fee(
     initial_fee: u64,
 ) -> u64 {
     let mut fee = initial_fee;
-    for _ in 0..2 {
-        let weight = predict_weight(n_in, n_out, tree_depth, fee);
-        fee = fee_from_weight(rate, weight);
+    for _ in 0..MAX_FEE_FIXPOINT_PASSES {
+        let next = fee_from_weight(rate, predict_weight(n_in, n_out, tree_depth, fee));
+        if next == fee {
+            return fee;
+        }
+        fee = next;
     }
-    fee
+    // Unreachable per `MAX_FEE_FIXPOINT_PASSES`. Settling on the conservative
+    // side costs one predictor call in a branch that never runs, and is the
+    // difference between a fee that over-pays and one that bounces.
+    fee.max(fee_from_weight(
+        rate,
+        predict_weight(n_in, n_out, tree_depth, fee),
+    ))
 }
 
 /// Populate [`FeeDirective`] for the selected input count and payment outputs `N`.
@@ -143,8 +174,7 @@ pub(crate) fn build_fee_directive(
     tree_depth: u8,
 ) -> FeeDirective {
     let n_no_change = payment_output_count;
-    let seed = fee_from_weight(rate, predict_weight(n_in, n_no_change, tree_depth, 0));
-    let fee_no_change = converge_fee(rate, n_in, n_no_change, tree_depth, seed);
+    let fee_no_change = converge_fee(rate, n_in, n_no_change, tree_depth, 0);
 
     // With-change adds one output. At the output limit a change output would exceed
     // MAX_OUTPUTS, so that variant is *unbuildable* (tx-builder would reject it with
@@ -238,11 +268,109 @@ mod tests {
         }
     }
 
+    /// The fee is an *argument* to the weight predictor — the wire carries
+    /// `varint(fee)` — so `fee = rate x weight(fee)` is a fixed point, not a
+    /// formula. Pinned case, found by sweeping the rate space against the
+    /// varint boundaries: at `pw = 24_184`, a one-in one-out spend's fee lands
+    /// just under `2^28`, the second pass pushes it over, and the varint grows
+    /// from four bytes to five. A fee returned before the fixed point does not
+    /// cover the weight of the transaction that carries it.
+    ///
+    /// The value is the *fixed point*, computed from the rate and the shape;
+    /// it is pinned so a change to the weight model has to restate it
+    /// deliberately rather than absorb a regression.
     #[test]
-    fn converge_fee_is_stable_within_two_passes() {
-        let rate = FeeRate::new(10, 1).unwrap();
-        let fee = converge_fee(&rate, InputCount::clamped(1), OutputCount::clamped(2), 1, 0);
-        assert!(fee > 0);
+    fn converge_fee_reaches_the_fee_varint_fixed_point() {
+        let rate = FeeRate::new(24_184, 1).unwrap();
+        let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
+
+        let fee = converge_fee(&rate, n_in, n_out, depth, 0);
+        assert_eq!(fee, 268_466_584, "the fee-varint fixed point for this rate");
+
+        // The defining property, stated on its own axis: the returned fee is
+        // what its own predicted weight prices. Two passes return 268_442_400,
+        // which prices at 268_466_584 — short by one varint byte's worth of
+        // rate (24_184 atomic units).
+        assert_eq!(
+            fee_from_weight(&rate, predict_weight(n_in, n_out, depth, fee)),
+            fee,
+            "converge_fee returned a fee its own weight does not price"
+        );
+    }
+
+    /// Seed-independence: `converge_fee` must not depend on the caller warming
+    /// it up. Three call sites seed it differently — `fee_query` passes 0,
+    /// `fee_estimator` and `build_fee_directive` pass `fee_from_weight(rate,
+    /// predict_weight(.., 0))`, and the with-change variant passes the
+    /// no-change fee — and a fee quote that disagrees with the fee the build
+    /// path charges is a defect regardless of which one is larger.
+    #[test]
+    fn converge_fee_is_independent_of_its_seed() {
+        let rate = FeeRate::new(24_184, 1).unwrap();
+        let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
+        let warm = fee_from_weight(&rate, predict_weight(n_in, n_out, depth, 0));
+        assert_eq!(
+            converge_fee(&rate, n_in, n_out, depth, 0),
+            converge_fee(&rate, n_in, n_out, depth, warm),
+            "the quote path and the build path must converge to one fee"
+        );
+    }
+
+    /// Sweep the rate space where the defect lives — the bands around each
+    /// varint boundary, for a spread of shapes and quantization masks — and
+    /// assert the fixed-point property everywhere. Brute-forcing the whole
+    /// rate range finds the same cases at 0.004% density; aiming at the
+    /// boundaries is both faster and denser in true positives.
+    #[test]
+    fn converge_fee_is_a_fixed_point_across_the_rate_and_shape_space() {
+        use shekyl_tx_weight::{MAX_OUTPUTS, MAX_TREE_DEPTH};
+
+        let shapes: [(usize, usize, u8); 8] = [
+            (1, 1, 1),
+            (1, 2, 8),
+            (2, 2, 16),
+            (8, 16, MAX_TREE_DEPTH),
+            (1, MAX_OUTPUTS, 24),
+            (4, 3, 12),
+            (3, 5, 3),
+            (8, 2, 1),
+        ];
+        // How many cases needed more than a single pass. Without this the
+        // sweep could pass by never leaving the trivial band (rule 47: a gate
+        // asserts its own subject is present).
+        let mut multi_pass = 0usize;
+
+        for &mask in &[1u64, 2, 4, 8, 10, 100, 1000, 10_000] {
+            for &(ni, no, depth) in &shapes {
+                let n_in = InputCount::clamped(ni);
+                let n_out = OutputCount::clamped(no);
+                let w0 = predict_weight(n_in, n_out, depth, 0) as u64;
+                for bits in [7u32, 14, 21, 28, 35, 42, 49, 56] {
+                    let centre = (1u64 << bits) / w0;
+                    for delta in -8i64..=8 {
+                        let pw = centre.saturating_add_signed(delta);
+                        let Ok(rate) = FeeRate::new(pw, mask) else {
+                            continue;
+                        };
+                        let fee = converge_fee(&rate, n_in, n_out, depth, 0);
+                        let priced =
+                            fee_from_weight(&rate, predict_weight(n_in, n_out, depth, fee));
+                        assert_eq!(
+                            priced, fee,
+                            "not a fixed point: pw={pw} mask={mask} shape=({ni},{no},{depth}) \
+                             fee={fee} prices at {priced}"
+                        );
+                        if fee != fee_from_weight(&rate, predict_weight(n_in, n_out, depth, 0)) {
+                            multi_pass += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            multi_pass > 0,
+            "the sweep never left the single-pass band, so it asserts nothing"
+        );
     }
 
     #[test]
