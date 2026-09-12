@@ -211,6 +211,19 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/test_check_shell_gate_exits.py
 
+      - name: Run redb key-type ordering gate
+        # The bijection gate checks that every table is MAPPED; this one checks
+        # the mapping reproduces LMDB's ORDERING. That gap was not theoretical:
+        # review of the first landing found three MDB_INTEGERKEY tables mapped
+        # as &[u8] and one DUPSORT multimap whose values ignored compare_uint64
+        # — names 49/49 while four orderings were wrong.
+        # Default-flag tables are deliberately unconstrained: several store
+        # BE(x) 8-byte keys, where big-endian byte-lex IS numeric order, so both
+        # u64 and &[u8] are correct and a rule would fail correct code.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_redb_schema_key_types.py
+
       - name: Run redb schema bijection gate
         # DRS-0 slice B: every table in SHEKYL_LMDB_TABLES has exactly one
         # redb TableDefinition and vice versa, no duplicates on either side,

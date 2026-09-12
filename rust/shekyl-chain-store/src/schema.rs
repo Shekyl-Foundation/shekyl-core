@@ -95,7 +95,7 @@
 
 use redb::{MultimapTableDefinition, TableDefinition};
 
-use crate::hash_order::LmdbHashKey;
+use crate::lmdb_order::{LmdbHashKey, U64PrefixBytes};
 
 /// `blocks` — LMDB flags `INTEGERKEY`, comparator `-`, accumulator class `append-mostly`.
 ///
@@ -161,7 +161,7 @@ pub const OUTPUT_TXS: TableDefinition<u64, &[u8]> = TableDefinition::new("output
 /// `output_amounts` — LMDB flags `INTEGERKEY+DUPSORT+DUPFIXED`, comparator `dupsort:compare_uint64`, accumulator class `set-shaped`.
 ///
 /// amount -> many outputs; dup order compare_uint64 (numeric).
-pub const OUTPUT_AMOUNTS: MultimapTableDefinition<u64, &[u8]> =
+pub const OUTPUT_AMOUNTS: MultimapTableDefinition<u64, U64PrefixBytes> =
     MultimapTableDefinition::new("output_amounts");
 
 /// `spent_keys` — LMDB flags `INTEGERKEY+DUPSORT+DUPFIXED`, comparator `dupsort:compare_hash32`, accumulator class `set-shaped`.
@@ -306,12 +306,12 @@ pub const BLOCK_PENDING_ADDITIONS: TableDefinition<&[u8], &[u8]> =
 /// Blind upsert. NOT delete-by-key: `remove_output_leaf_mapping` reads the
 /// value and verifies it against `tree_pos` before deleting. W13 reversibility
 /// falsifier fails today.
-pub const OUTPUT_TO_LEAF: TableDefinition<&[u8], &[u8]> = TableDefinition::new("output_to_leaf");
+pub const OUTPUT_TO_LEAF: TableDefinition<u64, &[u8]> = TableDefinition::new("output_to_leaf");
 
 /// `leaf_to_output` — LMDB flags `INTEGERKEY`, comparator `-`, accumulator class `set-shaped`.
 ///
 /// blind upsert + delete-by-key; W13 reversibility falsifier fails today.
-pub const LEAF_TO_OUTPUT: TableDefinition<&[u8], &[u8]> = TableDefinition::new("leaf_to_output");
+pub const LEAF_TO_OUTPUT: TableDefinition<u64, &[u8]> = TableDefinition::new("leaf_to_output");
 
 /// `curve_tree_leaves` — LMDB flags `INTEGERKEY`, comparator `-`, accumulator class `append-mostly`.
 pub const CURVE_TREE_LEAVES: TableDefinition<u64, &[u8]> =
@@ -320,7 +320,7 @@ pub const CURVE_TREE_LEAVES: TableDefinition<u64, &[u8]> =
 /// `curve_tree_layers` — LMDB flags `INTEGERKEY`, comparator `-`, accumulator class `derived`.
 ///
 /// DERIVED: recomputed from leaves, not folded.
-pub const CURVE_TREE_LAYERS: TableDefinition<&[u8], &[u8]> =
+pub const CURVE_TREE_LAYERS: TableDefinition<u64, &[u8]> =
     TableDefinition::new("curve_tree_layers");
 
 /// `curve_tree_meta` — LMDB flags `default`, comparator `-`, accumulator class `small`.
