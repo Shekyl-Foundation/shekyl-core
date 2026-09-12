@@ -288,6 +288,57 @@ class SectionScopedEra(unittest.TestCase):
         self.assertIn("matches 2 tracked files", out)
 
 
+    def test_a_sibling_slice_inherits_the_PARENT_pin_not_HEAD(self):
+        """Pins nest, so they are held on a stack.
+
+        With a pinned `####` parent, a pinned `#####` slice, and a SECOND
+        `#####` slice pinning nothing, a single-pin parser cleared the child's
+        pin at the sibling heading and left nothing behind — the sibling fell
+        to HEAD and its records-was citations were resolved against current
+        code. The eras disagree on purpose: the cited file exists at the
+        parent era and not at HEAD's predecessor, so inheriting the wrong one
+        is the difference between pass and fail."""
+        with Fixture(
+            f"#### Parent\n\nReviewed at **`{ROW_PIN_PRESENT}`**.\n\n"
+            f"##### Slice A\n\nReviewed at **`{PIN}`**.\n\n"
+            "| CEN-X | ok | `cryptonote_core/blockchain.cpp:1` |\n\n"
+            "##### Slice B\n\n"
+            "| CEN-Y | ok | `tests/unit_tests/curve_tree_header_root_check.cpp:1` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 0, "Slice B must inherit the parent era, not fall to HEAD")
+
+    def test_an_era_finding_in_one_slice_does_not_hide_a_defect_in_its_SIBLING(self):
+        """The counterfactual diff must not attribute a sibling's rows to the
+        slice above it. When it did, the sibling was marked mis-scoped and
+        skipped, so a real ambiguous-basename defect in it went unreported
+        behind the neighbour's era finding."""
+        with Fixture(
+            f"#### Parent\n\nReviewed at **`{ROW_PIN_PRESENT}`**.\n\n"
+            f"##### Slice A\n\nReviewed at `{PIN}`.\n\n"
+            "| CEN-X | ok | `cryptonote_core/blockchain.cpp:1` |\n\n"
+            "##### Slice B\n\n| CEN-Y | ok | `blockchain_db.cpp:1` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 1)
+        self.assertIn("declares an era this gate does not parse", out)
+        self.assertIn("matches 2 tracked files", out)
+
+    def test_a_legend_under_an_unparsed_declaration_yields_no_containment_finding(self):
+        """Containment must honour the same mis-scoped filter the path limb
+        does. A legend read at an era the document does not claim would
+        produce findings built on the very premise the gate refused."""
+        with Fixture(
+            f"### S\n\nReviewed at `{PIN}`.\n\n"
+            "Walks: **W-TI** = the spend-path\n"
+            "gates in `check_tx_inputs` (`cryptonote_core/blockchain.cpp:100\u2013120`).\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 1)
+        self.assertIn("declares an era this gate does not parse", out)
+        self.assertNotIn("come loose from the symbol", out)
+
+
 class SymbolAndRange(unittest.TestCase):
     def test_range_inside_exactly_one_overload_passes(self):
         """W-TI: `check_tx_inputs` has two definitions at the pin, [3310,3328]

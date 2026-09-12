@@ -281,24 +281,38 @@ def definition_extents(lines, symbol):
 
 
 def eras_for_lines(lines):
-    """Era governing each 1-based line: inline override, else section pin, else HEAD."""
+    """Era governing each 1-based line: inline override, else the innermost
+    enclosing section pin, else HEAD.
+
+    Pins NEST, so they are held on a stack. A single pin plus a level was
+    wrong in a way the live register does not currently exercise but which is
+    a wrong-era resolution waiting to happen: with a pinned `####` parent, a
+    pinned `#####` slice, and a SECOND `#####` slice that pins nothing, the
+    single-pin form cleared the child's pin at the sibling heading and left
+    nothing behind -- so the sibling fell to HEAD instead of inheriting its
+    parent's era. Records-was citations resolved against current code, which
+    is the whole defect this gate exists to prevent, sitting in its parser.
+
+    A stack restores the enclosing pin instead of dropping to HEAD. Popping on
+    `level >= section_level` is what makes a sibling close its predecessor
+    while a deeper heading does not.
+    """
     eras = {}
-    pin = None
-    pin_level = 99
+    stack = []  # (section_level, sha), innermost last
     section_level = 99
     for i, line in enumerate(lines, 1):
         heading = HEADING_RE.match(line)
         if heading:
-            level = len(heading.group(1))
-            if pin is not None and level <= pin_level:
-                pin = None  # the pin's section closed
-            section_level = level
+            section_level = len(heading.group(1))
+            while stack and stack[-1][0] >= section_level:
+                stack.pop()
         found = SECTION_PIN_RE.search(line)
         if found:
-            pin = found.group(1) or found.group(2)
-            pin_level = section_level
+            while stack and stack[-1][0] >= section_level:
+                stack.pop()
+            stack.append((section_level, found.group(1) or found.group(2)))
         inline = INLINE_PIN_RE.search(line)
-        eras[i] = inline.group(1) if inline else (pin or HEAD)
+        eras[i] = inline.group(1) if inline else (stack[-1][1] if stack else HEAD)
     return eras
 
 
@@ -401,8 +415,8 @@ def _enclosing_heading(lines, lineno):
 
 
 def legend_blocks(lines):
-    """Blank-line-delimited paragraphs that carry a walk marker, as
-    (first_lineno, joined_text)."""
+    """Blank-line-delimited paragraphs carrying a walk marker, as
+    (first_lineno, last_lineno, joined_text)."""
     out = []
     start = None
     buf = []
@@ -413,14 +427,14 @@ def legend_blocks(lines):
             buf.append(line)
             continue
         if buf and WALK_MARKER_RE.search(" ".join(buf)):
-            out.append((start, " ".join(buf)))
+            out.append((start, start + len(buf) - 1, " ".join(buf)))
         start, buf = None, []
     if buf and WALK_MARKER_RE.search(" ".join(buf)):
-        out.append((start, " ".join(buf)))
+        out.append((start, start + len(buf) - 1, " ".join(buf)))
     return out
 
 
-def check_legend_containment(relpath, lines, eras, failures):
+def check_legend_containment(relpath, lines, eras, failures, mis_scoped=frozenset()):
     """A walk's cited range must lie inside exactly one body-bearing definition
     of the symbol that walk names.
 
@@ -429,7 +443,13 @@ def check_legend_containment(relpath, lines, eras, failures):
     on the markers and each walk's symbol is paired only with the range in its
     own segment.
     """
-    for first_lineno, text in legend_blocks(lines):
+    for first_lineno, last_lineno, text in legend_blocks(lines):
+        # A legend sitting under a declaration this gate could not parse is
+        # read at an era the document does not claim, so any containment
+        # finding from it would be built on the same false premise the path
+        # limb already declines to report.
+        if mis_scoped & set(range(first_lineno, last_lineno + 1)):
+            continue
         rev = eras.get(first_lineno, HEAD)
         tracked = Era.files(rev)
         if tracked is None:
@@ -550,7 +570,7 @@ def check_document(relpath, failures):
                 )
                 continue
 
-    check_legend_containment(relpath, lines, eras, failures)
+    check_legend_containment(relpath, lines, eras, failures, mis_scoped)
 
     if seen == 0:
         failures.append(
