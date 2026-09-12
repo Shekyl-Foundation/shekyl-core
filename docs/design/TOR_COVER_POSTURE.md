@@ -17,14 +17,18 @@ the decision reached a document.
 ## 1. The ruling
 
 **On the Tor zone, wire-observer resistance is obtained by operator posture —
-running a non-exit Tor relay alongside the node — not by a protocol-level
-cover-traffic carrier.**
+running a non-exit Tor relay in the same Tor process the node uses as its
+client, not by a protocol-level cover-traffic carrier.**
 
-Cover comes from *volume*: a relay's uplink already carries thousands of
-fixed-size, per-hop-encrypted cells per second, and the node's own originated
-cells are indistinguishable among them. An 8 KiB stem is seventeen cells inside
-a stream doing thousands. The node stops emitting a constant-rate envelope of
-its own and stops paying for one.
+Cover comes from *volume on that process's OR connections*: a relay's uplink
+already carries thousands of fixed-size, per-hop-encrypted cells per second,
+and the node's own originated cells are indistinguishable among them **only
+when they share those connections**. An 8 KiB stem is seventeen cells inside a
+stream doing thousands. A second Tor for the daemon's SOCKS/onion — including
+the default managed ephemeral instance — keeps originated cells on their own
+OR connections; a wire observer can still separate that burst from relay
+volume. The node stops emitting a constant-rate envelope of its own and stops
+paying for one.
 
 Three consequences follow immediately:
 
@@ -81,9 +85,12 @@ already sells.
 Tor's cell format does the work substitution was simulating. Cells are 514
 bytes, uniform, and encrypted per hop, and a relay carries its own client
 circuits over the same OR connections it already holds to other relays. An
-observer of the uplink cannot separate relayed cells from originated ones. The
+observer of **those** connections cannot separate relayed cells from originated
+ones. That claim is false of a sidecar client Tor: originated circuits then
+have their own OR connections, and the relay's volume is unused as cover. The
 protocol does not need to manufacture the indistinguishability; it needs the
-node to be carrying traffic.
+node's client circuits to ride the relay process. Operator form:
+[`docs/TOR_RELAY.md`](../TOR_RELAY.md).
 
 Against 3 KiB per 12.5 s of manufactured envelope, a modest relay's throughput
 is not a close comparison. **That comparison is not the measurement §8 owes.**
@@ -137,12 +144,18 @@ get an operator an exit relay and an abuse complaint. Exit operation carries
 abuse-handling and legal exposure the project does not ask of its operators and
 does not need for cover.
 
-**Separate process, separate lifecycle.** The relay must not share a process
-with the daemon. Relay throughput and uptime are externally measurable by
-design — that is how bandwidth authorities work — so a relay co-located in the
-daemon process turns the daemon's uptime into a remotely probeable signal. The
-same principle applies to any other externally measured relay property. The
-operator must be able to restart either without the other.
+**Separate process from `shekyld`, same Tor process as the node's client.**
+The relay must not share a process with the daemon. Relay throughput and
+uptime are externally measurable by design — that is how bandwidth authorities
+work — so a relay co-located in the daemon process turns the daemon's uptime
+into a remotely probeable signal. The same principle applies to any other
+externally measured relay property. The operator must be able to restart
+`shekyld` without restarting the relay, and the reverse. **Separate from
+`shekyld` is not a second Tor for Shekyl circuits.** Mixing is cells on the
+relay process's OR connections; the daemon's SOCKS outbound and onion inbound
+must be that process (operator `--tx-proxy` / `--anonymous-inbound` against
+it, which yields the default ephemeral spawn). Putting the relay *inside* the
+daemon-spawned managed Tor remains rejected (§9).
 
 **Not load-bearing on any protocol path.** No consensus rule, no mechanism, and
 no default behaviour may assume the node's operator runs a relay. The posture
@@ -187,22 +200,29 @@ load are outside the project's control and can change without notice.
 **Enumerability residual.** A relay IP in the consensus advertises "runs Tor,"
 not "runs Shekyl," and the relay set is a poor candidate list. Emit-attribution
 on the anon zone is structurally unavailable, so the onion↔IP adjacency is not
-newly reachable by this posture. The residual that remains: if Shekyl operators
-adopt relaying disproportionately, the population correlation strengthens over
-time. This is why the posture is documented as a contribution and a
-recommendation and is never made a default or a requirement.
+newly reachable by this posture. **Publishing overlay inbound from that same
+listed process is the mixing topology for inbound, not a protocol
+requirement** — inbound on a second Tor is uncovered inbound. The residual that
+remains: if Shekyl operators adopt relaying disproportionately, the population
+correlation strengthens over time. This is why the posture is documented as a
+contribution and a recommendation and is never made a default or a
+requirement.
 
 ## 8. Falsifiers and reopen criteria
 
 **The measurement this ruling rests on has not been taken.** A Shekyl node
-running a modest non-exit relay, and how much traffic it actually carries across
-hours and consensus weights. It is the one input that cannot be reasoned to, and
-it decides whether the cover is real at the sizes an ordinary operator runs.
+whose Tor **client is the same process as** a modest non-exit relay, and how
+much traffic that process actually carries across hours and consensus weights.
+A sidecar client Tor is not this measurement's subject — originated cells
+would not be on the relay's OR connections. It is the one input that cannot
+be reasoned to, and it decides whether the cover is real at the sizes an
+ordinary operator runs.
 
 Falsifier chain, in the [`PWD-E8`](P2P_2_ENDPOINT_ROUND.md) shape — the subject
 must exist before the measurement can:
 
-1. The posture is documented and an operator relay is running.
+1. The posture is documented (`docs/TOR_RELAY.md`: shared-instance bind) and
+   that operator topology is running.
 2. Carried traffic is measured across hours and weights.
 3. If measured cover at ordinary operator scale is insufficient to make
    originated cells indistinguishable, **this ruling reopens** and the carrier's
@@ -235,7 +255,15 @@ leak, the empty-message wedge, and the inherited embargo. Retained for other
 encrypted layers, where no volume alternative exists (§2).
 
 **Relay co-located in the daemon process.** Rejected. Externally measurable
-relay properties become a remote probe of daemon state (§5).
+relay properties become a remote probe of daemon state (§5). The daemon-spawned
+managed Tor stays client-only; do not add relay flags to it.
+
+**A second Tor process for the daemon's SOCKS/onion, as cover.** Rejected as a
+cover configuration. Originated cells then travel that client's own OR
+connections. The default managed ephemeral Tor is that second process;
+`--tx-proxy` / `--anonymous-inbound` against the operator relay yields it.
+This is not a new ruling — it is the §3 mixing claim stated so "separate
+process" cannot be read as a sidecar client Tor.
 
 **Preferring Shekyl-operated relays for Shekyl circuits.** Rejected (§4). Path
 selection stays Tor's.
@@ -257,6 +285,9 @@ Discharged in the 2026-09-12 recording change that landed this document.
   posture-conditional (§6).
 - Operator documentation: [`docs/TOR_RELAY.md`](../TOR_RELAY.md) — the non-exit
   relay recommendation, with §5's constraints and §7's trades stated, so
-  adoption is a choice rather than a default.
+  adoption is a choice rather than a default. **UPDATE 2026-09-12:** the
+  operator form names the shared-instance bind (daemon SOCKS/onion on that
+  same relay process). A sidecar client Tor is uncovered; this is the §3
+  claim, not a new ruling.
 - [`FOLLOWUPS.md`](../FOLLOWUPS.md): one pre-genesis row for the §8 measurement,
   blocker named as the falsifier chain's first link.

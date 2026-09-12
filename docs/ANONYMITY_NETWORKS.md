@@ -1,10 +1,14 @@
 # Anonymity Networks with Shekyl
 
 > **UPDATE 2026-09-12.** Tor-zone wire-observer cover is operator non-exit
-> relay posture, not a protocol carrier. See [`TOR_RELAY.md`](TOR_RELAY.md)
+> relay posture, not a protocol carrier. Mixing requires the daemon's Tor
+> client (SOCKS and overlay inbound) to be **that same relay process** —
+> a sidecar client Tor is uncovered. See [`TOR_RELAY.md`](TOR_RELAY.md)
 > and [`design/TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md). This
 > file's remaining body is the inherited Tor/I2P P2P usage matrix; it is
-> not the cover-posture SoT.
+> not the cover-posture SoT. Do not copy `--tx-proxy …,10` from Usage as
+> the cover bind: counts below 12 are refused, and cover is TOR_RELAY's
+> shared-instance topology.
 
 Currently only Tor and I2P have been integrated into Shekyl. The usage of
 these networks is still considered experimental - there are a few pessimistic

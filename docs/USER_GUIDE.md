@@ -747,9 +747,11 @@ Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
 
 > **Tor-zone cover is an operator choice, not a protocol default (TRC,
 > recorded 2026-09-12).** Wire-observer resistance on Tor comes from running a
-> **non-exit** Tor relay in a **separate process** from `shekyld`. See
-> [TOR_RELAY.md](TOR_RELAY.md). The daemon does not check, warn, or refuse on
-> that basis. The contract is
+> **non-exit** Tor relay in a **separate process** from `shekyld`, with the
+> node's Tor **client that same process** (originated cells on the relay's OR
+> connections). A sidecar client Tor — including the default managed
+> ephemeral instance — is uncovered. See [TOR_RELAY.md](TOR_RELAY.md). The
+> daemon does not check, warn, or refuse on that basis. The contract is
 > [design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md).
 
 Shekyl can broadcast transactions over Tor or I2P so that observers cannot
@@ -759,12 +761,14 @@ communication still uses IPv4 to resist Sybil attacks.
 ### Daemon: outbound transaction proxy
 
 ```bash
-./shekyld --tx-proxy tor,127.0.0.1:9050,10 \
+./shekyld --tx-proxy tor,127.0.0.1:9050 \
           --tx-proxy i2p,127.0.0.1:9000
 ```
 
-The `10` parameter is the maximum number of outbound connections over that
-network.
+Omit the outbound count to use the default. An explicit count below 12 is
+refused at start (the relay-embargo floor). For Tor-zone *cover*, that
+SocksPort must be the non-exit relay process — see [TOR_RELAY.md](TOR_RELAY.md)
+— not a second client Tor.
 
 ### Daemon: inbound hidden service
 
@@ -800,7 +804,9 @@ operator sees what it asks for — true of your own node too; see
 - If no anonymity peers are available, the transaction is **held** -- it will
   never be broadcast over a public connection.
 - V3 transactions are larger (~7-8 KB vs ~2-3 KB pre-PQC), creating a more
-  distinctive traffic burst. Consider dummy traffic and fragmentation tuning.
+  distinctive traffic burst. On Tor that burst is mixed by operator relay
+  volume ([TOR_RELAY.md](TOR_RELAY.md)), not by dummy traffic. Dummy and
+  fragmentation remain the cover for encrypted zones other than Tor.
 
 ---
 

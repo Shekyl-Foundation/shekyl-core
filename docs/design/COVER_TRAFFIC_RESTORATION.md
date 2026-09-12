@@ -416,7 +416,9 @@ unable to *substitute* for the carrier there —
 **SoT as of 2026-09-12:** [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §§4–5
 and [`docs/TOR_RELAY.md`](../TOR_RELAY.md). The four constraints below are
 the 2026-08-23 wording; they are preserved (path selection, non-exit, opt-in,
-separate process) and are not a second authority.
+separate process) and are not a second authority. **UPDATE 2026-09-12:**
+"separate process" means separate from `shekyld`, not a sidecar client Tor —
+mixing is [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §5 / [`TOR_RELAY.md`](../TOR_RELAY.md).
 
 Recommended, and separate from every remaining carrier guarantee:
 

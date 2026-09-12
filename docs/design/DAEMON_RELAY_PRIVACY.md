@@ -11,7 +11,9 @@ gate**, which is therefore a reopening trigger for this document (§31.6).
 > **UPDATE 2026-09-12 — Tor-zone wire-observer cover SUPERSEDED as a protocol
 > default.** [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) (TRC; RULED
 > 2026-09-04, recorded 2026-09-12): on Tor, cover is operator non-exit relay
-> posture, not the §42 carrier. The §42 architecture is **retained** for
+> posture, not the §42 carrier. Mixing requires the daemon's Tor client on
+> that same relay process ([`TOR_RELAY.md`](../TOR_RELAY.md)); a sidecar
+> client Tor is uncovered. The §42 architecture is **retained** for
 > encrypted zones other than Tor. Default Tor nodes no longer receive
 > protocol-level constant-rate cover. This document's Round-3 / RP port
 > status is unchanged.

@@ -153,7 +153,7 @@ Identifier collisions (Phase 2 vs Bond-PR 2, and the rest): [design/IMPLEMENTATI
 
 - [INSTALLATION_GUIDE.md](INSTALLATION_GUIDE.md)
 - [USER_GUIDE.md](USER_GUIDE.md)
-- [TOR_RELAY.md](TOR_RELAY.md) — non-exit Tor relay beside the node (cover posture; not a default)
+- [TOR_RELAY.md](TOR_RELAY.md) — non-exit Tor relay; daemon client on that same process (cover posture; not a default)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [SIGNING.md](SIGNING.md), [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)
 

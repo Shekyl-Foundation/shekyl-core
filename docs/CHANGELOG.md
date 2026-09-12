@@ -9,8 +9,11 @@
   TRC; RULED 2026-09-04, recorded 2026-09-12). Default Tor nodes no longer
   receive protocol-level constant-rate cover. The carrier remains for
   encrypted zones other than Tor. Operator recommendation:
-  [`TOR_RELAY.md`](TOR_RELAY.md). This is a reduction in what the protocol
-  guarantees: cover moves from a protocol mechanism to an operator posture.
+  [`TOR_RELAY.md`](TOR_RELAY.md) — the daemon's Tor client (SOCKS and overlay
+  inbound) must be **that same non-exit relay process**; a sidecar client
+  Tor, including the default managed ephemeral instance, is uncovered.
+  This is a reduction in what the protocol guarantees: cover moves from a
+  protocol mechanism to an operator posture.
 
 - **Cover-traffic ~42 GB/month ceiling signed off** after the
   `COVER_TRAFFIC_RESTORATION.md` §3.1c three-arm measurement (seedusw,
