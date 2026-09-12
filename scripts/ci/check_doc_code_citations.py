@@ -330,54 +330,74 @@ def section_spans(lines):
 
 
 def unparsed_era_sections(lines, eras):
-    """Sections that tried to declare an era this parser did not understand.
+    """Era declarations this parser did not understand, whose citations
+    therefore resolved at the WRONG revision.
 
-    Flagged when a section holds BOTH an era-declaration attempt -- a
-    `<sha>`-shaped token on a prose line that is not a table row and carries no
-    citation of its own -- and citations that fell back to HEAD. Row-level shas
-    sit in table cells and are excluded, so a dated ledger carrying its own
-    per-row provenance is not flagged.
+    The test is not "did anything fall back to HEAD". HEAD is only one of the
+    wrong answers: an unparsed pin on a `#####` slice sitting under a `####`
+    parent that IS parsed lets the slice's rows inherit the PARENT's sha, so
+    nothing falls back to HEAD and the gate stays green while resolving the
+    slice at a revision the document does not claim. That is the register's
+    actual heading shape.
+
+    So each declaration is compared against what it WOULD have set. A citation
+    is mis-resolved when its era differs from the sha the declaration names.
+    Where they happen to agree there is no defect and nothing is reported.
+
+    Rows carrying their own inline pin are skipped: most-specific-wins means a
+    row pin legitimately overrides whatever the section would have said.
     """
     flagged = []
-    for level, heading, start, end in section_spans(lines):
-        declaration = None
-        declared_at = 0
-        head_cites = 0
-        for lineno in range(start, min(end, len(lines)) + 1):
-            line = lines[lineno - 1]
-            stripped = line.lstrip()
-            if (
-                declaration is None
-                and not stripped.startswith("|")
-                and ANY_SHA_RE.search(line)
-                and any(intent.search(line) for intent in PIN_INTENT_RES)
-                and not SECTION_PIN_RE.search(line)
-            ):
-                declaration = "`" + ANY_SHA_RE.search(line).group(1) + "`"
-                declared_at = lineno
-            if eras.get(lineno) == HEAD:
-                head_cites += len(CITATION_RE.findall(line))
-        if declaration and head_cites:
+    section_level = 99
+    for lineno, line in enumerate(lines, 1):
+        heading = HEADING_RE.match(line)
+        if heading:
+            section_level = len(heading.group(1))
+            continue
+        stripped = line.lstrip()
+        if (
+            stripped.startswith("|")
+            or not ANY_SHA_RE.search(line)
+            or not any(intent.search(line) for intent in PIN_INTENT_RES)
+            or SECTION_PIN_RE.search(line)
+        ):
+            continue
+        declared = ANY_SHA_RE.search(line).group(1)
+
+        # The span this declaration would have governed had it parsed: onward
+        # until a heading at the same level or shallower, exactly as
+        # `eras_for_lines` scopes a pin it does understand.
+        scope_end = len(lines)
+        for later in range(lineno + 1, len(lines) + 1):
+            match = HEADING_RE.match(lines[later - 1])
+            if match and len(match.group(1)) <= section_level:
+                scope_end = later - 1
+                break
+
+        misresolved = 0
+        for inner in range(lineno + 1, scope_end + 1):
+            text = lines[inner - 1]
+            if INLINE_PIN_RE.search(text):
+                continue  # the row pins itself; most specific wins
+            if eras.get(inner) != declared:
+                misresolved += len(CITATION_RE.findall(text))
+        if misresolved:
             flagged.append(
                 {
-                    "heading": heading,
-                    "declaration": declaration,
-                    "declared_at": declared_at,
-                    "head_cites": head_cites,
-                    "level": level,
+                    "declaration": "`" + declared + "`",
+                    "declared_at": lineno,
+                    "head_cites": misresolved,
+                    "heading": _enclosing_heading(lines, lineno),
                 }
             )
-    # Report the innermost section that owns each failure, not every ancestor
-    # that contains it: one finding per defect, named where the author looks.
-    flagged.sort(key=lambda f: -f["level"])
-    seen_lines = set()
-    unique = []
-    for finding in flagged:
-        if finding["declared_at"] in seen_lines:
-            continue
-        seen_lines.add(finding["declared_at"])
-        unique.append(finding)
-    return unique
+    return flagged
+
+
+def _enclosing_heading(lines, lineno):
+    for back in range(lineno - 1, 0, -1):
+        if HEADING_RE.match(lines[back - 1]):
+            return lines[back - 1].strip("# ").strip()[:60]
+    return "(front matter)"
 
 
 def legend_blocks(lines):
@@ -478,12 +498,12 @@ def check_document(relpath, failures):
             f"{relpath}:{section['declared_at']}: section "
             f"\"{section['heading']}\" declares an era this gate does not "
             f"parse ({section['declaration']}), so its {section['head_cites']} "
-            f"citation(s) fell through to HEAD. If they are records-was, "
-            f"resolving them at current code is the exact defect this gate "
-            f"exists to catch -- and it would have reported them green. Use the "
-            f"parsed section form, `Reviewed at **`<sha>`**` or a table header "
-            f"`(all at `<sha>`)`, or pin the rows individually with "
-            f"`at `<sha>`` on each."
+            f"citation(s) resolved at a DIFFERENT revision -- an enclosing "
+            f"section's pin, or HEAD. They would have been checked against "
+            f"code the document does not claim they were read at, and the gate "
+            f"would have reported them green. Use the parsed section form, "
+            f"`Reviewed at **`<sha>`**` or a table header `(all at `<sha>`)`, "
+            f"or pin the rows individually with `at `<sha>`` on each."
         )
     if unparsed:
         # Resolution below would be against the wrong era; reporting path

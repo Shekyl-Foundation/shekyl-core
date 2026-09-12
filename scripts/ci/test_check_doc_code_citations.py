@@ -221,6 +221,42 @@ class SectionScopedEra(unittest.TestCase):
         self.assertEqual(rc, 0, out)
 
 
+    def test_unparsed_child_pin_under_a_PARSED_parent_is_fatal(self):
+        """The register's real heading shape, and the hole the sibling-only
+        test missed.
+
+        An unbolded `#####` slice pin under a `####` parent that IS parsed:
+        the slice's rows inherit the PARENT's sha, so nothing falls back to
+        HEAD and a 'did anything reach HEAD' test never fires. The eras are
+        chosen so the inherited one RESOLVES -- the file exists at the parent
+        era and not at the era the slice declares -- which is what makes the
+        failure silent rather than loud."""
+        with Fixture(
+            f"#### Register\n\nReviewed at **`{ROW_PIN_PRESENT}`**.\n\n"
+            "| CEN-A | ok | `cryptonote_core/blockchain.cpp:1` |\n\n"
+            f"##### P0f slice 9\n\nReviewed at `{PIN}`.\n\n"
+            "| CEN-X1 | ok | `tests/unit_tests/curve_tree_header_root_check.cpp:1` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 1, "an unparsed child pin must not hide behind its "
+                                "parent's parsed one")
+        self.assertIn("P0f slice 9", out)
+        self.assertIn("resolved at a DIFFERENT revision", out)
+
+    def test_unparsed_pin_agreeing_with_the_inherited_era_is_not_flagged(self):
+        """No defect, so no finding. If the unparsed declaration names the same
+        sha the section would have inherited anyway, nothing resolves at the
+        wrong revision -- reporting it would be noise, and a gate that cries
+        wolf gets deleted."""
+        with Fixture(
+            f"#### Register\n\nReviewed at **`{PIN}`**.\n\n"
+            f"##### Slice\n\nReviewed at `{PIN}`.\n\n"
+            "| CEN-A | ok | `cryptonote_core/blockchain.cpp:1` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 0, out)
+
+
 class SymbolAndRange(unittest.TestCase):
     def test_range_inside_exactly_one_overload_passes(self):
         """W-TI: `check_tx_inputs` has two definitions at the pin, [3310,3328]
