@@ -4699,6 +4699,21 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     ? nullptr
     : bond.holdings.shard_ids.data();
 
+  // EU-D3 belt for non-parse callers, kind-agnostic (every codec refuses the
+  // shape at parse; the per-arm §9.11 belts below are its twin for the key):
+  // the serving endpoint exists iff JoinMarket or EndpointUpdate. Placed
+  // before the arms so no arm can be reached with an endpoint it must not
+  // see — the JoinMarket and EndpointUpdate verifies then read a field that
+  // is present by construction.
+  if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket)
+    && bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::EndpointUpdate)
+    && bond.has_endpoint())
+  {
+    MERROR_VER("Archival bond-post rejected: vin carries an endpoint on a kind that "
+      "cannot (JoinMarket/EndpointUpdate-coupled field)");
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+  }
+
   if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Release))
   {
     // §9.11 coupling belt for non-parse callers (every codec refuses this at

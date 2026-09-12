@@ -228,6 +228,21 @@ TEST(archival_bond_post, vin_serializer_enforces_endpoint_coupling_and_kind4_sha
     EXPECT_EQ(wire.size(),
       1 + varint_size(config::PQC_HYBRID_SINGLE_KEY_LEN) + config::PQC_HYBRID_SINGLE_KEY_LEN
         + sizeof(crypto::hash) + 1 + 32);
+    // Exact bytes, derived by hand from the shape (not copied from Rust): the
+    // Rust bond wire pins the same construction in its own test, so the two
+    // codecs agree on kind 4 through the spec rather than through each other.
+    std::string expected;
+    expected.push_back(static_cast<char>(0x03));
+    for (uint64_t v = config::PQC_HYBRID_SINGLE_KEY_LEN;; v >>= 7)
+    {
+      if (v >= 0x80) { expected.push_back(static_cast<char>((v & 0x7F) | 0x80)); }
+      else { expected.push_back(static_cast<char>(v)); break; }
+    }
+    expected.append(config::PQC_HYBRID_SINGLE_KEY_LEN, static_cast<char>(0xAB));
+    expected.append(sizeof(crypto::hash), static_cast<char>(0x11));
+    expected.push_back(static_cast<char>(4));
+    expected.append(32, static_cast<char>(0x4E));
+    EXPECT_EQ(wire, expected);
     txin_v decoded;
     ASSERT_TRUE(decode(wire, decoded));
     const auto& out = std::get<txin_archival_bond_post>(decoded);
@@ -551,4 +566,67 @@ TEST(archival_bond_post, rct_balance_endpoint_update_has_no_bond_term)
   // A fee with nothing funding it is a sum mismatch on the kind-4 path too.
   rv.txnFee = 1;
   EXPECT_FALSE(ct::verCtSemanticsEndpointUpdate(rv));
+}
+
+// Rick's named KAT for EU-D11 (2026-09-12), at the level where "fails to
+// parse" is decidable: a whole transaction. A vin-level read of a kind-4
+// prefix followed by a term cannot fail (the trailing bytes belong to the
+// next field), but a JoinMarket TRANSACTION whose kind byte is patched to 4
+// leaves holdings and terms on the wire after the endpoint, and the tx
+// serializer then reads them as the next fields — which do not parse. The
+// unpatched blob is asserted to parse first, so the red is attributable to
+// the patch and not to the fixture.
+TEST(archival_bond_post, kind4_transaction_carrying_a_term_fails_to_parse)
+{
+  transaction tx{};
+  tx.version = 3;
+  tx.unlock_time = 0;
+  tx.vin.push_back(make_join_market_vin());
+  // One output with a real BP+ range proof: the production parse entry point
+  // (`expand_transaction_1`) requires outPk sized to vout and exactly one
+  // aggregate proof on a non-serve-credit FCMP++ tx, so the unpatched blob
+  // must satisfy it for the patched blob's failure to be the kind byte's.
+  tx_out vout{};
+  vout.amount = 0;
+  txout_to_tagged_key tagged{};
+  const ct::key out_key = ct::scalarmultBase(ct::d2h(11));
+  memcpy(&tagged.key, out_key.bytes, sizeof(tagged.key));
+  tagged.view_tag.data = 0;
+  vout.target = tagged;
+  tx.vout.push_back(vout);
+  tx.ct_signatures.type = ct::CTTypeFcmpPlusPlusPqc;
+  tx.ct_signatures.txnFee = 0;
+  const ct::key mask_scalar = ct::skGen();
+  tx.ct_signatures.outPk.resize(1);
+  tx.ct_signatures.outPk[0].mask = ct::commit(0, mask_scalar);
+  tx.ct_signatures.enc_amounts.resize(1);
+  tx.ct_signatures.enc_labels.resize(1);
+  tx.ct_signatures.p.bulletproofs_plus.push_back(ct::bulletproof_plus_PROVE(0, mask_scalar));
+  tx.ct_signatures.p.curve_trees_tree_depth = 0;
+  // One auth slot per vin — the serializer refuses pqc_auths.size() != vin.size().
+  tx.pqc_auths.resize(tx.vin.size());
+  tx.pqc_auths[0].auth_version = 1;
+
+  blobdata blob;
+  ASSERT_TRUE(t_serializable_object_to_blob(tx, blob));
+  transaction parsed;
+  ASSERT_TRUE(parse_and_validate_tx_from_blob(blob, parsed));
+  ASSERT_EQ(parsed.vin.size(), 1u);
+  EXPECT_EQ(std::get<txin_archival_bond_post>(parsed.vin[0]).post_kind,
+    static_cast<uint8_t>(archival_bond_post_kind::JoinMarket));
+
+  // Locate the kind byte: it follows the 32-byte p_canonical_id (0x11 * 32),
+  // which occurs exactly once in this blob.
+  const std::string p_id(sizeof(crypto::hash), static_cast<char>(0x11));
+  const size_t p_id_off = blob.find(p_id);
+  ASSERT_NE(p_id_off, std::string::npos);
+  ASSERT_EQ(blob.find(p_id, p_id_off + 1), std::string::npos);
+  const size_t kind_off = p_id_off + sizeof(crypto::hash);
+  ASSERT_EQ(static_cast<uint8_t>(blob[kind_off]),
+    static_cast<uint8_t>(archival_bond_post_kind::JoinMarket));
+
+  blobdata patched = blob;
+  patched[kind_off] = static_cast<char>(archival_bond_post_kind::EndpointUpdate);
+  transaction rejected;
+  EXPECT_FALSE(parse_and_validate_tx_from_blob(patched, rejected));
 }
