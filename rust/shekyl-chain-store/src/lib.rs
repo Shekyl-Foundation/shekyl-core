@@ -19,3 +19,5 @@
 #![deny(unsafe_code)]
 
 pub mod digest_v0;
+pub mod hash_order;
+pub mod schema;

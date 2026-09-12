@@ -211,6 +211,19 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/test_check_shell_gate_exits.py
 
+      - name: Run redb schema bijection gate
+        # DRS-0 slice B: every table in SHEKYL_LMDB_TABLES has exactly one
+        # redb TableDefinition and vice versa, no duplicates on either side,
+        # and the module's own ALL_TABLE_NAMES agrees with its definitions.
+        # The X-macro is the only admissible source: the settlement pair
+        # exists only on BlockchainLMDB, so a schema built from the abstract
+        # interface silently omits a write path LMDB has (SO-D8).
+        # Checks NAMES, not types — comparator evidence is in hash_order.rs's
+        # tests, class evidence is per-row in the audit's §12.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_redb_schema_bijection.py
+
       - name: Run conformance-coverage gate
         # Every RATIFIED consensus rule (census bucket 1/2) must carry a
         # conformance record in CONSENSUS_STORE_RECONCILIATION.md §5.4.1, and
