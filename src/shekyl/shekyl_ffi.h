@@ -2151,9 +2151,24 @@ uint8_t shekyl_archival_last_served_scan(
 // submit path cannot drift on this predicate.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY 49
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH  50
+// The cross-check arm of the cold-authority gate: it was invoked for a
+// (post_kind, bond_debit) that requires_cold_authority excludes. The calling
+// arm and the Rust predicate disagree -- an implementation error, classified
+// INTERNAL_FAILURE, never the sender's form. Unreachable through a correct
+// caller.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST 51
 /// PWD-B7: drop verdict for a shekyl_archival_verify_*_bond_post error code.
 uint8_t shekyl_archival_bond_post_drop_verdict(uint8_t code);
-uint8_t shekyl_archival_debit_auth_pin(
+// The composed COLD-AUTHORITY gate for a bond-post. Rust decides whether this
+// (post_kind, bond_debit) needs cold authority at all (the selector, stated
+// once as an exhaustive truth table: Release always; HoldingsUpdate iff
+// bond_debit > 0; JoinMarket / Rebond never) and, when it does, pins the
+// presented pqc_auths key against the record's COMMITTED bond_spend_pk. C++
+// marshals and logs; it does not decide. Replaces shekyl_archival_debit_auth_pin
+// (2026-09-11), which pinned but left the selector spelled at each C++ arm.
+uint8_t shekyl_archival_cold_authority_pin(
+    uint8_t post_kind,
+    uint64_t bond_debit,
     const uint8_t* record_bond_spend_pk_ptr,
     size_t record_bond_spend_pk_len,
     const uint8_t* auth_pubkey_ptr,

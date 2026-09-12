@@ -609,7 +609,7 @@ pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
 ///
 /// The §9.11 coupling is enforced in both directions, not assumed. Only
 /// JoinMarket carries `bond_spend_pk` on the wire; a debit authorizes against
-/// the record's **committed** copy (`archival_debit_auth_pin`), and consensus
+/// the record's **committed** copy (`archival_cold_authority_pin`), and consensus
 /// rejects a `Release` vin that brings a key along — "vin carries a
 /// bond_spend_pk (JoinMarket-coupled field)". So the `Release` arm refuses a
 /// non-empty key here rather than dropping it on the floor: silently discarding

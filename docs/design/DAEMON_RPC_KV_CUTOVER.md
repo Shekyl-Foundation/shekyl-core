@@ -1,12 +1,25 @@
 # Daemon RPC — Phase 2: the KV cutover (native Rust handlers over facts FFI)
 
-**Status:** **RK-1 through RK-4b landed** (the pattern slice, PR #534; count
+**Status:** **RK-1 through RK-5b landed** (the pattern slice, PR #534; count
 + hash-by-height, PR #540; the block-header projection, PR #541; whole blocks,
 PR #548; the `.bin` mechanism, PR #555; the last binary endpoint and the FFI
-bridge's deletion, PR #562) — per-slice shas in the §2 slice table. **RK-4c** (the transaction read set) is
-**landed on this branch**, PR #576, sha stamped at merge — the tense the §2
-rows use, which is written as of the merge this document lands with. Design
-**open for RK-5**. Census and binding
+bridge's deletion, PR #562; the transaction read set, PR #576 `8ba1aae3d`; the
+p2p seam, PR #585 `d468625e0`; the header projection's remainder, PR #619
+`2dba46537`) — per-slice shas in the §2 slice table. Design
+**open for RK-5c**.
+
+> **Correction (2026-09-11).** This banner read "RK-1 through RK-4b landed
+> … Design **open for RK-5**" and carried RK-4c in a "landed on this branch,
+> sha stamped at merge" tense that never got stamped. RK-4c, RK-5a and
+> **RK-5b** had all merged; RK-5b landed in PR #619 and its five methods
+> dispatch natively today (`handlers/json_rpc.rs`), with none of them left in
+> `core_rpc_ffi.cpp`'s table. The rule-94 index
+> ([`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2) was correct
+> throughout — it is the tracking surface; this banner had drifted from it.
+> The §2 rows for RK-4c, RK-5a and RK-5b are corrected in the same commit.
+> Landed-slice shas are now written, not promised.
+
+Census and binding
 decisions verified at source against `dev` **`077d97c4e`** (PR #528 merge);
 every `file:line` below was read at that commit. RK-2's own census rows and
 consumer set were re-verified at **`c5ca208e9`** (PR #534 merge), the commit
@@ -109,10 +122,10 @@ calls in the handler (`core_rpc_server.cpp`).
 | **RK-3b** — **landed** (PR #548, `3ed8baf08`) | Whole blocks | `get_block` (+ `getblock`) — header + blob + json + tx hashes, and the console's `print_block_by_hash` / `_by_height`, which read **only** this method | 22 | header facts + block blob + tx-hash list + **the epee-rendered `json` string** (RK-D11) | W C K R P |
 | **RK-4a** — **landed** (PR #555, `bbed0ad71`) | The `.bin` mechanism, proved small | `/get_o_indexes.bin` | 12 | `get_tx_outputs_gindexs` | W (`shekyl-rpc-client`) |
 | **RK-4b** — **landed** (PR #562, `85426f289`) | The remaining live binary endpoint | `/get_blocks_by_height.bin` `/getblocks_by_height.bin` | 15 | `get_blocks_by_height` | E (the engine's timing rig) |
-| **RK-4c** — **landed** (this branch; PR #576, sha stamped at merge) | The transaction read set (the wallet's proofs path) | `/get_transactions` `/gettransactions` (+ the console's `print_transaction`) · `/is_key_image_spent` (+ the console's `is_key_image_spent`) — each console command reads **only** its own method | 31 + 8 | `get_split_transactions_blobs`, `get_pool_transactions_info`, `are_key_images_spent[_in_pool]` | W K P F R |
+| **RK-4c** — **landed** (PR #576, `8ba1aae3d`) | The transaction read set (the wallet's proofs path) | `/get_transactions` `/gettransactions` (+ the console's `print_transaction`) · `/is_key_image_spent` (+ the console's `is_key_image_spent`) — each console command reads **only** its own method | 31 + 8 | `get_split_transactions_blobs`, `get_pool_transactions_info`, `are_key_images_spent[_in_pool]` | W K P F R |
 | **RK-4x** — **ruled: deleted** | `/get_blocks.bin` `/getblocks.bin` · `/get_hashes.bin` · `/gethashes.bin` | wallet2's batch sync, and wallet2 is gone. Retired rather than migrated, with `get_pool_info` and the pool's departure history behind it. Reopen clause in `DAEMON_RPC_RUST.md` | — (44 fields deleted, not ported) | — | none |
-| **RK-5a** — **landed** (this branch; PR #585, sha stamped at merge) | The **p2p seam**, proved small | `sync_info` · `/get_net_stats` · `/get_peer_list` · `get_connections` — the methods whose facts are p2p-only | 11 + 7 + 10 + 7 (+ `connection_info`) | `get_public_*_count`, peerlist, throttle stats — **as scalars**, see §3.2; plus the `shekyl_rpc_chain_tip` retrofit | K P F |
-| **RK-5b** | The header projection's remainder | `get_last_block_header` · `get_block_header_by_hash` · `get_block_headers_range` · `hard_fork_info` · `get_fee_estimate` | 8 + 11 + 10 + 15 + 10 | `fill_block_header_response`'s three, hard-fork voting info, `get_dynamic_base_fee_estimate_*` | W C K P |
+| **RK-5a** — **landed** (PR #585, `d468625e0`) | The **p2p seam**, proved small | `sync_info` · `/get_net_stats` · `/get_peer_list` · `get_connections` — the methods whose facts are p2p-only | 11 + 7 + 10 + 7 (+ `connection_info`) | `get_public_*_count`, peerlist, throttle stats — **as scalars**, see §3.2; plus the `shekyl_rpc_chain_tip` retrofit | K P F |
+| **RK-5b** — **landed** (PR #619, `2dba46537`) | The header projection's remainder | `get_last_block_header` · `get_block_header_by_hash` · `get_block_headers_range` · `hard_fork_info` · `get_fee_estimate` | 8 + 11 + 10 + 15 + 10 | `fill_block_header_response`'s three, hard-fork voting info, `get_dynamic_base_fee_estimate_*` | W C K P |
 | **RK-5c** | **`get_info`, the hub — and every console command that reads it** | `/get_info` `/getinfo` · `get_info` | 48 + 24 | 7 core reads, 5 p2p reads (scalars), ~20 bare getters | W C G K P F |
 | **RK-6** | Mempool | `/get_transaction_pool` · `/get_transaction_pool_hashes` (its `.bin` sibling is **retired**, not pending — see §5; do not re-add it) · `/get_transaction_pool_stats` · `get_txpool_backlog` · `flush_txpool` · `relay_tx` | 8 + 7 + 7 + 26 + 7 + 7 | pool reads, `flush_txes_from_pool`, `get_protocol().relay_transactions` | K P |
 | **RK-7** | Mining (consensus-adjacent → rule 26 pre-flight) | `get_block_template` · `submit_block` · `calc_pow` · `get_miner_data` · `generateblocks` · `/start_mining` `/stop_mining` `/mining_status` `/set_log_hash_rate` | 22 + 4 + 7 + 19 + 12 + 10 + 6 + 21 + 7 | `get_block_template`, `handle_block_found`, `check_incoming_block_size`, `get_miner()`, `get_miner_data` | K R P (`add_aux_pow` struck 2026-09-07: the method is deleted with the merge-mining shed, rule 60 — its 17 fields leave this row's count) |

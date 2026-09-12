@@ -4,18 +4,32 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# The debit-authorization predicate has ONE implementation.
+# The cold-authority predicate has ONE implementation -- both halves of it.
 #
-# A VALUE-OUT bond-post authorizes against the bond record's COMMITTED
-# bond_spend_pk, never the persona's identity key -- which a serving host
-# holds, and which would therefore turn a host compromise into a collateral
-# drain. That predicate lives in `shekyl-archival-retention::debit_auth_pin`
-# and is reached from C++ only through `shekyl_archival_debit_auth_pin`.
+# A bond-post that needs COLD authority authorizes against the bond record's
+# COMMITTED bond_spend_pk, never the persona's identity key -- which a serving
+# host holds, and which would therefore turn a host compromise into a
+# collateral drain. The pin is `shekyl-archival-retention::debit_auth_pin`;
+# the SELECTOR -- which (post_kind, bond_debit) needs it at all -- is
+# `requires_cold_authority`, an exhaustive truth table in the same module;
+# and consensus reaches both through the composed `cold_authority_pin`,
+# exported to C++ as `shekyl_archival_cold_authority_pin`.
 #
-# The selector is `bond_debit > 0`, NOT the post kind: consumers are Release
-# and the DROP arm of HoldingsUpdate. Rebond and HoldingsUpdate-add are
-# credit paths (bond_debit == 0) authorized by the IDENTITY key, so this gate
-# must not be read as prescribing the record-key pin for them.
+# The selector, as the code has always implemented it (corrected 2026-09-11;
+# this header previously said "bond_debit > 0, NOT the post kind", which the
+# Release arm never did):
+#
+#   Release          always            (UB3 before UB9, §8.7.1.1)
+#   HoldingsUpdate   iff bond_debit > 0 (drop = cold, add = identity)
+#   JoinMarket       never             (the credit that COMMITS the cold key)
+#   Rebond           never             (credit path; verify needs debit == 0)
+#
+# Rebond and HoldingsUpdate-add are authorized by the IDENTITY key, so this
+# gate must not be read as prescribing the record-key pin for them. The
+# composed gate REFUSES if called on such a post (NOT_COLD_AUTHORITY_POST) --
+# that arm is the cross-check this script cannot provide: this script catches
+# an arm that FORGETS the call; the refusal catches an arm that calls without
+# a predicate row. Neither sees the other's blind spot.
 #
 # WHY A GATE AND NOT A COMMENT: it was implemented three times. The per-tx
 # path and the checkpoint fast path in blockchain.cpp each spelled it out,
@@ -46,11 +60,13 @@ fail=0
 # matches `debit_auth_pin_renamed`, so the assertion would survive the very
 # rename it exists to catch (observed 2026-08-29 -- the first draft of this
 # gate passed its own bite).
-if ! rg -q 'pub fn debit_auth_pin\(' rust/shekyl-archival-retention/src/debit_auth.rs; then
-  echo "FAIL: debit_auth_pin is missing from shekyl-archival-retention -- this gate"
-  echo "      would pass vacuously against a tree that lost the shared predicate."
-  fail=1
-fi
+for fn_name in debit_auth_pin requires_cold_authority cold_authority_pin; do
+  if ! rg -q "pub fn ${fn_name}\\(" rust/shekyl-archival-retention/src/debit_auth.rs; then
+    echo "FAIL: ${fn_name} is missing from shekyl-archival-retention -- this gate"
+    echo "      would pass vacuously against a tree that lost the shared predicate."
+    fail=1
+  fi
+done
 
 # Each REQUIRED site by name, not a count. A count cannot tell a removed
 # checkpoint call from a new unrelated one, and it counts comments; both were
@@ -102,7 +118,11 @@ fi
 
 require_call() {
   local file="$1" needle="$2" label="$3" body hits
-  body=$(code_only "$file")
+  # Statement-scoped, like the invariant check further down: clang-format
+  # wraps the helper call across lines, so a line-scoped needle could not
+  # name both the call and its arm label. Joined then split on `;` -- one
+  # statement per line -- BEFORE rg sees it (no rg in the pipe; rule 46).
+  body=$(code_only "$file" | tr '\n' ' ' | sed 's:;:;\n:g')
   hits=$(printf '%s\n' "$body" | rg -c "$needle" || true)
   if [ "${hits:-0}" -lt 1 ]; then
     echo "FAIL: ${label} no longer reaches the shared debit pin."
@@ -113,14 +133,18 @@ require_call() {
   fi
 }
 
+# The C++ helper takes (record, post_kind, bond_debit, auth_pubkey, arm) and
+# clang-format wraps the call, so the needle anchors on the helper name and the
+# arm label rather than the whole argument list. Both must be on the joined
+# statement, which `code_only` + the newline join below produce.
 require_call src/cryptonote_core/blockchain.cpp \
-  'archival_debit_auth_pin\(record, auth_pubkey, "Release"\)' \
+  'archival_cold_authority_pin\(record,[^;]*"Release"\)' \
   "per-tx Release verify"
 require_call src/cryptonote_core/blockchain.cpp \
-  'archival_debit_auth_pin\(record, auth_pubkey, "HoldingsUpdate-drop"\)' \
+  'archival_cold_authority_pin\(record,[^;]*"HoldingsUpdate-drop"\)' \
   "per-tx HoldingsUpdate-drop verify"
 require_call src/rpc/daemon_submit_ffi.cpp \
-  'shekyl_archival_debit_auth_pin\(' \
+  'shekyl_archival_cold_authority_pin\(' \
   "submit gather work gate"
 
 # And the Rust submit battery, which the previous version never checked at
@@ -130,9 +154,9 @@ require_call src/rpc/daemon_submit_ffi.cpp \
 # unchanged.
 rust_body=$(code_only rust/shekyl-daemon-rpc/src/submit/verifier.rs)
 rust_pin=$(printf '%s\n' "$rust_body" \
-           | rg -c 'debit_auth_pin\(record\.bond_spend_pk\(\)' || true)
+           | rg -c 'cold_authority_pin\(' || true)
 if [ "${rust_pin:-0}" -lt 1 ]; then
-  echo "FAIL: the Rust submit battery no longer calls debit_auth_pin."
+  echo "FAIL: the Rust submit battery no longer calls cold_authority_pin."
   echo "      UB3 is the debit arm's authorization; an inlined comparison"
   echo "      there is a fourth implementation of the predicate."
   fail=1
@@ -177,13 +201,13 @@ hits=$(printf '%s\n' "$statements" \
 if [ -n "$hits" ]; then
   echo "FAIL: a C++ statement compares an auth key against a stored bond_spend_pk."
   echo "      The debit-auth predicate has one implementation"
-  echo "      (shekyl-archival-retention::debit_auth_pin); call"
-  echo "      shekyl_archival_debit_auth_pin instead of re-deriving it."
+  echo "      (shekyl-archival-retention::cold_authority_pin); call"
+  echo "      shekyl_archival_cold_authority_pin instead of re-deriving it."
   printf '%s\n' "$hits"
   fail=1
 fi
 
 if [ "$fail" -eq 0 ]; then
-  echo "PASS: the debit-auth predicate is single-sourced."
+  echo "PASS: the cold-authority predicate is single-sourced."
 fi
 exit "$fail"
