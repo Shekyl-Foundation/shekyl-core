@@ -7,8 +7,9 @@ rule 94 §1). Process per
 this is a multi-round design front on an FFI-adjacent, privacy-load-bearing
 surface. Decision authority: Rick. **No implementation code — no fetcher,
 no Tor outbound API, no FFI — until `SF-D2`…`SF-D10` and `SF-D12` are
-RULED** (rule 26 halt on undischarged named pass; `SF-D11` withdrawn,
-§4). The FOLLOWUPS row is the deferral record.
+RULED** (rule 26 halt on undischarged named pass; `SF-D10`/`SF-D12` are
+one ruling; `SF-D11` withdrawn, §4). The FOLLOWUPS row is the deferral
+record.
 
 This round specifies the **client** side of the archival serving route:
 a daemon fetching `GET /shard/{id}` from a P-served `.onion`. The server
@@ -16,8 +17,17 @@ half exists (`shekyl-p-serve` + `shekyl-p-host`, built-unwired at SH-1/
 SH-2); the bytes are ruled (`RF-D4` frame, `RF-R1` route); discovery is
 ruled (`EU-D1`…`EU-D9`). What has never been ruled is dial, isolation,
 timeout/retry, verify seam, where the client lives, **which P an organic
-caller dials**, and whether a verify-failure is remembered — the things
-an implementer would otherwise decide silently at the keyboard.
+caller dials** — verify-failure memory is an input to that rule, not a
+separate question (`SF-D10`/`SF-D12`) — the things an implementer would
+otherwise decide silently at the keyboard.
+
+**Grep-surface conventions.** A withdrawn *identifier* is current
+information: keep `SF-D11` WITHDRAWN in the heading and in §4, so a
+future grep finds the withdrawal. A superseded *phrase* is not: delete
+it from the live surface (the RF-R1 heading, a comment that stated a
+retracted residual). The SHA is the archive. They look contradictory
+if you have not asked which one a future grep needs to find: the id,
+yes; the old wording, no.
 
 ---
 
@@ -84,7 +94,7 @@ different artifacts:
 
 TJ's R2 still holds: until prune-mode exists, every daemon already has
 the leaves, so the market's scarcity product is not live. That does
-**not** license a fake challenge path in the meantime. Full nodes that
+**not** license a fake challenge path in the meantime. Nodes that
 still hold every leaf still fetch-and-verify over the onion — that is
 how serving is tested, and that is how challenges run. This section
 exists so the index's "pruning MODE ships post-genesis" line cannot be
@@ -105,7 +115,7 @@ inherited as "the client waits."
 | Request parse | `rust/shekyl-p-serve/src/serve.rs:558–560` — `path.strip_prefix(ROUTE_PREFIX)` then `parse::<u64>()`; comment: "Exact decimal id — no path suffix, no query string" | The request unit is a whole shard (`§4`) |
 | Segment size | `rust/shekyl-curve-tree/src/segment.rs:36` — `LEAF_BYTES`; `:63` — `leaves_per_segment()` | Honest-holder egress of a challenge fetch: one full segment (`leaves_per_segment() × LEAF_BYTES`) |
 | Serving ↔ fetching Tor | `PWD-E9` ([`P2P_2_ENDPOINT_ROUND.md`](P2P_2_ENDPOINT_ROUND.md) §PWD-E9): daemon gets its own tor path, no crossover to the archival-serving persona; launch path takes instance identity as a parameter. Implemented 2026-09-09 (`DaemonTorControl`, `shekyl-tor-control-daemon`) | Closed. Constrains `SF-D2`: "reuse the managed instance" means the daemon's |
-| Intro-layer PoW | `rust/shekyl-tor-control-wallet/src/onion_service.rs:146–148` — `HiddenServicePoW` defaults **on**; `rust/shekyl-tor-control-client/src/control/onion.rs:272–282` — PoW throttles rendezvous **arrival**, not egress; `control/actor.rs:1725–1754` — live `ADD_ONION` with PoW. Measurement: [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) SPIKE-F-15/17/18, §19/§19a | Threat-3 pin: intro flooding is priced; not general Tor lore |
+| Intro-layer PoW | `rust/shekyl-tor-control-wallet/src/onion_service.rs:146–148` — `HiddenServicePoW` defaults **on**; `rust/shekyl-tor-control-client/src/control/onion.rs:272–292` — PoW throttles rendezvous **arrival**, not egress; over onion the body transfer is symmetric (flow control). `control/actor.rs:1725–1754` — live `ADD_ONION` with PoW. Measurement: [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) SPIKE-F-15/17/18, §19/§19a | Threat-3 pin: intro flooding is priced; not general Tor lore |
 
 ## 4. Already closed — do not re-litigate
 
@@ -144,12 +154,13 @@ suffixes `/shard/` is a named reopening of `RF-R1`, not of this round —
 and it inherits this premise: the new path must be usable by both
 callers. A leaf-addressed challenge-only suffix is a second path.
 
-## 6. Round-1 open questions (`SF-D2`…`SF-D10`, `SF-D12`)
+## 6. Round-1 open questions (`SF-D2`…`SF-D8`, coupled `SF-D10`/`SF-D12`)
 
 Each is recorded with a **lean** and a **reopen criterion**; none is
 ruled here. Rick rules them; the doc does not pre-decide. `SF-D9` is
 done (same-change heading). `SF-D11` is withdrawn (§4 / `PWD-E9`) and
-is not in this list.
+is not in this list. `SF-D10` and `SF-D12` are one row: ruling them
+separately will produce an inconsistency.
 
 ### `SF-D2` — daemon Tor outbound posture
 
@@ -281,8 +292,8 @@ storage); it consumes the same typed result.
   unverified stream (e.g. partial-segment resume) that cannot be met
   behind the seam.
 
-Whether the client **remembers** a refusal is `SF-D12`, not this
-question.
+Whether the client **remembers** a refusal is an input to `SF-D10`,
+not a follow-on (`SF-D12` is that input).
 
 ### `SF-D9` — `RF-R1` heading correction
 
@@ -294,7 +305,7 @@ untouched. **Done in this change.** The heading the contract carried
 before `EU-D1` ruled the client side is this section and the SHA of
 #714, not a parenthetical in the living contract.
 
-### `SF-D10` — peer selection for the organic caller
+### `SF-D10` / `SF-D12` — organic selection (verify-failure memory is an input)
 
 The challenge caller has no choice: the assignment names `(P, s)`. The
 organic caller needs shard `s`, and `D` personas may hold it. Which one
@@ -303,21 +314,56 @@ order are three different privacy postures — deterministic means one
 persona learns the daemon's entire need profile; random spreads the
 disclosure across the set over time.
 
+`SF-D8` returns verified-or-refused. An `R_k` mismatch on an organic
+read means a persona served garbage. If the client remembers, that
+memory has to act somewhere, and the only place it can act is organic
+selection — the challenge dial is fixed by assignment. So verify-failure
+memory is not a side condition on a later question: **it is a term in
+this selection rule.** `SF-D12` names that term. Ruling the two
+separately will produce an inconsistency (a selection rule that cannot
+consume its own memory, or a memory that has nowhere legal to act).
+
 This is a threat-#1 vector that request-shape uniformity does not
 close. If organic reads are distributed across holders while challenge
 fetches arrive at exactly the assigned one, a rarely-chosen `P` can
 infer "I am rarely dialed organically, so this request is probably the
-test." Teaching-to-the-test through selection statistics. Whatever the
-selection rule is, it has to be evaluated against that.
+test." Teaching-to-the-test through selection statistics.
+
+Memory that deprioritizes a persona *changes those statistics in a way
+the persona can observe.* `P` serves garbage once, sees organic demand
+fall off, and has now measured its own position in the selection
+distribution. Repeat with a few daemons and `P` learns roughly how
+often it should expect organic reads — which is the baseline it needs
+to recognize an off-baseline request as a probable challenge. A naive
+memory hands `P` a **calibration oracle** for free.
+
+Whatever this rule is, the memory's effect on selection has to be
+bounded so `P` cannot use its own exclusion as a measurement
+instrument. Shapes that survive that bound:
+
+- hard local exclusion with no partial deprioritization (binary, so
+  there is no gradient to measure), or
+- memory decays on a schedule `P` cannot infer, or
+- selection is randomized enough that a single daemon's exclusion is
+  below `P`'s observation noise.
+
+Partial, durable, observable deprioritization does not survive.
 
 - **Lean:** random among currently-bonded holders of `s` (fresh draw
-  per organic fetch), so no persona accumulates a daemon's need
-  profile, and a rarely-assigned `P` still sees organic traffic.
+  per organic fetch); **no durable exclusion** (the empty input — no
+  calibration oracle). Organic retries are bounded by `SF-D6`. If
+  memory is later shown necessary at the floor, it is re-ruled *as a
+  term in this rule*, and only as one of the three surviving shapes —
+  not as a follow-on that mutates a finished selection rule.
 - **Constraint (from `SF-D1`):** the challenge caller does not consult
-  this rule. The assignment is the selection.
-- **Reopen if:** a selection rule is shown under which a holder, from
-  its own request log alone, can classify a request as challenge with
-  better-than-assignment-base-rate confidence.
+  this rule. The assignment is the selection. Memory, if it exists,
+  cannot touch the challenge dial; a caller-blind exclusion list is a
+  second path that refuses assigned tests.
+- **Reopen if:** a holder, from its own request log alone — including
+  by observing its own exclusion — can classify a request as challenge
+  with better-than-assignment-base-rate confidence; or unbounded
+  organic retry against a known-bad holder is shown to be worse, at
+  the floor, than a surviving-shape exclusion.
 
 ### `SF-D11` — serving ↔ fetching Tor instance — WITHDRAWN 2026-09-12
 
@@ -326,30 +372,12 @@ implemented 2026-09-09). Not an open question and not in the halt list.
 See §4. Identifier kept so grep finds the withdrawal; `SF-D12` is not
 renumbered (already published).
 
-### `SF-D12` — verify-failure memory
+### `SF-D12` — verify-failure memory — input to `SF-D10` (same row)
 
-`SF-D8` returns verified-or-refused. An `R_k` mismatch on an organic
-read means a persona served garbage. Does the client remember?
-
-Both answers have teeth. No memory means unbounded retry against a
-server that will fail again. Memory means per-daemon local state that
-changes future selection — exploitable in the other direction: a
-hostile `P` serves garbage to a specific daemon precisely to get
-itself excluded from that daemon's selection, shaping who serves whom.
-And if the memory is caller-blind it also excludes `P` from challenge
-fetches, which a client cannot do — the assignment is not optional.
-
-- **Constraint (premised):** memory can only affect organic selection
-  (`SF-D10`), never the challenge dial. Saying so is the ruling; a
-  caller-blind exclusion list is a second path that refuses assigned
-  tests.
-- **Open:** whether organic selection remembers failures at all.
-- **Lean:** no durable exclusion. Organic retries are bounded by
-  `SF-D6`; a hostile-P exclusion attack is cheaper than serving
-  garbage once if memory is sticky.
-- **Reopen if:** unbounded organic retry against a known-bad holder is
-  shown to be worse, at the floor, than a short-TTL organic-only
-  exclusion whose existence cannot leak into the challenge path.
+Not a separate question. The memory's only legal act-site is organic
+selection; the constraint that it never touches the challenge dial is a
+term of `SF-D10`, not a side condition here. See `SF-D10`. Identifier
+kept so grep finds the coupling.
 
 ## 7. Threat-model frame (rule 26 A3)
 
@@ -362,10 +390,13 @@ Named attacker objectives this round's rulings are evaluated against:
    refuse the job. This is TJ §9's attack, now applied to the client's
    observable surface.
    **Selection statistics are a second channel of the same attack**
-   (`SF-D10`): request-shape uniformity does not close it. If organic
-   reads are distributed across holders while challenge fetches arrive
-   at exactly the assigned one, a rarely-chosen `P` classifies the
-   request from its own log.
+   (`SF-D10`/`SF-D12`): request-shape uniformity does not close it. If
+   organic reads are distributed across holders while challenge fetches
+   arrive at exactly the assigned one, a rarely-chosen `P` classifies
+   the request from its own log. Verify-failure memory is a term in
+   that selection rule, not a later question: a memory that
+   deprioritizes `P` is observable to `P`, and a naive one is a
+   calibration oracle for the organic baseline.
 2. **Guard sees the fetch set.** A daemon fetching many personas on one
    SOCKS identity exposes the challenge schedule and reconstruct
    traffic to a single entry guard (`SF-D3`).
@@ -391,25 +422,21 @@ Named attacker objectives this round's rulings are evaluated against:
    target for a probabilistic payoff is a much worse trade than
    "saturate for 17 hours."
 
-   **Intro PoW prices introductions, and the residual is not
-   asymmetric egress.** Proposal-327 PoW gates introductions
-   (`onion_service.rs:146–148` defaults on; `control/onion.rs:272–282`
-   throttles the rendezvous-request queue, not egress;
+   **Intro PoW prices introductions; byte-rate after rendezvous is
+   symmetric.** Proposal-327 PoW gates introductions
+   (`onion_service.rs:146–148` defaults on; `control/onion.rs:272–292`
+   throttles the rendezvous-request queue, not egress, and the body
+   transfer is symmetric under flow control;
    `control/actor.rs:1725–1754` live `ADD_ONION` with PoW). Recollection is
    grounded in [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md)
    SPIKE-F-15/17/18, not general Tor lore. Once a rendezvous is
-   established, a whole-shard GET is ~3.33 MB. A clearnet intuition
-   says that is cheap for them and expensive for `P` — a few hundred
-   bytes in, megabytes out, discard the response, the server still
-   pays egress. **Retracted.** Over Tor the response traverses T's own
-   three-hop circuit, and Tor's flow control means T has to keep
-   acknowledging for data to keep flowing; stop reading and the
-   circuit stalls and `P` stops sending. `P`'s egress is bounded by
-   T's willingness to actually receive 3.33 MB per request, through
+   established, a whole-shard GET is ~3.33 MB. Over Tor the response
+   traverses T's own three-hop circuit, and Tor's flow control means T
+   has to keep acknowledging for data to keep flowing — stop reading
+   and the circuit stalls and `P` stops sending. `P`'s egress is
+   bounded by T's willingness to actually receive the body, through
    relays T is also paying for. It is symmetric, and each attack
-   saturates everything from the rendezvous point on. The comment at
-   `control/onion.rs:286–292` ("requester pays only its own circuit")
-   is that retracted intuition, not a remaining residual.
+   saturates everything from the rendezvous point on.
 
    **Who T would have to be, volumetrically.** Discovery is free
    (`EU-D3` puts the onion on chain). Targeting is unavailable
@@ -488,10 +515,10 @@ A living contract the first **client** is written against: crate name,
 daemon Tor posture (P2P↔fetch; serving↔fetching already `PWD-E9`),
 isolation key both callers can use, dial grammar (key → onion:port),
 one failure taxonomy with two caller columns, the verify function
-signature, organic peer-selection rule, and verify-failure memory
-(organic-only if it exists). The challenge is a scheduler of that
-client. The W₂ measurement plan is named as Round 0 / pre-flight of the
-*implementation* PR, over daemon→wallet — never as a second protocol
+signature, and one organic selection rule of which verify-failure
+memory is an input (`SF-D10`/`SF-D12`). The challenge is a scheduler of
+that client. The W₂ measurement plan is named as Round 0 / pre-flight of
+the *implementation* PR, over daemon→wallet — never as a second protocol
 round. The first implementation is the client; the first tests are that
 client against `shekyl-p-serve`; the challenge caller is wired to the
 same entry point.

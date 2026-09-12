@@ -936,7 +936,7 @@ Default. Lands before genesis if it should exist at launch.
 - ~~**Measure boundary-cell occupancy**~~ — **DONE at round 18**: occupancy 741‰, mean residence 637 blocks, max 13 597; it selected `P` = 720. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.10 (the figures) and §9 FL-D8 (row closed).
   - Target: pre-genesis
 
-- **Implement the daemon shard-fetch client once `SF-D2`…`SF-D10` and `SF-D12` are RULED** — the one client both the challenge fetch and the organic read call ([ARCHIVAL_SHARD_FETCH.md](design/ARCHIVAL_SHARD_FETCH.md), Round 1 OPEN 2026-09-12). `SF-D11` withdrawn (closed by reading `PWD-E9`). Blocked on the remaining rulings per `26-sub-pr-design-discipline.mdc` (no fetcher code, no Tor outbound API, no FFI until then); falsify by the round doc's Status banner reading anything other than OPEN.
+- **Implement the daemon shard-fetch client once `SF-D2`…`SF-D10` and `SF-D12` are RULED** — the one client both the challenge fetch and the organic read call ([ARCHIVAL_SHARD_FETCH.md](design/ARCHIVAL_SHARD_FETCH.md), Round 1 OPEN 2026-09-12). `SF-D10`/`SF-D12` are one ruling (memory is an input to organic selection). `SF-D11` withdrawn (closed by reading `PWD-E9`). Blocked on the remaining rulings per `26-sub-pr-design-discipline.mdc` (no fetcher code, no Tor outbound API, no FFI until then); falsify by the round doc's Status banner reading anything other than OPEN.
   - Target: pre-genesis
 
 ## Post-genesis
