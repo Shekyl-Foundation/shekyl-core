@@ -1036,6 +1036,71 @@ than assumed.
 
 ---
 
+
+### 11.2 E-6 — the reconstructibility boundary, drawn by table (DRS-0 slice C, `ba4b3c73a`, 2026-09-12)
+
+§11 states D10's mandate and §8.1 puts *"DRS-D10 reconstructible derived
+state implemented"* on the **genesis checklist**, so the boundary it assumes is
+load-bearing rather than descriptive. This draws it.
+
+**The digest side is slice A's and is cited, not restated.** The five
+accumulator-class tokens and every table's class live in
+[`LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) §12, with
+the discriminator that keeps the `derived` class honest (*can the table's
+contents be stated as a function of its named source without reference to the
+writer's code?*). **Reconstructibility is a recovery property and never a digest
+exemption** — a derived table exempted from coverage because it can be rebuilt
+yields a store that can repair a corruption it cannot see. The two axes are
+independent and this section is only the recovery one.
+
+**The corpus, by table.** §11 says "block blobs + minimum tx blobs needed to
+replay `apply_block`". Concretely that is **`blocks`**, **`txs_pruned`**, and
+**`txs_pqc_auths`** — the last because the V11 retention note
+(`src/blockchain_db/lmdb/db_lmdb.cpp:128–135`) records that `prune_tx_data`
+must **keep** `txs_pqc_auths` and `txs_prunable_hash` when it drops the prunable
+body: both are operands of the pruned v3 txid, and neither has a hash table of
+its own. **That note is D10's failure mode already realised once**: V10's depth
+pass deleted them, so "a V10 datadir that ever pruned holds txs the V11 reader
+cannot name … forever, with no repair path (the bytes are gone)." A corpus
+boundary drawn one table too small is unrecoverable by construction, which is
+why this is drawn by table rather than by phrase.
+
+**D10 is stated universally and its wording does not hold. Three groups, each
+grounded at this pin, and the classification agrees with slice A's `excluded`
+reasons row for row** — two instruments, one field, cross-checked:
+
+| Group | Tables | Why replay cannot produce them |
+| --- | --- | --- |
+| **Not chain state** | `txpool_meta`, `txpool_blob`, `alt_blocks`, `archival_alt_attestation_witness` | Replaying **main-chain** blocks produces the main chain. The pool is unconfirmed by definition and the alt surface is by definition what the chain did not take; two honest nodes at one height legitimately differ. Slice A excludes these from **all future digests** on the same ground. Slice C's §5.1 pick moves the pool out of the consensus store file entirely, which makes this a boundary rather than an exception |
+| **Node-local by prune policy** | `txs_prunable`, `txs_prunable_tip`, `output_metadata` | Rebuildable **only from bytes a pruning node has deliberately discarded**. Replay cannot recreate what the local corpus no longer holds, and D10's own premise is *local* blocks |
+| **Dead** | `txs` (never written, DRS-W4), `hf_starting_heights` (dropped at every writable `open()`, DRS-W5) | Empty domain. Trivially satisfied and trivially uninteresting |
+
+**And one CONDITIONAL row, which is the interesting one because it is neither
+excluded nor unconditionally rebuildable.** `archival_attestation_witness` is
+class `small` — digested, consensus-bearing, not excluded by anyone — and it
+reaches the store through `block_connect_supplement::attestation_witness`
+(`src/cryptonote_core/tx_verification_utils.h:87`), populated by the transport,
+*"empty until the transport populates it"*. Its bytes ride the coinbase
+transaction's **prunable** side (`ARCHIVAL_CREDIT_WIRE.md`, prunable-residence
+row: *"Header kept; 3.43 KB countersignature on the coinbase-tx prunable
+side"*). So it is reconstructible from the local corpus **iff the node retains
+that prunable region**, and on a pruning node it is not — the same dependency
+the `node-local` group carries, on a table nobody has classified that way.
+**Flagged for the implementation to confirm at the byte level rather than
+asserted here:** what this section establishes is that the table's rebuild path
+runs through prunable bytes, not that the projection is exact.
+
+**Consequence, stated rather than patched.** D10 reads *"All non-block-corpus
+tables must be rebuildable by replaying local blocks through `apply_block`"*.
+Its true domain is **consensus-bearing derived state whose inputs the node
+retains** — which is what §8.1's checklist item can actually be checked
+against. **The wording of a binding decision is not this slice's to change**
+(rule 21 / `.cursor/rules` and §1 are the owner's), so this is routed, not
+edited: either D10 gains a domain clause naming the three groups, or each group
+gains a named exception. Leaving it universal is the option that should not be
+taken, because §8.1 turns it into a genesis gate and a gate whose subject is
+mis-stated is one that passes on the wrong set.
+
 ## 12. Deletion register
 
 | ID | Artifact | Trigger | Status |
