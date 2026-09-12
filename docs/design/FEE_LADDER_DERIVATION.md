@@ -759,33 +759,67 @@ Two regimes, both mispriced today, in opposite directions:
   regime the ladder exists for, and it is where the transliteration is most
   wrong — the brief's premise (4), now measured.
 
-### §4.3 Spacing and coverage of the inherited ladder (FL-C2/C3 input)
+### §4.3 Spacing and coverage of the served ladder (FL-C2/C3 input)
 
-Average-cost `x` per rung and adjacent fee ratios (instrument `x_ladder`):
+Average-cost `x` per rung and adjacent fee ratios, measured on the **served
+three-tier ladder** — `[economy, standard, priority]`, the shape the daemon
+emits — through the production owner `shekyl_economics::corrected_fee_ladder`.
 
-| `M` | `x(Fl)` | `x(Fn)` | `x(Fm)` | `x(Fh)` | ratios `Fn/Fl, Fm/Fn, Fh/Fm` |
-| --- | --- | --- | --- | --- | --- |
-| `Zm` | 1.0% | 4.0% | 16% | 200% | 4.0, 4.0, **12.5** |
-| `3·Zm` | 0.33% | 1.3% | 16% | 200% | 4.0, **12.0**, 12.5 |
-| `10·Zm` | 0.10% | 0.40% | 16% | 200% | 4.0, **40**, 12.5 |
-| `50·Zm` | 0.02% | 0.08% | 16% | 200% | 4.0, **200**, 12.5 |
-| surge (`Mnw=50·Mlw`) † | 1.0% | 4.0% | 16% | **64%** | 4.0, 4.0, 4.0 |
+`x_i = f_i·M/R` is the expansion fraction of the median that rung `i` funds on
+an average-cost basis. Measured at genesis with baseline volume, where
+`R` = 2048 SKL and the correction is **`C` = 0.85**. **Every row states `C`
+because `x` is not invariant under it:** the correction sits inside the floor
+and the priority rung while `R` is the `M_r`-neutral total, so `C` scales the
+fee side without scaling the divisor. (This is a change from the previous
+characterisation, whose `x` *was* `C`-invariant only because the shape it
+measured had no correction at all.)
 
-† **Computed at the pre-Q3 surge point.** This row prices the inherited ladder at `Mnw = 50·Mlw`, the surge ceiling under the ×50 that C2-R2 Q3 **refuted** (signed 2026-09-06, re-derived `S = 4`; implemented 2026-09-11). At the ratified factor the surge point is `Mnw = 4·Mlw`, so this row's operand — and therefore its percentages — no longer describe a reachable state. **Deliberately not recomputed here:** this is the fee-ladder lane's derivation table and PR #701 is actively rewriting this file; recomputing it from the surge lane would collide with that work and put the ladder's arithmetic in the hands of a lane that does not own it. Routed to the fee-ladder lane with the operand named.
+| `M` | `x(economy)` | `x(standard)` | `x(priority)` | ratios `std/eco, pri/std` |
+| --- | --- | --- | --- | --- |
+| `Zm` (300 000) | 0.850% | 3.400% | **170.0%** | 4.00, **50** |
+| `3·Zm` | 0.283% | 1.133% | **170.0%** | 4.00, **150** |
+| `10·Zm` | 0.085% | 0.340% | **170.0%** | 4.00, **500** |
+| `50·Zm` | 0.017% | 0.067% | **170.0%** | 4.00, **2523** |
 
-- The inherited ladder **already violates FL-C3 everywhere**: the `Fm→Fh`
-  gap is 12.5× at every median, and the inter-family `Fn→Fm` gap grows
-  linearly with `M` (200× at 15 MB medians). Uniform-geometric spacing was
-  never a property of this ladder.
-- Mechanical FL-C2+C3 coverage arithmetic: floor-to-top span is 100× at
-  `M=Zm` (needs ≥ 3 rungs at `r ≤ 10`), 10 000× at `50·Zm` (needs 5). So a
-  strict reading of C2+C3 wants **4–5 rungs at large medians**, while FL-C4b
-  (below) supports **3**. This is the round's registered conflict; §5.3
-  resolves it on the record.
-- **FL-C2(b) gap found:** in the surge state the top rung covers marginal
-  expansion only to `x = 32%` — under exactly the short-term congestion
-  spike where full expansion is the product being sold. The main arm is
-  exact (`2R/M`); the surge discount is the defect. §5.2 removes it.
+Reproduce with
+`cargo test -p shekyl-economics-sim served_ladder_spacing_table -- --nocapture`.
+The numbers are instrument output, not transcribed arithmetic; the sweep runs
+past the launch zone because the **long-term** median is unbounded above
+(C2-R2 Q2/Q3), so `3×`/`10×`/`50×` the zone are reachable states under
+sustained demand.
+
+**There is no surge row, and its absence is a result rather than an omission.**
+The served ladder is a function of the long-term effective median alone. The
+surge factor `S` clamps the SHORT-TERM median, which never reaches the fee
+path, so a surge state is not a distinct row here — it is the same row. (The
+previous table carried such a row because the inherited top rung read the
+short-term median; that arm is deleted, FL-R5.)
+
+What the measurement shows:
+
+- **`x(priority)` is exactly `2C` at every median** — 170% at `C` = 0.85 — and
+  is therefore flat across the sweep. The priority rung is the
+  full-expansion rung (`2RC/M`), so `x = 2RC/M · M/R = 2C` identically. It
+  funds a full doubling of the median plus the correction's margin, at every
+  chain width. This is the property the ladder exists to provide and it holds
+  uniformly.
+- **`x(economy)` is `C·w_ref/M`** and falls as `1/M` — 0.850% at the zone down
+  to 0.017% at `50·Zm`. Economy and standard are per-byte floors (`∝ 1/M²`),
+  so the expansion they fund shrinks as the chain widens. That is correct for
+  a floor: it prices a reference transaction, not an expansion.
+- **`std/eco` is exactly 4.00 everywhere**, by construction (`standard = 4F`),
+  so the bottom of the ladder is uniformly spaced by design rather than by
+  accident.
+- **`pri/std` grows linearly with `M`** — 50× at the zone to 2523× at
+  `50·Zm` — because the two rungs have different exponents in `M` (`1/M`
+  against `1/M²`). **This is the FL-C2/C3 tension, and it is structural, not a
+  defect of calibration:** a floor that prices a transaction and a top rung
+  that prices an expansion cannot stay a fixed ratio apart as the median
+  moves. Mechanical FL-C2+C3 coverage arithmetic: the economy-to-priority span
+  is 200× at `M = Zm` (needs ≥ 3 rungs at `r ≤ 10`) and 10 000× at `50·Zm`
+  (needs 5). A strict reading of C2+C3 therefore wants **4–5 rungs at large
+  medians** while FL-C4b supports **3** — the round's registered conflict,
+  resolved on the record in §5.3.
 
 ### §4.4 Dwell (FL-C4a)
 
@@ -1234,7 +1268,7 @@ Readings, as corrected at round 6:
 | Criterion | Verdict | Where |
 | --- | --- | --- |
 | FL-C1 continuous | **rejected** — never triggered: discrete ladders satisfy the registered set; the exception clause stays unfired | §4.3 |
-| FL-C2 coverage | met by floor + `2R/M` top; **surge arm fails C2(b)** → fixed in §5.2 | §4.3 |
+| FL-C2 coverage | met by floor + `2R/M` top — `x(priority)` = `2C` at every median. The inherited **surge arm failed C2(b)** and was deleted (FL-R5), so the served ladder has no surge-discounted top | §4.3, §5.2 |
 | FL-C3 spacing ≤ 10× | **conflict with C4b** — registered outcome, resolved on the record in §5.3 | §4.3 |
 | FL-C4a dwell | raw `C` fails; **the adopted ceiling passes the 240-block gate in every scenario at every registered age on drift-honest traces, with or without the §7 band** (round 12 behind the band: min median 446, min in-ramp 274; #640 un-banded — which is what the daemon now serves, FL-R3: min median **464**, so this criterion is insensitive to the band's removal; secular reward-decay steps ~1 per 10–20 k blocks are shared by every mode incl. current). **The registered nearest rule FAILS at age 12 under drift** (median 2–3 blocks — per-block flicker at the √2 midpoint), a second independent ground for the ceiling. **Rounds 14–15: the criterion's anonymity rationale is REFUTED and NOT replaced by another anonymity one** — a conforming transaction's fee is redundant with the block carrying it, construction time is already public via `reference_block`, and round 14's fallback (stale-quote self-marking) was itself retracted at round 15 because `check_fee` is a floor, not an equality. What survives is **quantization quality and user predictability**, on which every decision this criterion drove still holds (§1.4 note, §4.5b) | §4.4, §4.5b |
 | FL-C4b usage floor | `Fm` at **0% measured production usage** (FL-V3) → **delete** (emergency-lane branch examined and rejected: an emergency lane nobody was using marks the first user who ever touches it) | §5.3 |
@@ -1337,8 +1371,12 @@ named as misfitting a two-family ladder.**
    bounds is paid only by a user whose need falls between rungs, once,
    voluntarily, and capped: a user needing `Fm`'s 16% who now pays the
    `2R/M` top overpays **12.5×** — exactly the `Fh/Fm` gap the inherited
-   ladder already carries at every median (§4.3), and constant across
-   medians because both rungs are 1/M-family. Deleting `Fm` does not
+   four-tier ladder carried at every median, and constant across medians
+   because both rungs are 1/M-family. (That figure characterises the
+   inherited shape, which is why it is stated here rather than cited from
+   §4.3: §4.3 now measures the SERVED three-tier ladder, and the rung it
+   describes — `Fm` — is the one this resolution deletes. The heritage
+   measurement is in git history.) Deleting `Fm` does not
    *create* a C3 violation; it inherits the 12.5× one the ladder always
    had, confines its marginal cost to needs in the 16%-neighborhood, and
    those needs are borne today by **zero measured users** (FL-V3). Needs
@@ -1349,15 +1387,19 @@ named as misfitting a two-family ladder.**
    assigns them < 5%, and the one intermediate rung that existed measured
    **0%** in production for its entire life (FL-V3). C4b would delete them
    right back.
-3. The scary C3 numbers (`Fn→Fm` = 200×) are *inter-family* gaps: they
-   compare an admission price to an expansion price, which diverge as 1/M²
-   vs 1/M by construction (§3.2). Uniform-geometric spacing across that
+3. The scary C3 numbers are *inter-family* gaps: they compare an admission
+   price to an expansion price, which diverge as 1/M² vs 1/M by
+   construction (§3.2). On the served ladder this is the `pri/std` column
+   of §4.3 — 50× at the zone rising to 2523× at `50·Zm` — and on the
+   inherited shape it was the `Fn→Fm` gap reaching 200×. Same seam, either
+   shape. Uniform-geometric spacing across that
    seam is not achievable with any finite rung count — the criterion's
    premise (one geometric family) does not describe this object. The
    *intra-family* spacings of the proposed ladder are 4× (admission,
    within C3's bound) and 12.5× worst-case overpayment on the expansion
    side — the inherited `Fh/Fm` gap, above C3's bound and resolved for
-   privacy per point 1.
+   privacy per point 1. On the served ladder the surviving intra-family
+   spacing is `std/eco` = 4.00× at every median (§4.3), inside C3's bound.
 4. The losing branch, recorded: 4 rungs re-spaced uniform-geometric
    (`r = 5.85` over 1%–200% at `Zm`) satisfies C3 at minimum zone only,
    re-breaks at 10·Zm (`r = 12.6`), and staffs its extra rung with nobody —

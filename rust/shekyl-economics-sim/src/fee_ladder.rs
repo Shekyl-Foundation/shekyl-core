@@ -448,23 +448,38 @@ fn quantize_c_pow2(c_scaled: u64, rule: SnapRule) -> u64 {
 // x-characterization (average-cost expansion each rung funds)
 // ---------------------------------------------------------------------------
 
+/// Spacing and coverage of the **served three-tier ladder** — the shape the
+/// daemon actually emits (`economy`, `standard`, `priority`), built from the
+/// production owner `shekyl_economics::corrected_fee_ladder`.
+///
+/// This replaces a four-tier characterisation of the inherited ArticMine
+/// ladder. That instrument measured a shape this project no longer has: four
+/// rungs, no `C` correction, and a top rung whose value depended on the
+/// short-term median (the "surge discount" FL-R5 deleted). Keeping its numbers
+/// in a live document invited them to be grepped and re-implemented, so they
+/// are gone; the heritage arithmetic remains in git history.
 #[derive(Serialize)]
-pub struct XLadderRow {
+pub struct XServedRow {
+    /// The long-term effective median the ladder is priced against. The served
+    /// ladder is a function of THIS alone — see `surge_note` below.
     pub median: u64,
-    pub mnw: u64,
-    /// `x_i = f_i·M/R` per rung, in millionths (expansion fraction of the
-    /// median that rung `i` pays for on an average-cost basis). Invariant
-    /// under the `C` correction — `C` rescales fees and miner terms alike.
-    pub x_millionths: [u64; 4],
-    /// Adjacent-rung ratios ×1000 (`[f1/f0, f2/f1, f3/f2]`).
-    pub adjacent_ratio_milli: [u64; 3],
+    /// The correction `C` in force, scaled. Unlike the heritage instrument,
+    /// `x` here is NOT invariant under `C`: the correction sits inside the
+    /// floor and the priority rung, while `base_reward` is the M_r-neutral
+    /// total, so every row must state the `C` it was measured at.
+    pub c_scaled: u64,
+    /// `x_i = f_i·M/R` per rung, in millionths — the expansion fraction of the
+    /// median that rung `i` funds on an average-cost basis.
+    pub x_millionths: [u64; SERVED_SLOTS],
+    /// Adjacent-rung ratios ×1000 (`[standard/economy, priority/standard]`).
+    pub adjacent_ratio_milli: [u64; SERVED_SLOTS - 1],
 }
 
-fn x_ladder_row(base_reward: u64, mnw: u64, mlw: u64) -> XLadderRow {
-    let raw = articmine_ladder_raw(base_reward, mnw, mlw);
-    let m = mnw.min(mlw).max(FULL_REWARD_ZONE_V5);
-    let x = raw.map(|f| {
-        u64::try_from(u128::from(f) * u128::from(m) * u128::from(SCALE) / u128::from(base_reward))
+fn x_served_row(base_reward: u64, median: u64, c_scaled: u64) -> XServedRow {
+    let f = served_ladder(base_reward, median, c_scaled);
+    let m = median.max(FULL_REWARD_ZONE_V5);
+    let x = f.map(|fi| {
+        u64::try_from(u128::from(fi) * u128::from(m) * u128::from(SCALE) / u128::from(base_reward))
             .expect("x fits u64")
     });
     let ratio = |hi: u64, lo: u64| -> u64 {
@@ -474,15 +489,11 @@ fn x_ladder_row(base_reward: u64, mnw: u64, mlw: u64) -> XLadderRow {
             u64::try_from(u128::from(hi) * 1000 / u128::from(lo)).expect("ratio fits u64")
         }
     };
-    XLadderRow {
+    XServedRow {
         median: m,
-        mnw,
+        c_scaled,
         x_millionths: x,
-        adjacent_ratio_milli: [
-            ratio(raw[1], raw[0]),
-            ratio(raw[2], raw[1]),
-            ratio(raw[3], raw[2]),
-        ],
+        adjacent_ratio_milli: [ratio(f[1], f[0]), ratio(f[2], f[1])],
     }
 }
 
@@ -2087,7 +2098,7 @@ pub struct FeeLadderReport {
     c_surface: Vec<CorrectionPoint>,
     c_reachable_min: u64,
     c_reachable_max: u64,
-    x_ladder: Vec<XLadderRow>,
+    x_served: Vec<XServedRow>,
     rung_tables: Vec<RungTable>,
     dwell: Vec<DwellResult>,
     feedback: Vec<FeedbackResult>,
@@ -2166,13 +2177,32 @@ pub fn report() -> FeeLadderReport {
     }
 
     let genesis = state_of(0);
-    let x_ladder = vec![
-        x_ladder_row(genesis.base_reward, zone, zone),
-        x_ladder_row(genesis.base_reward, 3 * zone, 3 * zone),
-        x_ladder_row(genesis.base_reward, 10 * zone, 10 * zone),
-        x_ladder_row(genesis.base_reward, 50 * zone, 50 * zone),
-        // Registered spot-check: short-term surge decoupled from long-term.
-        x_ladder_row(genesis.base_reward, 50 * zone, zone),
+    // Spacing and coverage of the SERVED three-tier ladder, swept over the
+    // long-term effective median at the genesis-baseline correction.
+    //
+    // NO SURGE ROW, and its absence is the finding rather than an omission.
+    // The heritage instrument carried one because the inherited top rung was a
+    // function of the SHORT-TERM median. The served ladder is a function of the
+    // long-term effective median alone, and the surge factor S clamps the
+    // short-term median, which never reaches this path — so a surge state is
+    // not a distinct row here, it is the same row. That is the S-independence
+    // recorded at the wallet estimate's call site in blockchain.cpp.
+    //
+    // The median sweep runs past the launch zone deliberately: the LONG-TERM
+    // median is unbounded above (C2-R2 Q2/Q3), so 3x/10x/50x the zone are
+    // reachable chain states as sustained demand grows, not surge transients.
+    let c_baseline = correction_factor(
+        params.tx_volume_baseline,
+        genesis.ag,
+        genesis.height,
+        &params,
+    )
+    .c_scaled;
+    let x_served = vec![
+        x_served_row(genesis.base_reward, zone, c_baseline),
+        x_served_row(genesis.base_reward, 3 * zone, c_baseline),
+        x_served_row(genesis.base_reward, 10 * zone, c_baseline),
+        x_served_row(genesis.base_reward, 50 * zone, c_baseline),
     ];
 
     let rung_tables = vec![
@@ -2544,7 +2574,7 @@ pub fn report() -> FeeLadderReport {
         c_surface,
         c_reachable_min: c_min,
         c_reachable_max: c_max,
-        x_ladder,
+        x_served,
         rung_tables,
         dwell,
         feedback,
@@ -2873,6 +2903,54 @@ pub fn render_json(r: &FeeLadderReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Prints the served-ladder spacing table the way
+    /// `FEE_LADDER_DERIVATION.md` §4.3 transcribes it, so the document's
+    /// numbers are reproducible from a single fast command rather than a
+    /// full simulation run:
+    ///
+    /// ```text
+    /// cargo test -p shekyl-economics-sim served_ladder_spacing_table -- --nocapture
+    /// ```
+    ///
+    /// A transcribed table that cannot be regenerated cheaply is a table that
+    /// goes stale, which is how §4.3 came to carry a four-tier characterisation
+    /// of a shape this project had already deleted.
+    #[test]
+    fn served_ladder_spacing_table() {
+        // Same constructor the report uses, so the probe and the full
+        // simulation cannot disagree about what they measured.
+        let params = EconomicParams::default();
+        let zone = FULL_REWARD_ZONE_V5;
+        let genesis = age_state(0, &params);
+        let c = correction_factor(
+            params.tx_volume_baseline,
+            genesis.ag,
+            genesis.height,
+            &params,
+        )
+        .c_scaled;
+        println!(
+            "C_scaled = {c} (genesis, baseline volume {})",
+            params.tx_volume_baseline
+        );
+        println!("base_reward = {}", genesis.base_reward);
+        println!("median | x(economy) x(standard) x(priority) | std/eco pri/std");
+        for mult in [1u64, 3, 10, 50] {
+            let row = x_served_row(genesis.base_reward, mult * zone, c);
+            let x = row.x_millionths;
+            let r = row.adjacent_ratio_milli;
+            println!(
+                "{:>9} | {:>9.3}% {:>10.3}% {:>10.3}% | {:>6.2}x {:>6.2}x",
+                row.median,
+                x[0] as f64 / 10_000.0,
+                x[1] as f64 / 10_000.0,
+                x[2] as f64 / 10_000.0,
+                r[0] as f64 / 1000.0,
+                r[1] as f64 / 1000.0,
+            );
+        }
+    }
 
     /// The guard [`in_boundary_zone`]'s docstring promises: `D8_MARGIN_MILLI`
     /// is a re-derivation of the owner's private `HYSTERESIS_MARGIN_MILLI`,
