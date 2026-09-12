@@ -616,7 +616,9 @@ named exclusion. **No silent sampling.**
 [`LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) §10,
 with the five tokens, the `set-shaped` delete-path falsifier, the named
 exclusion reasons and the gate's stated limitation defined in that
-document's §12. Three qualifications the freeze establishes and this
+document's §12. The vocabulary and write contracts live in
+`shekyl-chain-store::accumulator` (`AccumulatorClass`, `TABLE_CLASSES`,
+`SET_SHAPED_CONTRACTS`) — that is what DRS-E1 reads. Three qualifications the freeze establishes and this
 section does not state: the Append-mostly caveat above; that **the fourth
 row is a cross-cutting verification mechanism, not a table class** (no
 table is "the torn-commit table" — it applies to the two *incremental*

@@ -1293,7 +1293,7 @@ oracle. P0e's job was to measure the gap and make it impossible to lose.
 **This section states what the frozen design commits to for each table. It
 is a different axis from §11.** §11's `Digest v0` state says what the
 *minimum oracle reads today*; this section's `Accumulator class` says what
-the *design commits to*. By construction **they disagree on **16** rows** —
+the *design commits to*. By construction they disagree on **16** rows —
 a count the gate derives from the two columns rather than trusting this
 sentence: the archival journals are v0-`excluded`, and
 `DAEMON_REDB_STORE.md` §6.2 names "archival journals" under **Small**. A v0
@@ -1307,6 +1307,13 @@ either column as a proxy for the other.**
 one-per-table. As with the P0e leg, **the leg asserts classhood, not
 soundness** — a tree where all 49 read `excluded` passes it. See the stated
 limitation at the end of this section, which is not a footnote.
+
+The vocabulary and the set-shaped write contracts live in
+`shekyl-chain-store::accumulator` (`AccumulatorClass`, `TABLE_CLASSES`,
+`SET_SHAPED_CONTRACTS`). This section is the prose freeze those types
+encode. The schema-coverage gate pins the named sets to `db_lmdb.cpp` by
+**set equality** (a rotation that keeps the count is red). The crate tests
+pin the types to this document.
 
 ### The five tokens
 
@@ -1394,8 +1401,10 @@ fifteen `set-shaped` tables: does the delete path have the stored element
 answer is not uniform, and **two earlier drafts of this section enumerated
 it by hand and got it wrong in both directions.** The lists below are
 derived mechanically from the write sites in `db_lmdb.cpp` and
-gate-checked against them (§9.1 slice-A write-pattern leg), because the
-enumeration — not the classification — is the thing that drifts.
+gate-checked against them by set equality (§9.1 slice-A write-pattern
+leg), because the enumeration — not the classification — is the thing
+that drifts. A count pin stays green under a rotation; a set pin does
+not.
 
 **The split is structural, which is why it is stated as a structure rather
 than as two lists to maintain.** Five `set-shaped` tables are
