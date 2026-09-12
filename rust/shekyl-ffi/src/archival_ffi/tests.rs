@@ -19,6 +19,9 @@ use shekyl_peer_policy::DropVerdict;
 use std::ffi::CStr;
 use std::ptr;
 
+/// The serving endpoint every JoinMarket call site passes (EU-D3: mandatory).
+static TEST_ENDPOINT: [u8; 32] = [0x4E; 32];
+
 #[test]
 fn emission_vin_drop_verdict_classifies_form_and_does_not_sever_on_our_state() {
     assert!(DropVerdict::from_byte(shekyl_emission_vin_drop_verdict(
@@ -261,6 +264,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
             shard_len,
             spend_pk.as_ptr(),
             spend_pk.len(),
+            TEST_ENDPOINT.as_ptr(),
+            TEST_ENDPOINT.len(),
             total,
             credit,
             debit,
@@ -272,9 +277,10 @@ fn bond_post_ffi_maps_each_reject_reason() {
         verify(0, 0, Some(&shard), 1, floor, floor, 0, 0),
         SHEKYL_ARCHIVAL_BOND_POST_OK
     );
-    // A conforming Rebond vin carries NO key (§9.11), so the post-kind
-    // verdict is asserted with an empty one; Rebond WITH a key is the
-    // coupling case at the bottom.
+    // A conforming Rebond vin carries NO key (§9.11) and NO endpoint (EU-D3),
+    // so the post-kind verdict is asserted with both empty; Rebond WITH a key
+    // is the coupling case at the bottom, and Rebond WITH an endpoint is the
+    // endpoint-coupling case right after this one.
     assert_eq!(
         unsafe {
             shekyl_archival_verify_join_market_bond_post(
@@ -284,6 +290,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
                 1,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
+                0,
                 floor,
                 floor,
                 0,
@@ -291,6 +299,27 @@ fn bond_post_ffi_maps_each_reject_reason() {
             )
         },
         SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
+    );
+    // Rebond WITH an endpoint: the EU-D3 coupling refuses at the shared marshal,
+    // by the same rule (and code family) as the bond_spend_pk coupling.
+    assert_eq!(
+        unsafe {
+            shekyl_archival_verify_join_market_bond_post(
+                1,
+                0,
+                std::ptr::from_ref(&shard),
+                1,
+                std::ptr::null(),
+                0,
+                TEST_ENDPOINT.as_ptr(),
+                TEST_ENDPOINT.len(),
+                floor,
+                floor,
+                0,
+                0,
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING
     );
     assert_eq!(
         verify(0, 0, None, 1, floor, floor, 0, 0),
@@ -339,6 +368,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
                 pk.as_ptr()
             },
             pk.len(),
+            TEST_ENDPOINT.as_ptr(),
+            TEST_ENDPOINT.len(),
             floor,
             floor,
             0,
@@ -369,6 +400,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
                 1,
                 std::ptr::null(),
                 HYBRID_PUBKEY_CANONICAL_BYTES,
+                TEST_ENDPOINT.as_ptr(),
+                TEST_ENDPOINT.len(),
                 floor,
                 floor,
                 0,
@@ -691,6 +724,8 @@ fn bond_post_ffi_rejects_duplicate_holdings_at_the_marshal_boundary() {
             dup.len(),
             std::ptr::null(),
             0,
+            TEST_ENDPOINT.as_ptr(),
+            TEST_ENDPOINT.len(),
             3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             0,
@@ -927,7 +962,7 @@ fn serve_credit_epoch_ok_ffi_matches_rust() {
 #[test]
 fn bond_ct_balance_ffi_rejects_null_with_nonzero_count() {
     let code = unsafe {
-        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 1, ptr::null(), 0, 0, 0, 0)
+        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 1, ptr::null(), 0, 0, 0, 0, 0)
     };
     assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR);
 }
@@ -944,6 +979,7 @@ fn bond_ct_balance_ffi_rejects_count_overflow() {
             0,
             0,
             0,
+            0,
         )
     };
     assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT);
@@ -956,7 +992,7 @@ fn bond_ct_balance_ffi_rejects_count_overflow() {
 fn bond_ct_balance_ffi_rejects_neither_bond_term() {
     // credit = debit = 0 (empty balance) → NO_BOND_TERM, not OK.
     let code = unsafe {
-        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 0, 0)
+        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 0, 0, 0)
     };
     assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM);
 }
@@ -965,9 +1001,96 @@ fn bond_ct_balance_ffi_rejects_neither_bond_term() {
 fn bond_ct_balance_ffi_rejects_both_bond_terms() {
     // credit and debit both non-zero → BOTH_TERMS.
     let code = unsafe {
-        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 1, 1)
+        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 1, 1, 0)
     };
     assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS);
+}
+
+// EU-D11: the kind selects the term arity. An EndpointUpdate balances with no
+// bond term (the plain equation), and a kind-4 post that presents one is
+// refused by name — never balanced by accident, never NO_BOND_TERM.
+#[test]
+fn bond_ct_balance_ffi_endpoint_update_balances_with_no_term() {
+    let kind = shekyl_archival_retention::BondPostKind::EndpointUpdate as u8;
+    // No inputs, no outputs, no fee: the plain equation holds trivially.
+    let code = unsafe {
+        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 0, 0, kind)
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK);
+}
+
+#[test]
+fn bond_ct_balance_ffi_rejects_a_term_on_endpoint_update() {
+    let kind = shekyl_archival_retention::BondPostKind::EndpointUpdate as u8;
+    for (credit, debit) in [(1u64, 0u64), (0, 1), (1, 1)] {
+        let code = unsafe {
+            shekyl_archival_verify_bond_post_ct_balance(
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                0,
+                credit,
+                debit,
+                kind,
+            )
+        };
+        assert_eq!(
+            code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_TERM_ON_ENDPOINT_UPDATE,
+            "credit={credit} debit={debit}"
+        );
+    }
+}
+
+// EU-D7 / EU-D11 at the FFI boundary: the EndpointUpdate verify entry.
+#[test]
+fn endpoint_update_ffi_accepts_a_bonded_record_and_refuses_a_zero_bonded_one() {
+    let kind = shekyl_archival_retention::BondPostKind::EndpointUpdate as u8;
+    let endpoint = [0x4Eu8; 32];
+    let ok = unsafe {
+        shekyl_archival_verify_endpoint_update(kind, endpoint.as_ptr(), endpoint.len(), 1, 750)
+    };
+    assert_eq!(ok, SHEKYL_ARCHIVAL_BOND_POST_OK);
+    let zero = unsafe {
+        shekyl_archival_verify_endpoint_update(kind, endpoint.as_ptr(), endpoint.len(), 1, 0)
+    };
+    assert_eq!(zero, SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_RECORD_NOT_BONDED);
+    assert_eq!(
+        shekyl_archival_bond_post_drop_verdict(SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_RECORD_NOT_BONDED),
+        shekyl_archival_bond_post_drop_verdict(SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED),
+        "EU-D7 mirrors its HoldingsUpdate sibling's verdict class by name"
+    );
+    let missing = unsafe {
+        shekyl_archival_verify_endpoint_update(kind, endpoint.as_ptr(), endpoint.len(), 0, 0)
+    };
+    assert_eq!(missing, SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING);
+}
+
+#[test]
+fn endpoint_update_ffi_refuses_the_wrong_kind_and_a_malformed_endpoint() {
+    let kind = shekyl_archival_retention::BondPostKind::EndpointUpdate as u8;
+    let endpoint = [0x4Eu8; 32];
+    // A non-EndpointUpdate byte (HoldingsUpdate) reaches the verify's own
+    // kind check through the shared marshal.
+    let wrong = unsafe {
+        shekyl_archival_verify_endpoint_update(3, endpoint.as_ptr(), endpoint.len(), 1, 750)
+    };
+    assert_eq!(wrong, SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
+    // Absent endpoint on a kind-4 vin: the EU-D3 coupling refuses at the marshal.
+    let absent = unsafe { shekyl_archival_verify_endpoint_update(kind, ptr::null(), 0, 1, 750) };
+    assert_eq!(absent, SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
+    // Wrong length: the wire carries the raw key or nothing.
+    let short =
+        unsafe { shekyl_archival_verify_endpoint_update(kind, endpoint.as_ptr(), 31, 1, 750) };
+    assert_eq!(short, SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
+    // An unknown byte is refused as not-EndpointUpdate.
+    let unknown = unsafe {
+        shekyl_archival_verify_endpoint_update(9, endpoint.as_ptr(), endpoint.len(), 1, 750)
+    };
+    assert_eq!(
+        unknown,
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_ENDPOINT_UPDATE
+    );
 }
 
 #[test]

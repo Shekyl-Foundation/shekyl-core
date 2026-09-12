@@ -96,6 +96,7 @@ fn bond_post_holdings_with_duplicate_shard_rejected_at_read() {
         p_canonical_id: [0x77; 32],
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![0xCD; PQC_HYBRID_SINGLE_KEY_LEN],
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::ShardSetCompact(vec![7, 42, 7]),
         bonded_total_atomic: 750_000_000 * 3,
@@ -120,6 +121,7 @@ fn bond_post_joinmarket_round_trips_with_bond_spend_pk() {
         p_canonical_id: [0x77; 32],
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![0xCD; PQC_HYBRID_SINGLE_KEY_LEN],
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::ShardSetCompact(vec![1, 2, 3, 9]),
         bonded_total_atomic: 750_000_000 * 4,
@@ -148,6 +150,114 @@ fn bond_post_non_joinmarket_has_no_bond_spend_pk() {
         bond_debit: 3_000_000_000,
     }));
     assert_eq!(round_trip(&input), input);
+}
+
+#[test]
+fn bond_post_endpoint_update_round_trips_as_exactly_the_endpoint() {
+    // EU-D11: hybrid_public_key ‖ p_canonical_id ‖ post_kind ‖ endpoint and
+    // nothing else — the decoded post carries the empty shape by construction.
+    let input = Input::BondPost(Box::new(BondPost {
+        hybrid_public_key: vec![0x01; PQC_HYBRID_SINGLE_KEY_LEN],
+        p_canonical_id: [0x02; 32],
+        kind: BondPostKind::EndpointUpdate {
+            endpoint: [0x4E; 32],
+        },
+        holdings: Holdings::ShardSetCompact(Vec::new()),
+        bonded_total_atomic: 0,
+        bond_credit: 0,
+        bond_debit: 0,
+    }));
+    let mut bytes = Vec::new();
+    input.write(&mut bytes).expect("write");
+    // The kind-4 payload ends 32 bytes after the kind byte: no holdings
+    // descriptor, no varints. (1 vin tag + varint len + key + 32 id + 1 kind + 32.)
+    let key_len_varint = 2; // PQC_HYBRID_SINGLE_KEY_LEN = 1996 fits two varint bytes
+    assert_eq!(
+        bytes.len(),
+        1 + key_len_varint + PQC_HYBRID_SINGLE_KEY_LEN + 32 + 1 + 32
+    );
+    assert_eq!(round_trip(&input), input);
+}
+
+/// EU-D9 KAT (a) at this serializer: a kind-4 post carrying holdings or an
+/// amount term does not serialize — `write` refuses on validate, so the bytes
+/// that would spell a standing or value mutation under kind 4 cannot exist.
+#[test]
+fn bond_post_endpoint_update_cannot_carry_holdings_or_a_term() {
+    let base = BondPost {
+        hybrid_public_key: vec![0x01; PQC_HYBRID_SINGLE_KEY_LEN],
+        p_canonical_id: [0x02; 32],
+        kind: BondPostKind::EndpointUpdate {
+            endpoint: [0x4E; 32],
+        },
+        holdings: Holdings::ShardSetCompact(Vec::new()),
+        bonded_total_atomic: 0,
+        bond_credit: 0,
+        bond_debit: 0,
+    };
+    let refuse = |post: BondPost, why: &str| {
+        let err = Input::BondPost(Box::new(post))
+            .write(&mut Vec::new())
+            .expect_err(why);
+        assert!(
+            err.to_string().contains("EndpointUpdate carries no"),
+            "{why}: {err}"
+        );
+    };
+    refuse(
+        BondPost {
+            holdings: Holdings::ShardSetCompact(vec![7]),
+            ..base.clone()
+        },
+        "holdings list",
+    );
+    refuse(
+        BondPost {
+            holdings: Holdings::CompleteTree,
+            ..base.clone()
+        },
+        "complete tree",
+    );
+    refuse(
+        BondPost {
+            bond_credit: 1,
+            ..base.clone()
+        },
+        "credit",
+    );
+    refuse(
+        BondPost {
+            bond_debit: 1,
+            ..base.clone()
+        },
+        "debit",
+    );
+    refuse(
+        BondPost {
+            bonded_total_atomic: 1,
+            ..base
+        },
+        "bonded total",
+    );
+}
+
+#[test]
+fn bond_post_other_must_not_reuse_the_endpoint_update_tag() {
+    // Other(4) would emit a blob that re-parses as EndpointUpdate, consuming
+    // the holdings bytes as the endpoint. Refused at write, like Other(0).
+    let input = Input::BondPost(Box::new(BondPost {
+        hybrid_public_key: vec![0x01; PQC_HYBRID_SINGLE_KEY_LEN],
+        p_canonical_id: [0x02; 32],
+        kind: BondPostKind::Other(4),
+        holdings: Holdings::CompleteTree,
+        bonded_total_atomic: 1,
+        bond_credit: 1,
+        bond_debit: 0,
+    }));
+    let err = input
+        .write(&mut Vec::new())
+        .expect_err("Other(4) must refuse");
+    assert!(err.to_string().contains("coupled payload"), "{err}");
 }
 
 #[test]

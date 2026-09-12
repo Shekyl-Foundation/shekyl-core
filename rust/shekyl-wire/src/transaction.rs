@@ -84,6 +84,12 @@ pub const TAG_INPUT_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 /// `post_kind` value for a JoinMarket archival bond post.
 /// `bond_spend_pk` is present on the wire iff `post_kind == JOINMARKET` (§9.11).
 pub const BOND_POST_KIND_JOINMARKET: u8 = 0;
+/// `post_kind` byte for an `EndpointUpdate` bond post (`EU-D3`/`EU-D11`): the
+/// kind-4 vin carries exactly the endpoint — no holdings, no amount term.
+pub const BOND_POST_KIND_ENDPOINT_UPDATE: u8 = 4;
+/// The serving endpoint on the wire: the raw 32-byte ed25519 public key of the
+/// persona's v3 onion service. Present iff JoinMarket or EndpointUpdate.
+pub const BOND_POST_ENDPOINT_LEN: usize = 32;
 /// `holdings.kind` for a compact shard-set (carries an explicit shard list).
 pub const HOLDINGS_SHARD_SET_COMPACT: u8 = 0;
 /// `holdings.kind` for the complete tree (carries no shard list).
@@ -600,10 +606,21 @@ pub enum BondPostKind {
     JoinMarket {
         /// The GF-1 debit authorizer hybrid public key.
         bond_spend_pk: Vec<u8>,
+        /// The persona's serving endpoint (`EU-D3`): mandatory on JoinMarket —
+        /// a bond without an endpoint was the discovery gap.
+        endpoint: [u8; BOND_POST_ENDPOINT_LEN],
     },
-    /// Any non-JoinMarket post kind — no `bond_spend_pk` on the wire. The byte must
-    /// not be the JoinMarket tag (`Other` is non-JoinMarket by construction; `write`
-    /// rejects `Other(JOINMARKET)`).
+    /// EndpointUpdate post (`post_kind` `0x04`) — rotates the serving endpoint
+    /// in place. The kind-4 vin is exactly the endpoint (`EU-D11`): `write`
+    /// emits no holdings and no amount term after it, `read` yields the empty
+    /// shape, and `validate` refuses a `BondPost` that carries either.
+    EndpointUpdate {
+        /// The new serving endpoint.
+        endpoint: [u8; BOND_POST_ENDPOINT_LEN],
+    },
+    /// Any other post kind — no `bond_spend_pk` and no endpoint on the wire. The
+    /// byte must not be a tag with a coupled payload (`write` rejects
+    /// `Other(JOINMARKET)` and `Other(ENDPOINT_UPDATE)`).
     Other(u8),
 }
 
@@ -629,25 +646,53 @@ pub struct BondPost {
 }
 
 impl BondPost {
+    /// `EU-D11`: a kind-4 post is exactly the endpoint. Shared by `write` (so
+    /// the fields cannot be silently dropped) and `validate` (so a hand-built
+    /// value is refused by the same rule).
+    fn endpoint_update_shape(&self) -> io::Result<()> {
+        if !matches!(&self.holdings, Holdings::ShardSetCompact(ids) if ids.is_empty()) {
+            return Err(io::Error::other(
+                "shekyl-wire: EndpointUpdate carries no holdings",
+            ));
+        }
+        if self.bonded_total_atomic != 0 || self.bond_credit != 0 || self.bond_debit != 0 {
+            return Err(io::Error::other(
+                "shekyl-wire: EndpointUpdate carries no amount term",
+            ));
+        }
+        Ok(())
+    }
+
     fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         write_varint(self.hybrid_public_key.len(), w)?;
         w.write_all(&self.hybrid_public_key)?;
         w.write_all(&self.p_canonical_id)?;
         match &self.kind {
-            BondPostKind::JoinMarket { bond_spend_pk } => {
+            BondPostKind::JoinMarket {
+                bond_spend_pk,
+                endpoint,
+            } => {
                 w.write_all(&[BOND_POST_KIND_JOINMARKET])?;
                 write_varint(bond_spend_pk.len(), w)?;
                 w.write_all(bond_spend_pk)?;
+                w.write_all(endpoint)?;
+            }
+            BondPostKind::EndpointUpdate { endpoint } => {
+                // `EU-D11`: nothing follows the endpoint on a kind-4 vin — so a
+                // post that carries holdings or a term under this kind is
+                // refused here, never silently dropped on the floor.
+                self.endpoint_update_shape()?;
+                w.write_all(&[BOND_POST_KIND_ENDPOINT_UPDATE])?;
+                w.write_all(endpoint)?;
+                return Ok(());
             }
             BondPostKind::Other(post_kind) => {
-                // `Other` is non-JoinMarket by contract; reusing the JoinMarket tag
-                // would make `write` emit a `bond_spend_pk`-less blob that `read`
-                // would then try to parse as JoinMarket (consuming the holdings bytes
-                // as the key). Reject the misconstruction rather than emit it.
-                if *post_kind == BOND_POST_KIND_JOINMARKET {
+                if *post_kind == BOND_POST_KIND_JOINMARKET
+                    || *post_kind == BOND_POST_KIND_ENDPOINT_UPDATE
+                {
                     return Err(io::Error::other(
-                        "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag \
-                         (use BondPostKind::JoinMarket)",
+                        "shekyl-wire: BondPostKind::Other must not use a tag with a coupled \
+                         payload (use BondPostKind::JoinMarket / BondPostKind::EndpointUpdate)",
                     ));
                 }
                 w.write_all(&[*post_kind])?;
@@ -664,8 +709,9 @@ impl BondPost {
             read_len_prefixed_exact(r, "bond_post hybrid_public_key", PQC_HYBRID_SINGLE_KEY_LEN)?;
         let p_canonical_id = read_array(r)?;
         let post_kind = read_byte(r)?;
-        // `read` never yields `Other(JOINMARKET)`: the JoinMarket tag always takes the
-        // first arm, so the `write` guard above only fires on a hand-built value.
+        // `read` never yields `Other(JOINMARKET)` or `Other(ENDPOINT_UPDATE)`: those
+        // tags always take their own arm, so the `write` guard above only fires on
+        // a hand-built value.
         let kind = if post_kind == BOND_POST_KIND_JOINMARKET {
             BondPostKind::JoinMarket {
                 bond_spend_pk: read_len_prefixed_exact(
@@ -673,7 +719,23 @@ impl BondPost {
                     "bond_spend_pk",
                     PQC_HYBRID_SINGLE_KEY_LEN,
                 )?,
+                endpoint: read_array(r)?,
             }
+        } else if post_kind == BOND_POST_KIND_ENDPOINT_UPDATE {
+            // `EU-D11`: the kind-4 vin ends at the endpoint. Holdings and the
+            // amount term have no bytes to read; the decoded post carries the
+            // empty shape by construction.
+            return Ok(BondPost {
+                hybrid_public_key,
+                p_canonical_id,
+                kind: BondPostKind::EndpointUpdate {
+                    endpoint: read_array(r)?,
+                },
+                holdings: Holdings::ShardSetCompact(Vec::new()),
+                bonded_total_atomic: 0,
+                bond_credit: 0,
+                bond_debit: 0,
+            });
         } else {
             BondPostKind::Other(post_kind)
         };
@@ -700,7 +762,7 @@ impl BondPost {
             )));
         }
         match &self.kind {
-            BondPostKind::JoinMarket { bond_spend_pk } => {
+            BondPostKind::JoinMarket { bond_spend_pk, .. } => {
                 if bond_spend_pk.len() != PQC_HYBRID_SINGLE_KEY_LEN {
                     return Err(io::Error::other(format!(
                         "shekyl-wire: bond_post bond_spend_pk {} != canonical {PQC_HYBRID_SINGLE_KEY_LEN}",
@@ -708,12 +770,15 @@ impl BondPost {
                     )));
                 }
             }
-            // `Other` must not reuse the JoinMarket tag — `write` would emit a
-            // bond_spend_pk-less blob that re-parses as JoinMarket (a mis-parse).
+            BondPostKind::EndpointUpdate { .. } => self.endpoint_update_shape()?,
+            // `Other` must not reuse a tag with a coupled payload — `write` would
+            // emit a blob that re-parses as that kind (a mis-parse).
             BondPostKind::Other(post_kind) => {
-                if *post_kind == BOND_POST_KIND_JOINMARKET {
+                if *post_kind == BOND_POST_KIND_JOINMARKET
+                    || *post_kind == BOND_POST_KIND_ENDPOINT_UPDATE
+                {
                     return Err(io::Error::other(
-                        "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag",
+                        "shekyl-wire: BondPostKind::Other must not use a tag with a coupled payload",
                     ));
                 }
             }

@@ -332,7 +332,12 @@ impl Message<PlanBondPost> for StakeEngine {
         //    never returned to the caller (rule 36-secret-locality): only the
         //    constructed `JoinMarketVin` (paired with its placement offset)
         //    crosses the actor boundary.
-        let vin = build_join_market_vin(keys.bond_post_keys(), msg.holdings)
+        // The serving endpoint the bond advertises (EU-D3, mandatory): the
+        // persona's onion public key, minted here from the seed the actor
+        // holds and never returned — `OnionIdentity` yields the public half
+        // only; the expanded secret stays behind `mint_onion_key`.
+        let endpoint = OnionIdentity::from_hs_id_seed(&keys.hs_id_seed).public_key();
+        let vin = build_join_market_vin(keys.bond_post_keys(), msg.holdings, endpoint)
             .map_err(StakeEngineError::BondBuild)?;
         Ok(BondPostPlacement {
             vin,

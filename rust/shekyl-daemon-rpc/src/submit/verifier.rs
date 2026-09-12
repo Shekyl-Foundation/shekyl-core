@@ -63,9 +63,11 @@
 //!   fee-floor resolution lands; re-evaluation shape: extend
 //!   [`SubmitFacts`] with the §8.7.1 SC-row archival facts and implement
 //!   the serve-credit battery (SC1–SC8) in this match arm.
-//! - **HoldingsUpdate / Rebond** (wire `BondPostKind::Other`): the semantic
-//!   verifies exist in `shekyl-archival-retention` and the block path runs
-//!   them today, but **no wallet constructs either kind**. Building their
+//! - **HoldingsUpdate / Rebond** (wire `BondPostKind::Other`) and
+//!   **EndpointUpdate** (wire `BondPostKind::EndpointUpdate`, STAGED until D
+//!   supplies the producer — `EU-D10`/`EU-D13`): the semantic verifies exist
+//!   in `shekyl-archival-retention` and the block path runs them today, but
+//!   **no wallet constructs any of the three**. Building their
 //!   submit-side fact sets now would be pre-provisioned flexibility (rule
 //!   21) whose Phase-D race classification could not be verified against
 //!   any real submission, so `verify_bond_post` refuses them at the kind
@@ -258,7 +260,7 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     // producer, so their fact sets are deliberately unbuilt and they refuse
     // loudly under their named rule-21 reopening criterion (module docs).
     let arm = match &bond.kind {
-        WireBondPostKind::JoinMarket { bond_spend_pk } => BondArm::Credit(bond_spend_pk),
+        WireBondPostKind::JoinMarket { bond_spend_pk, .. } => BondArm::Credit(bond_spend_pk),
         WireBondPostKind::Other(tag) if *tag == RetentionBondPostKind::Release as u8 => {
             BondArm::Debit
         }
@@ -266,13 +268,13 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
             tracing::error!(
                 ?kind,
                 "bond-post submit battery covers JoinMarket (§8.7.1) and \
-                 Release (§8.7.1.1); HoldingsUpdate and Rebond refuse until \
-                 a producer exists and their fact set + Phase-D re-check \
-                 semantics are specified (rule-21 reopening criterion in \
-                 the module docs)"
+                 Release (§8.7.1.1); HoldingsUpdate, Rebond and EndpointUpdate \
+                 refuse until a producer exists and their fact set + Phase-D \
+                 re-check semantics are specified (rule-21 reopening criterion \
+                 in the module docs; EndpointUpdate's producer is D's, EU-D13)"
             );
             return Err(VerifyReject::malformed(
-                "bond-post: HoldingsUpdate/Rebond have no submit battery (rule-21)",
+                "bond-post: HoldingsUpdate/Rebond/EndpointUpdate have no submit battery (rule-21)",
             ));
         }
     };
@@ -867,11 +869,20 @@ fn retention_vin(
         ),
         Holdings::CompleteTree => (HoldingsKind::CompleteTree, ShardSet::empty()),
     };
+    // The endpoint rides the wire kind (EU-D3): JoinMarket and EndpointUpdate
+    // carry one, every other kind does not — the retention view mirrors that
+    // exactly, so `check_couplings` on the marshaled vin agrees with the wire.
+    let endpoint = match &bond.kind {
+        WireBondPostKind::JoinMarket { endpoint, .. }
+        | WireBondPostKind::EndpointUpdate { endpoint } => Some(*endpoint),
+        WireBondPostKind::Other(_) => None,
+    };
     Some(ArchivalBondPostVin {
         hybrid_public_key: bond.hybrid_public_key.clone(),
         p_canonical_id: bond.p_canonical_id,
         post_kind,
         bond_spend_pk: bond_spend_pk.to_vec(),
+        endpoint,
         holdings: HoldingsDescriptor { kind, shard_ids },
         bonded_total_atomic: bond.bonded_total_atomic,
         bond_credit: bond.bond_credit,

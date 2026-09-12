@@ -72,6 +72,9 @@ pub(crate) fn bond_post_observations(
 pub(crate) fn post_kind_byte(kind: &BondPostKind) -> u8 {
     match kind {
         BondPostKind::JoinMarket { .. } => shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
+        BondPostKind::EndpointUpdate { .. } => {
+            shekyl_wire::transaction::BOND_POST_KIND_ENDPOINT_UPDATE
+        }
         BondPostKind::Other(b) => *b,
     }
 }

@@ -97,7 +97,12 @@ pub fn debit_auth_pin(
 #[must_use]
 pub fn requires_cold_authority(post_kind: BondPostKind, bond_debit: u64) -> bool {
     match post_kind {
-        BondPostKind::Release => true,
+        // Release: always (UB3 before UB9, §8.7.1.1). EndpointUpdate — C1
+        // (`EU-D2`): zero debit, cold anyway. The endpoint is spoiled precisely
+        // when the hot key is the attacker's (host compromise, deanonymization
+        // — §9.5), so hot authorization would be a flapping contest decided by
+        // whoever posts last. Cold authority is what the attacker does not have.
+        BondPostKind::Release | BondPostKind::EndpointUpdate => true,
         BondPostKind::HoldingsUpdate => bond_debit > 0,
         BondPostKind::JoinMarket | BondPostKind::Rebond => false,
     }
@@ -212,6 +217,8 @@ mod tests {
         assert!(!requires_cold_authority(JoinMarket, 1));
         assert!(!requires_cold_authority(Rebond, 0));
         assert!(!requires_cold_authority(Rebond, 1));
+        assert!(requires_cold_authority(EndpointUpdate, 0));
+        assert!(requires_cold_authority(EndpointUpdate, 1));
     }
 
     #[test]

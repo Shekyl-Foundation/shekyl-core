@@ -92,6 +92,29 @@ pub fn verify_bond_post_ct_balance(
     result.map_err(BondCtBalanceError::from)
 }
 
+/// The `EndpointUpdate` (kind 4) balance: **no bond term** (`EU-D11`). The
+/// post is fee-funded from ordinary inputs and moves no bond value, so the
+/// equation is the plain one — `Σ pseudoOuts = Σ out_masks + fee`. This is a
+/// separate function rather than a third `BondTerm` variant on purpose: a
+/// representable zero term would undo what `NonZeroAtomicUnits` exists to
+/// prevent for every other kind. The kind → term-arity coupling (term-absent
+/// iff `EndpointUpdate`) is enforced at the serializers; the FFI selects this
+/// arm by `post_kind` and refuses a kind-4 post that presents a term.
+pub fn verify_endpoint_update_ct_balance(
+    pseudo_outs_flat: &[u8],
+    out_masks_flat: &[u8],
+    txn_fee: u64,
+) -> Result<(), BondCtBalanceError> {
+    verify_ct_balance(
+        pseudo_outs_flat,
+        out_masks_flat,
+        AtomicUnits::from_raw(txn_fee),
+        &[],
+        &[],
+    )
+    .map_err(BondCtBalanceError::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +196,25 @@ mod tests {
         assert_eq!(
             verify_bond_post_ct_balance(&torsion, &[], 0, BondTerm::Credit(nz(1))),
             Err(BondCtBalanceError::InvalidPoint)
+        );
+    }
+
+    #[test]
+    fn endpoint_update_balances_with_no_bond_term() {
+        // EU-D11: fee-funded from ordinary inputs, no bond value moves.
+        // One input of 1_000 against one output of 900 and a fee of 100.
+        let mask = Scalar::from(11u64);
+        let pseudo = commit(1_000, mask);
+        let out = commit(900, mask);
+        assert_eq!(
+            verify_endpoint_update_ct_balance(&pseudo, &out, 100),
+            Ok(())
+        );
+        // A bond term that "should" have been there is a sum mismatch, not a
+        // silently balanced post: the same commitments with the fee moved.
+        assert_eq!(
+            verify_endpoint_update_ct_balance(&pseudo, &out, 200),
+            Err(BondCtBalanceError::SumMismatch)
         );
     }
 }

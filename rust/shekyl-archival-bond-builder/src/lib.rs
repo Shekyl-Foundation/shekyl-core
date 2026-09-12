@@ -54,7 +54,7 @@ pub use error::BondBuildError;
 
 use shekyl_archival_retention::{
     bond_floor, p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, BondPostKind,
-    HoldingsDescriptor, HoldingsKind, ShardSet,
+    HoldingsDescriptor, HoldingsKind, ShardSet, ENDPOINT_BYTES,
 };
 use shekyl_crypto_pq::archival_p::BondPostKeys;
 use shekyl_ct_balance::{InputTerm, OutputTerm};
@@ -158,6 +158,7 @@ impl ReleaseVin {
 pub fn build_join_market_vin(
     keys: BondPostKeys<'_>,
     holdings: HoldingsDescriptor,
+    endpoint: [u8; ENDPOINT_BYTES],
 ) -> Result<JoinMarketVin, BondBuildError> {
     let floor = bond_floor(&holdings);
     if floor == 0 {
@@ -200,6 +201,10 @@ pub fn build_join_market_vin(
         p_canonical_id,
         post_kind: BondPostKind::JoinMarket,
         bond_spend_pk,
+        // Mandatory on JoinMarket (EU-D3): the persona's serving-endpoint
+        // public key, minted by the caller from the hs_id seed it holds
+        // (`OnionIdentity::public_key`) — this crate never sees the seed.
+        endpoint: Some(endpoint),
         holdings,
         bonded_total_atomic: floor,
         bond_credit: floor,
@@ -329,6 +334,10 @@ pub fn build_release_vin(
         // carry one"), and the Release verify arm is passed null/0 by the
         // consensus caller for the same reason.
         bond_spend_pk: Vec::new(),
+        // Same coupling for the endpoint (EU-D3): JoinMarket and EndpointUpdate
+        // carry one; a Release does not, and a Release leaves the record's
+        // endpoint in place (EU-D7).
+        endpoint: None,
         // The canonical empty descriptor. `bond_floor` returns 0 both for this
         // and for a structurally-invalid oversize set, which is why the verifier
         // guards the non-empty case explicitly — this constructor can only

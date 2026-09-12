@@ -90,7 +90,9 @@ pub use bond_connect::{
     RebondConnectError, RebondPopError, ReleaseConnect, ReleaseConnectError, ReleasePopError,
     MAX_BOND_BAD_INTERVALS,
 };
-pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
+pub use bond_ct_balance::{
+    verify_bond_post_ct_balance, verify_endpoint_update_ct_balance, BondCtBalanceError, BondTerm,
+};
 pub use bond_duration::{bond_duration, ShardAgeAtAdd};
 pub use bond_floor::{
     bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REORG_DEPTH_BLOCKS,
@@ -99,13 +101,15 @@ pub use bond_floor::{
 };
 pub use bond_post::{
     bond_post_block_unique, bond_post_funding_floor_met, release_pre_cooldown_guards,
-    release_vin_statics, verify_holdings_update_add, verify_holdings_update_drop,
-    verify_join_market_bond_post, verify_rebond_bond_post, verify_release_bond_post, BondPostError,
+    release_vin_statics, verify_endpoint_update, verify_holdings_update_add,
+    verify_holdings_update_drop, verify_join_market_bond_post, verify_rebond_bond_post,
+    verify_release_bond_post, BondPostError,
 };
 pub use bond_wire::{
     encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
-    HoldingsKind, LastServedScan, ShardSet, ShardSetError, HYBRID_PUBKEY_CANONICAL_BYTES,
-    MAX_HOLDINGS_SHARDS, VIN_TYPE_ARCHIVAL_BOND_POST,
+    HoldingsKind, LastServedScan, ShardSet, ShardSetError, WireError as BondWireError,
+    ENDPOINT_BYTES, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
+    VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use challenge::{
     challenge_fire_height, challenge_leaf_index, challenge_seal_height, challenge_seal_on_chain,

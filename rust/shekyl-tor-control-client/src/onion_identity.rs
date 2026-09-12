@@ -98,6 +98,10 @@ const ONION_CHECKSUM_PREFIX: &[u8] = b".onion checksum";
 /// `Arc<OnionIdentity>` at the call site.
 pub struct OnionIdentity {
     expanded: Zeroizing<[u8; ONION_KEY_BYTES]>,
+    /// The ed25519 public key — the 32 bytes the bond-post vin carries as
+    /// the persona's serving endpoint (`EU-D3`); `service_id` is its display
+    /// form. Public by definition, so held unwrapped.
+    public_key: [u8; 32],
     service_id: ServiceId,
 }
 
@@ -125,11 +129,23 @@ impl OnionIdentity {
     pub fn from_hs_id_seed(seed: &[u8; 32]) -> Self {
         let expanded = expand_seed(seed);
         let verifying = verifying_key_from_seed(seed);
-        let service_id = service_id_from_pubkey(verifying.as_bytes());
+        let public_key = verifying.to_bytes();
+        let service_id = service_id_from_pubkey(&public_key);
         Self {
             expanded,
+            public_key,
             service_id,
         }
+    }
+
+    /// The raw 32-byte ed25519 public key: what the archival bond-post vin
+    /// carries as the persona's serving endpoint (`EU-D3` — the wire carries
+    /// the key, never the address; a reader reconstructs `service_id` from
+    /// it). This is the only accessor a JoinMarket / EndpointUpdate producer
+    /// needs; the secret half stays behind [`Self::mint_onion_key`].
+    #[must_use]
+    pub fn public_key(&self) -> [u8; 32] {
+        self.public_key
     }
 
     /// The `.onion` service id this key publishes at — authoritative because
@@ -290,6 +306,19 @@ mod tests {
             identity.service_id().as_str(),
             "efjprum3peosirjsilqv6lvlns3476t3njpngaexsyhangeb3mjo7sad",
             "the v3 address for the fixed seed"
+        );
+    }
+
+    #[test]
+    fn public_key_is_the_service_ids_preimage() {
+        // The wire carries the key (EU-D3); the address is a display form a
+        // reader reconstructs. If these ever disagree, the endpoint a bond
+        // advertises is not the address tor serves.
+        let id = OnionIdentity::from_hs_id_seed(&[7u8; 32]);
+        assert_eq!(service_id_from_pubkey(&id.public_key()), *id.service_id());
+        assert_eq!(
+            id.public_key(),
+            verifying_key_from_seed(&[7u8; 32]).to_bytes()
         );
     }
 

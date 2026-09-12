@@ -96,6 +96,18 @@ pub enum BondPostError {
          held shard); an Exited or slash-emptied record re-enters via JoinMarket/Rebond"
     )]
     HoldingsUpdateRecordNotBonded,
+    // ── EndpointUpdate (kind 4; EU-D7, EU-D11) ───────────────────────────
+    #[error("post_kind is not EndpointUpdate")]
+    PostKindNotEndpointUpdate,
+    #[error(
+        "EndpointUpdate requires a Bonded record (bonded collateral); a retired or \
+         slash-emptied record serves nothing and has no endpoint to rotate"
+    )]
+    EndpointUpdateRecordNotBonded,
+    #[error("EndpointUpdate carries no amount term (bond_credit and bond_debit must be zero)")]
+    EndpointUpdateCarriesTerm,
+    #[error("EndpointUpdate vin carries no endpoint")]
+    EndpointUpdateWithoutEndpoint,
     #[error("post_kind is not Rebond")]
     PostKindNotRebond,
     #[error("Rebond is only valid on a ShardSetCompact record (not CompleteTree)")]
@@ -769,3 +781,42 @@ mod tests;
 #[cfg(test)]
 #[path = "bond_post_funding_tests.rs"]
 mod funding_floor_tests;
+
+/// `EndpointUpdate` (kind 4) verify — `EU-D7`, `EU-D11`.
+///
+/// The **only** verify that accepts a vin with no amount term, because the
+/// wire gives a kind-4 vin none (`EU-D11`): the term belts here are the
+/// "only" made explicit, so a marshal that hands this verify a term is
+/// refused by name rather than balanced by accident. Cold authority is the
+/// caller's, as for every value-out (`cold_authority_pin` through the
+/// selector's `EndpointUpdate => true` arm); this verify decides the record
+/// side.
+///
+/// **Refuse on a zero-bonded record** (`EU-D7`): a retired (Released) or
+/// slash-emptied persona serves nothing and has no endpoint whose
+/// reachability matters, and permitting the post would open a mutation path
+/// on a record the mechanism no longer reads. Mirrors
+/// `HoldingsUpdateRecordNotBonded` — same verdict class, our state, not the
+/// sender's form. A Release does **not** clear the endpoint; clearing would
+/// be a write on the policed path (`EU-D7`).
+pub fn verify_endpoint_update(
+    vin: &ArchivalBondPostVin,
+    record_bonded_total: Option<u64>,
+) -> Result<(), BondPostError> {
+    if vin.post_kind != BondPostKind::EndpointUpdate {
+        return Err(BondPostError::PostKindNotEndpointUpdate);
+    }
+    if vin.endpoint.is_none() {
+        return Err(BondPostError::EndpointUpdateWithoutEndpoint);
+    }
+    if vin.bond_credit != 0 || vin.bond_debit != 0 {
+        return Err(BondPostError::EndpointUpdateCarriesTerm);
+    }
+    let Some(current_bonded) = record_bonded_total else {
+        return Err(BondPostError::RecordMissing);
+    };
+    if current_bonded == 0 {
+        return Err(BondPostError::EndpointUpdateRecordNotBonded);
+    }
+    Ok(())
+}

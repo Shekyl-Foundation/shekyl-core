@@ -5,7 +5,10 @@
 
 //! Bond-post CT balance verification FFI.
 
-use shekyl_archival_retention::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
+use shekyl_archival_retention::{
+    verify_bond_post_ct_balance, verify_endpoint_update_ct_balance, BondCtBalanceError,
+    BondPostKind, BondTerm,
+};
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 
 use super::codes::*;
@@ -39,7 +42,9 @@ unsafe fn flat_commitment_keys<'a>(ptr: *const u8, count: usize) -> Result<&'a [
 /// Verify bond-post CT balance: `sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit`.
 ///
 /// `pseudo_outs_ptr` and `out_masks_ptr` are flattened `N × 32` byte arrays; either pointer may
-/// be null when the corresponding count is zero.
+/// be null when the corresponding count is zero. `post_kind` selects the term arity: an
+/// `EndpointUpdate` (kind 4) balances with **no** bond term (`EU-D11`) and is refused with
+/// `ERR_TERM_ON_ENDPOINT_UPDATE` if it presents one; every other kind must present exactly one.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
     pseudo_outs_ptr: *const u8,
@@ -49,6 +54,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
     txn_fee: u64,
     bond_credit: u64,
     bond_debit: u64,
+    post_kind: u8,
 ) -> u8 {
     if num_pseudo_outs > 0 && pseudo_outs_ptr.is_null() {
         return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR;
@@ -65,6 +71,21 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
         Ok(slice) => slice,
         Err(code) => return code,
     };
+
+    // `EndpointUpdate` (kind 4) has no bond term by construction (`EU-D11`:
+    // term-absent iff EndpointUpdate, made unrepresentable at the serializers).
+    // The kind selects the plain equation; a kind-4 post that nonetheless
+    // presents a term is a marshal that disagrees with the wire, refused by
+    // name rather than balanced.
+    if post_kind == BondPostKind::EndpointUpdate as u8 {
+        if bond_credit != 0 || bond_debit != 0 {
+            return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_TERM_ON_ENDPOINT_UPDATE;
+        }
+        return match verify_endpoint_update_ct_balance(pseudo_flat, mask_flat, txn_fee) {
+            Ok(()) => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK,
+            Err(e) => map_bond_ct_balance_error(e),
+        };
+    }
 
     // The C ABI carries the two directions as separate u64s; convert to the
     // `BondTerm` the (total) core function takes, rejecting the both / neither /

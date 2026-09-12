@@ -5165,3 +5165,38 @@ recorded at `EU-D10`).
 `.cursor/rules/50-testing.mdc` §"Regenerating a self-pinned vector".
 
 ---
+
+## 2026-09-12 — JoinMarket vin gains a mandatory serving endpoint (`EU-D3`); the gate-4 lifecycle tripwire is re-pinned
+
+**Decision.** The archival bond-post vin carries the persona's serving
+endpoint — the raw 32-byte Ed25519 public key of its v3 onion service —
+present iff `post_kind ∈ {JoinMarket, EndpointUpdate}` and **mandatory on
+JoinMarket** (a bond without an endpoint was the discovery gap). Ruled by
+Rick in the `EndpointUpdate` round (`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md`
+`EU-D3`, 2026-09-11; the kind-4 shape at `EU-D11`, 2026-09-12); landing in
+B+C1 under `07-consensus-atomic-cutovers.mdc`.
+
+**What moves.** Every serialized JoinMarket vin gains 32 bytes after
+`bond_spend_pk`. The self-pinned gate-4 lifecycle fixture
+(`rust/shekyl-archival-retention/tests/fixtures/gate4_lifecycle_kat_v1.json`,
+`join.wire_hex`) pins that wire, and the C++ integration test
+(`tests/unit_tests/archival_bond_post_integration.cpp`) parses the same hex
+with the C++ decoder — so the re-pin is the cross-language check that both
+serializers moved together. The fixture's endpoint is a deterministic pattern
+(`0x0E × 32`), as `bond_spend_pk`'s is: the tripwire pins wire shape and
+record commit, not the onion derivation.
+
+**Why free.** No chain has been mined on any network and no user wallet
+exists; there is no legacy JoinMarket vin to accommodate.
+
+**Regeneration citation to use.**
+`SHEKYL_PINNED_REGEN_DECISION="2026-09-12 JoinMarket endpoint mandatory
+(EU-D3); gate-4 lifecycle re-pin"`. The gate-4 regenerator is armed with the
+citation check by the same PR (it was an unarmed rewrite-on-request before,
+the shape `50-testing.mdc` calls a one-command silencer).
+
+**Reference.** `rust/shekyl-archival-retention/src/bond_wire.rs`
+(`ArchivalBondPostVin::endpoint`, `check_couplings`);
+`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` §4, §12.
+
+---

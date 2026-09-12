@@ -5,8 +5,9 @@
 
 //! Gate-4 §8 phase-1 lifecycle KAT (join → serve `E_first`, bonded-aggregation audit).
 //!
-//! Regenerate fixture:
-//! `cargo test -p shekyl-archival-retention regenerate_gate4_lifecycle_fixture -- --ignored --nocapture`
+//! Regenerate fixture (armed — cite the decision-log entry that authorizes it):
+//! `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
+//!   cargo test -p shekyl-archival-retention regenerate_gate4_lifecycle_fixture -- --ignored --nocapture`
 
 use std::io::Cursor;
 
@@ -19,7 +20,7 @@ use shekyl_archival_retention::{
     verify_join_market_bond_post, verify_segment_path, ArchivalBondPostVin,
     ArchivalServeCreditPruned, ArchivalServeCreditResponse, BadInterval, BondPostError,
     BondPostKind, ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind,
-    ServeCreditRow, ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, SETTLEMENT_EPOCH_BLOCKS,
+    ServeCreditRow, ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, ENDPOINT_BYTES, SETTLEMENT_EPOCH_BLOCKS,
     VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
@@ -77,6 +78,11 @@ fn build_gate4_document() -> Value {
         p_canonical_id: p_id,
         post_kind: BondPostKind::JoinMarket,
         bond_spend_pk: bond_spend_pk.clone(),
+        // The serving endpoint (EU-D3, mandatory on JoinMarket). A deterministic
+        // pattern for the same reason as bond_spend_pk above: the KAT pins the
+        // wire shape and the record commit, not the onion derivation (that is
+        // ARCHIVAL_P_DERIVE's job).
+        endpoint: Some([0x0Eu8; ENDPOINT_BYTES]),
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![integration["shard_id"].as_u64().expect("shard")])
@@ -208,9 +214,36 @@ fn gate4_emission_phase2_vectors(emission: &Value) {
     );
 }
 
+/// Environment variable that arms [`regenerate_gate4_lifecycle_fixture`]:
+/// `YYYY-MM-DD <rationale>`, the date naming the `docs/V3_WALLET_DECISION_LOG.md`
+/// entry that authorizes moving the pinned wire. The fixture is a self-pinned
+/// tripwire (rule 50): a regenerator that rewrites it on request is a
+/// one-command silencer for a failing pin, so it refuses without a citation
+/// (the `wallet_envelope.rs` `pinned_fixtures_regenerate` shape).
+const PINNED_REGEN_DECISION_ENV: &str = "SHEKYL_PINNED_REGEN_DECISION";
+
 #[test]
-#[ignore = "writes tests/fixtures/gate4_lifecycle_kat_v1.json"]
+#[ignore = "armed fixture regenerator; requires SHEKYL_PINNED_REGEN_DECISION"]
 fn regenerate_gate4_lifecycle_fixture() {
+    let decision = std::env::var(PINNED_REGEN_DECISION_ENV).unwrap_or_default();
+    let cited = decision.len() > 11
+        && decision.as_bytes()[..10]
+            .iter()
+            .enumerate()
+            .all(|(i, b)| match i {
+                4 | 7 => *b == b'-',
+                _ => b.is_ascii_digit(),
+            })
+        && decision.as_bytes()[10] == b' ';
+    assert!(
+        cited,
+        "refusing to regenerate the gate-4 lifecycle fixture: set \
+         {PINNED_REGEN_DECISION_ENV}=\"YYYY-MM-DD <rationale>\" citing the \
+         docs/V3_WALLET_DECISION_LOG.md entry that authorizes moving it (got: \
+         {decision:?}). Moving a pinned vector is a format decision, not a test \
+         fix — see 50-testing.mdc."
+    );
+    eprintln!("regenerating the gate-4 lifecycle fixture under decision: {decision}");
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/gate4_lifecycle_kat_v1.json");
     let doc = build_gate4_document();

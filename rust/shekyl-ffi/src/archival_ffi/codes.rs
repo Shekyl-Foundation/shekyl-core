@@ -111,6 +111,10 @@ pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT: u8 = 3;
 pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_SUM_MISMATCH: u8 = 4;
 /// Neither `bond_credit` nor `bond_debit` is set (§3.2 term rigidity).
 pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM: u8 = 5;
+/// An `EndpointUpdate` (kind 4) presented a bond term. The kind-4 vin has
+/// none by construction (`EU-D11`: term-absent iff EndpointUpdate, enforced
+/// at the serializers); this is the FFI's belt for a marshal that disagrees.
+pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_TERM_ON_ENDPOINT_UPDATE: u8 = 6;
 
 /// JoinMarket bond-post semantic verify succeeded (gate-4 §3.5).
 pub const SHEKYL_ARCHIVAL_BOND_POST_OK: u8 = 0;
@@ -251,6 +255,27 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH: u8 = 50;
 /// correct caller; exists so a new arm cannot silently authorize hot.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST: u8 = 51;
 
+/// Shared vin marshal: the endpoint violates its coupling (`EU-D3`) — absent
+/// or not 32 bytes on a JoinMarket / EndpointUpdate vin, or present on any
+/// other kind. The sibling of `ERR_BOND_SPEND_PK_COUPLING`.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING: u8 = 52;
+/// `post_kind` is not `EndpointUpdate` at the EndpointUpdate verify entry.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_ENDPOINT_UPDATE: u8 = 53;
+/// `EndpointUpdate` on a record with no bonded collateral (`EU-D7`): a
+/// retired or slash-emptied persona serves nothing and has no endpoint to
+/// rotate. Our state, not the sender's form — the sibling of
+/// `ERR_HU_RECORD_NOT_BONDED`, same verdict class.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_RECORD_NOT_BONDED: u8 = 54;
+/// `EndpointUpdate` vin carries an amount term (`EU-D11`). Unreachable
+/// through the serializers; the verify's belt for a disagreeing marshal.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_CARRIES_TERM: u8 = 55;
+/// `EndpointUpdate` vin carries no endpoint. Unreachable through the
+/// serializers; the verify's belt for a disagreeing marshal.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_WITHOUT_ENDPOINT: u8 = 56;
+/// Shared vin marshal: an `EndpointUpdate` vin carries holdings or an amount
+/// term (`EU-D11`: the kind-4 vin is exactly the endpoint).
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_SHAPE: u8 = 57;
+
 /// Stable operator strings for the bond-post C-ABI code space.
 ///
 /// **This is THE table.** NUL-terminated so C++ can hand these to
@@ -298,6 +323,24 @@ pub const fn bond_post_err_cstr(code: u8) -> &'static CStr {
         }
         SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING => {
             c"bond_spend_pk violates the JoinMarket coupling (missing/non-canonical on JoinMarket, or present on another kind)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING => {
+            c"endpoint violates its coupling (missing/not 32 bytes on JoinMarket or EndpointUpdate, or present on another kind)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_ENDPOINT_UPDATE => {
+            c"post_kind is not EndpointUpdate"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_RECORD_NOT_BONDED => {
+            c"EndpointUpdate requires a Bonded record (a retired or slash-emptied record has no endpoint to rotate)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_CARRIES_TERM => {
+            c"EndpointUpdate carries no amount term (bond_credit and bond_debit must be zero)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_WITHOUT_ENDPOINT => {
+            c"EndpointUpdate vin carries no endpoint"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_SHAPE => {
+            c"EndpointUpdate carries holdings or an amount term (the kind-4 vin is exactly the endpoint)"
         }
         SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE => {
             c"post_kind is not HoldingsUpdate"
@@ -418,6 +461,7 @@ fn archival_bond_post_drop_verdict(code: u8) -> DropVerdict {
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_RECORD_NOT_BONDED
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN
@@ -439,6 +483,11 @@ fn archival_bond_post_drop_verdict(code: u8) -> DropVerdict {
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_HOLDINGS_NOT_EMPTY
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_ENDPOINT_UPDATE
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_CARRIES_TERM
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_WITHOUT_ENDPOINT
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_SHAPE
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS
@@ -717,6 +766,16 @@ pub(super) fn map_bond_post_error(err: BondPostError) -> u8 {
         }
         BondPostError::HoldingsUpdateRecordNotBonded => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED
+        }
+        BondPostError::PostKindNotEndpointUpdate => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_ENDPOINT_UPDATE
+        }
+        BondPostError::EndpointUpdateRecordNotBonded => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_RECORD_NOT_BONDED
+        }
+        BondPostError::EndpointUpdateCarriesTerm => SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_CARRIES_TERM,
+        BondPostError::EndpointUpdateWithoutEndpoint => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_WITHOUT_ENDPOINT
         }
         BondPostError::PostKindNotRebond => SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND,
         BondPostError::RebondRecordFloorBroken => SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR,

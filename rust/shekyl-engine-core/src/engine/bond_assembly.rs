@@ -619,6 +619,15 @@ pub(crate) fn wire_bond_post_input(vin: &ArchivalBondPostVin) -> Result<Input, B
     let kind = match vin.post_kind {
         RetentionBondPostKind::JoinMarket => WireBondPostKind::JoinMarket {
             bond_spend_pk: vin.bond_spend_pk.clone(),
+            // Mandatory on JoinMarket (EU-D3); `check_couplings` refuses a
+            // JoinMarket vin without one, so `None` here is a construction
+            // bug surfaced by name rather than a wire nothing accepts.
+            endpoint: vin.endpoint.ok_or_else(|| {
+                BondAssemblyError::build(
+                    "wire bond-post mapping",
+                    "JoinMarket vin carries no endpoint (EU-D3: mandatory)",
+                )
+            })?,
         },
         RetentionBondPostKind::Release => {
             if !vin.bond_spend_pk.is_empty() {

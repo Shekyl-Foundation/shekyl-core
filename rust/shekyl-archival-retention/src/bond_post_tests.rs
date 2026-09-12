@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC;
-use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, ShardSet};
+use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, ShardSet, ENDPOINT_BYTES};
 
 fn valid_join_vin() -> ArchivalBondPostVin {
     ArchivalBondPostVin {
@@ -15,6 +15,7 @@ fn valid_join_vin() -> ArchivalBondPostVin {
         p_canonical_id: [0x11; 32],
         post_kind: BondPostKind::JoinMarket,
         bond_spend_pk: vec![0xE5; 64],
+        endpoint: Some([0xEE; ENDPOINT_BYTES]),
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
@@ -140,6 +141,7 @@ fn valid_release_vin() -> ArchivalBondPostVin {
         p_canonical_id: [0x11; 32],
         post_kind: BondPostKind::Release,
         bond_spend_pk: Vec::new(),
+        endpoint: None,
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::empty(),
@@ -387,6 +389,7 @@ fn valid_add_vin() -> ArchivalBondPostVin {
         p_canonical_id: [0x11; 32],
         post_kind: BondPostKind::HoldingsUpdate,
         bond_spend_pk: Vec::new(),
+        endpoint: None,
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![7, 9, 11]).unwrap(), // current + one new shard
@@ -549,6 +552,7 @@ fn valid_drop_vin() -> ArchivalBondPostVin {
         p_canonical_id: [0x11; 32],
         post_kind: BondPostKind::HoldingsUpdate,
         bond_spend_pk: Vec::new(),
+        endpoint: None,
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![7]).unwrap(), // current {7, 11} minus 11
@@ -747,6 +751,7 @@ fn rebond_vin(post: Vec<u64>, credit: u64) -> ArchivalBondPostVin {
         p_canonical_id: [0x11; 32],
         post_kind: BondPostKind::Rebond,
         bond_spend_pk: Vec::new(),
+        endpoint: None,
         holdings: HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids,
@@ -995,5 +1000,96 @@ fn rebond_rejects_record_floor_drift() {
             &[open_interval(5)],
         ),
         Err(BondPostError::RebondRecordFloorBroken)
+    );
+}
+
+// ── EndpointUpdate verify (kind 4; EU-D7, EU-D11) ─────────────────────
+
+fn valid_endpoint_update_vin() -> ArchivalBondPostVin {
+    ArchivalBondPostVin {
+        hybrid_public_key: vec![0xAB; 64],
+        p_canonical_id: [0x11; 32],
+        post_kind: BondPostKind::EndpointUpdate,
+        bond_spend_pk: Vec::new(),
+        endpoint: Some([0xEE; ENDPOINT_BYTES]),
+        // EU-D11: the kind-4 vin carries the empty shape and no term.
+        holdings: HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: ShardSet::empty(),
+        },
+        bonded_total_atomic: 0,
+        bond_credit: 0,
+        bond_debit: 0,
+    }
+}
+
+#[test]
+fn endpoint_update_accepts_a_bonded_record() {
+    assert_eq!(
+        verify_endpoint_update(
+            &valid_endpoint_update_vin(),
+            Some(ARCHIVAL_BOND_FLOOR_ATOMIC)
+        ),
+        Ok(())
+    );
+}
+
+#[test]
+fn endpoint_update_rejects_other_post_kinds() {
+    let vin = ArchivalBondPostVin {
+        post_kind: BondPostKind::HoldingsUpdate,
+        ..valid_endpoint_update_vin()
+    };
+    assert_eq!(
+        verify_endpoint_update(&vin, Some(ARCHIVAL_BOND_FLOOR_ATOMIC)),
+        Err(BondPostError::PostKindNotEndpointUpdate)
+    );
+}
+
+#[test]
+fn endpoint_update_rejects_a_missing_record() {
+    assert_eq!(
+        verify_endpoint_update(&valid_endpoint_update_vin(), None),
+        Err(BondPostError::RecordMissing)
+    );
+}
+
+#[test]
+fn endpoint_update_rejects_a_zero_bonded_record() {
+    // EU-D7: a Released or slash-emptied persona serves nothing; rotation has
+    // no subject. Same verdict class as HoldingsUpdateRecordNotBonded.
+    assert_eq!(
+        verify_endpoint_update(&valid_endpoint_update_vin(), Some(0)),
+        Err(BondPostError::EndpointUpdateRecordNotBonded)
+    );
+}
+
+#[test]
+fn endpoint_update_is_the_only_verify_that_accepts_no_term_and_refuses_one() {
+    // EU-D11: the wire gives a kind-4 vin no term; a marshal that hands this
+    // verify one is refused by name, never balanced by accident.
+    for (credit, debit) in [(1, 0), (0, 1), (ARCHIVAL_BOND_FLOOR_ATOMIC, 0)] {
+        let vin = ArchivalBondPostVin {
+            bond_credit: credit,
+            bond_debit: debit,
+            ..valid_endpoint_update_vin()
+        };
+        assert_eq!(
+            verify_endpoint_update(&vin, Some(ARCHIVAL_BOND_FLOOR_ATOMIC)),
+            Err(BondPostError::EndpointUpdateCarriesTerm),
+            "credit={credit} debit={debit}"
+        );
+    }
+}
+
+#[test]
+fn endpoint_update_rejects_a_vin_without_an_endpoint() {
+    let vin = ArchivalBondPostVin {
+        endpoint: None,
+        ..valid_endpoint_update_vin()
+    };
+    assert_eq!(
+        verify_endpoint_update(&vin, Some(ARCHIVAL_BOND_FLOOR_ATOMIC)),
+        Err(BondPostError::EndpointUpdateWithoutEndpoint)
     );
 }
