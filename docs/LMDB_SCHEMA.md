@@ -24,7 +24,44 @@ Several `DUPSORT` tables use a **dummy primary key** of 8 zero bytes (`zerokval`
 
 ### Hash comparator
 
-`compare_hash32` interprets a 32-byte `crypto::hash` as 8 consecutive `uint32_t` words in memory order and compares them lexicographically.
+`compare_hash32` (`db_lmdb.cpp:236`) loads a 32-byte `crypto::hash` as 8
+`uint32_t` words and compares them **from word 7 down to word 0** — the LAST
+four bytes are the most significant. The loads are native, so on a
+little-endian host the effect is to order the 32 bytes as a **little-endian
+256-bit integer**: byte 31 most significant, byte 0 least.
+
+**It is NOT byte-lexicographic, and it is not the `memcmp` order a reader is
+likely to assume — it is the reverse of it.** Demonstrated with
+`A = 01 00 … 00` and `B = 00 … 00 01`: `compare_hash32` says `A < B`, while
+byte-lexicographic comparison says `A > B`.
+
+> **This sentence previously said "in memory order … lexicographically", which
+> is word 0 first — the opposite of what the loop does.** It is corrected here
+> because the wrong description coincided with the default ordering a
+> reimplementation would reach for (Rust's `[u8; 32]`, `memcmp`), so a port
+> built on this document would have agreed with the document, agreed with
+> itself, and been **backwards from LMDB on all seven tables that use this
+> comparator** — invisible until a range scan returned the wrong set. Found
+> while mapping the schema for DRS-0 slice B.
+
+The seven tables, split by which ordering the comparator governs:
+
+| Governs | Tables |
+|---|---|
+| **Key** order (`mdb_set_compare`) | `txpool_meta`, `txpool_blob`, `alt_blocks`, `archival_alt_attestation_witness` |
+| **Duplicate** order (`mdb_set_dupsort`) | `spent_keys`, `block_heights`, `tx_indices` |
+
+**Two properties to carry into any reimplementation** (specification records —
+the C++ is scheduled for deletion, so neither is patched here):
+
+- **Host-endianness dependence is structural, not incidental.** The native
+  `uint32_t` loads mean the on-disk *ordering* differs between a little-endian
+  and a big-endian host — a sharper instance of this document's
+  architecture-dependence note, which otherwise concerns field layout rather
+  than sort order. A reimplementation should state its byte order
+  **explicitly** rather than inherit the host's.
+- **`mv_data` is cast to `uint32_t*` with no alignment guarantee.** Benign on
+  x86-64 and ARM64; UB-adjacent in principle.
 
 ### String comparator
 
