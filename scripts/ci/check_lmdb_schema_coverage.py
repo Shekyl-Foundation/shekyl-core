@@ -378,9 +378,10 @@ def main() -> None:
                       ("v0", "v0-partial", "excluded", "uncovered")
                       if ledger.get(k))
           + ". This leg checks STATEHOOD, not coverage: "
-          f"{ledger.get('uncovered', 0)} tables hold main-chain state the "
-          "digest cannot see (audit §11), and that is a recorded measurement, "
-          "not a failure.")
+          f"{ledger.get('uncovered', 0)} tables are in the oracle's domain "
+          "and invisible to the digest (audit §11) — one of them, "
+          "hf_starting_heights, holds no runtime rows to diverge (DRS-W5). "
+          "That is a recorded measurement, not a failure.")
 
 
 if __name__ == "__main__":

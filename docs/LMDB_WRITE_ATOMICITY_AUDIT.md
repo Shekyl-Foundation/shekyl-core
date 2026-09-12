@@ -1105,6 +1105,25 @@ the partiality is easy to misread:
 - **`curve_tree_meta` — the `"root"` property only.** Other keys in the table
   are not read.
 
+**A joint property of `blocks` and `block_info`, not a note on either.** The
+digest's **length** comes from one table and its **content** from another:
+`n_blocks` is `mdb_stat(m_blocks).ms_entries`, and the values hashed are
+`block_info.bi_hash` for `h ∈ [0, n_blocks)`. **Nothing in the walker asserts
+the two tables agree in cardinality**, and the two directions of disagreement
+do not behave alike:
+
+- `block_info` **shorter** than `blocks` — `get_block_hash_from_height`
+  raises `BLOCK_DNE` and the digest **fails loudly**. Safe direction.
+- `block_info` **longer** than `blocks` — the loop stops at the smaller
+  `n_blocks` and the trailing heights are **silently dropped** from the
+  hash. A `block_info` row above the `blocks` count is invisible.
+
+So `blocks` being `v0-partial` is not only "the blob is not read": its row
+count is the digest's *bound*, and an under-count silently shortens the
+digest's domain rather than failing. Recorded as a coverage finding over the
+pair; widening the digest to hash the cardinalities against each other is
+**E1**'s.
+
 **`excluded` — outside the oracle's domain, or dead.**
 
 Digest v0 is a **main-chain-state oracle by construction**, so non-canonical
