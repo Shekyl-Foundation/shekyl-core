@@ -759,31 +759,67 @@ Two regimes, both mispriced today, in opposite directions:
   regime the ladder exists for, and it is where the transliteration is most
   wrong — the brief's premise (4), now measured.
 
-### §4.3 Spacing and coverage of the inherited ladder (FL-C2/C3 input)
+### §4.3 Spacing and coverage of the served ladder (FL-C2/C3 input)
 
-Average-cost `x` per rung and adjacent fee ratios (instrument `x_ladder`):
+Average-cost `x` per rung and adjacent fee ratios, measured on the **served
+three-tier ladder** — `[economy, standard, priority]`, the shape the daemon
+emits — through the production owner `shekyl_economics::corrected_fee_ladder`.
 
-| `M` | `x(Fl)` | `x(Fn)` | `x(Fm)` | `x(Fh)` | ratios `Fn/Fl, Fm/Fn, Fh/Fm` |
-| --- | --- | --- | --- | --- | --- |
-| `Zm` | 1.0% | 4.0% | 16% | 200% | 4.0, 4.0, **12.5** |
-| `3·Zm` | 0.33% | 1.3% | 16% | 200% | 4.0, **12.0**, 12.5 |
-| `10·Zm` | 0.10% | 0.40% | 16% | 200% | 4.0, **40**, 12.5 |
-| `50·Zm` | 0.02% | 0.08% | 16% | 200% | 4.0, **200**, 12.5 |
-| surge (`Mnw=50·Mlw`) | 1.0% | 4.0% | 16% | **64%** | 4.0, 4.0, 4.0 |
+`x_i = f_i·M/R` is the expansion fraction of the median that rung `i` funds on
+an average-cost basis. Measured at genesis with baseline volume, where
+`R` = 2048 SKL and the correction is **`C` = 0.85**. **Every row states `C`
+because `x` is not invariant under it:** the correction sits inside the floor
+and the priority rung while `R` is the `M_r`-neutral total, so `C` scales the
+fee side without scaling the divisor. (This is a change from the previous
+characterisation, whose `x` *was* `C`-invariant only because the shape it
+measured had no correction at all.)
 
-- The inherited ladder **already violates FL-C3 everywhere**: the `Fm→Fh`
-  gap is 12.5× at every median, and the inter-family `Fn→Fm` gap grows
-  linearly with `M` (200× at 15 MB medians). Uniform-geometric spacing was
-  never a property of this ladder.
-- Mechanical FL-C2+C3 coverage arithmetic: floor-to-top span is 100× at
-  `M=Zm` (needs ≥ 3 rungs at `r ≤ 10`), 10 000× at `50·Zm` (needs 5). So a
-  strict reading of C2+C3 wants **4–5 rungs at large medians**, while FL-C4b
-  (below) supports **3**. This is the round's registered conflict; §5.3
-  resolves it on the record.
-- **FL-C2(b) gap found:** in the surge state the top rung covers marginal
-  expansion only to `x = 32%` — under exactly the short-term congestion
-  spike where full expansion is the product being sold. The main arm is
-  exact (`2R/M`); the surge discount is the defect. §5.2 removes it.
+| `M` | `x(economy)` | `x(standard)` | `x(priority)` | ratios `std/eco, pri/std` |
+| --- | --- | --- | --- | --- |
+| `Zm` (300 000) | 0.850% | 3.400% | **170.0%** | 4.00, **50** |
+| `3·Zm` | 0.283% | 1.133% | **170.0%** | 4.00, **150** |
+| `10·Zm` | 0.085% | 0.340% | **170.0%** | 4.00, **500** |
+| `50·Zm` | 0.017% | 0.067% | **170.0%** | 4.00, **2523** |
+
+Reproduce with
+`cargo test -p shekyl-economics-sim served_ladder_spacing_table -- --nocapture`.
+The numbers are instrument output, not transcribed arithmetic; the sweep runs
+past the launch zone because the **long-term** median is unbounded above
+(C2-R2 Q2/Q3), so `3×`/`10×`/`50×` the zone are reachable states under
+sustained demand.
+
+**There is no surge row, and its absence is a result rather than an omission.**
+The served ladder is a function of the long-term effective median alone. The
+surge factor `S` clamps the SHORT-TERM median, which never reaches the fee
+path, so a surge state is not a distinct row here — it is the same row. (The
+previous table carried such a row because the inherited top rung read the
+short-term median; that arm is deleted, FL-R5.)
+
+What the measurement shows:
+
+- **`x(priority)` is exactly `2C` at every median** — 170% at `C` = 0.85 — and
+  is therefore flat across the sweep. The priority rung is the
+  full-expansion rung (`2RC/M`), so `x = 2RC/M · M/R = 2C` identically. It
+  funds a full doubling of the median plus the correction's margin, at every
+  chain width. This is the property the ladder exists to provide and it holds
+  uniformly.
+- **`x(economy)` is `C·w_ref/M`** and falls as `1/M` — 0.850% at the zone down
+  to 0.017% at `50·Zm`. Economy and standard are per-byte floors (`∝ 1/M²`),
+  so the expansion they fund shrinks as the chain widens. That is correct for
+  a floor: it prices a reference transaction, not an expansion.
+- **`std/eco` is exactly 4.00 everywhere**, by construction (`standard = 4F`),
+  so the bottom of the ladder is uniformly spaced by design rather than by
+  accident.
+- **`pri/std` grows linearly with `M`** — 50× at the zone to 2523× at
+  `50·Zm` — because the two rungs have different exponents in `M` (`1/M`
+  against `1/M²`). **This is the FL-C2/C3 tension, and it is structural, not a
+  defect of calibration:** a floor that prices a transaction and a top rung
+  that prices an expansion cannot stay a fixed ratio apart as the median
+  moves. Mechanical FL-C2+C3 coverage arithmetic: the economy-to-priority span
+  is 200× at `M = Zm` (needs ≥ 3 rungs at `r ≤ 10`) and 10 000× at `50·Zm`
+  (needs 5). A strict reading of C2+C3 therefore wants **4–5 rungs at large
+  medians** while FL-C4b supports **3** — the round's registered conflict,
+  resolved on the record in §5.3.
 
 ### §4.4 Dwell (FL-C4a)
 
@@ -1232,7 +1268,7 @@ Readings, as corrected at round 6:
 | Criterion | Verdict | Where |
 | --- | --- | --- |
 | FL-C1 continuous | **rejected** — never triggered: discrete ladders satisfy the registered set; the exception clause stays unfired | §4.3 |
-| FL-C2 coverage | met by floor + `2R/M` top; **surge arm fails C2(b)** → fixed in §5.2 | §4.3 |
+| FL-C2 coverage | met by floor + `2R/M` top — `x(priority)` = `2C` at every median. The inherited **surge arm failed C2(b)** and was deleted (FL-R5), so the served ladder has no surge-discounted top | §4.3, §5.2 |
 | FL-C3 spacing ≤ 10× | **conflict with C4b** — registered outcome, resolved on the record in §5.3 | §4.3 |
 | FL-C4a dwell | raw `C` fails; **the adopted ceiling passes the 240-block gate in every scenario at every registered age on drift-honest traces, with or without the §7 band** (round 12 behind the band: min median 446, min in-ramp 274; #640 un-banded — which is what the daemon now serves, FL-R3: min median **464**, so this criterion is insensitive to the band's removal; secular reward-decay steps ~1 per 10–20 k blocks are shared by every mode incl. current). **The registered nearest rule FAILS at age 12 under drift** (median 2–3 blocks — per-block flicker at the √2 midpoint), a second independent ground for the ceiling. **Rounds 14–15: the criterion's anonymity rationale is REFUTED and NOT replaced by another anonymity one** — a conforming transaction's fee is redundant with the block carrying it, construction time is already public via `reference_block`, and round 14's fallback (stale-quote self-marking) was itself retracted at round 15 because `check_fee` is a floor, not an equality. What survives is **quantization quality and user predictability**, on which every decision this criterion drove still holds (§1.4 note, §4.5b) | §4.4, §4.5b |
 | FL-C4b usage floor | `Fm` at **0% measured production usage** (FL-V3) → **delete** (emergency-lane branch examined and rejected: an emergency lane nobody was using marks the first user who ever touches it) | §5.3 |
@@ -1335,8 +1371,12 @@ named as misfitting a two-family ladder.**
    bounds is paid only by a user whose need falls between rungs, once,
    voluntarily, and capped: a user needing `Fm`'s 16% who now pays the
    `2R/M` top overpays **12.5×** — exactly the `Fh/Fm` gap the inherited
-   ladder already carries at every median (§4.3), and constant across
-   medians because both rungs are 1/M-family. Deleting `Fm` does not
+   four-tier ladder carried at every median, and constant across medians
+   because both rungs are 1/M-family. (That figure characterises the
+   inherited shape, which is why it is stated here rather than cited from
+   §4.3: §4.3 now measures the SERVED three-tier ladder, and the rung it
+   describes — `Fm` — is the one this resolution deletes. The heritage
+   measurement is in git history.) Deleting `Fm` does not
    *create* a C3 violation; it inherits the 12.5× one the ladder always
    had, confines its marginal cost to needs in the 16%-neighborhood, and
    those needs are borne today by **zero measured users** (FL-V3). Needs
@@ -1347,15 +1387,19 @@ named as misfitting a two-family ladder.**
    assigns them < 5%, and the one intermediate rung that existed measured
    **0%** in production for its entire life (FL-V3). C4b would delete them
    right back.
-3. The scary C3 numbers (`Fn→Fm` = 200×) are *inter-family* gaps: they
-   compare an admission price to an expansion price, which diverge as 1/M²
-   vs 1/M by construction (§3.2). Uniform-geometric spacing across that
+3. The scary C3 numbers are *inter-family* gaps: they compare an admission
+   price to an expansion price, which diverge as 1/M² vs 1/M by
+   construction (§3.2). On the served ladder this is the `pri/std` column
+   of §4.3 — 50× at the zone rising to 2523× at `50·Zm` — and on the
+   inherited shape it was the `Fn→Fm` gap reaching 200×. Same seam, either
+   shape. Uniform-geometric spacing across that
    seam is not achievable with any finite rung count — the criterion's
    premise (one geometric family) does not describe this object. The
    *intra-family* spacings of the proposed ladder are 4× (admission,
    within C3's bound) and 12.5× worst-case overpayment on the expansion
    side — the inherited `Fh/Fm` gap, above C3's bound and resolved for
-   privacy per point 1.
+   privacy per point 1. On the served ladder the surviving intra-family
+   spacing is `std/eco` = 4.00× at every median (§4.3), inside C3's bound.
 4. The losing branch, recorded: 4 rungs re-spaced uniform-geometric
    (`r = 5.85` over 1%–200% at `Zm`) satisfies C3 at minimum zone only,
    re-breaks at 10·Zm (`r = 12.6`), and staffs its extra rung with nobody —
@@ -1487,6 +1531,7 @@ ride each row.
 | FL-R23 | **Lookback-min admission:** `fee ≥ mask_round_up(weight · min{F(h′−k) : 0 ≤ k ≤ G})`, `G` = 5 (hot-session gap 0–2 + network height spread 2 + 1 slack; the identity is per receiving node — review A-1 2026-09-10 corrected the first draft's `G` = 3). A quote at `F(h)` inside the gap is admitted by identity; the 2 % buffer and 0.95 deleted (weight model is byte-exact, §11.1 item 9). Cost = grace = worst `G`-block rise (FL-E3). Predicate lands in Rust behind FFI (rule 20). §11.2 | **RULED in-channel 2026-09-10** ("I agree with the math"); **spec amended at review 2026-09-10 (A-1 `G` = 5 per-node; A-2 weight-gate property test + `RELAY_ADMISSION_SLACK_BP` = 0 pin; A-3 reopening clause: reopens if any per-block-response operand enters `F`)** | none — relay policy |
 | FL-R24 | **SMA resolution for the floor operand:** (i) integer `tx_count_sum/720` as shipped — the 1/V tick is a grace cost under FL-R23, a quote-quality question only; (ii) exact `(tx_count_sum, baseline·720)` via the scale-invariant ratio functions — floor-only breaks FL-V1 by ≤ one tick; reward-and-floor is a consensus change to `M_r`'s operand (own row, rule 07). Decision rule pre-registered §11.5 FL-E3. §11.2 | **RULED in-channel 2026-09-10 ("accepted/agree"): (ii) exact SMA for reward AND floor** — the FL-E3 rule fired (integer tick 307 bp at age 30, §11.7) | **consensus row** (change to `M_r`'s operand resolution; pre-genesis; opened by the implementing PR, rule 07 evaluated there) |
 | FL-R25 | **The fourth fee slot is DELETED, not bridged.** FL-V3 (cycle 1) found slot 2 reachable only through `FeePriority::Elevated` — *"the `Elevated` priority, as defined by Monero"* — with **zero production callers, the GUI included**: wire-served and dead. The round's response was to build the RK-5 bridge (slot 2 mirrors slot 1) so a transliterated `Elevated` caller would pay the standard rate and stay in the largest anonymity set, then a contract test to assert the bridge holds, and round 19 then had to ask which slot the priority formula occupies. **Three artifacts protecting one dead enum variant, and the anonymity set the bridge protected had no members.** The premise also fails on its own terms: we are not wire-compatible with Monero — different address format, transaction format and proof system — so nothing that speaks Monero's RPC can reach this chain. The slot existed because ArticMine's 2021 ladder produced four numbers. **RK-5 REOPENED under rule 21** (our own pre-genesis ruling; its premise was that something consumes four slots, and nothing does) and discharged by deletion: `fees.resize(3)`, `FeeTiers([u64; 3])`, `FeeTier::Medium` and `FeePriority::Elevated` deleted, `fee_tier_for` collapsed to a bijection, the `chain_facts` pod and its vectors cut to three, the #640 contract test asserting three ascending tiers with no mirror clause, and both `get_fee_estimate` oracle vectors **regenerated, not edited**. Rules 60 and 15; pre-genesis, daemon and wallet ship together, no deployed network to skew. **§11.6 item 4's `fees[2] = 2RC/M` was never a slip — the wire was.** One behaviour change, named: priority `3` reached the bridge slot at the standard rate and now reaches `High`. | **RULED in-channel 2026-09-11** | minted at round 19, landed before PR B |
+| FL-R26 | **`grace_blocks` is DELETED from the estimate path and the RPC — not zeroed.** FL-R20's un-gracing (ruled 2026-09-11) makes the served ladder a function of chain state alone: `Mlw` is the un-graced long-term effective median, so `grace_blocks` moves no rung. What it used to buy was a lookahead — zeroes inserted into the long-term window pulled `M` down and the quote UP, so a quote survived the next few blocks — and **FL-R23 does that job exactly rather than probabilistically**, which is the same argument that withdrew the fixed pad (FL-R22): every economy user paid the premium forever for protection the lookback already gives by identity. It was redundant on *every* rung, not only slot 0: grace protected quotes taken AT the floor, and a standard quote is `4F`. **A tunable with no effect is worse than no tunable**, so the parameter goes rather than being pinned at zero. **Measured while implementing, and it sharpens the ruling: the lookahead was already all but inert in production.** `grace_blocks` is capped at `CRYPTONOTE_REWARD_BLOCKS_WINDOW` = 100 against a `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` = 100 000 window, so the zeroes move the median by at most 100 ranks in 100 000 — and on a locally flat weight distribution, by nothing at all. Restoring the graced shape verbatim left both a floor-pinned fixture and a 5 000-block high-median fixture **bit-for-bit unchanged**; `fee_2021_scaling.grace_blocks_do_not_move_the_served_ladder` therefore pins the mechanism at a window equal to the grace cap, where the zeroes saturate, and says so in its own comment. **Wire change** (`grace_blocks` is an RPC parameter), so it carries a `CORE_RPC_VERSION` bump and belongs with the RK-5 wire lane or PR C — explicitly **not** PR B. **Reopener (rule 21), cross-referenced to FL-R19:** if a long-gap construction path ever lands — cold signing, offline signing, multisig — `G` = 5 may not cover the quote-to-broadcast gap, at which point the lookahead question returns. FL-R19's sizing premise was voided on "there is no offline signing" (decision log 2026-09-07); **this row is where that premise is re-examined if that changes**, and a lookahead restored here would need FL-R19's binding constraint (fixed, deterministic, never per-wallet) rather than the inherited zero-insertion shape. | **RULED in-channel 2026-09-11** (with the un-graced `M`: *"the right end state is `grace_blocks` deleted from the estimate path and from the RPC — not zeroed, deleted"*) | not PR B — wire change; queued with the RK-5 lane / PR C |
 
 Signatures are recorded per-row with their provenance (in-channel, review
 rounds 4–8); this line remains for any wholesale countersign the
@@ -2939,9 +2984,14 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
   in that order: the weight-gate property test (item 3) lands before the
   zero-slack deletion it justifies. Relay policy and wallet-side only.
   *(Items were numbered 1, 2, 4, 3 when the weight gate was inserted at
-  review A-2; renumbered to reading order here — the numeric order used
-  to contradict the ordering the items themselves require. Order and
-  numbering only; no item's content changed.)*
+  review A-2, then renumbered to READING order. That renumbering did not
+  remove the contradiction it claimed to: the list still places the gate
+  (3) after the deletion (2) it must precede. The LANDING order is
+  therefore stated in words and is binding over the numbers — the
+  fee-varint fixed point and the gate first, then items 1 and 4 together
+  (one value, one identity), then item 2 — and that is the order PR B
+  landed in: `ca16135a2`, `cbd363658`, `52d143b92`, `622a90969`. Order
+  and numbering only; no item's content changed.)*
 - **PR C — the FL-R21 deletion sweep** (economics, FFI, instrument).
 
 *Daemon (`blockchain.cpp`, `tx_pool.cpp`), Rust-forward per rule 20:*
@@ -2983,10 +3033,18 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
 after item 3); `corrected_fee_ladder` takes raw `C`, drops the rounding;
 KAT pins for `F(h)` at the §4.6 degenerates and the §1.8 grid.
 
-*Wallet (`shekyl-engine-core` fee path):* verify nothing adds a margin —
-`fee = mask_round_up(rate × weight)` is already the shape
-(`tx_fee_model.rs`); no change expected. `fee_policy.rs`'s absolute cap
-unchanged.
+*Wallet (`shekyl-engine-core` fee path):* verify nothing adds a margin.
+**One change was needed, and it was a live defect** (`ca16135a2`): the
+shape is `fee = mask_round_up(rate × weight(fee))` — a fixed point, since
+the wire carries `varint(fee)` — and `converge_fee` ran two blind passes
+with no termination check. The build path seeded it with `g(0)` (three
+passes in effect, the orbit's worst case exactly); `fee_query` seeded it
+with 0 and under-quoted by one varint byte's worth of rate at every
+`2^(7k)` crossing — invisible under the 2 % buffer, a hard bounce at zero
+slack that FL-R23 cannot absorb because it is structural. Fixed to iterate
+to the fixed point under a derived bound, ahead of the slack deletion; the
+compensating seeds deleted. `fee_policy.rs`'s absolute cap moved with
+FL-R21, 220,000,000 → 218,453,333: the same structural bound, unrounded.
 
 *Instrument:* `fee_ladder.rs` loses the §10 arms, `RateLimited`,
 `Quantized*`, hysteresis; `fee_floor.rs`'s `floor_rate` is replaced by a
@@ -3027,11 +3085,32 @@ stationary `V`50 grace is the tick itself (209 → 307). `grace_bp_mean` is
 **0–6 bp in every cell of both arms**: in expectation the lookback gives
 miners nothing; in the worst block after a 10× instantaneous step it
 gives ≤ 7 % for three blocks. **Zero bounces under FL-R23 by identity.**
-The road-not-taken column shows why: a 50 bp fixed pad bounces **281 of
-19 997** quotes in the integer arm's *stationary* `V`50 cell at age 30
-(1.4 %, in a chain doing nothing), and **even a 300 bp pad bounces 23–36**
-quotes per 20 000 in every step cell on both arms. No fixed pad covers
-the step; the lookback covers it exactly and charges nothing on average.
+The road-not-taken column shows why, and it was **re-measured 2026-09-12 at
+the SHIPPED admission slack**: the pad race had been scored against
+`check_fee`'s inherited 2 % buffer, which FL-R23 deletes
+(`RELAY_ADMISSION_SLACK_BP` = 0), so every pad looked safer than the chain
+we ship allows. The sim now reads that constant from its owner instead of
+holding a copy. Pad admission margins fall from 255 / 306 / 408 / 510 bp to
+**50 / 100 / 200 / 300** — a pad buys exactly itself, with no cushion behind
+it.
+
+Regenerated: **in 27 of the 80 slew cells EVERY candidate pad bounces**,
+across both arms and at every age. A 50 bp pad still bounces **281 of
+19 997** in the integer arm's *stationary* `V`50 cell at age 30 (1.4 %, in a
+chain doing nothing) — and so now do the 100, 200 and 300 bp pads, all 281,
+because the integer tick there is 307 bp and no candidate margin reaches it.
+The largest pad considered, 300 bp, bounces up to **418** per 19 997 in the
+integer arm's step cells and up to **89** in the exact arm's (previously 36
+and 28). **No fixed pad covers the step, and the shipped slack makes that
+conclusion stronger, not weaker**; the lookback covers it exactly and charges
+nothing on average.
+
+*Every other figure in this section is from the original run and was verified
+bit-identical in the re-measurement* — all 80 cells' `rise_bp_max`,
+`fall_bp_max`, `grace_bp_max`, `grace_bp_mean` and `c_changes`, the whole
+600-cell feedback sweep, and the lookback sweep. A uniform acceptance buffer
+cancels out of a ratio, so only the pad race — the one absolute comparison in
+the section — could move, and only it did.
 
 **FL-E1 — FL-C7 with the floor in the loop.** *Exact arm:* 596/600
 converge inside the 50 bp bar at 30 000 blocks; the 4 misses are one cell

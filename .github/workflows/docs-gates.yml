@@ -89,6 +89,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           submodules: true
+          # Full history, not the default depth-1. The code-citation gate
+          # resolves each citation AT THE REVISION THE DOCUMENT DECLARES, and
+          # `git show <pin>:<path>` cannot work in a shallow clone. The gate
+          # FATALs on an unreachable pin rather than skipping it, so a depth-1
+          # checkout would fail this job loudly instead of passing it vacuously
+          # — but the right fix is to have the history, not to soften the gate.
+          fetch-depth: 0
 
       - name: Run doc-link check
         # Every relative markdown link under docs/ must resolve in the
@@ -154,11 +161,78 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_targets.py --selftest
 
+      - name: Run code-citation resolver
+        # Every code citation in the pinned review documents must resolve to
+        # exactly one tracked file at the era that document declares — its
+        # section pin, a row-level override, or HEAD when it claims no pin.
+        # Zero or many is a FATAL: a citation resolving to two files resolves
+        # to neither, which is how a register row comes to cite the wrong file
+        # while reading as evidence.
+        #
+        # Resolution happens at the PIN, never at HEAD by default: a pinned
+        # citation is records-was, and failing it against current code would
+        # teach authors to re-anchor pinned records, which is the opposite of
+        # what a pin is for.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_doc_code_citations.py
+
+      - name: Run code-citation resolver selftest
+        # Every limb of that gate has a fixture that makes it fail — ambiguous
+        # basename, era selection, pin scoping, unreachable pin, unparseable
+        # era declaration, symbol/range containment, empty corpus. Run them,
+        # because a check nobody exercises is a check nobody knows still
+        # fires, and this gate's live defects were repaired in the same commit
+        # that introduced it: without these fixtures it would have no
+        # remaining proof of life.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_doc_code_citations.py
+
       - name: Run index prefix-uniqueness check
         # Rule 94 §2 family prefixes must not collide.
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_index_prefix_uniqueness.py
+
+      - name: Run shell gate-exit discipline check
+        # 46-shell-gate-exits.mdc had no enforcement: a rule, not a gate.
+        # Both halves are checked — a verdict travelling through a pipe (which
+        # has shipped a clippy-red commit and masked a broken C++ link), and
+        # `pgrep -f`/`pkill -f` matching the caller. The anchor exemption is
+        # load-bearing: `pgrep -f "^$WORKSPACE/tor/tor "` is CORRECT because
+        # `^` binds the match to argv[0], and flagging it would fail careful
+        # code and teach the author to weaken it.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_shell_gate_exits.py
+
+      - name: Run shell gate-exit self-test
+        # Each check bitten red independently, and the anchor exemption pinned
+        # in BOTH directions — anchored passes, unanchored fails.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_shell_gate_exits.py
+
+      - name: Run conformance-coverage gate
+        # Every RATIFIED consensus rule (census bucket 1/2) must carry a
+        # conformance record in CONSENSUS_STORE_RECONCILIATION.md §5.4.1, and
+        # the register must not reach outside that set. Counting register rows
+        # proves SELF-CONSISTENCY, never COVERAGE — an absent row has no id to
+        # count — and the ratified denominator has already moved four times,
+        # each move silently reopening a backlog someone had just called closed.
+        # Buckets 3/4 are UNREVIEWED by construction and are NOT demanded.
+        # Instance of 47-gate-subject-assertion.mdc: both parses assert their
+        # own subject, and each side counts its own dropped ids, because an
+        # id-recognition bug that hits BOTH documents equally is invisible to a
+        # set difference.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_conformance_coverage.py
+
+      - name: Run conformance-coverage gate self-test
+        # Bitten red in both directions, plus the symmetric-drop case the
+        # comparison alone cannot see. Fixtures are deliberately multi-shape:
+        # #704's defects were all at INTERSECTIONS of axes, and its root cause
+        # was single-section fixtures making a limb untestable by their shape.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_conformance_coverage.py
 
       - name: Run index table-shape check
         # GFM drops a surplus cell and blanks a missing one, so a malformed row

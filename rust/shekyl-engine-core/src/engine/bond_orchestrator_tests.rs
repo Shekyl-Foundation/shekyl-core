@@ -742,12 +742,12 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
 
     // Honest 2021-scaling KAT row: accepted, and the fee is the shared
     // formula over the bond ceiling — not a number this path invents.
-    let honest = snapshot(340, 1_400, 67_000, 1);
+    let honest = snapshot(333, 1_332, 66_666, 1);
     let fee = bond_fee_from_estimates(honest).expect("an honest snapshot funds a bond");
     assert_eq!(
         fee.to_raw(),
         shekyl_rpc_client::tx_fee::fee_from_weight(
-            &FeeRate::new(340, 1).expect("rate"),
+            &FeeRate::new(333, 1).expect("rate"),
             p_lane_weight_ceiling_bytes()
         ),
         "the bond fee is economy over the P-lane ceiling, via the shared formula"
@@ -784,12 +784,12 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
     // Agreement, stated directly: the two gates accept exactly the same
     // snapshots. A future edit that loosens one and not the other fails.
     for (e, s, p, m) in [
-        (340, 1_400, 67_000, 1),
-        (13, 53, 14_000, 1),
+        (333, 1_332, 66_666, 1),
+        (13, 52, 13_333, 1),
         (200_000, 200_000, 200_000, 1),
         (50, 20, 100, 1),
         (1, 1, 1, 1_000_000_000_000_000_000),
-        (340, 1_400, 67_000, 10_000),
+        (333, 1_332, 66_666, 10_000),
     ] {
         let raw = snapshot(e, s, p, m);
         assert_eq!(

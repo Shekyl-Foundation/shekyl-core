@@ -11,6 +11,15 @@
 //! [`predict_weight_matches_wire_weight`](crate::tests) (the single-source
 //! guarantee). The `fcmp_proof_size` term reads the measured 2a-3 KAT table.
 //!
+//! **Two parity tests, different jobs.** The one named above builds a wire
+//! `Transaction` *by hand* at five shapes, so it pins the field model against a
+//! second reading of the wire layout. `tests/weight_gate.rs` — the FL-R20
+//! weight gate — asserts the same equality against the bytes the **builder**
+//! emits, across every `n_in x n_out x L` a spend can take and every `u64` fee
+//! varint length. Under FL-R23's zero relay slack a one-byte prediction error
+//! is a hard bounce, so that gate is what justifies deleting the inherited 2%
+//! admission cushion; edit this function and run it.
+//!
 //! Hoisted from `shekyl-engine-core` (§12.3 D-1) so the wallet fee path **and**
 //! `shekyl-economics-sim`'s W9 stuffer arm share one single-sourced weight model
 //! rather than a replicated byte formula. The **fee-rate** layer

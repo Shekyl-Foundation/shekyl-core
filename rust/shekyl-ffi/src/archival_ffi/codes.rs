@@ -8,6 +8,9 @@
 //! Domain modules may also define local codes next to their entry points.
 //! C++ / `shekyl_ffi.h` mirror the literals (rule 25).
 
+use std::ffi::CStr;
+use std::os::raw::c_char;
+
 use shekyl_archival_retention::{
     BondPostError, HoldingsUpdateConnectError, HoldingsUpdatePopError, RebondConnectError,
     RebondPopError, ReleaseConnectError, ReleasePopError, WireError,
@@ -234,13 +237,161 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED: u8 = 47;
 /// at the same `ShardSet::new` boundary as the count cap ("a set on the wire").
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD: u8 = 48;
 
-/// Debit authorization (`shekyl_archival_debit_auth_pin`): the bond record
+/// Cold authority (`shekyl_archival_cold_authority_pin`): the bond record
 /// commits no canonical-length `bond_spend_pk`, so it authorizes **no** debit.
 /// Fail closed — never an identity-key fallback.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY: u8 = 49;
-/// Debit authorization: the presented `pqc_auths` key is not the record's
+/// Cold authority: the presented `pqc_auths` key is not the record's
 /// committed `bond_spend_pk` (identity-key or foreign-key authorization).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH: u8 = 50;
+/// Cold authority: the gate was invoked for a `(post_kind, bond_debit)` that
+/// `requires_cold_authority` excludes. The calling arm and the predicate
+/// disagree about this kind — an implementation error, never the sender's
+/// form, so it classifies as an internal failure. Unreachable through a
+/// correct caller; exists so a new arm cannot silently authorize hot.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST: u8 = 51;
+
+/// Stable operator strings for the bond-post C-ABI code space.
+///
+/// **This is THE table.** NUL-terminated so C++ can hand these to
+/// `MERROR_VER` without allocating. ASCII-only: they cross into consoles
+/// whose encoding we do not control.
+#[must_use]
+pub const fn bond_post_err_cstr(code: u8) -> &'static CStr {
+    match code {
+        SHEKYL_ARCHIVAL_BOND_POST_OK => c"ok",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR => c"null shard id pointer",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND => c"post_kind not JoinMarket",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY => c"ShardSetCompact requires shards",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS => {
+            c"CompleteTree must not carry shard ids"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO => c"JoinMarket bond_debit must be zero",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS => c"bond_credit and bond_debit both non-zero",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO => c"bond_floor is zero",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH => {
+            c"bonded_total/bond_credit must equal bond_floor"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS => c"bond record already exists",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND => c"invalid holdings_kind",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE => c"post_kind not Release",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING => c"Release requires an existing bond record",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE => c"record bonded_total is zero",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_CREDIT => c"Release bond_credit must be zero",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_FLOOR_MISMATCH => {
+            c"post-connect bonded_total must equal bond_floor(holdings)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_RELEASE => {
+            c"Release is a full exit: post-connect bonded_total must be zero"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL => {
+            c"bond_debit must equal the record's current bonded_total"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED => c"release cooldown has not elapsed",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW => c"marshaled array length overflow",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_HOLDINGS_NOT_EMPTY => {
+            c"full exit must end at empty holdings"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL => c"record interval log is full",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING => {
+            c"slash scheduler has not settled every epoch through the last-served anchor"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING => {
+            c"bond_spend_pk violates the JoinMarket coupling (missing/non-canonical on JoinMarket, or present on another kind)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE => {
+            c"post_kind is not HoldingsUpdate"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE => {
+            c"HoldingsUpdate on a CompleteTree record (no shard set to change)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT => {
+            c"HoldingsUpdate post holdings are not ShardSetCompact"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS => {
+            c"HoldingsUpdate-add terms are not exactly +FLOOR credit / no debit"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING => {
+            c"HoldingsUpdate-add on a record not good_through the current epoch"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_ADD => {
+            c"HoldingsUpdate-add is not exactly one added shard"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_FLOOR_MISMATCH => {
+            c"HoldingsUpdate-add post bonded_total != bond_floor(post) / current + FLOOR"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS => {
+            c"HoldingsUpdate-drop terms are not exactly -FLOOR debit / no credit"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP => {
+            c"HoldingsUpdate-drop must remove exactly one shard, and it must be the shard whose per-shard facts were marshaled"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD => {
+            c"HoldingsUpdate-drop would empty the shard set (a full exit is Release)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH => {
+            c"HoldingsUpdate-drop post bonded_total != bond_floor(post) / current - FLOOR"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON => {
+            c"HoldingsUpdate-drop before the shard's retention-commitment horizon elapsed"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND => c"post_kind is not Rebond",
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE => {
+            c"Rebond on a CompleteTree record (demotion flips the kind; unrepresentable)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT => {
+            c"Rebond post-holdings are not ShardSetCompact"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED => {
+            c"Rebond requires an open bad interval (the record is not slashed)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN => {
+            c"record carries multiple open bad intervals (coalescing invariant broken)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM => {
+            c"record interval log lacks Rebond headroom (must leave a slot for the next slash and the Release clean close)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS => {
+            c"Rebond terms mismatch (debit nonzero, or credit != bond_floor(post) - record bonded_total, or post bonded_total != bond_floor(post))"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET => {
+            c"Rebond post-holdings are not a duplicate-free superset of the record's current holdings (shedding goes through HoldingsUpdate-drop)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED => {
+            c"retired Rebond oversize code (45) — never returned; oversize is now unrepresentable in the vin's ShardSet holdings"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR => {
+            c"record bonded_total != bond_floor(record holdings) (floor-drifted record)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED => {
+            c"vin holdings shard count exceeds the wire codec bound"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD => {
+            c"vin holdings carry a duplicate shard id (a set on the wire)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED => {
+            c"HoldingsUpdate requires a Bonded record (an Exited or slash-emptied record re-enters via JoinMarket/Rebond)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY => {
+            c"bond record commits no bond_spend_pk; it authorizes no debit"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH => {
+            c"pqc auth key is not the record's committed bond_spend_pk"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST => {
+            c"cold-authority gate invoked for a post that requires none (the calling arm and requires_cold_authority disagree)"
+        }
+        _ => c"unknown bond-post verify code",
+    }
+}
+
+/// NUL-terminated static reason for a bond-post verify code (do not free).
+/// Delegates to [`bond_post_err_cstr`]; a second match here would be a
+/// mirror keyed on the same code space.
+#[no_mangle]
+pub extern "C" fn shekyl_archival_bond_post_err_string(code: u8) -> *const c_char {
+    bond_post_err_cstr(code).as_ptr()
+}
 
 /// PWD-B7: map a bond-post FFI verify code onto a drop verdict.
 ///
@@ -254,9 +405,9 @@ pub extern "C" fn shekyl_archival_bond_post_drop_verdict(code: u8) -> u8 {
 
 fn archival_bond_post_drop_verdict(code: u8) -> DropVerdict {
     match code {
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR | SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW => {
-            DropVerdict::InternalFailure
-        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST => DropVerdict::InternalFailure,
         SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE

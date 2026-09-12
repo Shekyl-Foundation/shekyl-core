@@ -3,58 +3,42 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The **debit authorization pin** — the single check standing between a
-//! compromised serving host and a collateral-draining exit.
+//! **Cold authority** for a bond-post: whether a post must authorize against
+//! the record's committed `bond_spend_pk`, and the pin that makes that
+//! comparison. A serving host holds the identity key, so an identity-authorized
+//! debit is a collateral drain; this module is what makes the cold key
+//! load-bearing.
 //!
-//! A **value-out** bond-post authorizes against the **record's committed
-//! `bond_spend_pk`**, never against a key the transaction brings along and
-//! never against the persona's identity key.
+//! - [`requires_cold_authority`] is the selector — exhaustive over
+//!   `(post_kind, bond_debit)`.
+//! - [`cold_authority_pin`] consults the selector and, when it holds, runs
+//!   [`debit_auth_pin`] against the **record's committed** key. Never a key
+//!   the transaction brings along, never the persona's identity key.
 //!
-//! **The selector is `bond_debit > 0`, not the post kind.** Consensus
-//! consumers today are `Release` and the **drop** arm of `HoldingsUpdate`.
-//! `Rebond` is *not* one: its verify requires `bond_debit == 0` and
-//! `blockchain.cpp` authorizes it with the **identity** key on the
-//! credit path, exactly as `HoldingsUpdate`-add is. Applying this pin
-//! there would reject a legitimate credit — keying the rule on kind
-//! rather than on the debit term rejects every valid `HoldingsUpdate`-add
-//! block. (The since-retired block-level fast-path belt, CEN-G8, existed
-//! to hold exactly this line under a now-deleted verification skip.)
+//! | `post_kind`      | requires cold authority |
+//! |------------------|-------------------------|
+//! | `Release`        | always                  |
+//! | `HoldingsUpdate` | iff `bond_debit > 0`    |
+//! | `JoinMarket`     | never                   |
+//! | `Rebond`         | never                   |
 //!
-//! (An earlier revision of this module listed `Rebond` here. It came from
-//! reading `archival_marshal_record_facts`'s "record-mutating arms" comment
-//! as if it enumerated value-out arms. Record-mutating and value-out are
-//! different axes: every debit mutates the record, not every record
-//! mutation is a debit.) That distinction is the whole point: a
-//! serving host holds the identity hybrid key and can therefore produce a
-//! valid Auth-P, so an identity-authorized debit would let a host
-//! compromise become a collateral drain. `bond_spend_pk` is cold
-//! (`ARCHIVAL_CHALLENGE_MECHANISM.md` §hot-key), and this function is what
-//! makes that coldness load-bearing rather than aspirational.
+//! `Release` is unconditional because UB3 runs before the debit-term guards
+//! (UB9); a zero-debit Release with the wrong key is refused here, not later.
+//! `HoldingsUpdate` keys on the term because that is how the kind tells drop
+//! (cold) from add (identity). Credit paths never pin: JoinMarket is the post
+//! that *commits* the cold key; Rebond's verify requires `bond_debit == 0`.
 //!
-//! `SA-2b` moved *where the authorizer travels* — `bond_wire` forbids
-//! `bond_spend_pk` on the vin for non-JoinMarket kinds, because a
-//! vin-carried key would be a forgeable self-assertion — but it did not
-//! remove the requirement. The authorizer now rides the surface-A
-//! `pqc_auths` slot, and this pin is what ties that slot to the record.
-//!
-//! **One implementation.** C++ reaches it over FFI as
-//! `shekyl_archival_debit_auth_pin` (replacing the former
-//! `archival_debit_auth_pin` helper in `blockchain.cpp`); Rust calls it
-//! natively (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 row UB3). A second
-//! implementation is precisely the edit that must never land: two copies
-//! would drift on the one predicate that has no recovery.
-//!
-//! The authoritative list of call sites is
-//! `scripts/ci/check_debit_auth_single_source.sh`, which asserts each one
-//! by name in CI. It is named here rather than restated because a count in
-//! prose is a defect generator: an earlier revision of this paragraph said
-//! "two callers" and was stale within its own pull request — the submit
-//! gather's work gate had become a third C++ caller, and the gate the
-//! sentence was describing already required it.
+//! [`cold_authority_pin`] refuses a predicate-false call
+//! ([`ColdAuthorityError::NotAColdAuthorityPost`]) before the keys are
+//! compared, so a matching pair does not rescue an arm/predicate disagreement.
+//! `scripts/ci/check_debit_auth_single_source.sh` catches an arm that forgets
+//! the call. C++ reaches the composed gate as
+//! `shekyl_archival_cold_authority_pin`; the Rust submit battery calls it
+//! natively (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 row UB3).
 
 use thiserror::Error;
 
-use crate::bond_wire::HYBRID_PUBKEY_CANONICAL_BYTES;
+use crate::bond_wire::{BondPostKind, HYBRID_PUBKEY_CANONICAL_BYTES};
 
 /// Why a debit was refused authorization. Two arms rather than one so the
 /// operator log distinguishes *a record that authorizes nothing* from *a
@@ -105,6 +89,57 @@ pub fn debit_auth_pin(
         return Err(DebitAuthError::AuthKeyMismatch);
     }
     Ok(())
+}
+
+/// Whether this `(post_kind, bond_debit)` must authorize against the record's
+/// cold `bond_spend_pk`. Exhaustive: a new [`BondPostKind`] does not compile
+/// until its row is decided here.
+#[must_use]
+pub fn requires_cold_authority(post_kind: BondPostKind, bond_debit: u64) -> bool {
+    match post_kind {
+        BondPostKind::Release => true,
+        BondPostKind::HoldingsUpdate => bond_debit > 0,
+        BondPostKind::JoinMarket | BondPostKind::Rebond => false,
+    }
+}
+
+/// Why [`cold_authority_pin`] refused. `Pin` forwards [`DebitAuthError`] so
+/// the operator log keeps the no-key / wrong-key distinction; the other arm
+/// is an implementation error, never the sender's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum ColdAuthorityError {
+    /// The gate was invoked for a post that [`requires_cold_authority`]
+    /// excludes. Refused rather than passed so an arm/predicate disagreement
+    /// cannot silently authorize hot.
+    #[error(
+        "cold_authority_pin invoked for post_kind {post_kind:?} with bond_debit {bond_debit}, \
+         which requires no cold authority; the calling arm and requires_cold_authority disagree"
+    )]
+    NotAColdAuthorityPost {
+        post_kind: BondPostKind,
+        bond_debit: u64,
+    },
+    #[error(transparent)]
+    Pin(#[from] DebitAuthError),
+}
+
+/// Consult [`requires_cold_authority`], then [`debit_auth_pin`].
+///
+/// Predicate-false is a refusal, before the keys are compared. Byte-identical
+/// to [`debit_auth_pin`] on every input the consensus arms pass today.
+pub fn cold_authority_pin(
+    post_kind: BondPostKind,
+    bond_debit: u64,
+    record_bond_spend_pk: &[u8],
+    auth_pubkey: &[u8],
+) -> Result<(), ColdAuthorityError> {
+    if !requires_cold_authority(post_kind, bond_debit) {
+        return Err(ColdAuthorityError::NotAColdAuthorityPost {
+            post_kind,
+            bond_debit,
+        });
+    }
+    Ok(debit_auth_pin(record_bond_spend_pk, auth_pubkey)?)
 }
 
 #[cfg(test)]
@@ -160,5 +195,67 @@ mod tests {
             debit_auth_pin(&canonical(7), &presented),
             Err(DebitAuthError::AuthKeyMismatch)
         );
+    }
+
+    /// Exhaustive over `BondPostKind` by construction of the match; this pins
+    /// the VALUE of each arm, which the compiler does not.
+    #[test]
+    fn requires_cold_authority_truth_table() {
+        use BondPostKind::*;
+        assert!(requires_cold_authority(Release, 0));
+        assert!(requires_cold_authority(Release, 1));
+        assert!(requires_cold_authority(Release, u64::MAX));
+        assert!(!requires_cold_authority(HoldingsUpdate, 0));
+        assert!(requires_cold_authority(HoldingsUpdate, 1));
+        assert!(requires_cold_authority(HoldingsUpdate, u64::MAX));
+        assert!(!requires_cold_authority(JoinMarket, 0));
+        assert!(!requires_cold_authority(JoinMarket, 1));
+        assert!(!requires_cold_authority(Rebond, 0));
+        assert!(!requires_cold_authority(Rebond, 1));
+    }
+
+    #[test]
+    fn composed_gate_forwards_the_pin_unchanged_where_the_predicate_holds() {
+        for (kind, debit) in [
+            (BondPostKind::Release, 0u64),
+            (BondPostKind::Release, 7),
+            (BondPostKind::HoldingsUpdate, 7),
+        ] {
+            assert_eq!(
+                cold_authority_pin(kind, debit, &canonical(7), &canonical(7)),
+                Ok(()),
+                "{kind:?}/{debit}"
+            );
+            assert_eq!(
+                cold_authority_pin(kind, debit, &[], &canonical(7)),
+                Err(ColdAuthorityError::Pin(DebitAuthError::RecordCommitsNoKey)),
+                "{kind:?}/{debit}"
+            );
+            assert_eq!(
+                cold_authority_pin(kind, debit, &canonical(7), &canonical(8)),
+                Err(ColdAuthorityError::Pin(DebitAuthError::AuthKeyMismatch)),
+                "{kind:?}/{debit}"
+            );
+        }
+    }
+
+    /// Predicate-false is a refusal BEFORE the keys are looked at, so a
+    /// matching pair does not rescue it.
+    #[test]
+    fn composed_gate_refuses_a_post_that_needs_no_cold_authority() {
+        for (kind, debit) in [
+            (BondPostKind::JoinMarket, 0u64),
+            (BondPostKind::Rebond, 0),
+            (BondPostKind::HoldingsUpdate, 0),
+        ] {
+            assert_eq!(
+                cold_authority_pin(kind, debit, &canonical(7), &canonical(7)),
+                Err(ColdAuthorityError::NotAColdAuthorityPost {
+                    post_kind: kind,
+                    bond_debit: debit
+                }),
+                "{kind:?}/{debit}"
+            );
+        }
     }
 }

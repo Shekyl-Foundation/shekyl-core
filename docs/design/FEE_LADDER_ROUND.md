@@ -1288,3 +1288,14 @@ not written. State: **§11 OPEN** — FL-E1…FL-E3 pre-registered (§11.5), run
 fired (integer tick 307 bp at age 30) and the maintainer RULED exact SMA
 for reward and floor — a pre-genesis consensus row for the implementing PR;
 implementation spec §11.6 **signed off in-channel 2026-09-11** — PR A merged, PR B and PR C cleared.
+**UPDATE 2026-09-11:** PR B implemented on `feat/fl-r20-relay-policy-2`
+(awaiting review): items 1–4 and the FL-R23 ring; two rulings taken
+in-channel during implementation — `M` un-graced (the lookahead's job is
+FL-R23's, and it was measured nearly inert at production constants) and
+the ring's cold path reconstructs `M(h−k)` exactly rather than holding `M`
+at the tip ("it barely moves" is a probabilistic argument where an exact
+one was the point). **FL-R26 minted** (`grace_blocks` deleted, not zeroed;
+wire change, own row). Two defects surfaced and fixed ahead of the
+deletion: the fee-varint fixed point under-quote and a shared test double
+whose empty weight window read uninitialised storage. State: **§11 OPEN**
+pending PR B merge and PR C.

@@ -46,9 +46,9 @@ use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
     calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
     effective_emission, emission_speed_factor, hysteresis_fold, hysteresis_settled,
-    hysteresis_step, paid_block_reward, projected_already_generated, tail_subsidy_per_block,
-    EconomicParams, FeeLadder, TxVolume, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY,
-    STAKER_EMISSION_SHARE,
+    hysteresis_step, paid_block_reward, projected_already_generated, relay_fee_floor,
+    tail_subsidy_per_block, EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR,
+    RELAY_ADMISSION_SLACK_BP, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
@@ -265,46 +265,57 @@ fn rounded(raw: [u64; 4]) -> [u64; SERVED_SLOTS] {
 
 /// The SERVED ladder, from **the production owner itself** — no local
 /// re-derivation. `shekyl-economics::corrected_fee_ladder` computes
-/// `round2(base·w_ref·C_q / (Mfw²·SCALE))`: `C_q` in the NUMERATOR and a
-/// single division, so no intermediate truncation compounds.
+/// `base·w_ref·C / (Mfw²·SCALE)`: `C` in the NUMERATOR and a single
+/// division, so no intermediate truncation compounds. Since FL-R21 there
+/// is no `round_money_up_2` on it either, and `standard` is `4F` exactly.
 ///
 /// This replaced a local mirror that scaled already-truncated ArticMine
 /// rungs (PR #640 review). The mirror had been documented as bit-exact
 /// with the served path and was pinned at 210 for
-/// (10 SKL, `Mfw = 1.5 MB`, `C_q = 16`) — but the shipped owner returns
-/// **220** there, because it divides once. The mirror was measuring a
+/// (10 SKL, `Mfw = 1.5 MB`, `C_q = 16`); the owner returned 220 there at
+/// the time, because it divides once. (It returns 213 now — same single
+/// division, one less rounding step.) The mirror was measuring a
 /// composition the daemon does not serve, which is precisely the
 /// drift-pair §1.9 forbids: call the canonical function, reimplement
-/// none of it. The legacy transliteration survives ONLY as the `Current`
-/// comparison column, where reproducing today's daemon bit-for-bit is
-/// the point.
-fn served_ladder(base_reward: u64, median: u64, c_q: u64) -> [u64; SERVED_SLOTS] {
+/// none of it.
+///
+/// The legacy transliteration survives ONLY as the `Current` comparison
+/// column — the PRE-FL-R20 daemon, which is what that column exists to
+/// compare against. It stopped being "today's daemon" when FL-R20 landed;
+/// it is a historical baseline now, and `transliteration_matches_cpp_kat`
+/// pins it as one.
+fn served_ladder(base_reward: u64, median: u64, c: u64) -> [u64; SERVED_SLOTS] {
     corrected_fee_ladder(
         base_reward,
         median,
-        median,
         FULL_REWARD_ZONE_V5,
         REF_TX_WEIGHT,
-        c_q,
+        FeeCorrection::from_scaled(c),
     )
     .as_slots()
 }
 
-/// The relay floor, transliterating `get_dynamic_base_fee`
-/// (`blockchain.cpp:4422-4437`): `R·w_ref/M²` minus 5%, floor 1. The
-/// `check_fee` acceptance bound is this minus its further 2% buffer
-/// (`blockchain.cpp:4466`).
-fn relay_floor(base_reward: u64, median: u64) -> u64 {
-    let median = median.max(FULL_REWARD_ZONE_V5);
-    let lo = u128::from(base_reward) * u128::from(REF_TX_WEIGHT)
-        / (u128::from(median) * u128::from(median));
-    let mut lo = u64::try_from(lo).expect("fee/byte fits u64");
-    lo -= lo / 20;
-    if lo == 0 {
-        1
-    } else {
-        lo
-    }
+/// The relay floor — **the owner's function, not a copy of it.**
+///
+/// This previously transliterated the C++ `Blockchain::get_dynamic_base_fee`,
+/// including the inherited `0.95` factor and without the `C` correction. FL-R20
+/// deleted that function, deleted the `0.95`, and moved the arithmetic to
+/// `shekyl_economics::relay_fee_floor` (rule 20). The transliteration outlived
+/// it and became the tree's last copy of arithmetic production does not run —
+/// a drift pair by construction, which drifted.
+///
+/// The general rule, and the reason this wrapper is one line: **where the code
+/// is landed, the sim calls it.** Modelling proposed code in the harness is
+/// legitimate; keeping a private implementation of a shipped contract is not,
+/// because the harness then validates a parameter the chain does not enforce.
+fn relay_floor(base_reward: u64, median: u64, c: u64) -> u64 {
+    relay_fee_floor(
+        base_reward,
+        median,
+        FULL_REWARD_ZONE_V5,
+        REF_TX_WEIGHT,
+        FeeCorrection::from_scaled(c),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -443,23 +454,38 @@ fn quantize_c_pow2(c_scaled: u64, rule: SnapRule) -> u64 {
 // x-characterization (average-cost expansion each rung funds)
 // ---------------------------------------------------------------------------
 
+/// Spacing and coverage of the **served three-tier ladder** — the shape the
+/// daemon actually emits (`economy`, `standard`, `priority`), built from the
+/// production owner `shekyl_economics::corrected_fee_ladder`.
+///
+/// This replaces a four-tier characterisation of the inherited ArticMine
+/// ladder. That instrument measured a shape this project no longer has: four
+/// rungs, no `C` correction, and a top rung whose value depended on the
+/// short-term median (the "surge discount" FL-R5 deleted). Keeping its numbers
+/// in a live document invited them to be grepped and re-implemented, so they
+/// are gone; the heritage arithmetic remains in git history.
 #[derive(Serialize)]
-pub struct XLadderRow {
+pub struct XServedRow {
+    /// The long-term effective median the ladder is priced against. The served
+    /// ladder is a function of THIS alone — see `surge_note` below.
     pub median: u64,
-    pub mnw: u64,
-    /// `x_i = f_i·M/R` per rung, in millionths (expansion fraction of the
-    /// median that rung `i` pays for on an average-cost basis). Invariant
-    /// under the `C` correction — `C` rescales fees and miner terms alike.
-    pub x_millionths: [u64; 4],
-    /// Adjacent-rung ratios ×1000 (`[f1/f0, f2/f1, f3/f2]`).
-    pub adjacent_ratio_milli: [u64; 3],
+    /// The correction `C` in force, scaled. Unlike the heritage instrument,
+    /// `x` here is NOT invariant under `C`: the correction sits inside the
+    /// floor and the priority rung, while `base_reward` is the M_r-neutral
+    /// total, so every row must state the `C` it was measured at.
+    pub c_scaled: u64,
+    /// `x_i = f_i·M/R` per rung, in millionths — the expansion fraction of the
+    /// median that rung `i` funds on an average-cost basis.
+    pub x_millionths: [u64; SERVED_SLOTS],
+    /// Adjacent-rung ratios ×1000 (`[standard/economy, priority/standard]`).
+    pub adjacent_ratio_milli: [u64; SERVED_SLOTS - 1],
 }
 
-fn x_ladder_row(base_reward: u64, mnw: u64, mlw: u64) -> XLadderRow {
-    let raw = articmine_ladder_raw(base_reward, mnw, mlw);
-    let m = mnw.min(mlw).max(FULL_REWARD_ZONE_V5);
-    let x = raw.map(|f| {
-        u64::try_from(u128::from(f) * u128::from(m) * u128::from(SCALE) / u128::from(base_reward))
+fn x_served_row(base_reward: u64, median: u64, c_scaled: u64) -> XServedRow {
+    let f = served_ladder(base_reward, median, c_scaled);
+    let m = median.max(FULL_REWARD_ZONE_V5);
+    let x = f.map(|fi| {
+        u64::try_from(u128::from(fi) * u128::from(m) * u128::from(SCALE) / u128::from(base_reward))
             .expect("x fits u64")
     });
     let ratio = |hi: u64, lo: u64| -> u64 {
@@ -469,15 +495,11 @@ fn x_ladder_row(base_reward: u64, mnw: u64, mlw: u64) -> XLadderRow {
             u64::try_from(u128::from(hi) * 1000 / u128::from(lo)).expect("ratio fits u64")
         }
     };
-    XLadderRow {
+    XServedRow {
         median: m,
-        mnw,
+        c_scaled,
         x_millionths: x,
-        adjacent_ratio_milli: [
-            ratio(raw[1], raw[0]),
-            ratio(raw[2], raw[1]),
-            ratio(raw[3], raw[2]),
-        ],
+        adjacent_ratio_milli: [ratio(f[1], f[0]), ratio(f[2], f[1])],
     }
 }
 
@@ -567,8 +589,16 @@ fn rung_table(
 ) -> RungTable {
     let corr = correction_factor(v, st.ag, st.height, params);
     let raw = articmine_ladder_raw(st.base_reward, median, median);
-    let floor = relay_floor(st.base_reward, median);
-    let accept = floor - floor / 50;
+    let floor = relay_floor(st.base_reward, median, corr.c_scaled);
+    // Admission is the floor itself: FL-R23 pins RELAY_ADMISSION_SLACK_BP at
+    // ZERO, so the inherited 2% acceptance cushion is gone. The previous
+    // `floor - floor / 50` here was the last copy of that cushion, and it made
+    // every pad in the FL-E3 table look 2% safer than production allows.
+    debug_assert_eq!(
+        RELAY_ADMISSION_SLACK_BP, 0,
+        "accept == floor assumes zero slack"
+    );
+    let accept = floor;
     let corrected = served_ladder(st.base_reward, median, corr.c_scaled);
     let served = served_ladder(
         st.base_reward,
@@ -1608,7 +1638,7 @@ fn feedback_scenario(
             _ => c,
         };
         let ladder = served_ladder(base, median, c);
-        let floor_now = relay_floor(base, median);
+        let floor_now = relay_floor(base, median, c);
         (ladder[1].max(1), ladder[0].max(floor_now), floor_now)
     };
     // The reference fee is history-free and anchored at the trace's START
@@ -1994,7 +2024,7 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
             FULL_REWARD_ZONE_V5,
             FULL_REWARD_ZONE_V5,
         )),
-        relay_floor_at_exhaustion: relay_floor(val_reward, FULL_REWARD_ZONE_V5),
+        relay_floor_at_exhaustion: relay_floor(val_reward, FULL_REWARD_ZONE_V5, SCALE),
     }
 }
 
@@ -2082,7 +2112,7 @@ pub struct FeeLadderReport {
     c_surface: Vec<CorrectionPoint>,
     c_reachable_min: u64,
     c_reachable_max: u64,
-    x_ladder: Vec<XLadderRow>,
+    x_served: Vec<XServedRow>,
     rung_tables: Vec<RungTable>,
     dwell: Vec<DwellResult>,
     feedback: Vec<FeedbackResult>,
@@ -2161,13 +2191,32 @@ pub fn report() -> FeeLadderReport {
     }
 
     let genesis = state_of(0);
-    let x_ladder = vec![
-        x_ladder_row(genesis.base_reward, zone, zone),
-        x_ladder_row(genesis.base_reward, 3 * zone, 3 * zone),
-        x_ladder_row(genesis.base_reward, 10 * zone, 10 * zone),
-        x_ladder_row(genesis.base_reward, 50 * zone, 50 * zone),
-        // Registered spot-check: short-term surge decoupled from long-term.
-        x_ladder_row(genesis.base_reward, 50 * zone, zone),
+    // Spacing and coverage of the SERVED three-tier ladder, swept over the
+    // long-term effective median at the genesis-baseline correction.
+    //
+    // NO SURGE ROW, and its absence is the finding rather than an omission.
+    // The heritage instrument carried one because the inherited top rung was a
+    // function of the SHORT-TERM median. The served ladder is a function of the
+    // long-term effective median alone, and the surge factor S clamps the
+    // short-term median, which never reaches this path — so a surge state is
+    // not a distinct row here, it is the same row. That is the S-independence
+    // recorded at the wallet estimate's call site in blockchain.cpp.
+    //
+    // The median sweep runs past the launch zone deliberately: the LONG-TERM
+    // median is unbounded above (C2-R2 Q2/Q3), so 3x/10x/50x the zone are
+    // reachable chain states as sustained demand grows, not surge transients.
+    let c_baseline = correction_factor(
+        params.tx_volume_baseline,
+        genesis.ag,
+        genesis.height,
+        &params,
+    )
+    .c_scaled;
+    let x_served = vec![
+        x_served_row(genesis.base_reward, zone, c_baseline),
+        x_served_row(genesis.base_reward, 3 * zone, c_baseline),
+        x_served_row(genesis.base_reward, 10 * zone, c_baseline),
+        x_served_row(genesis.base_reward, 50 * zone, c_baseline),
     ];
 
     let rung_tables = vec![
@@ -2539,7 +2588,7 @@ pub fn report() -> FeeLadderReport {
         c_surface,
         c_reachable_min: c_min,
         c_reachable_max: c_max,
-        x_ladder,
+        x_served,
         rung_tables,
         dwell,
         feedback,
@@ -2869,6 +2918,54 @@ pub fn render_json(r: &FeeLadderReport) -> String {
 mod tests {
     use super::*;
 
+    /// Prints the served-ladder spacing table the way
+    /// `FEE_LADDER_DERIVATION.md` §4.3 transcribes it, so the document's
+    /// numbers are reproducible from a single fast command rather than a
+    /// full simulation run:
+    ///
+    /// ```text
+    /// cargo test -p shekyl-economics-sim served_ladder_spacing_table -- --nocapture
+    /// ```
+    ///
+    /// A transcribed table that cannot be regenerated cheaply is a table that
+    /// goes stale, which is how §4.3 came to carry a four-tier characterisation
+    /// of a shape this project had already deleted.
+    #[test]
+    fn served_ladder_spacing_table() {
+        // Same constructor the report uses, so the probe and the full
+        // simulation cannot disagree about what they measured.
+        let params = EconomicParams::default();
+        let zone = FULL_REWARD_ZONE_V5;
+        let genesis = age_state(0, &params);
+        let c = correction_factor(
+            params.tx_volume_baseline,
+            genesis.ag,
+            genesis.height,
+            &params,
+        )
+        .c_scaled;
+        println!(
+            "C_scaled = {c} (genesis, baseline volume {})",
+            params.tx_volume_baseline
+        );
+        println!("base_reward = {}", genesis.base_reward);
+        println!("median | x(economy) x(standard) x(priority) | std/eco pri/std");
+        for mult in [1u64, 3, 10, 50] {
+            let row = x_served_row(genesis.base_reward, mult * zone, c);
+            let x = row.x_millionths;
+            let r = row.adjacent_ratio_milli;
+            println!(
+                "{:>9} | {:>9.3}% {:>10.3}% {:>10.3}% | {:>6.2}x {:>6.2}x",
+                row.median,
+                x[0] as f64 / 10_000.0,
+                x[1] as f64 / 10_000.0,
+                x[2] as f64 / 10_000.0,
+                r[0] as f64 / 1000.0,
+                r[1] as f64 / 1000.0,
+            );
+        }
+    }
+
     /// The guard [`in_boundary_zone`]'s docstring promises: `D8_MARGIN_MILLI`
     /// is a re-derivation of the owner's private `HYSTERESIS_MARGIN_MILLI`,
     /// and a duplicated constant that nothing checks is one that drifts.
@@ -2922,7 +3019,10 @@ mod tests {
 
     /// Pin the transliteration against `tests/unit_tests/scaling_2021.cpp`
     /// `wallet_fee_estimate` (10 SKL reward cases) — the instrument's
-    /// "current" column must reproduce the C++ oracle exactly.
+    /// "current" column must reproduce the PRE-FL-R20 C++ oracle exactly —
+    /// the four-rung, `round_money_up_2`-ed, 0.95-ed shape that was the
+    /// daemon's until FL-R20/FL-R21. It is a historical baseline the sim
+    /// compares AGAINST, not a claim about what the daemon serves today.
     ///
     /// Deliberately NOT routed through [`rounded`], which projects onto the
     /// three priced rungs. This pin's subject is the legacy FOUR-value
@@ -2948,10 +3048,24 @@ mod tests {
         );
     }
 
-    /// Pin the genesis-condition `Fh` the wallet cap is derived from
-    /// (`fee_policy.rs`: daemon-rounded genesis `Fh` = 14,000,000).
+    /// Pin the genesis-condition `Fh` of the LEGACY transliteration — the
+    /// `Current` comparison column's own baseline, not the served value.
+    ///
+    /// The name and docstring used to say this was "the `Fh` the wallet cap is
+    /// derived from", and that stopped being true twice over. The cap derives
+    /// from `corrected_fee_ladder(...).priority` at the structural maximum
+    /// correction, not from the transliteration; and since FL-R21 took
+    /// `round_money_up_2` off the served path the genesis anchor is 13,653,333
+    /// rather than this 14,000,000. `fee_policy.rs` pins the cap itself
+    /// (`absolute_cap_is_the_structural_bound`), which is where that
+    /// assertion belongs — a cross-crate claim asserted from the side that
+    /// does not own it goes stale silently, as this one did.
+    ///
+    /// What remains true, and is all this asserts: the four-rung ArticMine
+    /// transliteration, rounded the way the pre-FL-R20 daemon rounded it,
+    /// puts genesis `Fh` at 14,000,000.
     #[test]
-    fn genesis_fh_matches_wallet_cap() {
+    fn genesis_fh_of_the_legacy_transliteration() {
         let params = EconomicParams::default();
         let base = base_block_reward(0, &params).expect("genesis base");
         let fees = rounded(articmine_ladder_raw(base, 300_000, 300_000));
@@ -2961,17 +3075,6 @@ mod tests {
 
     /// Pin the relay-floor transliteration against
     /// `tests/unit_tests/scaling_2021.cpp` `relay_fee`.
-    #[test]
-    fn relay_floor_matches_cpp_kat() {
-        let coin: u64 = 1_000_000_000;
-        assert_eq!(relay_floor(10 * coin, 300_000), 317);
-        assert_eq!(relay_floor(10 * coin, 600_000), 79);
-        assert_eq!(relay_floor(10 * coin, 3_000_000), 3);
-        assert_eq!(relay_floor(10 * coin, 6_000_000), 1);
-        assert_eq!(relay_floor(coin, 300_000), 32);
-        assert_eq!(relay_floor(10 * coin, 1), 317);
-        assert_eq!(relay_floor(10 * coin, 100_000), 317);
-    }
 
     #[test]
     fn round_money_up_two_places() {
@@ -3027,9 +3130,11 @@ mod tests {
         let raw = articmine_ladder_raw(10 * coin, 1_500_000, 1_500_000);
         assert_eq!(raw[0], 13);
 
-        // The SERVED value at the same state: one division, no
-        // compounded truncation.
-        assert_eq!(served_ladder(10 * coin, 1_500_000, 16 * SCALE)[0], 220);
+        // The SERVED value at the same state: one division, no compounded
+        // truncation, and since FL-R21 no `round_money_up_2` either. It was
+        // 220 while the owner rounded each rung up to two significant
+        // digits; the arithmetic's own answer is 213.
+        assert_eq!(served_ladder(10 * coin, 1_500_000, 16 * SCALE)[0], 213);
 
         // And it is the owner's output verbatim, not a reproduction.
         assert_eq!(
@@ -3037,10 +3142,9 @@ mod tests {
             corrected_fee_ladder(
                 10 * coin,
                 1_500_000,
-                1_500_000,
                 FULL_REWARD_ZONE_V5,
                 REF_TX_WEIGHT,
-                16 * SCALE
+                FeeCorrection::from_scaled(16 * SCALE)
             )
             .as_slots()
         );

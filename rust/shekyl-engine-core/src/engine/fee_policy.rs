@@ -20,8 +20,8 @@
 //! 2. **Absolute cap on the EFFECTIVE weight-1 charge** — for each
 //!    named tier, `fee_from_weight(rate, 1) ≤`
 //!    [`absolute_fee_rate_cap()`] (a STRUCTURAL bound on the served
-//!    priority rung = 220,000,000 atomic units — every factor at its own
-//!    extreme, derived from the parameters and KAT-pinned. Two earlier
+//!    priority rung — every factor at its own extreme, derived from the
+//!    parameters and KAT-pinned. Two earlier
 //!    values were caught refusing HONEST quotes: a 100,000 mid-regime
 //!    literal, and a 28,000,000 genesis-point maximum that the reachable
 //!    surface exceeds from year 3 — see [`absolute_fee_rate_cap`]).
@@ -93,9 +93,11 @@ const PENALTY_FREE_ZONE: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64
 /// ```text
 /// C   = (1−σ)·M_r/(1−b)  ≤  1·release_max/(1−burn_cap)     (σ ⇒ 0)
 /// C_q = 2^ceil(log2 C)                                      (≤ 16 at canonical params)
+///       — bounding device, not the served scalar: C_q ≥ C, so the cap
+///         is an upper bound, loose in the safe direction.
 /// R   ≤ base_block_reward(0)                                (monotone in already_generated)
 /// Mfw ≥ Zm
-/// cap = corrected_fee_ladder(R₀, Zm, Zm, Zm, w_ref, C_q^max).priority
+/// cap = corrected_fee_ladder(R₀, Zm, Zm, w_ref, C_q^max).priority
 /// ```
 ///
 /// This is loose against the reachable maximum by design: a cap exists to
@@ -129,19 +131,16 @@ pub fn absolute_fee_rate_cap() -> u64 {
         r0,
         zm,
         zm,
-        zm,
         DYNAMIC_FEE_REFERENCE_TX_WEIGHT,
-        structural_max_correction(&params),
+        shekyl_economics::FeeCorrection::from_scaled(structural_max_correction(&params)),
     )
     .priority
 }
 
-/// The largest `C_q` any chain state can produce, in `SCALE` units:
-/// `C = (1−σ)·M_r/(1−b)` with `σ` at its floor of zero, `M_r` at
-/// `release_max` and `b` at `burn_cap`, then ceiling-quantized the way
-/// the served ladder quantizes it. Computed from the parameters so a
-/// re-parameterization moves the bound with them rather than leaving a
-/// stale literal behind.
+/// Largest SCALE-unit multiplier used as a cap bound: raw `C` at
+/// `σ = 0`, `M_r = release_max`, `b = burn_cap`, then the pow2 ceiling.
+/// The served ladder multiplies by raw `C`; the ceiling is kept because
+/// `C_q ≥ C` makes this an upper bound (loose in the safe direction).
 fn structural_max_correction(params: &shekyl_economics::params::EconomicParams) -> u64 {
     let scale = u128::from(shekyl_economics::params::SCALE);
     let c_max = scale * u128::from(params.release_max) / (scale - u128::from(params.burn_cap));
@@ -451,12 +450,21 @@ mod tests {
     fn twenty_twenty_one_scaling_kat_rows_are_well_formed() {
         // tests/unit_tests/scaling_2021.cpp `wallet_fee_estimate`,
         // mapped economy=fees[0], standard=fees[1], priority=fees[2].
-        ValidatedFeeEstimates::try_new(snapshot(340, 1400, 67_000))
-            .expect("10 SKL / 300k-zone Fh=67000 is 197× economy and must pass");
-        ValidatedFeeEstimates::try_new(snapshot(340, 1400, 22_000))
-            .expect("10 SKL / large-Mnw Fh=22000 is 65× economy and must pass");
-        ValidatedFeeEstimates::try_new(snapshot(13, 53, 14_000))
-            .expect("10 SKL / 1.5M-zone Fh=14000 is 1077× economy and must pass");
+        //
+        // These MIRROR that file's rows, so they move when it moves — which
+        // is the only thing that makes a mirrored constant a cross-check
+        // rather than a second copy free to drift. They moved with FL-R21
+        // (no `round_money_up_2` on the served path, `standard` = 4F exactly).
+        ValidatedFeeEstimates::try_new(snapshot(333, 1332, 66_666))
+            .expect("10 SKL / 300k-zone Fh=66666 is 200× economy and must pass");
+        ValidatedFeeEstimates::try_new(snapshot(13, 52, 13_333))
+            .expect("10 SKL / 1.5M-zone Fh=13333 is 1025× economy and must pass");
+        // The large-Mnw row is deliberately NOT repeated: `Mfw = min(Mnw, Mlw)`
+        // makes it identical to the first row, which is the dead `min` finding
+        // showing through. It used to carry Fh = 22,000 — the SURGE-DISCOUNT
+        // value FL-C2(b) deleted at #640 — so it had been citing a number no
+        // C++ KAT contained for two rounds before this commit; the remaining
+        // mention over there is a comment saying exactly that.
         ValidatedFeeEstimates::try_new(snapshot(10, 20, 101))
             .expect("the withdrawn 10× lock must not refuse 10.1×");
     }
@@ -490,7 +498,7 @@ mod tests {
 
         // Honest mask (the 2021-scaling daemon's rounding granularity):
         // same KAT raw rates pass — the fix must not refuse honesty.
-        ValidatedFeeEstimates::try_new(masked(340, 1400, 67_000, 10_000))
+        ValidatedFeeEstimates::try_new(masked(333, 1332, 66_666, 10_000))
             .expect("KAT row with an honest 10k mask passes");
 
         // Boundary: mask exactly at the cap with a tiny rate — the
@@ -548,8 +556,15 @@ mod tests {
     #[test]
     fn absolute_cap_is_the_structural_bound() {
         let cap = absolute_fee_rate_cap();
+        // 218,453,333 = 2·R₀·C_max/(Zm·SCALE) with R₀ = 2,048,000,000,000 and
+        // C_max = 16·SCALE. It was 220,000,000 while the served ladder rounded
+        // each rung up to two significant digits; FL-R21 takes
+        // `round_money_up_2` off that path, so the bound is now the
+        // arithmetic's own answer. The cap TIGHTENED, and the swept maximum
+        // below moved down with it, so the soundness margin is unchanged —
+        // which is the property that matters, not the value.
         assert_eq!(
-            cap, 220_000_000,
+            cap, 218_453_333,
             "economics params moved the structural fee bound"
         );
     }
@@ -566,8 +581,7 @@ mod tests {
     /// maximum". It is not: history matters, because a slower-emitting
     /// past leaves more `remaining` and therefore a larger `R` at the
     /// same height. A chain dormant at the `M_r = 0.8` rail and then
-    /// busy reaches **98,000,000** at ≈ year 8, above the 91,000,000 the
-    /// neutral walk finds at year 7 (both still far under the bound).
+    /// busy peaks above the neutral walk (both still far under the bound).
     /// So the release rails are swept as the accumulation extremes.
     ///
     /// **Even this does not enumerate reachable histories** — arbitrary
@@ -603,12 +617,6 @@ mod tests {
                         shekyl_economics::BLOCKS_PER_YEAR,
                     );
                     for v in [0u64, 5, 50, 100, 200, 500] {
-                        let mult = shekyl_economics::calc_release_multiplier(
-                            shekyl_economics::TxVolume::per_block(v),
-                            p.tx_volume_baseline,
-                            p.release_min,
-                            p.release_max,
-                        );
                         let b = shekyl_economics::calc_burn_pct(
                             shekyl_economics::TxVolume::per_block(v),
                             p.tx_volume_baseline,
@@ -617,18 +625,18 @@ mod tests {
                             p.burn_base_rate,
                             p.burn_cap,
                         );
-                        let c = u64::try_from(
-                            u128::from(SCALE - sigma) * u128::from(mult) / u128::from(SCALE - b),
-                        )
-                        .expect("C fits u64");
-                        let c_q = shekyl_economics::quantize_pow2_ceil(c);
+                        let c = shekyl_economics::fee_correction(
+                            shekyl_economics::TxVolume::per_block(v),
+                            sigma,
+                            b,
+                            &p,
+                        );
                         let prio = shekyl_economics::corrected_fee_ladder(
                             base,
                             zm,
                             zm,
-                            zm,
                             DYNAMIC_FEE_REFERENCE_TX_WEIGHT,
-                            c_q,
+                            c,
                         )
                         .priority;
                         if prio > worst.0 {
@@ -657,14 +665,11 @@ mod tests {
             worst.3,
             cap
         );
-        // The peak over the SWEPT trajectories — not a claim about every
-        // reachable history. It sits on the dormant rail, which is the
-        // point: the neutral walk alone understated it.
-        assert_eq!(worst.0, 98_000_000, "the swept maximum moved");
-        assert_eq!(
-            worst.3, p.release_min,
-            "the swept peak left the dormant rail"
-        );
+        // Peak over the swept trajectories, not every reachable history.
+        // Raw C makes F ∝ C·R, so the product peaks on the neutral rail
+        // (C_q used to hide that and put the peak on the dormant rail).
+        assert_eq!(worst.0, 68_531_636, "the swept maximum moved");
+        assert_eq!(worst.3, SCALE, "the swept peak is on the neutral rail");
     }
 
     /// The finding's scenario, pinned end to end: the honest YOUNG-CHAIN
@@ -677,12 +682,9 @@ mod tests {
         // Raw folded-formula tiers at genesis conditions.
         ValidatedFeeEstimates::try_new(snapshot(68_266, 273_066, 13_653_325))
             .expect("raw genesis-condition tiers are honest and must pass");
-        // Daemon-rounded (round_money_up, 2 significant digits): the
-        // wire form at C_q = 1, then at the genesis-congested C_q = 2.
-        // Both sit WELL UNDER the structural cap rather than on it — the
-        // genesis point is not the era maximum (that is ~91,000,000 near
-        // year 7), which is exactly the error the old 28,000,000 cap
-        // encoded.
+        // Historical rounded genesis quotes (round_money_up, 2 digits)
+        // remain well-formed numbers — they sit well under the structural
+        // cap rather than on it.
         ValidatedFeeEstimates::try_new(snapshot(69_000, 280_000, 14_000_000))
             .expect("rounded genesis-condition C_q=1 tiers are honest and must pass");
         ValidatedFeeEstimates::try_new(snapshot(140_000, 550_000, 28_000_000))

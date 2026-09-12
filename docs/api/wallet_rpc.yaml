@@ -729,11 +729,12 @@ components:
                                           tier whose effective weight-1
                                           charge (mask rounding included)
                                           exceeds the era-maximum
-                                          legitimate fee — the
-                                          daemon-rounded genesis-condition
-                                          Fh, 14,000,000
-                                          atomic-units/weight, derived from
-                                          the economics parameters and
+                                          legitimate fee — the STRUCTURAL
+                                          bound absolute_fee_rate_cap(),
+                                          every factor at its own extreme:
+                                          218,453,333 atomic-units/weight
+                                          at canonical parameters, derived
+                                          from the economics parameters and
                                           KAT-pinned
                                           (data: {"reason","rate","bound"}).
                                           Distinct from -29102 (the query

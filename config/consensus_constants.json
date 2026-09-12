@@ -12,6 +12,9 @@
   "daa_mtp_window": 11,
   "daa_genesis_difficulty": 400,
 
+  "_comment_block_weight": "Short-term block-weight surge factor S: the effective median may exceed the long-term effective median by at most S (100-block fast governor). Ratified S = 4 (CONSENSUS_C2_R2_WEIGHT_FEES.md Q3, signed 2026-09-06). Loosening S reopens Q2: during the first ~100000 blocks this bound is the only protection against early-chain weight growth. Owner: shekyl-economics::effective_median / shekyl_effective_block_weight_median.",
+  "block_weight_short_term_surge_factor": 4,
+
   "_comment_archival": "Per-shard archival retention bond floor (ARCHIVAL_BOND_FLOOR). Calibrated from bond_rate* = 0.75 per docs/design/FOUNDATION_GENESIS_IDENTITY_SET.md §9.3 (1 sim capital unit ≡ 1 SKL). Foundation CompleteTree holders post one nominal bond at this floor.",
   "archival_bond_floor_atomic": 750000000,
 

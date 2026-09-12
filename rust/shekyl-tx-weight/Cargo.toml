@@ -26,6 +26,17 @@ shekyl-curve-io = { path = "../shekyl-curve-io" }
 # not depend on this crate.
 shekyl-scanner = { path = "../shekyl-scanner" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+# The WEIGHT GATE (tests/weight_gate.rs) asserts `predict_weight` against the
+# bytes the BUILDER emits, across the whole shape space. That needs the real
+# assembler and a real Bp+; the FCMP++ proof is the only stubbed term, and its
+# length is anchored by real proving in engine-core's `kat_fcmp_proof_size_*`.
+# Dev-only, so no production arrow is inverted: shekyl-tx-builder does not
+# depend on this crate, and this crate does not depend on it outside tests.
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+rand_core = { version = "0.6", features = ["std"] }
+serde_json = "1"
 
 [lints]
 workspace = true

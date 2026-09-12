@@ -44,6 +44,10 @@ KEYS_INTEGER = {
     "daa_ftl_seconds": "u64",
     "daa_mtp_window": "u64",
     "daa_genesis_difficulty": "u64",
+    # Short-term block-weight surge factor S. u64 because the clamp
+    # multiplies it by a u64 median; the value is small but the product
+    # is not. Rust owner: shekyl-economics::effective_median.
+    "block_weight_short_term_surge_factor": "u64",
     # Archival retention bond floor, FOUNDATION_GENESIS_IDENTITY_SET.md §9.3.
     "archival_bond_floor_atomic": "u64",
     # Archival claim-age window W, ARCHIVAL_TIMING_CONSTANTS.md §1 /
@@ -188,6 +192,12 @@ def main() -> int:
     {emit("daa_mtp_window")}
 #define SHEKYL_DAA_GENESIS_DIFFICULTY \
     {emit("daa_genesis_difficulty")}
+
+// Short-term block-weight surge factor S. The clamp itself is
+// shekyl_effective_block_weight_median; this macro is the C++ spelling
+// of the JSON key.
+#define SHEKYL_BLOCK_WEIGHT_SHORT_TERM_SURGE_FACTOR \
+    {emit("block_weight_short_term_surge_factor")}
 
 // Archival per-shard retention bond floor (ARCHIVAL_BOND_FLOOR). Emitted
 // alongside the FCMP/DAA constants because genesis foundation identities and

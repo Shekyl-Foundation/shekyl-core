@@ -501,6 +501,29 @@ pub extern "C" fn shekyl_base_block_reward(already_generated_coins: u64) -> u64 
     shekyl_economics::base_block_reward(already_generated_coins, &params).unwrap_or(0)
 }
 
+/// Effective block-weight median: `short_term` bounded to
+/// `[long_term, S · long_term]`. Cannot fail. C++ gathers the window
+/// medians; this is the clamp `update_next_cumulative_weight_limit`
+/// consumes.
+#[no_mangle]
+pub extern "C" fn shekyl_effective_block_weight_median(
+    long_term_effective: u64,
+    short_term_median: u64,
+) -> u64 {
+    shekyl_economics::effective_median(long_term_effective, short_term_median)
+}
+
+/// Bound a block's long-term-median contribution to `[LTEM/1.7, LTEM·1.7]`.
+/// Cannot fail. C++ gathers `LTEM`; this is the bound
+/// `get_next_long_term_block_weight` consumes.
+#[no_mangle]
+pub extern "C" fn shekyl_long_term_block_weight(
+    long_term_effective: u64,
+    block_weight: u64,
+) -> u64 {
+    shekyl_economics::long_term_weight(long_term_effective, block_weight)
+}
+
 /// Status: reward computed. `out_reward` and `out_weight_limit` are written.
 pub const SHEKYL_BLOCK_REWARD_OK: i32 = 0;
 /// Status: the block exceeds twice the effective median — a CONSENSUS
@@ -586,55 +609,44 @@ pub unsafe extern "C" fn shekyl_block_reward(
     }
 }
 
-/// The quantized fee-correction scalar C_q (FL-R12′ round-8 amendment,
-/// whole-scalar form) with pow2-boundary hysteresis. `sigma_scaled` and
-/// `burn_pct_scaled` are the SAME `shekyl_calc_emission_share` /
-/// `shekyl_calc_burn_pct` outputs the validation path computes at this
-/// state — one source, no second derivation. `prev_cq_scaled = 0` means no
-/// held value, and it is what the daemon passes today — so the band is a
-/// capability of this export, not yet a property of the served rate.
-/// FL-R3 is ruled: it is restored once the grid-anchored previous value
-/// has its own round. See the crate function's note for the two binding
-/// constraints before wiring a caller to a nonzero value. Cannot fail.
+/// Raw fee-correction `C = (1−σ)·M_r/(1−b)` in SCALE units — the served
+/// multiplier. `(tx_count_sum, window_blocks)` is the undivided volume
+/// window; `sigma` / `burn` are the validation-path values at this state.
+/// Cannot fail.
 #[no_mangle]
-pub extern "C" fn shekyl_fee_correction_quantized(
+pub extern "C" fn shekyl_fee_correction(
     tx_count_sum: u64,
     window_blocks: u64,
     sigma_scaled: u64,
     burn_pct_scaled: u64,
-    prev_cq_scaled: u64,
 ) -> u64 {
     let params = shekyl_economics::params::EconomicParams::default();
-    shekyl_economics::fee_correction_quantized(
+    shekyl_economics::fee_correction(
         shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
         sigma_scaled,
         burn_pct_scaled,
-        prev_cq_scaled,
         &params,
     )
+    .as_scaled()
 }
 
-/// The corrected three-slot fee ladder (`FeeLadder::as_slots`; `Fh` main
-/// arm unconditional; economy is clamped by the CALLER at the relay
-/// floor). Writes exactly three values through `out_fees`. Returns:
+/// Lookback depth `G`. Rust is the owner; C++ sizes the ring from this.
+#[no_mangle]
+pub extern "C" fn shekyl_relay_floor_lookback() -> u64 {
+    shekyl_economics::RELAY_FLOOR_LOOKBACK as u64
+}
+
+/// Admission slack in basis points. Rust is the owner; pinned at zero.
+#[no_mangle]
+pub extern "C" fn shekyl_relay_admission_slack_bp() -> u32 {
+    shekyl_economics::RELAY_ADMISSION_SLACK_BP
+}
+
+/// Three-slot ladder `[economy, standard, priority]`. Economy **is** the
+/// relay floor at the same operands. Writes three `u64`s.
 ///
-/// * `0` — the three values were written;
-/// * `-1` — null `out_fees`, nothing written;
-/// * `-2` — the scalars are outside the arithmetic's domain, nothing
-///   written (see below).
-///
-/// **Domain, per rule 40.** The rungs form products in `u128` that
-/// operands near `u64::MAX` overflow BEFORE the conversion fallback can
-/// see it — an abort in an overflow-checked build, wrapped fee values
-/// otherwise, and neither may cross `extern "C"`. No chain state reaches
-/// that input, so the domain is not made fallible for internal callers;
-/// it is decided by
-/// [`shekyl_economics::checked_corrected_fee_ladder`], which lives with
-/// the arithmetic and reads the same operands the rungs multiply, and a
-/// caller handing us an impossible state gets `-2` rather than an abort.
-/// The check is NOT re-derived here: the three rungs do not share an
-/// operand list, and a boundary copy written against one of them missed
-/// `priority`'s `2·R·C_q` for a full review cycle.
+/// Returns `0` written, `-1` null `out_fees`, `-2` scalars outside the
+/// `u128` domain (rule 40: refuse rather than abort).
 ///
 /// # Safety
 ///
@@ -642,11 +654,10 @@ pub extern "C" fn shekyl_fee_correction_quantized(
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     base_reward: u64,
-    mnw: u64,
-    mlw: u64,
+    median: u64,
     full_reward_zone: u64,
     ref_tx_weight: u64,
-    c_q: u64,
+    c_scaled: u64,
     out_fees: *mut u64,
 ) -> i32 {
     if out_fees.is_null() {
@@ -654,11 +665,10 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     }
     let Some(ladder) = shekyl_economics::checked_corrected_fee_ladder(
         base_reward,
-        mnw,
-        mlw,
+        median,
         full_reward_zone,
         ref_tx_weight,
-        c_q,
+        shekyl_economics::FeeCorrection::from_scaled(c_scaled),
     ) else {
         return -2;
     };
@@ -668,6 +678,70 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
         unsafe { out_fees.add(i).write(*f) };
     }
     0
+}
+
+/// Relay floor `F = R·C·w_ref/M²`, floored at 1. Same function as the
+/// ladder's economy rung. Returns `0` written, `-1` null, `-2` out of domain.
+///
+/// # Safety
+///
+/// `out_floor` must be null or point at one writable `u64`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_fee_floor(
+    base_reward: u64,
+    median: u64,
+    full_reward_zone: u64,
+    ref_tx_weight: u64,
+    c_scaled: u64,
+    out_floor: *mut u64,
+) -> i32 {
+    if out_floor.is_null() {
+        return -1;
+    }
+    let Some(floor) = shekyl_economics::checked_relay_fee_floor(
+        base_reward,
+        median,
+        full_reward_zone,
+        ref_tx_weight,
+        shekyl_economics::FeeCorrection::from_scaled(c_scaled),
+    ) else {
+        return -2;
+    };
+    // SAFETY: non-null per the check; caller guarantees one writable u64.
+    unsafe { out_floor.write(floor) };
+    0
+}
+
+/// Admit iff `fee >= mask_round_up(weight · min(floors)) − slack`.
+///
+/// `floors` is at most [`shekyl_economics::RELAY_FLOOR_WINDOW`] values;
+/// a longer window is refused (`-1`). Empty refuses. Returns `1` / `0` /
+/// `-1`.
+///
+/// # Safety
+///
+/// `floors` must point at `floors_len` readable `u64`s, or be null with
+/// `floors_len == 0`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_floor_admits(
+    fee: u64,
+    weight: u64,
+    mask: u64,
+    floors: *const u64,
+    floors_len: usize,
+    slack_bp: u32,
+) -> i32 {
+    if floors_len > shekyl_economics::RELAY_FLOOR_WINDOW {
+        return -1;
+    }
+    // SAFETY: caller contract matches the seam — `floors` addresses
+    // `floors_len` u64s, or is null with a zero length.
+    let Some(window) = (unsafe { slice_from_typed_ptr(floors, floors_len) }) else {
+        return -1;
+    };
+    i32::from(shekyl_economics::relay_floor_admits(
+        fee, weight, mask, window, slack_bp,
+    ))
 }
 
 /// Advance `already_generated_coins` by a block reward.

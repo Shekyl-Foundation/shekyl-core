@@ -43,17 +43,30 @@
 //!   refuted class as the snap and §11.2 removes it from the served path.
 //!
 //! §1.9 discipline: `C` comes from the owners through
-//! [`fee_ladder::correction_factor_ratio`]; the floor formula is written
-//! here ONLY because its owner does not exist yet — §11.6 names the
-//! production function that replaces [`floor_rate`] when it lands, and
-//! this pin is what that function is tested against.
+//! [`fee_ladder::correction_factor_ratio`]. The floor formula was written
+//! here because its owner did not exist; **it does now** —
+//! `shekyl_economics::relay_fee_floor` landed with FL-R20 items 1 and 4,
+//! and the daemon's `get_current_fee_per_byte` calls it.
+//!
+//! [`floor_rate`] is NOT simply replaced by it, and the reason is the
+//! instrument's subject rather than inertia: the owner returns atomic
+//! units per byte, floored at 1, which at large `M` is a single digit —
+//! so per-block RATIOS taken on it would be dominated by integer
+//! truncation and would report quantization as slew. This function keeps
+//! `SCALE` in the numerator and stays in `u128` precisely to measure
+//! below that floor. Substituting the owner here would normalize away the
+//! thing being measured. What the sweep owes is a CROSS-CHECK that the two
+//! agree once truncated, not a substitution (§11.6 instrument item, PR C).
 
 use core::fmt::Write as _;
 use std::collections::VecDeque;
 
 use serde::Serialize;
 use shekyl_economics::params::TX_VOLUME_WINDOW;
-use shekyl_economics::{base_block_reward, EconomicParams, TxVolume, BLOCKS_PER_YEAR};
+use shekyl_economics::{
+    base_block_reward, EconomicParams, TxVolume, BLOCKS_PER_YEAR, RELAY_ADMISSION_SLACK_BP,
+    RELAY_FLOOR_LOOKBACK,
+};
 
 use crate::fee_ladder::{
     advance_traced_state, age_state, correction_factor_ratio, AgeState, Rng, FULL_REWARD_ZONE_V5,
@@ -67,7 +80,7 @@ const VOLUME_WINDOW: usize = TX_VOLUME_WINDOW as usize;
 /// slack. The identity the predicate delivers is per receiving node — a
 /// quote at `h` is admitted by identity at every node whose tip is in
 /// `[h, h+G]`.
-pub const LOOKBACK_G: usize = 5;
+pub const LOOKBACK_G: usize = RELAY_FLOOR_LOOKBACK;
 /// FL-E4's sweep: the first draft's `G` = 3, the re-derived 5, and the
 /// point between, so the grace curve — not the derivation alone — is on
 /// record.
@@ -81,13 +94,23 @@ pub const GAPS: [usize; 3] = [1, 2, 3];
 /// before FL-R23. Reported so the record shows what each would have cost
 /// in bounces against the inherited buffer; not a design input.
 pub const PAD_CANDIDATES_BP: [u64; 4] = [50, 100, 200, 300];
-/// `check_fee`'s inherited buffer, `fee ≥ needed − needed/50`, which the
-/// pad race is scored against and which FL-R23 deletes.
-pub const Q_BUFFER_BP: u64 = 200;
+/// The admission slack the pad race is scored against — **the shipped
+/// value, read from its owner**, not a local copy.
+///
+/// This was `Q_BUFFER_BP = 200`, `check_fee`'s inherited
+/// `fee ≥ needed − needed/50` buffer. Its own comment said FL-R23 deletes
+/// it, and FL-R23 did: `shekyl_economics::RELAY_ADMISSION_SLACK_BP` is
+/// **0**. Scoring the road-not-taken against a cushion production no
+/// longer grants made every pad look safer than it is, so the figures
+/// understated the case for the rule that was actually adopted.
+pub const Q_BUFFER_BP: u64 = RELAY_ADMISSION_SLACK_BP as u64;
 
 /// The largest rise of `F` between quote and admission a fixed pad `p`
-/// still admits under the inherited buffer: `(1+p)/(1−q) − 1`, basis
-/// points, floored. `p = 50 → 255`, `100 → 306`, `200 → 408`, `300 → 510`.
+/// still admits: `(1+p)/(1−q) − 1`, basis points, floored. At the shipped
+/// slack `q` = 0 this is just `p` — `50 → 50`, `100 → 100`, `200 → 200`,
+/// `300 → 300`. (Under the deleted 2 % buffer it was 255 / 306 / 408 / 510,
+/// which is the difference between what the record said a pad would cost
+/// and what it would cost on the chain we ship.)
 pub const fn pad_admission_margin_bp(pad_bp: u64) -> u64 {
     (10_000 + pad_bp) * 10_000 / (10_000 - Q_BUFFER_BP) - 10_000
 }

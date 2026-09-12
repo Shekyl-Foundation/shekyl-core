@@ -4443,96 +4443,25 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 }
 
 //------------------------------------------------------------------
-uint64_t Blockchain::get_dynamic_base_fee(uint64_t block_reward, size_t median_block_weight, uint8_t version)
-{
-  const uint64_t min_block_weight = get_min_block_weight(version);
-  if (median_block_weight < min_block_weight)
-    median_block_weight = min_block_weight;
-  uint64_t hi, lo;
-
-  // min_fee_per_byte = round_up( 0.95 * block_reward * ref_weight / (fee_median^2) )
-  // fee_median (a.k.a. median_block_weight) equals effective long term median
-  lo = mul128(block_reward, DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT, &hi);
-  div128_64(hi, lo, median_block_weight, &hi, &lo, NULL, NULL);
-  div128_64(hi, lo, median_block_weight, &hi, &lo, NULL, NULL);
-  assert(hi == 0);
-  lo -= lo / 20;
-  return lo == 0 ? 1 : lo;
-}
 
 //------------------------------------------------------------------
-uint64_t Blockchain::get_current_fee_per_byte() const
+void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t base_reward, uint64_t median, uint64_t c, std::vector<uint64_t> &fees) const
 {
-  const uint8_t version = get_current_hard_fork_version();
-
-  uint64_t base_reward = 0;
-  uint64_t median = m_current_block_cumul_weight_limit / 2;
-  const uint64_t blockchain_height = m_db->height();
-  uint64_t already_generated_coins = blockchain_height ? m_db->get_block_already_generated_coins(blockchain_height - 1) : 0;
-  // Deliberately the M_r-NEUTRAL overload (v = baseline): the relay floor is
-  // CEN-M3's held machinery and must not start tracking demand as a side
-  // effect of the FL-R12' cutover — at baseline the values are bit-for-bit
-  // the pre-cutover ones for every pre-asymptote state, no per-transaction
-  // tx_volume_window scan lands on the pool-admission path, and past the
-  // asymptote the floor is now tail-derived instead of the failure-arm 0
-  // that rejected the entire mempool (FL-R16a's relay dead-letter).
-  if (!get_block_reward(median, 1, already_generated_coins, base_reward, version))
-    return 0;
-
-  // get_dynamic_base_fee never returns 0, so 0 is unambiguously the
-  // block-reward-failure arm above.
-  return get_dynamic_base_fee(base_reward, std::min<uint64_t>(median, m_long_term_effective_median_block_weight), version);
-}
-//------------------------------------------------------------------
-bool Blockchain::check_fee(size_t tx_weight, uint64_t fee) const
-{
-  const uint64_t fee_per_byte = get_current_fee_per_byte();
-  if (fee_per_byte == 0)
-    return false;
-  MDEBUG("Using " << print_money(fee_per_byte) << "/byte fee");
-  uint64_t needed_fee = tx_weight * fee_per_byte;
-  const uint64_t mask = get_fee_quantization_mask();
-  needed_fee = (needed_fee + mask - 1) / mask * mask;
-
-  if (fee < needed_fee - needed_fee / 50) // keep a little 2% buffer on acceptance - no integer overflow
-  {
-    MERROR_VER("transaction fee is not enough: " << print_money(fee) << ", minimum fee: " << print_money(needed_fee));
-    return false;
-  }
-  return true;
-}
-
-//------------------------------------------------------------------
-void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, uint64_t c_q, std::vector<uint64_t> &fees) const
-{
-  // FL round §5.2 (FL-R17 signed: three tiers; FL-R12' round-8 amendment:
-  // whole-scalar C_q on the M_r-neutral operand). The ladder arithmetic is
-  // Rust-owned (shekyl-economics `corrected_fee_ladder`); this marshals
-  // `FeeLadder::as_slots` — [economy, standard, priority]. The Fh main
-  // arm is UNCONDITIONAL (2R/M — exact marginal pricing of full expansion;
-  // the inherited surge discount was FL-C2(b)'s one derived defect).
   uint64_t slots[3];
   const int32_t rc = shekyl_corrected_fee_ladder(
       base_reward,
-      Mnw,
-      Mlw,
+      median,
       CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
       DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT,
-      c_q,
+      c,
       slots);
-  // Neither rejection is reachable from here — the out-pointer is a
-  // just-resized vector, and the scalars are chain state, far inside the
-  // ladder's u128 domain. The throw names WHICH one fired anyway: -1 is a
-  // null out-pointer (this marshal), -2 is scalars the arithmetic cannot
-  // form (the state that produced them). Reporting only the pointer case
-  // would send a reader hunting the wrong side of the boundary.
   CHECK_AND_ASSERT_THROW_MES(rc == 0,
       "shekyl_corrected_fee_ladder failed: rc=" << rc << " ("
       << (rc == -1 ? "null out-pointer"
                    : rc == -2 ? "scalars outside the ladder's arithmetic domain"
                               : "unknown status")
-      << "), base_reward=" << base_reward << " Mnw=" << Mnw << " Mlw=" << Mlw
-      << " c_q=" << c_q);
+      << "), base_reward=" << base_reward << " median=" << median
+      << " c=" << c);
   fees.assign(slots, slots + (sizeof(slots) / sizeof(slots[0])));
 }
 
@@ -4543,115 +4472,21 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
 
   CHECK_AND_ASSERT_THROW_MES(grace_blocks <= CRYPTONOTE_REWARD_BLOCKS_WINDOW, "Grace blocks invalid In 2021 fee scaling estimate.");
 
-  // we want Mlw = median of max((min(Mbw, 1.7 * Ml), Zm), Ml / 1.7)
-  // Mbw: block weight for the last 99990 blocks, 0 for the next 10
-  // Ml: penalty free zone (dynamic), aka long_term_median, aka median of max((min(Mb, 1.7 * Ml), Zm), Ml / 1.7)
-  // Zm: 300000 (minimum penalty free zone)
-  //
-  // So we copy the current rolling median state, add 10 (grace_blocks) zeroes to it, and get back Mlw
-
-  epee::misc_utils::rolling_median_t<uint64_t> rm = m_long_term_block_weights_cache_rolling_median;
-  for (size_t i = 0; i < grace_blocks; ++i)
-    rm.insert(0);
-  const uint64_t Mlw_penalty_free_zone_for_wallet = std::max<uint64_t>(rm.median(), CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5);
-
-  // Msw: median over [100 - grace blocks] past + [grace blocks] future blocks
-  std::vector<uint64_t> weights;
-  get_last_n_blocks_weights(weights, 100 - grace_blocks);
-  weights.reserve(100);
-  for (size_t i = 0; i < grace_blocks; ++i)
-    weights.push_back(0);
-  const uint64_t Msw_effective_short_term_median = std::max(epee::misc_utils::median(weights), Mlw_penalty_free_zone_for_wallet);
-
-  const uint64_t Mnw = std::min(Msw_effective_short_term_median, 50 * Mlw_penalty_free_zone_for_wallet);
+  // Long-term effective median. S clamps the short-term median in
+  // update_next_cumulative_weight_limit and never reaches this path.
+  const uint64_t median = m_long_term_effective_median_block_weight;
 
   uint64_t already_generated_coins = db_height ? m_db->get_block_already_generated_coins(db_height - 1) : 0;
   uint64_t base_reward;
-  // The operand is the M_r-NEUTRAL total reward (round-8 amendment,
-  // whole-scalar form): max(curve(remaining), TAIL). M_r lives inside the
-  // quantized scalar below — quantizing C' and leaving M_r raw in the
-  // operand is identical in algebra and NOT in quantization, and the raw
-  // split re-created the measured FL-C4a dwell failure. Totality means
-  // this returns the perpetual tail past the asymptote instead of falling
-  // to the BLOCK_REWARD_OVERESTIMATE placeholder wallets refuse (FL-R16a).
+  // M_r-neutral total: max(curve(remaining), TAIL). M_r lives inside C.
   if (!get_block_reward(m_current_block_cumul_weight_limit / 2, 1, already_generated_coins, base_reward, version))
   {
     MERROR("Failed to determine block reward, using placeholder " << print_money(BLOCK_REWARD_OVERESTIMATE) << " as a high bound");
     base_reward = BLOCK_REWARD_OVERESTIMATE;
   }
 
-  // C_q inputs read from the SAME sources validation uses at this state
-  // (one derivation, no estimate-side re-model): the exact volume window
-  // (FL-R24), sigma from the emission-share schedule, burn from
-  // the canonical burn curve.
-  //
-  // NO BAND ON THE SERVED VALUE **YET**: `C_q` is the plain ceiling snap
-  // of the correction at THIS state. FL-R3 is RULED — the band stays and
-  // is restored here — so treat this as a gap with an owner, not as the
-  // design. Do not "simplify" it away.
-  //
-  // Two attempts preceded this, and both failed for the same underlying
-  // reason — the §7 hysteresis band needs the previous SERVED value, and
-  // a daemon cannot supply that deterministically. (1) Remembering it in
-  // a mutable member made the served fee depend on the daemon's QUERY
-  // HISTORY: a restarted and a long-running node could quote differently
-  // at the same height, forever. (2) Seeding the band with the previous
-  // block's UNSEEDED snap made it deterministic but INVERTED it — for raw
-  // `C` alternating 1.00× / 1.02×, the served value comes out 1× / 2× out
-  // of phase, charging the high rate exactly when the correction says low
-  // (PR #640 review). That is worse than the flicker it was meant to damp.
-  //
-  // Reconstructing the true served sequence means folding chain history
-  // with a defined depth and reorg behaviour. That is the RULED direction
-  // (FL-R3, round 17): a grid-anchored previous value — bounded to
-  // evaluate, and still a pure function of chain state — restores the
-  // band here. It carries its own design questions (grid period, fold
-  // depth, reorg behaviour, per-query cost), so it comes back as its own
-  // round rather than being invented at this call site.
-  //
-  // Two constraints bind whoever wires it, both from findings on the
-  // record: the previous value must stay derivable from chain state — a
-  // remembered one repeals FL-R18's determinism rather than restoring
-  // FL-R3 — and the band keeps a single owner in shekyl-economics, never
-  // a copy here.
-  //
-  // Until then the served value is the plain snap. FL-R18 (a) is what
-  // makes that tolerable in the interim: the residual boundary
-  // oscillation is accepted as bounded, its anonymity premise examined
-  // and refuted.
-  const shekyl::tx_volume_window tx_volume = get_tx_volume_window(db_height);
-  const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-  const uint64_t sigma = shekyl_calc_emission_share(
-      db_height,
-      genesis_ng_height,
-      SHEKYL_STAKER_EMISSION_SHARE,
-      SHEKYL_STAKER_EMISSION_DECAY,
-      SHEKYL_BLOCKS_PER_YEAR);
-  const uint64_t burn_pct = shekyl_calc_burn_pct(
-      tx_volume.tx_count_sum,
-      tx_volume.blocks,
-      SHEKYL_TX_VOLUME_BASELINE,
-      already_generated_coins,
-      SHEKYL_EMISSION_CURVE_ASYMPTOTE,
-      SHEKYL_BURN_BASE_RATE,
-      SHEKYL_BURN_CAP);
-  // `prev_cq = 0` is "no held value": the plain ceiling quantization.
-  const uint64_t fee_correction_cq =
-      shekyl_fee_correction_quantized(tx_volume.tx_count_sum, tx_volume.blocks, sigma, burn_pct, 0);
-
-  get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, base_reward, Mnw, Mlw_penalty_free_zone_for_wallet, fee_correction_cq, fees);
-
-  // FL-R12' round-8 rider, satisfied BY CONSTRUCTION: the estimate can
-  // only err toward acceptance. Where the quote is consumed as a floor it
-  // is the RELAY floor (CEN-M3: there is no consensus fee floor), and the
-  // relay floor prices from get_current_fee_per_byte() — a different
-  // function than this ladder, so divergence is possible by construction
-  // and the bounded C_q mispricing can err low exactly where the tail
-  // binds. Clamping the served economy rung at the very value check_fee
-  // prices from turns the signed direction claim into an identity: a
-  // conforming wallet's quote is never below the floor, so mispricing can
-  // only overquote (bounded by the pow2 step), never dead-letter.
-  fees[0] = std::max<uint64_t>(fees[0], get_current_fee_per_byte());
+  const uint64_t c = fee_correction_at(db_height, already_generated_coins);
+  get_dynamic_base_fee_estimate_2021_scaling(base_reward, median, c, fees);
 }
 
 //------------------------------------------------------------------
@@ -4780,175 +4615,29 @@ crypto::hash Blockchain::compute_fcmp_verification_hash(const transaction& tx)
 //------------------------------------------------------------------
 namespace
 {
-const char* archival_bond_post_verify_err_string(uint8_t code)
-{
-  switch (code)
-  {
-  case SHEKYL_ARCHIVAL_BOND_POST_OK:
-    return "ok";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR:
-    return "null shard id pointer";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND:
-    return "post_kind not JoinMarket";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY:
-    return "ShardSetCompact requires shards";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS:
-    return "CompleteTree must not carry shard ids";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO:
-    return "JoinMarket bond_debit must be zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS:
-    return "bond_credit and bond_debit both non-zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO:
-    return "bond_floor is zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH:
-    return "bonded_total/bond_credit must equal bond_floor";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS:
-    return "bond record already exists";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND:
-    return "invalid holdings_kind";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE:
-    return "post_kind not Release";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING:
-    return "Release requires an existing bond record";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE:
-    return "record bonded_total is zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_CREDIT:
-    return "Release bond_credit must be zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_FLOOR_MISMATCH:
-    return "post-connect bonded_total must equal bond_floor(holdings)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_RELEASE:
-    return "Release is a full exit: post-connect bonded_total must be zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL:
-    return "bond_debit must equal the record's current bonded_total";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED:
-    return "release cooldown has not elapsed";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW:
-    return "marshaled array length overflow";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_HOLDINGS_NOT_EMPTY:
-    return "full exit must end at empty holdings";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL:
-    return "record interval log is full";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING:
-    return "slash scheduler has not settled every epoch through the last-served anchor";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING:
-    return "bond_spend_pk violates the JoinMarket coupling (missing/non-canonical on "
-      "JoinMarket, or present on another kind)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE:
-    return "post_kind is not HoldingsUpdate";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE:
-    return "HoldingsUpdate on a CompleteTree record (no shard set to change)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT:
-    return "HoldingsUpdate post holdings are not ShardSetCompact";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS:
-    return "HoldingsUpdate-add terms are not exactly +FLOOR credit / no debit";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING:
-    return "HoldingsUpdate-add on a record not good_through the current epoch";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_ADD:
-    return "HoldingsUpdate-add is not exactly one added shard";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_FLOOR_MISMATCH:
-    return "HoldingsUpdate-add post bonded_total != bond_floor(post) / current + FLOOR";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS:
-    return "HoldingsUpdate-drop terms are not exactly -FLOOR debit / no credit";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP:
-    return "HoldingsUpdate-drop must remove exactly one shard, and it must be the "
-      "shard whose per-shard facts were marshaled";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD:
-    return "HoldingsUpdate-drop would empty the shard set (a full exit is Release)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH:
-    return "HoldingsUpdate-drop post bonded_total != bond_floor(post) / current - FLOOR";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON:
-    return "HoldingsUpdate-drop before the shard's retention-commitment horizon elapsed";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND:
-    return "post_kind is not Rebond";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE:
-    return "Rebond on a CompleteTree record (demotion flips the kind; unrepresentable)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT:
-    return "Rebond post-holdings are not ShardSetCompact";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED:
-    return "Rebond requires an open bad interval (the record is not slashed)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN:
-    return "record carries multiple open bad intervals (coalescing invariant broken)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM:
-    return "record interval log lacks Rebond headroom (must leave a slot for the next "
-      "slash and the Release clean close)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS:
-    return "Rebond terms mismatch (debit nonzero, or credit != bond_floor(post) - "
-      "record bonded_total, or post bonded_total != bond_floor(post))";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET:
-    return "Rebond post-holdings are not a duplicate-free superset of the record's "
-      "current holdings (shedding goes through HoldingsUpdate-drop)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED:
-    return "retired Rebond oversize code (45) — never returned; oversize is now "
-      "unrepresentable in the vin's ShardSet holdings";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR:
-    return "record bonded_total != bond_floor(record holdings) (floor-drifted record)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED:
-    return "vin holdings shard count exceeds the wire codec bound";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD:
-    return "vin holdings carry a duplicate shard id (a set on the wire)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED:
-    return "HoldingsUpdate requires a Bonded record (an Exited or slash-emptied "
-      "record re-enters via JoinMarket/Rebond)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY:
-    return "bond record commits no bond_spend_pk; it authorizes no debit";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH:
-    return "pqc auth key is not the record's committed bond_spend_pk";
-  default:
-    return "unknown bond-post verify code";
-  }
-}
-
-// GF-1 debit authorization (gate-4 §3.5 step 5) — the SHARED debit authorizer,
-// single-sourced for every bond_debit > 0 arm (Release, HoldingsUpdate-drop; a
-// future debit kind rides the same call): the pqc auth key must equal the
-// record's COMMITTED bond_spend_pk — never the identity key P_pubkey
-// (identity-only invariant, gate-6 §9.6). The signature itself is verified
-// over the whole-tx payload by verify_transaction_pqc_auth against
-// pqc_auths[idx].hybrid_public_key; pinning that key here is the authorization
-// choice. A record with no committed key (pre-GF-1 shape) authorizes nothing —
-// fail closed, not identity fallback. Callers gate on have_record (a missing
-// record falls through to the semantic verify's RECORD_MISSING) and run this
-// BEFORE any per-shard cursor scans or FFI verify: it is a two-vector compare,
-// so an unauthorized attempt is rejected before it can cost LMDB seeks.
-// Debit authorization for the value-out bond-post arms. The predicate itself
-// is Rust (`shekyl-archival-retention::debit_auth_pin`); this site marshals and
-// logs. Callers classify the returned code via
-// `shekyl_archival_bond_post_drop_verdict` — this helper does not decide
-// whether the rejection severs. It used to be implemented here, which made it
-// a second copy of the one check that has no recovery -- a compromised serving
-// host holds the identity hybrid key, so an identity-authorized debit is a
-// collateral drain. The Rust submit battery calls the same function natively
-// (DAEMON_SUBMIT_VERDICT.md 8.7.1.1 row UB3), so the two verifying paths share
-// it rather than tracking each other.
-uint8_t archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
+// Cold-authority marshal: both halves are Rust (`cold_authority_pin`).
+// Callers gate on have_record (a missing record falls through to the
+// semantic verify's RECORD_MISSING) and run this before per-shard cursor
+// scans or FFI verify. Classification is `shekyl_archival_bond_post_drop_verdict`;
+// this helper does not decide whether the rejection severs. Operator strings
+// come from `shekyl_archival_bond_post_err_string` — the one table.
+uint8_t archival_cold_authority_pin(const shekyl::db::ArchivalBondValue& record,
+  uint8_t post_kind, uint64_t bond_debit,
   const std::vector<uint8_t>& auth_pubkey, const char* arm)
 {
-  const uint8_t rc = shekyl_archival_debit_auth_pin(
+  const uint8_t rc = shekyl_archival_cold_authority_pin(
+    post_kind, bond_debit,
     record.bond_spend_pk.empty() ? nullptr : record.bond_spend_pk.data(),
     record.bond_spend_pk.size(),
     auth_pubkey.empty() ? nullptr : auth_pubkey.data(),
     auth_pubkey.size());
-  if (rc == SHEKYL_ARCHIVAL_BOND_POST_OK)
-    return rc;
-  // Two arms, deliberately distinct in the log: "this record authorizes
-  // nothing" and "wrong key against a record that does" have different
-  // operator remedies.
-  if (rc == SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY)
+  if (rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
   {
-    MERROR_VER("Archival " << arm << " rejected: record commits no bond_spend_pk; "
-      "a debit cannot be authorized (and the identity key never authorizes "
-      "a value-out)");
-  }
-  else if (rc == SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH)
-  {
-    MERROR_VER("Archival " << arm << " rejected: pqc auth key does not match the "
-      "record's committed bond_spend_pk (identity-key or foreign-key debit "
-      "authorization is forbidden)");
-  }
-  else
-  {
-    MERROR_VER("Archival " << arm << " rejected: debit-auth pin marshal fault (code "
-      << static_cast<unsigned>(rc) << ")");
+    MERROR_VER("Archival " << arm << " rejected: "
+      << shekyl_archival_bond_post_err_string(rc)
+      << " (post_kind " << static_cast<unsigned>(post_kind)
+      << ", bond_debit " << bond_debit
+      << ", code " << static_cast<unsigned>(rc) << ")");
   }
   return rc;
 }
@@ -5028,13 +4717,12 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     shekyl::db::ArchivalBondValue record{};
     const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
 
-    // GF-1 debit authorization — the shared pin (archival_debit_auth_pin
-    // above), run before the cooldown-anchor gathering + semantic verify.
-    // Classification is the bond-post mapper: no committed key is our
-    // record state; a key mismatch is the sender's form.
+    // Cold authority — shared Rust gate, before cooldown gather + semantic
+    // verify. Release is unconditional in requires_cold_authority.
     if (have_record)
     {
-      const uint8_t pin_rc = archival_debit_auth_pin(record, auth_pubkey, "Release");
+      const uint8_t pin_rc = archival_cold_authority_pin(record,
+        bond.post_kind, bond.bond_debit, auth_pubkey, "Release");
       if (pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
         return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(pin_rc));
     }
@@ -5080,7 +4768,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     if (verify_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
     {
       MERROR_VER("Archival Release verify failed (code " << static_cast<unsigned>(verify_rc)
-        << "): " << archival_bond_post_verify_err_string(verify_rc));
+        << "): " << shekyl_archival_bond_post_err_string(verify_rc));
       return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(verify_rc));
     }
     return true;
@@ -5140,7 +4828,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       {
         MERROR_VER("Archival HoldingsUpdate-add verify failed (code "
           << static_cast<unsigned>(hu_rc) << "): "
-          << archival_bond_post_verify_err_string(hu_rc));
+          << shekyl_archival_bond_post_err_string(hu_rc));
         return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(hu_rc));
       }
       if (auth_pubkey != bond.hybrid_public_key)
@@ -5152,11 +4840,12 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       return true;
     }
 
-    // DROP (grace-tail debit path). GF-1 debit authorization — the shared pin
-    // (archival_debit_auth_pin above), the Release arm's twin.
+    // DROP. Cold authority — shared Rust gate. HoldingsUpdate selects on
+    // the debit term; we are on bond_debit != 0.
     if (have_record)
     {
-      const uint8_t pin_rc = archival_debit_auth_pin(record, auth_pubkey, "HoldingsUpdate-drop");
+      const uint8_t pin_rc = archival_cold_authority_pin(record,
+        bond.post_kind, bond.bond_debit, auth_pubkey, "HoldingsUpdate-drop");
       if (pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
         return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(pin_rc));
     }
@@ -5233,7 +4922,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     {
       MERROR_VER("Archival HoldingsUpdate-drop verify failed (code "
         << static_cast<unsigned>(hu_rc) << "): "
-        << archival_bond_post_verify_err_string(hu_rc));
+        << shekyl_archival_bond_post_err_string(hu_rc));
       return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(hu_rc));
     }
     return true;
@@ -5283,7 +4972,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     {
       MERROR_VER("Archival Rebond verify failed (code "
         << static_cast<unsigned>(rb_rc) << "): "
-        << archival_bond_post_verify_err_string(rb_rc));
+        << shekyl_archival_bond_post_err_string(rb_rc));
       return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(rb_rc));
     }
     // Credit-path authorization (P2B-9 Pin 4, the GF-1 selector): the identity
@@ -5336,7 +5025,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
   if (verify_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
   {
     MERROR_VER("Archival bond-post verify failed (code " << static_cast<unsigned>(verify_rc)
-      << "): " << archival_bond_post_verify_err_string(verify_rc));
+      << "): " << shekyl_archival_bond_post_err_string(verify_rc));
     return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(verify_rc));
   }
 
@@ -6731,7 +6420,6 @@ bool Blockchain::check_blockchain_pruning()
   return m_db->check_pruning();
 }
 //------------------------------------------------------------------
-// returns min(Mb, 1.7*Ml) as per https://github.com/ArticMine/Monero-Documents/blob/master/MoneroScaling2021-02.pdf from HF_VERSION_LONG_TERM_BLOCK_WEIGHT
 uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight) const
 {
   PERF_TIMER(get_next_long_term_block_weight);
@@ -6744,12 +6432,8 @@ uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight) cons
     long_term_median = get_long_term_block_weight_median(db_height - nblocks, nblocks);
   uint64_t long_term_effective_median_block_weight = std::max<uint64_t>(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, long_term_median);
 
-  // long_term_block_weight = block_weight bounded to range [long-term-median/1.7, long-term-median*1.7]
-  block_weight = std::max<uint64_t>(block_weight, long_term_effective_median_block_weight * 10 / 17);
-  uint64_t short_term_constraint = long_term_effective_median_block_weight + long_term_effective_median_block_weight * 7 / 10;
-  uint64_t long_term_block_weight = std::min<uint64_t>(block_weight, short_term_constraint);
-
-  return long_term_block_weight;
+  // [LTEM/1.7, LTEM·1.7]; the bound is shekyl_long_term_block_weight.
+  return shekyl_long_term_block_weight(long_term_effective_median_block_weight, block_weight);
 }
 //------------------------------------------------------------------
 bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight)
@@ -6775,9 +6459,10 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
     get_last_n_blocks_weights(weights, CRYPTONOTE_REWARD_BLOCKS_WINDOW);
 
     uint64_t short_term_median = epee::misc_utils::median(weights);
-    // effective median = short_term_median bounded to range [long_term_median, 50*long_term_median],
-    // but it can't be smaller than the minimum penalty free zone (a.k.a. 'full reward zone')
-    uint64_t effective_median_block_weight = std::min<uint64_t>(std::max<uint64_t>(m_long_term_effective_median_block_weight, short_term_median), CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR * m_long_term_effective_median_block_weight);
+    // Short-term median bounded to [LTEM, S·LTEM]. S is not spelled here;
+    // the clamp is shekyl_effective_block_weight_median.
+    uint64_t effective_median_block_weight = shekyl_effective_block_weight_median(
+        m_long_term_effective_median_block_weight, short_term_median);
 
     m_current_block_cumul_weight_median = effective_median_block_weight;
   }
@@ -6786,6 +6471,12 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
     m_current_block_cumul_weight_median = full_reward_zone;
 
   m_current_block_cumul_weight_limit = m_current_block_cumul_weight_median * 2;
+
+  // FL-R23 ring: every tip change — connect, pop, reorg, init — reaches this
+  // function, so the ring is maintained here and nowhere else, keyed on
+  // height continuity. M for this tip is settled just above, which is why
+  // the push happens after it and not before.
+  advance_relay_floor_ring(db_height);
 
   if (long_term_effective_median_block_weight)
     *long_term_effective_median_block_weight = m_long_term_effective_median_block_weight;

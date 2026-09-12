@@ -11,7 +11,10 @@ Tor inbound half; landed as PRs #442 / #445 / #447). §9.5 *narrows* the
 "do not cut consensus code" gate below rather than repealing it: everything on
 the §9.5 HOLD list — pass-record serialization, the response format,
 `EndpointUpdate` on the bond wire, the settlement writer — still waits on the
-format round. The ruling of record from this round: challenge
+format round. *(Updated 2026-09-12: `EndpointUpdate` is no longer held — its
+round record is [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md),
+`EU-D1`…`EU-D10`, and the sequence C0 → A → B+C1 → D is under way with C0
+landed. The other three entries read as they did.)* The ruling of record from this round: challenge
 assignment is **derived, not committed** (§2, ruled 2026-08-07 — "the more the
 system regulates itself, the better"; derivation makes challenges verifiable
 by anyone and scope-limited against DDoS). Everything else here is the round's
@@ -1483,10 +1486,11 @@ than repealing it:
 4. The two standalone PRs (#433 ordering assert, #434 coverage sim) —
    in flight.
 
-**HOLD — two of the four have since cleared (updated 2026-08-23).** The list
-as written was: pass-record serialization; the response format;
-`EndpointUpdate` on the bond wire; the settlement writer (item 9's schema is
-genuinely open).
+**HOLD — two of the four have cleared and landed; a third, `EndpointUpdate`,
+is ruled and sequenced but not in the tree (updated 2026-09-12; was "two of
+the four", 2026-08-23).** The list as written was: pass-record
+serialization; the response format; `EndpointUpdate` on the bond wire; the
+settlement writer (item 9's schema is genuinely open).
 
 - **Pass-record serialization — DISCHARGED 2026-08-18.** The carrier round
   ruled (`ARCHIVAL_PASS_RECORD_CARRIER.md`, `CR-D2`): a record partition, not
@@ -1494,8 +1498,15 @@ genuinely open).
 - **The response format — DISCHARGED 2026-08-21.** `RF-D1`…`RF-D10` ruled and
   implemented, PR #522. This entry is what made the other two "correctly
   blocked", so its clearing is what re-opened the queue.
-- **`EndpointUpdate` on the bond wire — STILL HELD.** Ruled in shape, not in
-  the tree.
+- **`EndpointUpdate` on the bond wire — RELEASED FROM HOLD 2026-09-12.** The
+  2026-08-10 ruling above is the shape; its one named spec gap (which cold key
+  a non-`JoinMarket` record verifies against) closed with C0 (PR #703), and the
+  six implementation-shaping questions the ruling did not reach are ruled in
+  [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md) (`EU-D1`…`EU-D10`,
+  2026-09-11). Not in the tree yet: B+C1 (wire + one predicate arm, atomic)
+  and D (the `hs_id` rotation index, a derivation replacement) follow in that
+  order. Until D lands the wire is a deliberate callee-without-caller,
+  disposed at `EU-D10`.
 - **The settlement writer — SCHEMA LANDED; the production wiring is now the
   hold, as of 2026-08-25.** This entry said the round had `SO-D6` (reorg)
   outstanding, which was true on 2026-08-23 and is not now: `SO-D1`…`SO-D5`

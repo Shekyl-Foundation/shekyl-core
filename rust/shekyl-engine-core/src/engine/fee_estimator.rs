@@ -60,7 +60,7 @@ use super::error::FeeEstimatorError;
 use super::fee_policy::ValidatedFeeEstimates;
 use super::refresh::LedgerSnapshot;
 use super::tx_counts::{InputCount, OutputCount};
-use super::tx_fee_model::{converge_fee, fee_from_weight, fee_rate_for_priority, predict_weight};
+use super::tx_fee_model::{converge_fee, fee_rate_for_priority};
 
 /// Caller-supplied fee preference for the
 /// `PendingTxEngine::build` pipeline.
@@ -270,8 +270,7 @@ impl FeeEstimator for DaemonFeeEstimator {
         // The counts are type-bounded (`>= 1`), so no `.max(1)` floor is needed.
         let n_in = context.input_count;
         let n_out = context.output_count;
-        let seed = fee_from_weight(&rate, predict_weight(n_in, n_out, context.tree_depth, 0));
-        let fee = converge_fee(&rate, n_in, n_out, context.tree_depth, seed);
+        let fee = converge_fee(&rate, n_in, n_out, context.tree_depth, 0);
         Ok(AtomicUnits::from_raw(fee))
     }
 }
