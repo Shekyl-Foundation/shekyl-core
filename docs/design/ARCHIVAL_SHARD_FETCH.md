@@ -107,7 +107,7 @@ inherited as "the client waits."
 | Serve route | `rust/shekyl-p-serve/src/serve.rs:57` — `ROUTE_PREFIX = "/shard/"` | The path the client dials (`RF-R1`) |
 | Served body | `rust/shekyl-curve-tree/src/served_frame.rs:274` — `ServedFrameHeader::read` | Frame parse incl. the `RF-D7` padding bound, enforced before the lengths are obtainable |
 | Verify function | `rust/shekyl-curve-tree/src/store/ops.rs:139` — `recompute_segment_r_k(&[[u8; 128]]) -> Result<[u8; 32], _>` | Self-authentication by reconstruction; today its only non-store caller is `p-serve/tests/store_axis.rs` — no production fetcher |
-| Serve virt port | `rust/shekyl-engine-core/src/engine/stake_engine/serving/task.rs:52` — `SERVING_VIRTUAL_PORT = 80`; `:58` — `SERVING_MAX_STREAMS = 8` | **Unratified** (tests-only consensus); `SF-D5` pins or rejects the port; `MAX_STREAMS` stays SPIKE-PIN territory |
+| Serve virt port | `rust/shekyl-engine-core/src/engine/stake_engine/serving/task.rs:52` — `pub(crate) SERVING_VIRTUAL_PORT = 80`; `:58` — `SERVING_MAX_STREAMS = 8` | Number is **unratified** (`SF-D5`); `MAX_STREAMS` stays SPIKE-PIN. Ratification *shape* is ruled (§4): a shared constant both sides read — this `pub(crate)` is not reachable from `shekyl-shard-fetch` |
 | Challenge deadline | `rust/shekyl-archival-retention/src/constants.rs:147` — `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` | The consensus clock the challenge caller answers to (`SF-D6`) |
 | Wallet-side isolation precedent | `rust/shekyl-p-transport/src/lib.rs:134` — `derive_socks_user(&PCanonicalId)` per-P `IsolateSOCKSAuth` | The isolation grammar `SF-D3` must adapt: a daemon is not a P |
 | Daemon Tor today | `rust/shekyl-tor-control-daemon` crate doc — inbound ephemeral onion only (PWD-E7); no outbound API, no SOCKS consumer | `SF-D2`'s starting state: outbound reuse can only mean **this** instance |
@@ -129,6 +129,7 @@ inherited as "the client waits."
 | `GET /shard/{id}`; identical 404s for every non-servable outcome; only content-type + content-length; hand-rolled HTTP/1.1 | `RF-R1` |
 | **Request unit is a whole shard.** `{id}` is an exact decimal `u64`; no suffix, no query string (`RF-R1` request grammar; `serve.rs:558–560` parses exactly that). There is no leaf addressing. The challenge caller fetches the full segment and extracts leaf ℓ locally — that is the TJ §9 topology working as designed (the honest holder's egress is the cost being measured). `RF-R1`'s reopening clause permits "an additional path that suffixes `/shard/`" if a later request contract is needed; that suffix is exactly where a leaf-addressed challenge fetch would enter, and it is the natural optimization for anyone looking at ~3.33 MB per challenge. **`SF-D1` holds that door shut:** any future suffix path must be usable by both callers, or it is a second path by another name | `RF-R1`; `SF-D1` |
 | **Serving and fetching do not share a Tor instance.** `PWD-E9` (RULED 2026-09-08, implemented 2026-09-09): the daemon gets its own tor path with no crossover to the archival-serving persona; the launch path takes instance identity as a parameter, so sharing the code cannot produce a shared instance. The ratified §7 guard residual splits one application's identities; E9 forbids two applications sharing one instance, and the ephemeral/durable asymmetry makes the crossover strictly worse. **`SF-D11` withdrawn** — asked in this round, then closed by reading `PWD-E9` | `PWD-E9` |
+| **The virtual port is a shared constant both sides read.** Ratifying the number (`SF-D5`) means the client dials the same port the persona publishes. Today's `SERVING_VIRTUAL_PORT` is `pub(crate)` in `shekyl-engine-core` (`serving/task.rs:52`) — unreachable from `shekyl-shard-fetch`, and `SF-D4` forbids the client pulling engine-core. Two `80`s that happen to agree are not a ratification. Placement of the constant is an implementation-PR detail under that constraint, not a new question | `SF-D5` (shape RULED; number still open) |
 | Body = `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding); codec owned by `shekyl-curve-tree`; write-zero read-anything | `RF-D4`, `RF-D7` |
 | Padding field reserved, no scheme; TJ-H mitigation at the Tor layer (vanguards on the **wallet** serve path) | TJ-H (ruled 2026-08-08) |
 | Server bind `127.0.0.1:0`; reachability is `ADD_ONION` | `RF-R1`, `shekyl-p-host` |
@@ -224,12 +225,18 @@ format ownership by the server) and must not pull engine-core.
 
 Reconstruct the v3 onion address from the 32-byte Ed25519 key
 (`EU-D3`: the address is display form; the key is the record). Pin the
-virtual port — today `SERVING_VIRTUAL_PORT = 80`, a tests-only
-consensus that has never been ratified. SOCKS CONNECT to
-`onion:port`, then the `RF-R1` GET. No extra request headers (already
-`RF-R1`'s rule) and no caller-specific path token (`SF-D1`).
+virtual port — today `SERVING_VIRTUAL_PORT = 80` at
+`serving/task.rs:52`, a tests-only consensus that has never been
+ratified as a number. SOCKS CONNECT to `onion:port`, then the `RF-R1`
+GET. No extra request headers (already `RF-R1`'s rule) and no
+caller-specific path token (`SF-D1`).
 
-- **Lean:** ratify port 80 (it is the conventional HTTP virt port,
+- **Ruled (shape, 2026-09-12):** the virtual port is a **shared
+  constant both sides read**, not two `80`s that happen to agree. The
+  current declaration is `pub(crate)` in `shekyl-engine-core` and is
+  not reachable from `shekyl-shard-fetch`; `SF-D4` forbids the client
+  pulling engine-core to get it. See §4.
+- **Lean (number):** ratify 80 (it is the conventional HTTP virt port,
   carries no fingerprint beyond the route itself, and every existing
   test and the serve task already speak it).
 - **Reopen if:** the Tor layer surfaces a reason a non-default virt
@@ -513,7 +520,8 @@ Named attacker objectives this round's rulings are evaluated against:
 
 A living contract the first **client** is written against: crate name,
 daemon Tor posture (P2P↔fetch; serving↔fetching already `PWD-E9`),
-isolation key both callers can use, dial grammar (key → onion:port),
+isolation key both callers can use, dial grammar (key → onion:port, the
+port a shared constant both sides read),
 one failure taxonomy with two caller columns, the verify function
 signature, and one organic selection rule of which verify-failure
 memory is an input (`SF-D10`/`SF-D12`). The challenge is a scheduler of
