@@ -10,8 +10,9 @@ use shekyl_archival_retention::{
     holdings_update_pop, rebond_connect, rebond_pop, release_connect, release_pop,
     verify_holdings_update_add, verify_holdings_update_drop, verify_join_market_bond_post,
     verify_rebond_bond_post, verify_release_bond_post, whole_record_last_served,
-    ArchivalBondPostVin, BadInterval, BondPostKind, ColdAuthorityError, HoldingsDescriptor,
-    HoldingsKind, LastServedScan, ShardSet, ShardSetError, HYBRID_PUBKEY_CANONICAL_BYTES,
+    ArchivalBondPostVin, BadInterval, BondPostKind, ColdAuthorityError, DebitAuthError,
+    HoldingsDescriptor, HoldingsKind, LastServedScan, ShardSet, ShardSetError,
+    HYBRID_PUBKEY_CANONICAL_BYTES,
 };
 
 use super::codes::*;
@@ -406,32 +407,11 @@ pub unsafe extern "C" fn shekyl_archival_last_served_scan(
     SHEKYL_ARCHIVAL_BOND_POST_OK
 }
 
-/// The composed **cold-authority** gate for a bond-post
-/// (`shekyl-archival-retention::cold_authority_pin`): consult
-/// `requires_cold_authority(post_kind, bond_debit)`, and when it holds, pin
-/// the presented authorizer against the bond record's committed
-/// `bond_spend_pk`.
+/// Composed cold-authority gate (`shekyl-archival-retention::cold_authority_pin`).
 ///
-/// The selector lives in Rust, once, as an exhaustive truth table: `Release`
-/// always; `HoldingsUpdate` iff `bond_debit > 0`; `JoinMarket` and `Rebond`
-/// never (credit paths, identity-key authorized — applying the pin to them
-/// would reject legitimate posts). The C++ block-connect arms and the submit
-/// gather call this; the Rust submit battery calls the same function
-/// natively (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 row UB3), so the two paths
-/// cannot drift on the one predicate that has no recovery — a compromised
-/// serving host holds the identity key and could otherwise authorize a
-/// collateral drain.
-///
-/// Three refusals, all distinct codes. Two are the pin's, so the operator
-/// log separates *a record that authorizes nothing* from *a wrong key
-/// against a record that does*; a record committing no canonical-length key
-/// authorizes **nothing**, there is no identity-key fallback. The third,
-/// `ERR_NOT_COLD_AUTHORITY_POST`, is the cross-check: the caller asked for
-/// cold authority on a post the predicate excludes, which means the arm and
-/// the predicate disagree. Unreachable through a correct caller.
-///
-/// An unknown `post_kind` byte refuses with `ERR_POST_KIND` rather than
-/// guessing a row.
+/// Selector: `Release` always; `HoldingsUpdate` iff `bond_debit > 0`;
+/// `JoinMarket` / `Rebond` never. Unknown `post_kind` → `ERR_POST_KIND`.
+/// Predicate-false → `ERR_NOT_COLD_AUTHORITY_POST` (implementation error).
 ///
 /// # Safety
 /// When a length is positive, its pointer must be valid for that many bytes
@@ -471,10 +451,10 @@ pub unsafe extern "C" fn shekyl_archival_cold_authority_pin(
         Err(ColdAuthorityError::NotAColdAuthorityPost { .. }) => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST
         }
-        Err(ColdAuthorityError::RecordCommitsNoKey(_)) => {
+        Err(ColdAuthorityError::Pin(DebitAuthError::RecordCommitsNoKey)) => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY
         }
-        Err(ColdAuthorityError::AuthKeyMismatch(_)) => {
+        Err(ColdAuthorityError::Pin(DebitAuthError::AuthKeyMismatch)) => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH
         }
     }

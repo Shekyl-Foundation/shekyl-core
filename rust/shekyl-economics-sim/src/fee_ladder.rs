@@ -47,7 +47,7 @@ use shekyl_economics::{
     calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
     effective_emission, emission_speed_factor, hysteresis_fold, hysteresis_settled,
     hysteresis_step, paid_block_reward, projected_already_generated, tail_subsidy_per_block,
-    EconomicParams, FeeLadder, TxVolume, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY,
+    EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY,
     STAKER_EMISSION_SHARE,
 };
 
@@ -265,27 +265,32 @@ fn rounded(raw: [u64; 4]) -> [u64; SERVED_SLOTS] {
 
 /// The SERVED ladder, from **the production owner itself** — no local
 /// re-derivation. `shekyl-economics::corrected_fee_ladder` computes
-/// `round2(base·w_ref·C_q / (Mfw²·SCALE))`: `C_q` in the NUMERATOR and a
-/// single division, so no intermediate truncation compounds.
+/// `base·w_ref·C / (Mfw²·SCALE)`: `C` in the NUMERATOR and a single
+/// division, so no intermediate truncation compounds. Since FL-R21 there
+/// is no `round_money_up_2` on it either, and `standard` is `4F` exactly.
 ///
 /// This replaced a local mirror that scaled already-truncated ArticMine
 /// rungs (PR #640 review). The mirror had been documented as bit-exact
 /// with the served path and was pinned at 210 for
-/// (10 SKL, `Mfw = 1.5 MB`, `C_q = 16`) — but the shipped owner returns
-/// **220** there, because it divides once. The mirror was measuring a
+/// (10 SKL, `Mfw = 1.5 MB`, `C_q = 16`); the owner returned 220 there at
+/// the time, because it divides once. (It returns 213 now — same single
+/// division, one less rounding step.) The mirror was measuring a
 /// composition the daemon does not serve, which is precisely the
 /// drift-pair §1.9 forbids: call the canonical function, reimplement
-/// none of it. The legacy transliteration survives ONLY as the `Current`
-/// comparison column, where reproducing today's daemon bit-for-bit is
-/// the point.
-fn served_ladder(base_reward: u64, median: u64, c_q: u64) -> [u64; SERVED_SLOTS] {
+/// none of it.
+///
+/// The legacy transliteration survives ONLY as the `Current` comparison
+/// column — the PRE-FL-R20 daemon, which is what that column exists to
+/// compare against. It stopped being "today's daemon" when FL-R20 landed;
+/// it is a historical baseline now, and `transliteration_matches_cpp_kat`
+/// pins it as one.
+fn served_ladder(base_reward: u64, median: u64, c: u64) -> [u64; SERVED_SLOTS] {
     corrected_fee_ladder(
         base_reward,
         median,
-        median,
         FULL_REWARD_ZONE_V5,
         REF_TX_WEIGHT,
-        c_q,
+        FeeCorrection::from_scaled(c),
     )
     .as_slots()
 }
@@ -2922,7 +2927,10 @@ mod tests {
 
     /// Pin the transliteration against `tests/unit_tests/scaling_2021.cpp`
     /// `wallet_fee_estimate` (10 SKL reward cases) — the instrument's
-    /// "current" column must reproduce the C++ oracle exactly.
+    /// "current" column must reproduce the PRE-FL-R20 C++ oracle exactly —
+    /// the four-rung, `round_money_up_2`-ed, 0.95-ed shape that was the
+    /// daemon's until FL-R20/FL-R21. It is a historical baseline the sim
+    /// compares AGAINST, not a claim about what the daemon serves today.
     ///
     /// Deliberately NOT routed through [`rounded`], which projects onto the
     /// three priced rungs. This pin's subject is the legacy FOUR-value
@@ -2948,10 +2956,24 @@ mod tests {
         );
     }
 
-    /// Pin the genesis-condition `Fh` the wallet cap is derived from
-    /// (`fee_policy.rs`: daemon-rounded genesis `Fh` = 14,000,000).
+    /// Pin the genesis-condition `Fh` of the LEGACY transliteration — the
+    /// `Current` comparison column's own baseline, not the served value.
+    ///
+    /// The name and docstring used to say this was "the `Fh` the wallet cap is
+    /// derived from", and that stopped being true twice over. The cap derives
+    /// from `corrected_fee_ladder(...).priority` at the structural maximum
+    /// correction, not from the transliteration; and since FL-R21 took
+    /// `round_money_up_2` off the served path the genesis anchor is 13,653,333
+    /// rather than this 14,000,000. `fee_policy.rs` pins the cap itself
+    /// (`absolute_cap_is_the_structural_bound`), which is where that
+    /// assertion belongs — a cross-crate claim asserted from the side that
+    /// does not own it goes stale silently, as this one did.
+    ///
+    /// What remains true, and is all this asserts: the four-rung ArticMine
+    /// transliteration, rounded the way the pre-FL-R20 daemon rounded it,
+    /// puts genesis `Fh` at 14,000,000.
     #[test]
-    fn genesis_fh_matches_wallet_cap() {
+    fn genesis_fh_of_the_legacy_transliteration() {
         let params = EconomicParams::default();
         let base = base_block_reward(0, &params).expect("genesis base");
         let fees = rounded(articmine_ladder_raw(base, 300_000, 300_000));
@@ -3027,9 +3049,11 @@ mod tests {
         let raw = articmine_ladder_raw(10 * coin, 1_500_000, 1_500_000);
         assert_eq!(raw[0], 13);
 
-        // The SERVED value at the same state: one division, no
-        // compounded truncation.
-        assert_eq!(served_ladder(10 * coin, 1_500_000, 16 * SCALE)[0], 220);
+        // The SERVED value at the same state: one division, no compounded
+        // truncation, and since FL-R21 no `round_money_up_2` either. It was
+        // 220 while the owner rounded each rung up to two significant
+        // digits; the arithmetic's own answer is 213.
+        assert_eq!(served_ladder(10 * coin, 1_500_000, 16 * SCALE)[0], 213);
 
         // And it is the owner's output verbatim, not a reproduction.
         assert_eq!(
@@ -3037,10 +3061,9 @@ mod tests {
             corrected_fee_ladder(
                 10 * coin,
                 1_500_000,
-                1_500_000,
                 FULL_REWARD_ZONE_V5,
                 REF_TX_WEIGHT,
-                16 * SCALE
+                FeeCorrection::from_scaled(16 * SCALE)
             )
             .as_slots()
         );

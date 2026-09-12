@@ -4,39 +4,52 @@
 
 ### Changed
 
-- **The cold-authority selector for bond-posts is one Rust predicate, and it
-  has two arms because the code always did.** `requires_cold_authority(post_kind,
-  bond_debit)` (`shekyl-archival-retention::debit_auth`) is an exhaustive truth
-  table — `Release` always, `HoldingsUpdate` iff `bond_debit > 0`, `JoinMarket`
-  / `Rebond` never — and `cold_authority_pin` composes it with the unchanged
-  `debit_auth_pin`. Consensus reaches the composed gate as
-  `shekyl_archival_cold_authority_pin(post_kind, bond_debit, …)`; the old
-  `shekyl_archival_debit_auth_pin` export is deleted, not aliased, so a missed
-  caller fails to link rather than silently keeping the selector at the arm.
-  Behavior is byte-identical on every input the arms pass today.
+- **The cold-authority selector for bond-posts is one Rust predicate.**
+  `requires_cold_authority(post_kind, bond_debit)` is an exhaustive truth
+  table — `Release` always, `HoldingsUpdate` iff `bond_debit > 0`,
+  `JoinMarket` / `Rebond` never — and `cold_authority_pin` composes it with
+  the unchanged `debit_auth_pin`. Consensus reaches the composed gate as
+  `shekyl_archival_cold_authority_pin`; the old
+  `shekyl_archival_debit_auth_pin` export is deleted, not aliased. Behavior
+  is byte-identical on every input the arms pass today. A predicate-false
+  call refuses with `NOT_COLD_AUTHORITY_POST` (51, `INTERNAL_FAILURE`)
+  before the keys are compared. Bond-post operator strings now live in
+  `bond_post_err_cstr` (the admission-code pattern); the C++ switch is gone,
+  and the connect helper is marshal + one log line. `ColdAuthorityError` is
+  `NotAColdAuthorityPost | Pin(DebitAuthError)`.
 
-  **The finding.** Three places — the module doc, the FFI doc, and the
-  single-source gate's header — said *"the selector is `bond_debit > 0`, not
-  the post kind."* The C++ Release arm never did that: it pins on kind,
-  unconditionally, ahead of the UB9 debit-term guards, and
-  `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 pins that order. Only the
-  `HoldingsUpdate` arm selects on the term. Encoding the prose would have
-  moved a zero-debit-mismatched-key Release from UB3 to UB9 — a different
-  refusal on a pinned ordering. The predicate now states what the arms do,
-  and a new kind (the ruled `EndpointUpdate`, zero-debit and cold) is one row
-  rather than a re-derivation at every arm.
+- **Relay admission is a lookback-min over the last six floors, at zero
+  slack; the relay floor follows the raw correction `C`; the fee ladder is
+  unrounded (FL-R20 / FL-R22 / FL-R23, PR B).** A transaction is admitted
+  when `fee ≥ mask_round_up(weight · min F(h′−k))` over `k = 0..5`, where
+  `F(h) = R·C(h)·w_ref/M(h)²`. Monero's 0.95 and the 2 % acceptance buffer
+  are gone — they insured the quote-to-broadcast gap probabilistically;
+  the lookback insures it by identity, so a quote taken at height `h` and
+  paid exactly is admitted at every node whose tip is within five blocks.
+  The wallet therefore pays the served rung and nothing more (FL-R22).
 
-  **The cross-check.** The composed gate refuses with a new code,
-  `NOT_COLD_AUTHORITY_POST` (51, classified `INTERNAL_FAILURE`), when an arm
-  calls it for a post the predicate excludes. Unreachable today. It exists
-  because the gate script catches an arm that *forgets* the call and nothing
-  caught an arm that calls without a predicate row; neither instrument sees
-  the other's blind spot. `check_debit_auth_single_source.sh` now asserts all
-  three functions exist and reads call sites statement-scoped, since the
-  wrapped C++ call no longer fits on one line. Daemon C++ (`blockchain.cpp`,
-  `daemon_submit_ffi.cpp`) is touched by ruling: the consensus core is under
-  rewrite, and a correct reference beats re-litigating the selector from the
-  daemon side at cutover.
+  **What changes for a user or operator.** The economy tier IS the relay
+  floor now — one function computes both (`fees[0] ==
+  get_current_fee_per_byte()` by call, not by clamp). `standard` is `4F`
+  exactly. No rung is rounded up to two significant digits any more, so
+  quotes are the arithmetic's own answer: at 10 SKL and the 300 kB zone,
+  `[340, 1400, 67000]` becomes `[333, 1332, 66666]`. The `grace_blocks`
+  RPC parameter no longer affects any tier (the estimate no longer builds
+  a graced short-term median); its deletion from the wire is FL-R26, a
+  separate change. The wallet's absolute fee cap moves with the
+  unrounding, 220,000,000 → 218,453,333 atomic-units/weight — the same
+  structural bound, unrounded.
+
+  **Two defects fixed on the way.** The fee-quote path (`fee_query`)
+  under-quoted by one varint byte's worth of rate whenever a fee crossed a
+  `2^(7k)` boundary — `converge_fee` ran two passes where the fixed point
+  needs three — which the 2 % buffer had been hiding; and a shared test
+  double returned an empty long-term-weight window, so `median()` read
+  uninitialised storage (a garbage median of ~9.5e18, order-dependent),
+  which the old grace-zero insertion had been masking by accident.
+
+  Relay policy only; `kept_by_block` is exempt and there is no consensus
+  fee floor.
 
 - **The fee estimate returns three tiers, not four, and `CORE_RPC_VERSION`
   is 3.30 (FL-R25).** `get_fee_estimate.fees` was a four-slot array

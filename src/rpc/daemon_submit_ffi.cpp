@@ -266,10 +266,7 @@ bool fill_release_facts_locked(Blockchain& bc, const crypto::hash& p_id,
   // None of this is a verdict. Every clause only causes LESS work: Rust runs
   // the same pins itself and issues the refusal, and the skipped flag makes it
   // refuse rather than fold an unread slice into the permissive "never served".
-  // Through the composed cold-authority gate, kind fixed to Release: this
-  // gather exists only for the Release path, and going through the Rust
-  // predicate (where Release is unconditional) keeps this work gate on the
-  // same selector as the connect arm and the Rust battery's UB3.
+  // Kind is Release: this gather exists only for that path.
   const uint8_t pin_rc = shekyl_archival_cold_authority_pin(
     static_cast<uint8_t>(archival_bond_post_kind::Release), bond_debit,
     record.bond_spend_pk.empty() ? nullptr : record.bond_spend_pk.data(),

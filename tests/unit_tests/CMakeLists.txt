@@ -53,7 +53,6 @@ set(unit_tests_sources
   epee_serialization.cpp
   epee_utils.cpp
   expect.cpp
-  fee.cpp
   json_serialization.cpp
   get_xtype_from_string.cpp
   hmac_keccak.cpp
@@ -66,7 +65,6 @@ set(unit_tests_sources
   memwipe.cpp
   mining_parity.cpp
   mlocker.cpp
-  mnemonics.cpp
   mtp_boundary.cpp
   mul_div.cpp
   multiexp.cpp
@@ -157,10 +155,6 @@ target_link_libraries(unit_tests
     rpc
     net
     serialization
-    # Direct, not inherited: mnemonics.cpp tests crypto::ElectrumWords, which
-    # reached this link line transitively through the C++ `wallet` library
-    # until the Phase-5 cutover unlinked it.
-    mnemonics
     p2p
     # daemon_rpc_client.cpp exercises src/daemon/rpc_client.h, whose failure
     # path writes through scoped_message_writer -> rdln::suspend_readline

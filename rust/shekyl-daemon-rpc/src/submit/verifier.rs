@@ -758,9 +758,9 @@ fn verify_debit_arm(
     };
 
     // ── UB3: the record's COMMITTED authorizer, never the identity key ──
-    // Through the composed gate, not the bare pin: Release is unconditional
-    // in `requires_cold_authority`, and going through the predicate here is
-    // what keeps this arm and the C++ connect arm on one selector.
+    // Composed gate, not the bare pin: Release is unconditional in
+    // `requires_cold_authority`, so this arm and the C++ connect arm share
+    // the selector.
     if let Err(e) = cold_authority_pin(
         RetentionBondPostKind::Release,
         bond.bond_debit,

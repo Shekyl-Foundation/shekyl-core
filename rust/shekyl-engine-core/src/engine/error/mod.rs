@@ -52,8 +52,7 @@
 //! - [`FeeEstimatorError::DaemonFeeUnreasonable`] — the daemon's fee
 //!   snapshot failed well-formedness (non-monotonic tier band, or a
 //!   named tier whose effective weight-1 charge exceeds the derived
-//!   structural era bound, `absolute_fee_rate_cap()` = 220,000,000
-//!   atomic-units/weight).
+//!   structural era bound, `absolute_fee_rate_cap()`).
 
 // Split by workflow per ENGINE_COMPOSITION_DECOMPOSITION.md §2 (the
 // transfer/ carve precedent): same code, new ownership. Every item is
