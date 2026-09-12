@@ -1,7 +1,7 @@
 # Archival serving route — request contract
 
 **Status: LIVING CONTRACT.** Ruled 2026-09-10 (`RF-R1`). Last verified
-2026-09-10.
+2026-09-12 (`SF-D9`: topology is daemon→P per `EU-D1`).
 
 This is the request half that
 [`ARCHIVAL_RESPONSE_FORMAT.md`](ARCHIVAL_RESPONSE_FORMAT.md)
@@ -24,9 +24,7 @@ does not own it.
 This is a daemon→P serving protocol — the client is a daemon, the
 server is a P-served onion; no wallet talks to a wallet (`EU-D1`,
 [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md), ruled
-2026-09-11; retitled 2026-09-12 per `SF-D9` — this line previously read
-"wallet-to-wallet", written before the client side was ruled) — not a
-consensus wire.
+2026-09-11) — not a consensus wire.
 Changing it after the freeze is a coordinated software upgrade
 ([rule 75](../../.cursor/rules/75-system-autonomy.mdc)), not a hard fork
 ([rule 42](../../.cursor/rules/42-serialization-policy.mdc) does not

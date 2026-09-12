@@ -127,8 +127,10 @@ same entry point — "you produced block *h*: fetch leaf ℓ of shard *s*"
 and "this daemon needs shard *s*" — and tests are a third scheduler of
 that same entry point, not a separate path.
 
-Reopen criterion: only if `EU-D1` or TJ §9 is itself reopened. There is
-no client-local ground on which `SF-D1` can move.
+Reopen if a storage-only pruned-daemon path is shown to exercise the
+serve endpoint end to end without a fetch client. (Also if `EU-D1` or
+TJ §9 is itself reopened — those are the substrate this premise sits
+on, not a substitute for a local falsifier.)
 
 ## 6. Round-1 open questions (`SF-D2`…`SF-D9`)
 
@@ -259,14 +261,13 @@ storage); it consumes the same typed result.
 
 ### `SF-D9` — `RF-R1` heading correction
 
-Not a protocol decision. The living contract
-([`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md)) still said
-"wallet-to-wallet serving protocol"; `EU-D1` rules the opposite (the
-daemon is the client). Same-change doc task (rule 91): retitle as
-daemon→P HTTP-over-onion, cite `EU-D1`, leave the byte rules — path,
-status/headers, request grammar, transport, falsifier — untouched.
-**Done in this change**; recorded here so the correction has a
-disposition id.
+Not a protocol decision. Same-change doc task (rule 91): retitle the
+living contract ([`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md))
+as daemon→P HTTP-over-onion, cite `EU-D1`, leave the byte rules —
+path, status/headers, request grammar, transport, falsifier —
+untouched. **Done in this change.** The heading the contract carried
+before `EU-D1` ruled the client side is this section and the SHA of
+#714, not a parenthetical in the living contract.
 
 ## 7. Threat-model frame (rule 26 A3)
 
