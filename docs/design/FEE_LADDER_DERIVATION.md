@@ -2940,9 +2940,14 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
   in that order: the weight-gate property test (item 3) lands before the
   zero-slack deletion it justifies. Relay policy and wallet-side only.
   *(Items were numbered 1, 2, 4, 3 when the weight gate was inserted at
-  review A-2; renumbered to reading order here — the numeric order used
-  to contradict the ordering the items themselves require. Order and
-  numbering only; no item's content changed.)*
+  review A-2, then renumbered to READING order. That renumbering did not
+  remove the contradiction it claimed to: the list still places the gate
+  (3) after the deletion (2) it must precede. The LANDING order is
+  therefore stated in words and is binding over the numbers — the
+  fee-varint fixed point and the gate first, then items 1 and 4 together
+  (one value, one identity), then item 2 — and that is the order PR B
+  landed in: `ca16135a2`, `cbd363658`, `52d143b92`, `622a90969`. Order
+  and numbering only; no item's content changed.)*
 - **PR C — the FL-R21 deletion sweep** (economics, FFI, instrument).
 
 *Daemon (`blockchain.cpp`, `tx_pool.cpp`), Rust-forward per rule 20:*
@@ -2984,10 +2989,18 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
 after item 3); `corrected_fee_ladder` takes raw `C`, drops the rounding;
 KAT pins for `F(h)` at the §4.6 degenerates and the §1.8 grid.
 
-*Wallet (`shekyl-engine-core` fee path):* verify nothing adds a margin —
-`fee = mask_round_up(rate × weight)` is already the shape
-(`tx_fee_model.rs`); no change expected. `fee_policy.rs`'s absolute cap
-unchanged.
+*Wallet (`shekyl-engine-core` fee path):* verify nothing adds a margin.
+**One change was needed, and it was a live defect** (`ca16135a2`): the
+shape is `fee = mask_round_up(rate × weight(fee))` — a fixed point, since
+the wire carries `varint(fee)` — and `converge_fee` ran two blind passes
+with no termination check. The build path seeded it with `g(0)` (three
+passes in effect, the orbit's worst case exactly); `fee_query` seeded it
+with 0 and under-quoted by one varint byte's worth of rate at every
+`2^(7k)` crossing — invisible under the 2 % buffer, a hard bounce at zero
+slack that FL-R23 cannot absorb because it is structural. Fixed to iterate
+to the fixed point under a derived bound, ahead of the slack deletion; the
+compensating seeds deleted. `fee_policy.rs`'s absolute cap moved with
+FL-R21, 220,000,000 → 218,453,333: the same structural bound, unrounded.
 
 *Instrument:* `fee_ladder.rs` loses the §10 arms, `RateLimited`,
 `Quantized*`, hysteresis; `fee_floor.rs`'s `floor_rate` is replaced by a
