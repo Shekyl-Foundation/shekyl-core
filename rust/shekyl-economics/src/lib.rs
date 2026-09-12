@@ -15,6 +15,7 @@
 #![deny(unsafe_code)]
 
 pub mod activity;
+pub mod block_weight;
 pub mod burn;
 pub mod digest;
 pub mod emission;
@@ -26,6 +27,9 @@ pub mod release;
 pub mod volume;
 
 pub use activity::{ActivityInvariantViolation, ActivityMetric};
+pub use block_weight::{
+    blocks_to_surge_saturation, effective_median, long_term_weight, BLOCK_WEIGHT_SURGE_FACTOR,
+};
 pub use burn::{
     calc_burn_pct, calc_burn_pct_from_activity, compute_burn_split, compute_burn_split_at,
     BurnSplit,

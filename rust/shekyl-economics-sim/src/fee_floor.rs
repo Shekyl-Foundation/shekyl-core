@@ -64,7 +64,8 @@ use std::collections::VecDeque;
 use serde::Serialize;
 use shekyl_economics::params::TX_VOLUME_WINDOW;
 use shekyl_economics::{
-    base_block_reward, EconomicParams, TxVolume, BLOCKS_PER_YEAR, RELAY_FLOOR_LOOKBACK,
+    base_block_reward, EconomicParams, TxVolume, BLOCKS_PER_YEAR, RELAY_ADMISSION_SLACK_BP,
+    RELAY_FLOOR_LOOKBACK,
 };
 
 use crate::fee_ladder::{
@@ -93,13 +94,23 @@ pub const GAPS: [usize; 3] = [1, 2, 3];
 /// before FL-R23. Reported so the record shows what each would have cost
 /// in bounces against the inherited buffer; not a design input.
 pub const PAD_CANDIDATES_BP: [u64; 4] = [50, 100, 200, 300];
-/// `check_fee`'s inherited buffer, `fee ≥ needed − needed/50`, which the
-/// pad race is scored against and which FL-R23 deletes.
-pub const Q_BUFFER_BP: u64 = 200;
+/// The admission slack the pad race is scored against — **the shipped
+/// value, read from its owner**, not a local copy.
+///
+/// This was `Q_BUFFER_BP = 200`, `check_fee`'s inherited
+/// `fee ≥ needed − needed/50` buffer. Its own comment said FL-R23 deletes
+/// it, and FL-R23 did: `shekyl_economics::RELAY_ADMISSION_SLACK_BP` is
+/// **0**. Scoring the road-not-taken against a cushion production no
+/// longer grants made every pad look safer than it is, so the figures
+/// understated the case for the rule that was actually adopted.
+pub const Q_BUFFER_BP: u64 = RELAY_ADMISSION_SLACK_BP as u64;
 
 /// The largest rise of `F` between quote and admission a fixed pad `p`
-/// still admits under the inherited buffer: `(1+p)/(1−q) − 1`, basis
-/// points, floored. `p = 50 → 255`, `100 → 306`, `200 → 408`, `300 → 510`.
+/// still admits: `(1+p)/(1−q) − 1`, basis points, floored. At the shipped
+/// slack `q` = 0 this is just `p` — `50 → 50`, `100 → 100`, `200 → 200`,
+/// `300 → 300`. (Under the deleted 2 % buffer it was 255 / 306 / 408 / 510,
+/// which is the difference between what the record said a pad would cost
+/// and what it would cost on the chain we ship.)
 pub const fn pad_admission_margin_bp(pad_bp: u64) -> u64 {
     (10_000 + pad_bp) * 10_000 / (10_000 - Q_BUFFER_BP) - 10_000
 }

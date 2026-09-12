@@ -110,6 +110,16 @@
 //! point). A linearity failure across the points is a finding, not an
 //! obstacle, and the multi-point design exists so the instrument can see one.
 //!
+//! **The 30 MB figure is RECORDS-WAS, and the value it refuted is gone
+//! (2026-09-12).** `2 × 50 × LTEM` was the ceiling under the inherited ×50.
+//! This extrapolation is what fired against that value: C2-R2 Q3 struck ×50 as
+//! REFUTED-not-superseded and re-derived **S = 4**, now implemented and
+//! single-sourced in `config/consensus_constants.json`. The reachable ceiling
+//! is therefore `2 × 4 × LTEM` = **2.4 MB at launch**, which sits INSIDE the
+//! measured span rather than 6.25× beyond it. The 30 MB extrapolation is kept
+//! because it is the evidence, not because it describes a state the chain can
+//! now enter — do not read it as the current bound.
+//!
 //! # Results — dev box, first run (SHAPE data; re-read the rule-76 section)
 //!
 //! **Machine: Intel i9-11950H (8C/16T, 5.0 GHz boost), Linux 6.12, `cargo
@@ -203,7 +213,13 @@
 //! stated floor.** That composition speaks directly to the condition
 //! census C2-R2 Q3 attached to the ×50 ratification (its named
 //! re-derivation target is the surge factor, not the zone); what the
-//! floor device measures remains GAP-7's open half.
+//! floor device measures remains GAP-7's open half. **That re-derivation
+//! has since happened (2026-09-12): the condition fired, ×50 was struck,
+//! and S = 4 is ratified and implemented — so the ≈ 48 % of a block
+//! interval below is the cost of a block the consensus rules no longer
+//! admit. At the ratified ceiling the same extrapolation lands inside the
+//! measured span.** The paragraph is kept as the measurement that forced
+//! the change.
 //!
 //! # FLOOR RESULTS — skl-pi, Raspberry Pi 4 Model B Rev 1.4 (verify_floor)
 //!

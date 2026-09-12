@@ -1098,6 +1098,36 @@ fn advance_already_generated_passes_the_asymptote() {
     );
 }
 
+#[test]
+fn effective_block_weight_median_matches_the_crate() {
+    let zone = 300_000u64;
+    for st in [0, zone / 10, zone, zone * 2, zone * 100, u64::MAX] {
+        assert_eq!(
+            shekyl_effective_block_weight_median(zone, st),
+            shekyl_economics::effective_median(zone, st),
+            "st={st}"
+        );
+    }
+    assert_eq!(
+        shekyl_effective_block_weight_median(zone, zone * 100),
+        4 * zone
+    );
+}
+
+#[test]
+fn long_term_block_weight_matches_the_crate() {
+    let zone = 300_000u64;
+    for w in [0, zone / 10, zone, zone * 2, 1_000_000, u64::MAX] {
+        assert_eq!(
+            shekyl_long_term_block_weight(zone, w),
+            shekyl_economics::long_term_weight(zone, w),
+            "w={w}"
+        );
+    }
+    assert_eq!(shekyl_long_term_block_weight(zone, 100_000), 176_470);
+    assert_eq!(shekyl_long_term_block_weight(zone, 1_000_000), 510_000);
+}
+
 // ─── shekyl_corrected_fee_ladder / shekyl_relay_fee_floor ────────────────────
 //
 // Crate tests own the arithmetic. These pin the marshal: null check, the

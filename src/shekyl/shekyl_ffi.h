@@ -308,6 +308,19 @@ ShekylBurnSplit shekyl_compute_burn_split_escalated(
 /// read-point obligation as shekyl_compute_burn_split_escalated.
 uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 
+/// Effective block-weight median: short_term bounded to
+/// [long_term, S * long_term], S from consensus_constants.json.
+/// Cannot fail. C++ gathers the window medians; Rust owns the clamp.
+uint64_t shekyl_effective_block_weight_median(
+    uint64_t long_term_effective,
+    uint64_t short_term_median);
+
+/// Bound a block's long-term-median contribution to [LTEM/1.7, LTEM*1.7].
+/// Cannot fail. C++ gathers LTEM; Rust owns the bound.
+uint64_t shekyl_long_term_block_weight(
+    uint64_t long_term_effective,
+    uint64_t block_weight);
+
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 

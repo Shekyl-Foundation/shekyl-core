@@ -34,30 +34,12 @@ use crate::calibration::{
 };
 use crate::escalation::{family, EscalationCurve, SHARE_SCALE};
 
-/// Long-term block-weight median floor, bytes
-/// (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`). The penalty-free block size.
-pub const BLOCK_WEIGHT_FLOOR: u64 = 300_000;
+/// Long-term block-weight median floor — the penalty-free zone.
+pub const BLOCK_WEIGHT_FLOOR: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
 
-/// Short-term surge factor over the long-term median
-/// (`CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR`).
-pub const BLOCK_WEIGHT_SURGE_FACTOR: u64 = 50;
+pub use shekyl_economics::{blocks_to_surge_saturation, BLOCK_WEIGHT_SURGE_FACTOR};
 
-/// **Measured**, not derived (`blockchain.cpp::update_next_cumulative_weight_limit`,
-/// the ArticMine-2021 algorithm, simulated over a full epoch):
-///
-/// - `effective_median = min(max(LTM_eff, short_term_median), 50 · LTM_eff)`
-/// - `block_weight_limit = effective_median · 2`
-///
-/// so a flood ratchets `effective_median` up (it is the median of the last 100
-/// actual weights) until it saturates at `50 · LTM_eff`, reaching the ceiling in
-/// **~300 blocks** — 3 % of an epoch, negligible. The **penalty-free** ceiling is
-/// the effective median itself; blocks above it up to `2×` are legal but cost the
-/// miner a reward penalty the flooder must compensate.
-///
-/// **The long-term median does not move within an epoch**, which is what makes the
-/// surge sustainable: each block's long-term weight is clamped to `1.7 · LTM_eff`
-/// (`get_next_long_term_block_weight`), and 10 000 elevated blocks cannot shift a
-/// 100 000-block median. Simulation confirms `LTM = 300 000` at epoch end.
+/// Saturated effective median: `S ·` the penalty-free zone.
 pub const BLOCK_WEIGHT_PENALTY_FREE: u64 = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SURGE_FACTOR;
 
 /// The legal per-block ceiling: `2 ×` the effective median. Using it costs the
@@ -141,12 +123,16 @@ pub fn a6_report(
          that the operand cannot swing (monotone + slow + no controller ⇒ W8 armed by\n\
          operand). Binding input is a W9 FLOOD, not organic growth — a stuffer buying\n\
          leaves at the block-weight ceiling is the fastest n can physically move.\n\
-         Ceiling: {FLOOR} B/block floor x{SURGE} surge = {SU} B; epoch = {EB} blocks;\n\
+         Ceiling: {FLOOR} B/block floor x{SURGE} surge = {SU} B, reached after\n\
+         ~{SAT} blocks of sustained flood ({SATPCT:.1}% of an epoch); epoch = {EB} blocks;\n\
          reorg reach = {RD} blocks. Curve = steepest candidate (asymptote {A:.0}%,\n\
          knee {K}) — a cliff would surface there first.",
         FLOOR = BLOCK_WEIGHT_FLOOR,
         SURGE = BLOCK_WEIGHT_SURGE_FACTOR,
         SU = surge,
+        SAT = blocks_to_surge_saturation(BLOCK_WEIGHT_SURGE_FACTOR),
+        SATPCT = blocks_to_surge_saturation(BLOCK_WEIGHT_SURGE_FACTOR) as f64 * 100.0
+            / EPOCH_BLOCKS as f64,
         EB = EPOCH_BLOCKS,
         RD = REORG_DEPTH_BLOCKS,
         A = curve.asymptote as f64 / 10_000.0,
@@ -238,7 +224,7 @@ mod tests {
 
     #[test]
     fn flood_ceiling_is_finite_and_depth_sensitive() {
-        let surge = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SURGE_FACTOR;
+        let surge = BLOCK_WEIGHT_PENALTY_FREE;
         let early = max_shards_per_window(EPOCH_BLOCKS, surge, 1_000);
         let late = max_shards_per_window(EPOCH_BLOCKS, surge, 5_000_000);
         assert!(early > 0, "a flood must be able to move n at all");
@@ -259,7 +245,7 @@ mod tests {
             .max_by_key(|c| c.asymptote)
             .copied()
             .unwrap();
-        let surge = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SURGE_FACTOR;
+        let surge = BLOCK_WEIGHT_PENALTY_FREE;
         for &n in &[0u64, 1_000, 25_000, 100_000, 250_000] {
             // Monotone: the share never falls as n rises.
             assert!(curve.share(n + 1) >= curve.share(n), "monotone at n={n}");
@@ -280,7 +266,7 @@ mod tests {
     fn reorg_bound_is_a_strict_subset_of_the_epoch_bound() {
         // The only down-swing reaches at most REORG_DEPTH_BLOCKS, which is a small
         // fraction of an epoch — so reversibility cannot exceed the up-slew.
-        let surge = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SURGE_FACTOR;
+        let surge = BLOCK_WEIGHT_PENALTY_FREE;
         const _: () = assert!(REORG_DEPTH_BLOCKS < EPOCH_BLOCKS);
         let n = 50_000;
         assert!(

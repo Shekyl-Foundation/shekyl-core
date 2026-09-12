@@ -4,6 +4,17 @@
 
 ### Changed
 
+- **Short-term block-weight surge factor is 4**, sourced from
+  `config/consensus_constants.json` as `block_weight_short_term_surge_factor`.
+  The effective-median clamp that consumes it lives in
+  `shekyl-economics::effective_median` (`shekyl_effective_block_weight_median`);
+  C++ gathers the window medians and does not multiply `S` itself. A node
+  holding the inherited ×50 accepts a block a node holding 4 rejects as
+  over-weight. Pre-genesis, so no cutover. **Changing `S` moves no fee
+  number:** the wallet's estimate reads the long-term effective median
+  directly, and the surge clamp applies to the short-term median, which never
+  reaches that path.
+
 - **The cold-authority selector for bond-posts is one Rust predicate.**
   `requires_cold_authority(post_kind, bond_debit)` is an exhaustive truth
   table — `Release` always, `HoldingsUpdate` iff `bond_debit > 0`,
