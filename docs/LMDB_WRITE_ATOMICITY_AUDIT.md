@@ -958,9 +958,11 @@ Found 2026-09-12 during DRS-0 slice A's delete-path falsifier run (§12),
 verified against `dev` `ba4b3c73a`.
 
 `remove_block` positions two of its three write cursors explicitly before
-deleting through them — `m_cur_block_info` by `MDB_GET_BOTH` on the height,
-then `m_cur_block_heights` by `MDB_GET_BOTH` on the `bi_hash` read back from
-that row. It then calls `mdb_cursor_del(m_cur_blocks, 0)` (`:1053`) with **no
+deleting through them — `m_cur_block_info` by `MDB_GET_BOTH` on the height
+(`:1040`), then `m_cur_block_heights` by `MDB_GET_BOTH` on the `bi_hash`
+read back from that row (`:1048`), one line before its own delete at
+`:1050`. **This is not an idiom the file lacks: it is one the file uses
+twice in the same twenty lines and omits once.** It then calls `mdb_cursor_del(m_cur_blocks, 0)` (`:1053`) with **no
 positioning call on `m_cur_blocks` anywhere in the function**.
 `CURSOR(blocks)` (`:433`) only opens the cursor if the member is null; it
 does not position it.
@@ -985,15 +987,16 @@ assumed.** An unpositioned `mdb_cursor_del` returns `EINVAL`, so a pop
 *should* throw on the first call; pops do not. The resolution is an
 **implicit position coupling across two functions**.
 `BlockchainDB::pop_block` calls `blk = get_top_block()`
-(`blockchain_db.cpp:743`) immediately before the pop sequence.
+(`blockchain_db.cpp:742`) — **sixty-three lines above** the
+`remove_block()` at `:805`, not adjacent to it, and the size of that window
+is part of the finding rather than incidental to it.
 `get_top_block` reaches `get_block_blob_from_height`, which does
 `mdb_cursor_get(m_cur_blocks, &key, …, MDB_SET)` (`:2789`) — and `RCURSOR`
 (`:440`) opens into `m_cursors`, which **is** `&m_wcursors` inside a write
 transaction. It is therefore the *same* `m_cur_blocks` member, left
 positioned at `height() - 1` — exactly the row `remove_block` then
-deletes. Nothing between the two touches the `blocks` table
-(`blockchain_db.cpp:743`–`:805`), and `pop_block` is `remove_block`'s
-**sole caller** (`:805`; the only other declarations are the pure virtual
+deletes. Nothing in those sixty-three lines touches the `blocks` table, and
+`pop_block` is `remove_block`'s **sole caller** (`:805`; the only other declarations are the pure virtual
 and `testdb.h`'s empty override).
 
 **So the grade is latent, not unresolved, and the hazard is precise.**
@@ -1001,9 +1004,12 @@ and `testdb.h`'s empty override).
 `remove_block` does not state and cannot check. Two changes break it, both
 silent:
 
-- any `blocks` read inserted between `get_top_block()` and `remove_block()`
-  in that window — it repositions the shared cursor, and the delete then
-  removes **whatever row the cursor last landed on**; and
+- any `blocks` read inserted anywhere in that **sixty-three-line** window
+  — it repositions the shared cursor, and the delete then removes
+  **whatever row the cursor last landed on**. This is the reason the row is
+  worth minting: the window is wide enough for a future edit to land in
+  without its author ever seeing the cursor dependency, which neither end
+  of the coupling states; and
 - any second caller of `remove_block` that does not read the top block
   first — it deletes at a stale position, or throws `EINVAL` if the cursor
   is fresh.
@@ -1371,60 +1377,70 @@ Set-shaped reversibility requires the element's canonical encoding be
 a property of the *table*, not of the class, so it is established per row
 rather than asserted class-wide.
 
-**The falsifier run for this freeze, and its result:** for each of the
-fifteen `set-shaped` tables, does the delete path have the stored element
-**in hand**, or does it delete by key with the value never read? **The
-answer is not uniform, and an earlier draft of this section said it was.**
-Ten paths read the element back; five delete by key alone:
+**The falsifier run for this freeze, and its result.** For each of the
+fifteen `set-shaped` tables: does the delete path have the stored element
+**in hand**, and does any write path **overwrite without reading**? The
+answer is not uniform, and **two earlier drafts of this section enumerated
+it by hand and got it wrong in both directions.** The lists below are
+derived mechanically from the write sites in `db_lmdb.cpp` and
+gate-checked against them (§9.1 slice-A write-pattern leg), because the
+enumeration — not the classification — is the thing that drifts.
 
-| Delete has the element | Mechanism |
-| --- | --- |
-| `spent_keys` | `remove_spent_key` — `MDB_GET_BOTH`; the element *is* the key image |
-| `block_heights` | `remove_block` — element derived from the `mdb_block_info` read back |
-| `tx_indices` | `remove_transaction_data` — whole `txindex` via `MDB_GET_BOTH` |
-| `output_txs`, `output_amounts` | `remove_output` — stored `pre_rct_outkey` read back |
-| `output_to_leaf`, `leaf_to_output` | `remove_output_leaf_mapping` — `mdb_get` then verify-before-delete |
-| `block_pending_additions`, `pending_tree_drain` | range cursor walks holding `&v` |
-| `archival_shard_segment` | `revert_archival_segment_freezes` — cursor walk holding `&v` |
+**The split is structural, which is why it is stated as a structure rather
+than as two lists to maintain.** Five `set-shaped` tables are
+DUPSORT/cursor-managed — written through `m_wcursors` with
+`mdb_cursor_put`, deleted through `mdb_cursor_del` after an `MDB_GET_BOTH`
+that positions the cursor *on the row*. The other ten are simple
+key→value tables written with `mdb_put`.
 
-| Delete by key ALONE — element never read | Call |
-| --- | --- |
-| `archival_bond` | `remove_archival_bond_record` — `mdb_del(txn, dbi, &k, nullptr)` |
-| `archival_slash_applied` | `remove_archival_slash_applied` — same shape |
-| `block_burn` | `remove_block_burn` — same shape |
-| `curve_tree_roots` | `remove_curve_tree_root_at_height` — same shape |
-| `pending_tree_leaves` | `remove_pending_tree_leaf` — same shape |
+| | Delete has the element | Blind upsert |
+| --- | --- | --- |
+| **DUPSORT/cursor-managed (5)** — `spent_keys`, `block_heights`, `tx_indices`, `output_txs`, `output_amounts` | **yes**, all five — `MDB_GET_BOTH` positions on the row before `mdb_cursor_del` | **none** |
+| **Range-cursor walks (3)** — `block_pending_additions`, `pending_tree_drain`, `archival_shard_segment` | **yes** — the walk holds `&v` at each step | **yes**, all three |
+| **`output_to_leaf`** | **yes** — `remove_output_leaf_mapping` does `mdb_get` and *verifies* the stored value before deleting | **yes** |
+| **Delete by key ALONE (6)** — `leaf_to_output`, `archival_bond`, `archival_slash_applied`, `block_burn`, `curve_tree_roots`, `pending_tree_leaves` | **NO** — `mdb_del(txn, dbi, &k, nullptr)`, value never read | **yes**, all six |
 
-**This does not move any class**, because a `set-shaped` accumulator is
-still reversible on those five — redb can always read before it deletes.
-What it moves is the **obligation**: for those five the Rust store must
-perform a read the C++ does not, and a port that transliterates
-`mdb_del(…, nullptr)` into a bare redb `remove` desynchronizes the
-accumulator silently. That is a specific instruction to DRS-0 slice B and
-DRS-E1, and it only exists because the run was per-table.
+So **nine of fifteen** have the element at delete and **six do not**; and
+**ten of fifteen blind-upsert** — every simple key→value table, none of the
+DUPSORT five. `leaf_to_output` is the asymmetry worth noticing: its partner
+`output_to_leaf` is read and verified in the same function, and it is not.
 
-**The general design rule, which holds for all fifteen: fold the value read
-from the store, never the caller's argument.**
-`remove_output_leaf_mapping` is why it is phrased that way — DRS-W13
-records that the caller *reconstructs* `TreePosition` arithmetically
-because the drain journal never recorded it, and the store defends itself
-by reading the stored value back and throwing on mismatch. A fold over the
-caller's argument would inherit W13's reconstruction; a fold over the
-stored bytes does not. `output_to_leaf` and `leaf_to_output` are therefore
-`set-shaped` **and** carry W13 as a live constraint on the Rust
-implementation.
+**None of this moves a class**, because a `set-shaped` accumulator is still
+reversible on all fifteen — redb can always read before it writes or
+deletes. What it moves is the **obligation**, and that is what DRS-0 slice B
+and DRS-E1 need:
 
-**Blind upsert is the second reversibility obligation, and four
-`set-shaped` tables have one.** `put_archival_bond_value`,
-`set_archival_slash_applied`, `add_block_burn` and
-`store_curve_tree_root_at_height` all call `mdb_put(…, 0)` — flags `0`,
-so an existing row is **overwritten without being read**. An XOR
-accumulator over those tables must fold the old value *out* before folding
-the new value *in*, which again requires a read the C++ does not perform.
-An earlier draft of this section named `txpool_meta`'s `update_txpool_tx`
-as "the live example" of an update path and noted it was `excluded`,
-implying no `set-shaped` table had one. Four do, and they are the same
-simple key→value tables that delete by key above.
+- **Six tables need a read the C++ does not perform before delete.** A port
+  that transliterates `mdb_del(…, nullptr)` into a bare redb `remove`
+  desynchronizes the accumulator silently.
+- **Ten tables need a read-modify-write on insert.** `mdb_put(…, 0)` with
+  flags `0` overwrites an existing row without reading it; an XOR
+  accumulator must fold the old value **out** before folding the new one
+  **in**, or an overwrite double-counts.
+
+**The general rule, holding for all fifteen: fold the value read from the
+store, never the caller's argument.** `remove_output_leaf_mapping` is why
+it is phrased that way — DRS-W13 records that the caller *reconstructs*
+`TreePosition` arithmetically because the drain journal never recorded it,
+and the store defends itself by reading the stored value back and throwing
+on mismatch. A fold over the caller's argument would inherit W13's
+reconstruction; a fold over the stored bytes does not. `output_to_leaf` and
+`leaf_to_output` are `set-shaped` **and** carry W13 as a live constraint.
+
+**`archival_shard_segment` has two write sites with different overwrite
+semantics, and a single accumulator hook on that table would be wrong on
+one of them.** `put_archival_shard_segment` uses `mdb_put(…, 0)` — blind,
+so read-modify-write; the registry path uses `mdb_put(…, MDB_NOOVERWRITE)`,
+create-only, whose comment states the single-row-per-shard contract and the
+O-2 overwrite adversary it refuses. Insert-only must **not** fold an old
+value out; blind upsert **must**. Which is correct depends on which site
+ran, so the Rust store needs the hook at the two call sites rather than one
+hook on the table. A divergence here would appear only under a specific
+write order — the hardest kind to find later.
+
+**`txpool_meta`'s `update_txpool_tx` is the same obligation on an
+`excluded` table** and is noted only so the pattern is not read as unique
+to the pool.
 
 ### Comparator coupling — the seven `compare_hash32` tables
 

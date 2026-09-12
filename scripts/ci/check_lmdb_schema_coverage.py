@@ -422,6 +422,95 @@ def main() -> None:
             f"v0-`excluded` with a real accumulator class:\n  "
             + ", ".join(axis_gap))
 
+    # Write-pattern leg (DRS-0 slice A, 2026-09-12). The accumulator freeze's
+    # §12 states, per set-shaped table, whether the delete path has the stored
+    # element in hand and whether any write path blind-upserts. Those two sets
+    # decide where DRS-E1 must add a read the C++ does not perform, so a
+    # drifted list is a wrong instruction to the port rather than a stale
+    # sentence.
+    #
+    # THIS LEG EXISTS BECAUSE CARE FAILED. The enumeration was written by hand
+    # twice and was wrong both times, in both directions -- once from a sample
+    # of six functions read as a population, once by missing `leaf_to_output`
+    # while catching its partner `output_to_leaf` in the same function. The
+    # classification held each time; only the enumeration moved. So the
+    # enumeration is derived here and the prose is checked against it.
+    #
+    # It matches `mdb_del(*m_write_txn, m_<table>, ...)` -- delete by key with
+    # no cursor -- and `mdb_put(*m_write_txn, m_<table>, &k, &v, 0)`, flags
+    # zero meaning overwrite-without-read. It deliberately does NOT try to
+    # decide whether a preceding `mdb_get` puts the value in hand: that is a
+    # per-call-site reading (`output_to_leaf` does, `leaf_to_output` does
+    # not, in the same function), and a regex that guessed it would be the
+    # instrument normalizing away the distinction it exists to expose. What
+    # this leg checks is the BLIND-UPSERT set, which is purely lexical, and
+    # that every table §12 names still has the write site §12 says it has.
+    try:
+        lmdb_src = (ROOT / "src" / "blockchain_db" / "lmdb"
+                    / "db_lmdb.cpp").read_text(encoding="utf-8")
+    except OSError as e:
+        _fail(f"cannot read db_lmdb.cpp ({e}) -- the slice-A write-pattern "
+              "leg cannot derive the write sites it checks")
+
+    set_shaped = {t for t, c in classes.items() if c == "set-shaped"}
+    blind_upsert = {
+        t for t in set_shaped
+        if re.search(r"mdb_put\(\*m_write_txn, m_" + re.escape(t)
+                     + r", &\w+, &\w+, 0\)", lmdb_src)}
+    del_by_key = {
+        t for t in set_shaped
+        if re.search(r"mdb_del\(\*m_write_txn, m_" + re.escape(t) + r",",
+                     lmdb_src)}
+
+    sec12 = re.search(r"^### The per-table falsifier.*?(?=^### )", audit,
+                      re.MULTILINE | re.DOTALL)
+    if not sec12:
+        errors.append("the audit \u00a712 falsifier subsection is gone -- the "
+                      "slice-A write-pattern leg has no subject to check "
+                      "(rule 47: a gate asserts its own subject exists)")
+    else:
+        stated_blind = re.search(r"\*\*ten of fifteen blind-upsert\*\*",
+                                 sec12.group(0))
+        if not stated_blind:
+            errors.append(
+                "the audit \u00a712 no longer states the blind-upsert count "
+                "in the form this leg checks ('**ten of fifteen "
+                "blind-upsert**')")
+        elif len(blind_upsert) != 10:
+            errors.append(
+                f"the audit \u00a712 states ten of fifteen set-shaped tables "
+                f"blind-upsert; {len(blind_upsert)} tables match "
+                f"mdb_put(..., 0) in db_lmdb.cpp:\n  "
+                + ", ".join(sorted(blind_upsert)))
+        # Every table named in the delete-by-key-alone row must actually have
+        # a keyed mdb_del. The converse is NOT checked: output_to_leaf has one
+        # and is correctly excluded, because it reads the value first.
+        named_row = re.search(
+            r"\*\*Delete by key ALONE \((\d+)\)\*\* — ([^|]+)\|",
+            sec12.group(0))
+        if not named_row:
+            errors.append("the audit \u00a712 no longer names its "
+                          "delete-by-key-alone set in the form this leg "
+                          "checks")
+        else:
+            named = set(re.findall(r"`([a-z0-9_]+)`", named_row.group(2)))
+            if int(named_row.group(1)) != len(named):
+                errors.append(
+                    f"the audit \u00a712 says {named_row.group(1)} tables "
+                    f"delete by key alone but names {len(named)}")
+            not_set_shaped = sorted(named - set_shaped)
+            if not_set_shaped:
+                errors.append(
+                    "the audit \u00a712 names these in the set-shaped "
+                    "delete-by-key row, but they are not classed "
+                    "set-shaped:\n  " + ", ".join(not_set_shaped))
+            no_such_del = sorted(named - del_by_key)
+            if no_such_del:
+                errors.append(
+                    "the audit \u00a712 says these delete by key alone, but "
+                    "db_lmdb.cpp has no keyed mdb_del on them:\n  "
+                    + ", ".join(no_such_del))
+
     mat_count = re.search(r"\*\*(\d+) rows\*\*", mat_m.group(0))
     if not mat_count:
         errors.append("the audit coverage matrix's '**N rows**' count line "
@@ -461,6 +550,12 @@ def main() -> None:
           f"The two axes disagree on {len(axis_gap)} rows (v0-excluded with "
           "a real class) \u2014 a v0 exclusion is not an accumulator "
           "exclusion (audit \u00a712).")
+    print(f"    Write patterns (slice A): {len(blind_upsert)} of "
+          f"{len(set_shaped)} set-shaped tables blind-upsert "
+          "(mdb_put flags 0) and so need a read-modify-write hook; "
+          f"{len(del_by_key)} carry a keyed mdb_del. Derived from "
+          "db_lmdb.cpp, not from the prose \u2014 this enumeration was "
+          "written by hand twice and wrong twice.")
 
 
 if __name__ == "__main__":
