@@ -133,42 +133,19 @@ struct BlockchainAndPool
     }; \
     get_test_options(): hard_forks{std::make_pair(1, (uint64_t)0), std::make_pair((uint8_t)hf_version, (uint64_t)1), std::make_pair((uint8_t)0, (uint64_t)0)} {} \
   } opts; \
-  bool r = bc->init(new TestDB(), cryptonote::FAKECHAIN, true, &opts.test_options, 0); \
-  ASSERT_TRUE(r)
+  TestDB *db = new TestDB(); \
+  ASSERT_TRUE(bc->init(db, cryptonote::FAKECHAIN, true, &opts.test_options, 0))
 
 #define PREFIX(hf_version) PREFIX_WINDOW(hf_version, TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW)
 
-
-// ---------------------------------------------------------------------------
-// CEN-G6 / CEN-G6b — the short-term surge factor.
-//
-// The fast governor lets the effective median exceed the long-term effective
-// median on the strength of the 100-block short-term median alone, bounded by
-// S. C2-R2 Q3 (SIGNED, Rick 2026-09-06) REFUTED the inherited x50 on GAP-7's
-// floor measurement -- the surge-ceiling cold block measured ~316% of T on the
-// Pi 4 floor device -- and re-derived **S = 4**, the d24 consensus-max figure
-// (verify_floor 128.77 ms/tx, f = 1/3, f*T = 40 s). The depth tier is part of
-// the value: d2/d7 would have signed 6.5/5.7, and the gap between those and 4
-// is the decay the ruling's reason names.
-//
-// Q3's coupling, restated because it is what makes these tests load-bearing
-// rather than decorative: during the first ~100 000 blocks this bound is the
-// ONLY protection against early-chain weight growth, because the long-term
-// governor is structurally weak while its window fills.
-// ---------------------------------------------------------------------------
-
 namespace
 {
-  // The ratified value, written as a LITERAL on purpose. Asserting the constant
-  // against itself cannot fail; the job of this number is to make an unratified
-  // edit of the surge factor fail a gate, so it must be an independent
-  // statement of what C2-R2 Q3 signed.
+  // Independent statement of C2-R2 Q3. Asserting the generated constant
+  // against itself cannot fail.
   constexpr uint64_t RATIFIED_SURGE_FACTOR = 4;
+  static_assert(RATIFIED_SURGE_FACTOR >= 3,
+                "the below-ceiling case needs a weight strictly between zone and S*zone");
 
-  // Drives `bc` to `count` blocks of the given weights and recomputes the
-  // limit. Long-term weights are held at the zone so the long-term effective
-  // median stays pinned there -- the surge clamp is what is under test, not
-  // the long-term governor.
   void push_blocks(TestDB *db, size_t count, size_t weight, uint64_t long_term_weight)
   {
     for (size_t i = 0; i < count; ++i)
@@ -177,45 +154,28 @@ namespace
   }
 }
 
-#define SURGE_PREFIX() \
-  BlockchainAndPool bap; \
-  cryptonote::Blockchain *bc = &bap.bc; \
-  struct get_test_options { \
-    const std::pair<uint8_t, uint64_t> hard_forks[3]; \
-    const cryptonote::test_options test_options = { hard_forks, TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW }; \
-    get_test_options(): hard_forks{std::make_pair(1, (uint64_t)0), std::make_pair((uint8_t)1, (uint64_t)1), std::make_pair((uint8_t)0, (uint64_t)0)} {} \
-  } opts; \
-  TestDB *db = new TestDB(); \
-  ASSERT_TRUE(bc->init(db, cryptonote::FAKECHAIN, true, &opts.test_options, 0))
+TEST(long_term_block_weight, generated_macro_matches_the_ratified_factor)
+{
+  EXPECT_EQ(RATIFIED_SURGE_FACTOR, SHEKYL_BLOCK_WEIGHT_SHORT_TERM_SURGE_FACTOR);
+}
 
-// A short-term median far above the ceiling must be clamped to exactly
-// S * long-term-effective-median. This is the test that fails at the refuted
-// x50 (it would observe 15 000 000) and passes at the ratified 4.
 TEST(long_term_block_weight, surge_ceiling_bounds_the_effective_median_at_the_ratified_factor)
 {
-  SURGE_PREFIX();
+  PREFIX(1);
   const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
 
-  // Long-term weights pinned at the zone, so LTEM == zone; short-term weights
-  // far above any plausible ceiling, so the clamp -- not the median -- decides.
   push_blocks(db, CRYPTONOTE_REWARD_BLOCKS_WINDOW, zone * 100, zone);
   ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
 
   EXPECT_EQ(RATIFIED_SURGE_FACTOR * zone, bc->get_current_cumulative_block_weight_median());
-  // The legal per-block ceiling is twice the effective median (CEN-G6b): at the
-  // ratified factor that is 2 * 4 * 300 000 = 2.4 MB at launch, not the 30 MB
-  // the refuted x50 admitted.
   EXPECT_EQ(2 * RATIFIED_SURGE_FACTOR * zone, bc->get_current_cumulative_block_weight_limit());
 }
 
-// The clamp must be a ceiling, not a constant: a short-term median BELOW the
-// ceiling has to pass through untouched. Without this, an implementation that
-// unconditionally returned S * LTEM would satisfy the test above.
 TEST(long_term_block_weight, a_short_term_median_below_the_ceiling_is_not_clamped)
 {
-  SURGE_PREFIX();
+  PREFIX(1);
   const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
-  const uint64_t below_ceiling = zone * 2; // < 4 * zone, and > zone
+  const uint64_t below_ceiling = zone * (RATIFIED_SURGE_FACTOR - 1);
 
   push_blocks(db, CRYPTONOTE_REWARD_BLOCKS_WINDOW, below_ceiling, zone);
   ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
@@ -223,12 +183,9 @@ TEST(long_term_block_weight, a_short_term_median_below_the_ceiling_is_not_clampe
   EXPECT_EQ(below_ceiling, bc->get_current_cumulative_block_weight_median());
 }
 
-// A short-term median below the long-term effective median must not drag the
-// effective median down: the clamp's lower arm is max(LTEM, ST), so the zone
-// floor holds. Pins the arm the surge change does not touch.
 TEST(long_term_block_weight, a_quiet_chain_does_not_fall_below_the_long_term_median)
 {
-  SURGE_PREFIX();
+  PREFIX(1);
   const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
 
   push_blocks(db, CRYPTONOTE_REWARD_BLOCKS_WINDOW, zone / 10, zone);

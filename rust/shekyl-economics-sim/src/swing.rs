@@ -34,79 +34,13 @@ use crate::calibration::{
 };
 use crate::escalation::{family, EscalationCurve, SHARE_SCALE};
 
-/// Long-term block-weight median floor, bytes
-/// (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`). The penalty-free block size.
-pub const BLOCK_WEIGHT_FLOOR: u64 = 300_000;
+/// Long-term block-weight median floor — the penalty-free zone.
+pub const BLOCK_WEIGHT_FLOOR: u64 = shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64;
 
-/// Short-term surge factor `S` over the long-term median.
-///
-/// Re-exported from [`shekyl_economics`], which reads it from the build
-/// authority `config/consensus_constants.json` — the same file that emits the
-/// C++ `SHEKYL_BLOCK_WEIGHT_SHORT_TERM_SURGE_FACTOR` consumed by the clamp in
-/// `Blockchain::update_next_cumulative_weight_limit`. It is **not** re-declared
-/// here: a sim that prices flood capacity against a locally-held copy can
-/// validate a parameter the chain does not enforce, which is exactly what
-/// happened while this constant sat at the refuted `x50`.
-///
-/// If this harness ever needs to *sweep* `S`, take it as a parameter at the
-/// call site rather than shadowing the consensus value with a second constant.
-pub use shekyl_economics::BLOCK_WEIGHT_SURGE_FACTOR;
+pub use shekyl_economics::{blocks_to_surge_saturation, BLOCK_WEIGHT_SURGE_FACTOR};
 
-/// The saturated effective median: what a maximal flood can lift the
-/// penalty-free ceiling to (`blockchain.cpp::update_next_cumulative_weight_limit`,
-/// the ArticMine-2021 algorithm):
-///
-/// - `effective_median = min(max(LTM_eff, short_term_median), S · LTM_eff)`
-/// - `block_weight_limit = effective_median · 2`
-///
-/// A flood ratchets `effective_median` up — it is the median of the last 100
-/// actual weights — until it saturates at `S · LTM_eff`. The **penalty-free**
-/// ceiling is the effective median itself; blocks above it up to `2×` are legal
-/// but cost the miner a reward penalty the flooder must compensate.
-///
-/// **Time to saturate is DERIVED, not a frozen measurement** — see
-/// [`blocks_to_surge_saturation`]. The figure this doc-comment used to carry
-/// ("~300 blocks, 3 % of an epoch, negligible") was a simulation result that
-/// depended on the refuted `S = 50`, with no reproducible computation behind
-/// it; at the ratified `S = 4` it is **~102 blocks, ~1 % of an epoch**. The
-/// conclusion does not change sign — saturation is *faster*, because there are
-/// fewer doublings to climb — but the ceiling it saturates *to* is 12.5× lower.
-///
-/// **The long-term median does not move within an epoch**, which is what makes the
-/// surge sustainable: each block's long-term weight is clamped to `1.7 · LTM_eff`
-/// (`get_next_long_term_block_weight`), and 10 000 elevated blocks cannot shift a
-/// 100 000-block median. Simulation confirms `LTM = 300 000` at epoch end.
+/// Saturated effective median: `S ·` the penalty-free zone.
 pub const BLOCK_WEIGHT_PENALTY_FREE: u64 = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SURGE_FACTOR;
-
-/// Blocks a maximal flood needs to lift the effective median from the
-/// long-term effective median all the way to the surge ceiling `S · LTM_eff`.
-///
-/// **Derivation** (C2-R2 Q3 ratifies both inputs): the short-term window is 100
-/// blocks and its median only moves once more than half the window carries the
-/// new level, so a flooder needs **51** blocks at the current limit to move the
-/// median to it — the ratified *51-block doubling envelope*. Each crossing
-/// doubles the limit (`limit = 2 · effective_median`), so reaching a ceiling
-/// `S ×` above the starting median takes `ceil(log2(S))` crossings.
-///
-/// This replaces a frozen "~300 blocks" that no code computed. The model is
-/// validated against that historical simulation at the value it was measured
-/// under: at `S = 50` it returns 306, which is the "~300 blocks — 3 % of an
-/// epoch" the old comment recorded. Agreeing with an independent measurement at
-/// the refuted value is what licenses using it at the ratified one.
-#[must_use]
-pub const fn blocks_to_surge_saturation(surge_factor: u64) -> u64 {
-    const SHORT_TERM_WINDOW: u64 = 100;
-    // Strictly more than half the window must carry the new level.
-    const BLOCKS_PER_CROSSING: u64 = SHORT_TERM_WINDOW / 2 + 1;
-
-    let mut crossings = 0;
-    let mut reached = 1;
-    while reached < surge_factor {
-        reached *= 2;
-        crossings += 1;
-    }
-    crossings * BLOCKS_PER_CROSSING
-}
 
 /// The legal per-block ceiling: `2 ×` the effective median. Using it costs the
 /// miner-reward penalty, so a flooder pays for the extra capacity twice (fees and
@@ -290,7 +224,7 @@ mod tests {
 
     #[test]
     fn flood_ceiling_is_finite_and_depth_sensitive() {
-        let surge = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SURGE_FACTOR;
+        let surge = BLOCK_WEIGHT_PENALTY_FREE;
         let early = max_shards_per_window(EPOCH_BLOCKS, surge, 1_000);
         let late = max_shards_per_window(EPOCH_BLOCKS, surge, 5_000_000);
         assert!(early > 0, "a flood must be able to move n at all");
@@ -311,7 +245,7 @@ mod tests {
             .max_by_key(|c| c.asymptote)
             .copied()
             .unwrap();
-        let surge = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SURGE_FACTOR;
+        let surge = BLOCK_WEIGHT_PENALTY_FREE;
         for &n in &[0u64, 1_000, 25_000, 100_000, 250_000] {
             // Monotone: the share never falls as n rises.
             assert!(curve.share(n + 1) >= curve.share(n), "monotone at n={n}");
@@ -332,60 +266,12 @@ mod tests {
     fn reorg_bound_is_a_strict_subset_of_the_epoch_bound() {
         // The only down-swing reaches at most REORG_DEPTH_BLOCKS, which is a small
         // fraction of an epoch — so reversibility cannot exceed the up-slew.
-        let surge = BLOCK_WEIGHT_FLOOR * BLOCK_WEIGHT_SURGE_FACTOR;
+        let surge = BLOCK_WEIGHT_PENALTY_FREE;
         const _: () = assert!(REORG_DEPTH_BLOCKS < EPOCH_BLOCKS);
         let n = 50_000;
         assert!(
             max_shards_per_window(REORG_DEPTH_BLOCKS, surge, n)
                 <= max_shards_per_window(EPOCH_BLOCKS, surge, n)
         );
-    }
-}
-
-#[cfg(test)]
-mod surge_saturation_tests {
-    use super::{blocks_to_surge_saturation, BLOCK_WEIGHT_SURGE_FACTOR, EPOCH_BLOCKS};
-
-    /// The model must reproduce the historical simulation at the value that
-    /// simulation was run under. Without this leg the derivation below is an
-    /// unvalidated formula that happens to produce a number.
-    #[test]
-    fn the_model_reproduces_the_measured_figure_at_the_refuted_factor() {
-        // The doc-comment this replaced recorded "~300 blocks — 3 % of an
-        // epoch" at S = 50, measured by simulation.
-        assert_eq!(blocks_to_surge_saturation(50), 306);
-        assert_eq!(306 * 100 / EPOCH_BLOCKS, 3);
-    }
-
-    /// The re-derivation at the ratified value. NOT the old number edited.
-    #[test]
-    fn saturation_at_the_ratified_factor_is_about_one_percent_of_an_epoch() {
-        assert_eq!(blocks_to_surge_saturation(4), 102);
-        // ~1 % of a 10 000-block epoch: the "negligible" conclusion holds and
-        // strengthens — fewer doublings to climb, so the flood saturates sooner.
-        assert!(blocks_to_surge_saturation(4) * 100 / EPOCH_BLOCKS <= 1);
-    }
-
-    /// Whatever the consensus authority currently says, saturation must stay a
-    /// small fraction of an epoch — the property the sim's flood scenarios rely
-    /// on. Fails loudly if a future re-derivation of S breaks the assumption
-    /// rather than letting the harness keep modelling a stale one.
-    #[test]
-    fn saturation_at_the_live_factor_stays_within_an_epoch() {
-        let blocks = blocks_to_surge_saturation(BLOCK_WEIGHT_SURGE_FACTOR);
-        assert!(
-            blocks > 0,
-            "a surge factor above 1 must take at least one crossing"
-        );
-        assert!(
-            blocks * 20 < EPOCH_BLOCKS,
-            "saturation {blocks} blocks is no longer negligible against a {EPOCH_BLOCKS}-block epoch"
-        );
-    }
-
-    /// S = 1 means no surge headroom at all: no crossings, nothing to climb.
-    #[test]
-    fn a_unit_surge_factor_needs_no_crossings() {
-        assert_eq!(blocks_to_surge_saturation(1), 0);
     }
 }

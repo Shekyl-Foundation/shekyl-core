@@ -40,12 +40,6 @@ fn main() {
     let consensus_map: BTreeMap<String, serde_json::Value> =
         serde_json::from_str(&consensus_raw).expect("invalid JSON in consensus_constants.json");
     let daa_target_seconds = get_u64(&consensus_map, "daa_target_seconds");
-    // Short-term block-weight surge factor S. Same authority, same reason:
-    // the sim harness prices flood capacity against the consensus ceiling, so
-    // a literal here would let the simulation validate a parameter the chain
-    // does not enforce. RATIFIED S = 4 (CONSENSUS_C2_R2_WEIGHT_FEES.md Q3,
-    // signed 2026-09-06); the inherited x50 was refuted by GAP-7's floor
-    // measurement, not superseded.
     let block_weight_surge_factor = get_u64(&consensus_map, "block_weight_short_term_surge_factor");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));

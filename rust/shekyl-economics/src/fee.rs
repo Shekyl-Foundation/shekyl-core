@@ -397,6 +397,9 @@ pub fn checked_corrected_fee_ladder(
     ref_tx_weight: u64,
     c_q: u64,
 ) -> Option<FeeLadder> {
+    // With the surge clamp, Mnw ≥ Mlw, so min(Mnw, Mlw) selects Mlw and S
+    // does not reach the priced rungs. The min stays: this function prices
+    // a caller-supplied pair, including heritage vectors with Mnw > Mlw.
     let mfw = mnw.min(mlw).max(full_reward_zone).max(1);
     let round_scaled = |num: u128, den: u128| -> u64 {
         round_money_up_2(u64::try_from(num / den).unwrap_or(u64::MAX))

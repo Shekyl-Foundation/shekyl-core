@@ -1098,6 +1098,22 @@ fn advance_already_generated_passes_the_asymptote() {
     );
 }
 
+#[test]
+fn effective_block_weight_median_matches_the_crate() {
+    let zone = 300_000u64;
+    for st in [0, zone / 10, zone, zone * 2, zone * 100, u64::MAX] {
+        assert_eq!(
+            shekyl_effective_block_weight_median(zone, st),
+            shekyl_economics::effective_median(zone, st),
+            "st={st}"
+        );
+    }
+    assert_eq!(
+        shekyl_effective_block_weight_median(zone, zone * 100),
+        4 * zone
+    );
+}
+
 // ─── shekyl_corrected_fee_ladder / shekyl_fee_correction_quantized ──────────
 //
 // Same boundary rationale as `shekyl_block_reward` above: the crate tests

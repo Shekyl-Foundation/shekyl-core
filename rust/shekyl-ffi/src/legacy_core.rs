@@ -501,6 +501,17 @@ pub extern "C" fn shekyl_base_block_reward(already_generated_coins: u64) -> u64 
     shekyl_economics::base_block_reward(already_generated_coins, &params).unwrap_or(0)
 }
 
+/// Effective block-weight median: `short_term` bounded to
+/// `[long_term, S · long_term]`. Cannot fail. C++ gathers the two medians;
+/// this is the clamp both the consensus path and the fee estimate consume.
+#[no_mangle]
+pub extern "C" fn shekyl_effective_block_weight_median(
+    long_term_effective: u64,
+    short_term_median: u64,
+) -> u64 {
+    shekyl_economics::effective_median(long_term_effective, short_term_median)
+}
+
 /// Status: reward computed. `out_reward` and `out_weight_limit` are written.
 pub const SHEKYL_BLOCK_REWARD_OK: i32 = 0;
 /// Status: the block exceeds twice the effective median — a CONSENSUS

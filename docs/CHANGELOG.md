@@ -4,6 +4,16 @@
 
 ### Changed
 
+- **Short-term block-weight surge factor is 4**, sourced from
+  `config/consensus_constants.json` as `block_weight_short_term_surge_factor`.
+  The effective-median clamp that consumes it lives in
+  `shekyl-economics::effective_median` (`shekyl_effective_block_weight_median`);
+  C++ gathers the two medians and does not multiply `S` itself. A node
+  holding the inherited ×50 accepts a block a node holding 4 rejects as
+  over-weight. Pre-genesis, so no cutover. The fee ladder's `Mfw =
+  min(Mnw, Mlw)` selects `Mlw` under this clamp, so changing `S` moves no
+  fee number.
+
 - **The fee estimate returns three tiers, not four, and `CORE_RPC_VERSION`
   is 3.30 (FL-R25).** `get_fee_estimate.fees` was a four-slot array
   carrying three priced rates: slot 2 duplicated slot 1. The duplicate

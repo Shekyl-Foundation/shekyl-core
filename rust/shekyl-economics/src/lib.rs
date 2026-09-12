@@ -15,6 +15,7 @@
 #![deny(unsafe_code)]
 
 pub mod activity;
+pub mod block_weight;
 pub mod burn;
 pub mod digest;
 pub mod emission;
@@ -26,6 +27,7 @@ pub mod release;
 pub mod volume;
 
 pub use activity::{ActivityInvariantViolation, ActivityMetric};
+pub use block_weight::{blocks_to_surge_saturation, effective_median, BLOCK_WEIGHT_SURGE_FACTOR};
 pub use burn::{
     calc_burn_pct, calc_burn_pct_from_activity, compute_burn_split, compute_burn_split_at,
     BurnSplit,
@@ -46,9 +48,8 @@ pub use fee::{
     EMISSION_CLAIM_FEE_FLOOR,
 };
 pub use params::{
-    calc_stake_ratio, EconomicParams, EconomicParamsError, BLOCKS_PER_YEAR,
-    BLOCK_WEIGHT_SURGE_FACTOR, CALIBRATION_GENERATION, EMISSION_CURVE_ASYMPTOTE,
-    STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    calc_stake_ratio, EconomicParams, EconomicParamsError, BLOCKS_PER_YEAR, CALIBRATION_GENERATION,
+    EMISSION_CURVE_ASYMPTOTE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 pub use release::calc_release_multiplier;
 pub use volume::TxVolume;

@@ -802,7 +802,7 @@ pre-renumber tags until recapture.)*
 | Bound | Value | Constant |
 |---|---|---|
 | tx / block | **0x10000000** | `CRYPTONOTE_MAX_TX_PER_BLOCK` (config:45) |
-| block weight | median-window limit (long-term window **100,000**; short-term surge factor **ratified S = 4** — census C2-R2 Q3 struck the inherited ×50; **implemented 2026-09-11**, single-sourced in `config/consensus_constants.json` as `block_weight_short_term_surge_factor` and emitted as `SHEKYL_BLOCK_WEIGHT_SHORT_TERM_SURGE_FACTOR`, replacing the hand-written define that carried the refuted value) | `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` / `SHEKYL_BLOCK_WEIGHT_SHORT_TERM_SURGE_FACTOR` (config) |
+| block weight | median-window limit (long-term window **100,000**; short-term surge factor **S = 4**) | `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` / `block_weight_short_term_surge_factor` (`shekyl_effective_block_weight_median`) |
 
 **Fossil flag (→ economics / block-weight owner, not this doc):**
 `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE` has **V1/V2/V5** variants
