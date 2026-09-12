@@ -6,6 +6,24 @@ include!(concat!(env!("OUT_DIR"), "/params_generated.rs"));
 
 pub const SCALE: u64 = GENERATED_SCALE;
 
+/// Short-term block-weight surge factor `S` — the fast governor's ceiling:
+/// the effective block-weight median may exceed the long-term effective
+/// median by at most `S` on the strength of the 100-block short-term median
+/// alone (`Blockchain::update_next_cumulative_weight_limit`).
+///
+/// **RATIFIED `S = 4`** — `docs/completed/CONSENSUS_C2_R2_WEIGHT_FEES.md` Q3,
+/// signed 2026-09-06. The inherited `x50` was **refuted, not superseded**:
+/// GAP-7's floor measurement fired against it (the surge-ceiling cold block
+/// measured ~316 % of `T` on the Pi 4 floor device). `4` is the **d24
+/// consensus-max** figure, and the depth tier is part of the value — `d2`/`d7`
+/// would have signed `6.5`/`5.7`.
+///
+/// Surfaced from the build-generated authority rather than re-declared, so
+/// instruments that model flood capacity price it against the ceiling
+/// consensus actually enforces. Single source:
+/// `config/consensus_constants.json`.
+pub const BLOCK_WEIGHT_SURGE_FACTOR: u64 = GENERATED_BLOCK_WEIGHT_SURGE_FACTOR;
+
 /// The emission curve's asymptote in atomic units
 /// (`emission_curve_asymptote` from `config/economics_params.json`) — the
 /// value `curve = (asymptote − already_generated) >> esf` decays toward,

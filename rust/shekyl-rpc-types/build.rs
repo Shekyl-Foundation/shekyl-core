@@ -33,7 +33,20 @@ use std::path::PathBuf;
 /// [`consensus_canonical::CANONICAL_FILES`]. A change to either file moves it
 /// and fails this build with both values and the question to answer; see the
 /// panic below.
-const PINNED_DIGEST: &str = "c18aed8d072629c1ac813a8c4f658753b23852b554e5a392d3e98efe1beada89";
+///
+/// **Re-pinned 2026-09-12 — key ADDED: `block_weight_short_term_surge_factor`
+/// = 4 in `config/consensus_constants.json`.** The pin's question, answered
+/// rather than silenced: *does a different value of this key make a different
+/// chain?* **Yes, directly.** It is the ceiling the effective block-weight
+/// median is clamped to, and the per-block weight limit is twice that median —
+/// so a node holding `S = 50` accepts a block a node holding `S = 4` rejects as
+/// over-weight. That is a split, not a preference, which is exactly why the key
+/// belongs in this authority. The value implements the ratified `S = 4`
+/// (`docs/completed/CONSENSUS_C2_R2_WEIGHT_FEES.md` Q3, signed 2026-09-06);
+/// it replaces the hand-written `x50` that previously bypassed this authority
+/// altogether — the key was ADDED here precisely so that it stops being a
+/// constant this digest could not see.
+const PINNED_DIGEST: &str = "1959257f4e5101a332e92a3d7f9cb8e7941860a9606edd2a9f9d11fee04189f8";
 
 fn main() {
     let manifest_dir =

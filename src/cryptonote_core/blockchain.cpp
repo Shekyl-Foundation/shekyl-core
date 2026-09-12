@@ -6775,9 +6775,20 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
     get_last_n_blocks_weights(weights, CRYPTONOTE_REWARD_BLOCKS_WINDOW);
 
     uint64_t short_term_median = epee::misc_utils::median(weights);
-    // effective median = short_term_median bounded to range [long_term_median, 50*long_term_median],
-    // but it can't be smaller than the minimum penalty free zone (a.k.a. 'full reward zone')
-    uint64_t effective_median_block_weight = std::min<uint64_t>(std::max<uint64_t>(m_long_term_effective_median_block_weight, short_term_median), CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR * m_long_term_effective_median_block_weight);
+    // Effective median = the short-term median bounded to
+    // [long_term_median, S * long_term_median], where S is the ratified
+    // short-term surge factor — the "fast governor": a burst clears at up to
+    // S times the long-term norm without waiting for the long-term window,
+    // while the long-term clamps stop the burst becoming the new baseline
+    // unless it is sustained. The bound is then raised to the penalty-free
+    // zone, which is its floor.
+    //
+    // S is deliberately NOT spelled as a number here. Its value is ratified
+    // (CONSENSUS_C2_R2_WEIGHT_FEES.md Q3, signed 2026-09-06) and single-sourced
+    // in config/consensus_constants.json; a literal in this comment is a second
+    // copy that goes stale the next time the value is re-derived, which is
+    // exactly what happened to the "50" this sentence used to carry.
+    uint64_t effective_median_block_weight = std::min<uint64_t>(std::max<uint64_t>(m_long_term_effective_median_block_weight, short_term_median), SHEKYL_BLOCK_WEIGHT_SHORT_TERM_SURGE_FACTOR * m_long_term_effective_median_block_weight);
 
     m_current_block_cumul_weight_median = effective_median_block_weight;
   }

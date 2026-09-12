@@ -769,7 +769,9 @@ Average-cost `x` per rung and adjacent fee ratios (instrument `x_ladder`):
 | `3·Zm` | 0.33% | 1.3% | 16% | 200% | 4.0, **12.0**, 12.5 |
 | `10·Zm` | 0.10% | 0.40% | 16% | 200% | 4.0, **40**, 12.5 |
 | `50·Zm` | 0.02% | 0.08% | 16% | 200% | 4.0, **200**, 12.5 |
-| surge (`Mnw=50·Mlw`) | 1.0% | 4.0% | 16% | **64%** | 4.0, 4.0, 4.0 |
+| surge (`Mnw=50·Mlw`) † | 1.0% | 4.0% | 16% | **64%** | 4.0, 4.0, 4.0 |
+
+† **Computed at the pre-Q3 surge point.** This row prices the inherited ladder at `Mnw = 50·Mlw`, the surge ceiling under the ×50 that C2-R2 Q3 **refuted** (signed 2026-09-06, re-derived `S = 4`; implemented 2026-09-12). At the ratified factor the surge point is `Mnw = 4·Mlw`, so this row's operand — and therefore its percentages — no longer describe a reachable state. **Deliberately not recomputed here:** this is the fee-ladder lane's derivation table and PR #701 is actively rewriting this file; recomputing it from the surge lane would collide with that work and put the ladder's arithmetic in the hands of a lane that does not own it. Routed to the fee-ladder lane with the operand named.
 
 - The inherited ladder **already violates FL-C3 everywhere**: the `Fm→Fh`
   gap is 12.5× at every median, and the inter-family `Fn→Fm` gap grows
