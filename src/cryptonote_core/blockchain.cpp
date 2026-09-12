@@ -4613,164 +4613,12 @@ crypto::hash Blockchain::compute_fcmp_verification_hash(const transaction& tx)
 //------------------------------------------------------------------
 namespace
 {
-const char* archival_bond_post_verify_err_string(uint8_t code)
-{
-  switch (code)
-  {
-  case SHEKYL_ARCHIVAL_BOND_POST_OK:
-    return "ok";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR:
-    return "null shard id pointer";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND:
-    return "post_kind not JoinMarket";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_SHARD_SET_EMPTY:
-    return "ShardSetCompact requires shards";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_COMPLETE_TREE_WITH_SHARDS:
-    return "CompleteTree must not carry shard ids";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_DEBIT_NONZERO:
-    return "JoinMarket bond_debit must be zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOTH_TERMS:
-    return "bond_credit and bond_debit both non-zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO:
-    return "bond_floor is zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH:
-    return "bonded_total/bond_credit must equal bond_floor";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS:
-    return "bond record already exists";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND:
-    return "invalid holdings_kind";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE:
-    return "post_kind not Release";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING:
-    return "Release requires an existing bond record";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE:
-    return "record bonded_total is zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_CREDIT:
-    return "Release bond_credit must be zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_FLOOR_MISMATCH:
-    return "post-connect bonded_total must equal bond_floor(holdings)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_FULL_RELEASE:
-    return "Release is a full exit: post-connect bonded_total must be zero";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL:
-    return "bond_debit must equal the record's current bonded_total";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_COOLDOWN_NOT_ELAPSED:
-    return "release cooldown has not elapsed";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW:
-    return "marshaled array length overflow";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_HOLDINGS_NOT_EMPTY:
-    return "full exit must end at empty holdings";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_INTERVAL_LOG_FULL:
-    return "record interval log is full";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_SLASH_SETTLEMENT_PENDING:
-    return "slash scheduler has not settled every epoch through the last-served anchor";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING:
-    return "bond_spend_pk violates the JoinMarket coupling (missing/non-canonical on "
-      "JoinMarket, or present on another kind)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE:
-    return "post_kind is not HoldingsUpdate";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ON_COMPLETE_TREE:
-    return "HoldingsUpdate on a CompleteTree record (no shard set to change)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT:
-    return "HoldingsUpdate post holdings are not ShardSetCompact";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS:
-    return "HoldingsUpdate-add terms are not exactly +FLOOR credit / no debit";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_GOOD_STANDING:
-    return "HoldingsUpdate-add on a record not good_through the current epoch";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_ADD:
-    return "HoldingsUpdate-add is not exactly one added shard";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_FLOOR_MISMATCH:
-    return "HoldingsUpdate-add post bonded_total != bond_floor(post) / current + FLOOR";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_TERMS:
-    return "HoldingsUpdate-drop terms are not exactly -FLOOR debit / no credit";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_NOT_SINGLE_DROP:
-    return "HoldingsUpdate-drop must remove exactly one shard, and it must be the "
-      "shard whose per-shard facts were marshaled";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_LAST_SHARD:
-    return "HoldingsUpdate-drop would empty the shard set (a full exit is Release)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_FLOOR_MISMATCH:
-    return "HoldingsUpdate-drop post bonded_total != bond_floor(post) / current - FLOOR";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_DROP_WITHIN_HORIZON:
-    return "HoldingsUpdate-drop before the shard's retention-commitment horizon elapsed";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_REBOND:
-    return "post_kind is not Rebond";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_ON_COMPLETE_TREE:
-    return "Rebond on a CompleteTree record (demotion flips the kind; unrepresentable)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_NOT_COMPACT:
-    return "Rebond post-holdings are not ShardSetCompact";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SLASHED:
-    return "Rebond requires an open bad interval (the record is not slashed)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_MULTIPLE_OPEN:
-    return "record carries multiple open bad intervals (coalescing invariant broken)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_LOG_HEADROOM:
-    return "record interval log lacks Rebond headroom (must leave a slot for the next "
-      "slash and the Release clean close)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_TERMS:
-    return "Rebond terms mismatch (debit nonzero, or credit != bond_floor(post) - "
-      "record bonded_total, or post bonded_total != bond_floor(post))";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_NOT_SUPERSET:
-    return "Rebond post-holdings are not a duplicate-free superset of the record's "
-      "current holdings (shedding goes through HoldingsUpdate-drop)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_POST_OVERSIZE_RETIRED:
-    return "retired Rebond oversize code (45) — never returned; oversize is now "
-      "unrepresentable in the vin's ShardSet holdings";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_REBOND_RECORD_FLOOR:
-    return "record bonded_total != bond_floor(record holdings) (floor-drifted record)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED:
-    return "vin holdings shard count exceeds the wire codec bound";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD:
-    return "vin holdings carry a duplicate shard id (a set on the wire)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED:
-    return "HoldingsUpdate requires a Bonded record (an Exited or slash-emptied "
-      "record re-enters via JoinMarket/Rebond)";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY:
-    return "bond record commits no bond_spend_pk; it authorizes no debit";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH:
-    return "pqc auth key is not the record's committed bond_spend_pk";
-  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST:
-    return "cold-authority gate invoked for a post that requires none "
-      "(the calling arm and requires_cold_authority disagree)";
-  default:
-    return "unknown bond-post verify code";
-  }
-}
-
-// GF-1 debit authorization (gate-4 §3.5 step 5) — the SHARED debit authorizer,
-// single-sourced for every bond_debit > 0 arm (Release, HoldingsUpdate-drop; a
-// future debit kind rides the same call): the pqc auth key must equal the
-// record's COMMITTED bond_spend_pk — never the identity key P_pubkey
-// (identity-only invariant, gate-6 §9.6). The signature itself is verified
-// over the whole-tx payload by verify_transaction_pqc_auth against
-// pqc_auths[idx].hybrid_public_key; pinning that key here is the authorization
-// choice. A record with no committed key (pre-GF-1 shape) authorizes nothing —
-// fail closed, not identity fallback. Callers gate on have_record (a missing
-// record falls through to the semantic verify's RECORD_MISSING) and run this
-// BEFORE any per-shard cursor scans or FFI verify: it is a two-vector compare,
-// so an unauthorized attempt is rejected before it can cost LMDB seeks.
-// Cold authority for the bond-post arms. BOTH halves are Rust
-// (`shekyl-archival-retention::cold_authority_pin`): the selector -- whether
-// this (post_kind, bond_debit) needs cold authority at all, an exhaustive
-// truth table (`requires_cold_authority`: Release always, HoldingsUpdate iff
-// bond_debit > 0, JoinMarket/Rebond never) -- and the pin against the record's
-// COMMITTED bond_spend_pk. This site marshals and logs. Callers classify the
-// returned code via `shekyl_archival_bond_post_drop_verdict` — this helper does
-// not decide whether the rejection severs.
-//
-// Until 2026-09-11 only the pin was Rust and the selector was spelled at each
-// arm by which arms happened to call it -- the Release arm on kind, the
-// HoldingsUpdate arm on its debit term -- while the prose in three places said
-// "bond_debit > 0, not the post kind", which the Release arm never did. Moving
-// the selector into one Rust function is what lets a new kind (the ruled
-// EndpointUpdate, zero-debit, cold) be one predicate row instead of a
-// re-derivation at every arm. The pin itself used to be implemented here too,
-// which made it a second copy of the one check that has no recovery -- a
-// compromised serving host holds the identity hybrid key, so an
-// identity-authorized debit is a collateral drain. The Rust submit battery
-// calls the same function natively (DAEMON_SUBMIT_VERDICT.md 8.7.1.1 row UB3),
-// so the two verifying paths share it rather than tracking each other.
-//
-// The third rc arm, NOT_COLD_AUTHORITY_POST, is the cross-check: it fires only
-// if an arm calls this for a post the predicate excludes. Unreachable today;
-// its job is to make an arm/predicate disagreement loud rather than hot.
+// Cold-authority marshal: both halves are Rust (`cold_authority_pin`).
+// Callers gate on have_record (a missing record falls through to the
+// semantic verify's RECORD_MISSING) and run this before per-shard cursor
+// scans or FFI verify. Classification is `shekyl_archival_bond_post_drop_verdict`;
+// this helper does not decide whether the rejection severs. Operator strings
+// come from `shekyl_archival_bond_post_err_string` — the one table.
 uint8_t archival_cold_authority_pin(const shekyl::db::ArchivalBondValue& record,
   uint8_t post_kind, uint64_t bond_debit,
   const std::vector<uint8_t>& auth_pubkey, const char* arm)
@@ -4781,37 +4629,13 @@ uint8_t archival_cold_authority_pin(const shekyl::db::ArchivalBondValue& record,
     record.bond_spend_pk.size(),
     auth_pubkey.empty() ? nullptr : auth_pubkey.data(),
     auth_pubkey.size());
-  if (rc == SHEKYL_ARCHIVAL_BOND_POST_OK)
-    return rc;
-  // Two arms, deliberately distinct in the log: "this record authorizes
-  // nothing" and "wrong key against a record that does" have different
-  // operator remedies.
-  if (rc == SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY)
+  if (rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
   {
-    MERROR_VER("Archival " << arm << " rejected: record commits no bond_spend_pk; "
-      "a debit cannot be authorized (and the identity key never authorizes "
-      "a value-out)");
-  }
-  else if (rc == SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH)
-  {
-    MERROR_VER("Archival " << arm << " rejected: pqc auth key does not match the "
-      "record's committed bond_spend_pk (identity-key or foreign-key debit "
-      "authorization is forbidden)");
-  }
-  else if (rc == SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST)
-  {
-    // Not the sender's fault: this arm asked for cold authority on a post the
-    // Rust predicate says needs none. The arm and requires_cold_authority
-    // disagree about post_kind -- fix the code, not the transaction.
-    MERROR_VER("Archival " << arm << " rejected: cold-authority gate invoked for "
-      "post_kind " << static_cast<unsigned>(post_kind) << " / bond_debit "
-      << bond_debit << ", which requires no cold authority (arm/predicate "
-      "disagreement -- an implementation error)");
-  }
-  else
-  {
-    MERROR_VER("Archival " << arm << " rejected: cold-authority pin marshal fault (code "
-      << static_cast<unsigned>(rc) << ")");
+    MERROR_VER("Archival " << arm << " rejected: "
+      << shekyl_archival_bond_post_err_string(rc)
+      << " (post_kind " << static_cast<unsigned>(post_kind)
+      << ", bond_debit " << bond_debit
+      << ", code " << static_cast<unsigned>(rc) << ")");
   }
   return rc;
 }
@@ -4891,11 +4715,8 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     shekyl::db::ArchivalBondValue record{};
     const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
 
-    // GF-1 cold authority — the shared gate (archival_cold_authority_pin
-    // above; Release is unconditional in the Rust predicate), run before the
-    // cooldown-anchor gathering + semantic verify. Classification is the
-    // bond-post mapper: no committed key is our record state; a key mismatch
-    // is the sender's form.
+    // Cold authority — shared Rust gate, before cooldown gather + semantic
+    // verify. Release is unconditional in requires_cold_authority.
     if (have_record)
     {
       const uint8_t pin_rc = archival_cold_authority_pin(record,
@@ -4945,7 +4766,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     if (verify_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
     {
       MERROR_VER("Archival Release verify failed (code " << static_cast<unsigned>(verify_rc)
-        << "): " << archival_bond_post_verify_err_string(verify_rc));
+        << "): " << shekyl_archival_bond_post_err_string(verify_rc));
       return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(verify_rc));
     }
     return true;
@@ -5005,7 +4826,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       {
         MERROR_VER("Archival HoldingsUpdate-add verify failed (code "
           << static_cast<unsigned>(hu_rc) << "): "
-          << archival_bond_post_verify_err_string(hu_rc));
+          << shekyl_archival_bond_post_err_string(hu_rc));
         return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(hu_rc));
       }
       if (auth_pubkey != bond.hybrid_public_key)
@@ -5017,10 +4838,8 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       return true;
     }
 
-    // DROP (grace-tail debit path). GF-1 cold authority — the shared gate
-    // (archival_cold_authority_pin above; HoldingsUpdate selects on its debit
-    // term in the Rust predicate, and we are on the bond_debit != 0 branch),
-    // the Release arm's twin.
+    // DROP. Cold authority — shared Rust gate. HoldingsUpdate selects on
+    // the debit term; we are on bond_debit != 0.
     if (have_record)
     {
       const uint8_t pin_rc = archival_cold_authority_pin(record,
@@ -5101,7 +4920,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     {
       MERROR_VER("Archival HoldingsUpdate-drop verify failed (code "
         << static_cast<unsigned>(hu_rc) << "): "
-        << archival_bond_post_verify_err_string(hu_rc));
+        << shekyl_archival_bond_post_err_string(hu_rc));
       return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(hu_rc));
     }
     return true;
@@ -5151,7 +4970,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     {
       MERROR_VER("Archival Rebond verify failed (code "
         << static_cast<unsigned>(rb_rc) << "): "
-        << archival_bond_post_verify_err_string(rb_rc));
+        << shekyl_archival_bond_post_err_string(rb_rc));
       return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(rb_rc));
     }
     // Credit-path authorization (P2B-9 Pin 4, the GF-1 selector): the identity
@@ -5204,7 +5023,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
   if (verify_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
   {
     MERROR_VER("Archival bond-post verify failed (code " << static_cast<unsigned>(verify_rc)
-      << "): " << archival_bond_post_verify_err_string(verify_rc));
+      << "): " << shekyl_archival_bond_post_err_string(verify_rc));
     return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(verify_rc));
   }
 

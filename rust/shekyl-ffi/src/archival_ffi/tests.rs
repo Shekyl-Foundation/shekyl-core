@@ -16,6 +16,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
 use shekyl_peer_policy::DropVerdict;
+use std::ffi::CStr;
 use std::ptr;
 
 #[test]
@@ -90,6 +91,61 @@ fn serve_credit_and_bond_post_drop_verdicts_do_not_sever_on_our_state() {
         .severs()
     );
     assert!(!DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(255)).severs());
+    assert!(
+        DropVerdict::from_byte(shekyl_archival_bond_post_drop_verdict(
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST
+        ))
+        .is_internal_failure()
+    );
+}
+
+fn bond_post_err(code: u8) -> &'static str {
+    let p = shekyl_archival_bond_post_err_string(code);
+    assert!(!p.is_null(), "err_string({code}) was null");
+    // SAFETY: the FFI returns a static NUL-terminated string, never null
+    // (asserted above).
+    unsafe { CStr::from_ptr(p) }
+        .to_str()
+        .expect("operator strings are UTF-8")
+}
+
+#[test]
+fn bond_post_err_string_covers_the_assigned_code_space() {
+    // 0..=51 is the assigned bond-post verify space (51 = NOT_COLD_AUTHORITY_POST).
+    // A new code must extend this range or it ships as "unknown" in the log.
+    for code in 0..=SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST {
+        assert_ne!(
+            bond_post_err(code),
+            "unknown bond-post verify code",
+            "code {code} is assigned and must have a reason string"
+        );
+    }
+    assert_eq!(bond_post_err(255), "unknown bond-post verify code");
+}
+
+#[test]
+fn cold_authority_ffi_unknown_kind_is_post_kind_not_a_guessed_row() {
+    let key = vec![7u8; HYBRID_PUBKEY_CANONICAL_BYTES];
+    let rc = unsafe {
+        shekyl_archival_cold_authority_pin(99, 0, key.as_ptr(), key.len(), key.as_ptr(), key.len())
+    };
+    assert_eq!(rc, SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND);
+}
+
+#[test]
+fn cold_authority_ffi_credit_kind_is_not_rescued_by_matching_keys() {
+    let key = vec![7u8; HYBRID_PUBKEY_CANONICAL_BYTES];
+    let rc = unsafe {
+        shekyl_archival_cold_authority_pin(
+            0, // JoinMarket
+            0,
+            key.as_ptr(),
+            key.len(),
+            key.as_ptr(),
+            key.len(),
+        )
+    };
+    assert_eq!(rc, SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST);
 }
 
 #[test]
