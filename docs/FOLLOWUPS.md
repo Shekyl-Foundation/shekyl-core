@@ -122,7 +122,7 @@ Default. Lands before genesis if it should exist at launch.
 - **DRS-D3c — cross-store leaf/position KAT.** Daemon vs wallet LeafStore:
   - Target: pre-genesis
 
-- **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with reopen (d), and must include the limiter-saturation adversary** — sliding-window m-of-n is built (`failure_window.rs`; pin [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md)); numerics remain Round-1 provisional. Cannot be sized against honest miss alone: gate-4 grace and `m`/`n` are one surface (`slash_prob(q, m, n)`), and pinning for false-slash alone invalidates reopen (d) (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6). The shard-fetch round ([ARCHIVAL_SHARD_FETCH.md](design/ARCHIVAL_SHARD_FETCH.md) §7 threat 3) named a third sizing input: a third party saturating an honest P's serve-side limiter, which the fetch client cannot distinguish from darkness. Owner of that defense: this threshold, not the client. Falsify by the re-pin recording a limiter-saturation input, not only an honest-failure CDF.
+- **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with reopen (d)** — sliding-window m-of-n is built (`failure_window.rs`; pin [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md)); numerics remain Round-1 provisional. Cannot be sized against honest miss alone: gate-4 grace and `m`/`n` are one surface (`slash_prob(q, m, n)`), and pinning for false-slash alone invalidates reopen (d) (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6). Falsify by the re-pin recording both false-slash and reopen-(d) inputs, not only an honest-failure CDF.
   - Target: pre-genesis
 
 - **`sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide**
@@ -936,7 +936,7 @@ Default. Lands before genesis if it should exist at launch.
 - ~~**Measure boundary-cell occupancy**~~ — **DONE at round 18**: occupancy 741‰, mean residence 637 blocks, max 13 597; it selected `P` = 720. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.10 (the figures) and §9 FL-D8 (row closed).
   - Target: pre-genesis
 
-- **Implement the daemon shard-fetch client once `SF-D2`…`SF-D12` are RULED** — the one client both the challenge fetch and the organic read call ([ARCHIVAL_SHARD_FETCH.md](design/ARCHIVAL_SHARD_FETCH.md), Round 1 OPEN 2026-09-12). Blocked on the round's rulings per `26-sub-pr-design-discipline.mdc` (no fetcher code, no Tor outbound API, no FFI until then); falsify by the round doc's Status banner reading anything other than OPEN.
+- **Implement the daemon shard-fetch client once `SF-D2`…`SF-D10` and `SF-D12` are RULED** — the one client both the challenge fetch and the organic read call ([ARCHIVAL_SHARD_FETCH.md](design/ARCHIVAL_SHARD_FETCH.md), Round 1 OPEN 2026-09-12). `SF-D11` withdrawn (closed by reading `PWD-E9`). Blocked on the remaining rulings per `26-sub-pr-design-discipline.mdc` (no fetcher code, no Tor outbound API, no FFI until then); falsify by the round doc's Status banner reading anything other than OPEN.
   - Target: pre-genesis
 
 ## Post-genesis

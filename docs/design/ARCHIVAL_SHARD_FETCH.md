@@ -6,9 +6,9 @@ rule 94 §1). Process per
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc):
 this is a multi-round design front on an FFI-adjacent, privacy-load-bearing
 surface. Decision authority: Rick. **No implementation code — no fetcher,
-no Tor outbound API, no FFI — until `SF-D2`…`SF-D12` are RULED** (rule 26
-halt on undischarged named pass). The FOLLOWUPS row is the deferral
-record.
+no Tor outbound API, no FFI — until `SF-D2`…`SF-D10` and `SF-D12` are
+RULED** (rule 26 halt on undischarged named pass; `SF-D11` withdrawn,
+§4). The FOLLOWUPS row is the deferral record.
 
 This round specifies the **client** side of the archival serving route:
 a daemon fetching `GET /shard/{id}` from a P-served `.onion`. The server
@@ -16,9 +16,8 @@ half exists (`shekyl-p-serve` + `shekyl-p-host`, built-unwired at SH-1/
 SH-2); the bytes are ruled (`RF-D4` frame, `RF-R1` route); discovery is
 ruled (`EU-D1`…`EU-D9`). What has never been ruled is dial, isolation,
 timeout/retry, verify seam, where the client lives, **which P an organic
-caller dials**, whether daemon-fetch and persona-serve share a Tor
-instance, and whether a verify-failure is remembered — the things an
-implementer would otherwise decide silently at the keyboard.
+caller dials**, and whether a verify-failure is remembered — the things
+an implementer would otherwise decide silently at the keyboard.
 
 ---
 
@@ -101,11 +100,12 @@ inherited as "the client waits."
 | Serve virt port | `rust/shekyl-engine-core/src/engine/stake_engine/serving/task.rs:52` — `SERVING_VIRTUAL_PORT = 80`; `:58` — `SERVING_MAX_STREAMS = 8` | **Unratified** (tests-only consensus); `SF-D5` pins or rejects the port; `MAX_STREAMS` stays SPIKE-PIN territory |
 | Challenge deadline | `rust/shekyl-archival-retention/src/constants.rs:147` — `CHALLENGE_RESPONSE_BLOCKS = SEB / 20 = 500` | The consensus clock the challenge caller answers to (`SF-D6`) |
 | Wallet-side isolation precedent | `rust/shekyl-p-transport/src/lib.rs:134` — `derive_socks_user(&PCanonicalId)` per-P `IsolateSOCKSAuth` | The isolation grammar `SF-D3` must adapt: a daemon is not a P |
-| Daemon Tor today | `rust/shekyl-tor-control-daemon` crate doc — inbound ephemeral onion only (PWD-E7); no outbound API, no SOCKS consumer | `SF-D2`'s starting state |
+| Daemon Tor today | `rust/shekyl-tor-control-daemon` crate doc — inbound ephemeral onion only (PWD-E7); no outbound API, no SOCKS consumer | `SF-D2`'s starting state: outbound reuse can only mean **this** instance |
 | Discovery | `EU-D3`/`EU-D4` — endpoint = raw 32-byte Ed25519 key on the bond record; witness reads it from the drawable snapshot at epoch open, joined by `p_id` (`DrawablePair`, `rust/shekyl-archival-retention/src/challenge_assignment.rs:71`) | `SF-D5`'s input: key → onion is derivation, not lookup |
 | Request parse | `rust/shekyl-p-serve/src/serve.rs:558–560` — `path.strip_prefix(ROUTE_PREFIX)` then `parse::<u64>()`; comment: "Exact decimal id — no path suffix, no query string" | The request unit is a whole shard (`§4`) |
 | Segment size | `rust/shekyl-curve-tree/src/segment.rs:36` — `LEAF_BYTES`; `:63` — `leaves_per_segment()` | Honest-holder egress of a challenge fetch: one full segment (`leaves_per_segment() × LEAF_BYTES`) |
-| Wallet Tor instance | `rust/shekyl-tor-control-wallet/src/lib.rs:6–14` — `WalletTorControl` owns one managed tor; "a Tor instance this supervisor must never share"; daemon sibling is `DaemonTorControl` (PWD-E7/E9) | `SF-D11`'s starting state: two crates, two supervisors; production wiring is the question |
+| Serving ↔ fetching Tor | `PWD-E9` ([`P2P_2_ENDPOINT_ROUND.md`](P2P_2_ENDPOINT_ROUND.md) §PWD-E9): daemon gets its own tor path, no crossover to the archival-serving persona; launch path takes instance identity as a parameter. Implemented 2026-09-09 (`DaemonTorControl`, `shekyl-tor-control-daemon`) | Closed. Constrains `SF-D2`: "reuse the managed instance" means the daemon's |
+| Intro-layer PoW | `rust/shekyl-tor-control-wallet/src/onion_service.rs:146–148` — `HiddenServicePoW` defaults **on**; `rust/shekyl-tor-control-client/src/control/onion.rs:272–282` — PoW throttles rendezvous **arrival**, not egress; `control/actor.rs:1725–1754` — live `ADD_ONION` with PoW. Measurement: [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) SPIKE-F-15/17/18, §19/§19a | Threat-3 pin: intro flooding is priced; not general Tor lore |
 
 ## 4. Already closed — do not re-litigate
 
@@ -118,6 +118,7 @@ inherited as "the client waits."
 | Enumerability of onions is a design input; serve-side rate-limit is load-bearing | `EU-D6` |
 | `GET /shard/{id}`; identical 404s for every non-servable outcome; only content-type + content-length; hand-rolled HTTP/1.1 | `RF-R1` |
 | **Request unit is a whole shard.** `{id}` is an exact decimal `u64`; no suffix, no query string (`RF-R1` request grammar; `serve.rs:558–560` parses exactly that). There is no leaf addressing. The challenge caller fetches the full segment and extracts leaf ℓ locally — that is the TJ §9 topology working as designed (the honest holder's egress is the cost being measured). `RF-R1`'s reopening clause permits "an additional path that suffixes `/shard/`" if a later request contract is needed; that suffix is exactly where a leaf-addressed challenge fetch would enter, and it is the natural optimization for anyone looking at ~3.33 MB per challenge. **`SF-D1` holds that door shut:** any future suffix path must be usable by both callers, or it is a second path by another name | `RF-R1`; `SF-D1` |
+| **Serving and fetching do not share a Tor instance.** `PWD-E9` (RULED 2026-09-08, implemented 2026-09-09): the daemon gets its own tor path with no crossover to the archival-serving persona; the launch path takes instance identity as a parameter, so sharing the code cannot produce a shared instance. The ratified §7 guard residual splits one application's identities; E9 forbids two applications sharing one instance, and the ephemeral/durable asymmetry makes the crossover strictly worse. **`SF-D11` withdrawn** — asked in this round, then closed by reading `PWD-E9` | `PWD-E9` |
 | Body = `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding); codec owned by `shekyl-curve-tree`; write-zero read-anything | `RF-D4`, `RF-D7` |
 | Padding field reserved, no scheme; TJ-H mitigation at the Tor layer (vanguards on the **wallet** serve path) | TJ-H (ruled 2026-08-08) |
 | Server bind `127.0.0.1:0`; reachability is `ADD_ONION` | `RF-R1`, `shekyl-p-host` |
@@ -143,10 +144,12 @@ suffixes `/shard/` is a named reopening of `RF-R1`, not of this round —
 and it inherits this premise: the new path must be usable by both
 callers. A leaf-addressed challenge-only suffix is a second path.
 
-## 6. Round-1 open questions (`SF-D2`…`SF-D12`)
+## 6. Round-1 open questions (`SF-D2`…`SF-D10`, `SF-D12`)
 
 Each is recorded with a **lean** and a **reopen criterion**; none is
-ruled here. Rick rules them; the doc does not pre-decide.
+ruled here. Rick rules them; the doc does not pre-decide. `SF-D9` is
+done (same-change heading). `SF-D11` is withdrawn (§4 / `PWD-E9`) and
+is not in this list.
 
 ### `SF-D2` — daemon Tor outbound posture
 
@@ -155,20 +158,21 @@ it exposes no outbound API and no SOCKS consumer. Question: reuse the
 managed instance's SOCKS port for fetches, or run a second Tor process
 so overlay P2P and archival fetches do not share entry guards?
 
-- **Lean:** reuse the managed instance, with `SF-D3` isolation carrying
-  the separation — a second Tor process is a second failure domain and
-  a second version to supervise on the Pi 4 floor (rule 76), and the
-  shared-guard residual is already named next to `EU-D1` / SPIKE-F-12.
+- **Lean:** reuse the daemon's managed instance, with `SF-D3` isolation
+  carrying the separation — a second Tor process is a second failure
+  domain and a second version to supervise on the Pi 4 floor (rule 76),
+  and the shared-guard residual is already named next to `EU-D1` /
+  SPIKE-F-12. Serving↔fetching is not this question (`PWD-E9`).
 - **Reopen if:** measurement over this topology (the SP-T3 re-base)
   shows a reason the accepted residual is worse than a second Tor
   process at the Pi 4 floor.
 - **Note:** guards are per-process. Stream isolation (`SF-D3`) cannot
   cut a shared-guard residual on one Tor instance, so an earlier draft
   of this reopen ("correlation that stream isolation cannot cut")
-  described the lean rather than a later measurement. The pair that
-  actually crosses a privacy boundary is serving↔fetching (`SF-D11`),
-  not P2P↔fetch. This round leaves the reuse lean standing and asks
-  `SF-D11` explicitly rather than inheriting.
+  described the lean rather than a later measurement. **"Reuse the
+  managed instance" can only mean the daemon's** — `PWD-E9` closed the
+  serving↔fetching axis (`SF-D11` withdrawn, §4), so this question is
+  genuinely the P2P ↔ archival-fetch pair inside the daemon.
 
 ### `SF-D3` — circuit-isolation key
 
@@ -315,27 +319,12 @@ selection rule is, it has to be evaluated against that.
   its own request log alone, can classify a request as challenge with
   better-than-assignment-base-rate confidence.
 
-### `SF-D11` — serving ↔ fetching Tor instance
+### `SF-D11` — serving ↔ fetching Tor instance — WITHDRAWN 2026-09-12
 
-`SF-D2` asks about the P2P ↔ archival-fetch pair *inside the daemon*.
-The more damaging pair is serving ↔ fetching on a staker's box,
-because it crosses the persona/principal boundary: a guard-level
-observer that sees both outbound fetches and the persona's rendezvous
-links a persona identity to a node identity.
-
-Substrate, not inheritance: `shekyl-tor-control-wallet` owns a managed
-tor the supervisor "must never share"; `DaemonTorControl` is a
-different crate (PWD-E7/E9). Two supervisors is not yet two processes
-on a staker's box — production wiring could still point daemon fetches
-at the wallet's SOCKS, or persona publish at the daemon's control
-port. Stream isolation (`SF-D3`) does not help if they share a
-process, for the same guards-are-per-process reason noted at `SF-D2`.
-
-- **Lean:** they stay separate. PWD-E9 already forbids sharing the
-  supervisor; this question is whether production wiring can still
-  collapse them.
-- **Reopen if:** a supported deployment is found in which daemon
-  fetches and persona serving share a Tor process.
+Asked in this round, then closed by reading `PWD-E9` (RULED 2026-09-08,
+implemented 2026-09-09). Not an open question and not in the halt list.
+See §4. Identifier kept so grep finds the withdrawal; `SF-D12` is not
+renumbered (already published).
 
 ### `SF-D12` — verify-failure memory
 
@@ -380,30 +369,91 @@ Named attacker objectives this round's rulings are evaluated against:
 2. **Guard sees the fetch set.** A daemon fetching many personas on one
    SOCKS identity exposes the challenge schedule and reconstruct
    traffic to a single entry guard (`SF-D3`).
-3. **Rate-limit as DoS on coverage — handed off.** The serve-side rate
-   limit is load-bearing (`EU-D6`). The form that actually slashes is
-   a third party saturating an *honest* `P`'s limiter so assigned
-   challenge fetches miss the deadline; the honest holder did nothing
-   wrong, and the client cannot tell darkness from a full limiter
-   (identical 404s, `RF-R1`). **Nothing this client can do is the
-   defense.** The defense is the accumulated-miss threshold
-   (`failure_window.rs`, `ARCHIVAL_FAILURE_WINDOW_M`/`N`; pin
-   [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](../completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md)).
-   This round is where the question surfaced; the owner is the
-   existing `m`/`n` re-pin (FOLLOWUPS: failure-window `m`/`n`), which
-   must be sized against this adversary and not only against honest
-   failure. `SF-D6`/`SF-D7` still own the client's own retry shape so
-   it does not *add* distinguishable load; they do not own the slash.
+3. **Slash-by-denial over onion — not a client-owned weapon, and not a
+   handoff.** The serve-side limiter is load-bearing (`EU-D6`). The
+   form that would slash is a third party keeping an *honest* `P`'s
+   assigned challenge fetches from landing; the honest holder did
+   nothing wrong, and the client cannot tell darkness from a full
+   limiter (identical 404s, `RF-R1`). **Nothing this client can do is
+   the defense,** and **nothing this round owes the challenge
+   mechanism.** Volumetric denial over onion is symmetrically priced
+   and untargetable; the cheap attack is positional and already owned.
+
+   **Unobservability, not the window.** `CHALLENGE_RESPONSE_BLOCKS =
+   500` is ~17 hours and sounds like a generous target. What defeats
+   the attacker is that there is no target: the test is a read (`TJ`
+   §9 / `SF-D1`), so nothing on the wire identifies which fetch is the
+   challenge or when the assignment lands. They cannot attack a
+   window — they have to attack continuously, across every window, and
+   repeatedly, since one miss does not slash; the accumulated
+   threshold does. `SF-D1`'s indistinguishability is also the anti-DoS
+   property. Sustained intro-layer PoW cost against an unobservable
+   target for a probabilistic payoff is a much worse trade than
+   "saturate for 17 hours."
+
+   **Intro PoW prices introductions, and the residual is not
+   asymmetric egress.** Proposal-327 PoW gates introductions
+   (`onion_service.rs:146–148` defaults on; `control/onion.rs:272–282`
+   throttles the rendezvous-request queue, not egress;
+   `control/actor.rs:1725–1754` live `ADD_ONION` with PoW). Recollection is
+   grounded in [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md)
+   SPIKE-F-15/17/18, not general Tor lore. Once a rendezvous is
+   established, a whole-shard GET is ~3.33 MB. A clearnet intuition
+   says that is cheap for them and expensive for `P` — a few hundred
+   bytes in, megabytes out, discard the response, the server still
+   pays egress. **Retracted.** Over Tor the response traverses T's own
+   three-hop circuit, and Tor's flow control means T has to keep
+   acknowledging for data to keep flowing; stop reading and the
+   circuit stalls and `P` stops sending. `P`'s egress is bounded by
+   T's willingness to actually receive 3.33 MB per request, through
+   relays T is also paying for. It is symmetric, and each attack
+   saturates everything from the rendezvous point on. The comment at
+   `control/onion.rs:286–292` ("requester pays only its own circuit")
+   is that retracted intuition, not a remaining residual.
+
+   **Who T would have to be, volumetrically.** Discovery is free
+   (`EU-D3` puts the onion on chain). Targeting is unavailable
+   (unobservability above). Introduction is priced per circuit, and T
+   needs many concurrent circuits to hold a meaningful share of
+   `EU-D6`. Sustain is the binding constraint: occupy most of the
+   limiter continuously — sustained multi-megabit received throughput
+   over Tor, across many circuits, each with its own guard and puzzle
+   cost, for ~17 hours per window, for as many windows as the
+   threshold requires. Payoff is capped at one persona's bond. Cost is
+   unbounded in duration, symmetric in bandwidth, against a target
+   whose challenge schedule T cannot see. The economically motivated
+   version — a competing staker slashing a rival to raise emission
+   share — is the worst fit of all. Any T with that capability has
+   cheaper things to do with it.
+
+   **The T that actually matters is positional, not volumetric.** An
+   adversary selected as one of `P`'s layer-2 or layer-3 nodes can
+   drop or delay rendezvous traffic at near-zero bandwidth cost,
+   indefinitely, with no PoW to pay and no symmetric transfer. That
+   is the cheap route to slash-by-denial over onion, and it is already
+   owned: `VG-1`…`VG-3`, full-vanguards path selection for a serving
+   persona, with the rotation state machine and the `VanguardsActive`
+   sealed witness. The mechanism against the cheap attack exists;
+   volumetric flooding is the expensive one.
+
+   **If something does emerge, mitigation looks different than
+   clearnet** — a response-time trap, not a design gap. The clearnet
+   reflex is per-client throttling, and there is no client to
+   throttle. Damage is not localized to `P`'s box (rendezvous
+   outward). Four levers, no IP filtering: (1) Tor's intro-layer PoW
+   parameters, (2) the service's own stream limiter (`EU-D6` /
+   SPIKE-PIN-1/2), (3) vanguard posture (`VG-1`…`VG-3`), (4) the
+   accumulated-miss threshold's tolerance. The mechanism-side answer,
+   if one is ever needed, is the miss threshold; this round does not
+   own a re-pin. `SF-D6`/`SF-D7` still own the client's own retry
+   shape so it does not *add* distinguishable load; they do not own
+   the slash.
 4. **Shared-guard P2P + archival correlation.** If overlay P2P and
    archival fetches share entry guards, a guard-level observer
    correlates daemon identity with fetch interest (`SF-D2`; residual
    named next to `EU-D1` / SPIKE-F-12). Accepted-by-construction if
-   they share a process (guards are per-process); see `SF-D11` for the
-   persona/principal pair.
-5. **Shared-guard serving + fetching (persona ↔ principal).** A
-   guard-level observer that sees both a daemon's outbound fetches and
-   a persona's rendezvous links a persona identity to a node identity
-   (`SF-D11`). This is the pair `SF-D2` does not cover.
+   they share a process (guards are per-process). Serving↔fetching
+   (persona ↔ principal) is closed by `PWD-E9` (`SF-D11` withdrawn).
 
 ## 8. Explicitly out of this round (rule 19)
 
@@ -418,10 +468,14 @@ Named attacker objectives this round's rulings are evaluated against:
 - W₂ numeric pin — needs this topology measured first (the SP-T3
   re-base is the pre-flight of the implementation PR, not part of this
   round).
-- **Failure-window `m`/`n` re-pin, including the limiter-saturation
-  adversary named at §7 threat 3.** Owner: `failure_window.rs` /
-  [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](../completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md);
-  FOLLOWUPS row "failure-window `m`/`n`". Not a client question.
+- Failure-window `m`/`n` re-pin — already a FOLLOWUPS item, joint with
+  reopen (d). This round adds no sizing input to it. Owner:
+  `failure_window.rs` /
+  [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](../completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md).
+- Positional onion denial (`VG-1`…`VG-3`) and intro-layer PoW
+  (`onion_service.rs`, `control/actor.rs`, SP-T3 SPIKE-F-15/17/18) —
+  already owned; not this client. SPIKE-PIN-1/2 stay where `SF-D7`
+  left them.
 - SH-2 remainder (the wallet actually constructing
   `PersonaServingHost`) — a named blocker for *end-to-end onion
   integration*, not for specifying the client; loopback serve already
@@ -431,7 +485,7 @@ Named attacker objectives this round's rulings are evaluated against:
 ## 9. What "ruled" looks like after Round 1
 
 A living contract the first **client** is written against: crate name,
-Tor posture (daemon P2P↔fetch, and serving↔fetching on a staker box),
+daemon Tor posture (P2P↔fetch; serving↔fetching already `PWD-E9`),
 isolation key both callers can use, dial grammar (key → onion:port),
 one failure taxonomy with two caller columns, the verify function
 signature, organic peer-selection rule, and verify-failure memory
