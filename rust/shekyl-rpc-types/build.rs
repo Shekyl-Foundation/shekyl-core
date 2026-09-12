@@ -34,7 +34,7 @@ use std::path::PathBuf;
 /// and fails this build with both values and the question to answer; see the
 /// panic below.
 ///
-/// **Re-pinned 2026-09-12 — key ADDED: `block_weight_short_term_surge_factor`
+/// **Re-pinned 2026-09-11 — key ADDED: `block_weight_short_term_surge_factor`
 /// = 4 in `config/consensus_constants.json`.** The pin's question, answered
 /// rather than silenced: *does a different value of this key make a different
 /// chain?* **Yes, directly.** It is the ceiling the effective block-weight
