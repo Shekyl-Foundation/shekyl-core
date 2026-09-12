@@ -1489,6 +1489,7 @@ ride each row.
 | FL-R23 | **Lookback-min admission:** `fee ≥ mask_round_up(weight · min{F(h′−k) : 0 ≤ k ≤ G})`, `G` = 5 (hot-session gap 0–2 + network height spread 2 + 1 slack; the identity is per receiving node — review A-1 2026-09-10 corrected the first draft's `G` = 3). A quote at `F(h)` inside the gap is admitted by identity; the 2 % buffer and 0.95 deleted (weight model is byte-exact, §11.1 item 9). Cost = grace = worst `G`-block rise (FL-E3). Predicate lands in Rust behind FFI (rule 20). §11.2 | **RULED in-channel 2026-09-10** ("I agree with the math"); **spec amended at review 2026-09-10 (A-1 `G` = 5 per-node; A-2 weight-gate property test + `RELAY_ADMISSION_SLACK_BP` = 0 pin; A-3 reopening clause: reopens if any per-block-response operand enters `F`)** | none — relay policy |
 | FL-R24 | **SMA resolution for the floor operand:** (i) integer `tx_count_sum/720` as shipped — the 1/V tick is a grace cost under FL-R23, a quote-quality question only; (ii) exact `(tx_count_sum, baseline·720)` via the scale-invariant ratio functions — floor-only breaks FL-V1 by ≤ one tick; reward-and-floor is a consensus change to `M_r`'s operand (own row, rule 07). Decision rule pre-registered §11.5 FL-E3. §11.2 | **RULED in-channel 2026-09-10 ("accepted/agree"): (ii) exact SMA for reward AND floor** — the FL-E3 rule fired (integer tick 307 bp at age 30, §11.7) | **consensus row** (change to `M_r`'s operand resolution; pre-genesis; opened by the implementing PR, rule 07 evaluated there) |
 | FL-R25 | **The fourth fee slot is DELETED, not bridged.** FL-V3 (cycle 1) found slot 2 reachable only through `FeePriority::Elevated` — *"the `Elevated` priority, as defined by Monero"* — with **zero production callers, the GUI included**: wire-served and dead. The round's response was to build the RK-5 bridge (slot 2 mirrors slot 1) so a transliterated `Elevated` caller would pay the standard rate and stay in the largest anonymity set, then a contract test to assert the bridge holds, and round 19 then had to ask which slot the priority formula occupies. **Three artifacts protecting one dead enum variant, and the anonymity set the bridge protected had no members.** The premise also fails on its own terms: we are not wire-compatible with Monero — different address format, transaction format and proof system — so nothing that speaks Monero's RPC can reach this chain. The slot existed because ArticMine's 2021 ladder produced four numbers. **RK-5 REOPENED under rule 21** (our own pre-genesis ruling; its premise was that something consumes four slots, and nothing does) and discharged by deletion: `fees.resize(3)`, `FeeTiers([u64; 3])`, `FeeTier::Medium` and `FeePriority::Elevated` deleted, `fee_tier_for` collapsed to a bijection, the `chain_facts` pod and its vectors cut to three, the #640 contract test asserting three ascending tiers with no mirror clause, and both `get_fee_estimate` oracle vectors **regenerated, not edited**. Rules 60 and 15; pre-genesis, daemon and wallet ship together, no deployed network to skew. **§11.6 item 4's `fees[2] = 2RC/M` was never a slip — the wire was.** One behaviour change, named: priority `3` reached the bridge slot at the standard rate and now reaches `High`. | **RULED in-channel 2026-09-11** | minted at round 19, landed before PR B |
+| FL-R26 | **`grace_blocks` is DELETED from the estimate path and the RPC — not zeroed.** FL-R20's un-gracing (ruled 2026-09-11) makes the served ladder a function of chain state alone: `Mlw` is the un-graced long-term effective median, so `grace_blocks` moves no rung. What it used to buy was a lookahead — zeroes inserted into the long-term window pulled `M` down and the quote UP, so a quote survived the next few blocks — and **FL-R23 does that job exactly rather than probabilistically**, which is the same argument that withdrew the fixed pad (FL-R22): every economy user paid the premium forever for protection the lookback already gives by identity. It was redundant on *every* rung, not only slot 0: grace protected quotes taken AT the floor, and a standard quote is `4F`. **A tunable with no effect is worse than no tunable**, so the parameter goes rather than being pinned at zero. **Measured while implementing, and it sharpens the ruling: the lookahead was already all but inert in production.** `grace_blocks` is capped at `CRYPTONOTE_REWARD_BLOCKS_WINDOW` = 100 against a `CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE` = 100 000 window, so the zeroes move the median by at most 100 ranks in 100 000 — and on a locally flat weight distribution, by nothing at all. Restoring the graced shape verbatim left both a floor-pinned fixture and a 5 000-block high-median fixture **bit-for-bit unchanged**; `fee_2021_scaling.grace_blocks_do_not_move_the_served_ladder` therefore pins the mechanism at a window equal to the grace cap, where the zeroes saturate, and says so in its own comment. **Wire change** (`grace_blocks` is an RPC parameter), so it carries a `CORE_RPC_VERSION` bump and belongs with the RK-5 wire lane or PR C — explicitly **not** PR B. **Reopener (rule 21), cross-referenced to FL-R19:** if a long-gap construction path ever lands — cold signing, offline signing, multisig — `G` = 5 may not cover the quote-to-broadcast gap, at which point the lookahead question returns. FL-R19's sizing premise was voided on "there is no offline signing" (decision log 2026-09-07); **this row is where that premise is re-examined if that changes**, and a lookahead restored here would need FL-R19's binding constraint (fixed, deterministic, never per-wallet) rather than the inherited zero-insertion shape. | **RULED in-channel 2026-09-11** (with the un-graced `M`: *"the right end state is `grace_blocks` deleted from the estimate path and from the RPC — not zeroed, deleted"*) | not PR B — wire change; queued with the RK-5 lane / PR C |
 
 Signatures are recorded per-row with their provenance (in-channel, review
 rounds 4–8); this line remains for any wholesale countersign the
@@ -2941,9 +2942,14 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
   in that order: the weight-gate property test (item 3) lands before the
   zero-slack deletion it justifies. Relay policy and wallet-side only.
   *(Items were numbered 1, 2, 4, 3 when the weight gate was inserted at
-  review A-2; renumbered to reading order here — the numeric order used
-  to contradict the ordering the items themselves require. Order and
-  numbering only; no item's content changed.)*
+  review A-2, then renumbered to READING order. That renumbering did not
+  remove the contradiction it claimed to: the list still places the gate
+  (3) after the deletion (2) it must precede. The LANDING order is
+  therefore stated in words and is binding over the numbers — the
+  fee-varint fixed point and the gate first, then items 1 and 4 together
+  (one value, one identity), then item 2 — and that is the order PR B
+  landed in: `ca16135a2`, `cbd363658`, `52d143b92`, `622a90969`. Order
+  and numbering only; no item's content changed.)*
 - **PR C — the FL-R21 deletion sweep** (economics, FFI, instrument).
 
 *Daemon (`blockchain.cpp`, `tx_pool.cpp`), Rust-forward per rule 20:*
@@ -2985,10 +2991,18 @@ predicate and a repo-wide deletion in one diff (review 2026-09-10):
 after item 3); `corrected_fee_ladder` takes raw `C`, drops the rounding;
 KAT pins for `F(h)` at the §4.6 degenerates and the §1.8 grid.
 
-*Wallet (`shekyl-engine-core` fee path):* verify nothing adds a margin —
-`fee = mask_round_up(rate × weight)` is already the shape
-(`tx_fee_model.rs`); no change expected. `fee_policy.rs`'s absolute cap
-unchanged.
+*Wallet (`shekyl-engine-core` fee path):* verify nothing adds a margin.
+**One change was needed, and it was a live defect** (`ca16135a2`): the
+shape is `fee = mask_round_up(rate × weight(fee))` — a fixed point, since
+the wire carries `varint(fee)` — and `converge_fee` ran two blind passes
+with no termination check. The build path seeded it with `g(0)` (three
+passes in effect, the orbit's worst case exactly); `fee_query` seeded it
+with 0 and under-quoted by one varint byte's worth of rate at every
+`2^(7k)` crossing — invisible under the 2 % buffer, a hard bounce at zero
+slack that FL-R23 cannot absorb because it is structural. Fixed to iterate
+to the fixed point under a derived bound, ahead of the slack deletion; the
+compensating seeds deleted. `fee_policy.rs`'s absolute cap moved with
+FL-R21, 220,000,000 → 218,453,333: the same structural bound, unrounded.
 
 *Instrument:* `fee_ladder.rs` loses the §10 arms, `RateLimited`,
 `Quantized*`, hysteresis; `fee_floor.rs`'s `floor_rate` is replaced by a

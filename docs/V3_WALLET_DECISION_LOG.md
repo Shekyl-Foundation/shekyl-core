@@ -4774,7 +4774,11 @@ band is exactly the policy every named tier obeys and nothing more:
 at or above the snapshot's economy floor (below it the transaction
 does not clear — not paternalism), at or below the same derived
 era-maximum absolute cap (`absolute_fee_rate_cap()` = 14,000,000
-atomic-units/weight) on the same effective weight-1 basis. This
+atomic-units/weight) on the same effective weight-1 basis. *[Value as
+ruled 2026-08-17. Superseded twice since, basis unchanged: re-derived as a
+structural bound (220,000,000) at #640, then unrounded to 218,453,333 when
+FL-R21 took `round_money_up_2` off the served path (PR B, 2026-09-11).]*
+This
 brings the code to what the 2026-08-16 ruling already named as
 `Custom`'s bound; no third, `Custom`-only ceiling was ever ratified,
 and none is introduced. A ceiling anchored on `priority` was

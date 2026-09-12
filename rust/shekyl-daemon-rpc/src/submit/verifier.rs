@@ -81,7 +81,7 @@ use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
 use rand_core::OsRng;
 
 use shekyl_archival_retention::{
-    debit_auth_pin, emission_vin_verify_auth, emission_vin_verify_backing,
+    cold_authority_pin, emission_vin_verify_auth, emission_vin_verify_backing,
     emission_vin_verify_claims, p_canonical_id_from_hybrid_pubkey, release_pre_cooldown_guards,
     release_vin_statics, settlement_epoch_at_height, verify_bond_post_ct_balance,
     verify_join_market_bond_post, verify_release_bond_post, whole_record_last_served,
@@ -723,7 +723,7 @@ fn verify_credit_arm(
 /// takes bonded collateral out of the system. `P`'s identity key is held by
 /// the serving host (it produces Auth-P for every response), so authorizing a
 /// value-out against it would turn a host compromise into a collateral drain.
-/// The record's `bond_spend_pk` is cold, and `debit_auth_pin` — the same
+/// The record's `bond_spend_pk` is cold, and `cold_authority_pin` — the same
 /// function the C++ block path calls over FFI — is what makes that coldness
 /// load-bearing. A record committing no canonical key authorizes nothing;
 /// there is no identity-key fallback.
@@ -758,7 +758,15 @@ fn verify_debit_arm(
     };
 
     // ── UB3: the record's COMMITTED authorizer, never the identity key ──
-    if let Err(e) = debit_auth_pin(record.bond_spend_pk(), &bond_auth.hybrid_public_key) {
+    // Composed gate, not the bare pin: Release is unconditional in
+    // `requires_cold_authority`, so this arm and the C++ connect arm share
+    // the selector.
+    if let Err(e) = cold_authority_pin(
+        RetentionBondPostKind::Release,
+        bond.bond_debit,
+        record.bond_spend_pk(),
+        &bond_auth.hybrid_public_key,
+    ) {
         return Err(VerifyReject::malformed(format!("UB3: {e}")));
     }
 
@@ -1168,7 +1176,7 @@ fn verify_pqc_auth_slot(auth: &PqcAuth, payload_hash: &[u8; 32]) -> Result<(), V
 /// §8.7.1.1 fact gather takes the pool→blockchain locks.
 ///
 /// **Why this exists, stated as the attack it closes.** The gather's cheap
-/// pin (`debit_auth_pin`, run C++-side at `daemon_submit_ffi.cpp`) compares
+/// pin (`cold_authority_pin`, run C++-side at `daemon_submit_ffi.cpp`) compares
 /// the presented key to the record's committed `bond_spend_pk`. Both are
 /// **public**: `bond_spend_pk` rides the JoinMarket bond post on the wire
 /// and is therefore readable by anyone who syncs the chain. Equality of two

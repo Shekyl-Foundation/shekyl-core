@@ -46,6 +46,7 @@
 import collections
 import pathlib
 import re
+from collections import Counter
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -288,6 +289,72 @@ def main() -> None:
             "these audit coverage matrix rows name tables absent from "
             "SHEKYL_LMDB_TABLES (deleted table, surviving row?):\n  "
             + "\n  ".join(mat_ghosts))
+    # Digest-v0 coverage leg (P0e, 2026-09-11). DRS §9.1 leg 4: "after digest
+    # exists: every MDB_dbi in digest set OR named exclusion row". The digest
+    # exists as of P0d (2026-09-10), so the leg is live.
+    #
+    # THIS LEG ASSERTS STATEHOOD, NOT COVERAGE. A tree whose 49 tables all read
+    # `uncovered` passes it. What it prevents is a table entering or leaving the
+    # digest with nobody writing it down -- and, via DIGEST_V0_TABLES below, the
+    # doc and the walker drifting apart in silence.
+    #
+    # Anchor honesty: there is no code-side constant naming the digest's table
+    # set. digest_v0 reads through four accessors in
+    # src/blockchain_db/lmdb/logical_state_digest.cpp:41 -- height() (mdb_stat on
+    # m_blocks), get_block_hash_from_height (m_block_info), for_all_key_images
+    # (m_spent_keys) and get_curve_tree_root (m_curve_tree_meta). The set below
+    # is a SECOND COPY of that mapping, transcribed by hand. It is a weaker
+    # anchor than reading the walker, and its value is that the two copies fail
+    # loudly against each other instead of one drifting alone. If the walker's
+    # accessors change, this constant and the audit's column must both move.
+    DIGEST_V0_TABLES = {"blocks", "block_info", "spent_keys", "curve_tree_meta"}
+    DIGEST_STATES = {"v0", "v0-partial", "excluded", "uncovered"}
+
+    state_rows = re.findall(
+        r"^\| `([a-z0-9_]+)` \|[^\n]*\| ([a-z0-9-]+) \|$",
+        mat_m.group(0), re.MULTILINE)
+    if not state_rows:
+        _fail("the audit coverage matrix has no `Digest v0` state column "
+              "(P0e leg) -- every row must carry exactly one of "
+              + "/".join(sorted(DIGEST_STATES)))
+    states = dict(state_rows)
+    if len(states) != len(state_rows):
+        errors.append("duplicate table rows while reading the Digest v0 "
+                      "column of the audit coverage matrix")
+    bad = sorted(f"{t} -> {v}" for t, v in states.items()
+                 if v not in DIGEST_STATES)
+    if bad:
+        errors.append(
+            "these audit coverage matrix rows carry an unknown Digest v0 "
+            "state (allowed: " + ", ".join(sorted(DIGEST_STATES)) + "):\n  "
+            + "\n  ".join(bad))
+    stateless = [t for t in tables if t not in states]
+    if stateless:
+        errors.append(
+            "these tables exist in SHEKYL_LMDB_TABLES but carry no Digest v0 "
+            "state in the audit coverage matrix -- a table cannot be silently "
+            "outside the digest ledger (DRS \u00a79.1 leg 4):\n  "
+            + "\n  ".join(stateless))
+    # The two copies must agree: the doc's digested rows are exactly the set
+    # transcribed from the walker's accessors.
+    doc_digested = {t for t, v in states.items()
+                    if v in ("v0", "v0-partial") and t in table_set}
+    if doc_digested != DIGEST_V0_TABLES:
+        only_doc = sorted(doc_digested - DIGEST_V0_TABLES)
+        only_gate = sorted(DIGEST_V0_TABLES - doc_digested)
+        detail = []
+        if only_doc:
+            detail.append("marked digested in the audit but absent from this "
+                          "gate's transcription of the walker: "
+                          + ", ".join(only_doc))
+        if only_gate:
+            detail.append("read by the digest walker but not marked digested "
+                          "in the audit: " + ", ".join(only_gate))
+        errors.append(
+            "the audit's digested rows and this gate's DIGEST_V0_TABLES "
+            "disagree -- one of the two copies has drifted from "
+            "logical_state_digest.cpp:\n  " + "\n  ".join(detail))
+
     mat_count = re.search(r"\*\*(\d+) rows\*\*", mat_m.group(0))
     if not mat_count:
         errors.append("the audit coverage matrix's '**N rows**' count line "
@@ -302,9 +369,19 @@ def main() -> None:
         sys.exit("FAIL: the LMDB schema surface is out of step with the live "
                  "table list:\n" + "\n".join(errors))
 
+    ledger = Counter(states[t] for t in tables if t in states)
     print(f"OK: all {len(tables)} LMDB tables documented (property rows and "
           "headings), reconciliation registry and atomicity-audit matrix "
           "match, stated totals and DB-version header match the code")
+    print("    Digest v0 ledger (P0e): every table carries one state — "
+          + ", ".join(f"{ledger[k]} {k}" for k in
+                      ("v0", "v0-partial", "excluded", "uncovered")
+                      if ledger.get(k))
+          + ". This leg checks STATEHOOD, not coverage: "
+          f"{ledger.get('uncovered', 0)} tables are in the oracle's domain "
+          "and invisible to the digest (audit §11) — one of them, "
+          "hf_starting_heights, holds no runtime rows to diverge (DRS-W5). "
+          "That is a recorded measurement, not a failure.")
 
 
 if __name__ == "__main__":

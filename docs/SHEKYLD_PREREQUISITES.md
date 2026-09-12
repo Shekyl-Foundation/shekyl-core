@@ -305,8 +305,9 @@ The wallet-side sanity ceiling
 (`FeeEstimatorError::DaemonFeeUnreasonable`) remains binding: a
 non-monotonic `fees[]` band, or any `fees[i]` whose effective
 weight-1 charge (mask rounding included) exceeds the derived
-era-maximum cap (`absolute_fee_rate_cap()` — the daemon-rounded
-genesis-condition `Fh`, 14,000,000 atomic-units/weight), causes the
+era-maximum cap (`absolute_fee_rate_cap()` — the structural bound, every
+factor at its own extreme: 218,453,333 atomic-units/weight at canonical
+parameters), causes the
 wallet to refuse the build (and the fee quote) with a typed error. The ceiling is wallet
 policy, not daemon config. An intra-snapshot 10× `fees[2]/fees[0]`
 lock is *not* applied — honest 2021-scaling `Fh/Fl` exceeds 10×.

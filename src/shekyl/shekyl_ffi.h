@@ -318,37 +318,48 @@ uint64_t shekyl_effective_block_weight_median(
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
-/// The quantized fee-correction scalar C_q (FL-R12' round-8 amendment,
-/// whole-scalar form) with pow2-boundary hysteresis. sigma_scaled and
-/// burn_pct_scaled are the SAME shekyl_calc_emission_share /
-/// shekyl_calc_burn_pct outputs validation computes at this state.
-/// prev_cq_scaled = 0 means no held value, and it is what the daemon
-/// passes today: the band is a capability of this export, not yet a
-/// property of the served rate. FL-R3 is RULED -- the band stays and is
-/// restored -- pending the grid-anchored previous value's own round.
-uint64_t shekyl_fee_correction_quantized(
+// Admit iff fee >= mask_round_up(weight * min(floors)) - slack_bp.
+// floors is at most shekyl_relay_floor_lookback()+1 values; only the
+// minimum is read. A short window is stricter; empty refuses.
+// Returns 1 admit, 0 refuse, -1 bad pointer/length.
+int32_t shekyl_relay_floor_admits(
+    uint64_t fee,
+    uint64_t weight,
+    uint64_t mask,
+    const uint64_t* floors,
+    size_t floors_len,
+    uint32_t slack_bp);
+
+// F = R*C*w_ref/M^2, floored at 1. Same function as the ladder's economy
+// rung. Returns 0 written, -1 null out_floor, -2 out of u128 domain.
+int32_t shekyl_relay_fee_floor(
+    uint64_t base_reward,
+    uint64_t median,
+    uint64_t full_reward_zone,
+    uint64_t ref_tx_weight,
+    uint64_t c_scaled,
+    uint64_t* out_floor);
+
+// Raw C = (1-sigma)*M_r/(1-b) in SCALE units. Cannot fail.
+uint64_t shekyl_fee_correction(
     uint64_t tx_count_sum,
     uint64_t window_blocks,
     uint64_t sigma_scaled,
-    uint64_t burn_pct_scaled,
-    uint64_t prev_cq_scaled);
+    uint64_t burn_pct_scaled);
 
-/// The corrected three-slot fee ladder (`FeeLadder::as_slots`: economy,
-/// standard, priority; Fh main arm unconditional). Writes exactly three
-/// values; the CALLER clamps fees[0] at the relay floor. Returns:
-///   0  - the three values were written;
-///  -1  - null out_fees, nothing written;
-///  -2  - the scalars cannot form the rungs' products in 128 bits,
-///        nothing written. No chain state reaches this; it exists so a
-///        corrupt or synthetic caller gets a status instead of an abort
-///        across the ABI (rule 40).
+// G — lookback depth. Rust is the owner.
+uint64_t shekyl_relay_floor_lookback(void);
+// Admission slack, basis points. Rust is the owner; pinned at 0.
+uint32_t shekyl_relay_admission_slack_bp(void);
+
+// Three-slot ladder [economy, standard, priority]. Economy is the relay
+// floor at the same operands. Returns 0 written, -1 null, -2 out of domain.
 int32_t shekyl_corrected_fee_ladder(
     uint64_t base_reward,
-    uint64_t mnw,
-    uint64_t mlw,
+    uint64_t median,
     uint64_t full_reward_zone,
     uint64_t ref_tx_weight,
-    uint64_t c_q,
+    uint64_t c_scaled,
     uint64_t *out_fees);
 
 /// shekyl_block_reward status codes. Rejection is POSITIVE, caller misuse
@@ -2139,28 +2150,25 @@ uint8_t shekyl_archival_last_served_scan(
     uint8_t holdings_kind,
     uint8_t* out_scan);
 
-// Debit authorization pin -- the single gate between a compromised serving
-// host and a collateral-draining exit. A VALUE-OUT bond-post authorizes
-// against the RECORD's committed bond_spend_pk, never against the persona's
-// identity key (which a serving host holds) and never against a key the vin
-// carries (which would be a forgeable self-assertion). A record committing
-// no canonical-length key authorizes NOTHING -- fail closed, no identity-key
-// fallback.
-//
-// SELECTOR: bond_debit > 0, NOT the post kind. Consumers are Release and the
-// DROP arm of HoldingsUpdate. Rebond and HoldingsUpdate-add are credit paths
-// (bond_debit == 0) that consensus authorizes with the identity key -- do
-// not call this for them, or a legitimate credit is rejected: keying on kind
-// instead of the debit term rejects every valid HoldingsUpdate-add block.
-//
-// The Rust submit battery calls the same shekyl-archival-retention function
-// natively (DAEMON_SUBMIT_VERDICT.md 8.7.1.1 row UB3), so block path and
-// submit path cannot drift on this predicate.
+// Cold-authority gate. Rust owns both halves:
+//   selector  requires_cold_authority — Release always; HoldingsUpdate iff
+//             bond_debit > 0; JoinMarket / Rebond never
+//   pin       presented pqc_auths key vs the record's COMMITTED bond_spend_pk
+// C++ marshals and logs. A record committing no canonical-length key
+// authorizes NOTHING -- fail closed, no identity-key fallback. Code 51 is
+// the cross-check (gate invoked for a post the selector excludes):
+// INTERNAL_FAILURE, never the sender's form.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY 49
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH  50
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST 51
 /// PWD-B7: drop verdict for a shekyl_archival_verify_*_bond_post error code.
 uint8_t shekyl_archival_bond_post_drop_verdict(uint8_t code);
-uint8_t shekyl_archival_debit_auth_pin(
+/// NUL-terminated static reason for a bond-post verify code (do not free).
+/// Strings come from shekyl-ffi::bond_post_err_cstr -- the one table.
+const char* shekyl_archival_bond_post_err_string(uint8_t code);
+uint8_t shekyl_archival_cold_authority_pin(
+    uint8_t post_kind,
+    uint64_t bond_debit,
     const uint8_t* record_bond_spend_pk_ptr,
     size_t record_bond_spend_pk_len,
     const uint8_t* auth_pubkey_ptr,
