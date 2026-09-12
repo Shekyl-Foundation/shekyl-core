@@ -10,26 +10,17 @@
 # COMMITTED bond_spend_pk, never the persona's identity key -- which a serving
 # host holds, and which would therefore turn a host compromise into a
 # collateral drain. The pin is `shekyl-archival-retention::debit_auth_pin`;
-# the SELECTOR -- which (post_kind, bond_debit) needs it at all -- is
-# `requires_cold_authority`, an exhaustive truth table in the same module;
-# and consensus reaches both through the composed `cold_authority_pin`,
-# exported to C++ as `shekyl_archival_cold_authority_pin`.
-#
-# The selector, as the code has always implemented it (corrected 2026-09-11;
-# this header previously said "bond_debit > 0, NOT the post kind", which the
-# Release arm never did):
+# the SELECTOR is `requires_cold_authority`; consensus reaches both through
+# `cold_authority_pin` / `shekyl_archival_cold_authority_pin`.
 #
 #   Release          always            (UB3 before UB9, §8.7.1.1)
 #   HoldingsUpdate   iff bond_debit > 0 (drop = cold, add = identity)
 #   JoinMarket       never             (the credit that COMMITS the cold key)
 #   Rebond           never             (credit path; verify needs debit == 0)
 #
-# Rebond and HoldingsUpdate-add are authorized by the IDENTITY key, so this
-# gate must not be read as prescribing the record-key pin for them. The
-# composed gate REFUSES if called on such a post (NOT_COLD_AUTHORITY_POST) --
-# that arm is the cross-check this script cannot provide: this script catches
-# an arm that FORGETS the call; the refusal catches an arm that calls without
-# a predicate row. Neither sees the other's blind spot.
+# The composed gate REFUSES if called on a predicate-false post
+# (NOT_COLD_AUTHORITY_POST). This script catches an arm that FORGETS the
+# call; the refusal catches an arm that calls without a predicate row.
 #
 # WHY A GATE AND NOT A COMMENT: it was implemented three times. The per-tx
 # path and the checkpoint fast path in blockchain.cpp each spelled it out,
@@ -105,6 +96,11 @@ done
 # staleness this gate exists to prevent. Read strip_c_comments.py.
 code_only() { python3 "$here/strip_c_comments.py" "$1"; }
 
+# One statement per line so a wrapped call still matches a needle that names
+# both the function and an argument. Join, then split on ';' -- BEFORE rg
+# sees it (no rg in the pipe; rule 46).
+statements_of() { code_only "$1" | tr '\n' ' ' | sed 's:;:;\n:g'; }
+
 # Rule 47 applied to the helper: every arm below is only as good as the
 # stripper, so assert the stripper is correct BEFORE trusting its output. A
 # stripper regression would otherwise widen every check here at once, silently
@@ -118,14 +114,10 @@ fi
 
 require_call() {
   local file="$1" needle="$2" label="$3" body hits
-  # Statement-scoped, like the invariant check further down: clang-format
-  # wraps the helper call across lines, so a line-scoped needle could not
-  # name both the call and its arm label. Joined then split on `;` -- one
-  # statement per line -- BEFORE rg sees it (no rg in the pipe; rule 46).
-  body=$(code_only "$file" | tr '\n' ' ' | sed 's:;:;\n:g')
+  body=$(statements_of "$file")
   hits=$(printf '%s\n' "$body" | rg -c "$needle" || true)
   if [ "${hits:-0}" -lt 1 ]; then
-    echo "FAIL: ${label} no longer reaches the shared debit pin."
+    echo "FAIL: ${label} no longer reaches the shared cold-authority gate."
     echo "      An arm that stops authorizing its value-out is invisible to the"
     echo "      comparison check below -- there is nothing to compare when the"
     echo "      check is simply gone."
@@ -136,7 +128,7 @@ require_call() {
 # The C++ helper takes (record, post_kind, bond_debit, auth_pubkey, arm) and
 # clang-format wraps the call, so the needle anchors on the helper name and the
 # arm label rather than the whole argument list. Both must be on the joined
-# statement, which `code_only` + the newline join below produce.
+# statement `statements_of` produces.
 require_call src/cryptonote_core/blockchain.cpp \
   'archival_cold_authority_pin\(record,[^;]*"Release"\)' \
   "per-tx Release verify"
@@ -152,9 +144,9 @@ require_call src/rpc/daemon_submit_ffi.cpp \
 # Comment-stripped like the C++ arms: reading the raw file let a commented-out
 # call satisfy the gate. Rust line comments are `//` too, so `code_only` works
 # unchanged.
-rust_body=$(code_only rust/shekyl-daemon-rpc/src/submit/verifier.rs)
+rust_body=$(statements_of rust/shekyl-daemon-rpc/src/submit/verifier.rs)
 rust_pin=$(printf '%s\n' "$rust_body" \
-           | rg -c 'cold_authority_pin\(' || true)
+           | rg -c 'cold_authority_pin\([^;]*record\.bond_spend_pk\(\)' || true)
 if [ "${rust_pin:-0}" -lt 1 ]; then
   echo "FAIL: the Rust submit battery no longer calls cold_authority_pin."
   echo "      UB3 is the debit arm's authorization; an inlined comparison"

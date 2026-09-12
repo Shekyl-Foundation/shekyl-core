@@ -4,39 +4,19 @@
 
 ### Changed
 
-- **The cold-authority selector for bond-posts is one Rust predicate, and it
-  has two arms because the code always did.** `requires_cold_authority(post_kind,
-  bond_debit)` (`shekyl-archival-retention::debit_auth`) is an exhaustive truth
-  table — `Release` always, `HoldingsUpdate` iff `bond_debit > 0`, `JoinMarket`
-  / `Rebond` never — and `cold_authority_pin` composes it with the unchanged
-  `debit_auth_pin`. Consensus reaches the composed gate as
-  `shekyl_archival_cold_authority_pin(post_kind, bond_debit, …)`; the old
-  `shekyl_archival_debit_auth_pin` export is deleted, not aliased, so a missed
-  caller fails to link rather than silently keeping the selector at the arm.
-  Behavior is byte-identical on every input the arms pass today.
-
-  **The finding.** Three places — the module doc, the FFI doc, and the
-  single-source gate's header — said *"the selector is `bond_debit > 0`, not
-  the post kind."* The C++ Release arm never did that: it pins on kind,
-  unconditionally, ahead of the UB9 debit-term guards, and
-  `DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 pins that order. Only the
-  `HoldingsUpdate` arm selects on the term. Encoding the prose would have
-  moved a zero-debit-mismatched-key Release from UB3 to UB9 — a different
-  refusal on a pinned ordering. The predicate now states what the arms do,
-  and a new kind (the ruled `EndpointUpdate`, zero-debit and cold) is one row
-  rather than a re-derivation at every arm.
-
-  **The cross-check.** The composed gate refuses with a new code,
-  `NOT_COLD_AUTHORITY_POST` (51, classified `INTERNAL_FAILURE`), when an arm
-  calls it for a post the predicate excludes. Unreachable today. It exists
-  because the gate script catches an arm that *forgets* the call and nothing
-  caught an arm that calls without a predicate row; neither instrument sees
-  the other's blind spot. `check_debit_auth_single_source.sh` now asserts all
-  three functions exist and reads call sites statement-scoped, since the
-  wrapped C++ call no longer fits on one line. Daemon C++ (`blockchain.cpp`,
-  `daemon_submit_ffi.cpp`) is touched by ruling: the consensus core is under
-  rewrite, and a correct reference beats re-litigating the selector from the
-  daemon side at cutover.
+- **The cold-authority selector for bond-posts is one Rust predicate.**
+  `requires_cold_authority(post_kind, bond_debit)` is an exhaustive truth
+  table — `Release` always, `HoldingsUpdate` iff `bond_debit > 0`,
+  `JoinMarket` / `Rebond` never — and `cold_authority_pin` composes it with
+  the unchanged `debit_auth_pin`. Consensus reaches the composed gate as
+  `shekyl_archival_cold_authority_pin`; the old
+  `shekyl_archival_debit_auth_pin` export is deleted, not aliased. Behavior
+  is byte-identical on every input the arms pass today. A predicate-false
+  call refuses with `NOT_COLD_AUTHORITY_POST` (51, `INTERNAL_FAILURE`)
+  before the keys are compared. Bond-post operator strings now live in
+  `bond_post_err_cstr` (the admission-code pattern); the C++ switch is gone,
+  and the connect helper is marshal + one log line. `ColdAuthorityError` is
+  `NotAColdAuthorityPost | Pin(DebitAuthError)`.
 
 - **The fee estimate returns three tiers, not four, and `CORE_RPC_VERSION`
   is 3.30 (FL-R25).** `get_fee_estimate.fees` was a four-slot array
