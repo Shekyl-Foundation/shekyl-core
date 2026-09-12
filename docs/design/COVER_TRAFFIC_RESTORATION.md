@@ -1229,15 +1229,17 @@ optional; a truncated snaplen under-reads). Count with
 TCP, scans for the levin signature so SOCKS5 wrapping is skipped, and keeps
 messages whose *framed* size is `WINDOW_BYTES` (20 480) — that is
 `HEADER_SIZE + m_cb`, the quantity `noise_notify(WINDOW_BYTES)` emits.
-`m_cb` itself is `WINDOW_BODY` (20 447). Matching `m_cb == WINDOW_BYTES`
+`m_cb` itself is `WINDOW_BODY` (20 451 = `WINDOW_BYTES −` the live 29-byte
+header; PWD-B5 deleted `return_code`). Matching `m_cb == WINDOW_BYTES`
 misses every real window. Each hit is charged `WINDOW_BYTES` (the budget
 unit), not the body. Proxy→node is ignored. Arm A rehearsal, carrier still
 off: `--expect-zero` (exit 1 if any window is present). Interval buckets at
 the summary are the per-flow aggregate against `U[3333, 6667]` ms — not the
 merged timestamp series, which would read four healthy channels as a
 metronome. Tests in `utils/carrier/test_count_windows.py` fail if the size
-filter is widened by a byte, if `m_cb == WINDOW_BYTES` is accepted, or if
-the summary jitter is computed on the merge.
+filter is widened by a byte, if `m_cb == WINDOW_BYTES` is accepted, if
+`HEADER_SIZE` reverts to the pre-PWD-B5 33, or if the summary jitter is
+computed on the merge.
 
 **Arm A rehearsal (2026-09-10, seedusw).** Carrier off, `--expect-zero`:
 `windows=0 payload_bytes=0 flows=13`, 20 877 packets captured, 0 dropped by
@@ -1250,7 +1252,19 @@ capture wall-clock. This is the filter rehearsal the method names — not the
 `sudo timeout 7200 tcpdump -i lo -s 0 -w /tmp/arm-a-alpha8.pcap 'tcp and dst port 9050'`:
 first packet 04:14:24Z, last 06:14:13Z, span 7189 s, 2221 packets, 0 kernel
 drops. Counter `--expect-zero`: `windows=0 payload_bytes=0 flows=8`. This is
-the B − A baseline on this binary. Arms B and C remain the budget measurement.
+the B − A baseline on this binary.
+
+**Arm B (2026-09-11/12, seedusw, v3.1.0-alpha.8, carrier ARMED).** Idle.
+`/tmp/arm-b.pcap`: 4728 packets, 0 kernel drops, ~7197 s. First pass of
+`count_windows.py` (HEADER_SIZE still 33) read `windows=0` — every dummy
+had `m_cb = 20 451` and was scored as a 20 484-byte frame. Re-count with
+the live 29-byte header: `windows=2505 payload_bytes=51302400
+rate_Bps=7128`. That is 87 % of the Tor-only two-channel mean (8192 B/s)
+and 44 % of the dual-zone ceiling (16 384 B/s). Per-flow intervals sit in
+`U[3333, 6667]`; the merged histogram's `below_min` pile is the four-channel
+metronome the method already refuses. B − A is B (Arm A is still
+`windows=0` under the 29-byte parse). Defects 1 and 2: not observed.
+Arm C (loaded) is still unrun.
 
 **Window: 2 hours per arm.** The relative standard error of the aggregate rate
 is `0.0963/√n` per channel, with four channels at a 5 s mean: ~5 min resolves a
