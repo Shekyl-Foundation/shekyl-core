@@ -172,6 +172,15 @@ TEST(archival_bond_post, gate4_integration_accepts_valid_join_market)
   const Gate4Kat kat = load_gate4_kat();
   txin_archival_bond_post bond = load_join_bond_vin(kat.join_wire_hex);
   EXPECT_EQ(bond.p_canonical_id, hash_from_hex(kat.p_id_hex));
+  // EU-D3 cross-language pin: the Rust regenerator (gate4_lifecycle_kat.rs)
+  // wrote the JoinMarket endpoint as 32 x 0x0E; C++ must read those bytes at
+  // the endpoint field — position and length agree across the codecs, not
+  // merely "the wire parsed".
+  {
+    crypto::public_key expected{};
+    memset(expected.data, 0x0E, sizeof(expected.data));
+    EXPECT_EQ(0, memcmp(bond.endpoint.data, expected.data, sizeof(expected.data)));
+  }
 
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
