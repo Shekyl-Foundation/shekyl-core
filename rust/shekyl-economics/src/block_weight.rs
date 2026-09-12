@@ -11,17 +11,10 @@
 //! against* `M`; it never ruled on how `M` is assembled. `S` is consensus
 //! (C2-R2 Q3).
 //!
-//! **Changing `S` does not move a fee number**, but not for the reason this
-//! comment first gave. It cited the ladder taking `Mfw = min(Mnw, Mlw)` with
-//! the clamp's lower arm forcing `Mnw ≥ Mlw`; FL-R20 then deleted that
-//! two-median computation, so there is no `min` left to select anything. The
-//! conclusion survives on the operand instead: the fee estimate reads the
-//! **long-term** effective median directly, and the surge clamp applies to the
-//! short-term median, which never reaches that path.
-//!
-//! The block-weight *penalty* still prices against the effective median, so
-//! during a surge the penalty and the fee floor price the same expansion off
-//! operands that differ by up to `S` — the divergence recorded in
+//! Changing `S` does not move a fee number: the fee estimate reads the
+//! long-term effective median, and the surge clamp applies to the short-term
+//! median. The block-weight *penalty* still prices against the effective
+//! median, so during a surge the two paths differ by up to `S` — recorded in
 //! `FOLLOWUPS.md`.
 
 use crate::params::GENERATED_BLOCK_WEIGHT_SURGE_FACTOR;
@@ -45,6 +38,19 @@ pub fn effective_median(long_term: u64, short_term: u64) -> u64 {
     short_term.max(long_term).min(ceiling)
 }
 
+/// Bound a block's contribution to the long-term median to
+/// `[long_term / 1.7, long_term · 1.7]`.
+///
+/// Integer form: `[long_term · 10 / 17, long_term + long_term · 7 / 10]`.
+/// The upper bound saturates at `u64::MAX`; wrapping it would clamp *down*.
+#[must_use]
+pub fn long_term_weight(long_term_effective: u64, block_weight: u64) -> u64 {
+    let ltem = u128::from(long_term_effective);
+    let lower = u64::try_from(ltem * 10 / 17).unwrap_or(u64::MAX);
+    let upper = u64::try_from(ltem + ltem * 7 / 10).unwrap_or(u64::MAX);
+    block_weight.max(lower).min(upper)
+}
+
 /// Blocks a maximal flood needs to lift the effective median from the
 /// long-term effective median to the surge ceiling `S · LTEM`.
 ///
@@ -52,10 +58,7 @@ pub fn effective_median(long_term: u64, short_term: u64) -> u64 {
 /// half the window carries the new level, so each doubling costs 51
 /// blocks (C2-R2 Q3's 51-block doubling envelope). Reaching a ceiling
 /// `S ×` above the starting median takes `ceil(log2(S))` crossings.
-///
-/// Validated against the historical simulation at the refuted `S = 50`
-/// (returns 306, the "~300 blocks — 3 % of an epoch" that simulation
-/// recorded) before being applied at the ratified `S = 4` (102).
+/// At `S = 50` this returns 306; at `S = 4` it returns 102.
 #[must_use]
 pub const fn blocks_to_surge_saturation(surge_factor: u64) -> u64 {
     const SHORT_TERM_WINDOW: u64 = 100;
@@ -76,7 +79,9 @@ pub const fn blocks_to_surge_saturation(surge_factor: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{blocks_to_surge_saturation, effective_median, BLOCK_WEIGHT_SURGE_FACTOR};
+    use super::{
+        blocks_to_surge_saturation, effective_median, long_term_weight, BLOCK_WEIGHT_SURGE_FACTOR,
+    };
 
     const ZONE: u64 = 300_000;
     const RATIFIED: u64 = 4;
@@ -105,18 +110,6 @@ mod tests {
 
     #[test]
     fn the_lower_arm_holds_in_every_clamp_state_including_saturation() {
-        // The clamp's lower arm: the effective median is NEVER below the
-        // long-term median, whatever the short-term median does — swept
-        // across both clamp arms and the saturating ceiling, which the
-        // single-case test above does not cover.
-        //
-        // Renamed from `the_fee_ladder_operand_is_the_long_term_median_...`:
-        // the property is real, but the name and its comment described a
-        // consumer that no longer exists. It read the assertion as proving
-        // the ladder's `Mfw = min(Mnw, Mlw)` selects `Mlw`, and FL-R20
-        // deleted that computation. A test named for a dead caller invites
-        // the next reader to delete it with the caller; named for the
-        // invariant, it survives on its own terms.
         for st in [0, ZONE / 10, ZONE, ZONE * 2, ZONE * 100, u64::MAX] {
             assert!(effective_median(ZONE, st) >= ZONE, "st={st}");
         }
@@ -126,6 +119,20 @@ mod tests {
     fn a_saturating_ceiling_does_not_wrap_and_clamp_down() {
         assert_eq!(effective_median(u64::MAX, 0), u64::MAX);
         assert_eq!(effective_median(u64::MAX / 2, u64::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn long_term_weight_matches_the_integer_17_10_form() {
+        // lower = 300_000 * 10 / 17 = 176_470; upper = 300_000 + 210_000.
+        assert_eq!(long_term_weight(ZONE, ZONE), ZONE);
+        assert_eq!(long_term_weight(ZONE, 100_000), 176_470);
+        assert_eq!(long_term_weight(ZONE, 1_000_000), 510_000);
+    }
+
+    #[test]
+    fn long_term_weight_upper_bound_saturates() {
+        assert_eq!(long_term_weight(u64::MAX, u64::MAX), u64::MAX);
+        assert_eq!(long_term_weight(0, 1_000), 0);
     }
 
     #[test]

@@ -4472,17 +4472,8 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
 
   CHECK_AND_ASSERT_THROW_MES(grace_blocks <= CRYPTONOTE_REWARD_BLOCKS_WINDOW, "Grace blocks invalid In 2021 fee scaling estimate.");
 
-  // The wallet's fee estimate reads the LONG-TERM effective median directly.
-  // It is therefore structurally independent of the surge factor S: S clamps
-  // the SHORT-TERM median in update_next_cumulative_weight_limit, and that
-  // clamped value never reaches this path, so changing S moves no fee number.
-  //
-  // This replaces a two-median computation (a grace-adjusted Mlw plus a
-  // short-term Mnw, with the ladder taking Mfw = min(Mnw, Mlw)) that FL-R20
-  // deleted along with the `50 * Mlw` literal it used to carry. The
-  // S-independence survives the deletion but rests on a different reason, so
-  // it is restated rather than carried over: it is now the operand, not a
-  // min().
+  // Long-term effective median. S clamps the short-term median in
+  // update_next_cumulative_weight_limit and never reaches this path.
   const uint64_t median = m_long_term_effective_median_block_weight;
 
   uint64_t already_generated_coins = db_height ? m_db->get_block_already_generated_coins(db_height - 1) : 0;
@@ -6429,7 +6420,6 @@ bool Blockchain::check_blockchain_pruning()
   return m_db->check_pruning();
 }
 //------------------------------------------------------------------
-// returns min(Mb, 1.7*Ml) as per https://github.com/ArticMine/Monero-Documents/blob/master/MoneroScaling2021-02.pdf from HF_VERSION_LONG_TERM_BLOCK_WEIGHT
 uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight) const
 {
   PERF_TIMER(get_next_long_term_block_weight);
@@ -6442,12 +6432,8 @@ uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight) cons
     long_term_median = get_long_term_block_weight_median(db_height - nblocks, nblocks);
   uint64_t long_term_effective_median_block_weight = std::max<uint64_t>(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, long_term_median);
 
-  // long_term_block_weight = block_weight bounded to range [long-term-median/1.7, long-term-median*1.7]
-  block_weight = std::max<uint64_t>(block_weight, long_term_effective_median_block_weight * 10 / 17);
-  uint64_t short_term_constraint = long_term_effective_median_block_weight + long_term_effective_median_block_weight * 7 / 10;
-  uint64_t long_term_block_weight = std::min<uint64_t>(block_weight, short_term_constraint);
-
-  return long_term_block_weight;
+  // [LTEM/1.7, LTEM·1.7]; the bound is shekyl_long_term_block_weight.
+  return shekyl_long_term_block_weight(long_term_effective_median_block_weight, block_weight);
 }
 //------------------------------------------------------------------
 bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effective_median_block_weight)

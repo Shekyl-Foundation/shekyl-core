@@ -193,3 +193,14 @@ TEST(long_term_block_weight, a_quiet_chain_does_not_fall_below_the_long_term_med
 
   EXPECT_EQ(zone, bc->get_current_cumulative_block_weight_median());
 }
+
+TEST(long_term_block_weight, a_block_contribution_is_bounded_to_the_17_10_band)
+{
+  PREFIX(1);
+  const uint64_t zone = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
+  push_blocks(db, TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW, zone, zone);
+
+  EXPECT_EQ(zone, bc->get_next_long_term_block_weight(zone));
+  EXPECT_EQ(zone * 10 / 17, bc->get_next_long_term_block_weight(zone / 10));
+  EXPECT_EQ(zone + zone * 7 / 10, bc->get_next_long_term_block_weight(zone * 10));
+}

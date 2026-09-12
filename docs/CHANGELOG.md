@@ -13,9 +13,7 @@
   over-weight. Pre-genesis, so no cutover. **Changing `S` moves no fee
   number:** the wallet's estimate reads the long-term effective median
   directly, and the surge clamp applies to the short-term median, which never
-  reaches that path. (This entry originally gave the reason as the ladder's
-  `Mfw = min(Mnw, Mlw)` selecting `Mlw`; FL-R20 then deleted that two-median
-  computation, so the conclusion stands on the operand rather than on a min.)
+  reaches that path.
 
 - **The cold-authority selector for bond-posts is one Rust predicate.**
   `requires_cold_authority(post_kind, bond_debit)` is an exhaustive truth

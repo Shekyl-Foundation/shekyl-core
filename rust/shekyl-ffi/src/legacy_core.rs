@@ -502,14 +502,26 @@ pub extern "C" fn shekyl_base_block_reward(already_generated_coins: u64) -> u64 
 }
 
 /// Effective block-weight median: `short_term` bounded to
-/// `[long_term, S · long_term]`. Cannot fail. C++ gathers the two medians;
-/// this is the clamp both the consensus path and the fee estimate consume.
+/// `[long_term, S · long_term]`. Cannot fail. C++ gathers the window
+/// medians; this is the clamp `update_next_cumulative_weight_limit`
+/// consumes.
 #[no_mangle]
 pub extern "C" fn shekyl_effective_block_weight_median(
     long_term_effective: u64,
     short_term_median: u64,
 ) -> u64 {
     shekyl_economics::effective_median(long_term_effective, short_term_median)
+}
+
+/// Bound a block's long-term-median contribution to `[LTEM/1.7, LTEM·1.7]`.
+/// Cannot fail. C++ gathers `LTEM`; this is the bound
+/// `get_next_long_term_block_weight` consumes.
+#[no_mangle]
+pub extern "C" fn shekyl_long_term_block_weight(
+    long_term_effective: u64,
+    block_weight: u64,
+) -> u64 {
+    shekyl_economics::long_term_weight(long_term_effective, block_weight)
 }
 
 /// Status: reward computed. `out_reward` and `out_weight_limit` are written.

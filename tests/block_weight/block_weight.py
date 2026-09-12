@@ -12,21 +12,9 @@ import math
 MEDIAN_WINDOW_SMALL = 100 # number of recent blocks for median computation
 MEDIAN_WINDOW_BIG = 5000
 
-# The short-term surge factor S is READ FROM THE CONSENSUS AUTHORITY, not
-# written here. This file is the independent reference model that
-# `compare.py` diffs against the C++ implementation, and the C++ side takes S
-# from the same JSON through the generated header — so a literal here is a
-# second copy of a consensus constant in a second language, which is how it
-# came to say 50.0 after the ratified value became 4 (C2-R2 Q3, signed
-# 2026-09-06) and made this differential fail for a reason that had nothing
-# to do with the algorithms disagreeing.
-#
-# Reading the authority does NOT weaken the differential. Its value is that
-# two independent implementations of the ArticMine weight ALGORITHM agree; S
-# is a parameter, not part of the algorithm. Sharing the parameter removes a
-# false-failure mode whose natural fix — edit the Python to match the C++ —
-# is precisely the reflex that lets a real algorithmic divergence hide behind
-# a "just re-sync the constant" commit.
+# S is a parameter of the ArticMine algorithm, not part of it. Both this
+# model and the C++ implementation read it from the JSON authority; a
+# missing key is an error, not a default.
 def _surge_factor():
     here = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(here, os.pardir, os.pardir, "config", "consensus_constants.json")
@@ -34,9 +22,6 @@ def _surge_factor():
         constants = json.load(handle)
     key = "block_weight_short_term_surge_factor"
     if key not in constants:
-        # Assert the subject rather than defaulting: a silent fallback would
-        # make this model disagree with consensus and report it as an
-        # algorithm mismatch.
         raise KeyError("%s missing from %s" % (key, path))
     return float(constants[key])
 
