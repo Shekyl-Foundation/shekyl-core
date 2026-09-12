@@ -364,6 +364,42 @@ class SectionScopedEra(unittest.TestCase):
         self.assertNotIn("come loose from the symbol", out)
 
 
+    def test_a_range_past_the_end_of_its_file_is_fatal(self):
+        """The axis that previously read green: a row could cite any line
+        number at all. Perturbing a citation to `:999999` exited 0."""
+        with Fixture(
+            f"## S\n\nReviewed at **`{PIN}`**.\n\n"
+            "| CEN-X | ok | `cryptonote_core/blockchain.cpp:999999` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 1)
+        self.assertIn("points past the end of the file", out)
+
+    def test_bounds_are_checked_at_the_CITED_era_not_HEAD(self):
+        """A line valid at the pin must pass even if the file has since shrunk
+        past it -- and the reverse. The era must reach the bounds check, or it
+        is a HEAD check wearing a pin."""
+        with Fixture(
+            f"## S\n\nReviewed at **`{PIN}`**.\n\n"
+            "| CEN-X | ok | `shekyl-tor/src/binary.rs:10` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 0, "a file deleted since the pin still has lines AT the pin")
+
+    def test_a_second_era_on_one_row_governs_its_own_clause(self):
+        """A row carrying two eras resolved entirely at the FIRST. The later
+        clause cites a file that exists only at the SECOND era, so pairing it
+        with the first is the difference between pass and fail."""
+        with Fixture(
+            f"## S\n\nReviewed at **`{UNBORN}`**.\n\n"
+            f"| CEN-X | ok | first at `{UNBORN}` `cryptonote_core/blockchain.cpp:1`, "
+            f"then at `{ROW_PIN_PRESENT}` "
+            "`tests/unit_tests/curve_tree_header_root_check.cpp:1` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 0, "the second clause must resolve at the second era")
+
+
 class SymbolAndRange(unittest.TestCase):
     def test_range_inside_exactly_one_overload_passes(self):
         """W-TI: `check_tx_inputs` has two definitions at the pin, [3310,3328]
