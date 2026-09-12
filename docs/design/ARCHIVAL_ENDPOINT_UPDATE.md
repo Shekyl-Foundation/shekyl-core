@@ -383,7 +383,7 @@ before they are trusted (rule 50; the C0 bites are the pattern).
 |---|---|---|
 | **C0** | `requires_cold_authority` + `cold_authority_pin`; selector in Rust | **LANDED** #703; review pass #711 |
 | **A** | this document; the decision-log entry; `EU-` registered; HELD rows flipped | this PR |
-| **B + C1** (one PR, rule 07) | kind 4 in the retention enum, the C++ `archival_bond_post_kind`, and `shekyl-wire` as per-kind variants (`EU-D3`); the endpoint field and the **four** presence couplings — `bond_spend_pk` iff JoinMarket, endpoint iff JoinMarket ∨ EndpointUpdate, holdings and the amount term absent iff EndpointUpdate (`EU-D11`) — at every serializer; `verify_endpoint_update` as the only verify accepting `credit == debit == 0`, incl. the `EU-D7` refusal; the record column (`kVersion 6→7`) + LMDB 12→13; the per-kind journal table and pop (`EU-D12`); the C++ connect arm with its CSR-3a record; the JoinMarket producer supplying the endpoint (a 32-byte accessor on `OnionIdentity`, which today holds only the base32 service id); `EU-D9`'s two KATs; **and** the one predicate arm | **STAGED (rule 23)** — a deliberate callee-without-caller: the wire exists and nothing produces an update for it. Named consumers: D (the second address) and, for the *read* side, TJ-B's fetcher. In-policy under the disposition test because both consumers are named and the plan is live; recorded here so the next audit does not flag it |
+| **B + C1** (one PR, rule 07) | kind 4 in the retention enum, the C++ `archival_bond_post_kind`, and `shekyl-wire` as per-kind variants (`EU-D3`); the endpoint field and the **four** presence couplings — `bond_spend_pk` iff JoinMarket, endpoint iff JoinMarket ∨ EndpointUpdate, holdings and the amount term absent iff EndpointUpdate (`EU-D11`) — at every serializer; the retention vin as a per-kind payload so `verify_endpoint_update` sees no term or holdings at all, incl. the `EU-D7` refusal; the record column (`kVersion 6→7`) + LMDB 12→13; the per-kind journal table and pop (`EU-D12`); the C++ connect arm with its CSR-3a record; the JoinMarket producer supplying the endpoint (a 32-byte accessor on `OnionIdentity`, which today holds only the base32 service id); `EU-D9`'s two KATs; **and** the one predicate arm | **STAGED (rule 23)** — a deliberate callee-without-caller: the wire exists and nothing produces an update for it. Named consumers: D (the second address) and, for the *read* side, TJ-B's fetcher. In-policy under the disposition test because both consumers are named and the plan is live; recorded here so the next audit does not flag it |
 | **D** | new label, rotation always present, V1 deleted, V2 minted; regenerator cites the entry; the wallet producer for `EndpointUpdate` and, with it, `PENDING_POST_VERSION` 10→11 (`EU-D13`) | closes B's staging |
 
 **Why D is last despite being a production prerequisite.** B+C1's staging is
@@ -410,16 +410,20 @@ post could not balance.
 
 **Ruled.** Term-absent iff `EndpointUpdate` — the third coupling in the §9.11
 family — enforced **at the serializers**, not only at verify: a kind-4 vin
-with a nonzero `bond_credit` or `bond_debit` fails to parse, so the
-combination is unrepresentable in memory rather than refused later.
-`verify_endpoint_update` is the only verify that accepts
-`credit == debit == 0`; `BondTerm` itself is unchanged — a representable
-zero term would undo what `NonZeroAtomicUnits` exists to prevent. The CT
-balance for kind 4 is the plain equation with no bond term, through its own
-FFI entry (`shekyl_archival_verify_endpoint_update_ct_balance`); the C++
-bond-post caller selects the entry by `post_kind`, so no kind byte and no
-term operands cross the boundary on the kind-4 path (see §15 for the
-alternative this replaced).
+with a nonzero `bond_credit` or `bond_debit` fails to parse. In Rust the
+combination is unrepresentable in memory: the retention vin is a per-kind
+payload (`BondPostPayload::EndpointUpdate { endpoint }`, matching
+`shekyl-wire`'s variants), so `verify_endpoint_update` sees no term and no
+holdings and decides only the record side (`EU-D7`); its FFI entry takes the
+32-byte endpoint and the record facts, nothing else. In C++ the flat vin
+struct is refused at all three codecs and belted at the arm — checked, not
+typed, on the side rule 20 keeps thin. `BondTerm` itself is unchanged — a
+representable zero term would undo what `NonZeroAtomicUnits` exists to
+prevent. The CT balance for kind 4 is the plain equation with no bond term,
+through its own FFI entry (`shekyl_archival_verify_endpoint_update_ct_balance`);
+the C++ bond-post caller selects the entry by `post_kind`, so no kind byte and
+no term operands cross the boundary on the kind-4 path (see §15 for the
+alternatives this replaced).
 
 **And holdings / `bonded_total_atomic` are absent too.** Both fields are
 unconditional on the wire today and A did not rule them for kind 4. Ruled
@@ -486,6 +490,13 @@ history is in PR #712, not here.
 - **Fold the endpoint pre-image into bond-record journaling** — rejected
   (B sweep, 2026-09-12): puts endpoint restoration on the value/holdings
   restore path. Per-kind table (`EU-D12`).
+- **Kind-4 term absence as a checked coupling on a flat retention vin** —
+  superseded (B, `228546879`): `check_kind_couplings` refused a term or
+  holdings on kind 4 and `verify_endpoint_update` belted them again; both
+  were checks on a shape the type could still hold. The retention vin became
+  a per-kind payload (`884d79e7f`), the belts and their five error codes
+  went with it, and the kind-4 FFI entry takes only the endpoint and the
+  record facts.
 - **A `post_kind` byte on the shared bond-post CT-balance export** —
   superseded (B, `228546879`): the export's other caller is the
   reward-emission arm, which is not a bond post and has no kind to pass, so
