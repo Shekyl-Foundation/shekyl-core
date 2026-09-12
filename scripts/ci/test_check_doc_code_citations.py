@@ -164,7 +164,43 @@ class EraSelection(unittest.TestCase):
         ) as doc:
             rc, out = run_gate(doc)
         self.assertEqual(rc, 1)
-        self.assertIn("declares no era in a form this gate parses", out)
+        self.assertIn("declares an era this gate does not parse", out)
+
+
+class SectionScopedEra(unittest.TestCase):
+    def test_unparsed_pin_in_ONE_section_of_a_pinned_document_is_fatal(self):
+        """The limb that shipped without coverage, found empirically by a lane
+        whose sixteen rows all resolved at HEAD while the gate called them
+        green 'at their declared eras'.
+
+        A document-level 'are there any parseable pins?' test is satisfied by
+        the document's OTHER slices and never fires. The two eras here
+        disagree on purpose: the cited file exists at HEAD and NOT at the sha
+        slice B declares, so resolving at the wrong era is the difference
+        between pass and fail rather than a cosmetic one."""
+        with Fixture(
+            f"### Slice A\n\nReviewed at **`{PIN}`**.\n\n"
+            "Evidence: `cryptonote_core/blockchain.cpp:3403`.\n\n"
+            f"### Slice B\n\nReviewed at `{UNBORN}`.\n\n"
+            "| CEN-X1 | ok | `tests/unit_tests/curve_tree_header_root_check.cpp:1` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 1, "an unbolded slice pin must not pass on the "
+                                "strength of its neighbours' pins")
+        self.assertIn("Slice B", out)
+        self.assertIn("declares an era this gate does not parse", out)
+        self.assertNotIn("Slice A", out)
+
+    def test_row_level_shas_in_a_ledger_do_not_trip_the_section_check(self):
+        """The false positive the rule must avoid: a dated ledger whose rows
+        carry their own provenance shas in table cells is not a section
+        declaring an era, and its unpinned citations are asserts-is."""
+        with Fixture(
+            "## Decision log\n\n"
+            "| 2026-09-05 | fixed at `4b9807c5e` | `cryptonote_core/blockchain.cpp:1` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 0, out)
 
 
 class SymbolAndRange(unittest.TestCase):

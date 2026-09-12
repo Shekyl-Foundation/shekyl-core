@@ -35,18 +35,39 @@
 #      a skip: skipping unpinned citations would let a document with no pins
 #      at all pass in silence.
 #
-# AND THE CASE THAT RULE 3 WOULD OTHERWISE SWALLOW: a document that declares
-# its eras in a form this parser does not recognise would fall through to
-# HEAD on every row -- silently resolving *records-was* citations against
-# current code, which is precisely the failure this gate exists to prevent,
-# now wearing a green tick. `docs/LMDB_WRITE_ATOMICITY_AUDIT.md` is the live
-# instance: it pins by ROW-SET in front matter (`` `dev` `<sha>` `` for
-# DRS-W1..W11, another for W12..W15, a third for the regrade) and states in
-# its own prose that its line citations are records-was. So: a document that
-# contains sha-shaped tokens but yields NO section pin this parser understood
-# is a FATAL. Supporting the token form without its row-set scoping would be
-# worse than refusing -- it would silently pin every row to whichever sha
-# happened to be declared last.
+# AND THE CASE THAT RULE 3 WOULD OTHERWISE SWALLOW: a section that TRIES to
+# declare an era in a spelling this parser does not recognise falls through to
+# HEAD on every row beneath it -- silently resolving *records-was* citations
+# against current code, which is precisely the failure this gate exists to
+# prevent, now wearing a green tick.
+#
+# THE CHECK IS PER SECTION, NOT PER DOCUMENT. A document-level "are there any
+# parseable pins?" test is satisfied by the document's OTHER slices and never
+# fires, so one unbolded slice heading in an otherwise well-pinned register
+# passes in silence. That shipped in the first version of this gate and was
+# caught empirically by a lane whose sixteen rows all resolved at HEAD while
+# the gate reported them green "at their declared eras". Worse, the unbolded
+# pin line itself matches the inline form, so that ONE line resolves correctly
+# while every row under it does not.
+#
+# A section is flagged when BOTH hold:
+#   - it contains an era-declaration ATTEMPT: a `<sha>`-shaped token on a prose
+#     line (not a table row, and not a line that carries a citation itself);
+#   - and citations inside it fell back to HEAD.
+# Row-level shas live in table cells and are excluded, so a dated ledger whose
+# rows carry their own provenance is not flagged. Measured against the live
+# register: zero false positives.
+#
+# This subsumes the whole-document case. `docs/LMDB_WRITE_ATOMICITY_AUDIT.md`
+# pins by ROW-SET in front matter (`` `dev` `<sha>` `` for DRS-W1..W11, another
+# for W12..W15, a third for the regrade) and says its line citations are
+# records-was; every one of its sections is flagged. Supporting that token form
+# without its row-set scoping would be worse than refusing -- it would pin
+# every row to whichever sha happened to be declared last.
+#
+# Deliberately NOT done: accepting the unbolded spelling. Silently accepting
+# more spellings is how the row-set token would have got in. Refuse, and name
+# the exact form the author should use.
 #
 # WHAT COUNTS AS A CITATION, deliberately narrow so the gate cannot cry wolf
 # and get deleted (this repo has lost gates that way):
@@ -248,6 +269,39 @@ def eras_for_lines(lines):
     return eras
 
 
+def unparsed_era_sections(lines, eras):
+    """Sections that tried to declare an era this parser did not understand.
+
+    Flagged when a section holds BOTH an era-declaration attempt -- a
+    `<sha>`-shaped token on a prose line that is not a table row and carries no
+    citation of its own -- and citations that fell back to HEAD. Row-level shas
+    sit in table cells and are excluded, so a dated ledger carrying its own
+    per-row provenance is not flagged.
+    """
+    current = {"heading": "(front matter)", "declaration": None,
+               "declared_at": 0, "head_cites": 0}
+    sections = []
+    for lineno, line in enumerate(lines, 1):
+        if HEADING_RE.match(line):
+            sections.append(current)
+            current = {"heading": line.strip("# ").strip()[:60],
+                       "declaration": None, "declared_at": 0, "head_cites": 0}
+        stripped = line.lstrip()
+        if (
+            current["declaration"] is None
+            and not stripped.startswith("|")
+            and ANY_SHA_RE.search(line)
+            and not CITATION_RE.search(line)
+            and not SECTION_PIN_RE.search(line)
+        ):
+            current["declaration"] = "`" + ANY_SHA_RE.search(line).group(1) + "`"
+            current["declared_at"] = lineno
+        if eras[lineno] == HEAD:
+            current["head_cites"] += len(CITATION_RE.findall(line))
+    sections.append(current)
+    return [s for s in sections if s["declaration"] and s["head_cites"]]
+
+
 def check_document(relpath, failures):
     abspath = os.path.join(ROOT, relpath)
     if not os.path.exists(abspath):
@@ -258,20 +312,23 @@ def check_document(relpath, failures):
     eras = eras_for_lines(lines)
     seen = 0
 
-    # Era declarations this parser could not read (see the header note).
-    if not any(SECTION_PIN_RE.search(line) for line in lines):
-        shas = sorted({m for line in lines for m in ANY_SHA_RE.findall(line)})
-        if shas:
-            failures.append(
-                f"{relpath}: contains {len(shas)} revision-shaped tokens "
-                f"({', '.join(shas[:4])}{', ...' if len(shas) > 4 else ''}) but "
-                f"declares no era in a form this gate parses, so every citation "
-                f"below would be resolved at HEAD. If those citations are "
-                f"records-was -- this document says they are -- resolving them at "
-                f"HEAD is the exact defect this gate exists to catch. Give the "
-                f"document a parseable pin, or pin its rows individually."
-            )
-            return 0
+    unparsed = unparsed_era_sections(lines, eras)
+    for section in unparsed:
+        failures.append(
+            f"{relpath}:{section['declared_at']}: section "
+            f"\"{section['heading']}\" declares an era this gate does not "
+            f"parse ({section['declaration']}), so its {section['head_cites']} "
+            f"citation(s) fell through to HEAD. If they are records-was, "
+            f"resolving them at current code is the exact defect this gate "
+            f"exists to catch -- and it would have reported them green. Use the "
+            f"parsed section form, `Reviewed at **`<sha>`**` or a table header "
+            f"`(all at `<sha>`)`, or pin the rows individually with "
+            f"`at `<sha>`` on each."
+        )
+    if unparsed:
+        # Resolution below would be against the wrong era; reporting path
+        # findings on top of that would be noise built on a false premise.
+        return 0
 
     for lineno, line in enumerate(lines, 1):
         rev = eras[lineno]
