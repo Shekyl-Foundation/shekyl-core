@@ -3085,11 +3085,32 @@ stationary `V`50 grace is the tick itself (209 → 307). `grace_bp_mean` is
 **0–6 bp in every cell of both arms**: in expectation the lookback gives
 miners nothing; in the worst block after a 10× instantaneous step it
 gives ≤ 7 % for three blocks. **Zero bounces under FL-R23 by identity.**
-The road-not-taken column shows why: a 50 bp fixed pad bounces **281 of
-19 997** quotes in the integer arm's *stationary* `V`50 cell at age 30
-(1.4 %, in a chain doing nothing), and **even a 300 bp pad bounces 23–36**
-quotes per 20 000 in every step cell on both arms. No fixed pad covers
-the step; the lookback covers it exactly and charges nothing on average.
+The road-not-taken column shows why, and it was **re-measured 2026-09-12 at
+the SHIPPED admission slack**: the pad race had been scored against
+`check_fee`'s inherited 2 % buffer, which FL-R23 deletes
+(`RELAY_ADMISSION_SLACK_BP` = 0), so every pad looked safer than the chain
+we ship allows. The sim now reads that constant from its owner instead of
+holding a copy. Pad admission margins fall from 255 / 306 / 408 / 510 bp to
+**50 / 100 / 200 / 300** — a pad buys exactly itself, with no cushion behind
+it.
+
+Regenerated: **in 27 of the 80 slew cells EVERY candidate pad bounces**,
+across both arms and at every age. A 50 bp pad still bounces **281 of
+19 997** in the integer arm's *stationary* `V`50 cell at age 30 (1.4 %, in a
+chain doing nothing) — and so now do the 100, 200 and 300 bp pads, all 281,
+because the integer tick there is 307 bp and no candidate margin reaches it.
+The largest pad considered, 300 bp, bounces up to **418** per 19 997 in the
+integer arm's step cells and up to **89** in the exact arm's (previously 36
+and 28). **No fixed pad covers the step, and the shipped slack makes that
+conclusion stronger, not weaker**; the lookback covers it exactly and charges
+nothing on average.
+
+*Every other figure in this section is from the original run and was verified
+bit-identical in the re-measurement* — all 80 cells' `rise_bp_max`,
+`fall_bp_max`, `grace_bp_max`, `grace_bp_mean` and `c_changes`, the whole
+600-cell feedback sweep, and the lookback sweep. A uniform acceptance buffer
+cancels out of a ratio, so only the pad race — the one absolute comparison in
+the section — could move, and only it did.
 
 **FL-E1 — FL-C7 with the floor in the loop.** *Exact arm:* 596/600
 converge inside the 50 bp bar at 30 000 blocks; the 4 misses are one cell

@@ -46,9 +46,9 @@ use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
     calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
     effective_emission, emission_speed_factor, hysteresis_fold, hysteresis_settled,
-    hysteresis_step, paid_block_reward, projected_already_generated, tail_subsidy_per_block,
-    EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY,
-    STAKER_EMISSION_SHARE,
+    hysteresis_step, paid_block_reward, projected_already_generated, relay_fee_floor,
+    tail_subsidy_per_block, EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR,
+    RELAY_ADMISSION_SLACK_BP, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
 };
 
 /// `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`, read from its single
@@ -295,21 +295,27 @@ fn served_ladder(base_reward: u64, median: u64, c: u64) -> [u64; SERVED_SLOTS] {
     .as_slots()
 }
 
-/// The relay floor, transliterating `get_dynamic_base_fee`
-/// (`blockchain.cpp:4422-4437`): `R·w_ref/M²` minus 5%, floor 1. The
-/// `check_fee` acceptance bound is this minus its further 2% buffer
-/// (`blockchain.cpp:4466`).
-fn relay_floor(base_reward: u64, median: u64) -> u64 {
-    let median = median.max(FULL_REWARD_ZONE_V5);
-    let lo = u128::from(base_reward) * u128::from(REF_TX_WEIGHT)
-        / (u128::from(median) * u128::from(median));
-    let mut lo = u64::try_from(lo).expect("fee/byte fits u64");
-    lo -= lo / 20;
-    if lo == 0 {
-        1
-    } else {
-        lo
-    }
+/// The relay floor — **the owner's function, not a copy of it.**
+///
+/// This previously transliterated the C++ `Blockchain::get_dynamic_base_fee`,
+/// including the inherited `0.95` factor and without the `C` correction. FL-R20
+/// deleted that function, deleted the `0.95`, and moved the arithmetic to
+/// `shekyl_economics::relay_fee_floor` (rule 20). The transliteration outlived
+/// it and became the tree's last copy of arithmetic production does not run —
+/// a drift pair by construction, which drifted.
+///
+/// The general rule, and the reason this wrapper is one line: **where the code
+/// is landed, the sim calls it.** Modelling proposed code in the harness is
+/// legitimate; keeping a private implementation of a shipped contract is not,
+/// because the harness then validates a parameter the chain does not enforce.
+fn relay_floor(base_reward: u64, median: u64, c: u64) -> u64 {
+    relay_fee_floor(
+        base_reward,
+        median,
+        FULL_REWARD_ZONE_V5,
+        REF_TX_WEIGHT,
+        FeeCorrection::from_scaled(c),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -583,8 +589,16 @@ fn rung_table(
 ) -> RungTable {
     let corr = correction_factor(v, st.ag, st.height, params);
     let raw = articmine_ladder_raw(st.base_reward, median, median);
-    let floor = relay_floor(st.base_reward, median);
-    let accept = floor - floor / 50;
+    let floor = relay_floor(st.base_reward, median, corr.c_scaled);
+    // Admission is the floor itself: FL-R23 pins RELAY_ADMISSION_SLACK_BP at
+    // ZERO, so the inherited 2% acceptance cushion is gone. The previous
+    // `floor - floor / 50` here was the last copy of that cushion, and it made
+    // every pad in the FL-E3 table look 2% safer than production allows.
+    debug_assert_eq!(
+        RELAY_ADMISSION_SLACK_BP, 0,
+        "accept == floor assumes zero slack"
+    );
+    let accept = floor;
     let corrected = served_ladder(st.base_reward, median, corr.c_scaled);
     let served = served_ladder(
         st.base_reward,
@@ -1624,7 +1638,7 @@ fn feedback_scenario(
             _ => c,
         };
         let ladder = served_ladder(base, median, c);
-        let floor_now = relay_floor(base, median);
+        let floor_now = relay_floor(base, median, c);
         (ladder[1].max(1), ladder[0].max(floor_now), floor_now)
     };
     // The reference fee is history-free and anchored at the trace's START
@@ -2010,7 +2024,7 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
             FULL_REWARD_ZONE_V5,
             FULL_REWARD_ZONE_V5,
         )),
-        relay_floor_at_exhaustion: relay_floor(val_reward, FULL_REWARD_ZONE_V5),
+        relay_floor_at_exhaustion: relay_floor(val_reward, FULL_REWARD_ZONE_V5, SCALE),
     }
 }
 
@@ -3061,17 +3075,6 @@ mod tests {
 
     /// Pin the relay-floor transliteration against
     /// `tests/unit_tests/scaling_2021.cpp` `relay_fee`.
-    #[test]
-    fn relay_floor_matches_cpp_kat() {
-        let coin: u64 = 1_000_000_000;
-        assert_eq!(relay_floor(10 * coin, 300_000), 317);
-        assert_eq!(relay_floor(10 * coin, 600_000), 79);
-        assert_eq!(relay_floor(10 * coin, 3_000_000), 3);
-        assert_eq!(relay_floor(10 * coin, 6_000_000), 1);
-        assert_eq!(relay_floor(coin, 300_000), 32);
-        assert_eq!(relay_floor(10 * coin, 1), 317);
-        assert_eq!(relay_floor(10 * coin, 100_000), 317);
-    }
 
     #[test]
     fn round_money_up_two_places() {
