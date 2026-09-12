@@ -111,10 +111,6 @@ pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT: u8 = 3;
 pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_SUM_MISMATCH: u8 = 4;
 /// Neither `bond_credit` nor `bond_debit` is set (§3.2 term rigidity).
 pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM: u8 = 5;
-/// An `EndpointUpdate` (kind 4) presented a bond term. The kind-4 vin has
-/// none by construction (`EU-D11`: term-absent iff EndpointUpdate, enforced
-/// at the serializers); this is the FFI's belt for a marshal that disagrees.
-pub const SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_TERM_ON_ENDPOINT_UPDATE: u8 = 6;
 
 /// JoinMarket bond-post semantic verify succeeded (gate-4 §3.5).
 pub const SHEKYL_ARCHIVAL_BOND_POST_OK: u8 = 0;

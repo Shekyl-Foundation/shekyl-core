@@ -962,7 +962,7 @@ fn serve_credit_epoch_ok_ffi_matches_rust() {
 #[test]
 fn bond_ct_balance_ffi_rejects_null_with_nonzero_count() {
     let code = unsafe {
-        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 1, ptr::null(), 0, 0, 0, 0, 0)
+        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 1, ptr::null(), 0, 0, 0, 0)
     };
     assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR);
 }
@@ -979,7 +979,6 @@ fn bond_ct_balance_ffi_rejects_count_overflow() {
             0,
             0,
             0,
-            0,
         )
     };
     assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_INVALID_POINT);
@@ -992,7 +991,7 @@ fn bond_ct_balance_ffi_rejects_count_overflow() {
 fn bond_ct_balance_ffi_rejects_neither_bond_term() {
     // credit = debit = 0 (empty balance) → NO_BOND_TERM, not OK.
     let code = unsafe {
-        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 0, 0, 0)
+        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 0, 0)
     };
     assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NO_BOND_TERM);
 }
@@ -1001,45 +1000,32 @@ fn bond_ct_balance_ffi_rejects_neither_bond_term() {
 fn bond_ct_balance_ffi_rejects_both_bond_terms() {
     // credit and debit both non-zero → BOTH_TERMS.
     let code = unsafe {
-        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 1, 1, 0)
+        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 1, 1)
     };
     assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_BOTH_TERMS);
 }
 
-// EU-D11: the kind selects the term arity. An EndpointUpdate balances with no
-// bond term (the plain equation), and a kind-4 post that presents one is
-// refused by name — never balanced by accident, never NO_BOND_TERM.
+// EU-D11: an EndpointUpdate balances with no bond term through its own entry
+// point — the plain equation. No kind byte and no term operands cross the
+// boundary, so "a kind-4 post that presents a term" is not expressible here;
+// it is refused at the serializers and at verify_endpoint_update.
 #[test]
-fn bond_ct_balance_ffi_endpoint_update_balances_with_no_term() {
-    let kind = shekyl_archival_retention::BondPostKind::EndpointUpdate as u8;
-    // No inputs, no outputs, no fee: the plain equation holds trivially.
+fn endpoint_update_ct_balance_ffi_is_the_plain_equation() {
+    // No inputs, no outputs, no fee: holds trivially.
     let code = unsafe {
-        shekyl_archival_verify_bond_post_ct_balance(ptr::null(), 0, ptr::null(), 0, 0, 0, 0, kind)
+        shekyl_archival_verify_endpoint_update_ct_balance(ptr::null(), 0, ptr::null(), 0, 0)
     };
     assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK);
-}
-
-#[test]
-fn bond_ct_balance_ffi_rejects_a_term_on_endpoint_update() {
-    let kind = shekyl_archival_retention::BondPostKind::EndpointUpdate as u8;
-    for (credit, debit) in [(1u64, 0u64), (0, 1), (1, 1)] {
-        let code = unsafe {
-            shekyl_archival_verify_bond_post_ct_balance(
-                ptr::null(),
-                0,
-                ptr::null(),
-                0,
-                0,
-                credit,
-                debit,
-                kind,
-            )
-        };
-        assert_eq!(
-            code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_TERM_ON_ENDPOINT_UPDATE,
-            "credit={credit} debit={debit}"
-        );
-    }
+    // A fee with nothing funding it is a sum mismatch, not a silently balanced post.
+    let code = unsafe {
+        shekyl_archival_verify_endpoint_update_ct_balance(ptr::null(), 0, ptr::null(), 0, 7)
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_SUM_MISMATCH);
+    // The pointer contract is the sibling's.
+    let code = unsafe {
+        shekyl_archival_verify_endpoint_update_ct_balance(ptr::null(), 1, ptr::null(), 0, 0)
+    };
+    assert_eq!(code, SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR);
 }
 
 // EU-D7 / EU-D11 at the FFI boundary: the EndpointUpdate verify entry.

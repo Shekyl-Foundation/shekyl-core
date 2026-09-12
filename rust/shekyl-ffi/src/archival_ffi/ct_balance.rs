@@ -6,8 +6,7 @@
 //! Bond-post CT balance verification FFI.
 
 use shekyl_archival_retention::{
-    verify_bond_post_ct_balance, verify_endpoint_update_ct_balance, BondCtBalanceError,
-    BondPostKind, BondTerm,
+    verify_bond_post_ct_balance, verify_endpoint_update_ct_balance, BondCtBalanceError, BondTerm,
 };
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 
@@ -42,9 +41,10 @@ unsafe fn flat_commitment_keys<'a>(ptr: *const u8, count: usize) -> Result<&'a [
 /// Verify bond-post CT balance: `sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit`.
 ///
 /// `pseudo_outs_ptr` and `out_masks_ptr` are flattened `N × 32` byte arrays; either pointer may
-/// be null when the corresponding count is zero. `post_kind` selects the term arity: an
-/// `EndpointUpdate` (kind 4) balances with **no** bond term (`EU-D11`) and is refused with
-/// `ERR_TERM_ON_ENDPOINT_UPDATE` if it presents one; every other kind must present exactly one.
+/// be null when the corresponding count is zero. Exactly one bond term, by the conversion below;
+/// the `EndpointUpdate` (kind 4) shape has none and is its own entry point,
+/// [`shekyl_archival_verify_endpoint_update_ct_balance`] — the C++ bond-post caller selects by
+/// kind, so no kind byte crosses this boundary.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
     pseudo_outs_ptr: *const u8,
@@ -54,7 +54,6 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
     txn_fee: u64,
     bond_credit: u64,
     bond_debit: u64,
-    post_kind: u8,
 ) -> u8 {
     if num_pseudo_outs > 0 && pseudo_outs_ptr.is_null() {
         return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR;
@@ -72,21 +71,6 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
         Err(code) => return code,
     };
 
-    // `EndpointUpdate` (kind 4) has no bond term by construction (`EU-D11`:
-    // term-absent iff EndpointUpdate, made unrepresentable at the serializers).
-    // The kind selects the plain equation; a kind-4 post that nonetheless
-    // presents a term is a marshal that disagrees with the wire, refused by
-    // name rather than balanced.
-    if post_kind == BondPostKind::EndpointUpdate as u8 {
-        if bond_credit != 0 || bond_debit != 0 {
-            return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_TERM_ON_ENDPOINT_UPDATE;
-        }
-        return match verify_endpoint_update_ct_balance(pseudo_flat, mask_flat, txn_fee) {
-            Ok(()) => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK,
-            Err(e) => map_bond_ct_balance_error(e),
-        };
-    }
-
     // The C ABI carries the two directions as separate u64s; convert to the
     // `BondTerm` the (total) core function takes, rejecting the both / neither /
     // zero states here — at the untrusted-input boundary — with the same status
@@ -103,6 +87,43 @@ pub unsafe extern "C" fn shekyl_archival_verify_bond_post_ct_balance(
     };
 
     match verify_bond_post_ct_balance(pseudo_flat, mask_flat, txn_fee, term) {
+        Ok(()) => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK,
+        Err(e) => map_bond_ct_balance_error(e),
+    }
+}
+
+/// Verify the `EndpointUpdate` (kind 4) CT balance: the plain equation with **no** bond term
+/// (`EU-D11`: term-absent iff EndpointUpdate, made unrepresentable at the serializers, so
+/// there are no term operands to marshal). A separate entry point rather than a kind byte on
+/// [`shekyl_archival_verify_bond_post_ct_balance`]: that export's second caller is the
+/// reward-emission arm, which is not a bond post and has no kind to pass — a sentinel there
+/// would be an untyped hole in consensus code.
+///
+/// `pseudo_outs_ptr` and `out_masks_ptr` are flattened `N × 32` byte arrays; either pointer may
+/// be null when the corresponding count is zero.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_verify_endpoint_update_ct_balance(
+    pseudo_outs_ptr: *const u8,
+    num_pseudo_outs: usize,
+    out_masks_ptr: *const u8,
+    num_out_masks: usize,
+    txn_fee: u64,
+) -> u8 {
+    if num_pseudo_outs > 0 && pseudo_outs_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR;
+    }
+    if num_out_masks > 0 && out_masks_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_BOND_CT_BALANCE_ERR_NULL_PTR;
+    }
+    let pseudo_flat = match unsafe { flat_commitment_keys(pseudo_outs_ptr, num_pseudo_outs) } {
+        Ok(slice) => slice,
+        Err(code) => return code,
+    };
+    let mask_flat = match unsafe { flat_commitment_keys(out_masks_ptr, num_out_masks) } {
+        Ok(slice) => slice,
+        Err(code) => return code,
+    };
+    match verify_endpoint_update_ct_balance(pseudo_flat, mask_flat, txn_fee) {
         Ok(()) => SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK,
         Err(e) => map_bond_ct_balance_error(e),
     }
