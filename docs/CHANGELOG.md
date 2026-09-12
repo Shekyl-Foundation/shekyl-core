@@ -4,6 +4,39 @@
 
 ### Changed
 
+- **Relay admission is a lookback-min over the last six floors, at zero
+  slack; the relay floor follows the raw correction `C`; the fee ladder is
+  unrounded (FL-R20 / FL-R22 / FL-R23, PR B).** A transaction is admitted
+  when `fee ≥ mask_round_up(weight · min F(h′−k))` over `k = 0..5`, where
+  `F(h) = R·C(h)·w_ref/M(h)²`. Monero's 0.95 and the 2 % acceptance buffer
+  are gone — they insured the quote-to-broadcast gap probabilistically;
+  the lookback insures it by identity, so a quote taken at height `h` and
+  paid exactly is admitted at every node whose tip is within five blocks.
+  The wallet therefore pays the served rung and nothing more (FL-R22).
+
+  **What changes for a user or operator.** The economy tier IS the relay
+  floor now — one function computes both (`fees[0] ==
+  get_current_fee_per_byte()` by call, not by clamp). `standard` is `4F`
+  exactly. No rung is rounded up to two significant digits any more, so
+  quotes are the arithmetic's own answer: at 10 SKL and the 300 kB zone,
+  `[340, 1400, 67000]` becomes `[333, 1332, 66666]`. The `grace_blocks`
+  RPC parameter no longer affects any tier (it was already nearly inert at
+  production constants — ≤ 100 zeroes against a 100 000-block median); its
+  deletion from the wire is FL-R26, a separate change. The wallet's
+  absolute fee cap moves with the unrounding, 220,000,000 → 218,453,333
+  atomic-units/weight — the same structural bound, unrounded.
+
+  **Two defects fixed on the way.** The fee-quote path (`fee_query`)
+  under-quoted by one varint byte's worth of rate whenever a fee crossed a
+  `2^(7k)` boundary — `converge_fee` ran two passes where the fixed point
+  needs three — which the 2 % buffer had been hiding; and a shared test
+  double returned an empty long-term-weight window, so `median()` read
+  uninitialised storage (a garbage median of ~9.5e18, order-dependent),
+  which the old grace-zero insertion had been masking by accident.
+
+  Relay policy only; `kept_by_block` is exempt and there is no consensus
+  fee floor.
+
 - **The fee estimate returns three tiers, not four, and `CORE_RPC_VERSION`
   is 3.30 (FL-R25).** `get_fee_estimate.fees` was a four-slot array
   carrying three priced rates: slot 2 duplicated slot 1. The duplicate
