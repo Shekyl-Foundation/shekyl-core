@@ -193,6 +193,24 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_index_prefix_uniqueness.py
 
+      - name: Run shell gate-exit discipline check
+        # 46-shell-gate-exits.mdc had no enforcement: a rule, not a gate.
+        # Both halves are checked — a verdict travelling through a pipe (which
+        # has shipped a clippy-red commit and masked a broken C++ link), and
+        # `pgrep -f`/`pkill -f` matching the caller. The anchor exemption is
+        # load-bearing: `pgrep -f "^$WORKSPACE/tor/tor "` is CORRECT because
+        # `^` binds the match to argv[0], and flagging it would fail careful
+        # code and teach the author to weaken it.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_shell_gate_exits.py
+
+      - name: Run shell gate-exit self-test
+        # Each check bitten red independently, and the anchor exemption pinned
+        # in BOTH directions — anchored passes, unanchored fails.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_shell_gate_exits.py
+
       - name: Run conformance-coverage gate
         # Every RATIFIED consensus rule (census bucket 1/2) must carry a
         # conformance record in CONSENSUS_STORE_RECONCILIATION.md §5.4.1, and
