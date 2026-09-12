@@ -13,7 +13,7 @@ the §9.5 HOLD list — pass-record serialization, the response format,
 `EndpointUpdate` on the bond wire, the settlement writer — still waits on the
 format round. *(Updated 2026-09-12: `EndpointUpdate` is no longer held — its
 round record is [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md),
-`EU-D1`…`EU-D10`, and the sequence C0 → A → B+C1 → D is under way with C0
+`EU-D1`…`EU-D13`, and the sequence C0 → A → B+C1 → D is under way with C0
 landed. The other three entries read as they did.)* The ruling of record from this round: challenge
 assignment is **derived, not committed** (§2, ruled 2026-08-07 — "the more the
 system regulates itself, the better"; derivation makes challenges verifiable
@@ -1020,7 +1020,11 @@ the round kept trying to add forensics underneath it.
       have: **the cold tier, despite being a non-debit post.** The cost,
       stated honestly in the operator-facing text: rotation requires
       reaching for the same custody used for releasing — the escape is
-      not automatable from the serving box. That is the correct
+      not automatable from the serving box. (*Cold* is the principal-tier
+      key the serving host does not hold, not an air-gapped signing flow —
+      cold signing is REJECTED, decision log 2026-09-07; this is an
+      ordinary networked spend with a key kept elsewhere, the same act as
+      a Release.) That is the correct
       trade — an escape hatch a compromised host can operate isn't
       one — but it is a real burden. It also cleans up the funding
       residual: with cold authority the principal is already involved,
@@ -1502,7 +1506,7 @@ settlement writer (item 9's schema is genuinely open).
   2026-08-10 ruling above is the shape; its one named spec gap (which cold key
   a non-`JoinMarket` record verifies against) closed with C0 (PR #703), and the
   six implementation-shaping questions the ruling did not reach are ruled in
-  [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md) (`EU-D1`…`EU-D10`,
+  [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md) (`EU-D1`…`EU-D13`,
   2026-09-11). Not in the tree yet: B+C1 (wire + one predicate arm, atomic)
   and D (the `hs_id` rotation index, a derivation replacement) follow in that
   order. Until D lands the wire is a deliberate callee-without-caller,

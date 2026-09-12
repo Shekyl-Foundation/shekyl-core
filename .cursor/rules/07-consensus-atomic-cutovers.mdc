@@ -250,6 +250,52 @@ invocations:
   implementation time); landed under §18 here so future
   invocations inherit the lesson without amending the rule.
 
+- **`EndpointUpdate` B+C1** (`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md`
+  `EU-D10`–`EU-D13`; branch `feat/eu-b-c1-endpoint-update-wire`,
+  opened 2026-09-12 — PR number and merge commit recorded in this
+  entry when the PR opens and lands). Bond-post kind 4
+  (`EndpointUpdate`) on the consensus vin, with its predicate arm.
+  Criterion 1: the vin serializer (kind bound, four presence
+  couplings), the CT-balance term arity for kind 4, the record
+  codec and its journal, and the cold-authority selector are all
+  rules every node must reproduce byte-identically. Criterion 2:
+  structural, per the rule — a kind the wire accepts either
+  authorizes cold or does not; there is no simultaneously-valid
+  flag state. Criterion 3: enumerated in advance at `EU-D10`
+  (corrected 2026-09-12 by B's readiness sweep BEFORE the first
+  code commit, which is why `EU-D11`–`EU-D13` exist — the sweep
+  found A's enumeration incomplete on term arity, field presence,
+  the journal, and the wallet bump, and the scope was settled by
+  ruling rather than discovered mid-PR). Criterion 4: the
+  sub-clause structure in the PR description.
+
+  *Reviewer map (4.3).* **Consensus-affecting:**
+  `src/cryptonote_basic/cryptonote_basic.h` (enum, vin serializer),
+  `src/cryptonote_basic/cryptonote_boost_serialization.h`,
+  `src/serialization/json_object.cpp` (both directions),
+  `src/cryptonote_core/blockchain.cpp` (the kind-4 arm; JoinMarket
+  arm writes the endpoint), `src/blockchain_db/blockchain_db.cpp`
+  (add/pop arms), `src/blockchain_db/lmdb/db_lmdb.cpp` (`VERSION`,
+  the new table, put/remove), `src/blockchain_db/shekyl_types.h`
+  (`kVersion`, column, journal entry), `src/fcmp/ct_semantics.cpp`
+  (kind marshaled to the balance FFI),
+  `rust/shekyl-archival-retention/src/{bond_wire,bond_post,bond_connect,debit_auth}.rs`,
+  `rust/shekyl-ffi/src/archival_ffi/{bond,ct_balance,codes}.rs`,
+  `rust/shekyl-wire/src/transaction.rs`. **Mechanical:**
+  `src/shekyl/shekyl_ffi.h` (decls), the submit verifier's refusal
+  message, the JoinMarket producer in `shekyl-engine-core` and the
+  `OnionIdentity` accessor in `shekyl-tor-control-client`, test
+  fixtures, `scripts/ci/check_debit_auth_single_source.sh` rows,
+  docs (`LMDB_SCHEMA.md`, `DAEMON_REDB_STORE.md`, the atomicity
+  audit, CEN rows). **Deletions:** none.
+
+  *Rollback (4.4).* Revert the merge commit on `dev` (single-commit
+  reversion; the cutover is atomic). A node that ran the merged build
+  holds an LMDB at `VERSION 13`, which the reverted build refuses
+  (`db_version > VERSION`, `db_lmdb.cpp`); the operator deletes the
+  data directory and resyncs. Pre-genesis, that is free — no chain
+  exists to resync.
+
 ### Cases that might appear analogous but are not
 
 These cases share surface features with consensus-atomic

@@ -4926,6 +4926,16 @@ priority hierarchy, not a deferral. A future product round that wants
 offline signing starts from a fresh threat-model review, not from this
 entry.
 
+**Disambiguation (2026-09-12).** "Cold authority" in the archival bond
+family (`requires_cold_authority`, `cold_authority_pin`,
+`shekyl_archival_cold_authority_pin`) is a **custody tier** — the
+principal-tier `bond_spend_pk` committed in the bond record, which the
+serving host does not hold — and is unrelated to the workflow rejected
+here. A cold-authority spend is an ordinary networked spend made with a key
+kept off the serving box. The function is not renamed: it is accurate in
+standard custody vocabulary, single-sourced, FFI-exported, and gate-asserted
+by name. See `docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D2`.
+
 **Reference.** `docs/api/wallet_rpc.yaml` `x-shekyl-method-registry`;
 `.cursor/rules/23-disposition-visibility.mdc`; wallet-rewrite audit
 plan (2026-09-07).

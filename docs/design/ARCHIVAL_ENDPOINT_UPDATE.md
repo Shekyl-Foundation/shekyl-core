@@ -1,9 +1,10 @@
 # `EndpointUpdate` — the round record (EU)
 
 **Status:** **RULED** (round record) — dispositions `EU-D1`…`EU-D10` ruled
-2026-09-11, recorded 2026-09-12. Nothing in this document is implemented
-unless a disposition says so by PR number; as of the recording date only
-`EU-D2`'s prerequisite (C0) has landed. **Read this before cutting B, C1 or
+2026-09-11 and `EU-D11`…`EU-D13` ruled 2026-09-12 (B's readiness sweep),
+recorded 2026-09-12. Nothing in this document is implemented unless a
+disposition says so by PR number; as of the recording date only `EU-D2`'s
+prerequisite (C0) has landed. **Read this before cutting B, C1 or
 D.** The rulings were made in-channel by Rick and are quoted where the
 words matter; the consequences are this document's.
 
@@ -20,11 +21,14 @@ words matter; the consequences are this document's.
 **Freezes.** The endpoint field on the bond-post vin (a genesis-frozen consensus
 wire) and the endpoint column on the bond record (LMDB). **Rule 42 does NOT
 fire on the vin** — it governs tier-4 sealed `shekyl-engine-state` blocks, not
-the consensus tx wire. It fires on the **wallet** half: `PENDING_POST_VERSION`
-`10 → 11` when the wallet learns to persist a pending `EndpointUpdate`. The
-LMDB `#define VERSION 12 → 13` is the schema guard — separate guard, separate
-question (the `PC-D` row's phrasing). Getting this wrong is how B mis-aims the
-bump; it is stated here so B does not have to re-derive it.
+the consensus tx wire — and it does not fire in B at all: the pending block
+stores each pending post as opaque wire `tx_bytes`, so nothing B changes is
+a shape the snapshot gate reads. `PENDING_POST_VERSION` `10 → 11` lands with
+the wallet producer that first persists a pending `EndpointUpdate`, in D
+(`EU-D13`). The daemon has **two** guards, both in B: the record codec's own
+`ArchivalBondValue::kVersion` `6 → 7` (a new column) and the LMDB
+`#define VERSION 12 → 13` (a new column and a new table, `EU-D12`) — separate
+guard, separate question (the `PC-D` row's phrasing).
 
 **Process.** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 cited: B and C1 move the FFI boundary and touch consensus; D changes a
@@ -121,7 +125,12 @@ present iff `JoinMarket` on the wire)."*
 the key on non-`JoinMarket` vins precisely because a vin-carried key is a
 forgeable self-assertion); the authorizer rides the surface-A `pqc_auths` slot
 and the pin ties it to the record (`BlockchainLMDB::put_archival_bond_record` in
-`db_lmdb.cpp` persists it). `EndpointUpdate` inherits that answer unchanged. What was
+`db_lmdb.cpp` persists it). `EndpointUpdate` inherits that answer unchanged.
+**"Cold" here is a custody tier, not a signing flow:** the principal-tier key
+committed in the record, which the serving host does not hold. It is not an
+air-gapped ceremony — cold *signing* is REJECTED permanently (decision log
+2026-09-07) — and a cold-authority spend is an ordinary networked spend made
+with a key kept off the serving box, the same act as a Release. What was
 missing was not a key but a **selector** that could say so: until C0 the
 "is this a cold post" decision was implied by which C++ arms happened to call
 the pin, and described in prose — in three places — as *"`bond_debit > 0`, not
@@ -174,10 +183,15 @@ version bump.
 carries it.
 
 **Presence.** Present iff `post_kind ∈ {JoinMarket, EndpointUpdate}`, enforced
-in `write` / `read_payload` alongside the existing `bond_spend_pk`-iff-`JoinMarket`
-coupling — two fields, two couplings, one enforcement site. A `JoinMarket` vin
-without an endpoint, or a `Release` / `Rebond` / `HoldingsUpdate` vin with one,
-is unrepresentable on the wire, the same idiom as the amount arms.
+at every serializer — the retention `write` / `read_payload`, the C++ vin
+`BEGIN_SERIALIZE_OBJECT`, boost, and JSON in both directions — alongside the
+existing `bond_spend_pk`-iff-`JoinMarket` coupling, and beside the two
+`EU-D11` adds. A `JoinMarket` vin without an endpoint, or a `Release` /
+`Rebond` / `HoldingsUpdate` vin with one, is unrepresentable on the wire, the
+same idiom as the amount arms. In `shekyl-wire` the kind is a per-kind
+variant: `JoinMarket { bond_spend_pk, endpoint }` and
+`EndpointUpdate { endpoint }` — the `Other(u8)` catch-all does not parse
+kind 4, because the bytes after the kind differ.
 
 **Mandatory on `JoinMarket`.** The carrier ruling's *"a bond without an
 endpoint was the discovery gap"* reads as mandatory; it lands as a
@@ -186,7 +200,8 @@ bond to accommodate — a bond without an endpoint cannot be constructed.
 
 **On the record.** `ArchivalBondValue` gains a 32-byte endpoint column; written
 at `JoinMarket` connect, overwritten at `EndpointUpdate` connect, **never
-cleared** (`EU-D7`). LMDB `VERSION 12 → 13`.
+cleared** (`EU-D7`). Two guards move: the codec's `kVersion 6 → 7` and LMDB
+`VERSION 12 → 13` (the latter also covering `EU-D12`'s table).
 
 ---
 
@@ -340,19 +355,23 @@ checkable, and prose will not stop the shared-path mistake — the sibling
 maintainer seeing two siblings in one enum will reach for the shared
 record-update path.
 
-- **KAT (a):** a record's `join_settlement_epoch`, bad-interval list,
-  `bonded_total`, and holdings are **byte-identical** across an
-  `EndpointUpdate`. Over `bond_connect.rs`, in the retention crate's test
-  suite.
+- **KAT (a) — structural, then parsed.** A record's `join_settlement_epoch`,
+  bad-interval list, `bonded_total`, and holdings are byte-identical across
+  an `EndpointUpdate` **by type**: under `EU-D11` the kind-4 vin carries no
+  holdings and no amount term, so there is nothing for a connect to apply.
+  The test that stands in for the assertion is a **parse** KAT: a kind-4 vin
+  carrying holdings or a nonzero `bond_credit` / `bond_debit` fails to
+  *parse* at every serializer (retention, C++ vin, boost, JSON) — not fails
+  to verify. Its bite is a serializer that accepts the bytes.
 - **KAT (b):** a failure-window vector in which a persona at 10 accumulated
   misses **still slashes after rotating** — the attack stated as a test, the
   one that fails loudly if rotation is wired into the wrong branch. Fixture
   infrastructure exists (`gate4_lifecycle_kat.rs`,
-  `attestation_settlement_window.rs`).
+  `attestation_settlement_window.rs`). Its bite is a connect that touches the
+  window.
 
-Both land **in B**, and both must be observed failing against a deliberately
-mis-wired connect before they are trusted (rule 50; the C0 bites are the
-pattern).
+Both land **in B**, and both must be observed failing against their bite
+before they are trusted (rule 50; the C0 bites are the pattern).
 
 ---
 
@@ -364,8 +383,8 @@ pattern).
 |---|---|---|
 | **C0** | `requires_cold_authority` + `cold_authority_pin`; selector in Rust | **LANDED** #703; review pass #711 |
 | **A** | this document; the decision-log entry; `EU-` registered; HELD rows flipped | this PR |
-| **B + C1** (one PR, rule 07) | kind 4 in the retention enum, the C++ `archival_bond_post_kind`, and `shekyl-wire` (whose `Other(u8)` already parses it); the endpoint field and its couplings; the record column + LMDB 12→13; `PENDING_POST_VERSION` 10→11; `verify_endpoint_update` incl. the `EU-D7` refusal; the C++ connect arm; `EU-D9`'s two KATs; **and** the one predicate arm | **STAGED (rule 23)** — a deliberate callee-without-caller: the wire exists and nothing produces an update for it. Named consumers: D (the second address) and, for the *read* side, TJ-B's fetcher. In-policy under the disposition test because both consumers are named and the plan is live; recorded here so the next audit does not flag it |
-| **D** | new label, rotation always present, V1 deleted, V2 minted; regenerator cites the entry | closes B's staging |
+| **B + C1** (one PR, rule 07) | kind 4 in the retention enum, the C++ `archival_bond_post_kind`, and `shekyl-wire` as per-kind variants (`EU-D3`); the endpoint field and the **four** presence couplings — `bond_spend_pk` iff JoinMarket, endpoint iff JoinMarket ∨ EndpointUpdate, holdings and the amount term absent iff EndpointUpdate (`EU-D11`) — at every serializer; `verify_endpoint_update` as the only verify accepting `credit == debit == 0`, incl. the `EU-D7` refusal; the record column (`kVersion 6→7`) + LMDB 12→13; the per-kind journal table and pop (`EU-D12`); the C++ connect arm with its CSR-3a record; the JoinMarket producer supplying the endpoint (a 32-byte accessor on `OnionIdentity`, which today holds only the base32 service id); `EU-D9`'s two KATs; **and** the one predicate arm | **STAGED (rule 23)** — a deliberate callee-without-caller: the wire exists and nothing produces an update for it. Named consumers: D (the second address) and, for the *read* side, TJ-B's fetcher. In-policy under the disposition test because both consumers are named and the plan is live; recorded here so the next audit does not flag it |
+| **D** | new label, rotation always present, V1 deleted, V2 minted; regenerator cites the entry; the wallet producer for `EndpointUpdate` and, with it, `PENDING_POST_VERSION` 10→11 (`EU-D13`) | closes B's staging |
 
 **Why D is last despite being a production prerequisite.** B+C1's staging is
 safe (the predicate arm ships with the wire, so kind 4 never authorizes hot),
@@ -381,7 +400,94 @@ CSR-3a conformance record in the same PR — the C0 precedent (CEN-J13).
 
 ---
 
-## 12. Out of scope, by name
+## 12. `EU-D11` — RULED 2026-09-12: the kind-4 vin carries exactly the endpoint; the amount term is absent, made unrepresentable at the serializers
+
+**What the sweep found.** `BondTerm` is `Credit(NonZero) | Debit(NonZero)`;
+the FFI conversion refuses `(0, 0)` (`ERR_NO_BOND_TERM`); every existing kind
+carries an economic term (HoldingsUpdate-add requires `bond_credit == FLOOR`).
+An `EndpointUpdate` is fee-funded with no bond term, so as A left it the
+post could not balance.
+
+**Ruled.** Term-absent iff `EndpointUpdate` — the third coupling in the §9.11
+family — enforced **at the serializers**, not only at verify: a kind-4 vin
+with a nonzero `bond_credit` or `bond_debit` fails to parse, so the
+combination is unrepresentable in memory rather than refused later.
+`verify_endpoint_update` is the only verify that accepts
+`credit == debit == 0`; `BondTerm` itself is unchanged — a representable
+zero term would undo what `NonZeroAtomicUnits` exists to prevent. The CT
+balance for kind 4 is the plain equation with no bond term (`post_kind` is
+marshaled into `shekyl_archival_verify_bond_post_ct_balance` so the arm can
+select it).
+
+**And holdings / `bonded_total_atomic` are absent too.** Both fields are
+unconditional on the wire today and A did not rule them for kind 4. Ruled
+**absent**: the kind-4 vin is `hybrid_public_key ‖ p_canonical_id ‖
+post_kind ‖ endpoint` and nothing else. Two grounds, in Rick's words:
+*mirror-and-verify "makes the escape hatch racy"* — a HoldingsUpdate landing
+between assembly and connect would fail the rotation an operator is making
+away from a compromised host — and *absent "makes KAT (a) structurally true
+rather than checked"*. An ignored field is a laundering surface; an absent
+one is not ignored, it is gone. Cost: a fourth presence coupling at the
+serializers, mechanical against an idiom already applied.
+
+---
+
+## 13. `EU-D12` — RULED 2026-09-12: the endpoint pre-image gets its own per-kind journal table
+
+Reorg pop must restore the previous endpoint. Release and HoldingsUpdate each
+journal their record pre-image in a per-kind log table
+(`archival_bond_unbond_log`, `archival_bond_holdings_update_log`), and
+`EndpointUpdate` follows: `archival_bond_endpoint_update_log`, keyed like its
+siblings, carrying the 32-byte prior endpoint. **Why not fold it into the
+record's existing journaling** (Rick): *"folding endpoint pre-images into
+bond-record journaling puts endpoint restoration on the path that also
+restores value and holdings, so a pop bug that crosses fields turns a
+rotation into a value error. Per-kind isolation is what keeps the mutation
+classes apart."* The four-document obligation the coverage gate imposes on a
+new table (`LMDB_SCHEMA.md` section and total 49 → 50, the
+`DAEMON_REDB_STORE.md` registry row, the write-atomicity audit) is the gate
+working as designed, not an argument.
+
+---
+
+## 14. `EU-D13` — RULED 2026-09-12: `PENDING_POST_VERSION` bumps with the producer, in D
+
+The wallet's pending block stores each pending post as opaque wire
+`tx_bytes` in a per-kind struct; B changes no persisted shape, and the
+snapshot gate fails on change-without-bump, never on bump-without-change. A
+bump in B would be a version with no schema behind it. The bump lands with
+the wallet producer that first persists a pending `EndpointUpdate` — D's
+scope, stated in the `EU-D10` row so D does not discover it there.
+
+---
+
+## 15. Rejected alternatives, in one place
+
+Each is the decision and one line of reason. Where an entry supersedes text
+this record carried at A, the SHA is the commit whose text it replaces; the
+history is in PR #712, not here.
+
+- **`shekyl-wire`'s `Other(u8)` "already parses" kind 4** — superseded
+  (A, `91cc6d060`): once the endpoint field exists, `Other(4)` would read
+  32 endpoint bytes as holdings. Per-kind variants (`EU-D3`).
+- **`PENDING_POST_VERSION` 10 → 11 in B** — superseded (A, `91cc6d060`):
+  no persisted shape changes in B. With the producer, in D (`EU-D13`).
+- **KAT (a) as an assertion over `bond_connect.rs`** — superseded
+  (A, `91cc6d060`): under `EU-D11` there is nothing for a connect to apply;
+  the assertion became a type and the test became a parse KAT (`EU-D9`).
+- **Term-absent enforced at the verify edge only** — rejected (B sweep,
+  2026-09-12): validation where the carrier ruling asked for
+  unrepresentability; the sibling coupling is enforced at the serializers.
+- **Holdings / `bonded_total_atomic` mirror-and-verify on kind 4** —
+  rejected (B sweep, 2026-09-12): a racy escape hatch, and a field with no
+  use in the variant. Absent (`EU-D11`).
+- **Fold the endpoint pre-image into bond-record journaling** — rejected
+  (B sweep, 2026-09-12): puts endpoint restoration on the value/holdings
+  restore path. Per-kind table (`EU-D12`).
+
+---
+
+## 16. Out of scope, by name
 
 - **Shard assignment** (`-29505`): its own unopened round. Not touched.
 - **TJ-B** (the daemon-side fetcher and everything the read path needs): this
