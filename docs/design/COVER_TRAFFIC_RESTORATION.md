@@ -1093,13 +1093,22 @@ arrival leg cannot be driven without a chain that admits real transactions.
 This is not one of them, and counting it as one would have made the queue look
 longer than the work is.
 
-### 3.1c Budget versus actual — pre-registered before the traffic exists
+### 3.1c Budget versus actual — SIGNED 2026-09-12
 
-**2026-08-29.** The ~42 GB/month posture is signed off **provisionally**, on
-the condition that it be measured once a real transaction rides the carrier —
-which the producer now makes possible for the first time. This section names
-what the measurement should show **before** anyone runs it, because the first
-reading is otherwise free to be read as either confirmation or a defect.
+**SIGNED 2026-09-12.** The ~42 GB/month figure is the dual-zone four-channel
+*ceiling* (`16 384 B/s` sustained), and that ceiling is signed off. The
+2026-08-29 condition was a three-arm wire measurement once a real transaction
+rode the carrier; that ran on seedusw (`v3.1.0-alpha.8`). Defects 1–3 were
+not observed. Honest Tor-only two-channel mean is `8192 B/s` (~21 GB/month);
+measured idle **7128 B/s** (~18.5 GB/month), loaded **7809 B/s**
+(~20.2 GB/month). The under-read versus 16 384 B/s is CV-2 (unbound slots),
+which the pre-registration named as expected — not a cheaper ceiling.
+
+**2026-08-29 (records-was, provisional).** The posture was signed off
+provisionally on the condition that it be measured once a real transaction
+rides the carrier. The paragraphs below named what that measurement should
+show *before* anyone ran it, so the first reading could not be read as
+either confirmation or a defect after the fact.
 
 **The arithmetic is not what is in question.** `PER_NODE_CEILING_BYTES_PER_SEC`
 is a `const` assert at exact equality: `20 480 × 4 ÷ 5 s = 16 384 B/s` holds by
@@ -1279,6 +1288,10 @@ sustained above 6145 B/s (max flow-average 3413 B/s). In-band 250 ms
 histogram is the same flat `U[3333, 6667]` as Arm B. C vs B aggregate
 rate moved with occupancy (more overlapping flows, a shorter idle tail),
 not with interval law. Defect 3: not observed.
+
+**Budget sign-off 2026-09-12.** The three-arm condition is met. The
+~42 GB/month number stays the worst-posture ceiling, not the typical node
+bill. A Tor-only seed in this run paid ~18–20 GB/month equivalent.
 
 **Window: 2 hours per arm.** The relative standard error of the aggregate rate
 is `0.0963/√n` per channel, with four channels at a 5 s mean: ~5 min resolves a
@@ -1607,7 +1620,8 @@ that exists.
 | per channel | **4 KiB/s** |
 | worst-posture node rate (**sustained**) | 20,480 × 4 ÷ 5 s = **16,384 B/s** |
 | worst-posture **burst** | ceil(20,480 × 4 ÷ 3.333 s) = **24,579 B/s** (~1.50×) |
-| sustained cost | **~42 GB/month**, ~8.9 % of the 180 KiB/s circuit floor |
+| sustained cost (ceiling) | **~42 GB/month**, ~8.9 % of the 180 KiB/s circuit floor |
+| measured honest Tor-only (seedusw 2026-09-12, SIGNED) | idle **7128 B/s** (~18.5 GB/month); loaded **7809 B/s** (~20.2 GB/month) |
 
 **It holds at exact equality, and the ceiling is now a build break rather than
 a table entry.** `params::carrier::PER_NODE_CEILING_BYTES_PER_SEC` carries it
