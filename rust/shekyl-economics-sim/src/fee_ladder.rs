@@ -47,7 +47,7 @@ use shekyl_economics::{
     calc_effective_emission_share, calc_release_multiplier, corrected_fee_ladder,
     effective_emission, emission_speed_factor, hysteresis_fold, hysteresis_settled,
     hysteresis_step, paid_block_reward, projected_already_generated, tail_subsidy_per_block,
-    EconomicParams, FeeLadder, TxVolume, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY,
+    EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR, STAKER_EMISSION_DECAY,
     STAKER_EMISSION_SHARE,
 };
 
@@ -284,14 +284,13 @@ fn rounded(raw: [u64; 4]) -> [u64; SERVED_SLOTS] {
 /// compare against. It stopped being "today's daemon" when FL-R20 landed;
 /// it is a historical baseline now, and `transliteration_matches_cpp_kat`
 /// pins it as one.
-fn served_ladder(base_reward: u64, median: u64, c_q: u64) -> [u64; SERVED_SLOTS] {
+fn served_ladder(base_reward: u64, median: u64, c: u64) -> [u64; SERVED_SLOTS] {
     corrected_fee_ladder(
         base_reward,
         median,
-        median,
         FULL_REWARD_ZONE_V5,
         REF_TX_WEIGHT,
-        c_q,
+        FeeCorrection::from_scaled(c),
     )
     .as_slots()
 }
@@ -3062,10 +3061,9 @@ mod tests {
             corrected_fee_ladder(
                 10 * coin,
                 1_500_000,
-                1_500_000,
                 FULL_REWARD_ZONE_V5,
                 REF_TX_WEIGHT,
-                16 * SCALE
+                FeeCorrection::from_scaled(16 * SCALE)
             )
             .as_slots()
         );

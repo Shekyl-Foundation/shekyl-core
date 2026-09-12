@@ -68,16 +68,6 @@
 #define DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD            ((uint64_t)10000000000) // 10 * pow(10, 9)
 #define DYNAMIC_FEE_PER_KB_BASE_FEE_V5                  ((uint64_t)2000000 * (uint64_t)CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2 / CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5)
 #define DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT         ((uint64_t)3000)
-// FL-R23 admission slack, basis points. Pinned at ZERO and a named parameter
-// rather than an absence: it replaces the inherited `needed/50` (2%), which
-// insured the quote-to-broadcast gap probabilistically; the lookback-min ring
-// closes that gap exactly. What makes zero affordable is the weight gate
-// (shekyl-tx-weight tests/weight_gate.rs) — if it ever fails on a live shape,
-// re-introducing a buffer is this constant, not a design round. The Rust owner
-// is shekyl_economics::RELAY_ADMISSION_SLACK_BP; a KAT there pins it at zero.
-#define SHEKYL_RELAY_ADMISSION_SLACK_BP                  ((uint32_t)0)
-// G — the FL-R23 lookback depth. Owner: shekyl_economics::RELAY_FLOOR_LOOKBACK.
-#define SHEKYL_RELAY_FLOOR_LOOKBACK                      ((uint64_t)5)
 
 // Four-component economics constants are generated from config/economics_params.json.
 

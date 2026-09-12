@@ -4445,305 +4445,23 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 //------------------------------------------------------------------
 
 //------------------------------------------------------------------
-uint64_t Blockchain::fee_correction_at(uint64_t db_height, uint64_t already_generated_coins) const
+void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t base_reward, uint64_t median, uint64_t c, std::vector<uint64_t> &fees) const
 {
-  // The memoized window for the tip; the FL-R23 cold rebuild has G + 1
-  // historical windows from one prefix-sum scan and reaches the same body
-  // through fee_correction_from, so C has ONE derivation either way.
-  return fee_correction_from(db_height, already_generated_coins, get_tx_volume_window(db_height));
-}
-//------------------------------------------------------------------
-uint64_t Blockchain::fee_correction_from(uint64_t height, uint64_t already_generated_coins,
-    const shekyl::tx_volume_window& tx_volume) const
-{
-  // ONE derivation of C, for the relay floor (warm push and cold rebuild
-  // alike) and the served ladder. FL-R6 is an identity under FL-R20 and
-  // FL-R21 deletes the clamp that used to reconcile the two paths; an
-  // identity whose operands are computed twice is one edit away from being
-  // false, so this is the only place sigma, the burn and the volume window
-  // are read on a fee path.
-  const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
-  const uint64_t sigma = shekyl_calc_emission_share(
-      height,
-      genesis_ng_height,
-      SHEKYL_STAKER_EMISSION_SHARE,
-      SHEKYL_STAKER_EMISSION_DECAY,
-      SHEKYL_BLOCKS_PER_YEAR);
-  const uint64_t burn_pct = shekyl_calc_burn_pct(
-      tx_volume.tx_count_sum,
-      tx_volume.blocks,
-      SHEKYL_TX_VOLUME_BASELINE,
-      already_generated_coins,
-      SHEKYL_EMISSION_CURVE_ASYMPTOTE,
-      SHEKYL_BURN_BASE_RATE,
-      SHEKYL_BURN_CAP);
-  // RAW C (FL-R20): no snap, no band, no previous value. The quantized
-  // scalar could only ever raise the floor — the pow2 ceiling maps the whole
-  // sub-unity range onto 1.0 — so a quiet chain could not lower it.
-  return shekyl_fee_correction(tx_volume.tx_count_sum, tx_volume.blocks, sigma, burn_pct);
-}
-//------------------------------------------------------------------
-bool Blockchain::relay_floor_at(uint64_t height, uint64_t long_term_median,
-    uint64_t already_generated_coins, const shekyl::tx_volume_window& tx_volume,
-    uint64_t& floor) const
-{
-  // THE definition of F(height). The warm ring push, the cold rebuild and
-  // get_current_fee_per_byte all come through here, which is what lets a
-  // warm node and a restarted node hold the same G + 1 floors: the same
-  // function of the same per-height operands.
-  //
-  // Deliberately the M_r-NEUTRAL reward overload: M_r lives INSIDE C (the
-  // round-8 whole-scalar amendment), so a demand-scaled reward here would
-  // apply the multiplier twice. The median operand is the penalty-free zone
-  // rather than a historical median because the block-weight penalty is
-  // INERT at weight 1 — shekyl-economics' apply_weight_penalty returns the
-  // amount unchanged whenever weight <= median — so R(height) depends on
-  // already_generated_coins alone. That is what keeps the cold rebuild's
-  // historical-median reconstruction to one quantity, M, rather than two.
-  uint64_t base_reward = 0;
-  if (!get_block_reward(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, 1, already_generated_coins, base_reward,
-      get_current_hard_fork_version()))
-    return false;
-
-  const uint64_t c = fee_correction_from(height, already_generated_coins, tx_volume);
-
-  // (M, M): the relay path used to pass (effective_median, LTM) and the
-  // ladder passes (Mnw, Mlw); both reduce to the long-term median because
-  // the first operand is >= the second at every call site (the dead-min
-  // finding, PR C). Passing M twice makes that reduction explicit here.
-  const int32_t rc = shekyl_relay_fee_floor(
-      base_reward,
-      long_term_median,
-      long_term_median,
-      CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
-      DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT,
-      c,
-      &floor);
-  // Unreachable from chain state for the same reason the ladder's is (the
-  // scalars are far inside the u128 domain), and named rather than folded
-  // into a false return: a false here means "no reward", and a reader
-  // chasing a refused block must not be sent to the wrong side of the FFI.
-  CHECK_AND_ASSERT_THROW_MES(rc == 0,
-      "shekyl_relay_fee_floor failed: rc=" << rc << " ("
-      << (rc == -1 ? "null out-pointer"
-                   : rc == -2 ? "scalars outside the floor's arithmetic domain"
-                              : "unknown status")
-      << "), height=" << height << " base_reward=" << base_reward
-      << " M=" << long_term_median << " C=" << c);
-  return true;
-}
-//------------------------------------------------------------------
-void Blockchain::rebuild_relay_floor_ring(uint64_t tip_height)
-{
-  // THE COLD PATH — startup, pop, reorg. A workaround with a trigger, not
-  // architecture (FOLLOWUPS FL-R3-STORE): the two per-height quantities it
-  // reconstructs, the volume window and the long-term median, are not stored
-  // per block. When they are, this is G + 1 field reads and this function is
-  // deleted. Its cost is TWO terms in TWO units, and they must not be added
-  // as if they were one: `720 + G` block-blob PARSES for the windows, plus
-  // ~100 000 long-term-weight FIELD reads to seed the median.
-  PERF_TIMER(rebuild_relay_floor_ring);
-  const uint64_t G = SHEKYL_RELAY_FLOOR_LOOKBACK;
-  const uint64_t W = SHEKYL_TX_VOLUME_WINDOW;
-
-  std::deque<relay_floor_entry> ring;
-  if (tip_height > 0)
-  {
-    const uint64_t oldest = tip_height > G ? tip_height - G : 0;
-
-    // 1. The G + 1 volume windows from ONE scan, via prefix sums. Window at
-    //    h' is the sum over [max(h' - W, 0), h'); every such range lies
-    //    inside [scan_start, tip), so one pass over that range serves all.
-    const uint64_t scan_start = oldest > W ? oldest - W : 0;
-    std::vector<uint64_t> prefix(static_cast<size_t>(tip_height - scan_start) + 1, 0);
-    for (uint64_t h = scan_start; h < tip_height; ++h)
-      prefix[h - scan_start + 1] = prefix[h - scan_start] + m_db->get_block_from_height(h).tx_hashes.size();
-    const auto window_at = [&](uint64_t h) {
-      const uint64_t start = h > W ? h - W : 0;
-      shekyl::tx_volume_window w;
-      w.blocks = h - start;
-      w.tx_count_sum = prefix[h - scan_start] - prefix[start - scan_start];
-      return w;
-    };
-
-    // 2. M at each height: seed a rolling median with the window ending at
-    //    `oldest`, then step it forward one block at a time. `nblocks =
-    //    min(N, h)` mirrors update_next_cumulative_weight_limit exactly,
-    //    including the partial fill on a young chain; the structure's own
-    //    eviction does the sliding once it is full.
-    const uint64_t N = m_long_term_block_weights_window;
-    epee::misc_utils::rolling_median_t<uint64_t> rm(static_cast<size_t>(N));
-    const uint64_t seed_blocks = std::min<uint64_t>(N, oldest);
-    if (seed_blocks > 0)
-      for (const uint64_t w : m_db->get_long_term_block_weights(oldest - seed_blocks, static_cast<size_t>(seed_blocks)))
-        rm.insert(w);
-
-    for (uint64_t h = oldest; h <= tip_height; ++h)
-    {
-      if (h > oldest)
-        rm.insert(m_db->get_block_long_term_weight(h - 1));
-      const uint64_t long_term_median = rm.size() > 0
-        ? std::max<uint64_t>(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, rm.median())
-        : CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
-      const uint64_t already_generated_coins = h ? m_db->get_block_already_generated_coins(h - 1) : 0;
-
-      uint64_t floor = 0;
-      if (relay_floor_at(h, long_term_median, already_generated_coins, window_at(h), floor))
-        ring.push_back({h, floor});
-      else
-        // Left OUT rather than pushed as 0: a shorter window is stricter and
-        // a zero floor would admit everything.
-        MERROR("relay floor ring: no block reward at height " << h << "; omitted from the window");
-    }
-  }
-
-  CRITICAL_REGION_LOCAL(m_tx_volume_window_lock);
-  m_relay_floor_ring.swap(ring);
-}
-//------------------------------------------------------------------
-void Blockchain::advance_relay_floor_ring(uint64_t tip_height)
-{
-  // THE WARM PATH: O(1) per block connect. Push F(tip) when the ring's top
-  // is the tip's predecessor; anything else — empty at startup, a pop or
-  // reorg that moved the tip backwards or sideways — is a rebuild. One rule
-  // for every hook, decided by height continuity rather than by which
-  // caller we happen to be in.
-  bool continues = false;
-  {
-    CRITICAL_REGION_LOCAL(m_tx_volume_window_lock);
-    continues = !m_relay_floor_ring.empty() && m_relay_floor_ring.back().height + 1 == tip_height;
-  }
-  if (!continues)
-  {
-    rebuild_relay_floor_ring(tip_height);
-    return;
-  }
-
-  const uint64_t already_generated_coins = tip_height ? m_db->get_block_already_generated_coins(tip_height - 1) : 0;
-  uint64_t floor = 0;
-  if (!relay_floor_at(tip_height, m_long_term_effective_median_block_weight, already_generated_coins,
-      get_tx_volume_window(tip_height), floor))
-  {
-    // The ring's top stays one behind the tip, which check_fee reads as
-    // stale and refuses — fail closed, loudly, rather than serving a 0.
-    MERROR("relay floor ring: no block reward at tip " << tip_height << "; ring not advanced");
-    return;
-  }
-
-  CRITICAL_REGION_LOCAL(m_tx_volume_window_lock);
-  m_relay_floor_ring.push_back({tip_height, floor});
-  while (m_relay_floor_ring.size() > SHEKYL_RELAY_FLOOR_LOOKBACK + 1)
-    m_relay_floor_ring.pop_front();
-}
-//------------------------------------------------------------------
-std::vector<std::pair<uint64_t, uint64_t>> Blockchain::relay_floor_ring() const
-{
-  CRITICAL_REGION_LOCAL(m_tx_volume_window_lock);
-  std::vector<std::pair<uint64_t, uint64_t>> out;
-  out.reserve(m_relay_floor_ring.size());
-  for (const auto& e : m_relay_floor_ring)
-    out.emplace_back(e.height, e.floor);
-  return out;
-}
-//------------------------------------------------------------------
-uint64_t Blockchain::get_current_fee_per_byte() const
-{
-  const uint64_t tip_height = m_db->height();
-  {
-    CRITICAL_REGION_LOCAL(m_tx_volume_window_lock);
-    if (!m_relay_floor_ring.empty() && m_relay_floor_ring.back().height == tip_height)
-      return m_relay_floor_ring.back().floor;
-  }
-  // The ring is not at the tip — the transient between a block landing in
-  // the DB and update_next_cumulative_weight_limit running, or a push that
-  // found no reward. Compute live through THE SAME definition the ring uses,
-  // so this can never disagree with what the ring would have held.
-  const uint64_t already_generated_coins = tip_height ? m_db->get_block_already_generated_coins(tip_height - 1) : 0;
-  uint64_t floor = 0;
-  if (!relay_floor_at(tip_height, m_long_term_effective_median_block_weight, already_generated_coins,
-      get_tx_volume_window(tip_height), floor))
-    return 0; // unambiguously the block-reward-failure arm: the floor itself carries max(1)
-  return floor;
-}
-//------------------------------------------------------------------
-bool Blockchain::check_fee(size_t tx_weight, uint64_t fee) const
-{
-  // FL-R23: fee >= mask_round_up(weight * min{F(h'-k) : 0 <= k <= G}), no
-  // slack. The predicate is Rust's (rule 20); this marshals the ring.
-  const uint64_t tip_height = m_db->height();
-  std::vector<uint64_t> floors;
-  {
-    CRITICAL_REGION_LOCAL(m_tx_volume_window_lock);
-    // A ring whose top is not the tip is a ring we cannot vouch for: either
-    // the transient between add_block and update_next_cumulative_weight_limit
-    // (both under the blockchain lock, which this path does not hold — the
-    // inherited check read the same fields with the same transient) or a
-    // push that found no reward. Refuse rather than admit against floors
-    // for a different tip. Fail closed, and say so.
-    if (m_relay_floor_ring.empty() || m_relay_floor_ring.back().height != tip_height)
-    {
-      MERROR("relay floor ring is not at the tip (" << tip_height << "); refusing admission");
-      return false;
-    }
-    floors.reserve(m_relay_floor_ring.size());
-    for (const auto& e : m_relay_floor_ring)
-      floors.push_back(e.floor);
-  }
-  MDEBUG("Relay floor window [" << *std::min_element(floors.begin(), floors.end())
-      << ", " << *std::max_element(floors.begin(), floors.end()) << "]/byte over " << floors.size() << " blocks");
-
-  const int32_t rc = shekyl_relay_floor_admits(
-      fee,
-      tx_weight,
-      get_fee_quantization_mask(),
-      floors.data(),
-      floors.size(),
-      SHEKYL_RELAY_ADMISSION_SLACK_BP);
-  if (rc < 0)
-  {
-    MERROR("shekyl_relay_floor_admits rejected its arguments (rc=" << rc << ")");
-    return false;
-  }
-  if (rc == 0)
-  {
-    MERROR_VER("transaction fee is not enough: " << print_money(fee) << ", floor window min "
-        << print_money(*std::min_element(floors.begin(), floors.end())) << "/byte over " << tx_weight << " bytes");
-    return false;
-  }
-  return true;
-}
-
-//------------------------------------------------------------------
-void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, uint64_t c_q, std::vector<uint64_t> &fees) const
-{
-  // FL round §5.2 (FL-R17 signed: three tiers; FL-R12' round-8 amendment:
-  // whole-scalar C_q on the M_r-neutral operand). The ladder arithmetic is
-  // Rust-owned (shekyl-economics `corrected_fee_ladder`); this marshals
-  // `FeeLadder::as_slots` — [economy, standard, priority]. The Fh main
-  // arm is UNCONDITIONAL (2R/M — exact marginal pricing of full expansion;
-  // the inherited surge discount was FL-C2(b)'s one derived defect).
   uint64_t slots[3];
   const int32_t rc = shekyl_corrected_fee_ladder(
       base_reward,
-      Mnw,
-      Mlw,
+      median,
       CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
       DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT,
-      c_q,
+      c,
       slots);
-  // Neither rejection is reachable from here — the out-pointer is a
-  // just-resized vector, and the scalars are chain state, far inside the
-  // ladder's u128 domain. The throw names WHICH one fired anyway: -1 is a
-  // null out-pointer (this marshal), -2 is scalars the arithmetic cannot
-  // form (the state that produced them). Reporting only the pointer case
-  // would send a reader hunting the wrong side of the boundary.
   CHECK_AND_ASSERT_THROW_MES(rc == 0,
       "shekyl_corrected_fee_ladder failed: rc=" << rc << " ("
       << (rc == -1 ? "null out-pointer"
                    : rc == -2 ? "scalars outside the ladder's arithmetic domain"
                               : "unknown status")
-      << "), base_reward=" << base_reward << " Mnw=" << Mnw << " Mlw=" << Mlw
-      << " c_q=" << c_q);
+      << "), base_reward=" << base_reward << " median=" << median
+      << " c=" << c);
   fees.assign(slots, slots + (sizeof(slots) / sizeof(slots[0])));
 }
 
@@ -4754,72 +4472,19 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_block
 
   CHECK_AND_ASSERT_THROW_MES(grace_blocks <= CRYPTONOTE_REWARD_BLOCKS_WINDOW, "Grace blocks invalid In 2021 fee scaling estimate.");
 
-  // Mlw is the UN-GRACED long-term effective median (FL-R20/FL-R23, ruled
-  // 2026-09-11), and it is read from the member rather than recomputed.
-  //
-  // The inherited shape copied the 100 000-entry rolling median and inserted
-  // `grace_blocks` zeroes, pulling the median down and the quoted fee UP — a
-  // deliberate over-quote so a wallet's quote survived the next ~10 blocks.
-  // FL-R23 does that job exactly instead of probabilistically: admission takes
-  // the minimum floor over the last G+1 blocks, so a quote at F(h) is admitted
-  // by identity and the lookahead premium buys protection the wallet already
-  // has. Grace also only ever protected quotes taken AT the floor; a standard
-  // quote is 4F and never needed it.
-  //
-  // Using the member is the other half of FL-R6's identity: with no zeroes to
-  // insert, `max(rolling_median, Zm)` IS m_long_term_effective_median_block_weight
-  // (set from the same median, floored the same way, in
-  // update_next_cumulative_weight_limit), so the estimate and the relay floor
-  // divide by the same M by construction rather than by agreeing arithmetic.
-  //
-  // `grace_blocks` is consequently dead on every rung, not just slot 0, and is
-  // queued for deletion from the estimate path AND the RPC as its own row — a
-  // tunable with no effect is worse than no tunable. Reopener on record: a
-  // long-gap construction path (cold signing, offline signing, multisig) may
-  // outrun G = 5, at which point the lookahead question returns (FL-R19).
-  const uint64_t Mlw_penalty_free_zone_for_wallet = m_long_term_effective_median_block_weight;
-
-  // Msw: median over [100 - grace blocks] past + [grace blocks] future blocks
-  std::vector<uint64_t> weights;
-  get_last_n_blocks_weights(weights, 100 - grace_blocks);
-  weights.reserve(100);
-  for (size_t i = 0; i < grace_blocks; ++i)
-    weights.push_back(0);
-  const uint64_t Msw_effective_short_term_median = std::max(epee::misc_utils::median(weights), Mlw_penalty_free_zone_for_wallet);
-
-  const uint64_t Mnw = std::min(Msw_effective_short_term_median, 50 * Mlw_penalty_free_zone_for_wallet);
+  const uint64_t median = m_long_term_effective_median_block_weight;
 
   uint64_t already_generated_coins = db_height ? m_db->get_block_already_generated_coins(db_height - 1) : 0;
   uint64_t base_reward;
-  // The operand is the M_r-NEUTRAL total reward (round-8 amendment,
-  // whole-scalar form): max(curve(remaining), TAIL). M_r lives inside the
-  // quantized scalar below — quantizing C' and leaving M_r raw in the
-  // operand is identical in algebra and NOT in quantization, and the raw
-  // split re-created the measured FL-C4a dwell failure. Totality means
-  // this returns the perpetual tail past the asymptote instead of falling
-  // to the BLOCK_REWARD_OVERESTIMATE placeholder wallets refuse (FL-R16a).
+  // M_r-neutral total: max(curve(remaining), TAIL). M_r lives inside C.
   if (!get_block_reward(m_current_block_cumul_weight_limit / 2, 1, already_generated_coins, base_reward, version))
   {
     MERROR("Failed to determine block reward, using placeholder " << print_money(BLOCK_REWARD_OVERESTIMATE) << " as a high bound");
     base_reward = BLOCK_REWARD_OVERESTIMATE;
   }
 
-  // RAW C, from the one owner both paths share (FL-R20 / FL-R21). The long
-  // note this replaces described the FL-R3 hysteresis band as a gap with an
-  // owner; FL-R21 closed it by deleting the quantizer the band smoothed, so
-  // there is no previous value to reconstruct and no band to restore.
-  const uint64_t fee_correction_c = fee_correction_at(db_height, already_generated_coins);
-
-  get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, base_reward, Mnw, Mlw_penalty_free_zone_for_wallet, fee_correction_c, fees);
-
-  // The `fees[0] = max(fees[0], get_current_fee_per_byte())` clamp that stood
-  // here is DELETED (FL-R21). It existed because two functions computed the
-  // floor independently and could diverge; they are now one function over one
-  // M and one C, so the clamp was a clamp of a value to itself. Deleting a
-  // sync without unifying its sources would reopen exactly what it closed —
-  // hence the identity is asserted in shekyl-economics
-  // (`economy_rung_is_the_relay_floor`) rather than left as a property two
-  // expressions happen to share.
+  const uint64_t c = fee_correction_at(db_height, already_generated_coins);
+  get_dynamic_base_fee_estimate_2021_scaling(base_reward, median, c, fees);
 }
 
 //------------------------------------------------------------------

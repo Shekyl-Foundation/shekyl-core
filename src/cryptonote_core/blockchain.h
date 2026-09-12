@@ -59,6 +59,7 @@
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "cryptonote_basic/difficulty.h"
 #include "shekyl/tx_volume_window.h"
+#include "shekyl/relay_floor_ring.h"
 #include "cryptonote_tx_utils.h"
 #include "tx_verification_utils.h"
 #include "cryptonote_basic/verification_context.h"
@@ -613,116 +614,33 @@ namespace cryptonote
       return tools::PowerOf<10, CRYPTONOTE_DISPLAY_DECIMAL_POINT - PER_KB_FEE_QUANTIZATION_DECIMALS>::Value;
     }
 
-    /**
-     * @brief the raw fee-correction scalar C at a chain state (FL-R20)
-     *
-     * `C = (1-sigma)*M_r/(1-b)` in SCALE units, from shekyl-economics. ONE
-     * derivation, shared by the relay floor and the served ladder: FL-R6 is an
-     * identity under FL-R20 and FL-R21 deletes the clamp that used to
-     * reconcile them, so computing C twice would put the identity one edit
-     * away from being false.
-     *
-     * Replaces `get_dynamic_base_fee`, whose whole body was the inherited
-     * `0.95 * R * w_ref / M^2` — the 0.95 deleted by FL-R20 (it and the 2%
-     * admission buffer were the same fudge for the same gap, which FL-R23
-     * closes structurally) and the arithmetic moved to its Rust owner
-     * (`shekyl_relay_fee_floor`, rule 20).
-     *
-     * @param db_height the chain height to price at
-     * @param already_generated_coins supply at that height, for the burn curve
-     *
-     * @return C in SCALE units
-     */
+    /// Raw C at `db_height` from the memoized tip window.
     uint64_t fee_correction_at(uint64_t db_height, uint64_t already_generated_coins) const;
 
-    /**
-     * @brief C from an explicitly supplied volume window (the one derivation)
-     *
-     * fee_correction_at reads the memoized window for the tip; the FL-R23 cold
-     * rebuild has G + 1 historical windows from one prefix-sum scan and hands
-     * each in here, so both paths share one body.
-     */
+    /// Raw C from an explicit volume window — one derivation for the ring and the estimate.
     uint64_t fee_correction_from(uint64_t height, uint64_t already_generated_coins,
         const shekyl::tx_volume_window& tx_volume) const;
 
-    /**
-     * @brief F(height) = R * C * w_ref / M^2, floored at 1 — THE definition
-     *
-     * One body for the warm ring push, the cold rebuild and
-     * get_current_fee_per_byte, so a warm node and a restarted node cannot
-     * compute different floors for the same height. @p long_term_median is
-     * M(height): the un-graced long-term effective median AT that height.
-     * The reward's block-weight penalty is inert at weight 1 (it returns the
-     * amount unchanged whenever weight <= median), so R needs no historical
-     * median — only already_generated_coins.
-     *
-     * @return false if the block reward could not be computed (the caller
-     *   leaves that height OUT of the ring — a shorter window is stricter,
-     *   and a 0 floor would admit everything)
-     */
+    /// F(height) = R * C * w_ref / M^2, floored at 1. False if no block reward.
     bool relay_floor_at(uint64_t height, uint64_t long_term_median,
         uint64_t already_generated_coins, const shekyl::tx_volume_window& tx_volume,
         uint64_t& floor) const;
 
-    /**
-     * @brief rebuild the FL-R23 ring from chain history at @p tip_height
-     *
-     * The COLD path (startup, pop, reorg) — a workaround with a trigger, not
-     * architecture (FOLLOWUPS FL-R3-STORE). Two terms in two units: one scan
-     * of `720 + G` block blobs, parsed, for the G + 1 volume windows via
-     * prefix sums; plus ~100 000 long-term-weight FIELD reads to seed a rolling
-     * median that is then stepped forward G times (one insert, one median per
-     * step). Once both quantities are stored per block this is G + 1 field
-     * reads and this function is deleted.
-     */
+    /// Cold path: rebuild the ring from chain history at `tip_height`.
     void rebuild_relay_floor_ring(uint64_t tip_height);
 
-    /**
-     * @brief push F(tip) onto the ring if it continues the ring, else rebuild
-     */
+    /// Warm path: push F(tip) if the ring continues, else rebuild.
     void advance_relay_floor_ring(uint64_t tip_height);
 
-    /**
-     * @brief read-only view of the FL-R23 ring: (height, F) oldest first
-     *
-     * Observability, like get_current_fee_per_byte — not a test hook behind an
-     * ifdef, which would give this class two definitions across translation
-     * units. The warm/cold equality test reads it; so can an operator.
-     */
+    /// (height, F) oldest first. Observability, not a test-only hook.
     std::vector<std::pair<uint64_t, uint64_t>> relay_floor_ring() const;
 
-    /**
-     * @brief the three-tier estimate with its inputs supplied rather than read
-     *
-     * Same computation as the overload below, for a caller that already holds
-     * the block reward and the two weight medians.
-     *
-     * @param grace_blocks number of blocks we want the fee to be valid for
-     * @param base_reward the M_r-NEUTRAL total reward to price against
-     *   (`max(curve(remaining), TAIL)`) — the round-8 amendment's operand;
-     *   `M_r` lives inside `c_q`, so passing a modulated reward here would
-     *   double-count it
-     * @param Mnw the median of the short-term weight window
-     * @param Mlw the penalty-free zone the wallet sees
-     * @param c_q the whole volume-dependent correction scalar
-     *   `Q_ceil((1-sigma)*M_r/(1-b))`, in SHEKYL_FIXED_POINT_SCALE units
-     *   (SCALE = 1.0x); derived from chain state, never remembered
-     * @param fees out: three slots — [0] economy, [1] standard, [2] priority.
-     *   The CALLER clamps [0] up to the relay floor.
-     */
-    void get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, uint64_t base_reward, uint64_t Mnw, uint64_t Mlw, uint64_t c_q, std::vector<uint64_t> &fees) const;
+    /// Three-tier estimate from supplied operands. `median` is the long-term
+    /// fee median; `c` is raw C in SCALE units. `base_reward` is M_r-neutral.
+    void get_dynamic_base_fee_estimate_2021_scaling(uint64_t base_reward, uint64_t median, uint64_t c, std::vector<uint64_t> &fees) const;
 
-    /**
-     * @brief get three levels of dynamic per-byte fee estimate for the next few blocks
-     *
-     * The dynamic fee is based on the block weight in a past window, and
-     * the current block reward. It is expressed per byte. This function
-     * calculates an estimate valid for the next grace_blocks.
-     *
-     * @param grace_blocks number of blocks we want the fee to be valid for
-     *
-     * @return the fee estimates (economy, standard, priority)
-     */
+    /// Three-tier estimate from chain state. `grace_blocks` is accepted and
+    /// ignored (FL-R26 deletes it from the RPC).
     void get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, std::vector<uint64_t> &fees) const;
 
     /**
@@ -1322,19 +1240,7 @@ namespace cryptonote
     crypto::hash m_difficulty_for_next_block_top_hash;
     difficulty_type m_difficulty_for_next_block;
 
-    // FL-R23 relay-floor ring: (height, F(height)) for the last G + 1 tips,
-    // newest at the back. check_fee admits against min(F) over this window.
-    //
-    // Written ONLY by update_next_cumulative_weight_limit, which every
-    // tip change reaches (connect, pop, reorg, init): pushed when the ring's
-    // top is the new tip's predecessor, rebuilt from chain history otherwise.
-    // A pure function of chain state — every node at the same tip holds the
-    // same G + 1 values — which is what makes the admission rule
-    // deterministic across nodes; the warm push and the cold rebuild are
-    // asserted equal by fee_2021_scaling.warm_ring_equals_cold_reconstruction.
-    // Read under m_tx_volume_window_lock, the memo it sits beside.
-    struct relay_floor_entry { uint64_t height; uint64_t floor; };
-    std::deque<relay_floor_entry> m_relay_floor_ring;
+    shekyl::RelayFloorRing m_relay_floor_ring;
 
     // Memo for get_tx_volume_window, keyed on (top block hash, height) so
     // it is a memoization of a pure function of chain state and never a

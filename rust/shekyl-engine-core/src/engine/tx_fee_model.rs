@@ -52,7 +52,7 @@ pub(crate) fn dust_threshold_for_rate(rate: &FeeRate) -> u64 {
 /// There is deliberately no `Custom`-only relative ceiling. One
 /// anchored on economy (the shipped "100× economy") banned the
 /// snapshot's own Priority rate: on the pinned KAT row
-/// `(340, 1400, 67_000)` it refused `Custom(67_000)` as the caller's
+/// `(333, 1332, 66_666)` it refused `Custom(66_666)` as the caller's
 /// error while `FeePriority::Priority` succeeded at that identical
 /// rate. Economy is the market *floor* and honest 2021-scaling
 /// `Fh / Fl` reaches 1077×, so no economy multiple can separate
@@ -87,7 +87,7 @@ pub(crate) fn fee_rate_for_priority(
             // Reading the floor at weight 1 would collapse the
             // comparison — under a 10,000 mask every rate in `1..=10_000`
             // quantizes to the same 10,000 charge, so a weight-1 floor
-            // would admit a rate of 1 against an economy tier of 340 and
+            // would admit a rate of 1 against an economy tier of 333 and
             // then undercut it at every weight that matters.
             if custom.per_weight() < snapshot.economy().per_weight() {
                 return Err(FeeEstimatorError::CustomFeeOutOfRange(
@@ -446,12 +446,12 @@ mod tests {
         // weight-1 charge. Under a large mask that distinction is the
         // whole guard: every rate in `1..=10_000` quantizes to the same
         // 10,000 charge at weight 1, so a floor read there would admit a
-        // rate of 1 against an economy tier of 340 — and then undercut
+        // rate of 1 against an economy tier of 333 — and then undercut
         // it at every weight a real transaction has.
         let masked = ValidatedFeeEstimates::try_new(FeeEstimates {
-            economy: FeeRate::new(340, 10_000).expect("economy"),
-            standard: FeeRate::new(1_400, 10_000).expect("standard"),
-            priority: FeeRate::new(67_000, 10_000).expect("priority"),
+            economy: FeeRate::new(333, 10_000).expect("economy"),
+            standard: FeeRate::new(1_332, 10_000).expect("standard"),
+            priority: FeeRate::new(66_666, 10_000).expect("priority"),
             quantization_mask: 10_000,
         })
         .expect("KAT row under an honest 10k mask");
@@ -466,7 +466,7 @@ mod tests {
             other => panic!("a rate 340x under economy must be refused, got: {other:?}"),
         }
         // The masked snapshot's own Priority tier is still reachable.
-        let top = NonZeroU64::new(67_000).expect("nonzero");
+        let top = NonZeroU64::new(66_666).expect("nonzero");
         fee_rate_for_priority(FeePriority::Custom(top), &masked)
             .expect("Custom reaches Priority under a mask too");
 
@@ -509,10 +509,10 @@ mod tests {
             .expect("named tiers inside the snapshot ceiling")
         };
 
-        // Every 2021-scaling KAT row, at its own Priority rate and just
+        // Served 2021-scaling KAT rows, at their own Priority rate and just
         // above it ("priority, plus a little" — the ask the old band
-        // made inexpressible). 197×, 65×, and 1077× economy.
-        for (e, s, p) in [(340, 1400, 67_000), (340, 1400, 22_000), (13, 53, 14_000)] {
+        // made inexpressible).
+        for (e, s, p) in [(333, 1332, 66_666), (13, 52, 13_333)] {
             let snapshot = validated(e, s, p);
             let named = fee_rate_for_priority(FeePriority::Priority, &snapshot)
                 .expect("the named tier resolves");

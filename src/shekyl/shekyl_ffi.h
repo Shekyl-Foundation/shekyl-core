@@ -311,11 +311,10 @@ uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
-// FL-R23 admission: fee >= mask_round_up(weight * min(floors)) - slack_bp.
-// floors is the (h'-G ..= h') window of relay floors (<= G+1 values; only the
-// minimum is read). A short window is STRICTER, never looser; an empty window
-// refuses. slack_bp is SHEKYL_RELAY_ADMISSION_SLACK_BP (0) at the daemon's
-// call site. Returns 1 admit, 0 refuse, -1 null floors with floors_len != 0.
+// Admit iff fee >= mask_round_up(weight * min(floors)) - slack_bp.
+// floors is at most shekyl_relay_floor_lookback()+1 values; only the
+// minimum is read. A short window is stricter; empty refuses.
+// Returns 1 admit, 0 refuse, -1 bad pointer/length.
 int32_t shekyl_relay_floor_admits(
     uint64_t fee,
     uint64_t weight,
@@ -324,69 +323,36 @@ int32_t shekyl_relay_floor_admits(
     size_t floors_len,
     uint32_t slack_bp);
 
-// The FL-R20 relay floor F(h) = R*C*w_ref/M^2, floored at 1 - what check_fee
-// prices admission from AND, by identity, the estimate's economy rung
-// (shekyl_corrected_fee_ladder's out_fees[0] at the same operands). FL-R21
-// deletes the fees[0] clamp that used to reconcile two independent
-// computations; that is only safe while they are one function, so both
-// resolve to the same Rust entry point.
-// (mnw, mlw) take the same pair the ladder does: the relay path passes
-// (effective_median, long_term_effective_median), the same min(short, long)
-// reduction the estimate's (Mnw, Mlw) performs.
-// Returns 0 (floor written through out_floor), -1 null out_floor, -2 scalars
-// outside the ladder's u128 domain.
+// F = R*C*w_ref/M^2, floored at 1. Same function as the ladder's economy
+// rung. Returns 0 written, -1 null out_floor, -2 out of u128 domain.
 int32_t shekyl_relay_fee_floor(
     uint64_t base_reward,
-    uint64_t mnw,
-    uint64_t mlw,
+    uint64_t median,
     uint64_t full_reward_zone,
     uint64_t ref_tx_weight,
     uint64_t c_scaled,
     uint64_t* out_floor);
 
-// The RAW fee-correction scalar C = (1-sigma)*M_r/(1-b) in SCALE units
-// (FL-R20) - what the relay floor follows: F(h) = R*C(h)*w_ref/M^2.
-// `sigma_scaled` / `burn_pct_scaled` are the same shekyl_calc_emission_share /
-// shekyl_calc_burn_pct outputs validation computes at this state, and
-// (tx_count_sum, window_blocks) is FL-R24's undivided window. No snap, no
-// band, no previous value - hence no prev_cq parameter. Cannot fail.
+// Raw C = (1-sigma)*M_r/(1-b) in SCALE units. Cannot fail.
 uint64_t shekyl_fee_correction(
     uint64_t tx_count_sum,
     uint64_t window_blocks,
     uint64_t sigma_scaled,
     uint64_t burn_pct_scaled);
 
-/// The quantized fee-correction scalar C_q (FL-R12' round-8 amendment,
-/// whole-scalar form) with pow2-boundary hysteresis. sigma_scaled and
-/// burn_pct_scaled are the SAME shekyl_calc_emission_share /
-/// shekyl_calc_burn_pct outputs validation computes at this state.
-/// prev_cq_scaled = 0 means no held value, and it is what the daemon
-/// passes today: the band is a capability of this export, not yet a
-/// property of the served rate. FL-R3 is RULED -- the band stays and is
-/// restored -- pending the grid-anchored previous value's own round.
-uint64_t shekyl_fee_correction_quantized(
-    uint64_t tx_count_sum,
-    uint64_t window_blocks,
-    uint64_t sigma_scaled,
-    uint64_t burn_pct_scaled,
-    uint64_t prev_cq_scaled);
+// G — lookback depth. Rust is the owner.
+uint64_t shekyl_relay_floor_lookback(void);
+// Admission slack, basis points. Rust is the owner; pinned at 0.
+uint32_t shekyl_relay_admission_slack_bp(void);
 
-/// The corrected three-slot fee ladder (`FeeLadder::as_slots`: economy,
-/// standard, priority; Fh main arm unconditional). Writes exactly three
-/// values; the CALLER clamps fees[0] at the relay floor. Returns:
-///   0  - the three values were written;
-///  -1  - null out_fees, nothing written;
-///  -2  - the scalars cannot form the rungs' products in 128 bits,
-///        nothing written. No chain state reaches this; it exists so a
-///        corrupt or synthetic caller gets a status instead of an abort
-///        across the ABI (rule 40).
+// Three-slot ladder [economy, standard, priority]. Economy is the relay
+// floor at the same operands. Returns 0 written, -1 null, -2 out of domain.
 int32_t shekyl_corrected_fee_ladder(
     uint64_t base_reward,
-    uint64_t mnw,
-    uint64_t mlw,
+    uint64_t median,
     uint64_t full_reward_zone,
     uint64_t ref_tx_weight,
-    uint64_t c_q,
+    uint64_t c_scaled,
     uint64_t *out_fees);
 
 /// shekyl_block_reward status codes. Rejection is POSITIVE, caller misuse

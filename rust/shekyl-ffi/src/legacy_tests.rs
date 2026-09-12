@@ -1098,55 +1098,17 @@ fn advance_already_generated_passes_the_asymptote() {
     );
 }
 
-// ─── shekyl_corrected_fee_ladder / shekyl_fee_correction_quantized ──────────
+// ─── shekyl_corrected_fee_ladder / shekyl_relay_fee_floor ────────────────────
 //
-// Same boundary rationale as `shekyl_block_reward` above: the crate tests
-// own the ladder arithmetic (shekyl-economics `fee.rs`); what only exists
-// here is the null check, the four out-writes, and the fact that the
-// marshal reaches the crate function unchanged. Written under the
-// no-test-exists-means-write-the-test rule: these exports crossed with the
-// FL-R12′ bundle and had no boundary pin of their own.
-
-/// Rule 40: a malformed boundary input must not panic across
-/// `extern "C"`. This export is documented "cannot fail", and it very
-/// nearly could: the scalars are caller-controlled, and `σ` at its own
-/// clamp (`SCALE - 1`) with a dormant volume drives the integer division
-/// to `C = 0`, which trips `quantize_pow2_ceil`'s loud in-range assert
-/// (PR #640 review). No chain state reaches it — the measured floor is
-/// ≈ 0.68 — but the ABI is not entitled to assume its caller.
-///
-/// The exact adversarial triple from the review is pinned, plus the
-/// neighbouring degenerate corners, so the boundary stays total.
-#[test]
-fn fee_correction_quantized_is_total_at_hostile_scalars() {
-    let scale = shekyl_economics::params::SCALE;
-    // The reported case: sigma at its clamp, no burn, dormant volume.
-    let cq = shekyl_fee_correction_quantized(0, 0, scale - 1, 0, 0);
-    assert!(cq > 0, "a total boundary must still return a usable step");
-
-    // The same state carried through the hysteresis band, and the
-    // saturating corners on both scalars.
-    for (v, sigma, burn, prev) in [
-        (0u64, scale - 1, 0u64, scale),
-        (0, u64::MAX, 0, 0),
-        (0, u64::MAX, u64::MAX, 0),
-        (u64::MAX, u64::MAX, u64::MAX, u64::MAX),
-        (u64::MAX, 0, u64::MAX, 0),
-    ] {
-        let out = shekyl_fee_correction_quantized(v, 1, sigma, burn, prev);
-        assert!(
-            out > 0,
-            "boundary returned an unusable value at (v={v}, sigma={sigma}, burn={burn}, prev={prev})"
-        );
-    }
-}
+// Crate tests own the arithmetic. These pin the marshal: null check, the
+// out-writes, domain refusal, and that G/slack cross the ABI from the
+// Rust owner.
 
 #[test]
 fn corrected_fee_ladder_null_out_returns_minus_one() {
     let st = unsafe {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
-            300_000,
             300_000,
             300_000,
             3_000,
@@ -1160,44 +1122,32 @@ fn corrected_fee_ladder_null_out_returns_minus_one() {
     );
 }
 
-/// Rule 40, the other export: `corrected_fee_ladder` forms
-/// `4·R·w_ref·C_q` in `u128`, which OVERFLOWS before any conversion
-/// fallback can see it once the bare-`u64` ABI is handed operands near
-/// `u64::MAX` — an abort in an overflow-checked build, wrapped fee
-/// values otherwise (PR #640 review). The i32 ABI already carries a
-/// failure shape, so the domain is checked and refused with `-2`.
 #[test]
 fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
     let mut fees = [SENTINEL; 3];
-    for (base, mnw, mlw, zone, w, cq) in [
-        (u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX),
-        (u64::MAX, 300_000, 300_000, 300_000, 3_000, u64::MAX),
-        (u64::MAX, 300_000, 300_000, 300_000, u64::MAX, 1_000_000),
-        (1, u64::MAX, u64::MAX, u64::MAX, 3_000, 1_000_000),
-        // The PRIORITY rung, which is `2·R·C_q` and is the one rung that
-        // does not carry `w_ref`: a `w_ref` of zero makes every product
-        // that DOES carry it vanish, so a domain check written against a
-        // representative `w_ref`-bearing product passes this and then
-        // overflows forming `2·R·C_q` (PR #640 review, cycle 6). The
-        // rungs do not share an operand list, so the domain cannot be
-        // checked against one of them.
-        (u64::MAX, 300_000, 300_000, 300_000, 0, u64::MAX),
+    for (base, median, zone, w, c) in [
+        (u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX),
+        (u64::MAX, 300_000, 300_000, 3_000, u64::MAX),
+        (u64::MAX, 300_000, 300_000, u64::MAX, 1_000_000),
+        (1, u64::MAX, u64::MAX, 3_000, 1_000_000),
+        // Priority is `2·R·C` and does not carry `w_ref`: a zero `w_ref`
+        // zeroes every other product, so a domain check written against a
+        // `w_ref`-bearing product would miss this overflow.
+        (u64::MAX, 300_000, 300_000, 0, u64::MAX),
     ] {
         let st =
-            unsafe { shekyl_corrected_fee_ladder(base, mnw, mlw, zone, w, cq, fees.as_mut_ptr()) };
+            unsafe { shekyl_corrected_fee_ladder(base, median, zone, w, c, fees.as_mut_ptr()) };
         assert_eq!(
             st, -2,
             "out-of-domain scalars must be refused, not computed \
-             (base={base}, mnw={mnw}, mlw={mlw}, zone={zone}, w={w}, cq={cq})"
+             (base={base}, median={median}, zone={zone}, w={w}, c={c})"
         );
         assert_eq!(fees, [SENTINEL; 3], "a refused call must not write");
     }
 
-    // And the honest domain still computes: the refusal is not a blanket.
     let st = unsafe {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
-            300_000,
             300_000,
             300_000,
             3_000,
@@ -1211,20 +1161,10 @@ fn corrected_fee_ladder_refuses_out_of_domain_scalars() {
 
 #[test]
 fn corrected_fee_ladder_marshals_the_heritage_vector() {
-    // 10 SKL reward, Mnw = Mlw = zone, C = 1: the FL-R17 signed shape over the
-    // heritage values — the same vector scaling_2021.cpp pins from the C++
-    // side, so a drift in either marshal direction fails one of the two.
-    //
-    // [333, 1332, 66_666] since FL-R21, where it was [340, 1400, 67_000]: the
-    // served path no longer rounds each rung up to two significant digits, and
-    // `standard` is `4F` exactly rather than its own rounded quotient. The
-    // C++ pin moved with it in the same commit — that is what makes this pair
-    // a cross-check rather than two copies of one number.
     let mut fees = [SENTINEL; 3];
     let st = unsafe {
         shekyl_corrected_fee_ladder(
             10_000_000_000,
-            300_000,
             300_000,
             300_000,
             3_000,
@@ -1237,36 +1177,13 @@ fn corrected_fee_ladder_marshals_the_heritage_vector() {
 }
 
 #[test]
-fn fee_correction_quantized_ffi_matches_the_crate() {
-    let p = shekyl_economics::EconomicParams::default();
-    let scale = shekyl_economics::params::SCALE;
-    // A decisive surge state (M_r pinned at 1.3, no sigma/burn, no previous
-    // value): C = 1.3 snaps up to the C_q = 2 step.
-    let v = 2 * p.tx_volume_baseline;
-    let got = shekyl_fee_correction_quantized(v, 1, 0, 0, 0);
+fn relay_constants_cross_the_abi_from_the_rust_owner() {
     assert_eq!(
-        got,
-        shekyl_economics::fee_correction_quantized(
-            shekyl_economics::TxVolume::per_block(v),
-            0,
-            0,
-            0,
-            &p
-        )
-    );
-    assert_eq!(got, 2 * scale);
-    // And the hysteresis argument is threaded, not dropped — asserted at a
-    // probe where held and fresh DIFFER (v = baseline + 1 puts raw C just
-    // past the 2^0 boundary, inside the 3% band): with the previous step it
-    // holds, without it it snaps up. A probe where both paths agree could
-    // not fail on a dropped argument.
-    let boundary_v = p.tx_volume_baseline + 1;
-    assert_eq!(
-        shekyl_fee_correction_quantized(boundary_v, 1, 0, 0, scale),
-        scale
+        shekyl_relay_floor_lookback(),
+        u64::try_from(shekyl_economics::RELAY_FLOOR_LOOKBACK).expect("G fits u64")
     );
     assert_eq!(
-        shekyl_fee_correction_quantized(boundary_v, 1, 0, 0, 0),
-        2 * scale
+        shekyl_relay_admission_slack_bp(),
+        shekyl_economics::RELAY_ADMISSION_SLACK_BP
     );
 }

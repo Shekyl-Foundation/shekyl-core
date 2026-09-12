@@ -42,6 +42,7 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "blockchain_db/testdb.h"
 #include "shekyl/economics_params_generated.h"
+#include "shekyl/shekyl_ffi.h"
 
 namespace
 {
@@ -241,38 +242,25 @@ TEST(fee_2021_scaling, wallet_fee_estimate)
   // so each rung is the arithmetic's own answer rather than that answer
   // rounded up to two significant digits, and standard is 4x economy exactly.
 
-  // 10 SKL reward, Mnw=Mlw=ZONE_V5
+  // 10 SKL reward, median=ZONE_V5
   fees.clear();
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 300000, 300000, SHEKYL_FIXED_POINT_SCALE, fees);
+  bc->get_dynamic_base_fee_estimate_2021_scaling(10ull * COIN, 300000, SHEKYL_FIXED_POINT_SCALE, fees);
   ASSERT_EQ(fees.size(), 3);
   ASSERT_EQ(fees[0], 333u);
   ASSERT_EQ(fees[1], 1332u);
   ASSERT_EQ(fees[2], 66666u);
 
-  // 10 SKL reward, large Mnw. The heritage 22000 came from the surge
-  // discount; the unconditional main arm prices full expansion here too
-  // (FL-C2(b) — the one derived defect in the inherited shape).
+  // 10 SKL reward, median=1500000
   fees.clear();
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 15000000, 300000, SHEKYL_FIXED_POINT_SCALE, fees);
-  ASSERT_EQ(fees.size(), 3);
-  ASSERT_EQ(fees[0], 333u);
-  ASSERT_EQ(fees[1], 1332u);
-  ASSERT_EQ(fees[2], 66666u);
-
-  // 10 SKL reward, Mnw=Mlw=1500000
-  fees.clear();
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 1500000, 1500000, SHEKYL_FIXED_POINT_SCALE, fees);
+  bc->get_dynamic_base_fee_estimate_2021_scaling(10ull * COIN, 1500000, SHEKYL_FIXED_POINT_SCALE, fees);
   ASSERT_EQ(fees.size(), 3);
   ASSERT_EQ(fees[0], 13u);
   ASSERT_EQ(fees[1], 52u);
   ASSERT_EQ(fees[2], 13333u);
 
-  // C = 2 (one congestion step): every rung doubles EXACTLY, now that
-  // round_money_up_2 is off the served path (FL-R21). Under the rounding the
-  // C = 1 row was [340, 1400, 67000] and this one [670, 2700, 140000] — not
-  // quite double, because each rung was rounded up independently.
+  // C = 2: every rung doubles exactly.
   fees.clear();
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 300000, 300000, 2 * SHEKYL_FIXED_POINT_SCALE, fees);
+  bc->get_dynamic_base_fee_estimate_2021_scaling(10ull * COIN, 300000, 2 * SHEKYL_FIXED_POINT_SCALE, fees);
   ASSERT_EQ(fees.size(), 3);
   ASSERT_EQ(fees[0], 666u);
   ASSERT_EQ(fees[1], 2664u);
@@ -379,7 +367,7 @@ TEST(fee_2021_scaling, grace_blocks_do_not_move_the_served_ladder)
 TEST(fee_2021_scaling, warm_ring_equals_cold_reconstruction)
 {
   const uint64_t start = 800; // > SHEKYL_TX_VOLUME_WINDOW + G, so every window is full
-  const uint64_t G = SHEKYL_RELAY_FLOOR_LOOKBACK;
+  const uint64_t G = shekyl_relay_floor_lookback();
   VaryingChainTestDB* db = new VaryingChainTestDB(start);
   PREFIX_WINDOW_DBPTR(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE, db);
 
@@ -419,7 +407,7 @@ TEST(fee_2021_scaling, warm_ring_equals_cold_reconstruction)
 // is what a node that never saw those blocks would hold.
 TEST(fee_2021_scaling, ring_rebuilds_when_the_tip_moves_backwards)
 {
-  const uint64_t G = SHEKYL_RELAY_FLOOR_LOOKBACK;
+  const uint64_t G = shekyl_relay_floor_lookback();
   VaryingChainTestDB* db = new VaryingChainTestDB(806);
   PREFIX_WINDOW_DBPTR(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE, db);
   const auto at_806 = bc->relay_floor_ring();

@@ -63,7 +63,9 @@ use std::collections::VecDeque;
 
 use serde::Serialize;
 use shekyl_economics::params::TX_VOLUME_WINDOW;
-use shekyl_economics::{base_block_reward, EconomicParams, TxVolume, BLOCKS_PER_YEAR};
+use shekyl_economics::{
+    base_block_reward, EconomicParams, TxVolume, BLOCKS_PER_YEAR, RELAY_FLOOR_LOOKBACK,
+};
 
 use crate::fee_ladder::{
     advance_traced_state, age_state, correction_factor_ratio, AgeState, Rng, FULL_REWARD_ZONE_V5,
@@ -77,7 +79,7 @@ const VOLUME_WINDOW: usize = TX_VOLUME_WINDOW as usize;
 /// slack. The identity the predicate delivers is per receiving node — a
 /// quote at `h` is admitted by identity at every node whose tip is in
 /// `[h, h+G]`.
-pub const LOOKBACK_G: usize = 5;
+pub const LOOKBACK_G: usize = RELAY_FLOOR_LOOKBACK;
 /// FL-E4's sweep: the first draft's `G` = 3, the re-derived 5, and the
 /// point between, so the grace curve — not the derivation alone — is on
 /// record.

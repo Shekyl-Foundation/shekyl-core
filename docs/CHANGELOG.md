@@ -20,11 +20,11 @@
   exactly. No rung is rounded up to two significant digits any more, so
   quotes are the arithmetic's own answer: at 10 SKL and the 300 kB zone,
   `[340, 1400, 67000]` becomes `[333, 1332, 66666]`. The `grace_blocks`
-  RPC parameter no longer affects any tier (it was already nearly inert at
-  production constants — ≤ 100 zeroes against a 100 000-block median); its
-  deletion from the wire is FL-R26, a separate change. The wallet's
-  absolute fee cap moves with the unrounding, 220,000,000 → 218,453,333
-  atomic-units/weight — the same structural bound, unrounded.
+  RPC parameter no longer affects any tier (the estimate no longer builds
+  a graced short-term median); its deletion from the wire is FL-R26, a
+  separate change. The wallet's absolute fee cap moves with the
+  unrounding, 220,000,000 → 218,453,333 atomic-units/weight — the same
+  structural bound, unrounded.
 
   **Two defects fixed on the way.** The fee-quote path (`fee_query`)
   under-quoted by one varint byte's worth of rate whenever a fee crossed a
