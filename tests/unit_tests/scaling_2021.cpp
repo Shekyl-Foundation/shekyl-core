@@ -96,6 +96,76 @@ public:
 
 }
 
+// A chain whose long-term weights, per-block transaction counts and supply
+// all VARY by height, with a height the test can advance.
+//
+// It exists for warm_ring_equals_cold_reconstruction. On a fixture whose
+// per-height quantities are constant, the warm push and the cold rebuild
+// agree trivially — every F(h) is the same number — and the test asserts
+// nothing about the reconstruction. Here M, C and R each move with h, so the
+// two paths can only agree if the cold path reconstructs each height's
+// operands exactly.
+class VaryingChainTestDB: public cryptonote::BaseTestDB
+{
+public:
+  explicit VaryingChainTestDB(uint64_t height) : m_height(height) { m_open = true; }
+  void set_height(uint64_t h) { m_height = h; }
+
+  // Above the penalty-free floor everywhere, and not monotone, so the
+  // stepped median genuinely moves as the window slides.
+  static uint64_t lt_weight(uint64_t h) { return 2 * CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 + (h * 7919) % 100000; }
+  // Mean ~49.5/block — AT the volume baseline, so M_r sits between its rails
+  // and C actually responds to the window. The first version used h % 13
+  // (mean ~6), which pinned M_r at the 0.8 rail at every height: C was then
+  // a constant, and a bite that fed every height the TIP's window passed —
+  // the C axis was invisible. See the C-axis subject assertion in the test.
+  static size_t tx_count(uint64_t h) { return static_cast<size_t>(h % 100); }
+  // The volume window the daemon would count at height h: sum over [h-720, h).
+  static uint64_t window_sum(uint64_t h) {
+    const uint64_t start = h > SHEKYL_TX_VOLUME_WINDOW ? h - SHEKYL_TX_VOLUME_WINDOW : 0;
+    uint64_t sum = 0;
+    for (uint64_t x = start; x < h; ++x) sum += tx_count(x);
+    return sum;
+  }
+
+  virtual uint64_t height() const override { return m_height; }
+  virtual size_t get_block_weight(const uint64_t &h) const override { return lt_weight(h); }
+  virtual uint64_t get_block_long_term_weight(const uint64_t &h) const override { return lt_weight(h); }
+  virtual std::vector<uint64_t> get_block_weights(uint64_t start, size_t count) const override {
+    std::vector<uint64_t> v; v.reserve(count);
+    for (uint64_t h = start; h < start + count && h < m_height; ++h) v.push_back(lt_weight(h));
+    return v;
+  }
+  virtual std::vector<uint64_t> get_long_term_block_weights(uint64_t start, size_t count) const override {
+    std::vector<uint64_t> v; v.reserve(count);
+    for (uint64_t h = start; h < start + count && h < m_height; ++h) v.push_back(lt_weight(h));
+    return v;
+  }
+  virtual cryptonote::block get_block_from_height(const uint64_t &h) const override {
+    cryptonote::block b;
+    b.tx_hashes.resize(tx_count(h), crypto::null_hash);
+    return b;
+  }
+  virtual uint64_t get_block_already_generated_coins(const uint64_t &h) const override {
+    return 10000000000ull + h * 1000000ull;
+  }
+  virtual crypto::hash get_block_hash_from_height(const uint64_t &h) const override {
+    crypto::hash hash = crypto::null_hash;
+    *(uint64_t*)&hash = h;
+    return hash;
+  }
+  virtual crypto::hash top_block_hash(uint64_t *block_height = NULL) const override {
+    crypto::hash top = crypto::null_hash;
+    *(uint64_t*)&top = m_height - 1;
+    if (block_height)
+      *block_height = m_height - 1;
+    return top;
+  }
+
+private:
+  uint64_t m_height;
+};
+
 #define PREFIX_WINDOW(hf_version,window) \
   std::unique_ptr<cryptonote::Blockchain> bc; \
   cryptonote::tx_memory_pool txpool(*bc); \
@@ -113,6 +183,22 @@ public:
   ASSERT_TRUE(r)
 
 #define PREFIX(hf_version) PREFIX_WINDOW(hf_version, TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW)
+
+#define PREFIX_WINDOW_DBPTR(hf_version,window,dbptr) \
+  std::unique_ptr<cryptonote::Blockchain> bc; \
+  cryptonote::tx_memory_pool txpool(*bc); \
+  bc.reset(new cryptonote::Blockchain(txpool)); \
+  struct get_test_options_dbptr { \
+    const std::pair<uint8_t, uint64_t> hard_forks[3]; \
+    const cryptonote::test_options test_options = { \
+      hard_forks, \
+      window, \
+    }; \
+    get_test_options_dbptr(): hard_forks{std::make_pair(1, (uint64_t)0), std::make_pair((uint8_t)hf_version, (uint64_t)1), std::make_pair((uint8_t)0, (uint64_t)0)} {} \
+  } opts; \
+  cryptonote::Blockchain *blockchain = bc.get(); \
+  bool r = blockchain->init(dbptr, cryptonote::FAKECHAIN, true, &opts.test_options, 0); \
+  ASSERT_TRUE(r)
 
 #define PREFIX_WINDOW_DB(hf_version,window,dbtype) \
   std::unique_ptr<cryptonote::Blockchain> bc; \
@@ -275,6 +361,83 @@ TEST(fee_2021_scaling, grace_blocks_do_not_move_the_served_ladder)
 
   // And FL-R6's identity holds on this fixture too, not only on the empty one.
   ASSERT_EQ(no_grace[0], bc->get_current_fee_per_byte());
+}
+
+// The FL-R23 ring's two paths agree — the gate that turns "a warm node and a
+// restarted node admit the same transaction" from a claim into a check.
+//
+// Warm: init at height S (a cold rebuild), then advance the chain G + 1 times
+// so that EVERY entry now in the ring arrived by an O(1) push from the live
+// m_long_term_effective_median_block_weight and the memoized volume window.
+// Cold: rebuild from chain history at the same tip — prefix-sum windows and a
+// stepped rolling median. If the cold path reconstructs any height's M, C or
+// R differently from what the live path computed when that height was the
+// tip, the two rings differ and this fails.
+//
+// Subject assertions first (rule 47): the ring is full and consecutive, and
+// the floors are NOT all equal — on a flat fixture equality is vacuous.
+TEST(fee_2021_scaling, warm_ring_equals_cold_reconstruction)
+{
+  const uint64_t start = 800; // > SHEKYL_TX_VOLUME_WINDOW + G, so every window is full
+  const uint64_t G = SHEKYL_RELAY_FLOOR_LOOKBACK;
+  VaryingChainTestDB* db = new VaryingChainTestDB(start);
+  PREFIX_WINDOW_DBPTR(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE, db);
+
+  for (uint64_t i = 1; i <= G + 1; ++i)
+  {
+    db->set_height(start + i);
+    ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
+  }
+  const uint64_t tip = start + G + 1;
+  const auto warm = bc->relay_floor_ring();
+
+  ASSERT_EQ(warm.size(), G + 1) << "the ring must hold exactly G + 1 entries after G + 1 pushes";
+  for (size_t k = 0; k < warm.size(); ++k)
+    ASSERT_EQ(warm[k].first, tip - G + k) << "ring heights must be consecutive and end at the tip";
+  uint64_t lo = warm.front().second, hi = lo;
+  for (const auto& e : warm) { lo = std::min(lo, e.second); hi = std::max(hi, e.second); }
+  ASSERT_LT(lo, hi) << "fixture produced a flat ring; equality below would prove nothing";
+  // The C AXIS, separately: the volume window must differ across the ring's
+  // heights, or the cold path could feed every height the tip's window and
+  // still agree. A flat-floor check cannot see this — M alone can make the
+  // floors vary while C is rail-pinned and constant, which is exactly what
+  // happened with the first fixture.
+  ASSERT_NE(VaryingChainTestDB::window_sum(tip - G), VaryingChainTestDB::window_sum(tip))
+      << "fixture's volume window is flat across the ring; the C axis would be untested";
+
+  bc->rebuild_relay_floor_ring(tip);
+  const auto cold = bc->relay_floor_ring();
+  ASSERT_EQ(warm, cold) << "cold reconstruction disagrees with the warm push at the same tip";
+
+  // And the served floor IS the ring's top — the identity every consumer
+  // of get_current_fee_per_byte now rests on.
+  ASSERT_EQ(cold.back().second, bc->get_current_fee_per_byte());
+}
+
+// A pop moves the tip BACKWARDS, and the ring must not carry entries from the
+// future it no longer has. Continuity fails, the ring rebuilds, and the result
+// is what a node that never saw those blocks would hold.
+TEST(fee_2021_scaling, ring_rebuilds_when_the_tip_moves_backwards)
+{
+  const uint64_t G = SHEKYL_RELAY_FLOOR_LOOKBACK;
+  VaryingChainTestDB* db = new VaryingChainTestDB(806);
+  PREFIX_WINDOW_DBPTR(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE, db);
+  const auto at_806 = bc->relay_floor_ring();
+  ASSERT_EQ(at_806.back().first, 806u);
+
+  db->set_height(803);
+  ASSERT_TRUE(bc->update_next_cumulative_weight_limit());
+  const auto at_803 = bc->relay_floor_ring();
+  ASSERT_EQ(at_803.size(), G + 1);
+  ASSERT_EQ(at_803.back().first, 803u) << "the ring must follow the tip backwards";
+  for (const auto& e : at_803)
+    ASSERT_LE(e.first, 803u) << "no entry may come from a height the chain no longer has";
+  // The overlapping heights are the same numbers either way — reconstruction
+  // is a function of chain state, not of the path taken to reach it.
+  for (const auto& e : at_803)
+    for (const auto& f : at_806)
+      if (e.first == f.first)
+        ASSERT_EQ(e.second, f.second) << "height " << e.first << " priced differently after a pop";
 }
 
 TEST(fee_2021_scaling, rounding)

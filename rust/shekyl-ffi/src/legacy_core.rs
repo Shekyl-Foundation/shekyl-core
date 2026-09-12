@@ -760,6 +760,49 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
     0
 }
 
+/// FL-R23 admission: `fee >= mask_round_up(weight · min(floors)) − slack`.
+///
+/// `floors` is the daemon's `(h′−G ..= h′)` window of relay floors — up to
+/// `G + 1` values; only the minimum is read, so order is not part of the
+/// contract. A window shorter than `G + 1` is STRICTER, never looser (the
+/// minimum over fewer values is larger), so an unwarmed ring degrades to
+/// pre-FL-R23 behaviour rather than to something exploitable; an EMPTY
+/// window refuses, because no floor is not a floor of zero.
+///
+/// `slack_bp` is [`shekyl_economics::RELAY_ADMISSION_SLACK_BP`] = 0 at the
+/// only production call site; it crosses the ABI as a parameter so that
+/// re-introducing a buffer is a constant edit on the C++ side and not a
+/// signature change here.
+///
+/// Returns `1` admitted, `0` refused, `-1` for a null `floors` with a
+/// non-zero `floors_len` (a zero-length window is a refusal, not a fault).
+///
+/// # Safety
+///
+/// `floors` must point at `floors_len` readable `u64`s, or be null with
+/// `floors_len == 0`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_relay_floor_admits(
+    fee: u64,
+    weight: u64,
+    mask: u64,
+    floors: *const u64,
+    floors_len: usize,
+    slack_bp: u32,
+) -> i32 {
+    let window: &[u64] = if floors_len == 0 {
+        &[]
+    } else if floors.is_null() {
+        return -1;
+    } else {
+        // SAFETY: non-null and `floors_len` readable per the contract above.
+        unsafe { core::slice::from_raw_parts(floors, floors_len) }
+    };
+    i32::from(shekyl_economics::relay_floor_admits(
+        fee, weight, mask, window, slack_bp,
+    ))
+}
+
 /// Advance `already_generated_coins` by a block reward.
 ///
 /// One entry point for both C++ connect paths (main-chain and alt-chain),

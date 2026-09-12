@@ -311,6 +311,19 @@ uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
+// FL-R23 admission: fee >= mask_round_up(weight * min(floors)) - slack_bp.
+// floors is the (h'-G ..= h') window of relay floors (<= G+1 values; only the
+// minimum is read). A short window is STRICTER, never looser; an empty window
+// refuses. slack_bp is SHEKYL_RELAY_ADMISSION_SLACK_BP (0) at the daemon's
+// call site. Returns 1 admit, 0 refuse, -1 null floors with floors_len != 0.
+int32_t shekyl_relay_floor_admits(
+    uint64_t fee,
+    uint64_t weight,
+    uint64_t mask,
+    const uint64_t* floors,
+    size_t floors_len,
+    uint32_t slack_bp);
+
 // The FL-R20 relay floor F(h) = R*C*w_ref/M^2, floored at 1 - what check_fee
 // prices admission from AND, by identity, the estimate's economy rung
 // (shekyl_corrected_fee_ladder's out_fees[0] at the same operands). FL-R21

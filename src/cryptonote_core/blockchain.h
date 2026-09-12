@@ -636,6 +636,62 @@ namespace cryptonote
     uint64_t fee_correction_at(uint64_t db_height, uint64_t already_generated_coins) const;
 
     /**
+     * @brief C from an explicitly supplied volume window (the one derivation)
+     *
+     * fee_correction_at reads the memoized window for the tip; the FL-R23 cold
+     * rebuild has G + 1 historical windows from one prefix-sum scan and hands
+     * each in here, so both paths share one body.
+     */
+    uint64_t fee_correction_from(uint64_t height, uint64_t already_generated_coins,
+        const shekyl::tx_volume_window& tx_volume) const;
+
+    /**
+     * @brief F(height) = R * C * w_ref / M^2, floored at 1 — THE definition
+     *
+     * One body for the warm ring push, the cold rebuild and
+     * get_current_fee_per_byte, so a warm node and a restarted node cannot
+     * compute different floors for the same height. @p long_term_median is
+     * M(height): the un-graced long-term effective median AT that height.
+     * The reward's block-weight penalty is inert at weight 1 (it returns the
+     * amount unchanged whenever weight <= median), so R needs no historical
+     * median — only already_generated_coins.
+     *
+     * @return false if the block reward could not be computed (the caller
+     *   leaves that height OUT of the ring — a shorter window is stricter,
+     *   and a 0 floor would admit everything)
+     */
+    bool relay_floor_at(uint64_t height, uint64_t long_term_median,
+        uint64_t already_generated_coins, const shekyl::tx_volume_window& tx_volume,
+        uint64_t& floor) const;
+
+    /**
+     * @brief rebuild the FL-R23 ring from chain history at @p tip_height
+     *
+     * The COLD path (startup, pop, reorg) — a workaround with a trigger, not
+     * architecture (FOLLOWUPS FL-R3-STORE). Two terms in two units: one scan
+     * of `720 + G` block blobs, parsed, for the G + 1 volume windows via
+     * prefix sums; plus ~100 000 long-term-weight FIELD reads to seed a rolling
+     * median that is then stepped forward G times (one insert, one median per
+     * step). Once both quantities are stored per block this is G + 1 field
+     * reads and this function is deleted.
+     */
+    void rebuild_relay_floor_ring(uint64_t tip_height);
+
+    /**
+     * @brief push F(tip) onto the ring if it continues the ring, else rebuild
+     */
+    void advance_relay_floor_ring(uint64_t tip_height);
+
+    /**
+     * @brief read-only view of the FL-R23 ring: (height, F) oldest first
+     *
+     * Observability, like get_current_fee_per_byte — not a test hook behind an
+     * ifdef, which would give this class two definitions across translation
+     * units. The warm/cold equality test reads it; so can an operator.
+     */
+    std::vector<std::pair<uint64_t, uint64_t>> relay_floor_ring() const;
+
+    /**
      * @brief the three-tier estimate with its inputs supplied rather than read
      *
      * Same computation as the overload below, for a caller that already holds
@@ -1265,6 +1321,20 @@ namespace cryptonote
     epee::critical_section m_difficulty_lock;
     crypto::hash m_difficulty_for_next_block_top_hash;
     difficulty_type m_difficulty_for_next_block;
+
+    // FL-R23 relay-floor ring: (height, F(height)) for the last G + 1 tips,
+    // newest at the back. check_fee admits against min(F) over this window.
+    //
+    // Written ONLY by update_next_cumulative_weight_limit, which every
+    // tip change reaches (connect, pop, reorg, init): pushed when the ring's
+    // top is the new tip's predecessor, rebuilt from chain history otherwise.
+    // A pure function of chain state — every node at the same tip holds the
+    // same G + 1 values — which is what makes the admission rule
+    // deterministic across nodes; the warm push and the cold rebuild are
+    // asserted equal by fee_2021_scaling.warm_ring_equals_cold_reconstruction.
+    // Read under m_tx_volume_window_lock, the memo it sits beside.
+    struct relay_floor_entry { uint64_t height; uint64_t floor; };
+    std::deque<relay_floor_entry> m_relay_floor_ring;
 
     // Memo for get_tx_volume_window, keyed on (top block hash, height) so
     // it is a memoization of a pure function of chain state and never a
