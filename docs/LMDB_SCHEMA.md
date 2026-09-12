@@ -1,7 +1,7 @@
 # LMDB Schema Reference
 
 **Last updated:** August 2026
-**DB version:** 12 (schema v12: the prune-watermark receipt — `properties` key `archival_prune_watermark_epoch`, the pop floor's source (C2-R1b-Q1c); a v11 datadir pruned without receipts and is refused; v11: `prune_tx_data` retention corrected — the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths`, the pruned-txid operands, when it drops the prunable body; a v10-pruned datadir may lack them and is refused; v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
+**DB version:** 13 (schema v13: `EndpointUpdate` — the `archival_bond` value v6 → v7 gains the 32-byte serving `endpoint` and the per-kind `archival_bond_endpoint_update_log` journal is born (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D12`); a v12 datadir's records fail the value's version pin and the datadir is refused; v12: the prune-watermark receipt — `properties` key `archival_prune_watermark_epoch`, the pop floor's source (C2-R1b-Q1c); a v11 datadir pruned without receipts and is refused; v11: `prune_tx_data` retention corrected — the depth pass keeps `txs_prunable_hash` and `txs_pqc_auths`, the pruned-txid operands, when it drops the prunable body; a v10-pruned datadir may lack them and is refused; v10: serve-credit key widened 48 → 56 B — `BE(block_height)` appended, one row per challenge (PC-D4) — with the additive `archival_settlement` table riding the boundary; v9: block header gains `attestation_root` (+32 B block blob), witness tables ride; v8: persisted pop-symmetric frozen-shard counter; v7: composite-key pending/drain tables, output↔leaf mapping)
 **Source:** `src/blockchain_db/lmdb/db_lmdb.cpp`, `src/blockchain_db/lmdb/db_lmdb.h`, `src/blockchain_db/blockchain_db.h`, `src/blockchain_db/shekyl_types.h`
 
 ## Conventions
@@ -453,33 +453,40 @@ once (`SO-D4.3`).
 
 Gate-4 `ArchivalBondRecord` substrate for serve-credit and emission reads
 (`ARCHIVAL_CONSENSUS_STATE.md` §3.4). Written on JoinMarket bond-post connect
-(gate-4 §3.4.1).
+(gate-4 §3.4.1); the serving `endpoint` it carries is the one field a later
+`EndpointUpdate` connect rotates in place (`ARCHIVAL_ENDPOINT_UPDATE.md`
+`EU-D12`), with the previous value journaled per kind for the pop.
 
 | Property | Value |
 |---|---|
 | LMDB name | `"archival_bond"` |
 | Flags | `MDB_CREATE` |
 | Key | `P_id[32]` (`P_canonical_id`) |
-| Value | versioned `ArchivalBondValue` blob (v4 only at genesis: hybrid pubkey, **`bond_spend_pk`** (GF-1 debit authorizer, gate-4 §4.1), `E_join`, `bonded_total_atomic`, `holdings_kind`, shard set or CompleteTree sentinel, bad intervals, claimed settlement epochs, `first_paying_emission_height`; v1–v3 decode rejected) |
-| Writers | `put_archival_bond_record` (join/re-bond connect), `remove_archival_bond_record` (reorg) |
-| Readers | `get_archival_bond_hybrid_pubkey`, `archival_bond_join_epoch`, `archival_bond_good_through`, `archival_bond_holds_shard` |
+| Value | versioned `ArchivalBondValue` blob (v7 at genesis: hybrid pubkey, **`bond_spend_pk`** (GF-1 debit authorizer, gate-4 §4.1), **`endpoint`** (32-byte serving endpoint, `EU-D3`/`EU-D12`), `E_join`, `bonded_total_atomic`, `holdings_kind`, shard set or CompleteTree sentinel with the index-parallel per-shard add-epochs (v6), bad intervals, claimed settlement epochs, `first_paying_emission_height`; every earlier version is rejected at decode) |
+| Writers | `put_archival_bond_record` (JoinMarket connect), `put_archival_bond_value` (every load-modify-store writer: slash apply/revert, Release, HoldingsUpdate, Rebond, and `apply_archival_endpoint_update` / `revert_archival_endpoint_updates_at_height` for the endpoint), `remove_archival_bond_record` (JoinMarket pop) |
+| Readers | `get_archival_bond_value`, `get_archival_bond_hybrid_pubkey`, `archival_bond_join_epoch`, `archival_bond_good_through`, `archival_bond_holds_shard` |
 | Encoder | `shekyl::db::ArchivalBondValue` in `blockchain_db/shekyl_types.h` |
 | Introduced | HF1 (gate-4 substrate; gate-2 §5.3 steps 2–3 reads) |
 
-v4 layout (`REWARD_EMISSION_LEG.md` §6.2/§6.3, pinned 2026-06-11; `bond_spend_pk`
-amended in per `ARCHIVAL_BOND_GATE4.md` §4.1, 2026-06-16 — committed at JoinMarket,
-immutable, and bound into the bond-post sig-preimage (gate-4 §3.4.1), so the
-persisted record must carry it. Pre-genesis amendment: no migration, reset
-data-dir per the v4 posture; the field is in the genesis v4, not a v5 bump):
+v7 layout. v4 (`REWARD_EMISSION_LEG.md` §6.2/§6.3, pinned 2026-06-11) appended
+the claimed-epoch set and `first_paying_emission_height`; v5 (`ARCHIVAL_BOND_GATE4.md`
+§4.1, 2026-06-16) inserted `bond_spend_pk` — committed at JoinMarket, immutable,
+and bound into the bond-post sig-preimage (gate-4 §3.4.1), so the persisted
+record must carry it; v6 (gate-4 §4.4, HoldingsUpdate) added the per-shard
+add-epochs under the holdings count; v7 (`ARCHIVAL_ENDPOINT_UPDATE.md`
+`EU-D12`, 2026-09-12) inserted the serving `endpoint` after `bond_spend_pk`.
+Every bump is pre-genesis: no migration, reset the data-dir; `decode` rejects
+any other version byte.
 
 ```text
-u8  version (= 4)
+u8  version (= 7)
 u16 BE pubkey_len ‖ pubkey bytes              (≤ 2048)   // P_pubkey (account identity)
 u16 BE bond_spend_pk_len ‖ bond_spend_pk      (≤ 2048)   // GF-1 debit authorizer (gate-4 §4.1); committed at JoinMarket, immutable
+u8[32] endpoint                                          // serving endpoint (EU-D3); committed at JoinMarket, rotated by EndpointUpdate (EU-D12)
 u64 BE join_settlement_epoch
 u64 BE bonded_total_atomic
 u8  holdings_kind (0 = shard set, 1 = CompleteTree)
-u32 BE holdings_count ‖ u64 BE shard ids      (≤ 4096)
+u32 BE holdings_count ‖ u64 BE shard ids ‖ u64 BE shard add-epochs   (≤ 4096; both arrays under the ONE count, index-parallel — v6)
 u32 BE bad_interval_count ‖ (u64 BE start, u64 BE end_exclusive) pairs (≤ 256)
 u32 BE claimed_count ‖ u64 BE claimed epochs  (≤ 32 = W + 6, strictly
                                                increasing, span ≤ W)
@@ -652,15 +659,16 @@ Per-block revert journal for slash connect / `pop_block` (gate-2 §8).
 | Readers | `revert_archival_slashes_at_height` |
 | Introduced | HF1 (gate-2 §10 step 4) |
 
-### The four pre-image journals
+### The five pre-image journals
 
 `archival_emission_claim_log`, `archival_bond_unbond_log`,
-`archival_bond_holdings_update_log`, and `archival_bond_rebond_log` share
+`archival_bond_holdings_update_log`, `archival_bond_rebond_log`, and
+`archival_bond_endpoint_update_log` share
 the slash log's row layout and the height-keyed journal scaffold in
 `db_lmdb.cpp` (`archival_journal_{next_seq,put,read,delete}`): key
 `BE(block_height) ‖ BE(seq)` (12 bytes; each key type is an alias of
 `ArchivalSlashLogKey`), seq dense from 0 per height, read-to-first-gap on
-pop, restore in reverse connect order, then delete `[0, count)`. All four
+pop, restore in reverse connect order, then delete `[0, count)`. All five
 key on the **block INDEX** `N = removed_block_height − 1` (F-B5b "convert,
 don't unify"), unlike the slash/close hooks, which take the post-block
 height. None uses the slash log's `0xFFFFFFFF` epoch-marker sentinel — that
@@ -745,6 +753,29 @@ closed (`FATAL: archival rebond revert interval desync` otherwise).
 | Value | `ArchivalBondRebondRevertValue` v1, variable: `version[1] \|\| p_id[32] \|\| BE(pre_bonded_total)[8] \|\| BE32(closed_interval_index) \|\| BE(closed_interval_start)[8] \|\| BE32(shard_count) \|\| BE(pre_shard_ids[]) \|\| BE(pre_shard_add_epochs[])` (57 + 16·shards bytes; `pre_bonded_total == 0` is LEGAL — a terminal-slash reinstatement starts from a zero-balance record) |
 | Writers | `apply_archival_rebond` via the shared bond-record scaffold, the revert's clear |
 | Readers | `revert_archival_rebonds_at_height` |
+
+### `archival_bond_endpoint_update_log`
+
+Per-block journal for the EndpointUpdate connect's record pre-image
+(`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D12`). Its own table rather than a row
+kind folded into the record's other journaling — Rick's ruling: *"a pop bug
+that crosses fields turns a rotation into a value error. Per-kind isolation
+is what keeps the mutation classes apart."* The connect mutates exactly one
+field, `endpoint`, so the row is that field and the record identity and
+nothing else; the pop restores the endpoint and leaves balance, holdings,
+add-epochs and intervals as the tip has them, by construction. Field-disjoint
+from every other journal, so its position among the pop-side reverts is free
+(stated at `BlockchainDB::pop_block`).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"archival_bond_endpoint_update_log"` |
+| Flags | `MDB_CREATE` |
+| Key | `BE(block_height) \|\| BE(seq)` (12 bytes) |
+| Value | `ArchivalBondEndpointUpdateRevertValue` v1, fixed: `version[1] \|\| p_id[32] \|\| pre_endpoint[32]` (65 bytes exactly; a zero pre-endpoint is a value the record can hold and round-trips) |
+| Writers | `apply_archival_endpoint_update`, the revert's clear |
+| Readers | `revert_archival_endpoint_updates_at_height` |
+| Introduced | schema v13 (`EndpointUpdate` B+C1, 2026-09-12) |
 
 ### `archival_attestation_witness`
 
@@ -1126,7 +1157,7 @@ General key-value store for database-level metadata.
 
 ## Sub-database total
 
-Total: **49 sub-databases**. The single source of truth is the
+Total: **50 sub-databases**. The single source of truth is the
 `SHEKYL_LMDB_TABLES` X-macro list in `db_lmdb.cpp`; its derived
 `kLmdbTableCount` is what `mdb_env_set_maxdbs` receives (`SO-D4`,
 `ARCHIVAL_SETTLEMENT_WRITER.md`), so the count is exact by construction with
@@ -1207,6 +1238,17 @@ keeps a v11 binary — which reads no receipts — out of a v12 datadir it
 could otherwise pop past. Delete and resync. No table is added; one
 `properties` key is minted, written only by `prune_archival_epochs_before`
 in the same write txn as the deletions it receipts.
+
+### Schema v12 → v13 (breaking, no migration path)
+
+DB v13: `EndpointUpdate` (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D12`, 2026-09-12)
+— layout. The `archival_bond` value moves v6 → v7, inserting the 32-byte
+serving `endpoint` after `bond_spend_pk` (committed at JoinMarket from the
+vin's `EU-D3` field, rotated in place by an EndpointUpdate connect), and the
+per-kind `archival_bond_endpoint_update_log` journal is born. Every v12
+record fails the value codec's version pin, so a v12 datadir cannot be read
+by a v13 binary and is refused at open rather than mis-decoded. Pre-genesis:
+delete and resync.
 
 `BlockchainLMDB::migrate` refuses any pre-`VERSION` database with a message
 that tracks the constant, so each bump extends the refusal automatically.

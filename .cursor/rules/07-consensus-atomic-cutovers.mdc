@@ -277,12 +277,16 @@ invocations:
   arm writes the endpoint), `src/blockchain_db/blockchain_db.cpp`
   (add/pop arms), `src/blockchain_db/lmdb/db_lmdb.cpp` (`VERSION`,
   the new table, put/remove), `src/blockchain_db/shekyl_types.h`
-  (`kVersion`, column, journal entry), `src/fcmp/ct_semantics.cpp`
-  (kind marshaled to the balance FFI),
-  `rust/shekyl-archival-retention/src/{bond_wire,bond_post,bond_connect,debit_auth}.rs`,
+  (`kVersion`, column, journal entry),
+  `src/cryptonote_core/tx_verification_utils.cpp` (the kind selects
+  the balance check), `src/fcmp/ct_semantics.cpp` (the no-term
+  balance through its own FFI entry — no kind byte crosses the
+  boundary, so the emission caller is untouched),
+  `rust/shekyl-archival-retention/src/{bond_wire,bond_post,bond_ct_balance,debit_auth}.rs`,
   `rust/shekyl-ffi/src/archival_ffi/{bond,ct_balance,codes}.rs`,
   `rust/shekyl-wire/src/transaction.rs`. **Mechanical:**
-  `src/shekyl/shekyl_ffi.h` (decls), the submit verifier's refusal
+  `src/shekyl/shekyl_ffi.h` (decls), `src/fcmp/ct_semantics.h`,
+  the DB interface headers, the submit verifier's refusal
   message, the JoinMarket producer in `shekyl-engine-core` and the
   `OnionIdentity` accessor in `shekyl-tor-control-client`, test
   fixtures, `scripts/ci/check_debit_auth_single_source.sh` rows,

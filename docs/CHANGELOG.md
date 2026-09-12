@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`EndpointUpdate` — bond-post kind 4 (`ARCHIVAL_ENDPOINT_UPDATE.md`,
+  B+C1, one PR under rule 07).** A bonded `P` rotates its serving endpoint
+  under cold authority. The wire is exactly the endpoint — `hybrid_public_key ‖
+  p_canonical_id ‖ post_kind ‖ endpoint` — with four presence couplings
+  enforced at every serializer (Rust bond wire, `shekyl-wire`, and the C++
+  binary/boost/JSON codecs): `bond_spend_pk` iff JoinMarket; endpoint iff
+  JoinMarket ∨ EndpointUpdate (`EU-D3`, so JoinMarket now commits one); and
+  holdings and the amount term absent iff EndpointUpdate (`EU-D11`, a kind-4
+  vin carrying either fails to parse, not to verify). `verify_endpoint_update`
+  is the only verify accepting `credit == debit == 0` and refuses a missing
+  or zero-bonded record (`EU-D7`); the CT balance is the no-term equation
+  through its own FFI entry. `requires_cold_authority` gains `EndpointUpdate
+  ⇒ always` (`EU-D2`; the C++ arm pins before it verifies, and the
+  single-source gate asserts the call). The `archival_bond` record gains the
+  endpoint (`kVersion` 6 → 7) and a per-kind
+  `archival_bond_endpoint_update_log` journal restores it on pop
+  (`EU-D12`); LMDB schema 12 → 13 (pre-genesis: delete and resync).
+  `OnionIdentity::public_key` supplies the endpoint to the JoinMarket
+  producer. STAGED (rule 23): a callee-without-caller until D lands the
+  wallet producer and, with it, `PENDING_POST_VERSION` 10 → 11 (`EU-D13`).
+  `EU-D9`'s laundering KATs: (a) the record after a rotation differs from
+  before only in the endpoint, structurally; (b) a rotation inside the
+  failure window does not reset it. Census row CEN-J27 minted with the arm.
+
 ### Changed
 
 - **The cold-authority selector for bond-posts is one Rust predicate.**

@@ -415,9 +415,11 @@ combination is unrepresentable in memory rather than refused later.
 `verify_endpoint_update` is the only verify that accepts
 `credit == debit == 0`; `BondTerm` itself is unchanged — a representable
 zero term would undo what `NonZeroAtomicUnits` exists to prevent. The CT
-balance for kind 4 is the plain equation with no bond term (`post_kind` is
-marshaled into `shekyl_archival_verify_bond_post_ct_balance` so the arm can
-select it).
+balance for kind 4 is the plain equation with no bond term, through its own
+FFI entry (`shekyl_archival_verify_endpoint_update_ct_balance`); the C++
+bond-post caller selects the entry by `post_kind`, so no kind byte and no
+term operands cross the boundary on the kind-4 path (see §15 for the
+alternative this replaced).
 
 **And holdings / `bonded_total_atomic` are absent too.** Both fields are
 unconditional on the wire today and A did not rule them for kind 4. Ruled
@@ -484,6 +486,11 @@ history is in PR #712, not here.
 - **Fold the endpoint pre-image into bond-record journaling** — rejected
   (B sweep, 2026-09-12): puts endpoint restoration on the value/holdings
   restore path. Per-kind table (`EU-D12`).
+- **A `post_kind` byte on the shared bond-post CT-balance export** —
+  superseded (B, `228546879`): the export's other caller is the
+  reward-emission arm, which is not a bond post and has no kind to pass, so
+  the byte would have been an untyped sentinel in consensus code. The kind-4
+  shape has its own FFI entry and the C++ caller selects by kind (`EU-D11`).
 
 ---
 

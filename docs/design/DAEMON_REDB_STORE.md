@@ -81,9 +81,9 @@ the other stamped figures are unre-measured and keep the Round-2 pin.
 
 | Fact | Measurement |
 | --- | --- |
-| Live `MDB_dbi` table handles in `db_lmdb.h` | **49** (1:1 with opens; was 46 at the Round-2 pin — the three births are in the P0a registry below) |
-| `lmdb_db_open(` **call** sites (macro path) | **49** — the 50th `rg` hit is the **function definition**, not an open (the pin-era shape R2-3 ruled on: N calls + 1 definition; was 46+1) |
-| `docs/LMDB_SCHEMA.md` claimed total | **49** — **current and gate-pinned** (`check_lmdb_schema_coverage.py`; claimed 41 at the Round-2 pin) |
+| Live `MDB_dbi` table handles in `db_lmdb.h` | **50** (1:1 with opens; was 46 at the Round-2 pin — the three births to the P0a pin are in the registry below, and `archival_bond_endpoint_update_log` was born after it, 2026-09-12) |
+| `lmdb_db_open(` **call** sites (macro path) | **50** — the 51st `rg` hit is the **function definition**, not an open (the pin-era shape R2-3 ruled on: N calls + 1 definition; was 46+1) |
+| `docs/LMDB_SCHEMA.md` claimed total | **50** — **current and gate-pinned** (`check_lmdb_schema_coverage.py`; claimed 41 at the Round-2 pin) |
 | Tables in code, **0 hits** in schema doc | **none** (P0a, 2026-09-05). At the Round-2 pin these **seven** had zero hits: `block_burn`, `archival_budget`, `archival_budget_accrual`, `archival_bond_unbond_log`, `archival_bond_rebond_log`, `archival_bond_holdings_update_log`, **`archival_emission_claim_log`** — all documented since (`2572e6f5b`, 2026-08-25 — the commit that landed all seven sections and the coverage gate; the gate's header dates its census 2026-08-26, the same moment in UTC, and counts **nine** = these seven + the two witness tables born 2026-08-04) |
 | Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion, and the gate's ghost leg refuses their return |
 | `m_db->` sites / distinct methods | **253** in `blockchain.cpp`; **97** distinct methods (same 97 across all files — no extra methods outside that vocabulary) |
@@ -156,7 +156,7 @@ born 2026-08-04 (between pin and census) and undocumented at birth.
 Phantoms at HEAD: **0** — both lost their sections with the claim-era
 wire deletion, and the gate's ghost leg refuses their return.
 
-**49 rows**, one per **declared** table (declared, not runtime — a writable
+**50 rows**, one per **declared** table (declared, not runtime — a writable
 `open()` drops `hf_starting_heights`, leaving 48; DRS-W5); dispositions
 count 39 documented-at-pin
 + 7 since-documented + 3 born-since:
@@ -167,6 +167,7 @@ count 39 documented-at-pin
 | `archival_alt_attestation_witness` | born since pin — `3dee502595` (2026-08-04, credit-wire PR-B2; schema v9) |
 | `archival_attestation_witness` | born since pin — `a308eb430a` (2026-08-04, credit-wire PR-B2; schema v9) |
 | `archival_bond` | in code at pin, documented at pin |
+| `archival_bond_endpoint_update_log` | born since pin — `EndpointUpdate` B+C1 (2026-09-12, `ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D12`; schema v13), documented in the PR that created it |
 | `archival_bond_holdings_update_log` | in code at pin, **undocumented** at pin (Round-2 row above); section added post-pin in `2572e6f5b` (2026-08-25 — the one commit that landed all seven sections and the coverage gate) |
 | `archival_bond_rebond_log` | in code at pin, **undocumented** at pin (Round-2 row above); section added post-pin in `2572e6f5b` (2026-08-25 — the one commit that landed all seven sections and the coverage gate) |
 | `archival_bond_unbond_log` | in code at pin, **undocumented** at pin (Round-2 row above); section added post-pin in `2572e6f5b` (2026-08-25 — the one commit that landed all seven sections and the coverage gate) |
