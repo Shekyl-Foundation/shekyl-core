@@ -762,11 +762,11 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
 
 /// FL-R23 admission: `fee >= mask_round_up(weight · min(floors)) − slack`.
 ///
-/// `floors` is the daemon's `(h′−G ..= h′)` window of relay floors — up to
-/// `G + 1` values; only the minimum is read, so order is not part of the
-/// contract. A window shorter than `G + 1` is STRICTER, never looser (the
-/// minimum over fewer values is larger), so an unwarmed ring degrades to
-/// pre-FL-R23 behaviour rather than to something exploitable; an EMPTY
+/// `floors` is the daemon's `(h′−G ..= h′)` window of relay floors — at
+/// most `G + 1` values; only the minimum is read, so order is not part of
+/// the contract. A window shorter than `G + 1` is STRICTER, never looser
+/// (the minimum over fewer values is larger), so an unwarmed ring degrades
+/// to pre-FL-R23 behaviour rather than to something exploitable; an EMPTY
 /// window refuses, because no floor is not a floor of zero.
 ///
 /// `slack_bp` is [`shekyl_economics::RELAY_ADMISSION_SLACK_BP`] = 0 at the
@@ -774,8 +774,17 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
 /// re-introducing a buffer is a constant edit on the C++ side and not a
 /// signature change here.
 ///
+/// The window is read as BYTES through the crate's FFI-read seam
+/// ([`slice_from_ptr`], SA-R-7) and re-formed into `u64`s here, rather than
+/// through a `u64` `from_raw_parts` of its own: the seam owns the null,
+/// zero-length and `isize::MAX` preconditions once, and the boundary
+/// ratchet keeps the count of sites that re-own them from growing. The
+/// re-formed window lives in a bounded array — no allocation on the
+/// admission path — so a `floors_len` above `G + 1` is refused as a
+/// caller fault rather than read.
+///
 /// Returns `1` admitted, `0` refused, `-1` for a null `floors` with a
-/// non-zero `floors_len` (a zero-length window is a refusal, not a fault).
+/// non-zero `floors_len`, or a `floors_len` above `G + 1`.
 ///
 /// # Safety
 ///
@@ -790,16 +799,34 @@ pub unsafe extern "C" fn shekyl_relay_floor_admits(
     floors_len: usize,
     slack_bp: u32,
 ) -> i32 {
-    let window: &[u64] = if floors_len == 0 {
-        &[]
-    } else if floors.is_null() {
+    const MAX_WINDOW: usize = shekyl_economics::RELAY_FLOOR_LOOKBACK + 1;
+    if floors_len > MAX_WINDOW {
         return -1;
-    } else {
-        // SAFETY: non-null and `floors_len` readable per the contract above.
-        unsafe { core::slice::from_raw_parts(floors, floors_len) }
+    }
+    let Some(byte_len) = floors_len.checked_mul(core::mem::size_of::<u64>()) else {
+        return -1;
     };
+    // SAFETY: the caller's contract (above) is exactly the seam's — `floors`
+    // addresses `floors_len` u64s, i.e. `byte_len` bytes, or is null with a
+    // zero length.
+    let Some(bytes) = (unsafe { slice_from_ptr(floors.cast::<u8>(), byte_len) }) else {
+        return -1;
+    };
+    let mut window = [0u64; MAX_WINDOW];
+    for (slot, chunk) in window
+        .iter_mut()
+        .zip(bytes.chunks_exact(core::mem::size_of::<u64>()))
+    {
+        // `chunks_exact(8)` yields exactly 8-byte chunks; the conversion
+        // cannot fail, and the daemon wrote these as native u64s.
+        *slot = u64::from_ne_bytes(chunk.try_into().expect("chunks_exact yields 8-byte chunks"));
+    }
     i32::from(shekyl_economics::relay_floor_admits(
-        fee, weight, mask, window, slack_bp,
+        fee,
+        weight,
+        mask,
+        &window[..floors_len],
+        slack_bp,
     ))
 }
 
