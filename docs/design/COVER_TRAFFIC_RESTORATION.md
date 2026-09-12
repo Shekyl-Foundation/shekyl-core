@@ -1264,7 +1264,21 @@ and 44 % of the dual-zone ceiling (16 384 B/s). Per-flow intervals sit in
 `U[3333, 6667]`; the merged histogram's `below_min` pile is the four-channel
 metronome the method already refuses. B − A is B (Arm A is still
 `windows=0` under the 29-byte parse). Defects 1 and 2: not observed.
-Arm C (loaded) is still unrun.
+
+**Arm C (2026-09-12, seedusw, v3.1.0-alpha.8, carrier ARMED, transacting).**
+`sudo timeout 7200 tcpdump -i lo -s 0 -w /tmp/arm-c.pcap 'tcp and dst port 9050'`:
+first packet 16:33:52Z, last 18:33:25Z, span 7173 s, 5381 packets.
+Miner self-transfers every 60 s through the local daemon (153 `ACCEPTED`
+in the capture window). Counter: `windows=2577 payload_bytes=52776960
+duration_s=6758 rate_Bps=7809`. That is 95 % of the Tor-only two-channel
+mean and 48 % of the dual-zone ceiling. Window-span is 415 s shorter than
+the capture because the last bound flow ended before tcpdump did; the
+wall-clock rate against the packet span is 7358 B/s. Per-flow:
+`below_min=0 in_jitter=2563 above_jitter=9`, medians ~5.0 s, no flow
+sustained above 6145 B/s (max flow-average 3413 B/s). In-band 250 ms
+histogram is the same flat `U[3333, 6667]` as Arm B. C vs B aggregate
+rate moved with occupancy (more overlapping flows, a shorter idle tail),
+not with interval law. Defect 3: not observed.
 
 **Window: 2 hours per arm.** The relative standard error of the aggregate rate
 is `0.0963/√n` per channel, with four channels at a 5 s mean: ~5 min resolves a
