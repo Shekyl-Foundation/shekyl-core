@@ -368,7 +368,7 @@ closed.
 | **UNREVIEWED** | no conformance check on record — **the default** | **regression only** |
 
 **DRS-P0f row coverage is COMPLETE OVER THE 2026-09-02 SET** (slices 1–8, all at the
-shas pinned per slice): the **102** bucket-1/2 rows that existed when P0f ran have a recorded disposition. **That denominator has since grown:** C2-R1b promoted **nine** rows into bucket 2 on 2026-09-03 and C2-R1c **ten** more on 2026-09-04 (nine promotions plus the CEN-K1 → K1a/K1b split), and CEN-I19 was minted into bucket 1 on 2026-09-06 with its implementation, so the current bucket-1/2 set is **130** (counted from the census bucket column, 2026-09-11: 87 b1 + 43 b2) — and **as of slice 10 (2026-09-12) every one of them carries a record: the set-difference is ZERO.** CSR-3a's set-growth obligation fired for the first time when that gap opened at twenty-seven, and slices 9 and 10 closed it (eleven `CEN-K` rows, then the sixteen non-K remainder). **Counted from the rows of this register, not carried from the prior figure: 130 recorded = 127 CHECKED-CONFORMANT + 2 DIVERGENT + 1 UNREVIEWED.** The 2 DIVERGENT are CEN-G6/CEN-G6b (ratified surge factor `S = 4`, shipped `50`) and the 1 UNREVIEWED is CEN-L8, failed closed on an unwired clause — so **UNREVIEWED by absence is now zero, and the only UNREVIEWED row is one that says why.** Disposition of the 102 — **100 CHECKED-CONFORMANT**, **1 DIVERGENT** (CEN-B5, the
+shas pinned per slice): the **102** bucket-1/2 rows that existed when P0f ran have a recorded disposition. **That denominator has since grown:** C2-R1b promoted **nine** rows into bucket 2 on 2026-09-03 and C2-R1c **ten** more on 2026-09-04 (nine promotions plus the CEN-K1 → K1a/K1b split), and CEN-I19 was minted into bucket 1 on 2026-09-06 with its implementation, so the current bucket-1/2 set is **130** (counted from the census bucket column, 2026-09-11: 87 b1 + 43 b2) — and **as of slice 10 (2026-09-11) every one of them carries a record: the set-difference is ZERO.** CSR-3a's set-growth obligation fired for the first time when that gap opened at twenty-seven, and slices 9 and 10 closed it (eleven `CEN-K` rows, then the sixteen non-K remainder). **Counted from the rows of this register, not carried from the prior figure: 130 recorded = 127 CHECKED-CONFORMANT + 2 DIVERGENT + 1 UNREVIEWED.** The 2 DIVERGENT are CEN-G6/CEN-G6b (ratified surge factor `S = 4`, shipped `50`) and the 1 UNREVIEWED is CEN-L8, failed closed on an unwired clause — so **UNREVIEWED by absence is now zero, and the only UNREVIEWED row is one that says why.** Disposition of the 102 — **100 CHECKED-CONFORMANT**, **1 DIVERGENT** (CEN-B5, the
 rule-71 FAKECHAIN skip, which census R9 owns),
 **1 failed closed to UNREVIEWED**
 (CEN-L8, whose settlement clause names an unwired writer; CEN-I12 failed closed the same way until its anchor source was reconciled — re-reviewed and promoted 2026-09-05). UNREVIEWED remains
@@ -723,7 +723,7 @@ PR #702 and is not rewritten here — if its landed figure disagrees with the
 ##### P0f slice 10 — the non-K backlog remainder (16 rows) — **the backlog closes**
 
 Reviewed at **`eb1b60198`** (2026-09-11), the `dev` tip that merged PR #699 —
-the same pin slice 9 used. Appended 2026-09-12, after PR #705 merged; the pin is
+the same pin slice 9 used. Appended 2026-09-11, after PR #705 merged; the pin is
 the sha the code was READ at and does not move on the append.
 
 **Scope basis, derived rather than asserted, and re-derived at append time:**

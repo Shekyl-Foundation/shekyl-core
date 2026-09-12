@@ -160,6 +160,29 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_index_prefix_uniqueness.py
 
+      - name: Run conformance-coverage gate
+        # Every RATIFIED consensus rule (census bucket 1/2) must carry a
+        # conformance record in CONSENSUS_STORE_RECONCILIATION.md §5.4.1, and
+        # the register must not reach outside that set. Counting register rows
+        # proves SELF-CONSISTENCY, never COVERAGE — an absent row has no id to
+        # count — and the ratified denominator has already moved four times,
+        # each move silently reopening a backlog someone had just called closed.
+        # Buckets 3/4 are UNREVIEWED by construction and are NOT demanded.
+        # Instance of 47-gate-subject-assertion.mdc: both parses assert their
+        # own subject, and each side counts its own dropped ids, because an
+        # id-recognition bug that hits BOTH documents equally is invisible to a
+        # set difference.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_conformance_coverage.py
+
+      - name: Run conformance-coverage gate self-test
+        # Bitten red in both directions, plus the symmetric-drop case the
+        # comparison alone cannot see. Fixtures are deliberately multi-shape:
+        # #704's defects were all at INTERSECTIONS of axes, and its root cause
+        # was single-section fixtures making a limb untestable by their shape.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_conformance_coverage.py
+
       - name: Run index table-shape check
         # GFM drops a surplus cell and blanks a missing one, so a malformed row
         # says one thing in source and another on the page — 5,455 characters
