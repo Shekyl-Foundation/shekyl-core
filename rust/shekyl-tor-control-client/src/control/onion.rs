@@ -283,13 +283,13 @@ impl OnionFlags {
 ///
 /// # Why this matters for a shard-serving persona
 ///
-/// A shard read is a ~100-byte request answered with ~3.33 MB, an egress
-/// amplification of roughly **33 000×**, where the requester pays only its own
-/// circuit. For a *bonded* persona that asymmetry is bounded by the challenge
-/// draw — its clients are drawn miners, a finite population. For a **publicly
-/// advertised, uncompensated** service (the Foundation's complete-tree `P`) it is
-/// bounded by nothing at all, and PoW is the mechanism that puts cost back on the
-/// requester.
+/// PoW prices *introductions*. A client that has already established a
+/// rendezvous still pulls a full shard (~3.33 MB); that byte-rate is a
+/// separate bound (the serve endpoint's in-flight cap). Over onion the
+/// transfer is symmetric: Tor's flow control means the requester has to
+/// keep acknowledging for data to keep flowing, so the sender stops when
+/// the requester stops reading. PoW and the in-flight cap are not
+/// substitutes — one gates arrival, the other caps concurrent bodies.
 ///
 /// # Default is [`Disabled`](Self::Disabled), matching tor
 ///
