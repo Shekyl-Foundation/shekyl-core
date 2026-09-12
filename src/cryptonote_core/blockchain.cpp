@@ -5039,9 +5039,7 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     // Bonded. The endpoint is not validated as a key — any 32 bytes (EU-D9:
     // a bad endpoint is self-harm the P pays for at the next challenge).
     const uint8_t eu_rc = shekyl_archival_verify_endpoint_update(
-      bond.post_kind,
       reinterpret_cast<const uint8_t*>(bond.endpoint.data),
-      sizeof(bond.endpoint.data),
       have_record ? 1 : 0,
       record.bonded_total_atomic);
     if (eu_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)

@@ -37,7 +37,6 @@
 #include "bulletproofs_plus.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
-#include <functional>
 #include "shekyl/shekyl_ffi.h"
 
 using namespace crypto;
@@ -259,23 +258,15 @@ namespace
       return verCtSemanticsSimple(std::vector<const CtSig*>(1, &rv));
     }
 
-    // The flattened-operand balance call each archival semantics check selects:
-    // the bond-post shape (one bond term), the emission shape (the mint on the
-    // debit slot), or the EndpointUpdate shape (no term at all, its own FFI
-    // entry — a kind byte on the shared export would be an untyped hole for
-    // the emission caller, which is not a bond post and has no kind to pass).
-    using archival_balance_fn = std::function<uint8_t(
-        const uint8_t *pseudo_flat, size_t num_pseudo,
-        const uint8_t *mask_flat, size_t num_masks, uint64_t txn_fee)>;
-
     // Shared CT-balance + aggregate-range tail for the archival bond-post,
     // reward-emission, and EndpointUpdate semantics checks. The canonical-BPP
     // layout check, flatten loops, and range-proof verify are identical for all
     // three — only the balance call's operands and each caller's structural
     // prologue differ, so the common logic lives here once. `what` labels the
-    // log lines. Any divergence must be made here, not forked into a second copy.
-    static bool verArchivalCtBalanceAndRange(const CtSig &rv,
-        const archival_balance_fn &balance, const char *what)
+    // log lines. `Balance` is a callable of the flattened FFI shape; a template
+    // keeps this off the heap (the three call sites are lambdas).
+    template <typename Balance>
+    static bool verArchivalCtBalanceAndRange(const CtSig &rv, Balance &&balance, const char *what)
     {
       CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus),
           false, "Mismatched sizes of outPk and bulletproofs_plus");

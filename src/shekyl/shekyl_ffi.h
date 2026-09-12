@@ -1948,9 +1948,10 @@ uint8_t shekyl_check_commitment_masks(
 /// SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING (code 23, shared by
 /// both entry points like LEN_OVERFLOW) instead of building a vin the Rust
 /// wire codec would refuse to serialize. `endpoint_*` is the vin's EU-D3
-/// serving endpoint — exactly 32 bytes on JoinMarket (and EndpointUpdate),
-/// null/0 on every other kind; the same marshaler refuses the coupling with
-/// SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING (code 52).
+/// serving endpoint — exactly 32 bytes on JoinMarket, null/0 on every other
+/// value-moving kind; the marshaler refuses the coupling with
+/// SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING (code 52). EndpointUpdate
+/// has its own entry and does not use this marshaler.
 uint8_t shekyl_archival_verify_join_market_bond_post(
     uint8_t post_kind,
     uint8_t holdings_kind,
@@ -2173,26 +2174,18 @@ uint8_t shekyl_archival_last_served_scan(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST 51
 
 // EndpointUpdate (ARCHIVAL_ENDPOINT_UPDATE.md; kind 4). Shared vin marshal:
-// the EU-D3 endpoint coupling (32 bytes iff JoinMarket or EndpointUpdate) —
-// the sibling of BOND_SPEND_PK_COUPLING, shared by every verify entry.
+// the EU-D3 endpoint coupling (32 bytes on JoinMarket, none on other
+// value-moving kinds) — the sibling of BOND_SPEND_PK_COUPLING.
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING       52
-// EndpointUpdate verify (EU-D7): wrong kind at the entry; record missing is
-// RECORD_MISSING (12); record present but not Bonded (zero balance — Exited
-// or terminally slashed); a marshal presenting a term / no endpoint on a kind
-// whose wire cannot carry those shapes (EU-D11 belts); and the kind-4 vin
-// carrying holdings or a term at the marshal.
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_ENDPOINT_UPDATE 53
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_RECORD_NOT_BONDED    54
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_CARRIES_TERM         55
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_WITHOUT_ENDPOINT     56
-#define SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_SHAPE                57
-/// EndpointUpdate bond-post verify (EU-D7). `endpoint_*` is the vin's 32-byte
-/// endpoint; `record_exists` / `record_bonded_total` come from the LMDB bond
-/// record. The C++ arm runs the cold-authority pin FIRST (EU-D2), then this.
+// EndpointUpdate verify (EU-D7): record missing is RECORD_MISSING (12);
+// record present but not Bonded (zero balance — Exited or terminally slashed).
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_RECORD_NOT_BONDED    53
+/// EndpointUpdate bond-post verify (EU-D7). `endpoint_ptr` is the vin's
+/// 32-byte endpoint; `record_exists` / `record_bonded_total` come from the
+/// LMDB bond record. The C++ arm runs the cold-authority pin FIRST (EU-D2),
+/// then this. No kind byte or amount term crosses this boundary.
 uint8_t shekyl_archival_verify_endpoint_update(
-    uint8_t post_kind,
     const uint8_t* endpoint_ptr,
-    size_t endpoint_len,
     uint8_t record_exists,
     uint64_t record_bonded_total);
 /// PWD-B7: drop verdict for a shekyl_archival_verify_*_bond_post error code.

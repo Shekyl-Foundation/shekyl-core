@@ -135,7 +135,10 @@ impl Message<AssembleBond> for StakeEngine {
         // ── Step 8: funding arithmetic (§3.2 balance rule, checked) ──────
         // `funding == change + fee + credit` exactly; change splits across
         // TWO outputs (daemon prunable-tx floor: `vout.size() < 2` rejects).
-        let floor = built.vin().bond_credit;
+        let floor = built
+            .vin()
+            .bond_credit()
+            .expect("JoinMarketVin is JoinMarket by construction");
         let required = floor
             .checked_add(msg.fee)
             .ok_or(BondAssemblyError::AmountOverflow)?;

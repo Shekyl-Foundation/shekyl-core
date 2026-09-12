@@ -136,16 +136,16 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
                 const ct::CtSig& rv = tx.ct_signatures;
                 // EU-D11: the kind selects the balance shape. An EndpointUpdate
                 // has no bond term to present; every other kind presents one.
-                const bool is_endpoint_update = bond.post_kind
-                    == static_cast<uint8_t>(archival_bond_post_kind::EndpointUpdate);
+                const bool ct_ok = (bond.post_kind
+                    == static_cast<uint8_t>(archival_bond_post_kind::EndpointUpdate))
+                    ? ct::verCtSemanticsEndpointUpdate(rv)
+                    : ct::verCtSemanticsBondPost(rv, bond.bond_credit, bond.bond_debit);
                 if (tx.pqc_auths.size() != tx.vin.size()
                     || spend_input_count == 0
                     || rv.p.pseudoOuts.size() != spend_input_count
                     || rv.p.fcmp_pp_proof.empty()
                     || rv.type != ct::CTTypeFcmpPlusPlusPqc
-                    || !(is_endpoint_update
-                        ? ct::verCtSemanticsEndpointUpdate(rv)
-                        : ct::verCtSemanticsBondPost(rv, bond.bond_credit, bond.bond_debit)))
+                    || !ct_ok)
                 {
                     tvc.m_verifivation_failed = true;
                     tvc.m_invalid_input = true;

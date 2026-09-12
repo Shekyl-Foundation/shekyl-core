@@ -12,10 +12,11 @@
   binary/boost/JSON codecs): `bond_spend_pk` iff JoinMarket; endpoint iff
   JoinMarket ∨ EndpointUpdate (`EU-D3`, so JoinMarket now commits one); and
   holdings and the amount term absent iff EndpointUpdate (`EU-D11`, a kind-4
-  vin carrying either fails to parse, not to verify). `verify_endpoint_update`
-  is the only verify accepting `credit == debit == 0` and refuses a missing
-  or zero-bonded record (`EU-D7`); the CT balance is the no-term equation
-  through its own FFI entry. `requires_cold_authority` gains `EndpointUpdate
+  vin carrying either fails to parse, not to verify). The retention vin is a
+  per-kind payload so an EndpointUpdate cannot hold holdings or a term;
+  `verify_endpoint_update` refuses a missing or zero-bonded record (`EU-D7`)
+  and its FFI takes only the 32-byte endpoint plus record facts. The CT
+  balance is the no-term equation through its own FFI entry. `requires_cold_authority` gains `EndpointUpdate
   ⇒ always` (`EU-D2`; the C++ arm pins before it verifies, and the
   single-source gate asserts the call). The `archival_bond` record gains the
   endpoint (`kVersion` 6 → 7) and a per-kind

@@ -106,9 +106,9 @@ pub use bond_post::{
     verify_release_bond_post, BondPostError,
 };
 pub use bond_wire::{
-    encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, HoldingsDescriptor,
-    HoldingsKind, LastServedScan, ShardSet, ShardSetError, WireError as BondWireError,
-    ENDPOINT_BYTES, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
+    encode_holdings_descriptor, ArchivalBondPostVin, BondPostKind, BondPostPayload,
+    HoldingsDescriptor, HoldingsKind, LastServedScan, ShardSet, ShardSetError,
+    WireError as BondWireError, ENDPOINT_BYTES, HYBRID_PUBKEY_CANONICAL_BYTES, MAX_HOLDINGS_SHARDS,
     VIN_TYPE_ARCHIVAL_BOND_POST,
 };
 pub use challenge::{

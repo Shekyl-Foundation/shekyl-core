@@ -57,9 +57,9 @@ fn join_market_construct_verifies_against_retention() {
         .expect("build JoinMarket vin");
 
     // The vin is shaped exactly as the credit-path verify side requires.
-    assert_eq!(built.vin().bonded_total_atomic, floor);
-    assert_eq!(built.vin().bond_credit, floor);
-    assert_eq!(built.vin().bond_debit, 0);
+    assert_eq!(built.vin().bonded_total_atomic(), Some(floor));
+    assert_eq!(built.vin().bond_credit(), Some(floor));
+    assert_eq!(built.vin().bond_debit(), Some(0));
 
     // --- verify (1/2): vin semantics, record does not yet exist ---
     verify_join_market_bond_post(built.vin(), false).expect("verify accepts fresh JoinMarket post");
@@ -142,5 +142,5 @@ fn wrong_credit_amount_breaks_the_balance() {
         ),
     );
     assert_eq!(result, Err(BondCtBalanceError::SumMismatch));
-    assert_eq!(built.vin().bond_credit, floor);
+    assert_eq!(built.vin().bond_credit(), Some(floor));
 }

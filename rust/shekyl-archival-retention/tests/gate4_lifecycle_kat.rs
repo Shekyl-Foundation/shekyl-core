@@ -19,7 +19,7 @@ use shekyl_archival_retention::{
     serve_credit_epoch_ok, sigma_work_milli, verify_conservation_snapshot,
     verify_join_market_bond_post, verify_segment_path, ArchivalBondPostVin,
     ArchivalServeCreditPruned, ArchivalServeCreditResponse, BadInterval, BondPostError,
-    BondPostKind, ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind,
+    BondPostPayload, ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind,
     ServeCreditRow, ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, ENDPOINT_BYTES, SETTLEMENT_EPOCH_BLOCKS,
     VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };
@@ -73,25 +73,19 @@ fn build_gate4_document() -> Value {
     // not key validity; the C++ integration auth KAT references this hex.
     let bond_spend_pk = vec![0xB5u8; hybrid_pk_bytes.len()];
 
-    let join_vin = ArchivalBondPostVin {
-        hybrid_public_key: hybrid_pk_bytes,
-        p_canonical_id: p_id,
-        post_kind: BondPostKind::JoinMarket,
-        bond_spend_pk: bond_spend_pk.clone(),
-        // The serving endpoint (EU-D3, mandatory on JoinMarket). A deterministic
-        // pattern for the same reason as bond_spend_pk above: the KAT pins the
-        // wire shape and the record commit, not the onion derivation (that is
-        // ARCHIVAL_P_DERIVE's job).
-        endpoint: Some([0x0Eu8; ENDPOINT_BYTES]),
-        holdings: HoldingsDescriptor {
+    let join_vin = ArchivalBondPostVin::join_market(
+        hybrid_pk_bytes,
+        p_id,
+        bond_spend_pk.clone(),
+        [0x0Eu8; ENDPOINT_BYTES],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![integration["shard_id"].as_u64().expect("shard")])
                 .unwrap(),
         },
-        bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_debit: 0,
-    };
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+    );
     verify_join_market_bond_post(&join_vin, false).expect("join vin valid");
 
     json!({
@@ -270,7 +264,7 @@ fn gate4_lifecycle_kat_vectors() {
         ArchivalBondPostVin::read_payload_exact(&mut cursor).expect("parse join bond-post");
     verify_join_market_bond_post(&join_vin, false).expect("join verify");
     assert_eq!(
-        bond_floor(&join_vin.holdings),
+        bond_floor(join_vin.holdings().expect("JoinMarket carries holdings")),
         join["bond_credit"].as_u64().expect("bond_credit")
     );
 
@@ -425,7 +419,14 @@ fn gate4_join_rejects_both_bond_terms() {
     let mut cursor = Cursor::new(&join_wire[1..]);
     let mut join_vin =
         ArchivalBondPostVin::read_payload_exact(&mut cursor).expect("parse join bond-post");
-    join_vin.bond_debit = join_vin.bond_credit;
+    match &mut join_vin.payload {
+        BondPostPayload::JoinMarket {
+            bond_debit,
+            bond_credit,
+            ..
+        } => *bond_debit = *bond_credit,
+        _ => panic!("gate4 fixture is a JoinMarket vin"),
+    }
     assert_eq!(
         verify_join_market_bond_post(&join_vin, false),
         Err(BondPostError::BothTermsNonzero)

@@ -244,37 +244,67 @@ pub struct HoldingsDescriptor {
     pub shard_ids: ShardSet,
 }
 
+/// Kind-keyed payload of an [`ArchivalBondPostVin`]. Presence couplings are
+/// the variant: `bond_spend_pk` and the JoinMarket endpoint exist only on
+/// [`Self::JoinMarket`]; the EndpointUpdate endpoint exists only on
+/// [`Self::EndpointUpdate`]; holdings and the amount term exist on every
+/// kind except EndpointUpdate (`EU-D3`, `EU-D11`, §9.11). A kind-4 vin
+/// carrying holdings or a term cannot be constructed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BondPostPayload {
+    JoinMarket {
+        bond_spend_pk: Vec<u8>,
+        endpoint: [u8; ENDPOINT_BYTES],
+        holdings: HoldingsDescriptor,
+        bonded_total_atomic: u64,
+        bond_credit: u64,
+        bond_debit: u64,
+    },
+    Rebond {
+        holdings: HoldingsDescriptor,
+        bonded_total_atomic: u64,
+        bond_credit: u64,
+        bond_debit: u64,
+    },
+    Release {
+        holdings: HoldingsDescriptor,
+        bonded_total_atomic: u64,
+        bond_credit: u64,
+        bond_debit: u64,
+    },
+    HoldingsUpdate {
+        holdings: HoldingsDescriptor,
+        bonded_total_atomic: u64,
+        bond_credit: u64,
+        bond_debit: u64,
+    },
+    /// Rotate the serving endpoint in place. The kind-4 vin is exactly this
+    /// field (`EU-D11`).
+    EndpointUpdate { endpoint: [u8; ENDPOINT_BYTES] },
+}
+
+impl BondPostPayload {
+    pub const fn kind(&self) -> BondPostKind {
+        match self {
+            Self::JoinMarket { .. } => BondPostKind::JoinMarket,
+            Self::Rebond { .. } => BondPostKind::Rebond,
+            Self::Release { .. } => BondPostKind::Release,
+            Self::HoldingsUpdate { .. } => BondPostKind::HoldingsUpdate,
+            Self::EndpointUpdate { .. } => BondPostKind::EndpointUpdate,
+        }
+    }
+}
+
+/// Byte-exact `txin_archival_bond_post` (gate-4 §3.4.1). The kind-keyed
+/// fields live in [`BondPostPayload`] so a JoinMarket without an endpoint,
+/// a Release with one, or an EndpointUpdate with holdings / a term is
+/// unrepresentable in memory — the same idiom `shekyl-wire` uses for the
+/// consensus tx.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchivalBondPostVin {
     pub hybrid_public_key: Vec<u8>,
     pub p_canonical_id: [u8; 32],
-    pub post_kind: BondPostKind,
-    /// The GF-1 debit authorizer (gate-4 §4.1 `bond_spend_pk`, gate-6 §9.6),
-    /// **JoinMarket-coupled on the wire** (§9.11, mirroring the `shekyl-wire`
-    /// `BondPostKind::JoinMarket { bond_spend_pk }` oracle): present with the
-    /// exact canonical single-key length iff `post_kind == JoinMarket` —
-    /// committed once into the record at connect, immutable for the record's
-    /// life, and the key every later `bond_debit` verifies against. `write`
-    /// and `read_payload` enforce the coupling (a non-JoinMarket vin carrying
-    /// one, or a JoinMarket vin without one, is unrepresentable on the wire).
-    pub bond_spend_pk: Vec<u8>,
-    /// The persona's serving endpoint (`EU-D3`): present iff
-    /// `post_kind ∈ {JoinMarket, EndpointUpdate}` — written into the bond
-    /// record at JoinMarket connect (a bond without an endpoint was the
-    /// discovery gap), overwritten at EndpointUpdate connect, never cleared.
-    /// `check_couplings` enforces the presence rule at write and at the FFI
-    /// marshal; `read_payload` cannot produce a violation.
-    pub endpoint: Option<[u8; ENDPOINT_BYTES]>,
-    /// Absent on the wire iff `post_kind == EndpointUpdate` (`EU-D11`); the
-    /// decoded kind-4 vin carries the empty shape (`ShardSetCompact`, no
-    /// shards) and `check_couplings` refuses anything else.
-    pub holdings: HoldingsDescriptor,
-    /// Absent on the wire iff `post_kind == EndpointUpdate` (`EU-D11`), with
-    /// `bond_credit` / `bond_debit`; the decoded kind-4 vin carries zeros and
-    /// `check_couplings` refuses anything else.
-    pub bonded_total_atomic: u64,
-    pub bond_credit: u64,
-    pub bond_debit: u64,
+    pub payload: BondPostPayload,
 }
 
 #[derive(Debug)]
@@ -283,11 +313,6 @@ pub enum WireError {
     UnknownVinType(u8),
     HybridPubkeyLenNotCanonical { got: usize },
     BondSpendPkLenNotCanonical { got: usize },
-    BondSpendPkForbidden,
-    EndpointMissing,
-    EndpointForbidden,
-    HoldingsForbiddenOnEndpointUpdate,
-    AmountTermForbiddenOnEndpointUpdate,
     HoldingsCountExceeded { got: usize },
     HoldingsDuplicateShard { shard_id: u64 },
     ShardListForbiddenForCompleteTree,
@@ -311,36 +336,6 @@ impl fmt::Display for WireError {
                 write!(
                     f,
                     "bond_spend_pk length {got} != canonical single-key length"
-                )
-            }
-            Self::BondSpendPkForbidden => {
-                write!(
-                    f,
-                    "bond_spend_pk is JoinMarket-coupled; other post kinds must not carry one"
-                )
-            }
-            Self::EndpointMissing => {
-                write!(
-                    f,
-                    "endpoint is required on JoinMarket and EndpointUpdate posts"
-                )
-            }
-            Self::EndpointForbidden => {
-                write!(
-                    f,
-                    "endpoint is JoinMarket/EndpointUpdate-coupled; other post kinds must not carry one"
-                )
-            }
-            Self::HoldingsForbiddenOnEndpointUpdate => {
-                write!(
-                    f,
-                    "EndpointUpdate carries no holdings (the kind-4 vin is exactly the endpoint)"
-                )
-            }
-            Self::AmountTermForbiddenOnEndpointUpdate => {
-                write!(
-                    f,
-                    "EndpointUpdate carries no amount term (bonded_total, bond_credit and bond_debit must be zero)"
                 )
             }
             Self::HoldingsCountExceeded { got } => {
@@ -437,78 +432,200 @@ pub fn read_holdings_descriptor<R: Read>(r: &mut R) -> Result<HoldingsDescriptor
 }
 
 impl ArchivalBondPostVin {
-    /// Every presence coupling the wire carries, in one place. `write` runs
-    /// it before emitting a byte and the FFI marshal — a second decoder for
-    /// the same object, built from raw parts — runs it after constructing, so
-    /// the two cannot drift. `read_payload` cannot produce a violation: the
-    /// bytes for a coupled field exist on the wire iff its kind says so.
-    ///
-    /// - `bond_spend_pk` present, at canonical length, iff `JoinMarket`
-    ///   (§9.11);
-    /// - `endpoint` present iff `JoinMarket ∨ EndpointUpdate` (`EU-D3`);
-    /// - holdings and the amount term absent iff `EndpointUpdate`
-    ///   (`EU-D11`): the kind-4 vin is `hybrid_public_key ‖ p_canonical_id ‖
-    ///   post_kind ‖ endpoint` and nothing else, so a rotation cannot carry a
-    ///   standing or value mutation even in memory — the laundering
-    ///   invariant as a type, not a check.
+    pub fn join_market(
+        hybrid_public_key: Vec<u8>,
+        p_canonical_id: [u8; 32],
+        bond_spend_pk: Vec<u8>,
+        endpoint: [u8; ENDPOINT_BYTES],
+        holdings: HoldingsDescriptor,
+        bonded_total_atomic: u64,
+        bond_credit: u64,
+    ) -> Self {
+        Self {
+            hybrid_public_key,
+            p_canonical_id,
+            payload: BondPostPayload::JoinMarket {
+                bond_spend_pk,
+                endpoint,
+                holdings,
+                bonded_total_atomic,
+                bond_credit,
+                bond_debit: 0,
+            },
+        }
+    }
+
+    pub fn release(
+        hybrid_public_key: Vec<u8>,
+        p_canonical_id: [u8; 32],
+        holdings: HoldingsDescriptor,
+        bonded_total_atomic: u64,
+        bond_credit: u64,
+        bond_debit: u64,
+    ) -> Self {
+        Self {
+            hybrid_public_key,
+            p_canonical_id,
+            payload: BondPostPayload::Release {
+                holdings,
+                bonded_total_atomic,
+                bond_credit,
+                bond_debit,
+            },
+        }
+    }
+
+    pub fn rebond(
+        hybrid_public_key: Vec<u8>,
+        p_canonical_id: [u8; 32],
+        holdings: HoldingsDescriptor,
+        bonded_total_atomic: u64,
+        bond_credit: u64,
+        bond_debit: u64,
+    ) -> Self {
+        Self {
+            hybrid_public_key,
+            p_canonical_id,
+            payload: BondPostPayload::Rebond {
+                holdings,
+                bonded_total_atomic,
+                bond_credit,
+                bond_debit,
+            },
+        }
+    }
+
+    pub fn holdings_update(
+        hybrid_public_key: Vec<u8>,
+        p_canonical_id: [u8; 32],
+        holdings: HoldingsDescriptor,
+        bonded_total_atomic: u64,
+        bond_credit: u64,
+        bond_debit: u64,
+    ) -> Self {
+        Self {
+            hybrid_public_key,
+            p_canonical_id,
+            payload: BondPostPayload::HoldingsUpdate {
+                holdings,
+                bonded_total_atomic,
+                bond_credit,
+                bond_debit,
+            },
+        }
+    }
+
+    pub fn endpoint_update(
+        hybrid_public_key: Vec<u8>,
+        p_canonical_id: [u8; 32],
+        endpoint: [u8; ENDPOINT_BYTES],
+    ) -> Self {
+        Self {
+            hybrid_public_key,
+            p_canonical_id,
+            payload: BondPostPayload::EndpointUpdate { endpoint },
+        }
+    }
+
+    pub const fn post_kind(&self) -> BondPostKind {
+        self.payload.kind()
+    }
+
+    /// Holdings of a value-moving post. `None` on EndpointUpdate — that kind
+    /// has no holdings field.
+    pub fn holdings(&self) -> Option<&HoldingsDescriptor> {
+        match &self.payload {
+            BondPostPayload::JoinMarket { holdings, .. }
+            | BondPostPayload::Rebond { holdings, .. }
+            | BondPostPayload::Release { holdings, .. }
+            | BondPostPayload::HoldingsUpdate { holdings, .. } => Some(holdings),
+            BondPostPayload::EndpointUpdate { .. } => None,
+        }
+    }
+
+    pub fn bonded_total_atomic(&self) -> Option<u64> {
+        match &self.payload {
+            BondPostPayload::JoinMarket {
+                bonded_total_atomic,
+                ..
+            }
+            | BondPostPayload::Rebond {
+                bonded_total_atomic,
+                ..
+            }
+            | BondPostPayload::Release {
+                bonded_total_atomic,
+                ..
+            }
+            | BondPostPayload::HoldingsUpdate {
+                bonded_total_atomic,
+                ..
+            } => Some(*bonded_total_atomic),
+            BondPostPayload::EndpointUpdate { .. } => None,
+        }
+    }
+
+    pub fn bond_credit(&self) -> Option<u64> {
+        match &self.payload {
+            BondPostPayload::JoinMarket { bond_credit, .. }
+            | BondPostPayload::Rebond { bond_credit, .. }
+            | BondPostPayload::Release { bond_credit, .. }
+            | BondPostPayload::HoldingsUpdate { bond_credit, .. } => Some(*bond_credit),
+            BondPostPayload::EndpointUpdate { .. } => None,
+        }
+    }
+
+    pub fn bond_debit(&self) -> Option<u64> {
+        match &self.payload {
+            BondPostPayload::JoinMarket { bond_debit, .. }
+            | BondPostPayload::Rebond { bond_debit, .. }
+            | BondPostPayload::Release { bond_debit, .. }
+            | BondPostPayload::HoldingsUpdate { bond_debit, .. } => Some(*bond_debit),
+            BondPostPayload::EndpointUpdate { .. } => None,
+        }
+    }
+
+    pub fn bond_spend_pk(&self) -> Option<&[u8]> {
+        match &self.payload {
+            BondPostPayload::JoinMarket { bond_spend_pk, .. } => Some(bond_spend_pk.as_slice()),
+            _ => None,
+        }
+    }
+
+    pub fn endpoint(&self) -> Option<&[u8; ENDPOINT_BYTES]> {
+        match &self.payload {
+            BondPostPayload::JoinMarket { endpoint, .. }
+            | BondPostPayload::EndpointUpdate { endpoint } => Some(endpoint),
+            _ => None,
+        }
+    }
+
+    /// Remaining write-time checks that the payload type cannot hold:
+    /// hybrid-key length, JoinMarket `bond_spend_pk` length, holdings bounds.
+    /// Presence couplings are the variant — they are not checked here.
     pub fn check_couplings(&self) -> Result<(), WireError> {
         if self.hybrid_public_key.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
             return Err(WireError::HybridPubkeyLenNotCanonical {
                 got: self.hybrid_public_key.len(),
             });
         }
-        self.check_kind_couplings()?;
-        if self.holdings.kind == HoldingsKind::ShardSetCompact
-            && self.holdings.shard_ids.len() > MAX_HOLDINGS_SHARDS
-        {
-            return Err(WireError::HoldingsCountExceeded {
-                got: self.holdings.shard_ids.len(),
-            });
-        }
-        if self.holdings.kind == HoldingsKind::CompleteTree && !self.holdings.shard_ids.is_empty() {
-            return Err(WireError::ShardListForbiddenForCompleteTree);
-        }
-        Ok(())
-    }
-
-    /// The kind-keyed presence couplings alone — `check_couplings` minus the
-    /// hybrid-pubkey length and the holdings bounds. This is the half the FFI
-    /// marshal runs: it builds the vin from raw operands with the hybrid key
-    /// left as a consensus-side placeholder (C++ checks it) and the shard set
-    /// already bounded by `ShardSet::new`, so only the kind rules remain to be
-    /// asserted there — and they are asserted by this function, not restated.
-    pub fn check_kind_couplings(&self) -> Result<(), WireError> {
-        match self.post_kind {
-            BondPostKind::JoinMarket => {
-                if self.bond_spend_pk.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
-                    return Err(WireError::BondSpendPkLenNotCanonical {
-                        got: self.bond_spend_pk.len(),
-                    });
-                }
-            }
-            _ => {
-                if !self.bond_spend_pk.is_empty() {
-                    return Err(WireError::BondSpendPkForbidden);
-                }
+        if let BondPostPayload::JoinMarket { bond_spend_pk, .. } = &self.payload {
+            if bond_spend_pk.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
+                return Err(WireError::BondSpendPkLenNotCanonical {
+                    got: bond_spend_pk.len(),
+                });
             }
         }
-        let endpoint_expected = matches!(
-            self.post_kind,
-            BondPostKind::JoinMarket | BondPostKind::EndpointUpdate
-        );
-        match (endpoint_expected, self.endpoint.is_some()) {
-            (true, false) => return Err(WireError::EndpointMissing),
-            (false, true) => return Err(WireError::EndpointForbidden),
-            _ => {}
-        }
-        if self.post_kind == BondPostKind::EndpointUpdate {
-            if self.holdings.kind != HoldingsKind::ShardSetCompact
-                || !self.holdings.shard_ids.is_empty()
+        if let Some(holdings) = self.holdings() {
+            if holdings.kind == HoldingsKind::ShardSetCompact
+                && holdings.shard_ids.len() > MAX_HOLDINGS_SHARDS
             {
-                return Err(WireError::HoldingsForbiddenOnEndpointUpdate);
+                return Err(WireError::HoldingsCountExceeded {
+                    got: holdings.shard_ids.len(),
+                });
             }
-            if self.bonded_total_atomic != 0 || self.bond_credit != 0 || self.bond_debit != 0 {
-                return Err(WireError::AmountTermForbiddenOnEndpointUpdate);
+            if holdings.kind == HoldingsKind::CompleteTree && !holdings.shard_ids.is_empty() {
+                return Err(WireError::ShardListForbiddenForCompleteTree);
             }
         }
         Ok(())
@@ -520,22 +637,51 @@ impl ArchivalBondPostVin {
         write_varint(&self.hybrid_public_key.len(), w)?;
         w.write_all(&self.hybrid_public_key)?;
         w.write_all(&self.p_canonical_id)?;
-        w.write_all(&[self.post_kind as u8])?;
-        if self.post_kind == BondPostKind::JoinMarket {
-            write_varint(&self.bond_spend_pk.len(), w)?;
-            w.write_all(&self.bond_spend_pk)?;
+        w.write_all(&[self.post_kind() as u8])?;
+        match &self.payload {
+            BondPostPayload::JoinMarket {
+                bond_spend_pk,
+                endpoint,
+                holdings,
+                bonded_total_atomic,
+                bond_credit,
+                bond_debit,
+            } => {
+                write_varint(&bond_spend_pk.len(), w)?;
+                w.write_all(bond_spend_pk)?;
+                w.write_all(endpoint)?;
+                write_holdings_descriptor(w, holdings)?;
+                write_varint(bonded_total_atomic, w)?;
+                write_varint(bond_credit, w)?;
+                write_varint(bond_debit, w)?;
+            }
+            BondPostPayload::EndpointUpdate { endpoint } => {
+                w.write_all(endpoint)?;
+            }
+            BondPostPayload::Rebond {
+                holdings,
+                bonded_total_atomic,
+                bond_credit,
+                bond_debit,
+            }
+            | BondPostPayload::Release {
+                holdings,
+                bonded_total_atomic,
+                bond_credit,
+                bond_debit,
+            }
+            | BondPostPayload::HoldingsUpdate {
+                holdings,
+                bonded_total_atomic,
+                bond_credit,
+                bond_debit,
+            } => {
+                write_holdings_descriptor(w, holdings)?;
+                write_varint(bonded_total_atomic, w)?;
+                write_varint(bond_credit, w)?;
+                write_varint(bond_debit, w)?;
+            }
         }
-        if let Some(endpoint) = &self.endpoint {
-            w.write_all(endpoint)?;
-        }
-        if self.post_kind == BondPostKind::EndpointUpdate {
-            // `EU-D11`: nothing follows the endpoint on a kind-4 vin.
-            return Ok(());
-        }
-        write_holdings_descriptor(w, &self.holdings)?;
-        write_varint(&self.bonded_total_atomic, w)?;
-        write_varint(&self.bond_credit, w)?;
-        write_varint(&self.bond_debit, w)?;
         Ok(())
     }
 
@@ -554,64 +700,65 @@ impl ArchivalBondPostVin {
         r.read_exact(&mut hybrid_public_key)?;
         let p_canonical_id = read_bytes(r)?;
         let post_kind = BondPostKind::from_u8(read_byte(r)?)?;
-        // §9.11 coupling: the key bytes exist on the wire iff JoinMarket, so
-        // `read` can never yield a non-JoinMarket vin carrying one.
-        let bond_spend_pk = if post_kind == BondPostKind::JoinMarket {
-            let spk_len: usize = read_varint(r)?;
-            if spk_len != HYBRID_PUBKEY_CANONICAL_BYTES {
-                return Err(WireError::BondSpendPkLenNotCanonical { got: spk_len });
+        let payload = match post_kind {
+            BondPostKind::JoinMarket => {
+                let spk_len: usize = read_varint(r)?;
+                if spk_len != HYBRID_PUBKEY_CANONICAL_BYTES {
+                    return Err(WireError::BondSpendPkLenNotCanonical { got: spk_len });
+                }
+                let mut bond_spend_pk = vec![0u8; spk_len];
+                r.read_exact(&mut bond_spend_pk)?;
+                let endpoint = read_bytes(r)?;
+                let holdings = read_holdings_descriptor(r)?;
+                let bonded_total_atomic = read_varint(r)?;
+                let bond_credit = read_varint(r)?;
+                let bond_debit = read_varint(r)?;
+                BondPostPayload::JoinMarket {
+                    bond_spend_pk,
+                    endpoint,
+                    holdings,
+                    bonded_total_atomic,
+                    bond_credit,
+                    bond_debit,
+                }
             }
-            let mut spk = vec![0u8; spk_len];
-            r.read_exact(&mut spk)?;
-            spk
-        } else {
-            Vec::new()
+            BondPostKind::EndpointUpdate => BondPostPayload::EndpointUpdate {
+                endpoint: read_bytes(r)?,
+            },
+            BondPostKind::Rebond | BondPostKind::Release | BondPostKind::HoldingsUpdate => {
+                let holdings = read_holdings_descriptor(r)?;
+                let bonded_total_atomic = read_varint(r)?;
+                let bond_credit = read_varint(r)?;
+                let bond_debit = read_varint(r)?;
+                match post_kind {
+                    BondPostKind::Rebond => BondPostPayload::Rebond {
+                        holdings,
+                        bonded_total_atomic,
+                        bond_credit,
+                        bond_debit,
+                    },
+                    BondPostKind::Release => BondPostPayload::Release {
+                        holdings,
+                        bonded_total_atomic,
+                        bond_credit,
+                        bond_debit,
+                    },
+                    BondPostKind::HoldingsUpdate => BondPostPayload::HoldingsUpdate {
+                        holdings,
+                        bonded_total_atomic,
+                        bond_credit,
+                        bond_debit,
+                    },
+                    BondPostKind::JoinMarket | BondPostKind::EndpointUpdate => {
+                        unreachable!("JoinMarket/EndpointUpdate take their own read arm")
+                    }
+                }
+            }
         };
-        // `EU-D3` coupling: the endpoint bytes exist on the wire iff the kind
-        // is JoinMarket or EndpointUpdate.
-        let endpoint = if matches!(
-            post_kind,
-            BondPostKind::JoinMarket | BondPostKind::EndpointUpdate
-        ) {
-            Some(read_bytes(r)?)
-        } else {
-            None
-        };
-        if post_kind == BondPostKind::EndpointUpdate {
-            // `EU-D11`: the kind-4 vin ends at the endpoint. Holdings and the
-            // amount term have no bytes to read, so the decoded vin carries
-            // the empty shape by construction — bytes that would spell a
-            // holdings list or a term after a kind-4 endpoint are trailing
-            // bytes (`read_payload_exact`), not a parse of anything.
-            return Ok(Self {
-                hybrid_public_key,
-                p_canonical_id,
-                post_kind,
-                bond_spend_pk,
-                endpoint,
-                holdings: HoldingsDescriptor {
-                    kind: HoldingsKind::ShardSetCompact,
-                    shard_ids: ShardSet::empty(),
-                },
-                bonded_total_atomic: 0,
-                bond_credit: 0,
-                bond_debit: 0,
-            });
-        }
-        let holdings = read_holdings_descriptor(r)?;
-        let bonded_total_atomic = read_varint(r)?;
-        let bond_credit = read_varint(r)?;
-        let bond_debit = read_varint(r)?;
         Ok(Self {
             hybrid_public_key,
             p_canonical_id,
-            post_kind,
-            bond_spend_pk,
-            endpoint,
-            holdings,
-            bonded_total_atomic,
-            bond_credit,
-            bond_debit,
+            payload,
         })
     }
 
@@ -635,471 +782,81 @@ impl ArchivalBondPostVin {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::id::p_canonical_id_from_hybrid_pubkey;
-
-    #[test]
-    fn bond_post_roundtrip_shard_set() {
-        let hybrid_pk = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES];
-        let vin = ArchivalBondPostVin {
-            hybrid_public_key: hybrid_pk.clone(),
-            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
-            post_kind: BondPostKind::JoinMarket,
-            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
-            endpoint: Some([0xEE; ENDPOINT_BYTES]),
-            holdings: HoldingsDescriptor {
-                kind: HoldingsKind::ShardSetCompact,
-                shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
-            },
-            bonded_total_atomic: 1_500_000_000,
-            bond_credit: 1_500_000_000,
-            bond_debit: 0,
-        };
-        let wire = vin.serialize().unwrap();
-        assert_eq!(wire[0], VIN_TYPE_ARCHIVAL_BOND_POST);
-        let decoded = ArchivalBondPostVin::read(&mut wire.as_slice()).unwrap();
-        assert_eq!(decoded, vin);
+impl ArchivalBondPostVin {
+    pub(crate) fn set_bond_debit(&mut self, debit: u64) {
+        *self.debit_mut() = debit;
     }
 
-    #[test]
-    fn bond_post_complete_tree_has_no_shard_list_on_wire() {
-        let hybrid_pk = vec![0x01; HYBRID_PUBKEY_CANONICAL_BYTES];
-        let vin = ArchivalBondPostVin {
-            hybrid_public_key: hybrid_pk.clone(),
-            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
-            post_kind: BondPostKind::JoinMarket,
-            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
-            endpoint: Some([0xEE; ENDPOINT_BYTES]),
-            holdings: HoldingsDescriptor {
-                kind: HoldingsKind::CompleteTree,
-                shard_ids: ShardSet::empty(),
-            },
-            bonded_total_atomic: 750_000_000,
-            bond_credit: 750_000_000,
-            bond_debit: 0,
-        };
-        let wire = vin.serialize().unwrap();
-        let decoded = ArchivalBondPostVin::read(&mut wire.as_slice()).unwrap();
-        assert_eq!(decoded.holdings.kind, HoldingsKind::CompleteTree);
-        assert!(decoded.holdings.shard_ids.is_empty());
+    pub(crate) fn set_bond_credit(&mut self, credit: u64) {
+        *self.credit_mut() = credit;
     }
 
-    /// A truncated (or over-long) hybrid pubkey is malformed, not a shorter
-    /// valid key — both write and read demand the exact canonical length
-    /// (mirrors the emission wire; the C++ oracle enforces the same equality).
-    #[test]
-    fn bond_post_rejects_non_canonical_pubkey_length() {
-        let mut vin = ArchivalBondPostVin {
-            hybrid_public_key: vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES - 1],
-            p_canonical_id: [0x11; 32],
-            post_kind: BondPostKind::JoinMarket,
-            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
-            endpoint: Some([0xEE; ENDPOINT_BYTES]),
-            holdings: HoldingsDescriptor {
-                kind: HoldingsKind::CompleteTree,
-                shard_ids: ShardSet::empty(),
-            },
-            bonded_total_atomic: 750_000_000,
-            bond_credit: 750_000_000,
-            bond_debit: 0,
-        };
-        assert!(matches!(
-            vin.serialize(),
-            Err(WireError::HybridPubkeyLenNotCanonical { .. })
-        ));
-        vin.hybrid_public_key = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES + 1];
-        assert!(matches!(
-            vin.serialize(),
-            Err(WireError::HybridPubkeyLenNotCanonical { .. })
-        ));
-
-        // Read side: craft a payload with a truncated pk_len.
-        let mut wire = Vec::new();
-        write_varint(&(HYBRID_PUBKEY_CANONICAL_BYTES - 1), &mut wire).unwrap();
-        wire.extend_from_slice(&vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES - 1]);
-        assert!(matches!(
-            ArchivalBondPostVin::read_payload(&mut wire.as_slice()),
-            Err(WireError::HybridPubkeyLenNotCanonical { .. })
-        ));
+    pub(crate) fn set_bonded_total(&mut self, total: u64) {
+        *self.total_mut() = total;
     }
 
-    /// §9.11 coupling: `bond_spend_pk` is present with the exact canonical
-    /// length iff JoinMarket. Both directions of the misconstruction are
-    /// unrepresentable — write refuses to emit them, read refuses to parse
-    /// them — mirroring the shekyl-wire `BondPostKind` enum coupling.
-    #[test]
-    fn bond_spend_pk_is_join_market_coupled() {
-        let hybrid_pk = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES];
-        let base = ArchivalBondPostVin {
-            hybrid_public_key: hybrid_pk.clone(),
-            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
-            post_kind: BondPostKind::JoinMarket,
-            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
-            endpoint: Some([0xEE; ENDPOINT_BYTES]),
-            holdings: HoldingsDescriptor {
-                kind: HoldingsKind::ShardSetCompact,
-                shard_ids: ShardSet::new(vec![7]).unwrap(),
-            },
-            bonded_total_atomic: 750_000_000,
-            bond_credit: 750_000_000,
-            bond_debit: 0,
-        };
-
-        // JoinMarket with a non-canonical key length refuses to write.
-        let mut vin = base.clone();
-        vin.bond_spend_pk = vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES - 1];
-        assert!(matches!(
-            vin.serialize(),
-            Err(WireError::BondSpendPkLenNotCanonical { .. })
-        ));
-        let mut vin = base.clone();
-        vin.bond_spend_pk = Vec::new();
-        assert!(matches!(
-            vin.serialize(),
-            Err(WireError::BondSpendPkLenNotCanonical { .. })
-        ));
-
-        // A non-JoinMarket vin carrying a key refuses to write (it would be
-        // silently dropped otherwise — the coupling means the wire has no
-        // place for it).
-        let mut vin = base.clone();
-        vin.post_kind = BondPostKind::Release;
-        vin.endpoint = None;
-        vin.holdings.shard_ids = ShardSet::empty();
-        vin.bonded_total_atomic = 0;
-        vin.bond_credit = 0;
-        vin.bond_debit = 750_000_000;
-        assert!(matches!(
-            vin.serialize(),
-            Err(WireError::BondSpendPkForbidden)
-        ));
-        // The same vin without the key round-trips, key-less.
-        vin.bond_spend_pk = Vec::new();
-        let wire = vin.serialize().unwrap();
-        let decoded = ArchivalBondPostVin::read(&mut wire.as_slice()).unwrap();
-        assert_eq!(decoded, vin);
-        assert!(decoded.bond_spend_pk.is_empty());
-
-        // Read side: a JoinMarket payload with a truncated key length refuses.
-        let mut wire = Vec::new();
-        write_varint(&HYBRID_PUBKEY_CANONICAL_BYTES, &mut wire).unwrap();
-        wire.extend_from_slice(&hybrid_pk);
-        wire.extend_from_slice(&base.p_canonical_id);
-        wire.push(BondPostKind::JoinMarket as u8);
-        write_varint(&(HYBRID_PUBKEY_CANONICAL_BYTES - 1), &mut wire).unwrap();
-        wire.extend_from_slice(&vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES - 1]);
-        assert!(matches!(
-            ArchivalBondPostVin::read_payload(&mut wire.as_slice()),
-            Err(WireError::BondSpendPkLenNotCanonical { .. })
-        ));
-    }
-
-    /// Golden byte vector for the shared holdings codec.
-    ///
-    /// **Blast radius: TWO consensus wires.** This fragment is byte-identical on
-    /// the bond-post wire (`0x03`, this module) **and** the reward-emission wire
-    /// (`0x04`, [`crate::emission_wire`], which mirrors this exact pin in
-    /// `emission_wire::tests::holdings_codec_golden_vector_shared_with_bond_wire`).
-    /// A change that moves these bytes is a consensus change to both surfaces and
-    /// must fail both suites loudly — do not "fix" this test by updating the pin
-    /// without a genesis-format decision covering both wires.
-    #[test]
-    fn holdings_codec_golden_vector_shared_with_emission_wire() {
-        let shard_set = HoldingsDescriptor {
-            kind: HoldingsKind::ShardSetCompact,
-            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
-        };
-        assert_eq!(
-            encode_holdings_descriptor(&shard_set).unwrap(),
-            [0x00, 0x02, 0x07, 0x2A],
-            "ShardSetCompact golden bytes moved — consensus change to BOTH wires"
-        );
-        let complete = HoldingsDescriptor {
-            kind: HoldingsKind::CompleteTree,
-            shard_ids: ShardSet::empty(),
-        };
-        assert_eq!(
-            encode_holdings_descriptor(&complete).unwrap(),
-            [0x01],
-            "CompleteTree golden byte moved — consensus change to BOTH wires"
-        );
-        // Read side of the same pin: the golden bytes decode back exactly.
-        assert_eq!(
-            read_holdings_descriptor(&mut [0x00u8, 0x02, 0x07, 0x2A].as_slice()).unwrap(),
-            shard_set
-        );
-        assert_eq!(
-            read_holdings_descriptor(&mut [0x01u8].as_slice()).unwrap(),
-            complete
-        );
-    }
-
-    #[test]
-    fn shard_set_rejects_oversize_at_construction() {
-        // MAX + 1 DISTINCT ids — fails the bound (count is checked before dupes).
-        let ids: Vec<u64> = (0..=MAX_HOLDINGS_SHARDS as u64).collect();
-        assert_eq!(ids.len(), MAX_HOLDINGS_SHARDS + 1);
-        assert_eq!(
-            ShardSet::new(ids),
-            Err(ShardSetError::CountExceeded {
-                got: MAX_HOLDINGS_SHARDS + 1
-            })
-        );
-        // The bound holds exactly at the cap.
-        assert!(ShardSet::new((0..MAX_HOLDINGS_SHARDS as u64).collect()).is_ok());
-    }
-
-    #[test]
-    fn shard_set_rejects_duplicate_at_construction() {
-        // "A set on the wire": the constructor rejects a repeated id, naming it.
-        assert_eq!(
-            ShardSet::new(vec![7, 42, 7]),
-            Err(ShardSetError::Duplicate { shard_id: 7 })
-        );
-        assert!(ShardSet::new(vec![7, 42, 9]).is_ok());
-        assert!(ShardSet::empty().is_empty());
-    }
-
-    #[test]
-    fn shard_set_preserves_insertion_order_byte_identically() {
-        // Q2 (2026-07-15): order is NOT canonicalized — `[42, 7]` stays `[42, 7]`
-        // and encodes in that order, so the type change re-encodes no accepted tx.
-        let unsorted = ShardSet::new(vec![42, 7]).unwrap();
-        assert_eq!(unsorted.as_slice(), &[42, 7]);
-        let holdings = HoldingsDescriptor {
-            kind: HoldingsKind::ShardSetCompact,
-            shard_ids: unsorted,
-        };
-        assert_eq!(
-            encode_holdings_descriptor(&holdings).unwrap(),
-            [0x00, 0x02, 0x2A, 0x07],
-            "insertion order must survive encoding (no canonical sort)"
-        );
-        // Round-trip: decode preserves the same order.
-        assert_eq!(
-            read_holdings_descriptor(&mut [0x00u8, 0x02, 0x2A, 0x07].as_slice()).unwrap(),
-            holdings
-        );
-    }
-
-    #[test]
-    fn last_served_scan_is_exhaustive_on_holdings_kind() {
-        // A third HoldingsKind variant fails to compile in last_served_scan
-        // until its arm is written — that is the gate. This test pins the
-        // two kinds that exist so a silent swap of the arms goes red.
-        assert_eq!(
-            HoldingsKind::ShardSetCompact.last_served_scan(),
-            LastServedScan::HeldShards
-        );
-        assert_eq!(
-            HoldingsKind::CompleteTree.last_served_scan(),
-            LastServedScan::AllShards
-        );
-        assert_ne!(
-            LastServedScan::HeldShards as u8,
-            LastServedScan::AllShards as u8
-        );
-    }
-
-    #[test]
-    fn decode_rejects_duplicate_carrying_wire_bytes() {
-        // The validity tightening at the wire boundary: a byte string carrying a
-        // duplicate id (count 2, ids [7, 7]) is rejected at decode — it was
-        // silently accepted before the newtype. Valid txs are unaffected (the
-        // golden-vector test above pins their bytes unchanged).
-        let dupe_bytes = [0x00u8, 0x02, 0x07, 0x07];
-        assert!(matches!(
-            read_holdings_descriptor(&mut dupe_bytes.as_slice()),
-            Err(WireError::HoldingsDuplicateShard { shard_id: 7 })
-        ));
-        // And an oversize count is still rejected (count varint past the cap).
-        let mut oversize = vec![0x00u8];
-        // varint(4097) then no ids needed — the count guard fires first.
-        oversize.extend_from_slice(&[0x81, 0x20]); // LEB128 for 4097
-        assert!(matches!(
-            read_holdings_descriptor(&mut oversize.as_slice()),
-            Err(WireError::HoldingsCountExceeded { got: 4097 })
-        ));
-    }
-
-    fn endpoint_update_vin(hybrid_pk: &[u8]) -> ArchivalBondPostVin {
-        ArchivalBondPostVin {
-            hybrid_public_key: hybrid_pk.to_vec(),
-            p_canonical_id: p_canonical_id_from_hybrid_pubkey(hybrid_pk).to_bytes(),
-            post_kind: BondPostKind::EndpointUpdate,
-            bond_spend_pk: Vec::new(),
-            endpoint: Some([0x4E; ENDPOINT_BYTES]),
-            holdings: HoldingsDescriptor {
-                kind: HoldingsKind::ShardSetCompact,
-                shard_ids: ShardSet::empty(),
-            },
-            bonded_total_atomic: 0,
-            bond_credit: 0,
-            bond_debit: 0,
+    pub(crate) fn holdings_mut(&mut self) -> &mut HoldingsDescriptor {
+        match &mut self.payload {
+            BondPostPayload::JoinMarket { holdings, .. }
+            | BondPostPayload::Rebond { holdings, .. }
+            | BondPostPayload::Release { holdings, .. }
+            | BondPostPayload::HoldingsUpdate { holdings, .. } => holdings,
+            BondPostPayload::EndpointUpdate { .. } => {
+                panic!("EndpointUpdate has no holdings field")
+            }
         }
     }
 
-    #[test]
-    fn post_kind_four_is_endpoint_update() {
-        assert!(matches!(
-            BondPostKind::from_u8(4),
-            Ok(BondPostKind::EndpointUpdate)
-        ));
-        assert_eq!(
-            BondPostKind::EndpointUpdate as u8,
-            4,
-            "genesis-frozen discriminant"
-        );
-        assert!(matches!(
-            BondPostKind::from_u8(5),
-            Err(WireError::InvalidPostKind(5))
-        ));
-    }
-
-    #[test]
-    fn endpoint_update_round_trips_as_exactly_the_endpoint() {
-        // EU-D11: hybrid_public_key ‖ p_canonical_id ‖ post_kind ‖ endpoint and
-        // nothing else. The byte length pins that shape.
-        let hybrid_pk = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES];
-        let vin = endpoint_update_vin(&hybrid_pk);
-        let wire = vin.serialize().unwrap();
-        let mut expected = vec![VIN_TYPE_ARCHIVAL_BOND_POST];
-        write_varint(&HYBRID_PUBKEY_CANONICAL_BYTES, &mut expected).unwrap();
-        expected.extend_from_slice(&hybrid_pk);
-        expected.extend_from_slice(&vin.p_canonical_id);
-        expected.push(4);
-        expected.extend_from_slice(&[0x4E; ENDPOINT_BYTES]);
-        assert_eq!(wire, expected);
-        let decoded = ArchivalBondPostVin::read(&mut wire.as_slice()).unwrap();
-        assert_eq!(decoded, vin);
-        assert!(decoded.bond_spend_pk.is_empty());
-        assert!(decoded.holdings.shard_ids.is_empty());
-        assert_eq!(
-            (
-                decoded.bonded_total_atomic,
-                decoded.bond_credit,
-                decoded.bond_debit
-            ),
-            (0, 0, 0)
-        );
-    }
-
-    #[test]
-    fn endpoint_is_coupled_to_join_market_and_endpoint_update() {
-        let hybrid_pk = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES];
-        // JoinMarket without an endpoint refuses to write (mandatory: a bond
-        // without an endpoint was the discovery gap).
-        let mut jm = ArchivalBondPostVin {
-            hybrid_public_key: hybrid_pk.clone(),
-            p_canonical_id: p_canonical_id_from_hybrid_pubkey(&hybrid_pk).to_bytes(),
-            post_kind: BondPostKind::JoinMarket,
-            bond_spend_pk: vec![0xE5; HYBRID_PUBKEY_CANONICAL_BYTES],
-            endpoint: None,
-            holdings: HoldingsDescriptor {
-                kind: HoldingsKind::ShardSetCompact,
-                shard_ids: ShardSet::new(vec![7]).unwrap(),
-            },
-            bonded_total_atomic: 750_000_000,
-            bond_credit: 750_000_000,
-            bond_debit: 0,
-        };
-        assert!(matches!(jm.serialize(), Err(WireError::EndpointMissing)));
-        jm.endpoint = Some([0xEE; ENDPOINT_BYTES]);
-        let wire = jm.serialize().unwrap();
-        assert_eq!(ArchivalBondPostVin::read(&mut wire.as_slice()).unwrap(), jm);
-
-        // EndpointUpdate without an endpoint refuses to write.
-        let mut eu = endpoint_update_vin(&hybrid_pk);
-        eu.endpoint = None;
-        assert!(matches!(eu.serialize(), Err(WireError::EndpointMissing)));
-
-        // Every other kind carrying one refuses to write — the wire has no
-        // place for it, so it would otherwise be silently dropped.
-        for kind in [
-            BondPostKind::Release,
-            BondPostKind::Rebond,
-            BondPostKind::HoldingsUpdate,
-        ] {
-            let mut vin = jm.clone();
-            vin.post_kind = kind;
-            vin.bond_spend_pk = Vec::new();
-            assert!(
-                matches!(vin.serialize(), Err(WireError::EndpointForbidden)),
-                "{kind:?}"
-            );
+    pub(crate) fn set_bond_spend_pk(&mut self, pk: Vec<u8>) {
+        match &mut self.payload {
+            BondPostPayload::JoinMarket { bond_spend_pk, .. } => *bond_spend_pk = pk,
+            _ => panic!("bond_spend_pk exists only on JoinMarket"),
         }
     }
 
-    /// EU-D9 KAT (a), as a parse test: a kind-4 vin carrying holdings or an
-    /// amount term fails to PARSE at this serializer, not to verify. The
-    /// laundering invariant (rotation resets nothing the window or the market
-    /// reads) is a type here; this is the test that stands in for the
-    /// assertion. Bite: a `write` that emits the fields, or a `read_payload`
-    /// that reads them, turns one of these arms green-to-red.
-    #[test]
-    fn endpoint_update_cannot_carry_holdings_or_an_amount_term() {
-        let hybrid_pk = vec![0xAB; HYBRID_PUBKEY_CANONICAL_BYTES];
-        let base = endpoint_update_vin(&hybrid_pk);
-
-        // Write side: each field refuses by name.
-        let mut vin = base.clone();
-        vin.holdings.shard_ids = ShardSet::new(vec![7]).unwrap();
-        assert!(matches!(
-            vin.serialize(),
-            Err(WireError::HoldingsForbiddenOnEndpointUpdate)
-        ));
-        let mut vin = base.clone();
-        vin.holdings.kind = HoldingsKind::CompleteTree;
-        assert!(matches!(
-            vin.serialize(),
-            Err(WireError::HoldingsForbiddenOnEndpointUpdate)
-        ));
-        for (total, credit, debit) in [(1, 0, 0), (0, 1, 0), (0, 0, 1)] {
-            let mut vin = base.clone();
-            vin.bonded_total_atomic = total;
-            vin.bond_credit = credit;
-            vin.bond_debit = debit;
-            assert!(
-                matches!(
-                    vin.serialize(),
-                    Err(WireError::AmountTermForbiddenOnEndpointUpdate)
-                ),
-                "({total},{credit},{debit})"
-            );
+    fn debit_mut(&mut self) -> &mut u64 {
+        match &mut self.payload {
+            BondPostPayload::JoinMarket { bond_debit, .. }
+            | BondPostPayload::Rebond { bond_debit, .. }
+            | BondPostPayload::Release { bond_debit, .. }
+            | BondPostPayload::HoldingsUpdate { bond_debit, .. } => bond_debit,
+            BondPostPayload::EndpointUpdate { .. } => panic!("EndpointUpdate has no amount term"),
         }
+    }
 
-        // Read side: bytes spelling a holdings list and a term after a kind-4
-        // endpoint are not part of the vin. The bounded parse refuses them as
-        // trailing bytes; the unbounded parse stops at the endpoint and
-        // yields the empty shape, never a vin with a term.
-        let mut wire = Vec::new();
-        base.write(&mut wire).unwrap();
-        let payload_len = wire.len();
-        let mut trailing = wire.clone();
-        write_holdings_descriptor(
-            &mut trailing,
-            &HoldingsDescriptor {
-                kind: HoldingsKind::ShardSetCompact,
-                shard_ids: ShardSet::new(vec![7]).unwrap(),
-            },
-        )
-        .unwrap();
-        write_varint(&750_000_000u64, &mut trailing).unwrap();
-        write_varint(&750_000_000u64, &mut trailing).unwrap();
-        write_varint(&0u64, &mut trailing).unwrap();
-        assert!(trailing.len() > payload_len);
-        assert!(matches!(
-            ArchivalBondPostVin::read_payload_exact(&mut &trailing[1..]),
-            Err(WireError::TrailingBytes)
-        ));
-        let mut cursor = &trailing[1..];
-        let decoded = ArchivalBondPostVin::read_payload(&mut cursor).unwrap();
-        assert_eq!(decoded, base);
-        assert_eq!(
-            cursor.len(),
-            trailing.len() - payload_len,
-            "stopped at the endpoint"
-        );
+    fn credit_mut(&mut self) -> &mut u64 {
+        match &mut self.payload {
+            BondPostPayload::JoinMarket { bond_credit, .. }
+            | BondPostPayload::Rebond { bond_credit, .. }
+            | BondPostPayload::Release { bond_credit, .. }
+            | BondPostPayload::HoldingsUpdate { bond_credit, .. } => bond_credit,
+            BondPostPayload::EndpointUpdate { .. } => panic!("EndpointUpdate has no amount term"),
+        }
+    }
+
+    fn total_mut(&mut self) -> &mut u64 {
+        match &mut self.payload {
+            BondPostPayload::JoinMarket {
+                bonded_total_atomic,
+                ..
+            }
+            | BondPostPayload::Rebond {
+                bonded_total_atomic,
+                ..
+            }
+            | BondPostPayload::Release {
+                bonded_total_atomic,
+                ..
+            }
+            | BondPostPayload::HoldingsUpdate {
+                bonded_total_atomic,
+                ..
+            } => bonded_total_atomic,
+            BondPostPayload::EndpointUpdate { .. } => panic!("EndpointUpdate has no amount term"),
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "bond_wire_tests.rs"]
+mod tests;

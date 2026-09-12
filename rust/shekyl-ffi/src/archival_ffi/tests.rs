@@ -277,10 +277,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
         verify(0, 0, Some(&shard), 1, floor, floor, 0, 0),
         SHEKYL_ARCHIVAL_BOND_POST_OK
     );
-    // A conforming Rebond vin carries NO key (§9.11) and NO endpoint (EU-D3),
-    // so the post-kind verdict is asserted with both empty; Rebond WITH a key
-    // is the coupling case at the bottom, and Rebond WITH an endpoint is the
-    // endpoint-coupling case right after this one.
+    // This entry is JoinMarket-only: a Rebond byte is the post-kind verdict,
+    // whether or not the caller also handed an endpoint or a spend key.
     assert_eq!(
         unsafe {
             shekyl_archival_verify_join_market_bond_post(
@@ -300,19 +298,18 @@ fn bond_post_ffi_maps_each_reject_reason() {
         },
         SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
     );
-    // Rebond WITH an endpoint: the EU-D3 coupling refuses at the shared marshal,
-    // by the same rule (and code family) as the bond_spend_pk coupling.
+    // JoinMarket missing its endpoint: the EU-D3 coupling refuses at the marshal.
     assert_eq!(
         unsafe {
             shekyl_archival_verify_join_market_bond_post(
-                1,
+                0,
                 0,
                 std::ptr::from_ref(&shard),
                 1,
+                spend_pk.as_ptr(),
+                spend_pk.len(),
                 std::ptr::null(),
                 0,
-                TEST_ENDPOINT.as_ptr(),
-                TEST_ENDPOINT.len(),
                 floor,
                 floor,
                 0,
@@ -384,11 +381,11 @@ fn bond_post_ffi_maps_each_reject_reason() {
         coupling(&spend_pk[..HYBRID_PUBKEY_CANONICAL_BYTES - 1]),
         SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
     );
-    // ...and the inverse direction: a non-JoinMarket kind (Rebond) carrying
-    // a key refuses at the marshaler, before the post-kind verdict.
+    // A non-JoinMarket kind at this entry is the post-kind verdict; the
+    // spend-pk coupling is a JoinMarket-operand check, not a kind check.
     assert_eq!(
         verify(1, 0, Some(&shard), 1, floor, floor, 0, 0),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
     );
     // A null key pointer with a positive length is the caller bug, not coupling.
     assert_eq!(
@@ -1031,52 +1028,26 @@ fn endpoint_update_ct_balance_ffi_is_the_plain_equation() {
 // EU-D7 / EU-D11 at the FFI boundary: the EndpointUpdate verify entry.
 #[test]
 fn endpoint_update_ffi_accepts_a_bonded_record_and_refuses_a_zero_bonded_one() {
-    let kind = shekyl_archival_retention::BondPostKind::EndpointUpdate as u8;
     let endpoint = [0x4Eu8; 32];
-    let ok = unsafe {
-        shekyl_archival_verify_endpoint_update(kind, endpoint.as_ptr(), endpoint.len(), 1, 750)
-    };
+    let ok = unsafe { shekyl_archival_verify_endpoint_update(endpoint.as_ptr(), 1, 750) };
     assert_eq!(ok, SHEKYL_ARCHIVAL_BOND_POST_OK);
-    let zero = unsafe {
-        shekyl_archival_verify_endpoint_update(kind, endpoint.as_ptr(), endpoint.len(), 1, 0)
-    };
+    let zero = unsafe { shekyl_archival_verify_endpoint_update(endpoint.as_ptr(), 1, 0) };
     assert_eq!(zero, SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_RECORD_NOT_BONDED);
     assert_eq!(
         shekyl_archival_bond_post_drop_verdict(SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_RECORD_NOT_BONDED),
         shekyl_archival_bond_post_drop_verdict(SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED),
         "EU-D7 mirrors its HoldingsUpdate sibling's verdict class by name"
     );
-    let missing = unsafe {
-        shekyl_archival_verify_endpoint_update(kind, endpoint.as_ptr(), endpoint.len(), 0, 0)
-    };
+    let missing = unsafe { shekyl_archival_verify_endpoint_update(endpoint.as_ptr(), 0, 0) };
     assert_eq!(missing, SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING);
 }
 
 #[test]
-fn endpoint_update_ffi_refuses_the_wrong_kind_and_a_malformed_endpoint() {
-    let kind = shekyl_archival_retention::BondPostKind::EndpointUpdate as u8;
-    let endpoint = [0x4Eu8; 32];
-    // A non-EndpointUpdate byte (HoldingsUpdate) reaches the verify's own
-    // kind check through the shared marshal.
-    let wrong = unsafe {
-        shekyl_archival_verify_endpoint_update(3, endpoint.as_ptr(), endpoint.len(), 1, 750)
-    };
-    assert_eq!(wrong, SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
-    // Absent endpoint on a kind-4 vin: the EU-D3 coupling refuses at the marshal.
-    let absent = unsafe { shekyl_archival_verify_endpoint_update(kind, ptr::null(), 0, 1, 750) };
+fn endpoint_update_ffi_refuses_a_null_endpoint() {
+    // No kind byte and no length: the entry is the 32-byte key. Null is the
+    // only malformed operand this boundary can name.
+    let absent = unsafe { shekyl_archival_verify_endpoint_update(ptr::null(), 1, 750) };
     assert_eq!(absent, SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
-    // Wrong length: the wire carries the raw key or nothing.
-    let short =
-        unsafe { shekyl_archival_verify_endpoint_update(kind, endpoint.as_ptr(), 31, 1, 750) };
-    assert_eq!(short, SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
-    // An unknown byte is refused as not-EndpointUpdate.
-    let unknown = unsafe {
-        shekyl_archival_verify_endpoint_update(9, endpoint.as_ptr(), endpoint.len(), 1, 750)
-    };
-    assert_eq!(
-        unknown,
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_ENDPOINT_UPDATE
-    );
 }
 
 #[test]
