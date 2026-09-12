@@ -11,11 +11,18 @@
 //! against* `M`; it never ruled on how `M` is assembled. `S` is consensus
 //! (C2-R2 Q3).
 //!
-//! The clamp's lower arm makes the effective median `≥ Mlw`, so the ladder's
-//! `Mfw = min(Mnw, Mlw)` selects `Mlw` in every state this function can
-//! produce. Changing `S` does not move a fee number. The block-weight
-//! *penalty* still prices against the effective median, which is the
-//! operand divergence recorded in `FOLLOWUPS.md`.
+//! **Changing `S` does not move a fee number**, but not for the reason this
+//! comment first gave. It cited the ladder taking `Mfw = min(Mnw, Mlw)` with
+//! the clamp's lower arm forcing `Mnw ≥ Mlw`; FL-R20 then deleted that
+//! two-median computation, so there is no `min` left to select anything. The
+//! conclusion survives on the operand instead: the fee estimate reads the
+//! **long-term** effective median directly, and the surge clamp applies to the
+//! short-term median, which never reaches that path.
+//!
+//! The block-weight *penalty* still prices against the effective median, so
+//! during a surge the penalty and the fee floor price the same expansion off
+//! operands that differ by up to `S` — the divergence recorded in
+//! `FOLLOWUPS.md`.
 
 use crate::params::GENERATED_BLOCK_WEIGHT_SURGE_FACTOR;
 
@@ -97,12 +104,21 @@ mod tests {
     }
 
     #[test]
-    fn the_fee_ladder_operand_is_the_long_term_median_in_every_clamp_state() {
-        // Mfw = min(Mnw, Mlw). The clamp's lower arm makes Mnw ≥ Mlw, so
-        // Mfw is Mlw and S does not reach the priced rungs.
+    fn the_lower_arm_holds_in_every_clamp_state_including_saturation() {
+        // The clamp's lower arm: the effective median is NEVER below the
+        // long-term median, whatever the short-term median does — swept
+        // across both clamp arms and the saturating ceiling, which the
+        // single-case test above does not cover.
+        //
+        // Renamed from `the_fee_ladder_operand_is_the_long_term_median_...`:
+        // the property is real, but the name and its comment described a
+        // consumer that no longer exists. It read the assertion as proving
+        // the ladder's `Mfw = min(Mnw, Mlw)` selects `Mlw`, and FL-R20
+        // deleted that computation. A test named for a dead caller invites
+        // the next reader to delete it with the caller; named for the
+        // invariant, it survives on its own terms.
         for st in [0, ZONE / 10, ZONE, ZONE * 2, ZONE * 100, u64::MAX] {
-            let mnw = effective_median(ZONE, st);
-            assert_eq!(mnw.min(ZONE), ZONE, "st={st}");
+            assert!(effective_median(ZONE, st) >= ZONE, "st={st}");
         }
     }
 
