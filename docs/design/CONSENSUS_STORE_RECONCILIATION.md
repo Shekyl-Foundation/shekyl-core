@@ -626,6 +626,100 @@ the unsafe version.
 A "digest-identical extraction" claim over a bucket-4 rule is a statement about
 fidelity to a defect, and must say so.
 
+##### P0f slice 9 — §4.K, alt-chain admission and reorg (11 rows)
+
+Reviewed at **`eb1b60198`** (2026-09-11), the `dev` tip that merged PR #699.
+**Pin side of C0 (`refactor/cold-authority-predicate-c0`, PR #703): PRE-C0** —
+`shekyl_archival_debit_auth_pin` is the name present at this pin
+(`src/cryptonote_core/blockchain.cpp:4926`, 0 hits of
+`shekyl_archival_cold_authority_pin`); no K row calls it directly (K5 reaches it
+only transitively, promotion → connect → `check_tx_inputs`), so the C0 rename
+moves no citation in this slice. **Scope basis, stated so "11 rows" is derived
+rather than asserted:** the bucket-1/2 set of
+`docs/design/CONSENSUS_RULE_CENSUS.md` §4 counted by its bucket column is 130
+rows; set-difference against the rows carrying a record in this register gave
+27 UNREVIEWED, of which the eleven `CEN-K` rows (K1a, K1b, K2–K10; K5b was
+recorded in slice 8) are this slice. These are **reviews, not promotions**:
+each row asks whether the C++ at the pin implements the ratified spec of record
+(`docs/completed/CONSENSUS_C2_R1_REORG.md` §5.5 Q1a/Q1b/Q1c/Q2a/Q3a and §4b Q1
+as amended F-1/F-2); DIVERGENT would be a success of the pass. Where a K row's
+*meaning* depends on a member rule owned by another row, the member is cited by
+its **register state**, and this slice affirms only the orchestration that is
+the K row's own.
+
+Six walks, each read end-to-end once (path, symbol, and signature where the
+name is overloaded), cited per row:
+
+- **Walk W-HA** — `src/cryptonote_core/blockchain.cpp`
+  `Blockchain::handle_alternative_block(const block&, const crypto::hash&,
+  block_verification_context&, block_connect_supplement&)` (`:2223–2600`): the
+  whole alt-admission ladder from the height-0 exit to the fork-choice call.
+- **Walk W-SW** — `src/cryptonote_core/blockchain.cpp`
+  `Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>&,
+  bool discard_disconnected_chain)` (`:1272–1420`) with
+  `Blockchain::rollback_blockchain_switching(std::list<detached_block>&,
+  uint64_t)` (`:1218–1270`).
+- **Walk W-BA** — `src/cryptonote_core/blockchain.cpp`
+  `Blockchain::build_alt_chain(const crypto::hash&,
+  std::list<block_extended_info>&, std::vector<uint64_t>&, …)` (`:2162–2215`).
+- **Walk W-AD** — `src/cryptonote_core/blockchain.cpp`
+  `Blockchain::get_next_difficulty_for_alternative_chain(…)` (`:1437–1500`)
+  and its Rust owner `rust/shekyl-difficulty/src/alt_window.rs`
+  `alt_window_plan`.
+- **Walk W-TP** — `src/cryptonote_core/tx_pool.cpp` `tx_memory_pool::add_tx`,
+  the `kept_by_block` arm (`:230–370`).
+- **Walk W-RT** — `src/cryptonote_core/blockchain.cpp` the 4-arg
+  `Blockchain::handle_block_to_main_chain(const block&, const crypto::hash&,
+  block_verification_context&, block_connect_supplement&)` (`:5905`; the 2-arg
+  overload at `:3178` is a forwarding shell), specifically its return-taken
+  leg (`:6136–6142`) and the promote-call site in W-SW (`:1331`).
+
+**Executed:** every citation below was resolved by reading the function at the
+pin; the negative claims (K1a "one site", K4 "no full-validation call on the alt
+path", K8 "no consensus-bearing reader", K9 "four feed sites") were each backed
+by an **untruncated** grep over the stated range — K9's third producer was
+missed on a first, truncated listing and found on the re-run, which is why the
+grep is stated per row; `scripts/ci/check_consensus_invariants.sh` was run at
+the pin (7/7 PASS, covering the F-2 single-writer/no-revert tripwire and the
+Q3b orphan arm that K6/K7 sit beside). **Not executed:** no live reorg, no
+watermark-refused pop, no promotion failure was driven at runtime; no
+K-family unit or core test was run for this slice — these verdicts are
+source-level conformance to the spec of record, and each row's falsifier is
+the runtime observation that would refute it.
+
+**Three drifts disclosed once, applying to every row citing them** (the census
+rows still carry pre-`eb1b60198` line anchors; all re-resolved here at the
+pin): (1) *position* — `handle_alternative_block` moved `:2153→:2232`,
+`build_alt_chain` `:2083→:2162`, the add-path assert `:2410→:2488`, the promotion
+walk `:1425→:1272`, the return-taken producer `:5932→:6140`,
+`blockchain_import.cpp` `:156→:157`; (2) *shape* — the K1b rejection is no
+longer a C++ `m_verifivation_failed` flag but `reject_block_form(bvc)`
+(`src/cryptonote_basic/block_ingest.h`) → `shekyl_block_ingest_reject_form` →
+`BlockIngest::write_reject_form` → `DropVerdict::AttributableForm`
+(`rust/shekyl-peer-policy/src/block_ingest.rs`), the same ruled
+peer-attributable polarity with a Rust owner; (3) *label* — the census's
+`verification_impossible` (K10) is prose, not a symbol: the mechanism is
+`meta.fcmp_verified = 0` with `last_failed_*` and `max_used_block_*` reset.
+
+| Row | State | Evidence (all at `eb1b60198`) |
+| --- | --- | --- |
+| CEN-K1a | **CHECKED-CONFORMANT** | W-AD. Rust owner `alt_window_plan` refuses `bei_height == 0` with `Err(Error::Window)` (`rust/shekyl-difficulty/src/alt_window.rs`, the R1b crossing); the C++ belt `CHECK_AND_ASSERT_MES(bei.height > 0, …)` (`src/cryptonote_core/blockchain.cpp:1454`) sits at the head of `get_next_difficulty_for_alternative_chain`, ahead of `shekyl_difficulty_alt_window_plan` (`:1489`). *Falsifier executed* (Q1b(i): "any second C++ site re-spelling the derived-height comparison"): grep over `blockchain.cpp` for `height > 0`/`height >= 1`/`== 0` against `alt`/`bei`/`derived` — hits are the one belt and its own comment (`:1446–1456`) plus a comment at `:5760`; **zero second sites**. Census anchor `:1449` → `:1454` |
+| CEN-K1b | **CHECKED-CONFORMANT** | W-HA. `if(0 == block_height)` is the **first** check in `handle_alternative_block` (`src/cryptonote_core/blockchain.cpp:2232–2236`), ahead of the checkpoint window (`:2245`), version (`:2254`), attestation (`:2264`), `build_alt_chain`, timestamp (`:2326`) and PoW (`:2378`) — the ratified cheapest-exit ordering. Polarity is the ruled peer-attributable one via `reject_block_form` → `DropVerdict::AttributableForm` (shape drift (2) above). *Falsifier:* any check inserted above `:2232`, or the verdict written as `DropVerdict::Discard` rather than `AttributableForm` |
+| CEN-K2 | **CHECKED-CONFORMANT** | W-BA. Four rebuild asserts in order: parse (`parse_and_validate_block_from_blob`, `src/cryptonote_core/blockchain.cpp:2172`), height sanity (`m_db->height() > alt_chain.front().height`, `:2188`), parent-in-main (`block_exists(prev_id)`, `:2192`, returns false), connection (`h == alt_chain.front().bl.prev_id`, `:2200`) — the Q3a belts, each a hard `false`. *Falsifier:* a rebuilt alt chain whose stored front parent is not the main-chain block at the claimed height passing `build_alt_chain` |
+| CEN-K3 | **CHECKED-CONFORMANT** | W-HA + DB belt. Add-path assert `CHECK_AND_ASSERT_MES(!m_db->get_alt_block(id, NULL, NULL), …)` (`src/cryptonote_core/blockchain.cpp:2488`) immediately before `add_alt_block` (`:2495`); DB belt `mdb_cursor_put(m_cur_alt_blocks, &k, &v, MDB_NODUPDATA)` (`src/blockchain_db/lmdb/db_lmdb.cpp:4744`). The **routing leg** (`have_block_unlocked` consults `get_alt_block`, `:3155`; `add_new_block` records `SHEKYL_BLOCK_INGEST_ALREADY_EXISTS` = `BlockIngest::AlreadyExists` and returns `false`, `:6825–6828`) is **CEN-A1's, which is UNREVIEWED**: this row affirms the assert and the DB belt, cites the leg's presence, and claims nothing for it. Precise word: an already-stored alt block is recorded *already-exists* (not a verification failure) at the leg, and would be *refused* by the assert and the DB if the leg were bypassed. Census `:2410→:2488`, `:3075→:3155` |
+| CEN-K4 | **CHECKED-CONFORMANT** | W-HA. Ladder at the pin, in order: height-0 (`:2232`) → checkpoint window (`:2245`) → version (`:2254`; CEN-B1 CHECKED-CONFORMANT) → attestation (`:2264`; CEN-B4 CHECKED-CONFORMANT) → `build_alt_chain` → agc advance (`:2312`) → MTP/FTL `check_block_timestamp(const std::vector<uint64_t>&, const block&, uint64_t&)` (`:2326`; CEN-C1/C2 CHECKED-CONFORMANT) → checkpoint conformance (`:2337`) → alt difficulty (W-AD; CEN-D1 CHECKED-CONFORMANT, **CEN-D5/D6 UNREVIEWED**) → PoW (`reject_block_bad_pow`, `:2378`) → `prevalidate_miner_transaction` (`:2382`) → NIC (`:2407`) → supplement `add_tx` (`:2425`) → store (`:2495`) → fork choice (`:2524`). *Negative, untruncated grep over `:2223–2600`:* `validate_miner_transaction`, `check_tx_inputs` (either overload, `:3319`/`:3517`) and the curve-tree verify family are **absent** (comment mentions only) — prevalidate-only, as ratified (Q1a). This row affirms the **ordering and the prevalidate-only tier**; the member rules' bodies are theirs |
+| CEN-K5 | **CHECKED-CONFORMANT** | W-SW + W-RT. Pops to the split (`:1305` loop), promotes each alt block through the **4-arg** `handle_block_to_main_chain(bei.bl, promoted_id, bvc, promoted)` (`src/cryptonote_core/blockchain.cpp:1331`, signature at `:5905` — the full connect path, not the 2-arg shell at `:3178`); any failure → `rollback_blockchain_switching(disconnected_chain, split_height)` (`:1218`), which pops the partial promotion and re-adds the original chain under a `PANIC!` assert (`:1257`). C0 note: the cold-authority pin is reached only transitively here (`check_tx_inputs` → `:4926`), so the rename moves nothing in this row. *Falsifier:* a promotion failure leaving the tip on the alt suffix, or a promoted block admitted through a path that skips connect-time `check_tx_inputs`. Census `:1425–1462` → `:1272–1420` |
+| CEN-K6 | **CHECKED-CONFORMANT** *(as amended C2-R1b F-1(a))* | W-HA. `shekyl_difficulty_fork_choice(fc_current, fc_alternative, is_a_checkpoint ? 1 : 0, &fc_verdict)` (`src/cryptonote_core/blockchain.cpp:2524`) is the Rust-owned verdict — strictly-greater switches, equal keeps, checkpoint forces; `SWITCH` → `switch_to_alternative_blockchain(alt_chain, is_a_checkpoint)` (`:2575`; the discard flag *is* the checkpoint arm, which is K7's asymmetry). **The prune-watermark refusal arm ahead of the switch (`:2550–2563`: `pop_target_allowed(fork_parent_height)` false → sticky `m_following_degraded`, `SHEKYL_BLOCK_INGEST_DEGRADED_KEEP`, block kept as alt, `return true`) is the RATIFIED F-1(a) posture** (`docs/completed/CONSENSUS_C2_R1_REORG.md` §4b: a watermark-refused network-driven switch enters a loud, persistent, operator-visible non-following state, never a silent healthy continue) — read in the ruling text, not from the code comment, and **named here so no reader takes a ratified refusal for a divergence from "strictly greater switches"**. *Falsifier:* a `SWITCH` verdict on equal cumulative difficulty, or a watermark refusal that clears on its own |
+| CEN-K7 | **CHECKED-CONFORMANT** | W-SW. `if(!discard_disconnected_chain)` (`src/cryptonote_core/blockchain.cpp:1360`): each demoted block re-enters through `handle_alternative_block(old_ch_ent.bl, old_id, bvc, connect)` with its witness carried (`:1371`); failure there is `MERROR` only, no return — not a switch failure, as ratified; on a discarded (checkpoint) chain the loop is skipped and the blocks are dropped. *Falsifier:* a readmit failure propagating into the switch result. Census `:1404–1419, :1465–1486` → `:1360–1380` |
+| CEN-K8 | **CHECKED-CONFORMANT** | W-HA. Alt bookkeeping `bei.already_generated_coins = shekyl_advance_already_generated(prev_generated_coins, block_reward)` (`src/cryptonote_core/blockchain.cpp:2311–2312`), persisted in `alt_block_data_t` (`:2494`). *Reader enumeration (untruncated grep for `already_generated_coins` on the alt data):* `build_alt_chain` (`:2177`, feeds the next alt entry's own bookkeeping) and `get_alternative_chains()` (`:7628`, RPC observability) — **no consensus-bearing reader**; promotion re-reads the ledger through the connect path, and the post-reorg miner notification reads `m_db->get_block_already_generated_coins(new_height − 1)` (`:1415–1417`). **Census-internal note, flagged not fixed:** `CONSENSUS_RULE_CENSUS.md` §9.2 accounts K8 as "bucket 2 → 4, `examined-disposition`" while its §4 row's bucket column reads 2 at this pin; reviewed regardless (bucket ≠ conformance) and routed to the census owner |
+| CEN-K9 | **CHECKED-CONFORMANT** | W-HA + W-RT. Supplement gate: `ver_non_input_consensus(extra_block_txs, tvc, hf_version)` false → reject whole block (`src/cryptonote_core/blockchain.cpp:2407`); each supplement tx `add_tx(…, relay_method::block, /*relayed=*/true, …)` failure → reject (`:2425`). **Four feed sites, enumerated by untruncated grep for `relay_method::block` at the pin:** pop-return (`:875`), alt supplement (`:2425`), the return-taken leg of the 4-arg `handle_block_to_main_chain` (`:6140`, `nic_verified_hf_version` comment `:6136`; `MERROR`, not return — the Q2a-armed already-checked skip), and the offline importer `src/blockchain_utilities/blockchain_import.cpp:157` (`handle_incoming_tx`). Exactly the four Q1c names; none new. **Disclosure:** Q1c says the feed-site enumeration "gate now exists to be RUN, not cited" — **no script under `scripts/ci/` or `.github/` enumerates `relay_method::block` feed sites at this pin** (searched by that string and by `feed_site`; hits are unit tests only), so the enumeration was executed by hand grep here, and the missing gate is reported to steering as a spec-vs-tree gap on the *instrument*, not the rule |
+| CEN-K10 | **CHECKED-CONFORMANT** *(as composed with CEN-M8)* | W-TP. `tx_memory_pool::add_tx` (`src/cryptonote_core/tx_pool.cpp`): `kept_by_block = (tx_relay == relay_method::block)` (`:230`); `check_tx_inputs` failure at `:312` → if `kept_by_block` (`:317`) the tx is **stored** with `max_used_block_*` reset (`:322`), `last_failed_*` reset (`:323`) and `meta.fcmp_verified = 0` (`:331`) — the ratified storage tolerance, with the skip **hash-gated** at connect by M8; else `m_verifivation_failed` and refuse (`:362`). Q2a's armed dependency carried, not borrowed: CEN-M8 is CHECKED-CONFORMANT at `a45916c66` (slice 8), and `git diff a45916c66 eb1b60198` over `blockchain.cpp` + `tx_pool.cpp` has **zero hunks** touching `take_tx`/`fcmp_verified`/`fcmp_verification_hash`/`nic_verified`, so that verdict is unmoved at this pin. *Falsifier:* a kept-by-block tx stored with `fcmp_verified = 1` after a failed input check, or a connect-time skip keyed on pool presence rather than the recorded hash. Census `:304–357` → `:312–370` |
+
+**Register effect:** eleven rows move UNREVIEWED → CHECKED-CONFORMANT, no
+DIVERGENT in this family; the count sentence at the head of §5.4.1 is owned by
+PR #702 and is not rewritten here — if its landed figure disagrees with the
+130 / 27 basis above, that routes to the figure's owner.
+
 ### 5.5 DRS-P0 — survives, rationale inverted
 
 P0a (inventory + CI), P0b (atomicity/journals), P0d/P0e (digest) survive
