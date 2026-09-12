@@ -37,8 +37,44 @@ never deleted as a side-effect of that class.
 ## Status banner
 
 Every file under `docs/design/` and `docs/completed/` carries a
-**Status** line in the first 40 lines after the H1. The banner is the
-first thing a grep-driven reader sees.
+**Status** line in the first 40 lines after the H1.
+
+**The banner is not the grep surface.** It is the first thing a reader
+who *opens the file* sees. It is invisible to the reader who arrives by
+`grep`/`rg` at line 1160 — and arriving mid-file is the normal case for
+an agent, which reads what the regex matched rather than scanning from
+the H1. A banner is necessary and is not sufficient.
+
+**Status must therefore be line-local.** Any assertion a reader could
+mistake for current carries its own status *in the grep-visible line*:
+the heading, the table row, or the sentence itself — never only in a
+banner or an enclosing heading above it. Concretely:
+
+- A **section** whose status differs from its file's says so **in its
+  own heading** (`### 5.5 … — RULED 2026-09-04`), because a heading is
+  what a section-level grep returns.
+- A **row** asserting a state carries its **era or status token in the
+  row**: `| CEN-x | CHECKED-CONFORMANT | Reviewed at `<sha>` …`. A pin
+  in a table *header* governs rows that grep returns without it.
+- A **superseded artifact** — an old table, formula, or sim row — is
+  either deleted or carries the marker in each line, not in a
+  heading. The artifact is what gets mistaken for current; a line that
+  says `REJECTED` or `SUPERSEDED` is hard to mistake.
+
+This is the failure that produced the "twenty-seven" backlog sentence,
+the `x50` surge rows read as live, and a `CLOSED as record` file whose
+§5.5 heading said *"nothing here is ruled"* 1148 lines below the banner
+that said all three sub-rounds were ruled and built.
+
+**What line-local status does NOT mean: delete the past.** A pinned
+*records-was* row — `DIVERGENT at <sha>`, a conformance verdict at a
+declared era — is a **provenance-bearing claim that is true now**, not
+history, and it stays. The discriminator is **artifact vs verdict**,
+not past vs present. A verdict carries its era in-line and is legible
+to a grep reader; a superseded artifact carries no self-describing
+status and is what must go. Moving content to git history does not make
+it safe — `git log -S` is precisely the move a grep-driven reader does
+not make.
 
 ## Completing a plan includes archive-or-contract
 
