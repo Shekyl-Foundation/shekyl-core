@@ -21,7 +21,12 @@ does not own it.
 
 ## Freeze clock
 
-This is a wallet-to-wallet serving protocol, not a consensus wire.
+This is a daemon→P serving protocol — the client is a daemon, the
+server is a P-served onion; no wallet talks to a wallet (`EU-D1`,
+[`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md), ruled
+2026-09-11; retitled 2026-09-12 per `SF-D9` — this line previously read
+"wallet-to-wallet", written before the client side was ruled) — not a
+consensus wire.
 Changing it after the freeze is a coordinated software upgrade
 ([rule 75](../../.cursor/rules/75-system-autonomy.mdc)), not a hard fork
 ([rule 42](../../.cursor/rules/42-serialization-policy.mdc) does not
