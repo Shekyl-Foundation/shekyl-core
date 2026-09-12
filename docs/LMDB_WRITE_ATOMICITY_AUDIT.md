@@ -1370,6 +1370,17 @@ encoding be computed from the logical value alone, with no cursor, no txn,
 no height counter and no previously-stored row?* If not, it is
 writer-coupled and fails §6.3.
 
+**One registry consequence DRS-E1 must not miss.** The accumulator
+primitives take their cSHAKE customization as a **constructor parameter**,
+so the domain literal lives at the *call site* rather than at the hash
+site. The SA-3b domain registry's count pin therefore stays at two cSHAKE
+sites however many tables are wired, and its literal-presence leg sees
+nothing until a real caller exists — every caller today is a test using
+`shekyl/test/…` fixtures. **When E1 wires a table to an accumulator, that
+table's domain string becomes a production literal and must be registered
+in `CRYPTO_DOMAIN_REGISTRY.tsv` at that moment**, per table, or it ships
+unregistered without tripping a count.
+
 ### The per-table falsifier for `set-shaped`
 
 Set-shaped reversibility requires the element's canonical encoding be
